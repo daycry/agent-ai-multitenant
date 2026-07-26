@@ -932,10 +932,17 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 
 #### `task_wf_62` — Trazabilidad del runtime: digest en vez de etiqueta flotante
 
-- [ ] **Título**: resolver la etiqueta `:v1` a **digest** en el lanzamiento y persistirlo en la
-      fila de `executions`. Hoy reconstruir `agent-runtime-php-phpunit:v1` cambia en silencio
-      lo que ejecuta toda tarea PHP, sin forma de saber qué build produjo un resultado ni de
-      volver atrás.
+- [x] _(hecho — migración **0120**)_ **Título**: persistir el **digest** de la imagen que
+      corrió en la fila de `executions`.
+- **Cambio respecto al enunciado**: no se «resuelve la etiqueta en el lanzamiento», se lee el
+  campo `Image` del **inspect del contenedor** — el id que el daemon ya resolvió. Preguntar
+  por la etiqueta después del lanzamiento tiene una carrera: si se reasignó entre medias, se
+  registraría la imagen equivocada justo en el caso que esta trazabilidad existe para
+  detectar. Además sale gratis (el inspect ya se lee) y no añade una llamada al daemon.
+- **Tests**: 3 — que se guarda, que un daemon que no lo reporta **no rompe el run** (degrada
+  a `None`), y que no se consulta al cliente por la imagen (el fake revienta si se hiciera).
+  También viaja en el camino de FALLO: saber qué build produjo un run roto vale más que
+  saberlo de uno que salió bien.
 - **Hallazgo**: M-4 · **Tiempo**: 0,75 d
 - **Ficheros**: `packages/shared-test-runtimes/.../catalog.py:31-41`,
   `apps/workers/src/workers/test_runtime.py`, `container.py`, migración para la columna

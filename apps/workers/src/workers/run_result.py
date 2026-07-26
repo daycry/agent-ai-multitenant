@@ -45,6 +45,10 @@ class _RuntimeResult:
     # `task_wf_52`: etiqueta del conjunto de prompts del runtime que produjo el
     # run. La calcula el propio runtime al cerrar; el worker solo la transporta.
     prompt_version: str | None = None
+    # `task_wf_62`: digest de la IMAGEN que corrió. Lo aporta el worker (lo lee
+    # del inspect del contenedor), no el runtime — el contenedor no sabe con qué
+    # digest lo lanzaron.
+    runtime_image_digest: str | None = None
 
 
 def _parse_line(line: str) -> dict[str, Any] | None:
@@ -96,6 +100,7 @@ def _assemble_result(
     exit_code: int,
     runtime_error: str | None,
     logs: str | None = None,
+    image_digest: str | None = None,
 ) -> _RuntimeResult:
     """Fold the streamed steps + final result line into a `_RuntimeResult`.
 
@@ -120,6 +125,7 @@ def _assemble_result(
             finish_status=final_result.get("finish_status"),
             guardrail_events=final_result.get("guardrail_events") or [],
             prompt_version=final_result.get("prompt_version"),
+            runtime_image_digest=image_digest,
         )
 
     # F16/P1.1: a clean exit with no result on the live stream — recover from the
@@ -137,6 +143,8 @@ def _assemble_result(
                 usage=recovered.get("usage") or dict(_EMPTY_USAGE),
                 finish_status=recovered.get("finish_status"),
                 guardrail_events=recovered.get("guardrail_events") or [],
+                prompt_version=recovered.get("prompt_version"),
+                runtime_image_digest=image_digest,
             )
         if recovered_error is not None:
             runtime_error = recovered_error
@@ -154,4 +162,7 @@ def _assemble_result(
         iterations=0,
         steps=steps,
         usage=dict(_EMPTY_USAGE),
+        # `task_wf_62`: también en el camino de FALLO. Saber qué build produjo
+        # un run roto es más útil que saberlo de uno que salió bien.
+        runtime_image_digest=image_digest,
     )

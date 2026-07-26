@@ -300,3 +300,48 @@ def test_the_normal_case_still_drains_to_the_last_line() -> None:
     lines: list[str] = []
     runner.run_streamed(_spec(), lines.append)
     assert lines[-1] == '{"event": "execution.finished"}'
+
+
+# ---------------------------------------------------------------------------
+# task_wf_62 — el digest de la imagen que corrió DE VERDAD
+# ---------------------------------------------------------------------------
+def test_the_result_carries_the_digest_of_the_image_that_ran() -> None:
+    # La etiqueta es flotante: reconstruir `agent-runtime-php-phpunit:v1` cambia
+    # en silencio lo que ejecuta toda tarea PHP. Sin el digest no hay forma de
+    # saber qué build produjo un resultado ni de volver a la anterior.
+    container = _StreamingContainer(stdout_chunks=[], full_logs=b"")
+    container.attrs["Image"] = "sha256:" + "ab" * 32
+    runner = _make_runner(container)
+
+    result = runner.run_streamed(_spec(), lambda _line: None)
+
+    assert result.image_digest == "sha256:" + "ab" * 32
+
+
+def test_a_daemon_that_does_not_report_it_does_not_break_the_run() -> None:
+    # Es trazabilidad: su ausencia no puede impedir un run ni cambiar su
+    # resultado. Degrada a `None` y el run sigue.
+    container = _StreamingContainer(stdout_chunks=[], full_logs=b"logs")
+    container.attrs.pop("Image", None)
+    runner = _make_runner(container)
+
+    result = runner.run_streamed(_spec(), lambda _line: None)
+
+    assert result.image_digest is None
+    assert result.logs == "logs"
+    assert result.exit_code == 0
+
+
+def test_the_digest_comes_from_the_container_not_from_the_tag() -> None:
+    # Se lee del inspect del CONTENEDOR, no preguntando por la etiqueta después:
+    # entre el lanzamiento y la consulta la etiqueta puede haberse reasignado a
+    # otra build, y se registraría la imagen equivocada justamente en el caso
+    # que esta trazabilidad existe para detectar.
+    container = _StreamingContainer(stdout_chunks=[], full_logs=b"")
+    container.attrs["Image"] = "sha256:cafe"
+    runner = _make_runner(container)
+    # El cliente no se consulta en ningún momento por la imagen: si `_capture`
+    # lo hiciera, este `object()` sin `.images` reventaría.
+    runner._client = object()  # type: ignore[assignment]
+
+    assert runner.run_streamed(_spec(), lambda _line: None).image_digest == "sha256:cafe"

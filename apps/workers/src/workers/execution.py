@@ -1374,6 +1374,8 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
         runtime_error=runtime_error,
         # F16/P1.1: the FULL captured log to recover a dropped terminal line.
         logs=container_result.logs,
+        # `task_wf_62`: el digest de la imagen que corrió DE VERDAD.
+        image_digest=container_result.image_digest,
     )
     if cancel_seen and final_result is None:
         # P3.3/F20: only force `cancelled` when the run did NOT actually finish.
@@ -1390,6 +1392,8 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             usage=result.usage,
             finish_status=result.finish_status,
             guardrail_events=result.guardrail_events,
+            prompt_version=result.prompt_version,
+            runtime_image_digest=result.runtime_image_digest,
         )
     approval = final_result.get("approval") if final_result else None
     return result, approval
@@ -1754,6 +1758,8 @@ async def conduct_execution(
             usage=result.usage,
             finish_status=result.finish_status,
             guardrail_events=result.guardrail_events,
+            prompt_version=result.prompt_version,
+            runtime_image_digest=result.runtime_image_digest,
         )
 
     # P0.5: for the implementer path the task transition is persisted ATOMICALLY with

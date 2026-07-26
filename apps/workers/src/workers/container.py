@@ -78,6 +78,12 @@ class ContainerResult:
     host_config: dict[str, Any]
     config_env: tuple[str, ...]
     networks: tuple[str, ...]
+    # `task_wf_62`: el DIGEST de la imagen que realmente corrió, no la etiqueta
+    # con la que se pidió. `agent-runtime-php-phpunit:v1` se reconstruye y
+    # cambia en silencio lo que ejecuta toda tarea PHP; sin esto no hay forma de
+    # saber qué build produjo un resultado ni de volver a la anterior.
+    # `None` cuando el daemon no lo reporta (nunca impide el run).
+    image_digest: str | None = None
 
     def succeeded(self) -> bool:
         return self.exit_code == 0 and not self.timed_out
@@ -92,6 +98,22 @@ class ContainerResult:
             "logs": self.logs,
             "networks": list(self.networks),
         }
+
+
+def _image_digest(attrs: dict[str, Any]) -> str | None:
+    """El digest de la imagen que este contenedor corrió DE VERDAD (`task_wf_62`).
+
+    Se lee del propio `inspect` del contenedor —el campo ``Image``, que el
+    daemon rellena con el id resuelto— en vez de preguntar por la etiqueta
+    después: entre el lanzamiento y la consulta la etiqueta puede haberse
+    reasignado a otra build, y entonces se registraría la imagen equivocada
+    justamente en el caso que esta trazabilidad existe para detectar.
+
+    `None` si el daemon no lo reporta. Es información de trazabilidad: su
+    ausencia no puede impedir un run ni cambiar su resultado.
+    """
+    image_id = attrs.get("Image")
+    return str(image_id) if image_id else None
 
 
 class AgentContainerRunner:
@@ -414,4 +436,5 @@ class AgentContainerRunner:
             host_config=dict(attrs.get("HostConfig") or {}),
             config_env=tuple(config.get("Env") or ()),
             networks=tuple(net.keys()),
+            image_digest=_image_digest(attrs),
         )

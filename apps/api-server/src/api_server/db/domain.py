@@ -1202,6 +1202,13 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     # los runs anteriores al versionado y en los que no lo reportan.
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # `task_wf_62`: digest de la IMAGEN del runtime que corrió. La etiqueta
+    # (`agent-runtime-php-phpunit:v1`) es flotante: reconstruirla cambia en
+    # silencio lo que ejecuta toda tarea PHP, sin forma de saber qué build
+    # produjo un resultado ni de volver atrás. NULL en los runs anteriores y
+    # cuando el daemon no lo reporta — es trazabilidad, nunca bloquea un run.
+    runtime_image_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
     # Por qué el Memorizer NO produjo memoria a partir de este run, como código
     # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
     # ``not_done`` / ``skip_private`` / ``no_team`` / ``no_scope`` / ``llm_empty``

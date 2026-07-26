@@ -528,6 +528,9 @@ async def finalize_execution(
     # `getattr` porque el Protocol admite formas de resultado más viejas — un
     # run de una imagen anterior al versionado simplemente la deja a NULL.
     execution.prompt_version = getattr(result, "prompt_version", None)
+    # `task_wf_62`: qué IMAGEN lo produjo. Junto a `prompt_version` cierra la
+    # trazabilidad de un run: qué prompts y qué build.
+    execution.runtime_image_digest = getattr(result, "runtime_image_digest", None)
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
