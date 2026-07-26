@@ -230,6 +230,7 @@ tengan `status: completed`.
 - `docs/context/tech-stack.md` — stack tecnológico detallado.
 - `docs/context/conventions.md` — convenciones de código y commits.
 - `docs/03-guides/gotchas/` — trampas conocidas del toolchain (Docker, asyncpg, mypy, pre-commit, OTEL, Windows…) con síntoma + causa raíz + fix. Antes de inventar una solución para un error de infraestructura, **busca aquí primero**; si lo resuelves y la trampa no estaba documentada, **añádela**.
+- `docs/03-guides/verificar-antes-de-implementar.md` — la otra mitad: modos de fallo que NO dan error sino trabajo perdido o confianza injustificada (un plan «pendiente» que miente, un test que fija el defecto, una guarda que pasa vacía). Léelo antes de implementar tareas de un plan antiguo.
 - `docs/roadmap/` — planes por fase (00 a 15), uno por archivo Markdown.
 - `docs/roadmap/README.md` — índice de fases del roadmap.
 - `especificaciones-completas.docx` (ubicación según convención del repo) — documento maestro con TODO el detalle (36 secciones + anexo).

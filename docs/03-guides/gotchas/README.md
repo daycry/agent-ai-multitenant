@@ -51,6 +51,13 @@ el problema ya esté documentado.
   — `decodeXLHeaders: Unknown xl meta version N`: el volumen dev lo
   escribió una build más nueva; recrear el volumen o subir el pin.
 
+- [image-build-recipes-that-bite.md](./image-build-recipes-that-bite.md)
+  — las cuatro recetas que muerden en un sitio: `workers` se construye SOBRE
+  `api-server:manuals` (la base `:ci` está desfasada), `WITH_CLAUDE=1` para el
+  SDK opcional, el grafo del agente vive en la imagen BASE y su contexto es la
+  raíz, y admin-panel se construye DESDE PowerShell (Git Bash mangla el
+  build-arg de ruta).
+
 ### ollama / embeddings
 
 - [ollama-embedding-model-naming.md](./ollama-embedding-model-naming.md)
@@ -80,6 +87,25 @@ el problema ya esté documentado.
   — `Can't locate revision`: la DB de dev quedó en una revisión cuyo fichero
   solo existe en otra rama; verifica migraciones SOLO en la DB de test.
 
+### llm-providers
+
+- [llm-provider-resolution-two-paths.md](./llm-provider-resolution-two-paths.md)
+  — hay DOS vías de resolver un proveedor (por `provider_id` = la fila concreta,
+  y por `kind` = el más nuevo activo). Mezclarlas hace que sincronizar
+  `ollama-cloud` traiga los modelos de `ollama-local`.
+
+### runs / celery / datos
+
+- [celery-visibility-timeout-redelivery-window.md](./celery-visibility-timeout-redelivery-window.md)
+  — un run muerto tarda ~7 h en re-entregarse: el `visibility_timeout` está por
+  encima del hard-limit A PROPÓSITO, para no duplicar runs largos sanos.
+- [git-and-data-ops-belong-in-the-worker.md](./git-and-data-ops-belong-in-the-worker.md)
+  — la api-server NO monta el volumen de repos: cualquier operación git o de
+  `/data` se delega al worker por Celery.
+- [verify-routes-with-curl-not-app-import.md](./verify-routes-with-curl-not-app-import.md)
+  — importar `api_server.main:app` en el contenedor da una app PARCIAL; verificar
+  con `curl` al gateway, y leer 401 como «existe» y 404 como «no montada».
+
 ### pre-commit / mypy / ruff
 
 - [pre-commit-python-version-pin.md](./pre-commit-python-version-pin.md)
@@ -92,6 +118,9 @@ el problema ya esté documentado.
 - [precommit-mixed-line-ending-vs-gitattributes.md](./precommit-mixed-line-ending-vs-gitattributes.md)
   — `mixed-line-ending --fix=lf` no respeta `.gitattributes`; hay que
   excluir `.ps1` / `.cmd` / `.bat` del hook.
+- [black-vs-ruff-format-chained-call-comment.md](./black-vs-ruff-format-chained-call-comment.md)
+  — los dos formateadores se pelean en bucle por un comentario DENTRO de una
+  llamada encadenada; sacarlo fuera del paréntesis los hace converger.
 - [prettier-all-files-libuv-windows.md](./prettier-all-files-libuv-windows.md)
   — `prettier --all-files` crashea en Windows por libuv
   (`UV_HANDLE_CLOSING`, exit 3221226505); usar prettier _scoped_
@@ -168,3 +197,18 @@ el problema ya esté documentado.
   — `page.route("**/X")` en Playwright 1.60 intercepta también la navegación
   `page.goto(".../X")` (misma cola de path) → la página recibe el JSON del mock
   como documento. Usar predicado por `pathname` exacto, no glob desnudo.
+
+### tests (patrones que engañan)
+
+- [tests-caplog-vs-logging-disable.md](./tests-caplog-vs-logging-disable.md)
+  — `caplog` deja de ver el record en la suite completa (integración corre antes
+  y la app llama `logging.disable`); usar un logger falso, no caplog.
+- [integration-tests-asyncpg-needs-the-plain-dsn.md](./integration-tests-asyncpg-needs-the-plain-dsn.md)
+  — `asyncpg.connect` necesita `migrations_pg_dsn`; `admin_database_url` lleva
+  `+asyncpg` y es para SQLAlchemy.
+- [vitest-select-change-before-options-load.md](./vitest-select-change-before-options-load.md)
+  — un `fireEvent.change` sobre un `<select>` sin opciones cargadas se descarta
+  EN SILENCIO; esperar a las `<option>` primero.
+- [workflow-parallel-review-source-contamination.md](./workflow-parallel-review-source-contamination.md)
+  — un «flaky» reportado por revisores en paralelo puede ser contaminación entre
+  ellos; re-correr en serie sobre el árbol limpio antes de creérselo.
