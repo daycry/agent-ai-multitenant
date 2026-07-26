@@ -528,23 +528,24 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_33` — Estimaciones calibradas con datos reales
 
-- [ ] **Título**: cerrar el bucle de estimación. El sistema ya cierra planes, escribe
-      retrospectivas (`plan_retro`, ADR 0124) y guarda duraciones y tokens reales en
-      `executions`; falta que eso vuelva a la estimación. Calcular, por proyecto (con
-      _fallback_ al tenant y luego a la plataforma), las horas y tokens medianos **reales** por
-      nivel de complejidad, y usarlos en lugar del mapa estático de `task_wf_03`. Sin
-      histórico suficiente se sigue usando el mapa, señalando en la UI que la estimación aún
-      no está calibrada.
-- **Hallazgo**: A-04 (mejora sobre la corrección mínima) · **Tiempo**: 1 d
-- **Depende de**: `task_wf_03`, `task_wf_30` (la agregación de coste real)
-- **Ficheros**: `chat/cost.py`, `workers/plan_retro.py`, tabla o vista de calibración
-- **Tests**: unit de que con histórico se usan las medianas reales y sin él el mapa estático;
-  unit del _fallback_ proyecto → tenant → plataforma.
-- **Criterio de aceptación**: tras cerrar tres planes en un proyecto, la estimación del cuarto
-  refleja lo que de verdad cuesta una tarea `l` **en ese proyecto**, no una constante.
-- **Por qué importa**: un mapa estático `complexity → horas` es la misma ficción que el
-  default de 4 h, solo que mejor vestida. Esta tarea es la que hace que el presupuesto
-  signifique algo.
+- [x] _(hecho — solo TOKENS, que era la decisión bloqueante)_ **Título**: cerrar el bucle de
+      estimación. Mediana de tokens reales por nivel de complejidad, con fallback
+      proyecto → tenant → mapa estático, **nivel a nivel**.
+- **Hallazgo**: A-04 · **Tiempo**: 1 d
+- **Ficheros**: `chat/cost_calibration.py` (nuevo), `routers/plans.py`
+- **La decisión que la bloqueaba, resuelta como recomendaba el recon**: se calibran **solo
+  los tokens**. Las horas humanas se quedan con el mapa estático porque son horas-PERSONA en
+  EUR y el histórico es wall-clock de MÁQUINA — calibrar una con la otra repetiría la mezcla
+  de magnitudes que ya se rechazó en el coste del plan, y daría un número que **parece**
+  medido. Hay dos tests que lo impiden si alguien lo intenta más adelante.
+- **Detalles que importan**: **mediana**, no media (un run que se fue a 300k por un bucle no
+  puede arrastrar la estimación de todas las tareas «m»); solo runs `done` (uno abortado mide
+  lo que se gastó antes de romperse, y sesgaría a la baja justo las tareas que más fallan);
+  mínimo de 5 muestras por nivel; ventana de 90 días.
+- **La UI puede distinguirlo**: el preflight devuelve `ai_calibrated` y el origen por nivel.
+  Presentar un placeholder igual que una medición es cómo un número inventado acaba
+  pareciendo un dato.
+- **Tests**: 8.
 
 #### `task_wf_34` — Standup y retrospectiva visibles
 

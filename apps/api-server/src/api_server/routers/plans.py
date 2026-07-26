@@ -53,6 +53,7 @@ from api_server.chat.cost import (
     compute_ai_cost,
     compute_human_cost,
 )
+from api_server.chat.cost_calibration import resolve_calibrated_estimates
 from api_server.chat.cost_resolution import load_price_catalog, resolve_plan_task_models
 from api_server.chat.dag import DAGCycleError, validate_dag
 from api_server.chat.plan_corrections import (
@@ -845,12 +846,23 @@ async def get_plan_preflight(
     # Las dos monedas van SEPARADAS, no sumadas: la estimación humana es EUR y
     # mide horas de persona; la de IA es USD y mide gasto de tokens. Un número
     # único que las mezclara sería inventado (decisión de `task_wf_30`).
+    calibration = await resolve_calibrated_estimates(
+        session, tenant_id=plan.tenant_id, project_id=plan.project_id
+    )
     payload["cost"] = {
         "human_hours": str(human.total_hours),
         "human_cost": str(human.total_cost),
         "human_currency": human.currency,
         "ai_usd_min": str(ai.cost_min),
         "ai_usd_max": str(ai.cost_max),
+        # `task_wf_33`: si la estimación de IA sale del histórico real de este
+        # proyecto o sigue siendo el mapa estático. Presentar las dos igual
+        # haría que un placeholder pareciera una medición.
+        "ai_calibrated": calibration.calibrated,
+        "ai_calibration_sources": calibration.sources,
+        # Las horas humanas NUNCA se calibran: son horas-persona en EUR y el
+        # histórico es wall-clock de máquina.
+        "human_calibrated": False,
     }
     return payload
 
@@ -1237,11 +1249,20 @@ async def _compute_plan_ai_cost(
     )
     task_models = await resolve_plan_task_models(session, plan)
     catalog = await load_price_catalog(session)
+    # `task_wf_33`: los tokens por complejidad salen del histórico REAL del
+    # proyecto (mediana de runs completados; fallback a tenant y al mapa
+    # estático nivel a nivel). Solo los TOKENS — las horas humanas siguen con el
+    # mapa, porque son horas-persona en EUR y el histórico es wall-clock de
+    # máquina: calibrar una con la otra daría un número que parece medido.
+    calibration = await resolve_calibrated_estimates(
+        session, tenant_id=plan.tenant_id, project_id=plan.project_id
+    )
     return compute_ai_cost(
         spec,
         default_model_id=default_model_id,
         catalog=catalog,
         task_models=task_models,
+        complexity_estimates=calibration.estimates,
     )
 
 
