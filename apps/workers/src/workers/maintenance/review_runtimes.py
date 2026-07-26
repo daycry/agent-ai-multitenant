@@ -81,6 +81,7 @@ async def _block_plan_for_expired_session(db: AsyncSession, row: Any) -> dict[st
         return None
     # T4 (ciclo-vida): toda mutación de estado de plan pasa por la única puerta
     # (el edge pending_human_validation→blocked es legal en la tabla, C8 F40).
+    old_status = plan.status
     transition_plan_status(plan, new_status)
     await db.flush()
     spec = row.spec or {}
@@ -90,7 +91,39 @@ async def _block_plan_for_expired_session(db: AsyncSession, row: Any) -> dict[st
         "session_id": str(row.id),
         "plan_title": str(spec.get("plan_title") or spec.get("title") or ""),
         "owner_user_id": spec.get("owner_user_id"),
+        # task_wf_32: datos del anuncio al tablero, que va DESPUÉS del commit
+        # junto a la notificación. Se llevan aquí porque tras el commit el
+        # objeto ORM está expirado.
+        "project_id": str(plan.project_id),
+        "old_status": old_status,
+        "new_status": new_status,
     }
+
+
+async def _announce_expired_plan_move(payload: dict[str, Any]) -> None:
+    """Publica al bus de planes el bloqueo por review caducada (`task_wf_32`).
+
+    Best-effort y con su propia conexión: el beat no mantiene una, y un fallo
+    aquí no puede deshacer un bloqueo ya commiteado."""
+    try:
+        from api_server.events import publish_plan_status_changed
+        from redis.asyncio import Redis
+
+        redis = Redis.from_url(get_settings().events_redis_url, decode_responses=True)
+        try:
+            await publish_plan_status_changed(
+                redis,
+                plan_id=payload["plan_id"],
+                tenant_id=payload["tenant_id"],
+                project_id=payload["project_id"],
+                old_status=payload["old_status"],
+                new_status=payload["new_status"],
+                title=payload.get("plan_title") or "",
+            )
+        finally:
+            await redis.aclose()
+    except Exception as exc:  # pragma: no cover - bus best-effort
+        _log.warning("maintenance.plan_move_announce_failed", error=str(exc))
 
 
 async def _enqueue_review_expiry_notification(payload: dict[str, Any]) -> None:
@@ -177,6 +210,9 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
     suspended = 0
     reaped = 0
     notify_payloads: list[dict[str, Any]] = []
+    # task_wf_32: transiciones de plan ganadas en esta pasada, anunciadas al
+    # tablero gerencial tras el commit (el mismo momento que la notificación).
+    plan_moves: list[dict[str, Any]] = []
     engine = create_async_engine(settings.database_url)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
@@ -189,6 +225,7 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
                 payload = await _block_plan_for_expired_session(db, row)
                 if payload is not None:
                     notify_payloads.append(payload)
+                    plan_moves.append(payload)
         # 2. Idle → suspended.
         async with sessionmaker() as db, db.begin():
             idle = await list_running_idle(db, idle_for=_SUSPEND_IDLE_AFTER)
@@ -230,6 +267,11 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
     # Notifications OUTSIDE the engine lifecycle — best-effort, one per expired plan.
     for payload in notify_payloads:
         await _enqueue_review_expiry_notification(payload)
+    # task_wf_32: y el mismo movimiento, al tablero gerencial. Una review que
+    # caduca bloquea el plan sin que medie gesto humano: si no se anuncia, la
+    # tarjeta se queda diciendo «pendiente de validación» indefinidamente.
+    for move in plan_moves:
+        await _announce_expired_plan_move(move)
 
     _log.info(
         "maintenance.expire_review_runtimes.done",

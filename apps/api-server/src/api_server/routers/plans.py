@@ -65,7 +65,6 @@ from api_server.chat.plan_state_machine import (
     PlanTransitionError,
     SameSignerError,
     assert_generic_put_transition,
-    transition_plan_status,
 )
 from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
@@ -87,6 +86,7 @@ from api_server.plan_progress import TaskSnapshot, compute_plan_progress
 from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     get_writable_or_404,
+    move_plan,
     require_project_active,
     require_tenant_id,
     soft_delete,
@@ -655,7 +655,7 @@ async def unblock_plan(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"plan is '{plan.status}', not 'blocked'",
         )
-    transition_plan_status(plan, PlanStatus.IN_PROGRESS.value)
+    move_plan(session, plan, PlanStatus.IN_PROGRESS.value)
     blocked_tasks = (
         (
             await session.execute(
@@ -923,7 +923,7 @@ async def update_plan(
                 },
             )
         try:
-            transition_plan_status(plan, payload.status.value, actor=principal.user_id)
+            move_plan(session, plan, payload.status.value, actor=principal.user_id)
         except PlanTransitionError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1350,7 +1350,7 @@ async def approve_plan(
     if not await _plan_has_any_tasks(session, plan):
         raise _plan_has_no_tasks_error()
 
-    _cast_approval_signature(plan, target, principal)
+    _cast_approval_signature(session, plan, target, principal)
 
     await session.flush()
     await session.refresh(plan)
@@ -1358,7 +1358,9 @@ async def approve_plan(
     return to_plan_response(plan)
 
 
-def _cast_approval_signature(plan: Plan, target: str, principal: AuthPrincipal) -> None:
+def _cast_approval_signature(
+    session: AsyncSession, plan: Plan, target: str, principal: AuthPrincipal
+) -> None:
     """Firma el plan hacia ``target``, traduciendo los fallos a 409 tipados.
 
     Extraído para que ``/approve`` y ``/approve-and-start`` firmen por el MISMO
@@ -1366,7 +1368,7 @@ def _cast_approval_signature(plan: Plan, target: str, principal: AuthPrincipal) 
     exactamente cómo se acaba pudiendo saltar la doble firma por uno de los dos.
     """
     try:
-        transition_plan_status(plan, target, actor=principal.user_id)
+        move_plan(session, plan, target, actor=principal.user_id)
     except SameSignerError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1505,7 +1507,7 @@ async def _start_approved_plan(
     ``/approve-and-start`` tiene que comprobarlo ANTES de firmar (ver allí).
     """
     try:
-        transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
+        move_plan(session, plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
     except PlanTransitionError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1587,7 +1589,7 @@ async def approve_and_start_plan(
         raise _plan_has_no_tasks_error()
 
     target = await _resolve_first_signature_target(session, plan)
-    _cast_approval_signature(plan, target, principal)
+    _cast_approval_signature(session, plan, target, principal)
 
     if target == PlanStatus.PENDING_SECOND_APPROVAL.value:
         # Primera de dos firmas: queda registrada y aquí se acaba.
@@ -1775,7 +1777,7 @@ async def accept_plan_corrections(
             detail={"error": "invalid_sync_scope", "message": str(exc)},
         ) from exc
 
-    transition_plan_status(plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
+    move_plan(session, plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
     plan.specification = mark_corrections_accepted(plan.specification or {}, payload.task_ids)
 
     ready_tasks = await promote_ready_tasks(session, plan.id)

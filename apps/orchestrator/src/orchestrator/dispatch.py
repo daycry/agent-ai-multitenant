@@ -62,7 +62,7 @@ from api_server.db.platform_settings import (
     get_execution_budget_ceiling_multiplier,
     resolve_model_config_chain,
 )
-from api_server.events import publish_task_status_changed
+from api_server.events import publish_plan_status_changed, publish_task_status_changed
 from api_server.mcp_oauth_flow import serialise_servers_for_run
 from api_server.plan_progress import (
     PlanStatus,
@@ -403,6 +403,13 @@ class TaskDispatcher:
         # c3/T7: set when the plan is escalated to `blocked`; the operator is notified
         # after commit (same broker-I/O-outside-txn rule).
         blocked_notify: dict[str, Any] | None = None
+        # task_wf_32: la transición ganada, para anunciarla al tablero gerencial
+        # DESPUÉS del commit — un consumidor rápido leería una fila no durable.
+        # Se recoge aquí porque las dos transiciones de este handler se escriben
+        # con UPDATE crudo (guarda atómica) y no pasan por `move_plan`. Se
+        # guardan los VALORES, no la fila: tras el commit el objeto ORM está
+        # expirado y leerlo dispararía un refresh sobre una sesión cerrada.
+        plan_event: dict[str, str] | None = None
         # C3 F05: a transient DB error here must NOT dead-letter the `done` event
         # (the plan would never close) — re-raise it as TransientHandlerError so
         # the consumer keeps it pending for reclaim.
@@ -478,6 +485,13 @@ class TaskDispatcher:
                         )
                     ).scalar_one_or_none()
                     if won_blocked is not None:
+                        plan_event = {
+                            "plan_id": str(plan.id),
+                            "project_id": str(plan.project_id),
+                            "title": plan.title or "",
+                            "old_status": _IN_PROGRESS,
+                            "new_status": blocked.new_status,
+                        }
                         _log.warning(
                             "orchestrator.plan_blocked",
                             plan_id=str(plan.id),
@@ -513,6 +527,13 @@ class TaskDispatcher:
                     )
                 ).scalar_one_or_none()
                 if won is not None:
+                    plan_event = {
+                        "plan_id": str(plan.id),
+                        "project_id": str(plan.project_id),
+                        "title": plan.title or "",
+                        "old_status": _IN_PROGRESS,
+                        "new_status": result.new_status,
+                    }
                     _log.info(
                         "orchestrator.plan_ready_for_review",
                         plan_id=str(plan.id),
@@ -534,6 +555,8 @@ class TaskDispatcher:
                         )
                         autostart_request = None
         # Enqueue OUTSIDE the txn (best-effort; never re-raises into the handler).
+        if plan_event is not None and self._redis is not None:
+            await publish_plan_status_changed(self._redis, tenant_id=str(tenant_id), **plan_event)
         if blocked_notify is not None:
             await self._send_plan_blocked_notification(blocked_notify)
         if autostart_request is not None:

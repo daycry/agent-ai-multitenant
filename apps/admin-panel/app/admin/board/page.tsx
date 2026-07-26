@@ -281,6 +281,35 @@ export default function BoardPage() {
 
   useWebSocket(kanbanUrl, onKanbanEvent);
 
+  // ---- Real-time: la FILA DE PLANES (task_wf_32) ------------------------
+  // El socket es de TENANT y no de proyecto: esta fila lista los planes de
+  // todos los proyectos, así que uno por proyecto dejaría rancias las demás
+  // tarjetas. Sin esto, un plan que pasa a `pending_human_validation` o a
+  // `blocked` —las dos transiciones que ocurren SIN gesto humano— se quedaba
+  // en su columna hasta que alguien recargara.
+  const plansUrl = useMemo(() => wsUrl("/ws/plans"), []);
+
+  const onPlanEvent = useCallback(
+    (data: unknown) => {
+      const event = data as { type?: string; plan_id?: string; payload?: { new_status?: string } };
+      const newStatus = event.payload?.new_status;
+      if (event.type !== "plan.status_changed" || !event.plan_id || !newStatus) return;
+      queryClient.setQueryData<PaginatedResult<Plan>>(["plans", "tenant"], (prev) => ({
+        truncated: prev?.truncated ?? false,
+        items: (prev?.items ?? []).map((p) =>
+          p.id === event.plan_id ? { ...p, status: newStatus } : p,
+        ),
+      }));
+      // La cabecera del plan abierto (progreso, PR, coste) también envejece con
+      // la transición: se invalida en vez de parchearse, porque su contenido no
+      // se deduce del estado nuevo.
+      void queryClient.invalidateQueries({ queryKey: ["plan-status", event.plan_id] });
+    },
+    [queryClient],
+  );
+
+  useWebSocket(plansUrl, onPlanEvent);
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader

@@ -4,6 +4,7 @@ Streams the browser can tail:
 
   /ws/executions/{execution_id}  — every step event of one agent run.
   /ws/kanban/{project_id}        — task transitions of one project.
+  /ws/plans                      — plan status changes of the caller's tenant.
   /ws/conversation/{id}          — one conversation's message/mode events.
   /ws/documents/{id}             — one document's ingestion progress.
 
@@ -54,6 +55,7 @@ from api_server.db.domain import Execution, Project
 from api_server.db.knowledge import Document
 from api_server.events import (
     EVENTS_STREAM,
+    PLANS_STREAM,
     conversation_stream_key,
     document_stream_key,
     execution_stream_key,
@@ -293,6 +295,49 @@ async def kanban_stream(
         tenant_filter=tenant_filter,
         # El estado inicial del tablero es el fetch HTTP; el socket solo aporta
         # lo nuevo (+ una ventana corta de solape). Ver _initial_stream_id.
+        replay_window_ms=_KANBAN_REPLAY_WINDOW_MS,
+    )
+
+
+@router.websocket("/ws/plans")
+async def plans_stream(
+    ws: WebSocket,
+    token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
+    redis: Redis = Depends(get_redis),
+    sessions: SessionStore = Depends(get_session_store),
+) -> None:
+    """Cambios de estado de los planes del tenant (`task_wf_32`).
+
+    De TENANT y no de proyecto: el tablero gerencial lista los planes de todo
+    el tenant, así que un socket por proyecto dejaría rancias las tarjetas de
+    los demás.
+
+    Eso lo hace el primer socket **sin recurso**: los otros cuatro autorizan
+    comprobando que el id pedido existe dentro del tenant del llamante
+    (`_owns_resource`), y aquí no hay id que comprobar. La autorización es que
+    el principal TENGA tenant — y el filtro por `tenant_id` del pump es lo que
+    impide leer los planes de otro. Un superadmin sin tenant elegido no puede
+    abrirlo: sin tenant no hay filtro, y sin filtro el socket sería un
+    escaparate de toda la plataforma.
+    """
+    await ws.accept()
+    principal = await _resolve_principal(token, sessions, tenant_id)
+    if principal is None:
+        await _reject(ws, "unauthenticated")
+        return
+    if principal.tenant_id is None:
+        await _reject(ws, "forbidden")
+        return
+    await _pump(
+        ws,
+        redis,
+        PLANS_STREAM,
+        project_filter=None,
+        tenant_filter=str(principal.tenant_id),
+        # Mismo criterio que el kanban: el estado inicial es el fetch HTTP y el
+        # socket solo aporta lo nuevo. Re-reproducir el histórico resucitaría
+        # estados viejos por encima de datos frescos de BD.
         replay_window_ms=_KANBAN_REPLAY_WINDOW_MS,
     )
 

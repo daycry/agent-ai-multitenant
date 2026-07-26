@@ -279,3 +279,92 @@ async def delete_cortex_affect_stream(redis: Redis, owner_user_id: str) -> None:
         await redis.delete(cortex_telemetry_stream_key(owner_user_id))
     except Exception as exc:  # cleanup is best-effort, never fail the caller
         _log.warning("api_server.cortex_affect_stream_delete_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Plan status stream (`task_wf_32`)
+# ---------------------------------------------------------------------------
+# El tablero gerencial lista los planes de TODO el tenant, así que su socket es
+# de tenant y no de proyecto: uno por proyecto dejaría rancias las tarjetas de
+# los demás.
+#
+# Stream PROPIO y no `events:tasks`: aquel lo consume el orchestrator con
+# XREADGROUP para asignar tareas, y un evento de plan ahí solo le añade trabajo
+# que descartar. (No lo rompería —`consumer.py` cuenta el malformado y hace
+# ACK— pero mezclar dos contratos en un bus para ahorrarse una constante es
+# como se acaba con un consumidor que filtra más de lo que procesa.)
+PLANS_STREAM = "events:plans"
+
+EVENT_PLAN_STATUS_CHANGED = "plan.status_changed"
+
+
+async def publish_plan_status_changed(
+    redis: Redis,
+    *,
+    plan_id: str,
+    tenant_id: str,
+    project_id: str,
+    old_status: str,
+    new_status: str,
+    title: str = "",
+) -> None:
+    """Emite el cambio de estado de un plan (best-effort, como el resto del bus).
+
+    Lo llaman los TRES servicios que mueven un plan: el api-server por sus
+    endpoints, el orchestrator al cerrarse la última tarea y el worker de
+    mantenimiento como red de seguridad. Que sea una función y no una línea
+    copiada tres veces es lo que hace que el tablero vea los tres caminos —
+    dos de ellos (`pending_human_validation` y `blocked`) se escriben con
+    UPDATE crudo, saltándose la máquina de estados, así que engancharlo solo a
+    `transition_plan_status` no emitiría ninguno de los dos.
+    """
+    if old_status == new_status:
+        return
+    try:
+        await redis.xadd(
+            PLANS_STREAM,
+            {
+                "type": EVENT_PLAN_STATUS_CHANGED,
+                "tenant_id": tenant_id,
+                "project_id": project_id,
+                "plan_id": plan_id,
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps(
+                    {"old_status": old_status, "new_status": new_status, "title": title}
+                ),
+            },
+            maxlen=_MAXLEN,
+            approximate=True,
+        )
+    except Exception as exc:  # el bus es best-effort, nunca tumba al llamante
+        _log.warning("api_server.plan_event_publish_failed", error=str(exc))
+
+
+def publish_plan_transition_after_commit(session: Any, plan: Any, old_status: str) -> None:
+    """Publica la transición de `plan` cuando la sesión del request commitee.
+
+    Post-commit y no en línea, por lo mismo que los eventos de tarea: un
+    consumidor rápido leería una fila que aún no es durable. Se usa en el
+    api-server (donde `schedule_after_commit` existe); los caminos del
+    orchestrator y del worker publican a mano tras su propio commit.
+    """
+    from api_server.auth.deps import get_redis, schedule_after_commit
+
+    new_status = plan.status
+    if old_status == new_status:
+        return
+    plan_id, tenant_id = str(plan.id), str(plan.tenant_id)
+    project_id, title = str(plan.project_id), plan.title or ""
+
+    async def _publish() -> None:
+        await publish_plan_status_changed(
+            get_redis(),
+            plan_id=plan_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            old_status=old_status,
+            new_status=new_status,
+            title=title,
+        )
+
+    schedule_after_commit(session, _publish)

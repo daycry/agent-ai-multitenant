@@ -506,13 +506,25 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_32` — WebSocket de plan
 
-- [ ] **Título**: stream `/ws/plan/{project_id}` con las transiciones de estado de plan,
-      consumido por el tablero gerencial, siguiendo el patrón del stream de kanban.
-- **Hallazgo**: D-03 (medio) · **Tiempo**: 0,75 d
-- **Ficheros**: `apps/api-server/src/api_server/routers/ws.py:264-300`,
-  `app/admin/board/page.tsx`
-- **Tests**: integración del stream con auth por query param; e2e de que un cambio de estado
-  se refleja sin recargar.
+- [x] _(hecho, con el enunciado corregido)_ **Título**: stream **`/ws/plans` de TENANT** (no
+      `/ws/plan/{project_id}`) con las transiciones de estado de plan, consumido por el
+      tablero gerencial.
+- **Hallazgo**: D-03 (medio) · **Tiempo**: 0,75 d (real ≈1,5)
+- **Ficheros**: `api_server/events.py` (stream `events:plans` + publicador),
+  `routers/ws.py`, `routers/_helpers.py` (`move_plan`), `routers/{plans,review,
+task_lifecycle}.py`, `orchestrator/dispatch.py`, `workers/maintenance/{reconciler,
+review_runtimes}.py`, `app/admin/board/page.tsx`
+- **Las dos correcciones del recon, aplicadas**: (1) el socket es de **tenant** — el tablero
+  lista los planes de todo el tenant y uno por proyecto dejaría rancias las demás tarjetas;
+  es el primer socket **sin recurso**, así que su autorización es «tener tenant» + el filtro
+  del pump, y un superadmin sin tenant elegido no puede abrirlo. (2) El 80% era el lado
+  **productor**: se cablearon los 8 sitios del api-server (vía `move_plan`, que transiciona
+  y anuncia en una sola llamada) **y los 4 de UPDATE crudo** del orchestrator, el reconciler
+  y el barrido de reviews caducadas — que son justo los que producen
+  `pending_human_validation` y `blocked`, las dos transiciones sin gesto humano.
+- **Tests**: 4 unit, uno de ellos el **guard estático**: cualquier módulo que escriba el
+  estado de un plan y no lo anuncie rompe la suite. Es lo que impide que el sitio nº 13
+  vuelva a dejar el tablero rancio.
 
 #### `task_wf_33` — Estimaciones calibradas con datos reales
 

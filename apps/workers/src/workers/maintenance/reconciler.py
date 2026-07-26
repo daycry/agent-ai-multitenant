@@ -478,7 +478,9 @@ async def _reconcile_orphan_reviews(
     return reannounced
 
 
-async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSession]) -> int:
+async def _reconcile_complete_plans(
+    sessionmaker: async_sessionmaker[AsyncSession], redis: Any | None = None
+) -> int:
     """Case (c): flip `in_progress` plans whose tasks are ALL terminal to
     `pending_human_validation` AND auto-start their review-runtime.
 
@@ -588,6 +590,16 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
                     new_status=result.new_status,
                 )
                 transitioned += 1
+                # task_wf_32: la red de seguridad también anuncia. Sin esto, un
+                # plan que llega a `pending_human_validation` por el beat (y no
+                # por el orchestrator) se movería sin que el tablero se entere —
+                # justo el caso en el que el evento del orchestrator se perdió.
+                await _announce_plan_move(
+                    redis,
+                    plan=plan,
+                    old_status=PlanStatus.IN_PROGRESS.value,
+                    new_status=result.new_status,
+                )
                 # El autostart del review-runtime solo aplica al camino
                 # pending_human_validation, NO a blocked.
                 won = result.new_status == "pending_human_validation"
@@ -599,7 +611,9 @@ async def _reconcile_complete_plans(sessionmaker: async_sessionmaker[AsyncSessio
     return transitioned
 
 
-async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSession]) -> int:
+async def _reconcile_unblocked_plans(
+    sessionmaker: async_sessionmaker[AsyncSession], redis: Any | None = None
+) -> int:
     """Red de seguridad del hallazgo #2: revierte planes ``blocked`` cuyo snapshot
     de tareas YA no justifica el bloqueo, sin exigir un segundo click humano.
 
@@ -700,6 +714,12 @@ async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSessi
                     new_status=result.new_status,
                 )
                 reverted += 1
+                await _announce_plan_move(
+                    redis,
+                    plan=plan,
+                    old_status=PlanStatus.BLOCKED.value,
+                    new_status=result.new_status,
+                )
                 # M-1 (auditoría 2026-07-10): notificar la reversión — en esta vía
                 # (la red async) nadie se entera de otro modo: no hubo gesto humano.
                 # Best-effort tras el commit del guard atómico; espejo del
@@ -710,6 +730,28 @@ async def _reconcile_unblocked_plans(sessionmaker: async_sessionmaker[AsyncSessi
                     plan_name=plan.title or "",
                 )
     return reverted
+
+
+async def _announce_plan_move(
+    redis: Any | None, *, plan: Any, old_status: str, new_status: str
+) -> None:
+    """Anuncia al tablero gerencial una transición ganada por el beat
+    (`task_wf_32`). Best-effort y con `redis` opcional: los tests del núcleo
+    llaman a los reconciliadores sin bus, y quedarse sin anunciar no puede
+    impedir la reconciliación — que es el trabajo de verdad."""
+    if redis is None:
+        return
+    from api_server.events import publish_plan_status_changed
+
+    await publish_plan_status_changed(
+        redis,
+        plan_id=str(plan.id),
+        tenant_id=str(plan.tenant_id),
+        project_id=str(plan.project_id),
+        old_status=old_status,
+        new_status=new_status,
+        title=plan.title or "",
+    )
 
 
 async def _notify_plan_unblocked(*, tenant_id: str, plan_id: str, plan_name: str) -> None:
@@ -843,13 +885,13 @@ async def _reconcile_pipeline_state_async(
         # in_progress y, en la MISMA pasada, _reconcile_complete_plans lo lleva a
         # pending_human_validation — sin esperar al siguiente beat.
         try:
-            result["unblocked_plans"] = await _reconcile_unblocked_plans(sessionmaker)
+            result["unblocked_plans"] = await _reconcile_unblocked_plans(sessionmaker, redis)
         except Exception as exc:
             _log.warning(
                 "maintenance.reconcile_pipeline_state.unblocked_plans_error", error=str(exc)
             )
         try:
-            result["completed_plans"] = await _reconcile_complete_plans(sessionmaker)
+            result["completed_plans"] = await _reconcile_complete_plans(sessionmaker, redis)
         except Exception as exc:
             _log.warning(
                 "maintenance.reconcile_pipeline_state.completed_plans_error", error=str(exc)

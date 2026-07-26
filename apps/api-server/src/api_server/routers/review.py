@@ -45,7 +45,6 @@ from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
 from api_server.celery_client import enqueue_event_dispatch, enqueue_open_plan_pr
-from api_server.chat.plan_state_machine import transition_plan_status
 from api_server.config import get_settings
 from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
@@ -56,6 +55,7 @@ from api_server.db.review_session_repo import (
     touch_activity,
 )
 from api_server.db.session import get_admin_sessionmaker
+from api_server.routers._helpers import move_plan
 
 router = APIRouter(tags=["review"])
 
@@ -512,9 +512,7 @@ async def submit_verdict(
                 # transición pending_human_validation→completed|rejected es legal (la
                 # misma de hoy); se PRESERVA el orden completar→encolar-PR (ADR 0072
                 # fase 2), sin cambio de comportamiento.
-                transition_plan_status(
-                    plan, "completed" if body.verdict == "approved" else "rejected"
-                )
+                move_plan(db, plan, "completed" if body.verdict == "approved" else "rejected")
                 if plan.status == "completed" and plan.project_id is not None:
                     pr_ctx = (plan.project_id, plan.id, plan.title or "")
             plan_status = plan.status

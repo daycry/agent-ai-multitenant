@@ -30,13 +30,12 @@ from api_server.auth.deps import (
     schedule_after_commit,
 )
 from api_server.chat.dag_enforcement import DependenciesNotDoneError, assert_dependencies_done
-from api_server.chat.plan_state_machine import transition_plan_status
 from api_server.db.domain import Plan, Task, TaskDependency
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
 from api_server.events import publish_task_status_changed
 from api_server.plan_progress import PlanStatus as PlanStatusLiteral
 from api_server.plan_progress import TaskSnapshot, transition_from_blocked
-from api_server.routers._helpers import require_tenant_id
+from api_server.routers._helpers import move_plan, require_tenant_id
 
 router = APIRouter(prefix="/tasks", tags=["task-lifecycle"])
 
@@ -176,7 +175,7 @@ async def reactivate_plan_if_unstuck(session: AsyncSession, plan_id: UUID) -> bo
     result = transition_from_blocked(cast(PlanStatusLiteral, plan.status), snapshots)
     if not result.transitioned:
         return False
-    transition_plan_status(plan, "in_progress")
+    move_plan(session, plan, "in_progress")
     # M-1 (auditoría 2026-07-10): notificar la reversión — el simétrico del
     # `plan_blocked` del escalado, para que una notificación de bloqueo previa no
     # quede accionable en falso. Post-commit (la fila debe ser durable) y
