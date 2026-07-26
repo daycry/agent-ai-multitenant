@@ -146,6 +146,15 @@ services:
       - node_exporter_textfile:/host/textfile
     network_mode: none
     restart: "no"
+    # Efímero pero corre como root: era el único servicio del stack sin la línea
+    # base de endurecimiento (2026-07-26). `chmod` sobre un directorio cuyo
+    # dueño ya es root no necesita ninguna capability —el euid coincide con el
+    # propietario, no hace falta CAP_FOWNER—, así que `cap_drop: [ALL]` no le
+    # quita nada que use. Verificado ejecutándolo así antes de fijarlo.
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=agentic-default
+    cap_drop: [ALL]
 
   # ---------------------------------------------------------------------------
   # Alertmanager — receives firing alerts from Prometheus, dedups/groups/

@@ -252,6 +252,15 @@ def _rendered_services(path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _effective_services(path: Path) -> dict[str, dict[str, Any]]:
+    """Los servicios que este compose DEFINE, sin los fragmentos de override que
+    solo parchean un servicio declarado en otro fichero (ver
+    ``tests/security/_compose.py``)."""
+    from tests.security._compose import defined_services
+
+    return defined_services(_rendered_services(path))
+
+
 def _security_opt(spec: dict[str, Any]) -> list[str]:
     opt = spec.get("security_opt") or []
     return [str(x) for x in opt]
@@ -483,7 +492,7 @@ def test_every_prod_service_references_an_apparmor_profile() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if name in APPARMOR_EXEMPT_SERVICES:
                 continue
             if not _references_apparmor(spec):
@@ -500,7 +509,7 @@ def test_pinned_compose_apparmor_names_resolve_to_a_shipped_profile() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             for opt in _security_opt(spec):
                 if not opt.startswith("apparmor="):
                     continue
@@ -519,7 +528,7 @@ def test_no_prod_service_runs_apparmor_unconfined() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if "apparmor=unconfined" in _security_opt(spec):
                 offenders.append(f"{path.name}:{name}")
     assert not offenders, "services running apparmor=unconfined: " + ", ".join(offenders)

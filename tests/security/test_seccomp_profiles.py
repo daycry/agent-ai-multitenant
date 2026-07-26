@@ -367,6 +367,15 @@ def test_agent_runtime_profile_has_the_boot_viability_essentials() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _effective_services(path: Path) -> dict[str, dict[str, Any]]:
+    """Los servicios que este compose DEFINE, sin los fragmentos de override que
+    solo parchean un servicio declarado en otro fichero (ver
+    ``tests/security/_compose.py``)."""
+    from tests.security._compose import defined_services
+
+    return defined_services(_rendered_services(path))
+
+
 def test_every_prod_service_carries_the_trusted_hardening_baseline() -> None:
     """Each long-lived TRUSTED service in the base + monitoring compose pins the
     trusted hardening baseline ``no-new-privileges:true`` (the host-agent
@@ -378,7 +387,7 @@ def test_every_prod_service_carries_the_trusted_hardening_baseline() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if not _references_no_new_privileges(spec):
                 missing.append(f"{path.name}:{name}")
     assert not missing, "services WITHOUT no-new-privileges pinned: " + ", ".join(missing)
@@ -396,7 +405,7 @@ def test_trusted_services_do_not_pin_a_custom_seccomp_profile() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if _references_seccomp(spec):
                 offenders.append(f"{path.name}:{name}")
     assert not offenders, (
@@ -413,7 +422,7 @@ def test_base_compose_never_sets_seccomp_unconfined() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if "seccomp=unconfined" in _security_opt(spec):
                 offenders.append(f"{path.name}:{name}")
     assert not offenders, "services running seccomp=unconfined: " + ", ".join(offenders)
