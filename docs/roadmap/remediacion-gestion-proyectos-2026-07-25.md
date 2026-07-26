@@ -997,7 +997,7 @@ refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
     run nuevo y legítimo no se toca nunca. De paso, `release_run_lock` pasa a devolver si
     borró de verdad: la primera versión contaba intentos y el contador
     `run_locks_released` habría mentido justo durante un incidente.
-- [x] _(ADR 0131 escrito, decisión del operador pendiente)_ **`task_wf_12` no funciona de punta a punta**: nadie fija `AGENT_VAULT_TOKEN` en
+- [x] _(ADR 0131 `accepted` + opción C implementada en `c8f9e2cc`)_ **`task_wf_12` no funciona de punta a punta**: nadie fija `AGENT_VAULT_TOKEN` en
       todo el repo (solo se lee, en el runtime). Meter un token de Vault en el sandbox
       choca con el principio 2 de `CLAUDE.md`. **Necesita ADR**: o el worker resuelve el
       token y lo inyecta canjeado, o la llamada MCP va mediada por el worker como
