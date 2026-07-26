@@ -13,9 +13,14 @@ sombra no puede bloquear ni alterar una ejecución de verdad.
 
 El grifo, por defecto, está cerrado
 -----------------------------------
-Cada eval en la sombra cuesta llamadas de juez, así que encenderlo tiene que
-ser un acto deliberado y visible. Hacen falta TRES condiciones, y cada una es
-algo que un operador hace a propósito:
+Conviene saber lo que cuesta antes de abrirlo: **una** corrida en la sombra son
+``items x (1 llamada de sujeto + N de juez)`` sobre el dataset entero, no una
+llamada por tarea muestreada. Con un dataset de 20 items y 3 criterios son 80
+llamadas por corrida; el tope de 5 corridas por latido lo deja en 400 llamadas
+a la hora en el peor caso. No es una cifra que deba encenderse por accidente.
+
+Por eso hacen falta TRES condiciones, y cada una es algo que un operador hace a
+propósito:
 
   1. tasa de muestreo > 0 (`EVAL_SHADOW_SAMPLE_RATE`, 5 % documentado);
   2. un modelo juez nombrado (`EVAL_JUDGE_MODEL`) — sin saber quién juzga no se
@@ -151,6 +156,10 @@ async def _candidates(session: Any, tenant_id: UUID) -> list[tuple[UUID, UUID, A
         .where(
             Task.tenant_id == tenant_id,
             Task.status == TaskStatus.DONE.value,
+            # Redundante con el join (una execution cuelga de una task, y la
+            # task ya está filtrada), pero el beat corre BYPASSRLS: aquí no hay
+            # red de seguridad de RLS y el filtro explícito es la única guarda.
+            Execution.tenant_id == tenant_id,
             Execution.status == "done",
             Execution.created_at >= since,
             Task.id.not_in(already),

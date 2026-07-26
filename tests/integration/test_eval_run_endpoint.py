@@ -57,6 +57,18 @@ class _ScriptedJudge:
         )
 
 
+class _GarbageJudge:
+    """Juez que contesta prosa: lo que hace un modelo pequeño de verdad."""
+
+    def __init__(self, model: str = "modelo-juez") -> None:
+        self.model = model
+
+    async def judge(self, prompt: str) -> Any:
+        from api_server.evals.judge import JudgeCallResult
+
+        return JudgeCallResult(text="Pues me parece que está bastante bien, la verdad.")
+
+
 class _ScriptedSubject:
     """Sujeto que produce una salida RECONOCIBLE y distinta de la referencia."""
 
@@ -488,6 +500,48 @@ def test_a_dataset_too_big_for_one_request_is_refused_up_front(
             assert "4" in detail["message"]
 
         # Y no ha quedado un run a medias en la tabla.
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            assert await conn.fetchval("SELECT count(*) FROM eval_runs") == 0
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_a_judge_that_answers_prose_says_so_instead_of_a_mute_500(
+    configured_app,  # noqa: F811
+    migrations_pg_dsn: str,
+    test_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un modelo pequeño como juez contesta en prosa, no en el JSON del contrato.
+
+    Sin traducirlo, el operador ve un 500 y no sabe que el problema es SU
+    elección de juez. Y lo que importa además: la transacción se deshace, así
+    que no queda un run colgado en `running` engordando el dashboard.
+    """
+
+    async def _run() -> None:
+        await _truncate_all(migrations_pg_dsn)
+        tenant = await _seed_tenant(migrations_pg_dsn, slug=f"t{uuid4().hex[:8]}")
+        _uid, jwt = await _seed_user_with_jwt(
+            migrations_pg_dsn,
+            test_redis_url,
+            tenant_id=tenant,
+            email=f"{uuid4().hex[:8]}@x.io",
+            role="tenant_admin",
+        )
+        _install_seams(monkeypatch, _GarbageJudge(), _ScriptedSubject())
+
+        async with _client(configured_app) as client:
+            dataset_id = await _seed_dataset_with_item(client, jwt)
+            resp = await client.post("/eval-runs", json=_body(dataset_id), headers=_auth(jwt))
+            assert resp.status_code == 502, resp.text
+            detail = resp.json()["detail"]
+            assert detail["error"] == "judge_unparseable"
+            assert "modelo-juez" in detail["message"]
+
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
             assert await conn.fetchval("SELECT count(*) FROM eval_runs") == 0

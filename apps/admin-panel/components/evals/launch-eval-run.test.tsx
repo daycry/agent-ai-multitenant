@@ -179,6 +179,19 @@ describe("describeLaunchError", () => {
     expect(describeLaunchError(error)).toContain("400 llamadas");
   });
 
+  it("un juez que contesta prosa se explica como problema del juez", () => {
+    const error = new ApiError(
+      502,
+      JSON.stringify({
+        detail: {
+          error: "judge_unparseable",
+          message: "el modelo juez «qwen:0.5b» devolvió algo que no se puede puntuar.",
+        },
+      }),
+    );
+    expect(describeLaunchError(error)).toContain("qwen:0.5b");
+  });
+
   it("un cuerpo que no es JSON se enseña tal cual en vez de reventar el diálogo", () => {
     expect(describeLaunchError(new ApiError(502, "<html>Bad Gateway</html>"))).toContain(
       "Bad Gateway",

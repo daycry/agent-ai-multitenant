@@ -793,6 +793,13 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Último tramo (UI)** — sin esto el trabajo no se puede usar: `LaunchEvalRun` (botón «Lanzar
   corrida» en `/admin/eval-quality`, que bloquea juez==sujeto y dataset vacío **antes** de
   gastar una llamada) y `EvalRunResults` (fila expandible con el desglose, fallos primero).
+- **Los dos fallos que la revisión adversarial encontró y se arreglaron**: (1) el beat corre
+  BYPASSRLS y su join a `executions` no filtraba `tenant_id` — redundante con el join, pero ahí
+  no hay red de RLS y el filtro explícito es la única guarda; (2) un juez que contesta prosa en
+  vez del JSON del contrato —lo típico de un modelo pequeño— daba un **500 mudo**: ahora es un
+  502 que nombra el modelo, porque el problema es la elección de juez y el operador tiene que
+  poder verlo. En los dos casos la transacción se deshace: nunca queda un run colgado en
+  `running` engordando el dashboard.
 - **Un tope, porque la corrida es síncrona**: se ejecuta dentro de la petición y son
   `items x (1 sujeto + N criterios)` llamadas. `MAX_SYNC_EVAL_CALLS = 200`; por encima se
   rechaza **por adelantado y con la cifra concreta**. Morir a mitad daría un 504 sin run y sin
@@ -802,12 +809,12 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   `workers/maintenance/shadow_evals.py` (nuevo), `beat_schedule.py`,
   `components/evals/{launch-eval-run,eval-run-results}.tsx` (nuevos),
   `app/admin/eval-quality/page.tsx`
-- **Tests**: 9 de integración (camino feliz, la trampa de la referencia, versión de prompt,
+- **Tests**: 11 de integración (camino feliz, la trampa de la referencia, versión de prompt,
   dataset vacío→422, juez==sujeto→409, RBAC, y **dos cross-tenant**: ni lanzar contra el dataset
   ajeno ni leer los resultados ajenos — el segundo importa porque los resultados son otra tabla
   y otra consulta, y sin resolver antes el run un `WHERE run_id=…` devolvería lista vacía en vez
-  de 404, confirmando que el run existe; y el tope de tamaño); 20 unit (adaptadores + las guardas del beat);
-  21 de frontend.
+  de 404, confirmando que el run existe; el tope de tamaño y el juez ilegible); 20 unit (adaptadores + las guardas del beat);
+  22 de frontend.
 - **Criterio de aceptación**: cumplido en cuanto se siembre — el productor, el lector y el
   muestreador están puestos y probados; lo único que queda para que el dashboard tenga datos es
   la curaduría humana del dataset.

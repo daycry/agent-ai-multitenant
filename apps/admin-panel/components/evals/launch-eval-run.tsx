@@ -89,6 +89,11 @@ export function describeLaunchError(error: unknown): string {
       ? (obj["message"] as string)
       : "El dataset es demasiado grande para una corrida síncrona. Párte lo o reduce criterios.";
   }
+  if (code === "judge_unparseable") {
+    return typeof obj?.["message"] === "string"
+      ? (obj["message"] as string)
+      : "El modelo juez devolvió algo que no se puede puntuar. Prueba con un modelo más capaz.";
+  }
   if (code === "no_llm_provider") {
     return "No hay proveedor LLM activo para actuar de juez. Configura uno en Proveedores LLM.";
   }

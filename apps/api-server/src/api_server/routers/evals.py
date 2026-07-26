@@ -61,7 +61,7 @@ from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tena
 from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
 from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem, EvalResult, EvalRun
 from api_server.evals.diff import DatasetMismatchError, RunDiff, diff_runs
-from api_server.evals.judge import SameModelJudgeError, run_eval
+from api_server.evals.judge import JudgeResponseError, SameModelJudgeError, run_eval
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -1010,6 +1010,21 @@ async def create_eval_run(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": "same_model_judge", "message": str(exc)},
+        ) from exc
+    except JudgeResponseError as exc:
+        # El juez contestó algo que el motor no sabe puntuar (prosa en vez del
+        # JSON del contrato: típico de un modelo pequeño). Sin esto sería un 500
+        # mudo y el operador no sabría que el problema es SU elección de juez.
+        # La transacción se deshace, así que no queda un run a medias.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "judge_unparseable",
+                "message": (
+                    f"el modelo juez «{payload.judge_model}» devolvió algo que no se puede "
+                    f"puntuar ({exc}). Prueba con un modelo más capaz como juez."
+                ),
+            },
         ) from exc
 
     await session.refresh(run)
