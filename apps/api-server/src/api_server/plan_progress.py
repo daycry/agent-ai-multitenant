@@ -219,6 +219,44 @@ def transition_to_blocked(
     return TransitionResult(new_status="blocked", transitioned=True)
 
 
+def decide_plan_closure(
+    current_status: PlanStatus,
+    tasks: Iterable[TaskSnapshot],
+) -> TransitionResult:
+    """La decisión de cierre de un plan `in_progress`, en UN solo sitio
+    (`task_wf_58`).
+
+    Al terminar una tarea hay que decidir lo mismo desde dos servicios: el
+    orchestrator, cuando consume el evento `task.done`, y el reconciler, como
+    red de seguridad cuando ese evento se pierde. Los dos hacían la misma
+    secuencia —¿pasa a validación humana? si no, ¿está atascado?— escrita dos
+    veces en dos apps, con un comentario prometiendo que eran iguales.
+
+    Ahora es una función. Una promesa en un comentario se rompe sin que nada
+    falle; una función compartida no puede divergir.
+
+    Devuelve el resultado de :func:`transition_to_pending_human_validation` si
+    dispara, si no el de :func:`transition_to_blocked`. El orden importa: un
+    plan cuyas tareas están TODAS hechas va a validación aunque alguna estuviera
+    bloqueada antes; solo si no puede cerrarse se plantea si está atascado.
+    """
+    materialised = list(tasks)
+    if not materialised:
+        # Un snapshot vacío satisface «todas las tareas hechas» por vacuidad, y
+        # cerrar un plan sin trabajo materializado sería declarar validado algo
+        # que nadie hizo. El reconciler ya lo salta antes de llegar aquí; la
+        # función no debería depender de que su llamante se acuerde.
+        return TransitionResult(
+            new_status=current_status,
+            transitioned=False,
+            reason="the plan has no materialised tasks",
+        )
+    result = transition_to_pending_human_validation(current_status, materialised)
+    if result.transitioned:
+        return result
+    return transition_to_blocked(current_status, materialised)
+
+
 def has_open_tasks(tasks: Iterable[TaskSnapshot]) -> bool:
     """¿Queda alguna tarea NO terminal (ni ``done`` ni ``cancelled``) en el snapshot?
 

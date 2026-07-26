@@ -503,8 +503,7 @@ async def _reconcile_complete_plans(
     )
     from api_server.plan_progress import (
         TaskSnapshot,
-        transition_to_blocked,
-        transition_to_pending_human_validation,
+        decide_plan_closure,
     )
     from sqlalchemy import select, update
 
@@ -562,13 +561,9 @@ async def _reconcile_complete_plans(
             # La columna es `str`; el Literal refleja el StrEnum del dominio 1:1
             # (mypy-total 2026-07-08) — cast, no conversión.
             plan_status = cast(PlanStatusLiteral, plan.status)
-            result = transition_to_pending_human_validation(plan_status, snapshots)
-            # prod-06 A1: safety-net del escalado a blocked cuando el evento
-            # `_on_task_done` del orchestrator se perdió — el mismo camino que el
-            # dispatch, aquí como red del beat (un plan atascado NO se queda
-            # in_progress para siempre sin señal al operador).
-            if not result.transitioned:
-                result = transition_to_blocked(plan_status, snapshots)
+            # `task_wf_58`: la MISMA función que usa el dispatch. Antes eran dos
+            # copias de la secuencia con un comentario prometiendo que coincidían.
+            result = decide_plan_closure(plan_status, snapshots)
             if not result.transitioned:
                 continue
             won_id = (

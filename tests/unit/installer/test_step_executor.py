@@ -10,6 +10,8 @@ The real subprocess/hvac calls are exercised only by the e2e / human tests.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from installer_backend.command_runner import FakeCommandRunner
 from installer_backend.compose_generator import PROJECT_NAME
@@ -81,8 +83,13 @@ def test_generate_config_env_carries_no_dev_secret_marker_in_prod(
     ex, _runner, writer, _tree = _executor(installer_config, gen_secrets)
     ex.execute(InstallStep.GENERATE_CONFIG, {})
     env_text = writer.written[f"{_COMPOSE_DIR}/.env"]
-    # Production .env must not carry a ${VAR:-default} dev marker.
-    assert ":-" not in env_text
+    # El .env de producción no puede llevar un default de desarrollo
+    # `${VAR:-valor}`. Se busca el PATRÓN, no el substring `:-` suelto: los
+    # secretos son `token_urlsafe`, que empieza por `-` una vez de cada 64, y
+    # dentro de una URL (`usuario:CONTRASEÑA@host`) eso produce `:-` sin que
+    # haya ningún default. Era un test que fallaba ~1 de cada 10 ejecuciones
+    # por azar y le echaba la culpa al commit que tocara.
+    assert not re.search(r"\$\{[^}]+:-", env_text), env_text
 
 
 def test_docker_steps_issue_expected_argv_in_order(

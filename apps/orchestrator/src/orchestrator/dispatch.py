@@ -67,8 +67,7 @@ from api_server.mcp_oauth_flow import serialise_servers_for_run
 from api_server.plan_progress import (
     PlanStatus,
     TaskSnapshot,
-    transition_to_blocked,
-    transition_to_pending_human_validation,
+    decide_plan_closure,
 )
 from api_server.review_autostart import (
     COMPOSE_REVIEW_RUNTIME_TASK as _COMPOSE_REVIEW_RUNTIME_TASK,
@@ -119,6 +118,7 @@ def _is_transient_db_error(exc: BaseException) -> bool:
 # A task is dispatchable the moment it reaches `ready`.
 _READY = "ready"
 _IN_PROGRESS = "in_progress"
+_BLOCKED = "blocked"
 # Terminal status that may complete the owning plan.
 _DONE = "done"
 _IN_REVIEW = TaskStatus.IN_REVIEW.value
@@ -462,15 +462,19 @@ class TaskDispatcher:
             # La columna es `str`; el Literal PlanStatus refleja el StrEnum del
             # dominio 1:1 (mypy-total 2026-07-08) — cast, no conversión.
             plan_status = cast(PlanStatus, plan.status)
-            result = transition_to_pending_human_validation(plan_status, snapshots)
-            if not result.transitioned:
+            # `task_wf_58`: la MISMA función que usa el reconciler como red de
+            # seguridad. `blocked` sale del mismo resultado, no de una segunda
+            # llamada — así las dos vías no pueden discrepar sobre el mismo
+            # snapshot.
+            result = decide_plan_closure(plan_status, snapshots)
+            if not result.transitioned or result.new_status == _BLOCKED:
                 # c3 (audit 2026-07-03): a plan whose only remaining open tasks
                 # are `blocked` can never reach pending_human_validation (blocked
                 # counts as open), so it would sit `in_progress` forever with no
                 # automatic route out. Escalate it to `blocked` (same atomic,
                 # idempotent status=in_progress guard) so the operator sees the
                 # stall and can unblock/retry a task.
-                blocked = transition_to_blocked(plan_status, snapshots)
+                blocked = result
                 if blocked.transitioned:
                     won_blocked = (
                         await session.execute(

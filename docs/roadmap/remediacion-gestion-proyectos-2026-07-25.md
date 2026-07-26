@@ -831,8 +831,15 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_58` — Test-contrato reconciler ↔ dispatch
 
-- [ ] **Título**: fijar con un test la promesa que hoy es un comentario: ambas rutas producen
-      la misma transición sobre el mismo fixture.
+- [x] _(hecho — y además se elimina la duplicación)_ **Título**: fijar con un test la promesa
+      que hoy es un comentario. Se hizo lo de un paso más allá: la secuencia de decisión vive
+      ahora en **`decide_plan_closure`**, que llaman las dos vías. Una promesa en un
+      comentario se rompe sin que nada falle; una función compartida no puede divergir.
+- **Tests**: 19 — dos guards estáticos (ambos módulos la llaman; ninguno recompone la
+  secuencia a mano) + la tabla de snapshots, incluidos los tres casos que costaron
+  auditorías. De paso apareció un caso que la pieza suelta resolvía mal: un snapshot **vacío**
+  satisface «todas hechas» por vacuidad y cerraba el plan; ahora la decisión compartida lo
+  rechaza sin depender de que el llamante se acuerde de filtrarlo.
 - **Hallazgo**: C-09 (bajo) · **Tiempo**: 0,5 d
 - **Ficheros**: `apps/workers/src/workers/maintenance/reconciler.py:319-438`,
   `apps/orchestrator/src/orchestrator/dispatch.py:371-537`
