@@ -389,7 +389,11 @@ def _wire_mcp_servers(registry: Any, spec: dict[str, Any]) -> MCPWiring:
     from agent_runtime.mcp_tools import MCPToolRunner, register_mcp_server
 
     failures: list[dict[str, str]] = []
-    runner = MCPToolRunner(vault_resolver=_build_mcp_vault_resolver())
+    # `vault_resolver` sigue siendo para los `auth_ref` de ADR 0052 (claves
+    # estáticas). La credencial OAuth ya NO sale de ahí: la pide al API interno
+    # (ADR 0131 opción C), así que un servidor OAuth funciona sin que el sandbox
+    # tenga token de Vault ninguno.
+    runner = MCPToolRunner(vault_resolver=_build_mcp_vault_resolver(), api=_build_internal_api())
     runner.start()
     for raw in raw_servers:
         try:

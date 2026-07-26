@@ -265,6 +265,17 @@ class InternalAgentAPI:
             body["title"] = title
         return self._post("/internal/agent/promote-to-kb", body)
 
+    def mcp_oauth_token(self, *, server: str, refresh: bool = False) -> dict[str, Any]:
+        """El access token vigente de un servidor MCP con OAuth (ADR 0131, C).
+
+        Se manda el NOMBRE del servidor, nunca la ruta de Vault: esa la compone
+        el servidor con el tenant del token y el proyecto del run. Con
+        ``refresh=True`` —solo tras un 401 real del remoto— la plataforma canjea
+        el refresh token, lo persiste y devuelve el nuevo. El refresh token no
+        baja nunca hasta aquí.
+        """
+        return self._post("/internal/agent/mcp-oauth-token", {"server": server, "refresh": refresh})
+
 
 __all__ = [
     "InternalAPIConfigError",

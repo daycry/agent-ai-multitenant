@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 from shared_mcp.catalog import template_for_url, uses_oauth
 from shared_mcp.oauth import oauth_vault_path
@@ -160,30 +161,97 @@ def test_the_runtime_config_mapper_reads_the_oauth_ref() -> None:
     assert config.oauth_ref == "vault:secret/data/mcp-oauth/t1/p1/atlassian-remote"
 
 
-def test_the_provider_is_built_against_the_servers_base_url(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """El SDK deriva los endpoints de discovery/token de la BASE, no del `/mcp`."""
-    from agent_runtime import mcp_tools
+class _FakeApi:
+    """Cliente del API interno de mentira: registra qué se le pide."""
 
-    seen: dict[str, Any] = {}
-    sentinel = object()
+    def __init__(self, tokens: list[str] | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._tokens = tokens or ["tok-1", "tok-2"]
 
-    def _fake_build(*, server_url: str, storage: Any, redirect_uri: str, **_: Any) -> object:
-        seen.update(server_url=server_url, storage=storage, redirect_uri=redirect_uri)
-        return sentinel
+    def mcp_oauth_token(self, *, server: str, refresh: bool = False) -> dict[str, Any]:
+        self.calls.append({"server": server, "refresh": refresh})
+        return {"access_token": self._tokens[len(self.calls) - 1], "token_type": "Bearer"}
 
-    monkeypatch.setattr(mcp_tools, "build_oauth_provider", _fake_build)
-    config = MCPServerConfig(
+
+def _oauth_config() -> MCPServerConfig:
+    return MCPServerConfig(
         name="atlassian-remote",
         transport="streamable_http",
         url=_ATLASSIAN_REMOTE_URL,
         oauth_ref="vault:secret/data/mcp-oauth/t1/p1/atlassian-remote",
     )
 
-    assert mcp_tools.build_oauth_auth(config, vault_resolver=object()) is sentinel
-    assert seen["server_url"] == "https://mcp.atlassian.com"
-    assert seen["storage"]._auth_ref == config.oauth_ref
+
+def test_the_sandbox_asks_the_platform_by_server_NAME_not_by_vault_path() -> None:
+    """ADR 0131 opción C. Mandar el `oauth_ref` ya montado habría convertido la
+    ruta de Vault en una capacidad: cambiando una cadena, el sandbox pediría la
+    credencial de otro proyecto. Se manda el nombre y la ruta la compone el
+    servidor con el tenant del token y el proyecto del run."""
+    from agent_runtime import mcp_tools
+
+    api = _FakeApi()
+    auth = mcp_tools.build_oauth_auth(_oauth_config(), api=api)
+    request = httpx.Request("POST", "https://mcp.atlassian.com/v1/sse")
+
+    flow = auth.auth_flow(request)
+    sent = next(flow)
+
+    assert sent.headers["Authorization"] == "Bearer tok-1"
+    assert api.calls == [{"server": "atlassian-remote", "refresh": False}]
+    assert all("vault:" not in str(c) for c in api.calls), "la ruta de Vault no sale del servidor"
+
+
+def test_a_401_refreshes_once_and_retries() -> None:
+    """El refresco lo dispara un 401 REAL del remoto, no un reloj: la entrada de
+    Vault no guarda vencimiento absoluto y adivinarlo falla con la deriva
+    horaria y con los servidores que revocan antes de tiempo."""
+    from agent_runtime import mcp_tools
+
+    api = _FakeApi()
+    auth = mcp_tools.build_oauth_auth(_oauth_config(), api=api)
+    request = httpx.Request("POST", "https://mcp.atlassian.com/v1/sse")
+
+    flow = auth.auth_flow(request)
+    next(flow)
+    retried = flow.send(httpx.Response(401, request=request))
+
+    assert retried.headers["Authorization"] == "Bearer tok-2"
+    assert api.calls[-1] == {"server": "atlassian-remote", "refresh": True}
+
+
+def test_a_second_401_is_not_retried_forever() -> None:
+    """Si el token recién emitido tampoco vale, reintentar es girar en vacío: el
+    401 se propaga y el fallo del servidor llega al preámbulo del agente."""
+    from agent_runtime import mcp_tools
+
+    auth = mcp_tools.build_oauth_auth(_oauth_config(), api=_FakeApi())
+    request = httpx.Request("POST", "https://mcp.atlassian.com/v1/sse")
+
+    flow = auth.auth_flow(request)
+    next(flow)
+    flow.send(httpx.Response(401, request=request))
+    with pytest.raises(StopIteration):
+        flow.send(httpx.Response(401, request=request))
+
+
+def test_the_token_is_reused_within_the_session() -> None:
+    """Una petición al API interno por sesión, no por llamada a tool."""
+    from agent_runtime import mcp_tools
+
+    api = _FakeApi()
+    auth = mcp_tools.build_oauth_auth(_oauth_config(), api=api)
+    for _ in range(3):
+        request = httpx.Request("POST", "https://mcp.atlassian.com/v1/sse")
+        next(auth.auth_flow(request))
+    assert len(api.calls) == 1
+
+
+def test_httpx_must_read_the_body_before_resuming_the_flow() -> None:
+    """`requires_response_body` no es decorativo: sin él httpx devolvería el
+    control con el stream a medias y el reintento del 401 se rompería."""
+    from agent_runtime import mcp_tools
+
+    assert mcp_tools.MediatedBearerAuth.requires_response_body is True
 
 
 def test_no_oauth_ref_means_no_auth() -> None:
@@ -191,20 +259,14 @@ def test_no_oauth_ref_means_no_auth() -> None:
     from agent_runtime import mcp_tools
 
     config = MCPServerConfig(name="local", transport="stdio", command="x")
-    assert mcp_tools.build_oauth_auth(config, vault_resolver=object()) is None
+    assert mcp_tools.build_oauth_auth(config, api=_FakeApi()) is None
 
 
-def test_oauth_without_a_vault_resolver_fails_loud() -> None:
-    """Sin resolver no hay token: conectar igualmente daría un 401 opaco del
+def test_oauth_without_an_internal_api_fails_loud() -> None:
+    """Sin API interno no hay token: conectar igualmente daría un 401 opaco del
     servidor remoto en vez de decir qué falta."""
     from agent_runtime import mcp_tools
     from shared_mcp import MCPAuthError
 
-    config = MCPServerConfig(
-        name="atlassian-remote",
-        transport="streamable_http",
-        url=_ATLASSIAN_REMOTE_URL,
-        oauth_ref="vault:secret/data/mcp-oauth/t1/p1/atlassian-remote",
-    )
-    with pytest.raises(MCPAuthError, match="Vault"):
-        mcp_tools.build_oauth_auth(config, vault_resolver=None)
+    with pytest.raises(MCPAuthError, match="internal API"):
+        mcp_tools.build_oauth_auth(_oauth_config(), api=None)

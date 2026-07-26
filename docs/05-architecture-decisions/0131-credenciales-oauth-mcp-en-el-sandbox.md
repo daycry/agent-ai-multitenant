@@ -1,6 +1,6 @@
 ---
 title: "ADR 0131: Cómo llega la credencial OAuth de un MCP remoto al sandbox"
-status: proposed
+status: accepted
 date: 2026-07-26
 deciders: [operador]
 relates_to: [0012, 0052, 0093, 0127, 0128]
@@ -131,25 +131,41 @@ un token vigente.
 
 ## Decisión
 
-**Pendiente.** Recomendación: **C**.
+**C**, aprobada e implementada por el operador el 2026-07-26.
 
 Es la única que respeta el principio 2 en su letra y a la vez resuelve el refresco, que es
 el problema real. A es más barata pero deja el bug a medio arreglar y empuja hacia meter
 el refresh token en el sandbox. B funciona hoy y erosiona la frontera que sostiene todo el
-aislamiento.
+aislamiento: es la que parece un atajo pequeño y es la que mueve la frontera.
 
-Si el coste de C no cabe ahora, **A es un paso intermedio honesto** siempre que se
-documente que los servidores OAuth no sobreviven a runs largos y que **no** se inyecte el
-refresh token. Lo que no debería hacerse es B: es la que parece un atajo pequeño y es la
-que mueve la frontera.
+### Cómo quedó
+
+- **`POST /internal/agent/mcp-oauth-token`** — el sandbox manda el **nombre** del servidor,
+  nunca la ruta de Vault. La ruta la compone el servidor con el tenant del token y el
+  proyecto del run resuelto server-side, y el nombre se valida contra los `mcp_servers` DE
+  ESE proyecto. Aceptar el `oauth_ref` ya montado —que el runtime recibe— habría convertido
+  una cadena en la capacidad de leer la credencial de otro proyecto.
+- **El refresco lo dispara un 401 real** del servidor remoto, no una cuenta atrás. La
+  entrada de Vault no guarda vencimiento absoluto (`OAuthToken` solo trae `expires_in`) y
+  adivinarlo con el reloj falla con la deriva horaria y con los proveedores que revocan
+  antes de tiempo. El disparador honesto es el rechazo del propio servidor.
+- **RFC 6749 §6**: si el proveedor omite `refresh_token` en la respuesta del refresco, se
+  conserva el anterior. Guardar la respuesta tal cual habría borrado el único refresh que
+  había, y el SIGUIENTE refresco dejaría el servidor desconectado hasta que un humano lo
+  reconectase.
+- En el runtime, `MediatedBearerAuth` reintenta **una** vez tras un 401. Un segundo 401 se
+  propaga: si el token recién emitido tampoco vale, reintentar es girar en vacío.
 
 ## Consecuencias
 
-- Mientras no se decida, un servidor MCP remoto con OAuth **queda sin conectar dentro de
-  los runs**, con motivo explícito en el log y en el preámbulo del agente. El resto de
-  servidores del proyecto no se ven afectados.
-- Con C, `AGENT_VAULT_TOKEN` y `_build_mcp_vault_resolver` desaparecen del runtime, y con
-  ellos la única expectativa de que el sandbox tenga credenciales de plataforma. El
-  `auth_ref` de ADR 0052 (claves estáticas) debería seguir el mismo camino.
+- Un servidor MCP remoto con OAuth **ya funciona dentro de un run**, que es el caso para el
+  que se diseñó ADR 0127, y sin que el sandbox tenga credencial de plataforma ninguna.
+- `AGENT_VAULT_TOKEN` deja de hacer falta para OAuth. **Sigue leyéndose para el `auth_ref`
+  de ADR 0052** (claves estáticas de MCP), que no se ha migrado en esta tanda: es el mismo
+  problema y merece el mismo camino, pero es una función distinta y no estaba rota. Hasta
+  que se migre, la variable sigue sin fijarse en ningún sitio, así que un servidor con
+  `auth_ref` sigue sin resolver su clave — con motivo explícito, como antes.
 - El test humano del handshake OAuth real sigue necesitando navegador: es el riesgo
-  residual (c) que el propio ADR 0127 declaró.
+  residual (c) que el propio ADR 0127 declaró. Lo que sí queda cubierto por tests es todo
+  lo demás: emisión, refresco, preservación del refresh token, reintento único y la
+  frontera de tenant.

@@ -294,6 +294,95 @@ async def complete_flow(
     return flow.server_name
 
 
+@dataclass(frozen=True)
+class AccessGrant:
+    """Lo ÚNICO que sale hacia el sandbox: un access token y su tipo."""
+
+    access_token: str
+    token_type: str
+
+
+async def issue_access_token(
+    *,
+    tenant_id: str,
+    project_id: str,
+    server_name: str,
+    server_url: str,
+    resolver: object,
+    http_client: httpx.AsyncClient,
+    refresh: bool = False,
+) -> AccessGrant:
+    """El access token vigente de un servidor OAuth, refrescándolo si hace falta.
+
+    La mitad privilegiada de la opción C del ADR 0131. El sandbox NO habla con
+    Vault: pide el token por el API interno y aquí se hace lo que requiere
+    privilegio —leer Vault, canjear el refresh token y volver a guardarlo—. Así
+    el contenedor no confiable no tiene ni un token de Vault (la llave del
+    almacén) ni el refresh token (la credencial de larga duración): solo un
+    access token acotado a un servidor y efímero.
+
+    El refresco lo dispara un 401 REAL del servidor remoto (``refresh=True``), no
+    una cuenta atrás: la entrada de Vault no guarda un vencimiento absoluto —
+    ``OAuthToken`` solo trae ``expires_in``—, y adivinarlo con el reloj falla con
+    la deriva horaria y con los servidores que revocan antes de tiempo. El
+    disparador honesto es el rechazo del propio servidor.
+    """
+    storage = VaultTokenStorage(
+        resolver,  # type: ignore[arg-type]
+        oauth_vault_path(tenant_id=tenant_id, project_id=project_id, server_name=server_name),
+    )
+    token = await storage.get_tokens()
+    if token is None:
+        raise McpOAuthError(
+            f"el servidor {server_name!r} no está conectado: no hay token guardado. "
+            "Conéctalo desde el panel del proyecto."
+        )
+    if not refresh:
+        return AccessGrant(token.access_token, token.token_type)
+
+    if not token.refresh_token:
+        raise McpOAuthError(
+            f"el token de {server_name!r} caducó y el proveedor no dio refresh_token: "
+            "hay que volver a conectarlo desde el panel."
+        )
+    client_info = await storage.get_client_info()
+    if client_info is None:
+        raise McpOAuthError(
+            f"el servidor {server_name!r} no tiene registro de cliente (DCR) guardado: "
+            "hay que volver a conectarlo desde el panel."
+        )
+
+    meta = await discover_auth_server(server_url, http_client)
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": token.refresh_token,
+        "client_id": client_info.client_id,
+    }
+    if client_info.client_secret:
+        data["client_secret"] = client_info.client_secret
+    try:
+        resp = await http_client.post(
+            meta.token_endpoint,
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    except httpx.HTTPError as exc:
+        raise McpOAuthError(f"refresh request failed: {type(exc).__name__}: {exc}") from exc
+    if resp.status_code != 200:
+        raise McpOAuthError(f"refresh rejected: HTTP {resp.status_code}: {resp.text[:300]}")
+
+    fresh = OAuthToken.model_validate(resp.json())
+    # RFC 6749 §6: en un refresco el servidor PUEDE omitir `refresh_token`, y
+    # entonces el anterior sigue siendo válido. Guardar la respuesta tal cual
+    # borraría el único refresh que teníamos y el SIGUIENTE refresco fallaría —
+    # el servidor quedaría desconectado hasta que un humano lo reconectase.
+    if not fresh.refresh_token:
+        fresh = fresh.model_copy(update={"refresh_token": token.refresh_token})
+    await storage.set_tokens(fresh)
+    _log.info("mcp_oauth.refreshed", project_id=project_id, server=server_name)
+    return AccessGrant(fresh.access_token, fresh.token_type)
+
+
 def find_server_url(payload_servers: list[dict[str, object]], server_name: str) -> str | None:
     """Return the declared server's `url` (HTTP transports only), or None."""
     for raw in payload_servers:

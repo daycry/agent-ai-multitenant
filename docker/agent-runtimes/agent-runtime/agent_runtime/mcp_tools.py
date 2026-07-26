@@ -43,10 +43,12 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import Callable, Generator
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import jsonschema
 from shared_mcp import (
     MCPAuthError,
@@ -59,32 +61,53 @@ from shared_mcp import (
     MCPTransportError,
     VaultResolver,
 )
-from shared_mcp.oauth import VaultTokenStorage, build_oauth_provider
 
 from agent_runtime.tools import ToolFn, ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
 
-# El `redirect_uri` que el SDK necesita en los metadatos de cliente. En un run
-# NUNCA debería usarse: el registro DCR y el token ya están en Vault desde el
-# «Conectar» del panel, así que el proveedor lee el cliente guardado y refresca
-# sin registrar de nuevo. Si el SDK llegara a necesitarlo es que no hay registro,
-# y entonces el handler por defecto de `build_oauth_provider` aborta con un
-# `MCPAuthError` accionable («conecta este servidor desde el panel») en vez de
-# colgar el run esperando un consentimiento que nadie va a dar.
-_RUNTIME_REDIRECT_URI = "http://localhost/mcp-oauth/unused-at-runtime"
+
+class MediatedBearerAuth(httpx.Auth):
+    """``httpx.Auth`` que pide el access token a la plataforma, no a Vault.
+
+    La mitad de sandbox de la opción C del ADR 0131. El contenedor no confiable
+    no guarda credenciales: por cada sesión MCP pide a ``/internal/agent/
+    mcp-oauth-token`` un access token acotado a un servidor, y ahí se acaba lo
+    que tiene. Ni token de Vault (la llave del almacén) ni refresh token (la
+    credencial de larga duración) bajan hasta aquí.
+
+    El refresco lo dispara un **401 real** del servidor remoto, no una cuenta
+    atrás: la plataforma canjea el refresh token, lo persiste y devuelve uno
+    nuevo, y la petición se reintenta UNA vez. Un segundo 401 se propaga — si el
+    token recién emitido tampoco vale, reintentar es girar en vacío.
+    """
+
+    # httpx tiene que leer el cuerpo de la respuesta antes de devolvernos el
+    # control, o el `yield` de reintento se quedaría con un stream a medias.
+    requires_response_body = True
+
+    def __init__(self, fetch: Callable[[bool], tuple[str, str]], server_name: str) -> None:
+        self._fetch = fetch
+        self._server_name = server_name
+        self._cached: tuple[str, str] | None = None
+
+    def _token(self, *, refresh: bool) -> tuple[str, str]:
+        if refresh or self._cached is None:
+            self._cached = self._fetch(refresh)
+        return self._cached
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        token_type, token = self._token(refresh=False)
+        request.headers["Authorization"] = f"{token_type} {token}"
+        response = yield request
+        if response.status_code != 401:
+            return
+        token_type, token = self._token(refresh=True)
+        request.headers["Authorization"] = f"{token_type} {token}"
+        yield request
 
 
-def _oauth_base_url(url: str | None) -> str:
-    """The server's BASE url — the SDK derives discovery/token endpoints from it,
-    not from the ``/mcp`` path the transport posts to."""
-    from urllib.parse import urlsplit
-
-    parts = urlsplit(url or "")
-    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else (url or "")
-
-
-def build_oauth_auth(config: MCPServerConfig, *, vault_resolver: VaultResolver | None) -> Any:
+def build_oauth_auth(config: MCPServerConfig, *, api: Any | None) -> Any:
     """The ``httpx.Auth`` for a server connected via OAuth 2.1, or ``None``.
 
     The last hop of ADR 0127 (task_wf_12, B-03). The interactive flow was
@@ -93,25 +116,38 @@ def build_oauth_auth(config: MCPServerConfig, *, vault_resolver: VaultResolver |
     the whole feature delivered nothing to autonomous execution, the one case it
     was designed for.
 
-    ``None`` when the server does not use OAuth (``oauth_ref`` absent), so every
-    other server connects exactly as before. Raises :class:`MCPAuthError` when a
-    server DOES declare OAuth but there is no Vault resolver: without it there is
-    no token, and connecting anyway would surface as an opaque 401 from the
-    remote instead of saying what is missing.
+    ADR 0131 decidió POR DÓNDE llega esa credencial. No por Vault: el diseño
+    anterior pedía un ``AGENT_VAULT_TOKEN`` dentro del sandbox —una llave del
+    almacén de secretos en el contenedor que ejecuta código no controlado, justo
+    lo que el principio 2 de CLAUDE.md prohíbe— y por eso esa variable no se fijó
+    nunca en ningún sitio y la función no llegó a funcionar. Ahora se pide a la
+    plataforma por el API interno que el runtime ya tiene cableado, igual que
+    ``stack_exec`` pide al worker lo que el sandbox no puede hacer.
+
+    ``None`` cuando el servidor no usa OAuth (sin ``oauth_ref``), así que el
+    resto conecta exactamente igual que antes. Lanza :class:`MCPAuthError` cuando
+    el servidor SÍ declara OAuth y no hay API interno: sin él no hay token, y
+    conectar igualmente saldría como un 401 opaco del remoto en vez de decir qué
+    falta.
+
+    Se manda el NOMBRE del servidor, no el ``oauth_ref``: la ruta de Vault la
+    construye el servidor con el tenant del token y el proyecto del run. Mandar
+    la ruta sería entregarle al sandbox la capacidad de pedir la credencial de
+    otro proyecto cambiando una cadena.
     """
     if not config.oauth_ref:
         return None
-    if vault_resolver is None:
+    if api is None:
         raise MCPAuthError(
-            f"server {config.name!r} uses OAuth but no Vault resolver is available "
-            "(AGENT_VAULT_TOKEN missing) — its stored token cannot be read"
+            f"server {config.name!r} uses OAuth but this run has no internal API "
+            "(no AGENTIC_INTERNAL_TOKEN) — its access token cannot be requested"
         )
-    storage = VaultTokenStorage(vault_resolver, config.oauth_ref)
-    return build_oauth_provider(
-        server_url=_oauth_base_url(config.url),
-        storage=storage,
-        redirect_uri=_RUNTIME_REDIRECT_URI,
-    )
+
+    def _fetch(refresh: bool) -> tuple[str, str]:
+        payload = api.mcp_oauth_token(server=config.name, refresh=refresh)
+        return str(payload.get("token_type") or "Bearer"), str(payload["access_token"])
+
+    return MediatedBearerAuth(_fetch, config.name)
 
 
 # Fallback output ceiling (bytes, UTF-8) used when a tool's owning server
@@ -212,7 +248,9 @@ class MCPToolRunner:
     sync registry (typically the agent loop's thread).
     """
 
-    def __init__(self, vault_resolver: VaultResolver | None = None) -> None:
+    def __init__(
+        self, vault_resolver: VaultResolver | None = None, *, api: Any | None = None
+    ) -> None:
         """
         Args:
             vault_resolver: optional secret resolver. When a connected
@@ -235,6 +273,8 @@ class MCPToolRunner:
         self._started = False
         self._lock = threading.Lock()
         self._vault_resolver = vault_resolver
+        # Cliente del API interno para la credencial OAuth (ADR 0131 opción C).
+        self._api = api
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -334,7 +374,7 @@ class MCPToolRunner:
         # sync caller; on failure it carries the exception instead.
         started: Future[tuple[MCPSession, list[MCPTool], asyncio.Event]] = Future()
 
-        auth = build_oauth_auth(config, vault_resolver=self._vault_resolver)
+        auth = build_oauth_auth(config, api=self._api)
 
         async def _serve() -> None:
             try:

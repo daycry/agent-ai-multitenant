@@ -233,8 +233,11 @@ class _FakeMcpRunner:
 
     instances: ClassVar[list[_FakeMcpRunner]] = []
 
-    def __init__(self, vault_resolver: Any = None) -> None:
+    def __init__(self, vault_resolver: Any = None, *, api: Any = None) -> None:
         self.vault_resolver = vault_resolver
+        # ADR 0131 opción C: el runner necesita el API interno para pedir la
+        # credencial OAuth, que ya no sale de Vault dentro del sandbox.
+        self.api = api
         self.started = False
         self.closed = False
         self.connected: list[str] = []

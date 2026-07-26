@@ -165,6 +165,127 @@ class MemoryRecallResponse(BaseModel):
     hits: list[MemoryRecallHitOut]
 
 
+class McpOAuthTokenRequest(BaseModel):
+    """El sandbox pide el token de UN servidor, POR NOMBRE."""
+
+    model_config = _BASE_CONFIG
+
+    server: str = Field(min_length=1, max_length=200)
+    # `True` solo tras un 401 real del servidor remoto: fuerza el canje del
+    # refresh token. Lo dispara el 401, no un reloj (ver `issue_access_token`).
+    refresh: bool = False
+
+
+class McpOAuthTokenResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    access_token: str
+    token_type: str
+
+
+async def _resolve_run_project(
+    session: AsyncSession, *, agent: Agent, principal: AgentPrincipal
+) -> Project | None:
+    """El proyecto DEL RUN, resuelto siempre en el servidor.
+
+    Distinto a propósito de :func:`_resolve_effective_project`, que sirve para
+    LEER memoria/RAG y por eso tiene la regla —con flag— del agente global que
+    hereda el proyecto de la tarea. Una credencial no se hereda: el proyecto es
+    el de la tarea que este run ejecuta, y si el token no porta tarea, el del
+    propio agente. Nunca el que diga el cliente.
+    """
+    if principal.task_id is not None:
+        task = (
+            await session.execute(
+                select(Task).where(
+                    Task.id == principal.task_id,
+                    # Defensa en profundidad sobre RLS: una tarea de otro tenant
+                    # no resuelve proyecto ninguno.
+                    Task.tenant_id == principal.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if task is not None and task.project_id is not None:
+            return (
+                await session.execute(select(Project).where(Project.id == task.project_id))
+            ).scalar_one_or_none()
+    if agent.project_id is not None:
+        return (
+            await session.execute(select(Project).where(Project.id == agent.project_id))
+        ).scalar_one_or_none()
+    return None
+
+
+@router.post("/mcp-oauth-token", response_model=McpOAuthTokenResponse)
+async def mcp_oauth_token(
+    payload: McpOAuthTokenRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> McpOAuthTokenResponse:
+    """El access token vigente de un servidor MCP con OAuth (ADR 0131, opción C).
+
+    El sandbox no habla con Vault. Pide el token por aquí y la plataforma hace lo
+    privilegiado: leer Vault, refrescar si el servidor remoto devolvió 401 y
+    persistir el token nuevo. Al contenedor solo baja un access token acotado a
+    un servidor y efímero — ni la llave del almacén, ni el refresh token.
+
+    La frontera de tenant NO depende de lo que mande el cliente. El sandbox envía
+    un NOMBRE de servidor; la ruta de Vault se construye aquí con el tenant del
+    token y el proyecto del run resuelto en servidor. Aceptar la ruta ya montada
+    (el ``oauth_ref`` que el runtime recibe) habría sido convertirla en una vía
+    para leer credenciales de otro proyecto — o de otro tenant— con solo cambiar
+    una cadena. Y el nombre se valida contra los ``mcp_servers`` DE ESE proyecto:
+    un servidor que el proyecto no declara no tiene token que dar.
+    """
+    from shared_mcp.catalog import uses_oauth
+
+    from api_server.mcp_oauth_flow import McpOAuthError, find_server_url, issue_access_token
+    from api_server.routers.mcp import get_vault_resolver
+
+    agent, _ = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    project = await _resolve_run_project(session, agent=agent, principal=principal)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="este run no tiene proyecto: no hay credenciales MCP que resolver",
+        )
+
+    servers = [s for s in (project.mcp_servers or []) if isinstance(s, dict)]
+    server_url = find_server_url(servers, payload.server)
+    if server_url is None or not uses_oauth(server_url):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"el proyecto no declara un servidor MCP con OAuth llamado {payload.server!r}",
+        )
+
+    resolver = get_vault_resolver()
+    if resolver is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="el api-server no tiene Vault configurado: no puede resolver credenciales MCP",
+        )
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            grant = await issue_access_token(
+                tenant_id=str(principal.tenant_id),
+                project_id=str(project.id),
+                server_name=payload.server,
+                server_url=server_url,
+                resolver=resolver,
+                http_client=http_client,
+                refresh=payload.refresh,
+            )
+    except McpOAuthError as exc:
+        # 409: el estado guardado no sirve y lo arregla un humano reconectando —
+        # no es un fallo transitorio que reintentar.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return McpOAuthTokenResponse(access_token=grant.access_token, token_type=grant.token_type)
+
+
 async def _resolve_agent_context(
     session: AsyncSession, agent_id: UUID, tenant_id: UUID
 ) -> tuple[Agent, Project | None]:
