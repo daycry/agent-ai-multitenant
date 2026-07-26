@@ -30,7 +30,7 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.chat.planning_graph import PlanningRole
@@ -46,6 +46,23 @@ PLAN_TASK_SPEC_ID_KEY = "plan_task_spec_id"
 # Default complexity stored on the materialised task when the spec
 # doesn't carry one. Matches the cost calculator default (`m`).
 _DEFAULT_COMPLEXITY = "m"
+
+
+class ReplanInFlightError(RuntimeError):
+    """Un replan que tocaría tareas EN VUELO (ADR 0132, decisión (b)).
+
+    No se cancela nada por nuestra cuenta: cancelar automáticamente tira
+    trabajo —y dinero de tokens— por un cambio que el operador podría no haber
+    querido aplicar a esa tarea. Se rechaza nombrando las tareas para que las
+    pare desde su ficha y reintente.
+    """
+
+    def __init__(self, task_ids: list[str], titles: list[str]) -> None:
+        self.task_ids = task_ids
+        self.titles = titles
+        super().__init__(
+            "estas tareas están en vuelo y el replan las tocaría: " + ", ".join(titles)
+        )
 
 
 class SyncScopeError(ValueError):
@@ -69,6 +86,15 @@ class SyncResult:
     created_task_ids: dict[str, UUID] = field(default_factory=dict)
     skipped_task_ids: dict[str, UUID] = field(default_factory=dict)
     dependencies_created: int = 0
+    # ADR 0132 / `task_wf_45`: la reconciliación deja de ser solo aditiva.
+    # `updated` son tareas ya materializadas cuyo spec cambió y que aún no
+    # habían empezado; `cancelled` son las que desaparecieron del spec;
+    # `frozen` son las que el spec cambió pero YA ESTÁN HECHAS — no se
+    # reescribe la historia, se avisa.
+    updated_task_ids: dict[str, UUID] = field(default_factory=dict)
+    cancelled_task_ids: dict[str, UUID] = field(default_factory=dict)
+    frozen_task_ids: dict[str, UUID] = field(default_factory=dict)
+    dependencies_removed: int = 0
 
 
 def select_spec_ids(
@@ -125,7 +151,136 @@ def select_spec_ids(
     raise SyncScopeError(f"unknown scope {scope!r}")
 
 
-async def sync_plan_to_kanban(
+def _classify(
+    spec_id: str,
+    row: Task,
+    result: SyncResult,
+    in_flight: list[Task],
+    on_actionable: Any,
+) -> None:
+    """Encaja UNA tarea ya materializada en las tres vías del ADR 0132.
+
+    Terminal → se congela y se avisa (lo hecho es historia). No empezada → la
+    acción que toque (actualizar o cancelar). En vuelo → a la lista de rechazo:
+    pararla es decisión humana, no efecto colateral de guardar un spec.
+    """
+    if row.status in _REPLAN_TERMINAL:
+        result.frozen_task_ids[spec_id] = row.id
+    elif row.status in _REPLAN_EDITABLE:
+        on_actionable()
+    else:
+        in_flight.append(row)
+
+
+async def _reconcile_existing(
+    session: AsyncSession,
+    result: SyncResult,
+    *,
+    selected_ids: list[str],
+    scope: str,
+    spec_by_id: dict[str, Any],
+    existing_rows: dict[str, Task],
+    role_agents: dict[PlanningRole, UUID] | None,
+) -> None:
+    """Aplica al tablero lo que el spec dice AHORA (ADR 0132 / `task_wf_45`).
+
+    Antes esto no existía: `sync_to_kanban` era estrictamente aditivo, así que
+    editar o borrar una tarea del spec **no llegaba nunca al tablero**. El
+    operador creía haber replanificado y el equipo seguía ejecutando el plan
+    anterior, sin un solo aviso.
+
+    El rechazo por trabajo EN VUELO va primero, antes de tocar nada: o se
+    aplica el replan entero o no se aplica ninguno. Un replan a medias deja el
+    tablero en un estado que no es ni el plan viejo ni el nuevo, y nadie sabría
+    cuál de los dos está mirando.
+
+    Raises:
+        ReplanInFlightError: alguna tarea afectada está corriendo o en review.
+    """
+    to_update: list[tuple[str, Task, dict[str, Any]]] = []
+    to_cancel: list[tuple[str, Task]] = []
+    in_flight: list[Task] = []
+
+    for spec_id in selected_ids:
+        row = existing_rows.get(spec_id)
+        if row is None or not _spec_fields_changed(row, spec_by_id[spec_id]):
+            continue
+        _classify(
+            spec_id,
+            row,
+            result,
+            in_flight,
+            lambda sid=spec_id, r=row: to_update.append((sid, r, spec_by_id[sid])),
+        )
+
+    # Huérfanas: materializadas y ya NO en el spec. Solo con el plan entero en
+    # el scope — con un scope parcial, «no está en la selección» no significa
+    # «se ha borrado del plan», y cancelarla sería destruir trabajo por una
+    # ambigüedad.
+    if scope == "all":
+        for spec_id, row in existing_rows.items():
+            if spec_id in spec_by_id:
+                continue
+            _classify(
+                spec_id,
+                row,
+                result,
+                in_flight,
+                lambda sid=spec_id, r=row: to_cancel.append((sid, r)),
+            )
+
+    if in_flight:
+        raise ReplanInFlightError(
+            [str(t.id) for t in in_flight], [str(t.title or t.id) for t in in_flight]
+        )
+
+    for spec_id, row, spec_task in to_update:
+        _apply_spec_to_task(row, spec_task, role_agents)
+        result.updated_task_ids[spec_id] = row.id
+    for spec_id, row in to_cancel:
+        row.status = TaskStatus.CANCELLED.value
+        result.cancelled_task_ids[spec_id] = row.id
+    if to_update or to_cancel:
+        await session.flush()
+
+
+async def _prune_stale_edges(
+    session: AsyncSession,
+    existing: dict[str, UUID],
+    spec_by_id: dict[str, Any],
+    existing_edges: set[tuple[UUID, UUID]],
+) -> int:
+    """Borra las dependencias que el spec YA NO declara (ADR 0132).
+
+    Hasta ahora las aristas solo se añadían, así que soltar una dependencia en
+    el spec no la soltaba en el tablero: la tarea seguía esperando a algo de lo
+    que el plan ya no dice que dependa, y el operador no tenía forma de verlo.
+
+    Solo con el plan entero en el scope: con un scope parcial no se puede
+    distinguir «esta dependencia se ha quitado» de «esta dependencia está fuera
+    de la selección».
+    """
+    wanted: set[tuple[UUID, UUID]] = set()
+    for spec_id, task_id in existing.items():
+        spec_entry = spec_by_id.get(spec_id)
+        if spec_entry is None:
+            continue
+        for dep_spec_id in spec_entry.get("depends_on") or []:
+            dep_task_id = existing.get(str(dep_spec_id))
+            if dep_task_id is not None:
+                wanted.add((task_id, dep_task_id))
+    stale = existing_edges - wanted
+    for task_id, dep_task_id in stale:
+        await session.execute(
+            delete(TaskDependency).where(
+                TaskDependency.task_id == task_id,
+                TaskDependency.depends_on_task_id == dep_task_id,
+            )
+        )
+    return len(stale)
+
+
+async def sync_plan_to_kanban(  # noqa: PLR0912 - reconciliación + alta + aristas, secuencia lineal
     session: AsyncSession,
     plan: Plan,
     *,
@@ -173,12 +328,28 @@ async def sync_plan_to_kanban(
     # the ones in this scope. A spec task outside the scope may already
     # exist from a previous sync and we still need its UUID to wire
     # dependencies for tasks inside the scope.
-    existing = await _load_existing_materialised(session, plan)
+    existing_rows = await _load_existing_rows(session, plan)
+    existing = {sid: row.id for sid, row in existing_rows.items()}
 
     result = SyncResult()
+
+    await _reconcile_existing(
+        session,
+        result,
+        selected_ids=selected_ids,
+        scope=scope,
+        spec_by_id=spec_by_id,
+        existing_rows=existing_rows,
+        role_agents=role_agents,
+    )
+
     for spec_id in selected_ids:
         if spec_id in existing:
-            result.skipped_task_ids[spec_id] = existing[spec_id]
+            # Una tarea que ACABA de actualizarse no es «saltada»: decir lo
+            # contrario en la respuesta haría creer al operador que su cambio
+            # no se aplicó.
+            if spec_id not in result.updated_task_ids:
+                result.skipped_task_ids[spec_id] = existing[spec_id]
             continue
         spec_task = spec_by_id[spec_id]
         task = _build_task(plan, spec_id, spec_task, role_agents=role_agents)
@@ -225,27 +396,90 @@ async def sync_plan_to_kanban(
             session.add(TaskDependency(task_id=task_id, depends_on_task_id=dep_task_id))
             deps_created += 1
 
-    if deps_created:
+    deps_removed = (
+        await _prune_stale_edges(session, existing, spec_by_id, existing_edges)
+        if scope == "all"
+        else 0
+    )
+
+    if deps_created or deps_removed:
         await session.flush()
     return SyncResult(
         created_task_ids=result.created_task_ids,
         skipped_task_ids=result.skipped_task_ids,
         dependencies_created=deps_created,
+        updated_task_ids=result.updated_task_ids,
+        cancelled_task_ids=result.cancelled_task_ids,
+        frozen_task_ids=result.frozen_task_ids,
+        dependencies_removed=deps_removed,
     )
 
 
-async def _load_existing_materialised(session: AsyncSession, plan: Plan) -> dict[str, UUID]:
-    """Return ``{spec_id: task_id}`` for every Task already created from
-    this plan (regardless of status)."""
+async def _load_existing_rows(session: AsyncSession, plan: Plan) -> dict[str, Task]:
+    """``{spec_id: Task}`` de todas las tareas ya materializadas de este plan.
+
+    Devuelve las FILAS y no solo los ids porque la reconciliación (ADR 0132)
+    necesita su estado para decidir qué se puede tocar."""
     result = await session.execute(
         select(Task).where(Task.plan_id == plan.id, Task.project_id == plan.project_id)
     )
-    out: dict[str, UUID] = {}
+    out: dict[str, Task] = {}
     for task in result.scalars().all():
         spec_id = (task.inputs or {}).get(PLAN_TASK_SPEC_ID_KEY)
         if isinstance(spec_id, str):
-            out[spec_id] = task.id
+            out[spec_id] = task
     return out
+
+
+async def _load_existing_materialised(session: AsyncSession, plan: Plan) -> dict[str, UUID]:
+    """``{spec_id: task_id}`` — la vista solo-ids, para los callers que no
+    reconcilian."""
+    return {sid: task.id for sid, task in (await _load_existing_rows(session, plan)).items()}
+
+
+# ADR 0132 / `task_wf_45`: qué se puede tocar de una tarea ya materializada.
+#
+#   * NO EMPEZADA  → se actualiza / se cancela. Replanificar es exactamente esto.
+#   * EN VUELO     → se RECHAZA. Pararla es una decisión humana, no un efecto
+#                    colateral de guardar un spec.
+#   * TERMINAL     → se ignora y se avisa. Lo que ya se hizo es historia.
+_REPLAN_EDITABLE = frozenset({TaskStatus.BACKLOG.value, TaskStatus.READY.value})
+_REPLAN_TERMINAL = frozenset({TaskStatus.DONE.value, TaskStatus.CANCELLED.value})
+
+
+def _spec_fields_changed(task: Task, spec_task: dict[str, Any]) -> bool:
+    """¿El spec dice algo distinto de lo que la tarea tiene persistido?"""
+    title = str(spec_task.get("title") or "").strip()[:200] or None
+    description = spec_task.get("description")
+    acceptance = spec_task.get("acceptance_criteria")
+    return (
+        (title is not None and title != task.title)
+        or (isinstance(description, str) and description != task.description)
+        or (isinstance(acceptance, list) and acceptance != (task.acceptance_criteria or []))
+    )
+
+
+def _apply_spec_to_task(
+    task: Task, spec_task: dict[str, Any], role_agents: dict[PlanningRole, UUID] | None
+) -> None:
+    """Vuelca sobre una tarea NO EMPEZADA lo que dice el spec ahora."""
+    title = str(spec_task.get("title") or "").strip()[:200]
+    if title:
+        task.title = title
+    description = spec_task.get("description")
+    if isinstance(description, str):
+        task.description = description
+    acceptance = spec_task.get("acceptance_criteria")
+    if isinstance(acceptance, list):
+        task.acceptance_criteria = acceptance
+    complexity = spec_task.get("complexity")
+    if isinstance(complexity, str) and complexity in {"xs", "s", "m", "l", "xl"}:
+        task.estimated_complexity = complexity
+    # El rol puede haber cambiado: reasignar por la MISMA vía que la creación,
+    # o el replan dejaría la tarea con el agente del rol anterior.
+    assigned, reviewer = _resolve_assignment(spec_task, role_agents)
+    task.assigned_agent_id = assigned
+    task.reviewer_agent_id = reviewer
 
 
 def _resolve_assignment(

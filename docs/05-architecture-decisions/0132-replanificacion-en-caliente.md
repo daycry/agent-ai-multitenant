@@ -1,12 +1,36 @@
 ---
 title: "ADR 0132: Replanificación en caliente de un plan en curso"
-status: proposed
+status: accepted
 date: 2026-07-26
 deciders: [operador]
 relates_to: [0022, 0087, 0107, 0117]
 ---
 
 # ADR 0132: Replanificación en caliente de un plan en curso
+
+## Resolución (2026-07-26)
+
+**Aceptadas A2 + (b) sin cancelación automática + C1 + traza de evento**, por la
+delegación permanente del operador de implementar los ADR `proposed` eligiendo la
+mejor opción («analizar los ADR proposed e implementarlos eligiendo la mejor
+opción», 2026-06-17). Implementado en `task_wf_45`:
+
+- **A2** — `sync_to_kanban` deja de ser aditivo: reconcilia por estado de la
+  tarea. No empezada → se actualiza o se cancela; **en vuelo → 409 nombrándola**;
+  terminal → se congela y se reporta. Las aristas que el spec ya no declara se
+  borran (antes solo se añadían).
+- **(b)** — nada se cancela solo. El 409 lleva las tareas para que el humano las
+  pare desde su ficha, donde `TaskHumanActions` (`task_wf_40`) ya ofrece hacerlo.
+- **C1** — sin re-aprobación, por coherencia con el ciclo de correcciones del
+  ADR 0107.
+- **(d)** — el resultado del sync reporta qué se actualizó, canceló y congeló.
+
+**Todo o nada**: el rechazo por trabajo en vuelo ocurre ANTES de tocar nada. Un
+replan a medias dejaría el tablero en un estado que no es ni el plan viejo ni el
+nuevo, y nadie sabría cuál está mirando.
+
+Consecuencia pendiente y deliberada: el gate de `plans.py` sigue admitiendo el
+PUT del spec en `in_progress`, que es lo que hace posible este camino.
 
 ## Contexto
 

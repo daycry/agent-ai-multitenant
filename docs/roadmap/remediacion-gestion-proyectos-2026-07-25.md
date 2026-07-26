@@ -694,12 +694,15 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_45` — Implementar la replanificación 🔒 GATED tras `task_wf_44`
 
-- [ ] **Título**: según lo que decida el ADR. Estimación provisional, a revisar cuando el ADR
-      esté aceptado.
+- [x] _(hecho — ADR 0132 **aceptado** con A2 + (b) + C1 + traza)_ **Título**: la
+      reconciliación de tres vías.
 - **Tiempo**: 2 d (estimación gruesa)
-- **BLOQUEADA**: el **ADR 0132** está escrito y en `proposed`. Hasta que el operador elija
-  entre A1/A2/A3 y C1/C2/C3 no hay alcance que implementar. El propio ADR deja escritas
-  las seis afirmaciones que sus tests tendrán que fijar.
+- **Ficheros**: `chat/sync_to_kanban.py` (`_reconcile_existing`, `_prune_stale_edges`,
+  `ReplanInFlightError`), `routers/plans.py` (409 tipado en los DOS endpoints de sync)
+- **Tests**: 14 unit — **las seis afirmaciones que el propio ADR dejó escritas**, más el
+  todo-o-nada (una tarea en vuelo aborta el replan sin tocar las demás) y el caso que
+  faltaba en el ADR: una tarea en vuelo que el spec **no cambia** no bloquea nada (si
+  bloqueara, ningún plan vivo podría replanificarse jamás).
 
 ---
 

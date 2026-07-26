@@ -71,7 +71,11 @@ from api_server.chat.responder import (
     resolve_chat_model_config,
     team_role_agents,
 )
-from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
+from api_server.chat.sync_to_kanban import (
+    ReplanInFlightError,
+    SyncScopeError,
+    sync_plan_to_kanban,
+)
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Execution, Plan, PlanStatus, Project, Task
@@ -1833,6 +1837,23 @@ async def accept_plan_corrections(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"error": "invalid_sync_scope", "message": str(exc)},
         ) from exc
+    except ReplanInFlightError as exc:
+        # ADR 0132 (b): el replan tocaría trabajo EN VUELO. No se cancela nada
+        # por nuestra cuenta —cancelar tira trabajo y tokens por un cambio que
+        # el operador quizá no quería aplicar a esa tarea—; se nombran las
+        # tareas para que las pare desde su ficha y reintente.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "replan_tasks_in_flight",
+                "task_ids": exc.task_ids,
+                "message": (
+                    "Estas tareas están en marcha y el cambio del plan las afecta: "
+                    + ", ".join(exc.titles)
+                    + ". Párala(s) desde su ficha y vuelve a sincronizar."
+                ),
+            },
+        ) from exc
 
     move_plan(session, plan, PlanStatus.IN_PROGRESS.value, actor=principal.user_id)
     plan.specification = mark_corrections_accepted(plan.specification or {}, payload.task_ids)
@@ -1885,6 +1906,23 @@ async def sync_plan_kanban(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={"error": "invalid_sync_scope", "message": str(exc)},
+        ) from exc
+    except ReplanInFlightError as exc:
+        # ADR 0132 (b): el replan tocaría trabajo EN VUELO. No se cancela nada
+        # por nuestra cuenta —cancelar tira trabajo y tokens por un cambio que
+        # el operador quizá no quería aplicar a esa tarea—; se nombran las
+        # tareas para que las pare desde su ficha y reintente.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "replan_tasks_in_flight",
+                "task_ids": exc.task_ids,
+                "message": (
+                    "Estas tareas están en marcha y el cambio del plan las afecta: "
+                    + ", ".join(exc.titles)
+                    + ". Párala(s) desde su ficha y vuelve a sincronizar."
+                ),
+            },
         ) from exc
 
     return PlanSyncResponse(
