@@ -49,6 +49,7 @@ interface Step {
   result?: unknown;
   // G5 (ADR 0103): contadores de nudges/trips que el step de finalize adjunta.
   safeguard_stats?: Record<string, number>;
+  budgets?: Record<string, number>;
   [key: string]: unknown;
 }
 
@@ -304,10 +305,26 @@ function ExecutionSummary({ execution, liveCount }: { execution: Execution; live
           </Metric>
         )}
         <Metric label="Iteraciones">
-          <span data-testid="execution-iterations">{execution.iterations}</span>
+          <span data-testid="execution-iterations">
+            {execution.iterations}
+            <BudgetRemaining
+              steps={execution.steps_log}
+              cap="max_iterations"
+              used={execution.iterations}
+              testId="execution-iterations-left"
+            />
+          </span>
         </Metric>
         <Metric label="Tokens">
-          <span data-testid="execution-tokens">{execution.total_tokens.toLocaleString()}</span>
+          <span data-testid="execution-tokens">
+            {execution.total_tokens.toLocaleString()}
+            <BudgetRemaining
+              steps={execution.steps_log}
+              cap="max_tokens"
+              used={execution.total_tokens}
+              testId="execution-tokens-left"
+            />
+          </span>
         </Metric>
         <Metric label="Coste">
           <span data-testid="execution-cost">{fmtCost(execution.total_cost_usd)}</span>
@@ -322,6 +339,43 @@ function ExecutionSummary({ execution, liveCount }: { execution: Execution; live
         <SafeguardStats steps={execution.steps_log} />
       </CardContent>
     </Card>
+  );
+}
+
+// G11 (plan guardas-research): lo que QUEDA de presupuesto, no solo lo gastado.
+// El aviso vivía únicamente dentro del prompt —el modelo lo veía y el operador
+// no—, y un contador sin techo contra el que compararlo no dice nada: 12
+// iteraciones tranquilizan si el tope es 50 y son una urgencia si es 15.
+//
+// El sobre lo adjunta el runtime al PRIMER step (`budgets`), así que está
+// disponible desde la iteración 1 y es el que ESTE run recibió — recalcularlo
+// aquí mostraría el presupuesto configurado hoy y mentiría sobre runs pasados.
+function BudgetRemaining({
+  steps,
+  cap,
+  used,
+  testId,
+}: {
+  steps: Step[];
+  cap: string;
+  used: number;
+  testId: string;
+}) {
+  const budgets = steps.find((s) => s.budgets && Object.keys(s.budgets).length > 0)?.budgets;
+  const limit = budgets?.[cap];
+  // Runs anteriores a G11 no traen el sobre: se calla en vez de inventar un
+  // techo, que es lo único peor que no mostrarlo.
+  if (!limit || limit <= 0) return null;
+  const left = Math.max(0, limit - used);
+  const tight = left <= limit * 0.2;
+  return (
+    <span
+      className={`ml-1 text-xs font-normal ${tight ? "text-warning-soft-foreground" : "text-muted-foreground"}`}
+      data-testid={testId}
+      title={`Tope de este run: ${limit.toLocaleString()}`}
+    >
+      · quedan {left.toLocaleString()}
+    </span>
   );
 }
 

@@ -63,11 +63,28 @@ interface ProjectUpdate {
 
 // Stack presets — pressing one fills the chips with the typical binaries
 // for that stack (merging, never clobbering, what's already there).
+//
+// G6a (plan guardas-research): el preset «Lectura» existe por un fallo medido.
+// Sin `sed` en la lista, un agente que quería mirar 50 líneas de un fichero
+// recibía «command not allowed: sed» y caía en releer el fichero entero una y
+// otra vez — la read-churn que disparaba las guardas de esterilidad y bloqueó
+// la tarea «Auditar dependencias». Son utilidades de TEXTO: el agente ya puede
+// escribir en el worktree con `write_file`, así que no amplían la superficie.
+//
+// Es un preset y NO una base implícita siempre activa a propósito: la
+// allowlist es deny-by-default por diseño (principio 2), y conceder siete
+// binarios en silencio a todo proyecto —incluidos los que el operador cerró a
+// conciencia— es una decisión suya, no de la plataforma. Un clic.
 const STACK_PRESETS: { key: string; label: string; commands: string[] }[] = [
   { key: "php", label: "PHP", commands: ["php", "composer", "vendor/bin/phpunit", "pest"] },
   { key: "node", label: "Node", commands: ["npm", "npx", "node"] },
   { key: "dotnet", label: ".NET", commands: ["dotnet"] },
   { key: "python", label: "Python", commands: ["python", "pytest"] },
+  {
+    key: "read",
+    label: "Lectura",
+    commands: ["sed", "awk", "sort", "uniq", "cut", "tr", "head", "tail", "grep", "wc"],
+  },
 ];
 
 // The runtime templates the operator can pick come from GET /runtime-templates

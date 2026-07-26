@@ -518,7 +518,28 @@ class _AgentLoop:
             summary=summary,
             placeholder=is_stub,
         )
+        # G11 (plan guardas-research): el SOBRE de presupuesto del run, en el
+        # PRIMER step. El visor ya recibe lo GASTADO en vivo (`iterations`,
+        # `total_tokens`) pero no el techo, así que no podía decir cuánto queda
+        # — el aviso solo existía dentro del prompt, donde no lo ve nadie.
+        #
+        # Va aquí y no en `finalize` (donde vive `safeguard_stats`) porque el
+        # caso de uso es un run EN CURSO: en finalize llegaría cuando ya no
+        # sirve para decidir si intervenir. Y es el envelope que ESTE run
+        # recibió, no el que esté configurado hoy: recalcularlo al leer mentiría
+        # en cuanto el operador cambiara los presupuestos.
+        step["budgets"] = self._budget_envelope()
         return {"context": context, "steps": [step], "guardrail_events": guardrail_events}
+
+    def _budget_envelope(self) -> dict[str, float]:
+        """Los topes del run, para que el visor calcule lo que queda."""
+        budgets = self.tracker.budgets
+        return {
+            "max_iterations": budgets.max_iterations,
+            "max_tokens": budgets.max_tokens,
+            "max_cost_usd": budgets.max_cost_usd,
+            "max_tool_calls": budgets.max_tool_calls,
+        }
 
     def plan(self, state: AgentState) -> dict[str, Any]:  # noqa: PLR0911, PLR0912, PLR0915
         """Check safeguards, ask the model for the next move, detect loops."""

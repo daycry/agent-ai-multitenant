@@ -109,3 +109,65 @@ describe("Timeline de ejecución — cabecera (runs-visor D1)", () => {
     expect(screen.queryByTestId("execution-safeguards")).toBeNull();
   });
 });
+
+// G11 (plan guardas-research): el visor muestra lo que QUEDA, no solo lo
+// gastado. El aviso vivía únicamente dentro del prompt — el modelo lo veía y el
+// operador no.
+describe("Presupuesto restante (G11)", () => {
+  const withBudgets = (budgets: Record<string, number>, over: Record<string, unknown> = {}) =>
+    execution({
+      steps_log: [
+        {
+          index: 0,
+          kind: "memory_read",
+          node: "recall",
+          status: "ok",
+          summary: "recall",
+          budgets,
+        },
+      ],
+      ...over,
+    });
+
+  it("resta lo gastado del tope de ESTE run", async () => {
+    // Un contador sin techo no dice nada: 12 iteraciones tranquilizan si el
+    // tope es 50 y son una urgencia si es 15.
+    apiFetchMock.mockResolvedValue(
+      withBudgets(
+        { max_iterations: 50, max_tokens: 100000 },
+        { iterations: 12, total_tokens: 40000 },
+      ),
+    );
+    mount();
+    await waitFor(() => expect(screen.getByTestId("execution-iterations-left")).toBeTruthy());
+    expect(screen.getByTestId("execution-iterations-left").textContent).toContain("38");
+    expect(screen.getByTestId("execution-tokens-left").textContent).toContain(
+      (60000).toLocaleString(),
+    );
+  });
+
+  it("un run anterior a G11 no inventa un techo", async () => {
+    // Sin sobre en steps_log se calla: mostrar un límite inventado es lo único
+    // peor que no mostrar nada.
+    apiFetchMock.mockResolvedValue(execution({ steps_log: [] }));
+    mount();
+    await waitFor(() => expect(screen.getByTestId("execution-iterations")).toBeTruthy());
+    expect(screen.queryByTestId("execution-iterations-left")).toBeNull();
+  });
+
+  it("nunca baja de cero aunque el run se pase del tope", async () => {
+    apiFetchMock.mockResolvedValue(withBudgets({ max_iterations: 50 }, { iterations: 60 }));
+    mount();
+    await waitFor(() => expect(screen.getByTestId("execution-iterations-left")).toBeTruthy());
+    expect(screen.getByTestId("execution-iterations-left").textContent).toContain("0");
+  });
+
+  it("un tope de cero se trata como ausente, no como «agotado»", async () => {
+    // Un 0 en el sobre es un dato corrupto, no un presupuesto: anunciar
+    // «quedan 0» sobre un run sano sería una alarma falsa.
+    apiFetchMock.mockResolvedValue(withBudgets({ max_iterations: 0 }, { iterations: 3 }));
+    mount();
+    await waitFor(() => expect(screen.getByTestId("execution-iterations")).toBeTruthy());
+    expect(screen.queryByTestId("execution-iterations-left")).toBeNull();
+  });
+});

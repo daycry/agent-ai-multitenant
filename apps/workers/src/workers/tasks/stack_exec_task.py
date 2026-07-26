@@ -65,6 +65,15 @@ _log = structlog.get_logger("workers.tasks")
 _STACK_EXEC_DEFAULT_TIMEOUT_S = 600
 
 
+# Utilidades de TEXTO cuya denegación tiene una alternativa mejor que pedirle al
+# operador que las autorice: `read_file` con offset/limit no pasa por la
+# allowlist y hace el mismo trabajo para el caso que importa (mirar un trozo de
+# fichero).
+_TEXT_READ_PROGRAMS = frozenset(
+    {"sed", "awk", "head", "tail", "grep", "cat", "less", "more", "cut", "tr", "wc"}
+)
+
+
 def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
     """Deny-by-default gate (ADR 0045), identical to ``shell_exec``: the first
     token's basename must be in ``allowed``. Returns an error string, or ``None``
@@ -95,6 +104,20 @@ def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
             hint = (
                 " stack_exec runs ONE allowed program per call; shell chaining "
                 "(&&, ||, ;, |) is NOT supported — issue each command in a separate call."
+            )
+        elif program in _TEXT_READ_PROGRAMS:
+            # G6b (plan guardas-research): el agente que quería mirar un trozo de
+            # fichero se topaba con esto y caía en releer el fichero ENTERO una y
+            # otra vez — la read-churn que disparaba las guardas de esterilidad.
+            #
+            # Se le ofrece `read_file`, que no pasa por la allowlist, en vez de la
+            # alternativa "obvia" `head -n N | tail`: esa lleva TUBERÍA, que
+            # stack_exec tampoco admite, así que sugerirla sería mandarle a un
+            # segundo fallo.
+            hint = (
+                " To read part of a file you do NOT need a shell command: call "
+                "`read_file` with `offset`/`limit` — it is always available and "
+                "needs no allowlist."
             )
         return f"command not allowed: {program}.{hint} Allowed: {allowed_display}."
     return None

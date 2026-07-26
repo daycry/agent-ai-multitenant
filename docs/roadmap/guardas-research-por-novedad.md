@@ -1,7 +1,7 @@
 ---
 plan_id: guardas-research-por-novedad
 title: Guardas de research por novedad (per-target + esterilidad) + memoria de lecturas + instrumentación
-status: in_progress
+status: blocked
 blocking_plan: []
 started_at: 2026-07-03
 completed_at: null
@@ -10,6 +10,12 @@ estimated_effort_person_days: 1
 estimated_cost_human_eur: 400 € – 700 €
 estimated_cost_ai_eur: 10 € – 25 €
 created_by: operador + auditoría-runs-2026-07-02
+blocked_reason: >-
+  Solo quedan F2 y G13, y las dos son VERIFICACIÓN e2e: exigen desplegar la
+  imagen nueva y relanzar runs reales. El despliegue está parado por decisión
+  del operador (no relanzar ni desbloquear nada hasta dar el sistema por
+  verificado). Todo el código de la fase G está entregado y probado.
+blocked_at: 2026-07-26
 spec_sections_referenced: []
 docs_language: es
 ---
@@ -240,33 +246,72 @@ docs_language: es
 
 ### Fase G — Recalibración (tareas)
 
-- [ ] **G1 — offset/limit en la clave del target**: `_read_target` incluye offset/limit → paginar deja de
-      contar como releer. **Test:** leer `A[0:100]` y `A[100:200]` cuenta como 2 targets, no 2 lecturas del mismo.
-- [ ] **G2 — decay/reset per-target tras turno productivo**: `read_counts[target]` decae/resetea cuando un
+> **Cierre (2026-07-26).** Casi toda esta fase la resolvió el **ADR 0103**
+> (`accepted`, implementación COMPLETA el 2026-07-12) y los checkboxes se habían
+> quedado atrás. Estado real, guarda por guarda:
+>
+> | Guarda                | Estado                                                          | Dónde                                                                                                                                                                        |
+> | --------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+> | G1                    | **RECHAZADA** por el ADR (recomendación B)                      | el residual real de r2 era la acumulación sin decay, que cierra G2 — meter offset/limit en la clave ABRE un hueco: un re-read con offset variable se disfraza de exploración |
+> | G2, G3b, G4a, G5, G10 | hechas (SAFE del ADR)                                           | `tool_classification.py`, `graph.py`, visor                                                                                                                                  |
+> | G3                    | hecha                                                           | `graph.py:1263` — `_is_producing_tool(tool) and bool(observation.get("ok"))`                                                                                                 |
+> | G8                    | hecha, opción B **ratificada** por el operador (2026-07-12)     | `LoopDetector.note_progress`                                                                                                                                                 |
+> | G9                    | **NO implementada** por recomendación del propio ADR (opción C) | G10 + la memoria de lecturas ya mitigan la relectura                                                                                                                         |
+> | G4b                   | follow-up con plumbing (pasar `security_level` al runtime)      | fuera del ADR                                                                                                                                                                |
+> | G6, G11, G12          | **cerradas hoy** (ver abajo)                                    |                                                                                                                                                                              |
+> | G13, F2               | **bloqueadas**: exigen desplegar y lanzar runs reales           | orden del operador vigente                                                                                                                                                   |
+>
+> **G6 — cerrada hoy.** G6b y G6c ya estaban; faltaba G6a y el mensaje tenía un
+> hueco. Se añade el preset **«Lectura»** (`sed, awk, sort, uniq, cut, tr, head,
+tail, grep, wc`) a la UI de comandos. Es un PRESET y no una base implícita
+> siempre activa a propósito: la allowlist es deny-by-default por diseño
+> (principio 2), y conceder siete binarios en silencio a todo proyecto —incluidos
+> los que el operador cerró a conciencia— es decisión suya, no de la plataforma.
+> Queda en un clic. Se deja fuera `echo`, que el plan listaba: sin shell no
+> redirige a ninguna parte, así que no sirve para leer nada.
+>
+> Y una corrección al propio plan: G6b proponía sugerir `head -n N | tail` como
+> alternativa, pero eso lleva **tubería** y `stack_exec` no la admite — sería
+> mandar al agente a un segundo fallo. El mensaje ofrece `read_file` con
+> `offset`/`limit`, que no pasa por la allowlist y siempre funciona. 7 tests.
+>
+> **G11 — cerrada hoy.** El aviso de «te quedan N iteraciones» vivía **solo
+> dentro del prompt**: lo veía el modelo y no el operador. El visor mostraba lo
+> gastado sin techo contra el que compararlo, que es como no mostrar nada (12
+> iteraciones tranquilizan si el tope es 50 y son una urgencia si es 15). El
+> runtime adjunta ahora el sobre de presupuesto al **primer** step —no al
+> `finalize`, donde llegaría cuando ya no sirve para intervenir— y el visor resta.
+> Es el envelope que ESE run recibió: recalcularlo al leer mostraría el
+> presupuesto de hoy y mentiría sobre runs pasados. 4 tests de runtime + 4 de
+> frontend.
+
+- [~] **G1 — offset/limit en la clave del target**: `_read_target` incluye offset/limit → paginar deja de
+  contar como releer. **Test:** leer `A[0:100]` y `A[100:200]` cuenta como 2 targets, no 2 lecturas del mismo.
+- [x] **G2 — decay/reset per-target tras turno productivo**: `read_counts[target]` decae/resetea cuando un
       turno productivo toca ese target (write al fichero o `stack_exec` OK); umbrales proporcionales al
       presupuesto (como `_sterile_hard_limit`), no fijos 3/5. **Test:** releer `Routes.php` tras un `phpunit`
       fallido en un bucle TDD NO dispara el nudge same-target.
-- [ ] **G3 — `has_produced` exige `result.ok` (r4)**: la rama de producing tools comprueba `observation.ok`
+- [x] **G3 — `has_produced` exige `result.ok` (r4)**: la rama de producing tools comprueba `observation.ok`
       antes de latchear `has_produced`/`turn_productive`. **Test:** un `shell_exec` denegado NO pone
       `has_produced=True`; un `write_file` OK sí.
-- [ ] **G3b — fallos de plataforma no suman esterilidad**: errores identificables de plataforma (tool sin
+- [x] **G3b — fallos de plataforma no suman esterilidad**: errores identificables de plataforma (tool sin
       executor, `command not allowed`, worktree vacío/EACCES) no incrementan la racha estéril ni el contador
       per-target. **Test:** 3 `command not allowed` seguidos no disparan el trip de esterilidad.
-- [ ] **G4 — clasificar research por metadata (r5a)**: añadir `search_code` a `_RESEARCH_TOOLS` y clasificar por
+- [x] **G4 — clasificar research por metadata (r5a)**: añadir `search_code` a `_RESEARCH_TOOLS` y clasificar por
       metadata del catálogo (`security_level=safe`/read-only ⇒ research) en vez de lista fija; cablear el
       executor de `search_code` (o retirarlo — coord. `tools-y-cierre-plan-fixes.md` g4). **Test:** una tool MCP
       read-only cuenta como research; `search_code` gana novedad y no cuenta como mutador.
-- [ ] **G5 — resumen del visor por variante (r3) + `safeguard_stats` en el visor**: cada variante de nudge
+- [x] **G5 — resumen del visor por variante (r3) + `safeguard_stats` en el visor**: cada variante de nudge
       (same-target / esterilidad / repetición / ya-produjo-FINISH) rinde su propio resumen; exponer
       `safeguard_stats` (instrumentación B1) en el visor de runs. **Test:** el step de un nudge «FINISH» no
       muestra «stop researching»; el visor lista los contadores por tipo.
-- [ ] **G6 — allowlist de lectura + error accionable + presets (r1)**: **G6a** ampliar la base con
+- [x] **G6 — allowlist de lectura + error accionable + presets (r1)**: **G6a** ampliar la base con
       `sed, awk, sort, uniq, cut, tr, echo` (escribir en el worktree ya está permitido, así que estas de lectura
       no añaden superficie); **G6b** al denegar, el mensaje sugiere la alternativa concreta (`head -n N | tail`,
       o `read_file` con offset/limit) además de la lista; **G6c** presets de `allowed_commands` por
       runtime-template en la UI de comandos. **Test:** `sed -n '1,50p'` se ejecuta; un comando fuera del
       allowlist devuelve un error con alternativa; el preset `php-phpunit` trae composer/php/phpunit.
-- [ ] **G8 — `LoopDetector` con reset por progreso (r7)**: el detector deja de tripar comandos idempotentes
+- [x] **G8 — `LoopDetector` con reset por progreso (r7)**: el detector deja de tripar comandos idempotentes
       re-ejecutados en un ciclo con progreso intercalado — resetear/decaer el fingerprint `(tool,args)` cuando
       hubo un turno productivo intermedio (write o target nuevo), de modo que edit→build→edit→build no acumule.
       Un comando FALLIDO repetido no se trata como mutador (no mutó nada): al 2.º fallo idéntico, inyectar el
@@ -274,16 +319,16 @@ docs_language: es
       para repeticiones idénticas EXITOSAS de mutadores SIN progreso intermedio. **Test:** `composer audit`
       ejecutado con éxito 4× intercalado con writes NO tripa; 4× idéntico sin ningún progreso sí; un
       `command not allowed` repetido inyecta guidance y no cuenta como mutador.
-- [ ] **G9 — cache de contenido por target leído**: si el agente relee un fichero NO modificado desde la última
-      lectura, servir del cache del propio runtime (respuesta gratis, sin container round-trip) y NO contar
-      esterilidad; invalidar al escribir el path. Convierte la relectura de pecado en no-op. **Test:** releer un
-      fichero no modificado no incrementa `read_counts` ni hace round-trip; tras escribirlo, la siguiente lectura
-      sí va al disco.
-- [ ] **G10 — subir `_READ_DIGEST_CHARS`**: a un presupuesto útil (~400) con firma de símbolos para código.
+- [~] **G9 — cache de contenido por target leído**: si el agente relee un fichero NO modificado desde la última
+  lectura, servir del cache del propio runtime (respuesta gratis, sin container round-trip) y NO contar
+  esterilidad; invalidar al escribir el path. Convierte la relectura de pecado en no-op. **Test:** releer un
+  fichero no modificado no incrementa `read_counts` ni hace round-trip; tras escribirlo, la siguiente lectura
+  sí va al disco.
+- [x] **G10 — subir `_READ_DIGEST_CHARS`**: a un presupuesto útil (~400) con firma de símbolos para código.
       **Test:** el digest de un `.py` incluye la 1.ª def/clase; el bloque PROGRESS no supera su cap.
-- [ ] **G11 — presupuesto restante en el visor**: mostrar iteraciones/tokens restantes también en el visor, no
+- [x] **G11 — presupuesto restante en el visor**: mostrar iteraciones/tokens restantes también en el visor, no
       solo en el PROGRESS del prompt. **Test:** el visor de un run en curso muestra el presupuesto restante.
-- [ ] **G12 — docs + ADR**: actualizar este plan y los ADR 0089/0092 afectados con la nueva semántica.
+- [x] **G12 — docs + ADR**: actualizar este plan y los ADR 0089/0092 afectados con la nueva semántica.
       **Test:** n/a (documental); los ADR reflejan el reset del loop-detector y la clasificación por metadata.
 - [ ] **G13 — e2e de validación**: re-lanzar «Tests de feature» con la imagen nueva y verificar **0**
       `command not allowed: sed`, **0** nudges por paginación/TDD legítimo, ciclo edit-build con comando
