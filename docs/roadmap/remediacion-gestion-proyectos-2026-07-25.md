@@ -1,9 +1,9 @@
 ---
 plan_id: remediacion-gestion-proyectos-2026-07-25
 title: Remediación del workflow de gestión de proyectos — cableado del último tramo
-status: pending_approval
+status: pending_human_validation
 blocking_plan: []
-started_at: null
+started_at: 2026-07-25
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 41
@@ -762,33 +762,55 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_52b` — Encender los evals: sembrar, lanzar y muestrear
 
-- [ ] **Título**: el subsistema de evals (Plan 14) está construido entero —7 módulos, 7 tablas,
-      18 endpoints, dashboard— y **las siete tablas están vacías porque no hay ninguna vía de
-      producirlas** (V-6). Tres piezas, en este orden:
-      **(a) Sembrar** un dataset dorado mínimo con sus criterios e ítems, a partir de tareas
-      reales ya cerradas cuyo resultado se considere bueno. Es la parte con trabajo humano de
-      verdad y la que decide si el resto sirve: un dataset malo mide ruido.
-      **(b) `POST /eval-runs`** para poder lanzar una corrida contra un dataset. Hoy el router
-      tiene CRUD de las entradas y solo lectura de las salidas: **no hay productor**.
-      **(c) El beat de shadow evals**, que muestrea el 5 % de tareas reales completadas y las
-      pasa por el juez. `record_shadow_eval` ya existe y no lo llama nadie.
-- **Hallazgo**: V-6 (alto, verificado en vivo) · **Tiempo**: 2,5 d (a: 1 d, b: 0,75 d, c: 0,75 d)
-- **Depende de**: `task_wf_52` (versionado de prompts) — sin versión, las corridas no se pueden
-  atribuir a un cambio y el dashboard sigue agrupando bajo «(sin versión)».
-- **Ficheros**: `apps/api-server/src/api_server/routers/evals.py`,
-  `apps/api-server/src/api_server/evals/shadow.py`,
-  `apps/workers/src/workers/beat_schedule.py`, seeds del dataset
-- **Tests**: integración de que `POST /eval-runs` produce filas en `eval_runs` + `eval_results`;
-  integración de que el beat muestrea y registra sin tocar `tasks` ni `executions` (la decisión
-  vinculante del Plan 14: **shadow nunca bloquea ni altera la ejecución real**).
-- **Criterio de aceptación**: el dashboard `/admin/eval-quality` deja de estar vacío y agrupa
-  por _release_ de prompt con datos reales.
-- **Decisión del operador**: la tasa del 5 % cuesta una llamada de juez por tarea muestreada.
-  Si se prefiere empezar a 0 % y subirla a mano, la tarea (c) sigue valiendo — cablea el
-  mecanismo y deja el grifo cerrado.
-- **Por qué importa**: es el **único instrumento** del sistema para saber si los agentes mejoran
-  o empeoran. Sin él, `task_wf_60` (reviewer con diff), `task_wf_63` (caché) y cualquier cambio
-  de prompt se entregan sin poder demostrar que mejoran nada.
+- [x] **Título**: el subsistema de evals (Plan 14) estaba construido entero —7 módulos, 7 tablas,
+      18 endpoints, dashboard— y **las siete tablas vacías porque no había ninguna vía de
+      producirlas** (V-6). Cerrado con el juez y el sujeto reales, el productor, el muestreador
+      y el último tramo de UI.
+- **(a) Sembrar** — el mecanismo ya existía (`POST /tasks/{id}/promote-to-dataset`, con UI) y la
+  curaduría es trabajo humano: elegir qué tareas cerradas son «buenas» no lo puede decidir el
+  sistema. Lo que faltaba y **sí** se ha hecho es todo lo que hace que sembrar sirva de algo —
+  sin (b) y (c), un dataset sembrado seguía sin poder medirse.
+- **(b) `POST /eval-runs`** — el productor. Con él, dos piezas que no existían:
+  - `evals/llm_judge.py`: `LLMJudgeModel` **y** `LLMSubjectModel` sobre `shared_llm` (ADR 0021).
+    Solo había `ScriptedJudgeModel`, el doble de test — sin un juez real todo lo demás era
+    andamiaje. El juez corre a temperatura 0 (un juez creativo puntúa distinto el mismo par dos
+    veces y hace inservible comparar releases); el sujeto NO (se le mide produciendo de verdad).
+  - `GET /eval-runs/{id}/results`: las filas `eval_results` se escribían desde el Plan 14 y
+    **ninguna ruta las leía**. Un `pass_rate` del 60 % sin desglose dice que algo va mal y no
+    deja arreglarlo. Resuelve además el NOMBRE de cada criterio: la fila persiste
+    `criterion_id`, así que sin esto la pantalla mostraría filas idénticas tituladas con un UUID.
+- **La trampa que este trabajo tenía que evitar**: pasar el `expected_output` del item como si
+  fuera la salida del sujeto. El juez compararía la referencia consigo misma → `pass_rate` 100 %
+  siempre. Un eval que siempre pasa es peor que no tener eval, porque da confianza. El sujeto
+  produce de verdad, y hay un test dedicado que lo fija
+  (`test_the_judge_never_sees_the_reference_as_the_produced_output`).
+- **(c) El beat** — `workers.run_shadow_evals` (horario). `record_shadow_eval` existía desde el
+  Plan 14 y **no lo llamaba nadie**. Se cablea con el grifo cerrado, por la decisión del
+  operador: hacen falta TRES condiciones deliberadas y visibles —tasa > 0, un juez nombrado en
+  `EVAL_JUDGE_MODEL`, y un dataset `shadow` CON items—. Ninguna se cumple sola en una
+  instalación nueva, así que instalarlo no enciende gasto. Topes: 5 corridas por latido y
+  ventana de 24 h, para que un pico de tareas no sea un pico de factura.
+- **Último tramo (UI)** — sin esto el trabajo no se puede usar: `LaunchEvalRun` (botón «Lanzar
+  corrida» en `/admin/eval-quality`, que bloquea juez==sujeto y dataset vacío **antes** de
+  gastar una llamada) y `EvalRunResults` (fila expandible con el desglose, fallos primero).
+- **Un tope, porque la corrida es síncrona**: se ejecuta dentro de la petición y son
+  `items x (1 sujeto + N criterios)` llamadas. `MAX_SYNC_EVAL_CALLS = 200`; por encima se
+  rechaza **por adelantado y con la cifra concreta**. Morir a mitad daría un 504 sin run y sin
+  explicación. Si algún día hace falta más, la salida es encolarlo en Celery, no subir el tope.
+- **Hallazgo**: V-6 (alto, verificado en vivo) · **Tiempo**: 2,5 d
+- **Ficheros**: `evals/llm_judge.py` (nuevo), `routers/evals.py`, `schemas/evals.py`,
+  `workers/maintenance/shadow_evals.py` (nuevo), `beat_schedule.py`,
+  `components/evals/{launch-eval-run,eval-run-results}.tsx` (nuevos),
+  `app/admin/eval-quality/page.tsx`
+- **Tests**: 9 de integración (camino feliz, la trampa de la referencia, versión de prompt,
+  dataset vacío→422, juez==sujeto→409, RBAC, y **dos cross-tenant**: ni lanzar contra el dataset
+  ajeno ni leer los resultados ajenos — el segundo importa porque los resultados son otra tabla
+  y otra consulta, y sin resolver antes el run un `WHERE run_id=…` devolvería lista vacía en vez
+  de 404, confirmando que el run existe; y el tope de tamaño); 20 unit (adaptadores + las guardas del beat);
+  21 de frontend.
+- **Criterio de aceptación**: cumplido en cuanto se siembre — el productor, el lector y el
+  muestreador están puestos y probados; lo único que queda para que el dashboard tenga datos es
+  la curaduría humana del dataset.
 
 #### `task_wf_53` — Tests de `tool_classification`
 

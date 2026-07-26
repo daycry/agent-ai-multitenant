@@ -199,6 +199,17 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(hour="4", minute="0"),
         "options": {"queue": "ingestion"},
     },
+    # `task_wf_52b`: latido de shadow evals. `record_shadow_eval` existia desde
+    # el Plan 14 sin ningun llamante — el mecanismo entero y nunca disparado.
+    # Horario y no mas frecuente: cada corrida cuesta llamadas de juez, y la
+    # senal que persigue (deriva de calidad) no se mueve por minutos. Pinned a
+    # `default`: son llamadas LLM + escrituras, sin efectos de infra. No-op
+    # barato mientras el operador no nombre juez y cree un dataset `shadow`.
+    "run-shadow-evals-hourly": {
+        "task": "workers.run_shadow_evals",
+        "schedule": crontab(minute="17"),
+        "options": {"queue": "default"},
+    },
 }
 
 # Plan 11 task_11_18: the scheduled price-catalog sync entry name. Kept as a

@@ -9,6 +9,7 @@ imports every submodule so all ``@app.task`` registrations fire. The submodules:
   * :mod:`~workers.maintenance.review_runtimes`   — ``workers.expire_review_runtimes`` (5 min)
   * :mod:`~workers.maintenance.memory_backfill`   — ``workers.backfill_memory_embeddings``
   * :mod:`~workers.maintenance.dag_promotion_beat`— ``workers.promote_ready_plans`` (30s)
+  * :mod:`~workers.maintenance.shadow_evals` — ``workers.run_shadow_evals`` (horario)
   * :mod:`~workers.maintenance.stale_sweeper`     — ``workers.sweep_stale_executions`` (5 min)
   * :mod:`~workers.maintenance.budget_sweep`      — ``workers.refresh_budgets`` (5 min)
   * :mod:`~workers.maintenance.queue_sampler`     — ``workers.sample_queue_metrics`` (30s)
@@ -63,6 +64,7 @@ from workers.maintenance.review_runtimes import (
     expire_review_runtimes,
     plan_status_after_expiry,
 )
+from workers.maintenance.shadow_evals import run_shadow_evals
 from workers.maintenance.stale_sweeper import (
     _remove_exited_terminal_containers,
     _sweep_stale_executions_async,
@@ -82,6 +84,7 @@ __all__ = [
     "idle_sweep_pools",
     "plan_status_after_expiry",
     "promote_ready_plans",
+    "run_shadow_evals",
     "prune_worktrees",
     "purge_dep_cache",
     "reconcile_pipeline_state",
