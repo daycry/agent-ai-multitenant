@@ -84,6 +84,56 @@ def _stuck_task_needs_reconcile(
     return latest_exec_completed_at <= now - min_age
 
 
+def is_orphan_claim_candidate(*, is_human_route: bool) -> bool:
+    """Whether "no execution row" may be read as "the run never started".
+
+    It may NOT on the human route, and that omission was a real regression
+    (adversarial audit 2026-07-25). ``_revert_orphan_claim`` guards on three
+    things — still ``in_progress``, old ``started_at``, zero ``executions`` — and
+    an ACCEPTED HUMAN TASK satisfies all three BY DESIGN: its auditable trace is
+    a ``HumanWorkSession``, never an ``Execution``. The SQL candidate filter does
+    not discriminate either.
+
+    So 30 minutes after a person accepted their task, it was reverted to ``ready``
+    with ``assigned_agent_id`` and ``started_at`` wiped. Their later submission
+    then 409'd (``ready -> in_review`` is illegal) with no way to re-accept, and
+    the ``ready`` event dispatched an AI run over the work the person was doing.
+
+    The ``if latest is None: continue`` that task_wf_m1 removed was that class's
+    only protection. The inference "no execution ⇒ no run ever started" is sound
+    only on the AI route.
+    """
+    return not is_human_route
+
+
+async def _is_human_route(db: Any, task: Any) -> bool:
+    """Is this task being worked by a PERSON rather than an agent run?
+
+    Two independent signals, either is enough — a task mid-handoff may briefly
+    carry one and not the other, and a false "yes" only means the reconciler
+    leaves the task alone (the safe direction), whereas a false "no" wipes a
+    human's assignment.
+    """
+    from api_server.db.domain import Agent, HumanTaskAssignment
+    from sqlalchemy import func, select
+
+    assigned = getattr(task, "assigned_agent_id", None)
+    if assigned is not None:
+        agent_type = (
+            await db.execute(select(Agent.agent_type).where(Agent.id == assigned))
+        ).scalar_one_or_none()
+        if str(agent_type or "") == "human":
+            return True
+    handed_to_person = (
+        await db.execute(
+            select(func.count())
+            .select_from(HumanTaskAssignment)
+            .where(HumanTaskAssignment.task_id == task.id)
+        )
+    ).scalar_one()
+    return bool(handed_to_person)
+
+
 def _orphan_claim_needs_revert(
     started_at: datetime | None,
     *,
@@ -178,6 +228,10 @@ async def _revert_orphan_claim(
         await db.execute(select(Task).where(Task.id == task_id).with_for_update())
     ).scalar_one_or_none()
     if task is None or task.status != TaskStatus.IN_PROGRESS.value:
+        return None
+    # La guarda que faltaba: una tarea de la RUTA HUMANA no es nunca una
+    # reclamación huérfana. Ver `is_orphan_claim_candidate`.
+    if not is_orphan_claim_candidate(is_human_route=await _is_human_route(db, task)):
         return None
     # El umbral de la reclamación huérfana es MÁS HOLGADO que el del caso (a): el
     # filtro SQL de candidatos usa el de (a), así que aquí se re-filtra.

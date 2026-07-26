@@ -256,3 +256,37 @@ async def test_core_isolates_a_failing_pass(monkeypatch: pytest.MonkeyPatch) -> 
         # G-04/P1-08: la pasada de vigilancia sin DB falla best-effort → 0.
         "tenant_ghost_children": 0,
     }
+
+
+# ---------------------------------------------------------------------------
+# REGRESIÓN (auditoría adversarial 2026-07-25): el rescate de reclamaciones
+# huérfanas se comía las TAREAS HUMANAS.
+#
+# `_revert_orphan_claim` tenía tres guardas —sigue `in_progress`, `started_at`
+# viejo, cero filas en `executions`— y una tarea humana aceptada cumple las tres
+# POR DISEÑO: su rastro auditable es un `HumanWorkSession`, nunca una
+# `Execution` (`human_inbox.py`). El filtro SQL de candidatos tampoco distingue
+# nada: `status == in_progress AND started_at < cutoff`.
+#
+# Resultado: 30 min después de aceptar, la tarea del humano volvía a `ready` con
+# `assigned_agent_id = None` y `started_at = None`. Su entrega posterior daba 409
+# (`ready -> in_review` es ilegal) y no podía re-aceptarla; y el evento `ready`
+# disparaba un run de IA sobre la tarea que la persona estaba haciendo.
+#
+# El `if latest is None: continue` que la tarea m1 retiró era la ÚNICA protección
+# de esa clase. La inferencia «sin ejecución ⇒ el run nunca arrancó» solo es
+# válida en la ruta de IA.
+# ---------------------------------------------------------------------------
+def test_a_human_task_is_never_an_orphan_claim() -> None:
+    """La guarda que faltaba, dicha en una línea."""
+    from workers.maintenance.reconciler import is_orphan_claim_candidate
+
+    assert is_orphan_claim_candidate(is_human_route=True) is False
+
+
+def test_an_ai_task_without_a_run_still_is_one() -> None:
+    """Y el caso que la tarea m1 vino a arreglar sigue arreglado: dos tareas
+    llevaban 7 días congeladas justo por esto."""
+    from workers.maintenance.reconciler import is_orphan_claim_candidate
+
+    assert is_orphan_claim_candidate(is_human_route=False) is True
