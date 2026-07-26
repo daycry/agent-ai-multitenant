@@ -60,6 +60,7 @@ def model_call_step(
     summary: str,
     status: str = "ok",
     provider: str | None = None,
+    cache_read_tokens: int = 0,
 ) -> dict[str, Any]:
     """An LLM call step — token counts and cost are captured here.
 
@@ -78,6 +79,12 @@ def model_call_step(
     )
     if provider:
         step["provider"] = provider
+    # `task_wf_63`: cuántos tokens del prompt sirvió la CACHÉ del proveedor.
+    # Viaja por iteración —no agregado— porque la pregunta que interesa es si
+    # el prefijo se reutiliza a medida que crece el contexto, y eso solo se ve
+    # turno a turno. `0` cuando el proveedor no lo reporta (Ollama local).
+    if cache_read_tokens:
+        step["cache_read_tokens"] = int(cache_read_tokens)
     return step
 
 

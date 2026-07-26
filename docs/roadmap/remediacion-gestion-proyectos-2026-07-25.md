@@ -962,19 +962,28 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 
 #### `task_wf_63` — Medir la caché de prompt antes de optimizarla
 
-- [ ] **Título**: instrumentar los aciertos de caché por proveedor y el coste por iteración,
-      **antes** de tocar la construcción de mensajes. Con el dato encima de la mesa, evaluar
-      pasar `_decide_messages` de «un mensaje de usuario grande reconstruido cada turno» a una
-      lista incremental, que es lo que permite a los proveedores con caché automática por
-      prefijo aprovechar también el histórico.
+- [x] _(hecho — la MEDICIÓN; la optimización queda pendiente del dato, que es el punto)_
+      **Título**: instrumentar los aciertos de caché por proveedor y el coste por iteración,
+      **antes** de tocar la construcción de mensajes.
 - **Hallazgo**: M-1 · **Tiempo**: 1 d
-- **Ficheros**: `agent_runtime/providers.py:340-400`, `packages/shared-llm/` (telemetría)
-- **Criterio de aceptación**: un informe con el coste por iteración y el porcentaje de prefijo
-  reutilizado por cada uno de los cuatro proveedores.
-- **Nota honesta**: el catálogo (ADR 0021) no incluye la Messages API de Anthropic en crudo,
-  así que **no aplica un `cache_control` explícito**. La ganancia depende de la caché
-  automática de cada proveedor y **puede ser pequeña**. Por eso esta tarea es de medición, no
-  de optimización: no comprometerse a un ahorro sin el dato.
+- **Ficheros**: `shared-llm/providers/_openai_compat.py`, `agent_runtime/{model,providers,
+steps}.py`, `api_server/prompt_cache_report.py` (nuevo),
+  `routers/tenant_stats.py` (`GET /tenant-stats/prompt-cache`)
+- **Lo que faltaba y no era obvio**: `Usage.cache_read_tokens` existía y **solo lo poblaba
+  `claude_sdk`**. Los proveedores OpenAI-compatibles lo reportan anidado en
+  `prompt_tokens_details.cached_tokens` y nadie lo leía, así que en tres de los cuatro
+  proveedores del catálogo no había forma de saber si la caché funcionaba. Y aunque se
+  poblara, no viajaba al step: no llegaba a persistirse.
+- **La honestidad del informe es lo que se ha protegido con tests**: un 0 % que significa «no
+  hay reutilización» y un 0 % que significa «este proveedor no lo reporta» son cosas
+  distintas, y confundirlas llevaría a optimizar a ciegas. De ahí `reports_cache`.
+- **Sin tabla nueva**: se agrega sobre los `steps_log` que ya se persisten, sin coste en el
+  camino caliente.
+- **La optimización NO se hace**, y es deliberado: pasar `_decide_messages` a una lista
+  incremental tiene riesgo real sobre la convergencia, y el catálogo (ADR 0021) no permite
+  `cache_control` explícito — la ganancia puede ser pequeña. Con el dato encima de la mesa
+  se decide; sin él sería fe.
+- **Tests**: 10.
 
 ---
 

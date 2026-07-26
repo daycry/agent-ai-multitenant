@@ -896,6 +896,10 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
         tokens_in=resp.usage.input_tokens,
         tokens_out=resp.usage.output_tokens,
         cost_usd=resp.usage.cost_usd,
+        # `task_wf_63`: cuánto del prompt sirvió la caché del proveedor.
+        # `getattr` porque es TELEMETRÍA: un provider que devuelva una forma de
+        # usage sin este campo no puede tumbar el run por un contador.
+        cache_read_tokens=int(getattr(resp.usage, "cache_read_tokens", 0) or 0),
     )
 
 

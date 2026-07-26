@@ -758,6 +758,7 @@ class _AgentLoop:
                 cost_usd=response.cost_usd,
                 summary=decision.rationale or f"decision: {decision.kind}",
                 provider=self.deps.provider_kind,
+                cache_read_tokens=response.cache_read_tokens,
             )
         )
 

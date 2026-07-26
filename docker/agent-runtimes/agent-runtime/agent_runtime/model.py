@@ -68,6 +68,9 @@ class ModelResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    # `task_wf_63`: tokens del prompt servidos desde la CACHÉ del proveedor.
+    # 0 cuando el proveedor no lo reporta (Ollama local no tiene caché de API).
+    cache_read_tokens: int = 0
 
 
 @dataclass(frozen=True)

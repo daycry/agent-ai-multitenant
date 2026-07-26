@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -911,3 +911,44 @@ def _rate(succeeded: int, total: int) -> Decimal | None:
 
 
 __all__ = ["router"]
+
+
+@router.get("/prompt-cache")
+async def prompt_cache_report(
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+    window_days: int = _window_days(),
+) -> dict[str, Any]:
+    """Reutilización de la caché de prompt y coste por iteración, por proveedor
+    (`task_wf_63`).
+
+    La tarea es de MEDICIÓN, y el orden importa: `_decide_messages` reconstruye
+    un mensaje de usuario grande cada turno, y pasarlo a una lista incremental
+    —lo que dejaría a los proveedores con caché por prefijo aprovechar también
+    el histórico— es un cambio con riesgo real sobre la convergencia. Antes de
+    tocarlo hay que saber si sirve de algo.
+
+    Se calcula sobre los `steps_log` que ya se persisten: sin tabla nueva, sin
+    telemetría paralela, sin coste en el camino caliente.
+
+    Lee `reports_cache` antes que `cached_prefix_pct`: un proveedor que no
+    reporta caché y otro que la reporta siempre a cero son situaciones
+    distintas, y confundirlas llevaría a optimizar a ciegas.
+    """
+    from api_server.prompt_cache_report import build_prompt_cache_report
+
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    rows = list(
+        (
+            await session.execute(
+                select(Execution.steps_log).where(
+                    Execution.tenant_id == principal.tenant_id,
+                    Execution.created_at >= since,
+                )
+            )
+        ).all()
+    )
+    report = build_prompt_cache_report([(None, row[0] or []) for row in rows])
+    payload = report.as_dict()
+    payload["window_days"] = window_days
+    return payload

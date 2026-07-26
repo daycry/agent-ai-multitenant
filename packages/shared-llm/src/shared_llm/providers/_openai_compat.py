@@ -121,9 +121,18 @@ def parse_chat_completion(
                 )
             )
     usage_d = data.get("usage") or {}
+    # `task_wf_63`: los tokens de prompt SERVIDOS DESDE CACHÉ. Los proveedores
+    # OpenAI-compatibles los reportan anidados en `prompt_tokens_details`, y
+    # nadie los leía: `Usage.cache_read_tokens` existía y solo lo poblaba
+    # claude_sdk, así que no había forma de saber si la caché de prefijo estaba
+    # funcionando en tres de los cuatro proveedores del catálogo. Medir antes de
+    # optimizar es el punto entero de esta tarea.
+    details = usage_d.get("prompt_tokens_details") or {}
+    cached = int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
     usage = Usage(
         input_tokens=int(usage_d.get("prompt_tokens", 0)),
         output_tokens=int(usage_d.get("completion_tokens", 0)),
+        cache_read_tokens=cached,
         cost_usd=float(usage_d.get("cost", 0.0) or 0.0),
     )
     # M-4 (auditoría 2026-07-10): el campo tipado `stop_reason` viaja también en
