@@ -7,10 +7,10 @@
 #
 # Posture: like agentic-default it DENIES the escape primitives (mount,
 # pivot_root, ptrace, kernel modules, reboot, raw I/O, docker.sock), but it is
-# STRICTER about WRITES — the agent may only write under /workspace and /tmp
-# (the two tmpfs / bind mounts the worker hands it); EVERYTHING ELSE on the
-# filesystem is read-only or denied. There is no broad /var/lib or /data write
-# grant here: untrusted code gets the minimum surface to do its job.
+# STRICTER about WRITES — the agent may only write under /workspace, /tmp and
+# its own HOME (the bind mount + the two tmpfs the worker hands it); EVERYTHING
+# ELSE on the filesystem is read-only or denied. There is no broad /var/lib or
+# /data write grant here: untrusted code gets the minimum surface to do its job.
 #
 # LOADING (host / HUMAN step — cannot run in CI, no privileged kernel):
 #   sudo apparmor_parser -r -W docker/apparmor/agent-runtime.profile
@@ -51,6 +51,20 @@ profile agent-runtime flags=(attach_disconnected,mediate_deleted) {
   /workspace/**             rwkix,
   /tmp/                     rw,
   /tmp/**                   rwk,
+  # HOME. The worker gives every sandbox HOME=/home/agent on its OWN tmpfs,
+  # sized per container and thrown away with it (workers.isolation.AGENT_HOME).
+  # It is NOT the bind-mounted worktree: HOME was moved out of /workspace on
+  # purpose, so the toolchain's dotfiles and caches stop landing in the project
+  # repo and getting committed by `git add -A`. Every runtime template then
+  # points its dependency cache inside it (`/home/agent/.npm`,
+  # `~/.composer/cache`, `~/.m2/repository`, …), so without this grant every
+  # `npm ci` / `composer install` / `pip install` dies with EACCES.
+  # `ix` because toolchains exec from their own home cache (npx,
+  # `~/.composer/vendor/bin`) — the tmpfs is nosuid but deliberately not noexec.
+  # There is no `deny /home/**` counterpart: a deny would beat this grant, and
+  # the rest of /home is already unwritable by default-deny (only `/** r` above).
+  /home/agent/              rw,
+  /home/agent/**            rwkix,
   owner /proc/*/fd/**       rw,
   owner /proc/*/task/**     r,
 
@@ -90,5 +104,4 @@ profile agent-runtime flags=(attach_disconnected,mediate_deleted) {
   deny /var/lib/** wklx,
   deny /data/** wklx,
   deny /root/** rwklx,
-  deny /home/** wklx,
 }
