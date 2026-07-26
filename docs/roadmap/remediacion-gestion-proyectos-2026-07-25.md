@@ -640,19 +640,31 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_44` — ADR de replanificación en caliente 🔒 GATED
 
-- [ ] **Título**: redactar el ADR que decida cómo se replanifica un plan `in_progress`: qué
-      pasa con las tareas en vuelo (¿se cancelan, se dejan terminar?), con la rama git y sus
-      commits ya hechos, con el presupuesto consumido, y si la replanificación exige
-      re-aprobación. **No implementar hasta que el operador acepte el ADR.**
+- [x] _(hecho — el ADR está escrito; **falta que el operador decida**)_ **Título**: redactar
+      el ADR que decida cómo se replanifica un plan `in_progress`.
 - **Hallazgo**: A-06 (alto), F-1 · **Tiempo**: 0,5 d (solo el ADR)
-- **Entregable**: `docs/05-architecture-decisions/01XX-replanificacion-en-caliente.md`,
-  status `proposed`, con al menos dos opciones y una recomendación.
+- **Entregable**: `docs/05-architecture-decisions/0132-replanificacion-en-caliente.md`,
+  status `proposed`, tres opciones para (a), tres para (c), y recomendación en cada una.
+- **Reencuadre que trajo el recon**: no se diseña desde cero. La mitad **aditiva** ya
+  funciona hoy (PUT del spec + `sync-to-kanban` que admite `in_progress`); el ADR gobierna
+  un camino que ya se puede recorrer. El agujero real es que `sync_to_kanban` es
+  estrictamente aditivo, así que **editar o borrar** una tarea del spec no llega nunca al
+  tablero: el operador cree que ha replanificado y el equipo sigue con el plan viejo.
+- **Recomendaciones del ADR**: (a) reconciliación de tres vías por estado de la tarea —
+  lo que no ha empezado se actualiza/cancela, lo que está en vuelo se **rechaza con 409**
+  nombrándolo, lo terminal no se reescribe; (b) nada se cancela solo; (c) sin
+  re-aprobación de momento, por coherencia con el ciclo de correcciones del ADR 0107, que
+  ya añade tareas a un plan aprobado sin volver a firmar; (d) registrar el evento, no
+  versionar el documento.
 
 #### `task_wf_45` — Implementar la replanificación 🔒 GATED tras `task_wf_44`
 
 - [ ] **Título**: según lo que decida el ADR. Estimación provisional, a revisar cuando el ADR
       esté aceptado.
 - **Tiempo**: 2 d (estimación gruesa)
+- **BLOQUEADA**: el **ADR 0132** está escrito y en `proposed`. Hasta que el operador elija
+  entre A1/A2/A3 y C1/C2/C3 no hay alcance que implementar. El propio ADR deja escritas
+  las seis afirmaciones que sus tests tendrán que fijar.
 
 ---
 
