@@ -951,7 +951,7 @@ refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
 
 ### Confirmados y PENDIENTES — no tocar sin leer esto entero
 
-- [ ] **`f3843e6f` × `2fc6af07` se contradicen** (alto). El perfil AppArmor
+- [x] _(hecho `786b2dca`)_ **`f3843e6f` × `2fc6af07` se contradicen** (alto). El perfil AppArmor
       `agent-runtime` tiene `deny /home/** wklx` (`docker/apparmor/agent-runtime.profile:93`)
       y el commit anterior puso ahí el HOME del test-runtime, donde apuntan los
       `dep_cache_mount` y `cache_env` de TODAS las plantillas. Con
@@ -963,7 +963,23 @@ refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
       instalador. Salidas: no aplicar AppArmor al test-runtime (conserva `pids_limit` +
       seccomp), o dar al perfil una excepción para `/home/agent`. Verificar antes si el
       agent-runtime sufre ya lo mismo: su HOME también es `/home/agent`.
-- [ ] **`619f2a7b` alarga demasiado el veto** (alto). El TTL pasó a 25200 s. El lock solo
+  - **Resuelto**: sí lo sufría, desde hace un mes. El perfil (2026-05-31) codificó «el
+    sandbox escribe en /workspace y /tmp» y el HOME del agente salió de /workspace a un
+    tmpfs propio en `498ade16` (2026-06-26) sin que nadie volviera al perfil. `2fc6af07`
+    no introdujo el choque: lo **amplió** a los `dep_cache_mount` de las 12 plantillas.
+    Se elige la excepción en el perfil, no retirar AppArmor del test-runtime — el
+    contenedor que más código ajeno ejecuta no puede ser el menos confinado. Y se QUITA
+    el `deny` en vez de añadir un permiso a su lado: en AppArmor un `deny` gana a
+    cualquier `allow`, así que las dos reglas juntas seguirían rotas pareciendo
+    arregladas. El invariante nuevo se ancla a `workers.isolation.AGENT_HOME` y al
+    catálogo, no a literales.
+  - **Nota aparte**: `tests/security/` tiene **4 tests en rojo desde antes** de esta
+    tanda (`test_every_prod_service_references_an_apparmor_profile`,
+    `test_monitoring_app_services_drop_all_caps_and_block_privesc`,
+    `test_every_tenant_owned_table_has_rls_enabled`,
+    `test_every_prod_service_carries_the_trusted_hardening_baseline`). Verificado contra
+    HEAD limpio. Uno de ellos es de RLS, o sea principio 1. Sin CI nadie los mira.
+- [x] _(hecho `1c471101`)_ **`619f2a7b` alarga demasiado el veto** (alto). El TTL pasó a 25200 s. El lock solo
       se suelta en el `finally`, que un SIGKILL no ejecuta, así que tras un OOM o un
       `docker stop` la tarea queda in-despachable hasta ~7 h; en la ruta del hard-kill el
       veto pasa de 0 s a 17400 s. Y el reintento se PIERDE: `concurrent_run_locked`
@@ -973,11 +989,29 @@ refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
       El plan pedía anclar al `execution_hard_time_limit_s` **efectivo más margen**, no a
       la ventana de visibilidad. Ojo: el arreglo tiene que resolver las DOS caras — el
       hueco que motivó C-05 y este veto—, probablemente soltando el lock en el sweeper.
-- [ ] **`task_wf_12` no funciona de punta a punta**: nadie fija `AGENT_VAULT_TOKEN` en
+  - **Resuelto** soltándolo en el sweeper, como apuntaba la nota: es quien acaba de
+    PROBAR que el titular está muerto. El TTL se queda anclado a la ventana de
+    visibilidad (mover el ancla reabriría el hueco de C-05); lo que cambia es que ya no
+    es el único camino de liberación. La liberación mantiene garantía de propiedad — el
+    token del lock es `executions.celery_task_id` —, así que un lock readquirido por un
+    run nuevo y legítimo no se toca nunca. De paso, `release_run_lock` pasa a devolver si
+    borró de verdad: la primera versión contaba intentos y el contador
+    `run_locks_released` habría mentido justo durante un incidente.
+- [x] _(ADR 0131 escrito, decisión del operador pendiente)_ **`task_wf_12` no funciona de punta a punta**: nadie fija `AGENT_VAULT_TOKEN` en
       todo el repo (solo se lee, en el runtime). Meter un token de Vault en el sandbox
       choca con el principio 2 de `CLAUDE.md`. **Necesita ADR**: o el worker resuelve el
       token y lo inyecta canjeado, o la llamada MCP va mediada por el worker como
       `stack_exec`.
+  - **`docs/05-architecture-decisions/0131-credenciales-oauth-mcp-en-el-sandbox.md`**,
+    `status: proposed`. Distingue lo que se confundía: un **token de Vault** es la llave
+    del almacén; un **access token OAuth** es un secreto acotado y efímero. Inyectar lo
+    segundo no contradice el principio 2 y es lo que la plataforma YA hace con la
+    credencial del LLM y con git. La vía MCP es la única que pide al sandbox tener una
+    llave del almacén. Tres opciones; recomendada la **C** (mediar por el API interno,
+    como `stack_exec`), porque es la única que además resuelve el **refresco** del token
+    —el problema real que A no cubre— sin meter el refresh token en el contenedor.
+    Mientras no se decida, el fallo está contenido: `_wire_mcp_servers` captura por
+    servidor y desde `task_wf_14` el motivo llega al preámbulo del agente.
 - [x] _(hecho c49c3430 — la regla vive ahora en `plan_is_live`)_ **`2e40b0bb`**: `_live_plan_of_conversation` no filtraba `deleted_at`, así que un plan
       borrado retiene su conversación para siempre. Arreglo: un `select` con
       `Plan.deleted_at.is_(None)` en vez del `session.get`.
