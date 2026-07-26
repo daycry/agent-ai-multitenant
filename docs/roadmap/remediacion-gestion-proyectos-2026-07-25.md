@@ -771,9 +771,14 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_53` — Tests de `tool_classification`
 
-- [ ] **Título**: batería directa del módulo del que dependen las guardas de convergencia, y
-      retirar de sus tablas las tools que no existen en el runtime (`search_code`,
-      `apply_patch`).
+- [x] _(hecho — 38 tests; la retirada NO se hace, ver abajo)_ **Título**: batería directa del
+      módulo del que dependen las guardas de convergencia.
+- **Desviación deliberada**: el plan pedía retirar `search_code` y `apply_patch` «porque no
+  existen en el runtime». **No se retiran, y hay un test que fija por qué**: estas tablas
+  clasifican VERBOS tras quitar el namespace (`_base_tool_name`), no tools registradas. Un
+  proyecto puede aportar `patcher.apply_patch` por MCP, y entonces sacarlo de
+  `_PRODUCING_TOOLS` haría que `has_produced` no prendiera y el run se escalara habiendo
+  producido — que es exactamente la regresión (C2/F24) que motivó el stripping de namespace.
 - **Hallazgo**: B-09 (medio) · **Tiempo**: 0,5 d
 - **Ficheros**: `agent_runtime/tool_classification.py`, tests nuevos
 - **Tests**: cobertura de las tres clases (research / producing / read-only) y del latch de
