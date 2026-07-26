@@ -1020,6 +1020,132 @@ refutadores. Solo **2 commits salieron limpios** (`5c11f592`, `4725ff45`).
       `tool_is_runtime_wired` sigue diciendo que es ejecutable porque cortocircuita por
       `implementation_type`.
 
+---
+
+## Recon de premisas de las olas 3 y 4 (2026-07-26)
+
+10 agentes de **solo lectura**, uno por tarea, contrastando cada premisa del plan
+contra el código. Igual que en el recon anterior, la mayoría de los enunciados
+**no se sostienen tal cual**: 9 de 10 salieron `partly`. Esto NO invalida las
+tareas — el hueco suele ser real —, pero sí su alcance, sus ficheros y su
+estimación. **Leer esto antes de implementar cualquiera de ellas.**
+
+Journal completo: workflow `wf_d021112e-da7`.
+
+### `task_wf_32` — WebSocket de plan · el enunciado está mal en dos ejes
+
+- **El socket tiene que ser de TENANT, no `/ws/plan/{project_id}`.** El tablero
+  gerencial lista `/plans` de todo el tenant (`board/page.tsx:157`,
+  `list_all_plans` en `plans.py:488`); un socket por proyecto dejaría rancias las
+  tarjetas de los demás proyectos. Y el auth de `ws.py` **no sirve tal cual**:
+  los 4 sockets actuales validan propiedad de un recurso (`_owns_resource`), y
+  aquí no hay recurso — es un patrón nuevo, no una copia del de kanban.
+- **El plan se salta el lado PRODUCTOR, que es el 80% del trabajo.** El estado de
+  plan se muta en **11 sitios de 3 servicios**, pese a que
+  `plan_state_machine.py:30` se declara «la única puerta». Y las dos transiciones
+  que motivan la tarea (`pending_human_validation` y `blocked`) se escriben con
+  **UPDATE crudo** desde el orchestrator (`dispatch.py:470`, `:505`) y los workers
+  (`reconciler.py:574`, `:686`) — enganchar el publicador solo a
+  `transition_plan_status` no emitiría **ninguno de los dos casos**.
+- Estimación real ≈ **1,5 d**, no 0,75.
+- **Corrección a mi propia afirmación anterior**: dije que publicar en
+  `events:tasks` «rompería el orchestrator». Falso: `consumer.py:229` captura el
+  evento malformado, incrementa `malformed` y hace ACK. La decisión no cambia (no
+  reutilizar ese stream), pero el motivo es ruido, no caída.
+- **Corrección a la auditoría D-03**: decía que el tablero «no tiene ni stream ni
+  refetchInterval». Parcialmente falso — ya abre `/ws/kanban/{project_id}`
+  (`board/page.tsx:250`). Lo que no se refresca es solo la fila de PLANES.
+- **Caso barato que conviene no dejar fuera**: invalidar `["plans","tenant"]` en
+  `onKanbanEvent` refresca las tarjetas del proyecto seleccionado sin backend
+  nuevo. No sustituye a la tarea (no cubre otros proyectos ni las transiciones
+  humanas), pero es una línea.
+
+### `task_wf_33` — Estimaciones calibradas · **necesita una decisión antes de empezar**
+
+- Los **tokens sí** se pueden calibrar ya: `compute_ai_cost` acepta
+  `complexity_estimates=` (el parámetro YA existe, `cost.py:423`).
+- Las **horas humanas NO**, y esto es el bloqueo: son horas-persona en EUR, y el
+  histórico de un agente es wall-clock de máquina. Calibrar una con la otra
+  repite exactamente la mezcla de magnitudes que `task_wf_30` rechazó a
+  propósito. **Recomendación: calibrar solo tokens/USD y dejar las horas humanas
+  como mapa estático**, diciéndolo en la UI.
+- Detalle no obvio: `pm_plan_draft` corre en un hilo **sin sesión de BD**, así que
+  el mapa calibrado hay que calcularlo fuera e inyectarlo por
+  `PlanningState.project_context`.
+
+### `task_wf_34` — Retro y standup · reducir a la mitad
+
+- El **standup ya se ve** en la bandeja (`inbox/page.tsx:380`) y su endpoint
+  existe. Solo faltaría una tarjeta «último standup» **a nivel de tenant** — el
+  standup no sabe de proyectos.
+- La **retro sí tiene trabajo**, y el plan se salta el bloqueo: hoy una retro **no
+  se puede atribuir a su plan**, porque `memory_entries` no tiene `plan_id` y el
+  INSERT fija `tags` a una constante (`plan_retro.py:214`). Orden correcto:
+  (1) escribir el identificador del plan; (2) `GET /plans/{id}/retro`; (3) UI.
+- Las retros ya escritas no llevan identificador. **Recomendación: degradar** (no
+  mostrar nada en planes cerrados anteriores) en vez de un backfill por texto.
+
+### `task_wf_35` — Config de proyecto · 4 campos, no 5
+
+- **`secrets_vault_id` sale del alcance**: está deprecated
+  (`schemas/projects.py:346`), tiene cero lectores y `task_proy_f2` ya decidió no
+  resucitarlo. Darle UI sería una regresión. La mini-tarea correcta es la
+  **inversa**: quitarlo de `ProjectCreateRequest` y de la siembra.
+- [x] _(hecho `39f1ebbf`)_ **Antes que la UI había un no-op silencioso**: la API
+      aceptaba `execution_budgets` y `guardrails_config` sin validar y aguas abajo se
+      descartaban sin decir nada. Ya se rechaza en la puerta con 422. Ojo: la
+      revisión afirmaba que una config malformada **desactiva los guardrails**, y lo
+      probé — **es falso**, el degradado cae al baseline y los runs siguen tamizados.
+
+### `task_wf_40` — Acciones humanas · **solo frontend**, y es media tarea
+
+- El backend está entero: **no tocar `task_lifecycle.py`**. El trabajo es extraer
+  un `TaskHumanActions` de `escalated/page.tsx:289-517` y reutilizarlo en el
+  sheet, visible solo en `awaiting_human_approval`/`blocked` y solo para admin.
+- `retry` **ES** el «desbloquear»: no hay una quinta acción que añadir.
+- ≈ 0,5 d, no 1.
+
+### `task_wf_41` — Aprobar y arrancar · forma corregida
+
+- Endpoint nuevo `POST /plans/{id}/approve-and-start` con el gate ESTRICTO
+  (`require_can_approve_plan`), **válido solo desde `pending_approval`** (409
+  desde cualquier otro estado) — que es la recomendación aprobada por el operador.
+- **La doble firma no se salta**: si `_resolve_first_signature_target` resuelve
+  `pending_second_approval`, firma y PARA.
+- Decisión de atomicidad: **no revertir la firma** si el arranque falla por
+  proyecto pausado — deja el plan `approved` y «Empezar ejecución» ya cubre la
+  recuperación. En una transacción única se perdería la firma.
+
+### `task_wf_42` — Editor del spec · **falta el gate en el backend**
+
+- La premisa se sostiene, pero el plan solo pide UI. `update_plan`
+  (`plans.py:795`) acepta `specification` **en cualquier estado** con solo
+  `require_tenant_member`. Hay que **rechazar con 409** fuera de
+  `draft`/`pending_approval`.
+- El PUT pisa con defaults: hay que reenviar el spec **completo**, no parcial.
+- El `{"error":"dag_cycle"}` se pinta **en crudo** hoy (`lib/api.ts:74`).
+
+### `task_wf_43` — @-menciones · premisa correcta, arreglo pequeño
+
+- Único `yes` del recon. Las menciones tienen que ganar al heurístico. El
+  desplegable de la UI **hardcodea los roles** (`page.tsx:77`) en vez de leer el
+  equipo real.
+
+### `task_wf_44` / `task_wf_45` — Replanificación · el ADR es **0132**
+
+- **0132**, no 0131 (ya usado) ni 0106 (es un hueco, no reutilizar).
+- Reencuadre importante: **no es diseñar la replanificación desde cero**. La
+  mitad aditiva **ya funciona hoy y está sin gate** (PUT de spec sin guarda +
+  sync-to-kanban admite `in_progress` + botón en la UI). El ADR gobierna un
+  camino que ya existe. Arranca de ADR 0022:177-179, que ya lo preveía.
+- Lo que el ADR tiene que decidir: (a) ediciones y **borrados** del spec sobre
+  tareas ya materializadas — hoy el sync es solo aditivo y el Kanban **diverge en
+  silencio** (`sync_to_kanban.py:180`); (b) tareas en vuelo (reutilizar
+  `cancel_tasks_and_executions`, no inventar); (c) si un replan exige
+  **re-aprobación**, que implicaría tocar `_TRANSITIONS`; (d) traza/versionado del
+  spec, que no existe.
+- `task_wf_45` **queda bloqueada** hasta ese ADR: sin decisión no hay alcance.
+
 ### Los ~30 hallazgos restantes
 
 Verificados uno a uno y **refutados**, o de severidad baja. Están en los journals de los
