@@ -24,6 +24,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 import structlog
+from shared_domain.memory_tags import RETRO_TAG, retro_plan_tag
 
 from workers.celery_app import app
 from workers.config import get_settings
@@ -204,6 +205,8 @@ class DbRetroPersister:
         self._sessionmaker = sessionmaker
 
     async def save(self, *, plan: ClosedPlan, content: str) -> None:
+        import json
+
         from sqlalchemy import text as sa_text
 
         async with self._sessionmaker() as session, session.begin():
@@ -212,13 +215,14 @@ class DbRetroPersister:
                     "INSERT INTO memory_entries"
                     " (id, tenant_id, scope, type, content, project_id, tags)"
                     " VALUES (:id, :tid, 'project_shared', 'semantic', :content, :pid,"
-                    "         '[\"plan_retro\"]'::jsonb)"
+                    "         CAST(:tags AS jsonb))"
                 ),
                 {
                     "id": str(uuid4()),
                     "tid": plan.tenant_id,
                     "content": content,
                     "pid": plan.project_id,
+                    "tags": json.dumps([RETRO_TAG, retro_plan_tag(plan.plan_id)]),
                 },
             )
 

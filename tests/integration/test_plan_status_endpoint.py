@@ -350,3 +350,97 @@ async def test_another_tenant_cannot_read_the_status(
         )
 
     assert resp.status_code == 404, resp.text
+
+
+# ===========================================================================
+# task_wf_34: GET /plans/{id}/retro
+# ===========================================================================
+async def _write_retro(dsn: str, *, tenant_id: UUID, project_id: UUID, tags: list[str]) -> None:
+    """Escribe una retro como lo hace el beat `plan_retro` (memoria
+    `project_shared` del proyecto, con sus etiquetas)."""
+    import json
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO memory_entries (id, tenant_id, scope, type, content, project_id, tags)"
+            " VALUES ($1, $2, 'project_shared', 'semantic', $3, $4, CAST($5 AS jsonb))",
+            uuid4(),
+            tenant_id,
+            "Retrospectiva del plan: 4/5 tareas hechas",
+            project_id,
+            json.dumps(tags),
+        )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_the_retro_of_a_plan_can_be_read_back(configured_app, migrations_pg_dsn: str) -> None:
+    # El beat la escribía y NADIE podía leerla: con `tags` fijo a
+    # ["plan_retro"] no se sabía de qué plan era.
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_plan(client, seeded["project_id"], headers)
+        await _write_retro(
+            migrations_pg_dsn,
+            tenant_id=seeded["tenant_id"],
+            project_id=seeded["project_id"],
+            tags=["plan_retro", f"plan:{plan_id}"],
+        )
+        resp = await client.get(f"/plans/{plan_id}/retro", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    assert "4/5 tareas hechas" in resp.json()["content"]
+
+
+@pytest.mark.asyncio
+async def test_a_retro_written_before_the_tag_is_not_guessed(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    # Una retro sin la etiqueta del plan no se puede atribuir. Devolver «la
+    # última del proyecto» enseñaría en un plan la retro de OTRO plan, que es
+    # peor que no enseñar nada.
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        plan_id = await _create_plan(client, seeded["project_id"], headers)
+        await _write_retro(
+            migrations_pg_dsn,
+            tenant_id=seeded["tenant_id"],
+            project_id=seeded["project_id"],
+            tags=["plan_retro"],
+        )
+        resp = await client.get(f"/plans/{plan_id}/retro", headers=headers)
+
+    assert resp.status_code == 404, resp.text
+
+
+@pytest.mark.asyncio
+async def test_the_retro_of_another_plan_is_not_returned(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        mine = await _create_plan(client, seeded["project_id"], headers)
+        other = await _create_plan(client, seeded["project_id"], headers)
+        await _write_retro(
+            migrations_pg_dsn,
+            tenant_id=seeded["tenant_id"],
+            project_id=seeded["project_id"],
+            tags=["plan_retro", f"plan:{other}"],
+        )
+        resp = await client.get(f"/plans/{mine}/retro", headers=headers)
+
+    assert resp.status_code == 404, resp.text

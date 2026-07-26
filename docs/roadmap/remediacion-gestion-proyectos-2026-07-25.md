@@ -536,11 +536,23 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_34` — Standup y retrospectiva visibles
 
-- [ ] **Título**: sección «Retrospectiva» en el detalle del plan cerrado (leyendo la memoria
-      `project_shared` que ya escribe `plan_retro`) y vista del último standup.
+- [x] _(hecho — la retro; el standup ya se veía)_ **Título**: sección «Retrospectiva» en el
+      detalle del plan cerrado, leyendo la memoria `project_shared` que ya escribe
+      `plan_retro`.
 - **Hallazgo**: D-05 (medio) · **Tiempo**: 0,75 d
-- **Ficheros**: `apps/workers/src/workers/plan_retro.py`, `standup.py`, detalle del plan
-- **Tests**: unit de render con y sin retro disponible.
+- **Ficheros**: `packages/shared-domain/src/shared_domain/memory_tags.py` (nuevo),
+  `workers/plan_retro.py`, `routers/plans.py` (`GET /plans/{id}/retro`),
+  `plans/[planId]/plan-retro-section.tsx` (nuevo)
+- **El bloqueo que el plan se saltaba** (lo detectó el recon): una retro **no se podía
+  atribuir a su plan**, porque el INSERT fijaba `tags` a una constante. Orden correcto y
+  seguido: (1) escribir `plan:{id}` en `tags`; (2) endpoint; (3) UI.
+- **Tests**: 2 unit del etiquetado + 3 de integración del endpoint + 4 de render.
+- **Degradación deliberada**: las retros escritas ANTES del etiquetado no se pueden
+  atribuir; el plan simplemente no enseña retro. Nada de backfill por coincidencia de
+  texto: emparejaría mal en cuanto dos planes del proyecto compartan título, y enseñar la
+  retro de OTRO plan es peor que no enseñar ninguna.
+- **Standup**: fuera de alcance, ya se ve en la bandeja (`inbox/page.tsx`) y su endpoint
+  existe. El standup es de TENANT, no sabe de proyectos.
 
 #### `task_wf_35` — Configuración de proyecto sin agujeros
 

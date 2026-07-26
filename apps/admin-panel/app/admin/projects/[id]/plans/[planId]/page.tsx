@@ -43,6 +43,7 @@ import { CostBreakdownSection } from "./plan-cost-section";
 import { PlanCodeDiffSection } from "./plan-code-diff-section";
 import { PlanDeepLinksSection } from "./plan-deep-links-section";
 import { PlanLifecycleSection } from "./plan-lifecycle-section";
+import { PlanRetroSection } from "./plan-retro-section";
 import { PlanSpecEditorSection } from "./plan-spec-editor-section";
 import { PlanStatusHeader } from "./plan-status-header";
 import { SyncToKanbanSection } from "./plan-sync-section";
@@ -122,6 +123,8 @@ export default function PlanDetailPage() {
       <div className="mt-2">
         <PreviewLauncher scope="plans" id={plan.id} title="Preview de la app (este plan)" />
       </div>
+      {/* task_wf_34: la retro que el beat escribía para nadie. */}
+      <PlanRetroSection planId={plan.id} status={plan.status} />
       <CorrectionsSection planId={plan.id} status={plan.status} spec={spec} />
       <PlanDeepLinksSection planId={plan.id} status={plan.status} />
       <PlanCodeDiffSection projectId={projectId} planId={plan.id} />

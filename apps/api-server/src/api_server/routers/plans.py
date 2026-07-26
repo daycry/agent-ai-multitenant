@@ -27,6 +27,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
+from shared_domain.memory_tags import retro_plan_tag
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,6 +73,7 @@ from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Execution, Plan, PlanStatus, Project, Task
 from api_server.db.execution_repo import cancel_tasks_and_executions
+from api_server.db.memory import MemoryEntry
 from api_server.db.models import Organization
 from api_server.db.plan_comment import PlanComment
 from api_server.db.platform_settings import get_double_signature_threshold
@@ -790,6 +792,49 @@ async def get_plan_preview_session(
             status_code=status.HTTP_404_NOT_FOUND, detail="no live preview for this plan"
         )
     return _plan_preview_payload(sessions[0])
+
+
+@plans_router.get("/{plan_id}/retro")
+async def get_plan_retro(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """La retrospectiva de este plan (`task_wf_34`), o 404 si aún no hay.
+
+    El beat `plan_retro` la escribe como memoria `project_shared` del proyecto
+    a los pocos minutos de cerrarse el plan. Hasta ahora se guardaba con `tags`
+    fijo a `["plan_retro"]`, así que **no se podía saber de qué plan era** y
+    ninguna pantalla la enseñaba: se escribía para nadie. Ahora lleva también
+    `plan:{id}` y esto la devuelve.
+
+    404 en dos casos indistinguibles a propósito: el plan aún no tiene retro
+    (se cerró hace menos de un ciclo del beat) o la tiene pero es ANTERIOR al
+    etiquetado y no se puede atribuir. Emparejarla por texto sería adivinar.
+    """
+    plan = await _load_plan(session, plan_id)
+    row = (
+        await session.execute(
+            select(MemoryEntry)
+            .where(
+                MemoryEntry.project_id == plan.project_id,
+                MemoryEntry.deleted_at.is_(None),
+                MemoryEntry.tags.contains([retro_plan_tag(str(plan_id))]),
+            )
+            .order_by(MemoryEntry.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no retro for this plan yet"
+        )
+    return {
+        "plan_id": str(plan_id),
+        "memory_id": str(row.id),
+        "content": row.content,
+        "created_at": row.created_at,
+    }
 
 
 # Estados desde los que se puede REESCRIBIR la especificación de un plan

@@ -145,3 +145,60 @@ def test_a_failing_plan_does_not_stop_the_rest() -> None:
     )
     assert result == {"processed": 1, "skipped": 1}
     assert [s["plan"].title for s in persister.saved] == ["Bueno"]
+
+
+# ---------------------------------------------------------------------------
+# task_wf_34: la retro se ata a SU plan
+# ---------------------------------------------------------------------------
+class _CapturingSession:
+    """Sesión mínima que retiene los parámetros del INSERT."""
+
+    def __init__(self, sink: list[dict[str, Any]]) -> None:
+        self._sink = sink
+
+    async def execute(self, _stmt: Any, params: dict[str, Any]) -> None:
+        self._sink.append(params)
+
+    def begin(self) -> Any:
+        return _AsyncNull()
+
+    async def __aenter__(self) -> _CapturingSession:
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        return None
+
+
+class _AsyncNull:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        return None
+
+
+def test_the_retro_carries_the_id_of_its_plan() -> None:
+    # Se guardaba con `tags` fijo a ["plan_retro"], así que una vez escrita no
+    # había forma de saber de qué plan era: el detalle del plan no podía
+    # enseñarla y la retro se escribía para nadie.
+    import json
+
+    from workers.plan_retro import DbRetroPersister
+
+    captured: list[dict[str, Any]] = []
+    plan = _plan()
+    persister = DbRetroPersister(lambda: _CapturingSession(captured))
+    asyncio.run(persister.save(plan=plan, content="Retrospectiva…"))
+
+    assert len(captured) == 1
+    tags = json.loads(captured[0]["tags"])
+    assert tags == ["plan_retro", f"plan:{plan.plan_id}"]
+
+
+def test_the_plan_tag_is_the_same_string_both_sides_read() -> None:
+    # El worker la escribe y el api-server la consulta: si las dos mitades
+    # componen la etiqueta por su cuenta, divergen y la retro deja de
+    # encontrarse sin que ningún test lo note.
+    from shared_domain.memory_tags import retro_plan_tag
+
+    assert retro_plan_tag("abc") == "plan:abc"
