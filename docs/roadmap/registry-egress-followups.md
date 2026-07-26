@@ -71,11 +71,16 @@ va por `stack_exec`.
 **Dónde:** cambio propio (afecta a no-CI4, no hacer big-bang en ADR 0093). **Esfuerzo:** M.
 **Prioridad:** baja.
 
-## F6 — Causa raíz: creación de proyecto sin `slug` (ADR 0093, hallazgo de despliegue)
+## F6 — Causa raíz: creación de proyecto sin `slug` — ✅ CERRADA 2026-07-26
 
 **Qué:** el proyecto demo "Api CI" se creó con `project.slug` VACÍO (anomalía); se arregló con un
 fix de datos (`slug='api-ci'`). Falta encontrar y cerrar la vía de creación de proyecto que permite
 slug vacío (validación en el endpoint / generación de slug).
 **Por qué importa:** sin slug, `execution.py` no provisiona worktree (cae a tmpfs efímero) y
 `stack_exec` no resuelve.
+**Resolución (verificada 2026-07-26):** la vía está cerrada por tres sitios a la vez.
+`create_project` llama SIEMPRE a `slugify(payload.name)` (`projects.py:349`), y `slugify`
+**nunca devuelve vacío** — cae a `untitled` por contrato explícito (`slug.py:42`). El índice
+único parcial de la migración **0114** (P1-02) es el backstop contra carreras, y en colisión
+se sufija con `-{id8}`. No queda ninguna ruta que persista un slug vacío.
 **Dónde:** producto (creación de proyecto). **Esfuerzo:** S. **Prioridad:** media.

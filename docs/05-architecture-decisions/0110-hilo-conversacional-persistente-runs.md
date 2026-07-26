@@ -1,6 +1,6 @@
 ---
 title: "ADR 0110: Hilo conversacional persistente en los runs (threading + prompt caching)"
-status: proposed
+status: accepted
 date: 2026-07-12
 ---
 
@@ -62,3 +62,23 @@ transportes**, igual para los 4 providers: misma flag
 contrato (`LLMProvider.complete()`, un ACT por turno) y mismo default (**OFF**).
 Sigue pendiente lo mismo que antes para ratificar el encendido: validación e2e
 con runs reales (coste/convergencia antes-después).
+
+## Cierre (2026-07-26)
+
+Se pasa a `accepted`: la decisión está tomada y **construida en sus dos
+transportes**, con la flag `WORKERS_RUNTIME_CONVERSATION_THREAD` en **OFF** por
+defecto. Quedarse en `proposed` con el código entregado solo hacía que el
+registro mintiera sobre el estado real.
+
+Aceptar el ADR **no enciende la flag**: son dos cosas distintas. El encendido
+sigue pendiente de la validación e2e con runs reales (coste y convergencia,
+antes y después), que exige desplegar — y el despliegue está parado por decisión
+del operador.
+
+Lo que sí cambia es que ahora **hay con qué medirlo**: el informe de
+reutilización de caché por proveedor (`api_server.prompt_cache_report`,
+`task_wf_63`, remediación 2026-07-25) da `cached_prefix_pct` y
+`cost_per_iteration_usd` por proveedor, que es exactamente el «antes/después»
+que este ADR pedía. Ojo a su matiz: `reports_cache` distingue «0 % de
+reutilización» de «este proveedor no informa de caché», y confundirlos llevaría
+a concluir que el hilo no sirve cuando lo que pasa es que no se está midiendo.

@@ -1,6 +1,6 @@
 ---
 title: "ADR 0128: Tools MCP aportadas por el proyecto en runtime (agentes compartidos + rol opcional)"
-status: proposed
+status: accepted
 date: 2026-07-23
 deciders: [operador]
 relates_to: [0052, 0066, 0091, 0117, 0127]
@@ -49,7 +49,17 @@ agentes se quedan **compartidos** (tenant-local, adoptados una vez); cada proyec
 > correr en el proyecto P, usa las tools de P"), que es inequívoco y NO filtra
 > entre proyectos — es la forma limpia de relajar el scope-check.
 
-## Decisión propuesta
+> **Aceptado el 2026-07-26.** El estado se quedó en `proposed` por descuido: los
+> cinco puntos están implementados y desplegados. Trazas: allowlist por proyecto en
+> `extend_allowlist_with_project_mcp` (puntos 1, 2 y 4); política rol→tool en
+> `filter_mcp_tools_by_role_policy` + columna `projects.mcp_tool_roles`
+> (migración 0116) y su UI en `mcp-server-sections.tsx` (punto 3); agentes
+> compartidos sin fork obligatorio (punto 5). El último hueco —las tools quedaban
+> permitidas pero **invisibles** para el modelo, porque los esquemas salían de
+> `tool_specs`, que es POR AGENTE— se cerró en la remediación de 2026-07-25
+> (hallazgo B6) con `serialize_project_mcp_tool_specs(..., role=agent.role)`.
+
+## Decisión aceptada
 
 1. **Las tools MCP pasan a ser aportadas por el proyecto en runtime.** El allowlist
    MCP efectivo de un run = las tools de los servers MCP **declarados en el

@@ -1,7 +1,7 @@
 ---
 title: Hallazgos pendientes de implementar (QA e2e + refactor 2026-07-07/08)
 date: 2026-07-08
-status: in_progress
+status: pending_human_validation
 owner: operador (jmano)
 branch: plan/runs-visor-trabajo
 ---

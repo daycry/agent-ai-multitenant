@@ -18,7 +18,6 @@ so a deployment without Claude doesn't drag the SDK + the Node CLI in.
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -206,19 +205,20 @@ class ClaudeAgentProvider:
         # claude_agent_sdk.query. None -> real SDK is loaded lazily.
         query_fn: Any | None = None,
     ) -> None:
-        if api_key:
-            os.environ["ANTHROPIC_API_KEY"] = api_key
-        if oauth_token:
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-        if (
-            not (api_key or oauth_token)
-            and not os.environ.get("ANTHROPIC_API_KEY")
-            and query_fn is None
-        ):
-            # Pro/Max subscription users may rely on ambient auth (a token
-            # already in the environment / the SDK's own credentials). We do
-            # NOT fail here — the SDK surfaces an auth error at call time.
-            pass
+        # ADR 0076 (prerequisito de seguridad): la credencial vive en la
+        # INSTANCIA, nunca en `os.environ`. Escribirla en el entorno del proceso
+        # la dejaba en `/proc/self/environ`, la heredaba cualquier hijo y no se
+        # limpiaba jamás — pero lo caro era otra cosa: el catálogo admite varias
+        # filas del mismo kind (la columna `slug`, migración 0083), así que la
+        # clave del proveedor A quedaba puesta para siempre y un proveedor B con
+        # suscripción OAuth podía acabar facturando a la cuenta de A. Se entrega
+        # por llamada vía `ClaudeAgentOptions.env` (ver `_auth_env`).
+        self._api_key = api_key or None
+        self._oauth_token = oauth_token or None
+        # Sin credencial configurada NO se toca nada: un usuario Pro/Max puede
+        # depender de auth ambiental (token ya en el entorno o credenciales del
+        # propio SDK). Tampoco se falla aquí — el SDK da el error de auth en la
+        # llamada, que es donde el operador puede leerlo.
         self._default_model = default_model
         self._default_allowed_tools = default_allowed_tools or []
         self._default_system_prompt = default_system_prompt
@@ -282,6 +282,9 @@ class ClaudeAgentProvider:
             disabled = [name for name in _SDK_NATIVE_TOOLS if name not in _allowed]
             if disabled:
                 extra["disallowed_tools"] = disabled
+        auth_env = self._auth_env()
+        if auth_env:
+            extra["env"] = auth_env
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
@@ -289,6 +292,34 @@ class ClaudeAgentProvider:
             max_turns=max_turns,
             **extra,
         )
+
+    def _auth_env(self) -> dict[str, str]:
+        """La credencial de ESTE proveedor, para el subproceso del CLI.
+
+        El transporte del SDK FUSIONA `options.env` sobre el entorno heredado y
+        deja ganar a lo nuestro. Que sea una fusión y no un reemplazo tiene una
+        consecuencia que hay que atender: no basta con poner la credencial
+        propia. Si el proceso arrastra un `ANTHROPIC_API_KEY` de otro sitio —el
+        despliegue, código antiguo, otro proveedor— el CLI lo vería igual y
+        podría preferirlo. Por eso el modo elegido **anula explícitamente** la
+        variable del otro modo con cadena vacía: es lo máximo que permite una
+        interfaz que solo sabe añadir claves, y equivale a «no uses esa vía».
+
+        Sin credencial configurada devuelve `{}` y no se toca el entorno: ahí la
+        auth ambiental es justo lo que el usuario Pro/Max quiere.
+        """
+        if not (self._api_key or self._oauth_token):
+            return {}
+        env: dict[str, str] = {}
+        env["ANTHROPIC_API_KEY"] = self._api_key or ""
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = self._oauth_token or ""
+        return env
+
+    def __repr__(self) -> str:
+        """Sin credenciales: un `repr` con la clave acaba en un traceback, y de
+        ahí en Loki."""
+        mode = "api_key" if self._api_key else ("oauth" if self._oauth_token else "ambient")
+        return f"ClaudeAgentProvider(model={self._default_model!r}, auth={mode})"
 
     @staticmethod
     def _flatten(messages: Sequence[Message]) -> tuple[str | None, str]:
@@ -580,6 +611,9 @@ class ClaudeAgentProvider:
         disabled = [name for name in _SDK_NATIVE_TOOLS if name not in _allowed]
         if disabled:
             extra["disallowed_tools"] = disabled
+        auth_env = self._auth_env()
+        if auth_env:
+            extra["env"] = auth_env
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
@@ -672,12 +706,6 @@ class ClaudeAgentProvider:
 
     async def aclose(self) -> None:
         return None
-
-    # Convenience for tests that want to verify api_key handling.
-    @staticmethod
-    def assert_api_key_present() -> None:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise AuthError("ANTHROPIC_API_KEY is not set")
 
 
 def _to_agent_event(msg: Any) -> AgentRunEvent:

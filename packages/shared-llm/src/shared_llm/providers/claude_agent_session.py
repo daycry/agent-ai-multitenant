@@ -175,6 +175,13 @@ class ClaudeAgentSessionProvider(ClaudeAgentProvider):
         disabled = [n for n in _SDK_NATIVE_TOOLS if n not in set(allowed_tools or ())]
         if disabled:
             extra["disallowed_tools"] = disabled
+        # La credencial va por opciones, no por `os.environ` (ADR 0076). Esta
+        # clase construye sus PROPIAS opciones en vez de reutilizar
+        # `_build_options`, así que olvidarlo aquí dejaría sin auth justo a los
+        # runs con hilo persistente.
+        auth_env = self._auth_env()
+        if auth_env:
+            extra["env"] = auth_env
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
