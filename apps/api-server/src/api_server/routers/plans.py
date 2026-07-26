@@ -288,9 +288,26 @@ async def _live_plan_of_conversation(session: AsyncSession, conversation_id: UUI
     if conv is None or conv.related_plan_id is None:
         return None
     plan = await session.get(Plan, conv.related_plan_id)
-    if plan is None or plan.status in _SUPERSEDABLE_PLAN_STATUSES:
-        return None
-    return plan
+    return plan if plan_is_live(plan) else None
+
+
+def plan_is_live(plan: Plan | None) -> bool:
+    """Whether a plan still OWNS its conversation, so a second "Generate plan"
+    returns it instead of creating a twin.
+
+    ``deleted_at`` was missing here (adversarial audit 2026-07-25) while
+    :func:`_load_plan` and ``list_plans`` both filter it. And ``delete_plan``
+    only stamps ``deleted_at``: it does not touch ``plan.status`` nor
+    ``conversation.related_plan_id``, and the repo has no global soft-delete
+    filter. So deleting a plan and going back to the chat returned 200 with the
+    DELETED plan — whose own ``GET /plans/{id}`` answers 404 — and the
+    conversation could never generate another one.
+
+    Checking the status alone is precisely how that slipped through.
+    """
+    if plan is None or plan.deleted_at is not None:
+        return False
+    return str(plan.status) not in _SUPERSEDABLE_PLAN_STATUSES
 
 
 # ===========================================================================
