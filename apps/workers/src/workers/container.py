@@ -19,9 +19,19 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import structlog
+
 import docker
 from workers.config import Settings
 from workers.isolation import assert_no_docker_socket, build_hardened_run_kwargs
+
+_log = structlog.get_logger(__name__)
+
+# `task_wf_56`: techo del drenaje del pump de logs. Generoso porque el caso
+# normal termina en milisegundos —el stream cierra solo al salir el
+# contenedor—; existe para que un daemon colgado deje rastro en vez de
+# inmovilizar el worker indefinidamente.
+_PUMP_DRAIN_TIMEOUT_S = 120.0
 
 # How often the run loop polls a container's state. Agent runs last
 # seconds-to-minutes, so a sub-second poll is plenty responsive without
@@ -205,7 +215,24 @@ class AgentContainerRunner:
             # been killed, so the pump terminates on its own. Drain it fully —
             # NOT on a short timeout — before reaping: a cut mid-read drops the
             # live tail (e.g. the final `execution.finished` line) for the UI.
-            pump.join()
+            #
+            # `task_wf_56`: pero con techo. El `join()` sin timeout apuesta a que
+            # el stream SIEMPRE cierra; si el daemon se cuelga o la conexión se
+            # queda a medias, el worker se queda ahí para siempre con el slot de
+            # la cola ocupado y sin un solo log que lo explique. El techo es
+            # generoso a propósito —el caso normal drena en milisegundos— y lo
+            # que aporta no es cortar antes, es que la anomalía DEJE RASTRO.
+            pump.join(timeout=_PUMP_DRAIN_TIMEOUT_S)
+            if pump.is_alive():
+                _log.warning(
+                    "workers.container.log_pump_did_not_drain",
+                    execution_id=spec.labels.get("com.agentic-platform.execution-id"),
+                    timeout_s=_PUMP_DRAIN_TIMEOUT_S,
+                    detail=(
+                        "el stream de logs no cerró tras salir el contenedor; "
+                        "la cola del log en vivo puede estar incompleta"
+                    ),
+                )
             return result
         finally:
             with contextlib.suppress(Exception):

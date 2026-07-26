@@ -244,3 +244,59 @@ def _spec() -> Any:
     from workers.container import ContainerSpec
 
     return ContainerSpec(image="img")
+
+
+# ---------------------------------------------------------------------------
+# task_wf_56 — el drenaje tiene techo, y la anomalía deja rastro
+# ---------------------------------------------------------------------------
+class _NeverEndingStream(_StreamingContainer):
+    """El stream de logs no cierra al salir el contenedor (daemon colgado,
+    conexión a medias). Sin techo, el worker se queda aquí para siempre."""
+
+    def logs(self, *, stream: bool = False, **kw: Any) -> Any:
+        if not stream:
+            return super().logs(stream=False, **kw)
+
+        def _forever() -> Any:
+            yield b"una linea\n"
+            import time as _time
+
+            while True:  # pragma: no cover - lo corta el techo del join
+                _time.sleep(0.05)
+
+        return _forever()
+
+
+def test_a_log_stream_that_never_closes_does_not_freeze_the_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # El `join()` sin timeout apostaba a que el stream SIEMPRE cierra. Cuando
+    # no lo hace, el worker se queda bloqueado con el slot de la cola ocupado y
+    # sin un solo log que lo explique — el fallo más caro de diagnosticar.
+    import workers.container as container_mod
+
+    monkeypatch.setattr(container_mod, "_PUMP_DRAIN_TIMEOUT_S", 0.2)
+    container = _NeverEndingStream(stdout_chunks=[], full_logs=b"una linea\n")
+    runner = _make_runner(container)
+
+    lines: list[str] = []
+    result = runner.run_streamed(_spec(), lines.append)
+
+    # El resultado sigue siendo el bueno: los logs completos se capturan ANTES
+    # del techo, así que acotar el drenaje no le quita nada al caso normal.
+    assert "una linea" in result.logs
+    assert container.removed is True
+
+
+def test_the_normal_case_still_drains_to_the_last_line() -> None:
+    # Lo que el techo NO puede hacer es cortar la cola en un run sano: la
+    # última línea suele ser `execution.finished`, que es la que el visor
+    # espera para dejar de girar.
+    container = _StreamingContainer(
+        stdout_chunks=[b'{"event": "a"}\n', b'{"event": "execution.finished"}\n'],
+        full_logs=b'{"event": "a"}\n{"event": "execution.finished"}\n',
+    )
+    runner = _make_runner(container)
+    lines: list[str] = []
+    runner.run_streamed(_spec(), lines.append)
+    assert lines[-1] == '{"event": "execution.finished"}'

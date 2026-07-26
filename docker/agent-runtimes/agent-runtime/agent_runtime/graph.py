@@ -949,6 +949,34 @@ class _AgentLoop:
         # plan salvo lo que cupiera en la ventana de 8 items).
         if tool == "update_plan":
             plan_text = str(args.get("plan") or "").strip()[:_AGENT_PLAN_MAX_CHARS]
+            # `task_wf_51`: el scratchpad pasa por los MISMOS hooks que cualquier
+            # otra tool. Ser una capacidad del loop y no del registry no lo
+            # exime: su contenido se vuelve sticky y el modelo lo relee TODOS
+            # los turnos, así que es el sitio con más permanencia del prompt —
+            # exactamente donde una inyección quiere aterrizar. Saltárselo hacía
+            # del scratchpad el único camino sin escudo hacia el contexto.
+            plan_events = run_hook(
+                self.deps.guardrails, hook="pre_tool", tool_name=tool, tool_args=args
+            )
+            plan_events += run_hook(
+                self.deps.guardrails, hook="post_tool", tool_name=tool, tool_result=plan_text
+            )
+            blocked = [
+                str(e.get("guardrail_type") or "?")
+                for e in plan_events
+                if e.get("action") == "block"
+            ]
+            if blocked:
+                # No se guarda NADA: un plan a medias sería peor que ninguno, y
+                # el sticky anterior sigue siendo válido. El error explica el
+                # motivo para que el modelo reintente por otra vía (deny
+                # visible, igual que en `_screened_tool_call`).
+                plan_text = ""
+            error = (
+                f"plan blocked by guardrail ({', '.join(blocked)})"
+                if blocked
+                else (None if plan_text else "empty plan")
+            )
             step = tool_call_step(
                 len(state["steps"]),
                 "act",
@@ -962,12 +990,13 @@ class _AgentLoop:
                 "tool": tool,
                 "ok": bool(plan_text),
                 "output": "plan stored" if plan_text else None,
-                "error": None if plan_text else "empty plan",
+                "error": error,
             }
             return {
                 "agent_plan": plan_text or state.get("agent_plan"),
                 "last_observation": observation,
                 "steps": [step],
+                "guardrail_events": plan_events,
             }
         result, guardrail_events = self._screened_tool_call(tool, args)
         steps = [

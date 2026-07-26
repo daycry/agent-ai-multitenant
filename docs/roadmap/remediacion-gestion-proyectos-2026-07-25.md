@@ -718,8 +718,11 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_51` — `update_plan` pasa por los guardrails
 
-- [ ] **Título**: hacer que el scratchpad pase por `pre_tool`/`post_tool` como cualquier otra
-      tool, sin perder su naturaleza de capacidad del loop.
+- [x] _(hecho)_ **Título**: hacer que el scratchpad pase por `pre_tool`/`post_tool` como
+      cualquier otra tool, sin perder su naturaleza de capacidad del loop. Un plan bloqueado
+      **no se guarda a medias**: el sticky anterior sigue valiendo y el modelo recibe el
+      motivo. Era el único camino al contexto sin escudo, y el de más permanencia — el plan
+      se relee todos los turnos.
 - **Hallazgo**: B-06 (medio) · **Tiempo**: 0,25 d
 - **Ficheros**: `agent_runtime/graph.py:950-971`
 - **Tests**: unit de que un `update_plan` con contenido marcado se registra en los eventos de
@@ -796,8 +799,9 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_56` — `pump.join()` acotado
 
-- [ ] **Título**: timeout generoso con log de la anomalía, conservando el drenaje completo del
-      caso normal.
+- [x] _(hecho)_ **Título**: timeout generoso (120 s) con log de la anomalía, conservando el
+      drenaje completo del caso normal. Lo que aporta no es cortar antes: es que un daemon
+      colgado DEJE RASTRO en vez de inmovilizar el worker con el slot de la cola ocupado.
 - **Hallazgo**: C-07 (bajo) · **Tiempo**: 0,25 d
 - **Ficheros**: `apps/workers/src/workers/container.py:196-212`
 
