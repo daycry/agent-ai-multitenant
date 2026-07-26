@@ -982,20 +982,21 @@ Justificación en §7 del informe.
 
 #### `task_wf_70` — Brief de las tareas predecesoras
 
-- [ ] **Título**: que el agente de una tarea reciba, en el preámbulo, **qué hicieron las tareas
-      de las que depende**: título y el `summary` que su agente entregó en `submit_result`
-      (ya persistido en `executions.output`). Bloque nuevo del preámbulo, mismo patrón que
-      `build_prior_failure_preamble` / `build_comments_preamble`, fenced como dato de terceros.
-      Acotado: solo dependencias **directas** completadas, con tope de caracteres.
+- [x] _(hecho)_ **Título**: que el agente reciba, en el preámbulo, **qué hicieron las tareas de
+      las que depende**: título + el resumen que su agente entregó en `submit_result`. Bloque
+      nuevo, fenced como dato de terceros, acotado a dependencias **directas** completadas.
 - **Hallazgo**: N-1 (feature) · **Tiempo**: 1 d
-- **Ficheros**: `apps/orchestrator/src/orchestrator/dispatch.py` (`_assemble_run_request`),
-  `agent_runtime/__main__.py:692-751` (`assemble_system_preamble`)
-- **Tests**: unit de que una tarea con dos dependencias completadas recibe ambos resúmenes;
-  unit de que sin dependencias el preámbulo no cambia; unit del fence.
-- **Criterio de aceptación**: en un plan encadenado, el agente de la tarea 3 cita en su
-  razonamiento el contrato que estableció la tarea 1 en vez de reinventarlo.
-- **Por qué importa**: hoy `depends_on` solo se usa para reconciliar el DAG. Un plan largo no
-  es un equipo trabajando sobre un diseño común, son N tareas aisladas compartiendo directorio.
+- **Ficheros**: `orchestrator/dispatch.py` (`_read_predecessor_briefs`),
+  `workers/run_contract.py` + `run_spec.py`, `agent_runtime/__main__.py`
+  (`build_predecessors_preamble`)
+- **Tests**: 8 de render + 4 del productor. Los que importan: el brief va **fenced** (son
+  informes de OTROS runs, contexto y no instrucciones); una dependencia **sin resumen se
+  descarta** («hizo algo» no es algo sobre lo que construir y ocupa prompt); y una tarea sin
+  dependencias cuesta **una sola consulta** y no emite la clave.
+- **Corrección de mi propia intuición**: puse el brief por encima de los comentarios humanos
+  y el test me obligó a mirarlo — un comentario del humano es una instrucción directa sobre
+  ESTA tarea, y enterrarla bajo dos resúmenes de dependencias degradaría la guía que más
+  manda. Orden final: comentarios → briefs → skills.
 
 #### `task_wf_71` — Intervención en caliente sobre un run vivo
 

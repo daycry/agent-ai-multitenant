@@ -205,6 +205,10 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     # preamble (`build_comments_preamble`). Only emit when present (backward-compat).
     if request.task_comments is not None:
         spec["task_comments"] = request.task_comments
+    # `task_wf_70`: lo que entregaron las dependencias directas ya completadas.
+    # Solo cuando las hay: "sin clave" es el comportamiento de siempre.
+    if request.predecessors:
+        spec["predecessors"] = request.predecessors
     # P0-7: the previous non-review failure → the runtime folds a corrective
     # preamble (build_prior_failure_preamble). Only emit when present.
     if request.prior_failure is not None:

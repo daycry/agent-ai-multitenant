@@ -1379,6 +1379,11 @@ class TaskDispatcher:
         prior_failure = await self._read_prior_failure(session, task)
         if prior_failure:
             request["prior_failure"] = prior_failure
+        # `task_wf_70`: qué entregaron las dependencias DIRECTAS ya completadas
+        # → el runtime las pliega como el terreno sobre el que construir.
+        predecessors = await self._read_predecessor_briefs(session, task)
+        if predecessors:
+            request["predecessors"] = predecessors
         # ADR 0114: respuestas humanas a ask_human de intentos previos → el
         # runtime las pliega como preámbulo autoritativo (human_answers).
         human_answers = await self._read_prior_human_answers(session, task)
@@ -1552,6 +1557,75 @@ class TaskDispatcher:
             "abort_code": str(latest.abort_code or ""),
             "output_tail": output_tail,
         }
+
+    # `task_wf_70`: cuántas predecesoras viajan y cuánto de cada resumen. Tope
+    # bajo a propósito — cinco dependencias con su contrato entero desplazarían
+    # del prompt la tarea PROPIA, que es lo que hay que hacer.
+    _PREDECESSORS_MAX = 5
+    _PREDECESSOR_SUMMARY_MAX = 1200
+
+    async def _read_predecessor_briefs(
+        self, session: AsyncSession, task: Task
+    ) -> list[dict[str, str]]:
+        """Qué entregaron las tareas de las que ``task`` depende (`task_wf_70`).
+
+        Hasta ahora ``depends_on`` solo servía para reconciliar el DAG: el
+        agente de la tarea 3 no sabía nada de lo que hicieron la 1 y la 2, así
+        que reinventaba el contrato en vez de consumirlo. Un plan largo no era
+        un equipo trabajando sobre un diseño común, eran N tareas aisladas
+        compartiendo directorio.
+
+        Acotado a las dependencias **directas** ya ``done``: una dependencia sin
+        terminar no tiene nada que contar, y el cierre transitivo traería el
+        plan entero al prompt. El resumen es el ``output`` de su última
+        ejecución completada — lo que su propio agente declaró haber entregado.
+        BYPASSRLS → predicado explícito de ``tenant_id``.
+        """
+        dep_ids = list(
+            (
+                await session.execute(
+                    select(TaskDependency.depends_on_task_id).where(
+                        TaskDependency.task_id == task.id
+                    )
+                )
+            ).scalars()
+        )
+        if not dep_ids:
+            return []
+        rows = list(
+            (
+                await session.execute(
+                    select(Task.id, Task.title)
+                    .where(
+                        Task.id.in_(dep_ids),
+                        Task.tenant_id == task.tenant_id,
+                        Task.status == TaskStatus.DONE.value,
+                    )
+                    .limit(self._PREDECESSORS_MAX)
+                )
+            ).all()
+        )
+        briefs: list[dict[str, str]] = []
+        for row in rows:
+            output = (
+                await session.execute(
+                    select(Execution.output)
+                    .where(
+                        Execution.task_id == row.id,
+                        Execution.tenant_id == task.tenant_id,
+                        Execution.status == "done",
+                    )
+                    .order_by(Execution.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            summary = str(output or "").strip()[: self._PREDECESSOR_SUMMARY_MAX]
+            if not summary:
+                # Sin resumen no hay nada sobre lo que construir; el hueco solo
+                # ocuparía sitio en el prompt.
+                continue
+            briefs.append({"title": str(row.title or ""), "summary": summary})
+        return briefs
 
     # ADR 0114: cuántas Q&A respondidas viajan al siguiente run (las más
     # recientes primero) y tope defensivo del texto de cada lado.

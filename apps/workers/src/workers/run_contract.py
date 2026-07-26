@@ -135,6 +135,10 @@ class ExecutionRequest:
     # ADR 0114: respuestas humanas a ask_human de intentos previos de ESTA task
     # ({question, answer}, mas reciente primero) -> preamble human_answers.
     human_answers: list[dict[str, Any]] | None = None
+    # `task_wf_70`: qué entregaron las dependencias DIRECTAS ya completadas
+    # (`{title, summary}`), hilado por el orchestrator. El runtime lo pliega como
+    # el terreno sobre el que construir. `None` = sin clave (retro-compat).
+    predecessors: list[dict[str, Any]] | None = None
     # P0-1 (investigación 2026-07-11): the agent's effective persona
     # (`{prompt, role?, name?}`), resolved by the orchestrator from
     # `agents.system_prompt` / `model_config.system_prompts`. The runtime
@@ -165,6 +169,7 @@ class ExecutionRequest:
             "task_comments": self.task_comments,
             "prior_failure": self.prior_failure,
             "human_answers": self.human_answers,
+            "predecessors": self.predecessors,
             "agent_persona": self.agent_persona,
         }
 
@@ -188,6 +193,7 @@ class ExecutionRequest:
             review=bool(raw.get("review", False)),
             review_context=raw.get("review_context"),
             prior_review_feedback=raw.get("prior_review_feedback"),
+            predecessors=raw.get("predecessors"),
             task_comments=raw.get("task_comments"),
             prior_failure=raw.get("prior_failure"),
             human_answers=raw.get("human_answers"),
