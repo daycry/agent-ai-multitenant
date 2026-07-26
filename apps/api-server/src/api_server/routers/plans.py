@@ -792,6 +792,48 @@ async def get_plan_preview_session(
     return _plan_preview_payload(sessions[0])
 
 
+# Estados desde los que se puede REESCRIBIR la especificación de un plan
+# (`task_wf_42`). Hasta ahora el PUT la aceptaba en CUALQUIER estado con solo
+# `require_tenant_member`, así que se podía cambiar el alcance de un plan ya
+# aprobado —o ya completado— sin que nada lo registrara ni lo impidiera.
+#
+#   * `draft` / `pending_approval`: el caso normal. Corregir una tarea mal
+#     planteada ANTES de que nadie la firme es justo lo que este editor añade.
+#   * `in_progress`: se deja abierto A PROPÓSITO. La replanificación en caliente
+#     ya existe hoy por esta vía (PUT del spec + re-`sync-to-kanban`, que admite
+#     `in_progress`), y quién la puede hacer y con qué reglas lo decide el
+#     **ADR 0132**. Cerrarla aquí sería implementar por la puerta de atrás una
+#     decisión que está explícitamente pendiente de aprobación humana.
+#
+# Lo que sí se cierra son los estados donde editar no tiene lectura honesta:
+# `pending_second_approval` (el segundo firmante estaría aprobando algo que el
+# primero no vio), `approved` (la firma dejaría de cubrir lo que hay) y los
+# terminales.
+_SPEC_EDITABLE_STATUSES = frozenset(
+    {
+        PlanStatus.DRAFT.value,
+        PlanStatus.PENDING_APPROVAL.value,
+        PlanStatus.IN_PROGRESS.value,
+    }
+)
+
+
+def _require_spec_editable(plan: Plan) -> None:
+    if plan.status in _SPEC_EDITABLE_STATUSES:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "spec_not_editable",
+            "status": plan.status,
+            "message": (
+                "La especificación de un plan solo se puede editar mientras está en "
+                f"borrador o pendiente de aprobación; este plan está en '{plan.status}'."
+            ),
+        },
+    )
+
+
 @plans_router.put("/{plan_id}", response_model=PlanResponse)
 async def update_plan(
     plan_id: UUID,
@@ -856,6 +898,8 @@ async def update_plan(
                     schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
 
     spec_dict = payload.specification.model_dump() if payload.specification else None
+    if spec_dict is not None:
+        _require_spec_editable(plan)
     if spec_dict is not None and spec_dict.get("tasks"):
         try:
             validate_dag(spec_dict["tasks"])

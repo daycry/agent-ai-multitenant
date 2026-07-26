@@ -173,3 +173,128 @@ async def test_put_plan_cannot_enter_validation_with_open_tasks(
         )
     assert resp.status_code == 409
     assert resp.json()["detail"]["error"] == "plan_has_open_tasks"
+
+
+# ---------------------------------------------------------------------------
+# task_wf_42: la especificación no se reescribe en cualquier estado
+# ---------------------------------------------------------------------------
+_SPEC = {
+    "summary": {"title": "Alcance"},
+    "tasks": [{"id": "t1", "title": "Una tarea", "depends_on": []}],
+}
+
+
+async def _plan_in_status(dsn: str, seeded: dict[str, UUID], plan_status: str) -> UUID:
+    plan_id = uuid4()
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status, specification)"
+            " VALUES ($1, $2, $3, 'P', $4, '{}'::jsonb)",
+            plan_id,
+            seeded["tenant"],
+            seeded["project"],
+            plan_status,
+        )
+    finally:
+        await conn.close()
+    return plan_id
+
+
+@pytest.mark.asyncio
+async def test_put_can_rewrite_the_spec_before_anyone_signs_it(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    # El caso que el editor del spec (task_wf_42) necesita: corregir una tarea
+    # mal planteada mientras el plan espera aprobación.
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    plan_id = await _plan_in_status(migrations_pg_dsn, seeded, "pending_approval")
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(f"/plans/{plan_id}", json={"specification": _SPEC}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["specification"]["tasks"][0]["id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_put_refuses_to_rewrite_the_spec_of_an_approved_plan(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    # Editar después de la firma deja una aprobación que ya no cubre lo que hay:
+    # el plan diría «aprobado» sobre un alcance que nadie aprobó.
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    plan_id = await _plan_in_status(migrations_pg_dsn, seeded, "approved")
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(f"/plans/{plan_id}", json={"specification": _SPEC}, headers=headers)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["error"] == "spec_not_editable"
+
+
+@pytest.mark.asyncio
+async def test_put_refuses_to_rewrite_the_spec_between_the_two_signatures(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    # El segundo firmante estaría aprobando algo que el primero no vio: es
+    # exactamente la revisión a cuatro ojos convertida en teatro.
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    plan_id = await _plan_in_status(migrations_pg_dsn, seeded, "pending_second_approval")
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(f"/plans/{plan_id}", json={"specification": _SPEC}, headers=headers)
+    assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.asyncio
+async def test_put_refuses_to_rewrite_the_spec_of_a_finished_plan(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    plan_id = await _plan_in_status(migrations_pg_dsn, seeded, "completed")
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(f"/plans/{plan_id}", json={"specification": _SPEC}, headers=headers)
+    assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.asyncio
+async def test_put_still_allows_the_hot_replan_path_pending_adr_0132(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    # `in_progress` queda ABIERTO a propósito: la replanificación en caliente ya
+    # existe hoy por esta vía (PUT del spec + re-sync al Kanban) y quién puede
+    # hacerla lo decide el ADR 0132. Cerrarla aquí sería implementar por la
+    # puerta de atrás una decisión pendiente de aprobación humana.
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    plan_id = await _plan_in_status(migrations_pg_dsn, seeded, "in_progress")
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(f"/plans/{plan_id}", json={"specification": _SPEC}, headers=headers)
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_the_gate_does_not_block_a_title_only_edit(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    # La puerta es del SPEC, no del plan: renombrar un plan completado sigue
+    # siendo legítimo y no cambia lo que se hizo.
+    seeded = await _seed(migrations_pg_dsn)
+    headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
+    plan_id = await _plan_in_status(migrations_pg_dsn, seeded, "completed")
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.put(f"/plans/{plan_id}", json={"title": "Otro nombre"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Otro nombre"

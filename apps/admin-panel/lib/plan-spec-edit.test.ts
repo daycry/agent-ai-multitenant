@@ -1,0 +1,151 @@
+// `task_wf_42`: las reglas del editor del spec que merecen un test propio.
+
+import { describe, expect, it } from "vitest";
+
+import { ApiError } from "@/lib/api";
+import {
+  describeSaveError,
+  localSpecProblems,
+  nextTaskId,
+  removeTask,
+  specEditable,
+  toDrafts,
+  toTaskSpecs,
+  type TaskDraft,
+} from "@/lib/plan-spec-edit";
+
+function drafts(): TaskDraft[] {
+  return toDrafts([
+    { id: "t1", title: "Migrar el esquema", depends_on: [] },
+    { id: "t2", title: "Cargar los datos", depends_on: ["t1"] },
+    { id: "t3", title: "Verificar", depends_on: ["t2"] },
+  ]);
+}
+
+describe("specEditable", () => {
+  it("only offers the editor before anyone has signed the plan", () => {
+    expect(specEditable("draft")).toBe(true);
+    expect(specEditable("pending_approval")).toBe(true);
+    // `in_progress` lo acepta el BACKEND (la replanificación en caliente ya
+    // existe por esa vía, la gobierna el ADR 0132), pero ofrecer el editor ahí
+    // insinuaría que replanificar es un gesto resuelto.
+    for (const status of [
+      "in_progress",
+      "pending_second_approval",
+      "approved",
+      "blocked",
+      "completed",
+      "cancelled",
+    ]) {
+      expect(specEditable(status)).toBe(false);
+    }
+    expect(specEditable(undefined)).toBe(false);
+  });
+});
+
+describe("round-trip del spec", () => {
+  it("keeps the fields the editor does not touch", () => {
+    // ADR 0107 marca las tareas nacidas de un rechazo con `origin`. Perderlo al
+    // editar el título borraría de dónde vino la tarea.
+    const [row] = toDrafts([{ id: "t1", title: "T", origin: "correction" }]);
+    expect(toTaskSpecs([{ ...row, title: "T2" }])[0]).toMatchObject({
+      id: "t1",
+      title: "T2",
+      origin: "correction",
+    });
+  });
+
+  it("omits empty fields instead of persisting blanks", () => {
+    const [row] = toDrafts([{ id: "t1", title: "T" }]);
+    const spec = toTaskSpecs([row])[0];
+    // Un `role: ""` guardado se pinta como un rol asignado en blanco.
+    expect("role" in spec).toBe(false);
+    expect("estimated_hours" in spec).toBe(false);
+    expect("depends_on" in spec).toBe(false);
+  });
+
+  it("splits the acceptance criteria by line and drops the empty ones", () => {
+    const [row] = toDrafts([{ id: "t1", title: "T" }]);
+    const spec = toTaskSpecs([
+      { ...row, criteria: "  Devuelve 200 \n\n  Registra el intento " },
+    ])[0];
+    expect(spec.acceptance_criteria).toEqual(["Devuelve 200", "Registra el intento"]);
+  });
+});
+
+describe("removeTask", () => {
+  it("also prunes every dependency on the removed task", () => {
+    // Sin la poda el backend contesta «depends on unknown task», que es cierto
+    // pero incomprensible: el operador borró una tarea, no una dependencia.
+    const rows = drafts();
+    const left = removeTask(rows, rows[1].key);
+    expect(left.map((r) => r.id)).toEqual(["t1", "t3"]);
+    expect(left[1].dependsOn).toEqual([]);
+  });
+});
+
+describe("nextTaskId", () => {
+  it("does not reuse an id that is already taken", () => {
+    const rows = toDrafts([
+      { id: "t1", title: "A" },
+      { id: "t4", title: "B" },
+    ]);
+    expect(nextTaskId(rows)).toBe("t3");
+    expect(nextTaskId([...rows, { ...rows[0], key: 9, id: "t3" }])).toBe("t5");
+  });
+});
+
+describe("localSpecProblems", () => {
+  it("catches what does not need a round-trip", () => {
+    const rows = drafts();
+    expect(localSpecProblems(rows)).toEqual([]);
+    expect(localSpecProblems([{ ...rows[0], title: "  " }])).toContain(
+      "La tarea «t1» no tiene título.",
+    );
+    expect(localSpecProblems([rows[0], { ...rows[1], id: "t1" }])).toContain(
+      "El identificador «t1» está repetido.",
+    );
+    expect(localSpecProblems([{ ...rows[0], id: "" }])).toContain(
+      "Toda tarea necesita un identificador.",
+    );
+  });
+});
+
+describe("describeSaveError", () => {
+  it("turns a DAG cycle into the chain of titles the operator can act on", () => {
+    // Lo que se pintaba antes: {"detail":{"error":"dag_cycle","cycle":["t1",...]}}.
+    // `t1 → t2 → t1` tampoco dice nada a quien acaba de escribir los títulos.
+    const error = new ApiError(
+      422,
+      JSON.stringify({ detail: { error: "dag_cycle", cycle: ["t1", "t2", "t1"] } }),
+    );
+    const message = describeSaveError(error, drafts());
+    expect(message).toContain("t1 («Migrar el esquema»)");
+    expect(message).toContain("t2 («Cargar los datos»)");
+    expect(message).toContain("romper el ciclo");
+  });
+
+  it("relays the backend message when the plan no longer admits edits", () => {
+    const error = new ApiError(
+      409,
+      JSON.stringify({
+        detail: { error: "spec_not_editable", status: "approved", message: "Ya está aprobado." },
+      }),
+    );
+    expect(describeSaveError(error, drafts())).toBe("Ya está aprobado.");
+  });
+
+  it("unwraps a pydantic 422 to its readable messages", () => {
+    const error = new ApiError(
+      422,
+      JSON.stringify({
+        detail: [{ msg: "tasks[t2] depends on unknown task 't9'", loc: ["body"] }],
+      }),
+    );
+    expect(describeSaveError(error, drafts())).toBe("tasks[t2] depends on unknown task 't9'");
+  });
+
+  it("falls back to the raw body rather than swallowing an unknown failure", () => {
+    expect(describeSaveError(new ApiError(500, "boom"), drafts())).toBe("boom");
+  });
+});

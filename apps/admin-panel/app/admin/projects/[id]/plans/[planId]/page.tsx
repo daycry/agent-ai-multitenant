@@ -36,7 +36,6 @@ import {
   GanttSection,
   PhasesSection,
   SummarySection,
-  TasksSection,
 } from "./plan-spec-sections";
 import { CommentsSection } from "./plan-comments-section";
 import { CorrectionsSection } from "./plan-corrections-section";
@@ -44,6 +43,7 @@ import { CostBreakdownSection } from "./plan-cost-section";
 import { PlanCodeDiffSection } from "./plan-code-diff-section";
 import { PlanDeepLinksSection } from "./plan-deep-links-section";
 import { PlanLifecycleSection } from "./plan-lifecycle-section";
+import { PlanSpecEditorSection } from "./plan-spec-editor-section";
 import { PlanStatusHeader } from "./plan-status-header";
 import { SyncToKanbanSection } from "./plan-sync-section";
 import { HumanValidationSection } from "./plan-validation-section";
@@ -137,7 +137,9 @@ export default function PlanDetailPage() {
       <PhasesSection phases={spec.phases} tasks={spec.tasks} />
       <DAGSection tasks={spec.tasks} />
       <GanttSection tasks={spec.tasks} />
-      <TasksSection tasks={spec.tasks} />
+      {/* task_wf_42: la tabla de tareas de siempre, con «Editar tareas» cuando
+          el plan aún no está firmado. */}
+      <PlanSpecEditorSection planId={plan.id} status={plan.status} spec={spec} />
       <CommentsSection planId={plan.id} taskIds={(spec.tasks ?? []).map((t) => t.id)} />
     </div>
   );

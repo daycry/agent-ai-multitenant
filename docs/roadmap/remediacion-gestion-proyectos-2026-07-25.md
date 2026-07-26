@@ -603,15 +603,23 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_42` — Editor del spec antes de aprobar
 
-- [ ] **Título**: tabla editable de tareas (título, descripción, rol, complejidad,
-      dependencias, criterios) sobre el `PUT /plans/{id}` existente, habilitada solo en
-      `draft`/`pending_approval`. Incluye recuperación de un ciclo de DAG: el error 422 se
-      traduce a un mensaje legible que señala las tareas del ciclo y deja editarlas.
+- [x] _(hecho, backend + UI)_ **Título**: tabla editable de tareas (título, descripción, rol,
+      complejidad, horas, dependencias, criterios) sobre el `PUT /plans/{id}` existente,
+      habilitada solo en `draft`/`pending_approval`. Incluye recuperación de un ciclo de DAG:
+      el 422 se traduce a un mensaje legible con los TÍTULOS de las tareas del ciclo y el
+      editor sigue abierto con lo escrito.
 - **Hallazgo**: A-07, A-11, F-2 · **Tiempo**: 2 d
 - **Depende de**: `task_wf_02` (sin el arreglo de `summary`, el `PUT` falla)
-- **Ficheros**: `app/admin/projects/[id]/plans/[planId]/`, `routers/plans.py:595-640`
-- **Tests**: e2e de editar una dependencia y guardar; e2e de introducir un ciclo → mensaje
-  legible, no JSON crudo.
+- **Ficheros**: `plan-spec-editor-section.tsx` + `lib/plan-spec-edit.ts` (nuevos),
+  `plans/[planId]/page.tsx`, `routers/plans.py` (`_require_spec_editable`)
+- **Tests**: 11 unit de las piezas puras + 6 de render + 6 de integración del gate.
+- **Gate del backend** (lo que el recon detectó que faltaba): `update_plan` aceptaba
+  `specification` en CUALQUIER estado con solo `require_tenant_member`. Ahora 409
+  `spec_not_editable` fuera de `draft`/`pending_approval`/`in_progress`.
+  **`in_progress` queda abierto A PROPÓSITO**: la replanificación en caliente ya existe hoy
+  por esa vía y la gobierna el **ADR 0132** (`task_wf_44`); cerrarla aquí sería implementar
+  por la puerta de atrás una decisión pendiente de aprobación humana. La UI sí es más
+  estrecha: el editor no se ofrece en `in_progress`.
 
 #### `task_wf_43` — Las @-menciones tienen efecto (o se retiran)
 
