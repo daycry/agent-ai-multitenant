@@ -181,6 +181,64 @@ def _validate_runtime_template(value: str | None) -> str | None:
     return value
 
 
+def _validate_execution_budgets(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Rechaza un presupuesto de ejecución que se iba a descartar en silencio.
+
+    `resolve_execution_budgets` (budgets/envelope.py) tira sin decir nada las
+    claves desconocidas y los valores no numéricos o ≤ 0. Como la API tampoco
+    los validaba, un `max_wall_clock` sin la `_s`, o un `"mucho"` donde iba un
+    número, devolvía 200 y el run seguía corriendo con el presupuesto de
+    plataforma. El operador cree que ha capado el gasto de un proyecto y no ha
+    capado nada, sin ninguna señal.
+
+    Que un valor por encima del techo se recorte NO es un error: está
+    documentado y es intencionado. Lo que aquí se rechaza es solo lo que el
+    resolver iba a DESCARTAR — que es indistinguible de no haber escrito nada.
+    """
+    if value is None:
+        return None
+    from api_server.budgets.envelope import EXECUTION_BUDGET_CEILING
+
+    problems: list[str] = []
+    for key, raw in value.items():
+        if key not in EXECUTION_BUDGET_CEILING:
+            problems.append(f"{key!r} no es un presupuesto conocido")
+        elif isinstance(raw, bool) or not isinstance(raw, int | float):
+            # bool es subclase de int: `True` no puede colarse como cantidad.
+            problems.append(f"{key!r} tiene que ser un número, no {type(raw).__name__}")
+        elif raw <= 0:
+            problems.append(f"{key!r} tiene que ser mayor que cero")
+    if problems:
+        known = ", ".join(sorted(EXECUTION_BUDGET_CEILING))
+        raise ValueError(f"{'; '.join(problems)}. Presupuestos válidos: {known}")
+    return value
+
+
+def _validate_guardrails_config(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Rechaza una config de guardrails que el runtime no sabría leer.
+
+    La capa de proyecto se fusiona con la de plataforma en
+    `_resolve_guardrails_config` (workers/execution.py), y ahí un
+    `GuardrailConfigError` se captura y degrada a `None` — el run cae al
+    baseline del runtime. Es un degradado SEGURO: los runs siguen tamizados. Lo
+    que no es aceptable es que sea MUDO: el operador configura sus guardrails,
+    la API responde 200 y todos los runs de ese proyecto ignoran la config sin
+    que nada se lo diga (solo un warning en el log del worker).
+
+    Se valida con el MISMO parser que usa el worker, así que la API no puede
+    aceptar nada que el worker vaya a rechazar después.
+    """
+    if value is None:
+        return None
+    from shared_guardrails.layers import LayerConfig
+
+    try:
+        LayerConfig.from_dict("project", value)
+    except Exception as exc:  # GuardrailConfigError y cualquier fallo de forma
+        raise ValueError(f"config de guardrails inválida: {exc}") from exc
+    return value
+
+
 def _check_json_config_size(value: Any, field_name: str) -> None:
     """Reject a free-form JSON config blob over `_MAX_JSON_CONFIG_BYTES`.
 
@@ -425,12 +483,24 @@ class ProjectUpdateRequest(BaseModel):
         "worker_config",
         "repository_config",
         "human_approval_policy",
+        "execution_budgets",
+        "guardrails_config",
         mode="after",
     )
     @classmethod
     def _cap_json_config(cls, value: Any, info: Any) -> Any:
         _check_json_config_size(value, info.field_name)
         return value
+
+    @field_validator("execution_budgets", mode="after")
+    @classmethod
+    def _check_execution_budgets(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_execution_budgets(value)
+
+    @field_validator("guardrails_config", mode="after")
+    @classmethod
+    def _check_guardrails_config(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_guardrails_config(value)
 
     @model_validator(mode="after")
     def _budget_invariants(self) -> ProjectUpdateRequest:

@@ -110,10 +110,27 @@ async def _seed(dsn: str) -> dict[str, UUID]:
 async def test_execution_budgets_and_guardrails_round_trip(
     configured_app, migrations_pg_dsn: str
 ) -> None:
+    """Round-trip con valores que el sistema USA de verdad.
+
+    Este test estaba en verde afirmando el round-trip de
+    ``{"max_total_tokens": ...}`` y ``{"pre_llm": [{"rule": "pii_scrub"}]}``.
+    Ninguna de las dos formas existe: ``max_total_tokens`` no aparece en NINGÚN
+    punto del código (las claves son ``max_tokens``, ``max_wall_clock_s``,
+    ``max_cost_usd``, ``max_iterations``, ``max_tool_calls``) y un guardrail se
+    declara con ``type``, no con ``rule``. La columna guardaba el JSON tal cual,
+    así que el round-trip pasaba — y aguas abajo `resolve_execution_budgets`
+    tiraba la clave desconocida y `LayerConfig.from_dict` reventaba con el
+    `GuardrailConfigError` que el worker captura para caer al baseline.
+
+    O sea: el test certificaba que se puede guardar una configuración que no
+    hace nada. Ahora usa las claves reales, y la segunda mitad fija que las
+    formas inválidas se rechazan en la puerta con 422 en vez de aceptarse y
+    descartarse en silencio.
+    """
     seeded = await _seed(migrations_pg_dsn)
     headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
-    budgets = {"max_total_tokens": 500000, "max_iterations": 40}
-    guardrails = {"pre_llm": [{"rule": "pii_scrub"}]}
+    budgets = {"max_tokens": 500000, "max_iterations": 40}
+    guardrails = {"pre_llm": [{"type": "pii_scrub", "action": "redact"}]}
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
@@ -124,9 +141,24 @@ async def test_execution_budgets_and_guardrails_round_trip(
         )
         assert put.status_code == 200, put.text
         got = await client.get(f"/projects/{seeded['proj']}", headers=headers)
+
+        # Y lo que el sistema iba a descartar ya no entra.
+        bad_budget = await client.put(
+            f"/projects/{seeded['proj']}",
+            json={"execution_budgets": {"max_total_tokens": 500000}},
+            headers=headers,
+        )
+        bad_guardrails = await client.put(
+            f"/projects/{seeded['proj']}",
+            json={"guardrails_config": {"pre_llm": [{"rule": "pii_scrub"}]}},
+            headers=headers,
+        )
     body = got.json()
     assert body["execution_budgets"] == budgets
     assert body["guardrails_config"] == guardrails
+    assert bad_budget.status_code == 422, bad_budget.text
+    assert "max_total_tokens" in bad_budget.text
+    assert bad_guardrails.status_code == 422, bad_guardrails.text
 
 
 @pytest.mark.asyncio
