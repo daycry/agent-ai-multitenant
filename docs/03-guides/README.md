@@ -44,4 +44,5 @@ y la tabla de NIVELES) vive en
 | [design-tokens.md](./design-tokens.md)                                   | Tokens de diseño del frontend                                                                                                           |
 | [ui-conventions.md](./ui-conventions.md)                                 | Design-system del admin-panel: primitivas, componentes, estados, a11y                                                                   |
 | [gotchas/](./gotchas/)                                                   | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…)                                                                 |
+| [../../CONTINUE_HERE.md](../../CONTINUE_HERE.md)                         | Por dónde va el trabajo ahora mismo: rama, bloqueos, qué espera al operador                                                             |
 | [verificar-antes-de-implementar.md](./verificar-antes-de-implementar.md) | Prácticas de trabajo: por qué un plan «pendiente» miente, cómo evitar que un test fije el defecto, y guardas que no pueden pasar vacías |

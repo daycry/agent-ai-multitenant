@@ -2,6 +2,11 @@
 
 Este archivo es el contexto principal que debes cargar al arrancar. Define qué es este sistema, sus principios rectores, cómo trabajar en él y el protocolo de gestión del roadmap.
 
+> **Antes de nada, lee [`CONTINUE_HERE.md`](CONTINUE_HERE.md)**: dice en qué rama
+> va el trabajo, qué está bloqueado, qué espera una decisión tuya y cómo
+> comprobar que ese resumen sigue siendo cierto. Este archivo explica CÓMO se
+> trabaja; aquél, POR DÓNDE va.
+
 ## Qué es Este Sistema
 
 Una **plataforma de IA agéntica multi-tenant** que permite construir, configurar y orquestar equipos de agentes autónomos especializados (Project Manager, Arquitecto, Backend Dev, Frontend Dev, QA, Reviewer, etc.) que trabajan de forma cooperativa sobre proyectos software. La unidad operativa es el **Plan**: un conjunto ordenado de tareas con dependencias DAG que los agentes ejecutan en paralelo.
