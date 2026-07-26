@@ -44,6 +44,7 @@ from api_server.db.conversation import (
     Message,
     MessageAuthorKind,
 )
+from api_server.db.conversation_compression import SUMMARY_REPLACES_KIND
 from api_server.db.domain import Project
 from api_server.events import (
     EVENT_CONVERSATION_MODE_CHANGED,
@@ -329,6 +330,22 @@ async def post_message(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="solo se pueden publicar mensajes con author_kind='user' por esta vía",
+        )
+    # Misma familia por la puerta de al lado (auditoría adversarial 2026-07-25):
+    # `is_summary` + un attachment `summary_replaces` declaran que un mensaje
+    # SUSTITUYE a otros en la ventana de contexto. Desde que el prompt del equipo
+    # pasa por `load_context_window`, publicar eso a mano dejaba a cualquier
+    # miembro del tenant borrar mensajes AJENOS del contexto que lee el equipo,
+    # sin rastro en el feed (`GET /messages` los sigue devolviendo). El único
+    # escritor legítimo de cobertura es `compress_old_messages`, que autora como
+    # `system`. `_replaced_message_ids` lo re-verifica del lado de la lectura.
+    if payload.is_summary or any(
+        isinstance(att, dict) and att.get("kind") == SUMMARY_REPLACES_KIND
+        for att in payload.attachments
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="los resúmenes de conversación los escribe el sistema, no el cliente",
         )
 
     conv = await _load_conversation(session, conversation_id)

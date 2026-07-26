@@ -256,8 +256,23 @@ class ScriptedSummariser:
 # Helpers
 # ---------------------------------------------------------------------------
 def _replaced_message_ids(message: Message) -> set[UUID]:
-    """Return the set of message ids a summary message replaces, or {}."""
-    if not message.is_summary:
+    """Return the set of message ids a summary message replaces, or {}.
+
+    Only a ``system``-authored summary is believed. ``POST /messages`` takes
+    ``is_summary`` and ``attachments`` as free client input, and once the team's
+    prompt started going through :func:`load_context_window` a tenant member
+    could post their OWN message carrying ``is_summary=true`` plus a
+    ``summary_replaces`` pointing at SOMEONE ELSE'S messages — and those messages
+    vanished from the context the team reads, with the feed not showing anything
+    odd because ``GET /messages`` still returns them (adversarial audit
+    2026-07-25).
+
+    The endpoint already rejects ``author_kind != 'user'`` so nobody can forge an
+    attachment with an agent's voice; this is the same attack through the next
+    door. The only legitimate writer of coverage is
+    :func:`compress_old_messages`, which authors as ``system``.
+    """
+    if not message.is_summary or message.author_kind != MessageAuthorKind.SYSTEM.value:
         return set()
     for att in message.attachments:
         if isinstance(att, dict) and att.get("kind") == SUMMARY_REPLACES_KIND:
