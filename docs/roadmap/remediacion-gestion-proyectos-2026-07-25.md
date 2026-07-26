@@ -707,10 +707,19 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_50` — Cablear `pre_llm` y `post_llm`
 
-- [ ] **Título**: invocar los dos hooks que faltan en el ciclo del runtime — el prompt antes
-      de enviarlo al modelo y la respuesta al recibirla — cumpliendo el principio rector 10.
-      Mantener el fail-open del pipeline y el baseline `warn`, para que cablearlos no cambie
-      el comportamiento hasta que un tenant endurezca su política.
+- [x] _(hecho)_ **Título**: invocar los dos hooks que faltan en el ciclo del runtime — el
+      prompt antes de enviarlo al modelo y la respuesta al recibirla. Fail-open y baseline
+      `warn` intactos: hay test de que con la política por defecto **ningún run cambia de
+      resultado**.
+- **Faltaba una segunda mitad que el plan no nombraba**: el baseline solo declaraba
+  `post_tool`, así que aunque los hooks estuvieran cableados no habrían tenido nada que
+  ejecutar. Ahora declara los tres con la MISMA acción `warn` — cambia qué se mira, no qué
+  se hace con ello. Y el seam (`run_hook`) no pasaba `prompt`/`response`, que son los campos
+  que leen esos dos hooks: el contrato ya existía en `shared_guardrails` y nadie lo usaba.
+- **Semántica del `block`** (solo si un tenant lo configura): en `pre_llm` **no se manda el
+  prompt** y el run corta con `guardrail_blocked` —bloquearlo después de mandarlo no
+  bloquearía nada—; en `post_llm` la decisión se reescribe a un `noop` con el motivo, que es
+  un rechazo visible del que el modelo se recupera al turno siguiente.
 - **Hallazgo**: B-05 (alto) · **Tiempo**: 1 d · **Prioridad real**: P1
 - **Ficheros**: `agent_runtime/graph.py`, `agent_runtime/guardrails.py:47-128`
 - **Tests**: unit de que un prompt con contenido marcado dispara el hook; regresión de que con

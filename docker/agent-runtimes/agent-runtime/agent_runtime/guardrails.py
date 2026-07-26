@@ -22,17 +22,31 @@ from typing import Any
 _log = logging.getLogger("agent_runtime.guardrails")
 
 # Platform baseline used when the task spec carries no resolved guardrail config
-# (bare run / minimal slice): scan tool OUTPUTS for prompt injection in LOG mode
-# (warn + learning_mode) — detect + record, never block (ADR 0102 D1).
+# (bare run / minimal slice): scan for prompt injection in LOG mode (warn +
+# learning_mode) — detect + record, never block (ADR 0102 D1).
+#
+# `task_wf_50`: el baseline solo cubría `post_tool`, así que aunque los cuatro
+# hooks del principio rector 10 estuvieran cableados, dos no tenían nada que
+# ejecutar. `pre_llm` y `post_llm` entran aquí con la MISMA acción `warn`: lo
+# que cambia es QUÉ se mira, no qué se hace con ello — ningún run cambia de
+# resultado hasta que un tenant endurezca su política a `block`.
+#
+# Por qué los tres y no solo `post_tool`: el hook de tool ve cada resultado
+# cuando ENTRA, una vez. `pre_llm` ve lo que de VERDAD se manda al modelo, que
+# incluye lo acumulado en turnos anteriores y los preámbulos que arma la
+# plataforma (comentarios del humano, memoria recuperada, resúmenes de tareas
+# previas) — ninguno de los cuales pasa por una tool.
+_INJECTION_RULE: dict[str, Any] = {
+    "type": "prompt_injection",
+    "action": "warn",
+    "config": {"learning_mode": True, "severity": "high"},
+}
+
 _BASELINE_CONFIG: dict[str, Any] = {
     "guardrails": {
-        "post_tool": [
-            {
-                "type": "prompt_injection",
-                "action": "warn",
-                "config": {"learning_mode": True, "severity": "high"},
-            }
-        ]
+        "pre_llm": [dict(_INJECTION_RULE)],
+        "post_llm": [dict(_INJECTION_RULE)],
+        "post_tool": [dict(_INJECTION_RULE)],
     }
 }
 
@@ -83,6 +97,8 @@ def run_hook(
     tool_name: str | None = None,
     tool_args: dict[str, Any] | None = None,
     tool_result: Any = None,
+    prompt: str | None = None,
+    response: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run ``pipeline`` at ``hook`` and return JSON-safe events for the guardrails
@@ -96,14 +112,26 @@ def run_hook(
 
         meta = dict(metadata or {})
         # ADR 0102 D6: truncado del input escaneado, marcado en metadata.
+        # `task_wf_50`: aplica a los TRES campos de texto — `prompt` y
+        # `response` son los que leen `pre_llm` / `post_llm`
+        # (`GuardrailContext.primary_text`), y un prompt largo cuesta tanto de
+        # escanear como un output largo.
         if isinstance(tool_result, str) and len(tool_result) > _HOOK_INPUT_MAX:
             tool_result = tool_result[:_HOOK_INPUT_MAX]
+            meta["truncated"] = True
+        if isinstance(prompt, str) and len(prompt) > _HOOK_INPUT_MAX:
+            prompt = prompt[:_HOOK_INPUT_MAX]
+            meta["truncated"] = True
+        if isinstance(response, str) and len(response) > _HOOK_INPUT_MAX:
+            response = response[:_HOOK_INPUT_MAX]
             meta["truncated"] = True
         ctx = GuardrailContext(
             hook=hook,  # type: ignore[arg-type]
             tool_name=tool_name,
             tool_args=tool_args or {},
             tool_result=tool_result,
+            prompt=prompt,
+            response=response,
             metadata=meta,
         )
         decision = pipeline.run(ctx)

@@ -649,6 +649,31 @@ class _AgentLoop:
         # __main__ → execution.error → the worker doubling it to a hard `failed`
         # and losing all progress. Only LLM-layer errors are caught — a real bug
         # (KeyError/TypeError/…) is NOT an LLMError and still propagates.
+        # `task_wf_50`: de los cuatro hooks del principio rector 10, `pre_llm` y
+        # `post_llm` estaban declarados y sin cablear — solo se tamizaban las
+        # tools. Justo el prompt, que es donde se pliegan el contenido de
+        # ficheros y la salida de MCP, viajaba al modelo sin mirar. Aquí se
+        # cierra el ciclo: lo que ENTRA al modelo y lo que SALE.
+        pre_events = self._screen_prompt(state)
+        pre_blocked = [
+            str(e.get("guardrail_type") or "?") for e in pre_events if e.get("action") == "block"
+        ]
+        if pre_blocked:
+            summary = (
+                "Prompt blocked by guardrail "
+                f"({', '.join(pre_blocked)}) — the project's policy refuses to "
+                "send this context to the model."
+            )
+            steps.append(node_step(base + len(steps), "plan", summary, status="aborted"))
+            return {
+                "status": STATUS_ABORTED,
+                "abort_code": str(SafeguardCode.GUARDRAIL_BLOCKED),
+                "output": summary,
+                "iteration": self.tracker.usage.iterations,
+                "steps": steps,
+                "guardrail_events": pre_events,
+            }
+
         try:
             response = self.deps.model.decide(dict(state))
         except LLMError as exc:
@@ -675,6 +700,29 @@ class _AgentLoop:
             }
         self.tracker.record_model_call(response.tokens_in, response.tokens_out, response.cost_usd)
         decision = response.decision
+        # `post_llm`: lo que el modelo acaba de devolver, ANTES de actuar sobre
+        # ello. Un `block` aquí no aborta el run — reescribe la decisión a un
+        # noop con el motivo, que es un rechazo VISIBLE del que el modelo puede
+        # recuperarse en el turno siguiente (mismo patrón que una tool bloqueada).
+        post_events = self._screen_response(decision)
+        post_blocked = [
+            str(e.get("guardrail_type") or "?") for e in post_events if e.get("action") == "block"
+        ]
+        if post_blocked:
+            decision = replace(
+                decision,
+                kind=DecisionKind.ACT,
+                tool="noop",
+                tool_args={
+                    "reason": (
+                        f"your previous answer was blocked by a guardrail "
+                        f"({', '.join(post_blocked)}); rephrase it without the "
+                        "flagged content"
+                    )
+                },
+                batch_calls=(),
+            )
+        guardrail_events = pre_events + post_events
         steps.append(
             model_call_step(
                 base + len(steps),
@@ -786,7 +834,62 @@ class _AgentLoop:
             "last_decision": decision.as_dict(),
             "iteration": self.tracker.usage.iterations,
             "steps": steps,
+            "guardrail_events": guardrail_events,
         }
+
+    # ---- pre_llm / post_llm (task_wf_50) --------------------------------
+
+    def _screen_prompt(self, state: AgentState) -> list[dict[str, Any]]:
+        """Tamiza lo que va a viajar al modelo ESTE turno (`pre_llm`).
+
+        Se escanea el preámbulo del sistema y el contexto plegado, que es donde
+        aterriza el contenido de terceros: lo leído de ficheros, la salida de
+        las tools y la de los servidores MCP. El hook de tools ya mira cada
+        resultado cuando entra; éste mira lo que de verdad se manda, que incluye
+        lo acumulado en turnos anteriores y los preámbulos que arma la
+        plataforma.
+
+        Best-effort como el resto del seam: sin pipeline o con un fallo, `[]`.
+        """
+        parts: list[str] = []
+        preamble = state.get("system_preamble")
+        if isinstance(preamble, str) and preamble:
+            parts.append(preamble)
+        for entry in state.get("context") or []:
+            if isinstance(entry, dict):
+                content = entry.get("content")
+                if isinstance(content, str) and content:
+                    parts.append(content)
+        if not parts:
+            return []
+        return run_hook(
+            self.deps.guardrails,
+            hook="pre_llm",
+            prompt="\n".join(parts),
+            metadata={"parts": len(parts)},
+        )
+
+    def _screen_response(self, decision: ModelDecision) -> list[dict[str, Any]]:
+        """Tamiza lo que el modelo acaba de responder (`post_llm`).
+
+        Mira el razonamiento y los argumentos de la decisión: es donde se vería
+        un secreto exfiltrado o el efecto de una inyección que ya se coló. El
+        hook `pre_tool` cubre la llamada concreta; éste cubre la respuesta
+        ENTERA, incluida la prosa que nunca llega a ser una tool.
+        """
+        payload = " ".join(
+            str(x)
+            for x in (decision.rationale or "", decision.tool or "", decision.tool_args or {})
+            if x
+        ).strip()
+        if not payload:
+            return []
+        return run_hook(
+            self.deps.guardrails,
+            hook="post_llm",
+            tool_name=decision.tool,
+            response=payload,
+        )
 
     def _run_reflection_assess(self, state: AgentState, iterations: int) -> None:
         """ADR 0112 fase 2 (flag OFF): en cadencia, el mini-turno DEDICADO con

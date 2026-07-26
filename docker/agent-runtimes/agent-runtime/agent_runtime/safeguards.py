@@ -75,6 +75,12 @@ class SafeguardCode(enum.StrEnum):
     # (el detector de bucle no salta con args distintos y stack_exec es
     # producing-tool, exento de las guardas de research).
     STACK_EXEC_UNAVAILABLE = "stack_exec_unavailable"
+    # `task_wf_50`: un guardrail configurado como `block` en el hook `pre_llm`
+    # rechazó el prompt del turno. No es un fallo del agente ni de la
+    # plataforma: es la política del tenant negándose a mandar al modelo un
+    # contexto marcado. Se corta con código propio para que no se confunda con
+    # un abort por presupuesto.
+    GUARDRAIL_BLOCKED = "guardrail_blocked"
 
 
 @dataclass(frozen=True)
