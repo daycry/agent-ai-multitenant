@@ -803,12 +803,25 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 #### `task_wf_54` — Resolver el ADR 0108 (canales de veredicto)
 
-- [ ] **Título**: cerrar el ADR ya `proposed` y unificar los dos contratos de veredicto que
-      hoy recibe un run de reviewer.
+- [x] _(ya estaba resuelto — premisa obsoleta, verificado)_ **Título**: cerrar el ADR 0108.
 - **Hallazgo**: B-10 (medio) · **Tiempo**: 0,75 d
-- **Ficheros**: `agent_runtime/providers.py:112-147`, `__main__.py:436-497`,
-  `docs/05-architecture-decisions/0108-*.md`
-- **Tests**: e2e de un run de review completo tras la unificación.
+- **La premisa está obsoleta en dos cosas**: el ADR **no está `proposed`** —lo aceptó el
+  operador el 2026-07-12— y la decisión aceptada es la **opción C: NO unificar**. Unificar
+  ahora contradiría un ADR aceptado y reabriría el riesgo de convergencia del ADR 0095, que
+  es justo lo que la opción C evita.
+- **Sus consecuencias YA están aplicadas, verificado una por una**: el ancla cruzada en los
+  dos parsers (`reviewer_bridge.py:103` y `providers.py:918`, cada uno apuntando al otro y
+  explicando por qué la divergencia es intencional), la fuente única del wire-format
+  (`review_contract.py`) y el test de contrato cruzado (`test_review_verdict_wire_contract`,
+  3 tests en verde).
+- **La normalización que el ADR nombra como siguiente paso de menor riesgo ya existe
+  también**: los 3 campos ricos del reject del canal externo (`failed_criterion` /
+  `testreport_evidence` / `what_to_fix`) llegan al implementador por
+  `prior_review_feedback` con ese mismo shape (`dispatch.py:1451`). El `feedback` de la
+  self-review no viaja por ahí porque **no es un dato entre runs**: es un sticky del propio
+  run. Dos lifetimes distintos, no dos formatos del mismo dato.
+- **Desbloquea `task_wf_61`**: se estructura el canal que emite veredicto entre runs, no
+  «los dos que iban a unificarse».
 
 #### `task_wf_55` — Pinear los perfiles seccomp/apparmor
 
