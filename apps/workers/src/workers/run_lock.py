@@ -49,11 +49,19 @@ async def acquire_run_lock(redis: Any, task_id: str, *, ttl_s: int, token: str) 
     return bool(got)
 
 
-async def release_run_lock(redis: Any, task_id: str, *, token: str) -> None:
+async def release_run_lock(redis: Any, task_id: str, *, token: str) -> bool:
     """Release the lock IFF we still own it (token match). Best-effort — a Redis
-    blip just leaves the key to expire via its TTL."""
+    blip just leaves the key to expire via its TTL.
+
+    Returns whether the key was ACTUALLY deleted: ``False`` both when someone
+    else now holds the lock (token mismatch — leave it alone) and when Redis did
+    not answer. Callers that report a count must not treat an attempt as a
+    release; the stale sweeper's ``run_locks_released`` is read during an
+    incident and a number that lies there is worse than no number.
+    """
     with contextlib.suppress(Exception):  # release best-effort; TTL is the backstop
-        await redis.eval(_RELEASE_IF_OWNED, 1, run_lock_key(task_id), token)
+        return bool(await redis.eval(_RELEASE_IF_OWNED, 1, run_lock_key(task_id), token))
+    return False
 
 
 __all__ = ["acquire_run_lock", "release_run_lock", "run_lock_key"]

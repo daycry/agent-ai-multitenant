@@ -40,10 +40,71 @@ def sweep_stale_executions() -> dict[str, Any]:
     left ``executions.running`` rows and dangling agent-runtime containers. This
     beat finds ``running`` rows older than the stale threshold, marks them
     ``failed`` (``abort_code=stale_after_worker_loss``), transitions their task off
-    ``in_progress`` (reusing the dag_01 policy → ``blocked``), and ``docker rm -f``
-    their container by label. Best-effort (never crashes beat)."""
+    ``in_progress`` (reusing the dag_01 policy → ``blocked``), ``docker rm -f``
+    their container by label, and frees their per-task run-lock so the task can
+    actually be re-dispatched (:func:`_release_locks_of_sealed_runs`).
+    Best-effort (never crashes beat)."""
     settings = get_settings()
     return asyncio.run(_sweep_stale_executions_async(settings))
+
+
+async def _release_locks_of_sealed_runs(redis: Any, sealed: list[tuple[str, str | None]]) -> int:
+    """Free the per-task run-lock of every run this sweep just declared dead.
+
+    The lock (``workers.run_lock``) stops a Celery re-delivery from starting a
+    SECOND run of a task while the first is live — its worktree
+    ``reset --hard`` + ``clean -fdx`` would destroy the first's work. Its TTL is
+    the broker's visibility timeout (7 h) because that is the earliest a
+    competitor can exist; anything shorter reopens the gap C-05 closed.
+
+    But the holder only releases it in a ``finally``, and a SIGKILL (OOM, hard
+    limit, ``docker stop``) never runs one. So the lock outlived the run by up to
+    7 h and VETOED every attempt to recover the task in between — including this
+    sweeper's own: it seals the row and moves the task to ``blocked``, the
+    operator unblocks it, the dispatch fires, and ``run_execution`` returns
+    ``concurrent_run_locked`` as a SUCCESS, so Celery acks and the retry is gone.
+    The same reasoning already applied to the execution ROW (the orphan-container
+    sweep exists so it does not sit 7 h "vetando el re-despacho de su task"); the
+    lock was simply never given the same treatment.
+
+    The sweeper has just PROVEN the holder is dead, so it is the right authority
+    to free it. Release stays token-guarded: the token is the run's Celery job
+    id, which is also stamped on the execution row, so a lock re-acquired by a
+    NEWER legitimate run (whose token differs) is never touched. A row with no
+    ``celery_task_id`` — a direct, non-Celery invocation — is skipped rather than
+    force-deleted, because then ownership cannot be proven.
+    """
+    from workers.run_lock import release_run_lock
+
+    released = 0
+    for task_id, token in sealed:
+        if not token:
+            continue
+        if await release_run_lock(redis, task_id, token=token):
+            released += 1
+    return released
+
+
+async def _sweep_run_locks(
+    settings: Settings, redis: Any, sealed: list[tuple[str, str | None]]
+) -> int:
+    """Owns the Redis connection around :func:`_release_locks_of_sealed_runs`.
+
+    Only connects when there is actually a lock to free, and closes only what it
+    opened (the test injects its own client)."""
+    if not sealed:
+        return 0
+    owned = None
+    if redis is None:
+        from redis.asyncio import Redis
+
+        redis = owned = Redis.from_url(settings.events_redis_url, decode_responses=True)
+    try:
+        return await _release_locks_of_sealed_runs(redis, sealed)
+    finally:
+        if owned is not None:
+            with contextlib.suppress(Exception):
+                await owned.aclose()
 
 
 async def _remove_exited_terminal_containers(engine: Any, runner: Any) -> int:
@@ -87,9 +148,11 @@ async def _sweep_stale_executions_async(
     runner: Any = None,
     stale_after: timedelta = _STALE_EXECUTION_AFTER,
     now: datetime | None = None,
+    redis: Any = None,
 ) -> dict[str, Any]:
-    """Async core. ``runner`` (a container runner with ``kill_by_label``) and
-    ``now`` are injectable so the test drives it without Docker or wall-clock."""
+    """Async core. ``runner`` (a container runner with ``kill_by_label``),
+    ``redis`` (for the run-lock release) and ``now`` are injectable so the test
+    drives it without Docker, Redis or wall-clock."""
     from api_server.db.domain import Execution, ExecutionStatus
     from api_server.db.execution_repo import seal_terminal_execution
     from sqlalchemy import select
@@ -104,6 +167,10 @@ async def _sweep_stale_executions_async(
     swept = 0
     reaped = 0
     containers_removed = 0
+    released = 0
+    # (task_id, run-lock token) of every row this pass seals — see
+    # `_release_locks_of_sealed_runs`.
+    sealed_runs: list[tuple[str, str | None]] = []
     try:
         if runner is None:
             runner = AgentContainerRunner(settings)
@@ -154,6 +221,7 @@ async def _sweep_stale_executions_async(
                 ):
                     continue
                 stale_ids.append(str(execution.id))
+                sealed_runs.append((str(execution.task_id), execution.celery_task_id))
                 # Move the orphaned task off in_progress (dag_01 policy → blocked).
                 await transition_task_after_run(db, execution.task_id, ExecutionStatus.FAILED.value)
                 # AUD16-21: rastro reconstruible desde BD — quién selló y por qué.
@@ -178,12 +246,16 @@ async def _sweep_stale_executions_async(
             with contextlib.suppress(Exception):
                 reaped += runner.kill_by_label(execution_id)
         containers_removed = await _remove_exited_terminal_containers(engine, runner)
+        # LAST, and best-effort: a Redis blip must not cost us the Docker cleanup
+        # above.
+        released = await _sweep_run_locks(settings, redis, sealed_runs)
     except Exception as exc:  # pragma: no cover — defensive logging
         _log.warning("maintenance.sweep_stale_executions.error", error=str(exc))
         return {
             "swept": swept,
             "reaped": reaped,
             "containers_removed": containers_removed,
+            "run_locks_released": released,
             "error": str(exc),
         }
     finally:
@@ -194,5 +266,11 @@ async def _sweep_stale_executions_async(
         swept=swept,
         reaped=reaped,
         containers_removed=containers_removed,
+        run_locks_released=released,
     )
-    return {"swept": swept, "reaped": reaped, "containers_removed": containers_removed}
+    return {
+        "swept": swept,
+        "reaped": reaped,
+        "containers_removed": containers_removed,
+        "run_locks_released": released,
+    }

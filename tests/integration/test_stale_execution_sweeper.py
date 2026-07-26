@@ -99,16 +99,18 @@ async def _seed(dsn: str) -> dict[str, UUID]:
                 ids["project"],
             )
         # stale execution: started 8h ago (> the 7h threshold). fresh: just now.
+        # `celery_task_id` es el token del run-lock (workers.run_lock): el sweeper
+        # lo necesita para soltar el lock con garantía de propiedad.
         await conn.execute(
-            "INSERT INTO executions (id, tenant_id, task_id, status, started_at)"
-            " VALUES ($1, $2, $3, 'running', now() - interval '8 hours')",
+            "INSERT INTO executions (id, tenant_id, task_id, status, started_at, celery_task_id)"
+            " VALUES ($1, $2, $3, 'running', now() - interval '8 hours', 'celery-stale')",
             ids["exec_stale"],
             ids["tenant"],
             ids["task_stale"],
         )
         await conn.execute(
-            "INSERT INTO executions (id, tenant_id, task_id, status, started_at)"
-            " VALUES ($1, $2, $3, 'running', now())",
+            "INSERT INTO executions (id, tenant_id, task_id, status, started_at, celery_task_id)"
+            " VALUES ($1, $2, $3, 'running', now(), 'celery-fresh')",
             ids["exec_fresh"],
             ids["tenant"],
             ids["task_fresh"],
@@ -173,6 +175,56 @@ async def test_sweep_stale_executions(
         assert str(ids["exec_stale"]) in str(sweeper_events[0]["payload"])
     finally:
         await engine.dispose()
+
+
+class _LockRedis:
+    """Redis con la semántica compare-and-del del script de release del run-lock."""
+
+    def __init__(self, keys: dict[str, str]) -> None:
+        self.keys = dict(keys)
+
+    async def eval(self, _script: str, _numkeys: int, key: str, token: str) -> int:
+        if self.keys.get(key) == token:
+            del self.keys[key]
+            return 1
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_sweep_frees_the_run_lock_of_the_run_it_seals(
+    _migrated: None, workers_settings: object, migrations_pg_dsn: str
+) -> None:
+    """El run-lock sobrevivía al run hasta 7 h tras un SIGKILL y vetaba toda
+    recuperación de la tarea (revisión adversarial 2026-07-25, la otra cara de
+    C-05). El titular solo lo suelta en un `finally` y un SIGKILL no ejecuta
+    ninguno; peor aún, el intento de re-despacho devolvía `concurrent_run_locked`
+    como ÉXITO, así que Celery hacía ack y el reintento se perdía.
+
+    Quien sella la fila es quien ha probado que el titular está muerto, así que
+    es quien debe soltar el lock. Y solo el suyo: el del run fresco —vivo, no
+    sellado— tiene que seguir ahí, porque es justamente lo que impide que una
+    re-entrega le haga `reset --hard` encima del trabajo en vuelo.
+    """
+    from workers.maintenance import _sweep_stale_executions_async
+    from workers.run_lock import run_lock_key
+
+    ids = await _seed(migrations_pg_dsn)
+    stale_key = run_lock_key(str(ids["task_stale"]))
+    fresh_key = run_lock_key(str(ids["task_fresh"]))
+    redis = _LockRedis({stale_key: "celery-stale", fresh_key: "celery-fresh"})
+
+    result = await _sweep_stale_executions_async(
+        workers_settings,  # type: ignore[arg-type]
+        runner=_FakeRunner(),
+        stale_after=timedelta(hours=7),
+        now=datetime.now(UTC),
+        redis=redis,
+    )
+
+    assert result["swept"] == 1
+    assert result["run_locks_released"] == 1
+    assert stale_key not in redis.keys, "la tarea sigue vetada hasta 7 h después de morir su run"
+    assert redis.keys.get(fresh_key) == "celery-fresh", "el lock del run VIVO no se toca"
 
 
 @pytest.mark.asyncio
