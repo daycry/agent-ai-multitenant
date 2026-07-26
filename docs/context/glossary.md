@@ -53,7 +53,7 @@ para modelos y endpoints, [`../04-reference/`](../04-reference/).
 
 **Plan**: conjunto ordenado de tareas con dependencias DAG generado en chat de planning. Materializa como rama git `plan/{id}-{slug}` al sincronizarse; los commits llevan trailers `Plan-Id`/`Task-Id`/`Execution-Id`; al cerrarse se abre un PR.
 
-**Task**: unidad de trabajo en el Kanban. Tiene runtime declarado para tests automáticos, criterios de aceptación, opcionalmente `human_validation_required=true`. Su assignee puede ser IA o humano.
+**Task**: unidad de trabajo en el Kanban. Tiene runtime declarado para tests automáticos y criterios de aceptación. Su assignee puede ser IA o humano. Para exigir un humano en un punto concreto NO hay un flag por tarea (ver principio 7): están las políticas de aprobación por categoría de acción y la tool `ask_human` (ADR 0114).
 
 **Execution**: registro de una ejecución concreta de una tarea **por un agente IA** en un agent-runtime. Lleva el snapshot de coste USD (`total_cost_usd` + `steps_log`).
 

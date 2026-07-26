@@ -788,11 +788,16 @@ class Settings(BaseSettings):
         "use (`docker compose --file <this>`).",
     )
     restore_app_services: list[str] = Field(
+        # ADR 0117 (c): `web-app` estuvo aquí y **no existe en ningún compose**
+        # — ni el versionado ni el que genera el instalador. `docker compose stop`
+        # con un servicio inexistente devuelve != 0, y `_stop_app_stack` eleva en
+        # ese caso: la restauración completa abortaba en el paso 3, ANTES de
+        # restaurar nada. Un fantasma en esta lista no es cosmética, es el
+        # simulacro de recuperación roto.
         default_factory=lambda: [
             "api-server",
             "orchestrator",
             "workers",
-            "web-app",
             "admin-panel",
         ],
         description="The APP services stopped (and brought back up) around a full "

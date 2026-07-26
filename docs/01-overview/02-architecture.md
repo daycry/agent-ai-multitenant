@@ -18,8 +18,7 @@ la fuente de verdad de producto sigue siendo el `.docx` maestro.
 ```mermaid
 flowchart LR
     subgraph Frontend
-        AP[admin-panel<br/>System + Tenant Admin]
-        WA[web-app<br/>tenants]
+        AP[admin-panel<br/>frontend único: tenants + System Admin]
         INS[installer<br/>wizard · Fase 15]
     end
 
@@ -47,7 +46,7 @@ flowchart LR
         RT3[review-runtime]
     end
 
-    AP & WA & INS -- HTTPS --> API
+    AP & INS -- HTTPS --> API
     API --> PG & RED & VLT & MIN & CAV
     ORQ --> RED
     WRK --> RED
@@ -84,18 +83,17 @@ flowchart LR
 
 ## Apps del producto
 
-| App                            | Rol                                                                   |
-| ------------------------------ | --------------------------------------------------------------------- |
-| `apps/api-server`              | FastAPI: REST/WebSocket/SSE, RBAC, middleware multi-tenant (RLS).     |
-| `apps/orchestrator`            | Asigna tareas listas del DAG a los workers.                           |
-| `apps/workers`                 | Celery (default/heavy/gpu/ingestion/test/review): orquestan runtimes. |
-| `apps/memorizer`               | Indexa memoria (4 scopes) y destila ejecuciones.                      |
-| `apps/personal-assistant`      | Asistente personal por usuario.                                       |
-| `apps/notification-dispatcher` | Entrega notificaciones multicanal.                                    |
-| `apps/webhook-dispatcher`      | Entrega webhooks salientes.                                           |
-| `apps/admin-panel`             | Next.js 14 — System Admin + Tenant Admin (incl. `/admin/docs`).       |
-| `apps/web-app`                 | Next.js 14 — tenants (Kanban, chat, KBs, visor de docs).              |
-| `apps/installer`               | Wizard de bootstrap (Fase 15).                                        |
+| App                            | Rol                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `apps/api-server`              | FastAPI: REST/WebSocket/SSE, RBAC, middleware multi-tenant (RLS).                                                  |
+| `apps/orchestrator`            | Asigna tareas listas del DAG a los workers.                                                                        |
+| `apps/workers`                 | Celery (default/heavy/gpu/ingestion/test/review): orquestan runtimes.                                              |
+| `apps/memorizer`               | Indexa memoria (4 scopes) y destila ejecuciones.                                                                   |
+| `apps/personal-assistant`      | Asistente personal por usuario.                                                                                    |
+| `apps/notification-dispatcher` | Entrega notificaciones multicanal.                                                                                 |
+| `apps/webhook-dispatcher`      | Entrega webhooks salientes.                                                                                        |
+| `apps/admin-panel`             | Next.js 14 — frontend ÚNICO: tenants + System Admin, separados por RBAC y rutas (ADR 0117 c). Incl. `/admin/docs`. |
+| `apps/installer`               | Wizard de bootstrap (Fase 15).                                                                                     |
 
 ## Modelo multi-tenant
 

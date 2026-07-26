@@ -1,6 +1,6 @@
 ---
 title: "ADR 0117: Tres decisiones menores del dominio Proyecto (MCP, validación humana por tarea, web-app)"
-status: proposed
+status: accepted
 date: 2026-07-18
 ---
 
@@ -106,6 +106,23 @@ validación humana es solo por plan (review session al pasar a
 flag por-tarea duplicaría maquinaria. Si el operador prefiere (1), es un plan
 propio (~2-3 d) — no un remiendo.
 
+### Resolución (b) — 2026-07-26: **Opción 2 (corregir CLAUDE.md), aceptada e implementada**
+
+El operador elige la **(2)**. El principio 7 ya no promete
+`task.human_validation_required`: describe las dos vías que SÍ existen —
+políticas de aprobación por categoría de acción sensible (13 categorías, 4
+plantillas) y la tool `ask_human` (ADR 0114)— y dice explícitamente que el flag
+no existe y por qué. Ambas se verificaron en código antes de escribirlo
+(`shared_domain.approval_categories.APPROVAL_CATEGORIES`, `ask_human` cableada
+en dispatch/run-contract/schemas).
+
+Nada de código: el flag nunca tuvo columna. Lo que se retira es una promesa que
+llevaba desde el día uno sin implementación — el tipo de mentira documental que
+sobrevive porque nadie va a comprobarla.
+
+Si algún día se prefiere la (1), es un plan propio (~2-3 d): máquina de revisión
+por-tarea, UI y notificaciones. No un remiendo.
+
 ## (c) `apps/web-app` vacío: consolidar en admin-panel o plan de separación
 
 ### Contexto
@@ -134,11 +151,44 @@ construye.
 **(1)**: consolidar y documentar. (2) solo si aparece el requisito de
 aislamiento de superficie.
 
+### Resolución (c) — 2026-07-26: **Opción 1 (consolidar), aceptada e implementada**
+
+El operador elige la **(1)**. `apps/admin-panel` queda declarado el frontend
+ÚNICO (tenants + System Admin, separados por RBAC y rutas) y `apps/web-app` se
+borra. Se actualizan CLAUDE.md, `docs/01-overview/02-architecture.md` y
+`docs/context/architecture-overview.md` (nodos del Mermaid y sus aristas
+incluidos, que si no quedaban huérfanos).
+
+**El coste NO era «cero código», como decía la opción.** Tirando del hilo
+apareció un fallo real de recuperación ante desastres:
+`Settings.restore_app_services` incluía `web-app` entre los servicios que la
+restauración completa para. Ese servicio no está en NINGÚN compose —ni el
+versionado ni el que genera el instalador (`CORE_SERVICES`)— porque nunca tuvo
+código. Y `_stop_app_stack` hace `docker compose stop <servicios>` y **eleva si
+el código de salida no es 0**, que es justo lo que devuelve compose ante un
+servicio desconocido: **la restauración abortaba en el paso 3, antes de
+restaurar nada**. Solo se manifiesta ejecutándola de verdad, así que llevaba ahí
+desde que se escribió la lista.
+
+Corregido, con test que compara `restore_app_services` contra los servicios que
+el generador del instalador declara (`tests/unit/test_restore_services_exist.py`).
+Retirado también de `apps/installer/lib/preview.ts`, donde reservaba 256 MiB y
+el puerto 3001 para un fantasma.
+
+**Fuera del alcance de este ADR, anotado**: `apps/memorizer`,
+`apps/personal-assistant` y `apps/webhook-dispatcher` **también contienen solo
+`.gitkeep`**. No se borran —su lógica existe y vive embebida
+(`api_server/memorizer/`, `api_server/assistant/`, los workers), así que la
+carpeta puede ser un destino de extracción legítimo— pero CLAUDE.md ya las
+marca como RESERVADAS en vez de listarlas como apps desplegables.
+
 ## Consecuencias
 
-- Este ADR no cambia código por sí mismo; cada resolución del operador se
-  implementa como tarea pequeña (b y c son S; a-opción-2 es S, a-opción-1/3
-  son M/L con plan propio).
-- Mientras esté `proposed`, la UI MCP sigue visible (fachada conocida), el
-  principio 7 sigue impreciso y `apps/web-app` sigue vacío — los tres costes
-  son de honestidad documental, no de fiabilidad del runtime.
+- **Las tres decisiones están resueltas** (a: 2026-07-23; b y c: 2026-07-26).
+  Ninguna requirió el trabajo grande de sus opciones alternativas.
+- La UI MCP ofrece solo transportes que funcionan; el principio 7 describe los
+  mecanismos reales; el frontend documentado es el que existe.
+- Coste real descubierto al implementar (c): el simulacro de recuperación estaba
+  roto por un servicio fantasma. La lección: una divergencia «solo documental»
+  puede tener aristas ejecutables — la lista de servicios de un runbook es
+  código, aunque parezca prosa.

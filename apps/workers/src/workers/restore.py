@@ -17,7 +17,7 @@ that bundle:
      restore BEFORE any destructive command runs (fail closed). Restoring a
      corrupt bundle over a live stack is the worst possible outcome.
   3. **STOP the app stack** — ``docker compose stop`` of the *app* services
-     (api-server, workers, web-app, …) while LEAVING PostgreSQL reachable so the
+     (api-server, workers, admin-panel, …) while LEAVING PostgreSQL reachable so the
      dump can be restored into it. The DB + volume-backing services are NOT
      stopped here; they are stopped/started around the volume restore separately.
   4. **pg_restore** the LOGICAL directory dump into PostgreSQL with ``--clean

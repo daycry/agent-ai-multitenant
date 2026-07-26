@@ -22,7 +22,7 @@ El sistema se opera como un stack **Docker Compose en una sola máquina** (no Ku
 
 6. **Doble Kanban**: vista superior de Planes (gerencial) + vista de Tareas por plan (operativa). NUNCA mostrar un Kanban plano que mezcla tareas de varios planes.
 
-7. **Tests humanos a nivel de plan**, no de tarea. Excepción: `task.human_validation_required=true` para tareas individuales críticas.
+7. **Tests humanos a nivel de plan**, no de tarea. Para exigir un humano en un punto CONCRETO hay dos vías, ambas con granularidad mayor que un flag por tarea: las **políticas de aprobación por categoría de acción sensible** (13 categorías, 4 plantillas — principio 11) y la tool **`ask_human`** (ADR 0114), con la que el propio agente para y pregunta. No existe `task.human_validation_required`: fue una promesa de este documento que nunca tuvo columna ni código, retirada por el ADR 0117 (b) el 2026-07-26.
 
 8. **Documentación obligatoria en `/docs/`** con estructura canónica de 7 carpetas (`01-overview/`, `02-getting-started/`, `03-guides/`, `04-reference/`, `05-architecture-decisions/`, `06-runbooks/`, `07-changelog/`). El Technical Writer agente la mantiene al cierre de cada plan.
 
@@ -40,16 +40,18 @@ El sistema se opera como un stack **Docker Compose en una sola máquina** (no Ku
 agentic-platform/
 ├── CLAUDE.md                        # este archivo
 ├── apps/
-│   ├── api-server/                  # FastAPI + endpoints REST/WebSocket
+│   ├── api-server/                  # FastAPI + REST/WebSocket. Aloja además el
+│   │                                #   memorizer y el asistente personal
 │   ├── orchestrator/                # Asignación de tareas a workers
-│   ├── workers/                     # Celery workers (default/heavy/gpu/test/review)
-│   ├── memorizer/                   # Indexación memoria
-│   ├── notification-dispatcher/
-│   ├── webhook-dispatcher/
-│   ├── personal-assistant/
+│   ├── workers/                     # Celery workers (default/heavy/gpu/test/review).
+│   │                                #   Aloja además el despacho de webhooks
+│   ├── notification-dispatcher/     # Servicio propio
+│   ├── memorizer/                   # RESERVADA (vacía) — vive en api_server/memorizer/
+│   ├── webhook-dispatcher/          # RESERVADA (vacía) — vive en los workers
+│   ├── personal-assistant/          # RESERVADA (vacía) — vive en api_server/assistant/
 │   ├── installer/                   # Wizard UI bootstrap
-│   ├── admin-panel/                 # Frontend Next.js del System Admin
-│   └── web-app/                     # Frontend Next.js de tenants
+│   └── admin-panel/                 # Frontend ÚNICO: tenants + System Admin,
+│                                    #   separados por RBAC y rutas (ADR 0117 c)
 ├── packages/
 │   ├── shared-domain/               # Modelos Pydantic compartidos
 │   ├── shared-db/                   # SQLAlchemy + Alembic
