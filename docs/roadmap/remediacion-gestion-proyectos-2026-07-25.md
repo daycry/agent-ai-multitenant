@@ -615,12 +615,20 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
 #### `task_wf_43` — Las @-menciones tienen efecto (o se retiran)
 
-- [ ] **Título**: parsear las menciones del mensaje del usuario y pasarlas a `pm_decide` como
-      preferencia de especialistas. Si se decide no implementarlo, **retirar la afordancia**
-      del compositor: una mención que no hace nada es peor que no tenerla.
+- [x] _(hecho)_ **Título**: parsear las menciones del mensaje del usuario y pasarlas a
+      `pm_decide` como preferencia de especialistas. Se implementó (no se retiró): la
+      mención **manda** sobre el juicio del modelo y sobre el heurístico de palabras clave,
+      y manda **acotando** — pedir un rol no debe convocar a otros cuatro.
 - **Hallazgo**: A-10 (medio) · **Tiempo**: 0,5 d
-- **Ficheros**: `chat/planning_llm.py:276-343`, `chat/page.tsx` (compositor)
-- **Tests**: unit de que una mención explícita entra en la selección de especialistas.
+- **Ficheros**: `chat/planning_llm.py` (`_mentioned_roles` + precedencia en `pm_decide`),
+  `routers/conversations.py` (`GET /projects/{id}/planning-roles`, nuevo),
+  `schemas/conversations.py`, `chat/page.tsx` (compositor), `e2e/agent-mentions.spec.ts`
+- **Tests**: 7 unit (`test_planning_llm.py`) + 3 de integración del endpoint.
+- **Decisiones**: `ask_user` y `finish_planning` NO se sobreescriben — el segundo es el turno
+  que produce el botón «Generar Plan» y robarlo cuesta más que posponer la mención.
+  Mencionar **solo** al PM es la mención simétrica («contéstame tú»): silencia el empujón
+  determinista. El desplegable ya no hardcodea los nueve roles del enum: lee el equipo REAL,
+  que es el mismo conjunto con el que el servidor intersecta.
 
 #### `task_wf_44` — ADR de replanificación en caliente 🔒 GATED
 

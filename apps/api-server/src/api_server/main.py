@@ -40,6 +40,7 @@ from api_server.routers.conversations import (
     chat_modes_router,
     conversations_router,
     project_conversations_router,
+    project_planning_roles_router,
 )
 from api_server.routers.copilot_device_flow import (
     admin_router as copilot_device_flow_admin_router,
@@ -212,6 +213,7 @@ def _register_routers(app: FastAPI) -> None:
         project_conversations_router,
         conversations_router,
         chat_modes_router,
+        project_planning_roles_router,
         project_plans_router,
         plans_router,
         memories_router,

@@ -65,26 +65,10 @@ interface Message {
   created_at: string;
 }
 
-// Built-in PlanningRoles mirrored from
-// `api_server.chat.planning_graph.PlanningRole`. Used by the @-mention
-// autocomplete (task_03_12) — the operator can address a specific
-// specialist directly from the chat composer.
 // A-01: cuántos mensajes carga el feed. Un turno de planning emite entre 6 y 10
 // (framing del PM → un especialista por rol → síntesis), así que 100 cubre unos
 // diez turnos completos. El endpoint devuelve LOS MÁS RECIENTES.
 const MESSAGE_WINDOW = 100;
-
-const PLANNING_ROLES = [
-  "project_manager",
-  "architect",
-  "backend_dev",
-  "frontend_dev",
-  "qa",
-  "reviewer",
-  "devops",
-  "security",
-  "technical_writer",
-] as const;
 
 interface ModeOption {
   value: string;
@@ -179,6 +163,19 @@ export default function ProjectChatPage() {
     queryFn: () => apiFetch<Conversation[]>(`/projects/${projectId}/conversations`),
     refetchOnWindowFocus: false,
     enabled: Boolean(projectId),
+  });
+
+  // task_wf_43: a quién se puede @-mencionar EN ESTE proyecto. La lista salía
+  // del enum completo, así que ofrecía especialistas que el equipo no tiene: la
+  // mención se enviaba, el servidor la descartaba por no estar en el equipo y el
+  // turno quedaba vacío. La composición del equipo cambia poco, de ahí el
+  // staleTime largo.
+  const planningRolesQuery = useQuery({
+    queryKey: ["planning-roles", projectId],
+    queryFn: () => apiFetch<{ roles: string[] }>(`/projects/${projectId}/planning-roles`),
+    refetchOnWindowFocus: false,
+    enabled: Boolean(projectId),
+    staleTime: 5 * 60_000,
   });
 
   // Auto-select the most recent conversation as soon as the list lands.
@@ -513,6 +510,7 @@ export default function ProjectChatPage() {
           {activeConversation ? (
             <ChatComposer
               disabled={postMessage.isPending}
+              roles={planningRolesQuery.data?.roles ?? []}
               onSubmit={(content) =>
                 postMessage.mutate({
                   conversationId: activeConversation.id,
@@ -777,10 +775,14 @@ function MessageRow({ message }: { message: Message }) {
 // --------------------------------------------------------------------------
 interface ChatComposerProps {
   disabled: boolean;
+  /** Roles del equipo REAL del proyecto (`GET /projects/{id}/planning-roles`).
+   * Vacío mientras carga o si el proyecto no tiene equipo: sin sugerencias es
+   * preferible a sugerir a alguien que no va a contestar. */
+  roles: readonly string[];
   onSubmit: (content: string) => void;
 }
 
-function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
+function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
   const [value, setValue] = useState("");
   // Markdown preview toggle. The edit view keeps the raw <textarea> so @-mention
   // tracking (cursor/onChange) stays intact; preview renders the same markdown
@@ -790,9 +792,7 @@ function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
   // partial mention token ("@" followed by 0+ word-chars, no space).
   const mention = parsePendingMention(value);
 
-  const suggestions = mention
-    ? PLANNING_ROLES.filter((r) => r.startsWith(mention.query.toLowerCase()))
-    : [];
+  const suggestions = mention ? roles.filter((r) => r.startsWith(mention.query.toLowerCase())) : [];
 
   // Take the text+mention to operate on as explicit args rather than
   // relying on the enclosing closure (frontend-admin-panel-4): the click

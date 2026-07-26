@@ -37,7 +37,7 @@ from api_server.auth.deps import (
     schedule_after_commit,
 )
 from api_server.chat.modes import list_chat_modes
-from api_server.chat.responder import schedule_reply
+from api_server.chat.responder import schedule_reply, team_planning_roles
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
@@ -68,6 +68,7 @@ from api_server.schemas.conversations import (
     ConversationUpdateRequest,
     MessageCreateRequest,
     MessageResponse,
+    PlanningRolesResponse,
     to_conversation_response,
     to_message_response,
 )
@@ -81,6 +82,9 @@ conversations_router = APIRouter(prefix="/conversations", tags=["conversations"]
 # read-only que la seccion Persona consume para componer el "prompt efectivo"
 # (rol + modo) sin hardcodear los prompts de modo en el frontend.
 chat_modes_router = APIRouter(prefix="/chat-modes", tags=["conversations"])
+# Quién puede ser @-mencionado en el chat de ESTE proyecto (`task_wf_43`). Va
+# aparte porque el recurso cuelga del proyecto, no de una conversación.
+project_planning_roles_router = APIRouter(prefix="/projects/{project_id}", tags=["conversations"])
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +502,31 @@ async def list_chat_mode_catalog(
     ]
 
 
+# ===========================================================================
+# Planning roles of the project's team (task_wf_43)
+# ===========================================================================
+@project_planning_roles_router.get("/planning-roles", response_model=PlanningRolesResponse)
+async def list_project_planning_roles(
+    project_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanningRolesResponse:
+    """Los roles que el equipo de este proyecto puede poner a hablar en el chat.
+
+    El compositor los usa para el autocompletado de `@`. Antes la lista estaba
+    hardcodeada con los nueve `PlanningRole` del enum, así que ofrecía mencionar
+    a un especialista que el equipo no tiene: el turno salía vacío y la mención
+    parecía rota. Aquí sale el equipo REAL, que es también con el que
+    `pm_decide` intersecta la mención en el servidor — una sola fuente.
+
+    Siempre incluye `project_manager`: es el único rol obligatorio y el que
+    conduce cada turno de planificación.
+    """
+    project = await _verify_project_visible(session, project_id)
+    roles = await team_planning_roles(session, project)
+    return PlanningRolesResponse(roles=sorted(r.value for r in roles))
+
+
 # Keep `ChatMode` reachable from this module so external callers can
 # import all chat-router public surface from one place.
 __all__ = [
@@ -505,4 +534,5 @@ __all__ = [
     "chat_modes_router",
     "conversations_router",
     "project_conversations_router",
+    "project_planning_roles_router",
 ]

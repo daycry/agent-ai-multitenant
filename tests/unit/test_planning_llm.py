@@ -14,6 +14,7 @@ from api_server.chat.planning_graph import (
 )
 from api_server.chat.planning_llm import (
     LLMPlanningModel,
+    _mentioned_roles,
     _normalise_plan_draft,
     _suggest_specialists,
 )
@@ -90,6 +91,110 @@ def test_pm_decide_nudges_invite_for_multidisciplinary_request() -> None:
     assert PlanningRole.BACKEND_DEV in directive.specialists
     assert PlanningRole.SECURITY in directive.specialists
     assert PlanningRole.ARCHITECT in directive.specialists
+
+
+_FULL_TEAM = {
+    PlanningRole.PROJECT_MANAGER,
+    PlanningRole.ARCHITECT,
+    PlanningRole.BACKEND_DEV,
+    PlanningRole.FRONTEND_DEV,
+    PlanningRole.QA,
+    PlanningRole.SECURITY,
+}
+
+
+def test_mentioned_roles_reads_at_tokens_intersected_with_the_team() -> None:
+    available = frozenset({PlanningRole.PROJECT_MANAGER, PlanningRole.QA, PlanningRole.SECURITY})
+    assert _mentioned_roles("@qa revisa esto", available) == (PlanningRole.QA,)
+    # Un rol que el equipo NO tiene no se convoca por mencionarlo.
+    assert _mentioned_roles("@architect ¿qué opinas?", available) == ()
+    # Ni un @ que no es un rol (correos, handles).
+    assert _mentioned_roles("escribe a soporte@example.com", available) == ()
+    assert _mentioned_roles("sin menciones", available) == ()
+    # Mayúsculas y varias menciones en el mismo mensaje.
+    assert set(_mentioned_roles("@QA y @security, mirad esto", available)) == {
+        PlanningRole.QA,
+        PlanningRole.SECURITY,
+    }
+
+
+def test_pm_decide_convenes_a_mentioned_specialist_the_model_ignored() -> None:
+    # El caso que motiva `task_wf_43`: el usuario escribe @qa y el PM contesta solo.
+    # La mención es una instrucción explícita, no una pista: gana.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "lo veo trivial"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state([{"role": "user", "content": "@qa ¿esto cómo lo probarías?"}], _FULL_TEAM)
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.INVITE_SPECIALISTS
+    assert directive.specialists == (PlanningRole.QA,)
+
+
+def test_pm_decide_adds_the_mention_to_the_specialists_the_model_picked() -> None:
+    provider = _FakeProvider('{"intent": "invite_specialists", "specialists": ["architect"]}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state([{"role": "user", "content": "@security repasa el diseño"}], _FULL_TEAM)
+    directive = model.pm_decide(state)
+    assert set(directive.specialists) == {PlanningRole.ARCHITECT, PlanningRole.SECURITY}
+
+
+def test_pm_decide_mentions_win_over_the_keyword_heuristic() -> None:
+    # El heurístico detectaría varias disciplinas por las palabras clave; el
+    # usuario ha pedido UNA. Convocar a los otros cuatro es ignorarle igual que
+    # ignorar la mención: la petición explícita acota, no amplía.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "x"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state(
+        [
+            {
+                "role": "user",
+                "content": "@architect: la API con base de datos, auth con JWT, frontend y tests",
+            }
+        ],
+        _FULL_TEAM,
+    )
+    directive = model.pm_decide(state)
+    assert directive.specialists == (PlanningRole.ARCHITECT,)
+
+
+def test_pm_decide_mentioning_only_the_pm_silences_the_nudge() -> None:
+    # «@project_manager contéstame tú» es la mención simétrica: el usuario
+    # DECLINA la ronda de especialistas que el heurístico convocaría.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "x"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state(
+        [
+            {
+                "role": "user",
+                "content": "@project_manager resúmemelo tú: API, base de datos, auth y tests",
+            }
+        ],
+        _FULL_TEAM,
+    )
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.SPEAK_ALONE
+    assert directive.specialists == ()
+
+
+def test_pm_decide_a_mention_does_not_steal_the_generate_plan_turn() -> None:
+    # `finish_planning` es el turno que produce el adjunto con el botón «Generar
+    # Plan». Convertirlo en una ronda más de especialistas le quitaría el botón
+    # al usuario, que es un precio mayor que el de posponer la mención.
+    provider = _FakeProvider('{"intent": "finish_planning", "rationale": "el plan está"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state([{"role": "user", "content": "@qa cerramos ya"}], _FULL_TEAM)
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.FINISH_PLANNING
+
+
+def test_pm_decide_tells_the_pm_about_the_mention() -> None:
+    # Sin decírselo, el override determinista y el razonamiento del modelo
+    # cuentan historias distintas en el mismo turno.
+    seen: list[list[Message]] = []
+    provider = _FakeProvider('{"intent": "speak_alone"}', seen=seen)
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    model.pm_decide(_state([{"role": "user", "content": "@qa mira esto"}], _FULL_TEAM))
+    assert "qa" in seen[0][0].content
+    assert "mencionado" in seen[0][0].content.lower()
 
 
 def test_pm_decide_keeps_speak_alone_for_trivial_request() -> None:

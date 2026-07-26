@@ -243,6 +243,30 @@ def _suggest_specialists(text: str, available: frozenset[PlanningRole]) -> tuple
     return tuple(sorted(hits, key=lambda r: r.value))
 
 
+# `@rol` tal y como lo inserta el compositor del chat (`@backend_dev `). El
+# `\w+` cubre el guión bajo de los roles compuestos; cualquier otro `@algo`
+# (un correo, un handle) no casa con ningún PlanningRole y se descarta.
+_MENTION_RE = re.compile(r"@(\w+)")
+
+
+def _mentioned_roles(text: str, available: frozenset[PlanningRole]) -> tuple[PlanningRole, ...]:
+    """Roles que el usuario ha mencionado con `@`, intersectados con el equipo.
+
+    A diferencia de :func:`_suggest_specialists`, que ADIVINA a partir de
+    palabras clave, esto es una instrucción explícita del humano — y por eso
+    manda sobre ella (`task_wf_43`). Un rol que el equipo no tiene se descarta
+    en silencio: convocarlo produciría un turno vacío."""
+    hits = set()
+    for raw in _MENTION_RE.findall(text):
+        try:
+            role = PlanningRole(raw.lower())
+        except ValueError:
+            continue
+        if role in available:
+            hits.add(role)
+    return tuple(sorted(hits, key=lambda r: r.value))
+
+
 @dataclass
 class LLMPlanningModel:
     """Adapt an ``LLMProvider`` to the planning sub-graph's ``PlanningModelClient``."""
@@ -275,6 +299,16 @@ class LLMPlanningModel:
 
     def pm_decide(self, state: PlanningState) -> PMDirective:
         available = sorted(r.value for r in state.team_roles if r != PlanningRole.PROJECT_MANAGER)
+        latest_user = next(
+            (
+                str(e.get("content", ""))
+                for e in reversed(state.chat_history)
+                if e.get("role") == "user"
+            ),
+            "",
+        )
+        mentioned = _mentioned_roles(latest_user, state.team_roles)
+        mentioned_specialists = tuple(r for r in mentioned if r != PlanningRole.PROJECT_MANAGER)
         system = (
             "Eres el PROJECT MANAGER de un equipo de desarrollo en una sesión de "
             "PLANIFICACIÓN. " + _PLAN_ONLY_RULE + "\n\n"
@@ -297,6 +331,16 @@ class LLMPlanningModel:
             "especialistas y solo falta cerrar.\n"
             f"Especialistas disponibles: {available or '(ninguno)'}."
         )
+        if mentioned:
+            # Decírselo al modelo además de forzarlo: si no, el override
+            # determinista y el `rationale` cuentan historias distintas del
+            # mismo turno y el usuario lee la contradicción.
+            names = ", ".join(r.value for r in mentioned)
+            system += (
+                f"\nEl usuario ha MENCIONADO explícitamente a: {names}. "
+                "Es una petición directa suya: convócalos "
+                "(o responde tú si solo te ha mencionado a ti)."
+            )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
         if note:
@@ -315,19 +359,44 @@ class LLMPlanningModel:
                     continue
             specialists = tuple(picked)
 
+        # `task_wf_43`: una @-mención es una INSTRUCCIÓN del humano, no una pista,
+        # así que gana tanto al juicio del modelo como al heurístico de abajo — y
+        # gana ACOTANDO: si el usuario pide un rol, convocar a otros cuatro por
+        # palabras clave le ignora igual que no convocar a ninguno.
+        #
+        # Dos intents quedan intactos a propósito: `ask_user` (el PM necesita un
+        # dato que los especialistas tampoco tienen) y `finish_planning` (es el
+        # turno que produce el botón «Generar Plan»; robarlo cuesta más que
+        # posponer la mención un mensaje).
+        if mentioned_specialists:
+            if intent == PMIntent.SPEAK_ALONE:
+                intent = PMIntent.INVITE_SPECIALISTS
+                specialists = mentioned_specialists
+            elif intent == PMIntent.INVITE_SPECIALISTS:
+                specialists = tuple(
+                    sorted(set(specialists) | set(mentioned_specialists), key=lambda r: r.value)
+                )
+            return PMDirective(
+                intent=intent,
+                rationale=str(obj.get("rationale", "")),
+                specialists=specialists,
+            )
+
+        # Mencionar SOLO al PM es la mención simétrica: «contéstame tú». El
+        # usuario ha declinado la ronda, así que el empujón determinista no se
+        # aplica (el modelo ya decidió por su cuenta más arriba).
+        if mentioned:
+            return PMDirective(
+                intent=intent,
+                rationale=str(obj.get("rationale", "")),
+                specialists=specialists,
+            )
+
         # Deterministic collaboration nudge (supervisor/router pattern): the model
         # under-invites, so detect the disciplines THIS request touches and convene the
         # matching specialists instead of letting the PM plan solo. Only on a fresh,
         # multi-disciplinary turn (>=2 detected, no specialist has spoken yet); never
         # overrides ask_user / finish_planning.
-        latest_user = next(
-            (
-                str(e.get("content", ""))
-                for e in reversed(state.chat_history)
-                if e.get("role") == "user"
-            ),
-            "",
-        )
         suggested = _suggest_specialists(latest_user, state.team_roles)
         if intent == PMIntent.SPEAK_ALONE and len(suggested) >= 2 and not state.contributions:
             intent = PMIntent.INVITE_SPECIALISTS

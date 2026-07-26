@@ -3,9 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * E2E for @-mentions in the chat composer (Plan 03 task_03_12).
  *
- * Typing `@` opens an autocomplete with the PlanningRoles; picking
+ * Typing `@` opens an autocomplete with the project's team roles; picking
  * one inserts `@<role> ` into the input. Sending the message POSTs
  * the literal text containing the mention; the chat feed shows it.
+ *
+ * task_wf_43: la lista sale de `GET /projects/{id}/planning-roles` (el equipo
+ * REAL), no del enum entero, así que el mock tiene que servirla.
  */
 
 const PROJECT_ID = "00000000-0000-0000-0000-000000000001";
@@ -38,6 +41,16 @@ async function setup(page: Page): Promise<PostCapture> {
   await page.addInitScript(() => {
     window.localStorage.setItem("agentic.token", "e2e-fake-token");
   });
+
+  await page.route(`**/projects/${PROJECT_ID}/planning-roles`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        roles: ["architect", "backend_dev", "project_manager", "qa"],
+      }),
+    }),
+  );
 
   await page.route(`**/projects/${PROJECT_ID}/conversations`, (route) => {
     if (route.request().method() !== "GET") return route.continue();
@@ -101,10 +114,12 @@ test("typing '@' opens the role autocomplete and picking one inserts the mention
   const suggestions = page.getByTestId("mention-suggestions");
   await expect(suggestions).toBeVisible();
 
-  // All built-in PlanningRoles appear when query is empty.
+  // Todos los roles DEL EQUIPO aparecen con la consulta vacía.
   await expect(page.getByTestId("mention-suggestion-architect")).toBeVisible();
   await expect(page.getByTestId("mention-suggestion-qa")).toBeVisible();
   await expect(page.getByTestId("mention-suggestion-backend_dev")).toBeVisible();
+  // Y uno que el equipo NO tiene no se ofrece: mencionarlo daría un turno vacío.
+  await expect(page.getByTestId("mention-suggestion-security")).toHaveCount(0);
 
   // Pick architect — `@architect ` lands in the buffer and the
   // dropdown closes.
