@@ -1,6 +1,6 @@
 ---
 title: "Mejoras 2026-06: coste por modelo, historial de chat, limpieza de streams y córtex"
-status: in_progress
+status: pending_human_validation
 started_at: 2026-06-23
 blocking_plan: null
 owner: operator
@@ -61,17 +61,37 @@ forma de ver el histórico, cambiar de conversación, ni borrar una.
 
 ---
 
-## Feature 3 — Borrar chat limpia DB + Redis · S · ◑ PARCIAL
+## Feature 3 — Borrar chat limpia DB + Redis · S · ✅ HECHO
 
 **Estado.** Para conversaciones YA está hecho (commit `9df29b4`:
 `delete_conversation_stream` se llama en `delete_conversation` y `clear_messages`).
 El hueco son los otros streams (`doc:{id}` de documentos) que pueden dejar
 huérfanos en Redis.
 
-- [ ] **`delete_document_stream(redis, document_id)`** en `events.py` (mismo patrón que el de conversación).
-- [ ] **Llamarlo** en `knowledge_bases.py::delete_document` tras el soft-delete.
-- [ ] **Verificar** que el DELETE de conversación además hard-borra sus mensajes (hoy quedan bajo una conversación soft-deleted).
-- [ ] **Tests** — `test_delete_document_also_deletes_redis_stream`.
+- [x] **`delete_document_stream(redis, document_id)`** en `events.py` (mismo patrón que el de conversación).
+- [x] **Llamarlo** en `knowledge_bases.py::delete_document` tras el soft-delete.
+- [x] **Verificar** que el DELETE de conversación además hard-borra sus mensajes — sí lo hace
+      (`delete(Message).where(...)`); la conversación queda soft-deleted como marca de auditoría.
+- [x] **Tests** — `tests/unit/test_redis_stream_cleanup.py` (13).
+
+**Cierre (2026-07-26).** Las tres primeras **ya estaban escritas** y sin marcar; lo que faltaba
+de verdad era la cuarta, y no era un detalle: sin test, la llamada de limpieza podía
+desaparecer en un refactor sin que nadie se enterara — el mismo patrón de «mecanismo entregado,
+cero red debajo» que persigue la remediación de 2026-07-25.
+
+Se cubren los dos contratos, y el que más importa es el negativo: la limpieza es _best-effort_
+y **un Redis caído no puede tumbar el borrado del usuario**. Perder un stream huérfano es un
+incordio; perder el borrado es perder una orden explícita.
+
+**Hallazgo del inventario**: el test que enumera las familias de stream —puesto para que una
+nueva no pase inadvertida— encontró a la primera dos que no estaban en el plan.
+`cortex:telemetry:{owner}` está acotado (una por owner, no crece con el uso), pero
+`exec:{id}` **no tenía ni limpieza ni TTL**: una clave en Redis por cada run y para siempre.
+`maxlen` acota lo que pesa cada stream, no cuántos hay. No existe una operación «borrar
+ejecución» de la que colgar la limpieza —son registros inmutables—, así que se le pone un TTL
+deslizante de 7 días, renovado en la misma ida y vuelta que el `xadd`. Es seguro porque el
+stream es solo el canal EN VIVO: el histórico que pinta el visor sale de
+`executions.steps_log`, en PostgreSQL.
 
 ---
 

@@ -34,6 +34,15 @@ EVENT_TASK_STATUS_CHANGED = "task.status_changed"
 # Approximate trimming (`~`) lets Redis trim in efficient batches.
 _MAXLEN = 10_000
 
+# TTL deslizante del stream EN VIVO de una ejecución. `maxlen` acota lo que pesa
+# cada stream, pero no cuántos hay: sin caducidad, la plataforma dejaba una clave
+# `exec:{id}` en Redis **por cada run, para siempre**, y eso crece de forma
+# monótona con el uso. Es seguro caducarlo porque el stream es solo el canal en
+# vivo — el histórico que pinta el visor sale de `executions.steps_log`, en
+# PostgreSQL. Deslizante y no fijo desde la creación: un run largo sigue
+# refrescándolo y no se le corta el directo por debajo.
+_EXECUTION_STREAM_TTL_S = 7 * 24 * 3600
+
 
 async def _publish(redis: Redis, fields: dict[str, str]) -> None:
     try:
@@ -102,10 +111,16 @@ async def publish_execution_event(
     event_type: str,
     payload: dict[str, Any],
 ) -> None:
-    """Emit one event onto an execution's per-run stream (best-effort)."""
+    """Emit one event onto an execution's per-run stream (best-effort).
+
+    Renueva además el TTL del stream en la MISMA ida y vuelta que el `xadd`
+    (pipeline): sin caducidad quedaba una clave por run en Redis para siempre.
+    """
+    key = execution_stream_key(execution_id)
     try:
-        await redis.xadd(
-            execution_stream_key(execution_id),
+        pipe = redis.pipeline()
+        pipe.xadd(
+            key,
             {
                 "type": event_type,
                 "occurred_at": datetime.now(UTC).isoformat(),
@@ -114,6 +129,8 @@ async def publish_execution_event(
             maxlen=_MAXLEN,
             approximate=True,
         )
+        pipe.expire(key, _EXECUTION_STREAM_TTL_S)
+        await pipe.execute()
     except Exception as exc:  # live stream is best-effort, never fail the caller
         _log.warning("api_server.execution_event_publish_failed", error=str(exc))
 

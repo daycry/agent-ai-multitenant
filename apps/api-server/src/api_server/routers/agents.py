@@ -86,7 +86,6 @@ from api_server.schemas.agents import (
     AgentFieldDiff,
     AgentForkRequest,
     AgentMergeRequest,
-    AgentModelOptionsResponse,
     AgentProviderOptionsResponse,
     AgentResponse,
     AgentSkillResponse,
@@ -179,46 +178,6 @@ async def _teams_by_agent(
     for agent_id, team_id, team_name in rows.all():
         out.setdefault(agent_id, []).append((team_id, team_name))
     return out
-
-
-# ---------------------------------------------------------------------------
-# GET /agents/model-options — modelos por kind para los selectores de modelo
-# ---------------------------------------------------------------------------
-# DEBE declararse ANTES de `GET /{agent_id}`, o "model-options" se intentaría
-# parsear como un UUID de agente. Tenant-accesible (require_tenant_member): los
-# proveedores LLM son platform-global (sin secretos), leídos en la sesión admin
-# como hace `/assistant/model/options`. Por kind se exponen SOLO los modelos del
-# proveedor que el dispatch resolverá (el más nuevo activo), igual que el
-# endpoint System-Admin de platform-settings.
-@router.get("/model-options", response_model=AgentModelOptionsResponse)
-async def get_agent_model_options(
-    _: AuthPrincipal = Depends(require_tenant_member),
-) -> AgentModelOptionsResponse:
-    from api_server.assistant.model_config import list_available_models_for_provider
-    from api_server.db.llm_providers import (
-        LLM_PROVIDER_KINDS,
-        REASONING_OPTIONS_BY_KIND,
-        list_active_llm_providers_by_kind,
-    )
-    from api_server.db.session import get_admin_sessionmaker
-
-    by_kind: dict[str, list[str]] = {}
-    sessionmaker = get_admin_sessionmaker()
-    async with sessionmaker() as session:
-        for kind in LLM_PROVIDER_KINDS:
-            rows = await list_active_llm_providers_by_kind(session, kind)
-            if not rows:
-                continue
-            models = await list_available_models_for_provider(session, rows[0])
-            if models:
-                by_kind[kind] = sorted(set(models))
-    # ADR 0070: opciones de razonamiento por proveedor, solo para los activos.
-    reasoning_by_kind = {
-        kind: list(REASONING_OPTIONS_BY_KIND[kind])
-        for kind in by_kind
-        if kind in REASONING_OPTIONS_BY_KIND
-    }
-    return AgentModelOptionsResponse(by_kind=by_kind, reasoning_by_kind=reasoning_by_kind)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 ---
 title: "Plan — Unificación de selección+resolución de modelo por provider_id (ADR 0082)"
 date: 2026-06-25
-status: in_progress
+status: pending_human_validation
 adr: "0082"
 docs_language: es
 ---
@@ -117,7 +117,7 @@ model}` cuenta como **pineado** (no heredar). TDD.
   > **Verificado (2026-07-08)**: las tres superficies usan `PersonaModelFields`
   > (`components/teams/adopt-team-dialog.tsx:29,228` y ambos `agents/*.tsx`), que internamente
   > renderiza el `ProviderModelSelects` compartido.
-- [ ] **Converger** chat/asistente/córtex/platform-defaults al MISMO componente compartido
+- [x] **Converger** chat/asistente/córtex/platform-defaults al MISMO componente compartido
       (hoy son variantes equivalentes) para que sea literalmente uno solo. (Si el coste es alto,
       dejar asistente/córtex como follow-up — ya son por-provider correctos.)
   > **Estado (2026-07-08)**: chat (`chat-model-section.tsx`) y asistente
@@ -125,14 +125,39 @@ model}` cuenta como **pineado** (no heredar). TDD.
   > platform-defaults siguen con variante propia (`settings/platform-defaults/cortex-model-section.tsx`
   >
   > - `GET /owner/cortex/model-options`). Follow-up de prioridad baja permitido por este item.
+  >
+  > **Cierre (2026-07-26)**: se comparte la REGLA, no el widget. Los componentes NO se fusionan
+  > y el motivo es estructural, no pereza: el del córtex vive tras `require_system_owner` y lee
+  > `/owner/cortex/model-options`, mientras que el compartido lee `/agents/provider-options`,
+  > que exige pertenencia a un tenant — y el córtex es **tenant-less por diseño** (ADR 0074).
+  > Además no tiene temperatura. Forzarlos en un componente significaría parametrizar origen de
+  > datos, ámbito de autorización y forma del valor para servir a un llamante que difiere de
+  > verdad.
+  >
+  > Lo que sí estaba duplicado —y es lo que se ha extraído a `lib/model-selection.ts` con 9
+  > tests— era una regla no obvia, escrita **dos veces byte a byte**: conservar en el
+  > desplegable un `reasoning_effort` guardado que el proveedor ya no ofrece. Sin ella el
+  > `<select>` no casa con ningún `<option>` y el siguiente guardado **cambia la configuración
+  > en silencio**. Es justo el tipo de regla que diverge sin que nadie lo note, porque solo se
+  > manifiesta en una configuración concreta.
 - [x] **Borrar `DefaultModelSection`** (huérfano, confirmado sin consumidores).
   > **Verificado**: 0 referencias a `DefaultModelSection` en `apps/admin-panel/`.
 
 ## Fase 4 — Limpieza + deprecación
 
-- [ ] Deprecar/eliminar `GET /agents/model-options` si queda sin consumidores (o dejar el
-      arreglo de union como red de seguridad). Decidir en su momento.
-- [ ] Changelog + actualizar `04-reference` afectados.
+- [x] **`GET /agents/model-options` RETIRADO** (con su `AgentModelOptionsResponse`): 67 líneas.
+      Cero llamantes en todo el repo, comprobado. Primero lo marqué `deprecated=True` por
+      prudencia —«no rompamos un SDK de ahí fuera»— y al verificarlo resultó falso: los SDK se
+      generan solo del OpenAPI **v1** (`build_v1_openapi()`) y esta ruta vive en la superficie
+      de administración, fuera de `/api/v1`. Sin contrato que proteger y con cero consumidores,
+      dejarlo en pie solo conservaba una forma de elegir el proveedor equivocado: agregaba por
+      KIND y de dos filas del mismo kind (ollama-local vs ollama-cloud) escondía una.
+      Tests en `tests/unit/test_model_options_deprecation.py` (4) para que no vuelva por
+      descuido — ni él ni el patrón «por kind» con otro nombre.
+- [x] Changelog + `04-reference`. De paso, una imprecisión del `domain-model.md` que invitaba a
+      leer una violación del principio 9 donde no la hay: el sync de precios lee el JSON de
+      LiteLLM **como feed de datos**, no lo usa como proveedor. El código ya lo decía; la
+      referencia, no.
 
 ## Backward-compat (transversal, en TODA fase)
 

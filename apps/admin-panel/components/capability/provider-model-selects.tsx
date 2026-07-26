@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useLang } from "@/lib/lang-context";
+import { reasoningLabel as labelFor, selectableReasoningOptions } from "@/lib/model-selection";
 
 export interface ProviderOption {
   id: string;
@@ -76,16 +77,13 @@ export function ProviderModelSelects({
   // Si el modelo guardado no está en la lista (legacy/custom), lo anteponemos.
   const modelOptions =
     value.model && !models.includes(value.model) ? [value.model, ...models] : models;
-  const reasoningOpts = selected?.reasoning_options ?? [];
-  const reasoningSelectable =
-    value.reasoning_effort &&
-    value.reasoning_effort !== "off" &&
-    !reasoningOpts.includes(value.reasoning_effort)
-      ? [value.reasoning_effort, ...reasoningOpts]
-      : reasoningOpts;
+  const reasoningSelectable = selectableReasoningOptions(
+    value.reasoning_effort,
+    selected?.reasoning_options ?? [],
+  );
   // claude_sdk ignora temperature; los demás la envían.
   const tempApplies = selected ? selected.kind !== "claude_sdk" : true;
-  const reasoningLabel = (opt: string) => (opt === "off" ? t("Desactivado", "Off") : opt);
+  const reasoningLabel = (opt: string) => labelFor(opt, t("Desactivado", "Off"));
   const err = (field: "provider" | "model" | "temperature") => errorFor?.(field) ?? null;
 
   return (

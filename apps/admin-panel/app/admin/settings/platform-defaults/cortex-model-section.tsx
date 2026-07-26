@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
+import { reasoningLabel, selectableReasoningOptions } from "@/lib/model-selection";
 import {
   clearCortexModel,
   getCortexModel,
@@ -45,10 +46,6 @@ function modelsFor(providers: CortexModelOption[], providerId: string): string[]
 function errorText(error: unknown): string {
   if (error instanceof ApiError) return error.body;
   return String(error);
-}
-
-function reasoningLabel(opt: string): string {
-  return opt === "off" ? "Desactivado" : opt; // low / medium / high / xhigh / max
 }
 
 export function CortexModelSection() {
@@ -87,10 +84,7 @@ export function CortexModelSection() {
   const models = providerId ? modelsFor(providers, providerId) : [];
   const kind = providers.find((p) => p.provider_id === providerId)?.kind;
   const reasoningOptions = kind ? (reasoningByKind[kind] ?? []) : [];
-  const reasoningSelectable =
-    reasoningEffort && reasoningEffort !== "off" && !reasoningOptions.includes(reasoningEffort)
-      ? [reasoningEffort, ...reasoningOptions]
-      : reasoningOptions;
+  const reasoningSelectable = selectableReasoningOptions(reasoningEffort, reasoningOptions);
 
   const saveMutation = useMutation<CortexModel, ApiError>({
     mutationFn: () => setCortexModel(providerId, modelId, reasoningEffort),

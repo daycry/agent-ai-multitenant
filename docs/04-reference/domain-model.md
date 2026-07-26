@@ -359,7 +359,10 @@ nuevos en `TaskStatus`.
   catálogo de precios con vigencia (effective-dated), `modality`,
   `provider` (familia: "anthropic", "openai"…) y desde Plan 11.2
   **`provider_id`** (FK nullable a `llm_providers`, SET NULL). Alimentado
-  por el sync LiteLLM **limitado a las familias de proveedores activos**.
+  por el sync **limitado a las familias de proveedores activos**, que lee el
+  JSON de precios de la comunidad LiteLLM **como simple feed de datos**: no
+  convierte a LiteLLM en un proveedor del catálogo, que sigue cerrado a los
+  cuatro del principio 9 / ADR 0021.
 - **`exchange_rates`** (platform-global, read-open) — tipos de cambio FX
   para convertir coste a la moneda canónica (USD). `price_snapshots` y
   los presupuestos consumen ambos. Ver [pricing.md](./pricing.md).
