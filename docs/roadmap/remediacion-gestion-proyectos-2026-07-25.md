@@ -1015,21 +1015,23 @@ Justificación en §7 del informe.
 
 #### `task_wf_72` — Preflight del plan antes de aprobar
 
-- [ ] **Título**: semáforo de solo-lectura antes del botón de aprobar, componiendo resolvedores
-      que **ya existen**: asignación por rol (`sync_to_kanban._resolve_assignment` en modo dry),
-      desglose de coste, validación del DAG y cobertura de criterios de aceptación. Salida:
-      «3 tareas sin agente elegible, 2 sin criterios, coste estimado 47 €, camino crítico de 8
-      tareas sin paralelismo».
+- [x] _(hecho)_ **Título**: semáforo de solo-lectura antes del botón de aprobar, componiendo
+      resolvedores que **ya existen**: asignación por rol en modo seco, DAG, criterios de
+      aceptación y desglose de coste.
 - **Hallazgo**: N-3 (feature) · **Tiempo**: 1,5 d
-- **Depende de**: nada, pero **se potencia mucho con `task_wf_42`** (editor del spec): detectas
-  el problema y lo corriges sin cambiar de pantalla.
-- **Ficheros**: `routers/plans.py` (endpoint nuevo), `chat/sync_to_kanban.py:251-288` (extraer
-  la resolución a un modo sin escritura), `chat/cost.py`, `chat/dag.py`,
-  `plans/[planId]/plan-lifecycle-section.tsx`
-- **Tests**: integración del preflight sobre un plan con rol inexistente → lo reporta sin
-  escribir nada; unit de que no muta el plan.
-- **Criterio de aceptación**: aprobar un plan con tareas sin agente deja de ser una sorpresa
-  posterior.
+- **Ficheros**: `api_server/plan_preflight.py` (nuevo, PURO), `routers/plans.py`
+  (`GET /plans/{id}/preflight`), `plans/[planId]/plan-preflight-section.tsx` (nuevo)
+- **La decisión que lo hace fiable**: usa los MISMOS resolvedores que deciden en producción.
+  Un preflight que dijera algo distinto de lo que luego hace el sistema sería peor que no
+  tenerlo.
+- **Qué reporta**: rol sin agente en el equipo (**serio** — se materializa sin agente y lo
+  reparte la política de carga, no el rol pedido), ciclo en el DAG (**serio**), tarea sin
+  criterios (**aviso** — el reviewer certifica contra ellos, y sin ellos juzga contra la
+  descripción y rechaza en bucle), plan en fila india (**aviso** — tarda lo mismo con un
+  agente que con diez), más camino crítico, paralelismo máximo y coste.
+- **No bloquea la aprobación**: informa. Y **no muta nada** — hay test.
+- **Tests**: 14 unit + 6 de render. Uno fija que un plan limpio lo DIGA: el silencio se lee
+  como «no se ha comprobado».
 
 ---
 

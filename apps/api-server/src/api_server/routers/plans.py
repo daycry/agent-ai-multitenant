@@ -66,7 +66,11 @@ from api_server.chat.plan_state_machine import (
     SameSignerError,
     assert_generic_put_transition,
 )
-from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
+from api_server.chat.responder import (
+    _resolve_chat_provider,
+    resolve_chat_model_config,
+    team_role_agents,
+)
 from api_server.chat.sync_to_kanban import SyncScopeError, sync_plan_to_kanban
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
 from api_server.db.conversation import Conversation, Message
@@ -82,6 +86,7 @@ from api_server.db.review_session_repo import (
 )
 from api_server.events import publish_task_status_changed
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.plan_preflight import run_plan_preflight
 from api_server.plan_progress import TaskSnapshot, compute_plan_progress
 from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
@@ -792,6 +797,58 @@ async def get_plan_preview_session(
             status_code=status.HTTP_404_NOT_FOUND, detail="no live preview for this plan"
         )
     return _plan_preview_payload(sessions[0])
+
+
+@plans_router.get("/{plan_id}/preflight")
+async def get_plan_preflight(
+    plan_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, object]:
+    """Semáforo de solo-lectura antes de aprobar (`task_wf_72`).
+
+    Aprobar un plan era un acto de fe: una tarea con un rol que el equipo no
+    tiene, otra sin criterios, un camino crítico que serializa todo el
+    trabajo… todo eso aparecía DESPUÉS, con el plan ya corriendo y costando
+    desbloquear tareas una a una.
+
+    No valida nada nuevo: compone en seco los resolvedores que ya deciden en
+    producción (la asignación por rol de `sync_to_kanban`, el DAG de
+    `chat.dag`) más el desglose de coste. Que sean los MISMOS es el punto —
+    un preflight que dijera algo distinto de lo que luego hace el sistema
+    sería peor que no tenerlo.
+
+    **No muta nada** y **no bloquea la aprobación**: informa. La decisión sigue
+    siendo del humano; lo que cambia es que ahora la toma sabiendo qué le va a
+    costar en intervenciones manuales.
+    """
+    plan = await _load_plan(session, plan_id)
+    project = (
+        await session.execute(select(Project).where(Project.id == plan.project_id))
+    ).scalar_one_or_none()
+    role_agents = await team_role_agents(session, project)
+    report = run_plan_preflight(plan.specification or {}, role_agents=role_agents)
+    payload = report.as_dict()
+    # El coste estimado va aparte del semáforo: no es un problema, es el
+    # número que el humano necesita para decidir si le compensa.
+    tenant_rate, tenant_currency = await _resolve_tenant_rate(session, plan.tenant_id)
+    human = compute_human_cost(
+        plan.specification or {},
+        hourly_rate=tenant_rate if tenant_rate is not None else DEFAULT_HOURLY_RATE_EUR,
+        currency=tenant_currency or "EUR",
+    )
+    ai = await _compute_plan_ai_cost(session, plan)
+    # Las dos monedas van SEPARADAS, no sumadas: la estimación humana es EUR y
+    # mide horas de persona; la de IA es USD y mide gasto de tokens. Un número
+    # único que las mezclara sería inventado (decisión de `task_wf_30`).
+    payload["cost"] = {
+        "human_hours": str(human.total_hours),
+        "human_cost": str(human.total_cost),
+        "human_currency": human.currency,
+        "ai_usd_min": str(ai.cost_min),
+        "ai_usd_max": str(ai.cost_max),
+    }
+    return payload
 
 
 @plans_router.get("/{plan_id}/retro")

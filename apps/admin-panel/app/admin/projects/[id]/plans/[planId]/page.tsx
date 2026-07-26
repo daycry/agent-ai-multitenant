@@ -43,6 +43,7 @@ import { CostBreakdownSection } from "./plan-cost-section";
 import { PlanCodeDiffSection } from "./plan-code-diff-section";
 import { PlanDeepLinksSection } from "./plan-deep-links-section";
 import { PlanLifecycleSection } from "./plan-lifecycle-section";
+import { PlanPreflightSection } from "./plan-preflight-section";
 import { PlanRetroSection } from "./plan-retro-section";
 import { PlanSpecEditorSection } from "./plan-spec-editor-section";
 import { PlanStatusHeader } from "./plan-status-header";
@@ -116,6 +117,9 @@ export default function PlanDetailPage() {
       {/* task_wf_30: progreso, PR y coste real ARRIBA — el estado del plan se
           lee sin desplazarse, en vez de estar repartido por cuatro secciones. */}
       <PlanStatusHeader planId={plan.id} />
+      {/* task_wf_72: el semáforo va JUSTO ENCIMA de los botones de
+          aprobación — un aviso que hay que buscar más abajo llega tarde. */}
+      <PlanPreflightSection planId={plan.id} status={plan.status} />
       <PlanLifecycleSection planId={plan.id} status={plan.status} />
       <HumanValidationSection planId={plan.id} status={plan.status} />
       {/* ADR 0130: preview on-demand de la rama del plan (24h, sin veredicto) —
