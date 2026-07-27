@@ -49,6 +49,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     builtin_agent = uuid4()
     builtin_tool_a = uuid4()
     builtin_tool_b = uuid4()
+    unwired_builtin_tool = uuid4()
     custom_tool = uuid4()
     foreign_custom_tool = uuid4()
     mcp_tool = uuid4()
@@ -135,6 +136,18 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             builtin_tool_b,
             tenant,
         )
+        # A catalog builtin with NO runtime executor (`summarize_text`, one of
+        # the three g4 named). The catalog offers it — honestly flagged as not
+        # executable — but assigning it must 422: T4 de `tools-y-cierre-plan-fixes`.
+        await conn.execute(
+            "INSERT INTO tools"
+            " (id, tenant_id, name, description, category,"
+            "  implementation_type, security_level, is_builtin)"
+            " VALUES ($1, $2, 'summarize_text', 'summarize', 'knowledge',"
+            "         'builtin', 'safe', true)",
+            unwired_builtin_tool,
+            tenant,
+        )
         # Custom tool owned by the caller's tenant.
         await conn.execute(
             "INSERT INTO tools"
@@ -177,6 +190,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         "builtin_agent": builtin_agent,
         "builtin_tool_a": builtin_tool_a,
         "builtin_tool_b": builtin_tool_b,
+        "unwired_builtin_tool": unwired_builtin_tool,
         "custom_tool": custom_tool,
         "foreign_custom_tool": foreign_custom_tool,
         "mcp_tool": mcp_tool,
@@ -465,6 +479,52 @@ async def test_duplicate_tool_id_is_422(configured_app, migrations_pg_dsn: str) 
             },
         )
         assert r.status_code == 422, r.text
+
+
+# ---------------------------------------------------------------------------
+# A catalog builtin with no runtime executor is NOT assignable (→ 422).
+# T4 de `tools-y-cierre-plan-fixes` (g4): la mitad de comportamiento del
+# candado estructural `tests/unit/test_catalog_executor_parity.py`. Los seeds
+# ya no cuelan tools muertas; esta es la otra puerta, la del operador.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_cannot_assign_unwired_builtin(configured_app, migrations_pg_dsn: str) -> None:
+    seed = await _seed(migrations_pg_dsn)
+    token = await _mint(seed["admin_user"], seed["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        r = await client.put(
+            f"/agents/{seed['local_agent']}/tools",
+            headers=headers,
+            json={"tools": [{"tool_id": str(seed["unwired_builtin_tool"])}]},
+        )
+        assert r.status_code == 422, r.text
+        # El motivo tiene que nombrar la tool: un 422 opaco manda al operador a
+        # adivinar por qué el catálogo le ofrece algo que no puede asignar.
+        assert "summarize_text" in r.json()["detail"]
+
+        # Y no se persiste nada (el set declarativo es transaccional).
+        r = await client.get(f"/agents/{seed['local_agent']}/tools", headers=headers)
+        assert r.json() == []
+
+        # Mezclada con una wired tampoco pasa: el rechazo es del conjunto entero,
+        # no un filtrado silencioso que dejaría al operador creyendo que asignó dos.
+        r = await client.put(
+            f"/agents/{seed['local_agent']}/tools",
+            headers=headers,
+            json={
+                "tools": [
+                    {"tool_id": str(seed["builtin_tool_a"])},
+                    {"tool_id": str(seed["unwired_builtin_tool"])},
+                ]
+            },
+        )
+        assert r.status_code == 422, r.text
+        r = await client.get(f"/agents/{seed['local_agent']}/tools", headers=headers)
+        assert r.json() == []
 
 
 # ---------------------------------------------------------------------------
