@@ -17,6 +17,15 @@ gated: false
 
 # Córtex F2 — Modelo afectivo computacional + Panel de Mente
 
+> **Auditoría 2026-07-27 — las casillas de este plan se verificaron una a una
+> contra el código.** Las marcadas `[x]` lo están con evidencia `file:line` y una
+> segunda pasada adversarial; las que siguen sin marcar tienen su hueco concreto
+> descrito en
+> [`gaps-cortex-2026-07-27.md`](gaps-cortex-2026-07-27.md) (informe:
+> [`auditoria-cortex-2026-07-27.md`](auditoria-cortex-2026-07-27.md)).
+> Antes de implementar una casilla sin marcar, **abre el fichero**: la pasada
+> adversarial dio al menos un falso positivo comprobado.
+
 > **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). El
 > banner "GATED — bloqueado por F1 sin código" quedó congelado desde el commit de diseño `cf8f7cd`;
 > F1 SÍ existe y F2 se implementó encima: `cortex/affective.py`, `affect_store.py`, `affect_cache.py`,
@@ -73,7 +82,7 @@ Columnas clave:
 
 ## FASE A — Migración + modelo ORM de `cortex_affect_snapshots`
 
-- [ ] **Test de migración up/down + invariantes de tabla**
+- [x] **Test de migración up/down + invariantes de tabla**
   - Crear `tests/integration/test_cortex_affect_migration.py`.
   - TDD: escribe test que (a) `alembic upgrade head` crea `cortex_affect_snapshots` con las columnas y los 3 índices; (b) inserta dos snapshots con `source_turn_id` distinto y verifica que un segundo INSERT con el MISMO `source_turn_id` viola `uq_cortex_affect_snapshot_per_turn`; (c) `alembic downgrade -1` elimina la tabla; (d) la tabla NO tiene política RLS (es tenant-less, accedida por BYPASSRLS) — assert vía `pg_class.relrowsecurity = false`.
   - Falla (tabla no existe) → implementa migración → pasa → commit.
@@ -87,30 +96,30 @@ Columnas clave:
 
 ## FASE B — Motor PAD determinista (código puro, FUERA del LLM)
 
-- [ ] **`PADState`, `Drives` y constantes de dinámica**
+- [x] **`PADState`, `Drives` y constantes de dinámica**
   - TDD: crear `apps/api-server/tests/unit/test_cortex_affective.py`; test que construye `PADState(valence, arousal, dominance, intensity)` y `Drives(curiosity, bonding, coherence, competence)` y verifica que el constructor **clampa** cada eje a su rango (`valence/dominance∈[-1,1]`, resto `∈[0,1]`).
   - Falla (módulo no existe) → implementa dataclasses frozen + clamps → pasa → commit.
   - Ficheros: crear `apps/api-server/src/api_server/assistant/cortex_affective.py`. Dataclasses `frozen=True`; helper `_clamp(x, lo, hi)`; constantes `DECAY_HALF_LIFE_S` (emoción→baseline), `MOOD_EWMA_ALPHA=0.98` (ADR 0075), `DRIVE_DECAY_PER_HOUR`, `MOOD_FLOOR`/`MOOD_CEIL` (evitar "depresión/manía"), `BASELINE_MAX_DELTA_PER_REFLECTION` (clamp del set-point, lo usará F3).
   - Aceptación: rangos garantizados por construcción; valores fuera de rango se recortan, no lanzan.
 
-- [ ] **`decay_emotion(state, baseline, elapsed_s)` — decay lazy hacia baseline**
+- [x] **`decay_emotion(state, baseline, elapsed_s)` — decay lazy hacia baseline**
   - TDD: test que con `elapsed_s=0` devuelve el estado igual; con `elapsed_s` grande converge al `baseline`; es monótono hacia el baseline y nunca lo cruza (homeostasis). Test de propiedad: tras `2*half_life` la distancia al baseline es ≈1/4.
   - Implementa decay exponencial por eje hacia el baseline (set-point), determinista.
   - Aceptación: convergencia correcta y estable; sin oscilación.
 
-- [ ] **`apply_event(state, delta, baseline)` — update por evento + clamps**
+- [x] **`apply_event(state, delta, baseline)` — update por evento + clamps**
   - TDD: test que aplicar un `delta` positivo sube valence pero recorta al techo; `delta` cero deja el estado intacto (camino fail-open); `intensity` sube con la magnitud del delta y decae con el tiempo.
   - Aceptación: el delta del distilador se integra de forma determinista y siempre clampeada.
 
-- [ ] **`update_mood(mood, emotion)` — EWMA lento + piso/techo**
+- [x] **`update_mood(mood, emotion)` — EWMA lento + piso/techo**
   - TDD: test que `mood' = α·mood + (1-α)·emotion` con `α=0.98`; tras muchas iteraciones con emoción extrema, el mood se satura en `MOOD_FLOOR`/`MOOD_CEIL`, nunca alcanza el extremo de la emoción.
   - Aceptación: el mood se mueve lento y queda dentro de los límites de temperamento.
 
-- [ ] **`decay_drives(drives, elapsed_s)` + `satisfy_drive(drives, name, amount)`**
+- [x] **`decay_drives(drives, elapsed_s)` + `satisfy_drive(drives, name, amount)`**
   - TDD: test que los drives decaen hacia 0 con el tiempo (motor de la curiosidad) y `satisfy_drive` los sube clampeado a `[0,1]`; un drive desconocido es no-op.
   - Aceptación: drives observables y saciables de forma determinista (su capacidad de DISPARAR comportamiento llega en F4; aquí son estado).
 
-- [ ] **`derive_mood_label(mood)` — etiqueta categórica SOLO-UI (ES/EN)**
+- [x] **`derive_mood_label(mood)` — etiqueta categórica SOLO-UI (ES/EN)**
   - TDD: test parametrizado con cuadrantes PAD canónicos → etiqueta esperada (p.ej. valence alto + arousal alto ⇒ "alegría"/"joy"; valence bajo + arousal bajo ⇒ "abatimiento"/"down"); idioma vía parámetro `language ∈ {es,en}`.
   - Aceptación: mapeo PAD→label determinista, bilingüe, documentado como derivado (no fuente de verdad).
 
@@ -120,20 +129,20 @@ Columnas clave:
 
 ## FASE C — Estado vivo en Redis (decay lazy en lectura)
 
-- [ ] **`CortexAffectStore` (Redis) — read aplica decay, write persiste timestamp**
+- [x] **`CortexAffectStore` (Redis) — read aplica decay, write persiste timestamp**
   - TDD: crear `apps/api-server/tests/unit/test_cortex_affect_store.py` con `fakeredis`; test que `write(owner, state, mood, drives)` guarda en `cortex:affect:{owner}` (JSON) con `updated_at`; `read(owner)` recupera y **aplica `decay_emotion`/`decay_drives`** según el tiempo transcurrido desde `updated_at` (decay lazy, no timer); owner sin estado → devuelve el baseline neutro inicial.
   - Falla → implementa → pasa → commit.
   - Ficheros: crear `apps/api-server/src/api_server/assistant/cortex_affect_store.py`. Clave `cortex:affect:{owner_user_id}`; usa `get_redis()` de `auth/deps.py`; opcional TTL largo (el decay lazy hace que un estado viejo lea ≈baseline igualmente).
   - Aceptación: el dial PAD que verá el endpoint refleja el decay sin proceso de fondo; aislamiento por clave-por-owner.
 
-- [ ] **Frame de telemetría + stream Redis `cortex:telemetry:{owner}`**
+- [x] **Frame de telemetría + stream Redis `cortex:telemetry:{owner}`**
   - TDD: añade test en el store: `publish_affect_frame(owner, frame)` hace `xadd` en `cortex:telemetry:{owner}` con `maxlen` aproximado (patrón `events.py`); `delete_affect_streams(owner)` limpia (best-effort).
   - Ficheros: extender `apps/api-server/src/api_server/events.py` con `cortex_telemetry_stream_key(owner_user_id)` + `publish_cortex_affect_event(redis, owner_user_id, *, payload)` (best-effort, nunca lanza), espejo de `publish_conversation_event`.
   - Aceptación: el WS podrá tailear el stream; publicación tolerante a fallos.
 
 ## FASE D — Distilador afectivo asíncrono (Celery, Ollama local, fail-open)
 
-- [ ] **Worker `cortex_distill_affect` — núcleo async testeable con LLM inyectable**
+- [x] **Worker `cortex_distill_affect` — núcleo async testeable con LLM inyectable**
   - TDD: crear `apps/workers/tests/test_cortex_affect_task.py`; test del core `_distill_affect_async(turn_id, *, settings, llm_factory, affective)` con un `llm_factory` falso que devuelve un JSON `{delta:{valence,arousal,dominance,intensity}, reason, drive_satisfied}`: verifica que (a) lee el turno de `cortex_turns` filtrando `owner_user_id`; (b) llama al motor `apply_event`/`update_mood`/`satisfy_drive`; (c) escribe el estado en Redis y un snapshot en `cortex_affect_snapshots` (idempotente por `source_turn_id`); (d) publica el frame de telemetría; (e) escribe la episódica emocional en `memory_entries` vía `persist_memory_candidates` DIRECTO (metadata*.cortex=true, metadata*.emotion=…), NO vía `workers/memorizer.py`.
   - **Test fail-open**: con un `llm_factory` que lanza/timeout ⇒ delta=0, el snapshot se escribe con el estado decaído y `appraisal_reason=NULL`, y la task devuelve `ok:fail_open` (no propaga). Espejo de la tolerancia de `workers/memorizer.py`.
   - **Test idempotencia**: re-entrega del mismo `turn_id` no duplica snapshot (captura `UniqueViolation` → `ok:already_distilled`).
@@ -146,26 +155,26 @@ Columnas clave:
   - Ficheros: extender `apps/workers/src/workers/config.py` (dos `Field` nuevos, sección "Córtex F2"); añadir `"workers.cortex_affect"` a `imports` en `apps/workers/src/workers/celery_app.py`.
   - Aceptación: la task se registra al boot; URL/modelo operator-tunable, default local sin egress.
 
-- [ ] **Trigger post-turno `trigger_cortex_distill_affect(turn_id)`**
+- [x] **Trigger post-turno `trigger_cortex_distill_affect(turn_id)`**
   - TDD: test que con un `turn_id` válido encola `cortex_distill_affect` en la cola `default`; un broker caído (mock que lanza) es swallowed y devuelve `False` (nunca rompe el turno). Espejo de `trigger_memorize` en `workers/memorizer.py`.
   - Ficheros: añadir `trigger_cortex_distill_affect` en `apps/workers/src/workers/cortex_affect.py`; **cablear la llamada en el endpoint del turno del córtex de F1** (`apps/api-server/src/api_server/routers/cortex.py`, fichero creado en F1) justo después de persistir el turno — fire-and-forget, fuera del hot-path. (Si F1 expone un seam de "post-turn hook", usarlo; si no, llamar el trigger tras el commit del turno.)
   - Aceptación: el appraisal sale del hot-path; el dial se actualiza ~1-2s tras la respuesta (aceptado por ADR 0075).
 
 ## FASE E — Lectura afectiva en el siguiente turno (mood sesga el prompt)
 
-- [ ] **`augment_system_prompt_with_affect(base, *, mood_label, drives, language)`**
+- [x] **`augment_system_prompt_with_affect(base, *, mood_label, drives, language)`**
   - TDD: crear `apps/api-server/tests/unit/test_cortex_affect_prompt.py`; test que con un mood "calmado" inyecta una sección honesta ("tu estado afectivo computacional actual es…") que sesga el TONO (no inventa sentimientos), bilingüe; con drives bajos añade una pista de curiosidad; sin estado, devuelve `base` intacto. Modela el patrón de `assistant/memory.py::augment_system_prompt`.
   - Ficheros: extender `apps/api-server/src/api_server/assistant/cortex_affective.py` (o un helper junto al prompt del córtex creado en F1). Devolver también el `reasoning_effort` sugerido (modulación ADR 0070) como dato, sin forzar.
   - Aceptación: el prompt del siguiente turno refleja el mood/drives leídos de Redis; copy honesto; nunca bloquea.
 
-- [ ] **Cableado de lectura afectiva en la percepción del turno del córtex (F1)**
+- [x] **Cableado de lectura afectiva en la percepción del turno del córtex (F1)**
   - TDD: test de integración (en la suite del córtex de F1) que un turno tras un snapshot afectivo guardado produce un system_prompt que contiene la sección de afecto (assert sobre el prompt construido, con `ScriptedAssistantModel`).
   - Ficheros: modificar el armado del prompt en `apps/api-server/src/api_server/routers/cortex.py` (F1): leer `CortexAffectStore.read(owner)` y aplicar `augment_system_prompt_with_affect` antes de `run_assistant_turn`.
   - Aceptación: el afecto modula el turno siguiente; degrada limpio si Redis no tiene estado (baseline neutro).
 
 ## FASE F — Endpoints REST `/owner/cortex/*` (gated, cross-owner test)
 
-- [ ] **Router `cortex_mind` + `GET /owner/cortex/mind`**
+- [x] **Router `cortex_mind` + `GET /owner/cortex/mind`**
   - TDD: crear `apps/api-server/tests/integration/test_cortex_mind_endpoints.py`; test que (a) un no-owner recibe 403 (gate `require_system_owner` DB-authoritative, patrón `test_cortex_f0_ownership.py`); (b) el owner recibe 200 con `valence/arousal/dominance/intensity` (Redis con decay aplicado), `mood_label`, `drives` y el bloque `honesty`. **Test cross-owner**: con dos owners simulados, el endpoint del owner A nunca devuelve el estado de B (filtro `owner_user_id`).
   - Falla → implementa → pasa → commit.
   - Ficheros: crear `apps/api-server/src/api_server/routers/cortex_mind.py` (`APIRouter(prefix="/owner/cortex")`, `dependencies=[Depends(require_system_owner)]`); registrar en `apps/api-server/src/api_server/main.py` (`include_router`). Schemas en `apps/api-server/src/api_server/schemas/cortex_mind.py`.
@@ -183,7 +192,7 @@ Columnas clave:
 
 ## FASE G — WS de telemetría `/ws/owner/cortex/telemetry` (gated)
 
-- [ ] **WS que tailea `cortex:telemetry:{owner}` con gate DB-authoritative**
+- [x] **WS que tailea `cortex:telemetry:{owner}` con gate DB-authoritative**
   - TDD: crear `apps/api-server/tests/integration/test_cortex_telemetry_ws.py`; test que (a) sin token / token de no-owner ⇒ cierre 1008; (b) con token del owner ⇒ acepta y, tras un `publish_cortex_affect_event`, recibe el frame `{type:'affect',…}`. Reusa el patrón de `routers/ws.py` (`_resolve_principal`) + un check explícito de owner contra la BD (no solo el claim), espejo de `_is_db_system_owner`.
   - Falla → implementa → pasa → commit.
   - Ficheros: crear `apps/api-server/src/api_server/routers/cortex_ws.py` (`@router.websocket("/ws/owner/cortex/telemetry")`), reutilizando `_pump`/`_resolve_principal` de `routers/ws.py` y `_is_db_system_owner` de `auth/deps.py`; registrar el router en `main.py`.
@@ -201,7 +210,7 @@ Columnas clave:
   - Ficheros: crear `apps/admin-panel/components/cortex/mind-panel.tsx` (diales PAD en vivo, espacio PAD 2D con estela, gráfico de mood, mapa afectivo de episodios con hover=`appraisal_reason`, barras de drives, banner de honestidad). Montarlo en la columna derecha de `apps/admin-panel/app/admin/cortex/page.tsx` (creada en F1).
   - Aceptación: el panel muestra estado en vivo (WS) + histórico; copy honesto no removible; ES+EN.
 
-- [ ] **Nav "Córtex" `systemOwnerOnly` (si F1 no lo añadió)**
+- [x] **Nav "Córtex" `systemOwnerOnly` (si F1 no lo añadió)**
   - TDD: ajustar/añadir test del shell que oculta el grupo "Córtex" salvo `isSystemOwner`.
   - Ficheros: en `apps/admin-panel/components/layout/admin-shell.tsx` añadir el predicado `systemOwnerOnly` (espejo de `systemAdminOnly`, usando `isSystemOwner` de `use-current-user.ts`) y el grupo NAV "Córtex"; si F1 ya lo hizo, esta tarea es no-op verificatoria.
   - Aceptación: solo el system_owner ve la entrada del Panel de Mente.

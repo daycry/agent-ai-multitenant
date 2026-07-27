@@ -16,6 +16,15 @@ docs_language: es
 
 # Córtex F4 — Curiosidad y pensamiento de fondo
 
+> **Auditoría 2026-07-27 — las casillas de este plan se verificaron una a una
+> contra el código.** Las marcadas `[x]` lo están con evidencia `file:line` y una
+> segunda pasada adversarial; las que siguen sin marcar tienen su hueco concreto
+> descrito en
+> [`gaps-cortex-2026-07-27.md`](gaps-cortex-2026-07-27.md) (informe:
+> [`auditoria-cortex-2026-07-27.md`](auditoria-cortex-2026-07-27.md)).
+> Antes de implementar una casilla sin marcar, **abre el fichero**: la pasada
+> adversarial dio al menos un falso positivo comprobado.
+
 > **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). El
 > banner GATED quedó congelado desde el diseño (commit `cf8f7cd`); el código real:
 > `cortex/autonomy.py`, `curiosity.py`, migraciones `0095_cortex_curiosity_pursuits` +
@@ -96,7 +105,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
   - TDD: en `apps/api-server/tests/unit/test_platform_settings.py` (o `test_cortex_curiosity_settings.py` nuevo) — test: defaults cuando no escrito; `set_platform_setting` rechaza no-System-Admin (`PlatformSettingForbiddenError`); valores tipados correctos.
   - **Aceptación:** los 6 getters devuelven los defaults seguros (autonomía OFF, gate ON) sin filas en `platform_settings`; un Tenant-Admin no puede escribirlos.
 
-- [ ] **Config de cadencia del beat (worker)**
+- [x] **Config de cadencia del beat (worker)**
   - Modificar: `apps/workers/src/workers/config.py` — añadir `cortex_curiosity_cron: str = Field(default="*/30 * * * *", ...)` y `cortex_curiosity_cb_cooldown_s: int = Field(default=3600, ...)` (mismo estilo que `human_escalation_cron`).
   - TDD: `apps/workers/tests/test_config.py` — test: el default parsea como cron válido vía `_parse_cron`; override por env (`WORKERS_CORTEX_CURIOSITY_CRON`) se respeta.
   - **Aceptación:** `get_settings().cortex_curiosity_cron == "*/30 * * * *"` y `_parse_cron(...)` no cae al fallback.
@@ -110,7 +119,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
   - TDD: `apps/api-server/tests/unit/test_cortex_curiosity_budget.py` (fakeredis) — test: bajo cap → `allowed`; al alcanzar el cap de USD o de búsquedas → `not allowed` con reason; TTL fijado; `record_spend` acumula; `seconds_until_utc_midnight` correcto en bordes.
   - **Aceptación:** un cap de 5 búsquedas bloquea la 6ª en la misma ventana; la ventana se resetea a medianoche UTC.
 
-- [ ] **Circuit-breaker determinista**
+- [x] **Circuit-breaker determinista**
   - Crear: `apps/api-server/src/api_server/cortex/curiosity/circuit_breaker.py` — `async def is_open(redis, owner_user_id) -> bool`, `async def record_failure(redis, *, owner_user_id, threshold, cooldown_s) -> bool` (abre el breaker al N-ésimo fallo consecutivo; devuelve si quedó abierto), `async def record_success(redis, owner_user_id) -> None` (resetea el contador).
   - TDD: `apps/api-server/tests/unit/test_cortex_curiosity_circuit_breaker.py` (fakeredis) — test: N fallos consecutivos abren el breaker con TTL=cooldown; un éxito resetea; mientras `open` el bucle no debe correr.
   - **Aceptación:** tras 3 fallos consecutivos `is_open()==True` durante `cooldown_s`; un éxito intermedio reinicia el contador.
@@ -166,7 +175,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
   - TDD: `apps/workers/tests/test_cortex_curiosity_loop.py` — con fakeredis + DB de test + provider-doble: (a) kill-switch OFF → no-op; (b) `curiosity` alto → no-op; (c) budget agotado → pursuit `skipped`; (d) approval gate ON → queda `selected`, sin búsqueda; (e) camino feliz (gate OFF) → `digested`, memoria escrita, drive saciado, `record_spend` llamado; (f) provider sin SDK → `skipped no_sdk`, sin egress; (g) **una excepción interna NO propaga** (best-effort). **Test cross-owner**: con dos users `is_system_owner` simulados, el bucle solo toca al owner real (en la práctica el singleton lo garantiza, pero el SQL filtra `owner_user_id`).
   - **Aceptación:** cada rama del gate observable en el dict de retorno; el camino feliz deja una fila `digested` + una `memory_entries` `learning` + el drive saciado en Redis; un fallo del LLM incrementa el circuit-breaker sin tumbar beat.
 
-- [ ] **Wire del beat schedule (cadencia + enable en vivo)**
+- [x] **Wire del beat schedule (cadencia + enable en vivo)**
   - Modificar: `apps/workers/src/workers/beat_schedule.py` — añadir `CORTEX_CURIOSITY_BEAT_ENTRY = "cortex-curiosity-loop"` y en `build_beat_schedule` insertar la entrada `{"task":"workers.cortex_curiosity_loop","schedule":_parse_cron(cfg.cortex_curiosity_cron),"options":{"queue":"default"}}`. (El enable/disable real es el platform setting leído _dentro_ de la tarea — la entrada del beat siempre existe, como el price-sync.)
   - TDD: `apps/workers/tests/test_beat_schedule.py` — test: la entrada existe con el nombre constante, apunta a `workers.cortex_curiosity_loop`, queue `default`, y su `schedule` deriva de `cortex_curiosity_cron`.
   - **Aceptación:** `build_beat_schedule()` contiene la entrada `cortex-curiosity-loop` con la cadencia configurada.

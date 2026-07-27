@@ -16,6 +16,15 @@ docs_language: es
 
 # Córtex F5 — Voz/avatar afectivo + olvido
 
+> **Auditoría 2026-07-27 — las casillas de este plan se verificaron una a una
+> contra el código.** Las marcadas `[x]` lo están con evidencia `file:line` y una
+> segunda pasada adversarial; las que siguen sin marcar tienen su hueco concreto
+> descrito en
+> [`gaps-cortex-2026-07-27.md`](gaps-cortex-2026-07-27.md) (informe:
+> [`auditoria-cortex-2026-07-27.md`](auditoria-cortex-2026-07-27.md)).
+> Antes de implementar una casilla sin marcar, **abre el fichero**: la pasada
+> adversarial dio al menos un falso positivo comprobado.
+
 > **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). La
 > frase "hoy SIN código: no existe `apps/api-server/src/api_server/cortex/`" es falsa desde el
 > primer commit de F1 (2026-06-24): el directorio existe con 18+ ficheros. Código real de F5:
@@ -66,7 +75,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
 
 ### Fase A — Modulación de voz por arousal (sustrato medios, NO gated por F1)
 
-- [ ] **A1. `HttpTextToSpeech.synthesize(speed=...)` — parámetro de velocidad Kokoro**
+- [x] **A1. `HttpTextToSpeech.synthesize(speed=...)` — parámetro de velocidad Kokoro**
   - Ficheros: `apps/api-server/src/api_server/assistant/voice_clients.py` (modificar: añadir `speed: float = 1.0` a `synthesize` y al `Protocol TextToSpeech`, incluyéndolo en el payload `/v1/audio/speech` sólo si `!= 1.0`).
   - TDD:
     1. Escribe en `tests/unit/test_voice_session.py` un test nuevo `test_http_tts_forwards_speed_param`: monta `httpx.MockTransport`, llama `synthesize("hola", voice="ef_dora", speed=1.4)`, asserta que `body["speed"] == 1.4`. Falla (no existe el kwarg).

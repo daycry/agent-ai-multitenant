@@ -71,13 +71,19 @@ test("system owner sees the voice toggle and opens the voice card", async ({ pag
 
   await page.goto("/admin/cortex", { waitUntil: "domcontentloaded" });
 
-  // El botón de "Modo voz" está visible; la tarjeta no, hasta pulsar.
+  // El botón de "Modo voz" está visible; la videollamada no, hasta pulsar.
+  //
+  // Auditoría del córtex 2026-07-27 (F5.C4): estas aserciones apuntaban a
+  // `cortex-voice-card`, un testid que NO existe en la app — sólo en esta spec.
+  // El test no podía pasar nunca; y como su cabecera decía «PENDING HUMAN
+  // VERIFICATION», el rojo se lo habría encontrado el operador. El testid real
+  // lo emite `VoiceCallShell` a partir de `testidPrefix="cortex-voice"`:
+  // `cortex-voice-call` ES la tarjeta (la videollamada a pantalla completa).
   await expect(page.getByTestId("cortex-voice-toggle")).toBeVisible();
-  await expect(page.getByTestId("cortex-voice-card")).toHaveCount(0);
+  await expect(page.getByTestId("cortex-voice-call")).toHaveCount(0);
 
   await page.getByTestId("cortex-voice-toggle").click();
 
-  await expect(page.getByTestId("cortex-voice-card")).toBeVisible();
   await expect(page.getByTestId("cortex-voice-call")).toBeVisible();
   // El botón para iniciar la videollamada de voz está presente.
   await expect(page.getByTestId("cortex-voice-connect")).toBeVisible();
