@@ -191,11 +191,21 @@ async def build_cortex_default_model(
                 model=api_model,
                 vault=vault,
             )
+        # Auditoría del córtex 2026-07-27 (F1.6): el flag NO se pasaba, así que
+        # `native_web` era siempre False y las WebSearch/WebFetch nativas del SDK
+        # —el egress RECOMENDADO por el ADR 0076 (dec. 3), con anti-SSRF gratis
+        # porque el fetch lo hace Anthropic— eran código muerto: con la web
+        # encendida el córtex caía siempre en el camino DEGRADADO (dec. 4), el que
+        # sale del proceso confiable y necesita su propio anti-SSRF. Se lee del
+        # MISMO setting que gobierna las host tools (`cortex.web_enabled`), para
+        # que encender la web sea una sola decisión del owner y no dos.
+        web_enabled = await get_cortex_web_enabled(admin_session)
         try:
             return build_cortex_model(
                 resolved,
                 provider=provider,
                 claude_sdk_available=claude_ok,
+                web_enabled=web_enabled,
             )
         except CortexModelUnavailableError as exc:
             raise HTTPException(
