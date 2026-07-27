@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-07-26** · rama `plan/runs-visor-trabajo` · HEAD `dc7668d5`
+> **Última actualización: 2026-07-27** · rama `plan/runs-visor-trabajo`
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -32,28 +32,39 @@ despliegue, aprobar planes nuevos).
 | Estado                     |  N  | Qué significa aquí                                        |
 | -------------------------- | :-: | --------------------------------------------------------- |
 | `completed`                | 25  | cerradas del todo                                         |
-| `pending_human_validation` | 45  | código entregado; **esperan tests humanos + despliegue**  |
-| `pending_approval`         | 15  | **nunca empezadas** — necesitan tu aprobación (protocolo) |
+| `pending_human_validation` | 46  | código entregado; **esperan tests humanos + despliegue**  |
+| `pending_approval`         | 14  | **nunca empezadas** — necesitan tu aprobación (protocolo) |
 | `blocked`                  |  1  | `guardas-research-por-novedad`: solo le falta el e2e      |
 | `in_progress`              |  0  | correcto: el protocolo permite una como mucho             |
 
 **ADR en `proposed`: ninguno.** Los cuatro que quedaban se cerraron el 2026-07-26
 (0076, 0110, 0117, 0128).
 
-## Las 83 casillas sin marcar NO son 83 tareas pendientes
+## Las casillas del córtex: lo que decía aquí era falso
 
-`grep -c '^- \[ \]' docs/roadmap/*.md` da ~83 casillas vivas. **Verificado el
-2026-07-26 una a una**: ninguna es trabajo de código que se pueda hacer ahora.
+> **Corregido el 2026-07-27.** Este archivo afirmaba que las 76 casillas del
+> córtex eran «**rancias**: implementado y desplegado, los planes quedaron sin
+> marcar». Se verificaron **una a una contra el código**, con una pasada
+> adversarial por fase. Resultado: **29 implementadas, 45 parciales, 2 ausentes**.
+> La afirmación anterior extrapolaba tres comprobaciones puntuales a 76 tareas.
 
-| Dónde                                    |  N  | Qué son de verdad                                                                                                                                                               |
-| ---------------------------------------- | :-: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cortex-f1`…`f5`                         | 76  | **Rancias.** El córtex está implementado y desplegado; los planes quedaron sin marcar. Comprobado: migración 0093, `CortexAffectSnapshot`, `PADState`, `decay_emotion` existen. |
-| `prod-06`                                |  1  | **Rancia.** «Dar caller a `apply_reviewer_verdict`» — ya lo tiene (`workers/execution.py:473`), llegó con el ADR 0087.                                                          |
-| `15-instalador`                          |  2  | Pentest externo y release v1.0.0: **decisión y contratación tuya**, no código.                                                                                                  |
-| `prod-17`, `prod-18`, `guardas-research` |  4  | **e2e bloqueados**: exigen runner Docker y lanzar runs reales.                                                                                                                  |
+Estado actual tras marcar lo verificado y cerrar cinco defectos reales:
 
-Antes de ponerte a implementar cualquiera de ellas, comprueba contra el código
-que sigue sin hacer. Cuesta un `grep` y evita reescribir lo que ya existe.
+| Dónde                                    |  N  | Qué son de verdad                                                                                                                                                                             |
+| ---------------------------------------- | :-: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cortex-f1`…`f5`                         | 42  | **Huecos reales**, uno a uno en [`gaps-cortex-2026-07-27.md`](docs/roadmap/gaps-cortex-2026-07-27.md). ~14 son «falta el test», ~5 divergencias de nombre (no tocar), ~15 tramos funcionales. |
+| `prod-06`                                |  1  | **Rancia.** «Dar caller a `apply_reviewer_verdict`» — ya lo tiene (`workers/execution.py:473`), llegó con el ADR 0087.                                                                        |
+| `15-instalador`                          |  2  | Pentest externo y release v1.0.0: **decisión y contratación tuya**, no código.                                                                                                                |
+| `prod-17`, `prod-18`, `guardas-research` |  4  | **e2e bloqueados**: exigen runner Docker y lanzar runs reales.                                                                                                                                |
+| `06.10`, `06.11`                         |  2  | Diferidas por decisión propia (typeahead cosmético; plan 06.12 aparte). Están en planes ya `completed`.                                                                                       |
+| `prod-03`…`prod-16`, `remediacion-…`     | 171 | De los **14 planes `pending_approval`**: nunca empezados, esperan tu aprobación.                                                                                                              |
+
+**Lo que hay que llevarse de aquí, más que los números:** un resumen que dice
+«esto ya está» sin evidencia por ítem envejece mintiendo, y cuesta más caro que
+no tenerlo — porque se lee y se cree. Antes de saltarte una casilla porque este
+archivo dice que es rancia, **ábrela**. Y al revés: la pasada adversarial dio al
+menos un falso positivo comprobado, así que tampoco te fíes de un `partial` sin
+mirar el fichero.
 
 ## Qué necesita al operador (por orden de coste)
 
@@ -112,12 +123,18 @@ estaban **rechazadas** por un ADR posterior.
 ## Verificación local (con CI caído)
 
 ```bash
-python -m pytest tests/unit/ -q                       # 2794
-python -m pytest tests/security/ -q                   # 73
-python -m mypy apps/ packages/                        # 582 ficheros, limpio
-cd apps/admin-panel && npx vitest run                 # 402
-cd docker/agent-runtimes/agent-runtime && python -m pytest tests/ -q   # 469
+.venv/Scripts/python.exe -m pytest tests/unit/ -q      # 2858
+.venv/Scripts/python.exe -m pytest tests/security/ -q  # 73
+.venv/Scripts/python.exe -m mypy apps/ packages/       # 583 ficheros, limpio
+cd apps/admin-panel && npx vitest run                  # 402
+cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m pytest tests/ -q   # 472
 ```
+
+> **Usa el intérprete del venv, no `python` a secas.** Los paquetes de
+> `packages/` están en editable sólo en `.venv/`; con el Python global la suite
+> muere en la recolección con `ModuleNotFoundError: shared_domain` — sin correr
+> ni un test, y en un fichero que no has tocado. Detalle en
+> [gotchas/pytest-needs-the-repo-venv.md](docs/03-guides/gotchas/pytest-needs-the-repo-venv.md).
 
 > **La suite del agent-runtime NO está en `testpaths`**: solo la corre CI en un
 > paso propio. Con CI caído hay que invocarla a mano desde su directorio.
@@ -132,11 +149,20 @@ cd docker/agent-runtimes/agent-runtime && python -m pytest tests/ -q   # 469
 | Qué se hizo y por qué        | `docs/07-changelog/<plan_id>.md`                                                                       |
 | Estado y tareas de un plan   | `docs/roadmap/<plan_id>.md` (frontmatter + checkboxes)                                                 |
 | Una decisión de arquitectura | `docs/05-architecture-decisions/`                                                                      |
-| Una trampa del toolchain     | [`docs/03-guides/gotchas/`](docs/03-guides/gotchas/) (66)                                              |
+| Una trampa del toolchain     | [`docs/03-guides/gotchas/`](docs/03-guides/gotchas/) (67)                                              |
 | Cómo no perder el tiempo     | [`docs/03-guides/verificar-antes-de-implementar.md`](docs/03-guides/verificar-antes-de-implementar.md) |
 | Principios y protocolo       | `CLAUDE.md`                                                                                            |
 
 ## Últimos hitos (para contexto, no para fiarse)
+
+- **2026-07-27** — Cerradas las 3 tareas que quedaban de `tools-y-cierre-plan-fixes`
+  (T2 tools MCP gateables · T4 candado de paridad catálogo↔executor · T8 changelog
+  automático al cerrar plan) y auditados los 5 planes del córtex. De paso: tres
+  settings de cadencia del beat que eran código muerto, el camino web nativo del
+  ADR 0076 que nadie activaba, siete ADR cuyo cuerpo decía `proposed` con el
+  frontmatter en `accepted`, y una e2e que asertaba un testid inexistente.
+  Suites: unit 2840 · runtime 472 · security 73 · vitest 402 · mypy 583 · verde.
+  **Sin desplegar.**
 
 - **2026-07-26** — Barrido del backlog: 3 planes `in_progress` cerrados, los 4 ADR
   `proposed` resueltos. De paso, dos hallazgos que no buscaba: la credencial de
