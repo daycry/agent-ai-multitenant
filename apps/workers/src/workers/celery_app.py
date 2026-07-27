@@ -97,6 +97,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.human_escalation",
             "workers.repo_clone",
             "workers.plan_pr",
+            "workers.plan_docs",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

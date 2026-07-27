@@ -1,9 +1,9 @@
 ---
 plan_id: tools-y-cierre-plan-fixes
 title: Tools, guardrails de runtime y cierre de plan — paridad catálogo↔executor, gate humano que no falle-abierto y changelog automático
-status: pending_approval
+status: pending_human_validation
 blocking_plan: []
-started_at: null
+started_at: 2026-07-06
 completed_at: null
 estimated_duration_calendar: 4-5 días
 estimated_effort_person_days: 4
@@ -19,6 +19,14 @@ docs_language: es
 > **Origen:** auditoría de plataforma 2026-07-03, causas raíz **D (guardrails/gate sin callers en runtime)**,
 > **E (el catálogo declara lo que el runtime no tiene)** y **G (cierre de plan incompleto)**. Hallazgos
 > g1-g6 + c4 verificados adversarialmente en Opus 4.8.
+>
+> **Estado corregido el 2026-07-27.** El frontmatter decía `pending_approval` («plan definido pero no
+> empezado») con **6 de 9 tareas ya en `[x]`** por sesiones anteriores: llevaba meses mintiendo. Las tres que
+> quedaban (T2/T4/T8) se cerraron el 2026-07-27 con test, así que pasa a `pending_human_validation`, igual que
+> las otras 45 fases con código entregado y sin desplegar. `started_at` se fija al 2026-07-06, la fecha del
+> primer cierre registrado en el propio plan (T9). **Esto no es saltarse el protocolo: es dejar de esquivarlo.**
+> Si el operador prefiere revertir el plan entero a `pending_approval` y re-aprobarlo, el código ya está y los
+> `[x]` documentan qué se hizo.
 >
 > **Coordinación obligatoria con `prod-03-guardrails-validacion-humana.md`** (`pending_approval`): ese plan ya
 > aborda el re-mapeo de categorías del gate y el cableado de guardrails. Este plan **no lo duplica**: donde
@@ -81,10 +89,22 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
       con prod-03 task_prod03_01.** **Test de contrato:** el conjunto de categorías que emite el gate ⊆ las 13
       canónicas; un preset `customer-external` (13/13 human_required) **detiene** `shell_exec`/`write_file`/
       `http_post`/`agent_invoke` (hoy pasan). Falla si los vocabularios divergen.
-- [ ] **T2 — Tools MCP gateables (g6)**: forwardear un campo `category` en el `ToolSpec` de las tools MCP/custom
-      para que `<server>.<tool>` sea gateable (hoy solo 6 builtins están en el mapa). **Coordinar con prod-03
-      task_prod03_02.** **Test:** una tool MCP marcada sensible se aparca para validación humana bajo el preset
-      adecuado.
+- [x] **T2 — Tools MCP gateables (g6)** (cerrada 2026-07-27): forwardear un campo `category` en el `ToolSpec` de
+      las tools MCP/custom para que `<server>.<tool>` sea gateable (hoy solo 6 builtins están en el mapa).
+      **Coordinar con prod-03 task_prod03_02.** **Test:** una tool MCP marcada sensible se aparca para validación
+      humana bajo el preset adecuado.
+      **Entregado:** `shared_domain.approval_categories.spec_approval_category(implementation_type, security_level)`
+      deriva la categoría de lo que el operador YA declara al importar la tool (`sandboxed` por defecto); una
+      integración MCP/HTTP es una llamada saliente con efectos → `external_http_post`, y una que ejecuta código
+      (`python_function`/`docker_command`) → `code_changes`. `security_level='safe'` es el opt-out **explícito y
+      por-tool** (sin él la única palanca del operador sería apagar la categoría entera del proyecto). Fail-CLOSED
+      ante un nivel desconocido. `_tool_to_spec` la emite (omitiendo la clave cuando no aplica) y
+      `agent_runtime.approval.tool_categories_from_specs` la mezcla con el mapa builtin — con el **builtin ganando
+      la colisión** (un spec no puede rebajar el gate de `write_file`) y **descartando** cualquier categoría fuera
+      de las 13 (propagarla reeditaría el fail-open de g6 en pequeño). Cableado vivo en `__main__.py` del runtime.
+      **Tests:** `tests/unit/test_mcp_tool_approval_category.py` (26) + `docker/agent-runtimes/agent-runtime/tests/
+    test_boot_approval_mcp_gate.py` (3, con control negativo: sin la categoría en el spec, «Cliente Externo» NO
+      para la tool — el estado exacto anterior a T2).
 - [x] **T3 — Slice mínimo de guardrails en el loop (g1, P0)**: cablear `pre_tool`/`post_tool` del motor
       `shared-guardrails` en el loop del agent-runtime (o worker) en modo `log` (no bloqueante), de modo que las
       salidas MCP/HTTP/RAG pasen por al menos un check de inyección (`prompt_injection`, `secret_leakage`)
@@ -95,9 +115,20 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
 
 ### Fase B — Paridad catálogo↔executor (g4 + g5 + g2)
 
-- [ ] **T4 — Test de CI de paridad catálogo↔executor (g4, P1)**: test que falla si un nombre de
-      `_CATALOG_TOOL_NAMES` builtin **no** está en `RUNTIME_WIRED_TOOL_NAMES` **y** es asignable. **Test:**
-      hoy falla nombrando `apply_patch`/`search_code`/`summarize_text`.
+- [x] **T4 — Test de CI de paridad catálogo↔executor (g4, P1)** (cerrada 2026-07-27): test que falla si un nombre
+      de `_CATALOG_TOOL_NAMES` builtin **no** está en `RUNTIME_WIRED_TOOL_NAMES` **y** es asignable.
+      **Nota sobre el enunciado:** decía «hoy falla nombrando `apply_patch`/`search_code`/`summarize_text`». Eso
+      era cierto cuando se escribió; **T5 lo cerró el 2026-07-18**, así que hoy el candado pasa. Se entrega igual
+      —es su función: pasar mientras el invariante se sostenga y morder cuando se rompa— y se verificó **por
+      mutación** (añadir `search-code` a `ROLE_DEFAULT_TOOLS["qa"]` lo pone en rojo nombrando al culpable).
+      **Entregado:** `tests/unit/test_catalog_executor_parity.py` cruza las tres vías declarativas que escriben en
+      `agent_tools` — `ROLE_DEFAULT_TOOLS`, **`BUILTIN_AGENTS[*].resolved_tool_slugs()`** (lo que el seed escribe
+      DE VERDAD; pinear solo el diccionario dejaba abierta la puerta del override `tool_slugs=`) y
+      `CI4_AGENTS[*].tool_slugs`— más el predicado que consulta la guarda del PUT. Deriva los builtins sin ejecutor
+      de la semilla (no de una lista a mano) y tiene guarda contra vaciarse en silencio. La cuarta vía, el PUT, se
+      cubre por comportamiento: `tests/integration/test_agent_tools_assignment.py::test_cannot_assign_unwired_builtin`
+      (422 nombrando la tool, nada persistido, y el rechazo es del conjunto entero — no un filtrado silencioso).
+      El fork (`_clone_agent_tools`) no añade superficie: copia filas que las otras vías ya filtraron.
 - [x] **T5 — Cablear-o-retirar los tools sin executor (g4)** (cerrado 2026-07-18, F3 de remediacion-proyecto-integral: RETIRADOS de `ROLE_DEFAULT_TOOLS` y `ci4_team._FILE_TOOLS` (`apply-patch`/`search-code`/`summarize-text`); el anuncio al LLM ya filtraba por `is_runtime_wired` (`agent_tool_schemas.py` g4); candado `tests/unit/test_seed_tools_runtime_wired.py`; la purga de las filas `agent_tools` vivas va en el deploy): para cada uno, decidir: implementar el executor
       (p.ej. `search_code` como grep del worktree) **o** retirarlo del catálogo asignable Y de
       `ROLE_DEFAULT_TOOLS`/`ci4_team._BASE_TOOLS` (los seeds que hoy los asignan esquivando el 422). El
@@ -115,11 +146,25 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
 
 ### Fase C — Cierre de plan completo (c4)
 
-- [ ] **T8 — Changelog + docs automáticos al cierre (c4, G)**: cablear `generate_plan_docs`/`render_changelog`
-      (o el despacho del agente Technical Writer) en el path real de cierre de plan (`_on_task_done` /
-      `maintenance._reconcile_complete_plans`), generando la entrada `docs/07-changelog/{plan_id}.md`. **Test:**
-      al completar un plan (con o sin PR), existe la entrada de changelog; el criterio de cierre 4 de CLAUDE.md
-      se cumple por un path automático.
+- [x] **T8 — Changelog + docs automáticos al cierre (c4, G)** (cerrada 2026-07-27): cablear
+      `generate_plan_docs`/`render_changelog` en el path real de cierre de plan, generando la entrada
+      `docs/07-changelog/{plan_id}.md`. **Test:** al completar un plan (con o sin PR), existe la entrada de
+      changelog; el criterio de cierre 4 de CLAUDE.md se cumple por un path automático.
+      **Entregado:** `apps/workers/src/workers/plan_docs.py` — vive en el WORKER, no en la api-server, porque
+      ésta no monta `agent-data` y toda operación de git/disco sobre el repo del proyecto tiene que pasar por
+      allí. Provisiona un worktree DEDICADO de la rama del plan (`plan-docs-{id8}`, para que el `git add -A` del
+      commit no barra artefactos de una tarea hermana), lo sincroniza a HEAD, genera, commitea con los trailers
+      y empuja al bare.
+      **Punto de enganche:** inline al principio de `plan_pr._open_plan_pr_async`, **por delante** del corte por
+      `git_config`/`remote_url` — el criterio dice «con o sin PR» y un proyecto local sin remoto sí tiene bare
+      donde escribir. Un solo disparador (encolarlo aparte habría hecho competir dos tasks por el mismo
+      worktree), y garantiza que **el PR contenga su propio changelog**. Además queda la task Celery
+      `workers.generate_plan_closure_docs` para backfill de planes cerrados antes de T8.
+      Idempotente por construcción (`generate_plan_docs` es skip-if-exists ⇒ nada escrito ⇒ nada commiteado):
+      un reintento no duplica el commit **ni pisa un changelog que un humano haya reescrito**.
+      **Tests:** `tests/integration/test_plan_closure_docs.py` (7, git real contra `tmp_path`) +
+      `tests/integration/test_plan_close_e2e.py` extendido con el bloque (d), que lo comprueba **en el camino
+      real que abre el PR**, no en un doble.
 
 ### Fase D — g3 (documentar, no tocar)
 

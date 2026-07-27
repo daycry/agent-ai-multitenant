@@ -11,6 +11,7 @@ Reutiliza la resolución de git del proyecto (config + secreto de Vault) de
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -188,31 +189,76 @@ async def _push_branch_to_remote_gated(
         auth.cleanup()
 
 
+@dataclass(frozen=True)
+class _PrContext:
+    """Lo que el auto-PR necesita de la BD, ya resuelto (o el motivo del skip).
+
+    Extraído de :func:`_open_plan_pr_async`, que hacía cuatro cosas en una sola
+    función (resolver, generar docs, empujar, abrir el PR) y se pasaba del límite
+    de sentencias al añadirle T8. La resolución es la pieza que no depende de git
+    ni de la red, así que es la que sale limpia.
+    """
+
+    tenant_slug: str = ""
+    project_slug: str = ""
+    plan_slug: str = ""
+    cfg: dict[str, Any] = field(default_factory=dict)
+    policies: PlanGitPolicies = field(default_factory=PlanGitPolicies)
+    skip_reason: str | None = None
+
+
+async def _resolve_pr_context(sessionmaker: Any, project_id: UUID, plan_id: str) -> _PrContext:
+    """Lee proyecto/plan/org y devuelve el contexto, o el `skipped:*` que aplique."""
+    from api_server.db.domain import Plan, Project
+    from api_server.db.models import Organization
+
+    async with sessionmaker() as session:
+        project = await session.get(Project, project_id)
+        if project is None or not project.git_config:
+            return _PrContext(skip_reason="skipped:no_git_config")
+        if not project.slug:
+            return _PrContext(skip_reason="skipped:no_project_slug")
+        plan = await session.get(Plan, UUID(plan_id))
+        if plan is None or not plan.slug:
+            return _PrContext(skip_reason="skipped:no_plan_slug")
+        org = await session.get(Organization, project.tenant_id)
+        return _PrContext(
+            tenant_slug=(org.slug if org is not None else None) or str(project.tenant_id),
+            project_slug=project.slug,
+            plan_slug=plan.slug,
+            cfg=dict(project.git_config),
+            policies=_policies_from_worker_config(project.worker_config),
+        )
+
+
 async def _open_plan_pr_async(
     project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:
-    from api_server.db.domain import Plan, Project
-    from api_server.db.models import Organization
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from workers.plan_docs import generate_plan_closure_docs_async
+
+    # T8 (c4): la documentación de cierre se genera y commitea ANTES de abrir el
+    # PR, para que el PR la contenga. Va aquí arriba —por delante del corte por
+    # `git_config`/`remote_url`— a propósito: el criterio 4 de CLAUDE.md dice
+    # «con o sin PR», y un proyecto local sin remoto sí tiene bare donde escribir.
+    # Best-effort por construcción (devuelve estado, nunca lanza): el plan ya
+    # está `completed` en BD y un fallo aquí no debe tocar el auto-PR.
+    docs = await generate_plan_closure_docs_async(settings, plan_id)
+    _log.info("plan_pr.closure_docs", plan_id=plan_id, status=docs.get("status"))
 
     engine = create_async_engine(settings.database_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with sessionmaker() as session:
-            project = await session.get(Project, project_id)
-            if project is None or not project.git_config:
-                return {"project_id": str(project_id), "status": "skipped:no_git_config"}
-            if not project.slug:
-                return {"project_id": str(project_id), "status": "skipped:no_project_slug"}
-            plan = await session.get(Plan, UUID(plan_id))
-            if plan is None or not plan.slug:
-                return {"project_id": str(project_id), "status": "skipped:no_plan_slug"}
-            org = await session.get(Organization, project.tenant_id)
-            cfg = dict(project.git_config)
-            tenant_slug = (org.slug if org is not None else None) or str(project.tenant_id)
-            project_slug = project.slug
-            plan_slug = plan.slug
-            policies = _policies_from_worker_config(project.worker_config)
+        ctx = await _resolve_pr_context(sessionmaker, project_id, plan_id)
+        if ctx.skip_reason is not None:
+            return {
+                "project_id": str(project_id),
+                "status": ctx.skip_reason,
+                "closure_docs": docs.get("status"),
+            }
+        cfg, policies = ctx.cfg, ctx.policies
+        tenant_slug, project_slug, plan_slug = ctx.tenant_slug, ctx.project_slug, ctx.plan_slug
 
         # SINGLE-SOURCE identity (audit 2026-07-03, P1/P2): the auto-PR resolves the
         # SAME bare repo + branch as execution/clone — derived from the persisted
@@ -224,7 +270,11 @@ async def _open_plan_pr_async(
         base = cfg.get("default_branch", "main")
         auth_mode = cfg.get("auth_mode", "none")
         if not remote_url:
-            return {"project_id": str(project_id), "status": "skipped:no_remote"}
+            return {
+                "project_id": str(project_id),
+                "status": "skipped:no_remote",
+                "closure_docs": docs.get("status"),
+            }
 
         username, token, ssh_key = _resolve_git_secret(settings, project_id, auth_mode)
 
@@ -290,6 +340,7 @@ async def _open_plan_pr_async(
             "branch": plan_branch,
             "url": pr_url,
             "status": "ok" if pr_url else (f"error:{pr_error}" if pr_error else "skipped"),
+            "closure_docs": docs.get("status"),
         }
     finally:
         await engine.dispose()

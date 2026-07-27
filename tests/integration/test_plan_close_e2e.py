@@ -166,3 +166,26 @@ async def test_plan_close_opens_pr_against_branch_with_commits(
     assert row["pr_url"] == "https://fake.test/owner/backend/pull/7"
     assert row["pr_branch"] == identity.plan_branch
     assert row["pr_error"] is None
+
+    # (d) T8 (c4): el cierre generó y COMMITEÓ la entrada de changelog en la rama
+    # del plan, antes del PR. Es el criterio de cierre 4 de CLAUDE.md, que hasta
+    # ahora no cumplía ningún camino automático (`generate_plan_docs` existía y
+    # solo lo llamaban los tests). Se comprueba sobre el bare LOCAL —el que tiene
+    # los commits— y en el mismo camino real que abre el PR, no en un doble.
+    assert result["closure_docs"] == "written", result
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", identity.plan_branch],
+        cwd=str(bare),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    ).stdout.split()
+    assert f"docs/07-changelog/{plan_id}.md" in listed, listed
+
+    # Y es idempotente: un segundo cierre (reintento del operador, re-veredicto)
+    # no duplica el commit ni pisa el fichero.
+    again = await plan_pr._open_plan_pr_async(
+        ids["project"], plan_id, title="My plan", body="body", settings=settings
+    )
+    assert again["closure_docs"] == "skipped:already_generated", again
