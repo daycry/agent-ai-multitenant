@@ -409,19 +409,41 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     # estas entradas pueden tickear siempre sin coste: encolan barato y la tarea sale
     # enseguida si la autonomía está apagada. Queue `default` (Ollama local + web
     # acotada, sin infra). Activación = encender el switch desde la UI del owner.
+    # Auditoría del córtex 2026-07-27: las tres cadencias eran CONSTANTES pese a que
+    # `workers.config` declara los tres crons «operator-tunable» con un default
+    # documentado. El operador exportaba la variable, reiniciaba el beat y no pasaba
+    # nada; y los defaults del Field mentían frente a lo que corría de verdad (`*/30`
+    # contra 15 min, `42 4` contra 04:45). Ahora salen de `_parse_cron`, como las otras
+    # seis entradas configurables: mismo fallback ruidoso ante un cron malformado
+    # (RAISE en staging/prod, ERROR + default de ESTA entrada en dev).
     sched["cortex-curiosity"] = {
         "task": "workers.cortex_curiosity_loop",
-        "schedule": schedule(run_every=900.0),  # cada 15 min
+        "schedule": _parse_cron(
+            cfg.cortex_curiosity_cron,
+            env_var="WORKERS_CORTEX_CURIOSITY_CRON",
+            default=_cron_default("cortex_curiosity_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     sched["cortex-reflection"] = {
         "task": "workers.cortex_reflect_scheduled",
-        "schedule": crontab(hour="4", minute="15"),  # reflexión diaria (madrugada)
+        "schedule": _parse_cron(
+            cfg.cortex_reflection_cron,
+            env_var="WORKERS_CORTEX_REFLECTION_CRON",
+            default=_cron_default("cortex_reflection_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     sched["cortex-maintenance"] = {
         "task": "workers.cortex_maintenance",
-        "schedule": crontab(hour="4", minute="45"),  # mantenimiento/olvido diario
+        "schedule": _parse_cron(
+            cfg.cortex_maintenance_cron,
+            env_var="WORKERS_CORTEX_MAINTENANCE_CRON",
+            default=_cron_default("cortex_maintenance_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     # C2 (investigación 2026-07-11): el pulso de plataforma — el córtex siente
