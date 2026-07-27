@@ -15,8 +15,10 @@ approval` — the policy contract, not importable across the sandbox.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from typing import Any
 
+from shared_domain.approval_categories import APPROVAL_CATEGORIES
 from shared_domain.tool_names import to_canonical
 
 # Builtin tool → sensitive-action category. Keyed on CANONICAL tool names
@@ -46,6 +48,40 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "http_post": "external_http_post",
     "agent_invoke": "code_changes",
 }
+
+
+def tool_categories_from_specs(
+    raw_specs: Iterable[Mapping[str, Any]] | None,
+    base: Mapping[str, str] = DEFAULT_TOOL_CATEGORIES,
+) -> dict[str, str]:
+    """El mapa tool→categoría del run: builtins + lo que traiga cada ToolSpec.
+
+    T2 de `tools-y-cierre-plan-fixes` (residuo de g6). :data:`DEFAULT_TOOL_CATEGORIES`
+    está keyed por nombre canónico de builtin y una tool MCP se llama
+    ``<server>.<tool>``, un nombre que depende del servidor que declare el
+    proyecto: no cabe en un mapa estático. El api-server deriva su categoría del
+    ``security_level`` de la fila (``shared_domain.approval_categories.
+    spec_approval_category``) y la serializa en el spec; aquí se une al mapa
+    builtin justo antes de construir el gate.
+
+    Dos reglas que no son adorno:
+
+      * **el builtin gana la colisión** — un spec no puede rebajar el gate de
+        ``write_file`` declarándolo con una categoría más laxa;
+      * **una categoría fuera de las 13 se descarta** — propagarla haría creer
+        que la tool está cubierta cuando ``requires_human`` caería en ``auto``,
+        que es exactamente el fail-open de g6 reeditado en pequeño.
+    """
+    merged = dict(base)
+    for spec in raw_specs or ():
+        name = spec.get("name")
+        category = spec.get("approval_category")
+        if not name or not category or name in base:
+            continue
+        if category not in APPROVAL_CATEGORIES:
+            continue
+        merged[str(name)] = str(category)
+    return merged
 
 
 def requires_human(policy: dict[str, Any] | None, category: str) -> bool:

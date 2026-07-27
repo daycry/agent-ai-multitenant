@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
+from shared_domain.approval_categories import spec_approval_category
 from shared_domain.tool_names import is_runtime_wired, to_canonical_set
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -177,13 +178,25 @@ def _tool_to_spec(tool: Tool) -> dict[str, Any]:
     # exists: the worker's build_model_tool_schemas skips any custom tool whose
     # spec carries no input_schema, so omitting them left every custom tool
     # invisible to the model (and thus uncallable).
-    return {
+    spec: dict[str, Any] = {
         "name": tool.name,
         "implementation_type": impl,
         "config": config,
         "input_schema": tool.input_schema,
         "description": tool.description,
     }
+    # T2 (g6): la categoría de acción sensible que gatea esta tool, para que el
+    # runtime pueda parar un `<server>.<tool>` — un nombre que su mapa de
+    # builtins no puede contener. Se OMITE la clave cuando no aplica (builtin, o
+    # `security_level='safe'`) en vez de emitir None: así el merge del runtime no
+    # tiene que filtrar valores falsy y "sin categoría" se distingue a simple
+    # vista de "categoría nula".
+    approval_category = spec_approval_category(
+        implementation_type=impl, security_level=tool.security_level
+    )
+    if approval_category is not None:
+        spec["approval_category"] = approval_category
+    return spec
 
 
 def combine_tool_allowlists(

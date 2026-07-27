@@ -922,7 +922,7 @@ def assemble_system_preamble(
 
 def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
     """Run the agent loop for `spec`, streaming the steps_log as JSON lines."""
-    from agent_runtime.approval import ApprovalGate
+    from agent_runtime.approval import ApprovalGate, tool_categories_from_specs
     from agent_runtime.graph import AgentDeps, run_agent
     from agent_runtime.guardrails import build_pipeline
     from agent_runtime.model import model_from_spec
@@ -1027,7 +1027,16 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             reflection_assess_every=int(spec.get("reflection_assess_every", 0) or 0),
             model=model_from_spec(spec["model"]),
             tools=registry,
-            approval=ApprovalGate(policy) if policy else None,
+            # T2 (g6): el gate no se construye solo con el mapa de builtins. Las
+            # tools MCP/custom traen su `approval_category` en el ToolSpec, así
+            # que un `<server>.<tool>` —el nombre que un mapa estático no puede
+            # contener— también es gateable. Sin esto, ni el preset «Cliente
+            # Externo» detenía una integración externa.
+            approval=(
+                ApprovalGate(policy, tool_categories_from_specs(spec.get("tool_specs")))
+                if policy
+                else None
+            ),
             # ADR 0102 / g1: the guardrail pipeline (resolved config from the spec,
             # or the platform baseline) — scans tool outputs for prompt injection.
             guardrails=build_pipeline(spec),
