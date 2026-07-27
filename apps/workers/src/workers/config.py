@@ -200,6 +200,18 @@ class Settings(BaseSettings):
         "keeping HOME on its own tmpfs OUTSIDE /workspace stops that config from "
         "polluting the project worktree (and the agent's model context).",
     )
+    test_runtime_tmp_size: str = Field(
+        default="256m",
+        description="Size of the TEST/STACK runtime container's /tmp tmpfs. F3 de "
+        "registry-egress-followups: estaba escrito como literal de 64m y por ahí pasan "
+        "`composer install` y `npm ci`, que descargan y EXTRAEN en /tmp — composer ya "
+        "avisaba 'less than 100MiB of free space'. 256m deja holgura para un árbol de "
+        "deps normal sin acercarse al mem_limit del contenedor: las páginas del tmpfs "
+        "cuentan contra su cgroup de memoria, así que un /tmp desproporcionado cambia un "
+        "ENOSPC legible por un OOM-kill mudo (exit 137 sin mensaje). Un monorepo grande "
+        "puede necesitar más: WORKERS_TEST_RUNTIME_TMP_SIZE. El invariante 'nunca más de "
+        "la mitad del mem_limit' lo fija tests/unit/test_test_runtime_tmp_size.py.",
+    )
     test_runtime_home_size: str = Field(
         default="512m",
         description="Size of the TEST/STACK runtime container's HOME tmpfs "

@@ -845,7 +845,13 @@ class TestRuntimeRunner:
             # profundidad del destino), así que la caché caliente sigue siendo
             # el bind y el tmpfs solo carga metadatos sueltos.
             "tmpfs": {
-                "/tmp": "rw,nosuid,size=64m",
+                # F3 (registry-egress-followups): era un literal de 64m mientras el
+                # HOME de al lado ya era configurable. Por aquí pasan `composer
+                # install` y `npm ci` —descargan y extraen en /tmp—, así que un
+                # árbol de deps grande se quedaba sin sitio en frío. Sin `noexec`
+                # por el mismo motivo que el HOME: los instaladores ejecutan desde
+                # sus temporales.
+                "/tmp": f"rw,nosuid,size={self._settings.test_runtime_tmp_size}",
                 AGENT_HOME: (
                     f"rw,nosuid,size={self._settings.test_runtime_home_size},uid=1000,gid=1000"
                 ),
