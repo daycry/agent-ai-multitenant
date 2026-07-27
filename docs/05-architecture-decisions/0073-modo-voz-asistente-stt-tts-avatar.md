@@ -11,7 +11,9 @@ extends: ["0021", "0033", "0065"]
 
 # ADR 0073 — Modo voz del Asistente: STT/TTS/avatar provider-agnósticos (sin 5º provider LLM)
 
-> **Estado: `proposed`.** Diseño verificado contra el código por el workflow
+> **Estado: `accepted`** (frontmatter desde el 2026-06-21; banner corregido el
+> 2026-07-27 — decía `proposed` y contradecía a su propio frontmatter).
+> Diseño verificado contra el código por el workflow
 > `voice-assistant-design`. El diseño completo (stack, arquitectura, avatar,
 > plan por fases F1–F4, riesgos) vive en
 > [`docs/superpowers/specs/2026-06-21-voice-assistant-design.md`](../superpowers/specs/2026-06-21-voice-assistant-design.md).

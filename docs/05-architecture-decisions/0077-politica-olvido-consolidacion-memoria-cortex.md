@@ -12,7 +12,7 @@ supersedes: []
 
 # ADR 0077 — Política de olvido y consolidación de la memoria del Córtex
 
-> **Estado: `proposed`** — el olvido es destructivo (aunque reversible). **Requiere aprobación explícita del owner antes de activar** (fase final del plan).
+> **Estado: `accepted`** (frontmatter desde el 2026-06-22; banner corregido el 2026-07-27, decía `proposed`). El olvido es destructivo aunque reversible, así que la decisión aprobada NO es "olvidar por defecto": el barrido vive en `workers.cortex_maintenance` detrás del kill-switch `cortex.autonomy_enabled` (default OFF) y sólo hace **soft-delete**. Encenderlo sigue siendo una acción explícita del owner.
 
 ## Contexto
 

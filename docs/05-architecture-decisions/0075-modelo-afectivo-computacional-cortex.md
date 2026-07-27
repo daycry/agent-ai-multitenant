@@ -12,7 +12,7 @@ supersedes: []
 
 # ADR 0075 — Modelo afectivo computacional del Córtex
 
-> **Estado: `proposed`** — define cómo el córtex "siente" y puntúa su estado. **Requiere aprobación del operador.**
+> **Estado: `accepted`** — define cómo el córtex "siente" y puntúa su estado. Aprobado por el operador (frontmatter desde el 2026-06-22); el banner decía `proposed` y se corrigió el 2026-07-27. Implementado en `api_server/cortex/affective.py` + snapshots en `cortex_affect_snapshots`.
 
 ## Contexto
 

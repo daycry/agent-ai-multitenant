@@ -12,12 +12,15 @@ docs_language: es
 
 # ADR 0063 — Autoarranque del review-runtime al completar un plan
 
-> **Estado: `proposed`.** La **parte A** (transición live del plan a
-> `pending_human_validation` cuando termina su última tarea) está
-> **implementada y testeada** en esta sesión. La **parte B** (arrancar de
-> verdad el contenedor review-runtime) depende de **dos decisiones de producto
-> abiertas** que este ADR plantea para que las ratifique un humano — no se
-> implementan "a ojo" (CLAUDE.md: no inventar features/arquitectura).
+> **Estado: `accepted`** (frontmatter desde el 2026-06-18; banner corregido el
+> 2026-07-27). Las **dos partes** están implementadas: la **A** (transición live
+> del plan a `pending_human_validation` al terminar su última tarea) en el
+> `_on_task_done` del orchestrator, y la **B** (arrancar el contenedor
+> review-runtime) vía `workers.compose_review_runtime`, con red de seguridad en
+> `_autostart_review_runtime` del reconciler para cuando el evento se pierde.
+>
+> El banner decía `proposed` mientras el frontmatter decía `accepted`: una sesión
+> que leyera el cuerpo creería que las decisiones de producto seguían abiertas.
 
 ## Contexto
 

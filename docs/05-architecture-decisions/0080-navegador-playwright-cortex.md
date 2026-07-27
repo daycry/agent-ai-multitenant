@@ -12,9 +12,15 @@ supersedes: []
 
 # ADR 0080 — Navegador real (Playwright) para el córtex
 
-> **Estado: `proposed`** — DISEÑO, no implementado. Abre una superficie de seguridad muy
-> superior a la lectura web del ADR 0067 (un navegador completo navega, ejecuta JS, clica,
-> rellena formularios). Requiere aprobación explícita del operador antes de tocar código.
+> **Estado: `accepted`** e **implementado** (frontmatter desde el 2026-06-24; banner
+> corregido el 2026-07-27, seguía diciendo `proposed` y «DISEÑO, no implementado»
+> cuando ya existían `cortex/browse.py`, la tabla `browse_sessions` —migración
+> 0112— y el kill-switch `cortex.browser_enabled`).
+>
+> Abre una superficie de seguridad muy superior a la lectura web del ADR 0067 (un
+> navegador completo navega, ejecuta JS, clica, rellena formularios), y por eso lo
+> aprobado lleva **doble llave**: el kill-switch arranca APAGADO y, aun encendido,
+> **cada sesión de navegación necesita la aprobación explícita del owner**.
 
 ## Contexto
 

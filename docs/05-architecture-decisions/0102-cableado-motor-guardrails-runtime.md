@@ -3,7 +3,7 @@ adr: "0102"
 title: Cableado del motor de guardrails en la ejecución de agentes (4 hooks) con slice mínimo post_tool en modo LOG, transporte por task spec/result envelope y política de fallo por check
 status: accepted
 date: 2026-07-05
-deciders: operador (pendiente)
+deciders: operador
 phase: auditoria-plataforma-2026-07-03
 related: ["0035", "0016", "0020"]
 docs_language: es
@@ -11,7 +11,12 @@ docs_language: es
 
 # ADR 0102 — Cableado del motor de guardrails en el bucle del agente
 
-> **Estado: `proposed`.** Cierra la OTRA mitad del P0 de guardrails (hallazgo
+> **Estado: `accepted`** (frontmatter desde el 2026-07-05; banner corregido el
+> 2026-07-27, decía `proposed`). El slice mínimo está cableado: el bucle del
+> agente construye su pipeline con `build_pipeline(spec)` y la capa PROYECTO de
+> los guardrails vive en la migración 0110.
+>
+> Cierra la OTRA mitad del P0 de guardrails (hallazgo
 > g1): el motor `GuardrailPipeline` (ADR 0035) existe, está testeado y sólo se
 > instancia en `api_server/guardrails/planning.py`; el bucle del agente
 > sandboxed nunca lo invoca, así que las salidas de MCP/HTTP/RAG reentran
