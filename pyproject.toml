@@ -110,6 +110,21 @@ extend-immutable-calls = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# NOTA para quien vea la línea `note: unused section(s): module = [...]` al final
+# de una corrida limpia: NO la persigas borrando esos overrides.
+#
+# Los que quedan cubren **dependencias OPCIONALES** (el extra `claude`, los
+# reranker/PII pesados, los bindings de SSO…) que en ESTE venv están instaladas
+# con type info, así que mypy no necesita el override y lo reporta sin usar. En
+# un entorno sin el extra —un dev sin `claude-agent-sdk`, una imagen construida
+# sin `WITH_CLAUDE`— el mismo override es lo único que evita un
+# `import-not-found`. Borrarlos cambia una nota informativa por una fragilidad
+# real, y mypy sigue diciendo «Success: no issues found» con ellos puestos.
+#
+# El 2026-07-28 se limpiaron los tres que SÍ estaban muertos de verdad
+# (`workers.runtime_pool`, que ni existe como módulo; `authlib` y `xmlsec`, que
+# no los importa nadie). Si añades uno nuevo a la lista, comprueba antes con un
+# grep que el módulo se importa en algún sitio.
 warn_unused_configs = true
 warn_unreachable = true
 disallow_any_generics = true
@@ -282,7 +297,9 @@ ignore_missing_imports = true
 module = [
     "workers.git_repos",
     "workers.plan_git",
-    "workers.runtime_pool",
+    # `workers.runtime_pool` estuvo aquí hasta el 2026-07-28: el módulo ya no
+    # existe, así que el override era config muerta que `warn_unused_configs`
+    # reportaba en cada corrida de mypy.
     "workers.review_runtime",
     # backup.py / backup_restore.py (Plan 12) lazily import the backup
     # destination + encryption adapters and the per-tenant restore worker
@@ -328,13 +345,15 @@ ignore_missing_imports = true
 module = ["jsonschema", "jsonschema.*"]
 ignore_missing_imports = true
 
-# Enterprise SSO / OIDC (Plan 08 task_08_01). `authlib` and the
-# `joserfc` it ships sign/verify ID tokens against the IdP JWKS;
-# `cryptography.fernet` encrypts the OIDC client secret at rest. The
-# pre-commit mypy hook doesn't install these; the runtime venv does.
-# Same pattern as the other optional-dep overrides above.
+# Enterprise SSO / OIDC (Plan 08 task_08_01). `joserfc` firma/verifica los ID
+# tokens contra el JWKS del IdP y `cryptography.fernet` cifra el client secret
+# en reposo. El hook de pre-commit no los instala; el venv de runtime sí. Mismo
+# patrón que los demás overrides de dependencia opcional de arriba.
+#
+# `authlib` salió de la lista el 2026-07-28: no lo importa nadie (el flujo OIDC
+# usa `joserfc` directamente), así que el override era config muerta.
 [[tool.mypy.overrides]]
-module = ["authlib", "authlib.*", "joserfc", "joserfc.*", "cryptography.*"]
+module = ["joserfc", "joserfc.*", "cryptography.*"]
 ignore_missing_imports = true
 
 # SAML 2.0 (Plan 08 task_08_04). `python3-saml` (imported as the
@@ -343,8 +362,12 @@ ignore_missing_imports = true
 # so the app stays importable without the native libs; mypy still needs
 # the missing-import suppressed. Same pattern as the other optional-dep
 # overrides above.
+#
+# `xmlsec` salió de la lista el 2026-07-28: es un binding NATIVO transitivo de
+# python3-saml que ningún módulo nuestro importa por su nombre, así que mypy
+# nunca lo veía y el override era config muerta.
 [[tool.mypy.overrides]]
-module = ["onelogin", "onelogin.*", "xmlsec", "xmlsec.*"]
+module = ["onelogin", "onelogin.*"]
 ignore_missing_imports = true
 
 # MFA TOTP (Plan 08 task_08_09). `pyotp` ships no type stubs; the
@@ -392,6 +415,39 @@ testpaths = ["tests"]
 # `python -m pytest` worked because -m adds CWD.
 pythonpath = ["."]
 addopts = "-ra --strict-markers --strict-config"
+# Avisos silenciados, uno a uno y con motivo (2026-07-28). La regla que se sigue
+# aquí: **solo se filtra lo que no podemos arreglar**. Un aviso propio se corrige
+# —el `on_event is deprecated` de FastAPI, que salía 33 veces por corrida de
+# integración, se cerró migrando `main.py` a un handler `lifespan`—; un aviso de
+# un paquete de terceros emitido EN SU IMPORT no tiene punto donde intervenir.
+#
+# Nada de `ignore::DeprecationWarning` a secas: cada línea nombra el mensaje y el
+# módulo, así que un aviso NUEVO —incluso de la misma categoría y el mismo
+# paquete— sigue apareciendo en la salida en vez de quedar tapado.
+filterwarnings = [
+    # langgraph >= 0.6 avisa al importar `langgraph.cache.base` de que el default
+    # de `allowed_objects` cambiará. Lo emite el import del propio paquete, no una
+    # llamada nuestra, así que no hay dónde pasar el valor explícito que pide.
+    # Se filtra por CATEGORÍA y MÓDULO (no por mensaje): al salir durante el import
+    # de la dependencia, el filtro por mensaje no llega a aplicarse.
+    # RETIRAR cuando langgraph fije el default (o exponga la opción en un punto
+    # que podamos alcanzar).
+    "ignore::langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+    # opentelemetry-instrumentation importa `pkg_resources`, deprecado por
+    # setuptools. Es de la librería, no nuestro. RETIRAR cuando el paquete migre a
+    # `importlib.metadata`; si en 2026-11 sigue, es que toca subir la versión de
+    # opentelemetry-instrumentation, porque `pkg_resources` desaparece.
+    "ignore:pkg_resources is deprecated as an API:UserWarning",
+    # Un ProactorEventLoop sin cerrar, propio de los tests (Windows). El aviso
+    # salta en el GC, así que pytest lo atribuye a un test SINCRÓNICO que no crea
+    # loops (`test_event_mapping_registry`) y manda a depurar al sitio equivocado.
+    # No afecta a producción: el único código que crea loops a mano es
+    # `ClaudeAgentSessionProvider`, que hoy NO se instancia en ningún camino de
+    # producción (ADR 0097, capacidad aún sin cablear) y cuyo `aclose()` sí para
+    # el loop. RETIRAR al cablear esa sesión: entonces el aviso dejaría de ser
+    # ruido de test y habría que tratarlo como fuga real.
+    "ignore:unclosed event loop:ResourceWarning",
+]
 markers = [
   "unit: unit tests (fast, no I/O)",
   "integration: integration tests (DB, Redis, Docker)",

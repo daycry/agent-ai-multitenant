@@ -11,6 +11,8 @@ Auth and admin routers arrive in tasks 00_10 and 00_11.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
@@ -256,12 +258,65 @@ def _register_routers(app: FastAPI) -> None:
         app.include_router(router)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001 — firma de FastAPI
+    """Arranque y parada de la app (sustituye a los `@app.on_event("startup")`).
+
+    FastAPI deprecó `on_event` en favor de `lifespan`, y el aviso salía 33 veces en
+    cada corrida de integración. La conversión NO es cosmética: con `on_event` los
+    handlers eran dos funciones independientes cuyo orden dependía del registro;
+    aquí el orden es explícito y legible.
+
+    Las dos son **best-effort por diseño**: ninguna puede impedir que el
+    api-server arranque. Un catálogo builtin incompleto o un barrido de chat que
+    falle son degradaciones, no motivos para dejar la plataforma caída — y si
+    reventaran aquí, el contenedor entraría en bucle de reinicio sin decir por qué.
+    """
+    await _ensure_builtin_catalog()
+    await _resume_chat_replies()
+    yield
+
+
+async def _ensure_builtin_catalog() -> None:
+    # G-02 (auditoría proyecto 2026-07-17): garantiza las filas del catálogo
+    # builtin de KBs si un wipe/reset las dejó a 0 (sin ellas los grants de
+    # plantilla apuntan a KBs inexistentes y el auto-RAG queda estéril).
+    # Idempotente + advisory lock; best-effort (nunca impide arrancar).
+    try:
+        from api_server.db.session import get_admin_sessionmaker
+        from api_server.seeds.startup import ensure_builtin_catalog
+
+        result = await ensure_builtin_catalog(get_admin_sessionmaker())
+        if result["seeded"]:
+            _logger.warning("startup.builtin_catalog_reseeded", **result)
+    except Exception:
+        _logger.warning("startup.builtin_catalog_check_failed", exc_info=True)
+
+
+async def _resume_chat_replies() -> None:
+    # c9 (audit 2026-07-03): the team chat reply runs as an in-process detached
+    # task, so a restart mid-turn drops it while the user's message stays durable.
+    # Resume those unanswered turns on boot. Best-effort — a chat-durability sweep
+    # must never stop the api-server from starting.
+    try:
+        from api_server.auth.deps import get_redis
+        from api_server.chat.responder import resume_pending_replies
+        from api_server.routers.llm_providers import get_provider_vault_store
+
+        resumed = await resume_pending_replies(vault=get_provider_vault_store(), redis=get_redis())
+        if resumed:
+            _logger.info("chat.resumed_on_startup", count=resumed)
+    except Exception:
+        _logger.warning("chat.resume_on_startup_failed", exc_info=True)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="agentic-platform / api-server",
         version="0.0.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=_lifespan,
     )
 
     settings = get_settings()
@@ -287,41 +342,6 @@ def create_app() -> FastAPI:
     _register_routers(app)
 
     instrument_fastapi(app)
-
-    @app.on_event("startup")
-    async def _ensure_builtin_catalog() -> None:
-        # G-02 (auditoría proyecto 2026-07-17): garantiza las filas del catálogo
-        # builtin de KBs si un wipe/reset las dejó a 0 (sin ellas los grants de
-        # plantilla apuntan a KBs inexistentes y el auto-RAG queda estéril).
-        # Idempotente + advisory lock; best-effort (nunca impide arrancar).
-        try:
-            from api_server.db.session import get_admin_sessionmaker
-            from api_server.seeds.startup import ensure_builtin_catalog
-
-            result = await ensure_builtin_catalog(get_admin_sessionmaker())
-            if result["seeded"]:
-                _logger.warning("startup.builtin_catalog_reseeded", **result)
-        except Exception:
-            _logger.warning("startup.builtin_catalog_check_failed", exc_info=True)
-
-    @app.on_event("startup")
-    async def _resume_chat_replies() -> None:
-        # c9 (audit 2026-07-03): the team chat reply runs as an in-process detached
-        # task, so a restart mid-turn drops it while the user's message stays durable.
-        # Resume those unanswered turns on boot. Best-effort — a chat-durability sweep
-        # must never stop the api-server from starting.
-        try:
-            from api_server.auth.deps import get_redis
-            from api_server.chat.responder import resume_pending_replies
-            from api_server.routers.llm_providers import get_provider_vault_store
-
-            resumed = await resume_pending_replies(
-                vault=get_provider_vault_store(), redis=get_redis()
-            )
-            if resumed:
-                _logger.info("chat.resumed_on_startup", count=resumed)
-        except Exception:
-            _logger.warning("chat.resume_on_startup_failed", exc_info=True)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
