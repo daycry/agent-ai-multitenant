@@ -169,9 +169,15 @@ async def get_episodes(
     """Memorias episódicas emocionales del owner desde ``memory_entries`` (ADR 0077).
 
     Filtra ``user_id=owner`` + ``scope='private'`` + ``metadata_->>'cortex'='true'``
-    + (opcional) ``metadata_->'emotion'->>'mood_label' = :emotion``. Cada item lleva
+    + **``metadata_ ? 'emotion'``** + (opcional)
+    ``metadata_->'emotion'->>'mood_label' = :emotion``. Cada item lleva
     ``appraisal_reason`` para el hover del mapa afectivo. NUNCA devuelve memorias de
-    otro usuario (filtro ``user_id`` explícito)."""
+    otro usuario (filtro ``user_id`` explícito).
+
+    La condición de ``emotion`` PRESENTE no es redundante con el filtro opcional:
+    aquél solo actúa cuando se pasa el query param, y sin ésta el mapa se llenaba de
+    memorias sin afecto (las escribe ``cortex_remember``, que también marca
+    ``cortex=true``) pintadas con un PAD de ceros."""
     owner_id: UUID = principal.user_id
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session:
@@ -182,6 +188,14 @@ async def get_episodes(
                 MemoryEntry.scope == "private",
                 MemoryEntry.deleted_at.is_(None),
                 MemoryEntry.metadata_["cortex"].astext == "true",
+                # Cuarta condición del contrato (cortex-f2-afectivo.md): la
+                # memoria tiene que traer `emotion`. Faltaba, y `cortex=true` NO
+                # es exclusivo del distilador afectivo — lo escribe también
+                # `cortex_remember`, así que el mapa de episodios se llenaba de
+                # memorias SIN afecto que el render pinta con un PAD de ceros:
+                # un episodio neutro inventado donde no hubo emoción ninguna.
+                # Detectado al escribir el test del contrato completo (2026-07-28).
+                MemoryEntry.metadata_.has_key("emotion"),  # — operador JSONB `?`
             )
             .order_by(MemoryEntry.created_at.desc())
             .limit(limit)

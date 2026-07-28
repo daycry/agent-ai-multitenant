@@ -7,6 +7,7 @@ retención es candidata a soft-delete. El ``retention_score`` es determinista.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 from api_server.cortex.forgetting import (
@@ -156,3 +157,79 @@ def test_vieja_no_recallada_cae_y_recallada_se_salva() -> None:
         recall_frequency=recall_frequency_factor(5),
     )
     assert recallada.forget is False
+
+
+# ---------------------------------------------------------------------------
+# Monotonía del `retention_score` — criterio de aceptación D1 del plan
+# cortex-f5: «score monótono respecto a recencia / frecuencia / intensidad».
+#
+# Ningún test de arriba lo demuestra: los que comparan una memoria vieja con una
+# fresca mueven DOS variables a la vez (365 días + importancia 0.4 frente a 1 día
+# + importancia 0.8), así que fijan casos concretos del veredicto, no la
+# monotonía de ningún factor. Los de abajo barren UNA dimensión dejando las otras
+# FIJAS, que es lo que atrapa el defecto que importa: un signo invertido, una
+# ganancia a cero o un factor que se cuela sin efecto en el producto.
+# ---------------------------------------------------------------------------
+def test_score_estrictamente_decreciente_en_la_edad() -> None:
+    """A igual importancia y frecuencia, más vieja ⇒ menos retención.
+
+    Si la recencia se ignorase (o entrase con el signo cambiado), el barrido de
+    edad daría una serie plana o creciente y el olvido enterraría lo reciente en
+    vez de lo rancio.
+    """
+    scores = [
+        retention_score(
+            created_at=_NOW - timedelta(days=days),
+            now=_NOW,
+            metadata={"importance": 0.6},
+            recall_frequency=1.0,
+        )
+        for days in (0, 1, 7, 30, 90, 365)
+    ]
+    assert all(b < a for a, b in pairwise(scores)), scores
+
+
+def test_score_estrictamente_creciente_en_la_frecuencia_de_recall() -> None:
+    """A igual edad e importancia, más recalls ⇒ más retención (hasta saturar).
+
+    `test_recall_frequency_factor_curva_con_suelo` verifica la curva del FACTOR;
+    esto verifica que el factor llega al SCORE de verdad — si `retention_score`
+    dejara de multiplicarlo (o lo clampease a 1 por error), la curva seguiría
+    verde y el score sería ciego al uso real de la memoria.
+    """
+    from api_server.cortex.forgetting import recall_frequency_factor
+
+    def _score(count: int) -> float:
+        return retention_score(
+            created_at=_NOW - timedelta(days=45),
+            now=_NOW,
+            metadata={"importance": 0.6},
+            recall_frequency=recall_frequency_factor(count),
+        )
+
+    scores = [_score(c) for c in (0, 1, 2, 3, 4, 5)]
+    assert all(b > a for a, b in pairwise(scores)), scores
+    # Saturación: pasados RECALL_COUNT_SATURATION recalls el score ya no sube.
+    assert _score(50) == pytest.approx(_score(5))
+
+
+def test_score_estrictamente_creciente_en_la_importancia() -> None:
+    """A igual edad y frecuencia, más importante ⇒ más retención.
+
+    OJO al mapeo con el plan: el criterio D1 nombra la *intensidad emocional*
+    (`metadata_.emotion.intensity`) como tercera dimensión, pero la
+    implementación puntúa `metadata_.importance` — otro dato y otro productor.
+    Este test fija la monotonía de la dimensión que EXISTE; la emocional no está
+    implementada (hueco de la auditoría 2026-07-27: exige cambio de código, no de
+    test, así que no se simula aquí).
+    """
+    scores = [
+        retention_score(
+            created_at=_NOW - timedelta(days=10),
+            now=_NOW,
+            metadata={"importance": imp},
+            recall_frequency=1.0,
+        )
+        for imp in (0.0, 0.25, 0.5, 0.75, 1.0)
+    ]
+    assert all(b > a for a, b in pairwise(scores)), scores

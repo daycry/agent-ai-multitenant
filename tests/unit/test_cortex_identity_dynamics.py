@@ -9,18 +9,23 @@ de forma ACOTADA y versionada (ADR 0074: guardrail de auto-modificación):
     narrative/language/learning_goals; jamás traits/mood_baseline/relationship_model.
   * ``apply_reflection_delta`` — compone clamp+bounded sobre traits/baseline +
     reescribe narrative, devolviendo el nuevo ``identity_state`` (puro).
+  * ``compute_diff`` — la auditoría del cambio: SOLO los campos que cambiaron.
 """
 
 from __future__ import annotations
 
+import pytest
 from api_server.cortex.identity import (
     apply_reflection_delta,
     bounded_update,
     clamp_baseline,
     clamp_traits,
+    compute_diff,
     default_identity_state,
     editable_owner_state,
 )
+
+pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +216,48 @@ def test_apply_reflection_delta_no_muta_el_input() -> None:
     assert current["traits"] == snapshot["traits"]
 
 
+def test_reflexion_repetida_converge_y_se_queda_quieta() -> None:
+    """El criterio «reflexión repetida converge (no oscila)» del plan, pero sobre el
+    paso COMPUESTO (clamp+bounded juntos), no solo sobre ``bounded_update``.
+
+    El defecto que atrapa: que la composición clamp→bounded→clamp introduzca
+    overshoot o un ciclo límite (el estado se pasa del objetivo y vuelve, ida y
+    vuelta indefinidamente). Con un mismo objetivo propuesto ciclo tras ciclo la
+    identidad debe acercarse de forma monótona, no cruzarlo nunca, y quedarse
+    EXACTAMENTE ahí — si el punto fijo no fuese estable, la identidad del córtex
+    "temblaría" para siempre y cada pasada emitiría una versión de histórico nueva
+    con un diff espurio.
+    """
+    state = default_identity_state()  # openness 0.5, valence 0.0
+    prev_openness = state["traits"]["openness"]
+    prev_valence = state["mood_baseline"]["valence"]
+    for _ in range(12):
+        state = apply_reflection_delta(
+            state,
+            traits={"openness": 0.8},
+            mood_baseline={"valence": 0.2},
+            max_delta_per_cycle=0.05,
+        )
+        openness = state["traits"]["openness"]
+        valence = state["mood_baseline"]["valence"]
+        # Monótono hacia el objetivo y sin cruzarlo (nada de overshoot).
+        assert openness >= prev_openness
+        assert openness <= 0.8 + 1e-9
+        assert valence >= prev_valence
+        assert valence <= 0.2 + 1e-9
+        prev_openness, prev_valence = openness, valence
+    # Punto fijo alcanzado y ESTABLE (las últimas pasadas ya no mueven nada).
+    assert abs(state["traits"]["openness"] - 0.8) < 1e-9
+    assert abs(state["mood_baseline"]["valence"] - 0.2) < 1e-9
+    again = apply_reflection_delta(
+        state,
+        traits={"openness": 0.8},
+        mood_baseline={"valence": 0.2},
+        max_delta_per_cycle=0.05,
+    )
+    assert compute_diff(state, again) == {}
+
+
 # ---------------------------------------------------------------------------
 # effective_mood_baseline — el set-point que el motor afectivo DEBE leer
 # ---------------------------------------------------------------------------
@@ -322,3 +369,58 @@ def test_owner_model_no_muta_el_input() -> None:
     current["relationship_model"] = {"prefiere": "TDD"}
     apply_owner_model_delta(current, {"prefiere": "otra cosa", "extra": "x"})
     assert current["relationship_model"] == {"prefiere": "TDD"}
+
+
+# ---------------------------------------------------------------------------
+# compute_diff — la auditoría del cambio (el criterio del plan que faltaba)
+# ---------------------------------------------------------------------------
+# El plan pedía aquí «compute_diff ignora campos sin cambio» y este fichero ni
+# importaba la función (auditoría 2026-07-27): la única aserción del diff vivía en
+# integración y era `'name' not in diff_v2`. El diff es lo que se persiste en
+# ``cortex_identity_history.diff``, o sea la ÚNICA traza de qué tocó la reflexión;
+# si emitiera campos que no cambiaron, cada versión parecería reescribir la
+# identidad entera y la auditoría no serviría para nada.
+def test_compute_diff_ignora_los_campos_sin_cambio() -> None:
+    before = default_identity_state()
+    after = default_identity_state()
+    after["narrative"] = "He aprendido algo nuevo."
+    diff = compute_diff(before, after)
+    # SOLO el campo que cambió.
+    assert set(diff) == {"narrative"}
+    assert diff["narrative"] == {"before": "", "after": "He aprendido algo nuevo."}
+
+
+def test_compute_diff_de_estados_identicos_es_vacio() -> None:
+    state = default_identity_state()
+    # Una pasada que no mueve nada NO debe ensuciar el histórico con un diff.
+    assert compute_diff(state, dict(state)) == {}
+
+
+def test_compute_diff_detecta_un_cambio_dentro_de_un_dict_anidado() -> None:
+    """``traits``/``mood_baseline`` son dicts: el diff los compara por valor y emite
+    el bloque completo. Si comparara por identidad de objeto (``is``) o solo mirara
+    las claves de primer nivel por presencia, un cambio de rasgo pasaría invisible."""
+    before = default_identity_state()
+    after = default_identity_state()
+    after["traits"] = {**after["traits"], "openness": 0.55}
+    diff = compute_diff(before, after)
+    assert set(diff) == {"traits"}
+    assert diff["traits"]["before"]["openness"] == 0.5
+    assert diff["traits"]["after"]["openness"] == 0.55
+
+
+def test_compute_diff_marca_campo_nuevo_y_campo_retirado() -> None:
+    diff = compute_diff({"name": "Córtex", "obsoleto": "x"}, {"name": "Córtex", "nuevo": "y"})
+    # Un campo añadido entra con before=None; uno retirado, con after=None.
+    assert diff["nuevo"] == {"before": None, "after": "y"}
+    assert diff["obsoleto"] == {"before": "x", "after": None}
+    # y el que no cambió no aparece.
+    assert "name" not in diff
+
+
+def test_compute_diff_no_muta_los_estados_que_compara() -> None:
+    before = {"name": "Córtex", "traits": {"openness": 0.5}}
+    after = {"name": "Atlas", "traits": {"openness": 0.5}}
+    compute_diff(before, after)
+    assert before == {"name": "Córtex", "traits": {"openness": 0.5}}
+    assert after == {"name": "Atlas", "traits": {"openness": 0.5}}
