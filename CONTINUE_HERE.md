@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-07-27** · rama `plan/runs-visor-trabajo`
+> **Última actualización: 2026-07-28** · rama `plan/runs-visor-trabajo`
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -11,28 +11,44 @@
 
 ## En una frase
 
-El código está al día y **nada está desplegado**: hay una remediación grande
-cerrada, todos los ADR aceptados, y el trabajo pendiente es humano (tests,
-despliegue, aprobar planes nuevos).
+El código está al día y **desplegado desde el 2026-07-28** (106 commits de una
+tacada, esquema en `0121`): lo que queda pendiente es **humano** — validar las 46
+fases entregadas, aprobar los 14 planes nunca empezados y arreglar la facturación
+de CI.
 
 ## Lo primero que hay que saber
 
-1. **No desplegar ni relanzar nada.** Orden vigente del operador: no relanzar ni
-   desbloquear tareas —ni tras el reset de cuota— hasta que dé el sistema por
-   verificado. Observación pasiva sí.
-2. **CI está caído y no es culpa del código**: facturación de la cuenta `daycry`
+1. **No relanzar ni desbloquear tareas** hasta que el operador dé el sistema por
+   verificado. Observación pasiva sí. (Desplegar ya no está vetado: se hizo el
+   2026-07-28 por orden expresa suya.)
+   - **Y ojo con esto al desplegar**: aquel `up -d` **relanzó dos tareas
+     congeladas** —el reconciler las rescató a los 90 s— con ~165 k tokens de
+     gasto. La comprobación de «¿queda algo corriendo?» NO las ve, porque su
+     rasgo es no tener ejecución. Cuenta reclamaciones huérfanas y despliega con
+     `--scale orchestrator=0`:
+     [gotchas/deploy-relaunches-frozen-tasks.md](docs/03-guides/gotchas/deploy-relaunches-frozen-tasks.md).
+2. **El perfil seccomp endurecido está ACTIVO** desde ese despliegue
+   (`WORKERS_SECCOMP_PROFILE_PATH`, antes vacío). Solo afecta a los sandboxes que
+   lanza el worker, y **no se ha ejercitado con un run real**: el primer run que
+   se lance será el primero bajo el perfil estricto. Válvula de escape:
+   `WORKERS_SECCOMP_PROFILE_PATH=` en el `.env`, sin tocar el compose.
+3. **CI está caído y no es culpa del código**: facturación de la cuenta `daycry`
    («recent account payments have failed»). Lo arregla el operador en
    <https://github.com/settings/billing>. Mientras tanto, las suites se corren en
    local (ver más abajo).
-3. **La rama `plan/runs-visor-trabajo` tiene el PR #66 abierto** y va muy por
+4. **La rama `plan/runs-visor-trabajo` tiene el PR #66 abierto** y va muy por
    delante de lo que describe su título. Todo lo empujado está ahí.
+5. **Queda un `DELETE` sin ejecutar**: 8 filas de `agent_tools` conceden
+   `send_notification` a los agentes CI4 DevOps y Project Manager, y esa tool no
+   tiene ejecutor (devuelve `ok=False, "not wired"` y les quema un turno). Ningún
+   seed las repone. Copia previa: bundle `20260728T114814Z`.
 
 ## Estado del roadmap (regenerable, ver §«Comprobar»)
 
 | Estado                     |  N  | Qué significa aquí                                        |
 | -------------------------- | :-: | --------------------------------------------------------- |
 | `completed`                | 25  | cerradas del todo                                         |
-| `pending_human_validation` | 46  | código entregado; **esperan tests humanos + despliegue**  |
+| `pending_human_validation` | 46  | código entregado **y desplegado**; esperan tests humanos  |
 | `pending_approval`         | 14  | **nunca empezadas** — necesitan tu aprobación (protocolo) |
 | `blocked`                  |  1  | `guardas-research-por-novedad`: solo le falta el e2e      |
 | `in_progress`              |  0  | correcto: el protocolo permite una como mucho             |
@@ -68,18 +84,22 @@ mirar el fichero.
 
 ## Qué necesita al operador (por orden de coste)
 
-1. **Desplegar y validar.** Es el cuello de botella de las 45 fases en
-   `pending_human_validation`. Recetas de build en
-   [gotchas/image-build-recipes-that-bite.md](docs/03-guides/gotchas/image-build-recipes-that-bite.md).
-   Pendiente además: rescatar en dev 2 tareas congeladas y 3 planes varados.
-2. **Aprobar (o descartar) los 15 planes `pending_approval`** — casi todos
+1. **Validar las 46 fases en `pending_human_validation`.** El despliegue ya está
+   hecho (2026-07-28), así que esto por fin es posible: era el cuello de botella
+   y llevaba semanas atascado. Recetas de build, para la próxima, en
+   [gotchas/image-build-recipes-that-bite.md](docs/03-guides/gotchas/image-build-recipes-that-bite.md);
+   procedimiento en [06-runbooks/03-system-upgrade.md](docs/06-runbooks/03-system-upgrade.md).
+2. **Aprobar (o descartar) los 14 planes `pending_approval`** — casi todos
    `prod-XX`. Sin aprobación no puedo arrancarlos.
 3. **Dos verificaciones que exigen humano delante**: la prueba en navegador del
-   OAuth de MCP (ADR 0127) y el smoke del perfil seccomp estricto en dev.
+   OAuth de MCP (ADR 0127) y el **primer run bajo el perfil seccomp estricto**,
+   que ya está activo pero sin ejercitar (ver punto 2 de arriba).
 4. **Sembrar un dataset dorado de evals.** El productor, el lector y el
    muestreador están puestos y probados; elegir qué tareas cerradas son «buenas»
    es curaduría humana. Mecanismo: `POST /tasks/{id}/promote-to-dataset` (hay UI).
-5. **`registry-egress-followups`** (`open`): F1/F3/F4/F5 siguen abiertos.
+5. **`registry-egress-followups`** (`open`): **F3 cerrada el 2026-07-28**;
+   F1/F4/F5 siguen abiertos. F5 lleva escrito su orden correcto y su trampa (si
+   se hace a medias reabre la puerta trasera de B-04).
 
 ## Órdenes permanentes del operador
 
@@ -149,12 +169,17 @@ cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m p
 | Qué se hizo y por qué        | `docs/07-changelog/<plan_id>.md`                                                                       |
 | Estado y tareas de un plan   | `docs/roadmap/<plan_id>.md` (frontmatter + checkboxes)                                                 |
 | Una decisión de arquitectura | `docs/05-architecture-decisions/`                                                                      |
-| Una trampa del toolchain     | [`docs/03-guides/gotchas/`](docs/03-guides/gotchas/) (67)                                              |
+| Una trampa del toolchain     | [`docs/03-guides/gotchas/`](docs/03-guides/gotchas/) (68)                                              |
 | Cómo no perder el tiempo     | [`docs/03-guides/verificar-antes-de-implementar.md`](docs/03-guides/verificar-antes-de-implementar.md) |
 | Principios y protocolo       | `CLAUDE.md`                                                                                            |
 
 ## Últimos hitos (para contexto, no para fiarse)
 
+- **2026-07-28** — **Desplegado**: 106 commits, 6 imágenes, esquema 0118→0121 con
+  round-trip de reversibilidad probado. Copia previa `20260728T114814Z` y las
+  imágenes anteriores etiquetadas `:predeploy-20260728` (rollback = `docker tag`
+  de vuelta). Dos trampas de build cazadas en caliente y ya documentadas, y una
+  lección cara: el `up -d` **relanzó dos tareas congeladas**.
 - **2026-07-27** — Cerradas las 3 tareas que quedaban de `tools-y-cierre-plan-fixes`
   (T2 tools MCP gateables · T4 candado de paridad catálogo↔executor · T8 changelog
   automático al cerrar plan) y auditados los 5 planes del córtex. De paso: tres

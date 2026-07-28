@@ -52,11 +52,17 @@ el problema ya esté documentado.
   escribió una build más nueva; recrear el volumen o subir el pin.
 
 - [image-build-recipes-that-bite.md](./image-build-recipes-that-bite.md)
-  — las cuatro recetas que muerden en un sitio: `workers` se construye SOBRE
-  `api-server:manuals` (la base `:ci` está desfasada), `WITH_CLAUDE=1` para el
-  SDK opcional, el grafo del agente vive en la imagen BASE y su contexto es la
-  raíz, y admin-panel se construye DESDE PowerShell (Git Bash mangla el
+  — las seis recetas que muerden en un sitio: **tres** imágenes cuelgan de
+  `BASE_IMAGE` (workers, orchestrator y notification-dispatcher — la base `:ci`
+  está desfasada), `WITH_CLAUDE=1` para el SDK opcional, el grafo del agente
+  vive en la imagen BASE y su contexto es la raíz, el worker lanza
+  `agent-runtime:v1` **SIN prefijo** (construir el prefijado no llega a los
+  runs), y admin-panel se construye DESDE PowerShell (Git Bash mangla el
   build-arg de ruta).
+- [deploy-relaunches-frozen-tasks.md](./deploy-relaunches-frozen-tasks.md)
+  — un `up -d` lanza runs que nadie pidió: el reconciler rescata a los 90 s las
+  tareas `in_progress` **sin ejecución** (>30 min), y son invisibles al chequeo
+  de «¿queda algo corriendo?». Despliega con `--scale orchestrator=0`.
 
 ### ollama / embeddings
 
