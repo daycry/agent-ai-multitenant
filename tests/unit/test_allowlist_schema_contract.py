@@ -79,8 +79,23 @@ def test_the_detector_catches_a_planted_hole() -> None:
 
 
 def test_builtin_grants_are_all_advertised() -> None:
-    allowlist = combine_tool_allowlists({"read_file", "write_file", "run_pytest"}, None)
+    # `run_pytest` salió del anuncio con F5 (2026-07-28): es `docker_command` y
+    # `DockerCommandTool` falla siempre dentro del sandbox. La tool del mismo
+    # trabajo que SÍ ejecuta es `stack_exec`, y es la que va aquí.
+    allowlist = combine_tool_allowlists({"read_file", "write_file", "stack_exec"}, None)
     assert unadvertised(allowlist, None) == set()
+
+
+def test_a_granted_run_tool_is_deliberately_unadvertised() -> None:
+    """El otro lado de F5: conceder un `run_*` (fila heredada en una BD sin
+    migrar) NO lo mete en el anuncio.
+
+    `unadvertised` mide «permitido pero sin esquema», que normalmente es un
+    defecto. Para estas cuatro es lo CORRECTO y hay que dejarlo dicho, o el
+    próximo que lea este contrato lo tomará por un agujero.
+    """
+    allowlist = combine_tool_allowlists({"read_file", "run_pytest"}, None)
+    assert unadvertised(allowlist, None) == {"run_pytest"}
 
 
 def test_project_mcp_tools_are_advertised_for_a_restricted_agent() -> None:

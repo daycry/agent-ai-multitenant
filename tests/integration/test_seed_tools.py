@@ -50,13 +50,38 @@ def _as_async_dsn(dsn: str) -> str:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-def test_seed_creates_tools_in_expected_range(alembic_config, migrations_pg_dsn: str) -> None:
-    """Spec asks for 15-20 tools."""
+def test_seed_writes_exactly_what_it_declares(alembic_config, migrations_pg_dsn: str) -> None:
+    """El seed persiste EXACTAMENTE las filas que declara `BUILTIN_TOOLS`.
+
+    Antes esto afirmaba el rango «15-20 tools» del .docx. Ese rango se escribió
+    cuando el catálogo llevaba la familia `git_*` y las cuatro `run_*`, y dos
+    retiradas posteriores lo han dejado en 13:
+
+      * ADR 0049 / task_06_18_06 — `git_*`: categoría en la UI y NINGÚN ejecutor;
+      * F5 de registry-egress-followups (2026-07-28) — `run_*`: `docker_command`,
+        y `DockerCommandTool` falla siempre dentro del sandbox por diseño.
+
+    Las dos son decisiones de arquitectura registradas, no una deriva. Mantener el
+    `15 <=` obligaría a resembrar tools que no pueden ejecutarse solo para cuadrar
+    una cifra histórica — exactamente al revés de lo que las dos retiradas
+    buscaban.
+
+    El invariante que SÍ vale es la igualdad con la constante: el seed no puede
+    escribir más filas de las que declara (duplicados) ni menos (una fila que
+    falla en silencio). Y un suelo bajo, para que vaciar el catálogo por accidente
+    siga siendo un fallo.
+    """
+    from api_server.seeds.builtin_tools import BUILTIN_TOOLS
+
     command.upgrade(alembic_config, "head")
     asyncio.run(_truncate(migrations_pg_dsn))
 
     n = asyncio.run(_run_seed(_as_async_dsn(migrations_pg_dsn)))
-    assert 15 <= n <= 20, f"expected 15-20 tools, got {n}"
+    assert n == len(BUILTIN_TOOLS), (
+        f"el seed persistió {n} filas y declara {len(BUILTIN_TOOLS)}: "
+        "o hay duplicados o alguna fila falla en silencio"
+    )
+    assert n >= 10, f"el catálogo built-in se quedó en {n} tools: ¿retirada de más?"
 
 
 def test_seed_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
@@ -171,5 +196,15 @@ def test_seeded_tools_visible_to_tenant_sessions(alembic_config, migrations_pg_d
         finally:
             await conn.close()
 
+    from api_server.seeds.builtin_tools import BUILTIN_TOOLS
+
+    # Lo que importa aquí es la RLS, no la cardinalidad: una sesión de tenant ve
+    # el catálogo built-in COMPLETO (política `tools_builtin_read`). Se compara
+    # contra la constante y no contra un rango fijo — ver
+    # `test_seed_writes_exactly_what_it_declares` para por qué el «15-20» del
+    # .docx quedó obsoleto tras las retiradas de `git_*` y `run_*`.
     visible = asyncio.run(_seed_tenant_and_count())
-    assert 15 <= visible <= 20
+    assert visible == len(BUILTIN_TOOLS), (
+        f"la sesión de tenant ve {visible} de {len(BUILTIN_TOOLS)} built-ins: "
+        "la política tools_builtin_read está ocultando filas"
+    )

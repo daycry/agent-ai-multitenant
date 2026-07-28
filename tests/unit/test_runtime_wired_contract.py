@@ -24,7 +24,26 @@ pytestmark = pytest.mark.unit
 # (`agent_runtime.orchestration_tools`): validan sus argumentos y NO emiten
 # efecto porque nadie lo drena worker-side. `task_comment`, la cuarta de esa
 # familia, SÍ tiene consumidor real y por eso no está aquí.
-_NOT_WIRED_TOOLS: frozenset[str] = frozenset({"kanban_update", "agent_invoke", "send_notification"})
+_NO_DRAIN_TOOLS: frozenset[str] = frozenset({"kanban_update", "agent_invoke", "send_notification"})
+
+# Los cuatro `run_*` (F5 de registry-egress-followups, ADR 0093 D3). Distinto
+# motivo, MISMA consecuencia: son `docker_command`, y `DockerCommandTool` dentro
+# del sandbox **falla siempre por diseño** —la imagen del agent-runtime no
+# instala el paquete `docker` ni recibe socket (`test_docker_command_tool_retired`
+# lo fija)—, así que anunciarlas es prometerle al modelo cuatro tools que no
+# pueden ejecutarse. La vía real es `stack_exec`: el worker corre el toolchain en
+# el runtime-template del proyecto.
+#
+# El ADR 0093 retiró el grant del equipo CI4 pero las dejó en el catálogo de
+# plataforma «por compatibilidad», y así se quedaron: 62 grants vivos en 6 roles
+# el 2026-07-28, cada invocación un turno quemado. Es el mismo fallo B-04 que
+# `send_notification`, multiplicado por cuatro.
+_SANDBOX_IMPOSSIBLE_TOOLS: frozenset[str] = frozenset(
+    {"run_pytest", "run_lint", "run_typecheck", "run_build"}
+)
+
+#: Todo lo que NO puede anunciarse al modelo, por cualquiera de los dos motivos.
+_NOT_WIRED_TOOLS: frozenset[str] = _NO_DRAIN_TOOLS | _SANDBOX_IMPOSSIBLE_TOOLS
 
 
 def test_not_wired_tools_are_never_advertised_to_the_model() -> None:
@@ -150,6 +169,56 @@ def test_a_wired_builtin_stays_wired() -> None:
     assert tool_is_runtime_wired("read_file", "builtin") is True
     assert tool_is_runtime_wired("semantic_search", "builtin") is True
     assert tool_is_runtime_wired("stack_exec", "builtin") is True
+
+
+# ---------------------------------------------------------------------------
+# F5 — la puerta trasera que abre retirar un `run_*` MAL
+# ---------------------------------------------------------------------------
+def test_retiring_a_run_tool_does_not_reopen_the_implementation_type_shortcut() -> None:
+    """El punto delicado de F5, y la razón de hacerlo en un orden concreto.
+
+    `tool_is_runtime_wired` cortocircuita por `implementation_type` para las
+    tools de tenant, y `docker_command` está en ese conjunto. Si al retirar los
+    `run_*` se les quitara además el nombre de `_CATALOG_TOOL_NAMES`,
+    `is_unwired_platform_builtin` dejaría de reconocerlos como builtins de
+    plataforma, el atajo tomaría el mando y devolvería `True` para
+    `docker_command`: una fila `run_pytest` superviviente en una BD sin migrar
+    volvería a ser asignable Y anunciable. Es la puerta de atrás de B-04
+    reabierta.
+
+    Por eso siguen siendo nombres CANÓNICOS aunque ya no sean ejecutables.
+    """
+    from api_server.schemas.catalog import tool_is_runtime_wired
+    from shared_domain.tool_names import CANONICAL_TOOL_NAMES, is_unwired_platform_builtin
+
+    for name in sorted(_SANDBOX_IMPOSSIBLE_TOOLS):
+        assert name in CANONICAL_TOOL_NAMES, f"{name} debe seguir siendo canónico"
+        assert is_unwired_platform_builtin(name) is True, name
+        # El tipo real de la fila sembrada, que es el que activaría el atajo.
+        assert (
+            tool_is_runtime_wired(name, "docker_command") is False
+        ), f"{name}: el atajo por implementation_type volvió a declararla ejecutable"
+
+
+def test_a_surviving_run_row_is_never_advertised() -> None:
+    """El caso de la BD sin migrar, de punta a punta: aunque la fila siga viva y
+    concedida, el modelo no la ve."""
+    from workers.agent_tool_schemas import build_model_tool_schemas
+
+    spec = [
+        {
+            "name": "run_pytest",
+            "implementation_type": "docker_command",
+            "config": {"runtime_template": "python-pytest"},
+            "input_schema": {"type": "object"},
+            "description": "falla siempre dentro del sandbox",
+        }
+    ]
+    advertised = {
+        t["function"]["name"] for t in build_model_tool_schemas(["run_pytest", "stack_exec"], spec)
+    }
+    assert "run_pytest" not in advertised
+    assert "stack_exec" in advertised, "la vía real sí se anuncia"
 
 
 def test_both_sides_read_the_same_rule_from_the_domain() -> None:

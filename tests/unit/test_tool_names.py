@@ -97,8 +97,8 @@ def test_git_family_not_canonical_after_retirement() -> None:
 def test_is_runtime_wired_reflects_executor() -> None:
     from shared_domain.tool_names import is_runtime_wired
 
-    # Wired families + run_* + shell.
-    for name in ("read_file", "http_get", "rag_search", "run_pytest", "shell_exec"):
+    # Wired families + the stack toolchain + shell.
+    for name in ("read_file", "http_get", "rag_search", "stack_exec", "shell_exec"):
         assert is_runtime_wired(name) is True, name
     # semantic_search via the rag_search alias.
     assert is_runtime_wired("semantic_search") is True
@@ -107,3 +107,26 @@ def test_is_runtime_wired_reflects_executor() -> None:
     # Builtins with no executor (and the retired git family).
     for name in ("apply_patch", "search_code", "summarize_text", "git_status"):
         assert is_runtime_wired(name) is False, name
+
+
+def test_the_run_family_is_unwired_but_still_canonical() -> None:
+    """F5 (2026-07-28): los `run_*` dejan de ser ejecutables SIN dejar de ser
+    canónicos, y la diferencia con la familia `git_*` es deliberada.
+
+    `git_*` se retiró del catálogo entero, así que su nombre ya no es canónico.
+    Los `run_*` NO pueden seguir ese camino: si perdieran la canonicidad,
+    `is_unwired_platform_builtin` no los reconocería como builtins de plataforma
+    y `tool_is_runtime_wired` caería al atajo por `implementation_type`, que
+    devuelve True para `docker_command`. Una fila superviviente volvería a ser
+    asignable. Ver `test_runtime_wired_contract`.
+    """
+    from shared_domain.tool_names import (
+        CANONICAL_TOOL_NAMES,
+        is_runtime_wired,
+        is_unwired_platform_builtin,
+    )
+
+    for name in ("run_pytest", "run_lint", "run_typecheck", "run_build"):
+        assert is_runtime_wired(name) is False, name
+        assert name in CANONICAL_TOOL_NAMES, name
+        assert is_unwired_platform_builtin(name) is True, name

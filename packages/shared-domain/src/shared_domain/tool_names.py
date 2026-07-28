@@ -135,11 +135,23 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         # memory family
         "memory_recall",
         "memory_store",
-        # run_* docker_command tools
-        "run_pytest",
-        "run_lint",
-        "run_typecheck",
-        "run_build",
+        # NOTA — los cuatro `run_*` SALIERON de esta lista (F5 de
+        # registry-egress-followups, 2026-07-28). Son `docker_command`, y
+        # `DockerCommandTool` dentro del sandbox falla SIEMPRE por diseño: la
+        # imagen del agent-runtime no instala el paquete `docker` ni recibe
+        # socket (ver `test_docker_command_tool_retired`). Anunciarlas al modelo
+        # era prometerle cuatro tools imposibles — el mismo fallo B-04 que
+        # `send_notification`, y con 62 grants vivos detrás. La vía real es
+        # `stack_exec`: el worker corre el toolchain en el runtime-template del
+        # proyecto (ADR 0093).
+        #
+        # Siguen en `_CATALOG_TOOL_NAMES` a propósito, y eso NO es un descuido:
+        # si dejaran de ser nombres canónicos, `is_unwired_platform_builtin` no
+        # los reconocería como builtins de plataforma, `tool_is_runtime_wired`
+        # caería al atajo por `implementation_type` —que devuelve True para
+        # `docker_command`— y una fila superviviente en una BD sin migrar
+        # volvería a ser asignable y anunciable. `test_runtime_wired_contract`
+        # fija las dos mitades.
         # per-project shell
         "shell_exec",
         # stack family — worker-mediated toolchain exec (ADR 0093)

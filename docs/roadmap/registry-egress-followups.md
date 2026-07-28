@@ -79,7 +79,40 @@ salvo que el bind-mount las cubra. La solución completa (imágenes `USER 1000` 
 **Dónde:** `task_prod12_img_01` (prod-12, Fase C). **Esfuerzo:** M (ya planificado). **Prioridad:**
 media.
 
-## F5 — Retirada total de `run_*` del catálogo de plataforma (ADR 0093 D3)
+## F5 — Retirada total de `run_*` del catálogo de plataforma (ADR 0093 D3) — ✅ CERRADA 2026-07-28
+
+**Resolución.** Al abrirla se planteó como limpieza de deuda («código muerto en la superficie
+de tools»). Al ejecutarla resultó ser un **defecto de seguridad de la misma familia que B-04**:
+`docker/agent-runtimes/agent-runtime/tests/test_docker_command_tool_retired.py` demuestra que
+`DockerCommandTool` dentro del sandbox **falla SIEMPRE por diseño** —la imagen «carries NO
+Docker client» y no recibe socket—, así que las cuatro `run_*` se anunciaban al modelo, se
+invocaban y morían. **62 grants vivos** el día de la retirada (run_lint 18, run_pytest 15,
+run_typecheck 15, run_build 14), un turno quemado por invocación.
+
+Hecho en el orden que el análisis de abajo prescribía, y ese orden importaba:
+
+1. fuera de `RUNTIME_WIRED_TOOL_NAMES`, **dentro** de `_CATALOG_TOOL_NAMES` — si perdieran la
+   canonicidad, `tool_is_runtime_wired` caería al atajo por `implementation_type` (True para
+   `docker_command`) y una fila superviviente volvería a ser asignable;
+2. `ROLE_DEFAULT_TOOLS` sustituye las cuatro por **`stack-exec`** en los 6 roles que producían
+   código, para que la retirada no deje a ningún agente sin toolchain (CI4 ya la tenía);
+3. migración **0122**, reversible: **soft-delete** de las cuatro filas y **NI UN grant borrado**
+   —los caminos vivos ya filtran por `deleted_at IS NULL`, así que quedan inertes, y borrarlos
+   sería irreversible porque nadie guarda qué agente tenía qué;
+4. fuera del seed (`builtin_tools.py`), con el mismo bloque de comentario que dejó `git_*`.
+
+**Tests**: el invariante vive en `tests/unit/test_runtime_wired_contract.py`, que ahora
+distingue dos motivos de no-anunciable (sin drain vs. imposible en sandbox) y añade el test de
+la puerta trasera. Se invirtieron cuatro contratos que afirmaban lo contrario
+(`test_tool_catalog_contract` exigía que el catálogo sembrara `run_*`), y el rango «15-20 tools»
+del .docx se cambió por la igualdad con `len(BUILTIN_TOOLS)`: dos retiradas por ADR lo han
+dejado en 13 y mantener el suelo obligaría a resembrar tools que no pueden ejecutarse.
+
+`_RUN_TOOL_COMMANDS` queda **vacío** a propósito: el mecanismo sigue (una tool
+`docker_command` de tenant pasa por ahí), las entradas no.
+
+<details>
+<summary>Análisis previo (2026-07-27), conservado por el orden y la trampa</summary>
 
 **Qué:** ADR 0093 retiró los `run_*` (docker_command rotos in-sandbox) del grant del equipo CI4,
 pero las filas siguen en el catálogo de plataforma (`builtin_tools.py`) + `RUNTIME_WIRED_TOOL_NAMES`
@@ -117,6 +150,14 @@ entonces retirar del seed.
 `_NOT_WIRED_TOOLS` en `test_runtime_wired_contract.py`, ampliar el conjunto conocido de
 `test_catalog_executor_parity.py`, ajustar la cardinalidad de `test_seed_tools.py:53-59`, y añadir
 uno nuevo de la migración (up/down) y otro de la puerta trasera de arriba.
+
+</details>
+
+> **Nota sobre el punto (3) del análisis:** decía «soft-delete de las filas **y borre sus
+> grants**». Al implementarlo se descartó la segunda mitad: borrar los grants es irreversible
+> —nadie guarda qué agente tenía qué— y con las filas en soft-delete son ya inertes, porque
+> todos los caminos vivos filtran por `deleted_at IS NULL`. Un `downgrade` que restaura las
+> tools pero pierde sus asignaciones no es una vuelta atrás.
 
 ## F6 — Causa raíz: creación de proyecto sin `slug` — ✅ CERRADA 2026-07-26
 

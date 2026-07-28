@@ -268,17 +268,29 @@ def test_runtime_wired_set_matches_runtime_executor() -> None:
     #
     # Lo que no puede pasar es que se ANUNCIE algo sin ejecutor: eso le quema un
     # turno al modelo con un error de plataforma que no puede resolver. Al revés
-    # sí se permite, y es deliberado: `kanban_update`, `agent_invoke` y
-    # `send_notification` siguen REGISTRADAS en el runtime —para que una llamada
-    # reciba un error honesto en vez de «unknown tool»— pero fuera de
-    # `RUNTIME_WIRED_TOOL_NAMES`, porque su drain worker-side nunca aterrizó y
-    # anunciarlas es una promesa falsa. Volverán a la lista el día que exista su
-    # consumidor; `tests/unit/test_runtime_wired_contract.py` fija esa lista.
+    # sí se permite, y es deliberado: hay tools REGISTRADAS en el runtime —para
+    # que una llamada reciba un error honesto en vez de «unknown tool»— pero
+    # fuera de `RUNTIME_WIRED_TOOL_NAMES`, porque anunciarlas sería una promesa
+    # falsa. `tests/unit/test_runtime_wired_contract.py` fija esa lista.
     #
     # Escrito como igualdad, este test se puso ROJO al retirarlas y así estuvo un
     # día sin que nadie lo viera (la suite unit pasaba). La igualdad afirmaba algo
     # que el diseño no sostiene.
-    honest_error_only = {"kanban_update", "agent_invoke", "send_notification"}
+    honest_error_only = {
+        # Su drain worker-side nunca aterrizó: devuelven `ok=False, "not wired"`.
+        "kanban_update",
+        "agent_invoke",
+        "send_notification",
+        # F5 (2026-07-28): `docker_command` dentro del sandbox falla SIEMPRE por
+        # diseño —la imagen no lleva cliente Docker ni socket— y su ejecutor
+        # devuelve el error accionable que apunta a `stack_exec`
+        # (`test_docker_command_tool_retired`). Registradas para dar ese error;
+        # no anunciables, porque el modelo no puede hacer nada con ellas.
+        "run_pytest",
+        "run_lint",
+        "run_typecheck",
+        "run_build",
+    }
     assert expected >= RUNTIME_WIRED_TOOL_NAMES, (
         "se anuncian tools sin ejecutor real: " f"{sorted(RUNTIME_WIRED_TOOL_NAMES - expected)}"
     )

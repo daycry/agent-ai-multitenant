@@ -58,19 +58,18 @@ from api_server.db.domain import AgentTool, Tool
 #: computation treats it specially.
 _SHELL_EXEC = "shell_exec"
 
-# Default argv the four ``run_*`` builtins execute inside their runtime
-# container (Plan 06.18 task_06_18_05). The Tool rows carry the runtime
-# template (``implementation_ref``) but not a command, so the orchestrator
-# serialises a sane default ``command_template`` here; ``{path}`` resolves
-# from the call args by the docker_command executor. Tools absent from this
-# map fall back to a no-op echo so the spec is still well-formed (the
-# operator can override per-tool config in a later plan).
-_RUN_TOOL_COMMANDS: dict[str, list[str]] = {
-    "run_pytest": ["pytest", "{path}"],
-    "run_lint": ["ruff", "check", "{path}"],
-    "run_typecheck": ["mypy", "{path}"],
-    "run_build": ["make", "build"],
-}
+# Default argv por tool ``docker_command`` (Plan 06.18 task_06_18_05): la fila
+# lleva el runtime template (``implementation_ref``) pero no un comando, así que
+# el orquestador serializa aquí un ``command_template`` sensato. ``{path}`` lo
+# resuelve el ejecutor desde los args de la llamada. Una tool ausente del mapa
+# cae a un echo no-op, para que el spec siga siendo bien formado.
+#
+# Está VACÍO desde F5 (2026-07-28): sus cuatro entradas eran las `run_*`, que se
+# retiraron del catálogo por no poder ejecutarse dentro del sandbox. Se conserva
+# el mecanismo —no las entradas— porque una tool `docker_command` de TENANT sigue
+# pasando por aquí; borrarlo cambiaría su fallback. Que quede vacío es la señal
+# honesta de que hoy ninguna fila del catálogo built-in lo necesita.
+_RUN_TOOL_COMMANDS: dict[str, list[str]] = {}
 
 
 async def resolve_agent_tool_names(session: AsyncSession, agent_id: UUID) -> frozenset[str] | None:

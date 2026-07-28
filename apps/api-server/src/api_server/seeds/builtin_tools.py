@@ -176,75 +176,24 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         ),
     ),
     # ----- Code runtime -----
-    BuiltinTool(
-        "run-pytest",
-        "run_pytest",
-        "Run pytest inside the python-pytest runtime. Returns summary + output.",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        600,
-        _obj(
-            {
-                "path": {"type": "string", "default": "tests/"},
-                "args": {"type": "array", "items": {"type": "string"}, "default": []},
-            }
-        ),
-        _obj(
-            {
-                "exit_code": {"type": "integer"},
-                "passed": {"type": "integer"},
-                "failed": {"type": "integer"},
-                "stdout": {"type": "string"},
-            },
-            ["exit_code"],
-        ),
-        implementation_ref="python-pytest",
-    ),
-    BuiltinTool(
-        "run-lint",
-        "run_lint",
-        "Run the project's linter (ruff/eslint depending on the stack).",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        120,
-        _obj({"path": {"type": "string", "default": "."}}),
-        _obj({"exit_code": {"type": "integer"}, "issues": {"type": "array"}}, ["exit_code"]),
-    ),
-    BuiltinTool(
-        "run-typecheck",
-        "run_typecheck",
-        "Run the type checker (mypy / tsc / pyright depending on the stack).",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        180,
-        _obj({"path": {"type": "string", "default": "."}}),
-        _obj({"exit_code": {"type": "integer"}, "errors": {"type": "array"}}, ["exit_code"]),
-    ),
-    BuiltinTool(
-        "run-build",
-        "run_build",
-        "Run the project's build (npm build / cargo build / ...).",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        600,
-        _obj(
-            {
-                "target": {"type": "string", "default": "default"},
-                "release": {"type": "boolean", "default": False},
-            }
-        ),
-        _obj(
-            {
-                "exit_code": {"type": "integer"},
-                "artifacts": {"type": "array", "items": {"type": "string"}},
-            },
-            ["exit_code"],
-        ),
-    ),
+    # RETIRADAS (F5 de registry-egress-followups, 2026-07-28; ADR 0093 D3): las
+    # cuatro `run_*` (run-pytest / run-lint / run-typecheck / run-build) eran
+    # `docker_command`, y `DockerCommandTool` dentro del sandbox falla SIEMPRE por
+    # diseño: la imagen del agent-runtime «carries NO Docker client» y no recibe
+    # socket (Dockerfile + `test_docker_command_tool_retired`). Ofrecerlas era
+    # prometer al operador —y anunciarle al modelo— cuatro tools que no pueden
+    # ejecutarse: el mismo fallo B-04 de `send_notification`, con 62 grants vivos
+    # detrás el día de la retirada y un turno quemado por invocación.
+    #
+    # La vía que SÍ ejecuta el toolchain es `stack-exec` (ADR 0093): el worker lo
+    # corre en el runtime-template del proyecto, con su egress y su caché de
+    # dependencias. Los defaults de rol ya la conceden en su lugar.
+    #
+    # Sus NOMBRES siguen en `_CATALOG_TOOL_NAMES` a propósito —a diferencia de la
+    # familia `git_*` de abajo, que salió del todo—: si dejaran de ser canónicos,
+    # `tool_is_runtime_wired` caería al atajo por `implementation_type` (que dice
+    # True para `docker_command`) y una fila superviviente en una BD sin migrar
+    # volvería a ser asignable. Ver `tests/unit/test_runtime_wired_contract.py`.
     # ----- Git -----
     # RETIRED (task_06_18_06, ADR 0049): the four git tools (git_status /
     # git_diff / git_commit / git_log) carried a UI category but NO runtime

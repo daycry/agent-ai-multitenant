@@ -66,24 +66,39 @@ def test_old_broken_categories_are_not_canonical() -> None:
 # DEBEN estar gateadas: destructivas, ejecutan código, o comunican al exterior.
 _MUST_BE_GATED = {
     "delete_file",  # destructiva (write_file ya se gateaba, delete no)
-    "run_pytest",  # ejecutan código arbitrario del repo
-    "run_lint",
-    "run_typecheck",
-    "run_build",
+    "stack_exec",  # ejecuta el toolchain del proyecto (la vía real, ADR 0093)
+}
+
+# Los cuatro `run_*` salieron de `RUNTIME_WIRED_TOOL_NAMES` con F5 (2026-07-28):
+# son `docker_command` y fallan siempre dentro del sandbox. Como
+# `send_notification`, CONSERVAN su categoría — ver el test de abajo.
+_UNWIRED_BUT_KEEP_CATEGORY = {
+    "send_notification": "external_communication",
+    "run_pytest": "code_changes",
+    "run_lint": "code_changes",
+    "run_typecheck": "code_changes",
+    "run_build": "code_changes",
 }
 
 
-def test_send_notification_keeps_its_category_while_unwired() -> None:
-    """`send_notification` salió de `RUNTIME_WIRED_TOOL_NAMES` (B-04: su ejecutor
-    devuelve «not wired», así que anunciarla era una promesa falsa), pero
-    CONSERVA su categoría de gate.
+def test_unwired_tools_keep_their_gate_category() -> None:
+    """Las tools que salieron de `RUNTIME_WIRED_TOOL_NAMES` CONSERVAN su categoría.
 
-    El día que se cablee su consumidor volverá a anunciarse, y debe reaparecer ya
-    gateada como `external_communication` — no colarse sin categoría y escapar al
-    gate incluso bajo customer-external (prod-03 A8). Por eso la categoría se
-    verifica aquí aunque la tool no esté wired hoy."""
-    assert "send_notification" in DEFAULT_TOOL_CATEGORIES
-    assert DEFAULT_TOOL_CATEGORIES["send_notification"] == "external_communication"
+    `send_notification` (B-04: su ejecutor devuelve «not wired») y los cuatro
+    `run_*` (F5: son `docker_command` y fallan siempre dentro del sandbox) no se
+    anuncian hoy. Pero si algún día se cablea su consumidor —o alguien las
+    reintroduce— tienen que reaparecer YA gateadas, no colarse sin categoría y
+    escapar al gate incluso bajo customer-external (prod-03 A8).
+
+    Quitarles la categoría al retirarlas parecería limpieza y sería justo el
+    agujero: el nombre volvería a estar disponible sin gate.
+    """
+    for tool, category in _UNWIRED_BUT_KEEP_CATEGORY.items():
+        assert tool in DEFAULT_TOOL_CATEGORIES, f"{tool} perdió su categoría al retirarse"
+        assert DEFAULT_TOOL_CATEGORIES[tool] == category, tool
+        assert (
+            tool not in RUNTIME_WIRED_TOOL_NAMES
+        ), f"{tool} volvió a estar wired — si es a propósito, muévela a _MUST_BE_GATED"
 
 
 def test_sensitive_wired_tools_are_gated() -> None:
