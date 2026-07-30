@@ -95,6 +95,7 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.fx_fetcher",
             "workers.git_remote_sweep",
             "workers.human_escalation",
+            "workers.approval_expiry",
             "workers.repo_clone",
             "workers.plan_pr",
             "workers.plan_docs",

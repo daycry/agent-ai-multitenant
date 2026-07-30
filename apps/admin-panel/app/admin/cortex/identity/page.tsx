@@ -24,6 +24,8 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, Info, RefreshCw, Save, Sparkles } from "lucide-react";
 
+import { IdentityTimeline } from "@/components/cortex/identity-timeline";
+import { TraitRadar } from "@/components/cortex/trait-radar";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,8 +44,6 @@ import {
   needsOnboarding,
   parseLines,
   reflectCortexIdentity,
-  TRAIT_LABELS_ES,
-  traitToPercent,
   updateCortexIdentity,
   type CortexIdentity,
 } from "@/lib/cortex-identity";
@@ -298,23 +298,9 @@ function CortexIdentityBody() {
               Los rasgos Big-Five y el ánimo base los ajusta la reflexión periódica de forma
               acotada; no se editan a mano.
             </p>
-            <ul className="flex flex-col gap-2">
-              {(Object.keys(TRAIT_LABELS_ES) as (keyof typeof TRAIT_LABELS_ES)[]).map((key) => (
-                <li key={key} className="flex items-center gap-3 text-sm">
-                  <span className="w-32 shrink-0">{TRAIT_LABELS_ES[key]}</span>
-                  <span className="bg-muted relative h-2 flex-1 overflow-hidden rounded-full">
-                    <span
-                      className="bg-primary absolute inset-y-0 left-0 rounded-full"
-                      style={{ width: `${traitToPercent(identity.traits[key])}%` }}
-                      data-testid={`cortex-identity-trait-${key}`}
-                    />
-                  </span>
-                  <span className="text-muted-foreground w-10 text-right text-xs">
-                    {identity.traits[key].toFixed(2)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            {/* Radar Big-Five (F3.6): la forma del perfil, no cinco barras sueltas.
+                La geometría es pura y testeada (`traitRadarAxes`). */}
+            <TraitRadar traits={identity.traits} />
 
             <div className="flex items-center gap-2 pt-2">
               <Button
@@ -375,6 +361,13 @@ function CortexIdentityBody() {
             )}
           </CardContent>
         </Card>
+      ) : null}
+
+      {/* Timeline de versiones (F3.6): qué tocó cada reflexión, con su diff. */}
+      {identity ? (
+        <div className="mt-6">
+          <IdentityTimeline />
+        </div>
       ) : null}
     </div>
   );

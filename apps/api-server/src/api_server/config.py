@@ -10,13 +10,37 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Substrings that flag a value as a known dev-only default. A staging/prod
 # deployment that still carries any of these is misconfigured (Plan 06.14
 # task_06_14_03 / secrets-config-1/2/3/5/7).
 _DEV_SECRET_MARKERS = ("changeme", "dev-only", "minioadmin")
+
+# The CLOSED set of deployment environments (prod-09 task_prod09_02, authz-2).
+# It used to be a free-form string, and every guard in the codebase asked
+# "environment in {staging, prod}?" — so ANY unrecognised value (a typo like
+# `production`, an empty var, a stray `PROD ` with a trailing space) silently
+# meant "dev": no dev-secret guard, no admin MFA, no IP allowlist, no short admin
+# session. A misspelling downgraded the whole security posture without a single
+# log line. The enum makes that impossible: an unknown value FAILS THE ARRANCADA.
+_KNOWN_ENVIRONMENTS = frozenset({"dev", "staging", "prod"})
+
+# Environments where the deployment is expected to be real, i.e. everything that
+# is not `dev`. Written as "not dev" rather than "in {staging, prod}" on purpose:
+# adding a fourth environment later must default to ENFORCING the guards, not to
+# skipping them.
+_DEV_ENVIRONMENT = "dev"
+
+# Minimum length of an HMAC signing secret outside dev. HS256 keys shorter than
+# the hash output (32 bytes) weaken the MAC and, far more importantly in
+# practice, a short secret is a guessable/brute-forceable one — and this secret
+# mints SESSIONS. 32 chars is the floor, not a recommendation (the installer
+# generates 48+). Applies to the two secrets that sign BEARER TOKENS
+# (`jwt_secret`, `internal_token_secret`); prod-10 (secrets-3) generalises the
+# length floor to the rest of the secret families.
+_MIN_HMAC_SECRET_LEN = 32
 
 
 class Settings(BaseSettings):
@@ -29,12 +53,16 @@ class Settings(BaseSettings):
         description="SQLAlchemy URL for the *application* role (NOBYPASSRLS).",
     )
     admin_database_url: str = Field(
-        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        default="postgresql+asyncpg://service_user:changeme-service-dev-only"
         "@localhost:15432/agentic_platform",
         description=(
-            "SQLAlchemy URL for the System Admin endpoints. Connects as a "
-            "BYPASSRLS role so cross-tenant reads and audit_log inserts go "
-            "through without setting app.tenant_id."
+            "SQLAlchemy URL for the System Admin endpoints. Connects as "
+            "`service_user`: BYPASSRLS so cross-tenant reads and audit_log "
+            "inserts go through without setting app.tenant_id, but NO DDL "
+            "(prod-14 task_05 / tenancy-2). It used to be `migrations_user`, the "
+            "schema OWNER with GRANT ALL, which put `ALTER TABLE ... DISABLE ROW "
+            "LEVEL SECURITY` inside the blast radius of the /admin surface. "
+            "`migrations_user` is now referenced only by Alembic (migrations/env.py)."
         ),
     )
 
@@ -45,6 +73,34 @@ class Settings(BaseSettings):
     )
     jwt_algorithm: str = "HS256"
     jwt_expiration_minutes: int = 60 * 24  # 24h
+
+    # ----- Internal worker->api tokens (prod-09 task_prod09_03, secrets-9) -----
+    # HMAC secret for the `AGENTIC_INTERNAL_TOKEN` the worker mints per agent run
+    # (`auth/internal_agent.mint_agent_token`) and the api-server verifies on
+    # `/internal/agent/*`. It used to be `jwt_secret` — the SAME key that signs
+    # human SESSIONS — which put "can forge a System-Admin session" inside the
+    # blast radius of the workers container. The workers container legitimately
+    # holds this secret; it must NOT be able to mint user sessions with it.
+    #
+    # SEPARATE CRYPTOGRAPHIC DOMAINS, not merely separate values: agent tokens are
+    # already discriminated by the `kind=agent` claim, but a claim only helps if
+    # the verifier checks it — a shared key means one forgotten check is a full
+    # privilege escalation. Different keys make the two token families
+    # unforgeable across domains by construction.
+    #
+    # DEPLOYMENT (see docker/docker-compose.yml): the workers container must
+    # receive `API_SERVER_INTERNAL_TOKEN_SECRET` with the same value as the
+    # api-server (the worker mints through `api_server.config`, so the env var
+    # carries the api-server prefix); it no longer needs the api-server's
+    # `API_SERVER_JWT_SECRET` at all. The tokens are ephemeral per container, so
+    # rotation needs no migration — just a coordinated restart.
+    internal_token_secret: SecretStr = Field(
+        default=SecretStr("dev-only-internal-token-secret-change-me"),
+        description=(
+            "HMAC secret for worker->api internal agent tokens. MUST differ from "
+            "jwt_secret so a compromised worker cannot forge user sessions."
+        ),
+    )
 
     # ----- Review URL signing (Plan 06.5 task_06_5_08/10) -----
     # HMAC key used by `workers.review_runtime.sign_review_url` to mint
@@ -191,6 +247,23 @@ class Settings(BaseSettings):
     admin_session_ttl_minutes: int = Field(
         default=15,
         description="Max age (minutes) of a session for /admin/* access (staging/prod only).",
+    )
+
+    # ----- WebSockets (prod-09 task_prod09_13, authz-3) -----
+    # How often an OPEN socket re-checks that its session is still live and its
+    # token has not expired. The accept-time check was the ONLY one, so
+    # `routers/ws.py`'s documented guarantee ("logout/revocation closes existing
+    # sockets") was false for every socket already connected: a logged-out user,
+    # a SCIM-deprovisioned account or an expired token kept streaming kanban /
+    # execution / conversation events for as long as the browser tab stayed open.
+    # 30 s bounds the leak without adding meaningful load (one Redis GET + one
+    # HMAC verify per socket per interval). 0 disables the re-check.
+    ws_session_revalidate_seconds: int = Field(
+        default=30,
+        description=(
+            "Seconds between session/expiry re-checks inside an open WebSocket "
+            "(0 disables). A revoked session closes the socket with 1008."
+        ),
     )
 
     # ----- Redis (sessions, rate limit) -----
@@ -467,23 +540,95 @@ class Settings(BaseSettings):
     )
 
     environment: str = Field(
-        default="dev", description="Tag emitted in logs: dev | staging | prod."
+        default="dev",
+        description=(
+            "Deployment environment — a CLOSED set: dev | staging | prod. Any "
+            "other value fails startup (prod-09 task_prod09_02): an "
+            "unrecognised tag used to be treated as `dev`, silently disabling "
+            "the dev-secret guard and the whole admin hardening."
+        ),
     )
     cors_allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000"],
         description="Origins allowed by CORS (frontend admin-panel, etc.).",
     )
 
+    # ----- Interactive API docs (prod-09 task_prod09_14, api-7) -----
+    # `/docs` + `/openapi.json` published the COMPLETE internal schema —
+    # `/admin/*`, `/internal/agent/*`, every tenant route — to anyone who could
+    # reach the port, with no authentication. That is a free reconnaissance map of
+    # the whole attack surface. Default: ON in dev, OFF everywhere else.
+    # `None` means "derive from environment"; an explicit True/False is the
+    # break-glass override (e.g. a staging environment used as a demo).
+    # NOTE: this does NOT affect the PUBLIC `/api/v1` contract, which is a
+    # separate, curated document (`routers/api_v1/openapi.py`) that intentionally
+    # stays published — only the internal all-routes schema is withdrawn.
+    api_docs_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Publish /docs + /openapi.json (the FULL internal schema). None = "
+            "only in dev. Does not affect the public /api/v1 docs."
+        ),
+    )
+
+    @property
+    def api_docs_published(self) -> bool:
+        """Whether the internal Swagger UI + OpenAPI JSON should be mounted.
+
+        A property rather than a resolved field so the fail-closed default is
+        computed from the FINAL environment (validated + normalised) and cannot
+        be desynchronised by a later env change in tests.
+        """
+        if self.api_docs_enabled is None:
+            return self.environment == _DEV_ENVIRONMENT
+        return self.api_docs_enabled
+
+    @field_validator("environment")
+    @classmethod
+    def _validate_environment(cls, value: str) -> str:
+        """Reject any environment tag outside ``{dev, staging, prod}`` (authz-2).
+
+        A field validator (not a model one) so it runs BEFORE
+        :meth:`_forbid_dev_secrets_outside_dev`, which branches on this value:
+        the secret guard must never decide anything from an unvalidated tag.
+
+        Whitespace and case are normalised (``" PROD "`` -> ``"prod"``) because a
+        trailing newline in a compose/`.env` file is a configuration accident,
+        not an intent to run unguarded. Anything else — ``production``,
+        ``staging2``, ``""`` — is a hard failure with the accepted values
+        spelled out, so the operator fixes it in seconds instead of running a
+        publicly-known JWT secret in production for months.
+        """
+        normalised = value.strip().lower()
+        if normalised not in _KNOWN_ENVIRONMENTS:
+            raise ValueError(
+                f"API_SERVER_ENVIRONMENT={value!r} is not a known environment. "
+                f"Accepted values: {', '.join(sorted(_KNOWN_ENVIRONMENTS))}. "
+                "An unrecognised value used to be treated as 'dev', which "
+                "disabled the dev-secret guard and the /admin hardening."
+            )
+        return normalised
+
     @model_validator(mode="after")
     def _forbid_dev_secrets_outside_dev(self) -> Settings:
-        """Fail fast when a staging/prod deployment still carries a dev-only
-        default for any secret. Phase 15 moves these to Vault; until then
-        this guard stops a publicly-known JWT secret, MinIO password or DB
-        credential from silently reaching production (secrets-config-*)."""
-        if self.environment not in {"staging", "prod"}:
+        """Fail fast when a non-dev deployment still carries a dev-only default
+        for any secret. Phase 15 moves these to Vault; until then this guard
+        stops a publicly-known JWT secret, MinIO password or DB credential from
+        silently reaching production (secrets-config-*).
+
+        FAIL-CLOSED since prod-09 task_prod09_02 (authz-2): the predicate is
+        ``environment == "dev"`` (skip), not ``environment in {staging, prod}``
+        (enforce). The old shape meant any environment value the guard did not
+        recognise skipped it — the very definition of fail-open. The enum on
+        ``environment`` already closes today's hole; writing the guard as
+        "everything except dev" is what keeps a FUTURE fourth environment
+        guarded by default instead of by remembering to update this set.
+        """
+        if self.environment == _DEV_ENVIRONMENT:
             return self
         candidates = {
             "API_SERVER_JWT_SECRET": self.jwt_secret.get_secret_value(),
+            "API_SERVER_INTERNAL_TOKEN_SECRET": self.internal_token_secret.get_secret_value(),
             "API_SERVER_REVIEW_URL_SIGNING_SECRET": (
                 self.review_url_signing_secret.get_secret_value()
             ),
@@ -509,6 +654,37 @@ class Settings(BaseSettings):
                 f"environment={self.environment!r} but these settings still use dev "
                 f"defaults: {', '.join(offending)}. Set them to real secrets "
                 "(Vault-backed in production)."
+            )
+
+        # Length floor for the secrets that sign BEARER TOKENS (task_prod09_02
+        # point 3). "Not a dev default" is not the same as "strong": `x` passes
+        # the marker check and mints valid sessions. Kept separate from the
+        # marker check so the error tells the operator which problem they have.
+        hmac_secrets = {
+            "API_SERVER_JWT_SECRET": self.jwt_secret.get_secret_value(),
+            "API_SERVER_INTERNAL_TOKEN_SECRET": self.internal_token_secret.get_secret_value(),
+        }
+        too_short = sorted(
+            f"{name} ({len(value)} chars)"
+            for name, value in hmac_secrets.items()
+            if len(value) < _MIN_HMAC_SECRET_LEN
+        )
+        if too_short:
+            raise ValueError(
+                f"environment={self.environment!r} requires HMAC signing secrets of at "
+                f"least {_MIN_HMAC_SECRET_LEN} characters; too short: "
+                f"{', '.join(too_short)}."
+            )
+
+        # The whole point of task_prod09_03 is that the two signing domains are
+        # DIFFERENT. Setting both env vars to the same value would satisfy every
+        # check above while restoring the exact blast radius we set out to shrink,
+        # so it is rejected explicitly rather than left as a footgun.
+        if self.internal_token_secret.get_secret_value() == self.jwt_secret.get_secret_value():
+            raise ValueError(
+                "API_SERVER_INTERNAL_TOKEN_SECRET must differ from "
+                "API_SERVER_JWT_SECRET: sharing one key lets a compromised "
+                "worker forge human sessions (secrets-9)."
             )
         return self
 

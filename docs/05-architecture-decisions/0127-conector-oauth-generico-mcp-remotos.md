@@ -49,7 +49,7 @@ todos.
   (`auth/sso/oidc.py`, callback/redirect) y el **device-flow de GitHub Copilot**
   (ADR 0021, tokens en Vault). El almacenamiento en Vault por-tenant también existe.
 
-## Decisión propuesta
+## Decisión
 
 Construir **UN conector OAuth genérico para MCP remotos**, data-driven por la
 plantilla del catálogo, apoyado en el `OAuthClientProvider` del SDK + un

@@ -194,14 +194,55 @@ async def get_principal(
     )
 
 
-def require_system_admin(
+async def _is_db_system_admin(user_id: UUID) -> bool:
+    """Authoritative System Admin check against the DB (prod-09 task_prod09_04).
+
+    The ``sys`` JWT claim is fixed at LOGIN and the session TTL is 24 h, so
+    ``UPDATE users SET is_system_admin = false`` used to leave the degraded
+    admin with a full cross-tenant, BYPASSRLS session for up to a day — with no
+    way to end it (see the note in :meth:`SessionStore.revoke_user_sessions`:
+    the per-user index only covers TENANT-scoped sessions, and an admin's
+    session is tenant-less). Re-reading the flag per request is what makes the
+    revocation immediate.
+
+    Cheap: one indexed read by primary key on a global (un-RLSed) table, the
+    same query ``/auth/me`` already runs on every page load. Uses the BYPASSRLS
+    admin engine because ``users`` carries no ``tenant_id``.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(User.is_system_admin).where(User.id == user_id, User.deleted_at.is_(None))
+        )
+        return bool(result.scalar_one_or_none())
+
+
+async def require_system_admin(
     principal: AuthPrincipal = Depends(get_principal),
 ) -> AuthPrincipal:
-    """Gate an endpoint to System Admin only. 403 otherwise."""
+    """Gate an endpoint to System Admin only. 403 otherwise.
+
+    TWO checks, in this order (task_prod09_04, authz-4):
+
+      1. the ``sys`` claim — cheap, and it keeps a regular tenant user from ever
+         causing a DB round-trip on the admin surface;
+      2. ``users.is_system_admin`` re-read from the DB — the AUTHORITATIVE one.
+         Without it a privilege retired in the database stayed alive inside every
+         session already issued (24 h TTL), which is precisely the window an
+         off-boarding is meant to close.
+
+    Mirrors :func:`require_system_owner`, which has re-verified against the DB
+    since ADR 0074 — the admin gate was the one left trusting its claim.
+    """
     if not principal.is_system_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="system admin role required",
+        )
+    if not await _is_db_system_admin(principal.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system admin privileges have been revoked",
         )
     return principal
 
@@ -233,20 +274,29 @@ async def require_system_owner(
     return principal
 
 
-async def require_admin_or_owner(
-    principal: AuthPrincipal = Depends(get_principal),
-) -> AuthPrincipal:
-    """Gate to System Admin OR System Owner (ADR 0074). Composite so neither
-    primitive (``require_system_admin`` / ``require_system_owner``) is overloaded
-    in-place."""
-    if principal.is_system_admin:
-        return principal
-    if await _is_db_system_owner(principal.user_id):
-        return principal
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="system admin or system owner role required",
-    )
+# RETIRADA: `require_admin_or_owner` (2026-07-30)
+# -----------------------------------------------
+# La dependencia compuesta «System Admin OR System Owner» que el ADR 0074
+# (decisión 4) previó para las superficies admin del owner existió desde
+# entonces con CERO llamantes: ni un `Depends(require_admin_or_owner)` en todo
+# `apps/`. Solo la referenciaban su propia definición, una línea de
+# `tests/integration/test_cortex_f0_ownership.py` y la documentación.
+#
+# Código muerto en la superficie de AUTORIZACIÓN es el peor sitio para tenerlo:
+# venía con test verde y docstring convincente, así que el siguiente que
+# necesitase «admin o owner» lo habría cableado creyendo que estaba en uso y
+# probado en producción.
+#
+# Y no hacía falta: el System Owner se crea en el bootstrap del PRIMER usuario
+# junto con el flag de admin (`routers/auth.py`: `is_system_admin=is_first_user`
+# **y** `is_system_owner=is_first_user`, con índice único parcial que lo hace
+# singleton), así que el owner YA pasa por `require_system_admin`. La única
+# situación que la compuesta cubría —owner sin ser admin— solo se alcanza con un
+# UPDATE a mano en la base de datos.
+#
+# Si alguna vez hace falta de verdad, se reconstruye en cuatro líneas sobre
+# `_is_db_system_admin` / `_is_db_system_owner`, que siguen aquí y sí tienen
+# llamantes. Lo que no se debe reponer es una puerta sin endpoint.
 
 
 # ---------------------------------------------------------------------------

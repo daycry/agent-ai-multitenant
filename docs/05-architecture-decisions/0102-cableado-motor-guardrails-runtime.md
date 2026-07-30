@@ -76,7 +76,7 @@ post_tool` (`types.py:28-30`). El check `prompt_injection`
    entregable antes** que el resto, para tener defensa de inyección indirecta en
    producción cuanto antes con riesgo cero de bloquear runs legítimos.
 
-## Decisión propuesta
+## Decisión
 
 ### D1 — Slice MÍNIMO viable primero: `post_tool` en modo LOG con el baseline `prompt_injection`
 

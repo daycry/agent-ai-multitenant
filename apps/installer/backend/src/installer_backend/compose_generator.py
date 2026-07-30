@@ -555,7 +555,11 @@ def _app_environment(cfg: InstallerConfig, prefix: str, *, prod: bool) -> dict[s
     """
 
     return {
-        f"{prefix}ENVIRONMENT": cfg.system.environment.value,
+        # `.runtime_value`, NO `.value`: el enum del wizard dice `production` y el
+        # runtime solo acepta {dev, staging, prod}. Emitirlo en crudo impedía
+        # arrancar al api-server generado por el instalador en cuanto el guard de
+        # `environment` pasó a fail-closed (prod-09 task_02).
+        f"{prefix}ENVIRONMENT": cfg.system.environment.runtime_value,
         # Reference the per-service DSN the .env carries (config_generators
         # writes one per service: api-server gets the app role, workers/notify
         # the migrations role, etc.) — NOT a shared bare var.

@@ -84,7 +84,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     4. Commit `feat(cortex-f5): TTS speed param for arousal modulation`.
   - Aceptación: el test de regresión existente (`test_http_tts_posts_voice_and_returns_audio`) sigue verde y `speed` viaja sólo cuando difiere de 1.0.
 
-- [ ] **A2. Mapeo puro `arousal → speed` (afecto → prosodia)**
+- [x] **A2. Mapeo puro `arousal → speed` (afecto → prosodia)**
   - Ficheros: `apps/api-server/src/api_server/cortex/voice_affect.py` (NUEVO — función pura `arousal_to_speed(arousal: float) -> float`, clamp determinista, p.ej. `speed = clamp(0.85 + 0.5*arousal, 0.85, 1.25)`); `tests/unit/test_cortex_voice_affect.py` (NUEVO).
   - TDD:
     1. Test: `arousal=0 → 0.85`, `arousal=1 → 1.25`, `arousal=0.5 → 1.10`, y clamp ante valores fuera de `[0,1]`. Falla (módulo no existe).
@@ -96,7 +96,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
 
 > Precondición de arranque: existe el cerebro reactivo del córtex de F1 (contrato esperado: una corrutina `respond(owner_principal, user_text) -> str` análoga a `_respond` del asistente, sobre `cortex.default_model`) y el lector de afecto de F2 (`read_affect(owner_user_id) -> AffectState` con `valence/arousal/dominance/mood_label/drives`). Si las firmas reales difieren, adaptar el adaptador (B2), nunca el protocolo del WS.
 
-- [ ] **B2. Adaptador de turno del córtex para voz (`respond` + lectura de afecto)**
+- [x] **B2. Adaptador de turno del córtex para voz (`respond` + lectura de afecto)**
   - Ficheros: `apps/api-server/src/api_server/cortex/voice_turn.py` (NUEVO — `cortex_respond(principal, user_text)` que invoca el cerebro F1, persiste el turno en `cortex_turns` igual que el chat de F1; `affect_frame(owner_user_id) -> dict` que lee `read_affect` de F2 y devuelve el payload `{type:'affect', ...}`); `tests/unit/test_cortex_voice_turn.py` (NUEVO).
   - TDD:
     1. Test con dobles: un cerebro scripted (estilo `ScriptedAssistantModel`) y un `read_affect` fake → `cortex_respond` devuelve el texto y `affect_frame` construye el dict con las 5 claves PAD+drives. Falla (módulo no existe).
@@ -104,7 +104,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     3. Verde + commit.
   - Aceptación: `cortex_respond` persiste exactamente un turno por llamada (sin duplicados); `affect_frame` nunca lanza si Redis está vacío (fail-open: devuelve baseline neutro).
 
-- [ ] **B3. WS `/ws/owner/cortex/voice` (gate owner DB-authoritative + frame afectivo)**
+- [x] **B3. WS `/ws/owner/cortex/voice` (gate owner DB-authoritative + frame afectivo)**
   - Ficheros: `apps/api-server/src/api_server/routers/cortex_voice.py` (NUEVO, clona `assistant_voice.py`); registrar el router en `apps/api-server/src/api_server/main.py` (modificar: `include_router`); reutiliza `_resolve_principal` de `routers/ws.py`, `VoiceSession`/`VoiceTurn`, `HttpSpeechToText/HttpTextToSpeech`, settings `assistant_stt_url`/`assistant_tts_url`/`assistant_tts_default_voice`, el allowlist `_SUPPORTED_VOICES`, `_resolve_voice`, `_MAX_UTTERANCE_BYTES` y `_VoiceLoopState`.
   - Diferencias clave frente al asistente: (a) gate = `_is_db_system_owner(principal.user_id)` (clonar la verificación de `auth/deps.require_system_owner` en el accept del WS; un no-owner → close 1008); (b) `respond` = `cortex_respond`; (c) `synthesize` con `speed = arousal_to_speed(arousal_actual)` (lee el arousal vía `affect_frame` ANTES de sintetizar, o aplica el frame del turno previo — decisión: usar el afecto vigente en Redis al inicio de la síntesis); (d) tras `{type:'answer'}` y antes del binario, enviar `{type:'affect', ...}`.
   - TDD (integración, patrón de `test_cortex_f0_ownership.py` + WS de `routers/ws.py`):
@@ -116,7 +116,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
 
 ### Fase C — Avatar afectivo (frontend)
 
-- [ ] **C1. `affectToVisual` puro — PAD → color/expresión**
+- [x] **C1. `affectToVisual` puro — PAD → color/expresión**
   - Ficheros: `apps/admin-panel/lib/cortex-affect.ts` (NUEVO — `affectToVisual({valence,arousal,dominance,mood_label})` → `{hue, swaySpeed, blinkRate, mouthBias, label}`, puro y determinista); `apps/admin-panel/lib/__tests__/cortex-affect.test.ts` (NUEVO, vitest).
   - TDD:
     1. Tests: valence alto → hue cálido/verde; valence bajo → azul/frío; arousal alto → sway más rápido y blink más frecuente; clamps. Falla.
@@ -124,7 +124,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     3. `pnpm --filter admin-panel test` verde + commit.
   - Aceptación: mapeo puro cubierto; sin dependencias de React.
 
-- [ ] **C2. `CortexAvatarFace` — avatar modulado por afecto**
+- [x] **C2. `CortexAvatarFace` — avatar modulado por afecto**
   - Ficheros: `apps/admin-panel/components/cortex/cortex-avatar-face.tsx` (NUEVO — extiende `avatar-face.tsx` aceptando además `affect?: {valence,arousal,dominance,mood_label}`; aplica `affectToVisual` a color del rostro, velocidad de `sway`, frecuencia de parpadeo y curvatura de la boca). Reutiliza la estructura SVG existente; **sin** motor 3D (mantener la deuda conocida de avatar SVG del ADR 0073).
   - TDD:
     1. Test de render (vitest + testing-library) en `apps/admin-panel/components/cortex/__tests__/cortex-avatar-face.test.tsx`: dado `affect` con valence negativo, el `style`/`fill` reflejan el hue frío; con `affect` ausente cae a neutro. Falla.
@@ -139,6 +139,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     2. Implementa.
     3. Verde + commit.
   - Aceptación: e2e/manual en navegador (incertidumbre del ADR 0073, QA visual humano): cabeza + boca sincronizada + color que sigue al afecto, en ES y EN, con el disclaimer siempre visible.
+  - ⏳ **Pendiente (2026-07-30):** sólo falta el QA visual humano en navegador (ES+EN) que exige su aceptación; el test vitest `components/cortex/cortex-voice-call.test.tsx` (frame `affect` → estado + copy honesto, binario → audio) ya está escrito y en verde.
 
 - [ ] **C4. Página `app/admin/cortex` integra la videollamada (gated isSystemOwner)**
   - Ficheros: `apps/admin-panel/app/admin/cortex/page.tsx` (si F1 ya la creó, MODIFICAR para añadir el botón/tab "Videollamada" que monta `CortexVoiceCall`; si no existe aún por F1, crear el esqueleto gated). Gating con `useCurrentUser().isSystemOwner` (ya expuesto por F0); el grupo NAV "Córtex" `systemOwnerOnly` es de F1.
@@ -147,10 +148,11 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     2. Implementa el wiring.
     3. Verde + commit.
   - Aceptación: sólo el owner accede a la videollamada del córtex; no-owner sin superficie.
+  - ⏳ **Pendiente (2026-07-30):** la e2e `apps/admin-panel/e2e/cortex-voice.spec.ts` ya apunta a testids reales (`cortex-voice-toggle`/`cortex-voice-call`) pero NUNCA se ha ejecutado (su cabecera sigue diciendo «WRITTEN, NOT run … PENDING HUMAN VERIFICATION»): falta correr `npx playwright test e2e/cortex-voice.spec.ts` y verla en verde.
 
 ### Fase D — Bucle de olvido / mantenimiento (GATED por ADR 0077 accepted + kill-switch F4)
 
-- [ ] **D1. `compute_retention` puro — score de retención**
+- [x] **D1. `compute_retention` puro — score de retención**
   - Ficheros: `apps/api-server/src/api_server/cortex/forgetting.py` (NUEVO — `compute_retention(entry) -> float` a partir de recencia (`last_recalled_at`), frecuencia (`recall_count`), intensidad emocional (`metadata_.emotion.intensity`) y antigüedad; y `is_protected(entry) -> bool` que devuelve True para `metadata_.kind ∈ {identity, owner_model}`); `tests/unit/test_cortex_forgetting.py` (NUEVO).
   - TDD:
     1. Tests: una memoria `kind=identity` SIEMPRE `is_protected` (nunca se olvida); una episódica vieja, no recordada y de baja intensidad → score bajo; recordada hace poco → score alto. Falla.
@@ -158,7 +160,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     3. Verde + commit.
   - Aceptación: protección dura de `identity`/`owner_model` verificada por test; score monótono respecto a recencia/frecuencia/intensidad.
 
-- [ ] **D2. Tarea de mantenimiento (Celery beat) — soft-delete/consolidación reversible**
+- [x] **D2. Tarea de mantenimiento (Celery beat) — soft-delete/consolidación reversible**
   - Ficheros: `apps/api-server/src/api_server/cortex/maintenance.py` (NUEVO — `run_forgetting_sweep(owner_user_id)` que: respeta el **kill-switch/budget de F4** (aborta si `cortex:budget:{owner}` agotado o circuit-breaker abierto); barre `memory_entries` del owner vía `get_admin_sessionmaker` filtrando `user_id=owner AND metadata_.cortex='true'` con SQL **explícito por owner**; aplica `deleted_at` (SOFT-delete, nunca DELETE físico) a las de score < umbral que NO estén protegidas; idempotente por `metadata_`); registrar el beat en la config Celery existente (mismo patrón que los workers actuales — localizar el `celery_client.py`/beat real antes de cablear).
   - TDD (integración):
     1. `tests/integration/test_cortex_forgetting_sweep.py` (NUEVO): inserta memorias del owner (una `identity`, una episódica olvidable) → corre el sweep → la episódica queda `deleted_at` no nulo, la `identity` intacta. **TEST CROSS-OWNER**: una memoria de OTRO usuario nunca es tocada por el sweep del owner. **TEST kill-switch**: con budget agotado, el sweep no borra nada.
@@ -173,15 +175,17 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     2. Escribe la migración aditiva + reversible (ver sección "Tablas nuevas"). **Antes**: confirmar que F1/F2 no añadieron ya estas columnas (si sí, fusionar/no-op).
     3. `alembic upgrade head` + `alembic downgrade -1` limpios; verde + commit.
   - Aceptación: migración reversible; `down()` deja `memory_entries` exactamente como antes.
+  - ⏳ **Pendiente (2026-07-30):** el diseño pivotó a JSONB (`metadata_.recall_count`/`last_recalled_at`, que el sweep ya lee) y no existe ni la migración ni el índice parcial ni su test — falta la decisión de producto: escribir columnas+índice o cerrar la tarea documentando el JSONB y añadir al menos el índice parcial que hoy suple `_FORGET_SCAN_LIMIT = 500`.
 
 ### Fase E — Cierre
 
-- [ ] **E1. Documentación y honestidad**
+- [x] **E1. Documentación y honestidad**
   - Ficheros: `docs/05-architecture-decisions/0073-...md` (anotar que F5 reutiliza el modo voz), `docs/05-architecture-decisions/0077-...md` (mover a `accepted` tras aprobación), `CHANGELOG`/runbook si aplica. Verificar que el disclaimer "modelo computacional de afecto, no sentimientos reales" aparece en la UI de voz del córtex (C3) — criterio del CLAUDE.md.
   - Aceptación: ADR 0077 `accepted`; ADR 0073 enlaza F5; copy honesto presente; ES+EN cubiertos en voces y disclaimer.
 
 - [ ] **E2. Suite completa verde + QA visual**
   - Aceptación observable: `pytest tests/unit tests/integration -q` (incluye todos los `test_cortex_voice_*`, `test_cortex_forgetting*`) en verde; `pnpm --filter admin-panel test` y la e2e `cortex-voice.spec.ts` en verde; QA visual humano del avatar en ES+EN (cabeza/boca/color) — incertidumbres del ADR 0073 cerradas con prueba real (latencia Kokoro y `speed` confirmados en la imagen pineada).
+  - ⏳ **Pendiente (2026-07-30):** los tests F5 dirigidos están en verde uno a uno, pero faltan las tres cosas que sólo puede dar un humano con el stack: la suite completa `tests/unit tests/integration` de una pasada, la e2e Playwright `cortex-voice.spec.ts` ejecutada, y el QA visual del avatar en ES+EN con latencia Kokoro y `speed` medidos de verdad.
 
 ---
 

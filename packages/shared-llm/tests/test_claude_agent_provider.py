@@ -8,6 +8,7 @@ exercised without importing the real package.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -367,3 +368,102 @@ async def test_flatten_collapses_chat_into_human_assistant_transcript() -> None:
     )
     transcript = captured_prompts[0]
     assert transcript == "Human: hi\n\nAssistant: hello\n\nHuman: goodbye"
+
+
+# ======================================================================
+# prod-07 task_prod07_09 (c) — timeout de pared alrededor del query del SDK
+#
+# El SDK arranca un CLI de Node como SUBPROCESO. Si ese proceso se queda
+# colgado (sin salida y sin cerrar el stream), el `async for` que lo drena no
+# vuelve NUNCA: la request del asistente que lo espera se cuelga
+# indefinidamente y ni el usuario ni un timeout de uvicorn la rescatan (el
+# turno ya empezó a escribir la respuesta). Los otros tres providers están
+# protegidos por el timeout de httpx; este camino no tenía ninguno.
+#
+# El presupuesto es POR MENSAJE, no por llamada: un modelo razonando 20 min
+# emite tokens mientras piensa, así que el progreso reinicia el reloj y solo
+# salta cuando de verdad no hay nada al otro lado.
+# ======================================================================
+def _hanging_query(delay: float = 30.0):  # type: ignore[no-untyped-def]
+    """Un query del SDK que se cuelga ANTES de emitir su primer mensaje."""
+
+    async def _q(prompt: str, options: Any) -> AsyncIterator[Any]:
+        await asyncio.sleep(delay)
+        yield _AssistantMessage(content=[_TextBlock(text="jamás llega")])
+
+    return _q
+
+
+@pytest.mark.asyncio
+async def test_complete_timeout_when_the_sdk_cli_wedges() -> None:
+    p = ClaudeAgentProvider(query_fn=_hanging_query(), timeout=0.05)
+    with pytest.raises(ProviderError) as info:
+        await p.complete([Message(role="user", content="hi")])
+    assert "0s" in str(info.value) or "no respondió" in str(info.value)
+
+
+@pytest.mark.asyncio
+async def test_sdk_timeout_is_transient_so_the_retry_policy_retries_it() -> None:
+    """Un CLI encasquillado suele arreglarse volviendo a lanzarlo, así que el
+    error tiene que clasificarse como transitorio para `shared_llm.retry`."""
+    from shared_llm.retry import is_transient
+
+    p = ClaudeAgentProvider(query_fn=_hanging_query(), timeout=0.05)
+    with pytest.raises(ProviderError) as info:
+        await p.complete([Message(role="user", content="hi")])
+    assert is_transient(info.value) is True
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_timeout_too() -> None:
+    """El camino con tools drena el stream en OTRO sitio: verificar uno y
+    extrapolar es justo lo que este plan prohíbe."""
+    p = ClaudeAgentProvider(query_fn=_hanging_query(), timeout=0.05)
+    with pytest.raises(ProviderError):
+        await p.complete(
+            [Message(role="user", content="hi")],
+            tools=[{"type": "function", "function": {"name": "echo", "parameters": {}}}],
+        )
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_too() -> None:
+    p = ClaudeAgentProvider(query_fn=_hanging_query(), timeout=0.05)
+    with pytest.raises(ProviderError):
+        async for _chunk in p.stream([Message(role="user", content="hi")]):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_run_agent_timeout_too() -> None:
+    p = ClaudeAgentProvider(query_fn=_hanging_query(), timeout=0.05)
+    with pytest.raises(ProviderError):
+        async for _event in p.run_agent("haz algo"):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_timeout_budget_is_per_message_not_per_call() -> None:
+    """Un modelo lento que SIGUE emitiendo no debe morir por el timeout: el
+    progreso reinicia el reloj. Sin esto, un timeout por-llamada mataría runs
+    largos legítimos (y el operador subiría el valor hasta hacerlo inútil)."""
+
+    async def _slow_but_alive(prompt: str, options: Any) -> AsyncIterator[Any]:
+        for _ in range(4):
+            await asyncio.sleep(0.02)
+            yield _AssistantMessage(content=[_TextBlock(text="x")])
+
+    # 4 mensajes × 0.02s = 0.08s TOTAL, por encima del presupuesto de 0.05s...
+    p = ClaudeAgentProvider(query_fn=_slow_but_alive, timeout=0.05)
+    resp = await p.complete([Message(role="user", content="hi")])
+    assert resp.content == "xxxx"  # ...y no salta, porque hubo progreso
+
+
+@pytest.mark.asyncio
+async def test_healthy_call_unaffected_by_the_default_timeout() -> None:
+    """No-regresión: sin colgarse, el presupuesto por defecto no se nota."""
+    p = ClaudeAgentProvider(
+        query_fn=_make_query(_AssistantMessage(content=[_TextBlock(text="ok")]))
+    )
+    resp = await p.complete([Message(role="user", content="hi")])
+    assert resp.content == "ok"

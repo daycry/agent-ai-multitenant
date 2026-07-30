@@ -61,6 +61,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     project_b = uuid4()
     source_agent = uuid4()
     agent_b = uuid4()
+    builtin_agent = uuid4()
 
     kb_role = uuid4()
     kb_b = uuid4()
@@ -131,6 +132,18 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             agent_b,
             tenant_b,
             project_b,
+        )
+        # Built-in de PLATAFORMA (scope=global_builtin, tenant de plataforma):
+        # visible a todos los tenants por la policy `agents_global_builtin_read`
+        # (migración 0004) y forkeable, pero NO granteable en sí mismo.
+        # Necesario para human_06_9_04: "Si forkeas el built-in → la copia SÍ
+        # permite grant".
+        await conn.execute(
+            "INSERT INTO agents"
+            " (id, tenant_id, name, role, scope, agent_type, system_prompt, model_config)"
+            " VALUES ($1, $2, 'builtin-pm', 'project_manager', 'global_builtin', 'ai', 'p', '{}')",
+            builtin_agent,
+            _PLATFORM_TENANT_ID,
         )
         # KBs: role (tenant A) / b (tenant B).
         await conn.execute(
@@ -222,6 +235,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         "project_b": project_b,
         "source_agent": source_agent,
         "agent_b": agent_b,
+        "builtin_agent": builtin_agent,
         "kb_role": kb_role,
         "kb_b": kb_b,
         "tool_builtin": tool_builtin,
@@ -501,3 +515,101 @@ async def test_source_badge_is_not_a_fork(configured_app, migrations_pg_dsn: str
     ) as client:
         src = (await client.get(f"/agents/{seeded['source_agent']}", headers=headers)).json()
     assert src["forked_from_agent_id"] is None
+
+
+# ===========================================================================
+# human_06_9_04 — "Si forkeas el built-in → la copia SÍ permite grant"
+#
+# Este fichero clonaba capacidades pero NUNCA hacía un grant NUEVO sobre el
+# fork, así que la mitad afirmativa del test humano (el built-in se cierra,
+# su fork se abre) no la sostenía ningún test. Las dos mitades van juntas a
+# propósito: un 201 sobre el fork solo significa algo si el 403 sobre el
+# built-in ocurre en la MISMA corrida y con el MISMO token.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_builtin_rejects_grant_but_its_fork_accepts_one(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint(seeded["admin_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        # (1) Grant DIRECTO sobre el built-in de PLATAFORMA → rechazado.
+        #
+        # DIVERGENCIA, documentada en vez de maquillada: el checklist humano
+        # dice "403 con mensaje claro" y `_load_writable_agent_for_kb`
+        # (routers/agents.py) tiene esa rama, pero `get_writable_or_404` filtra
+        # ANTES por `tenant_id == principal.tenant_id`. Los built-ins REALES
+        # viven en el tenant de plataforma (seeds/builtin_agents.py,
+        # ci4_team.py, qa_e2e_automator.py), así que lo que devuelven de verdad
+        # es 404 "agent not found". La rama 403 solo se alcanza con un built-in
+        # cuyo tenant_id coincide con el del llamante — configuración que los
+        # seeds NUNCA producen y que es la que monta
+        # test_agent_kb_grants.py::test_grant_on_builtin_agent_is_403.
+        # Para el test humano el fondo se sostiene igual (el built-in no acepta
+        # el grant, su fork sí); lo que no se sostiene es el código 403.
+        denied = await client.post(
+            f"/agents/{seeded['builtin_agent']}/knowledge-bases",
+            headers=headers,
+            json={"kb_id": str(seeded["kb_role"])},
+        )
+        assert denied.status_code == 404, denied.text
+        assert denied.json()["detail"] == "agent not found"
+        # El rechazo no escribió nada: el built-in sigue sin la KB.
+        builtin_kbs = (
+            await client.get(f"/agents/{seeded['builtin_agent']}/knowledge-bases", headers=headers)
+        ).json()
+        assert builtin_kbs == []
+
+        # (2) "Personalizar (crear copia)" del built-in.
+        fork_resp = await client.post(
+            f"/agents/{seeded['builtin_agent']}/fork",
+            json={"project_id": str(seeded["project_a"])},
+            headers=headers,
+        )
+        assert fork_resp.status_code == 201, fork_resp.text
+        fork = fork_resp.json()
+        fork_id = fork["id"]
+        # El fork es del tenant que forkea y deja de ser global_builtin (es lo
+        # que lo hace granteable).
+        assert UUID(fork["tenant_id"]) == seeded["tenant_a"]
+        assert fork["scope"] != "global_builtin"
+        assert fork["forked_from_agent_id"] == str(seeded["builtin_agent"])
+
+        # El fork de un built-in de PLATAFORMA nace sin KBs: las del built-in
+        # viven en el tenant de plataforma y RLS no las hace visibles (ADR 0026
+        # — el tenant grantea las suyas al fork).
+        before = (await client.get(f"/agents/{fork_id}/knowledge-bases", headers=headers)).json()
+        assert before == []
+
+        # (3) Grant NUEVO sobre el fork → 201.
+        granted = await client.post(
+            f"/agents/{fork_id}/knowledge-bases",
+            headers=headers,
+            json={"kb_id": str(seeded["kb_role"])},
+        )
+        assert granted.status_code == 201, granted.text
+        assert granted.json()["kb_id"] == str(seeded["kb_role"])
+
+        # Y el grant es REAL: aparece en el listado del fork...
+        after = (await client.get(f"/agents/{fork_id}/knowledge-bases", headers=headers)).json()
+        assert [row["kb_id"] for row in after] == [str(seeded["kb_role"])]
+        # ...y en el panel «Asignaciones» inverso de la KB (Plan 06.9).
+        assigned = (
+            await client.get(f"/knowledge-bases/{seeded['kb_role']}/agents", headers=headers)
+        ).json()
+        assert fork_id in {row["agent_id"] for row in assigned}
+
+    # La fila clonada lleva el tenant del que forkea, nunca el de plataforma.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        kb_tenant = await conn.fetchval(
+            "SELECT tenant_id FROM agent_knowledge_bases WHERE agent_id = $1",
+            UUID(fork_id),
+        )
+    finally:
+        await conn.close()
+    assert kb_tenant == seeded["tenant_a"]

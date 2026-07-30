@@ -229,13 +229,50 @@ async def lookup_current_price(
 # (anthropic, azure, ollama con ids 'ollama/<m>'…). Sin este puente, la clave
 # (provider, model_id) no casaba jamás y price_snapshot_cost_usd quedó NULL en
 # el 100% de las executions pese a estar el modelo en el catálogo.
-_CATALOG_PROVIDER_ALIASES: dict[str, tuple[str, ...]] = {
-    "claude_sdk": ("anthropic",),
+#
+# prod-07 task_prod07_12: la tabla se DERIVA de `KIND_TO_LITELLM_FAMILIES` (la
+# oficial del ADR 0028, la que decide qué familias IMPORTA el sync de precios)
+# en vez de mantenerse a mano. Escrita a mano DIVERGÍA: a `copilot` le faltaba
+# `anthropic` y a `azure_foundry` le faltaba `openai`, así que el sync importaba
+# esos precios y el snapshot no los buscaba — casaban solo por el fallback de
+# «match único por model_id», que se apaga en cuanto otro proveedor comparte el
+# nombre del modelo. Derivar hace la divergencia IMPOSIBLE, no solo improbable.
+
+# Familias que NO vienen del feed LiteLLM, más el kind heredado `claude`:
+#   * `github_copilot` — la puebla el alta MANUAL del catálogo (el feed no la
+#     trae, porque Copilot no publica precios).
+#   * `claude` — kind histórico, alias de `claude_sdk`.
+# Van PRIMERO en el orden de búsqueda: son las más específicas.
+_EXTRA_CATALOG_ALIASES: dict[str, tuple[str, ...]] = {
     "claude": ("anthropic",),
-    "azure_foundry": ("azure", "azure_ai"),
-    "copilot": ("github_copilot", "openai"),
-    "ollama": ("ollama",),
+    "copilot": ("github_copilot",),
 }
+
+
+def _build_catalog_aliases() -> dict[str, tuple[str, ...]]:
+    """kind → familias del catálogo donde buscar su precio, en orden de prueba.
+
+    El orden es DETERMINISTA (``sorted`` sobre el frozenset de familias): decide
+    qué fila gana cuando varias casan, y el orden de iteración de un ``frozenset``
+    de cadenas varía entre procesos por el hash randomizado de Python.
+
+    Import diferido de `pricing.litellm_sync` para no meter la capa de pricing en
+    el grafo de imports del módulo de db en tiempo de carga.
+    """
+    from api_server.pricing.litellm_sync import KIND_TO_LITELLM_FAMILIES
+
+    aliases: dict[str, tuple[str, ...]] = {}
+    for kind, families in KIND_TO_LITELLM_FAMILIES.items():
+        ordered = list(_EXTRA_CATALOG_ALIASES.get(kind, ()))
+        ordered += [family for family in sorted(families) if family not in ordered]
+        aliases[kind] = tuple(ordered)
+    # Kinds que solo existen como alias (p.ej. `claude`) y no están en la oficial.
+    for kind, extra in _EXTRA_CATALOG_ALIASES.items():
+        aliases.setdefault(kind, tuple(extra))
+    return aliases
+
+
+_CATALOG_PROVIDER_ALIASES: dict[str, tuple[str, ...]] = _build_catalog_aliases()
 
 
 async def lookup_current_price_for_call(

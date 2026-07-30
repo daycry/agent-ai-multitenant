@@ -30,6 +30,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Brain, Info } from "lucide-react";
 
+import { LearningPanel } from "@/components/cortex/learning-panel";
+import { MindPadSpace } from "@/components/cortex/mind-pad-space";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -59,6 +61,8 @@ import {
   type CortexPursuit,
   type PadDimension,
 } from "@/lib/cortex";
+import { budgetUsageLabel, honestNote } from "@/lib/cortex-curiosity";
+import { useLangOptional } from "@/lib/lang-context";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
@@ -203,6 +207,21 @@ function CortexMindBody() {
           <DrivesPanel mind={mind} />
         </div>
       ) : null}
+
+      {/* Espacio PAD 2D con estela: las dos dimensiones del cuadrante a la vez
+          (la línea de abajo sólo enseña la valencia del mood en el tiempo). */}
+      <div className="mt-6">
+        <MindPadSpace
+          current={
+            mind
+              ? { valence: mind.valence, arousal: mind.arousal, mood_label: mind.mood_label }
+              : null
+          }
+          snapshots={timeseriesQuery.data ?? []}
+          isLoading={timeseriesQuery.isLoading}
+          isError={timeseriesQuery.isError}
+        />
+      </div>
 
       <div className="mt-6">
         <MoodChart
@@ -395,6 +414,7 @@ function JournalPanel({
 // Autonomía — kill-switch de los bucles de fondo + gates + budget (ADR 0078)
 // ---------------------------------------------------------------------------
 function AutonomyPanel() {
+  const lang = useLangOptional();
   const queryClient = useQueryClient();
   const autonomyQuery = useQuery<CortexAutonomy, ApiError>({
     queryKey: ["cortex", "autonomy"],
@@ -496,8 +516,12 @@ function AutonomyPanel() {
               </li>
               <li>
                 Búsquedas de curiosidad hoy:{" "}
-                <span className="text-foreground font-medium">
-                  {autonomy.budget.searches_today} / {autonomy.budget.searches_cap}
+                <span className="text-foreground font-medium" data-testid="cortex-budget-usage">
+                  {budgetUsageLabel(
+                    autonomy.budget.searches_today,
+                    autonomy.budget.searches_cap,
+                    lang,
+                  )}
                 </span>
               </li>
               <li>
@@ -513,7 +537,10 @@ function AutonomyPanel() {
                 </span>
               </li>
             </ul>
-            <p className="text-muted-foreground text-xs">{autonomy.note_es}</p>
+            {/* La API manda las dos notas; se muestra la del idioma activo. */}
+            <p className="text-muted-foreground text-xs" data-testid="cortex-autonomy-note">
+              {honestNote(autonomy, lang)}
+            </p>
           </>
         )}
       </CardContent>
@@ -523,70 +550,12 @@ function AutonomyPanel() {
 
 // ---------------------------------------------------------------------------
 // Lo que está aprendiendo — historial de curiosidad (ADR 0078, copy honesto)
+//
+// El panel (con su gate de aprobación y su copy bilingüe) vive en
+// `components/cortex/learning-panel.tsx` para poder testearlo aislado; aquí sólo
+// se monta. Las etiquetas de estado ya no son un `const` inline sin prueba: son
+// los helpers puros de `lib/cortex-curiosity.ts`.
 // ---------------------------------------------------------------------------
-
-/** Etiqueta ES por estado del ciclo de vida de un pursuit. */
-const PURSUIT_STATUS_LABELS: Record<string, string> = {
-  selected: "elegido",
-  searching: "investigando",
-  digested: "aprendido — pendiente de contarlo",
-  surfaced: "comentado en conversación",
-  skipped: "descartado",
-  failed: "falló",
-};
-
-function LearningPanel({
-  pursuits,
-  isLoading,
-  isError,
-}: {
-  pursuits: CortexPursuit[];
-  isLoading: boolean;
-  isError: boolean;
-}) {
-  return (
-    <Card data-testid="cortex-learning-panel">
-      <CardContent className="space-y-3 pt-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Lo que está aprendiendo</h2>
-          <span className="text-muted-foreground text-xs">
-            Bucle de curiosidad programado — no es curiosidad consciente
-          </span>
-        </div>
-        {isLoading ? (
-          <p className="text-muted-foreground flex items-center gap-2 text-sm">
-            <Spinner />
-            Cargando…
-          </p>
-        ) : isError ? (
-          <p className="text-destructive text-sm">No se pudo cargar el historial de curiosidad.</p>
-        ) : pursuits.length === 0 ? (
-          <EmptyState
-            title="Aún no hay temas"
-            description="Cuando el bucle de curiosidad investigue un tema que menciones, aparecerá aquí y el córtex lo sacará en la próxima conversación."
-          />
-        ) : (
-          <ul className="divide-border divide-y" data-testid="cortex-learning-list">
-            {pursuits.map((pursuit) => (
-              <li key={pursuit.id} className="flex items-center justify-between gap-3 py-2">
-                <span className="truncate text-sm">{pursuit.topic}</span>
-                <span
-                  className={
-                    pursuit.status === "surfaced"
-                      ? "text-muted-foreground shrink-0 text-xs"
-                      : "shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400"
-                  }
-                >
-                  {PURSUIT_STATUS_LABELS[pursuit.status] ?? pursuit.status}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
 
 function MindHeader() {
   return (
@@ -605,10 +574,14 @@ function MindHeader() {
  * un texto por defecto equivalente para que NUNCA se muestren diales sin él.
  */
 function HonestyBanner({ mind }: { mind: CortexMind | null }) {
+  const lang = useLangOptional();
+  // La API manda `note_es` + `note_en`: se muestra la del idioma activo (y la
+  // otra si esa viniera vacía — el aviso no puede quedar en blanco).
   const note =
-    mind?.honesty.note_es?.trim() ||
-    mind?.honesty.note_en?.trim() ||
-    "Modelo computacional de afecto, no sentimientos reales.";
+    honestNote(mind?.honesty ?? {}, lang) ||
+    (lang === "es"
+      ? "Modelo computacional de afecto, no sentimientos reales."
+      : "Computational model of affect, not real feelings.");
   return (
     <div
       className="border-border bg-muted text-muted-foreground mt-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm"

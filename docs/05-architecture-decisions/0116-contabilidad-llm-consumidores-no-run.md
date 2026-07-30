@@ -19,7 +19,7 @@ de tenants, el córtex del owner y el chat de planning consumen LLM SIN
 contabilizar ni topar — inconsistente con los budgets con auto-pausa del resto
 de la plataforma (hallazgo A6, auditoría asistente 2026-07-11).
 
-## Decisión (propuesta)
+## Decisión
 
 Nueva tabla `llm_usage_events` (tenant_id nullable para el córtex; source:
 assistant|cortex|planning; provider, model, tokens in/out, cost_usd, user_id) +

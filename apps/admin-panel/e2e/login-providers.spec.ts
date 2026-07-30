@@ -85,8 +85,8 @@ test("password form is present even with no SSO providers", async ({ page }) => 
 
   // Password login stays intact: email + password + Sign in button.
   await expect(page.getByLabel("Email")).toBeVisible();
-  await expect(page.getByLabel("Password")).toBeVisible();
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByLabel(/^(password|contraseña)$/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i })).toBeVisible();
 
   // No providers → no buttons block and no "or with email" divider.
   await expect(page.getByTestId("login-providers")).toHaveCount(0);
@@ -105,7 +105,7 @@ test("renders one branded button per enabled provider + the divider", async ({ p
   await expect(page.getByTestId("login-divider")).toBeVisible();
 
   // Password form coexists above the buttons (SSO is additive, not a gate).
-  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByLabel(/^(password|contraseña)$/i)).toBeVisible();
 
   const ms = page.getByTestId(`login-provider-${MICROSOFT.id}`);
   const google = page.getByTestId(`login-provider-${GOOGLE.id}`);

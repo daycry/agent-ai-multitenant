@@ -96,7 +96,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 
 ### Sub-fase 4.0 — Gates de gobierno (PRIMERO: sin esto no hay bucle)
 
-- [ ] **Platform settings de autonomía + budget + circuit-breaker**
+- [x] **Platform settings de autonomía + budget + circuit-breaker**
   - Modificar: `apps/api-server/src/api_server/db/platform_settings.py` — añadir claves y helpers (patrón exacto de `get_rag_reranker_enabled` / `get_memory_backfill_enabled`):
     - `CORTEX_AUTONOMY_ENABLED_KEY = "cortex.autonomy_enabled"` (default `False` → **kill-switch global apagado por defecto**), `get_cortex_autonomy_enabled(session) -> bool`.
     - `CORTEX_CURIOSITY_ENABLED_KEY = "cortex.curiosity_enabled"` (default `False`), `get_cortex_curiosity_enabled(session) -> bool`.
@@ -110,7 +110,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
   - TDD: `apps/workers/tests/test_config.py` — test: el default parsea como cron válido vía `_parse_cron`; override por env (`WORKERS_CORTEX_CURIOSITY_CRON`) se respeta.
   - **Aceptación:** `get_settings().cortex_curiosity_cron == "*/30 * * * *"` y `_parse_cron(...)` no cae al fallback.
 
-- [ ] **Budget gate determinista en Redis (puro, testeable)**
+- [x] **Budget gate determinista en Redis (puro, testeable)**
   - Crear: `apps/api-server/src/api_server/cortex/curiosity/budget.py` — funciones puras + acceso Redis:
     - `daily_budget_key(owner_user_id) -> str` → `cortex:budget:{owner}`.
     - `async def check_and_reserve(redis, *, owner_user_id, usd_cap, searches_cap) -> BudgetDecision` — lee `curiosity_cost_usd_today`/`curiosity_searches_today`; devuelve `allowed: bool` + `reason`; setea TTL hasta medianoche UTC si la clave es nueva. **No** incrementa coste real aquí (eso se hace tras la búsqueda con `record_spend`).
@@ -126,13 +126,14 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 
 ### Sub-fase 4.1 — Selección de tema + persistencia (lógica pura)
 
-- [ ] **Migración 0092 `cortex_curiosity_pursuits`**
+- [x] **Migración 0092 `cortex_curiosity_pursuits`**
   - Crear: `apps/api-server/migrations/versions/20260623_0092_cortex_curiosity_pursuits.py` — `revision="0092_cortex_curiosity_pursuits"`, `down_revision="0091_system_owner_f0"`. `upgrade()` crea la tabla + los 2 índices + el CHECK de `status`; `downgrade()` los retira (reversible). Server-defaults para `status`/`source_entities`/`metadata_`/`cost_usd`/`search_count`. **Sin RLS** (tenant-less, BYPASSRLS) — comentario explícito citando ADR 0074.
   - Modelo ORM: crear `apps/api-server/src/api_server/db/cortex.py` (o extender el de F1) con la clase `CortexCuriosityPursuit` (TimestamptzMixin, **sin** TenantScopedMixin).
   - TDD: `apps/api-server/tests/integration/test_migration_0092_cortex_pursuits.py` — test: `alembic upgrade head` crea la tabla con los índices y el CHECK; `downgrade -1` la elimina; insertar un `status` fuera del CHECK falla.
   - **Aceptación:** upgrade/downgrade limpios sobre una DB de test; el CHECK rechaza `status='bogus'`.
 
 - [ ] **Selector de tema determinista (puro)**
+  - ⏳ **Pendiente (2026-07-30):** falta la mitad `cortex_turns` del enunciado — `gather_owner_entities` solo agrega entities de `memory_entries` y descarta a propósito reusar `memorizer/recall.py::query_entity_terms` (razón argumentada en su docstring: el helper es un matcher de recall y como ranker saca palabras basura), desviación que nadie ha ratificado por ADR.
   - Crear: `apps/api-server/src/api_server/cortex/curiosity/topic_selection.py`:
     - `async def gather_owner_entities(session, *, owner_user_id, lookback) -> list[tuple[str,int]]` — SQL **BYPASSRLS con filtro `owner_user_id` explícito**: agrega `entities` de `memory_entries` (scope='private', user*id=owner, `metadata*->>'cortex'='true'`, `deleted_at IS NULL`) y de `cortex_turns`recientes (F1), ordenadas por frecuencia. Reusa la normalización de`memorizer/recall.py::query_entity_terms`.
     - `def pick_topic(entity_freqs, *, recently_pursued: set[str], identity_learning_goals: list[str]) -> str | None` — **pura**: elige la entity más frecuente NO investigada recientemente; sesga hacia `learning_goals` de la identidad (F3) si solapan; `None` si no hay candidato.
@@ -141,7 +142,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 
 ### Sub-fase 4.2 — Investigación autónoma (deep reasoning + WebSearch, GATED egress)
 
-- [ ] **Investigador con `claude_sdk` (egress confiable, degradación limpia)** — **GATED por ADR 0076**
+- [x] **Investigador con `claude_sdk` (egress confiable, degradación limpia)** — **GATED por ADR 0076**
   - Crear: `apps/api-server/src/api_server/cortex/curiosity/researcher.py`:
     - `async def research_topic(provider, *, topic, model, effort) -> ResearchResult` — usa `provider.run_agent(prompt, model=model, system_prompt=<digest prompt>, allowed_tools=["WebSearch","WebFetch"], effort=effort)` (ADR 0076: WebSearch/WebFetch **nativas del SDK** vía `allowed_tools`, anti-SSRF gratis; el `effort` SÍ llega a `_build_options`, fix de F0 ya aplicado). Acumula `text` events → digest; cuenta `tool_use` de WebSearch; suma `Usage.cost_usd` del `result` event.
     - **Degradación:** si el provider efectivo NO es `claude_sdk` (sin `run_agent` / sin `WITH_CLAUDE`, ADR 0064) → devolver `ResearchResult(skipped=True, reason="no_sdk")`. **MVP NO usa tool web propia** (Decisión #5 del plan maestro: camino degradado solo tras ADR con anti-SSRF obligatorio).
@@ -149,7 +150,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
   - TDD: `apps/api-server/tests/unit/test_cortex_researcher.py` — con un **doble de provider** (mismo patrón que `ScriptedAssistantModel`): emite text+tool_use+result → `research_topic` produce digest, cuenta búsquedas, suma coste. Provider sin `run_agent` → `skipped, reason="no_sdk"` (sin egress, sin excepción).
   - **Aceptación:** con el doble, `ResearchResult.digest` no vacío, `search_count>=1`, `cost_usd>0`; sin SDK, `skipped=True` y **cero llamadas de red**.
 
-- [ ] **Escritura de la memoria de aprendizaje (directa, idempotente)**
+- [x] **Escritura de la memoria de aprendizaje (directa, idempotente)**
   - Crear: `apps/api-server/src/api_server/cortex/curiosity/digest_memory.py` — `async def persist_learning(session, *, owner_user_id, topic, digest, pursuit_id, entities) -> MemoryEntry`:
     - Usa `persist_memory_candidates` **directo** (NO `workers/memorizer.py`, que enruta episodic→project_shared y rompería el scope private — ver plan maestro): `scope="private"`, `user_id=owner_user_id`, `type="semantic"`, `extra_metadata={"cortex": True, "kind": "learning", "cortex_pursuit_id": str(pursuit_id), "source": "cortex_curiosity"}`, `tags=("cortex","learning")`, `entities=...`.
     - **Idempotencia:** antes de escribir, comprobar que no exista ya una memoria con `metadata_->>'cortex_pursuit_id' == pursuit_id` (dedup por `metadata_`, ADR 0078) → si existe, no-op.
@@ -158,7 +159,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 
 ### Sub-fase 4.3 — El bucle de fondo (Celery beat) + satisfacción del drive
 
-- [ ] **Tarea Celery `workers.cortex_curiosity_loop`** — **GATED por ADR 0078**
+- [x] **Tarea Celery `workers.cortex_curiosity_loop`** — **GATED por ADR 0078**
   - Crear: `apps/workers/src/workers/cortex_curiosity.py` (patrón EXACTO de `workers/maintenance.py`): `@app.task(name="workers.cortex_curiosity_loop")` síncrona que hace `asyncio.run(_run_curiosity_loop(settings))`; el core async **posee el `engine` lifecycle** (`create_async_engine` + `dispose()`), corre **BYPASSRLS** (sin `set_config app.tenant_id`), captura sus propias excepciones (best-effort, nunca tumba beat).
   - Orquestación del core async (todo con imports perezosos de `api_server.cortex.*`, como `maintenance.py` importa `api_server.ingestion.embeddings`):
     1. **Kill-switch + enable**: si `not get_cortex_autonomy_enabled()` o `not get_cortex_curiosity_enabled()` → return `{"skipped":"disabled"}`.
@@ -183,6 +184,7 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 ### Sub-fase 4.4 — "Inicia el tema en el próximo encuentro"
 
 - [ ] **Inyección del tema pendiente en el system_prompt del turno** — **depende de F1 (grafo del córtex) + F2 (augment del mood)**
+  - ⏳ **Pendiente (2026-07-30):** el comportamiento está y su integración en verde (`tests/integration/test_cortex_surfacing.py`: se inyecta una vez, marca `surfaced`, cross-owner), pero NINGÚN test fija la variante **EN** del label (`_LEARNING_LABEL["en"]` en `cortex/self_context.py:258`), así que la mitad «copy ES+EN» de la aceptación no está protegida.
   - Crear: `apps/api-server/src/api_server/cortex/curiosity/surfacing.py` — `async def pending_topic_to_open(session, *, owner_user_id) -> CortexCuriosityPursuit | None` (la más reciente `status='digested' AND surfaced_at IS NULL`, filtro `owner_user_id`); `def augment_prompt_with_curiosity(base_prompt, pursuit, learning_digest, *, language) -> str` (**pura**, estilo `augment_system_prompt` de `assistant/memory.py`): añade una sección "Algo que aprendí desde la última vez (compártelo con naturalidad si encaja)" — copy ES+EN.
   - Modificar (F1): el constructor del system_prompt del turno del córtex (en el grafo/cerebro de F1) para llamar a este augment; tras usarse, marcar `surfaced_at=now()` y `status='surfaced'` (una sola vez, idempotente por `surfaced_at IS NULL`).
   - TDD: `apps/api-server/tests/unit/test_cortex_surfacing.py` — `augment_prompt_with_curiosity` inserta la sección en ES y EN; sin pursuit pendiente devuelve el prompt intacto. Integración: tras un turno, el pursuit pasa a `surfaced` y un segundo turno NO lo re-abre.
@@ -191,12 +193,14 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 ### Sub-fase 4.5 — Endpoints + UI "lo que está aprendiendo"
 
 - [ ] **Router `cortex_curiosity` (gated `require_system_owner`)**
+  - ⏳ **Pendiente (2026-07-30):** de los 4 endpoints, `pursuits` y `/approve` están completos y con test (403 no-owner + cross-owner + 404/409), pero el **budget** (plegado en `GET /autonomy`) solo expone la dimensión de búsquedas: el gasto USD que `record_spend` ya escribe no lo lee ninguna ruta ni lo asserta ningún test.
   - Crear: `apps/api-server/src/api_server/routers/cortex_curiosity.py` + schemas en `apps/api-server/src/api_server/schemas/cortex_curiosity.py`. Los 4 endpoints de la sección "Endpoints/WS". Acceso a `cortex_*` vía `get_admin_session`/admin sessionmaker con **filtro `owner_user_id == principal.user_id` explícito** en todo SQL (defensa en profundidad sobre BYPASSRLS). El `/kill-switch` y `/approve` escriben platform setting / fila con el owner como actor.
   - Montar el router en `apps/api-server/src/api_server/main.py` (o en el agregador de routers del córtex de F1).
   - TDD: `apps/api-server/tests/integration/test_cortex_curiosity_endpoints.py` — test: owner ve sus pursuits y su budget (200); **un user NO-owner → 403** (gate DB-authoritative); **un owner NO ve pursuits de otro owner_user_id** (cross-owner, aislamiento); `/approve` mueve el estado; `/kill-switch` flipa el platform setting y la siguiente pasada del bucle queda `disabled`.
   - **Aceptación:** 403 para no-owner; aislamiento cross-owner en verde; el kill-switch detiene el bucle en la siguiente pasada.
 
 - [ ] **UI "Lo que está aprendiendo" (Panel de Mente, F2/F3)**
+  - ⏳ **Pendiente (2026-07-30):** helpers puros + panel bilingüe con gate Aprobar/Rechazar en verde (26 vitest), pero ni la **tarjeta de budget** (`cortex-budget-usage`) ni el **toggle del kill-switch** (`cortex-autonomy-toggle`) tienen test: borrarlos no pondría nada rojo, y la aceptación los nombra.
   - Crear: `apps/admin-panel/app/admin/cortex/_components/curiosity-panel.tsx` (gated `isSystemOwner`, dentro de la superficie `app/admin/cortex` de F1) — lista de pursuits (tema, estado, fecha, coste), tarjeta de budget consumido vs cap, toggle del kill-switch, botón Aprobar/Rechazar cuando el gate está activo. **Copy honesto** (es/en): "El córtex investiga temas por su cuenta dentro de límites de coste que tú controlas; esto es un comportamiento programado, no curiosidad consciente."
   - Helper puro testeado: `apps/admin-panel/lib/cortex-curiosity.ts` (`budgetUsageLabel`, `pursuitStatusLabel`) con tests vitest (patrón de `lib/conversation-history.ts`).
   - TDD: vitest sobre el helper (formato de budget, etiquetas de estado bilingües).
@@ -204,12 +208,13 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
 
 ### Sub-fase 4.6 — Observabilidad (OTEL) + cierre
 
-- [ ] **Métricas OTEL del bucle (ADR 0078)**
+- [x] **Métricas OTEL del bucle (ADR 0078)**
   - Crear/Modificar: emitir métricas de coste/latencia/resultado por pasada del bucle. Patrón del repo: el textfile-collector de `apps/workers/src/workers/backup_metrics.py` (gauges `*.prom` atómicas) o el meter de `apps/api-server/src/api_server/telemetry/setup.py`. Métricas: `agentic_cortex_curiosity_runs_total{outcome}`, `agentic_cortex_curiosity_cost_usd_total`, `agentic_cortex_curiosity_searches_total`, `agentic_cortex_curiosity_circuit_open` (gauge). Best-effort: un fallo al emitir nunca rompe el bucle.
   - TDD: `apps/workers/tests/test_cortex_curiosity_metrics.py` — render determinista de las métricas dado un resultado de pasada; emisión es no-op seguro si el dir del collector no existe.
   - **Aceptación:** tras una pasada feliz, las métricas reflejan `outcome="digested"`, coste>0 y nº de búsquedas; el circuit-breaker abierto pone el gauge a 1.
 
 - [ ] **Doc + ADR flip**
+  - ⏳ **Pendiente (2026-07-30):** el flip de 0078 a `accepted-f4` exige el visto bueno del operador (sigue en `accepted` a secas) y, además, los tres documentos afirman que el owner-approval gate y el tope USD «no están cableados al bucle», lo que dejó de ser cierto hoy: hay que reescribirlos antes de dar el estado por coherente.
   - Modificar: `docs/roadmap/cortex-system-owner.md` (marcar F4 en progreso) y `docs/roadmap/mejoras-2026-06-chat-coste-cortex.md` (Feature 1 → F4). Flip `docs/05-architecture-decisions/0078-...md` a `accepted-f4` **solo tras visto bueno del operador**.
   - **Aceptación:** el roadmap refleja el estado real de F4; ADR 0078 documenta la aceptación parcial.
 

@@ -149,6 +149,11 @@ el problema ya esté documentado.
 - [windows-git-crlf-vs-hooks.md](./windows-git-crlf-vs-hooks.md)
   — `core.autocrlf` pelea con `mixed-line-ending`; arreglado con
   `.gitattributes`.
+- [windows-commit-to-branch-not-reentrant.md](./windows-commit-to-branch-not-reentrant.md)
+  — el helper de tests `commit_to_branch` no puede llamarse dos veces sobre la
+  MISMA rama: su `rmtree(ignore_errors=True)` no borra los objetos read-only de
+  `.git` en Windows y el segundo `git clone` sale con 128. Avanza la punta con
+  `commit-tree` + `update-ref` dentro del bare.
 - [windows-tcp-ghost-listener.md](./windows-tcp-ghost-listener.md)
   — `Get-NetTCPConnection` reporta un listener cuyo PID ya no
   existe; bind real (no la query) es la única fuente fiable.
@@ -218,3 +223,10 @@ el problema ya esté documentado.
 - [workflow-parallel-review-source-contamination.md](./workflow-parallel-review-source-contamination.md)
   — un «flaky» reportado por revisores en paralelo puede ser contaminación entre
   ellos; re-correr en serie sobre el árbol limpio antes de creérselo.
+- [integration-tests-share-one-database.md](./integration-tests-share-one-database.md)
+  — dos pytest de integración a la vez se dropean la BD mutuamente (una sola
+  `agentic_platform_test` para todo el repo); `TEST_PG_DB_NAME` distinto por proceso.
+- [beat-entry-whose-task-nobody-imports.md](./beat-entry-whose-task-nobody-imports.md)
+  — una entrada de beat cuyo módulo no está en `celery_app(imports=...)` se encola
+  y muere con `NotRegistered` **sin ruido**: seis features «desplegadas» que nunca
+  corrieron. Síntoma: ninguno. Guarda genérica en `test_approval_expiry_beat.py`.

@@ -52,7 +52,7 @@ pasa"), pero **el plan como conjunto no cumple su intención**: ningún
 agente ha ejecutado una tarea de principio a fin. El plan se llama
 "Ejecución de Agentes".
 
-## Decisión propuesta
+## Decisión
 
 Añadir una **Fase G — Integración end-to-end** al Plan 02 (no un plan
 nuevo: es la compleción de Plan 02). Tareas propuestas:

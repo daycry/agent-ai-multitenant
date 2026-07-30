@@ -15,18 +15,20 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.auth.admin_hardening import require_hardened_system_admin
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
 from api_server.config import get_settings
 from api_server.db.models import Organization, User, UserOrganizationMembership
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging, get_logger
 from api_server.logging.context import REQUEST_ID_HEADER, RequestContextMiddleware
+from api_server.middleware.security_headers import SecurityHeadersMiddleware
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
 from api_server.routers.api_tokens import router as api_tokens_router
@@ -173,6 +175,40 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+# Every path under this prefix is the System-Admin surface and MUST carry the
+# admin hardening gate (MFA + IP allowlist + short session, staging/prod only).
+_ADMIN_PREFIX = "/admin"
+
+
+def _is_admin_surface(router: APIRouter) -> bool:
+    """True iff EVERY route of ``router`` lives under ``/admin`` (authz-1).
+
+    The mount in :func:`_register_routers` uses this to attach
+    :func:`require_hardened_system_admin` automatically, so a NEW admin router
+    is hardened by the mere fact of being mounted — nobody has to remember the
+    dependency (the historic failure mode: 9 of the 10 ``/admin/*`` routers,
+    ``/admin/backup`` among them with its destructive restore, shipped without
+    it).
+
+    A router that MIXES admin and non-admin paths is a wiring error we refuse
+    to guess about: hardening it would 403 the tenant routes, and not hardening
+    it would leave the admin routes open. It raises at import time — loudly, at
+    startup — instead of silently picking either failure.
+    """
+    paths = [str(getattr(route, "path", "")) for route in router.routes]
+    admin = [p for p in paths if p == _ADMIN_PREFIX or p.startswith(f"{_ADMIN_PREFIX}/")]
+    if not admin:
+        return False
+    if len(admin) != len(paths):
+        non_admin = sorted(set(paths) - set(admin))
+        raise RuntimeError(
+            "router mixes /admin paths with non-admin paths, so the admin "
+            f"hardening gate cannot be applied at mount time: {non_admin}. "
+            "Split it into an admin router and a tenant router."
+        )
+    return True
+
+
 def _register_routers(app: FastAPI) -> None:
     """Mount every API router on ``app``.
 
@@ -180,6 +216,12 @@ def _register_routers(app: FastAPI) -> None:
     statement-count lint threshold as routers keep being added (the list
     only grows). Order is not significant — FastAPI matches by path — so
     new routers can be appended freely.
+
+    Routers whose whole surface lives under ``/admin`` are mounted WITH the
+    hardening dependency (:func:`_is_admin_surface`), so the System-Admin
+    surface cannot regress by omission. ``tests/integration/
+    test_admin_hardening_surface.py`` is the contract test that fails if any
+    mounted ``/admin`` route ends up without the gate.
     """
     for router in (
         auth_router,
@@ -255,7 +297,10 @@ def _register_routers(app: FastAPI) -> None:
         budget_pause_router,
         ws_router,
     ):
-        app.include_router(router)
+        if _is_admin_surface(router):
+            app.include_router(router, dependencies=[Depends(require_hardened_system_admin)])
+        else:
+            app.include_router(router)
 
 
 @asynccontextmanager
@@ -311,21 +356,35 @@ async def _resume_chat_replies() -> None:
 
 
 def create_app() -> FastAPI:
+    settings = get_settings()
+
+    # `/docs` + `/openapi.json` are withdrawn outside dev (task_prod09_14,
+    # api-7): the full internal schema — `/admin/*`, `/internal/agent/*`, every
+    # tenant route — used to be served unauthenticated. Withdrawing the UI alone
+    # would be theatre, since `/openapi.json` IS the map, so BOTH go. The public
+    # `/api/v1` contract is a separate curated document and stays published.
+    docs_published = settings.api_docs_published
     app = FastAPI(
         title="agentic-platform / api-server",
         version="0.0.0",
-        docs_url="/docs",
+        docs_url="/docs" if docs_published else None,
+        openapi_url="/openapi.json" if docs_published else None,
         redoc_url=None,
         lifespan=_lifespan,
     )
 
-    settings = get_settings()
     # Request-context middleware binds request_id (+ user_id/tenant_id) to
     # every log line via structlog contextvars and echoes X-Request-ID back
     # (error-obs-logging-1). Added BEFORE CORS so CORS ends up the outermost
     # layer — its headers wrap even the generic 500 emitted by the global
     # exception handler below.
     app.add_middleware(RequestContextMiddleware)
+    # Baseline response headers (task_prod09_14, api-7): nosniff, frame-deny,
+    # Referrer-Policy and — only over TLS, only outside dev — HSTS. Added AFTER
+    # RequestContextMiddleware and BEFORE CORS so it ends up between them: it must
+    # wrap every response including the generic 500 the global handler emits, and
+    # CORS must stay outermost so its own headers are never shadowed.
+    app.add_middleware(SecurityHeadersMiddleware, environment=settings.environment)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,

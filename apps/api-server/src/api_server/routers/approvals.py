@@ -56,6 +56,13 @@ async def resolve_approval_request(
     Approve -> task back to `backlog`; reject -> task to `blocked`.
     `resolve_approval` does the DB moves; here we publish the task
     transition so the board reacts in real time.
+
+    El 409 lo decide la ESCRITURA, no una lectura previa (prod-03
+    task_prod03_04). La comprobación de abajo sigue estando porque da el mensaje
+    concreto —«already approved»— y ahorra el UPDATE en el caso normal, pero ya
+    NO es la guarda: dos revisores simultáneos la pasaban los dos. La guarda es
+    el `UPDATE ... WHERE status='pending'` de `resolve_approval`; cuando afecta
+    0 filas devuelve ``None`` y ese es el 409 honesto.
     """
     request = await get_approval_request(session, request_id)
     if request is None:
@@ -74,6 +81,13 @@ async def resolve_approval_request(
         resolver_id=principal.user_id,
         reason=payload.reason,
     )
+    if resolved is None:
+        # Otro revisor (o el job de caducidad) ganó la transición entre nuestra
+        # lectura y nuestra escritura. Nada se ha mutado.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="approval request was already resolved by someone else",
+        )
     # Tell the board about the task transition (best-effort).
     new_status = TaskStatus.BACKLOG if payload.approved else TaskStatus.BLOCKED
     task = await session.get(Task, resolved.task_id)

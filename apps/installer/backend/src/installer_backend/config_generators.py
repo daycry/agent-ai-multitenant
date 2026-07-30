@@ -65,11 +65,10 @@ _SECRET_NBYTES = 32
 #: the services' settings guard keys on ``prod``/``staging``/``dev`` (and only
 #: ``staging``/``prod`` trip the dev-secret guard). Map installer → runtime here
 #: so a production install emits ``ENVIRONMENT=prod`` and the guard fires.
-_RUNTIME_ENVIRONMENT: dict[Environment, str] = {
-    Environment.PRODUCTION: "prod",
-    Environment.STAGING: "staging",
-    Environment.DEVELOPMENT: "dev",
-}
+#: Alias del mapeo, que ahora vive en el propio enum (`Environment.runtime_value`)
+#: para que no pueda volver a existir en un generador y faltar en el otro — que es
+#: exactamente lo que pasó con el compose hasta el 2026-07-30.
+_RUNTIME_ENVIRONMENT: dict[Environment, str] = {e: e.runtime_value for e in Environment}
 
 
 def _token() -> str:

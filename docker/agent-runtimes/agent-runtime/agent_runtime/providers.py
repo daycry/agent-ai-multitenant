@@ -48,12 +48,13 @@ from shared_llm import (
     LLMProvider,
     Message,
     OllamaProvider,
-    ProviderError,
-    RateLimitError,
 )
+from shared_llm.credential_fields import overlay_credentials
 from shared_llm.providers._openai_compat import CompletionSignals, completion_signals
 from shared_llm.providers.claude_agent_session import ClaudeAgentSessionProvider
 from shared_llm.reasoning import reasoning_call_kwargs
+from shared_llm.retry import RetryEvent, retry_delay
+from shared_llm.retry import is_transient as shared_is_transient
 
 from agent_runtime.model import (
     DecisionKind,
@@ -1001,17 +1002,20 @@ _DEFAULT_RETRY_BACKOFF_S: float = float(os.environ.get("AGENT_RUNTIME_LLM_BACKOF
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Whether ``exc`` is worth retrying: rate-limit, timeout, or a 5xx.
+    """Whether ``exc`` is worth retrying — la política ÚNICA de `shared_llm.retry`.
 
-    AuthError and 4xx ProviderErrors are permanent — retrying re-burns the budget
-    for nothing — so they are NOT transient and propagate on the first hit.
+    prod-07 task_prod07_01: la clasificación era local y le faltaba el caso que
+    más runs mató: un ``ProviderError`` SIN ``status_code``, que es la forma que
+    tiene un socket reseteado o un read-timeout cuando ``typed_transport_errors``
+    lo tipa (``transient=True``). La regla local "5xx → transitorio" lo archivaba
+    como permanente y el blip de red se llevaba el run entero (llm-2).
+
+    ``ProviderTimeout`` sigue tratándose aquí: es LOCAL del runtime y subclase de
+    ``LLMError``, no de ``TimeoutError``, así que shared_llm no puede reconocerlo.
     """
-    if isinstance(exc, RateLimitError | ProviderTimeout):
+    if isinstance(exc, ProviderTimeout):
         return True
-    if isinstance(exc, ProviderError):
-        code = exc.status_code
-        return code is not None and 500 <= code < 600
-    return False
+    return shared_is_transient(exc)
 
 
 def _run(coro: Any) -> Any:
@@ -1032,6 +1036,8 @@ def _run_with_retry(
     attempts: int = _DEFAULT_CALL_ATTEMPTS,
     backoff: float = _DEFAULT_RETRY_BACKOFF_S,
     sleep: Callable[[float], None] = time.sleep,
+    provider: str = "",
+    jitter: Callable[[], float] | None = None,
 ) -> Any:
     """Run a fresh provider coroutine per attempt, bounded by timeout + retries.
 
@@ -1039,16 +1045,29 @@ def _run_with_retry(
     coroutine, since a coroutine cannot be awaited twice. The call is wrapped in
     ``asyncio.wait_for`` so a stuck provider becomes a typed :class:`ProviderTimeout`
     instead of hanging the node forever. Transient failures (rate-limit / 5xx /
-    timeout) are retried with exponential backoff up to ``attempts`` times; once
-    the budget is spent the LAST error is RE-RAISED (typed) — never swallowed, so
-    the graph node in another unit decides how to surface the failure.
+    timeout / transport blip) are retried up to ``attempts`` times; once the budget
+    is spent the LAST error is RE-RAISED (typed) — never swallowed, so the graph
+    node in another unit decides how to surface the failure.
+
+    prod-07 task_prod07_01 — tres cosas que no hacía y ahora sí:
+
+      * la ESPERA la calcula ``shared_llm.retry.retry_delay``: backoff exponencial
+        + **jitter** (sin él, N agentes en paralelo que topan el mismo rate-limit
+        vuelven todos en el mismo instante) y, cuando el proveedor mandó
+        ``Retry-After``, se OBEDECE ese valor en vez de adivinar uno;
+      * cada reintento se LOGUEA con provider / intento / causa — antes se dormía
+        en silencio y no había forma de saber, leyendo el log de un run, que se
+        habían pagado los tokens del prompt dos veces;
+      * un ``ProviderError`` sin status (transporte) cuenta como transitorio (ver
+        :func:`_is_transient`).
     """
 
     async def _attempt() -> Any:
         return await asyncio.wait_for(make_coro(), timeout=timeout)
 
+    budget = max(1, attempts)
     last: BaseException | None = None
-    for i in range(max(1, attempts)):
+    for i in range(budget):
         try:
             return _run(_attempt())
         except TimeoutError as exc:
@@ -1058,8 +1077,25 @@ def _run_with_retry(
             if not _is_transient(exc):
                 raise
             last = exc
-        if i < max(1, attempts) - 1 and backoff > 0:
-            sleep(backoff * (2**i))
+        if i < budget - 1:
+            delay = retry_delay(last, attempt=i, base_delay=backoff, jitter=jitter)
+            event = RetryEvent(
+                provider=provider or getattr(last, "provider", "") or "",
+                attempt=i + 1,
+                attempts=budget,
+                delay=delay,
+                error=last,
+            )
+            _log.warning(
+                "LLM retry %s/%s tras %s (espera %.2fs)",
+                event.attempt,
+                event.attempts,
+                type(last).__name__,
+                delay,
+                extra=event.as_log_extra(),
+            )
+            if delay > 0:
+                sleep(delay)
     assert last is not None  # the loop ran at least once and never returned
     raise last
 
@@ -1119,6 +1155,22 @@ class _ProviderModelClient:
         # defecto: byte-a-byte el comportamiento histórico.
         self._conversation_thread = conversation_thread
         self._thread: list[Message] = []
+
+    def _retrying(self, make_coro: Callable[[], Awaitable[Any]]) -> Any:
+        """`_run_with_retry` con el NOMBRE del proveedor puesto.
+
+        prod-07 task_prod07_01: el log del reintento sin el proveedor no sirve de
+        nada — el operador necesita saber CUÁL de los cuatro está inestable.
+        Único punto por el que pasan `decide()`, `assess_progress()` y `review()`.
+        El backoff se lee del módulo en CADA llamada (no como default del `def`)
+        para que ops pueda ajustarlo por env sin redeploy y los tests puedan
+        neutralizarlo sin esperar de verdad.
+        """
+        return _run_with_retry(
+            make_coro,
+            provider=getattr(self.provider, "name", "") or "",
+            backoff=_DEFAULT_RETRY_BACKOFF_S,
+        )
 
     # ----- ADR 0110: hilo conversacional (solo con el flag activo) ---------
     def _thread_turn_update(self, state: dict[str, Any]) -> str:
@@ -1221,7 +1273,7 @@ class _ProviderModelClient:
                 sent_user = Message(role="user", content=self._thread_turn_update(state))
                 messages = [historical[0], *self._thread, sent_user]
             call_kwargs = {**self._extra_call_kwargs, **self._thread_call_kwargs()}
-            resp = _run_with_retry(
+            resp = self._retrying(
                 lambda: self.provider.complete(
                     messages,
                     model=self.model,
@@ -1231,7 +1283,7 @@ class _ProviderModelClient:
             )
             self._record_thread_turn(sent_user, resp)
             return _decision_from(resp, model=self.model)
-        resp = _run_with_retry(
+        resp = self._retrying(
             lambda: self.provider.complete(
                 _decide_messages(state),
                 model=self.model,
@@ -1252,7 +1304,7 @@ class _ProviderModelClient:
             return None  # camino CLI (claude_sdk): sin tool_choice forzable
         try:
             messages = _decide_messages(state)
-            resp = _run_with_retry(
+            resp = self._retrying(
                 lambda: self.provider.complete(
                     [Message(role="system", content=_ASSESS_SYSTEM), messages[1]],
                     model=self.model,
@@ -1292,7 +1344,7 @@ class _ProviderModelClient:
         kwargs: dict[str, Any] = dict(self._extra_call_kwargs)
         if self._forces_verdict_choice:
             kwargs["tool_choice"] = _SUBMIT_VERDICT_TOOL_CHOICE
-        resp = _run_with_retry(
+        resp = self._retrying(
             lambda: self.provider.complete(
                 _review_messages(state),
                 model=self.model,
@@ -1521,35 +1573,16 @@ def _overlay_resolved(
     the spec's env/installer-derived value; an absent resolved field leaves
     the spec untouched (so e.g. an Ollama row with no bearer keeps any
     env api_key). The input `spec` is never mutated.
+
+    prod-07 task_prod07_08: el mapeo kind→campos ya NO se escribe aquí. Vive en
+    `shared_llm.credential_fields.CREDENTIAL_FIELDS`, la tabla ÚNICA que
+    consumen las tres copias que existían (worker, runtime, factory del
+    api-server). Escrito a mano, este espejo ya había divergido: no mapeaba el
+    `bearer_token` de Azure que el factory sí acepta, así que un proveedor azure
+    bearer-only funcionaba en el asistente y era irresoluble por dispatch — el
+    agente arrancaba sin credencial y moría con un 401 dentro del sandbox.
     """
-    merged = dict(spec)
-    base_url = resolved.base_url
-    secret = resolved.secret
-    if kind == "azure_foundry":
-        if base_url:
-            merged["apim_base_url"] = base_url
-        if secret.get("api_key"):
-            merged["subscription_key"] = secret["api_key"]
-    elif kind == "copilot":
-        if secret.get("oauth_token"):
-            merged["github_token"] = secret["oauth_token"]
-    elif kind in ("claude_sdk", "claude"):
-        # Two auth modes on the same kind (ADR 0063): API key
-        # (secret['api_key'] → ANTHROPIC_API_KEY) and Pro/Max subscription
-        # (secret['oauth_token'] from `claude setup-token` →
-        # CLAUDE_CODE_OAUTH_TOKEN). Carry whichever Vault field is present onto
-        # the spec; `build_provider_client` feeds it to the SDK env. Mirror of
-        # the worker's `model_resolver._overlay_provider_fields`.
-        if secret.get("api_key"):
-            merged["api_key"] = secret["api_key"]
-        if secret.get("oauth_token"):
-            merged["oauth_token"] = secret["oauth_token"]
-    elif kind == "ollama":
-        if base_url:
-            merged["base_url"] = base_url
-        if secret.get("bearer_token"):
-            merged["api_key"] = secret["bearer_token"]
-    return merged
+    return overlay_credentials(spec, kind, base_url=resolved.base_url, secret=resolved.secret)
 
 
 # ---------------------------------------------------------------------------

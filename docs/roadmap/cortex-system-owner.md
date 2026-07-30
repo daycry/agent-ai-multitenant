@@ -18,9 +18,20 @@ docs_language: es
 > [cortex-fases.md](cortex-fases.md)) se implementaban por completo entre 2026-06-24 y 2026-07-06.
 > Desviación real vs. diseño: la búsqueda web salió por el ADR 0067 (provider-agnóstica,
 > egress-proxy), no por el ADR 0076 (WebSearch/WebFetch nativas de claude_sdk) que este documento
-> recomendaba como "camino preferente". Los ADRs 0075-0078 siguen en `proposed` en sus propios
-> ficheros pese a que el código que autorizan ya está en producción — pendiente de promoción
-> formal, no de implementación.
+> recomendaba como "camino preferente".
+>
+> **Actualizado el 2026-07-30.** Este banner decía que «los ADRs 0075-0078 siguen en `proposed` …
+> pendiente de promoción formal»: ya no es cierto. Comprobado ADR por ADR, **0073, 0075, 0076,
+> 0077, 0078 y 0080 están `accepted`**; **0074 está `accepted-f0`**, el único valor así del repo,
+> conservado a propósito porque se aprobó en dos tiempos (cimiento F0 primero, excepción a RLS
+> después). Sus banners de cuerpo, que se contradecían con su propio frontmatter, se corrigieron
+> entre el 2026-07-27 y el 2026-07-30.
+>
+> **«Implementado» no es «cerrado».** F2, F3, F4 y F5 conservan casillas abiertas con hueco
+> identificado — inventario casilla a casilla en
+> [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md). La más importante para quien vaya a
+> encender algo: **F4 salió sin owner-approval gate ni tope de gasto en USD cableados al bucle**,
+> y por eso `cortex.autonomy_enabled` sigue OFF.
 
 > Diseño producido por un workflow multi-agente (research de 5 áreas → panel de 3 arquitecturas independientes → jueces → síntesis). El diseño ganador (score 90/100) es una **arquitectura cognitiva por capas** sobre el sustrato existente. La **crítica adversarial automática no llegó a correr** (límite de sesión); la suplo en la sección [Crítica de restricciones y seguridad](#crítica-de-restricciones-y-seguridad).
 
@@ -115,9 +126,20 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ## Plan por fases
 
-> Cada fase produce software funcional y testeable por sí misma. Las migraciones son reversibles (a partir de 0090). **Las fases que tocan egress/aislamiento/rol nuevo están GATED por sus ADRs (0074-0078) y el visto bueno del owner.**
+> Cada fase produce software funcional y testeable por sí misma. Las migraciones son reversibles (a partir de 0090). **Las fases que tocan egress/aislamiento/rol nuevo estaban GATED por sus ADRs (0074-0078) y el visto bueno del owner** — ese gate se levantó el 2026-06-23 y los seis ADR están hoy `accepted`/`accepted-f0`.
+
+> **Estado de las seis fases, anotado el 2026-07-30.** Cada epígrafe lleva su línea
+> `**Estado:**` con el plan que la ejecutó y su changelog. Las viñetas de cada fase son el
+> **diseño original**, no una lista de tareas: dónde el diseño y lo entregado difieren, la
+> divergencia está declarada en el changelog de la fase, no aquí. El estado por casilla lo
+> mandan el plan de la fase y sus tests.
 
 ### Fase 0 — Cimiento `shared-llm` + rol `system_owner` (ADR 0074)
+
+**Estado:** ✅ implementada y desplegada el 2026-06-23 (migración 0091). Ejecutada por el plan
+táctico [mejoras-2026-06-chat-coste-cortex](mejoras-2026-06-chat-coste-cortex.md) ·
+[changelog](../07-changelog/mejoras-2026-06-chat-coste-cortex.md). Pendiente sólo de validación
+humana.
 
 - **Fix bloqueante**: añadir parámetro `effort` a `ClaudeAgentProvider.run_agent` y propagarlo a `_build_options` (`claude_agent.py:425-430`) + test.
 - Migración `users.is_system_owner` (Boolean NOT NULL default false) + UNIQUE parcial `WHERE is_system_owner` (0089→0090).
@@ -127,6 +149,12 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 - Tests cross-rol/gating (403), singleton, aislamiento.
 
 ### Fase 1 — Córtex conversacional con memoria persistente (mente útil mínima)
+
+**Estado:** ✅ implementada y desplegada (migración 0092). Plan
+[cortex-f1-memoria-cognitiva](cortex-f1-memoria-cognitiva.md) ·
+[changelog](../07-changelog/cortex-f1-memoria-cognitiva.md). **Divergencia:** la búsqueda web
+salió por el camino degradado del ADR 0076 (tool propia con anti-SSRF, ADR 0067), no por las
+WebSearch/WebFetch nativas de `claude_sdk` que este documento recomendaba.
 
 - Migración `cortex_conversations` + `cortex_turns` (hilo persistente).
 - Grafo del córtex (extraer/reusar el turn-loop + topes; tools propias owner-scoped; `remember` capado 1/turno).
@@ -138,6 +166,13 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ### Fase 2 — Modelo afectivo + Panel de Mente (ADR 0075)
 
+**Estado:** ✅ implementada y desplegada (migración 0093), ❌ **no cerrada**. Plan
+[cortex-f2-afectivo](cortex-f2-afectivo.md) ·
+[changelog](../07-changelog/cortex-f2-afectivo.md). La auditoría del 2026-07-27 dejó ocho casillas
+abiertas (suite de calibración incompleta, sin chequeo de drift de la migración, UI sólo en ES);
+varias estaban siendo remediadas el 2026-07-30, así que el estado vigente lo mandan el plan y sus
+tests, no esta línea.
+
 - Migración `cortex_affect_snapshots` + estado vivo en Redis (decay lazy).
 - Motor PAD determinista (decay/update/EWMA, clamps, drives) en código puro testeable.
 - Distilador afectivo asíncrono (Celery, Ollama local) fail-open.
@@ -148,6 +183,17 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ### Fase 3 — Identidad evolutiva + reflexión (ADR 0074/0078)
 
+**Estado:** ✅ implementada y desplegada (migración 0094), ❌ **no cerrada**. Plan
+[cortex-f3-identidad](cortex-f3-identidad.md) ·
+[changelog](../07-changelog/cortex-f3-identidad.md). Lo entregado: identidad singleton versionada
+con histórico y `diff`, clamp de rasgos y cota de baseline por ciclo
+(`BASELINE_MAX_DELTA_PER_REFLECTION = 0.05`), bucle `workers.cortex_reflect` y UI de identidad; el
+`identity_preamble` entra en el self-context de cada turno, así que la identidad **gobierna la
+conducta** y no decora. Lo que falta de las viñetas de abajo, verificado el 2026-07-30: la
+**co-construcción del autonombrado** (no hay `propose_identity`: el owner rellena un formulario),
+el **timeline de evolución** de la UI (no existe `GET /identity/history`, y el `/journal` descarta
+el `diff`), el **budget de la reflexión** y el saciado del drive `coherence`.
+
 - Migración `cortex_identity` + `cortex_identity_history`.
 - Onboarding de identidad (autonombrado, co-construcción de valores).
 - Bucle de reflexión (Celery beat): insights, reescribe narrativa, deriva traits/baseline clampeado + bound + diff versionado.
@@ -155,12 +201,32 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ### Fase 4 — Curiosidad y pensamiento de fondo (ADR 0078)
 
+**Estado:** ✅ implementada y desplegada (migración 0095, +0103 para `surfaced`), ❌ **no cerrada, y
+la que menos conviene cerrar en falso**. Plan [cortex-f4-autonomia](cortex-f4-autonomia.md) ·
+[changelog](../07-changelog/cortex-f4-autonomia.md). El bucle elige tema, investiga, destila a una
+memoria de aprendizaje y **abre el tema en el siguiente encuentro**; tiene kill-switch,
+circuit-breaker y tope de nº de búsquedas. Lo que la auditoría dejó abierto es justo el **gobierno**
+que el ADR 0078 llama no negociable: el **owner-approval gate** de la viñeta de abajo (el ADR lo
+marcaba «opcional» y el plan lo subió al MVP) y el **tope de gasto en USD** cableado al bucle, más
+las **métricas OTEL**. `cortex.autonomy_enabled` sigue OFF, y eso es lo único que hoy impide que un
+bucle autónomo gaste sin freno.
+
 - Bucle de curiosidad (drives bajos → metas desde entities → WebSearch→digest→memoria→satisfacción).
 - Inicia temas en el siguiente encuentro.
 - Budget caps + circuit-breaker + (opcional) owner-approval gate; métricas OTEL.
 - UI: "lo que está aprendiendo".
 
 ### Fase 5 — Voz/avatar afectivo + olvido (ADR 0073/0077)
+
+**Estado:** ✅ implementada y desplegada (sin tablas nuevas), ❌ **no cerrada**. Plan
+[cortex-f5-voz-avatar](cortex-f5-voz-avatar.md) ·
+[changelog](../07-changelog/cortex-f5-voz-avatar.md). WS `/ws/owner/cortex/voice` con gate
+DB-authoritative, frame `{type:'affect'}`, prosodia Kokoro modulada por el arousal
+(`arousal_to_speed`), y el olvido reversible por soft-delete + consolidación merge-into, todo
+detrás del kill-switch. Abierto: el **QA visual humano** (avatar en ES+EN, latencia de Kokoro), el
+copy y el `mood_label` **sólo en castellano**, y la decisión pendiente sobre la tarea **D3** — el
+diseño pivotó de columnas dedicadas a contadores en `metadata_` JSONB sin dejarlo escrito, y
+`last_recalled_at` se escribe pero nadie lo lee (la recencia se puntúa sobre `created_at`).
 
 - WS `/ws/owner/cortex/voice` (gate `require_system_owner`, reutiliza `VoiceSession`).
 - Frame `{type:'affect'}`; avatar modulado por PAD; voz Kokoro por arousal.
@@ -170,6 +236,12 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 ---
 
 ## ADRs necesarios (a crear como `proposed`)
+
+> **Los cinco existen y ninguno sigue `proposed`** (comprobado el 2026-07-30): 0074
+> `accepted-f0`; 0075, 0076, 0077 y 0078 `accepted`. Se añadieron después dos más al track:
+> **0073** (modo voz, `accepted`) y **0080** (navegador Playwright, `accepted`). Este epígrafe se
+> conserva como registro del diseño original — «a crear como `proposed`» era la instrucción de
+> entonces, no una tarea viva.
 
 - **ADR 0074** — Rol `system_owner` y Córtex: identidad global singleton, tablas tenant-less sobre BYPASSRLS y **excepción consciente al Principio 1 (RLS)**.
 - **ADR 0075** — Modelo afectivo computacional (PAD + appraisal OCC + drives homeostáticos), dinámica determinista, appraisal asíncrono, filosofía de honestidad.

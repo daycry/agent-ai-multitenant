@@ -1,8 +1,12 @@
 """Córtex F0 — System Owner foundation (ADR 0074).
 
 Exercises the F0 cimiento end-to-end: first-user bootstrap as owner, the singleton
-DB invariant, the `own` claim surfaced on /me, and the `require_system_owner` /
-`require_admin_or_owner` gates verified against the DB."""
+DB invariant, the `own` claim surfaced on /me, and the `require_system_owner` gate
+verified against the DB.
+
+(La compuesta `require_admin_or_owner` que este fichero también ejercitaba se
+retiró el 2026-07-30: cero llamantes en `apps/`. Razón completa en la nota de
+`auth/deps.py`.)"""
 
 from __future__ import annotations
 
@@ -129,7 +133,11 @@ async def test_require_system_owner_gate_checks_the_db(
 ) -> None:
     """The gate is DB-authoritative: owner passes, non-owner gets 403, even with a
     forged `is_system_owner=True` hint on the principal."""
-    from api_server.auth.deps import AuthPrincipal, require_admin_or_owner, require_system_owner
+    # `require_admin_or_owner` se retiró el 2026-07-30 (cero llamantes en
+    # `apps/`; ver la nota en `auth/deps.py`). La aserción que la ejercitaba
+    # desde aquí se fue con ella: era el único uso que tenía en todo el repo, y
+    # mantenerla habría seguido dando la impresión de que la puerta estaba viva.
+    from api_server.auth.deps import AuthPrincipal, require_system_owner
 
     await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
@@ -147,7 +155,6 @@ async def test_require_system_owner_gate_checks_the_db(
     )
 
     assert await require_system_owner(owner_principal) is owner_principal
-    assert await require_admin_or_owner(owner_principal) is owner_principal
 
     with pytest.raises(HTTPException) as exc:
         await require_system_owner(forged_principal)

@@ -12,13 +12,16 @@ Ejercita el núcleo ``_run_maintenance`` contra la BD real:
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
+import pytest_asyncio
 from alembic import command
+from redis.asyncio import Redis
 
 pytestmark = pytest.mark.integration
 
@@ -26,6 +29,33 @@ pytestmark = pytest.mark.integration
 @pytest.fixture()
 def schema_at_head(alembic_config) -> None:
     command.upgrade(alembic_config, "head")
+
+
+@pytest_asyncio.fixture()
+async def api_redis(test_redis_url: str, monkeypatch: pytest.MonkeyPatch):
+    """Apunta el ``get_redis()`` del api-server a la Redis de test.
+
+    La tarea de mantenimiento consulta el circuit-breaker de F4 (namespace
+    ``cortex:cb:*``) con el mismo cliente que el resto del córtex. Sin esta
+    redirección el gate hablaría con la Redis real del entorno — y como
+    ``is_circuit_open`` es FAIL-SAFE (Redis inalcanzable ⇒ "abierto"), la tarea
+    saldría no-op y los tests fallarían de forma fantasma.
+    """
+    monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
+    from api_server.auth.deps import reset_redis_cache
+    from api_server.config import get_settings
+
+    get_settings.cache_clear()
+    reset_redis_cache()
+    client: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.flushdb()
+        await client.aclose()
+        reset_redis_cache()
+        get_settings.cache_clear()
 
 
 @pytest.fixture()
@@ -181,7 +211,7 @@ async def _deleted_at(dsn: str, mem_id: UUID):  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_kill_switch_off_is_noop(
-    schema_at_head, migrations_pg_dsn: str, workers_settings
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
 ) -> None:
     seed = await _seed(migrations_pg_dsn)
     await _set_autonomy(migrations_pg_dsn, enabled=False)
@@ -209,7 +239,7 @@ async def test_kill_switch_off_is_noop(
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_autonomy_on_forgets_low_retention_but_protects_core(
-    schema_at_head, migrations_pg_dsn: str, workers_settings
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
 ) -> None:
     seed = await _seed(migrations_pg_dsn)
     await _set_autonomy(migrations_pg_dsn, enabled=True)
@@ -236,7 +266,7 @@ async def test_autonomy_on_forgets_low_retention_but_protects_core(
 
 @pytest.mark.asyncio
 async def test_maintenance_is_idempotent(
-    schema_at_head, migrations_pg_dsn: str, workers_settings
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
 ) -> None:
     seed = await _seed(migrations_pg_dsn)
     await _set_autonomy(migrations_pg_dsn, enabled=True)
@@ -270,7 +300,7 @@ async def test_maintenance_is_idempotent(
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_forget_usa_recall_count_para_retener_lo_usado(
-    schema_at_head, migrations_pg_dsn: str, workers_settings
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
 ) -> None:
     seed = await _seed(migrations_pg_dsn)
     await _set_autonomy(migrations_pg_dsn, True)
@@ -310,6 +340,111 @@ async def test_forget_usa_recall_count_para_retener_lo_usado(
 
 
 # ---------------------------------------------------------------------------
+# D1 end-to-end: las dos dimensiones nuevas llegan al SWEEP, no sólo al score
+#
+# Los unitarios de `tests/unit/test_cortex_forgetting.py` fijan la función pura;
+# estos comprueban que el barrido le pasa el `metadata_` real, con los datos que
+# escriben sus productores de verdad (el distilador afectivo de F2 y el recall de
+# F1). Sin esta mitad, la dimensión podría estar impecable y no cambiar nada en
+# producción — el patrón "mecanismo entregado, cero llamantes".
+# ---------------------------------------------------------------------------
+async def _insert_episodic(dsn: str, mem_id: UUID, owner_id: UUID, meta: str, days: int) -> None:
+    conn = await asyncpg.connect(dsn)
+    try:
+        tenant_id = await conn.fetchval("SELECT id FROM organizations LIMIT 1")
+        await conn.execute(
+            "INSERT INTO memory_entries (id, tenant_id, scope, type, content, user_id,"
+            " metadata, created_at) VALUES ($1, $2, 'private', 'episodic', $3, $4,"
+            " $5::jsonb, now() - ($6 || ' days')::interval)",
+            mem_id,
+            tenant_id,
+            f"mem {mem_id}",
+            owner_id,
+            meta,
+            str(days),
+        )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_el_sweep_retiene_la_episodica_emocionalmente_INTENSA(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Dos episódicas de 60 días idénticas salvo el bloque ``emotion`` del distilador.
+
+    El `metadata_.emotion` con `intensity` lo escribe
+    `workers.cortex_affect._persist_emotional_episode` en cada turno del córtex, así
+    que la forma del JSONB de aquí es la real, no una inventada para el test.
+    """
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, True)
+    owner_id = seed["owner_id"]
+
+    apagada, intensa = uuid4(), uuid4()
+    await _insert_episodic(migrations_pg_dsn, apagada, owner_id, '{"cortex": true}', 60)
+    await _insert_episodic(
+        migrations_pg_dsn,
+        intensa,
+        owner_id,
+        '{"cortex": true, "emotion": {"valence": -0.7, "arousal": 0.9,'
+        ' "dominance": -0.3, "intensity": 1.0, "mood_label": "miedo"}}',
+        60,
+    )
+
+    from workers.cortex_maintenance import _run_maintenance
+
+    await _run_maintenance(workers_settings)
+
+    assert await _deleted_at(migrations_pg_dsn, apagada) is not None
+    assert await _deleted_at(migrations_pg_dsn, intensa) is None
+
+
+@pytest.mark.asyncio
+async def test_el_sweep_retiene_lo_vieja_pero_recordada_ayer(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Una episódica de dos años recordada AYER sobrevive al barrido.
+
+    `metadata_.last_recalled_at` lo escribe `cortex.memory._bump_recall_counters`
+    en cada recall y nadie lo leía: el sweep medía la recencia sobre `created_at`,
+    así que enterraba lo que el owner acababa de usar.
+    """
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, True)
+    owner_id = seed["owner_id"]
+
+    olvidada, recordada = uuid4(), uuid4()
+    await _insert_episodic(migrations_pg_dsn, olvidada, owner_id, '{"cortex": true}', 730)
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ayer = await conn.fetchval("SELECT (now() - interval '1 day')")
+    finally:
+        await conn.close()
+    await _insert_episodic(
+        migrations_pg_dsn,
+        recordada,
+        owner_id,
+        json.dumps(
+            {
+                "cortex": True,
+                "recall_count": 1,
+                "last_recalled_at": ayer.astimezone(UTC).isoformat(),
+            }
+        ),
+        730,
+    )
+
+    from workers.cortex_maintenance import _run_maintenance
+
+    await _run_maintenance(workers_settings)
+
+    assert await _deleted_at(migrations_pg_dsn, olvidada) is not None
+    assert await _deleted_at(migrations_pg_dsn, recordada) is None
+
+
+# ---------------------------------------------------------------------------
 # Consolidación (ADR 0077) — merge-into de la episódica REPETIDA, end-to-end
 # ---------------------------------------------------------------------------
 def _vec(*, axis: int, jitter: float = 0.0) -> str:
@@ -322,7 +457,7 @@ def _vec(*, axis: int, jitter: float = 0.0) -> str:
 
 @pytest.mark.asyncio
 async def test_autonomy_on_consolidates_repeated_episodic(
-    schema_at_head, migrations_pg_dsn: str, workers_settings
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
 ) -> None:
     """3 episódicas viejas MUY similares colapsan en UNA consolidada; las
     originales quedan soft-borradas con `consolidated_into` (reversible); una 4ª
@@ -399,3 +534,129 @@ async def test_autonomy_on_consolidates_repeated_episodic(
         assert len(_json.loads(consolidated["src"])) == 3
     finally:
         await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# D2 — el gate del plan: kill-switch + CIRCUIT-BREAKER de F4 (ADR 0078)
+#
+# El gate sólo miraba el kill-switch global. El criterio D2 exige además
+# consultar el gobierno por owner de F4, que ya existía (`cortex/autonomy.py`) y
+# ya lo usaba la curiosidad. Sin esto, un owner cuyo mantenimiento falla en bucle
+# (BD saturada, embeddings corruptos) seguía siendo barrido cada noche sin freno.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_circuit_breaker_abierto_salta_el_barrido_del_owner(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Con el breaker ABIERTO para ese owner, la pasada no toca nada suyo.
+
+    Es el criterio literal de D2: el gate consulta el circuit-breaker de F4. La
+    clave la escribe `record_failure` tras N fallos consecutivos; aquí se abre a
+    mano para probar el GATE, no el contador.
+    """
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+
+    from api_server.cortex.autonomy import circuit_key
+    from workers.cortex_maintenance import MAINTENANCE_KIND, _run_maintenance
+
+    await api_redis.set(circuit_key(str(seed["owner_id"]), MAINTENANCE_KIND), "open", ex=600)
+
+    result = await _run_maintenance(workers_settings, now=datetime.now(UTC))
+
+    assert result["results"][0] == {
+        "owner_user_id": str(seed["owner_id"]),
+        "skipped": "circuit_open",
+    }, result
+    # NADA se tocó: ni el olvido, ni el decay snapshot, ni la poda.
+    assert await _deleted_at(migrations_pg_dsn, seed["old_episodic"]) is None
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        ancient = await conn.fetchval(
+            "SELECT count(*) FROM cortex_affect_snapshots WHERE id = $1", seed["snap_ancient"]
+        )
+    finally:
+        await conn.close()
+    assert ancient == 1, "la poda tampoco debe correr con el breaker abierto"
+
+
+@pytest.mark.asyncio
+async def test_breaker_de_la_curiosidad_no_frena_el_mantenimiento(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Los breakers están separados por `kind`: uno no debe cerrar la puerta al otro.
+
+    Si el mantenimiento reusara el `kind` por defecto (`curiosity`), una racha de
+    fallos de las búsquedas web dejaría además la memoria del owner sin barrer —
+    dos subsistemas independientes acoplados por una clave compartida.
+    """
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+
+    from api_server.cortex.autonomy import CURIOSITY_KIND, circuit_key
+    from workers.cortex_maintenance import _run_maintenance
+
+    await api_redis.set(circuit_key(str(seed["owner_id"]), CURIOSITY_KIND), "open", ex=600)
+
+    result = await _run_maintenance(workers_settings, now=datetime.now(UTC))
+
+    assert result["results"][0]["forgotten"] == 1, result
+    assert await _deleted_at(migrations_pg_dsn, seed["old_episodic"]) is not None
+
+
+@pytest.mark.asyncio
+async def test_una_pasada_limpia_resetea_la_racha_de_fallos(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Un mantenimiento sin errores borra el contador de fallos consecutivos.
+
+    Sin `record_success` el breaker sería un gate que sólo puede cerrarse: dos
+    fallos separados por semanas de éxitos acabarían abriéndolo. Y sin
+    `record_failure` sería un gate que NUNCA se abre — un mecanismo sin productor,
+    verde y muerto.
+    """
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+
+    from api_server.cortex.autonomy import circuit_fails_key
+    from workers.cortex_maintenance import MAINTENANCE_KIND, _run_maintenance
+
+    fails_key = circuit_fails_key(str(seed["owner_id"]), MAINTENANCE_KIND)
+    await api_redis.set(fails_key, "2")
+
+    await _run_maintenance(workers_settings, now=datetime.now(UTC))
+
+    assert await api_redis.get(fails_key) is None, "una pasada limpia resetea la racha"
+
+
+@pytest.mark.asyncio
+async def test_un_owner_con_fallos_acaba_abriendo_el_breaker(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis, monkeypatch
+) -> None:
+    """El productor del breaker existe: N pasadas con error lo ABREN.
+
+    El mantenimiento es best-effort por diseño (cada paso traga su excepción), así
+    que el fallo tiene que viajar hasta el gobierno de F4 explícitamente. Se
+    fuerza un fallo del paso de olvido y se comprueba que, al alcanzar el umbral,
+    la clave abierta aparece y la pasada siguiente ya sale por el gate.
+    """
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+
+    from api_server.cortex.autonomy import circuit_key
+    from workers import cortex_maintenance as mod
+
+    async def _boom(*_a, **_kw):
+        raise RuntimeError("disco lleno")
+
+    monkeypatch.setattr(mod, "_forget_low_retention", _boom)
+
+    key = circuit_key(str(seed["owner_id"]), mod.MAINTENANCE_KIND)
+    for _ in range(mod.MAINTENANCE_CB_FAILS):
+        result = await mod._run_maintenance(workers_settings, now=datetime.now(UTC))
+        # Fail-open: la tarea nunca propaga, aunque un paso reviente.
+        assert "error" not in result, result
+
+    assert await api_redis.exists(key), "tras la racha el breaker debe quedar abierto"
+    after = await mod._run_maintenance(workers_settings, now=datetime.now(UTC))
+    assert after["results"][0]["skipped"] == "circuit_open", after

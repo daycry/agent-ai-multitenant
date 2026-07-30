@@ -24,6 +24,10 @@ pytestmark = pytest.mark.unit
 # Real-looking api-server secrets — none contains a dev marker.
 _API_REAL = {
     "jwt_secret": "x" * 48,
+    # Dedicated worker->api signing secret (prod-09 task_prod09_03 / secrets-9).
+    # Guarded like the rest AND required to differ from `jwt_secret`, so the
+    # "real secrets" baseline has to carry its own distinct value.
+    "internal_token_secret": "q" * 48,
     "review_url_signing_secret": "y" * 48,
     # SSO client-secret encryption key (Plan 08 task_08_01) — also guarded.
     "sso_encryption_key": "w" * 48,

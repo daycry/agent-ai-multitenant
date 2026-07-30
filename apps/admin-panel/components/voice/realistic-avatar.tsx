@@ -15,11 +15,21 @@
  *     peinado y los rasgos (femenino/masculino) — cambiar de voz cambia a la
  *     persona que te habla.
  *   - **Afecto opcional (córtex, ADR 0075)**: valence→tono del aura y sonrisa,
- *     arousal→energía (cejas, rubor, velocidad del sway). SIEMPRE rotulado por
- *     el copy del contenedor como afecto SIMULADO, no sentimientos.
+ *     arousal→energía (cejas, rubor, velocidad del sway y FRECUENCIA DE
+ *     PARPADEO). SIEMPRE rotulado por el copy del contenedor como afecto
+ *     SIMULADO, no sentimientos.
+ *
+ * El mapeo afecto→visual NO se calcula aquí: sale de la función pura
+ * `avatarStyleFromAffect` (lib/cortex.ts, testeada). Hasta la auditoría del
+ * 2026-07-27 este componente reimplementaba el mapeo inline —dos verdades que ya
+ * habían empezado a divergir (el aura usaba una rampa distinta a la de la función
+ * pura, y el parpadeo era un intervalo aleatorio FIJO que ignoraba la
+ * activación)— y era el hueco C1 de F5.
  */
 
 import { useEffect, useState } from "react";
+
+import { avatarStyleFromAffect } from "@/lib/cortex";
 
 export type AvatarAffect = {
   valence: number; // -1..1
@@ -52,26 +62,44 @@ export function RealisticAvatar({
   const [blink, setBlink] = useState(false);
   const [gaze, setGaze] = useState(0); // sacadas: desplazamiento x del iris
 
-  // Parpadeo aleatorio (con doble parpadeo ocasional, como una persona).
+  // Mapeo afecto→visual: la ÚNICA fuente (función pura, testeada). Sin frame de
+  // afecto se usa un neutro tibio y de baja activación.
+  const style = avatarStyleFromAffect({
+    valence: affect?.valence ?? 0,
+    arousal: affect?.arousal ?? 0.3,
+    mood_label: affect?.mood_label,
+  });
+  // Parpadeos/minuto redondeados: el afecto llega a ráfagas y no queremos
+  // reprogramar el parpadeo por un cambio imperceptible de la activación.
+  const blinkRate = Math.round(style.blinkRate);
+
+  // Parpadeo: la CADENCIA la manda la activación (`blinkRate`, parpadeos/minuto)
+  // con jitter ±30 % para que no suene a metrónomo, más un doble parpadeo
+  // ocasional, como una persona.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const baseMs = 60_000 / Math.max(1, blinkRate);
     const schedule = () => {
-      timer = setTimeout(
-        () => {
-          setBlink(true);
-          setTimeout(() => setBlink(false), 110);
-          if (Math.random() < 0.25) {
-            setTimeout(() => setBlink(true), 250);
-            setTimeout(() => setBlink(false), 360);
-          }
-          schedule();
-        },
-        2200 + Math.floor(Math.random() * 3000),
+      timers.push(
+        setTimeout(
+          () => {
+            setBlink(true);
+            timers.push(setTimeout(() => setBlink(false), 110));
+            if (Math.random() < 0.25) {
+              timers.push(setTimeout(() => setBlink(true), 250));
+              timers.push(setTimeout(() => setBlink(false), 360));
+            }
+            schedule();
+          },
+          baseMs * (0.7 + Math.random() * 0.6),
+        ),
       );
     };
     schedule();
-    return () => clearTimeout(timer);
-  }, []);
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [blinkRate]);
 
   // Sacadas del iris: la mirada se desplaza sutilmente y vuelve al centro.
   useEffect(() => {
@@ -92,18 +120,21 @@ export function RealisticAvatar({
 
   const female = isFemaleVoice(voiceId);
   const open = clamp(mouthOpen, 0, 1);
-  const valence = clamp(affect?.valence ?? 0, -1, 1);
-  const arousal = clamp(affect?.arousal ?? 0.3, 0, 1);
+  const arousal = style.intensity; // = arousal clampado por la función pura
 
-  // Aura: neutra (marca) sin afecto; con afecto, el tono sigue la valencia
-  // (fría → cálida) y la opacidad la activación.
-  const auraHue = affect ? 8 + (valence + 1) * 62 : 226; // -1→8 (rojizo), +1→132 (verde)
+  // Aura: neutra (tono de MARCA) sin afecto — que el avatar arranque ya
+  // "coloreado" por un afecto que el servidor no ha mandado sería mentir. Con
+  // afecto, el tono y la saturación salen de la función pura y la opacidad sube
+  // con la activación.
+  const auraHue = affect ? style.hue : 226;
+  const auraSaturation = affect ? style.saturation : 85;
   const auraOpacity = 0.32 + arousal * 0.3 + (speaking ? 0.14 : 0);
 
   // Boca: alto por amplitud; el ancho se estrecha al abrir (forma de vocal).
   const mouthH = 1.6 + open * 15;
   const mouthW = 15 - open * 4.5;
-  const smile = speaking || open > 0.06 ? 0 : -valence * 5; // comisuras en reposo
+  // Comisuras en reposo: `mouthBias` +1 sonríe (Y menor = arriba en SVG).
+  const smile = speaking || open > 0.06 ? 0 : -style.mouthBias * 5;
   const browLift = arousal * 2.6 + (speaking ? 1.2 : 0); // cejas con la energía
   const eyeOpen = blink ? 0.4 : 4.6;
 
@@ -125,10 +156,14 @@ export function RealisticAvatar({
           <radialGradient id="va-aura" cx="50%" cy="45%" r="55%">
             <stop
               offset="0%"
-              stopColor={`hsl(${auraHue.toFixed(0)} 85% 62%)`}
+              stopColor={`hsl(${auraHue.toFixed(0)} ${auraSaturation.toFixed(0)}% 62%)`}
               stopOpacity={auraOpacity}
             />
-            <stop offset="100%" stopColor={`hsl(${auraHue.toFixed(0)} 85% 62%)`} stopOpacity="0" />
+            <stop
+              offset="100%"
+              stopColor={`hsl(${auraHue.toFixed(0)} ${auraSaturation.toFixed(0)}% 62%)`}
+              stopOpacity="0"
+            />
           </radialGradient>
           <linearGradient id="va-skin" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={skinTop} />
@@ -151,7 +186,7 @@ export function RealisticAvatar({
           style={{
             transformOrigin: "100px 120px",
             animation: speaking
-              ? `va-sway ${(3.4 - arousal * 1.6).toFixed(2)}s ease-in-out infinite`
+              ? `va-sway ${style.swayDurationSec.toFixed(2)}s ease-in-out infinite`
               : "va-breathe 4.6s ease-in-out infinite",
           }}
         >

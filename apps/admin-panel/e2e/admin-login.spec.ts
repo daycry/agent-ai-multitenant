@@ -19,8 +19,8 @@ test("login + dashboard happy path", async ({ page }) => {
   await page.goto("/login");
 
   await page.getByLabel("Email").fill(ADMIN_EMAIL);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByLabel(/^(password|contraseña)$/i).fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
 
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
   await expect(page.getByTestId("services-grid")).toBeVisible();
@@ -31,8 +31,8 @@ test("wrong password shows inline error", async ({ page }) => {
   await page.goto("/login");
 
   await page.getByLabel("Email").fill(ADMIN_EMAIL);
-  await page.getByLabel("Password").fill("definitely-wrong");
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByLabel(/^(password|contraseña)$/i).fill("definitely-wrong");
+  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
 
   await expect(page.getByTestId("login-error")).toBeVisible();
   await expect(page).toHaveURL(/\/login$/);

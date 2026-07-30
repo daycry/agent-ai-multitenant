@@ -151,7 +151,8 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
 
 ### Bloque D — Deliberación con effort modulado (claude_sdk) + degradación
 
-- [ ] **Tarea 5 — Resolución `cortex.default_model` + builder del modelo del córtex (degradación limpia)**
+- [x] **Tarea 5 — Resolución `cortex.default_model` + builder del modelo del córtex (degradación limpia)**
+  - ✅ **Verificado (2026-07-30):** `cortex/model_config.py` (clave, get/set/clear, `resolve_cortex_model` solo platform-default, `build_cortex_model` → `CortexModelUnavailableError`) + traducción a 503 en `routers/cortex.py::build_cortex_default_model`. Verde ejecutado: `tests/unit/test_cortex_model_factory.py` (15 passed) y `tests/integration/test_cortex_degradation.py` (2 passed, incluido `test_503_when_claude_sdk_missing`, que era el hueco del 2026-07-27).
   - Crear: `apps/api-server/src/api_server/cortex/model_config.py` — `CORTEX_DEFAULT_MODEL_KEY = "cortex.default_model"`; `get/set/clear_cortex_default_model` y `resolve_cortex_model(admin_session) -> ResolvedAssistantModel | None` clonando `assistant/model_config.py::resolve_assistant_model` pero **solo platform-default** (el córtex es singleton, sin override por tenant). Reutiliza `is_valid_selection`, `to_provider_model_name`, `_selection_from_value` (importadas).
   - Builder en el router (Tarea 7): `resolve_cortex_model` → si `provider_kind == "claude_sdk"` y `not _claude_sdk_available()` → **degradación**: si hay otro modelo configurable se usa el loop clásico con `reasoning_call_kwargs`; si no, 503 honesto (copia el `_claude_sdk_available()` y el patrón 503 de `routers/assistant.py:121-191`). El `effort` se propaga vía `LLMAssistantModel(extra_call_kwargs=reasoning_call_kwargs(kind, reasoning_effort))` — y, como `run_agent` YA propaga `effort` (claude_agent.py:428-434, fix F0), el razonamiento profundo no se ignora.
   - TDD:

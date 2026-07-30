@@ -25,9 +25,23 @@ independent controls, ALL of which are enforced ONLY when ``environment`` is
      stamps on every session.
 
 This composes ON TOP of :func:`api_server.auth.deps.require_system_admin`
-(which already 403s a non-admin), so wiring this single dependency at the
-``/admin`` router level hardens every admin route without touching them
-individually, and never affects the local/SSO/MFA login of non-admins.
+(which already 403s a non-admin) and never affects the local/SSO/MFA login of
+non-admins.
+
+WHERE IT IS WIRED (corrected by prod-09 task_prod09_01, authz-1). The original
+docstring claimed that "wiring this single dependency at the ``/admin`` router
+level hardens every admin route" — true of ``routers/admin.py`` and FALSE of the
+platform, because there is not one ``/admin`` router but ten: ``/admin/backup``
+(with a DESTRUCTIVE restore), ``/admin/llm-providers`` (LLM credentials),
+``/admin/platform-settings``, ``/admin/cross-tenant-stats``,
+``/admin/marketplace``, ``/admin/model-prices``, ``/admin/ollama``,
+``/admin/embeddings`` and ``/admin/llm/copilot/device-flow`` were mounted
+WITHOUT it. The gate is now attached AT MOUNT TIME by
+:func:`api_server.main._is_admin_surface`: any router whose whole surface lives
+under ``/admin`` gets this dependency by the mere fact of being mounted, so a
+new admin router cannot regress by omission.
+``tests/integration/test_admin_hardening_surface.py`` is the contract test that
+iterates ``app.routes`` and fails if ANY ``/admin`` path lacks the gate.
 
 The IP/MFA/short-session predicates are written as PURE functions so the
 security suite can assert each invariant deterministically without a live
@@ -52,9 +66,16 @@ from api_server.auth.mfa.store import user_mfa_methods
 from api_server.auth.sessions import SessionStore
 from api_server.config import Settings, get_settings
 
-# Environments in which the admin hardening is enforced. ``dev`` (and any
-# unknown tag) is intentionally NOT here so local development is not
-# over-enforced (no MFA, no allowlist, no 15-minute clock).
+# Environments in which the admin hardening is enforced. ``dev`` is
+# intentionally NOT here so local development is not over-enforced (no MFA, no
+# allowlist, no 15-minute clock).
+#
+# This set used to be the fail-open half of authz-2: an UNKNOWN ``environment``
+# tag (``production``, an empty var, ``prod `` with a trailing space) also fell
+# outside it, so a typo silently turned the entire admin hardening OFF. It is
+# safe as an allow-list now only because ``Settings`` validates ``environment``
+# against a closed enum and refuses to start otherwise
+# (prod-09 task_prod09_02) — the guarantee lives there, not here.
 _ENFORCED_ENVIRONMENTS = frozenset({"staging", "prod"})
 
 

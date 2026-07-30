@@ -53,4 +53,25 @@ DE MÍ". Ver [cortex-identidad-real](../roadmap/cortex-identidad-real.md).
 
 ## Estado de implementación (2026-07-12)
 
+> **Matiz añadido el 2026-07-30, porque el párrafo de abajo se lee como «todo hecho» y el
+> gobierno de este ADR no lo estaba.** Lo implementado se detalla en el plan
+> [cortex-f4-autonomia](../roadmap/cortex-f4-autonomia.md) y su
+> [changelog](../07-changelog/cortex-f4-autonomia.md); la reflexión y el mantenimiento salieron por
+> los planes [F3](../roadmap/cortex-f3-identidad.md) y
+> [F5](../roadmap/cortex-f5-voz-avatar.md). De los cuatro puntos que este ADR declara **«gobierno
+> no negociable»**, la auditoría del [2026-07-27](../roadmap/gaps-cortex-2026-07-27.md) encontró
+> tres incumplidos: no había tope de **coste en USD** (sólo de nº de búsquedas), no había
+> **owner-approval gate**, y no existía **ninguna** de las cuatro métricas **OTEL**. A 2026-07-30
+> las claves de settings y la capa USD del budget ya estaban escritas, pero
+> `workers/cortex_curiosity.py` **todavía no las llamaba** (grep de
+> `check_and_reserve|record_spend|cost_usd` → cero), y el bucle de **reflexión** no consulta budget
+> alguno: el disparo manual desde `POST /owner/cortex/reflect` no mira ni budget ni kill-switch.
+> Tampoco se sacia el drive `coherence` que el punto 1 promete, ni la reflexión marca lo procesado,
+> así que **no es idempotente**: dos pasadas re-sintetizan los mismos turnos.
+>
+> Nada de esto puede gastar hoy porque `cortex.autonomy_enabled` sigue OFF. La consecuencia ⚠️ de
+> arriba —«los caps y el kill-switch son parte del MVP del bucle, no un fast-follow»— es
+> exactamente la que hay que satisfacer **con tests** antes de encenderlo. El estado vigente lo
+> mandan el plan y sus tests, no este párrafo.
+
 IMPLEMENTADO (fase F4 del cortex + tandas posteriores): los tres bucles beat existen y son idempotentes — `workers/cortex_reflection.py` (sintesis de insights + narrativa versionada + baseline clampeado), `workers/cortex_curiosity.py` (pursuits con kill-switch, budget caps en Redis, circuit-breaker `is_circuit_open` y gate de drive), `workers/cortex_maintenance.py` (decay, retention, snapshots). Ademas se anadieron `cortex_platform.py` (pulso de plataforma, 2026-07-12) y `cortex_initiative.py` (proactividad gated). La autonomia global sigue OFF (`cortex.autonomy_enabled`, decision del operador).

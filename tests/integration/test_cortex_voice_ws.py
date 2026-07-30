@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -159,6 +160,51 @@ async def _seed(dsn: str, *, owner_is_owner: bool = True) -> dict[str, UUID]:
     return {"owner_id": owner_id, "tenant_id": tenant_id}
 
 
+async def _seed_live_affect(
+    redis_url: str,
+    owner_id: UUID,
+    *,
+    valence: float,
+    arousal: float,
+    mood_valence: float,
+    mood_arousal: float,
+) -> None:
+    """Siembra la caché afectiva VIVA del owner (``cortex:affect:{owner}``).
+
+    Es el camino que el WS recorre de verdad: ``load_current_affect`` lee Redis
+    ANTES de la BD, y el fixture ``configured_app`` hace ``_flush_redis``, así que
+    sin esta siembra el turno cae al baseline neutro y la modulación afecto→prosodia
+    no se ejercita (hueco de la auditoría 2026-07-27).
+
+    El ``baseline`` embebido se fija IGUAL a la emoción a propósito: el decay lazy
+    de la lectura es ``baseline + (x - baseline) * factor``, luego con
+    ``x == baseline`` la emoción sobrevive EXACTA a cualquier tiempo transcurrido
+    entre la siembra y el turno — el test puede afirmar un ``speed`` exacto sin
+    depender del reloj. El mood es capa lenta y no decae nunca.
+    """
+    from api_server.cortex.affect_cache import write_affect_state
+    from api_server.cortex.affective import AffectState, Drives, PADState
+    from redis.asyncio import Redis
+
+    emotion = PADState(valence=valence, arousal=arousal, dominance=0.0, intensity=0.5)
+    state = AffectState(
+        emotion=emotion,
+        mood=PADState(valence=mood_valence, arousal=mood_arousal, dominance=0.0, intensity=0.0),
+        drives=Drives(curiosity=0.6, bonding=0.5, coherence=0.5, competence=0.5),
+    )
+    client: Redis = Redis.from_url(redis_url, decode_responses=True)
+    try:
+        await write_affect_state(
+            client,
+            str(owner_id),
+            state,
+            now=datetime.now(UTC),
+            baseline=PADState(valence=valence, arousal=arousal, dominance=0.0, intensity=0.0),
+        )
+    finally:
+        await client.aclose()
+
+
 async def _mint_token(user_id: UUID, tenant_id: UUID, *, owner_claim: bool) -> str:
     from api_server.auth.jwt import encode_jwt
     from api_server.auth.sessions import SessionStore
@@ -281,10 +327,187 @@ def test_ws_owner_completes_voice_turn_with_affect_frame(
 
     # The fake STT saw the propagated webm mime (shared content_type fix), not wav.
     assert stt.seen_content_type == "audio/webm"
-    # The TTS got a speed derived from the affect (neutral baseline arousal 0.3 →
-    # within the clamp band, never the forced 1.0 default).
+    # Sin clave afectiva en Redis (el fixture la vacía) y sin snapshot en BD, la
+    # lectura cae al baseline neutro: arousal 0.3, valence 0.0. Se afirma el valor
+    # EXACTO que eso produce, no la banda del clamp — la banda la cumplía también
+    # el default 1.0 de la TTS, así que borrar el cableado dejaba el test verde
+    # (auditoría 2026-07-27). Éste fija el camino fail-open; la modulación con
+    # afecto vivo la fijan los dos tests de `speed` de más abajo.
+    from api_server.cortex.voice_affect import arousal_to_speed
+
     assert len(tts.calls) == 1
-    assert 0.85 <= float(tts.calls[0]["speed"]) <= 1.25
+    assert float(tts.calls[0]["speed"]) == pytest.approx(arousal_to_speed(0.3, valence=0.0))
+
+
+def _drive_one_turn(ws, *, voice: str | None = None) -> dict:
+    """Completa un turno de voz y devuelve el frame ``affect`` recibido.
+
+    Drena el protocolo entero (ready → transcript → thinking → answer → affect →
+    binario → turn_end) para que el test sólo afirme sobre lo que le interesa.
+    """
+    assert ws.receive_json()["type"] == "ready"
+    if voice is not None:
+        ws.send_json({"type": "config", "voice": voice})
+        ack = ws.receive_json()
+        assert ack["voice"] == voice, f"la voz {voice} debe estar en el allowlist"
+    ws.send_bytes(b"webm-audio-bytes")
+    ws.send_json({"type": "eot"})
+    assert ws.receive_json()["type"] == "transcript"
+    assert ws.receive_json() == {"type": "thinking"}
+    assert ws.receive_json()["type"] == "answer"
+    affect = ws.receive_json()
+    assert affect["type"] == "affect"
+    ws.receive_bytes()
+    assert ws.receive_json() == {"type": "turn_end"}
+    return affect
+
+
+# ===========================================================================
+# B3 — el `speed` que llega a Kokoro ES el del afecto vivo (criterio literal)
+# ===========================================================================
+def test_ws_speed_es_exactamente_el_del_arousal_vivo_de_redis(
+    ws_client, configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """El criterio del plan: «el `speed` enviado a Kokoro coincide con
+    `arousal_to_speed(arousal_de_Redis)`».
+
+    El test que decía cubrirlo sólo afirmaba `0.85 <= speed <= 1.25`, la BANDA
+    del clamp — que el default 1.0 de `HttpTextToSpeech.synthesize` también
+    cumple. Borrando el cableado afecto→prosodia entero seguía verde, y encima
+    el camino nunca llegaba a Redis (el fixture hace `_flush_redis`, así que el
+    afecto caía al baseline neutro: se ejercitaba el fail-open, no la modulación).
+
+    Aquí se siembra un arousal ALTO en la caché viva y se exige el valor EXACTO
+    que la función pura produce. Si alguien desconecta la lectura del afecto o
+    deja de reenviar `speed` a la TTS, esto se pone rojo.
+    """
+    seed = asyncio.run(_seed(migrations_pg_dsn, owner_is_owner=True))
+    # Córtex acelerado (arousal 0.9) y de valencia positiva (0.4).
+    asyncio.run(
+        _seed_live_affect(
+            test_redis_url,
+            seed["owner_id"],
+            valence=0.4,
+            arousal=0.9,
+            mood_valence=0.5,
+            mood_arousal=0.6,
+        )
+    )
+    stt, tts = _FakeSTT(), _FakeTTS()
+    _override_media(configured_app, stt, tts)
+    token = _mint(seed["owner_id"], seed["tenant_id"], owner_claim=True)
+
+    with ws_client.websocket_connect(f"/ws/owner/cortex/voice?token={token}") as ws:
+        affect = _drive_one_turn(ws)
+
+    from api_server.cortex.voice_affect import SPEED_MAX, arousal_to_speed
+
+    # El frame que ve el avatar lleva el afecto sembrado (llegó de Redis, no del
+    # baseline neutro cuyo arousal es 0.3 — ésa es la prueba de que el camino se
+    # recorrió de verdad).
+    assert affect["arousal"] == pytest.approx(0.9)
+    assert affect["valence"] == pytest.approx(0.4)
+
+    expected = arousal_to_speed(0.9, valence=0.4)
+    assert expected < SPEED_MAX, "el caso debe caer DENTRO de la banda, no en el clamp"
+    assert expected != pytest.approx(1.0), "si coincidiese con el default, el test no probaría nada"
+    assert len(tts.calls) == 1
+    assert float(tts.calls[0]["speed"]) == pytest.approx(expected)
+
+
+def test_ws_speed_baja_cuando_el_cortex_esta_apagado(
+    ws_client, configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """La otra mitad de la modulación: arousal BAJO ⇒ habla pausada.
+
+    Con un solo caso, un cableado que devolviese una constante alta pasaría. Dos
+    afectos opuestos fijan que el `speed` SIGUE al arousal, y que la voz no queda
+    clavada ni en el default ni en un extremo.
+    """
+    seed = asyncio.run(_seed(migrations_pg_dsn, owner_is_owner=True))
+    asyncio.run(
+        _seed_live_affect(
+            test_redis_url,
+            seed["owner_id"],
+            valence=-0.2,
+            arousal=0.1,
+            mood_valence=0.0,
+            mood_arousal=0.2,
+        )
+    )
+    stt, tts = _FakeSTT(), _FakeTTS()
+    _override_media(configured_app, stt, tts)
+    token = _mint(seed["owner_id"], seed["tenant_id"], owner_claim=True)
+
+    with ws_client.websocket_connect(f"/ws/owner/cortex/voice?token={token}") as ws:
+        _drive_one_turn(ws)
+
+    from api_server.cortex.voice_affect import arousal_to_speed
+
+    expected = arousal_to_speed(0.1, valence=-0.2)
+    assert float(tts.calls[0]["speed"]) == pytest.approx(expected)
+    assert float(tts.calls[0]["speed"]) < 1.0, "un córtex apagado habla por debajo del default"
+
+
+# ===========================================================================
+# C3/E1 — el frame afectivo habla el idioma de la voz (Principio 12: ES+EN)
+# ===========================================================================
+def test_ws_mood_label_sigue_el_idioma_de_la_voz(
+    ws_client, configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """Con voz inglesa el `mood_label` del frame debe venir en inglés.
+
+    El WS ya conoce el idioma de la voz (`voice_language`) y `affect_frame` acepta
+    `language=`, pero el router lo llamaba sin pasarlo: el avatar rotulaba
+    "alegría" en una llamada en inglés. Se siembra un mood NO neutro a propósito:
+    con el baseline neutro la etiqueta es "neutral" en ambos idiomas y el test
+    pasaría vacíamente.
+    """
+    seed = asyncio.run(_seed(migrations_pg_dsn, owner_is_owner=True))
+    asyncio.run(
+        _seed_live_affect(
+            test_redis_url,
+            seed["owner_id"],
+            valence=0.5,
+            arousal=0.6,
+            mood_valence=0.5,
+            mood_arousal=0.6,
+        )
+    )
+    stt, tts = _FakeSTT(), _FakeTTS()
+    _override_media(configured_app, stt, tts)
+    token = _mint(seed["owner_id"], seed["tenant_id"], owner_claim=True)
+
+    with ws_client.websocket_connect(f"/ws/owner/cortex/voice?token={token}") as ws:
+        affect = _drive_one_turn(ws, voice="bf_emma")  # bf_* ⇒ inglés
+
+    assert affect["mood_label"] == "joy", affect
+    assert tts.calls[0]["voice"] == "bf_emma"
+
+
+def test_ws_mood_label_en_espanol_con_voz_espanola(
+    ws_client, configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """Y con voz española, en español — el default no se rompe al cablear el idioma."""
+    seed = asyncio.run(_seed(migrations_pg_dsn, owner_is_owner=True))
+    asyncio.run(
+        _seed_live_affect(
+            test_redis_url,
+            seed["owner_id"],
+            valence=0.5,
+            arousal=0.6,
+            mood_valence=0.5,
+            mood_arousal=0.6,
+        )
+    )
+    stt, tts = _FakeSTT(), _FakeTTS()
+    _override_media(configured_app, stt, tts)
+    token = _mint(seed["owner_id"], seed["tenant_id"], owner_claim=True)
+
+    with ws_client.websocket_connect(f"/ws/owner/cortex/voice?token={token}") as ws:
+        affect = _drive_one_turn(ws, voice="ef_dora")  # ef_* ⇒ español
+
+    assert affect["mood_label"] == "alegría", affect
 
 
 def test_ws_unsupported_voice_is_ignored(ws_client, configured_app, migrations_pg_dsn: str) -> None:

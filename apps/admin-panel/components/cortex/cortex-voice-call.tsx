@@ -20,16 +20,30 @@ import { useState } from "react";
 import { RealisticAvatar } from "@/components/voice/realistic-avatar";
 import { VoiceCallShell } from "@/components/voice/voice-call-shell";
 import { parseVoiceAffectFrame, type CortexVoiceAffectFrame } from "@/lib/cortex";
+import { useLangOptional } from "@/lib/lang-context";
+
+/**
+ * Aviso honesto (ADR 0075 §6) en los dos idiomas soportados. Estaba fijo en
+ * castellano: el requisito ES+EN se incumplía justo en el rótulo obligatorio.
+ */
+const SUBTITLE = {
+  es: "Afecto simulado (modelo computacional) — no son sentimientos reales",
+  en: "Simulated affect (computational model) — these are not real feelings",
+} as const;
+
+/** Sufijo de la etiqueta de mood: recuerda que es simulada, no un sentimiento. */
+const SIMULATED = { es: "simulado", en: "simulated" } as const;
 
 export function CortexVoiceCall({ onClose }: { onClose: () => void }) {
   // Último frame de afecto del WS; alimenta aura/expresión del avatar.
   const [affect, setAffect] = useState<CortexVoiceAffectFrame | null>(null);
+  const lang = useLangOptional();
 
   return (
     <VoiceCallShell
       wsPath="/ws/owner/cortex/voice"
       title="Córtex"
-      subtitle="Afecto simulado (modelo computacional) — no son sentimientos reales"
+      subtitle={SUBTITLE[lang]}
       storageKey="agentic.voice.cortex"
       defaultVoice="ef_dora"
       testidPrefix="cortex-voice"
@@ -62,7 +76,7 @@ export function CortexVoiceCall({ onClose }: { onClose: () => void }) {
               data-testid="cortex-avatar-mood"
               title="Etiqueta derivada del afecto simulado (ADR 0075)"
             >
-              {affect.mood_label} · simulado
+              {affect.mood_label} · {SIMULATED[lang]}
             </span>
           ) : null}
         </div>

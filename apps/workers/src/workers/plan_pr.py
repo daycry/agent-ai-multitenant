@@ -61,26 +61,48 @@ def _resolve_git_secret(
     )
 
 
+#: Motivo LEGIBLE de cada `skipped:*` del auto-PR. Sin esto, un cierre sin PR no
+#: dejaba rastro en el plan (solo en los logs del worker) y la ficha decía «Todavía
+#: sin PR» para siempre — la ceguera que P6 denunciaba. La UI lo pinta detrás de
+#: «No se pudo abrir: », así que se redacta como continuación de esa frase.
+_SKIP_MESSAGES = {
+    "skipped:no_git_config": "el proyecto no tiene git configurado",
+    "skipped:no_project_slug": "el proyecto no tiene slug persistido",
+    "skipped:no_plan_slug": "el plan no tiene slug persistido",
+    "skipped:no_remote": "el proyecto no tiene remote_url en su configuración git",
+}
+
+
+def _skip_message(status: str) -> str:
+    return _SKIP_MESSAGES.get(status, status)
+
+
 async def _persist_pr_result(
     sessionmaker: Any,
     plan_id: str,
     *,
     pr_url: str | None,
-    pr_branch: str,
+    pr_branch: str | None,
     pr_error: str | None,
+    keep_existing_url: bool = False,
 ) -> None:
     """Write the auto-PR outcome back onto the plan (P6) so the URL/branch (or the
     failure reason) is visible in the API/UI instead of living only in worker logs.
-    Best-effort: a failure here never breaks the already-committed plan closure."""
+    Best-effort: a failure here never breaks the already-committed plan closure.
+
+    ``keep_existing_url`` protects a PR that ALREADY exists: the closure runs more
+    than once (re-veredicto, reintento del operador), and a later skip must not
+    erase the URL of a PR that is open on the provider."""
     from api_server.db.domain import Plan
 
     try:
         async with sessionmaker() as session, session.begin():
             plan = await session.get(Plan, UUID(plan_id))
-            if plan is not None:
-                plan.pr_url = pr_url
-                plan.pr_branch = pr_branch
-                plan.pr_error = pr_error
+            if plan is None or (keep_existing_url and plan.pr_url):
+                return
+            plan.pr_url = pr_url
+            plan.pr_branch = pr_branch
+            plan.pr_error = pr_error
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning("plan_pr.persist_failed", plan_id=plan_id, error=str(exc))
 
@@ -155,11 +177,17 @@ async def _push_branch_to_remote_gated(
 ) -> str:
     """bare → remote push given ALREADY-RESOLVED config (no DB access).
 
-    Gated by ``branch_push_mode`` (``final_only`` defers to plan close); ensures
-    ``origin`` on the single-source bare; resolves auth from Vault for pat/ssh.
-    Returns ``pushed`` / ``skipped:final_only`` / ``skipped:no_origin``. Split out of
-    :func:`push_plan_branch_to_remote` so the push mechanics are testable against a
-    ``file://`` remote without seeding a project row."""
+    Gated by ``push_policy`` (``forbidden`` never pushes) and ``branch_push_mode``
+    (``final_only`` defers to plan close); ensures ``origin`` on the single-source
+    bare; resolves auth from Vault for pat/ssh. Returns ``pushed`` /
+    ``skipped:push_forbidden`` / ``skipped:final_only`` / ``skipped:no_origin``.
+    Split out of :func:`push_plan_branch_to_remote` so the push mechanics are
+    testable against a ``file://`` remote without seeding a project row."""
+    # `forbidden` is the STRONGER gate: «this project never pushes» (the same
+    # reading `open_plan_pr` enforces). Without it the per-task incremental push
+    # of T3 mirrored to the remote of a project configured never to push.
+    if policies.push_policy == "forbidden":
+        return "skipped:push_forbidden"
     if policies.branch_push_mode == "final_only":
         return "skipped:final_only"
     # SINGLE-SOURCE identity (P1/P2): SAME bare + branch as execution/clone/auto-PR.
@@ -207,6 +235,28 @@ class _PrContext:
     skip_reason: str | None = None
 
 
+async def _skipped_pr_result(
+    sessionmaker: Any,
+    plan_id: str,
+    *,
+    project_id: UUID,
+    status: str,
+    pr_branch: str | None,
+    closure_docs: str | None,
+) -> dict[str, Any]:
+    """Devuelve el resultado de un auto-PR que NO se abrió, dejándolo escrito en el
+    plan (P6): el operador ve el motivo en la ficha, no en los logs del worker."""
+    await _persist_pr_result(
+        sessionmaker,
+        plan_id,
+        pr_url=None,
+        pr_branch=pr_branch,
+        pr_error=_skip_message(status),
+        keep_existing_url=True,
+    )
+    return {"project_id": str(project_id), "status": status, "closure_docs": closure_docs}
+
+
 async def _resolve_pr_context(sessionmaker: Any, project_id: UUID, plan_id: str) -> _PrContext:
     """Lee proyecto/plan/org y devuelve el contexto, o el `skipped:*` que aplique."""
     from api_server.db.domain import Plan, Project
@@ -252,11 +302,14 @@ async def _open_plan_pr_async(
     try:
         ctx = await _resolve_pr_context(sessionmaker, project_id, plan_id)
         if ctx.skip_reason is not None:
-            return {
-                "project_id": str(project_id),
-                "status": ctx.skip_reason,
-                "closure_docs": docs.get("status"),
-            }
+            return await _skipped_pr_result(
+                sessionmaker,
+                plan_id,
+                project_id=project_id,
+                status=ctx.skip_reason,
+                pr_branch=None,  # sin slugs no hay identidad que apuntar
+                closure_docs=docs.get("status"),
+            )
         cfg, policies = ctx.cfg, ctx.policies
         tenant_slug, project_slug, plan_slug = ctx.tenant_slug, ctx.project_slug, ctx.plan_slug
 
@@ -270,11 +323,14 @@ async def _open_plan_pr_async(
         base = cfg.get("default_branch", "main")
         auth_mode = cfg.get("auth_mode", "none")
         if not remote_url:
-            return {
-                "project_id": str(project_id),
-                "status": "skipped:no_remote",
-                "closure_docs": docs.get("status"),
-            }
+            return await _skipped_pr_result(
+                sessionmaker,
+                plan_id,
+                project_id=project_id,
+                status="skipped:no_remote",
+                pr_branch=plan_branch,
+                closure_docs=docs.get("status"),
+            )
 
         username, token, ssh_key = _resolve_git_secret(settings, project_id, auth_mode)
 
@@ -348,8 +404,13 @@ async def _open_plan_pr_async(
 
 @app.task(name="workers.open_plan_pr")  # type: ignore[untyped-decorator]
 def open_plan_pr(project_id: str, plan_id: str, title: str, body: str) -> dict[str, Any]:
-    """Entry point Celery. Best-effort: nunca propaga. La rama del plan se deriva
-    de ``plan_id`` + ``title`` (make_plan_branch_name), consistente con el push."""
+    """Entry point Celery. Best-effort: nunca propaga.
+
+    ``title``/``body`` son SOLO el texto del PR. La rama sale de la identidad de
+    fuente única (``plan_git_identity`` sobre los slugs PERSISTIDOS), nunca del
+    título: derivarla del título —que el enqueue prefija con ``"Plan: "``— es
+    exactamente lo que hacía que el PR apuntara a una rama sin los commits
+    (auditoría 2026-07-03, P1)."""
     settings = get_settings()
     try:
         return asyncio.run(

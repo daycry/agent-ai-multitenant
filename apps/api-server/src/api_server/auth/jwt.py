@@ -40,10 +40,14 @@ def encode_jwt(
 
     - `session_id` is mandatory — every token is bound to a server-side
       session in Redis so logout can revoke instantly.
-    - `is_system_admin` lifts the user out of RLS for admin endpoints.
-      Phase-0 caveat: this flag is fixed at login time; revoking
-      admin in the DB does NOT invalidate already-issued tokens until
-      they expire or the session is revoked.
+    - `is_system_admin` lifts the user out of RLS for admin endpoints. The
+      claim is still fixed at login time, but since prod-09 task_prod09_04 it is
+      only a HINT: :func:`api_server.auth.deps.require_system_admin` re-reads
+      ``users.is_system_admin`` from the DB on every admin request, so revoking
+      admin in the database takes effect on the NEXT request instead of
+      surviving in already-issued tokens for the 24 h session TTL (the Phase-0
+      caveat this note used to document, finding authz-4).
+    - `is_system_owner` has behaved the same way since ADR 0074.
     """
     settings = get_settings()
     now = datetime.now(tz=UTC)

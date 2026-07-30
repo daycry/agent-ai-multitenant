@@ -42,7 +42,20 @@ async def gather_owner_entities(
     ``user_id == owner`` lo impone). La agregación se hace en Python sobre las
     ``_ENTITY_SCAN_LIMIT`` memorias más recientes (simple y robusto; el volumen de
     la memoria privada del owner es modesto). Devuelve ``[(entity, freq), ...]``
-    ordenado por frecuencia desc, luego alfabético (determinismo)."""
+    ordenado por frecuencia desc, luego alfabético (determinismo).
+
+    **Por qué NO se agregan también entities de ``cortex_turns``** (el plan lo pedía,
+    reusando ``memorizer/recall.py::query_entity_terms``): ``cortex_turns`` no tiene
+    columna ``entities``, así que habría que extraerlas del texto crudo con ese
+    helper — y ese helper es un **matcher de recall**, no un ranker. Devuelve todo
+    token de ≥3 caracteres que no esté en una lista de 26 stopwords, lo cual es
+    inofensivo para BUSCAR (un término basura simplemente no hace match con ninguna
+    entity guardada) y desastroso para ORDENAR: medido sobre cuatro turnos realistas
+    en castellano, el ranking sale ``despliegue 2, eso 2, manana 2, necesito 2,
+    plan 2`` — o sea que el bucle autónomo sacaría a Internet, con dinero real, la
+    palabra "necesito". Las ``entities`` de ``memory_entries`` sí sirven porque están
+    **destiladas** (las escribe el memorizer, no un tokenizador). Cerrar este hueco de
+    verdad pide un extractor de entidades para turnos, no reutilizar este helper."""
     rows = (
         (
             await session.execute(

@@ -336,6 +336,80 @@ async def test_ollama_kind_matches_litellm_prefixed_model_id(
 
 
 # ===========================================================================
+# prod-07 task_prod07_12: los DOS kinds que la tabla de alias no cubría.
+#
+# `_CATALOG_PROVIDER_ALIASES` divergía del mapa oficial `KIND_TO_LITELLM_FAMILIES`:
+# a `copilot` le faltaba la familia `anthropic` y a `azure_foundry` la familia
+# `openai`. El sync de precios SÍ importa esas familias para esos kinds, así que
+# el catálogo tenía la fila y el snapshot no la encontraba.
+#
+# Los dos tests siembran un SEGUNDO precio con el mismo model_id bajo otro
+# proveedor, para APAGAR el fallback de «match único por model_id»: sin eso, el
+# test pasaría por el camino equivocado y no probaría el alias (que es
+# exactamente cómo la divergencia sobrevivió sin que nadie la viera).
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_copilot_kind_resolves_anthropic_catalog_family(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Copilot sirve modelos Claude: provider='copilot' + un modelo Claude tiene
+    que casar con la fila anthropic/<model> del catálogo."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task_and_price(sm)  # anthropic / claude-sonnet-4-5
+        # Apaga el fallback por model_id único.
+        await _seed_extra_price(sm, provider="otherprov", model_id=_MODEL)
+
+        result = _FakeResult(steps=[_model_call_step(provider="copilot")])
+        async with sm() as s, s.begin():
+            execution = await record_execution(
+                s, tenant_id=ids["tenant"], task_id=ids["task"], result=result
+            )
+            execution_id = execution.id
+        async with sm() as s:
+            loaded = await get_execution(s, execution_id)
+        assert loaded is not None
+        snap = _first_model_call(loaded.steps_log)["price_snapshot"]
+        assert snap["available"] is True, snap
+        assert loaded.price_snapshot_cost_usd is not None
+        assert loaded.price_snapshot_cost_usd > 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_azure_foundry_kind_resolves_openai_catalog_family(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Azure AI Foundry fronta modelos OpenAI, que LiteLLM lista bajo la familia
+    `openai`: provider='azure_foundry' tiene que casar con openai/<model>."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task_and_price(sm, seed_price=False)
+        await _seed_extra_price(sm, provider="openai", model_id="gpt-4o")
+        # Apaga el fallback por model_id único.
+        await _seed_extra_price(sm, provider="otherprov", model_id="gpt-4o")
+
+        result = _FakeResult(steps=[_model_call_step(provider="azure_foundry", model="gpt-4o")])
+        async with sm() as s, s.begin():
+            execution = await record_execution(
+                s, tenant_id=ids["tenant"], task_id=ids["task"], result=result
+            )
+            execution_id = execution.id
+        async with sm() as s:
+            loaded = await get_execution(s, execution_id)
+        assert loaded is not None
+        snap = _first_model_call(loaded.steps_log)["price_snapshot"]
+        assert snap["available"] is True, snap
+        assert loaded.price_snapshot_cost_usd is not None
+        assert loaded.price_snapshot_cost_usd > 0
+    finally:
+        await engine.dispose()
+
+
+# ===========================================================================
 # A later catalog price change does NOT alter the historical snapshot
 # ===========================================================================
 @pytest.mark.asyncio

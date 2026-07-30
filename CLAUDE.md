@@ -230,6 +230,12 @@ tengan `status: completed`.
 
 ## Contexto Adicional
 
+- `docs/context/memoria-del-asistente.md` — **léelo al arrancar en una máquina
+  nueva.** Las órdenes permanentes del operador, las constantes del proyecto que no
+  se deducen del código y la cola de pendientes que no vive en ningún plan. La
+  memoria de Claude Code se guarda fuera del repo (`~/.claude/projects/…/memory/`) y
+  se perdería al cambiar de ordenador: ese fichero explica cómo rehidratarla desde
+  el archivo verbatim de `docs/context/memoria-asistente/`.
 - `docs/context/architecture-overview.md` — visión arquitectónica resumida.
 - `docs/context/glossary.md` — términos del dominio.
 - `docs/context/tech-stack.md` — stack tecnológico detallado.

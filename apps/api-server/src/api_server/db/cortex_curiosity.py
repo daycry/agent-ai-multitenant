@@ -23,6 +23,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -101,6 +102,14 @@ class CortexCuriosityPursuit(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     search_count: Mapped[int] = mapped_column(
         Numeric(10, 0), nullable=False, server_default=text("0")
     )
+    # Veredicto del OWNER-APPROVAL GATE (migración 0123). TRI-ESTADO a propósito:
+    #   None  → propuesto, esperando al owner (el bucle NO busca);
+    #   True  → aprobado (la siguiente pasada lo investiga);
+    #   False → rechazado (no se reintenta).
+    # Un booleano no-nulo fundiría "pendiente" con "rechazado" y el gate del paso 7
+    # del bucle no podría distinguir esperar de descartar: su condición es
+    # literalmente ``approved IS NULL``.
+    approved: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # Extensible: razón de skip, trip del circuit-breaker, etc.
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")

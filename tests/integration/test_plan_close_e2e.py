@@ -124,8 +124,8 @@ async def test_plan_close_opens_pr_against_branch_with_commits(
     settings = SimpleNamespace(database_url=async_dsn, data_root=str(data_root))
 
     # (c) INCREMENTAL (the default): the per-task push (T3) mirrors the branch to the
-    # remote BEFORE close — that is where the branch reaches origin in this mode
-    # (open_plan_pr only force-pushes for final_only). This exercises the T3 wiring.
+    # remote BEFORE close, so the remote already has the task's commits when the plan
+    # closes. The close itself pushes the tip again (see (e)) — belt and braces.
     push_status = await plan_pr.push_plan_branch_to_remote(
         settings,
         project_id=ids["project"],
@@ -182,6 +182,20 @@ async def test_plan_close_opens_pr_against_branch_with_commits(
         check=True,
     ).stdout.split()
     assert f"docs/07-changelog/{plan_id}.md" in listed, listed
+
+    # (e) …y ese commit de cierre LLEGA AL REMOTO, que es el punto del principio
+    # rector 5: el PR se abre contra una rama que contiene su propio changelog.
+    # Antes no: el push del cierre estaba gated a `final_only`, así que en el modo
+    # por defecto el remoto se quedaba en el commit de la tarea (residuo de P3).
+    remote_listed = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", f"refs/heads/{identity.plan_branch}"],
+        cwd=str(remote_bare),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    ).stdout.split()
+    assert f"docs/07-changelog/{plan_id}.md" in remote_listed, remote_listed
 
     # Y es idempotente: un segundo cierre (reintento del operador, re-veredicto)
     # no duplica el commit ni pisa el fichero.

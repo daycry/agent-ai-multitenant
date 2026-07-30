@@ -18,7 +18,7 @@ date: 2026-07-12
 proyecto pesado pida más margen; los budgets reales por-kind son env del
 operador, globales al despliegue.
 
-## Decisión (propuesta)
+## Decisión
 
 Techo por PLATAFORMA configurable (platform setting, System Admin) y override
 de proyecto que puede subir hasta ese techo (nunca sobre él). El default actual

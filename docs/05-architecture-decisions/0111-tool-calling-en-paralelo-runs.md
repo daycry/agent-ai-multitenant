@@ -12,7 +12,7 @@ F36 descarta llamadas concurrentes: si el modelo emite varios tool calls se
 ejecuta solo el primero. Cada lectura cuesta una iteración del presupuesto
 (50 max): batch-leer 4 ficheros = 4 turnos.
 
-## Decisión (propuesta)
+## Decisión
 
 Permitir ejecutar en un mismo turno un LOTE de tool calls READ-ONLY
 (read_file/list_files/search/rag_search/memory_recall), cap N=4, resultados

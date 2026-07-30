@@ -22,8 +22,8 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "longenoughpw";
 async function login(page: Page) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(ADMIN_EMAIL);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByLabel(/^(password|contraseña)$/i).fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 }
 

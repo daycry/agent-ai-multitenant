@@ -40,7 +40,7 @@ por JS). Es una capacidad distinta y mucho más potente/peligrosa que `web-fetch
 | Recursos   | Baratísimo                               | Browser headless (CPU/RAM), procesos hijos                                |
 | Superficie | SSRF (mitigable)                         | SSRF + exfiltración + ejecución de JS hostil + fingerprinting + abuso     |
 
-## Decisión (propuesta)
+## Decisión
 
 Ofrecer Playwright como una **tool de córtex de alto privilegio**, ejecutada en un
 **runtime de navegador dedicado y sandboxeado**, NO en el proceso del api-server:
@@ -81,8 +81,12 @@ Ofrecer Playwright como una **tool de córtex de alto privilegio**, ejecutada en
 
 - **+** El córtex podría operar sitios que requieren JS/login que `web-fetch` no alcanza.
 - **−** La mayor superficie de ataque del sistema hasta la fecha. Por eso va en runtime
-  sandbox + egress-proxy + anti-SSRF + validación humana + budget/kill-switch, y por eso
-  este ADR está `proposed`. Si no se aprueba, el córtex se queda con `web-search`/`web-fetch`
+  sandbox + egress-proxy + anti-SSRF + validación humana + budget/kill-switch.
+  <!-- Esta viñeta terminaba diciendo «y por eso este ADR está `proposed`. Si no se
+  aprueba, el córtex se queda con web-search/web-fetch (ADR 0067)». La ratificación
+  del operador del 2026-07-13 (sección siguiente) aprobó las cuatro preguntas y el
+  frontmatter está en `accepted`; corregida el 2026-07-29 por contradecirlo. -->
+  La alternativa si NO se hubiera aprobado era quedarse con `web-search`/`web-fetch`
   (ADR 0067), que cubren la mayoría de necesidades de "consultar internet".
 
 ## Ratificación del operador (2026-07-13)

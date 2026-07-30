@@ -13,13 +13,22 @@ browser WebSocket API cannot set an Authorization header, so the JWT
 travels as a `?token=` query parameter.
 
 Authorization (Plan 06.14 task_06_14_01): a socket is accepted only when
-the token (a) decodes, (b) maps to a *live* server-side session in Redis
-(so logout/revocation closes existing sockets), and (c) the requested
-resource exists **within the caller's tenant** under PostgreSQL RLS. Any
-failure closes the socket with 1008 (policy violation) — we never leak
-whether the resource exists in another tenant. This closes the
+the token (a) decodes, (b) maps to a *live* server-side session in Redis,
+and (c) the requested resource exists **within the caller's tenant** under
+PostgreSQL RLS. Any failure closes the socket with 1008 (policy violation) —
+we never leak whether the resource exists in another tenant. This closes the
 cross-tenant real-time leak where any valid JWT could tail any tenant's
 streams by guessing a UUID.
+
+CONTINUOUS re-validation (prod-09 task_prod09_13, authz-3). The parenthetical
+above used to read "so logout/revocation closes existing sockets", and that was
+FALSE: the session lookup ran ONCE, at accept. An already-open socket outlived
+logout, SCIM deprovisioning and even its own token's expiry, streaming events for
+as long as the tab stayed open — exactly the sockets a revocation is meant to
+kill. :func:`_pump` now re-checks the session (and re-verifies the token,
+expiry included) every ``ws_session_revalidate_seconds`` (30 s by default) and
+closes with 1008 the moment either fails. The guarantee is now true, with a
+bounded delay instead of "never".
 
 Los streams POR-RECURSO (execution/conversation/document) se leen desde el
 principio (`0`): su backlog ES el estado que el cliente necesita (p. ej. los
@@ -35,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from typing import Any
 from uuid import UUID
 
@@ -50,6 +60,7 @@ from api_server.auth.deps import (
 )
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.auth.sessions import SessionStore
+from api_server.config import get_settings
 from api_server.db.conversation import Conversation
 from api_server.db.domain import Execution, Project
 from api_server.db.knowledge import Document
@@ -184,12 +195,40 @@ async def _initial_stream_id(redis: Redis, replay_window_ms: int | None) -> str:
     return f"{start_ms}-0"
 
 
+async def _credential_still_valid(
+    sessions: SessionStore, principal: AuthPrincipal, token: str | None
+) -> bool:
+    """Re-run the accept-time authentication checks on an OPEN socket (authz-3).
+
+    Deliberately calls the SAME primitives as :func:`_resolve_principal` — the
+    Redis session lookup and :func:`decode_jwt` — rather than re-deriving "is it
+    expired?" from a cached claim. A second implementation of the expiry rule
+    would be a second thing to get wrong, and ``decode_jwt`` already enforces
+    signature + ``exp`` in one call.
+
+    ``token`` is ``None`` only if a future caller resolves the principal some
+    other way (e.g. the one-shot ticket of task_prod09_12); the session check
+    still applies, which is the leg that logout and SCIM deprovisioning trip.
+    """
+    if not await sessions.get(principal.session_id):
+        return False
+    if token is not None:
+        try:
+            decode_jwt(token)
+        except InvalidTokenError:
+            return False
+    return True
+
+
 async def _pump(
     ws: WebSocket,
     redis: Redis,
     stream: str,
     *,
     project_filter: str | None,
+    sessions: SessionStore,
+    principal: AuthPrincipal,
+    token: str | None,
     tenant_filter: str | None = None,
     replay_window_ms: int | None = None,
 ) -> None:
@@ -203,11 +242,33 @@ async def _pump(
     A single `ws.receive()` runs alongside the Redis read so a client
     that closes while the stream is idle is noticed at once — no leaked
     task blocked on `xread`.
+
+    Every ``ws_session_revalidate_seconds`` the loop re-checks the caller's
+    credential (:func:`_credential_still_valid`) and closes with 1008 if it has
+    been revoked or has expired (task_prod09_13). The check sits at the TOP of the
+    iteration, before the blocking read is scheduled, so there is no pending
+    future to unwind on the revocation path — and since the read blocks for at
+    most ``_BLOCK_MS``, an idle socket is still checked on schedule instead of
+    only when an event happens to arrive. ``sessions``/``principal``/``token`` are
+    keyword-REQUIRED so a new endpoint cannot mount a pump that never re-checks.
     """
+    revalidate_every = float(get_settings().ws_session_revalidate_seconds)
+    last_check = time.monotonic()
     last_id = await _initial_stream_id(redis, replay_window_ms)
     reader = asyncio.ensure_future(ws.receive())
     try:
         while True:
+            if revalidate_every > 0 and (time.monotonic() - last_check) >= revalidate_every:
+                last_check = time.monotonic()
+                if not await _credential_still_valid(sessions, principal, token):
+                    _log.info(
+                        "api_server.ws_credential_revoked",
+                        stream=stream,
+                        user_id=str(principal.user_id),
+                        session_id=str(principal.session_id),
+                    )
+                    await _reject(ws, "session revoked or expired")
+                    return
             xread = asyncio.ensure_future(
                 redis.xread({stream: last_id}, count=_READ_COUNT, block=_BLOCK_MS)
             )
@@ -260,7 +321,15 @@ async def execution_stream(
     if not await _owns_resource(principal, Execution, execution_id):
         await _reject(ws, "forbidden")
         return
-    await _pump(ws, redis, execution_stream_key(execution_id), project_filter=None)
+    await _pump(
+        ws,
+        redis,
+        execution_stream_key(execution_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )
 
 
 @router.websocket("/ws/kanban/{project_id}")
@@ -292,6 +361,9 @@ async def kanban_stream(
         redis,
         EVENTS_STREAM,
         project_filter=project_id,
+        sessions=sessions,
+        principal=principal,
+        token=token,
         tenant_filter=tenant_filter,
         # El estado inicial del tablero es el fetch HTTP; el socket solo aporta
         # lo nuevo (+ una ventana corta de solape). Ver _initial_stream_id.
@@ -334,6 +406,9 @@ async def plans_stream(
         redis,
         PLANS_STREAM,
         project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
         tenant_filter=str(principal.tenant_id),
         # Mismo criterio que el kanban: el estado inicial es el fetch HTTP y el
         # socket solo aporta lo nuevo. Re-reproducir el histórico resucitaría
@@ -362,7 +437,15 @@ async def conversation_stream(
     if not await _owns_resource(principal, Conversation, conversation_id):
         await _reject(ws, "forbidden")
         return
-    await _pump(ws, redis, conversation_stream_key(conversation_id), project_filter=None)
+    await _pump(
+        ws,
+        redis,
+        conversation_stream_key(conversation_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )
 
 
 @router.websocket("/ws/documents/{document_id}")
@@ -387,4 +470,12 @@ async def document_stream(
     if not await _owns_resource(principal, Document, document_id):
         await _reject(ws, "forbidden")
         return
-    await _pump(ws, redis, document_stream_key(document_id), project_filter=None)
+    await _pump(
+        ws,
+        redis,
+        document_stream_key(document_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )

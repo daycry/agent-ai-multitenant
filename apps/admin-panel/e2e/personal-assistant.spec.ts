@@ -29,8 +29,8 @@ const MEMBER_PASSWORD = process.env.E2E_TENANT_MEMBER_PASSWORD ?? "longenoughpw"
 async function login(page: Page, email: string, password: string) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByLabel(/^(password|contraseña)$/i).fill(password);
+  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
   await expect(page).toHaveURL(/\/admin\//);
 }
 

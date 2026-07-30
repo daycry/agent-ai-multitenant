@@ -25,7 +25,7 @@ El principio rector 5 de `CLAUDE.md` («Plan = unidad de cambio… al completar 
 
 **Severidad efectiva: P1 latente.** La BD tiene 0 planes `completed`, así que la cadena aún no se ha disparado; pero el único proyecto con git real («Api CI» → GitHub, auth PAT) tocaría P3/P4 en cuanto su plan pase a `completed`. Hay que fijar la política antes del primer cierre real.
 
-## Decisión propuesta (pendiente de aprobación)
+## Decisión (aprobada)
 
 Tres decisiones, una por eje:
 

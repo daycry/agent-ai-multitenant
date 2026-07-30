@@ -55,7 +55,20 @@ async def cortex_telemetry_stream(
         await _reject(ws, "forbidden")
         return
     stream = cortex_telemetry_stream_key(str(principal.user_id))
-    await _pump(ws, redis, stream, project_filter=None)
+    # `sessions`/`principal`/`token` alimentan la re-validación periódica del pump
+    # (prod-09 task_prod09_13): el socket del córtex también se cierra con 1008 si
+    # la sesión se revoca o el token caduca mientras está abierto — antes sólo se
+    # comprobaba en el accept, así que un logout dejaba el panel de mente
+    # recibiendo telemetría afectiva del owner indefinidamente.
+    await _pump(
+        ws,
+        redis,
+        stream,
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )
 
 
 __all__ = ["router"]

@@ -32,14 +32,21 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// Desde prod-16 `task_prod16_01` el login se traduce por diccionario y su
+// idioma por defecto es ES, así que los selectores NO pueden ir contra el texto
+// inglés. Se buscan por expresión regular en los dos idiomas: lo que este test
+// comprueba es el flujo MFA, no la copia (ese contrato vive en `i18n.test.tsx`).
+const PASSWORD_LABEL = /^(password|contraseña)$/i;
+const SUBMIT_BUTTON = /^(sign in|iniciar sesión)$/i;
+
 async function submitPassword() {
   fireEvent.change(screen.getByLabelText("Email"), {
     target: { value: "ana@example.com" },
   });
-  fireEvent.change(screen.getByLabelText("Password"), {
+  fireEvent.change(screen.getByLabelText(PASSWORD_LABEL), {
     target: { value: "secret" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+  fireEvent.click(screen.getByRole("button", { name: SUBMIT_BUTTON }));
 }
 
 describe("LoginPage + MFA", () => {
@@ -72,7 +79,7 @@ describe("LoginPage + MFA", () => {
 
     // El desafío sustituye al formulario de password.
     const codeInput = await screen.findByTestId("mfa-code-input");
-    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(screen.queryByLabelText(PASSWORD_LABEL)).toBeNull();
 
     fireEvent.change(codeInput, { target: { value: "654321" } });
     fireEvent.submit(screen.getByTestId("mfa-form"));

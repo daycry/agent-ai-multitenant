@@ -47,6 +47,55 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "http_get": "external_http_get",
     "http_post": "external_http_post",
     "agent_invoke": "code_changes",
+    # prod-03 task_prod03_02 (recon 2026-07-29): las DOS escrituras persistentes
+    # que quedaban sin categoría — wired y por tanto anunciadas al modelo, y sin
+    # embargo invisibles al gate incluso bajo el preset «Cliente Externo». Un
+    # agente escribía en la KB del tenant y en la memoria compartida sin que
+    # ningún humano lo viera nunca.
+    #
+    # Ninguna de las 13 se llama «escritura persistente en KB/memoria» — el
+    # nombre honesto sería una 14ª (`knowledge_write`), y eso toca presets y UI,
+    # o sea decisión de producto. De las 13 disponibles se reparten así, y la
+    # diferencia NO es cosmética:
+    #
+    # `promote_to_kb` → `data_migration`. Copia un Document y TODOS sus Chunks a
+    #   otra KB del tenant (`/internal/agent/promote-to-kb`), de donde lo leerá
+    #   por RAG cualquier proyecto con grant. Es, en sentido literal, datos
+    #   moviéndose entre almacenes persistidos: `data_migration` es la única de
+    #   las 13 cuyo sujeto son los datos de la plataforma y no el producto del
+    #   trabajo, la red, los secretos, la infra, los despliegues, la comunicación
+    #   saliente, la exportación de PII o los usuarios. Requiere `document_id` +
+    #   `target_kb_id` ya existentes, así que es RARA y deliberada: gatearla
+    #   desde `development` cuesta una parada puntual, no un bucle.
+    #
+    # `memory_store` → `code_changes`, y aquí manda la FRECUENCIA. Es tool de
+    #   familia de sistema: `register_system_families` la cablea para TODO
+    #   agente, esté o no en sus `agent_tools`, y se usa de rutina. El gate no
+    #   «pide permiso y sigue»: aborta el run entero
+    #   (`graph.py` → `STATUS_AWAITING_APPROVAL`) y, por el ADR 0020, aprobar
+    #   devuelve la tarea a `backlog` para que se re-ejecute DESDE CERO. Con el
+    #   bucle aprobar→re-aparcar todavía sin arreglar (guardrails-7 /
+    #   task_prod03_06, que este carril NO implementa), darle una categoría que
+    #   el preset por defecto `development` marca `human_required` convertiría
+    #   cada run que guarda un aprendizaje en un livelock: aparcar → aprobar →
+    #   re-ejecutar → aparcar. `code_changes` la deja `auto` en
+    #   `sandbox`/`development` y la GATEA en `production` y
+    #   `customer-external`, que es exactamente el agujero que la auditoría
+    #   señaló («ni siquiera Cliente Externo detiene una sola tool»).
+    #
+    # Pendiente para producto, anotado aquí para que no se pierda: con la 14ª
+    # categoría, `memory_store` debería gatearse desde `development` — pero
+    # DESPUÉS de task_prod03_06, no antes.
+    "promote_to_kb": "data_migration",
+    "memory_store": "code_changes",
+    # `kanban_update` tiene el MISMO agujero latente (mueve tareas del tablero) y
+    # se queda sin categoría a propósito: hoy no está en
+    # `RUNTIME_WIRED_TOOL_NAMES` (su drain worker-side nunca aterrizó, devuelve
+    # `ok=False, "not wired"`), y ninguna de las 13 categorías canónicas cubre
+    # «gestión de tareas/plan» — inventar la 14ª toca presets y UI, o sea que es
+    # decisión de producto, no técnica. Si alguien la vuelve a cablear,
+    # `test_every_wired_tool_is_gated_or_exempt_with_a_reason` se pone rojo y
+    # fuerza la decisión ahí mismo. Eso es intencional.
 }
 
 

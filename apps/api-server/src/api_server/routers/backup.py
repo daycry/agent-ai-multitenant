@@ -9,11 +9,18 @@ next run without restarting Celery.
 
 Read/write split (mirrors the notifications platform-settings pattern):
 
-  - ``GET  /admin/backup/schedule``   read the schedule (any authenticated
-    member — the panel renders the current values; no secret is involved).
+  - ``GET  /admin/backup/schedule``   read the schedule (System Admin only —
+    the whole ``/admin`` surface is System-Admin + hardened; prod-09
+    task_prod09_01 closed the hole where this read accepted any tenant member).
   - ``PUT  /admin/backup/schedule``   set it (System Admin only, BYPASSRLS
     ``get_admin_session``; ``set_platform_setting`` re-checks the actor is a
     System Admin so a Tenant Admin can never reach the write).
+
+The router is mounted under ``/admin``, so ``api_server.main`` attaches
+:func:`api_server.auth.admin_hardening.require_hardened_system_admin` at mount
+time: in staging/prod every route here also needs MFA + an allowlisted source IP
++ a session younger than the short admin TTL. That matters most for the
+DESTRUCTIVE ``POST /admin/backup/restore``.
 
 The cron + retention window are validated server-side
 (``db.platform_settings.validate_*``); an invalid value is a clean 422 with no
@@ -29,9 +36,7 @@ from api_server.auth.audit import write_audit_log
 from api_server.auth.deps import (
     AuthPrincipal,
     get_admin_session,
-    get_tenant_session,
     require_system_admin,
-    require_tenant_member,
 )
 from api_server.db.models import User
 from api_server.db.platform_settings import (
@@ -68,15 +73,18 @@ _AUDIT_RESTORE_TRIGGERED = "backup.restore_triggered"
 
 @router.get("/schedule", response_model=BackupScheduleResponse)
 async def read_backup_schedule(
-    _: AuthPrincipal = Depends(require_tenant_member),
-    session: AsyncSession = Depends(get_tenant_session),
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> BackupScheduleResponse:
     """The current backup schedule (enabled + cron + retention_days).
 
-    Readable by any authenticated member so the admin panel can render the
-    current values; ``platform_settings`` carries no RLS, so this is a plain
-    global read. When unset, the platform defaults apply (enabled, daily 03:00,
-    7-day retention).
+    System-Admin only, like the rest of ``/admin/backup``: this used to accept
+    any authenticated tenant member (``require_tenant_member``), which leaked
+    the platform's backup cadence and retention window — operational
+    intelligence about when the platform is least defended — to every tenant
+    user, on an endpoint whose sibling is a destructive restore (authz-1).
+    ``platform_settings`` carries no RLS, so this is a plain global read; when
+    unset, the platform defaults apply (enabled, daily 03:00, 7-day retention).
     """
     enabled, cron, retention_days = await get_backup_schedule(session)
     return BackupScheduleResponse(enabled=enabled, cron=cron, retention_days=retention_days)
@@ -138,14 +146,16 @@ async def update_backup_schedule(
 
 @router.get("/destinations", response_model=BackupDestinationsResponse)
 async def read_backup_destinations(
-    _: AuthPrincipal = Depends(require_tenant_member),
-    session: AsyncSession = Depends(get_tenant_session),
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
 ) -> BackupDestinationsResponse:
     """The configured remote backup destinations (NON-secret config only).
 
-    Readable by any authenticated member so the panel can render the list;
-    ``platform_settings`` carries no RLS, so this is a plain global read. The
-    stored config never holds a credential, so this read can never expose one."""
+    System-Admin only (it used to accept any tenant member): the config holds no
+    credential, but it DOES name the buckets/hosts every tenant's data is copied
+    to — a map of the off-site copies, which is not a tenant user's business
+    (authz-1). ``platform_settings`` carries no RLS, so this is a plain global
+    read."""
     items = await get_backup_destinations(session)
     return BackupDestinationsResponse(
         destinations=[BackupDestination.model_validate(item) for item in items]

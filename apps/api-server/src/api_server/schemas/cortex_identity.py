@@ -14,6 +14,7 @@ owner NO los pisa a mano (guardrail de auto-modificación, ADR 0074).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -89,6 +90,33 @@ class CortexIdentityUpdateRequest(BaseModel):
     learning_goals: list[str] | None = Field(default=None, max_length=20)
 
 
+class CortexIdentityVersionItem(BaseModel):
+    """Una versión del histórico (``GET /owner/cortex/identity/history``).
+
+    El **timeline de versiones** del panel: qué cambió, cuándo, quién lo movió y por
+    qué. El campo que da valor a la pantalla es ``diff`` — el
+    ``{campo: {before, after}}`` que persiste ``cortex/identity.py::compute_diff``,
+    solo con los campos que cambiaron. ``GET /owner/cortex/journal`` también lee
+    ``cortex_identity_history``, pero aplana narrativas y DESCARTA el diff, así que
+    hasta este endpoint la traza de qué tocó cada reflexión no era consultable.
+
+    No se expone ``identity_state`` (el snapshot completo): la pantalla muestra
+    cambios, y el estado vigente ya lo sirve ``GET /owner/cortex/identity``. Enviar
+    el blob entero por versión multiplicaría el payload sin lector."""
+
+    model_config = _BASE_CONFIG
+
+    #: La versión que esta fila captura (monótona; 1 es el primer cambio real).
+    version: int
+    created_at: datetime
+    #: ``reflection`` | ``owner_override`` | ``onboarding`` — quién movió la identidad.
+    updated_by: str
+    #: Resumen 1-línea del cambio (NULL si quien lo escribió no dejó motivo).
+    reason: str | None = None
+    #: ``{campo: {before, after}}`` — SOLO los campos que cambiaron.
+    diff: dict[str, Any] = Field(default_factory=dict)
+
+
 class CortexReflectResponse(BaseModel):
     """Resultado de disparar una pasada de reflexión (``POST /owner/cortex/reflect``).
 
@@ -106,6 +134,7 @@ __all__ = [
     "CortexBaseline",
     "CortexIdentityResponse",
     "CortexIdentityUpdateRequest",
+    "CortexIdentityVersionItem",
     "CortexReflectResponse",
     "CortexTraits",
 ]

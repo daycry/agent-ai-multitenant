@@ -8,12 +8,22 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Substrings flagging a known dev-only default — forbidden in staging/prod
 # (Plan 06.14 task_06_14_03 / secrets-config-5).
 _DEV_SECRET_MARKERS = ("changeme", "dev-only")
+
+# The CLOSED set of deployment environments, and the fail-CLOSED predicate — the
+# same posture `api_server.config` adopted in prod-09 task_prod09_02 (authz-2) and
+# that this service was left without. Written as "everything except dev" rather
+# than "in {staging, prod}" on purpose: the old shape meant any UNRECOGNISED value
+# (`production`, an empty var, `prod ` with a trailing space) silently meant dev
+# and skipped the guard below. A typo downgraded the posture with no log line —
+# and the installer's own enum says `production`, so it was not hypothetical.
+_KNOWN_ENVIRONMENTS = frozenset({"dev", "staging", "prod"})
+_DEV_ENVIRONMENT = "dev"
 
 
 class Settings(BaseSettings):
@@ -33,10 +43,15 @@ class Settings(BaseSettings):
 
     # ----- Execution persistence + live stream (Plan 02 Fase G) -----
     database_url: str = Field(
-        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        default="postgresql+asyncpg://service_user:changeme-service-dev-only"
         "@localhost:5432/agentic_platform",
         description="PostgreSQL URL the worker persists `executions` rows to. "
-        "A BYPASSRLS role — the worker writes execution records across tenants.",
+        "`service_user`: BYPASSRLS but NO DDL (prod-14 task_05 / tenancy-2). "
+        "BYPASSRLS is required — the worker writes execution records across "
+        "tenants with no request-scoped `app.tenant_id` to bind to. What it does "
+        "NOT need, and used to have as `migrations_user` (schema owner, GRANT "
+        "ALL), is the ability to run `ALTER TABLE ... DISABLE ROW LEVEL "
+        "SECURITY` and switch off multi-tenant isolation platform-wide.",
     )
     events_redis_url: str = Field(
         default="redis://localhost:6379/0",
@@ -929,14 +944,51 @@ class Settings(BaseSettings):
 
     # ----- Misc -----
     environment: str = Field(
-        default="dev", description="Tag emitted in logs: dev | staging | prod."
+        default="dev",
+        description=(
+            "Deployment environment — a CLOSED set: dev | staging | prod. Any "
+            "other value fails startup: an unrecognised tag used to be treated as "
+            "`dev`, silently disabling the dev-credential guard below."
+        ),
     )
+
+    @field_validator("environment")
+    @classmethod
+    def _validate_environment(cls, value: str) -> str:
+        """Reject any environment tag outside ``{dev, staging, prod}``.
+
+        A FIELD validator (not a model one) so it runs BEFORE
+        :meth:`_forbid_dev_secrets_outside_dev`, which branches on this value: the
+        credential guard must never decide anything from an unvalidated tag.
+
+        Whitespace and case are normalised (``" PROD "`` -> ``"prod"``) because a
+        trailing newline in a compose/`.env` file is a configuration accident, not
+        an intent to run unguarded. Anything else is a hard failure naming the
+        accepted values, so the operator fixes it in seconds instead of running
+        publicly-known BYPASSRLS credentials in production for months.
+        """
+        normalised = value.strip().lower()
+        if normalised not in _KNOWN_ENVIRONMENTS:
+            raise ValueError(
+                f"WORKERS_ENVIRONMENT={value!r} is not a known environment. "
+                f"Accepted values: {', '.join(sorted(_KNOWN_ENVIRONMENTS))}. "
+                "An unrecognised value used to be treated as 'dev', which "
+                "disabled the dev-credential guard."
+            )
+        return normalised
 
     @model_validator(mode="after")
     def _forbid_dev_secrets_outside_dev(self) -> Settings:
         """Reject the dev-default `database_url` (BYPASSRLS credentials) in
-        staging/prod (secrets-config-5)."""
-        if self.environment not in {"staging", "prod"}:
+        anything that is not dev (secrets-config-5).
+
+        FAIL-CLOSED: the predicate is ``environment == "dev"`` (skip), never
+        ``environment in {staging, prod}`` (enforce). The enum above already closes
+        today's hole; writing the guard as "everything except dev" is what keeps a
+        FUTURE fourth environment guarded by default instead of by remembering to
+        update a set literal.
+        """
+        if self.environment == _DEV_ENVIRONMENT:
             return self
         if any(marker in self.database_url.lower() for marker in _DEV_SECRET_MARKERS):
             raise ValueError(

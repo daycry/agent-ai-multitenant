@@ -49,7 +49,7 @@ skills clonadas, enlazada por `forked_from_team_id`) y se **repunta**
   ([ADR 0065](0065-herencia-model-config-plataforma-proyecto-equipo-agente.md)).
   Forkear de oficio inflaría la base con agentes nunca tocados. Un equipo built-in
   enlazado **sí ejecuta** en el proyecto del tenant (contexto task-scoped del
-  [ADR 0054](0054-...md) si existe; los agentes global_builtin son visibles), así
+  [ADR 0054](0054-acoplamiento-contexto-proyecto-task.md) si existe; los agentes global_builtin son visibles), así
   que "referenciar" no limita la ejecución, solo la edición — y la edición se
   habilita forkeando, on-demand.
 

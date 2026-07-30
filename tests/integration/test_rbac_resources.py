@@ -97,6 +97,50 @@ async def _seed_db(dsn: str) -> dict[str, UUID]:
     }
 
 
+async def _seed_project_plan_task(dsn: str) -> dict[str, UUID]:
+    """`_seed_db` + an ACTIVE project with one plan and one backlog task.
+
+    Needed by the human_06_8_04 cases: unlike the admin-gated smokes (where
+    a 403 arrives before the handler), asserting that a tenant_user CAN
+    mutate requires the row to really exist so a 2xx is reachable.
+    """
+    seed = await _seed_db(dsn)
+    project = uuid4()
+    plan = uuid4()
+    task = uuid4()
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO projects (id, tenant_id, name, status)"
+            " VALUES ($1, $2, 'Kanban', 'active')",
+            project,
+            seed["tenant"],
+        )
+        await conn.execute(
+            "INSERT INTO plans (id, tenant_id, project_id, title, status)"
+            " VALUES ($1, $2, $3, 'Plan del sprint', 'draft')",
+            plan,
+            seed["tenant"],
+            project,
+        )
+        await conn.execute(
+            "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status)"
+            " VALUES ($1, $2, $3, $4, 'Mover esto', 'backlog')",
+            task,
+            seed["tenant"],
+            project,
+            plan,
+        )
+    finally:
+        await conn.close()
+
+    seed["project"] = project
+    seed["plan"] = plan
+    seed["task"] = task
+    return seed
+
+
 async def _promote_to_system_admin(dsn: str, user_id: UUID) -> None:
     conn = await asyncpg.connect(dsn)
     try:
@@ -177,8 +221,22 @@ async def _mint(user_id: UUID, tenant_id: UUID | None, *, is_system_admin: bool 
 # care if the create succeeds with full fields; a 4xx from validation
 # would also "leak" the gate (the gate runs first), so 403 vs 4xx tells
 # us the gate is in place.
+#
+# `_ABSENT_PROJECT_ID` is deliberately a project that does NOT exist: the
+# gate is a router-level dependency, so it runs BEFORE the handler ever
+# looks the row up. That makes the 403-vs-404 distinction the whole point
+# of the assertion — if the gate were downgraded to `require_tenant_member`
+# (or removed), a tenant_user would sail past it and get the handler's 404.
+_ABSENT_PROJECT_ID = "11111111-2222-3333-4444-555555555555"
+
 _ADMIN_GATED: list[tuple[str, str, dict[str, Any]]] = [
     ("POST", "/projects", {"name": "p", "status": "draft"}),
+    # human_06_8_01, last checklist line: "Llamar al PUT /projects/{id} con
+    # curl + token de tenant_user → 403". DELETE is the same gate
+    # (routers/projects.py: `require_tenant_admin` on both verbs) and the
+    # same checklist line ("botón 'Editar' y 'Borrar' no aparecen").
+    ("PUT", f"/projects/{_ABSENT_PROJECT_ID}", {"name": "renamed"}),
+    ("DELETE", f"/projects/{_ABSENT_PROJECT_ID}", {}),
     (
         "POST",
         "/agents",
@@ -341,3 +399,126 @@ async def test_admin_gated_allows_tenant_admin(configured_app, migrations_pg_dsn
             json={"name": "byadminmember", "status": "active"},
         )
     assert resp.status_code < 400, f"{resp.status_code} {resp.text}"
+
+
+# ===========================================================================
+# human_06_8_04 — "Tasks se crean por cualquier member (no solo admin)"
+#
+# `_MEMBER_GATED` above only carries GETs, so until now NO test asserted the
+# other half of the matrix: the day-to-day MUTATIONS a plain tenant_user must
+# be able to do. The three checklist lines that are machine-checkable are
+# "Crear tarea funciona end-to-end", "Drag-drop entre columnas del kanban
+# funciona (cambio de status)" and "Comentar en un plan funciona".
+#
+# Verified in the routers before writing these: `create_task` and
+# `update_task` (routers/tasks.py) and `post_plan_comment` (routers/plans.py)
+# all depend on `require_tenant_member`, NOT `require_tenant_admin` — these
+# tests are what stops a future "tighten the gates" pass from silently
+# breaking the Kanban for non-admins.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_tenant_user_can_create_task(configured_app, migrations_pg_dsn: str) -> None:
+    """POST /projects/{id}/tasks with a tenant_user token → 201."""
+    seed = await _seed_project_plan_task(migrations_pg_dsn)
+    token = await _mint(seed["plain_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            f"/projects/{seed['project']}/tasks",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"title": "Tarea del member", "status": "backlog"},
+        )
+    assert resp.status_code == 201, f"{resp.status_code} {resp.text}"
+    assert resp.json()["title"] == "Tarea del member"
+
+
+@pytest.mark.asyncio
+async def test_tenant_user_can_move_task_across_the_kanban(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """The drag-drop status move (backlog → ready) is a tenant_user write.
+
+    Asserts the persisted status, not just the code: a 200 that ignored the
+    body would leave the task in `backlog`.
+    """
+    seed = await _seed_project_plan_task(migrations_pg_dsn)
+    token = await _mint(seed["plain_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.put(
+            f"/projects/{seed['project']}/tasks/{seed['task']}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"status": "ready"},
+        )
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    assert resp.json()["status"] == "ready"
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        persisted = await conn.fetchval("SELECT status FROM tasks WHERE id = $1", seed["task"])
+    finally:
+        await conn.close()
+    assert persisted == "ready"
+
+
+@pytest.mark.asyncio
+async def test_tenant_user_can_comment_a_plan(configured_app, migrations_pg_dsn: str) -> None:
+    """POST /plans/{plan_id}/comments with a tenant_user token → 201, and the
+    comment is attributed to that user (not to the admin that owns the plan)."""
+    seed = await _seed_project_plan_task(migrations_pg_dsn)
+    token = await _mint(seed["plain_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.post(
+            f"/plans/{seed['plan']}/comments",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"target_kind": "plan", "content": "Esto lo comenta un member."},
+        )
+    assert resp.status_code == 201, f"{resp.status_code} {resp.text}"
+    body = resp.json()
+    assert body["content"] == "Esto lo comenta un member."
+    assert body["author_user_id"] == str(seed["plain_user"])
+
+
+@pytest.mark.asyncio
+async def test_stranger_cannot_create_task_or_comment(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Counterweight to the three above: the member gate is a GATE, not a
+    pass-through. A registered user with NO membership in the tenant is
+    rejected on the very same mutations (403)."""
+    seed = await _seed_project_plan_task(migrations_pg_dsn)
+    token = await _mint(seed["stranger"], seed["tenant"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        create = await client.post(
+            f"/projects/{seed['project']}/tasks",
+            headers=headers,
+            json={"title": "no debería entrar", "status": "backlog"},
+        )
+        move = await client.put(
+            f"/projects/{seed['project']}/tasks/{seed['task']}",
+            headers=headers,
+            json={"status": "ready"},
+        )
+        comment = await client.post(
+            f"/plans/{seed['plan']}/comments",
+            headers=headers,
+            json={"target_kind": "plan", "content": "tampoco"},
+        )
+    assert create.status_code == 403, create.text
+    assert move.status_code == 403, move.text
+    assert comment.status_code == 403, comment.text

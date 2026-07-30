@@ -119,14 +119,14 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - Implementar `upgrade()` con `op.create_table` (columnas arriba) + índices; `downgrade()` con `op.drop_table` en orden inverso. Estilo: `apps/api-server/migrations/versions/20260618_0084_memory_entities.py` (JSONB `server_default text("'{}'::jsonb")`, índices nombrados).
   - **Criterio**: ambos tests en verde; `upgrade`/`downgrade` simétricos.
 
-- [ ] **Modelos ORM `CortexIdentity` / `CortexIdentityHistory`**
+- [x] **Modelos ORM `CortexIdentity` / `CortexIdentityHistory`**
   - Crear: `apps/api-server/src/api_server/db/cortex_identity.py` con `class CortexIdentity(Base, UUIDPrimaryKeyMixin, TimestampMixin)` y `class CortexIdentityHistory(...)` (importados de `api_server.db.base`). **SIN** `TenantScopedMixin` (tenant-less). `__table_args__` con los índices/uniques que reflejan la migración.
   - TDD: test `tests/unit/test_cortex_identity_model.py` → instanciar, comprobar `__tablename__`, columnas y que NO hay `tenant_id` (defensa: cualquier confusión RLS la detecta el cross-owner test después).
   - **Criterio**: modelos importan y mapean; mypy/ruff limpios.
 
 ### F3.2 — Capa pura de mutación de identidad (determinista, sin LLM)
 
-- [ ] **`cortex/identity.py` — clamp + bound + diff**
+- [x] **`cortex/identity.py` — clamp + bound + diff**
   - Crear: `apps/api-server/src/api_server/cortex/identity.py` con funciones puras:
     - `clamp_traits(traits: dict) -> dict` — cada Big-Five a [0,1].
     - `clamp_baseline(pad: dict) -> dict` — valence∈[-1,1], arousal∈[0,1], dominance∈[-1,1] (piso/techo de mood, ADR 0075).
@@ -136,7 +136,7 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - TDD: `tests/unit/test_cortex_identity_dynamics.py` — un `proposed` fuera de rango se clampa; un salto grande se acota a `max_delta_per_cycle`; `compute_diff` ignora campos sin cambio; reflexión repetida converge (no oscila).
   - **Criterio**: 100% determinista, sin imports de red/LLM/DB; tests en verde.
 
-- [ ] **`cortex/identity_repo.py` — acceso DB con aislamiento explícito**
+- [x] **`cortex/identity_repo.py` — acceso DB con aislamiento explícito**
   - Crear: `apps/api-server/src/api_server/db/cortex_identity_repo.py`:
     - `get_identity(session, owner_user_id) -> CortexIdentity | None` (SELECT con `where(owner_user_id == ...)`).
     - `upsert_identity(session, owner_user_id, new_state, *, updated_by, reason=None)` — bump `version`, escribe `cortex_identity` y **append** a `cortex_identity_history` con `diff` (en una transacción).
@@ -152,15 +152,16 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - Reutiliza el **grafo del córtex de F1** para generar el turno de propuesta (el córtex se autonombra y propone valores; el owner confirma vía endpoint). NO duplica el turn-loop.
   - TDD: `tests/integration/test_cortex_f3_onboarding.py` — primer `POST /owner/cortex/identity/onboarding` con script del modelo (patrón `ScriptedAssistantModel` de `assistant/graph.py`) propone nombre+valores; confirmación persiste `identity_state` con `onboarded_at`; segundo POST es idempotente (no re-onboarda). Non-owner → 403 (gate DB-authoritative, patrón `test_cortex_f0_ownership.py::test_require_system_owner_gate_checks_the_db`).
   - **Criterio**: onboarding crea la identidad una sola vez; idempotente; gated.
+  - ⏳ **Pendiente (2026-07-30):** falta la CO-CONSTRUCCIÓN entera — `propose_identity` está en `cortex/identity.py` y probada (`tests/unit/test_cortex_identity_onboarding.py`, 20 verdes) pero **no la llama nadie**: no hay `cortex/onboarding.py`, ni `apply_onboarding`, ni `POST /identity/onboarding` que genere el turno de propuesta con el grafo de F1, ni el test de integración `test_cortex_f3_onboarding.py` (hoy el owner rellena un formulario a mano).
 
 ### F3.4 — Bucle de reflexión periódica (Celery beat — GATED, ADR 0078)
 
-- [ ] **Budget cap + kill-switch en Redis (gobierno ADR 0078)**
+- [x] **Budget cap + kill-switch en Redis (gobierno ADR 0078)**
   - Crear: `apps/api-server/src/api_server/cortex/budget.py` (o reutilizar el de F1/F2 si ya existe): `try_consume(redis, key, *, max_calls, max_cost_usd, cost) -> bool` y `is_killed(redis, owner) -> bool`. Claves: `cortex:budget:reflection:{owner}` (TTL diario) + `cortex:killswitch:{owner}`.
   - TDD: `tests/unit/test_cortex_budget.py` — el cap se respeta (N+1 devuelve False); kill-switch detiene el bucle; reset diario.
   - **Criterio**: el bucle NO puede superar el cap; kill-switch efectivo.
 
-- [ ] **Tarea de reflexión `workers.cortex_reflect`**
+- [x] **Tarea de reflexión `workers.cortex_reflect`**
   - Crear: `apps/workers/src/workers/cortex_reflection.py` con `@app.task(name="workers.cortex_reflect")` (patrón exacto de `workers/maintenance.py`: `def task(): return asyncio.run(_async(...))`, engine `create_async_engine(settings.database_url)` — ya BYPASSRLS, line 38 de `workers/config.py`).
   - Núcleo async `_reflect(...)`: (1) resolver el owner (singleton: `SELECT id FROM users WHERE is_system_owner`); (2) chequear kill-switch + budget cap → si excedido, no-op log; (3) recall de episodios recientes vía `memorizer.recall(... user_id=owner, scopes=['private'])` (filtrado estricto al owner, defensa cross-owner); (4) síntesis de insights + narrativa con `claude_sdk run_agent(effort=...)` (ADR 0070; degradar a no-op fail-open si no hay SDK — ADR 0064); (5) aplicar delta con `cortex/identity.py` (clamp+bounded) sobre `mood_baseline`/`traits`; (6) `cortex_identity_repo.upsert_identity(updated_by='reflection', reason=...)`; (7) persistir insight como memoria `type='semantic'`, `metadata_.kind='reflection'` vía `persist_memory_candidates` **directo** (NO `workers/memorizer.py`, que enruta episodic→project*shared); (8) saciar drive `coherence` (escribir a Redis de F2). Idempotente: marca lo procesado en `metadata*`.
   - **Protección de identidad (ADR 0077)**: la reflexión NUNCA borra `metadata_.kind ∈ {identity, owner_model}`; solo reescribe `narrative`/`traits`/`baseline` (versionado).
@@ -180,6 +181,7 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - Schemas: `apps/api-server/src/api_server/schemas/cortex_identity.py` (Pydantic, ES+EN labels donde aplique).
   - TDD: `tests/integration/test_cortex_f3_identity_endpoints.py` — owner: GET identidad/history OK; PATCH de `core_values` crea versión `owner_override`; PATCH de `narrative` → 422; non-owner → 403 en TODOS; cross-owner: el owner solo ve su fila.
   - **Criterio**: endpoints gated, override acotado, cross-owner aislado, tests en verde.
+  - ⏳ **Pendiente (2026-07-30):** el `GET /identity/history` ya existe y todo lo demás está gated/cross-owner y en verde, pero queda una CONTRADICCIÓN de diseño sin resolver por un humano: el plan exige 422 al tocar `narrative` y la implementación la hace editable a propósito (`OWNER_EDITABLE_FIELDS` la incluye; solo `traits`/`mood_baseline` dan 422) — decidir plan o código (¿ADR?) antes de marcar.
 
 ### F3.6 — UI: tarjeta de identidad + timeline (en `app/admin/cortex` de F1)
 
@@ -190,6 +192,7 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - Cliente API: `apps/admin-panel/lib/cortex-identity.ts` (fetch a los endpoints) + helper puro testeado `identityDiffSummary(diff)` (resumen legible de un cambio).
   - TDD: `apps/admin-panel/lib/cortex-identity.test.ts` (vitest, patrón `lib/conversation-history.ts`/`conversation-history.test.ts` de Feature 2): `identityDiffSummary` resume un diff multi-campo; etiqueta de versión correcta.
   - **Criterio**: la tarjeta renderiza identidad+narrativa con copy honesto; timeline muestra versiones; gated `isSystemOwner`; tests vitest en verde.
+  - ⏳ **Pendiente (2026-07-30):** radar (`components/cortex/trait-radar.tsx`), timeline y `identityDiffSummary` ya están y en verde (35 vitest), pero el **copy honesto es ES-only** — `HONESTY_NOTE` es un string fijo en castellano (`app/admin/cortex/identity/page.tsx:52`) y la página no usa `useLangOptional`, así que el «(ES+EN)» del enunciado no se cumple; además la tarjeta sigue siendo una ruta hermana (`/admin/cortex/identity`) y no un componente en la segunda columna de la página de F1, y no hay test de render de la tarjeta (solo de radar y timeline).
 
 ### F3.7 — Documentación + cierre de ADRs
 
@@ -198,6 +201,7 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - Modificar: `docs/roadmap/cortex-system-owner.md` (marcar Fase 3 hecha) y `docs/roadmap/mejoras-2026-06-chat-coste-cortex.md` (Feature 1: F3 ✅).
   - Crear changelog: `docs/07-changelog/` entrada de F3.
   - **Criterio**: estado de los docs coherente con el código; sin placeholders.
+  - ⏳ **Pendiente (2026-07-30):** el changelog `docs/07-changelog/cortex-f3-identidad.md` ya existe pero **contradice al código de hoy**: su sección «Lo que sigue abierto» sigue dando por ausentes el budget de la reflexión, el saciado de `coherence`, `list_history`, `GET /identity/history` y `identityDiffSummary` —los cinco implementados— y sus «Divergencias» aún dicen que los rasgos se pintan como barras (hay radar); hay que reescribirlo contra el estado real (ADR 0078 quedó en `accepted`, no `accepted-f3`: benigno).
 
 ---
 

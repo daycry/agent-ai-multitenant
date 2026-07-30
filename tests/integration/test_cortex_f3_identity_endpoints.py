@@ -397,3 +397,155 @@ async def test_get_identity_default_relationship_model_vacio(
         )
     assert resp.status_code == 200
     assert resp.json()["relationship_model"] == {}
+
+
+# ===========================================================================
+# GET /identity/history — el timeline de versiones CON su diff (F3.5/F3.6)
+# ===========================================================================
+# El único lector de ``cortex_identity_history`` era la query inline de
+# ``GET /owner/cortex/journal``, que aplana narrativas y DESCARTA el ``diff``: la
+# traza de QUÉ tocó cada reflexión no se podía consultar desde ningún sitio, y por
+# eso el timeline de versiones del panel era inconstruible (auditoría 2026-07-27).
+@pytest.mark.asyncio
+async def test_get_identity_history_non_owner_gets_403(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    seed = await _seed_two_owners(migrations_pg_dsn, owner_is_owner=False)
+    # Forja el claim `own`; el gate DB-authoritative debe rechazar igualmente.
+    token = await _mint(seed["owner_id"], seed["tenant_id"], owner_claim=True)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        resp = await client.get("/owner/cortex/identity/history", headers=headers)
+        assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_identity_history_newest_first_with_diff(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Dos overrides ⇒ dos versiones, MÁS RECIENTE PRIMERO, cada una con su ``diff``.
+
+    El ``diff`` es el valor de esta pantalla: sin él sólo se ve una lista de números
+    de versión. Defecto que atrapa: proyectar el ``identity_state`` completo (o el
+    ``diff`` vacío) en vez del ``{campo:{before,after}}`` que persiste
+    ``compute_diff``, y devolver el orden ASC (el timeline empezaría por la versión
+    más vieja, que es el extremo equivocado de una línea temporal)."""
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        # v1: nombre + valores. v2: sólo el idioma (el resto se preserva).
+        r1 = await client.put(
+            "/owner/cortex/identity",
+            json={"name": "Atlas", "core_values": ["honestidad"]},
+            headers=headers,
+        )
+        assert r1.status_code == 200, r1.text
+        r2 = await client.put("/owner/cortex/identity", json={"language": "en"}, headers=headers)
+        assert r2.status_code == 200, r2.text
+
+        resp = await client.get("/owner/cortex/identity/history", headers=headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert [v["version"] for v in body] == [2, 1], body
+
+        # Contrato de campos (apps/admin-panel/lib/cortex-identity.ts:151-160).
+        newest = body[0]
+        assert set(newest) >= {"version", "created_at", "reason", "updated_by", "diff"}
+        assert newest["updated_by"] == "owner_override"
+        assert newest["reason"] == "owner_onboarding"
+        assert isinstance(newest["created_at"], str) and newest["created_at"]
+
+        # v2 tocó SÓLO el idioma: `compute_diff` ignora los campos sin cambio, así
+        # que `name` no puede aparecer en el diff de v2 (sí en el de v1).
+        assert newest["diff"]["language"] == {"before": "es", "after": "en"}
+        assert "name" not in newest["diff"], newest["diff"]
+        assert body[1]["diff"]["name"] == {"before": "Córtex", "after": "Atlas"}
+
+
+@pytest.mark.asyncio
+async def test_get_identity_history_respects_limit_keeping_latest(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """``limit`` devuelve las N ÚLTIMAS versiones, no las N primeras.
+
+    Defecto que atrapa: un ``LIMIT`` sobre orden ASC (el panel mostraría el
+    principio del histórico y nunca el cambio más reciente, que es el que importa)."""
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        for name in ("Uno", "Dos", "Tres"):
+            resp = await client.put("/owner/cortex/identity", json={"name": name}, headers=headers)
+            assert resp.status_code == 200, resp.text
+
+        limited = await client.get(
+            "/owner/cortex/identity/history", params={"limit": 2}, headers=headers
+        )
+        assert limited.status_code == 200, limited.text
+        assert [v["version"] for v in limited.json()] == [3, 2]
+
+        # Un `limit` mayor que el histórico no inventa versiones.
+        wide = await client.get(
+            "/owner/cortex/identity/history", params={"limit": 50}, headers=headers
+        )
+        assert wide.status_code == 200, wide.text
+        assert [v["version"] for v in wide.json()] == [3, 2, 1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.cross_tenant
+async def test_get_identity_history_cross_owner_isolated(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El histórico de OTRO usuario nunca se filtra (tabla tenant-less, sin RLS de
+    respaldo: el aislamiento ES el filtro ``owner_user_id`` explícito, ADR 0074).
+
+    El histórico ajeno se siembra con versiones ALTAS (10, 11) a propósito: si el
+    endpoint olvidase el filtro por owner, el orden DESC por versión las pondría
+    PRIMERAS y el owner vería el diario íntimo de otro en la cabecera del panel."""
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        for version in (10, 11):
+            await conn.execute(
+                "INSERT INTO cortex_identity_history"
+                " (id, owner_user_id, version, identity_state, diff, updated_by, reason)"
+                " VALUES ($1, $2, $3, '{}'::jsonb, $4::jsonb, 'reflection', 'ajena')",
+                uuid4(),
+                seed["other_id"],
+                version,
+                '{"narrative": {"before": "x", "after": "secreto del otro"}}',
+            )
+    finally:
+        await conn.close()
+
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        put = await client.put("/owner/cortex/identity", json={"name": "Atlas"}, headers=headers)
+        assert put.status_code == 200, put.text
+        resp = await client.get("/owner/cortex/identity/history", headers=headers)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+    assert [v["version"] for v in body] == [1]
+    assert all(v["reason"] != "ajena" for v in body), body
+    assert "secreto del otro" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_identity_history_empty_before_any_version(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Sin ningún override todavía: lista vacía, no un 404 ni un 500.
+
+    ``ensure_identity`` crea la identidad en ``version=0`` SIN fila de histórico (el
+    versionado arranca en la primera reescritura real), así que el timeline de un
+    córtex recién nacido está legítimamente vacío y la UI debe poder pintarlo."""
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    async with _client(configured_app) as client:
+        resp = await client.get("/owner/cortex/identity/history", headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == []

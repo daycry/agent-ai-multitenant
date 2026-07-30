@@ -62,6 +62,10 @@ function ToggleButton({
       data-active={active ? "true" : "false"}
       className={cn(
         "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
+        // human_ui_01: el foco debe VERSE al tabular. Mismo anillo (token `ring`
+        // + offset sobre `background`) que Input/Select/Tabs, para que el
+        // recorrido por teclado se lea igual en todo el panel.
+        "focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2",
         active
           ? "bg-background text-foreground shadow"
           : "text-muted-foreground hover:text-foreground",

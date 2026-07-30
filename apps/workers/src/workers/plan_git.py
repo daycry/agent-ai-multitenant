@@ -37,6 +37,7 @@ from typing import Any, Literal
 
 import structlog
 
+from workers.git_identity import PLATFORM_GIT_EMAIL, PLATFORM_GIT_NAME, git_identity_env
 from workers.git_repos import BareRepoLayout, GitCommandError, _run_git
 
 # Optimistic-concurrency retries for the worktree→bare push: sibling tasks of the
@@ -212,8 +213,8 @@ def commit_task(
     *,
     message: str,
     trailers: CommitTrailers,
-    author_name: str = "Agentic Platform",
-    author_email: str = "noreply@agentic.local",
+    author_name: str = PLATFORM_GIT_NAME,
+    author_email: str = PLATFORM_GIT_EMAIL,
 ) -> str:
     """Stage everything, commit with trailers, return the new sha.
 
@@ -370,13 +371,9 @@ class PlanGitWorkflow:
         Returns the sha now on the bare's branch tip.
         """
         # The rebase replays our commit; give git an identity for the new
-        # committer (the worktree carries no user.name/email config).
-        committer_env = {
-            "GIT_AUTHOR_NAME": "Agentic Platform",
-            "GIT_AUTHOR_EMAIL": "noreply@agentic.local",
-            "GIT_COMMITTER_NAME": "Agentic Platform",
-            "GIT_COMMITTER_EMAIL": "noreply@agentic.local",
-        }
+        # committer (the worktree carries no user.name/email config). Single
+        # source (causa raíz A) — la misma con la que se firmó el commit.
+        committer_env = git_identity_env()
         last_exc: GitCommandError | None = None
         for _ in range(_PUSH_RECONCILE_RETRIES):
             try:
@@ -439,6 +436,10 @@ class PlanGitWorkflow:
         (one push per accepted task). ``final_only`` skips here and
         is invoked once at plan close. Returns True iff a push
         actually happened.
+
+        ``force`` bypasses the ``branch_push_mode`` gate (it is NOT
+        ``git push --force``): the plan close pushes the tip whatever
+        the mode, so the PR cannot target an incomplete branch.
         """
         if self._policies.branch_push_mode == "final_only" and not force:
             return False
@@ -471,16 +472,16 @@ class PlanGitWorkflow:
         Skipped (with a reason) when:
           * ``push_policy='forbidden'`` — the project never pushes.
           * No ``origin`` remote — local-only project.
+          * The branch could not be pushed to the remote (see below).
           * No ``pr_opener`` injected — dev/test without GitHub creds.
 
         Otherwise calls the injected opener and returns the URL it
         produced. The actual ``gh pr create`` machinery lives in the
         platform's wiring; here we just dispatch.
         """
-        # Force the final push when in final_only mode.
-        if self._policies.branch_push_mode == "final_only":
-            self.push_branch_to_remote(force=True)
-
+        # `forbidden` means «this project never pushes», so it is checked FIRST:
+        # the final_only push used to run before this gate and mirrored the branch
+        # to the remote of a project configured never to push (audit 2026-07-03, P4).
         if self._policies.push_policy == "forbidden":
             return PrInfo(
                 repo_name=self._bare_path.stem,
@@ -494,6 +495,36 @@ class PlanGitWorkflow:
                 branch=self._plan_branch,
                 url=None,
                 skipped_reason="no remote origin configured",
+            )
+        # The remote must hold the branch TIP before the PR is opened, whatever the
+        # `branch_push_mode` (residual P3, audit 2026-07-03): `final_only` never
+        # pushed until now, and under `incremental` (the DEFAULT) the closure-docs
+        # commit —written to the bare moments earlier so the PR carries its own
+        # changelog— stayed local, as did any task commit whose best-effort
+        # incremental push was skipped or failed. This is the one place that can
+        # guarantee «the PR points at the branch that holds the commits». Idempotent:
+        # a remote already at the tip makes it a no-op.
+        try:
+            self.push_branch_to_remote(force=True)
+        except GitCommandError as exc:
+            # A rejected push (diverged remote branch) must NOT degrade into a PR
+            # against an INCOMPLETE remote branch — that silent-loss shape is what
+            # this whole chain exists to prevent. Report it actionably instead.
+            reason = (
+                f"no se pudo empujar la rama '{self._plan_branch}' al remoto "
+                f"(el PR habría apuntado a una rama incompleta): {exc}"
+            )
+            _log.warning(
+                "plan_pr.branch_push_failed",
+                repo=self._bare_path.stem,
+                branch=self._plan_branch,
+                error=str(exc),
+            )
+            return PrInfo(
+                repo_name=self._bare_path.stem,
+                branch=self._plan_branch,
+                url=None,
+                skipped_reason=reason,
             )
         if self._pr_opener is None:
             return PrInfo(

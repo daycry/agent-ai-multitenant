@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-07-28** · rama `plan/runs-visor-trabajo`
+> **Última actualización: 2026-07-30** · rama `plan/runs-visor-trabajo`
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -11,10 +11,15 @@
 
 ## En una frase
 
-El código está al día y **desplegado desde el 2026-07-28** (106 commits de una
-tacada, esquema en `0121`): lo que queda pendiente es **humano** — validar las 46
-fases entregadas, aprobar los 14 planes nunca empezados y arreglar la facturación
-de CI.
+El código está al día y desplegado desde el 2026-07-28, pero **la sesión del
+2026-07-30 metió trabajo SIN desplegar**: esquema en `0124` (dos migraciones
+nuevas), 67 módulos y tests nuevos, y **4 ADR esperando tu decisión**
+(`0133`-`0136`). Lo que queda pendiente sigue siendo sobre todo **humano** —
+validar las 46 fases entregadas, aprobar los 14 planes nunca empezados y arreglar
+la facturación de CI—, más dos cosas nuevas: decidir si se encienden **seis jobs
+de fondo que nunca han corrido** (punto 0) y cerrar el bloqueante de despliegue
+del ADR `0136` (el instalador no genera `API_SERVER_INTERNAL_TOKEN_SECRET`, y con
+el guard fail-closed nuevo el api-server **no arranca en prod** sin él).
 
 ## Lo primero que hay que saber
 
@@ -36,8 +41,17 @@ de CI.
    («recent account payments have failed»). Lo arregla el operador en
    <https://github.com/settings/billing>. Mientras tanto, las suites se corren en
    local (ver más abajo).
-4. **La rama `plan/runs-visor-trabajo` tiene el PR #66 abierto** y va muy por
-   delante de lo que describe su título. Todo lo empujado está ahí.
+4. **El PR #66 está MERGEADO** desde el 2026-07-30 07:32 UTC (merge commit
+   `72fe899b`): los 543 commits que `plan/runs-visor-trabajo` llevaba de ventaja ya
+   están en `master`, y el **criterio 5 de cierre** («PR mergeado») dejó de bloquear
+   a los planes anteriores a esa fecha.
+   - **Pero el trabajo del 2026-07-30 NO está commiteado**: ~200 ficheros en el árbol
+     (dos migraciones, 67 módulos/tests nuevos, 5 ADR) sobre una rama que ya es
+     idéntica a `master`. Eso necesita **rama nueva + PR propio**; no lo empujes a
+     `plan/runs-visor-trabajo`, que ya cumplió su ciclo.
+   - Y no te fíes de esta línea: `git rev-list --left-right --count origin/master...HEAD`
+     y `gh pr view <n> --json state,mergedAt` lo dicen en un segundo. Este archivo
+     afirmó durante horas que el PR seguía abierto **después** de mergearse.
 5. **Queda un `DELETE` sin ejecutar**: 8 filas de `agent_tools` conceden
    `send_notification` a los agentes CI4 DevOps y Project Manager, y esa tool no
    tiene ejecutor (devuelve `ok=False, "not wired"` y les quema un turno). Ningún
@@ -53,8 +67,12 @@ de CI.
 | `blocked`                  |  1  | `guardas-research-por-novedad`: solo le falta el e2e      |
 | `in_progress`              |  0  | correcto: el protocolo permite una como mucho             |
 
-**ADR en `proposed`: ninguno.** Los cuatro que quedaban se cerraron el 2026-07-26
-(0076, 0110, 0117, 0128).
+**ADR en `proposed`: cuatro, y son tuyos** (nacidos el 2026-07-30 de los planes de
+seguridad): `0133` almacenamiento de la sesión del panel (cookie vs localStorage),
+`0134` auto-registro en producción, `0135` qué autoriza exactamente una aprobación
+humana (extensión del 0020) y `0136` dominios criptográficos worker↔api. Cada uno
+lleva opciones con su coste y una recomendación argumentada. El `0137` (la tabla
+`users` se queda global) era técnico y ya está `accepted` e implementado.
 
 ## Las casillas del córtex: lo que decía aquí era falso
 
@@ -66,14 +84,14 @@ de CI.
 
 Estado actual tras marcar lo verificado y cerrar cinco defectos reales:
 
-| Dónde                                    |  N  | Qué son de verdad                                                                                                                                                                             |
-| ---------------------------------------- | :-: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cortex-f1`…`f5`                         | 42  | **Huecos reales**, uno a uno en [`gaps-cortex-2026-07-27.md`](docs/roadmap/gaps-cortex-2026-07-27.md). ~14 son «falta el test», ~5 divergencias de nombre (no tocar), ~15 tramos funcionales. |
-| `prod-06`                                |  1  | **Rancia.** «Dar caller a `apply_reviewer_verdict`» — ya lo tiene (`workers/execution.py:473`), llegó con el ADR 0087.                                                                        |
-| `15-instalador`                          |  2  | Pentest externo y release v1.0.0: **decisión y contratación tuya**, no código.                                                                                                                |
-| `prod-17`, `prod-18`, `guardas-research` |  4  | **e2e bloqueados**: exigen runner Docker y lanzar runs reales.                                                                                                                                |
-| `06.10`, `06.11`                         |  2  | Diferidas por decisión propia (typeahead cosmético; plan 06.12 aparte). Están en planes ya `completed`.                                                                                       |
-| `prod-03`…`prod-16`, `remediacion-…`     | 171 | De los **14 planes `pending_approval`**: nunca empezados, esperan tu aprobación.                                                                                                              |
+| Dónde                                    |  N  | Qué son de verdad                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------- | :-: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cortex-f1`…`f5`                         | 15  | **Eran 42; el 2026-07-30 se cerraron 27** con test ejecutado, y F1 quedó completa (12/12). Las 15 que siguen abiertas están **anotadas una a una en su propio plan** con lo que falta (`⏳ Pendiente (2026-07-30)`): QA visual, e2e de Playwright, la co-construcción de identidad de F3 (decisión de producto) y la migración D3. El inventario [`gaps-cortex-2026-07-27.md`](docs/roadmap/gaps-cortex-2026-07-27.md) ya está PARCIALMENTE RANCIO: varias entradas suyas se cerraron el 28 y el 30 — verifica contra el código, no contra él. |
+| `prod-06`                                |  1  | **Rancia.** «Dar caller a `apply_reviewer_verdict`» — ya lo tiene (`workers/execution.py:473`), llegó con el ADR 0087.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `15-instalador`                          |  2  | Pentest externo y release v1.0.0: **decisión y contratación tuya**, no código.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `prod-17`, `prod-18`, `guardas-research` |  4  | **e2e bloqueados**: exigen runner Docker y lanzar runs reales.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `06.10`, `06.11`                         |  2  | Diferidas por decisión propia (typeahead cosmético; plan 06.12 aparte). Están en planes ya `completed`.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `prod-03`…`prod-16`, `remediacion-…`     | 171 | De los **14 planes `pending_approval`**: nunca empezados, esperan tu aprobación.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 **Lo que hay que llevarse de aquí, más que los números:** un resumen que dice
 «esto ya está» sin evidencia por ítem envejece mintiendo, y cuesta más caro que
@@ -83,6 +101,18 @@ menos un falso positivo comprobado, así que tampoco te fíes de un `partial` si
 mirar el fichero.
 
 ## Qué necesita al operador (por orden de coste)
+
+0. **Seis jobs de fondo que nunca han corrido, y decidir si se encienden.** Sus
+   entradas de beat nombran tasks que **ningún worker registra** (el módulo no
+   está en `celery_app(imports=...)`), así que beat las encola y el worker las
+   rechaza con `NotRegistered`, sin ruido: standup diario (ADR 0120), vigía de
+   credenciales (ADR 0122), retro de planes (ADR 0124), asesor de configuración
+   (ADR 0125), restore-drill (ADR 0126) y GC de conocimiento (G-03). Están
+   declaradas entregadas y desplegadas. **No las he cableado a propósito**:
+   arreglarlo enciende los seis de golpe y uno **ensaya una restauración de
+   backup**. Lista en vivo y detalle en
+   [gotchas/beat-entry-whose-task-nobody-imports.md](docs/03-guides/gotchas/beat-entry-whose-task-nobody-imports.md);
+   la guarda que lo impide en el futuro ya está en CI.
 
 1. **Validar las 46 fases en `pending_human_validation`.** El despliegue ya está
    hecho (2026-07-28), así que esto por fin es posible: era el cuello de botella
@@ -142,12 +172,31 @@ estaban **rechazadas** por un ADR posterior.
 
 ## Verificación local (con CI caído)
 
+> **Esta lista tenía tres agujeros y costó un rojo invisible.** Es el espejo de
+> los pasos de test de `.github/workflows/ci.yml`, y le faltaban `tests/docs/`,
+> `packages/shared-llm/tests` y la suite del browser-runtime. Con CI caído nadie
+> los corría, así que `tests/docs/test_runbooks_consistency.py` estuvo **en rojo
+> desde el 2026-07-28** sin que se viera (lo rompió, sin querer, el propio commit
+> que documentó las trampas de aquel despliegue). Si añades un paso de test a CI,
+> **añádelo también aquí**.
+
+Cifras verificadas el **2026-07-30**:
+
 ```bash
-.venv/Scripts/python.exe -m pytest tests/unit/ -q      # 2858
-.venv/Scripts/python.exe -m pytest tests/security/ -q  # 73
-.venv/Scripts/python.exe -m mypy apps/ packages/       # 583 ficheros, limpio
-cd apps/admin-panel && npx vitest run                  # 402
+# Los 6 pasos de pytest que corre CI, en el mismo orden
+.venv/Scripts/python.exe -m pytest tests/unit/ -q          # 3130
+.venv/Scripts/python.exe -m pytest tests/security/ -q      # 73
+.venv/Scripts/python.exe -m pytest tests/docs/ -q          # 261
+.venv/Scripts/python.exe -m pytest packages/shared-llm/tests -q   # 115 (+1 skip sin claude_agent_sdk)
 cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m pytest tests/ -q   # 472
+# El browser-runtime NO se instala en el venv: necesita el PYTHONPATH que le pone CI,
+# o muere en la recolección con `ModuleNotFoundError: No module named 'browser_runtime'`
+PYTHONPATH=docker/agent-runtimes/browser-runtime \
+  .venv/Scripts/python.exe -m pytest docker/agent-runtimes/browser-runtime/tests -q   # 19
+
+# Y lo que no es pytest
+.venv/Scripts/python.exe -m mypy apps/ packages/           # 588 ficheros, limpio
+cd apps/admin-panel && npx vitest run                      # 653 en 83 ficheros
 ```
 
 > **Usa el intérprete del venv, no `python` a secas.** Los paquetes de
@@ -161,6 +210,16 @@ cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m p
 >
 > Integración: necesita el Postgres de compose arriba; se corre por bloques
 > (`python -m pytest tests/integration/test_X.py -q -p no:randomly`).
+>
+> **Y un solo pytest de integración a la vez.** El conftest crea su BD con
+> `DROP DATABASE` + `CREATE DATABASE` sobre un nombre único para todo el repo, y
+> además hace `flushdb()` de la Redis de test en cada setup de app. Dos procesos
+> simultáneos se destruyen la BD (fallos fantasma de «tabla que no existe») y se
+> borran las sesiones entre ellos (`401 session has been revoked` en un test que
+> no toca auth). Si necesitas paralelismo, dale a cada proceso **las dos**:
+> `TEST_PG_DB_NAME=agentic_platform_test_<algo>` y `TEST_REDIS_URL=redis://localhost:6379/<1-14>`.
+> Detalle y firma para reconocerlo:
+> [gotchas/integration-tests-share-one-database.md](docs/03-guides/gotchas/integration-tests-share-one-database.md).
 
 ## Mapa: dónde está cada cosa
 

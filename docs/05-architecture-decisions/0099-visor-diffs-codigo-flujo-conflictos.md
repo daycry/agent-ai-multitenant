@@ -86,7 +86,7 @@ ADR.
 (bare_repo_name, plan_branch)`. El visor de código debe resolver el bare **por esa misma función**, no por
   `docs-mirror` ni por una cuarta derivación, o reintroduce la deriva (causa raíz A de la auditoría).
 
-## Decisión propuesta (pendiente de aprobación)
+## Decisión (aprobada)
 
 **Opción A: visor read-only de diffs de código de la rama del plan + escalado del conflicto a humano con
 contexto.** Concretamente:

@@ -690,8 +690,10 @@ async def _commit_and_push_worktree(
     The WORKER does this — the sandbox has no git credentials (principle 2). When
     ``escalated`` the run did not certify the output (``needs_human_review``); the
     commit is labelled WIP so the human validator can tell it apart from a clean
-    ``done`` (P2.3/F26). The bare→remote push stays with the existing ``open_plan_pr``
-    path (final_only at plan close).
+    ``done`` (P2.3/F26). The bare→remote push follows immediately via
+    ``push_plan_branch_to_remote`` when the project's ``branch_push_mode`` is
+    ``incremental`` (the default, T3/P3); ``final_only`` defers it to plan close,
+    where ``open_plan_pr`` pushes the tip regardless of mode.
 
     Returns the ``abort_code`` when a REAL git error prevented the commit/push —
     ``"rebase_conflict"`` when a sibling task changed the same lines (needs human

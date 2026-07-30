@@ -83,7 +83,19 @@ def test_task_is_not_soft_deleted() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Junction tables: composite PK, no tenant_id (parents are tenant-scoped)
+# Junction tables: composite PK + tenant_id propio (defensa en profundidad)
+#
+# Esta invariante se INVIRTIÓ el 2026-07-30 con el plan prod-14 y la migración
+# `0124_junction_tenant_rls`. Antes decía lo contrario —«no llevan tenant_id,
+# los padres ya son tenant-scoped»— y era cierto pero insuficiente: sin columna
+# propia no hay política RLS que las cubra, así que la única defensa era que
+# TODA query pasara por el padre. Un servicio con BYPASSRLS (o un JOIN mal
+# escrito) se saltaba el aislamiento sin que la base de datos dijera nada.
+#
+# Ahora cada fila lleva su `tenant_id`, un trigger lo DERIVA del padre y rechaza
+# cualquier valor contradictorio, y la RLS va con FORCE. El test cambia de signo
+# a propósito: exigir la columna es lo que hace que la próxima tabla de unión no
+# nazca desprotegida.
 # ---------------------------------------------------------------------------
 JUNCTIONS = {
     d.AgentSkill: ("agent_id", "skill_id"),
@@ -95,6 +107,7 @@ JUNCTIONS = {
 
 @pytest.mark.parametrize("model,pk_cols", list(JUNCTIONS.items()))
 def test_junctions_have_composite_pk(model, pk_cols) -> None:
+    """La PK sigue siendo la pareja de FKs: `tenant_id` es defensa, no identidad."""
     cols = model.__table__.primary_key.columns
     assert {c.name for c in cols} == set(
         pk_cols
@@ -102,10 +115,22 @@ def test_junctions_have_composite_pk(model, pk_cols) -> None:
 
 
 @pytest.mark.parametrize("model", list(JUNCTIONS.keys()))
-def test_junctions_do_not_carry_tenant_id(model) -> None:
-    assert (
-        "tenant_id" not in model.__table__.columns
-    ), f"{model.__name__} should rely on parent rows for tenant isolation"
+def test_junctions_carry_tenant_id_for_rls(model) -> None:
+    """Sin columna propia no hay política RLS posible (prod-14, migración 0124)."""
+    assert "tenant_id" in model.__table__.columns, (
+        f"{model.__name__} no lleva tenant_id: la RLS no puede cubrirla y su "
+        "aislamiento vuelve a depender de que ninguna query la lea sin el padre"
+    )
+
+
+@pytest.mark.parametrize("model", list(JUNCTIONS.keys()))
+def test_junction_tenant_id_is_not_nullable(model) -> None:
+    """Una fila con `tenant_id` NULL no la ve ninguna política: sería un agujero
+    silencioso justo en la tabla que acabamos de blindar."""
+    assert not model.__table__.columns["tenant_id"].nullable, (
+        f"{model.__name__}.tenant_id es nullable: una fila con NULL se escapa de "
+        "la política RLS en vez de ser rechazada"
+    )
 
 
 # ---------------------------------------------------------------------------

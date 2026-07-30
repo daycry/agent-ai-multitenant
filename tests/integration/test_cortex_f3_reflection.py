@@ -147,6 +147,24 @@ async def _seed_owner_with_turns(
     return {"owner_id": owner_id, "other_id": other_id, "tenant_id": tenant_id}
 
 
+async def _set_autonomy(dsn: str, enabled: bool) -> None:
+    """Fija el kill-switch global ``cortex.autonomy_enabled`` (ADR 0078).
+
+    La reflexión gasta LLM, así que su núcleo lo consulta en AMBOS caminos (el beat
+    y el botón "Reflexionar ahora"). El default de la plataforma es OFF, de modo que
+    todo test que espere una pasada real tiene que encenderlo explícitamente."""
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("TRUNCATE platform_settings")
+        if enabled:
+            await conn.execute(
+                "INSERT INTO platform_settings (key, value) VALUES"
+                " ('cortex.autonomy_enabled', 'true'::jsonb)"
+            )
+    finally:
+        await conn.close()
+
+
 @pytest.fixture()
 def schema_at_head(alembic_config) -> None:
     command.upgrade(alembic_config, "head")
@@ -207,6 +225,7 @@ async def test_reflection_rewrites_narrative_and_clamps_delta(
     owner_id = seed["owner_id"]
 
     fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
     from workers.cortex_reflection import _reflect_async
 
     result = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: fake)
@@ -282,6 +301,7 @@ async def test_reflection_fail_open_when_llm_raises(
     owner_id = seed["owner_id"]
 
     boom = _BoomLLM()
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
     from workers.cortex_reflection import _reflect_async
 
     result = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: boom)
@@ -315,6 +335,7 @@ async def test_reflection_fail_open_on_unparseable_json(
     owner_id = seed["owner_id"]
 
     junk = _FakeLLM(content="no puedo ayudarte con eso")
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
     from workers.cortex_reflection import _reflect_async
 
     result = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: junk)
@@ -344,6 +365,7 @@ async def test_reflection_no_turns_is_clean_noop(
     owner_id = seed["owner_id"]
 
     fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
     from workers.cortex_reflection import _reflect_async
 
     result = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: fake)
@@ -367,6 +389,7 @@ async def test_reflection_is_cross_owner_isolated(
     other_id = seed["other_id"]
 
     fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
     from workers.cortex_reflection import _reflect_async
 
     result = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: fake)
@@ -442,6 +465,7 @@ async def test_reflection_actualiza_owner_model_y_persiste_memorias(
     # Identidad previa del owner con relationship_model que se actualiza y
     # des-aprende ("obsoleto": "" en la propuesta lo borra).
     conn = await asyncpg.connect(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
     try:
         await conn.execute(
             "INSERT INTO cortex_identity (id, owner_user_id, identity_state, version,"
@@ -521,3 +545,358 @@ async def test_reflection_actualiza_owner_model_y_persiste_memorias(
     assert other_row["version"] == 3
     assert other_state["narrative"] == "no tuya"
     assert "relationship_model" not in other_state or not other_state.get("relationship_model")
+
+
+# ===========================================================================
+# Gobierno (ADR 0078) — kill-switch + BUDGET CAP en el núcleo, no sólo en el beat
+#
+# El camino manual (`POST /owner/cortex/reflect` → `workers.cortex_reflect` →
+# `_reflect_async`) no consultaba NINGUNO de los dos: el owner podía pulsar
+# "Reflexionar ahora" en bucle y cada pulsación gastaba una llamada al LLM sin
+# tope ni contabilidad. El criterio del plan («el bucle NO puede superar el cap;
+# kill-switch efectivo») se comprueba aquí sobre el núcleo compartido, que es lo
+# que ejecutan AMBOS caminos.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_kill_switch_off_no_reflexiona_ni_por_el_boton(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Con ``cortex.autonomy_enabled`` OFF (el default) el núcleo sale no-op.
+
+    Y no-op DE VERDAD: sin llamada al LLM (nada de gasto) y sin versión de
+    identidad. Antes el kill-switch sólo se miraba en la entrada del beat, así que
+    el disparo manual lo esquivaba por completo.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=4)
+
+    fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    await _set_autonomy(migrations_pg_dsn, enabled=False)
+    from workers.cortex_reflection import _reflect_async
+
+    result = await _reflect_async(
+        seed["owner_id"], settings=workers_settings, llm_factory=lambda _s: fake
+    )
+    assert result["reason"] == "skipped:disabled", result
+    assert fake.calls == 0, "el kill-switch debe cortar ANTES de gastar LLM"
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        hist = await conn.fetchval(
+            "SELECT count(*) FROM cortex_identity_history WHERE owner_user_id = $1",
+            seed["owner_id"],
+        )
+    finally:
+        await conn.close()
+    assert hist == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_diario_agotado_no_reflexiona(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Con el contador del día en el cap, la pasada no llama al LLM.
+
+    El contador vive en la ventana diaria UTC de F4
+    (``cortex:budget:{owner}:reflection:{yyyymmdd}``), así que se pre-carga al cap
+    para probar el GATE sin tener que gastar N pasadas.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=4)
+
+    from datetime import UTC, datetime
+
+    from api_server.cortex.autonomy import daily_budget_key
+    from workers.cortex_reflection import REFLECTION_DAILY_CAP, REFLECTION_KIND, _reflect_async
+
+    now = datetime.now(UTC)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    key = daily_budget_key(str(seed["owner_id"]), REFLECTION_KIND, now=now)
+    await api_redis.set(key, str(REFLECTION_DAILY_CAP))
+
+    fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    result = await _reflect_async(
+        seed["owner_id"], settings=workers_settings, llm_factory=lambda _s: fake, now=now
+    )
+    assert result["reason"].startswith("skipped:budget"), result
+    assert fake.calls == 0, "el cap debe cortar ANTES de gastar LLM"
+
+
+@pytest.mark.asyncio
+async def test_una_pasada_consume_una_unidad_de_budget(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """La contabilidad existe: tras una pasada el contador del día vale 1.
+
+    Sin esto el gate sería inalcanzable — un cap que nadie consume nunca se agota
+    (el patrón "mecanismo entregado, cero productores" de la guía). El budget de
+    un owner es su propia clave: el de otro owner no se mueve.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=4, second_owner=True)
+
+    from datetime import UTC, datetime
+
+    from api_server.cortex.autonomy import daily_budget_key
+    from workers.cortex_reflection import REFLECTION_KIND, _reflect_async
+
+    now = datetime.now(UTC)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    result = await _reflect_async(
+        seed["owner_id"], settings=workers_settings, llm_factory=lambda _s: fake, now=now
+    )
+    assert result["reason"] == "ok", result
+
+    key = daily_budget_key(str(seed["owner_id"]), REFLECTION_KIND, now=now)
+    assert await api_redis.get(key) == "1"
+    # TTL puesto: la ventana se autolimpia a medianoche UTC.
+    assert 0 < await api_redis.ttl(key) <= 24 * 3600
+    # Cross-owner: la clave del otro usuario no existe.
+    other_key = daily_budget_key(str(seed["other_id"]), REFLECTION_KIND, now=now)
+    assert await api_redis.get(other_key) is None
+
+
+@pytest.mark.asyncio
+async def test_el_fail_open_del_llm_tambien_consume_budget(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Una pasada que acaba en ``ok:fail_open`` ya intentó la llamada: cuenta.
+
+    Es la lectura conservadora del coste: si sólo se contabilizasen las pasadas
+    que parsean bien, un modelo que devuelve basura permitiría gastar sin límite —
+    justo el bucle caro que el cap debe frenar.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=2)
+
+    from datetime import UTC, datetime
+
+    from api_server.cortex.autonomy import daily_budget_key
+    from workers.cortex_reflection import REFLECTION_KIND, _reflect_async
+
+    now = datetime.now(UTC)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    junk = _FakeLLM(content="no puedo ayudarte con eso")
+    result = await _reflect_async(
+        seed["owner_id"], settings=workers_settings, llm_factory=lambda _s: junk, now=now
+    )
+    assert result["reason"] == "ok:fail_open", result
+    assert junk.calls == 1
+    key = daily_budget_key(str(seed["owner_id"]), REFLECTION_KIND, now=now)
+    assert await api_redis.get(key) == "1"
+
+
+# ===========================================================================
+# Paso (8) del plan — saciar el drive `coherence` en la Redis de F2
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_una_reflexion_sacia_el_drive_coherence(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Reflexionar CALMA la necesidad de coherencia (paso 8, ausente por completo).
+
+    Sin esto el drive ``coherence`` sube por decay y nada lo baja nunca: la "mente"
+    del córtex queda permanentemente hambrienta de una síntesis que sí está
+    haciendo. Se comprueba en las DOS superficies que el resto de F2 usa: la caché
+    viva de Redis y el snapshot durable de Postgres.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=4)
+    owner_id = seed["owner_id"]
+
+    from datetime import UTC, datetime
+
+    from api_server.cortex.affect_cache import read_affect_state
+    from workers.cortex_reflection import _reflect_async
+
+    now = datetime.now(UTC)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    assert (
+        await read_affect_state(api_redis, str(owner_id), now=now) is None
+    ), "el fixture arranca sin caché afectiva"
+
+    fake = _FakeLLM(content=_BIG_JUMP_JSON)
+    result = await _reflect_async(
+        owner_id, settings=workers_settings, llm_factory=lambda _s: fake, now=now
+    )
+    assert result["reason"] == "ok", result
+
+    after = await read_affect_state(api_redis, str(owner_id), now=now)
+    assert after is not None, "la reflexión debe refrescar la caché viva de F2"
+    # Baseline del motor = 0.5; saciar suma el delta de la reflexión.
+    assert after.drives.coherence > 0.5, after.drives.as_dict()
+    # Los demás drives NO se tocan (saciar es de un solo eje).
+    assert after.drives.curiosity == pytest.approx(0.5)
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        drives = await conn.fetchval(
+            "SELECT drives FROM cortex_affect_snapshots WHERE owner_user_id = $1"
+            " ORDER BY created_at DESC LIMIT 1",
+            owner_id,
+        )
+    finally:
+        await conn.close()
+    import json as _json
+
+    parsed = _json.loads(drives) if isinstance(drives, str) else drives
+    assert parsed["coherence"] > 0.5, parsed
+
+
+@pytest.mark.asyncio
+async def test_un_fail_open_no_sacia_la_coherencia(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """Sólo una síntesis REAL calma el drive.
+
+    Si el fail-open lo saciara, el córtex se sentiría coherente por haber intentado
+    pensar — y con Ollama caído dejaría de tener hambre de reflexión para siempre.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=2)
+
+    from datetime import UTC, datetime
+
+    from api_server.cortex.affect_cache import read_affect_state
+    from workers.cortex_reflection import _reflect_async
+
+    now = datetime.now(UTC)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    boom = _BoomLLM()
+    result = await _reflect_async(
+        seed["owner_id"], settings=workers_settings, llm_factory=lambda _s: boom, now=now
+    )
+    assert result["reason"] == "ok:fail_open", result
+    assert await read_affect_state(api_redis, str(seed["owner_id"]), now=now) is None
+
+
+# ===========================================================================
+# Idempotencia por marca — no re-sintetizar los mismos 20 turnos
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_dos_pasadas_seguidas_no_re_sintetizan_los_mismos_turnos(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """La segunda pasada sin turnos nuevos es no-op, sin gastar LLM.
+
+    Antes, dos pasadas seguidas leían los MISMOS 20 turnos y producían una segunda
+    versión de identidad (con su deriva acotada aplicada otra vez) y una segunda
+    memoria de reflexión duplicada. Con el beat cada 6 h y un owner que no habla,
+    la identidad derivaba sola sin información nueva.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=4)
+    owner_id = seed["owner_id"]
+
+    from workers.cortex_reflection import _reflect_async
+
+    first = _FakeLLM(content=_BIG_JUMP_JSON)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    r1 = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: first)
+    assert r1["reason"] == "ok", r1
+
+    second = _FakeLLM(content=_BIG_JUMP_JSON)
+    r2 = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: second)
+    assert r2["reason"] == "skipped:no_new_turns", r2
+    assert second.calls == 0, "sin turnos nuevos no se gasta LLM"
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        version = await conn.fetchval(
+            "SELECT version FROM cortex_identity WHERE owner_user_id = $1", owner_id
+        )
+        reflections = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE user_id = $1"
+            " AND metadata->>'kind' = 'reflection'",
+            owner_id,
+        )
+    finally:
+        await conn.close()
+    assert version == 1, "la segunda pasada no debe versionar de nuevo"
+    assert reflections == 1, "ni duplicar la memoria de reflexión"
+
+
+@pytest.mark.asyncio
+async def test_un_turno_nuevo_desbloquea_la_siguiente_reflexion(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, api_redis: Redis
+) -> None:
+    """La marca no congela el bucle: en cuanto hay conversación nueva, reflexiona.
+
+    Es la mitad que impide que la idempotencia se convierta en un apagado
+    permanente — el modo de fallo simétrico y más difícil de notar.
+    """
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seed = await _seed_owner_with_turns(migrations_pg_dsn, n_turns=4)
+    owner_id = seed["owner_id"]
+
+    from workers.cortex_reflection import _reflect_async
+
+    first = _FakeLLM(content=_BIG_JUMP_JSON)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+    r1 = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: first)
+    assert r1["reason"] == "ok", r1
+
+    # Conversación nueva DESPUÉS de la reflexión.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        conv_id = await conn.fetchval(
+            "SELECT id FROM cortex_conversations WHERE owner_user_id = $1", owner_id
+        )
+        await conn.execute(
+            "INSERT INTO cortex_turns (id, conversation_id, owner_user_id, role, content,"
+            " created_at) VALUES ($1, $2, $3, 'user', $4, now() + interval '1 hour')",
+            uuid4(),
+            conv_id,
+            owner_id,
+            "turno nuevo: ahora me interesa la prosodia",
+        )
+    finally:
+        await conn.close()
+
+    third = _FakeLLM(content=_BIG_JUMP_JSON)
+    r3 = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: third)
+    assert r3["reason"] == "ok", r3
+    assert third.calls == 1
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        version = await conn.fetchval(
+            "SELECT version FROM cortex_identity WHERE owner_user_id = $1", owner_id
+        )
+        mark = await conn.fetchval(
+            "SELECT metadata->>'reflected_through' FROM memory_entries WHERE user_id = $1"
+            " AND metadata->>'kind' = 'reflection' ORDER BY created_at DESC LIMIT 1",
+            owner_id,
+        )
+    finally:
+        await conn.close()
+    assert version == 2
+
+    # La marca AVANZÓ pasado el turno nuevo, y eso vuelve a cerrar la puerta: una
+    # cuarta pasada sin conversación nueva es no-op otra vez. Es la comprobación que
+    # atrapa el fallo sutil de colgar la marca de la creación de la memoria:
+    # `persist_memory_candidates` DEDUPLICA por contenido, y como las tres pasadas
+    # comparten `summary`, la de la tercera no crea fila — la marca se habría
+    # quedado clavada en el valor de la primera y el bucle re-sintetizaría siempre.
+    assert mark, "la memoria de reflexión debe llevar la marca"
+    fourth = _FakeLLM(content=_BIG_JUMP_JSON)
+    r4 = await _reflect_async(owner_id, settings=workers_settings, llm_factory=lambda _s: fourth)
+    assert r4["reason"] == "skipped:no_new_turns", r4
+    assert fourth.calls == 0

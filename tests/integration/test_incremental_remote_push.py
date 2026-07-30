@@ -73,6 +73,34 @@ def test_incremental_push_reaches_remote(tmp_path: Path) -> None:
     assert _remote_has_branch(remote_bare, identity.plan_branch)
 
 
+def test_push_forbidden_never_reaches_the_remote(tmp_path: Path) -> None:
+    """`push_policy='forbidden'` = «este proyecto nunca empuja»: el push por-tarea
+    de T3 lo ignoraba y espejaba la rama al remoto en cada tarea aceptada."""
+    from workers.plan_git import PlanGitPolicies, plan_git_identity
+    from workers.plan_pr import _push_branch_to_remote_gated
+
+    plan_id = str(uuid4())
+    identity = plan_git_identity(plan_id, "feat", "p")
+    settings, remote_bare = _setup_local_bare_with_plan_branch(tmp_path, identity.plan_branch)
+
+    status = asyncio.run(
+        _push_branch_to_remote_gated(
+            settings,
+            tenant_slug="t",
+            project_slug="p",
+            plan_id=plan_id,
+            plan_slug="feat",
+            remote_url=str(remote_bare),
+            provider="generic",
+            auth_mode="none",
+            project_id=uuid4(),
+            policies=PlanGitPolicies(branch_push_mode="incremental", push_policy="forbidden"),
+        )
+    )
+    assert status == "skipped:push_forbidden"
+    assert not _remote_has_branch(remote_bare, identity.plan_branch)
+
+
 def test_final_only_defers_the_push(tmp_path: Path) -> None:
     from workers.plan_git import PlanGitPolicies, plan_git_identity
     from workers.plan_pr import _push_branch_to_remote_gated

@@ -12,12 +12,22 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Substrings flagging a known dev-only default — forbidden in staging/prod
 # (Plan 06.14 task_06_14_03 / secrets-config-5). Mirrors workers/config.py.
 _DEV_SECRET_MARKERS = ("changeme", "dev-only")
+
+# The CLOSED set of deployment environments, and the fail-CLOSED predicate — the
+# same posture `api_server.config` adopted in prod-09 task_prod09_02 (authz-2) and
+# that this service was left without. Written as "everything except dev" rather
+# than "in {staging, prod}" on purpose: the old shape meant any UNRECOGNISED value
+# (`production`, an empty var, `prod ` with a trailing space) silently meant dev
+# and skipped BOTH guards below — the BYPASSRLS DSN and the key that encrypts
+# every notification channel's secret at rest.
+_KNOWN_ENVIRONMENTS = frozenset({"dev", "staging", "prod"})
+_DEV_ENVIRONMENT = "dev"
 
 
 class Settings(BaseSettings):
@@ -49,13 +59,15 @@ class Settings(BaseSettings):
 
     # ----- Persistence (Plan 10 task_10_01 tables) -----
     database_url: str = Field(
-        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        default="postgresql+asyncpg://service_user:changeme-service-dev-only"
         "@localhost:5432/agentic_platform",
         description="PostgreSQL URL the dispatcher reads channels from and "
-        "writes notification_logs to. A BYPASSRLS role — the dispatcher "
-        "delivers across tenants, so it MUST validate row.tenant_id == "
-        "request.tenant_id at the task boundary (task_10_02) since RLS "
-        "cannot catch a tampered Celery payload.",
+        "writes notification_logs to. `service_user`: BYPASSRLS but NO DDL "
+        "(prod-14 task_05 / tenancy-2). BYPASSRLS is required — the dispatcher "
+        "delivers across tenants and must see every tenant's queue — so it MUST "
+        "validate row.tenant_id == request.tenant_id at the task boundary "
+        "(task_10_02) since RLS cannot catch a tampered Celery payload. DDL it "
+        "never needed: only Alembic connects as `migrations_user` now.",
     )
     events_redis_url: str = Field(
         default="redis://localhost:6379/0",
@@ -363,17 +375,46 @@ class Settings(BaseSettings):
 
     # ----- Misc -----
     environment: str = Field(
-        default="dev", description="Tag emitted in logs: dev | staging | prod."
+        default="dev",
+        description=(
+            "Deployment environment — a CLOSED set: dev | staging | prod. Any "
+            "other value fails startup: an unrecognised tag used to be treated as "
+            "`dev`, silently disabling both dev-secret guards below."
+        ),
     )
+
+    @field_validator("environment")
+    @classmethod
+    def _validate_environment(cls, value: str) -> str:
+        """Reject any environment tag outside ``{dev, staging, prod}``.
+
+        A FIELD validator (not a model one) so it runs BEFORE
+        :meth:`_forbid_dev_secrets_outside_dev`, which branches on this value.
+        Whitespace and case are normalised (`" PROD "` -> `"prod"`): a trailing
+        newline in a `.env` is an accident, not an intent to run unguarded.
+        """
+        normalised = value.strip().lower()
+        if normalised not in _KNOWN_ENVIRONMENTS:
+            raise ValueError(
+                f"NOTIFY_ENVIRONMENT={value!r} is not a known environment. "
+                f"Accepted values: {', '.join(sorted(_KNOWN_ENVIRONMENTS))}. "
+                "An unrecognised value used to be treated as 'dev', which "
+                "disabled the dev-secret guards."
+            )
+        return normalised
 
     @model_validator(mode="after")
     def _forbid_dev_secrets_outside_dev(self) -> Settings:
-        """Reject dev-default secrets in staging/prod (secrets-config-5).
+        """Reject dev-default secrets in anything that is not dev (secrets-config-5).
 
         Two never-plaintext secrets are guarded: the BYPASSRLS
         ``database_url`` credentials and the notification-encryption key.
+
+        FAIL-CLOSED: the predicate is ``environment == "dev"`` (skip), never
+        ``environment in {staging, prod}`` (enforce), so a future fourth
+        environment is guarded by default rather than by remembering a set literal.
         """
-        if self.environment not in {"staging", "prod"}:
+        if self.environment == _DEV_ENVIRONMENT:
             return self
         if any(marker in self.database_url.lower() for marker in _DEV_SECRET_MARKERS):
             raise ValueError(

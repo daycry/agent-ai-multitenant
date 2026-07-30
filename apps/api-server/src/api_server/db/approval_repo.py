@@ -15,11 +15,12 @@ marked `timed_out`, its execution aborted and its task blocked.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.domain import (
@@ -31,12 +32,61 @@ from api_server.db.domain import (
     Task,
     TaskStatus,
 )
+from api_server.db.platform_settings import get_platform_setting
 
 # Abort code stamped on an execution whose approval request timed out.
 APPROVAL_TIMEOUT_ABORT_CODE = "approval_timeout_exceeded"
 # Abort code stamped on an execution whose approval request was rejected
 # by a human reviewer (ADR 0020).
 APPROVAL_REJECTED_ABORT_CODE = "approval_rejected"
+
+# ---------------------------------------------------------------------------
+# Ventana de caducidad — platform setting (prod-03 task_prod03_05)
+# ---------------------------------------------------------------------------
+#: Horas que una solicitud `pending` puede esperar antes de caducar. El ADR 0016
+#: dejó 24 h como DEFAULT explícitamente parametrizable; el job de beat
+#: (`workers.expire_stale_approvals`) lo lee en cada pasada, así que cambiarlo
+#: surte efecto sin reiniciar nada.
+APPROVAL_TIMEOUT_HOURS_KEY = "approval.timeout_hours"
+DEFAULT_APPROVAL_TIMEOUT_HOURS = 24.0
+#: Suelo de cordura: por debajo de 15 min el sweep caducaría solicitudes que un
+#: humano ni ha tenido tiempo de ver (y aborta la ejecución al hacerlo).
+MIN_APPROVAL_TIMEOUT_HOURS = 0.25
+#: Techo: más de un mes esperando no es «pendiente», es abandonada.
+MAX_APPROVAL_TIMEOUT_HOURS = 720.0
+
+#: Interruptor vivo del sweep de caducidad (System Admin). ON por defecto: sin él
+#: una decisión que nadie toma cuelga la ejecución para siempre, que es
+#: literalmente lo que el job existe para evitar.
+APPROVAL_EXPIRY_ENABLED_KEY = "approval_expiry_enabled"
+DEFAULT_APPROVAL_EXPIRY_ENABLED = True
+
+
+async def get_approval_timeout_hours(session: AsyncSession) -> float:
+    """La ventana de caducidad configurada, clampada al rango sano.
+
+    Un valor no numérico o fuera de rango NO tumba el sweep ni se aplica a
+    ciegas: cae al default / al extremo más cercano. Un typo en la UI no puede
+    convertir el barrido en «caduca todo lo que lleve 1 segundo».
+    """
+    raw = await get_platform_setting(
+        session, APPROVAL_TIMEOUT_HOURS_KEY, default=DEFAULT_APPROVAL_TIMEOUT_HOURS
+    )
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_APPROVAL_TIMEOUT_HOURS
+    if not math.isfinite(hours):  # NaN / ±inf
+        return DEFAULT_APPROVAL_TIMEOUT_HOURS
+    return max(MIN_APPROVAL_TIMEOUT_HOURS, min(MAX_APPROVAL_TIMEOUT_HOURS, hours))
+
+
+async def get_approval_expiry_enabled(session: AsyncSession) -> bool:
+    """Whether the approval-expiry sweep is currently enabled."""
+    value = await get_platform_setting(
+        session, APPROVAL_EXPIRY_ENABLED_KEY, default=DEFAULT_APPROVAL_EXPIRY_ENABLED
+    )
+    return bool(value)
 
 
 # ADR 0114: la categoría del ask_human del agente. SIEMPRE requiere humano —
@@ -120,6 +170,51 @@ async def list_pending_approvals(session: AsyncSession) -> list[ApprovalRequest]
     return list(result.scalars().all())
 
 
+async def claim_pending_approval(
+    session: AsyncSession,
+    request_id: UUID,
+    *,
+    new_status: ApprovalRequestStatus,
+    resolved_at: datetime,
+    resolver_id: UUID | None = None,
+    reason: str | None = None,
+) -> bool:
+    """Reclamar ATÓMICAMENTE una solicitud `pending` para `new_status`.
+
+    El guard compartido por las tres vías que cierran una solicitud (aprobar,
+    rechazar, caducar). Es un `UPDATE ... WHERE id=:id AND status='pending'`:
+    la comprobación y la escritura ocurren en la MISMA sentencia, así que la
+    decide el motor con el row lock y no una lectura previa del proceso.
+
+    Devuelve ``True`` si esta llamada ganó la transición (1 fila afectada) y
+    ``False`` si la perdió (0 filas: otro revisor, o el job de caducidad, llegó
+    primero). El llamante solo aplica las transiciones de Execution/Task cuando
+    ganó — el bug era justo ese: dos resoluciones simultáneas leían `pending`
+    las dos, pasaban las dos y escribían transiciones contradictorias
+    (ejecución `done` Y `aborted`, tarea `backlog` Y `blocked`).
+
+    En READ COMMITTED el segundo UPDATE se bloquea en el row lock y, al
+    liberarse, RE-EVALÚA el `WHERE` contra la fila nueva: ve `approved` y afecta
+    0 filas. No hace falta `SERIALIZABLE` ni un `SELECT FOR UPDATE` aparte.
+    """
+    result = await session.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == request_id,
+            ApprovalRequest.status == ApprovalRequestStatus.PENDING,
+        )
+        .values(
+            status=new_status,
+            resolved_at=resolved_at,
+            resolved_by=resolver_id,
+            reason=reason,
+        )
+        .returning(ApprovalRequest.id)
+        .execution_options(synchronize_session=False)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def resolve_approval(
     session: AsyncSession,
     request: ApprovalRequest,
@@ -127,7 +222,7 @@ async def resolve_approval(
     approved: bool,
     resolver_id: UUID | None = None,
     reason: str | None = None,
-) -> ApprovalRequest:
+) -> ApprovalRequest | None:
     """Approve or reject a pending request — ADR 0020.
 
     APPROVE: the original execution closes as `done`; the task goes
@@ -139,11 +234,26 @@ async def resolve_approval(
     will not be retried automatically. The reviewer's `reason` lives
     on the `ApprovalRequest` for audit (Opción B del ADR 0020, no
     implementada todavía: pasarlo de vuelta al agente como feedback).
+
+    Devuelve ``None`` cuando la solicitud YA no estaba `pending` — otro revisor
+    o el job de caducidad ganó la transición (prod-03 task_prod03_04). En ese
+    caso NADA se muta: es la señal con la que el router responde 409 sin tener
+    que leer el estado por su cuenta, que es de donde salía la carrera.
     """
-    request.status = ApprovalRequestStatus.APPROVED if approved else ApprovalRequestStatus.REJECTED
-    request.resolved_at = datetime.now(UTC)
-    request.resolved_by = resolver_id
-    request.reason = reason
+    now = datetime.now(UTC)
+    won = await claim_pending_approval(
+        session,
+        request.id,
+        new_status=(ApprovalRequestStatus.APPROVED if approved else ApprovalRequestStatus.REJECTED),
+        resolved_at=now,
+        resolver_id=resolver_id,
+        reason=reason,
+    )
+    if not won:
+        return None
+    # El UPDATE fue por Core (synchronize_session=False): la instancia en memoria
+    # sigue con el estado viejo hasta que se relee.
+    await session.refresh(request)
 
     execution = await session.get(Execution, request.execution_id)
     task = await session.get(Task, request.task_id)
@@ -167,33 +277,86 @@ async def resolve_approval(
     return request
 
 
+def _stale_pending_filter(cutoff: datetime, tenant_id: UUID | None) -> list[ColumnElement[bool]]:
+    """Las dos condiciones de «solicitud caducable», más el scope de tenant."""
+    conditions: list[ColumnElement[bool]] = [
+        ApprovalRequest.status == ApprovalRequestStatus.PENDING,
+        ApprovalRequest.requested_at < cutoff,
+    ]
+    if tenant_id is not None:
+        conditions.append(ApprovalRequest.tenant_id == tenant_id)
+    return conditions
+
+
+async def tenants_with_stale_approvals(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    timeout_hours: float = DEFAULT_APPROVAL_TIMEOUT_HOURS,
+) -> list[UUID]:
+    """Los tenants que tienen alguna solicitud caducable (prod-03 task_prod03_05).
+
+    El job de beat corre con el rol BYPASSRLS del worker, así que RLS no le
+    acota nada: para no barrer «todo a la vez» y respetar el Principio nº1
+    (ninguna escritura sin tenant), pide primero la lista y luego caduca
+    **tenant a tenant**, cada uno en su propia transacción. Un tenant que falle
+    no arrastra a los demás.
+    """
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(hours=timeout_hours)
+    result = await session.execute(
+        select(ApprovalRequest.tenant_id)
+        .where(*_stale_pending_filter(cutoff, None))
+        .group_by(ApprovalRequest.tenant_id)
+    )
+    return list(result.scalars().all())
+
+
 async def expire_stale_requests(
     session: AsyncSession,
     *,
     now: datetime | None = None,
-    timeout_hours: float = 24.0,
+    timeout_hours: float = DEFAULT_APPROVAL_TIMEOUT_HOURS,
+    tenant_id: UUID | None = None,
 ) -> list[ApprovalRequest]:
     """Time out every pending request older than `timeout_hours`.
 
     A timed-out request aborts its execution and blocks its task — a
     decision nobody made cannot leave the run hanging forever. Returns
     the requests that were expired.
+
+    ``tenant_id`` acota el barrido a UN tenant (Principio nº1: el job corre con
+    el rol BYPASSRLS del worker, donde RLS no acota nada, así que el scope tiene
+    que ser explícito). ``None`` barre todos los tenants — la firma que usaban
+    los tests del motor desde el Plan 02.
+
+    Cada fila se cierra con el MISMO guard atómico que la resolución humana
+    (:func:`claim_pending_approval`), así que la carrera aprobar-vs-timeout la
+    decide la base de datos: si un revisor resolvió entre el SELECT y el UPDATE,
+    esta pasada la salta en vez de pisarle la decisión (riesgo 6 del plan).
     """
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(hours=timeout_hours)
+    reason = f"no response within {timeout_hours:g} h"
 
     result = await session.execute(
-        select(ApprovalRequest).where(
-            ApprovalRequest.status == ApprovalRequestStatus.PENDING,
-            ApprovalRequest.requested_at < cutoff,
-        )
+        select(ApprovalRequest).where(*_stale_pending_filter(cutoff, tenant_id))
     )
-    stale = list(result.scalars().all())
+    candidates = list(result.scalars().all())
 
-    for request in stale:
-        request.status = ApprovalRequestStatus.TIMED_OUT
-        request.resolved_at = now
-        request.reason = f"no response within {timeout_hours:g} h"
+    expired: list[ApprovalRequest] = []
+    for request in candidates:
+        won = await claim_pending_approval(
+            session,
+            request.id,
+            new_status=ApprovalRequestStatus.TIMED_OUT,
+            resolved_at=now,
+            reason=reason,
+        )
+        if not won:
+            # Un humano la resolvió mientras barríamos. Su decisión gana.
+            continue
+        await session.refresh(request)
 
         execution = await session.get(Execution, request.execution_id)
         if execution is not None:
@@ -202,6 +365,7 @@ async def expire_stale_requests(
         task = await session.get(Task, request.task_id)
         if task is not None:
             task.status = TaskStatus.BLOCKED
+        expired.append(request)
 
     await session.flush()
-    return stale
+    return expired

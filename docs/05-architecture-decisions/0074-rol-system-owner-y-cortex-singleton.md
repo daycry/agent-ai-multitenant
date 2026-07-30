@@ -12,12 +12,35 @@ supersedes: []
 
 # ADR 0074 — Rol `system_owner` y Córtex: identidad global singleton sobre BYPASSRLS
 
-> **Estado: F0 `accepted` + IMPLEMENTADO (2026-06-23); F1-F5 `proposed` (gated).** El operador
-> aprobó el **cimiento F0** (rol `system_owner`: `users.is_system_owner` singleton, claim JWT
-> `own`, `require_system_owner`/`require_admin_or_owner` DB-authoritative, bootstrap del primer
-> usuario, `/me`). F0 **NO** crea tablas BYPASSRLS ni bucles autónomos. **F1-F5** (memoria
-> cognitiva, afecto, identidad, autonomía, voz) — que sí introducen la excepción al Principio 1
-> y egress/coste autónomos — **siguen requiriendo aprobación por fase antes de implementar.**
+> **Estado: `accepted-f0` + IMPLEMENTADO — F0 el 2026-06-23, F1-F5 entre el 2026-06-24 y el
+> 2026-07-06.** El operador aprobó primero el **cimiento F0** (rol `system_owner`:
+> `users.is_system_owner` singleton, claim JWT `own`,
+> `require_system_owner`/`require_admin_or_owner` DB-authoritative, bootstrap del primer usuario,
+> `/me`), que **NO** crea tablas BYPASSRLS ni bucles autónomos; y dio después luz verde a **F1-F5**
+> (memoria cognitiva, afecto, identidad, autonomía, voz), que sí introducen la excepción al
+> Principio 1 y egress/coste autónomos.
+>
+> **Banner corregido el 2026-07-30: decía «F1-F5 `proposed` (gated)» y «siguen requiriendo
+> aprobación por fase antes de implementar» con las cinco fases desplegadas.** Era el mismo
+> defecto que la auditoría del córtex describe como «documentos que afirman que algo no existe
+> mientras el código está desplegado». Lo implementado, fase por fase, con sus divergencias
+> declaradas: [índice de fases](../roadmap/cortex-fases.md) y las cinco entradas de changelog
+> ([F1](../07-changelog/cortex-f1-memoria-cognitiva.md),
+> [F2](../07-changelog/cortex-f2-afectivo.md),
+> [F3](../07-changelog/cortex-f3-identidad.md),
+> [F4](../07-changelog/cortex-f4-autonomia.md),
+> [F5](../07-changelog/cortex-f5-voz-avatar.md)).
+>
+> Que las fases estén implementadas **no las declara cerradas**: F2-F5 conservan casillas abiertas
+> con hueco identificado en [gaps-cortex-2026-07-27.md](../roadmap/gaps-cortex-2026-07-27.md), y la
+> más relevante para la seguridad de este ADR es que **F4 salió sin owner-approval gate ni tope de
+> gasto en USD** — razón por la que `cortex.autonomy_enabled` sigue OFF.
+>
+> **Sobre el valor `accepted-f0` del frontmatter:** es el único del repo (los otros 132 ADR usan
+> `accepted`) y se conserva a propósito, como registro de que este ADR se aprobó **en dos tiempos**
+> —cimiento primero, excepción a RLS después— y no de una vez. No se ha inventado un `accepted-f5`:
+> el corpus no usa estados por fase, y las fases se trazan por su plan y su changelog, no por el
+> `status` del ADR.
 
 ## Contexto
 

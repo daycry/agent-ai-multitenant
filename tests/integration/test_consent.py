@@ -24,6 +24,7 @@ drive the API via AsyncClient.
 from __future__ import annotations
 
 import asyncio
+import json
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -192,6 +193,39 @@ async def _count_audit(dsn: str, tenant_id: UUID, action: str) -> int:
         await conn.close()
 
 
+async def _audit_rows(dsn: str, tenant_id: UUID, action: str) -> list[dict]:
+    """The audit rows themselves — ``actor`` + parsed ``detail``.
+
+    ``_count_audit`` only ever answered "how many"; human_09_01's last
+    checklist line is "el audit_log refleja QUIÉN aprobó QUÉ permiso", which
+    needs the two columns that carry the answer. ``detail`` is JSONB and
+    asyncpg hands it over as text unless a codec is registered, so we parse.
+    """
+    conn = await asyncpg.connect(dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT actor, detail, installation_id, listing_id"
+            " FROM marketplace_audit_entries"
+            " WHERE tenant_id = $1 AND action = $2 ORDER BY created_at",
+            tenant_id,
+            action,
+        )
+    finally:
+        await conn.close()
+    parsed: list[dict] = []
+    for row in rows:
+        detail = row["detail"]
+        parsed.append(
+            {
+                "actor": row["actor"],
+                "installation_id": row["installation_id"],
+                "listing_id": row["listing_id"],
+                "detail": json.loads(detail) if isinstance(detail, str) else detail,
+            }
+        )
+    return parsed
+
+
 async def _install(client: AsyncClient, listing_id: UUID, headers: dict[str, str]) -> dict:
     resp = await client.post(
         "/marketplace/installations",
@@ -298,6 +332,29 @@ async def test_grant_all_permissions_enables_and_audits(
     assert await _count_audit(migrations_pg_dsn, seeded["tenant_a"], "consent") == 1
     assert await _count_audit(migrations_pg_dsn, seeded["tenant_a"], "consent_denied") == 0
 
+    # human_09_01: "el audit_log refleja QUIÉN aprobó QUÉ permiso". Contar filas
+    # por action no responde ni a quién ni a qué — estos dos asserts sí.
+    rows = await _audit_rows(migrations_pg_dsn, seeded["tenant_a"], "consent")
+    assert len(rows) == 1
+    entry = rows[0]
+    # QUIÉN: el actor es el admin autenticado, en el formato "user:<uuid>".
+    assert entry["actor"] == f"user:{seeded['admin_a']}"
+    # QUÉ: la decisión concreta, permiso a permiso.
+    assert entry["detail"]["decisions"] == {
+        "allowed_domains": "grant",
+        "network_policy": "grant",
+    }
+    assert entry["detail"]["enabled"] is True
+    assert entry["detail"]["denied_permissions"] == []
+    # Y el permiso granteado viaja con su VALOR, no solo con su tipo (un
+    # audit que dijera "network_policy" sin decir "restricted" no serviría
+    # para reconstruir qué se autorizó).
+    granted = {p["type"]: p["value"] for p in entry["detail"]["granted_permissions"]}
+    assert granted == {"allowed_domains": ["api.x.com"], "network_policy": "restricted"}
+    # La fila apunta a la instalación y al listing concretos.
+    assert str(entry["installation_id"]) == install_id
+    assert entry["listing_id"] == seeded["community_listing"]
+
 
 # ===========================================================================
 # Partial deny keeps the install disabled + audits consent_denied
@@ -335,6 +392,43 @@ async def test_partial_deny_keeps_disabled_and_audits(
     # Both a consent AND a consent_denied audit row were written.
     assert await _count_audit(migrations_pg_dsn, seeded["tenant_a"], "consent") == 1
     assert await _count_audit(migrations_pg_dsn, seeded["tenant_a"], "consent_denied") == 1
+
+    # QUIÉN rechazó QUÉ permiso — la mitad negativa de human_09_01.
+    denied_rows = await _audit_rows(migrations_pg_dsn, seeded["tenant_a"], "consent_denied")
+    assert len(denied_rows) == 1
+    entry = denied_rows[0]
+    assert entry["actor"] == f"user:{seeded['admin_a']}"
+    assert entry["detail"]["decisions"] == {
+        "allowed_domains": "grant",
+        "network_policy": "deny",
+    }
+    # El permiso RECHAZADO queda nombrado con su valor en la fila inmutable.
+    denied_perms = {p["type"]: p["value"] for p in entry["detail"]["denied_permissions"]}
+    assert denied_perms == {"network_policy": "restricted"}
+    granted_perms = {p["type"]: p["value"] for p in entry["detail"]["granted_permissions"]}
+    assert granted_perms == {"allowed_domains": ["api.x.com"]}
+    assert entry["detail"]["enabled"] is False
+
+    # DIVERGENCIA CON EL CHECKLIST HUMANO — se deja constancia, NO se cambia
+    # la implementación. human_09_01 dice "Si se rechaza un permiso, la
+    # instalación se cancela"; lo implementado la deja DISABLED (status
+    # 'disabled', fila viva, deleted_at NULL, status != 'revoked'), no
+    # cancelada/borrada. Es una elección razonable —el rechazo es
+    # REVERSIBLE: basta un grant posterior para habilitarla sin reinstalar—
+    # pero NO es lo que el checklist promete, así que quien firme el test
+    # humano debe firmar esta lectura, no la del plan.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        row = await conn.fetchrow(
+            "SELECT status, deleted_at FROM marketplace_installations WHERE id = $1",
+            UUID(install_id),
+        )
+    finally:
+        await conn.close()
+    assert row is not None, "la instalación NO se borra: el rechazo la deja viva y disabled"
+    assert row["status"] == "disabled"
+    assert row["status"] != "revoked"
+    assert row["deleted_at"] is None
 
 
 @pytest.mark.asyncio

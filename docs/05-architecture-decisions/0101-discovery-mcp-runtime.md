@@ -56,7 +56,7 @@ La pregunta de arquitectura que este ADR resuelve: **¿debe el runtime hacer dis
 anunciarlas al LLM automáticamente (revisando la decisión del ADR 0052), o mantener la importación
 manual y limitarse a arreglar la persistencia del schema?**
 
-## Decisión propuesta (pendiente de aprobación)
+## Decisión (aprobada)
 
 **Opción A — Mantener la importación manual del ADR 0052 y corregir la persistencia del
 `input_schema`.** No se introduce discovery MCP en runtime ni auto-visibilidad de tools no importadas.

@@ -16,8 +16,8 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "longenoughpw";
 async function loginAndGoToCatalog(page: import("@playwright/test").Page) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(ADMIN_EMAIL);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByLabel(/^(password|contraseña)$/i).fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 
   // Navigate via the dashboard's Agentes button so we cover the

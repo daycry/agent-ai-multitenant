@@ -7,8 +7,10 @@ from the admin panel. This suite exercises the backend half through the real
 FastAPI app + the real test Postgres so the RBAC / RLS boundary is the one under
 test:
 
-  * GET  /admin/backup/destinations          — readable by any authenticated
-    member (empty list when unset).
+  * GET  /admin/backup/destinations          — System-Admin only (empty list
+    when unset). prod-09 task_prod09_01 closed the earlier
+    ``require_tenant_member`` read: the config carries no credential, but it
+    names the buckets/hosts every tenant's data is copied to.
   * PUT  /admin/backup/destinations           — System-Admin-only (a Tenant
     Admin is 403); validates EVERY item (unknown type / missing required field /
     any secret-looking field -> 422, nothing persisted) and PERSISTS the list.
@@ -172,12 +174,12 @@ _SFTP_DEST = {
 
 
 # ===========================================================================
-# GET — empty when unset; readable by any member.
+# GET — empty when unset; System-Admin only.
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_get_destinations_empty_when_unset(configured_app, migrations_pg_dsn: str) -> None:
     seeded = await _seed(migrations_pg_dsn)
-    token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    token = await _mint_token(seeded["sysadmin"], None, is_system_admin=True)
     async with _client(configured_app) as client:
         resp = await client.get(
             "/admin/backup/destinations",
@@ -185,6 +187,24 @@ async def test_get_destinations_empty_when_unset(configured_app, migrations_pg_d
         )
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"destinations": []}
+
+
+@pytest.mark.asyncio
+async def test_get_destinations_is_not_readable_by_a_tenant_admin(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """prod-09 task_prod09_01 (authz-1): the destination list holds no
+    credential, but it DOES name the buckets/hosts every tenant's data is copied
+    to — a map of the off-site copies. It used to be readable by any tenant
+    member; the whole ``/admin/backup`` surface is System-Admin only now."""
+    seeded = await _seed(migrations_pg_dsn)
+    tenant_admin_token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    async with _client(configured_app) as client:
+        resp = await client.get(
+            "/admin/backup/destinations",
+            headers={"Authorization": f"Bearer {tenant_admin_token}"},
+        )
+    assert resp.status_code == 403, resp.text
 
 
 # ===========================================================================

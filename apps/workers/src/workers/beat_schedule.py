@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 # production incident, not a warning.
 _STRICT_ENVIRONMENTS = frozenset({"staging", "prod"})
 
+# prod-03 task_prod03_05: el nombre de la entrada del sweep de caducidad de
+# aprobaciones. Constante y NO literal repetido, como PRICE_SYNC / BACKUP: se
+# define ANTES del dict porque es su propia clave, así que las dos no pueden
+# divergir (los demás constantes se declaran abajo y sí podrían).
+APPROVAL_EXPIRY_BEAT_ENTRY = "expire-stale-approvals-every-15m"
+
 # Each schedule entry is the standard Celery shape:
 # `{task: <name>, schedule: <celery.schedules.*>, options: {queue: <name>}}`.
 #
@@ -79,6 +85,20 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "workers.expire_review_runtimes",
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "review"},
+    },
+    # prod-03 task_prod03_05 — caducidad de solicitudes de aprobación sin
+    # atender. `expire_stale_requests` estaba implementada desde el Plan 02 y
+    # NADIE la llamaba: una solicitud que nadie contesta dejaba la ejecución en
+    # `awaiting_human_approval` para siempre (el ADR 0016 ya lo anotaba como
+    # «falta el job»). Cada 15 min, cola `default`: son escrituras de dominio
+    # (fila + ejecución + tarea), sin efectos de infra. La VENTANA (default 24 h)
+    # y el interruptor son platform settings que el task lee en cada pasada, así
+    # que cambiarlos no pide reiniciar el beat. Una pasada sin nada vencido es un
+    # SELECT barato.
+    APPROVAL_EXPIRY_BEAT_ENTRY: {
+        "task": "workers.expire_stale_approvals",
+        "schedule": schedule(run_every=900.0),
+        "options": {"queue": "default"},
     },
     # prod-06 task_prod06_budget_01 — per-tenant budget sweep: re-derive the
     # auto-pause flags + fire threshold alerts. The post-execution hook keeps a

@@ -176,8 +176,24 @@ def test_decode_rejects_human_jwt(configured_app) -> None:
         algorithm=settings.jwt_algorithm,
     )
 
-    with pytest.raises(InvalidAgentTokenError, match="not an agent token"):
+    # Since prod-09 task_prod09_03 the two token families are signed with
+    # DIFFERENT keys, so a human JWT no longer even reaches the `kind` check —
+    # it dies at the signature. That is strictly stronger, so assert the
+    # rejection without pinning the (now signature-level) message.
+    with pytest.raises(InvalidAgentTokenError):
         decode_agent_token(human_token)
+
+    # And the `kind=agent` discriminator still holds INSIDE the internal signing
+    # domain: a token signed with the internal secret but without the claim
+    # (i.e. an internal caller trying to pass a session-shaped token) is
+    # rejected for what it is, not just for its signature.
+    same_key_no_kind = jwt.encode(
+        human_claims,
+        settings.internal_token_secret.get_secret_value(),
+        algorithm=settings.jwt_algorithm,
+    )
+    with pytest.raises(InvalidAgentTokenError, match="not an agent token"):
+        decode_agent_token(same_key_no_kind)
 
 
 def test_decode_rejects_expired(configured_app) -> None:
@@ -271,7 +287,13 @@ async def test_health_endpoint_rejects_missing_header(configured_app) -> None:
 @pytest.mark.asyncio
 async def test_health_endpoint_rejects_human_jwt(configured_app, migrations_pg_dsn: str) -> None:
     """Defence in depth: even if a human's JWT leaks into a sandbox
-    container, /internal/agent/* refuses it."""
+    container, /internal/agent/* refuses it.
+
+    Since prod-09 task_prod09_03 the rejection happens at the SIGNATURE (the two
+    token families use different HMAC keys) instead of at the ``kind`` claim, so
+    the assertion is on the 401 + the fact that the token bought nothing, not on
+    the old message. The `kind` discriminator is still tested inside the internal
+    signing domain by ``test_decode_rejects_a_human_jwt``."""
     from api_server.auth.jwt import encode_jwt
 
     seeded = await _seed_agent(migrations_pg_dsn)
@@ -291,7 +313,7 @@ async def test_health_endpoint_rejects_human_jwt(configured_app, migrations_pg_d
         )
 
     assert resp.status_code == 401
-    assert "not an agent token" in resp.text
+    assert "invalid agent token" in resp.text
 
 
 @pytest.mark.asyncio

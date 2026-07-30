@@ -631,10 +631,20 @@ class Tool(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
 # =============================================================================
 # Agent-Skill (M:N junction)
 # =============================================================================
-class AgentSkill(Base, TimestampMixin):
-    """Composite PK (agent_id, skill_id). No tenant_id column because both
-    parents are tenant-scoped and ON DELETE CASCADE cleans up cross-tenant
-    leftovers; RLS is enforced via the parent row visibility."""
+class AgentSkill(Base, TenantScopedMixin, TimestampMixin):
+    """Composite PK (agent_id, skill_id) + `tenant_id` denormalizado.
+
+    Hasta la migración 0124 esta tabla NO tenía `tenant_id` — «RLS vía la
+    visibilidad del padre», decía la 0002. Eso valía para el borrado en cascada
+    y no para nada más: sin columna no hay policy, y a nivel de BD cualquier
+    sesión leía las asignaciones de otro tenant (las FK se comprueban como
+    propietario e IGNORAN la RLS, así que tampoco protegían la escritura).
+
+    **No hay que pasar `tenant_id` al construir la fila**: el trigger
+    `trg_agent_skills_set_tenant_id` lo DERIVA del agente propietario y rechaza
+    cualquier valor que lo contradiga — también para los roles BYPASSRLS, que
+    son los que ninguna policy vigila.
+    """
 
     __tablename__ = "agent_skills"
     __table_args__ = (PrimaryKeyConstraint("agent_id", "skill_id", name="pk_agent_skills"),)
@@ -657,7 +667,14 @@ class AgentSkill(Base, TimestampMixin):
 # =============================================================================
 # Agent-Tool (M:N junction)
 # =============================================================================
-class AgentTool(Base, TimestampMixin):
+class AgentTool(Base, TenantScopedMixin, TimestampMixin):
+    """Junction agente↔tool + `tenant_id` denormalizado (migración 0124).
+
+    `config_override` es el dato con valor real de esta tabla, y era legible
+    cross-tenant antes de la 0124. Igual que en :class:`AgentSkill`, el
+    `tenant_id` lo estampa el trigger desde el agente propietario.
+    """
+
     __tablename__ = "agent_tools"
     __table_args__ = (PrimaryKeyConstraint("agent_id", "tool_id", name="pk_agent_tools"),)
 
@@ -740,7 +757,14 @@ class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
 # =============================================================================
 # TeamMember (M:N junction)
 # =============================================================================
-class TeamMember(Base, TimestampMixin):
+class TeamMember(Base, TenantScopedMixin, TimestampMixin):
+    """Junction equipo↔agente + `tenant_id` denormalizado (migración 0124).
+
+    El `tenant_id` se deriva del EQUIPO, no del agente: un agente built-in de
+    plataforma puede ser miembro del equipo de un tenant (`_verify_agent_visible`
+    lo permite a propósito), y esa membresía es del tenant, no de la plataforma.
+    """
+
     __tablename__ = "team_members"
     __table_args__ = (PrimaryKeyConstraint("team_id", "agent_id", name="pk_team_members"),)
 
@@ -1083,7 +1107,14 @@ class Task(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 # =============================================================================
 # TaskDependency (self-M:N: task depends on tasks)
 # =============================================================================
-class TaskDependency(Base):
+class TaskDependency(Base, TenantScopedMixin):
+    """Aristas del DAG + `tenant_id` denormalizado (migración 0124).
+
+    Su trigger exige además que AMBAS tareas sean del mismo tenant: una
+    dependencia cross-tenant es un DAG imposible y ni un servicio BYPASSRLS
+    debería poder crearla.
+    """
+
     __tablename__ = "task_dependencies"
     __table_args__ = (
         PrimaryKeyConstraint("task_id", "depends_on_task_id", name="pk_task_dependencies"),

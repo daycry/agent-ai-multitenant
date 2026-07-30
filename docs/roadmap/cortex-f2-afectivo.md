@@ -89,7 +89,7 @@ Columnas clave:
   - Ficheros: crear `apps/api-server/migrations/versions/20260623_0092_cortex_affect_snapshots.py` (revision `0092_cortex_affect_snapshots`, `down_revision="0091_system_owner_f0"`). `upgrade()` crea tabla + índices (patrón de `20260618_0084_memory_entities.py`); `downgrade()` los retira. NO añadir `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` (consciente: tenant-less BYPASSRLS).
   - Aceptación: `alembic upgrade head` y `downgrade -1` pasan; el índice UNIQUE parcial rechaza el duplicado por turno.
 
-- [ ] **Modelo ORM `CortexAffectSnapshot`**
+- [x] **Modelo ORM `CortexAffectSnapshot`**
   - TDD: en el test anterior, importa `from api_server.db.cortex_affect import CortexAffectSnapshot` y verifica `__tablename__`, columnas y que `Base.metadata` lo incluye (autogenerate-clean: `alembic check` no detecta drift).
   - Ficheros: crear `apps/api-server/src/api_server/db/cortex_affect.py` (hereda `Base, UUIDPrimaryKeyMixin, TimestampMixin`; NO `TenantScopedMixin`, NO `SoftDeleteMixin`); registrar import en `apps/api-server/migrations/env.py` (junto a `from api_server.db import models`) y en `apps/api-server/src/api_server/db/models.py` (añadir `from api_server.db.cortex_affect import CortexAffectSnapshot  # noqa: F401`) para que `Base.metadata` lo cargue.
   - Aceptación: el modelo mapea la tabla 1:1; `alembic check` limpio.
@@ -123,7 +123,7 @@ Columnas clave:
   - TDD: test parametrizado con cuadrantes PAD canónicos → etiqueta esperada (p.ej. valence alto + arousal alto ⇒ "alegría"/"joy"; valence bajo + arousal bajo ⇒ "abatimiento"/"down"); idioma vía parámetro `language ∈ {es,en}`.
   - Aceptación: mapeo PAD→label determinista, bilingüe, documentado como derivado (no fuente de verdad).
 
-- [ ] **Suite de calibración (interacciones canónicas → rangos PAD esperados)**
+- [x] **Suite de calibración (interacciones canónicas → rangos PAD esperados)**
   - TDD: crear `apps/api-server/tests/unit/test_cortex_affective_calibration.py`; tabla de ~8 escenarios canónicos (elogio del owner, crítica, pregunta curiosa que sacia `curiosity`, despedida fría que baja `bonding`, etc.) con `delta` esperado en rangos; aplica `apply_event`+`update_mood` y asserta que el estado cae en el rango esperado.
   - Aceptación: regresión que detecta cambios involuntarios en la dinámica (ADR 0075 §7).
 
@@ -150,7 +150,7 @@ Columnas clave:
   - Ficheros: crear `apps/workers/src/workers/cortex_affect.py`. `@app.task(name="workers.cortex_distill_affect")` → `asyncio.run(_distill_affect_async(...))`; `_default_llm_factory` = `OllamaProvider(base_url=settings.cortex_affect_llm_base_url, default_model=settings.cortex_affect_llm_model)` (patrón `_default_llm_factory` de `workers/memorizer.py`); usa `create_async_engine(settings.database_url)` (BYPASSRLS) + sessionmaker; `_distill_affect_async` envuelto en `try/except` global que loguea y devuelve `error:` (nunca crashea el worker). El prompt al distilador incluye turno + drives + identidad y pide SOLO el JSON de delta+razón.
   - Aceptación: distila o falla-abierto; idempotente; sin egress (Ollama local); el catálogo LLM cerrado (ADR 0021) intacto.
 
-- [ ] **Settings del worker + registro del módulo**
+- [x] **Settings del worker + registro del módulo**
   - TDD: test en `apps/workers/tests/test_cortex_affect_task.py` (o un `test_config`) que `Settings()` expone `cortex_affect_llm_base_url` (default Ollama local) y `cortex_affect_llm_model`, y que `cortex_distill_affect` está en `app.conf.imports`.
   - Ficheros: extender `apps/workers/src/workers/config.py` (dos `Field` nuevos, sección "Córtex F2"); añadir `"workers.cortex_affect"` a `imports` en `apps/workers/src/workers/celery_app.py`.
   - Aceptación: la task se registra al boot; URL/modelo operator-tunable, default local sin egress.
@@ -180,12 +180,12 @@ Columnas clave:
   - Ficheros: crear `apps/api-server/src/api_server/routers/cortex_mind.py` (`APIRouter(prefix="/owner/cortex")`, `dependencies=[Depends(require_system_owner)]`); registrar en `apps/api-server/src/api_server/main.py` (`include_router`). Schemas en `apps/api-server/src/api_server/schemas/cortex_mind.py`.
   - Aceptación: 403 para no-owner; 200 con snapshot; cross-owner aislado.
 
-- [ ] **`GET /owner/cortex/affect/timeseries`**
+- [x] **`GET /owner/cortex/affect/timeseries`**
   - TDD: test que inserta N snapshots del owner (vía sessionmaker BYPASSRLS) + 1 de otro owner; el endpoint devuelve SOLO los del owner en orden cronológico, respetando `since/until/limit`; cross-owner verificado.
   - Ficheros: añadir el handler en `cortex_mind.py` con una query que filtra `owner_user_id == principal.user_id` explícito (usa `get_admin_sessionmaker`, tenant-less BYPASSRLS).
   - Aceptación: serie temporal correcta y aislada por owner.
 
-- [ ] **`GET /owner/cortex/episodes?emotion=`**
+- [x] **`GET /owner/cortex/episodes?emotion=`**
   - TDD: test que crea memorias episódicas emocionales del owner en `memory_entries` (scope=private, user*id=owner, metadata*.cortex=true, metadata\_.emotion={…,mood_label}) y verifica el filtrado por `emotion`==`mood_label`, que incluye `appraisal_reason`, y que NUNCA devuelve memorias de otro usuario (filtro `user_id`).
   - Ficheros: añadir handler en `cortex_mind.py`; query sobre `memory_entries` filtrando `user_id=owner` + `scope='private'` + `metadata_->>'cortex'='true'` + (opcional) `metadata_->'emotion'->>'mood_label' = :emotion`.
   - Aceptación: mapa de episodios alimentado; aislamiento por usuario.
@@ -200,12 +200,13 @@ Columnas clave:
 
 ## FASE H — Panel de Mente (frontend, copy honesto)
 
-- [ ] **Hooks de datos + cliente WS**
+- [x] **Hooks de datos + cliente WS**
   - TDD: crear `apps/admin-panel/lib/cortex-affect.ts` con helpers puros testeados con vitest: `moodLabelColor(label)`, `padToCanvasXY(valence, arousal)` (proyección al espacio 2D), `trailFromSnapshots(snapshots)` (estela). Tests en `apps/admin-panel/lib/cortex-affect.test.ts`.
   - Ficheros: `apps/admin-panel/lib/cortex-affect.ts` (+ test). Hook `useCortexMind` / `useCortexTimeseries` (TanStack Query sobre `/owner/cortex/mind` y `/affect/timeseries`) y `useCortexTelemetry` (WS, patrón de cualquier hook WS existente del repo).
   - Aceptación: helpers puros verdes; los hooks consumen los endpoints gated.
 
 - [ ] **Componente `MindPanel` montado en `app/admin/cortex` (de F1)**
+  - ⏳ **Pendiente (2026-07-30):** falta el test de render del panel COMPLETO (diales PAD + banner honesto con datos mockeados; el vitest que hay cubre el espacio PAD 2D y la tarjeta de curiosidad, no los diales) y el panel sigue ES-only fuera del aviso honesto y del espacio PAD, así que el requisito ES+EN no se cumple.
   - TDD: test de render con vitest/RTL (`apps/admin-panel/components/cortex/mind-panel.test.tsx`) que verifica que SIEMPRE se renderiza el copy honesto ("modelo computacional de afecto, no sentimientos reales" / EN equivalente) y que los diales reflejan datos mockeados.
   - Ficheros: crear `apps/admin-panel/components/cortex/mind-panel.tsx` (diales PAD en vivo, espacio PAD 2D con estela, gráfico de mood, mapa afectivo de episodios con hover=`appraisal_reason`, barras de drives, banner de honestidad). Montarlo en la columna derecha de `apps/admin-panel/app/admin/cortex/page.tsx` (creada en F1).
   - Aceptación: el panel muestra estado en vivo (WS) + histórico; copy honesto no removible; ES+EN.
@@ -218,6 +219,7 @@ Columnas clave:
 ## FASE I — Verificación de fase
 
 - [ ] **Suite completa F2 en verde + lint/type**
+  - ⏳ **Pendiente (2026-07-30):** cierre de fase que depende de un humano y del panel: `alembic check` no es ejecutable (la imagen de runtime no trae alembic), el copy honesto NO está en todas las superficies (el Panel de Mente sigue ES-only) y «el dial PAD se actualiza vía WS tras un turno» exige un turno real del córtex mirado en pantalla.
   - Ejecutar la suite unit (`test_cortex_affective*`, `test_cortex_affect_store`, `test_cortex_affect_prompt`) + integración (`test_cortex_affect_migration`, `test_cortex_mind_endpoints`, `test_cortex_telemetry_ws`) + workers (`test_cortex_affect_task`) + frontend (vitest cortex-affect / mind-panel).
   - Verificar `alembic upgrade head` y `downgrade -1` reversibles; `alembic check` sin drift.
   - Confirmar copy honesto presente en todas las superficies; ningún egress en el distilador.

@@ -161,6 +161,16 @@ services:
     image: agentic-platform/orchestrator:manuals
     environment:
       ORCHESTRATOR_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       ORCHESTRATOR_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       ORCHESTRATOR_REDIS_URL: redis://redis:6379/0
       ORCHESTRATOR_BROKER_URL: redis://redis:6379/1
@@ -235,6 +245,16 @@ services:
       ]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       WORKERS_BROKER_URL: redis://redis:6379/1
       WORKERS_RESULT_BACKEND: redis://redis:6379/2
@@ -347,6 +367,16 @@ services:
       ]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       WORKERS_BROKER_URL: redis://redis:6379/1
       WORKERS_RESULT_BACKEND: redis://redis:6379/2
@@ -437,6 +467,16 @@ services:
       ]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       WORKERS_BROKER_URL: redis://redis:6379/1
       WORKERS_RESULT_BACKEND: redis://redis:6379/2
@@ -497,6 +537,16 @@ services:
     command: ["celery", "-A", "workers.celery_app", "beat", "--loglevel=info"]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       WORKERS_BROKER_URL: redis://redis:6379/1
       WORKERS_RESULT_BACKEND: redis://redis:6379/2
@@ -585,6 +635,16 @@ services:
     image: agentic-platform/notification-dispatcher:manuals
     environment:
       NOTIFY_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       NOTIFY_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
       NOTIFY_BROKER_URL: redis://redis:6379/1
       NOTIFY_RESULT_BACKEND: redis://redis:6379/2

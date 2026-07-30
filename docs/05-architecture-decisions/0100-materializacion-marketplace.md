@@ -67,7 +67,7 @@ runtime **pueda ejecutarla**. El tercer punto es el que ata este ADR a la infrae
 Es decir: **la línea donde aparece la dependencia de infra dura no es «skill vs tool», es
 el `implementation_type`.** Ese es el corte natural de la decisión.
 
-## Decisión propuesta (pendiente de aprobación)
+## Decisión (aprobada)
 
 Adoptar la **Opción (c): materialización parcial cortada por `implementation_type`/trust**,
 implementada como un puente transaccional install→catálogo con provenance, en tres piezas

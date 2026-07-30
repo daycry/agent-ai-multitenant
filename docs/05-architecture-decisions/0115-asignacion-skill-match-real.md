@@ -16,7 +16,7 @@ La política `skill_match` es un no-op que cae a load-balanced (`dispatch.py`),
 y la asignación por idoneidad depende de la preasignación del planner
 (ADR 0091). Un pool con especialistas no se aprovecha en dispatch.
 
-## Decisión (propuesta)
+## Decisión
 
 Scoring determinista de candidatos: rol de la tarea (spec) igual al rol del
 agente (+2), skills requeridas-y-asignadas ponderadas por proficiency (+1 cada

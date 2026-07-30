@@ -255,12 +255,39 @@ async def get_cortex_browser_enabled(session: AsyncSession) -> bool:
 CORTEX_AUTONOMY_ENABLED_KEY = "cortex.autonomy_enabled"
 DEFAULT_CORTEX_AUTONOMY_ENABLED = False
 
+# ENABLE de la CURIOSIDAD, separado del kill-switch global (ADR 0078). La
+# curiosidad es el único bucle que sale a Internet y gasta LLM por su cuenta: un
+# operador razonable quiere poder dejar la autonomía encendida (reflexión de
+# identidad + mantenimiento de memoria, ambas locales) y la curiosidad APAGADA. Con
+# una sola llave habría que elegir entre todo o nada. Default OFF, y se lee EN VIVO
+# dentro de la pasada — la entrada del beat siempre existe.
+CORTEX_CURIOSITY_ENABLED_KEY = "cortex.curiosity_enabled"
+DEFAULT_CORTEX_CURIOSITY_ENABLED = False
+
+# APPROVAL GATE del owner (ADR 0078, salvaguarda del MVP). Default **ON**: es el
+# único default de este grupo que arranca en True, y a propósito. Con el gate
+# puesto, el bucle elige el tema y deja el pursuit en ``status='selected'`` con
+# ``approved IS NULL`` — NO busca — hasta que el owner lo aprueba explícitamente
+# (columna ``cortex_curiosity_pursuits.approved``, migración 0123). Es la diferencia
+# entre "el córtex me propone investigar X" y "el córtex ya salió a Internet y me lo
+# cuenta después". Bajarlo es una decisión consciente del owner (System Admin).
+CORTEX_CURIOSITY_APPROVAL_GATE_KEY = "cortex.curiosity_approval_gate"
+DEFAULT_CORTEX_CURIOSITY_APPROVAL_GATE = True
+
 # Budget caps de la curiosidad por ventana DIARIA (ADR 0078: caps + circuit-breaker
 # son parte del MVP del bucle, no un fast-follow). Se aplican en Redis
 # (``cortex:budget:{owner}:curiosity:{yyyymmdd}`` con INCR + cap). Cuando se superan
 # → la pasada de curiosidad es un no-op (no busca). Solo un System Admin los escribe.
 CORTEX_CURIOSITY_DAILY_SEARCHES_CAP_KEY = "cortex.curiosity_daily_searches_cap"
 DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP = 5
+
+# Tope de GASTO diario en USD. Es la otra mitad del budget: contar búsquedas acota
+# el egress, pero no el coste — una sola pasada con razonamiento profundo
+# (``claude_sdk`` + WebSearch nativa, ADR 0076) puede costar más que veinte
+# búsquedas baratas. Sin esta dimensión el "coste real de la pasada" del panel era
+# siempre 0 y el único tope era el nº de búsquedas (auditoría 2026-07-27).
+CORTEX_CURIOSITY_DAILY_USD_CAP_KEY = "cortex.curiosity_daily_usd_cap"
+DEFAULT_CORTEX_CURIOSITY_DAILY_USD_CAP = 0.50
 
 # Umbral del drive: la curiosidad SOLO se dispara si ``curiosity < threshold``
 # (hambre de aprender). Por encima del umbral, el drive está saciado → no-op.
@@ -286,6 +313,52 @@ async def get_cortex_autonomy_enabled(session: AsyncSession) -> bool:
         session, CORTEX_AUTONOMY_ENABLED_KEY, default=DEFAULT_CORTEX_AUTONOMY_ENABLED
     )
     return bool(value)
+
+
+async def get_cortex_curiosity_enabled(session: AsyncSession) -> bool:
+    """Si la CURIOSIDAD autónoma está habilitada (independiente del kill-switch global).
+
+    La pasada de curiosidad exige AMBOS: ``cortex.autonomy_enabled`` (todos los
+    bucles) y esta llave (solo la curiosidad). Default OFF: es el bucle que gasta
+    egress y LLM. Solo un System Admin la escribe (``set_platform_setting``)."""
+    value = await get_platform_setting(
+        session, CORTEX_CURIOSITY_ENABLED_KEY, default=DEFAULT_CORTEX_CURIOSITY_ENABLED
+    )
+    return bool(value)
+
+
+async def get_cortex_curiosity_approval_gate(session: AsyncSession) -> bool:
+    """Si una persecución nueva necesita la APROBACIÓN del owner antes de buscar.
+
+    Default **True** (ADR 0078): con el gate puesto, el bucle deja el pursuit en
+    ``status='selected'`` con ``approved IS NULL`` y NO sale a la web; el owner lo
+    aprueba desde el panel (``POST .../pursuits/{id}/approve``) y la siguiente pasada
+    lo continúa. Solo un System Admin lo baja."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_APPROVAL_GATE_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_APPROVAL_GATE,
+    )
+    return bool(value)
+
+
+async def get_cortex_curiosity_daily_usd_cap(session: AsyncSession) -> float:
+    """Tope de GASTO (USD) al día de la curiosidad (default 0.50).
+
+    Lo lee el budget gate en vivo junto al tope de búsquedas; al alcanzarse, la
+    siguiente pasada es un no-op. Un valor negativo se sanea a 0.0 — «no gastes», que
+    es el lado seguro con dinero real, NO «sin tope»; un valor no numérico cae al
+    default."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_DAILY_USD_CAP_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_DAILY_USD_CAP,
+    )
+    try:
+        cap = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_DAILY_USD_CAP
+    return max(0.0, cap)
 
 
 async def get_cortex_curiosity_daily_searches_cap(session: AsyncSession) -> int:

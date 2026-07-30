@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
 import { setToken } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 import { resolveAndRoute } from "@/lib/session";
 
 interface LoginResponse {
@@ -35,6 +36,10 @@ function isMfaRequired(data: LoginResponse | MfaRequiredResponse): data is MfaRe
 
 export default function LoginPage() {
   const router = useRouter();
+  // i18n vía diccionario (prod-16 `task_prod16_01`). Antes esta pantalla
+  // mezclaba los dos idiomas a mano: "Sign in" junto a "Panel de
+  // administración multi-tenant" (hallazgo frontend-9).
+  const t = useT("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -70,11 +75,11 @@ export default function LoginPage() {
       await completeSession(data);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setError("Invalid email or password.");
+        setError(t("errorInvalidCredentials"));
       } else if (err instanceof ApiError && err.status === 429) {
-        setError("Too many attempts. Please wait and try again.");
+        setError(t("errorRateLimited"));
       } else {
-        setError("Could not reach the server.");
+        setError(t("errorUnreachable"));
       }
     } finally {
       setLoading(false);
@@ -91,14 +96,15 @@ export default function LoginPage() {
           <Sparkles className="h-7 w-7 text-white" />
         </span>
         <div className="text-center">
+          {/* "Agentic Platform" es un nombre propio: no va al diccionario. */}
           <h1 className="text-foreground text-xl font-semibold tracking-tight">Agentic Platform</h1>
-          <p className="text-muted-foreground text-sm">Panel de administración multi-tenant</p>
+          <p className="text-muted-foreground text-sm">{t("tagline")}</p>
         </div>
       </div>
 
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>{mfaToken ? "Verificación en dos pasos" : "Sign in"}</CardTitle>
+          <CardTitle>{mfaToken ? t("mfaTitle") : t("cardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           {mfaToken ? (
@@ -107,7 +113,7 @@ export default function LoginPage() {
             <>
               <form onSubmit={onSubmit} className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="email">{t("emailLabel")}</Label>
                   <Input
                     id="email"
                     type="email"
@@ -118,7 +124,7 @@ export default function LoginPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">{t("passwordLabel")}</Label>
                   <Input
                     id="password"
                     type="password"
@@ -135,7 +141,7 @@ export default function LoginPage() {
                 )}
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading && <Spinner className="mr-2 h-4 w-4" />}
-                  {loading ? "Signing in…" : "Sign in"}
+                  {loading ? t("submitting") : t("submit")}
                 </Button>
               </form>
 

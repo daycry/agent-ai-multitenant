@@ -151,3 +151,41 @@ def test_every_prod_compose_env_ref_is_written_to_the_dotenv() -> None:
         "compose references ${VAR}s with no matching .env key from "
         f"build_env_vars (prod would resolve them to empty): {missing}"
     )
+
+
+@pytest.mark.parametrize("env_profile", list(Environment))
+def test_compose_emits_an_environment_value_the_runtime_accepts(env_profile: Environment) -> None:
+    """El valor de ``<PREFIX>ENVIRONMENT`` que emite el compose tiene que estar en
+    el enum cerrado que valida el runtime, para los TRES perfiles.
+
+    Este test nace de un fallo con dos generadores y una sola mitad arreglada.
+    `config_generators.py` (el `.env`) traduce el enum del instalador al del
+    runtime con `_RUNTIME_ENVIRONMENT` — `production` -> `prod`. El compose no lo
+    hacía: emitía `cfg.system.environment.value` en crudo, o sea `production`.
+    Mientras el guard de `environment` era fail-OPEN eso pasaba desapercibido (un
+    valor desconocido se trataba como dev, que es justo el agujero que prod-09
+    task_02 cerró). Al volverlo fail-CLOSED, el api-server generado por el
+    instalador dejó de arrancar: `API_SERVER_ENVIRONMENT='production' is not a
+    known environment`.
+
+    Se parametriza por los tres perfiles a propósito: con solo `production` el
+    test pasaría el día que alguien "arreglase" el mapeo con un `if prod`.
+    """
+    cfg = _prod_config()
+    cfg.system.environment = env_profile
+    compose = generate_compose(cfg, monitoring=False)
+
+    accepted = {"dev", "staging", "prod"}
+    seen: dict[str, str] = {}
+    for name, service in compose["services"].items():
+        for key, value in (service.get("environment") or {}).items():
+            if key.endswith("ENVIRONMENT") and isinstance(value, str):
+                seen[f"{name}:{key}"] = value
+
+    assert seen, "el compose dejó de emitir ENVIRONMENT: el test se quedó sin objeto"
+    bad = {k: v for k, v in seen.items() if v not in accepted}
+    assert not bad, (
+        f"el compose emite valores de ENVIRONMENT que el runtime RECHAZA al arrancar: {bad}. "
+        f"Aceptados: {sorted(accepted)}. Traduce el enum del instalador como hace "
+        "config_generators._RUNTIME_ENVIRONMENT."
+    )

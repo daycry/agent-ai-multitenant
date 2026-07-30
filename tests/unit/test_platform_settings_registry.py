@@ -26,6 +26,72 @@ def test_known_keys_present() -> None:
     assert "rag.reranker_enabled" in keys
 
 
+# ---------------------------------------------------------------------------
+# Caducidad de aprobaciones (prod-03 task_prod03_05 / ADR 0016)
+# ---------------------------------------------------------------------------
+# Las dos palancas del sweep `workers.expire_stale_approvals` funcionaban y se
+# leían de `platform_settings` desde prod-03, pero NO estaban en este registro:
+# la única forma de cambiarlas era un INSERT a mano en la tabla. Un System Admin
+# no podía ni ver que existían, y `approval_expiry_enabled` es precisamente el
+# interruptor que se necesita a mano cuando el sweep está caducando solicitudes
+# que no debería (aborta la ejecución al hacerlo).
+def test_approval_expiry_settings_are_exposed() -> None:
+    keys = set(all_setting_keys())
+    assert "approval.timeout_hours" in keys
+    assert "approval_expiry_enabled" in keys
+
+
+def test_approval_timeout_defaults_and_bounds_match_the_read_path() -> None:
+    """Los límites del registro son LOS MISMOS que clampa `approval_repo`.
+
+    Si divergen, la UI aceptaría un valor que el sweep silenciosamente
+    reinterpreta — el operador creería haber configurado 1000 h y el job usaría
+    720. Se importan de la fuente en vez de copiarse.
+    """
+    from api_server.db.approval_repo import (
+        DEFAULT_APPROVAL_EXPIRY_ENABLED,
+        DEFAULT_APPROVAL_TIMEOUT_HOURS,
+        MAX_APPROVAL_TIMEOUT_HOURS,
+        MIN_APPROVAL_TIMEOUT_HOURS,
+    )
+    from api_server.platform_settings_registry import PLATFORM_KNOWN_SETTINGS
+
+    entries = {
+        key: sdef
+        for cat in PLATFORM_KNOWN_SETTINGS.values()
+        for key, sdef in cat.settings.items()
+        if key in {"approval.timeout_hours", "approval_expiry_enabled"}
+    }
+    timeout = entries["approval.timeout_hours"]
+    assert timeout.min_value == MIN_APPROVAL_TIMEOUT_HOURS
+    assert timeout.max_value == MAX_APPROVAL_TIMEOUT_HOURS
+    assert float(timeout.default) == DEFAULT_APPROVAL_TIMEOUT_HOURS
+
+    enabled = entries["approval_expiry_enabled"]
+    assert enabled.type == "bool"
+    assert enabled.default is DEFAULT_APPROVAL_EXPIRY_ENABLED
+
+
+def test_approval_timeout_accepts_fractional_hours() -> None:
+    """El suelo del rango es 0.25 h (15 min), así que un `int` no sirve: el tipo
+    tiene que preservar fracciones."""
+    assert validate_platform_setting_value("approval.timeout_hours", 0.5) == "0.5"
+    assert validate_platform_setting_value("approval.timeout_hours", "24") == "24"
+
+
+def test_approval_timeout_rejects_out_of_range() -> None:
+    with pytest.raises(ValueError):
+        validate_platform_setting_value("approval.timeout_hours", 0.1)  # bajo el suelo
+    with pytest.raises(ValueError):
+        validate_platform_setting_value("approval.timeout_hours", 1000)  # sobre el techo
+
+
+def test_approval_expiry_enabled_is_a_strict_bool() -> None:
+    assert validate_platform_setting_value("approval_expiry_enabled", False) is False
+    with pytest.raises(ValueError):
+        validate_platform_setting_value("approval_expiry_enabled", "off")
+
+
 def test_unknown_key_raises() -> None:
     with pytest.raises(UnknownPlatformSettingError):
         validate_platform_setting_value("does.not.exist", 1)

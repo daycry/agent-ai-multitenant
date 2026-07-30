@@ -64,8 +64,42 @@ _ORCHESTRATION_TOOL_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Memoria y conocimiento: nombres que el RUNTIME registra y el catálogo no ofrece
+# (`register_system_families` cablea memoria + `rag_search` para TODO agente, y
+# `register_builtin_families` los mutadores de conocimiento). Igual que la
+# familia de orquestación de arriba: no son asignables, pero son nombres DE
+# PLATAFORMA, no de tenant.
+#
+# Faltaban aquí, y no era cosmético (prod-03 task_prod03_02, 2026-07-29):
+#
+#   * el contrato «toda clave de `DEFAULT_TOOL_CATEGORIES` es un nombre canónico»
+#     (`test_tool_catalog_contract`) impedía darles categoría de aprobación —
+#     o sea que la omisión BLOQUEABA cerrar el agujero del gate;
+#   * `routers/tools._assert_name_available` rechaza un nombre de tenant que
+#     colisione con un builtin usando precisamente este conjunto: sin ellos, un
+#     tenant podía crear una tool llamada `memory_store`, y el registro por
+#     ToolSpec —que corre DESPUÉS de las familias de sistema— la habría
+#     sustituido silenciosamente por la suya.
+#
+# `RUNTIME_WIRED_TOOL_NAMES ⊆ CANONICAL_TOOL_NAMES` pasa a ser cierto con esto;
+# `test_approval_gate_categories` lo pinea.
+_SYSTEM_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        # memory family (siempre cableada, exenta del allowlist por-agente)
+        "memory_recall",
+        "memory_store",
+        # knowledge family — `rag_search` es el nombre ejecutable al que
+        # aliasea el `semantic_search` del catálogo
+        "rag_search",
+        "document_convert",
+        "promote_to_kb",
+    }
+)
+
 #: The full set of canonical tool names known to the platform.
-CANONICAL_TOOL_NAMES: frozenset[str] = _CATALOG_TOOL_NAMES | _ORCHESTRATION_TOOL_NAMES
+CANONICAL_TOOL_NAMES: frozenset[str] = (
+    _CATALOG_TOOL_NAMES | _ORCHESTRATION_TOOL_NAMES | _SYSTEM_TOOL_NAMES
+)
 
 # Legacy alias -> canonical name(s). Retro-compatible (ADR 0048): the chat-mode
 # and runtime namespaces resolve onto the catalog names through this map.

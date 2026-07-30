@@ -23,6 +23,14 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
+from api_server.db.approval_repo import (
+    APPROVAL_EXPIRY_ENABLED_KEY,
+    APPROVAL_TIMEOUT_HOURS_KEY,
+    DEFAULT_APPROVAL_EXPIRY_ENABLED,
+    DEFAULT_APPROVAL_TIMEOUT_HOURS,
+    MAX_APPROVAL_TIMEOUT_HOURS,
+    MIN_APPROVAL_TIMEOUT_HOURS,
+)
 from api_server.db.llm_providers import LLM_PROVIDER_KINDS
 from api_server.db.platform_settings import (
     DEFAULT_MODEL_CONFIG,
@@ -133,6 +141,49 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
             ),
         },
     ),
+    # Las dos palancas de la caducidad de solicitudes de aprobación (ADR 0016 /
+    # prod-03 task_prod03_05). Funcionaban y se leían de `platform_settings`
+    # desde entonces, pero NO estaban registradas aquí: la única forma de
+    # tocarlas era un INSERT a mano en la tabla. Van juntas a propósito — la
+    # ventana no significa nada si el barrido está apagado, y el operador que
+    # busca una encuentra la otra al lado.
+    "aprobaciones": PlatformCategoryDef(
+        label_es="Aprobaciones",
+        icon="ShieldCheck",
+        description_es=(
+            "Caducidad de las solicitudes de aprobación humana pendientes "
+            "(barrido `workers.expire_stale_approvals`)."
+        ),
+        settings={
+            APPROVAL_TIMEOUT_HOURS_KEY: PlatformSettingDef(
+                type="decimal",
+                # Decimal y no int: el suelo del rango son 15 minutos (0.25 h),
+                # así que un entero no podría expresar la mitad del rango útil.
+                default=str(DEFAULT_APPROVAL_TIMEOUT_HOURS),
+                label_es="Ventana de caducidad (horas)",
+                description_es=(
+                    "Horas que una solicitud `pending` espera antes de caducar; al "
+                    "caducar, ABORTA la ejecución que la esperaba. El barrido lo "
+                    "relee en cada pasada, así que el cambio surte efecto sin "
+                    f"reiniciar nada. Rango {MIN_APPROVAL_TIMEOUT_HOURS} h "
+                    f"(15 min) - {MAX_APPROVAL_TIMEOUT_HOURS} h (30 días)."
+                ),
+                min_value=MIN_APPROVAL_TIMEOUT_HOURS,
+                max_value=MAX_APPROVAL_TIMEOUT_HOURS,
+            ),
+            APPROVAL_EXPIRY_ENABLED_KEY: PlatformSettingDef(
+                type="bool",
+                default=DEFAULT_APPROVAL_EXPIRY_ENABLED,
+                label_es="Barrido de caducidad",
+                description_es=(
+                    "Interruptor vivo del barrido. ON por defecto: sin él, una "
+                    "decisión que nadie toma cuelga la ejecución para siempre. "
+                    "Apagarlo es la palanca de emergencia si el barrido está "
+                    "caducando solicitudes que un humano no ha tenido tiempo de ver."
+                ),
+            ),
+        },
+    ),
     "rag": PlatformCategoryDef(
         label_es="RAG",
         icon="Search",
@@ -231,10 +282,7 @@ def validate_platform_setting_value(key: str, value: Any) -> Any:
         _check_bounds(key, as_int, sdef)
         return as_int
     if sdef.type == "decimal":
-        as_str = _coerce_decimal(value)
-        if sdef.min_value is not None and Decimal(as_str) < Decimal(str(sdef.min_value)):
-            raise ValueError(f"{key}: value {as_str} below minimum {sdef.min_value}")
-        return as_str
+        return _validate_decimal(key, value, sdef)
     if sdef.type == "model_config":
         if not isinstance(value, dict):
             raise ValueError(f"{key}: expected a model config object")
@@ -260,6 +308,24 @@ def validate_platform_setting_value(key: str, value: Any) -> Any:
             raise ValueError(f"{key}: invalid guardrails config: {exc}") from exc
         return dict(value)
     raise ValueError(f"unknown setting type {sdef.type!r}")  # pragma: no cover
+
+
+def _validate_decimal(key: str, value: Any, sdef: PlatformSettingDef) -> str:
+    """Coerce to the normalised decimal STRING and check BOTH bounds.
+
+    El techo faltaba: el único `decimal` que existía
+    (`plan_approval_double_signature_threshold`) no declara `max_value`, así que la
+    omisión no se notaba — y `approval.timeout_hours` sí tiene techo (720 h). Sin
+    esta comprobación la UI aceptaría 1000 h y el barrido clamparía a 720 en
+    silencio: el operador leería un número que el sistema no usa.
+    """
+    as_str = _coerce_decimal(value)
+    as_decimal = Decimal(as_str)
+    if sdef.min_value is not None and as_decimal < Decimal(str(sdef.min_value)):
+        raise ValueError(f"{key}: value {as_str} below minimum {sdef.min_value}")
+    if sdef.max_value is not None and as_decimal > Decimal(str(sdef.max_value)):
+        raise ValueError(f"{key}: value {as_str} above maximum {sdef.max_value}")
+    return as_str
 
 
 def _coerce_int(value: Any) -> int:

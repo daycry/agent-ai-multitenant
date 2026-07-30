@@ -31,6 +31,33 @@ La memoria del córtex (`memory_entries`, scope private del owner) crece de form
 - ⚠️ La fórmula puede enterrar long-tail útil → empezar conservador, medir, ajustar; el owner puede inspeccionar lo olvidado (soft-delete) y restaurarlo.
 - ➡️ Sienta el patrón que la memoria multi-tenant de agentes podría adoptar después (con su propio ADR).
 
+## Dónde se implementó: el plan F5 del córtex
+
+Este ADR lo materializa el bloque **D** de
+[`docs/roadmap/cortex-f5-voz-avatar.md`](../roadmap/cortex-f5-voz-avatar.md) (la fase que junta
+voz/avatar y olvido), entregado entre el 2026-06-24 y el 2026-07-06 —
+[changelog de F5](../07-changelog/cortex-f5-voz-avatar.md). Correspondencia decisión → código:
+
+| Decisión de este ADR                       | Dónde vive                                                                          |
+| ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| (1) `retention_score`                      | `cortex/forgetting.py` (puro; D1 del plan)                                          |
+| (2) soft-delete / consolidación merge-into | `workers/cortex_maintenance.py::_forget_low_retention` + `cortex/consolidation.py`  |
+| (3) protección de `identity`/`owner_model` | `PROTECTED_KINDS` en `cortex/forgetting.py` (ampliado a `reflection`/`learning`)    |
+| (4) cadencia + gating + observabilidad     | beat `cortex-maintenance` + kill-switch `cortex.autonomy_enabled` (OFF por defecto) |
+
+**Dos divergencias del plan F5 que afectan a la decisión (1)** y que conviene leer aquí, no sólo en
+el plan, porque cambian lo que la fórmula mide de verdad:
+
+- **La `intensidad emocional` no se usa.** El plan pedía puntuar con
+  `metadata_.emotion.intensity`; el código usa `metadata_.importance`, que es **otro dato con otro
+  productor**. El factor emocional de la fórmula, por tanto, no está implementado.
+- **La recencia se mide sobre `created_at`, no sobre el último recall.** `metadata_.last_recalled_at`
+  **se escribe y nadie lo lee** (lo escribe `cortex/memory.py::_bump_recall_counters`; verificado el
+  2026-07-30 que `forgetting.py` no lo menciona). Consecuencia real: una memoria de hace dos años
+  recordada ayer sigue puntuando bajo, justo el long-tail que la consecuencia ⚠️ de arriba quería
+  proteger. La tarea D3 del plan (columnas + índice) quedó `missing`; hay que decidir entre escribir
+  la migración o leer el JSONB que ya existe.
+
 ## Estado de implementación (2026-07-06 — plan "identidad real")
 
 `recall_frequency` dejó de ser el placeholder 1.0: `cortex_recall` incrementa
