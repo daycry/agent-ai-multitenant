@@ -127,6 +127,10 @@ el problema ya esté documentado.
 - [black-vs-ruff-format-chained-call-comment.md](./black-vs-ruff-format-chained-call-comment.md)
   — los dos formateadores se pelean en bucle por un comentario DENTRO de una
   llamada encadenada; sacarlo fuera del paréntesis los hace converger.
+- [prettier-hook-version-vs-npx.md](./prettier-hook-version-vs-npx.md)
+  — el hook usa `mirrors-prettier` **v4.0.0-alpha.8** pineado y `npx prettier` baja
+  la última v3: formatear a mano no arregla el hook y el commit falla en bucle.
+  Arréglalo con `pre_commit run prettier --files …`.
 - [prettier-all-files-libuv-windows.md](./prettier-all-files-libuv-windows.md)
   — `prettier --all-files` crashea en Windows por libuv
   (`UV_HANDLE_CLOSING`, exit 3221226505); usar prettier _scoped_
