@@ -27,11 +27,19 @@ NO busca en Internet (no hay web propia en F1).
 
 from __future__ import annotations
 
+import dataclasses
+from typing import TYPE_CHECKING
+
 from shared_llm.base import LLMProvider
 from shared_llm.reasoning import reasoning_call_kwargs
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.llm import LLMAssistantModel
+from api_server.cortex.tools import cortex_tool_schemas, cortex_tool_schemas_without_host_web
+
+if TYPE_CHECKING:
+    from api_server.cortex.affect_policy import EffortDecision
 from api_server.assistant.model_config import (
     AssistantModelSelection,
     ResolvedAssistantModel,
@@ -51,6 +59,15 @@ CORTEX_DEFAULT_MODEL_KEY = "cortex.default_model"
 # Esfuerzo de razonamiento por defecto del córtex cuando la selección no fija uno
 # (ADR 0074: el córtex delibera en profundidad por diseño, no en "modo chat").
 CORTEX_DEFAULT_REASONING_EFFORT = "high"
+
+# Presupuesto de tokens del córtex. El default del AssistantModel (1024) es para
+# modelos NO de razonamiento; un modelo de razonamiento OpenAI-compatible
+# (gpt-oss, o1…) con effort alto emite su cadena de pensamiento en el canal
+# `reasoning`, que CUENTA contra `max_tokens` — con 1024 se agota razonando y
+# `content` (la respuesta real) queda VACÍO (visto en vivo: la voz del córtex no
+# respondía). 16k da holgura al razonamiento profundo MÁS la respuesta; es un
+# techo, no un objetivo (el modelo para en su stop natural).
+CORTEX_MAX_TOKENS = 16384
 
 # Tools web NATIVAS del Claude Agent SDK (ADR 0076). Anthropic gestiona el fetch
 # (anti-SSRF) — no se implementa navegador/egress propio. Sólo se pasan en el
@@ -185,7 +202,45 @@ def build_cortex_model(
         resolved.reasoning_effort,
         web_enabled=web_enabled,
     )
-    return LLMAssistantModel(provider=provider, model=api_model, extra_call_kwargs=extra)
+    # I-6 (auditoría 2026-07-10): exclusión mutua nativa/host — con las web tools
+    # NATIVAS del SDK activas (allowed_tools de arriba), el catálogo de schemas no
+    # ofrece además web_search/web_fetch host: dos herramientas para el mismo
+    # trabajo confunden la elección del modelo y duplican el gasto.
+    native_web = web_enabled and resolved.provider_kind == "claude_sdk"
+    return LLMAssistantModel(
+        provider=provider,
+        model=api_model,
+        max_tokens=CORTEX_MAX_TOKENS,
+        extra_call_kwargs=extra,
+        reasoning_effort=resolved.reasoning_effort,
+        provider_kind=resolved.provider_kind,
+        # Hallazgo #10e: el córtex debe enviar SU catálogo de schemas (web_search,
+        # web_fetch, cortex_remember, cortex_recall_more), no el del asistente —
+        # que no las conoce y dejaba toda complete() del córtex con tools=None.
+        schema_fn=cortex_tool_schemas_without_host_web if native_web else cortex_tool_schemas,
+    )
+
+
+def apply_effort_decision(
+    model: AssistantModelClient, decision: EffortDecision
+) -> AssistantModelClient:
+    """Reconstruye el modelo con el effort EFECTIVO de la política afectiva.
+
+    Solo reconstruye cuando hay un cambio real y el modelo es el
+    :class:`LLMAssistantModel` de producción (copia por-request vía
+    ``dataclasses.replace`` — sin estado compartido): regenera el kwarg de
+    razonamiento del kind preservando el resto (``allowed_tools`` incluido).
+    Un doble de test (no-dataclass) queda intacto — la decisión se audita
+    igualmente en la metadata del turno."""
+    if decision.effective is None or decision.effective == decision.base:
+        return model
+    if not isinstance(model, LLMAssistantModel):
+        return model
+    kwargs = {
+        k: v for k, v in model.extra_call_kwargs.items() if k not in ("effort", "reasoning_effort")
+    }
+    kwargs.update(reasoning_call_kwargs(model.provider_kind, decision.effective))
+    return dataclasses.replace(model, extra_call_kwargs=kwargs, reasoning_effort=decision.effective)
 
 
 __all__ = [
@@ -193,6 +248,7 @@ __all__ = [
     "CORTEX_DEFAULT_REASONING_EFFORT",
     "CORTEX_WEB_TOOLS",
     "CortexModelUnavailableError",
+    "apply_effort_decision",
     "build_cortex_model",
     "clear_cortex_default_model",
     "cortex_call_kwargs",

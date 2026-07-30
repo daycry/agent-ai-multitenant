@@ -70,10 +70,31 @@ class GuardrailSpec:
     # Optional stable id so layered merge / observability can address a
     # specific guardrail entry; defaults to the type when absent.
     id: str | None = None
+    # ADR 0102 D5: qué hacer si el CHECK revienta (no si dispara). "warn"
+    # (default) = fail-open, el error se registra sin disparar; "block" =
+    # fail-closed, el fallo del check dispara con acción block (para checks
+    # que el operador marque críticos, p. ej. el de inyección locked).
+    on_error: str = "warn"
 
     @property
     def key(self) -> str:
         return self.id or self.type
+
+    def to_dict(self) -> dict[str, Any]:
+        """Inverso serializable de :func:`_parse_spec` (ADR 0102 D3) — el
+        worker transporta la config RESUELTA al runtime como dict JSON."""
+        out: dict[str, Any] = {"type": self.type}
+        if self.config:
+            out["config"] = dict(self.config)
+        if self.action is not None:
+            out["action"] = self.action.value
+        if self.locked:
+            out["locked"] = True
+        if self.id is not None:
+            out["id"] = self.id
+        if self.on_error != "warn":
+            out["on_error"] = self.on_error
+        return out
 
 
 @dataclass
@@ -98,6 +119,15 @@ class PipelineConfig:
     def is_empty(self) -> bool:
         return all(not specs for specs in self.hooks.values())
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialización JSON-friendly (ADR 0102 D3): ``{"guardrails": {hook:
+        [spec…]}}`` con solo los hooks no vacíos — apta para ``parse_config``
+        (roundtrip) y para viajar en el task spec del runtime."""
+        hooks = {
+            hook: [spec.to_dict() for spec in specs] for hook, specs in self.hooks.items() if specs
+        }
+        return {"guardrails": hooks}
+
 
 def _parse_spec(raw: Any, *, hook: HookPoint, index: int) -> GuardrailSpec:
     if not isinstance(raw, dict):
@@ -120,12 +150,18 @@ def _parse_spec(raw: Any, *, hook: HookPoint, index: int) -> GuardrailSpec:
     spec_id = raw.get("id")
     if spec_id is not None and not isinstance(spec_id, str):
         raise GuardrailConfigError(f"Guardrail {gtype!r} at hook {hook!r}: 'id' must be a string.")
+    on_error = str(raw.get("on_error", "warn") or "warn").lower()
+    if on_error not in ("warn", "block"):
+        raise GuardrailConfigError(
+            f"Guardrail {gtype!r} at hook {hook!r}: 'on_error' must be 'warn' or 'block'."
+        )
     return GuardrailSpec(
         type=gtype,
         config=dict(cfg),
         action=_coerce_action(raw.get("action")),
         locked=bool(raw.get("locked", False)),
         id=spec_id,
+        on_error=on_error,
     )
 
 

@@ -93,7 +93,7 @@ def _default_llm_factory(settings: Settings) -> LLMProvider:
     )
 
 
-@app.task(name="workers.cortex_distill_affect")  # type: ignore[misc]
+@app.task(name="workers.cortex_distill_affect")  # type: ignore[untyped-decorator]
 def cortex_distill_affect(turn_id: str) -> dict[str, Any]:
     """Celery entry point. Distila el afecto de un turno del córtex.
 
@@ -133,10 +133,14 @@ async def _distill_affect_async(
 
         owner_id: UUID = ctx["owner_user_id"]
 
+        # Baseline EVOLUTIVO de la identidad (set-point del decay): se carga UNA
+        # vez y viaja tanto al decay del prior como embebido en la caché viva.
+        baseline = await _load_identity_baseline(sessionmaker, owner_id)
+
         # Estado afectivo de partida: el último snapshot del owner con decay lazy
         # aplicado hasta `now` (sin snapshot ⇒ baseline neutro). NO usamos la caché
         # Redis aquí: la BD es la fuente de verdad de la serie temporal.
-        prior = await _load_prior_state(sessionmaker, owner_id, now=now)
+        prior = await _load_prior_state(sessionmaker, owner_id, now=now, baseline=baseline)
 
         # --- Appraisal (fail-open) -------------------------------------------------
         delta, appraisal_reason, drive_name, drive_amount = await _appraise(
@@ -174,7 +178,7 @@ async def _distill_affect_async(
         mood_label = new_state.mood_label(language="es")
 
         # --- Caché viva + telemetría (best-effort, nunca rompen) -------------------
-        await _refresh_live_state(owner_id, new_state, now=now)
+        await _refresh_live_state(owner_id, new_state, now=now, baseline=baseline)
         await _publish_frame(
             owner_id,
             state=new_state,
@@ -359,28 +363,57 @@ async def _load_turn_context(session: AsyncSession, turn_id: UUID) -> dict[str, 
     }
 
 
+async def _load_identity_baseline(
+    sessionmaker: async_sessionmaker[AsyncSession], owner_id: UUID
+) -> PADState:
+    """El baseline evolutivo de la identidad del owner (fail-open a BASELINE_PAD).
+
+    Un fallo aquí (tabla ausente, sesión rota…) degrada al neutro del motor:
+    el baseline es un matiz del decay, nunca un bloqueo del distilador."""
+    from api_server.cortex.affective import BASELINE_PAD
+
+    try:
+        from api_server.cortex.identity import effective_mood_baseline, get_identity
+
+        async with sessionmaker() as session:
+            identity = await get_identity(session, owner_id)
+        return effective_mood_baseline(identity.identity_state if identity else None)
+    except Exception as exc:  # fail-open
+        _log.warning(
+            "cortex_affect.baseline_load_failed", owner_user_id=str(owner_id), error=str(exc)
+        )
+        return BASELINE_PAD
+
+
 async def _load_prior_state(
     sessionmaker: async_sessionmaker[AsyncSession],
     owner_id: UUID,
     *,
     now: datetime,
+    baseline: PADState | None = None,
 ) -> AffectState:
     """El estado afectivo de partida: último snapshot del owner con decay lazy.
 
-    Reusa el store (filtro ``owner_user_id`` explícito + decay determinista)."""
+    Reusa el store (filtro ``owner_user_id`` explícito + decay determinista
+    hacia el baseline evolutivo, que el caller ya cargó)."""
     from api_server.cortex.affect_store import load_affect_state
 
     async with sessionmaker() as session:
-        return await load_affect_state(session, owner_id, now=now)
+        return await load_affect_state(session, owner_id, now=now, baseline=baseline)
 
 
-async def _refresh_live_state(owner_id: UUID, state: AffectState, *, now: datetime) -> None:
-    """Refresca la caché Redis viva ``cortex:affect:{owner}`` (best-effort)."""
+async def _refresh_live_state(
+    owner_id: UUID, state: AffectState, *, now: datetime, baseline: PADState | None = None
+) -> None:
+    """Refresca la caché Redis viva ``cortex:affect:{owner}`` (best-effort).
+
+    El ``baseline`` evolutivo viaja embebido para que las lecturas de la caché
+    decaigan hacia el temperamento del córtex sin tocar la BD."""
     from api_server.cortex.affect_cache import write_affect_state
 
     redis = _get_redis()
     try:
-        await write_affect_state(redis, str(owner_id), state, now=now)
+        await write_affect_state(redis, str(owner_id), state, now=now, baseline=baseline)
     finally:
         await redis.aclose()
 
@@ -475,10 +508,18 @@ async def _persist_emotional_episode(
 
 
 def _get_redis() -> Any:
-    """Cliente Redis del api-server (mismo DB que el WS tailea)."""
-    from api_server.auth.deps import get_redis
+    """Cliente Redis del bus de eventos del WORKER (la misma DB 0 que el WS del
+    api-server tailea — invariante H10/AUD16).
 
-    return get_redis()
+    Bug cazado en vivo (2026-07-18): esto usaba `api_server.auth.deps.get_redis`,
+    cuya env (API_SERVER_REDIS_URL) no existe en el contenedor del worker → caía
+    al default localhost:6379 y el caché vivo de afecto + la telemetría WS
+    fallaban SIEMPRE (best-effort, así que en silencio salvo el WARNING)."""
+    from redis.asyncio import Redis
+
+    from workers.config import get_settings
+
+    return Redis.from_url(get_settings().events_redis_url)
 
 
 def _result(turn_id: UUID, reason: str) -> dict[str, Any]:

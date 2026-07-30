@@ -11,6 +11,8 @@ Auth and admin routers arrive in tasks 00_10 and 00_11.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
@@ -40,6 +42,7 @@ from api_server.routers.conversations import (
     chat_modes_router,
     conversations_router,
     project_conversations_router,
+    project_planning_roles_router,
 )
 from api_server.routers.copilot_device_flow import (
     admin_router as copilot_device_flow_admin_router,
@@ -59,9 +62,11 @@ from api_server.routers.guardrail_alerts import router as guardrail_alerts_route
 from api_server.routers.guardrail_events import router as guardrail_events_router
 from api_server.routers.human_agents import router as human_agents_router
 from api_server.routers.human_inbox import router as human_inbox_router
+from api_server.routers.human_queue import router as human_queue_router
 from api_server.routers.incoming_webhook_configs import router as incoming_webhook_configs_router
 from api_server.routers.incoming_webhooks import router as incoming_webhooks_router
 from api_server.routers.internal_agent import router as internal_agent_router
+from api_server.routers.internal_alerts import router as internal_alerts_router
 from api_server.routers.kb_categories import router as kb_categories_router
 from api_server.routers.knowledge_bases import (
     documents_router,
@@ -75,6 +80,7 @@ from api_server.routers.marketplace import admin_router as marketplace_admin_rou
 from api_server.routers.marketplace import router as marketplace_router
 from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
+from api_server.routers.mcp_oauth import router as mcp_oauth_router
 from api_server.routers.memories import router as memories_router
 from api_server.routers.mfa import router as mfa_router
 from api_server.routers.model_prices import admin_router as model_prices_admin_router
@@ -85,6 +91,7 @@ from api_server.routers.plans import plans_router, project_plans_router
 from api_server.routers.platform_settings import admin_router as platform_settings_admin_router
 from api_server.routers.projects import router as projects_router
 from api_server.routers.review import router as review_router
+from api_server.routers.runs import router as runs_router
 from api_server.routers.runtimes import router as runtime_templates_router
 from api_server.routers.scim import router as scim_router
 from api_server.routers.skills import router as skills_router
@@ -197,14 +204,18 @@ def _register_routers(app: FastAPI) -> None:
         approval_policies_router,
         approvals_router,
         executions_router,
+        runs_router,
+        human_queue_router,
         evals_router,
         eval_quality_router,
         tenant_stats_router,
         cross_tenant_stats_router,
         internal_agent_router,
+        internal_alerts_router,
         project_conversations_router,
         conversations_router,
         chat_modes_router,
+        project_planning_roles_router,
         project_plans_router,
         plans_router,
         memories_router,
@@ -222,6 +233,7 @@ def _register_routers(app: FastAPI) -> None:
         copilot_device_flow_admin_router,
         mcp_router,
         mcp_catalog_router,
+        mcp_oauth_router,
         runtime_templates_router,
         tools_diagnostic_router,
         dep_cache_router,
@@ -246,12 +258,65 @@ def _register_routers(app: FastAPI) -> None:
         app.include_router(router)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001 — firma de FastAPI
+    """Arranque y parada de la app (sustituye a los `@app.on_event("startup")`).
+
+    FastAPI deprecó `on_event` en favor de `lifespan`, y el aviso salía 33 veces en
+    cada corrida de integración. La conversión NO es cosmética: con `on_event` los
+    handlers eran dos funciones independientes cuyo orden dependía del registro;
+    aquí el orden es explícito y legible.
+
+    Las dos son **best-effort por diseño**: ninguna puede impedir que el
+    api-server arranque. Un catálogo builtin incompleto o un barrido de chat que
+    falle son degradaciones, no motivos para dejar la plataforma caída — y si
+    reventaran aquí, el contenedor entraría en bucle de reinicio sin decir por qué.
+    """
+    await _ensure_builtin_catalog()
+    await _resume_chat_replies()
+    yield
+
+
+async def _ensure_builtin_catalog() -> None:
+    # G-02 (auditoría proyecto 2026-07-17): garantiza las filas del catálogo
+    # builtin de KBs si un wipe/reset las dejó a 0 (sin ellas los grants de
+    # plantilla apuntan a KBs inexistentes y el auto-RAG queda estéril).
+    # Idempotente + advisory lock; best-effort (nunca impide arrancar).
+    try:
+        from api_server.db.session import get_admin_sessionmaker
+        from api_server.seeds.startup import ensure_builtin_catalog
+
+        result = await ensure_builtin_catalog(get_admin_sessionmaker())
+        if result["seeded"]:
+            _logger.warning("startup.builtin_catalog_reseeded", **result)
+    except Exception:
+        _logger.warning("startup.builtin_catalog_check_failed", exc_info=True)
+
+
+async def _resume_chat_replies() -> None:
+    # c9 (audit 2026-07-03): the team chat reply runs as an in-process detached
+    # task, so a restart mid-turn drops it while the user's message stays durable.
+    # Resume those unanswered turns on boot. Best-effort — a chat-durability sweep
+    # must never stop the api-server from starting.
+    try:
+        from api_server.auth.deps import get_redis
+        from api_server.chat.responder import resume_pending_replies
+        from api_server.routers.llm_providers import get_provider_vault_store
+
+        resumed = await resume_pending_replies(vault=get_provider_vault_store(), redis=get_redis())
+        if resumed:
+            _logger.info("chat.resumed_on_startup", count=resumed)
+    except Exception:
+        _logger.warning("chat.resume_on_startup_failed", exc_info=True)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="agentic-platform / api-server",
         version="0.0.0",
         docs_url="/docs",
         redoc_url=None,
+        lifespan=_lifespan,
     )
 
     settings = get_settings()

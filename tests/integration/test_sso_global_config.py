@@ -6,9 +6,10 @@ After migration ``0076_sso_global`` the ``sso_configurations`` table is
 Coverage:
 
   * the schema is global: ``tenant_id`` is gone, RLS is OFF, there is no
-    ``tenant_isolation`` policy, and the global ``uq_sso_config_provider``
-    unique constraint exists (the per-tenant one is gone).
-  * a second ``oidc`` row is rejected by the global unique constraint.
+    ``tenant_isolation`` policy, and — desde la migración 0115
+    (multi-provider) — tampoco queda NINGUNA unique por kind.
+  * a second ``oidc`` row is allowed (multi-provider; display_name
+    disambiguates and the API layer enforces it from the 2nd config on).
   * ``button_label`` round-trips (write → read).
   * the loaders ``_load_enabled_oidc_config`` / ``_load_enabled_saml_config``
     return the GLOBAL enabled config (no tenant argument), reading on the
@@ -186,24 +187,32 @@ async def test_schema_is_global_no_tenant_identity(configured_settings, admin_pg
     )
     assert policy_count == 0, "global table must have no RLS policy"
 
-    # Global unique constraint by provider; the per-tenant one is gone.
+    # Multi-provider (0115): NEITHER unique remains — several configs of the
+    # same kind may coexist; the per-tenant one is long gone (0076).
     constraints = await _fetchval(
         admin_pg_dsn,
         "SELECT array_agg(conname) FROM pg_constraint "
         "WHERE conrelid = 'sso_configurations'::regclass AND contype = 'u'",
     )
     names = set(constraints or [])
-    assert "uq_sso_config_provider" in names
+    assert "uq_sso_config_provider" not in names
     assert "uq_sso_config_tenant_provider" not in names
 
 
 @pytest.mark.asyncio
-async def test_global_unique_rejects_second_oidc(configured_settings, admin_pg_dsn: str) -> None:
+async def test_global_second_oidc_row_is_allowed(configured_settings, admin_pg_dsn: str) -> None:
+    """Multi-provider (migración 0115): la unique singleton por kind se
+    eliminó — pueden coexistir varias configs OIDC (el display_name las
+    desambigua en el login; la capa API exige display_name a partir de la
+    segunda). El candado antiguo pinneaba el UniqueViolationError."""
     await _truncate(admin_pg_dsn)
     await _seed_global_oidc(admin_pg_dsn)
-    # A second OIDC row violates the global unique-on-provider constraint.
-    with pytest.raises(asyncpg.UniqueViolationError):
-        await _seed_global_oidc(admin_pg_dsn)
+    await _seed_global_oidc(admin_pg_dsn)
+    rows = await _fetchval(
+        admin_pg_dsn,
+        "SELECT count(*) FROM sso_configurations WHERE provider = 'oidc'",
+    )
+    assert rows == 2
 
 
 @pytest.mark.asyncio

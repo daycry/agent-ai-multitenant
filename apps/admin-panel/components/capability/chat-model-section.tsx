@@ -69,6 +69,10 @@ export function ChatModelSection({
 }) {
   const { lang } = useLang();
   const t = (es: string, en: string) => (lang === "es" ? es : en);
+  // The card title doubles as the save-button label so the two never disagree:
+  // reused for "Modelo del equipo" / "Modelo del proyecto" / "Modelo del chat",
+  // the button reads "Guardar <ese título>" instead of a hard-coded "del chat".
+  const effectiveTitle = title ?? { es: "Modelo del chat", en: "Chat model" };
   const pinned = Boolean(value?.provider_id && value?.model);
 
   const [inherit, setInherit] = useState(!pinned);
@@ -108,7 +112,7 @@ export function ChatModelSection({
   return (
     <Card data-testid={`${idPrefix}-chat-model`}>
       <CardHeader>
-        <CardTitle>{title ? t(title.es, title.en) : t("Modelo del chat", "Chat model")}</CardTitle>
+        <CardTitle>{t(effectiveTitle.es, effectiveTitle.en)}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground text-sm">
@@ -241,7 +245,10 @@ export function ChatModelSection({
             >
               {pending
                 ? t("Guardando…", "Saving…")
-                : t("Guardar modelo del chat", "Save chat model")}
+                : t(
+                    `Guardar ${effectiveTitle.es.toLowerCase()}`,
+                    `Save ${effectiveTitle.en.toLowerCase()}`,
+                  )}
             </Button>
           </>
         )}

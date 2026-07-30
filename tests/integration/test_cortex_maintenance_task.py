@@ -263,3 +263,139 @@ async def test_maintenance_is_idempotent(
     finally:
         await conn.close()
     assert forgotten == 1
+
+
+# ---------------------------------------------------------------------------
+# recall_frequency real en el mantenimiento: el uso salva a la memoria
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_forget_usa_recall_count_para_retener_lo_usado(
+    schema_at_head, migrations_pg_dsn: str, workers_settings
+) -> None:
+    seed = await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, True)
+    owner_id = seed["owner_id"]
+
+    # Dos episódicas de 45 días (importance default 0.5): la nunca-recallada cae
+    # bajo el umbral (0.5*0.35*0.5≈0.088<0.1); la recallada 5 veces se salva
+    # (0.5*0.35*1.0≈0.177).
+    nunca = uuid4()
+    usada = uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        tenant_id = await conn.fetchval("SELECT id FROM organizations LIMIT 1")
+        for mid, meta in (
+            (nunca, '{"cortex": true}'),
+            (usada, '{"cortex": true, "recall_count": 5}'),
+        ):
+            await conn.execute(
+                "INSERT INTO memory_entries (id, tenant_id, scope, type, content, user_id,"
+                " metadata, created_at) VALUES ($1, $2, 'private', 'episodic', $3, $4,"
+                " $5::jsonb, now() - interval '45 days')",
+                mid,
+                tenant_id,
+                f"mem {mid}",
+                owner_id,
+                meta,
+            )
+    finally:
+        await conn.close()
+
+    from workers.cortex_maintenance import _run_maintenance
+
+    await _run_maintenance(workers_settings)
+
+    assert await _deleted_at(migrations_pg_dsn, nunca) is not None
+    assert await _deleted_at(migrations_pg_dsn, usada) is None
+
+
+# ---------------------------------------------------------------------------
+# Consolidación (ADR 0077) — merge-into de la episódica REPETIDA, end-to-end
+# ---------------------------------------------------------------------------
+def _vec(*, axis: int, jitter: float = 0.0) -> str:
+    """Un embedding vector(768) casi-one-hot en `axis` (coseno ~1 entre iguales)."""
+    dims = [0.0] * 768
+    dims[axis] = 1.0
+    dims[(axis + 1) % 768] = jitter  # ligera variación para no ser idénticos
+    return "[" + ",".join(str(d) for d in dims) + "]"
+
+
+@pytest.mark.asyncio
+async def test_autonomy_on_consolidates_repeated_episodic(
+    schema_at_head, migrations_pg_dsn: str, workers_settings
+) -> None:
+    """3 episódicas viejas MUY similares colapsan en UNA consolidada; las
+    originales quedan soft-borradas con `consolidated_into` (reversible); una 4ª
+    disímil se queda como está."""
+    await _seed(migrations_pg_dsn)
+    await _set_autonomy(migrations_pg_dsn, enabled=True)
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        tenant_id = await conn.fetchval("SELECT id FROM organizations LIMIT 1")
+        owner_id = await conn.fetchval("SELECT id FROM users WHERE is_system_owner LIMIT 1")
+        similares = [uuid4() for _ in range(3)]
+        distinta = uuid4()
+        for i, mid in enumerate(similares):
+            await conn.execute(
+                "INSERT INTO memory_entries (id, tenant_id, scope, type, content, user_id,"
+                " metadata, embedding, created_at) VALUES ($1, $2, 'private', 'episodic', $3,"
+                ' $4, \'{"cortex": true, "importance": 0.9}\'::jsonb, $5::vector,'
+                " now() - interval '30 days')",
+                mid,
+                tenant_id,
+                f"el owner prefiere REST (v{i})",
+                owner_id,
+                _vec(axis=0, jitter=0.01 * i),
+            )
+        await conn.execute(
+            "INSERT INTO memory_entries (id, tenant_id, scope, type, content, user_id,"
+            " metadata, embedding, created_at) VALUES ($1, $2, 'private', 'episodic', $3,"
+            ' $4, \'{"cortex": true, "importance": 0.9}\'::jsonb, $5::vector,'
+            " now() - interval '30 days')",
+            distinta,
+            tenant_id,
+            "hablamos del clima",
+            owner_id,
+            _vec(axis=500),
+        )
+    finally:
+        await conn.close()
+
+    from workers.cortex_maintenance import _run_maintenance
+
+    result = await _run_maintenance(workers_settings)
+    owner_res = next(r for r in result["results"] if r["consolidated_groups"] >= 1)
+    assert owner_res["consolidated_groups"] == 1
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        # Las 3 similares: soft-borradas y con back-reference a la consolidada.
+        for mid in similares:
+            row = await conn.fetchrow(
+                "SELECT deleted_at, metadata->>'consolidated_into' AS into"
+                " FROM memory_entries WHERE id = $1",
+                mid,
+            )
+            assert row["deleted_at"] is not None, "original consolidada debe soft-borrarse"
+            assert row["into"], "debe apuntar a la memoria consolidada (reversible)"
+        # La disímil: intacta.
+        assert (
+            await conn.fetchval("SELECT deleted_at FROM memory_entries WHERE id = $1", distinta)
+            is None
+        )
+        # Existe UNA memoria consolidada viva, con embedding (centroide) y origen.
+        consolidated = await conn.fetchrow(
+            "SELECT content, embedding, metadata->'consolidated_from' AS src"
+            " FROM memory_entries WHERE metadata->>'kind' = 'consolidated'"
+            " AND deleted_at IS NULL AND user_id = $1",
+            owner_id,
+        )
+        assert consolidated is not None, "debe crearse la memoria consolidada"
+        assert consolidated["embedding"] is not None, "centroide → sigue siendo recuperable"
+        assert "[consolidado]" in consolidated["content"]
+        import json as _json
+
+        assert len(_json.loads(consolidated["src"])) == 3
+    finally:
+        await conn.close()

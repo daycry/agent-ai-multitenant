@@ -30,25 +30,38 @@ con ``chat_history=recent_history_for_prompt`` → persistir turno ``cortex``.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 
 from api_server.assistant.graph import AssistantModelClient
 from api_server.assistant.model_config import to_provider_model_name
-from api_server.auth.deps import AuthPrincipal, require_system_owner
-from api_server.celery_client import enqueue_cortex_distill_affect
+from api_server.auth.deps import AuthPrincipal, get_redis, require_system_owner
+from api_server.celery_client import enqueue_browse_session, enqueue_cortex_distill_affect
+from api_server.cortex.affect_policy import modulate_reasoning_effort
+from api_server.cortex.browse import BrowseTransitionError
 from api_server.cortex.graph import run_cortex_turn
-from api_server.cortex.identity import ensure_identity, identity_preamble
-from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
 from api_server.cortex.model_config import (
     CortexModelUnavailableError,
+    apply_effort_decision,
     build_cortex_model,
     clear_cortex_default_model,
     get_cortex_default_model,
     resolve_cortex_model,
     set_cortex_default_model,
+)
+from api_server.cortex.self_context import (
+    compose_self_context_prompt,
+    load_self_context,
+    mark_pursuits_surfaced,
+)
+from api_server.cortex.self_context import (
+    self_context_meta as _self_context_meta,
 )
 from api_server.cortex.threads import (
     CortexNoTenantError,
@@ -60,10 +73,17 @@ from api_server.cortex.threads import (
     resolve_cortex_tenant_id,
 )
 from api_server.cortex.tools import CortexToolContext, cortex_enabled_tool_names
+from api_server.db.browse_repo import (
+    approve_session,
+    get_browse_session,
+    list_pending,
+    reject_session,
+)
 from api_server.db.llm_providers import get_llm_provider
 from api_server.db.models import User
 from api_server.db.platform_settings import (
     PlatformSettingForbiddenError,
+    get_cortex_browser_enabled,
     get_cortex_web_enabled,
 )
 from api_server.db.session import get_admin_sessionmaker
@@ -97,6 +117,17 @@ router = APIRouter(prefix="/owner/cortex", tags=["cortex"])
 
 # Longitud del recorte del último turno en el listado de hilos.
 _PREVIEW_LEN = 160
+
+
+def _redis_or_none() -> Redis | None:
+    """El cliente Redis del api-server, o ``None`` si no es construible.
+
+    El self-context lo usa solo para leer el afecto vivo (fail-open): sin Redis
+    cae a la BD y, sin snapshot, al estado neutro — nunca rompe el turno."""
+    try:
+        return get_redis()
+    except Exception:  # fail-open: el afecto es un matiz del turno
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -160,11 +191,21 @@ async def build_cortex_default_model(
                 model=api_model,
                 vault=vault,
             )
+        # Auditoría del córtex 2026-07-27 (F1.6): el flag NO se pasaba, así que
+        # `native_web` era siempre False y las WebSearch/WebFetch nativas del SDK
+        # —el egress RECOMENDADO por el ADR 0076 (dec. 3), con anti-SSRF gratis
+        # porque el fetch lo hace Anthropic— eran código muerto: con la web
+        # encendida el córtex caía siempre en el camino DEGRADADO (dec. 4), el que
+        # sale del proceso confiable y necesita su propio anti-SSRF. Se lee del
+        # MISMO setting que gobierna las host tools (`cortex.web_enabled`), para
+        # que encender la web sea una sola decisión del owner y no dos.
+        web_enabled = await get_cortex_web_enabled(admin_session)
         try:
             return build_cortex_model(
                 resolved,
                 provider=provider,
                 claude_sdk_available=claude_ok,
+                web_enabled=web_enabled,
             )
         except CortexModelUnavailableError as exc:
             raise HTTPException(
@@ -227,28 +268,38 @@ async def post_turn(
         # desde el panel, las host tools web_search/web_fetch entran en el catálogo y el
         # ctx las permite (salida SIEMPRE por el egress-proxy + anti-SSRF).
         web_enabled = await get_cortex_web_enabled(session)
-        enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
+        # Navegador real (ADR 0080): kill-switch APARTE del de la web. Encendido,
+        # el córtex puede PEDIR sesiones de navegación; cada una necesita despues
+        # la aprobación explícita del owner (validación humana por sesión).
+        browser_enabled = await get_cortex_browser_enabled(session)
+        enabled_tools = cortex_enabled_tool_names(
+            web_enabled=web_enabled, browser_enabled=browser_enabled
+        )
 
-        # Identidad del córtex (F3): carga (o crea la default) y la inyecta AL INICIO
-        # del system prompt, con el MISMO blindaje anti-inyección de los marcadores de
-        # datos. La identidad NUNCA se borra (ADR 0077), solo se versiona.
-        identity = await ensure_identity(session, owner_id)
-        preamble = identity_preamble(identity.identity_state)
-        base_prompt = _cortex_base_prompt()
-        if preamble:
-            base_prompt = f"{preamble}\n\n{base_prompt}"
-
-        # Recall híbrido del owner (Tarea 4) + augment del system prompt (Tarea 10).
-        known_facts = await cortex_recall(
+        # Self-context unificado: identidad + afecto vivo + recall + temas
+        # pendientes, cargados UNA vez y compuestos en UN solo prompt blindado.
+        now = datetime.now(UTC)
+        ctx = await load_self_context(
             session,
+            _redis_or_none(),
             owner_user_id=owner_id,
             tenant_id=tenant_id,
             query=payload.message,
-            limit=CORTEX_RECALL_LIMIT,
+            now=now,
         )
-        system_prompt = augment_cortex_prompt(
-            base_prompt,
-            known_facts=known_facts,
+
+        # El afecto modula el effort (acotado ±1 paso, auditable; ADR 0075: modula,
+        # nunca bloquea). Un doble de test sin provider_kind es no-op limpio.
+        decision = modulate_reasoning_effort(
+            getattr(model, "reasoning_effort", None),
+            getattr(model, "provider_kind", None),
+            ctx.affect,
+        )
+        model = apply_effort_decision(model, decision)
+
+        system_prompt = compose_self_context_prompt(
+            _cortex_base_prompt(web_enabled=web_enabled),
+            ctx,
             remember_enabled="cortex_remember" in enabled_tools,
         )
 
@@ -262,6 +313,7 @@ async def post_turn(
             owner_user_id=owner_id,
             tenant_id=tenant_id,
             web_enabled=web_enabled,
+            browser_enabled=browser_enabled,
         )
 
         try:
@@ -291,10 +343,13 @@ async def post_turn(
                 detail=f"el proveedor LLM del córtex falló: {exc}",
             ) from exc
 
-        # The effort/degraded the resolved model carried (None on a scripted test
-        # double). Honest: F1 has no auto-fallback, so degraded is False unless the
-        # model object explicitly says otherwise.
-        reasoning_effort = getattr(model, "reasoning_effort", None)
+        # El effort EFECTIVO del turno (modulado por afecto cuando aplica; para un
+        # doble sin metadatos la decisión es no-op y esto queda en None, como antes).
+        reasoning_effort = (
+            decision.effective
+            if decision.effective is not None
+            else getattr(model, "reasoning_effort", None)
+        )
         degraded = bool(getattr(model, "degraded", False))
 
         cortex_turn = await append_turn(
@@ -307,9 +362,35 @@ async def post_turn(
             tools_called=result.tools_called,
             rounds=result.rounds,
             reasoning_effort=reasoning_effort,
-            metadata={"degraded": degraded, "recall_hits": len(known_facts)},
+            metadata={
+                "degraded": degraded,
+                "recall_hits": len(ctx.known_facts),
+                "self_context": _self_context_meta(ctx, decision),
+            },
         )
         cortex_turn_id = cortex_turn.id
+
+        # Surfacing (ADR 0078): los temas de curiosidad ofrecidos al prompt se
+        # marcan EN ESTA transacción — si el LLM hubiera fallado antes, el
+        # rollback los deja pendientes para el próximo encuentro.
+        await mark_pursuits_surfaced(
+            session,
+            owner_user_id=owner_id,
+            pursuit_ids=[p.pursuit_id for p in ctx.pending_learnings],
+            now=now,
+        )
+
+        # ADR 0116: el consumo del córtex por fin se contabiliza (best-effort;
+        # tenant_id=None — es consumo del owner de plataforma, no de un tenant).
+        from api_server.llm_usage import record_llm_usage
+
+        await record_llm_usage(
+            session,
+            source="cortex",
+            model_client=model,
+            tenant_id=None,
+            user_id=owner_id,
+        )
 
     # Córtex F2 (ADR 0075): tras COMMIT del turno, dispara el distilador afectivo
     # fuera del hot-path (fire-and-forget). El appraisal es ASÍNCRONO: el dial PAD
@@ -486,18 +567,138 @@ async def put_model(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _cortex_base_prompt() -> str:
+# ---------------------------------------------------------------------------
+# Sesiones de navegador: el inbox de aprobación del owner (ADR 0080)
+# ---------------------------------------------------------------------------
+class BrowseSessionItem(BaseModel):
+    """Una sesión que el córtex quiere navegar. El owner ve el guion EXACTO —
+    a qué URLs va, qué clica y qué teclea — porque eso es lo que autoriza."""
+
+    id: str
+    status: str
+    goal: str
+    steps: list[dict[str, Any]]
+    result: dict[str, Any] | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+
+
+class BrowseDecisionRequest(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+def _browse_item(row: Any) -> BrowseSessionItem:
+    return BrowseSessionItem(
+        id=str(row.id),
+        status=row.status,
+        goal=row.goal,
+        steps=list(row.steps or []),
+        result=row.result,
+        error=row.error,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/browse-sessions", response_model=list[BrowseSessionItem])
+async def list_browse_sessions(
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> list[BrowseSessionItem]:
+    """Lo que el córtex ha pedido navegar y espera decisión humana."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        rows = await list_pending(admin_session, owner_user_id=principal.user_id)
+        return [_browse_item(row) for row in rows]
+
+
+@router.post("/browse-sessions/{session_id}/approve", response_model=BrowseSessionItem)
+async def approve_browse_session(
+    session_id: UUID,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> BrowseSessionItem:
+    """El owner aprueba ESTA sesión: solo ahora se lanza el navegador.
+
+    La aprobación es por sesión (nunca un permiso permanente) y se registra con
+    quién y cuándo. Si el kill-switch de plataforma está apagado no hay nada que
+    aprobar — y el worker lo vuelve a comprobar antes de abrir Chromium."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        if not await get_cortex_browser_enabled(admin_session):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="el navegador del córtex está deshabilitado (cortex.browser_enabled)",
+            )
+        owner_id = principal.user_id
+        row = await get_browse_session(admin_session, session_id, owner_user_id=owner_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+        try:
+            await approve_session(admin_session, row, decided_by=owner_id)
+        except BrowseTransitionError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        await admin_session.commit()
+        item = _browse_item(row)
+
+    if not await enqueue_browse_session(session_id):
+        # La fila queda en `approved`: re-aprobar la relanza. Se lo decimos al
+        # owner en vez de dejarle creer que su navegación está en marcha.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="sesión aprobada pero no se pudo encolar (broker caído): reintenta",
+        )
+    return item
+
+
+@router.post("/browse-sessions/{session_id}/reject", response_model=BrowseSessionItem)
+async def reject_browse_session(
+    session_id: UUID,
+    payload: BrowseDecisionRequest,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> BrowseSessionItem:
+    """El owner dice que no. Terminal: esa sesión no se navega nunca."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as admin_session:
+        owner_id = principal.user_id
+        row = await get_browse_session(admin_session, session_id, owner_user_id=owner_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+        try:
+            await reject_session(admin_session, row, decided_by=owner_id, reason=payload.reason)
+        except BrowseTransitionError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        await admin_session.commit()
+        return _browse_item(row)
+
+
+def _cortex_base_prompt(*, web_enabled: bool = False) -> str:
     """El system prompt base del córtex (copy honesto — F1 no simula afecto).
 
     El recall y la pista de escritura se añaden encima con
-    :func:`augment_cortex_prompt` (mismo blindaje anti-inyección del asistente)."""
-    return (
+    :func:`augment_cortex_prompt` (mismo blindaje anti-inyección del asistente).
+
+    ``web_enabled``: la affordance de la web se ANUNCIA explícitamente — el
+    modelo no puede usar lo que no sabe que tiene (sus priors buscan las tools
+    nativas «WebSearch/WebFetch», que aquí no existen: las del córtex son las
+    host tools ``web_search``/``web_fetch`` vía egress-proxy, ADR 0067)."""
+    base = (
         "Eres el córtex del System Owner: un asistente de deliberación con memoria "
         "persistente entre conversaciones. Razonas en profundidad, recuerdas lo que "
         "el owner te cuenta y lo usas para ayudarle mejor en futuros turnos. Responde "
         "con honestidad y precisión, en el idioma del owner (español o inglés). No "
         "afirmes tener emociones ni consciencia."
     )
+    if web_enabled:
+        base += (
+            " SÍ tienes acceso a Internet mediante tus tools web_search (buscar) y "
+            "web_fetch (leer una URL concreta), con salida por un proxy seguro. NUNCA "
+            "digas que no tienes acceso a Internet ni permiso para buscar: LO TIENES. "
+            "Siempre que te pregunten por información ACTUAL o externa (el tiempo, "
+            "noticias, precios, datos recientes, cualquier cosa que no sepas con "
+            "certeza), LLAMA a web_search ANTES de responder y basa tu respuesta en "
+            "los resultados, citando la fuente (no confundas estas tools con "
+            "«WebSearch/WebFetch», que no existen aquí). Solo di que no lo sabes si "
+            "la búsqueda no devuelve nada útil."
+        )
+    return base
 
 
 def _preview(content: str) -> str:

@@ -49,6 +49,15 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # prod-12 task_prod12_reaper_01 (sandbox-5): reap de contenedores managed
+    # sin asociacion VIVA (execution running / review activa) + redes bridge
+    # per-task de test-runtime vacias. Criterio de vida compartido con el
+    # sweeper de zombis de prod-06 (nunca doble-kill). Cada 10 min.
+    "reap-orphans-every-10m": {
+        "task": "workers.reap_orphans",
+        "schedule": schedule(run_every=600.0),
+        "options": {"queue": "default"},
+    },
     # prod-06 task_prod06_dag_02 — safety-net DAG promotion: across in_progress
     # plans, promote eligible backlog tasks to ready and re-announce undispatched
     # ready tasks (the DB trigger flips status without publishing an event). Cheap
@@ -89,14 +98,70 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": schedule(run_every=30.0),
         "options": {"queue": "default"},
     },
+    # Audit C3 / P0.6 — convergence safety net: reconcile DERIVED pipeline state the
+    # live event path can miss (a lost task/plan event, a worker SIGKILLed between the
+    # finalize txn and the publish). Three idempotent best-effort passes: (a) a task
+    # stuck `in_progress` whose last execution is terminal -> transition it off
+    # (reusing the dag_01 policy + re-emit the event); (b) an `in_review` task with an
+    # AI reviewer but no live/recent review run -> re-announce `in_review` so the
+    # orchestrator re-dispatches; (c) an `in_progress` plan whose tasks are all
+    # terminal -> `pending_human_validation`. Every 90s; only touches rows settled
+    # past the age thresholds, so it never races a worker mid post-processing.
+    "reconcile-pipeline-state-every-90s": {
+        "task": "workers.reconcile_pipeline_state",
+        "schedule": schedule(run_every=90.0),
+        "options": {"queue": "default"},
+    },
     "purge-dep-cache-daily": {
         "task": "workers.purge_dep_cache",
         "schedule": crontab(hour="3", minute="0"),
         "options": {"queue": "test"},
     },
+    # ADR 0122: vigía de credenciales LLM — sondea los proveedores activos
+    # y avisa ANTES de que un run muera por credencial caducada.
+    "provider-watchdog-every-30m": {
+        "task": "workers.provider_watchdog",
+        "schedule": schedule(run_every=1800.0),
+        "options": {"queue": "default"},
+    },
+    # ADR 0120: el standup del PM corre CADA HORA a los :05 — la task decide
+    # qué tenants reciben el parte (los que tienen `standup.hour` == hora
+    # actual UTC); la cadencia horaria hace de gate de idempotencia diaria.
+    "daily-standup-hourly-gate": {
+        "task": "workers.daily_standup",
+        "schedule": crontab(minute="5"),
+        "options": {"queue": "default"},
+    },
+    # ADR 0124: retro de planes cerrados → memoria project_shared (cada 15
+    # min; idempotente por marker en Redis, ventana 48h).
+    # ADR 0125: asesor de configuración — lunes 07:00 UTC, solo PROPONE.
+    "config-advisor-weekly": {
+        "task": "workers.config_advisor",
+        "schedule": crontab(day_of_week="1", hour="7", minute="0"),
+        "options": {"queue": "default"},
+    },
+    "plan-retro-every-15m": {
+        "task": "workers.plan_retro",
+        "schedule": schedule(run_every=900.0),
+        "options": {"queue": "default"},
+    },
     "prune-worktrees-daily": {
         "task": "workers.prune_worktrees",
         "schedule": crontab(hour="3", minute="30"),
+        "options": {"queue": "default"},
+    },
+    # G-08 (auditoría proyecto 2026-07-17) — higiene mensual de los bare repos:
+    # worktree prune + gc ligero + locks huérfanos + poda de ramas plan/* de
+    # planes cerrados con PR abierto (con refs/rescue como red).
+    # ADR 0126: restore-drill mensual — un backup no probado no existe.
+    "restore-drill-monthly": {
+        "task": "workers.restore_drill",
+        "schedule": crontab(day_of_month="2", hour="4", minute="30"),
+        "options": {"queue": "default"},
+    },
+    "git-housekeeping-monthly": {
+        "task": "workers.git_housekeeping",
+        "schedule": crontab(day_of_month="1", hour="3", minute="50"),
         "options": {"queue": "default"},
     },
     # Plan 06.11 — safety net: re-enqueue documents stuck in `pending`
@@ -113,10 +178,37 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     # una pasada solo toca filas NULL, así que con todo rellenado es un no-op
     # barato. Su enable/batch/throttle son platform settings (memory.backfill_*)
     # que un System Admin posee. Pinned a `ingestion` (donde vive el embedder).
+    # P1-11b (investigación 2026-07-11): el espejo para chunks de KB — la
+    # ingesta deja embedding=NULL si Ollama falla y el re-embed nunca existió.
+    "backfill-chunk-embeddings-every-5m": {
+        "task": "workers.backfill_chunk_embeddings",
+        "schedule": schedule(run_every=300.0),
+        "options": {"queue": "default"},
+    },
     "backfill-memory-embeddings-every-5m": {
         "task": "workers.backfill_memory_embeddings",
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "ingestion"},
+    },
+    # G-03 (auditoría proyecto 2026-07-17): GC físico del conocimiento —
+    # hard-purga documentos soft-borrados vencidos (chunks+blob+fila) y barre
+    # blobs kb/** sin fila documents. Diario 04:00. Pinned a `ingestion` (donde
+    # vive el cliente MinIO). Idempotente; una pasada sin basura es no-op barato.
+    "collect-knowledge-garbage-daily": {
+        "task": "workers.collect_knowledge_garbage",
+        "schedule": crontab(hour="4", minute="0"),
+        "options": {"queue": "ingestion"},
+    },
+    # `task_wf_52b`: latido de shadow evals. `record_shadow_eval` existia desde
+    # el Plan 14 sin ningun llamante — el mecanismo entero y nunca disparado.
+    # Horario y no mas frecuente: cada corrida cuesta llamadas de juez, y la
+    # senal que persigue (deriva de calidad) no se mueve por minutos. Pinned a
+    # `default`: son llamadas LLM + escrituras, sin efectos de infra. No-op
+    # barato mientras el operador no nombre juez y cree un dataset `shadow`.
+    "run-shadow-evals-hourly": {
+        "task": "workers.run_shadow_evals",
+        "schedule": crontab(minute="17"),
+        "options": {"queue": "default"},
     },
 }
 
@@ -135,6 +227,7 @@ CRED_ROTATION_BEAT_ENTRY = "rotate-credentials"
 # Plan 11.1 task_11_1_02: the scheduled exchange-rates-fetcher entry name. Same
 # constant-not-hardcoded-string discipline as the price-sync / backup entries.
 FX_FETCH_BEAT_ENTRY = "fetch-exchange-rates"
+GIT_FETCH_BEAT_ENTRY = "sweep-project-git-remotes"
 
 # Plan 16 task_16_06: the scheduled acceptance-timeout escalation sweep entry
 # name. Same constant-not-hardcoded-string discipline as the entries above.
@@ -280,6 +373,21 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
         ),
         "options": {"queue": "default"},
     }
+    # ADR 0098 (eje 3): barrido periodico de fetch de remotos git en cadencia
+    # CONFIGURABLE (WORKERS_GIT_FETCH_CRON, default cada 30 min). Cola `default`
+    # (fetch autenticado best-effort por proyecto, sin side-effects de infra).
+    # El interruptor vivo es el platform setting `git_fetch_sweep_enabled`
+    # (default OFF) que el task consulta antes de tocar ningun remoto.
+    sched[GIT_FETCH_BEAT_ENTRY] = {
+        "task": "workers.sweep_project_git_remotes",
+        "schedule": _parse_cron(
+            cfg.git_fetch_cron,
+            env_var="WORKERS_GIT_FETCH_CRON",
+            default=_cron_default("git_fetch_cron"),
+            environment=cfg.environment,
+        ),
+        "options": {"queue": "default"},
+    }
     # Plan 16 task_16_06: acceptance-timeout escalation sweep on a CONFIGURABLE
     # cadence (WORKERS_HUMAN_ESCALATION_CRON, default every 10 minutes). Pinned
     # to the `default` queue — a cheap partial-index scan of the open
@@ -301,19 +409,56 @@ def build_beat_schedule(settings: Settings | None = None) -> dict[str, dict[str,
     # estas entradas pueden tickear siempre sin coste: encolan barato y la tarea sale
     # enseguida si la autonomía está apagada. Queue `default` (Ollama local + web
     # acotada, sin infra). Activación = encender el switch desde la UI del owner.
+    # Auditoría del córtex 2026-07-27: las tres cadencias eran CONSTANTES pese a que
+    # `workers.config` declara los tres crons «operator-tunable» con un default
+    # documentado. El operador exportaba la variable, reiniciaba el beat y no pasaba
+    # nada; y los defaults del Field mentían frente a lo que corría de verdad (`*/30`
+    # contra 15 min, `42 4` contra 04:45). Ahora salen de `_parse_cron`, como las otras
+    # seis entradas configurables: mismo fallback ruidoso ante un cron malformado
+    # (RAISE en staging/prod, ERROR + default de ESTA entrada en dev).
     sched["cortex-curiosity"] = {
         "task": "workers.cortex_curiosity_loop",
-        "schedule": schedule(run_every=900.0),  # cada 15 min
+        "schedule": _parse_cron(
+            cfg.cortex_curiosity_cron,
+            env_var="WORKERS_CORTEX_CURIOSITY_CRON",
+            default=_cron_default("cortex_curiosity_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     sched["cortex-reflection"] = {
         "task": "workers.cortex_reflect_scheduled",
-        "schedule": crontab(hour="4", minute="15"),  # reflexión diaria (madrugada)
+        "schedule": _parse_cron(
+            cfg.cortex_reflection_cron,
+            env_var="WORKERS_CORTEX_REFLECTION_CRON",
+            default=_cron_default("cortex_reflection_cron"),
+            environment=cfg.environment,
+        ),
         "options": {"queue": "default"},
     }
     sched["cortex-maintenance"] = {
         "task": "workers.cortex_maintenance",
-        "schedule": crontab(hour="4", minute="45"),  # mantenimiento/olvido diario
+        "schedule": _parse_cron(
+            cfg.cortex_maintenance_cron,
+            env_var="WORKERS_CORTEX_MAINTENANCE_CRON",
+            default=_cron_default("cortex_maintenance_cron"),
+            environment=cfg.environment,
+        ),
+        "options": {"queue": "default"},
+    }
+    # C2 (investigación 2026-07-11): el pulso de plataforma — el córtex siente
+    # lo que le pasa al sistema (runs/planes) sin LLM (mapeo determinista).
+    sched["cortex-platform-pulse"] = {
+        "task": "workers.cortex_platform_pulse",
+        "schedule": schedule(run_every=900.0),  # cada 15 min
+        "options": {"queue": "default"},
+    }
+    # C1 (investigación 2026-07-11): iniciativa proactiva — el córtex escribe
+    # primero cuando hay aprendizajes pendientes + silencio largo (lógica pura
+    # anti-acoso en api_server.cortex.initiative).
+    sched["cortex-initiative"] = {
+        "task": "workers.cortex_initiative",
+        "schedule": schedule(run_every=1800.0),  # cada 30 min
         "options": {"queue": "default"},
     }
     return sched

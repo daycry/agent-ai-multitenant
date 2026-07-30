@@ -16,16 +16,25 @@ from __future__ import annotations
 
 from typing import Any
 
-# Mirrors the agent-runtime ``Budgets`` dataclass defaults
-# (docker/agent-runtimes/agent-runtime/agent_runtime/safeguards.py:38-47). These
-# are the CEILING — the maximum a project/platform budget may set. The dispatcher
-# must not import the sandboxed runtime package, so the values are duplicated here
-# by hand; keep them in sync if the dataclass defaults ever change.
+# The CEILING — the maximum a project/platform budget may set. It must be at
+# least the LARGEST legitimate per-kind budget the worker applies, otherwise the
+# clamp defeats those per-kind budgets: an operator override lands in
+# ``ExecutionRequest.budgets`` and the worker's per-kind ``setdefault`` no longer
+# fires, so a claude_sdk run gets strangled to the thin-provider default (the
+# prod-06 A2 regression, auditoría 2026-07-06 — revivía el corte a ~23 iter que
+# arregló la remediación 07c91cc). So the ceiling mirrors the claude_sdk
+# IMPLEMENTER per-kind budget (the highest across kinds), NOT the runtime's
+# thin-provider dataclass default.
+#
+# Sync source (duplicated by hand — the dispatcher must not import the sandboxed
+# runtime package): ``apps/workers/src/workers/config.py`` —
+# ``agent_max_tokens_claude_sdk`` (500_000), ``agent_max_iterations_claude_sdk``
+# (50), ``container_run_timeout_claude_sdk_s`` (7200). Keep in sync if those grow.
 EXECUTION_BUDGET_CEILING: dict[str, float] = {
-    "max_iterations": 25,
-    "max_tokens": 100_000,
+    "max_iterations": 50,
+    "max_tokens": 500_000,
     "max_cost_usd": 5.0,
-    "max_wall_clock_s": 600.0,
+    "max_wall_clock_s": 7200.0,
     "max_tool_calls": 50,
 }
 
@@ -37,10 +46,16 @@ EXECUTION_BUDGET_CEILING: dict[str, float] = {
 _INT_KEYS = frozenset({"max_iterations", "max_tokens", "max_tool_calls"})
 
 
+# ADR 0113: el wall-clock NO se multiplica — lo mata el timeout del contenedor
+# del worker (env), y un techo por encima solo produciria kills externos.
+_MULTIPLIER_EXEMPT_KEYS = frozenset({"max_wall_clock_s"})
+
+
 def resolve_execution_budgets(
     *,
     platform_default: dict[str, Any] | None,
     project_override: dict[str, Any] | None,
+    ceiling_multiplier: float = 1.0,
 ) -> dict[str, float] | None:
     """Resolve the per-run budget envelope.
 
@@ -59,6 +74,7 @@ def resolve_execution_budgets(
         if isinstance(src, dict):
             merged.update(src)
 
+    multiplier = max(1.0, float(ceiling_multiplier or 1.0))
     out: dict[str, float] = {}
     for key, ceiling in EXECUTION_BUDGET_CEILING.items():
         if key not in merged:
@@ -69,7 +85,10 @@ def resolve_execution_budgets(
             continue
         if raw <= 0:
             continue
-        value = min(float(raw), float(ceiling))
+        effective_ceiling = (
+            float(ceiling) if key in _MULTIPLIER_EXEMPT_KEYS else float(ceiling) * multiplier
+        )
+        value = min(float(raw), effective_ceiling)
         out[key] = int(value) if key in _INT_KEYS else value
 
     return out or None

@@ -29,7 +29,7 @@ cerebro y el frame afectivo:
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -39,11 +39,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api_server.assistant.graph import AssistantModelClient, AssistantTurnResult
 from api_server.cortex.affect_cache import read_affect_state
+from api_server.cortex.affect_policy import modulate_reasoning_effort
 from api_server.cortex.affect_store import load_affect_state
 from api_server.cortex.affective import AffectState, Language, neutral_affect_state
 from api_server.cortex.graph import run_cortex_turn
-from api_server.cortex.identity import ensure_identity, identity_preamble
-from api_server.cortex.memory import CORTEX_RECALL_LIMIT, augment_cortex_prompt, cortex_recall
+from api_server.cortex.model_config import apply_effort_decision
+from api_server.cortex.self_context import (
+    compose_self_context_prompt,
+    load_self_context,
+    mark_pursuits_surfaced,
+    self_context_meta,
+)
 from api_server.cortex.threads import (
     CortexNoTenantError,
     append_turn,
@@ -57,21 +63,38 @@ from api_server.db.platform_settings import get_cortex_web_enabled
 _log = structlog.get_logger("api_server.cortex.voice_turn")
 
 
-def _cortex_voice_base_prompt() -> str:
+def _cortex_voice_base_prompt(*, web_enabled: bool = False, language_instruction: str = "") -> str:
     """System prompt base del córtex en voz (copy honesto — sin fingir afecto).
 
     Espejo del prompt del chat (``routers.cortex._cortex_base_prompt``) con una
     nota de brevedad propia de la voz: las respuestas habladas deben ser concisas
-    (la TTS las lee), sin Markdown ni listas largas."""
-    return (
+    (la TTS las lee), sin Markdown ni listas largas. ``web_enabled`` anuncia la
+    affordance de la web (el modelo no usa lo que no sabe que tiene).
+    ``language_instruction`` fija el idioma de la RESPUESTA al de la voz elegida
+    (el owner reportó que con voz española el córtex contestaba en inglés)."""
+    base = (
         "Eres el córtex del System Owner en una videollamada de voz: un asistente "
         "de deliberación con memoria persistente entre conversaciones. Razonas, "
         "recuerdas lo que el owner te cuenta y lo usas para ayudarle mejor. Como te "
         "están ESCUCHANDO (no leyendo), responde de forma breve, natural y hablada: "
-        "sin Markdown, sin listas largas, frases cortas. Responde con honestidad y "
-        "en el idioma del owner (español o inglés). No afirmes tener emociones ni "
-        "consciencia: eres un modelo computacional."
+        "sin Markdown, sin listas largas, frases cortas. No afirmes tener emociones "
+        "ni consciencia: eres un modelo computacional."
     )
+    if language_instruction:
+        base += language_instruction
+    else:
+        base += " Responde con honestidad y en el idioma del owner (español o inglés)."
+    if web_enabled:
+        base += (
+            " SÍ tienes acceso a Internet mediante tus tools web_search y web_fetch "
+            "(salida por un proxy seguro). NUNCA digas que no tienes acceso a Internet "
+            "ni permiso para buscar: LO TIENES. Siempre que te pregunten por información "
+            "ACTUAL o del mundo real (el tiempo, noticias, precios, datos recientes, "
+            "cualquier cosa que no sepas con certeza), LLAMA a web_search ANTES de "
+            "responder y basa tu respuesta en los resultados, mencionando la fuente. "
+            "Solo di que no lo sabes si la búsqueda no devuelve nada útil."
+        )
+    return base
 
 
 async def run_cortex_voice_turn(
@@ -81,6 +104,9 @@ async def run_cortex_voice_turn(
     owner_user_id: UUID,
     user_text: str,
     conversation_id: UUID | None,
+    affect: AffectState | None = None,
+    now: datetime | None = None,
+    language_instruction: str = "",
 ) -> tuple[AssistantTurnResult, UUID, UUID]:
     """Corre UN turno del córtex para ``user_text`` y persiste ambos turnos.
 
@@ -116,22 +142,29 @@ async def run_cortex_voice_turn(
     web_enabled = await get_cortex_web_enabled(session)
     enabled_tools = cortex_enabled_tool_names(web_enabled=web_enabled)
 
-    identity = await ensure_identity(session, owner_user_id)
-    preamble = identity_preamble(identity.identity_state)
-    base_prompt = _cortex_voice_base_prompt()
-    if preamble:
-        base_prompt = f"{preamble}\n\n{base_prompt}"
-
-    known_facts = await cortex_recall(
+    # Self-context unificado (mismo composer que el chat): el WS ya cargó el
+    # afecto para la prosodia y lo pasa aquí — cero lecturas duplicadas.
+    turn_now = now or datetime.now(UTC)
+    ctx = await load_self_context(
         session,
+        None,
         owner_user_id=owner_user_id,
         tenant_id=tenant_id,
         query=user_text,
-        limit=CORTEX_RECALL_LIMIT,
+        now=turn_now,
+        affect=affect,
     )
-    system_prompt = augment_cortex_prompt(
-        base_prompt,
-        known_facts=known_facts,
+    decision = modulate_reasoning_effort(
+        getattr(model, "reasoning_effort", None),
+        getattr(model, "provider_kind", None),
+        ctx.affect,
+    )
+    model = apply_effort_decision(model, decision)
+    system_prompt = compose_self_context_prompt(
+        _cortex_voice_base_prompt(
+            web_enabled=web_enabled, language_instruction=language_instruction
+        ),
+        ctx,
         remember_enabled="cortex_remember" in enabled_tools,
     )
 
@@ -153,7 +186,11 @@ async def run_cortex_voice_turn(
         chat_history=chat_history,
     )
 
-    reasoning_effort = getattr(model, "reasoning_effort", None)
+    reasoning_effort = (
+        decision.effective
+        if decision.effective is not None
+        else getattr(model, "reasoning_effort", None)
+    )
     degraded = bool(getattr(model, "degraded", False))
     cortex_turn = await append_turn(
         session,
@@ -165,7 +202,20 @@ async def run_cortex_voice_turn(
         tools_called=result.tools_called,
         rounds=result.rounds,
         reasoning_effort=reasoning_effort,
-        metadata={"degraded": degraded, "recall_hits": len(known_facts), "channel": "voice"},
+        metadata={
+            "degraded": degraded,
+            "recall_hits": len(ctx.known_facts),
+            "channel": "voice",
+            "self_context": self_context_meta(ctx, decision),
+        },
+    )
+    # Surfacing (ADR 0078): mismo contrato que el chat — se marca en ESTA
+    # transacción; un fallo previo del turno los deja pendientes (rollback).
+    await mark_pursuits_surfaced(
+        session,
+        owner_user_id=owner_user_id,
+        pursuit_ids=[p.pursuit_id for p in ctx.pending_learnings],
+        now=turn_now,
     )
     return result, conversation_id, cortex_turn.id
 

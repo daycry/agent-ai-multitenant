@@ -425,3 +425,86 @@ def test_adapter_registered_under_whatsapp_channel_type() -> None:
     adapter = get_adapter("whatsapp")
     assert adapter is not None
     assert adapter.channel_type == "whatsapp"
+
+
+@pytest.mark.asyncio
+async def test_body_param_falls_back_to_message_body(patch_transport) -> None:
+    """NOTIF-1: un structured SIN 'body' (la forma histórica del pipeline) no
+    puede producir una plantilla con cuerpo en blanco — el param 'body' cae al
+    message.body renderizado."""
+    settings = _test_settings()
+    requests = patch_transport(httpx.Response(200, json={"messages": [{"id": "wamid.fb"}]}))
+
+    adapter = WhatsAppAdapter(settings=settings)
+    message = _message(structured={"template": "agentic_notification", "subject": "S"})
+    result = await adapter.send(message)
+
+    assert result.ok is True
+    payload = json.loads(requests[0].content.decode("utf-8"))
+    params = payload["template"]["components"][0]["parameters"]
+    assert params[0]["text"] == "Task X is blocked. Reason: timeout."
+
+
+# ===========================================================================
+# ADR 0109 (NOTIF-4): provider "neonize" — sidecar whatsmeow self-hosted,
+# texto libre (message.body renderizado), sin plantillas de Meta. Misma rama
+# de config.provider que email SMTP vs SendGrid.
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_neonize_provider_posts_free_text_to_sidecar(patch_transport) -> None:
+    settings = _test_settings()
+    requests = patch_transport(httpx.Response(200, json={"ok": True, "id": "n-1"}))
+
+    adapter = WhatsAppAdapter(settings=settings)
+    message = _message(
+        config={"provider": "neonize", "base_url": "http://wa-neonize:8085"},
+        structured={},  # neonize no usa plantillas — el body renderizado basta
+    )
+    result = await adapter.send(message)
+
+    assert result.ok is True
+    request = requests[0]
+    assert str(request.url) == "http://wa-neonize:8085/send"
+    assert request.headers["authorization"] == f"Bearer {_ACCESS_TOKEN}"
+    payload = json.loads(request.content.decode("utf-8"))
+    assert payload["to"] == _RECIPIENT
+    assert payload["text"] == "Task X is blocked. Reason: timeout."
+
+
+@pytest.mark.asyncio
+async def test_neonize_default_base_url_from_settings(patch_transport) -> None:
+    settings = _test_settings()
+    requests = patch_transport(httpx.Response(200, json={"ok": True}))
+
+    adapter = WhatsAppAdapter(settings=settings)
+    message = _message(config={"provider": "neonize"}, structured={})
+    result = await adapter.send(message)
+
+    assert result.ok is True
+    assert str(requests[0].url).startswith(settings.whatsapp_neonize_base_url)
+
+
+@pytest.mark.asyncio
+async def test_neonize_unpaired_session_is_a_channel_error(patch_transport) -> None:
+    settings = _test_settings()
+    patch_transport(httpx.Response(409, json={"error": "not_paired"}))
+
+    adapter = WhatsAppAdapter(settings=settings)
+    message = _message(config={"provider": "neonize"}, structured={})
+    # Un 409 not_paired (sesión QR sin vincular) eleva ChannelSendError con la
+    # causa accionable — el dispatcher lo registra + dead-letter como el resto.
+    with pytest.raises(ChannelSendError, match="not_paired"):
+        await adapter.send(message)
+
+
+@pytest.mark.asyncio
+async def test_cloud_provider_stays_the_default(patch_transport) -> None:
+    """Sin provider (o provider=cloud) el camino Cloud API es byte-a-byte el de
+    siempre — backward-compat para los canales existentes."""
+    settings = _test_settings()
+    requests = patch_transport(httpx.Response(200, json={"messages": [{"id": "wamid.z"}]}))
+
+    adapter = WhatsAppAdapter(settings=settings)
+    await adapter.send(_message())
+
+    assert "graph" in str(requests[0].url) or "/messages" in str(requests[0].url)

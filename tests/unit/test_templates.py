@@ -47,15 +47,18 @@ def test_supported_locales_are_es_en_only() -> None:
 
 
 def test_core_events_have_builtins_in_both_locales() -> None:
-    """The task names plan approved / task failed / execution finished /
-    review requested as the core preloaded events; each must ship in es+en."""
+    """Core preloaded events ship in es+en. `task_failed` se RETIRÓ (NOTIF-3):
+    era imposible por diseño (los fallos de run convergen en `blocked`, que ya
+    notifica task_blocked) y daba cobertura ilusoria."""
     core_events = {
         "plan_approved",
-        "task_failed",
+        "plan_rejected",
         "execution_finished",
+        "execution_failed",
         "review_requested",
     }
     assert core_events <= builtin_event_types()
+    assert "task_failed" not in builtin_event_types()
     for event in core_events:
         for locale in ("es", "en"):
             assert (event, locale) in BUILTIN_TEMPLATES, f"missing {event}/{locale}"
@@ -108,7 +111,7 @@ def test_missing_variables_render_safely() -> None:
     template's `default(...)` (or render empty), producing a deliverable
     message rather than a crash."""
     rendered = render_notification(
-        event_type="task_failed",
+        event_type="task_blocked",
         channel_type="sms",
         locale="en",
         context={},  # nothing supplied

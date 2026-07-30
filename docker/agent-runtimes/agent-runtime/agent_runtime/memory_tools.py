@@ -23,6 +23,40 @@ from agent_runtime.internal_api import (
 )
 from agent_runtime.tools import ToolRegistry, ToolResult
 
+_VALID_SCOPES = ("private", "team_shared", "project_shared", "global")
+# LLMs ignore the schema enum and send near-misses ("project", "team", "error"…),
+# which the internal API rejects with HTTP 422 — burning a whole turn. We coerce
+# the common intents and drop the rest instead of failing the call.
+_SCOPE_ALIASES = {
+    "project": "project_shared",
+    "project_share": "project_shared",
+    "team": "team_shared",
+    "team_share": "team_shared",
+    "shared": "project_shared",
+    "org": "global",
+    "organization": "global",
+    "organisation": "global",
+    "personal": "private",
+    "self": "private",
+}
+
+
+def _coerce_scopes(scopes: list[str]) -> list[str]:
+    """Normalise model-supplied scopes to the valid vocabulary.
+
+    Lowercases, maps common aliases ("project" → "project_shared"), drops anything
+    unknown, and de-dups preserving order. An empty result means "no scope filter"
+    so the caller passes ``None`` and the API uses the available defaults — never a
+    422 over a scope the model guessed wrong.
+    """
+    out: list[str] = []
+    for raw in scopes:
+        key = raw.strip().lower()
+        mapped = key if key in _VALID_SCOPES else _SCOPE_ALIASES.get(key)
+        if mapped and mapped not in out:
+            out.append(mapped)
+    return out
+
 
 @dataclass
 class MemoryTools:
@@ -42,6 +76,9 @@ class MemoryTools:
                 ok=False,
                 error="memory_recall 'scopes' must be a list of strings if provided",
             )
+        # Coerce model near-misses to the valid vocabulary; empty → no filter.
+        if scopes is not None:
+            scopes = _coerce_scopes(scopes) or None
         limit_raw = args.get("limit", 5)
         try:
             limit = int(limit_raw)

@@ -83,7 +83,6 @@ const APP_SERVICES: readonly PreviewService[] = [
   { name: "orchestrator", role: "Orquestador de tareas", port: null, ramMib: 384 },
   { name: "memorizer", role: "Indexación de memoria", port: null, ramMib: 384 },
   { name: "admin-panel", role: "Panel del System Admin (Next.js)", port: 3000, ramMib: 256 },
-  { name: "web-app", role: "Aplicación web de tenants (Next.js)", port: 3001, ramMib: 256 },
 ] as const;
 
 /** Per-worker RAM is bounded by the operator's per-worker memory choice. */

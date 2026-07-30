@@ -8,7 +8,7 @@ auditables, no curiosidad consciente.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -39,6 +39,9 @@ class CortexAutonomyResponse(BaseModel):
 
     autonomy_enabled: bool
     web_enabled: bool
+    # ADR 0080: el NAVEGADOR real (Playwright). Kill-switch aparte del de la web
+    # —leer no es navegar— y, aun encendido, cada sesión la aprueba el owner.
+    browser_enabled: bool = False
     curiosity_drive_threshold: float
     circuit_breaker_open: bool
     budget: CortexAutonomyBudget
@@ -47,11 +50,30 @@ class CortexAutonomyResponse(BaseModel):
 
 
 class CortexAutonomyUpdateRequest(BaseModel):
-    """Flip del kill-switch global de los bucles autónomos (System Owner)."""
+    """Update PARCIAL de los gates del córtex (System Owner, desde la UI).
+
+    Cada campo es opcional: ``autonomy_enabled`` flipa el kill-switch global de
+    los bucles autónomos; ``web_enabled`` el gate de la web del córtex
+    (``cortex.web_enabled``, ADR 0067 — deny-by-default). Un body sin ningún
+    campo es un 422 honesto (no hay nada que escribir)."""
 
     model_config = _BASE_CONFIG
 
-    autonomy_enabled: bool
+    autonomy_enabled: bool | None = None
+    web_enabled: bool | None = None
+    browser_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> CortexAutonomyUpdateRequest:
+        if (
+            self.autonomy_enabled is None
+            and self.web_enabled is None
+            and self.browser_enabled is None
+        ):
+            raise ValueError(
+                "provide at least one of autonomy_enabled / web_enabled / browser_enabled"
+            )
+        return self
 
 
 __all__ = [

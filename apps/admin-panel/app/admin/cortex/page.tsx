@@ -40,6 +40,7 @@ import { ApiError } from "@/lib/api";
 import {
   CORTEX_LIMITS,
   cortexConversationLabel,
+  cortexFetch,
   getCortexConversations,
   getCortexTurns,
   postCortexTurn,
@@ -56,12 +57,33 @@ export default function CortexChatPage() {
   const queryClient = useQueryClient();
 
   const [draft, setDraft] = useState("");
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  // Tri-estado del hilo activo: `undefined` = aún sin decidir (el efecto de
+  // auto-selección puede elegir el más reciente al cargar); `null` = el owner
+  // pulsó «Nueva conversación» (elección EXPLÍCITA — el auto-select no la pisa).
+  const [activeConversationId, setActiveConversationId] = useState<string | null | undefined>(
+    undefined,
+  );
   const [forbidden, setForbidden] = useState(false);
   const [voiceMode, setVoiceMode] = useState(false);
   // El effort efectivo del último turno del córtex; alimenta el indicador de
   // "pensando a fondo" del siguiente turno.
   const [lastEffort, setLastEffort] = useState<string | null>(null);
+  // Eco optimista: el mensaje recién enviado, visible como burbuja MIENTRAS el
+  // córtex delibera (el POST es síncrono y puede tardar). Se oculta solo cuando
+  // el refetch del hilo ya lo trae persistido (sin flicker ni duplicado).
+  const [pendingEcho, setPendingEcho] = useState<string | null>(null);
+
+  // C12 (investigación 2026-07-11): el mood vivo también en el CHAT — en voz ya
+  // se materializa (prosodia + avatar) pero en texto el owner no lo veía. Solo
+  // lectura ligera del Panel de Mente, refrescada con calma.
+  const mindQuery = useQuery<{ mood_label?: string }, ApiError>({
+    queryKey: ["cortex-mind-chat"],
+    queryFn: () => cortexFetch<{ mood_label?: string }>("/mind"),
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const moodLabel = mindQuery.data?.mood_label?.trim();
 
   const conversationsQuery = useQuery<CortexConversation[], ApiError>({
     queryKey: ["cortex", "conversations"],
@@ -71,10 +93,11 @@ export default function CortexChatPage() {
     retry: false,
   });
 
-  // Auto-selecciona el hilo más reciente en cuanto llega la lista. El backend
-  // devuelve los hilos más recientes primero, así que el primero es el activo.
+  // Auto-selecciona el hilo más reciente en cuanto llega la lista — SOLO si el
+  // owner aún no ha decidido (undefined). `null` es «Nueva conversación»
+  // explícita y el auto-select NO debe pisarla (bug QA 2026-07-06).
   useEffect(() => {
-    if (activeConversationId) return;
+    if (activeConversationId !== undefined) return;
     const conversations = conversationsQuery.data;
     if (conversations && conversations.length > 0) {
       setActiveConversationId(conversations[0].id);
@@ -106,7 +129,11 @@ export default function CortexChatPage() {
         queryKey: ["cortex", "turns", data.conversation_id],
       });
     },
-    onError: (error) => {
+    onError: (error, message) => {
+      // El envío falló: retira el eco y devuelve el texto al input para que el
+      // owner no pierda lo que escribió.
+      setPendingEcho(null);
+      setDraft((current) => current || message);
       // Un 403 aquí significa que dejaste de ser owner tras cargar: refleja el
       // gate del backend en vez de mostrar un chat que sabemos denegado.
       if (error.status === 403) setForbidden(true);
@@ -138,11 +165,16 @@ export default function CortexChatPage() {
     if (!canSend) return;
     const message = trimmed.slice(0, CORTEX_LIMITS.message.max);
     setDraft("");
+    setPendingEcho(message);
     mutation.mutate(message);
   };
 
   const conversations = conversationsQuery.data ?? [];
   const turns = turnsQuery.data ?? [];
+  // El eco optimista se muestra hasta que el refetch trae el turno persistido
+  // con el mismo contenido (entonces desaparece sin duplicarse ni parpadear).
+  const echoVisible =
+    pendingEcho !== null && !turns.some((t) => t.role === "user" && t.content === pendingEcho);
   // El effort se considera "profundo" cuando no es off/ninguno.
   const deepThinking = lastEffort !== null && lastEffort !== "off" && lastEffort !== "none";
 
@@ -153,30 +185,32 @@ export default function CortexChatPage() {
         title="Córtex"
         description="Tu córtex con hilo persistente, recall asociativo sobre tu memoria privada y deliberación profunda. Es una mente simulada y útil — sin afecto ni consciencia."
         actions={
-          <Button
-            variant={voiceMode ? "default" : "outline"}
-            onClick={() => setVoiceMode((v) => !v)}
-            data-testid="cortex-voice-toggle"
-          >
-            <Phone className="mr-2 h-4 w-4" />
-            {voiceMode ? "Cerrar voz" : "Modo voz"}
-          </Button>
+          <div className="flex items-center gap-2">
+            {moodLabel ? (
+              <span
+                className="text-muted-foreground rounded-full border px-2 py-0.5 text-xs"
+                title="Estado afectivo simulado (modelo computacional, ADR 0075)"
+                data-testid="cortex-chat-mood"
+              >
+                ánimo: {moodLabel} (simulado)
+              </span>
+            ) : null}
+            <Button
+              variant={voiceMode ? "default" : "outline"}
+              onClick={() => setVoiceMode((v) => !v)}
+              data-testid="cortex-voice-toggle"
+            >
+              <Phone className="mr-2 h-4 w-4" />
+              {voiceMode ? "Cerrar voz" : "Modo voz"}
+            </Button>
+          </div>
         }
         data-testid="cortex-chat-header"
       />
 
-      {voiceMode ? (
-        <Card className="mt-6" data-testid="cortex-voice-card">
-          <CardContent className="pt-5">
-            <p className="text-muted-foreground mb-3 text-xs">
-              Habla con tu córtex. El avatar refleja su afecto simulado (color y expresión según
-              valencia y activación) — es un modelo computacional determinista, no sentimientos
-              reales.
-            </p>
-            <CortexVoiceCall />
-          </CardContent>
-        </Card>
-      ) : null}
+      {/* Videollamada a pantalla completa; el copy de honestidad (afecto
+          simulado, ADR 0075) viaja en el subtítulo y la etiqueta de mood. */}
+      {voiceMode ? <CortexVoiceCall onClose={() => setVoiceMode(false)} /> : null}
 
       {/* Historial de hilos: cambia entre conversaciones o empieza una nueva
           sin borrar las demás (patrón del chat de proyecto). */}
@@ -188,7 +222,10 @@ export default function CortexChatPage() {
           <Select
             id="cortex-conversation-picker"
             value={activeConversationId ?? ""}
-            onChange={(e) => setActiveConversationId(e.target.value || null)}
+            onChange={(e) => {
+              setActiveConversationId(e.target.value || null);
+              setPendingEcho(null);
+            }}
             data-testid="cortex-conversation-picker"
             disabled={conversations.length === 0}
           >
@@ -209,11 +246,13 @@ export default function CortexChatPage() {
           data-testid="cortex-conversation-new"
           disabled={mutation.isPending}
           onClick={() => {
-            // "Nueva conversación" = desasociar el hilo activo; el próximo turno
-            // crea uno nuevo en el backend y lo adopta como activo.
+            // "Nueva conversación" = desasociar el hilo activo (null EXPLÍCITO,
+            // el auto-select no lo pisa); el próximo turno crea uno nuevo en el
+            // backend y lo adopta como activo.
             setActiveConversationId(null);
             setLastEffort(null);
             setDraft("");
+            setPendingEcho(null);
           }}
         >
           Nueva conversación
@@ -232,7 +271,7 @@ export default function CortexChatPage() {
                 <Spinner />
                 Cargando turnos…
               </p>
-            ) : turns.length === 0 && !mutation.isPending ? (
+            ) : turns.length === 0 && !mutation.isPending && !echoVisible ? (
               <EmptyState
                 icon={Brain}
                 title="Empieza a pensar en voz alta"
@@ -241,6 +280,16 @@ export default function CortexChatPage() {
             ) : (
               turns.map((turn) => <CortexBubble key={turn.id} turn={turn} />)
             )}
+            {echoVisible ? (
+              <CortexBubble
+                turn={{
+                  id: "pending-echo",
+                  role: "user",
+                  content: pendingEcho as string,
+                  created_at: "",
+                }}
+              />
+            ) : null}
             {mutation.isPending ? (
               <p
                 className="text-muted-foreground flex items-center gap-2 text-sm"

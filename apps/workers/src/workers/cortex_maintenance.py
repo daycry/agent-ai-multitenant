@@ -56,7 +56,7 @@ _SNAPSHOT_RETENTION = timedelta(days=90)
 _FORGET_SCAN_LIMIT = 500
 
 
-@app.task(name="workers.cortex_maintenance")  # type: ignore[misc]
+@app.task(name="workers.cortex_maintenance")  # type: ignore[untyped-decorator]
 def cortex_maintenance() -> dict[str, Any]:
     """Celery entry point. Mantenimiento de fondo de la mente del córtex.
 
@@ -118,11 +118,13 @@ async def _maintain_owner(
     """Las tres acciones de mantenimiento para UN owner (aislado por owner_id)."""
     snapshotted = await _decay_snapshot(sessionmaker, owner_id, now=now)
     forgotten = await _forget_low_retention(sessionmaker, owner_id, now=now)
+    consolidated = await _consolidate_similar(sessionmaker, owner_id, now=now)
     pruned = await _prune_old_snapshots(sessionmaker, owner_id, now=now)
     return {
         "owner_user_id": str(owner_id),
         "decay_snapshot_written": snapshotted,
         "forgotten": forgotten,
+        "consolidated_groups": consolidated,
         "pruned_snapshots": pruned,
     }
 
@@ -185,7 +187,7 @@ async def _forget_low_retention(
     + umbral de retención) y pone ``deleted_at=now`` a las candidatas. NUNCA borra
     físicamente (ADR 0059) ni toca identity/owner-model/reflection/learning.
     Idempotente: una fila ya soft-deleted no se re-selecciona."""
-    from api_server.cortex.forgetting import decide_forget
+    from api_server.cortex.forgetting import decide_forget, recall_frequency_factor
     from api_server.db.memory import MemoryEntry
 
     forgotten = 0
@@ -210,11 +212,14 @@ async def _forget_low_retention(
                 .all()
             )
             for row in rows:
+                metadata = row.metadata_ or {}
                 decision = decide_forget(
                     created_at=row.created_at,
                     now=now,
-                    metadata=row.metadata_ or {},
+                    metadata=metadata,
                     memory_type=row.type,
+                    # Uso real (ADR 0077): el contador que cortex_recall incrementa.
+                    recall_frequency=recall_frequency_factor(metadata.get("recall_count", 0)),
                 )
                 if decision.forget:
                     row.deleted_at = now
@@ -231,6 +236,117 @@ async def _forget_low_retention(
         _log.warning("cortex_maintenance.forget_failed", owner=str(owner_id), error=str(exc))
         return forgotten
     return forgotten
+
+
+# ADR 0077 (consolidación): solo recuerdos con esta antigüedad mínima entran
+# al merge-into — lo reciente aún está "en uso" y no debe colapsarse.
+_CONSOLIDATE_MIN_AGE_DAYS = 14
+_CONSOLIDATE_SCAN_LIMIT = 200
+
+
+async def _consolidate_similar(
+    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+) -> int:
+    """Merge-into de la episódica REPETIDA del córtex (ADR 0077).
+
+    Agrupa por similitud coseno de los embeddings YA calculados (lógica pura
+    ``api_server.cortex.consolidation``, determinista — sin LLM: el resumen
+    cita los originales, no inventa prosa). Cada grupo produce UNA memoria
+    consolidada (kind=consolidated, embedding = centroide normalizado) y los
+    originales se soft-borran con ``metadata_.consolidated_into`` (reversible,
+    mismo contrato que el olvido). Best-effort: jamás rompe el beat."""
+    from datetime import timedelta
+
+    from api_server.cortex.consolidation import (
+        ConsolidationCandidate,
+        merge_content,
+        select_consolidation_groups,
+    )
+    from api_server.cortex.forgetting import is_protected
+    from api_server.db.memory import MemoryEntry
+
+    consolidated = 0
+    cutoff = now - timedelta(days=_CONSOLIDATE_MIN_AGE_DAYS)
+    try:
+        async with sessionmaker() as session, session.begin():
+            rows = list(
+                (
+                    await session.execute(
+                        select(MemoryEntry)
+                        .where(
+                            MemoryEntry.user_id == owner_id,
+                            MemoryEntry.scope == "private",
+                            MemoryEntry.deleted_at.is_(None),
+                            MemoryEntry.metadata_["cortex"].astext == "true",
+                            MemoryEntry.type == "episodic",
+                            MemoryEntry.created_at < cutoff,
+                            MemoryEntry.embedding.is_not(None),
+                        )
+                        .order_by(MemoryEntry.created_at.asc())
+                        .limit(_CONSOLIDATE_SCAN_LIMIT)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_id = {}
+            by_embedding: dict[str, list[float]] = {}
+            candidates = []
+            for row in rows:
+                meta = row.metadata_ or {}
+                if is_protected(meta) or meta.get("kind") == "consolidated":
+                    continue
+                # pgvector devuelve el embedding como numpy.ndarray: NUNCA usar
+                # `arr or []` (evaluar un ndarray como bool es ambiguo y revienta).
+                # Se convierte explícitamente a lista de floats.
+                emb = row.embedding
+                emb_list = [float(x) for x in emb] if emb is not None else []
+                by_id[str(row.id)] = row
+                by_embedding[str(row.id)] = emb_list
+                candidates.append(
+                    ConsolidationCandidate(
+                        id=str(row.id),
+                        content=str(row.content or ""),
+                        created_at=row.created_at,
+                        embedding=emb_list,
+                    )
+                )
+            groups = select_consolidation_groups(candidates)
+            for group in groups:
+                members = [by_id[c.id] for c in group]
+                # Centroide del grupo — la memoria consolidada sigue siendo
+                # recuperable por semántica. Se usa el embedding ya convertido a
+                # lista (by_embedding), nunca el ndarray crudo del row.
+                embs = [by_embedding[c.id] for c in group]
+                dims = len(embs[0]) if embs else 0
+                centroid = [sum(e[i] for e in embs) / len(embs) for i in range(dims)]
+                template = members[0]
+                merged = MemoryEntry(
+                    tenant_id=template.tenant_id,
+                    user_id=owner_id,
+                    scope="private",
+                    type="episodic",
+                    content=merge_content(group),
+                    embedding=centroid,
+                    metadata_={
+                        "cortex": "true",
+                        "kind": "consolidated",
+                        "consolidated_from": [c.id for c in group],
+                        "at": now.astimezone(UTC).isoformat(),
+                    },
+                )
+                session.add(merged)
+                await session.flush()
+                for member in members:
+                    member.deleted_at = now
+                    meta = dict(member.metadata_ or {})
+                    meta["consolidated_into"] = str(merged.id)
+                    member.metadata_ = meta
+                consolidated += 1
+    except Exception as exc:  # best-effort
+        _log.warning("cortex_maintenance.consolidate_failed", owner=str(owner_id), error=str(exc))
+        return consolidated
+    return consolidated
 
 
 async def _prune_old_snapshots(

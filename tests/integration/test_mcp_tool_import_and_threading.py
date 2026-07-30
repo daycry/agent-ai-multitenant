@@ -185,12 +185,40 @@ async def _mint_token(user_id: UUID, tenant_id: UUID) -> str:
 _IMPORT_BODY = {"tool_names": ["read_file", "write_file"]}
 
 
+def _patch_discovery(monkeypatch: pytest.MonkeyPatch, schema: dict | None = None) -> None:
+    """ADR 0101: el import re-descubre server-side (fail-closed). Los tests
+    no tienen un MCP server vivo, así que se pincha el discovery con una
+    respuesta canónica (read_file con schema, write_file sin args)."""
+    from shared_mcp.discovery import DiscoveryResult
+    from shared_mcp.types import MCPTool
+
+    effective = schema if schema is not None else _SCHEMA_V1
+
+    async def _discover(config, *, vault_resolver=None):
+        return DiscoveryResult(
+            tools=[
+                MCPTool(
+                    name="read_file",
+                    description="Read a file from disk",
+                    input_schema=effective,
+                ),
+                MCPTool(name="write_file", description=None, input_schema={}),
+            ],
+            server_name="filesystem",
+        )
+
+    monkeypatch.setattr("api_server.routers.mcp.discover_tools", _discover)
+
+
 # ===========================================================================
 # Importación: namespacing + category=mcp + security sandboxed por defecto
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_import_creates_namespaced_mcp_tools(configured_app, migrations_pg_dsn: str) -> None:
+async def test_import_creates_namespaced_mcp_tools(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    _patch_discovery(monkeypatch)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
     project_id = seeded["project_a"]
@@ -223,8 +251,11 @@ async def test_import_creates_namespaced_mcp_tools(configured_app, migrations_pg
 
 
 @pytest.mark.asyncio
-async def test_reimport_is_idempotent_no_duplicates(configured_app, migrations_pg_dsn: str) -> None:
+async def test_reimport_is_idempotent_no_duplicates(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    _patch_discovery(monkeypatch)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
     project_id = seeded["project_a"]
@@ -285,9 +316,10 @@ async def test_tenant_b_cannot_import_into_tenant_a_project(
 
 @pytest.mark.asyncio
 async def test_imported_mcp_tools_not_visible_to_other_tenant(
-    configured_app, migrations_pg_dsn: str
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seeded = await _seed(migrations_pg_dsn)
+    _patch_discovery(monkeypatch)
     token_a = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     token_b = await _mint_token(seeded["user_b"], seeded["tenant_b"])
     project_a = seeded["project_a"]
@@ -329,6 +361,110 @@ async def test_import_unknown_server_is_404(configured_app, migrations_pg_dsn: s
         )
         # El server no está declarado en el proyecto → 404.
         assert resp.status_code == 404, resp.text
+
+
+# ===========================================================================
+# ADR 0101: el import persiste el input_schema RE-DESCUBIERTO server-side
+# ===========================================================================
+_SCHEMA_V1 = {
+    "type": "object",
+    "properties": {"path": {"type": "string"}},
+    "required": ["path"],
+}
+_SCHEMA_V2 = {
+    "type": "object",
+    "properties": {"path": {"type": "string"}, "encoding": {"type": "string"}},
+    "required": ["path"],
+}
+
+
+def _fake_discovery(schema: dict, description: str = "Read a file from disk"):
+    from shared_mcp.discovery import DiscoveryResult
+    from shared_mcp.types import MCPTool
+
+    async def _discover(config, *, vault_resolver=None):
+        return DiscoveryResult(
+            tools=[
+                MCPTool(name="read_file", description=description, input_schema=schema),
+                MCPTool(name="write_file", description=None, input_schema={}),
+            ],
+            server_name="filesystem",
+        )
+
+    return _discover
+
+
+@pytest.mark.asyncio
+async def test_import_persists_discovered_schema(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0101: sin esto, una tool MCP con args se anuncia al LLM con
+    ``parameters: {}`` y el pre-guard del runtime la rechaza (inservible)."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    project_id = seeded["project_a"]
+    monkeypatch.setattr("api_server.routers.mcp.discover_tools", _fake_discovery(_SCHEMA_V1))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/projects/{project_id}/mcp/servers/filesystem/import-tools",
+            json=_IMPORT_BODY,
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        imported = {t["name"]: t for t in resp.json()["tools"]}
+        # El schema descubierto se PERSISTE (antes quedaba '{}'::jsonb).
+        assert imported["filesystem.read_file"]["input_schema"] == _SCHEMA_V1
+        # La descripción real del server también (mejor que el placeholder).
+        assert imported["filesystem.read_file"]["description"] == "Read a file from disk"
+        # Una tool sin schema/descripción degrada al comportamiento histórico.
+        assert imported["filesystem.write_file"]["input_schema"] == {}
+
+        # Re-import con schema evolucionado → el upsert REFRESCA el schema.
+        monkeypatch.setattr("api_server.routers.mcp.discover_tools", _fake_discovery(_SCHEMA_V2))
+        second = await client.post(
+            f"/projects/{project_id}/mcp/servers/filesystem/import-tools",
+            json=_IMPORT_BODY,
+            headers=headers,
+        )
+        assert second.status_code == 200, second.text
+        refreshed = {t["name"]: t for t in second.json()["tools"]}
+        assert refreshed["filesystem.read_file"]["input_schema"] == _SCHEMA_V2
+
+
+@pytest.mark.asyncio
+async def test_import_fails_closed_when_discovery_unreachable(
+    configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un server inalcanzable en el import → 502 tipado, NO una tool rota con
+    schema vacío que recrearía el bug (fail-closed, ADR 0101)."""
+    from shared_mcp.exceptions import MCPTransportError
+
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    project_id = seeded["project_a"]
+
+    async def _boom(config, *, vault_resolver=None):
+        raise MCPTransportError("connection refused")
+
+    monkeypatch.setattr("api_server.routers.mcp.discover_tools", _boom)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/projects/{project_id}/mcp/servers/filesystem/import-tools",
+            json=_IMPORT_BODY,
+            headers=headers,
+        )
+        assert resp.status_code == 502, resp.text
+        # Y no quedó ninguna fila a medias en el catálogo.
+        listed = await client.get("/tools?category=mcp", headers=headers)
+        assert listed.json() == []
 
 
 # ===========================================================================
@@ -489,4 +625,161 @@ async def test_dispatcher_threads_project_mcp_servers(
     finally:
         await redis.delete("default")
         await redis.aclose()
+
+
+# ---------------------------------------------------------------------------
+# task_wf_10 (B-01) — permitir no es anunciar
+#
+# ADR 0128 metió las tools MCP del proyecto en `allowed_tools`, pero el anuncio
+# al modelo se construye desde `tool_specs`, que es POR AGENTE. La tool quedaba
+# permitida e invisible: el modelo no sabía que existía, así que jamás la
+# llamaba y el ADR no entregaba lo que prometía. Este test recorre el camino
+# entero — fila `Tool` del catálogo → dispatch → `ExecutionRequest` → agent-spec
+# — y comprueba que el esquema llega al bloque `model.tools`.
+# ---------------------------------------------------------------------------
+_MCP_TOOL_SCHEMA = {
+    "type": "object",
+    "properties": {"path": {"type": "string", "description": "Ruta a listar."}},
+    "required": ["path"],
+}
+
+
+@pytest.mark.asyncio
+async def test_project_mcp_tool_schema_reaches_the_model(
+    configured_app, admin_database_url: str
+) -> None:
+    """Un agente SIN grants, en un proyecto con MCP, recibe el esquema de la tool."""
+    import base64
+
+    from api_server.db.domain import Agent, Project, Task, Tool
+    from api_server.db.models import Organization
+    from orchestrator.config import Settings as OrchestratorSettings
+    from orchestrator.dispatch import TaskDispatcher
+    from orchestrator.events import EVENT_TASK_STATUS_CHANGED, TaskEvent
+    from redis.asyncio import Redis
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from workers.celery_app import build_celery_app
+    from workers.config import Settings as WorkerSettings
+    from workers.execution import ExecutionRequest, _agent_spec
+
+    test_redis_url = "redis://localhost:6379/15"
+    engine = create_async_engine(admin_database_url)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = {"tenant": uuid4(), "project": uuid4(), "agent": uuid4(), "task": uuid4()}
+        servers = [
+            {
+                "name": "filesystem",
+                "transport": "stdio",
+                "command": "filesystem-mcp",
+                "args": [],
+                "env": {},
+                "url": None,
+                "headers": {},
+                "auth_ref": None,
+                "timeout_s": 30.0,
+            }
+        ]
+        async with sm() as s, s.begin():
+            await s.execute(
+                text(
+                    "TRUNCATE executions, task_dependencies, tasks, agent_tools, tools,"
+                    " agents, projects, organizations RESTART IDENTITY CASCADE"
+                )
+            )
+            s.add(Organization(id=ids["tenant"], name="MCP schema tenant", slug="mcp-schema"))
+            await s.flush()
+            s.add(
+                Project(
+                    id=ids["project"],
+                    tenant_id=ids["tenant"],
+                    name="MCP schema project",
+                    status="active",
+                    is_template=False,
+                    worker_config={"assignment_policy": "load_balanced"},
+                    mcp_servers=servers,
+                )
+            )
+            # La fila del catálogo que la importación de discovery habría creado.
+            s.add(
+                Tool(
+                    tenant_id=ids["tenant"],
+                    name="filesystem.list_directory",
+                    description="Lista un directorio del servidor MCP.",
+                    implementation_type="mcp_tool",
+                    implementation_ref="filesystem.list_directory",
+                    category="mcp",
+                    security_level="sandboxed",
+                    input_schema=_MCP_TOOL_SCHEMA,
+                )
+            )
+            await s.flush()
+            # SIN `agent_tools`: el agente no tiene ninguna tool concedida.
+            s.add(
+                Agent(
+                    id=ids["agent"],
+                    tenant_id=ids["tenant"],
+                    name="Writer",
+                    role="backend_dev",
+                    system_prompt="You write things.",
+                    agent_type="ai",
+                    scope="project_local",
+                    project_id=ids["project"],
+                    model_config={"kind": "scripted", "decisions": []},
+                )
+            )
+            await s.flush()
+            s.add(
+                Task(
+                    id=ids["task"],
+                    tenant_id=ids["tenant"],
+                    project_id=ids["project"],
+                    title="Use the MCP tool",
+                    description="exercise mcp schema threading",
+                    status="ready",
+                    priority="medium",
+                )
+            )
+
+        await redis.delete("default")
+        dispatcher = TaskDispatcher(
+            sessionmaker=sm,
+            celery_app=build_celery_app(WorkerSettings(broker_url=test_redis_url)),
+            settings=OrchestratorSettings(redis_url=test_redis_url),
+        )
+        await dispatcher.handle(
+            TaskEvent(
+                stream_id="1-0",
+                type=EVENT_TASK_STATUS_CHANGED,
+                tenant_id=str(ids["tenant"]),
+                project_id=str(ids["project"]),
+                task_id=str(ids["task"]),
+                occurred_at="2026-07-25T00:00:00+00:00",
+                payload={"old_status": "backlog", "new_status": "ready"},
+            )
+        )
+
+        raw = await redis.lrange("default", 0, -1)
+        assert len(raw) == 1
+        _args, kwargs, _embed = json.loads(base64.b64decode(json.loads(raw[0])["body"]))
+        request = kwargs["request"]
+
+        # 1. El dispatch aporta el ESPECIFICADOR, no solo el nombre.
+        specs = {spec["name"]: spec for spec in request["tool_specs"]}
+        assert "filesystem.list_directory" in specs
+        assert specs["filesystem.list_directory"]["input_schema"] == _MCP_TOOL_SCHEMA
+
+        # 2. Y el esquema llega al bloque que el proveedor pasa al modelo.
+        spec = _agent_spec(ExecutionRequest.from_dict(request), None)
+        advertised = {t["function"]["name"]: t["function"] for t in spec["model"]["tools"]}
+        assert (
+            "filesystem.list_directory" in advertised
+        ), "la tool MCP del proyecto sigue siendo invisible para el modelo"
+        assert advertised["filesystem.list_directory"]["parameters"] == _MCP_TOOL_SCHEMA
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
         await engine.dispose()

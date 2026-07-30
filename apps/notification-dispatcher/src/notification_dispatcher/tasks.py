@@ -84,6 +84,10 @@ _log = structlog.get_logger("notification_dispatcher.tasks")
 # Truncate a provider error before it reaches NotificationLog.error so a
 # verbose stack/HTML body can't bloat the row. Tunable here, not magic.
 _MAX_ERROR_LEN = 2_000
+# AUD16-11: truncados del contenido persistido para in_app (= anchos de las
+# columnas notification_logs.subject/body de la migración 0113).
+_MAX_SUBJECT_LEN = 200
+_MAX_BODY_LEN = 2_000
 
 
 class CrossTenantNotificationError(RuntimeError):
@@ -140,7 +144,7 @@ class SendRequest:
         )
 
 
-@app.task(  # type: ignore[misc]
+@app.task(  # type: ignore[untyped-decorator]
     bind=True,
     name="notification_dispatcher.send_notification",
 )
@@ -258,7 +262,7 @@ async def _push_dead_letter(settings: Settings, request: dict[str, Any], exc: Ex
 # async function (`resolve_event_dispatch`) so it is unit-testable without
 # the broker; this task only adds the engine lifecycle + the enqueue.
 # ===========================================================================
-@app.task(name="notification_dispatcher.dispatch_event")  # type: ignore[misc]
+@app.task(name="notification_dispatcher.dispatch_event")  # type: ignore[untyped-decorator]
 def dispatch_event(event: dict[str, Any]) -> dict[str, Any]:
     """Fan one domain event out to its subscribed channels (task_10_04).
 
@@ -447,6 +451,15 @@ async def _dispatch(
             status = "retrying"
 
         now = datetime.now(UTC)
+        # AUD16-11: para in_app la fila ES la entrega — sin contenido, el inbox
+        # solo podía decir "pasó un <event_type>". subject viene del structured
+        # (donde lo deja event_mapping); ambos truncados a las columnas.
+        subject: str | None = None
+        body: str | None = None
+        if channel_type == "in_app":
+            raw_subject = (request.structured or {}).get("subject")
+            subject = str(raw_subject)[:_MAX_SUBJECT_LEN] if raw_subject else None
+            body = request.body[:_MAX_BODY_LEN] if request.body else None
         log = NotificationLog(
             channel_id=channel_id,
             tenant_id=request_tenant,
@@ -457,6 +470,8 @@ async def _dispatch(
             attempt=attempt,
             error=(result.error[:_MAX_ERROR_LEN] if result.error else None),
             sent_at=now if result.ok else None,
+            subject=subject,
+            body=body,
         )
         session.add(log)
         await session.flush()

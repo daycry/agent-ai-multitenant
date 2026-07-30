@@ -44,6 +44,11 @@ class PlanSpecification(BaseModel):
     tasks: list[dict[str, Any]] = Field(default_factory=list)
     estimates: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # ADR 0107: meta del ciclo de correcciones tras un rechazo humano —
+    # ``{session_id, reason, task_ids, created_at, status}``. Sin campo
+    # propio, un PUT con `specification` la perdería (pydantic descarta
+    # las claves no declaradas).
+    corrections: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_task_dependencies(self) -> PlanSpecification:
@@ -122,6 +127,11 @@ class PlanResponse(BaseModel):
     title: str
     description: str | None
     status: str
+    # Auto-PR result at plan close (P6): URL + branch of the opened PR, or the
+    # failure reason. NULL until the plan closes / when the project has no remote.
+    pr_url: str | None = None
+    pr_branch: str | None = None
+    pr_error: str | None = None
     conversation_id: UUID | None
     specification: dict[str, Any]
     created_by: UUID | None
@@ -143,6 +153,9 @@ def to_plan_response(p: Plan) -> PlanResponse:
         title=p.title,
         description=p.description,
         status=p.status,
+        pr_url=p.pr_url,
+        pr_branch=p.pr_branch,
+        pr_error=p.pr_error,
         conversation_id=p.conversation_id,
         specification=p.specification,
         created_by=p.created_by,
@@ -159,9 +172,11 @@ __all__ = [
     "AICostBreakdownResponse",
     "CostBreakdownResponse",
     "HumanCostBreakdownResponse",
+    "PlanAcceptCorrectionsRequest",
     "PlanCommentCreateRequest",
     "PlanCommentResponse",
     "PlanCreateRequest",
+    "PlanGenerateCorrectionsResponse",
     "PlanResponse",
     "PlanSpecification",
     "PlanSyncRequest",
@@ -304,6 +319,31 @@ class PlanSyncRequest(BaseModel):
         if self.scope == "selection" and not self.task_ids:
             raise ValueError("scope='selection' requires a non-empty task_ids")
         return self
+
+
+class PlanAcceptCorrectionsRequest(BaseModel):
+    """Body de POST /plans/{plan_id}/accept-corrections (ADR 0107):
+    los spec-ids de las tareas correctivas que el validador acepta."""
+
+    model_config = _BASE_CONFIG
+
+    task_ids: list[str] = Field(min_length=1)
+
+
+class PlanGenerateCorrectionsResponse(BaseModel):
+    """Resultado de POST /plans/{plan_id}/generate-corrections (ADR 0107):
+    la tanda de tareas correctivas propuesta para la sesión rechazada más
+    reciente. ``already_generated`` marca la respuesta idempotente (la
+    sesión ya tenía tanda en el spec y no se regeneró). ``tasks`` vacío =
+    el modelo no produjo nada usable y el spec no se tocó."""
+
+    model_config = _BASE_CONFIG
+
+    session_id: UUID
+    reason: str
+    task_ids: list[str] = Field(default_factory=list)
+    tasks: list[dict[str, Any]] = Field(default_factory=list)
+    already_generated: bool = False
 
 
 class PlanSyncResponse(BaseModel):

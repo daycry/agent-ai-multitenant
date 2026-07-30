@@ -367,6 +367,15 @@ def test_agent_runtime_profile_has_the_boot_viability_essentials() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _effective_services(path: Path) -> dict[str, dict[str, Any]]:
+    """Los servicios que este compose DEFINE, sin los fragmentos de override que
+    solo parchean un servicio declarado en otro fichero (ver
+    ``tests/security/_compose.py``)."""
+    from tests.security._compose import defined_services
+
+    return defined_services(_rendered_services(path))
+
+
 def test_every_prod_service_carries_the_trusted_hardening_baseline() -> None:
     """Each long-lived TRUSTED service in the base + monitoring compose pins the
     trusted hardening baseline ``no-new-privileges:true`` (the host-agent
@@ -378,7 +387,7 @@ def test_every_prod_service_carries_the_trusted_hardening_baseline() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if not _references_no_new_privileges(spec):
                 missing.append(f"{path.name}:{name}")
     assert not missing, "services WITHOUT no-new-privileges pinned: " + ", ".join(missing)
@@ -396,7 +405,7 @@ def test_trusted_services_do_not_pin_a_custom_seccomp_profile() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if _references_seccomp(spec):
                 offenders.append(f"{path.name}:{name}")
     assert not offenders, (
@@ -413,7 +422,7 @@ def test_base_compose_never_sets_seccomp_unconfined() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if "seccomp=unconfined" in _security_opt(spec):
                 offenders.append(f"{path.name}:{name}")
     assert not offenders, "services running seccomp=unconfined: " + ", ".join(offenders)
@@ -424,16 +433,6 @@ def test_base_compose_never_sets_seccomp_unconfined() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Postura AppArmor de cAdvisor sin resolver (finding sandbox-8). El baseline "
-        "exigido aqui incluye apparmor=agentic-default en TODO servicio generado, pero "
-        "tests/unit/test_compose_generator.py asserta que el cAdvisor privilegiado NO "
-        "debe fijarlo: contradiccion committeada. Decision de prod-08/prod-12; prod-02 "
-        "lo deja en cuarentena para que el resto de tests/security gatee CI."
-    ),
-    strict=False,
-)
 def test_compose_generator_emits_trusted_baseline_without_custom_seccomp() -> None:
     """The installer's compose generator wires the SAME trusted posture as the
     committed compose (ADR 0040, revised): every generated service pins
@@ -523,3 +522,71 @@ def test_empty_seccomp_setting_relies_on_docker_default() -> None:
     opts = kwargs["security_opt"]
     assert "no-new-privileges:true" in opts
     assert not any(o.startswith("seccomp=") for o in opts)
+
+
+# ---------------------------------------------------------------------------
+# task_wf_55 — el perfil endurecido está PINADO donde se ejecutan los sandboxes
+# ---------------------------------------------------------------------------
+def _dev_stack_services() -> dict[str, Any]:
+    import yaml
+
+    path = REPO_ROOT / "docker" / "docker-compose.manuals.yml"
+    return dict(yaml.safe_load(path.read_text(encoding="utf-8")).get("services") or {})
+
+
+def _worker_lanes() -> dict[str, Any]:
+    """Los servicios del stack de dev que LANZAN sandboxes."""
+    return {
+        name: svc
+        for name, svc in _dev_stack_services().items()
+        if name in {"workers", "workers-aux"}
+    }
+
+
+def test_the_dev_stack_pins_the_hardened_seccomp_profile() -> None:
+    """El perfil existía en disco y el instalador ya lo pinaba en el compose que
+    genera — pero el stack de DEV corría con el perfil por defecto de Docker.
+
+    O sea: el entorno donde se prueba todo era el menos protegido de los dos, y
+    un fallo por el allowlist estricto solo aparecía en producción.
+    """
+    lanes = _worker_lanes()
+    assert lanes, "el stack de dev debería declarar workers / workers-aux"
+    for name, svc in lanes.items():
+        env = svc.get("environment") or {}
+        pinned = str(env.get("WORKERS_SECCOMP_PROFILE_PATH", ""))
+        assert "agent-runtime.json" in pinned, f"{name} no pina el perfil seccomp endurecido"
+        # Y el JSON tiene que estar realmente montado, o el worker apunta a nada.
+        volumes = [str(v) for v in (svc.get("volumes") or [])]
+        assert any(
+            "/etc/agentic/seccomp" in v for v in volumes
+        ), f"{name} pina el perfil pero no monta ./seccomp"
+
+
+def test_the_seccomp_pin_can_be_turned_off_from_the_env() -> None:
+    # Si un toolchain choca con el allowlist, el operador necesita poder
+    # relajarlo sin editar el compose — si no, la vía rápida acaba siendo
+    # borrar la línea y que nadie se entere de que se desactivó.
+    for name, svc in _worker_lanes().items():
+        value = str((svc.get("environment") or {}).get("WORKERS_SECCOMP_PROFILE_PATH", ""))
+        assert value.startswith(
+            "${WORKERS_SECCOMP_PROFILE_PATH"
+        ), f"{name} pina el perfil sin dejar override por env"
+
+
+def test_apparmor_is_not_hard_pinned_in_the_dev_stack() -> None:
+    """AppArmor queda vacío por DEFECTO, y es deliberado.
+
+    Pinar un perfil que el host no tiene cargado hace fallar la creación del
+    contenedor. El dev típico es Docker Desktop sobre WSL2, que no trae
+    AppArmor: pinarlo aquí rompería TODOS los runs. Se activa por env en un
+    host Linux con el perfil cargado.
+    """
+    for name, svc in _worker_lanes().items():
+        value = str((svc.get("environment") or {}).get("WORKERS_APPARMOR_PROFILE", ""))
+        assert value.startswith(
+            "${WORKERS_APPARMOR_PROFILE"
+        ), f"{name} debería dejar AppArmor a la decisión del host, no fijarlo"
+        assert (
+            "agent-runtime" not in value
+        ), f"{name} pina AppArmor por defecto: rompe cualquier host sin el perfil cargado"

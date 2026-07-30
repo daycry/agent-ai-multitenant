@@ -17,7 +17,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
+from api_server.db.domain import (
+    ApprovalRequest,
+    ApprovalRequestStatus,
+    Execution,
+    ExecutionStatus,
+    Task,
+    TaskStatus,
+)
 from api_server.db.price_snapshot import PriceSnapshot, snapshot_model_call
 
 # The step kind that carries an LLM call's tokens + cost (the canonical
@@ -32,6 +39,35 @@ _MODEL_CALL_KIND = "model_call"
 # price), so an older steps_log shape degrades cleanly rather than crashing.
 _CACHED_TOKEN_KEYS = ("cached_input_tokens", "tokens_cached_input", "tokens_cached")
 
+# The set of execution statuses that mean "the run has finished" — these are the
+# only ones that seal `completed_at`. `running` is live; `awaiting_human_approval`
+# is parked mid-run (a human_approval_policy decision is pending) and has NOT
+# finished, so it stays uncompleted until the run resumes and reaches a terminal
+# state (task_02_33 / ADR 0087). Kept as a single source of truth so
+# `record_execution` and `finalize_execution` agree (F45).
+_TERMINAL_EXECUTION_STATUSES: frozenset[str] = frozenset(
+    {
+        ExecutionStatus.DONE,
+        ExecutionStatus.ABORTED,
+        ExecutionStatus.FAILED,
+        ExecutionStatus.CANCELLED,
+        # ADR 0087: escalated-to-human is terminal for the RUN (a human takes over).
+        ExecutionStatus.NEEDS_HUMAN_REVIEW,
+    }
+)
+
+
+def is_terminal_execution_status(status: str | None) -> bool:
+    """True when `status` is a terminal execution state (the run has finished).
+
+    Terminal = ``done`` / ``aborted`` / ``failed`` / ``cancelled`` /
+    ``needs_human_review``. NOT terminal: ``running`` (live) and
+    ``awaiting_human_approval`` (parked mid-run). Accepts the raw string or an
+    ``ExecutionStatus`` (a ``StrEnum``, so membership works for either); ``None``
+    is not terminal.
+    """
+    return status in _TERMINAL_EXECUTION_STATUSES
+
 
 class ExecutionResultLike(Protocol):
     """The shape of an `agent_runtime.ExecutionResult` — read-only."""
@@ -42,6 +78,9 @@ class ExecutionResultLike(Protocol):
     iterations: int
     steps: list[dict[str, Any]]
     usage: dict[str, Any]
+    # ADR 0087: the agent's structured finish status (success|failed|partial) or
+    # None. Optional on the Protocol so older/partial result shapes still satisfy it.
+    finish_status: str | None
 
 
 def _int_field(step: dict[str, Any], *names: str, default: int = 0) -> int:
@@ -153,8 +192,9 @@ async def record_execution(
         tool_call_count=int(usage.get("tool_calls", 0)),
         model_call_count=int(usage.get("model_calls", 0)),
         started_at=started_at,
-        # A finished run (done/aborted/failed) gets a completion stamp.
-        completed_at=None if result.status == ExecutionStatus.RUNNING else datetime.now(UTC),
+        # Only a terminal status (the run has finished) gets a completion stamp;
+        # `awaiting_human_approval` is parked mid-run and stays uncompleted (F45).
+        completed_at=(datetime.now(UTC) if is_terminal_execution_status(result.status) else None),
     )
     _apply_price_snapshot(execution, rollup)
     session.add(execution)
@@ -233,31 +273,71 @@ async def request_execution_cancel(session: AsyncSession, execution_id: UUID) ->
 async def cancel_running_executions_for_task(
     session: AsyncSession, task_id: UUID
 ) -> list[Execution]:
-    """Request cooperative cancellation of every still-`running` execution of a
-    task (prod-06 cancel_01/cancel_02).
+    """Cancel every non-terminal execution of a task (prod-06 cancel_01/cancel_02).
 
-    Seals ``cancel_requested_at`` on each (the worker polls it to kill the
-    container + finalise as ``cancelled``) and returns them — with their
-    ``celery_task_id`` — so the caller can ``revoke`` the queued jobs. Used when a
-    task is moved to ``cancelled`` (in_progress→cancelled) and by the plan-level
-    cancellation cascade. Idempotent; the caller owns the transaction.
+    Two cases, because a run can be parked without a live worker:
+
+      * ``running`` — a worker/container is (or was) live: seal only
+        ``cancel_requested_at``; the worker polls it, kills the container and
+        finalises the row as ``cancelled``.
+      * ``awaiting_human_approval`` — the run is parked mid-run with its container
+        already gone; NO worker will ever finalise it (the reaper/reconciler both
+        skip this state). Seal it terminally IN LINE (``cancelled`` + ``completed_at``)
+        and close its ``pending`` ApprovalRequest(s) so they leave the inbox and a
+        later ``resolve`` can't resurrect the cancelled task (CANCELAWAIT).
+
+    Returns every affected execution — with its ``celery_task_id`` — so the caller
+    can ``revoke`` the queued jobs (a no-op on an already-sealed row). Idempotent;
+    the caller owns the transaction.
     """
     rows = (
         (
             await session.execute(
                 select(Execution).where(
                     Execution.task_id == task_id,
-                    Execution.status == ExecutionStatus.RUNNING,
+                    Execution.status.in_(
+                        [
+                            ExecutionStatus.RUNNING.value,
+                            ExecutionStatus.AWAITING_HUMAN_APPROVAL.value,
+                        ]
+                    ),
                 )
             )
         )
         .scalars()
         .all()
     )
+    now = datetime.now(UTC)
     cancelled: list[Execution] = []
+    parked_exec_ids: list[UUID] = []
     for execution in rows:
-        execution.cancel_requested_at = execution.cancel_requested_at or datetime.now(UTC)
+        execution.cancel_requested_at = execution.cancel_requested_at or now
+        if execution.status == ExecutionStatus.AWAITING_HUMAN_APPROVAL.value:
+            # No worker owns this parked run — seal it here so it doesn't hang forever.
+            execution.status = ExecutionStatus.CANCELLED.value
+            execution.abort_code = "cancelled"
+            execution.completed_at = now
+            parked_exec_ids.append(execution.id)
         cancelled.append(execution)
+    if parked_exec_ids:
+        # Close the pending approval requests of the parked runs (tenant-scoped via
+        # the execution_id, which belongs to this task) so they leave the inbox.
+        pending = (
+            (
+                await session.execute(
+                    select(ApprovalRequest).where(
+                        ApprovalRequest.execution_id.in_(parked_exec_ids),
+                        ApprovalRequest.status == ApprovalRequestStatus.PENDING.value,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for request in pending:
+            request.status = ApprovalRequestStatus.CANCELLED.value
+            request.resolved_at = now
+            request.reason = "task cancelled"
     if cancelled:
         await session.flush()
     return cancelled
@@ -326,22 +406,81 @@ async def supersede_running_executions(
     stale = list(result.scalars().all())
     if not stale:
         return 0
+    from api_server.db.task_audit_repo import append_audit_event
+
     now = datetime.now(UTC)
     for execution in stale:
         # A row already flagged for cancellation that gets re-delivered (revoke +
         # task_acks_late) must close as CANCELLED, not FAILED/superseded — otherwise
         # the supersede would mask the operator's explicit cancel.
         if execution.cancel_requested_at is not None:
-            execution.status = ExecutionStatus.CANCELLED
-            execution.abort_code = "cancelled"
-            execution.output = "cancelled by operator"
+            sealed = seal_terminal_execution(
+                execution,
+                status=ExecutionStatus.CANCELLED.value,
+                abort_code="cancelled",
+                output="cancelled by operator",
+                now=now,
+            )
         else:
-            execution.status = ExecutionStatus.FAILED
-            execution.abort_code = "superseded"
-            execution.output = "superseded by a re-delivered execution (worker retry)"
-        execution.completed_at = now
+            sealed = seal_terminal_execution(
+                execution,
+                status=ExecutionStatus.FAILED.value,
+                abort_code="superseded",
+                output="superseded by a re-delivered execution (worker retry)",
+                now=now,
+            )
+        # AUD16-21: la cronología de una task debe ser reconstruible desde BD —
+        # cada sello por re-entrega deja su rastro con actor y motivo.
+        if sealed:
+            await append_audit_event(
+                session,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                kind="execution_superseded",
+                actor="system:redelivery_guard",
+                payload={
+                    "execution_id": str(execution.id),
+                    "abort_code": execution.abort_code,
+                },
+            )
     await session.flush()
     return len(stale)
+
+
+def seal_terminal_execution(
+    execution: Execution,
+    *,
+    status: str,
+    abort_code: str | None = None,
+    output: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Seal a `running` execution row into a terminal state, idempotently (M2).
+
+    The single primitive the non-`finalize` close-out paths funnel through
+    (``supersede_running_executions``, the zombie sweeper, the soft-timeout
+    finalizer) instead of hand-writing ``status`` + ``abort_code`` + ``output`` +
+    ``completed_at`` four times. Reuses ``finalize_execution``'s F46/F52 guard: a
+    row already sealed (terminal status + non-NULL ``completed_at``) is left
+    untouched and ``False`` is returned — a re-delivery/race can no longer stomp a
+    freshly-sealed outcome. ``output`` is written only when passed (so a caller can
+    seal status without clobbering the existing output). Returns ``True`` iff it
+    sealed the row. Pure (no I/O); the caller owns the session/flush.
+    """
+    if is_terminal_execution_status(execution.status) and execution.completed_at is not None:
+        return False
+    execution.status = status
+    execution.abort_code = abort_code
+    if output is not None:
+        execution.output = output
+    execution.completed_at = now or datetime.now(UTC)
+    # AUD16-21: un cierre administrativo no pasa por el memorizer — sellar el
+    # motivo canónico (si nadie lo puso antes) para que la UI pueda explicar
+    # por qué este run no dejó memoria, en vez de un NULL indistinguible de
+    # un bug del trigger.
+    if execution.memorize_skip_reason is None:
+        execution.memorize_skip_reason = "administrative_finalize"
+    return True
 
 
 async def finalize_execution(
@@ -361,17 +500,37 @@ async def finalize_execution(
     if execution is None:
         return None
 
-    # A row already CANCELLED by the operator wins: a late finalisation from the
-    # (revoked) worker must not revert it to done/failed. Fold in the streamed
-    # steps_log/usage for the audit trail but preserve the cancelled outcome.
-    preserve_cancel = execution.status == ExecutionStatus.CANCELLED
+    # F46 / F52: idempotency guard. A row already in a SEALED terminal state
+    # (terminal status + a non-NULL `completed_at`) has already been finalised —
+    # by a previous finalize (double delivery under task_acks_late), by an
+    # operator CANCELLED (preserve_cancel), or by a FAILED/superseded close-out
+    # from `supersede_running_executions` (F52). A late/duplicate finalize from
+    # the worker must not revert the outcome, recompute the usage roll-ups, or
+    # re-seal `completed_at`. We only fold in a richer streamed steps_log for the
+    # audit trail (a no-op when the same log is re-delivered).
+    if is_terminal_execution_status(execution.status) and execution.completed_at is not None:
+        incoming = list(result.steps)
+        if len(incoming) > len(execution.steps_log or []):
+            steps, _rollup = await snapshot_execution_prices(session, steps=incoming)
+            execution.steps_log = steps
+            await session.flush()
+        return execution
 
     usage = result.usage
     steps, rollup = await snapshot_execution_prices(session, steps=list(result.steps))
-    if not preserve_cancel:
-        execution.status = result.status
-        execution.abort_code = result.abort_code
-        execution.output = result.output
+    execution.status = result.status
+    execution.abort_code = result.abort_code
+    execution.output = result.output
+    # ADR 0087: persist the structured finish status (None when absent / for
+    # older result shapes without the field).
+    execution.finish_status = getattr(result, "finish_status", None)
+    # `task_wf_52`: la etiqueta del conjunto de prompts que produjo el run. Con
+    # `getattr` porque el Protocol admite formas de resultado más viejas — un
+    # run de una imagen anterior al versionado simplemente la deja a NULL.
+    execution.prompt_version = getattr(result, "prompt_version", None)
+    # `task_wf_62`: qué IMAGEN lo produjo. Junto a `prompt_version` cierra la
+    # trazabilidad de un run: qué prompts y qué build.
+    execution.runtime_image_digest = getattr(result, "runtime_image_digest", None)
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
@@ -380,17 +539,11 @@ async def finalize_execution(
     execution.tool_call_count = int(usage.get("tool_calls", 0))
     execution.model_call_count = int(usage.get("model_calls", 0))
     # Only a terminal status completes the run — a run parked in
-    # `awaiting_human_approval` has not finished (task_02_33). `cancelled` is
-    # terminal too, whether it arrives as the new result (cooperative cancel from
-    # the worker) or was already on the row (preserve_cancel, late finalisation).
-    terminal = {
-        ExecutionStatus.DONE,
-        ExecutionStatus.ABORTED,
-        ExecutionStatus.FAILED,
-        ExecutionStatus.CANCELLED,
-    }
-    is_terminal = preserve_cancel or result.status in terminal
-    execution.completed_at = datetime.now(UTC) if is_terminal else None
+    # `awaiting_human_approval` has not finished (task_02_33). A cooperative
+    # cancel arriving as the new result seals here too (`cancelled` is terminal).
+    execution.completed_at = (
+        datetime.now(UTC) if is_terminal_execution_status(result.status) else None
+    )
     await session.flush()
     return execution
 

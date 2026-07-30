@@ -418,10 +418,18 @@ def _agent_runtime_image() -> None:
 
 async def _seed_via(url: str) -> dict[str, UUID]:
     """Seed against a fresh engine — for the sync test below, which
-    cannot reuse an engine across separate `asyncio.run` calls."""
+    cannot reuse an engine across separate `asyncio.run` calls.
+
+    The task is seeded ``in_progress`` because that is the only state in which
+    ``run_execution`` ever runs in production: the orchestrator atomically
+    transitions ``ready -> in_progress`` before enqueuing it, and the worker's
+    R5 eligibility guard (ADR 0090) skips any task that is not launchable.
+    """
     engine = create_async_engine(url)
     try:
-        return await _seed(async_sessionmaker(engine, expire_on_commit=False))
+        return await _seed(
+            async_sessionmaker(engine, expire_on_commit=False), task_status="in_progress"
+        )
     finally:
         await engine.dispose()
 

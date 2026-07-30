@@ -234,6 +234,94 @@ async def test_memorize_done_team_shared_persists(
 
 
 @pytest.mark.asyncio
+async def test_memorize_uses_agent_provider_when_available(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F2.1 (auditoría 2026-07-02): el destilador usa el LLM del AGENTE de la
+    execution (resolución por provider_id, ADR 0082) en vez del modelo local
+    fijo (llama3.2:1b producía ~50% ruido: tautologías, URLs fabricadas). El
+    factory local queda como fallback. F2.3 parcial: metadata.distill_model
+    registra provider:modelo REAL, no solo el nombre del provider."""
+    import json as _json
+
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
+
+    agent_llm = _FakeLLM(
+        content='[{"content": "Lección real del agente.", "type": "semantic", "tags": []}]'
+    )
+
+    async def _fake_build(sessionmaker: Any, agent: Any, **_kw: Any) -> tuple[Any, str]:
+        return agent_llm, "claude-opus-4-8"
+
+    monkeypatch.setattr("workers.memorizer._build_agent_llm", _fake_build)
+    factory_calls = {"n": 0}
+
+    def _local_factory(_s: Any) -> Any:
+        factory_calls["n"] += 1
+        return _FakeLLM(content="[]")
+
+    from workers.memorizer import _memorize_execution_async
+
+    result = await _memorize_execution_async(
+        seeded["execution_id"],
+        settings=workers_settings,
+        llm_factory=_local_factory,
+    )
+
+    assert result["persisted"] == 1, result
+    assert factory_calls["n"] == 0  # el provider del agente ganó; sin fallback
+    assert agent_llm.closed is True
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        raw = await conn.fetchval("SELECT metadata FROM memory_entries LIMIT 1")
+    finally:
+        await conn.close()
+    metadata = _json.loads(raw) if isinstance(raw, str) else raw
+    assert metadata["distill_model"] == "fake-memorizer-llm:claude-opus-4-8"
+
+
+@pytest.mark.asyncio
+async def test_memorize_falls_back_to_local_llm_when_agent_provider_unavailable(
+    schema_at_head, migrations_pg_dsn: str, workers_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json as _json
+
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared")
+
+    async def _fake_build(sessionmaker: Any, agent: Any, **_kw: Any) -> None:
+        return None  # provider caído / cadena irresoluble → fallback local
+
+    monkeypatch.setattr("workers.memorizer._build_agent_llm", _fake_build)
+    fake = _FakeLLM(content='[{"content": "Fallback ok.", "type": "semantic", "tags": []}]')
+
+    from workers.memorizer import _memorize_execution_async
+
+    result = await _memorize_execution_async(
+        seeded["execution_id"],
+        settings=workers_settings,
+        llm_factory=lambda _s: fake,
+    )
+
+    assert result["persisted"] == 1, result
+    assert fake.closed is True
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        raw = await conn.fetchval("SELECT metadata FROM memory_entries LIMIT 1")
+    finally:
+        await conn.close()
+    metadata = _json.loads(raw) if isinstance(raw, str) else raw
+    # F2.3: el modelo real del fallback (el configurado del memorizer local).
+    assert metadata["distill_model"].endswith(workers_settings.memorizer_llm_model)
+
+
+@pytest.mark.asyncio
 async def test_redelivery_does_not_re_memorize(
     schema_at_head, migrations_pg_dsn: str, workers_settings
 ) -> None:
@@ -276,14 +364,27 @@ async def test_redelivery_does_not_re_memorize(
 
 
 @pytest.mark.asyncio
-async def test_memorize_aborted_does_not_persist(
+async def test_memorize_aborted_does_not_persist_when_operator_narrows_statuses(
     schema_at_head, migrations_pg_dsn: str, workers_settings
 ) -> None:
-    """An `aborted` execution short-circuits before the LLM call."""
+    """El gate de elegibilidad respeta el setting del operador.
+
+    AUD16-17: el DEFAULT ahora incluye los fracasos (aborted memoriza por
+    defecto — P1-1a), así que este test fija el otro lado del contrato: con el
+    setting estrechado a solo ``done``, un `aborted` corta ANTES del LLM."""
     from tests.integration.conftest import _grant_app_user_existing_tables
 
     await _grant_app_user_existing_tables()
     seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared", status="aborted")
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO platform_settings (key, value) VALUES"
+            " ('memory.memorizable_statuses', '[\"done\"]'::jsonb)"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+        )
+    finally:
+        await conn.close()
 
     fake = _FakeLLM(content="[]")
     from workers.memorizer import _memorize_execution_async
@@ -416,10 +517,15 @@ def test_trigger_memorize_enqueues_for_terminal_statuses(monkeypatch: pytest.Mon
     assert mod.trigger_memorize(execution_id, "aborted") is True
     assert mod.trigger_memorize(execution_id, "failed") is True
     assert mod.trigger_memorize(execution_id, "cancelled") is True
+    # Auditoría 2026-07-02 (F1.3): needs_human_review ES terminal (escalación
+    # ADR 0087) — faltaba aquí, así que 12 runs escalados no llegaban nunca al
+    # Memorizer (ni intento ni skip_reason) y el setting del operador
+    # `memorizable_statuses` era inalcanzable para ese estado.
+    assert mod.trigger_memorize(execution_id, "needs_human_review") is True
     # Non-terminal (mid-execution) → NOT enqueued.
     assert mod.trigger_memorize(execution_id, "awaiting_human_approval") is False
     assert mod.trigger_memorize(execution_id, "running") is False
-    assert len(calls) == 4  # the four terminal statuses
+    assert len(calls) == 5  # the five terminal statuses
 
 
 def test_trigger_memorize_swallows_broker_errors(monkeypatch: pytest.MonkeyPatch) -> None:

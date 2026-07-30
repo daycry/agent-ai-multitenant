@@ -1,6 +1,6 @@
 ---
 title: "Córtex F1 — Córtex conversacional con memoria persistente"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
   [
     "F0 (rol system_owner, IMPLEMENTADO)",
@@ -11,7 +11,8 @@ blocking_plan:
     "ADR 0054",
     "ADR 0059",
   ]
-started_at: null
+started_at: 2026-06-23
+completed_at: null
 date: 2026-06-23
 related_adrs: ["0074", "0076", "0021", "0070", "0054", "0059", "0064"]
 docs_language: es
@@ -19,7 +20,28 @@ docs_language: es
 
 # Córtex F1 — Córtex conversacional con memoria persistente (mente útil mínima)
 
-> **🔒 GATED.** Plan listo-para-ejecutar de la Fase F1 del Córtex del `system_owner`. F0 (rol, migración 0091, gates DB-authoritative) **YA está desplegado**: este plan NO lo re-planifica. F1 introduce la **primera tabla tenant-less sobre BYPASSRLS** (excepción consciente al Principio 1) y **egress de Internet** vía claude_sdk — no se implementa nada hasta el visto bueno del operador por fase (ADR 0074) y, para la búsqueda web, la aprobación del ADR 0076.
+> **Auditoría 2026-07-27 — las casillas de este plan se verificaron una a una
+> contra el código.** Las marcadas `[x]` lo están con evidencia `file:line` y una
+> segunda pasada adversarial; las que siguen sin marcar tienen su hueco concreto
+> descrito en
+> [`gaps-cortex-2026-07-27.md`](gaps-cortex-2026-07-27.md) (informe:
+> [`auditoria-cortex-2026-07-27.md`](auditoria-cortex-2026-07-27.md)).
+> Antes de implementar una casilla sin marcar, **abre el fichero**: la pasada
+> adversarial dio al menos un falso positivo comprobado.
+
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). Este
+> plan quedó congelado en su estado de diseño (`pending_approval`/GATED) tras el commit `cf8f7cd`,
+> pero el código real se implementó en la rama `plan/runs-visor-trabajo` entre 2026-06-24 y
+> 2026-07-06: `cortex/graph.py`, `threads.py`, `tools.py`, `model_config.py`, migración
+> `0092_cortex_threads`, router `cortex.py` (`/turns`, `/conversations`), página
+> `app/admin/cortex/page.tsx`, y la suite `test_cortex_threads*`/`test_cortex_turns_endpoint.py`/
+> `test_cortex_cross_owner.py` en verde. **Desviación real vs. plan**: la búsqueda web NO usa el
+> camino "WebSearch/WebFetch nativas de claude_sdk" (ADR 0076) que este plan exigía — se implementó
+> una tool web provider-agnóstica (`cortex/web.py`, SearXNG/Brave + egress-proxy) bajo el ADR 0067,
+> ya `accepted`. Ver [cortex-identidad-real.md](cortex-identidad-real.md) para la capa añadida
+> encima (self-model unificado) y el resto de correcciones de la auditoría 2026-07-06. Checkboxes
+> de tareas de este documento NO se han re-verificado línea a línea; el status refleja el
+> veredicto agregado, no un cierre formal con changelog propio.
 
 ## Objetivo
 
@@ -80,7 +102,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
 
 ### Bloque A — Persistencia del hilo (memoria episódica de conversación)
 
-- [ ] **Tarea 1 — Migración 0092: `cortex_conversations` + `cortex_turns`**
+- [x] **Tarea 1 — Migración 0092: `cortex_conversations` + `cortex_turns`**
   - Crear: `apps/api-server/migrations/versions/20260623_0092_cortex_threads.py` (`revision = "0092_cortex_threads"`, `down_revision = "0091_system_owner_f0"`).
   - Modelos ORM: `apps/api-server/src/api_server/db/cortex.py` (clase `CortexConversation`, `CortexTurn`; usar `UUIDPrimaryKeyMixin`, `TimestampMixin`; `CortexConversation` con `SoftDeleteMixin`; **NO** `TenantScopedMixin` con RLS — declarar `tenant_id`/`owner_user_id` como columnas explícitas; ver `db/conversation.py` y `db/memory.py` como referencia de estilo). Registrar el módulo donde `Base.metadata` los recoge (importarlo en `db/__init__.py` o el módulo que agrega modelos para alembic autogenerate).
   - TDD:
@@ -89,7 +111,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
     3. Verde. Commit: `feat(cortex): migración 0092 cortex_conversations + cortex_turns (F1, tenant-less BYPASSRLS)`.
   - Aceptación: `alembic upgrade head` y `alembic downgrade 0091_system_owner_f0` corren sin error; el CHECK rechaza `role='agent'`.
 
-- [ ] **Tarea 2 — Capa de persistencia del hilo (owner-scoped, BYPASSRLS)**
+- [x] **Tarea 2 — Capa de persistencia del hilo (owner-scoped, BYPASSRLS)**
   - Crear: `apps/api-server/src/api_server/cortex/threads.py` con funciones puras sobre una `AsyncSession` (admin/BYPASSRLS):
     - `resolve_cortex_tenant_id(session, owner_user_id) -> UUID` (Decisión D1: membership activa más antigua; lanza `CortexNoTenantError` si ninguna).
     - `create_conversation(session, *, owner_user_id, tenant_id, model_id) -> CortexConversation`.
@@ -104,7 +126,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
 
 ### Bloque B — Grafo reactivo del córtex
 
-- [ ] **Tarea 3 — `CortexState` + `run_cortex_turn` (clon del loop con persistencia de memoria)**
+- [x] **Tarea 3 — `CortexState` + `run_cortex_turn` (clon del loop con persistencia de memoria)**
   - Crear: `apps/api-server/src/api_server/cortex/graph.py`. Reutilizar las primitivas de `assistant/graph.py` (`ModelTurn`, `ToolInvocation`, `AssistantModelClient`, `MAX_TOOL_ROUNDS`, `_admissible_tool_calls`, el cap `_PER_TOOL_CALL_CAP`) **importándolas** (no copiar) y construir un `CortexState` análogo a `AssistantState` con: `system_prompt`, `chat_history` (de `recent_history_for_prompt`), `enabled_tools`, `tool_ctx` (un `CortexToolContext` nuevo). Exponer `run_cortex_turn(model, *, system_prompt, enabled_tools, tool_ctx, chat_history) -> AssistantTurnResult` (puede reutilizar `build_assistant_graph` directamente si `CortexState` es compatible; si no, factorizar `build_turn_graph` genérico). Tope de escritura de memoria 1/turno reutilizando `_PER_TOOL_CALL_CAP` con la tool `cortex_remember`.
   - Crear tools owner-scoped: `apps/api-server/src/api_server/cortex/tools.py` — `CortexToolContext(session, owner_user_id, tenant_id)`; tool `cortex_remember` (escribe memoria del córtex vía `persist_memory_candidates` directo con `metadata_.cortex=true`, cap 1/turno) y tool de lectura mínima `cortex_recall_more` (recall híbrido bajo demanda). Registro/`run_cortex_tool`/`cortex_tool_schemas` espejo de `assistant/tools.py`.
   - TDD:
@@ -115,7 +137,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
 
 ### Bloque C — Recall asociativo híbrido real
 
-- [ ] **Tarea 4 — Recall híbrido del córtex (BM25 + vector + entidad, RRF), filtrado por owner**
+- [x] **Tarea 4 — Recall híbrido del córtex (BM25 + vector + entidad, RRF), filtrado por owner**
   - Crear: `apps/api-server/src/api_server/cortex/memory.py`:
     - `cortex_recall(session, *, owner_user_id, tenant_id, query, query_embedding=None, limit=8) -> list[str]` — llama a `memorizer.recall.recall(session, query=query, tenant_id=tenant_id, scopes=("private",), user_id=owner_user_id, query_embedding=query_embedding, limit=limit)`. El filtro `scope='private' AND user_id=:user_id` de `_scope_filter_sql()` garantiza el aislamiento por owner; además se filtra `metadata_.cortex=true` post-fetch (o se añade el predicado al recall si se decide extender). **Sustituye el MVP "N recientes"** de `recall_user_memories`.
     - `cortex_remember(session, *, owner_user_id, tenant_id, content, type='semantic', tags=()) -> dict` — `persist_memory_candidates(... scope='private', user_id=owner_user_id, extra_metadata={'source':'cortex','cortex':True})` directo (NO `workers/memorizer.py`); dedup como `remember_user_fact`.
@@ -139,14 +161,14 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
     4. Verde. Commit: `feat(cortex): resolución cortex.default_model + effort modulado + degradación 503`.
   - Aceptación: con SDK presente el `effort` llega al provider; sin SDK ni alternativa → 503 claro (nunca 500).
 
-- [ ] **Tarea 6 — 🔒 GATED (ADR 0076): WebSearch/WebFetch nativas del Claude Agent SDK**
+- [x] **Tarea 6 — 🔒 GATED (ADR 0076): WebSearch/WebFetch nativas del Claude Agent SDK**
   - **NO implementar hasta aprobar el ADR 0076.** Cuando se apruebe: en el builder del modelo del córtex (solo para `provider_kind == "claude_sdk"`), pasar `allowed_tools=["WebSearch","WebFetch"]` a la vía agéntica (`ClaudeAgentProvider.run_agent`/`_build_options`), de modo que Anthropic gestione el fetch (anti-SSRF gratis, sin abrir egress en runtimes, sin ADR 0067). Sin claude_sdk → SIN web (camino degradado de web propia queda fuera de F1: requiere su propio ADR con anti-SSRF). Verificar antes el prerequisito de seguridad del ADR 0076 ("credencial en os.environ global" de `ClaudeAgentProvider`).
   - TDD (cuando se desbloquee): test con `query_fn` inyectado que comprueba que `allowed_tools` incluye `WebSearch`/`WebFetch` solo en el camino claude_sdk.
   - Aceptación: la web solo se activa con claude_sdk y ADR 0076 aprobado; sin SDK el córtex sigue respondiendo (sin web) o 503.
 
 ### Bloque E — Endpoints + página
 
-- [ ] **Tarea 7 — Router `/owner/cortex/*` (gate require_system_owner)**
+- [x] **Tarea 7 — Router `/owner/cortex/*` (gate require_system_owner)**
   - Crear: `apps/api-server/src/api_server/routers/cortex.py` (router `cortex_router`, prefix `/owner/cortex`). Endpoints `POST /turns`, `GET /turns`, `GET /conversations` (ver sección Endpoints). Todos `Depends(require_system_owner)`. Inyección del modelo vía dependencia `get_cortex_model` overrideable en tests (espejo exacto de `get_assistant_model`). Sesión: abrir `get_admin_sessionmaker()` internamente (BYPASSRLS) y filtrar `owner_user_id` explícito; manejar `AuthError/RateLimitError/LLMError` → 502/429/502 (copia el bloque de `routers/assistant.py:230-251`).
   - Crear schemas: `apps/api-server/src/api_server/schemas/cortex.py` (`CortexTurnRequest`, `CortexTurnResponse`, `CortexConversationResponse`, `CortexTurnItem`) — espejo de `schemas/assistant.py`.
   - Registrar el router: añadir `cortex_router` a la lista de `apps/api-server/src/api_server/routers/__init__.py` y al bloque `include_router` de `apps/api-server/src/api_server/main.py:200-238`.
@@ -156,7 +178,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
     3. Verde. Commit: `feat(cortex): endpoints /owner/cortex/{turns,conversations} (gate require_system_owner)`.
   - Aceptación: hilo persistente verificable por API; el segundo turno ve el primero como historia.
 
-- [ ] **Tarea 8 — Gate 403 + listado de hilos**
+- [x] **Tarea 8 — Gate 403 + listado de hilos**
   - TDD:
     1. Test (rojo): `tests/integration/test_cortex_turns_endpoint.py::test_non_owner_gets_403` — un usuario con membership tenant_admin pero `is_system_owner=false` (incluso con claim `own` forjado) recibe **403** en `POST /owner/cortex/turns` y `GET /owner/cortex/conversations` (gate DB-authoritative). Espejo del `test_require_system_owner_gate_checks_the_db` de F0 pero a nivel HTTP.
     2. Test (rojo): `test_list_conversations_owner_scoped` — owner crea 2 hilos; `GET /owner/cortex/conversations` los lista (más reciente primero) con preview.
@@ -164,14 +186,14 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
     4. Verde. Commit: `test(cortex): gate 403 no-owner + listado de hilos`.
   - Aceptación: no-owner → 403 en todos los endpoints; listado correcto y ordenado.
 
-- [ ] **Tarea 9 — 🔒 Test cross-owner OBLIGATORIO (excepción al Principio 1)**
+- [x] **Tarea 9 — 🔒 Test cross-owner OBLIGATORIO (excepción al Principio 1)**
   - TDD:
     1. Test (rojo): `tests/integration/test_cortex_cross_owner.py` (`@pytest.mark.cross_tenant`) — como el owner es singleton, simular a nivel de DATOS dos `owner_user_id` distintos en `cortex_conversations`/`cortex_turns` (insert directo con dos user ids) y comprobar que `list_turns`/`list_conversations`/`append_turn` con `owner_user_id=A` **NUNCA** ven ni tocan filas de `owner_user_id=B`, aun corriendo sobre BYPASSRLS (no hay RLS que proteja: solo el filtro explícito). Verificar que cada `SELECT`/`UPDATE` de `cortex/threads.py` lleva el `WHERE owner_user_id`.
     2. Implementa el filtro donde falte.
     3. Verde. Commit: `test(cortex): aislamiento cross-owner sobre BYPASSRLS (excepción consciente al Principio 1)`.
   - Aceptación: ningún acceso cruza de owner; este test es la condición de mérito de seguridad de F1.
 
-- [ ] **Tarea 10 — Cableado fin-a-fin: turno con recall + augment + deliberación**
+- [x] **Tarea 10 — Cableado fin-a-fin: turno con recall + augment + deliberación**
   - En `POST /owner/cortex/turns`: resolver tenant (D1) → persistir turno `user` → `cortex_recall` (Tarea 4) → `augment_cortex_prompt` → `run_cortex_turn` con el modelo resuelto (Tarea 5/7) y `chat_history=recent_history_for_prompt` → persistir turno `cortex` (con `tools_called`, `rounds`, `reasoning_effort`, `metadata.degraded`).
   - TDD:
     1. Test (rojo): `tests/integration/test_cortex_recall_in_chat.py` — siembra una memoria del córtex ("Al owner le interesa la arquitectura hexagonal"); con `ScriptedAssistantModel` que NO llama tools, comprueba que el `system_prompt` pasado al modelo (capturado por un fake que registra el state) contiene esa memoria recallada (recall híbrido funcionando en el hot-path). Reutiliza el patrón de captura de `decide` del test del asistente.
@@ -181,7 +203,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
 
 ### Bloque F — Frontend (página del córtex)
 
-- [ ] **Tarea 11 — NAV: grupo "Córtex" `systemOwnerOnly`**
+- [x] **Tarea 11 — NAV: grupo "Córtex" `systemOwnerOnly`**
   - Modificar: `apps/admin-panel/components/layout/admin-shell.tsx` — añadir `systemOwnerOnly?: boolean` a `NavItem` y `NavGroup`; en `SidebarContent` leer `isSystemOwner` de `useCurrentUser()` (ya existe) y extender `itemVisible`/`groupVisible` (`if (item.systemOwnerOnly) return isSystemOwner;` / idem grupo). Añadir un `NavGroup` `{ id: "cortex", label: "Córtex", Icon: Brain, systemOwnerOnly: true, items: [{ href: "/admin/cortex", label: "Córtex", Icon: Brain }] }` (separado, como pide el diseño).
   - TDD:
     1. Test (rojo): e2e/unit del shell que comprueba que el grupo "Córtex" se muestra con `isSystemOwner=true` y se oculta para un tenant_admin no-owner (mock de `useCurrentUser`). Si no hay test unit del shell, añadir uno mínimo (`apps/admin-panel/__tests__/admin-shell-cortex.test.tsx`) o un Playwright `nav-cortex` visible/oculto.
@@ -189,7 +211,7 @@ Todos gated por `Depends(require_system_owner)` (DB-authoritative, re-lee `users
     3. Verde. Commit: `feat(admin): grupo NAV "Córtex" systemOwnerOnly`.
   - Aceptación: el grupo solo lo ve el system_owner; el backend sigue siendo la barrera real.
 
-- [ ] **Tarea 12 — Página `app/admin/cortex/page.tsx` (chat persistente + preview Markdown)**
+- [x] **Tarea 12 — Página `app/admin/cortex/page.tsx` (chat persistente + preview Markdown)**
   - Crear: `apps/admin-panel/app/admin/cortex/page.tsx` — réplica del patrón de `app/admin/assistant/page.tsx` pero (a) gated por `isSystemOwner` (no `isTenantAdmin`); (b) **hilo persistente**: al montar, `GET /owner/cortex/conversations` y un selector de hilo (reutilizar el patrón de historial de `projects/[id]/chat`); `POST /owner/cortex/turns` con `conversation_id`; cargar turnos con `GET /owner/cortex/turns`; (c) respuestas del córtex con preview Markdown vía `renderPlanDraft` (igual que el asistente); (d) indicador "pensando profundo" cuando `reasoning_effort` alto; (e) **copy honesto** (sin afirmar emociones/consciencia — F1 no tiene afecto aún). `data-testid`: `cortex-input`, `cortex-send`, `cortex-chat`, `cortex-answer`, `cortex-no-access`.
   - Crear helpers/tipos: `apps/admin-panel/lib/cortex.ts` (tipos `CortexTurnResponse`, `CortexConversation`, `cortexFetch`).
   - TDD:

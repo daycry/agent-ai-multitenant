@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -386,6 +386,53 @@ async def _compute_consumption(
 
 
 # ===========================================================================
+# Reusable runs query — the single source of truth for the runs explorer.
+# Both this admin endpoint and the member-facing GET /runs (routers/runs.py)
+# call it, so the filtering / fetch / currency logic lives in one place (DRY).
+# ===========================================================================
+async def query_execution_runs(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    limit: int,
+    offset: int,
+    window_days: int,
+    agent_id: UUID | None = None,
+    role: str | None = None,
+    plan_id: UUID | None = None,
+    task_id: UUID | None = None,
+    verdict: str | None = None,
+    model: str | None = None,
+    min_cost: Decimal | None = None,
+    display_currency: str | None = None,
+) -> list[ExecutionRunRow]:
+    """This tenant's executions, newest first, paginated + filtered + currency-applied.
+
+    Tenant-scoped (the caller's session is RLS-bound) with a defence-in-depth
+    ``tenant_id`` predicate inside ``_exec_filters``. Returns one
+    :class:`ExecutionRunRow` per execution; never leaks prompts / completions /
+    credentials / ``steps_log``.
+    """
+    since = datetime.now(tz=UTC) - timedelta(days=window_days)
+    filters = _exec_filters(
+        tenant_id=tenant_id,
+        since=since,
+        agent_id=agent_id,
+        role=role,
+        plan_id=plan_id,
+        task_id=task_id,
+        verdict=verdict,
+        model=model,
+        min_cost=min_cost,
+    )
+    target_currency = await _resolve_display_currency(
+        session, tenant_id=tenant_id, override=display_currency
+    )
+    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
+    return await _apply_display_currency(session, rows, target_currency)
+
+
+# ===========================================================================
 # GET /tenant-stats/runs — paginated, filterable runs explorer
 # ===========================================================================
 @router.get("/runs", response_model=list[ExecutionRunRow])
@@ -431,10 +478,12 @@ async def list_execution_runs(
     with the FX rate of that run's OWN date. The stored USD is never changed.
     """
     tenant_id = require_tenant_id(principal)
-    since = datetime.now(tz=UTC) - timedelta(days=window_days)
-    filters = _exec_filters(
+    return await query_execution_runs(
+        session,
         tenant_id=tenant_id,
-        since=since,
+        limit=limit,
+        offset=offset,
+        window_days=window_days,
         agent_id=agent_id,
         role=role,
         plan_id=plan_id,
@@ -442,12 +491,8 @@ async def list_execution_runs(
         verdict=verdict,
         model=model,
         min_cost=min_cost,
+        display_currency=display_currency,
     )
-    target_currency = await _resolve_display_currency(
-        session, tenant_id=tenant_id, override=display_currency
-    )
-    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
-    return await _apply_display_currency(session, rows, target_currency)
 
 
 # ===========================================================================
@@ -604,6 +649,7 @@ async def _fetch_runs(
             model=model_name,
             verdict=ex.status,
             succeeded=ex.status == _DONE,
+            finish_status=ex.finish_status,
             retry_count=int(retry_count) if retry_count is not None else 0,
             duration_ms=int(duration) if duration is not None else None,
             total_tokens=ex.total_tokens,
@@ -865,3 +911,44 @@ def _rate(succeeded: int, total: int) -> Decimal | None:
 
 
 __all__ = ["router"]
+
+
+@router.get("/prompt-cache")
+async def prompt_cache_report(
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+    window_days: int = _window_days(),
+) -> dict[str, Any]:
+    """Reutilización de la caché de prompt y coste por iteración, por proveedor
+    (`task_wf_63`).
+
+    La tarea es de MEDICIÓN, y el orden importa: `_decide_messages` reconstruye
+    un mensaje de usuario grande cada turno, y pasarlo a una lista incremental
+    —lo que dejaría a los proveedores con caché por prefijo aprovechar también
+    el histórico— es un cambio con riesgo real sobre la convergencia. Antes de
+    tocarlo hay que saber si sirve de algo.
+
+    Se calcula sobre los `steps_log` que ya se persisten: sin tabla nueva, sin
+    telemetría paralela, sin coste en el camino caliente.
+
+    Lee `reports_cache` antes que `cached_prefix_pct`: un proveedor que no
+    reporta caché y otro que la reporta siempre a cero son situaciones
+    distintas, y confundirlas llevaría a optimizar a ciegas.
+    """
+    from api_server.prompt_cache_report import build_prompt_cache_report
+
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    rows = list(
+        (
+            await session.execute(
+                select(Execution.steps_log).where(
+                    Execution.tenant_id == principal.tenant_id,
+                    Execution.created_at >= since,
+                )
+            )
+        ).all()
+    )
+    report = build_prompt_cache_report([(None, row[0] or []) for row in rows])
+    payload = report.as_dict()
+    payload["window_days"] = window_days
+    return payload

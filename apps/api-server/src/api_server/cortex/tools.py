@@ -26,6 +26,7 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.cortex.browse import validate_browse_request
 from api_server.cortex.memory import (
     CORTEX_RECALL_LIMIT,
     cortex_recall,
@@ -63,6 +64,15 @@ class CortexToolContext:
     # cuando el owner habilita la web. Mientras sea False, esas tools no aparecen en
     # los schemas ni se despachan.
     web_enabled: bool = False
+    # Navegador real (ADR 0080): GATE de las host tools ``browse_request`` /
+    # ``browse_result``. Default False (kill-switch de plataforma, deny-by-default):
+    # navegar de verdad —ejecutar JS, clicar, teclear, mantener sesión— es la mayor
+    # superficie del sistema. Aun encendido, CADA sesión necesita la aprobación
+    # explícita del owner: la tool NO lanza el navegador, lo PIDE.
+    browser_enabled: bool = False
+    # Persistencia de las sesiones de navegación (seam de test). En producción es
+    # el repo sobre la sesión admin; NO es un eje de autorización.
+    browse_store: Any | None = field(default=None)
     # Seams de inyección para las web tools (tests / overrides). En producción se
     # dejan None y la tool resuelve la config desde ``Settings`` (proxy, proveedor,
     # key de Vault/env). NO son ejes de autorización — sólo permiten mockear la red.
@@ -178,6 +188,90 @@ async def _cortex_web_fetch(
         proxy_url=proxy_url,
         resolver=ctx.web_resolver,
     )
+
+
+# ---------------------------------------------------------------------------
+# Navegador real, con aprobación humana por sesión (ADR 0080)
+# ---------------------------------------------------------------------------
+def _browse_store(ctx: CortexToolContext) -> Any:
+    """El repo de sesiones de navegación (inyectable en tests)."""
+    if ctx.browse_store is not None:
+        return ctx.browse_store
+    from api_server.db import browse_repo
+
+    class _DbStore:
+        async def create_pending(self, **kw: Any) -> dict[str, Any]:
+            row = await browse_repo.create_pending(ctx.session, **kw)
+            return {"id": str(row.id), "status": row.status}
+
+        async def get(self, session_id: str) -> dict[str, Any] | None:
+            row = await browse_repo.get_browse_session(
+                ctx.session, UUID(session_id), owner_user_id=ctx.owner_user_id
+            )
+            if row is None:
+                return None
+            return {
+                "id": str(row.id),
+                "status": row.status,
+                "result": row.result,
+                "error": row.error,
+            }
+
+    return _DbStore()
+
+
+async def _cortex_browse_request(
+    ctx: CortexToolContext,
+    *,
+    goal: str,
+    steps: Any,
+    **_: Any,
+) -> dict[str, Any]:
+    """PIDE una sesión de navegación: NO navega, la deja esperando al owner.
+
+    El guion se valida aquí con el MISMO catálogo cerrado + anti-SSRF que aplica
+    el browser-runtime, para no ponerle delante al owner algo que el runtime
+    rechazaría igualmente."""
+    try:
+        plan = validate_browse_request(goal=goal, steps=steps)
+    except ValueError as exc:
+        return {"status": "rejected", "error": str(exc)}
+    row = await _browse_store(ctx).create_pending(
+        tenant_id=ctx.tenant_id,
+        owner_user_id=ctx.owner_user_id,
+        goal=plan["goal"],
+        steps=plan["steps"],
+    )
+    return {
+        "status": "pending_approval",
+        "session_id": str(row["id"]),
+        "message": (
+            "Sesión de navegación registrada y PENDIENTE DE APROBACIÓN del owner. "
+            "No se ha navegado nada: cuando la apruebe, consulta el resultado con "
+            "browse_result."
+        ),
+    }
+
+
+async def _cortex_browse_result(
+    ctx: CortexToolContext,
+    *,
+    session_id: str,
+    **_: Any,
+) -> dict[str, Any]:
+    """El estado (y, si terminó, el resultado saneado) de una sesión pedida."""
+    try:
+        row = await _browse_store(ctx).get(str(session_id))
+    except (ValueError, AttributeError):
+        row = None  # id malformado: para el modelo es, sencillamente, inexistente
+    if row is None:
+        return {"status": "not_found", "session_id": str(session_id)}
+    return {
+        "status": row["status"],
+        "session_id": str(row["id"]),
+        "result": row.get("result"),
+        "error": row.get("error"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -322,22 +416,101 @@ CORTEX_TOOLS: dict[str, CortexToolEntry] = {
             },
         },
     ),
+    "browse_request": CortexToolEntry(
+        impl=_cortex_browse_request,
+        schema={
+            "name": "browse_request",
+            "description": (
+                "PIDE una sesión de navegador real (Playwright) para lo que web_fetch "
+                "no alcanza: sitios que exigen JavaScript, login o interacción (clicar, "
+                "rellenar formularios). NO navega al instante: la sesión queda PENDIENTE "
+                "DE APROBACIÓN del owner, que verá el guion exacto (a qué URLs vas, qué "
+                "clicas, qué tecleas). Úsalo solo cuando web_search/web_fetch no basten."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": (
+                            "Qué vas a hacer y para qué, en una frase — es lo que el "
+                            "owner lee para decidir si te deja."
+                        ),
+                        "maxLength": 500,
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": (
+                            "El guion, paso a paso. Acciones: goto (url), click "
+                            "(selector), fill (selector+value), wait_for (selector), "
+                            "extract (selector opcional)."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["goto", "click", "fill", "wait_for", "extract"],
+                                },
+                                "url": {"type": "string"},
+                                "selector": {"type": "string"},
+                                "value": {"type": "string"},
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                },
+                "required": ["goal", "steps"],
+            },
+        },
+    ),
+    "browse_result": CortexToolEntry(
+        impl=_cortex_browse_result,
+        schema={
+            "name": "browse_result",
+            "description": (
+                "Consulta una sesión de navegación que pediste: si el owner la aprobó, "
+                "si está corriendo, y su resultado (el texto extraído) cuando termina."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "El id que devolvió browse_request.",
+                    }
+                },
+                "required": ["session_id"],
+            },
+        },
+    ),
 }
 
 # Las host tools web (ADR 0067) sólo se ofrecen cuando el owner habilita la web
 # (``web_enabled``). El resto del catálogo está siempre disponible.
 _WEB_TOOL_NAMES: tuple[str, ...] = ("web_search", "web_fetch")
+# El navegador real (ADR 0080) va por su PROPIO kill-switch: leer la web y
+# NAVEGARLA (ejecutar JS, clicar, teclear, mantener sesión) no son la misma liga.
+_BROWSER_TOOL_NAMES: tuple[str, ...] = ("browse_request", "browse_result")
 
 
-def cortex_enabled_tool_names(*, web_enabled: bool) -> tuple[str, ...]:
+def cortex_enabled_tool_names(
+    *, web_enabled: bool, browser_enabled: bool = False
+) -> tuple[str, ...]:
     """Los nombres de tools habilitadas del córtex, en orden de catálogo.
 
     Incluye las web tools (``web_search`` / ``web_fetch``) SOLO cuando ``web_enabled``
     es True (gate del ADR 0067, deny-by-default). El router lo deriva del
     :class:`CortexToolContext.web_enabled` y se lo pasa a ``cortex_tool_schemas`` y al
     grafo, de modo que un modelo nunca ve — ni puede llamar — una web tool que el
-    owner no ha habilitado."""
-    return tuple(name for name in CORTEX_TOOLS if web_enabled or name not in _WEB_TOOL_NAMES)
+    owner no ha habilitado. Idem el navegador real (ADR 0080) con ``browser_enabled``:
+    su kill-switch es INDEPENDIENTE del de la web — leer no es navegar."""
+    return tuple(
+        name
+        for name in CORTEX_TOOLS
+        if (web_enabled or name not in _WEB_TOOL_NAMES)
+        and (browser_enabled or name not in _BROWSER_TOOL_NAMES)
+    )
 
 
 class UnknownCortexToolError(KeyError):
@@ -361,12 +534,28 @@ async def run_cortex_tool(
         raise UnknownCortexToolError(f"unknown cortex tool {name!r}")
     if name in _WEB_TOOL_NAMES and not ctx.web_enabled:
         raise UnknownCortexToolError(f"cortex web tool {name!r} is disabled (web_enabled=False)")
+    if name in _BROWSER_TOOL_NAMES and not ctx.browser_enabled:
+        # Mismo criterio con el navegador (ADR 0080): con el kill-switch apagado,
+        # un modelo hostil que se invente el nombre se topa con "no existe".
+        raise UnknownCortexToolError(
+            f"cortex browser tool {name!r} is disabled (browser_enabled=False)"
+        )
     return await entry.impl(ctx, **(arguments or {}))
 
 
 def cortex_tool_schemas(enabled: tuple[str, ...]) -> list[dict[str, Any]]:
     """Los JSON schemas de las tools habilitadas, en orden de catálogo."""
     return [CORTEX_TOOLS[name].schema for name in enabled if name in CORTEX_TOOLS]
+
+
+def cortex_tool_schemas_without_host_web(enabled: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Como :func:`cortex_tool_schemas` pero SIN las host web tools (I-6, auditoría
+    2026-07-10): cuando las web tools NATIVAS del SDK están activas (``allowed_tools``
+    WebSearch/WebFetch, ADR 0076), el modelo no debe ver además ``web_search``/
+    ``web_fetch`` del catálogo host — dos herramientas para el mismo trabajo confunden
+    la elección y duplican el gasto. ``build_cortex_model`` elige esta variante como
+    ``schema_fn`` solo en ese caso (exclusión mutua nativa/host)."""
+    return cortex_tool_schemas(tuple(name for name in enabled if name not in _WEB_TOOL_NAMES))
 
 
 __all__ = [
@@ -376,5 +565,6 @@ __all__ = [
     "UnknownCortexToolError",
     "cortex_enabled_tool_names",
     "cortex_tool_schemas",
+    "cortex_tool_schemas_without_host_web",
     "run_cortex_tool",
 ]

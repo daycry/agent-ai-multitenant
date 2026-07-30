@@ -39,13 +39,23 @@ APPROVAL_TIMEOUT_ABORT_CODE = "approval_timeout_exceeded"
 APPROVAL_REJECTED_ABORT_CODE = "approval_rejected"
 
 
+# ADR 0114: la categoría del ask_human del agente. SIEMPRE requiere humano —
+# preguntar a un humano es, por definición, para un humano; no depende de la
+# política por categorías del proyecto. Espejo de
+# agent_runtime.graph.HUMAN_QUESTION_CATEGORY (los dos paquetes no se importan).
+HUMAN_QUESTION_CATEGORY = "human_question"
+
+
 def requires_human_approval(policy: dict[str, Any] | None, category: str) -> bool:
     """True if `category` needs a human under this project's policy.
 
     The policy JSONB is `{"categories": {<category>: "auto" |
     "human_required"}}` (a bare `{<category>: ...}` map is also
-    accepted). An unlisted category defaults to `auto`.
+    accepted). An unlisted category defaults to `auto`. The ``human_question``
+    category (ADR 0114) is ALWAYS human-required, whatever the policy says.
     """
+    if category == HUMAN_QUESTION_CATEGORY:
+        return True
     if not policy:
         return False
     categories = policy.get("categories", policy)

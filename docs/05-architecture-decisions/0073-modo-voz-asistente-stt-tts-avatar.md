@@ -1,7 +1,7 @@
 ---
 adr_id: "0073"
 title: "Modo voz (videoconferencia) del Asistente: STT/TTS/avatar como add-ons de medios, provider-agnósticos y dockerizables (sin 5º provider LLM)"
-status: proposed
+status: accepted
 date: 2026-06-21
 authors: [system_architect]
 plan_referenced: voice-assistant
@@ -11,7 +11,9 @@ extends: ["0021", "0033", "0065"]
 
 # ADR 0073 — Modo voz del Asistente: STT/TTS/avatar provider-agnósticos (sin 5º provider LLM)
 
-> **Estado: `proposed`.** Diseño verificado contra el código por el workflow
+> **Estado: `accepted`** (frontmatter desde el 2026-06-21; banner corregido el
+> 2026-07-27 — decía `proposed` y contradecía a su propio frontmatter).
+> Diseño verificado contra el código por el workflow
 > `voice-assistant-design`. El diseño completo (stack, arquitectura, avatar,
 > plan por fases F1–F4, riesgos) vive en
 > [`docs/superpowers/specs/2026-06-21-voice-assistant-design.md`](../superpowers/specs/2026-06-21-voice-assistant-design.md).
@@ -104,3 +106,7 @@ auth/RLS del WS (rechazo cross-tenant 1008) verificados; F2 = primera frase del 
 hablada + barge-in <300 ms en los 4 providers; F3 = avatar con cabeza + boca
 sincronizada en ES+EN (QA visual humano); F4 = visemas fonéticos + degradación con
 gracia bajo carga + runbook/changelog.
+
+## Estado de implementación (2026-07-12)
+
+F1 IMPLEMENTADA Y DESPLEGADA (verificado 2026-07-12) para el asistente de tenants Y el cortex sobre la misma infra: WS `/ws/assistant/voice` (`routers/assistant_voice.py`), `VoiceSession` (transcribe->respond->synthesize) con clientes STT/TTS (`assistant/voice_clients.py`), servicios `stt` (faster-whisper) y `tts` (Kokoro-82M) en docker-compose.yml, shell UI compartida `components/voice/voice-call-shell.tsx` + avatar con lip-sync por amplitud (`realistic-avatar.tsx`, SVG procedural ~= F3 MVP; no el TalkingHead/GLB propuesto). PENDIENTE: F2 (streaming token-a-token + barge-in/VAD; hoy push-to-talk y `/assistant/chat/stream` emite progreso por rondas, no deltas) y F4 (visemas). El token-a-token exige `stream()` en los 4 providers de shared-llm.

@@ -17,9 +17,6 @@ Needs the full local stack: Docker, PostgreSQL and Redis.
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
-import os
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -28,24 +25,22 @@ from alembic import command
 from api_server.db.domain import Agent, ExecutionStatus, Project, Task
 from api_server.db.execution_repo import list_executions_for_task
 from api_server.db.models import Organization
-from orchestrator.config import Settings as OrchestratorSettings
-from orchestrator.consumer import StreamConsumer
-from orchestrator.dispatch import TaskDispatcher
 from redis.asyncio import Redis
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from workers.celery_app import build_celery_app
-from workers.config import Settings as WorkerSettings
-from workers.config import reset_settings_cache
 
-import docker
+from ._docker_helpers import requires_docker
+from ._pipeline_helpers import (
+    TEST_REDIS_URL,
+    consume_and_take_job,
+    require_agent_runtime_image,
+    run_worker_job,
+    status_changed_event,
+    task_status,
+)
 
-from ._docker_helpers import docker_client, requires_docker, skip_or_fail
-
-pytestmark = pytest.mark.integration
-
-_IMAGE = "agent-runtime:v1"
-TEST_REDIS_URL = "redis://localhost:6379/15"
+# M-6: timeout por-test — un contenedor colgado muere acotado, no al timeout del job.
+pytestmark = [pytest.mark.integration, pytest.mark.timeout(300)]
 
 # The agent's ModelClient spec: act once, then finish — a full loop
 # with a tool call, a finish and a passing self-review.
@@ -65,16 +60,7 @@ def _migrated(alembic_config: object) -> None:
 
 @pytest.fixture()
 def _agent_runtime_image() -> None:
-    """Skip locally if agent-runtime:v1 is not built; FAIL under CI (the CI
-    integration job builds it, so a missing image there is a real regression —
-    finding tests-6, the e2e gate must not vanish silently)."""
-    client = docker_client()
-    try:
-        client.images.get(_IMAGE)
-    except docker.errors.ImageNotFound:  # pragma: no cover - env-dependent
-        skip_or_fail(f"{_IMAGE} not built — run: docker build -t {_IMAGE} ...")
-    finally:
-        client.close()
+    require_agent_runtime_image()
 
 
 async def _seed(db_url: str) -> dict[str, UUID]:
@@ -136,59 +122,23 @@ async def _seed(db_url: str) -> dict[str, UUID]:
 async def _dispatch_via_orchestrator(db_url: str, ids: dict[str, UUID]) -> dict[str, Any]:
     """Publish a task event, run the orchestrator consumer once, and
     return the execution request the dispatcher enqueued for the worker."""
-    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
-    engine = create_async_engine(db_url)
     stream = f"test:e2e:{uuid4().hex[:8]}"
+    redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     try:
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        settings = OrchestratorSettings(
-            redis_url=TEST_REDIS_URL,
+        request = await consume_and_take_job(
+            db_url,
             events_stream=stream,
-            consumer_group="e2e",
-            consumer_name="e2e-1",
-            block_ms=200,
+            seed_event=status_changed_event(
+                ids, old="backlog", new="ready", occurred_at="2026-05-22T00:00:00+00:00"
+            ),
         )
-        celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
-        dispatcher = TaskDispatcher(sessionmaker=sm, celery_app=celery_app, settings=settings)
-        consumer = StreamConsumer(redis, settings, dispatcher.handle)
-        await consumer.ensure_group()
-        await redis.delete("default")
-
-        await redis.xadd(
-            stream,
-            {
-                "type": "task.status_changed",
-                "tenant_id": str(ids["tenant"]),
-                "project_id": str(ids["project"]),
-                "task_id": str(ids["task"]),
-                "occurred_at": "2026-05-22T00:00:00+00:00",
-                "payload": json.dumps({"old_status": "backlog", "new_status": "ready"}),
-            },
-        )
-        result = await consumer.consume_once()
-        assert result.processed == 1, "the orchestrator did not process the task event"
-
-        messages = await redis.lrange("default", 0, -1)
-        await redis.delete("default")
         await redis.delete(stream)
-        assert len(messages) == 1, "the dispatcher did not enqueue exactly one worker job"
-        body = json.loads(base64.b64decode(json.loads(messages[0])["body"]))
-        _args, kwargs, _embed = body
-        return kwargs["request"]  # type: ignore[no-any-return]
+        return request
     finally:
         await redis.aclose()
-        await engine.dispose()
 
 
-async def _task_status(db_url: str, task_id: UUID) -> str:
-    engine = create_async_engine(db_url)
-    try:
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        async with sm() as s:
-            task = (await s.execute(select(Task).where(Task.id == task_id))).scalar_one()
-            return task.status
-    finally:
-        await engine.dispose()
+_task_status = task_status
 
 
 async def _execution(db_url: str, task_id: UUID) -> dict[str, Any]:
@@ -230,8 +180,6 @@ def test_full_pipeline_dispatches_runs_and_persists_an_execution(
     Sync, like Celery calls `run_execution`: the task owns its own
     event loop, so the test must not run inside one.
     """
-    from workers.tasks import run_execution
-
     ids = asyncio.run(_seed(admin_database_url))
 
     # --- orchestrator: event → assignment → enqueue ------------------------
@@ -242,15 +190,7 @@ def test_full_pipeline_dispatches_runs_and_persists_an_execution(
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "in_progress"
 
     # --- worker: run the enqueued job (container → loop → DB) --------------
-    os.environ["WORKERS_DATABASE_URL"] = admin_database_url
-    os.environ["WORKERS_EVENTS_REDIS_URL"] = TEST_REDIS_URL
-    reset_settings_cache()
-    try:
-        outcome = run_execution(request)
-    finally:
-        os.environ.pop("WORKERS_DATABASE_URL", None)
-        os.environ.pop("WORKERS_EVENTS_REDIS_URL", None)
-        reset_settings_cache()
+    outcome = run_worker_job(request, admin_database_url)
 
     assert outcome["status"] == ExecutionStatus.DONE
 

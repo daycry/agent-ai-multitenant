@@ -64,16 +64,59 @@ def _ci4_agent_id(slug: str) -> UUID:
 
 # ---------------------------------------------------------------------------
 # Conjuntos de tools reutilizables (slugs del catálogo built-in
-# `api_server.seeds.builtin_tools`). shell_exec + file + semantic-search van a
-# TODOS; run_* a backend/dba/qa/devops; http_* a auth-security/devops. La
-# familia git dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
+# `api_server.seeds.builtin_tools`). shell_exec + stack_exec + file +
+# semantic-search van a TODOS; http_* a auth-security/devops. La familia git
+# dedicada se retiró en 06.18 (ADR 0049); git se hace vía shell-exec.
 # ---------------------------------------------------------------------------
-_FILE_TOOLS = ("read-file", "write-file", "apply-patch", "list-files", "search-code")
-_RUN_TOOLS = ("run-pytest", "run-lint", "run-typecheck", "run-build")
+# R6 (ADR 0089): se concede `delete-file` (wired) para que el agente pueda
+# reconciliar el deliverable eliminando ficheros stale/duplicados de intentos
+# previos en el worktree persistente; se RETIRA `apply-patch` del grant — no
+# tiene executor en el runtime (igual que la familia git, ADR 0049), así que el
+# modelo lo invocaba y recibía "unknown tool", quemando iteraciones.
+#
+# ADR 0093: se RETIRAN los `run_*` (run-pytest/lint/typecheck/build) del grant.
+# Eran `docker_command` que llamaban `docker.from_env()` DENTRO del sandbox (sin
+# socket por principio 2) → nunca lanzaban contenedor; el modelo los invocaba y
+# fallaba, quemando iteraciones (mismo patrón que apply-patch/git). El toolchain
+# del stack (composer/phpunit/php spark) se ejecuta ahora vía `stack-exec`, que
+# lo lanza en el runtime-template del proyecto a través del worker.
+# PROJ-08/F3: `search-code` retirado — no está cableada en el runtime (el grep
+# vive dentro de shell-exec/stack_exec).
+_FILE_TOOLS = ("read-file", "write-file", "delete-file", "list-files")
 # Base que todo agente del equipo recibe: ejecutar comandos del stack
 # (deny-by-default por allowed_commands del proyecto), leer/editar el repo,
 # git vía shell-exec y la búsqueda semántica en las KBs concedidas al proyecto.
-_BASE_TOOLS = ("shell-exec", *_FILE_TOOLS, "semantic-search")
+# `stack-exec` (ADR 0093) es el HERMANO de `shell-exec` para el toolchain del
+# stack: shell-exec corre en el sandbox fino (git/python), stack-exec lanza el
+# comando en el runtime-template del proyecto (php-phpunit) vía el worker, que es
+# donde existen composer/php/phpunit. Ambos comparten la misma allowlist.
+_BASE_TOOLS = ("shell-exec", "stack-exec", *_FILE_TOOLS, "semantic-search")
+
+
+# Guía de higiene de stack compartida por TODOS los agentes CI4 (fix 2026-07-24).
+# El proyecto debe vivir en la RAÍZ del worktree; si por lo que sea queda en un
+# subdirectorio, la toolchain se corre con `stack_exec(cwd=...)` — nunca con `cd`
+# ni encadenando (stack_exec ejecuta UN programa por llamada). Sin esto, un
+# proyecto anidado (visto en vivo con `ci4build/`, plan 019f8e47) hacía que
+# `vendor/bin/phpunit` diera 127 desde la raíz y el agente girara sin converger.
+_CI4_STACK_HYGIENE_ES = (
+    "\n\nESTRUCTURA Y TOOLCHAIN (obligatorio): mantén el proyecto CodeIgniter 4 en la RAÍZ del "
+    "workspace (donde ya está el repo); NO lo anides en un subdirectorio. Ejecuta la toolchain "
+    "(composer, vendor/bin/phpunit, php spark) con `stack_exec` desde esa raíz. Si el proyecto "
+    'YA está en un subdirectorio, pásalo como `cwd` a `stack_exec` (p.ej. cwd="ci4build") — '
+    "NUNCA uses `cd` ni encadenes comandos con `&&`/`;`/`|` (stack_exec corre un solo programa "
+    "por llamada). Si `vendor/bin/phpunit` da 'not found', es que estás en el directorio "
+    "equivocado: corrige el `cwd`, no cambies de comando a ciegas."
+)
+_CI4_STACK_HYGIENE_EN = (
+    "\n\nLAYOUT & TOOLCHAIN (required): keep the CodeIgniter 4 project at the ROOT of the "
+    "workspace (where the repo already is); do NOT nest it in a subdirectory. Run the toolchain "
+    "(composer, vendor/bin/phpunit, php spark) via `stack_exec` from that root. If the project "
+    'IS already in a subdirectory, pass it as `cwd` to `stack_exec` (e.g. cwd="ci4build") — '
+    "NEVER use `cd` or chain commands with `&&`/`;`/`|` (stack_exec runs one program per call). "
+    "If `vendor/bin/phpunit` reports 'not found', you are in the wrong directory: fix `cwd`, "
+    "don't blindly switch commands."
+)
 
 
 @dataclass(frozen=True)
@@ -116,8 +159,8 @@ class CI4Agent:
         """
         return {
             "system_prompts": {
-                "es": self.system_prompt_es,
-                "en": self.system_prompt_en,
+                "es": self.system_prompt_es + _CI4_STACK_HYGIENE_ES,
+                "en": self.system_prompt_en + _CI4_STACK_HYGIENE_EN,
             }
         }
 
@@ -191,7 +234,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "ambiguous, ask ONE concrete question before proceeding. Get human "
             "approval before moving a Plan to status='approved'."
         ),
-        tool_slugs=(*_BASE_TOOLS, "send-notification"),
+        tool_slugs=_BASE_TOOLS,
     ),
     CI4Agent(
         slug="ci4-architect",
@@ -284,7 +327,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "inheritance and direct code over speculative abstractions. If a "
             "design choice is non-trivial, consult the Architect before coding."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS),
+        tool_slugs=(*_BASE_TOOLS,),
         max_concurrent_tasks=4,
     ),
     CI4Agent(
@@ -332,7 +375,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "where relevant. The data pattern is Config+Items: a configuration "
             "singleton + N orderable items. Every migration must be reversible."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS),
+        tool_slugs=(*_BASE_TOOLS,),
     ),
     CI4Agent(
         slug="ci4-frontend",
@@ -513,7 +556,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "goal is to raise coverage steadily. Your bias is to break, not to "
             "validate: a 'green' feature you have not tried to break isn't done."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS),
+        tool_slugs=(*_BASE_TOOLS,),
         max_concurrent_tasks=3,
     ),
     CI4Agent(
@@ -611,7 +654,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
             "not a fix. You document every toolchain gotcha as you fix it. You "
             "don't touch business logic except to add instrumentation."
         ),
-        tool_slugs=(*_BASE_TOOLS, *_RUN_TOOLS, "http-get", "http-post", "send-notification"),
+        tool_slugs=(*_BASE_TOOLS, "http-get", "http-post"),
     ),
 )
 
@@ -804,15 +847,20 @@ CI4_PROJECT_TEMPLATE: BuiltinProjectTemplate = BuiltinProjectTemplate(
         "ecosistema."
     ),
     team_slug="codeigniter-4",
-    worker_config={
-        "min_workers": 1,
-        "max_workers": 4,
-        "cpu_per_worker": 1.0,
-        "ram_per_worker_mb": 1536,
-    },
+    worker_config={"assignment_policy": "skill_match"},
     repository_config={"language": "php", "framework": "codeigniter4", "orm": "doctrine"},
     human_approval_policy=_POLICY_DEV_SKELETON,
     default_kb_grants=CI4_KB_SLUGS,
+    # PROJ-01/P1-05: toolchain PHP del stack — sin esto, adoptar la plantilla
+    # dejaba stack_exec deny-all (ni composer ni phpunit ejecutables).
+    allowed_commands=("php", "composer", "phpunit", "spark"),
+    default_runtime_template="php-phpunit",
+    allowed_domains=(
+        "packagist.org",
+        "repo.packagist.org",
+        "api.github.com",
+        "codeload.github.com",
+    ),
 )
 
 

@@ -265,7 +265,7 @@ def resolve_config(
             raise GuardrailConfigError(
                 f"Layer argument for {expected!r} carries layer={arg.layer!r}."
             )
-        supplied[expected] = arg  # type: ignore[index]
+        supplied[expected] = arg
 
     # Apply in canonical order regardless of how they were passed.
     ordered_layers = [supplied[name] for name in LAYER_ORDER if name in supplied]

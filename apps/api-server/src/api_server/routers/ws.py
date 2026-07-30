@@ -4,6 +4,7 @@ Streams the browser can tail:
 
   /ws/executions/{execution_id}  — every step event of one agent run.
   /ws/kanban/{project_id}        — task transitions of one project.
+  /ws/plans                      — plan status changes of the caller's tenant.
   /ws/conversation/{id}          — one conversation's message/mode events.
   /ws/documents/{id}             — one document's ingestion progress.
 
@@ -20,8 +21,13 @@ whether the resource exists in another tenant. This closes the
 cross-tenant real-time leak where any valid JWT could tail any tenant's
 streams by guessing a UUID.
 
-Each socket reads its stream from the beginning (`0`), so a client that
-connects mid-run still gets the backlog and then the live tail.
+Los streams POR-RECURSO (execution/conversation/document) se leen desde el
+principio (`0`): su backlog ES el estado que el cliente necesita (p. ej. los
+steps ya emitidos de un run en curso). El stream del KANBAN es distinto: el
+estado inicial lo da el fetch HTTP y el socket solo debe aportar lo NUEVO —
+re-reproducir el histórico del stream GLOBAL resucitaba estados viejos por
+encima de datos frescos de BD (reset del plan CI4, 2026-07-03) y crecía sin
+límite con la vida de la plataforma. Por eso arranca en `now - ventana`.
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ from api_server.db.domain import Execution, Project
 from api_server.db.knowledge import Document
 from api_server.events import (
     EVENTS_STREAM,
+    PLANS_STREAM,
     conversation_stream_key,
     document_stream_key,
     execution_stream_key,
@@ -62,6 +69,11 @@ router = APIRouter(tags=["ws"])
 # that a closing socket is noticed reasonably soon.
 _BLOCK_MS = 10_000
 _READ_COUNT = 64
+
+# Solapamiento de re-reproducción del socket de kanban: cubre el hueco entre el
+# fetch HTTP del tablero y la conexión del WS (un evento en esa ventana no se
+# pierde) sin re-reproducir el histórico completo del stream global.
+_KANBAN_REPLAY_WINDOW_MS = 15_000
 
 # Close codes (RFC 6455 1008 = policy violation).
 _CLOSE_POLICY = 1008
@@ -82,13 +94,26 @@ def _to_event(entry_id: object, fields: dict[Any, Any]) -> dict[str, Any]:
     return event
 
 
-async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthPrincipal | None:
+async def _resolve_principal(
+    token: str | None,
+    sessions: SessionStore,
+    tenant_id_override: str | None = None,
+) -> AuthPrincipal | None:
     """Decode the query-param JWT and confirm its session is still live.
 
     Returns the principal, or None if the token is missing/invalid or the
     server-side session has been revoked (logout). Mirrors the REST
     `get_principal` checks; WebSocket can't use it directly because it
     reads the bearer from a Header dependency.
+
+    ``tenant_id_override`` is the WebSocket mirror of the REST ``X-Tenant-Id``
+    header: for a ``is_system_admin`` principal it overrides the JWT's ``tid``
+    so a superadmin can tail the streams of the tenant they are ACTING AS (the
+    admin-panel tenant picker). The browser WebSocket API can't set headers, so
+    this travels as the ``?tenant_id=`` query param instead. Non-admins can't
+    escape their JWT scope — the override is ignored for them (same rule as
+    ``get_principal``). A malformed override for an admin rejects the socket
+    rather than silently acting on the home tenant.
     """
     if not token:
         return None
@@ -101,10 +126,19 @@ async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthP
         session_id = UUID(claims["sid"])
     except (KeyError, ValueError, TypeError):
         return None
+    is_system_admin = bool(claims.get("sys", False))
+    # Effective tenant: a System Admin's ?tenant_id override (the WS mirror of
+    # the REST X-Tenant-Id header) wins over the JWT tid so a superadmin can
+    # tail the streams of the tenant they are ACTING AS. Non-admins can't
+    # override — they always fall back to their own JWT tid, so the query param
+    # can never be used to escape a tenant's own scope.
+    raw_tenant = (
+        tenant_id_override if (is_system_admin and tenant_id_override) else claims.get("tid")
+    )
     tenant_id: UUID | None = None
-    if claims.get("tid") is not None:
+    if raw_tenant is not None:
         try:
-            tenant_id = UUID(claims["tid"])
+            tenant_id = UUID(raw_tenant)
         except (ValueError, TypeError):
             return None
     # Revoked session → reject (immediate logout for live sockets too).
@@ -114,7 +148,7 @@ async def _resolve_principal(token: str | None, sessions: SessionStore) -> AuthP
         user_id=user_id,
         session_id=session_id,
         tenant_id=tenant_id,
-        is_system_admin=bool(claims.get("sys", False)),
+        is_system_admin=is_system_admin,
     )
 
 
@@ -133,6 +167,23 @@ async def _owns_resource(principal: AuthPrincipal, model: type[Any], resource_id
         return row is not None
 
 
+async def _initial_stream_id(redis: Redis, replay_window_ms: int | None) -> str:
+    """Resolve where the pump starts reading the stream.
+
+    ``None`` → ``"0"``: re-reproduce todo el backlog (streams por-recurso cuyo
+    histórico ES el estado, p. ej. los steps de una execution). ``N`` → un id
+    ``now-N`` según el RELOJ DE REDIS (los ids de stream los genera Redis; usar
+    su TIME evita desfases con el del api-server): solo se re-reproduce la
+    ventana reciente — el estado inicial viene del fetch HTTP, y el histórico
+    antiguo puede contradecir datos más frescos de BD (2026-07-03: el tablero
+    resucitaba tareas a «Hecho» tras el reset del plan CI4)."""
+    if replay_window_ms is None:
+        return "0"
+    seconds, microseconds = await redis.time()
+    start_ms = max(0, int(seconds) * 1000 + int(microseconds) // 1000 - replay_window_ms)
+    return f"{start_ms}-0"
+
+
 async def _pump(
     ws: WebSocket,
     redis: Redis,
@@ -140,17 +191,20 @@ async def _pump(
     *,
     project_filter: str | None,
     tenant_filter: str | None = None,
+    replay_window_ms: int | None = None,
 ) -> None:
-    """Tail `stream` from the start and forward entries until the client
-    disconnects. `project_filter`/`tenant_filter`, when set, drop entries
-    whose `project_id`/`tenant_id` field does not match — the kanban
-    stream is global, so it is scoped to one project AND one tenant.
+    """Tail `stream` and forward entries until the client disconnects.
+    `project_filter`/`tenant_filter`, when set, drop entries whose
+    `project_id`/`tenant_id` field does not match — the kanban stream is
+    global, so it is scoped to one project AND one tenant.
+    `replay_window_ms` decides how much backlog re-plays on connect (see
+    :func:`_initial_stream_id`).
 
     A single `ws.receive()` runs alongside the Redis read so a client
     that closes while the stream is idle is noticed at once — no leaked
     task blocked on `xread`.
     """
-    last_id = "0"
+    last_id = await _initial_stream_id(redis, replay_window_ms)
     reader = asyncio.ensure_future(ws.receive())
     try:
         while True:
@@ -193,12 +247,13 @@ async def execution_stream(
     ws: WebSocket,
     execution_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
     """Stream one execution's step events — only to a member of its tenant."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return
@@ -213,6 +268,7 @@ async def kanban_stream(
     ws: WebSocket,
     project_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
@@ -223,7 +279,7 @@ async def kanban_stream(
     project ids are globally-unique UUIDs already).
     """
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return
@@ -231,7 +287,59 @@ async def kanban_stream(
         await _reject(ws, "forbidden")
         return
     tenant_filter = str(principal.tenant_id) if principal.tenant_id is not None else None
-    await _pump(ws, redis, EVENTS_STREAM, project_filter=project_id, tenant_filter=tenant_filter)
+    await _pump(
+        ws,
+        redis,
+        EVENTS_STREAM,
+        project_filter=project_id,
+        tenant_filter=tenant_filter,
+        # El estado inicial del tablero es el fetch HTTP; el socket solo aporta
+        # lo nuevo (+ una ventana corta de solape). Ver _initial_stream_id.
+        replay_window_ms=_KANBAN_REPLAY_WINDOW_MS,
+    )
+
+
+@router.websocket("/ws/plans")
+async def plans_stream(
+    ws: WebSocket,
+    token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
+    redis: Redis = Depends(get_redis),
+    sessions: SessionStore = Depends(get_session_store),
+) -> None:
+    """Cambios de estado de los planes del tenant (`task_wf_32`).
+
+    De TENANT y no de proyecto: el tablero gerencial lista los planes de todo
+    el tenant, así que un socket por proyecto dejaría rancias las tarjetas de
+    los demás.
+
+    Eso lo hace el primer socket **sin recurso**: los otros cuatro autorizan
+    comprobando que el id pedido existe dentro del tenant del llamante
+    (`_owns_resource`), y aquí no hay id que comprobar. La autorización es que
+    el principal TENGA tenant — y el filtro por `tenant_id` del pump es lo que
+    impide leer los planes de otro. Un superadmin sin tenant elegido no puede
+    abrirlo: sin tenant no hay filtro, y sin filtro el socket sería un
+    escaparate de toda la plataforma.
+    """
+    await ws.accept()
+    principal = await _resolve_principal(token, sessions, tenant_id)
+    if principal is None:
+        await _reject(ws, "unauthenticated")
+        return
+    if principal.tenant_id is None:
+        await _reject(ws, "forbidden")
+        return
+    await _pump(
+        ws,
+        redis,
+        PLANS_STREAM,
+        project_filter=None,
+        tenant_filter=str(principal.tenant_id),
+        # Mismo criterio que el kanban: el estado inicial es el fetch HTTP y el
+        # socket solo aporta lo nuevo. Re-reproducir el histórico resucitaría
+        # estados viejos por encima de datos frescos de BD.
+        replay_window_ms=_KANBAN_REPLAY_WINDOW_MS,
+    )
 
 
 @router.websocket("/ws/conversation/{conversation_id}")
@@ -239,6 +347,7 @@ async def conversation_stream(
     ws: WebSocket,
     conversation_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
@@ -246,7 +355,7 @@ async def conversation_stream(
     only to a member of its tenant. The REST endpoint
     POST /conversations/{id}/messages is the sole producer."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return
@@ -261,6 +370,7 @@ async def document_stream(
     ws: WebSocket,
     document_id: str,
     token: str | None = Query(default=None),
+    tenant_id: str | None = Query(default=None),
     redis: Redis = Depends(get_redis),
     sessions: SessionStore = Depends(get_session_store),
 ) -> None:
@@ -270,7 +380,7 @@ async def document_stream(
     events to the per-document Redis stream as it walks scan → parse →
     embed → persist."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
+    principal = await _resolve_principal(token, sessions, tenant_id)
     if principal is None:
         await _reject(ws, "unauthenticated")
         return

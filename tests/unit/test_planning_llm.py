@@ -14,6 +14,7 @@ from api_server.chat.planning_graph import (
 )
 from api_server.chat.planning_llm import (
     LLMPlanningModel,
+    _mentioned_roles,
     _normalise_plan_draft,
     _suggest_specialists,
 )
@@ -90,6 +91,110 @@ def test_pm_decide_nudges_invite_for_multidisciplinary_request() -> None:
     assert PlanningRole.BACKEND_DEV in directive.specialists
     assert PlanningRole.SECURITY in directive.specialists
     assert PlanningRole.ARCHITECT in directive.specialists
+
+
+_FULL_TEAM = {
+    PlanningRole.PROJECT_MANAGER,
+    PlanningRole.ARCHITECT,
+    PlanningRole.BACKEND_DEV,
+    PlanningRole.FRONTEND_DEV,
+    PlanningRole.QA,
+    PlanningRole.SECURITY,
+}
+
+
+def test_mentioned_roles_reads_at_tokens_intersected_with_the_team() -> None:
+    available = frozenset({PlanningRole.PROJECT_MANAGER, PlanningRole.QA, PlanningRole.SECURITY})
+    assert _mentioned_roles("@qa revisa esto", available) == (PlanningRole.QA,)
+    # Un rol que el equipo NO tiene no se convoca por mencionarlo.
+    assert _mentioned_roles("@architect ¿qué opinas?", available) == ()
+    # Ni un @ que no es un rol (correos, handles).
+    assert _mentioned_roles("escribe a soporte@example.com", available) == ()
+    assert _mentioned_roles("sin menciones", available) == ()
+    # Mayúsculas y varias menciones en el mismo mensaje.
+    assert set(_mentioned_roles("@QA y @security, mirad esto", available)) == {
+        PlanningRole.QA,
+        PlanningRole.SECURITY,
+    }
+
+
+def test_pm_decide_convenes_a_mentioned_specialist_the_model_ignored() -> None:
+    # El caso que motiva `task_wf_43`: el usuario escribe @qa y el PM contesta solo.
+    # La mención es una instrucción explícita, no una pista: gana.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "lo veo trivial"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state([{"role": "user", "content": "@qa ¿esto cómo lo probarías?"}], _FULL_TEAM)
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.INVITE_SPECIALISTS
+    assert directive.specialists == (PlanningRole.QA,)
+
+
+def test_pm_decide_adds_the_mention_to_the_specialists_the_model_picked() -> None:
+    provider = _FakeProvider('{"intent": "invite_specialists", "specialists": ["architect"]}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state([{"role": "user", "content": "@security repasa el diseño"}], _FULL_TEAM)
+    directive = model.pm_decide(state)
+    assert set(directive.specialists) == {PlanningRole.ARCHITECT, PlanningRole.SECURITY}
+
+
+def test_pm_decide_mentions_win_over_the_keyword_heuristic() -> None:
+    # El heurístico detectaría varias disciplinas por las palabras clave; el
+    # usuario ha pedido UNA. Convocar a los otros cuatro es ignorarle igual que
+    # ignorar la mención: la petición explícita acota, no amplía.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "x"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state(
+        [
+            {
+                "role": "user",
+                "content": "@architect: la API con base de datos, auth con JWT, frontend y tests",
+            }
+        ],
+        _FULL_TEAM,
+    )
+    directive = model.pm_decide(state)
+    assert directive.specialists == (PlanningRole.ARCHITECT,)
+
+
+def test_pm_decide_mentioning_only_the_pm_silences_the_nudge() -> None:
+    # «@project_manager contéstame tú» es la mención simétrica: el usuario
+    # DECLINA la ronda de especialistas que el heurístico convocaría.
+    provider = _FakeProvider('{"intent": "speak_alone", "rationale": "x"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state(
+        [
+            {
+                "role": "user",
+                "content": "@project_manager resúmemelo tú: API, base de datos, auth y tests",
+            }
+        ],
+        _FULL_TEAM,
+    )
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.SPEAK_ALONE
+    assert directive.specialists == ()
+
+
+def test_pm_decide_a_mention_does_not_steal_the_generate_plan_turn() -> None:
+    # `finish_planning` es el turno que produce el adjunto con el botón «Generar
+    # Plan». Convertirlo en una ronda más de especialistas le quitaría el botón
+    # al usuario, que es un precio mayor que el de posponer la mención.
+    provider = _FakeProvider('{"intent": "finish_planning", "rationale": "el plan está"}')
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    state = _state([{"role": "user", "content": "@qa cerramos ya"}], _FULL_TEAM)
+    directive = model.pm_decide(state)
+    assert directive.intent == PMIntent.FINISH_PLANNING
+
+
+def test_pm_decide_tells_the_pm_about_the_mention() -> None:
+    # Sin decírselo, el override determinista y el razonamiento del modelo
+    # cuentan historias distintas en el mismo turno.
+    seen: list[list[Message]] = []
+    provider = _FakeProvider('{"intent": "speak_alone"}', seen=seen)
+    model = LLMPlanningModel(provider=provider)  # type: ignore[arg-type]
+    model.pm_decide(_state([{"role": "user", "content": "@qa mira esto"}], _FULL_TEAM))
+    assert "qa" in seen[0][0].content
+    assert "mencionado" in seen[0][0].content.lower()
 
 
 def test_pm_decide_keeps_speak_alone_for_trivial_request() -> None:
@@ -236,7 +341,168 @@ def test_normalise_plan_draft_fills_ids_and_drops_bad_deps() -> None:
     assert out["tasks"][2]["title"] == "POST saludar"  # name → title
 
 
+def test_normalise_plan_draft_summary_is_an_object_not_a_string() -> None:
+    """A-03: `PlanSpecification.summary` es un `dict`, no un `str`.
+
+    El draft del chat lo emitía como cadena y `create_plan` lo persiste SIN pasar
+    por Pydantic, así que el 422 aparecía después, en cualquier `PUT` que
+    reenviara el spec. Y la UI hacía `Object.keys("texto")` → `["0","1",…]`,
+    concluía que había resumen y pintaba una tarjeta vacía (busca
+    `summary.description`, que en una cadena no existe)."""
+    out = _normalise_plan_draft(
+        {"title": "X", "summary": "Sin BD", "tasks": [{"id": "t1", "title": "A"}]}
+    )
+    assert isinstance(out["summary"], dict)
+    assert out["summary"]["description"] == "Sin BD"
+
+
+def test_normalise_plan_draft_accepts_a_structured_summary() -> None:
+    """Si el modelo YA emite el objeto (con alcance), se respeta tal cual."""
+    rich = {"description": "API de inventario", "scope_in": ["CRUD"], "scope_out": ["pagos"]}
+    out = _normalise_plan_draft(
+        {"title": "X", "summary": rich, "tasks": [{"id": "t1", "title": "A"}]}
+    )
+    assert out["summary"] == rich
+
+
+def test_normalise_plan_draft_derives_hours_from_complexity() -> None:
+    """A-04: sin `estimated_hours` el Gantt pintaba barras IDÉNTICAS y el coste
+    humano era `nº_tareas × 4 h × tarifa` — un número con aspecto de dato y sin
+    información. El planner emite `complexity`, así que las horas se derivan de
+    ahí; si el modelo da un valor explícito, ese gana."""
+    out = _normalise_plan_draft(
+        {
+            "title": "X",
+            "tasks": [
+                {"id": "t1", "title": "Diminuta", "complexity": "xs"},
+                {"id": "t2", "title": "Enorme", "complexity": "xl"},
+                {"id": "t3", "title": "Con horas propias", "complexity": "s", "estimated_hours": 9},
+            ],
+        }
+    )
+    by_id = {t["id"]: t for t in out["tasks"]}
+    assert by_id["t1"]["estimated_hours"] < by_id["t2"]["estimated_hours"]
+    assert by_id["t3"]["estimated_hours"] == 9.0  # el explícito manda
+    assert all(t["estimated_hours"] > 0 for t in out["tasks"])
+
+
 def test_normalise_plan_draft_empty_when_no_tasks() -> None:
     out = _normalise_plan_draft({"title": "x"})
     assert out["tasks"] == []
     assert out["title"] == "x"
+
+
+def test_normalise_plan_draft_extracts_acceptance_criteria() -> None:
+    # The planner emits per-task acceptance_criteria as descriptive, verifiable
+    # strings (the agent's definition of done). The parser cleans them: trims,
+    # drops empties/non-strings, flattens {description} dicts.
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Auditar deps",
+                    "acceptance_criteria": [
+                        "composer audit sin vulnerabilidades",
+                        "  composer.lock fija versiones  ",
+                        "",
+                        123,
+                        {"description": "PSR-4 correcto"},
+                    ],
+                },
+                {"id": "t2", "title": "Sin criterios"},
+            ],
+        }
+    )
+    t1 = next(t for t in out["tasks"] if t["id"] == "t1")
+    assert t1["acceptance_criteria"] == [
+        "composer audit sin vulnerabilidades",
+        "composer.lock fija versiones",
+        "PSR-4 correcto",
+    ]
+    t2 = next(t for t in out["tasks"] if t["id"] == "t2")
+    assert t2["acceptance_criteria"] == []  # absent → [] (always present)
+
+
+def test_normalise_plan_draft_caps_acceptance_criteria_count() -> None:
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "tasks": [
+                {"id": "t1", "title": "T", "acceptance_criteria": [f"c{i}" for i in range(20)]}
+            ],
+        }
+    )
+    assert len(out["tasks"][0]["acceptance_criteria"]) <= 8
+
+
+def test_pm_plan_draft_prompt_requests_acceptance_criteria() -> None:
+    seen: list[list[Message]] = []
+    model = LLMPlanningModel(provider=_FakeProvider("{}", seen=seen))  # type: ignore[arg-type]
+    model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "acceptance_criteria" in system
+
+
+def test_normalise_plan_draft_coerces_complexity() -> None:
+    # c11: a chat-planned task carries its own complexity estimate instead of
+    # everything defaulting to `m`. Valid values are lowercased; invalid/absent
+    # fall back to `m`.
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "tasks": [
+                {"id": "t1", "title": "Grande", "complexity": "XL"},  # valid → lowercased
+                {"id": "t2", "title": "Rara", "complexity": "enorme"},  # invalid → m
+                {"id": "t3", "title": "Sin campo"},  # absent → m
+            ],
+        }
+    )
+    by_id = {t["id"]: t["complexity"] for t in out["tasks"]}
+    assert by_id == {"t1": "xl", "t2": "m", "t3": "m"}
+
+
+def test_pm_plan_draft_prompt_requests_complexity() -> None:
+    seen: list[list[Message]] = []
+    model = LLMPlanningModel(provider=_FakeProvider("{}", seen=seen))  # type: ignore[arg-type]
+    model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "complexity" in system
+
+
+def test_normalise_plan_draft_extracts_phases() -> None:
+    # c6: chat plans now carry phases[] so the `phase` sync scope works. Unknown
+    # task ids and empty phases are dropped so sync_to_kanban never rejects them.
+    out = _normalise_plan_draft(
+        {
+            "title": "x",
+            "phases": [
+                {"title": "Diseño", "tasks": ["t1", "ghost", "t1"]},  # unknown + dup dropped
+                {"name": "Build", "tasks": ["t2"]},  # `name` → title
+                {"title": "Vacía", "tasks": ["ghost"]},  # only unknown → dropped
+                "garbage",  # non-dict → dropped
+            ],
+            "tasks": [
+                {"id": "t1", "title": "A"},
+                {"id": "t2", "title": "B"},
+            ],
+        }
+    )
+    assert out["phases"] == [
+        {"title": "Diseño", "tasks": ["t1"]},
+        {"title": "Build", "tasks": ["t2"]},
+    ]
+
+
+def test_normalise_plan_draft_phases_default_empty() -> None:
+    out = _normalise_plan_draft({"title": "x", "tasks": [{"id": "t1", "title": "A"}]})
+    assert out["phases"] == []  # absent → [] (phase scope simply unavailable)
+
+
+def test_pm_plan_draft_prompt_requests_phases() -> None:
+    seen: list[list[Message]] = []
+    model = LLMPlanningModel(provider=_FakeProvider("{}", seen=seen))  # type: ignore[arg-type]
+    model.pm_plan_draft(_state([{"role": "user", "content": "x"}], set()), [])
+    system = " ".join(m.content for m in seen[-1] if m.role == "system")
+    assert "phases" in system

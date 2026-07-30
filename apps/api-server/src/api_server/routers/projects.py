@@ -9,7 +9,9 @@ exist -- a project is always created by a tenant.
 
 from __future__ import annotations
 
-from uuid import UUID
+from copy import deepcopy
+from typing import Any
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -31,11 +33,18 @@ from api_server.capabilities import (
     kbs_for_project,
     memory_counts,
 )
-from api_server.celery_client import enqueue_clone_project_repo, revoke_job_callback
+from api_server.celery_client import (
+    enqueue_clone_project_repo,
+    enqueue_compose_review_runtime,
+    revoke_job_callback,
+)
 from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.db.execution_repo import cancel_tasks_and_executions
+from api_server.db.models import Organization
+from api_server.db.review_session_repo import list_active_preview_sessions
 from api_server.git_integration import project_git_secret_path
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.preview_launch import build_preview_request
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -57,6 +66,22 @@ from api_server.slug import slugify
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+# P1-10: claves de `repository_config` que escribe la PLATAFORMA (no el
+# cliente) — un PUT del cliente no puede pisarlas.
+_REPOSITORY_CONFIG_PLATFORM_KEYS: tuple[str, ...] = ("last_git_sync", "review_image")
+
+# P1-01: transiciones legales del estado del proyecto. `archived` es terminal
+# salvo el unarchive del admin (todo update_project ya exige tenant_admin).
+_PROJECT_TRANSITIONS: dict[str, frozenset[str]] = {
+    ProjectStatus.ACTIVE.value: frozenset(
+        {ProjectStatus.PAUSED.value, ProjectStatus.ARCHIVED.value}
+    ),
+    ProjectStatus.PAUSED.value: frozenset(
+        {ProjectStatus.ACTIVE.value, ProjectStatus.ARCHIVED.value}
+    ),
+    ProjectStatus.ARCHIVED.value: frozenset({ProjectStatus.ACTIVE.value}),
+}
+
 
 async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
     """RLS already filters cross-tenant teams; this lookup converts a
@@ -71,7 +96,7 @@ async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
 
 async def _verify_template_visible(
     session: AsyncSession, template_id: UUID, tenant_id: UUID
-) -> None:
+) -> Project:
     """Resolve `template_id` to a usable project template or raise 404.
 
     The `projects_template_read` RLS policy (FOR SELECT USING
@@ -82,19 +107,62 @@ async def _verify_template_visible(
     platform tenant (the built-in catalog). A template owned by a
     *different* tenant surfaces as a clean 404 and grants nothing,
     preventing cross-tenant leakage of `default_kb_grants`.
+
+    Returns the full template row — PROJ-01: la adopción es server-side y
+    hereda de aquí toda la forma del proyecto.
     """
     result = await session.execute(
-        select(Project.id).where(
+        select(Project).where(
             Project.id == template_id,
             Project.is_template.is_(True),
             Project.deleted_at.is_(None),
             Project.tenant_id.in_([tenant_id, PLATFORM_TENANT_ID]),
         )
     )
-    if result.scalar_one_or_none() is None:
+    template = result.scalar_one_or_none()
+    if template is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="project template not found"
         )
+    return template
+
+
+# PROJ-01: campos de forma que la adopción hereda del template cuando el caller
+# no los fija explícitamente (payload.model_fields_set). `team_id` se trata
+# aparte (fork por defecto).
+_TEMPLATE_INHERITED_FIELDS: tuple[str, ...] = (
+    "mcp_servers",
+    "worker_config",
+    "repository_config",
+    "human_approval_policy",
+    "allowed_commands",
+    "default_runtime_template",
+    "allowed_domains",
+)
+
+
+def _resolve_template_adoption(
+    payload: ProjectCreateRequest, template: Project | None
+) -> tuple[dict[str, Any], UUID | None, bool]:
+    """Forma efectiva de la adopción (PROJ-01): campos heredados del template
+    que el caller no envió, equipo efectivo, y si se forkea el equipo.
+
+    `fork_team` por defecto al adoptar plantilla: el proyecto recibe SU copia
+    editable del equipo builtin (agentes project_local despachables). Un
+    `fork_team: false` explícito referencia el equipo tal cual (linked)."""
+    sent = payload.model_fields_set
+    inherited: dict[str, Any] = {}
+    effective_team_id = payload.team_id
+    if template is not None:
+        for field_name in _TEMPLATE_INHERITED_FIELDS:
+            if field_name not in sent:
+                value = getattr(template, field_name)
+                if value is not None:
+                    inherited[field_name] = deepcopy(value)
+        if effective_team_id is None and "team_id" not in sent:
+            effective_team_id = template.team_id
+    fork_team = payload.fork_team if "fork_team" in sent else template is not None
+    return inherited, effective_team_id, fork_team
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +242,83 @@ async def get_project(
 
 
 # ---------------------------------------------------------------------------
+# App-preview on-demand (ADR 0130) — levantar la app del proyecto (rama por
+# defecto) durante 24h, reutilizando la maquinaria de review-runtime. Sin
+# veredicto: es solo la app en vivo.
+# ---------------------------------------------------------------------------
+async def _load_project_or_404(session: AsyncSession, project_id: UUID) -> Project:
+    row = (
+        await session.execute(
+            select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+    return row
+
+
+def _preview_session_payload(row: Any) -> dict[str, Any]:
+    """Signed app URL + metadata for a live preview session (ADR 0130)."""
+    from api_server.routers.review import build_review_urls
+
+    urls = build_review_urls(row.id, row.expires_at.timestamp())
+    return {
+        "session_id": str(row.id),
+        "status": row.status,
+        "app_url": urls["app_url"],
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "app_configured": bool((row.spec or {}).get("app_configured", True)),
+    }
+
+
+@router.post("/{project_id}/preview", status_code=status.HTTP_202_ACCEPTED)
+async def launch_project_preview(
+    project_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, Any]:
+    """Launch an on-demand app-preview of the project's DEFAULT branch (ADR 0130).
+
+    Reuses the review-runtime machinery (24h, no verdict). Idempotent: if a
+    preview is already live for this project, returns it instead of spawning a
+    second. 409 when the project pins no app-preview image."""
+    tenant_id = require_tenant_id(principal)
+    project = await _load_project_or_404(session, project_id)
+    existing = await list_active_preview_sessions(session, project_id=project_id)
+    if existing:
+        return {"status": "running", **_preview_session_payload(existing[0])}
+    org = await session.get(Organization, tenant_id)
+    request = build_preview_request(tenant_id=tenant_id, project=project, org=org, plan=None)
+    if request is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "El proyecto no tiene imagen de app-preview configurada. Configúra "
+                "'repository_config.review_image' en Servicios/App-preview primero."
+            ),
+        )
+    await enqueue_compose_review_runtime(request)
+    return {"status": "provisioning"}
+
+
+@router.get("/{project_id}/preview-session")
+async def get_project_preview_session(
+    project_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, Any]:
+    """Latest live on-demand preview of a project + a freshly-signed app URL
+    (ADR 0130). 404 while none is live (the UI polls this after launching)."""
+    await _load_project_or_404(session, project_id)
+    sessions = await list_active_preview_sessions(session, project_id=project_id)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no live preview for this project"
+        )
+    return _preview_session_payload(sessions[0])
+
+
+# ---------------------------------------------------------------------------
 # POST /projects
 # ---------------------------------------------------------------------------
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -187,25 +332,50 @@ async def create_project(
     if payload.team_id is not None:
         await _verify_team_visible(session, payload.team_id)
 
+    # PROJ-01: adopción SERVER-SIDE. El wizard era quien copiaba la forma de la
+    # plantilla (equipo, allowlist, runtime, …); la API directa creaba proyectos
+    # inertes. Ahora el servidor hereda del template todo campo que el caller no
+    # fije explícitamente; el wizard pasa a ser un consumidor más.
+    template: Project | None = None
     if payload.template_id is not None:
-        await _verify_template_visible(session, payload.template_id, tenant_id)
+        template = await _verify_template_visible(session, payload.template_id, tenant_id)
+    inherited, effective_team_id, fork_team = _resolve_template_adoption(payload, template)
+
+    # P1-02: el slug identifica el bare repo del proyecto en disco — dos
+    # proyectos vivos del mismo tenant no pueden compartirlo. En colisión se
+    # añade -{id8} del proyecto nuevo; el índice único parcial (migración
+    # 0114) es el backstop contra carreras.
+    project_id = uuid4()
+    slug = slugify(payload.name)
+    collision = (
+        await session.execute(
+            select(Project.id).where(
+                Project.tenant_id == tenant_id,
+                Project.slug == slug,
+                Project.deleted_at.is_(None),
+            )
+        )
+    ).first()
+    if collision is not None:
+        slug = f"{slug}-{project_id.hex[:8]}"
 
     project = Project(
+        id=project_id,
         tenant_id=tenant_id,
         name=payload.name,
         # prod-18 / ADR 0085: stable worktree slug, generated once at creation.
-        slug=slugify(payload.name),
+        slug=slug,
         description=payload.description,
         status=payload.status.value,
-        team_id=payload.team_id,
+        team_id=effective_team_id,
         mcp_servers=payload.mcp_servers,
         rag_knowledge_bases=payload.rag_knowledge_bases,
         worker_config=payload.worker_config,
         repository_config=payload.repository_config,
         human_approval_policy=payload.human_approval_policy,
-        secrets_vault_id=payload.secrets_vault_id,
         allowed_commands=payload.allowed_commands,
         default_runtime_template=payload.default_runtime_template,
+        allowed_domains=payload.allowed_domains,
         human_task_review_mode=payload.human_task_review_mode.value,
         budget_amount=payload.budget_amount,
         budget_currency=payload.budget_currency,
@@ -215,6 +385,10 @@ async def create_project(
         # paused_by_budget stays False on create -- it's flipped only by
         # the budget evaluator (Plan 11+).
     )
+    # PROJ-01: aplicar la forma heredada de la plantilla (solo campos que el
+    # caller no envió). Copias profundas ya hechas arriba.
+    for field_name, value in inherited.items():
+        setattr(project, field_name, value)
     session.add(project)
     try:
         await session.flush()
@@ -227,7 +401,7 @@ async def create_project(
     # plantilla, normalmente) a una copia editable del tenant con agentes
     # `project_local`, y repuntamos `project.team_id` al fork. El equipo original
     # queda intacto. `fork_team=False` (default) referencia el equipo tal cual.
-    if payload.fork_team and project.team_id is not None:
+    if fork_team and project.team_id is not None:
         from api_server.db.domain import AgentScope
         from api_server.routers.teams import fork_team_into
 
@@ -291,6 +465,37 @@ async def update_project(
     if "team_id" in payload.model_fields_set and payload.team_id is not None:
         await _verify_team_visible(session, payload.team_id)
 
+    # P1-01: máquina mínima de estados del proyecto. active<->paused->archived;
+    # archived es terminal salvo el unarchive del admin (->active).
+    old_status = project.status
+    if payload.status is not None and payload.status.value != old_status:
+        allowed = _PROJECT_TRANSITIONS.get(old_status, frozenset())
+        if payload.status.value not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "invalid_project_transition",
+                    "from": old_status,
+                    "to": payload.status.value,
+                },
+            )
+
+    # P1-10: `repository_config` mezcla claves del CLIENTE (language,
+    # framework, …) con claves de PLATAFORMA que escribe el sistema
+    # (last_git_sync, review_image). Un PUT del cliente las pisaba — merge
+    # server-side: las claves de plataforma presentes se preservan salvo que
+    # el payload las traiga explícitamente.
+    if (
+        "repository_config" in payload.model_fields_set
+        and payload.repository_config is not None
+        and isinstance(project.repository_config, dict)
+    ):
+        for platform_key in _REPOSITORY_CONFIG_PLATFORM_KEYS:
+            if platform_key in project.repository_config and (
+                platform_key not in payload.repository_config
+            ):
+                payload.repository_config[platform_key] = project.repository_config[platform_key]
+
     apply_partial_update(
         project,
         payload,
@@ -299,6 +504,16 @@ async def update_project(
         # `chat_llm_config` (JSON `chat_model_config`) → columna `chat_model_config`.
         rename={"llm_config": "model_config", "chat_llm_config": "chat_model_config"},
     )
+
+    # P1-01: archivar cancela el trabajo en vuelo (tareas + runs) — espejo de la
+    # cascada del soft-delete, sin el soft-delete.
+    if (
+        old_status != ProjectStatus.ARCHIVED.value
+        and project.status == ProjectStatus.ARCHIVED.value
+    ):
+        for execution in await cancel_tasks_and_executions(session, project_id=project.id):
+            if execution.celery_task_id:
+                schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
 
     await session.flush()
     await session.refresh(project)
@@ -373,6 +588,39 @@ async def set_project_git(
         plan_validation_mode=payload.plan_validation_mode,
         push_policy=payload.push_policy,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /projects/{id}/git/sync — re-sync manual del remoto (P5/T6, ADR 0072)
+# ---------------------------------------------------------------------------
+@router.post("/{project_id}/git/sync", status_code=status.HTTP_202_ACCEPTED)
+async def sync_project_git(
+    project_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> dict[str, str]:
+    """Re-sincroniza el bare del proyecto con su remoto (el botón «Sincronizar»).
+
+    Encola ``workers.clone_project_repo`` (idempotente: ``ensure_repo`` + ``git fetch
+    --prune origin``). P5/T6 (audit 2026-07-03): antes el bare solo se re-sincronizaba
+    al RE-guardar la config git; no hay beat periódico ni webhook (el docstring de
+    ``fetch_remote`` lo prometía en falso). El re-sync periódico + el webhook con
+    verificación de firma quedan para el ADR 0098 (gated).
+    """
+    require_tenant_id(principal)
+    project = await get_writable_or_404(
+        session, Project, project_id, principal, not_found_detail="project not found"
+    )
+    if not project.git_config:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="el proyecto no tiene configuración git (remoto) que sincronizar",
+        )
+    enqueued = await enqueue_clone_project_repo(project_id)
+    return {
+        "project_id": str(project_id),
+        "status": "enqueued" if enqueued else "enqueue_failed",
+    }
 
 
 # ---------------------------------------------------------------------------

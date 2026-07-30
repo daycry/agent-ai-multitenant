@@ -297,6 +297,7 @@ async def import_mcp_tools(
     payload: ImportMcpToolsRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
+    resolver: VaultResolver | None = Depends(get_vault_resolver),
 ) -> ImportMcpToolsResponse:
     """Importar tools descubiertas de un MCP server al catálogo (ADR 0052).
 
@@ -325,7 +326,7 @@ async def import_mcp_tools(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
 
     declared = {
-        str(server.get("name"))
+        str(server.get("name")): server
         for server in (project.mcp_servers or [])
         if isinstance(server, dict) and server.get("name")
     }
@@ -334,6 +335,30 @@ async def import_mcp_tools(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"MCP server {server_name!r} not declared on this project",
         )
+
+    # ADR 0101: re-descubrir server-side EN el import para persistir el
+    # ``input_schema`` real de cada tool. Sin esto la fila quedaba con
+    # ``'{}'::jsonb`` y toda tool con argumentos se anunciaba al LLM con
+    # ``parameters: {}`` → el pre-guard del runtime la rechazaba (inservible).
+    # FAIL-CLOSED: un server inalcanzable aborta el import con un error tipado
+    # en vez de crear una tool rota que recrearía el bug en silencio.
+    try:
+        server_model = MCPServerConfigModel.model_validate(declared[server_name])
+        discovery = await discover_tools(_to_runtime_config(server_model), vault_resolver=resolver)
+    except MCPAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=McpTestConnectionError(error_code="AUTH_ERROR", message=str(exc)).model_dump(),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=McpTestConnectionError(
+                error_code="TRANSPORT_ERROR",
+                message=f"discovery failed during import: {type(exc).__name__}: {exc}",
+            ).model_dump(),
+        ) from exc
+    discovered = {tool.name: tool for tool in discovery.tools}
 
     # Namespaced name <server>.<tool>; the tool segment is normalised to a
     # slug so it matches the ``tools.name`` invariant (task_06_18_04). Dedupe
@@ -368,24 +393,39 @@ async def import_mcp_tools(
 
     result_tools: list[Tool] = []
     for name, raw_name in namespaced.items():
+        # ADR 0101: el schema/descripción REALES del server; una tool que el
+        # server ya no anuncia degrada al comportamiento histórico ({} +
+        # placeholder) en vez de abortar todo el lote.
+        spec = discovered.get(raw_name)
+        input_schema = dict(spec.input_schema) if spec is not None else {}
+        description = (
+            spec.description
+            if spec is not None and spec.description
+            else f"MCP tool {raw_name!r} from server {server_name!r}"
+        )
         row = by_name.get(name)
         if row is None:
             row = Tool(
                 tenant_id=tenant_id,
                 name=name,
-                description=f"MCP tool {raw_name!r} from server {server_name!r}",
+                description=description,
                 category=ToolCategory.MCP.value,
                 implementation_type=ToolImplementationType.MCP_TOOL.value,
                 implementation_ref=name,
+                input_schema=input_schema,
                 security_level=payload.security_level.value,
                 is_builtin=False,
             )
             session.add(row)
         else:
             # ON CONFLICT-style update: keep the row, refresh the operator's
-            # security choice (the editable default, ADR 0052).
+            # security choice (the editable default, ADR 0052) AND the
+            # discovered schema/description (ADR 0101: el re-import refresca
+            # un schema evolucionado en el server).
             row.security_level = payload.security_level.value
             row.implementation_ref = name
+            row.input_schema = input_schema
+            row.description = description
         result_tools.append(row)
 
     try:

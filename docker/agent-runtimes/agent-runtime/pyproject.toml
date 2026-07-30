@@ -22,6 +22,10 @@ dependencies = [
   # aliases via shared_domain.tool_names.
   "shared-domain",
 
+  # Guardrail engine (ADR 0102 / g1): the runtime scans tool outputs for prompt
+  # injection (post_tool) before they re-enter the model context.
+  "shared-guardrails",
+
   # Builtin tools lean on these (Fase D)
   "httpx>=0.27,<1.0",
 

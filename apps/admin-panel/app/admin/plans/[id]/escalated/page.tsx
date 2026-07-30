@@ -3,10 +3,10 @@
 /**
  * Escalated-tasks panel (Plan 06 task_06_34b3) + free task form (06_34b5).
  *
- * Lista las tareas en `awaiting_human` de un plan, con las 4 acciones
- * humanas (approve_manual / reassign_with_guidance / block_with_reason /
- * cancel). Las dos acciones que necesitan input (reassign + block) se
- * abren en un Dialog antes de disparar el POST.
+ * Lista las tareas en `awaiting_human` de un plan. Las acciones humanas ya no
+ * viven aquí: son `<TaskHumanActions>` (`task_wf_40`), compartido con la ficha
+ * de la tarea para que una tarea `blocked` que NO escaló también se pueda
+ * desatascar.
  *
  * También permite añadir una tarea libre al plan (no atada a un
  * checkbox), por si el humano detecta trabajo nuevo durante la
@@ -14,17 +14,17 @@
  *
  * Endpoints:
  *   GET  /plans/{id}/escalated-tasks
- *   POST /tasks/{id}/human-action   { action, reason?, guidance? }
  *   POST /plans/{id}/free-task      { title, description }
  */
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Ban, Check, FolderKanban, Home, Plus, Workflow } from "lucide-react";
+import { AlertTriangle, FolderKanban, Home, Plus, RotateCcw, Workflow } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
+import { TaskHumanActions } from "@/components/tasks/task-human-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -58,14 +58,7 @@ interface PlanBreadcrumb {
   id: string;
   project_id: string;
   title: string;
-}
-
-type HumanAction = "approve_manual" | "reassign_with_guidance" | "block_with_reason" | "cancel";
-
-interface HumanActionPayload {
-  action: HumanAction;
-  reason?: string;
-  guidance?: string;
+  status: string;
 }
 
 export default function EscalatedPage() {
@@ -73,8 +66,6 @@ export default function EscalatedPage() {
   const planId = params?.id ?? "";
   const queryClient = useQueryClient();
 
-  const [reassignTask, setReassignTask] = useState<EscalatedTask | null>(null);
-  const [blockTask, setBlockTask] = useState<EscalatedTask | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
 
   const planQuery = useQuery({
@@ -94,17 +85,23 @@ export default function EscalatedPage() {
 
   const plan = planQuery.data;
 
-  const actionMutation = useMutation({
-    mutationFn: async ({ taskId, payload }: { taskId: string; payload: HumanActionPayload }) =>
-      apiFetch(`/tasks/${taskId}/human-action`, { method: "POST", body: payload }),
+  // Cualquier acción humana puede haber desatascado el plan entero
+  // (`reactivate_plan_if_unstuck`), así que se refresca también su cabecera:
+  // si no, «Desbloquear plan» seguiría ofreciéndose sobre un plan ya activo.
+  function onActionApplied() {
+    void queryClient.invalidateQueries({ queryKey: ["escalated-tasks", planId] });
+    void queryClient.invalidateQueries({ queryKey: ["plan", planId] });
+  }
+
+  // T7c part D: un-stick the whole plan in one gesture (reactivate + re-enqueue all
+  // its blocked tasks). Only offered when the plan is actually blocked.
+  const unblockMutation = useMutation({
+    mutationFn: async () => apiFetch(`/plans/${planId}/unblock`, { method: "POST" }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["escalated-tasks", planId] });
+      void queryClient.invalidateQueries({ queryKey: ["plan", planId] });
     },
   });
-
-  function runAction(taskId: string, payload: HumanActionPayload) {
-    actionMutation.mutate({ taskId, payload });
-  }
 
   const tasks = tasksQuery.data?.tasks ?? [];
 
@@ -139,38 +136,31 @@ export default function EscalatedPage() {
         title="Tareas escaladas"
         description="Tareas del plan que llegaron al límite de reintentos del revisor automático y esperan decisión humana."
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCreateOpen(true)}
-            data-testid="free-task-open"
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            Añadir tarea libre
-          </Button>
+          <div className="flex items-center gap-2">
+            {plan?.status === "blocked" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => unblockMutation.mutate()}
+                disabled={unblockMutation.isPending}
+                data-testid="plan-unblock"
+              >
+                <RotateCcw className="mr-1 h-4 w-4" />
+                Desbloquear plan
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCreateOpen(true)}
+              data-testid="free-task-open"
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              Añadir tarea libre
+            </Button>
+          </div>
         }
       />
-
-      <Card className="bg-warning-soft border-warning/30 mt-4">
-        <CardContent className="text-warning-soft-foreground py-3 text-xs">
-          <strong>Esta vista depende del orchestrator productivo (Plan 06.5).</strong> La UI está
-          completa, pero los endpoints (<code>/plans/&#123;id&#125;/escalated-tasks</code>,
-          <code>/tasks/&#123;id&#125;/human-action</code>,{" "}
-          <code>/plans/&#123;id&#125;/free-task</code>) se cablearán al cerrar 06.5. Mientras tanto
-          los botones devolverán un error 404 esperado.
-        </CardContent>
-      </Card>
-
-      {actionMutation.isError && (
-        <div
-          className="bg-danger-soft text-danger-soft-foreground mt-4 rounded p-3 text-sm"
-          data-testid="action-error"
-        >
-          {actionMutation.error instanceof ApiError
-            ? actionMutation.error.body
-            : String(actionMutation.error)}
-        </div>
-      )}
 
       <section data-testid="escalated-list" className="mt-6 space-y-3">
         {tasksQuery.isLoading && (
@@ -197,37 +187,9 @@ export default function EscalatedPage() {
           </Card>
         )}
         {tasks.map((task) => (
-          <EscalatedTaskRow
-            key={task.id}
-            task={task}
-            disabled={actionMutation.isPending}
-            onApprove={() => runAction(task.id, { action: "approve_manual" })}
-            onCancel={() => runAction(task.id, { action: "cancel" })}
-            onReassign={() => setReassignTask(task)}
-            onBlock={() => setBlockTask(task)}
-          />
+          <EscalatedTaskRow key={task.id} task={task} onApplied={onActionApplied} />
         ))}
       </section>
-
-      <ReassignDialog
-        task={reassignTask}
-        onClose={() => setReassignTask(null)}
-        onSubmit={(guidance) => {
-          if (!reassignTask) return;
-          runAction(reassignTask.id, { action: "reassign_with_guidance", guidance });
-          setReassignTask(null);
-        }}
-      />
-
-      <BlockDialog
-        task={blockTask}
-        onClose={() => setBlockTask(null)}
-        onSubmit={(reason) => {
-          if (!blockTask) return;
-          runAction(blockTask.id, { action: "block_with_reason", reason });
-          setBlockTask(null);
-        }}
-      />
 
       <FreeTaskDialog
         planId={planId}
@@ -246,21 +208,7 @@ export default function EscalatedPage() {
 // Task row
 // ---------------------------------------------------------------------------
 
-function EscalatedTaskRow({
-  task,
-  disabled,
-  onApprove,
-  onReassign,
-  onBlock,
-  onCancel,
-}: {
-  task: EscalatedTask;
-  disabled: boolean;
-  onApprove: () => void;
-  onReassign: () => void;
-  onBlock: () => void;
-  onCancel: () => void;
-}) {
+function EscalatedTaskRow({ task, onApplied }: { task: EscalatedTask; onApplied: () => void }) {
   return (
     <Card data-testid={`escalated-${task.id}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-2">
@@ -275,47 +223,7 @@ function EscalatedTaskRow({
         </Badge>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant="default"
-            onClick={onApprove}
-            disabled={disabled}
-            data-testid={`approve-${task.id}`}
-          >
-            <Check className="mr-1 h-3.5 w-3.5" />
-            Aprobar manualmente
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onReassign}
-            disabled={disabled}
-            data-testid={`reassign-${task.id}`}
-          >
-            <Workflow className="mr-1 h-3.5 w-3.5" />
-            Reasignar con guía
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onBlock}
-            disabled={disabled}
-            data-testid={`block-${task.id}`}
-          >
-            <Ban className="mr-1 h-3.5 w-3.5" />
-            Bloquear con motivo
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            onClick={onCancel}
-            disabled={disabled}
-            data-testid={`cancel-${task.id}`}
-          >
-            Cancelar
-          </Button>
-        </div>
+        <TaskHumanActions taskId={task.id} onApplied={onApplied} />
 
         {task.history.length > 0 && (
           <details className="text-xs">
@@ -336,131 +244,6 @@ function EscalatedTaskRow({
         )}
       </CardContent>
     </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Reassign dialog
-// ---------------------------------------------------------------------------
-
-function ReassignDialog({
-  task,
-  onClose,
-  onSubmit,
-}: {
-  task: EscalatedTask | null;
-  onClose: () => void;
-  onSubmit: (guidance: string) => void;
-}) {
-  const [guidance, setGuidance] = useState("");
-
-  return (
-    <Dialog
-      open={task !== null}
-      onOpenChange={(v) => {
-        if (!v) {
-          setGuidance("");
-          onClose();
-        }
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Reasignar con guía</DialogTitle>
-          <DialogDescription>
-            Devuelve la tarea al backlog con instrucciones específicas para el siguiente intento. La
-            guía queda en el historial de la tarea.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogBody>
-          <div className="flex flex-col gap-1.5">
-            <Label>Guía para el agente</Label>
-            <MarkdownTextarea
-              value={guidance}
-              onChange={setGuidance}
-              rows={5}
-              placeholder="Por ejemplo: 'Intenta otro enfoque usando la librería X en vez de Y.'"
-              data-testid="reassign-guidance"
-            />
-          </div>
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button
-            disabled={!guidance.trim()}
-            onClick={() => onSubmit(guidance.trim())}
-            data-testid="reassign-submit"
-          >
-            Reasignar
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Block dialog
-// ---------------------------------------------------------------------------
-
-function BlockDialog({
-  task,
-  onClose,
-  onSubmit,
-}: {
-  task: EscalatedTask | null;
-  onClose: () => void;
-  onSubmit: (reason: string) => void;
-}) {
-  const [reason, setReason] = useState("");
-
-  return (
-    <Dialog
-      open={task !== null}
-      onOpenChange={(v) => {
-        if (!v) {
-          setReason("");
-          onClose();
-        }
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Bloquear con motivo</DialogTitle>
-          <DialogDescription>
-            Marca la tarea como bloqueada por una causa externa (falta de acceso, dependencia
-            pendiente, decisión de producto…). El motivo queda visible en el historial.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogBody>
-          <div className="flex flex-col gap-1.5">
-            <Label>Motivo del bloqueo</Label>
-            <MarkdownTextarea
-              value={reason}
-              onChange={setReason}
-              rows={4}
-              placeholder="Por ejemplo: 'Esperando credencial de la API del cliente.'"
-              data-testid="block-reason"
-            />
-          </div>
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancelar
-          </Button>
-          <Button
-            variant="destructive"
-            disabled={!reason.trim()}
-            onClick={() => onSubmit(reason.trim())}
-            data-testid="block-submit"
-          >
-            Bloquear
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

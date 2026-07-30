@@ -97,17 +97,54 @@ docker compose -f docker/docker-compose.yml down       # SIN -v
 
 ### 4. Migraciones de esquema (Alembic, reversibles)
 
-El esquema lo aplica el **servicio one-shot `migrations`** del propio
-stack — no un Python local desde un checkout. La imagen `api-server` que
-acabas de traer en el paso 2 ya trae Alembic y los modelos, así que el
-host de producción **no** necesita Python ni el repo instalado. El
-servicio corre `alembic upgrade head` con el rol `migrations_user` (no el
-rol de aplicación), toma su DSN (`ADMIN_DATABASE_URL`) del `.env` generado
-y termina (`restart: no`). Aplícalo **antes** de levantar la aplicación:
+> **Ojo: el servicio `migrations` NO existe en el stack de dev** (corregido el
+> 2026-07-28, tras perder una vuelta con esto). Lo **genera el instalador**
+> (`installer_backend.compose_generator._migrations_service`) en el compose de
+> una instalación de producción; los `docker/docker-compose*.yml` escritos a
+> mano —el stack de dev/manuals— no lo declaran. Comprueba cuál tienes antes de
+> copiar el comando:
+>
+> ```bash
+> docker compose <tus -f> config --services | grep -x migrations || echo "SIN servicio migrations: usa la variante de dev"
+> ```
+>
+> Y en ninguno de los dos casos migra `up -d` por sí solo en dev: el
+> `depends_on: service_completed_successfully` que dispara el one-shot vive
+> únicamente en el compose generado.
+
+**Producción (compose del instalador).** El esquema lo aplica el **servicio
+one-shot `migrations`** del propio stack — no un Python local desde un
+checkout. La imagen `api-server` que acabas de traer en el paso 2 ya trae
+Alembic y los modelos, así que el host de producción **no** necesita Python ni
+el repo instalado. El servicio corre `alembic upgrade head` con el rol
+`migrations_user` (no el rol de aplicación), toma su DSN
+(`ADMIN_DATABASE_URL`) del `.env` generado y termina (`restart: no`).
+Aplícalo **antes** de levantar la aplicación:
 
 ```bash
 docker compose -f docker/docker-compose.yml run --rm migrations
 ```
+
+**Dev / manuals (sin servicio `migrations`).** Dos vías equivalentes; las dos
+usan el rol `migrations_user` y `env.py` toma el mismo advisory lock:
+
+```bash
+# (a) desde la IMAGEN NUEVA — la única válida si el host no tiene Python.
+#     El contenedor de api-server que está corriendo NO sirve: lleva la imagen
+#     ANTERIOR, sin las revisiones nuevas. Y `env.py` exige `DATABASE_URL`
+#     pelado, no el `API_SERVER_*` que el contenedor trae.
+docker compose <tus -f> run --rm --no-deps --entrypoint sh api-server \
+  -c 'export DATABASE_URL="$API_SERVER_ADMIN_DATABASE_URL"; alembic upgrade head'
+
+# (b) desde el venv del repo, como hace scripts/dev/up.ps1 (postgres expuesto
+#     en 15432). Es la vía corta cuando ya tienes el .venv montado.
+cd apps/api-server
+DATABASE_URL="postgresql+asyncpg://migrations_user:<pwd-dev>@localhost:15432/agentic_platform" \
+  ../../.venv/Scripts/python.exe -m alembic upgrade head
+```
+
+La variante (a) resuelve la credencial **dentro** del contenedor, así que no
+aparece en el historial del shell ni en los logs.
 
 `run --rm` arranca PostgreSQL como dependencia, ejecuta el one-shot y
 **propaga el exit code** de Alembic: `0` = esquema al día. El servicio toma
@@ -146,6 +183,24 @@ paso 1. Tenlo decidido **antes** de aplicarla.
 > lo edites a mano: restaura el backup pre-upgrade.
 
 ### 5. Levanta el stack con las imágenes nuevas
+
+> **Antes del `up -d`, cuenta las reclamaciones huérfanas.** Una tarea
+> `in_progress` **sin fila viva en `executions`** es invisible al chequeo
+> instintivo de «¿queda algo corriendo?», y el reconciler la devuelve a `ready`
+> a los 90 s de arrancar el beat: el despliegue **lanza runs que nadie pidió**.
+> Pasó el 2026-07-28 (2 tareas de hacía 10 días, ~165 k tokens).
+>
+> ```sql
+> SELECT count(*) FROM tasks t
+>  WHERE t.status = 'in_progress'
+>    AND NOT EXISTS (SELECT 1 FROM executions e
+>                     WHERE e.task_id = t.id
+>                       AND e.status IN ('running','pending','queued'));
+> ```
+>
+> Si es `> 0`, levanta con `--scale orchestrator=0` y arranca el orchestrator
+> aparte cuando hayas decidido qué hacer con esas tareas. Detalle en
+> [gotchas/deploy-relaunches-frozen-tasks.md](../03-guides/gotchas/deploy-relaunches-frozen-tasks.md).
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d

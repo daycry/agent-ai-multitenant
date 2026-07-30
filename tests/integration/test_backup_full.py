@@ -131,8 +131,11 @@ def test_configured_volumes_are_tarred_from_their_data_trees(tmp_path: Path) -> 
         str(cfg.volumes_mount_root / "redis_data" / "_data"),
         str(cfg.volumes_mount_root / "vault_data" / "_data"),
     ]
-    # Each tar is gzip + writes a <volume>.tar.gz into the bundle.
+    # Each tar is CREATE (GNU tar exige el modo — «You must specify one of the
+    # '-Acdtrux' options»; faltó desde Plan 12 hasta el primer backup real
+    # 2026-07-03) + gzip + writes a <volume>.tar.gz into the bundle.
     for call in tar_calls:
+        assert "--create" in call
         assert "--gzip" in call
         archive = _arg_value(call, "--file=")
         assert archive is not None and archive.endswith(".tar.gz")
@@ -171,6 +174,90 @@ def test_manifest_and_checksums_written(tmp_path: Path) -> None:
         assert art["size_bytes"] > 0
     # total_size_bytes is the sum.
     assert manifest["total_size_bytes"] == sum(a["size_bytes"] for a in manifest["artifacts"])
+
+
+def test_configured_bind_paths_are_tarred_and_manifested(tmp_path: Path) -> None:
+    """Auditoría 2026-07-02 (F0.4): /data/agent-platform (bind, NO named volume)
+    entra en el bundle — los bare repos + worktrees no los cubría ningún backup
+    y el wipe del bind en un engine-restart perdió el trabajo de 8 tareas."""
+    runner = FakeRunner()
+    bind = tmp_path / "data" / "agent-platform"
+    cfg = BackupConfig(
+        backup_root=tmp_path / "backups",
+        database_url="postgresql://migrations_user:s3cr3t@db:5432/agentic_platform",
+        volumes=("minio_data",),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+    )
+    engine = BackupEngine(cfg, runner=runner, now=_NOW)
+
+    result = engine.run_full_backup()
+
+    tar_sources = [_arg_value(c, "--directory=") for c in runner.calls if c[0] == "tar"]
+    assert str(bind) in tar_sources
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    bind_artifacts = [a for a in manifest["artifacts"] if a["kind"] == "bind_tar"]
+    assert len(bind_artifacts) == 1
+    assert bind_artifacts[0]["source"] == str(bind)
+    assert bind_artifacts[0]["name"].endswith(".tar.gz")
+
+
+def test_bind_tar_excludes_nested_backup_root(tmp_path: Path) -> None:
+    """prod-04 A7 (auditoría 2026-07-06): el bind tar NO debe auto-incluir el
+    backup_root cuando este vive DENTRO del bind_path.
+
+    Config por defecto: bind_paths=[/data/agent-platform], backup_root=
+    /data/agent-platform/backups → sin --exclude, cada backup diario embebía
+    todos los bundles previos + los artefactos del run en curso (crecimiento
+    cuadrático; y tar puede devolver rc≠0 por 'file changed as we read it')."""
+    runner = FakeRunner()
+    bind = tmp_path / "data" / "agent-platform"
+    backups = bind / "backups"  # backup_root ANIDADO dentro del bind
+    cfg = BackupConfig(
+        backup_root=backups,
+        database_url="postgresql://migrations_user:s3cr3t@db:5432/agentic_platform",
+        volumes=(),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+    )
+    engine = BackupEngine(cfg, runner=runner, now=_NOW)
+
+    engine.run_full_backup()
+
+    bind_tar = next(
+        c for c in runner.calls if c[0] == "tar" and _arg_value(c, "--directory=") == str(bind)
+    )
+    # El argv debe llevar un --exclude que cubra el backup_root anidado (rel al
+    # directorio archivado, p.ej. './backups' o 'backups').
+    excludes = [t.split("=", 1)[1] for t in bind_tar if t.startswith("--exclude=")]
+    assert any(
+        "backups" in e for e in excludes
+    ), f"el bind tar no excluye el backup_root anidado; argv={bind_tar}"
+
+
+def test_bind_tar_no_exclude_when_backup_root_outside(tmp_path: Path) -> None:
+    """Si el backup_root NO está bajo el bind_path, no se añade exclusión espuria."""
+    runner = FakeRunner()
+    bind = tmp_path / "data" / "agent-platform"
+    cfg = BackupConfig(
+        backup_root=tmp_path / "backups",  # FUERA del bind
+        database_url="postgresql://migrations_user:s3cr3t@db:5432/agentic_platform",
+        volumes=(),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+    )
+    engine = BackupEngine(cfg, runner=runner, now=_NOW)
+
+    engine.run_full_backup()
+
+    bind_tar = next(
+        c for c in runner.calls if c[0] == "tar" and _arg_value(c, "--directory=") == str(bind)
+    )
+    excludes = [t for t in bind_tar if t.startswith("--exclude=")]
+    assert excludes == []
 
 
 def test_manifest_does_not_leak_db_password(tmp_path: Path) -> None:
@@ -263,6 +350,7 @@ def test_run_full_backup_entrypoint_builds_engine_from_settings(tmp_path: Path) 
         backup_database_url="postgresql://migrations_user:pw@db:5432/agentic_platform",
         backup_volumes=["minio_data"],
         backup_volumes_mount_root=str(tmp_path / "volumes"),
+        backup_bind_paths=[str(tmp_path / "data" / "agent-platform")],
         backup_retention_days=7,
     )
     runner = FakeRunner()
@@ -271,6 +359,6 @@ def test_run_full_backup_entrypoint_builds_engine_from_settings(tmp_path: Path) 
 
     assert result.bundle_dir.exists()
     assert (result.bundle_dir / "manifest.json").exists()
-    # Honoured the single configured volume.
+    # Honoured the single configured volume + the configured bind path (F0.4).
     tar_calls = [c for c in runner.calls if c[0] == "tar"]
-    assert len(tar_calls) == 1
+    assert len(tar_calls) == 2

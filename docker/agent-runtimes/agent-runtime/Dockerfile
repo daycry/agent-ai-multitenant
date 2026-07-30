@@ -63,6 +63,13 @@ RUN pip install --no-cache-dir /src/shared-mcp
 COPY packages/shared-domain/ /src/shared-domain/
 RUN pip install --no-cache-dir /src/shared-domain
 
+# shared-guardrails is a path dependency of agent-runtime since ADR 0102 (g1):
+# the runtime runs the guardrail pipeline (post_tool prompt-injection defense)
+# over tool outputs before they re-enter the model context. Same local-wheel
+# trick so its name resolves locally rather than failing on PyPI.
+COPY packages/shared-guardrails/ /src/shared-guardrails/
+RUN pip install --no-cache-dir /src/shared-guardrails
+
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build
 COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./
@@ -80,14 +87,17 @@ LABEL org.opencontainers.image.title="agent-runtime" \
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
-    HOME=/workspace
+    HOME=/home/agent
 
-# Non-root user (uid/gid 1000). The worker also pins --user 1000:1000
-# at run time; baking it in keeps a bare `docker run` safe as well.
+# Non-root user (uid/gid 1000). The worker also pins --user 1000:1000 at run
+# time; baking it in keeps a bare `docker run` safe as well. HOME is /home/agent
+# (its own dir / a dedicated tmpfs at run time, isolation.py) and NOT /workspace,
+# so the Claude Code CLI's config (.claude.json/.claude/) never pollutes the
+# agent's project worktree mounted at /workspace.
 RUN groupadd --gid 1000 agent \
- && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /workspace agent \
- && mkdir -p /workspace \
- && chown -R 1000:1000 /workspace
+ && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /home/agent agent \
+ && mkdir -p /workspace /home/agent \
+ && chown -R 1000:1000 /workspace /home/agent
 
 # git + openssh-client (ADR 0072): los agentes commitean en los worktrees y las
 # operaciones git contra remotos pueden requerir ssh. La base no los trae.

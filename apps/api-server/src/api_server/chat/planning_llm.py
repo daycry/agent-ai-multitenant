@@ -22,7 +22,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, cast
 
 from shared_llm.base import LLMProvider
 from shared_llm.types import Message
@@ -122,7 +122,13 @@ def _history_messages(state: PlanningState) -> list[Message]:
     out: list[Message] = []
     for entry in state.chat_history:
         raw_role = str(entry.get("role", "user"))
-        role = raw_role if raw_role in ("user", "assistant", "system") else "user"
+        # mypy: el narrowing por `in` sobre una tupla no estrecha a Literal —
+        # el mapeo explícito sí (error preexistente, destapado 2026-07-03).
+        role: Literal["user", "assistant", "system"] = (
+            "user"
+            if raw_role not in ("user", "assistant", "system")
+            else cast(Literal["user", "assistant", "system"], raw_role)
+        )
         out.append(Message(role=role, content=str(entry.get("content", ""))))
     return out
 
@@ -237,6 +243,30 @@ def _suggest_specialists(text: str, available: frozenset[PlanningRole]) -> tuple
     return tuple(sorted(hits, key=lambda r: r.value))
 
 
+# `@rol` tal y como lo inserta el compositor del chat (`@backend_dev `). El
+# `\w+` cubre el guión bajo de los roles compuestos; cualquier otro `@algo`
+# (un correo, un handle) no casa con ningún PlanningRole y se descarta.
+_MENTION_RE = re.compile(r"@(\w+)")
+
+
+def _mentioned_roles(text: str, available: frozenset[PlanningRole]) -> tuple[PlanningRole, ...]:
+    """Roles que el usuario ha mencionado con `@`, intersectados con el equipo.
+
+    A diferencia de :func:`_suggest_specialists`, que ADIVINA a partir de
+    palabras clave, esto es una instrucción explícita del humano — y por eso
+    manda sobre ella (`task_wf_43`). Un rol que el equipo no tiene se descarta
+    en silencio: convocarlo produciría un turno vacío."""
+    hits = set()
+    for raw in _MENTION_RE.findall(text):
+        try:
+            role = PlanningRole(raw.lower())
+        except ValueError:
+            continue
+        if role in available:
+            hits.add(role)
+    return tuple(sorted(hits, key=lambda r: r.value))
+
+
 @dataclass
 class LLMPlanningModel:
     """Adapt an ``LLMProvider`` to the planning sub-graph's ``PlanningModelClient``."""
@@ -269,6 +299,16 @@ class LLMPlanningModel:
 
     def pm_decide(self, state: PlanningState) -> PMDirective:
         available = sorted(r.value for r in state.team_roles if r != PlanningRole.PROJECT_MANAGER)
+        latest_user = next(
+            (
+                str(e.get("content", ""))
+                for e in reversed(state.chat_history)
+                if e.get("role") == "user"
+            ),
+            "",
+        )
+        mentioned = _mentioned_roles(latest_user, state.team_roles)
+        mentioned_specialists = tuple(r for r in mentioned if r != PlanningRole.PROJECT_MANAGER)
         system = (
             "Eres el PROJECT MANAGER de un equipo de desarrollo en una sesión de "
             "PLANIFICACIÓN. " + _PLAN_ONLY_RULE + "\n\n"
@@ -291,6 +331,16 @@ class LLMPlanningModel:
             "especialistas y solo falta cerrar.\n"
             f"Especialistas disponibles: {available or '(ninguno)'}."
         )
+        if mentioned:
+            # Decírselo al modelo además de forzarlo: si no, el override
+            # determinista y el `rationale` cuentan historias distintas del
+            # mismo turno y el usuario lee la contradicción.
+            names = ", ".join(r.value for r in mentioned)
+            system += (
+                f"\nEl usuario ha MENCIONADO explícitamente a: {names}. "
+                "Es una petición directa suya: convócalos "
+                "(o responde tú si solo te ha mencionado a ti)."
+            )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
         if note:
@@ -309,19 +359,44 @@ class LLMPlanningModel:
                     continue
             specialists = tuple(picked)
 
+        # `task_wf_43`: una @-mención es una INSTRUCCIÓN del humano, no una pista,
+        # así que gana tanto al juicio del modelo como al heurístico de abajo — y
+        # gana ACOTANDO: si el usuario pide un rol, convocar a otros cuatro por
+        # palabras clave le ignora igual que no convocar a ninguno.
+        #
+        # Dos intents quedan intactos a propósito: `ask_user` (el PM necesita un
+        # dato que los especialistas tampoco tienen) y `finish_planning` (es el
+        # turno que produce el botón «Generar Plan»; robarlo cuesta más que
+        # posponer la mención un mensaje).
+        if mentioned_specialists:
+            if intent == PMIntent.SPEAK_ALONE:
+                intent = PMIntent.INVITE_SPECIALISTS
+                specialists = mentioned_specialists
+            elif intent == PMIntent.INVITE_SPECIALISTS:
+                specialists = tuple(
+                    sorted(set(specialists) | set(mentioned_specialists), key=lambda r: r.value)
+                )
+            return PMDirective(
+                intent=intent,
+                rationale=str(obj.get("rationale", "")),
+                specialists=specialists,
+            )
+
+        # Mencionar SOLO al PM es la mención simétrica: «contéstame tú». El
+        # usuario ha declinado la ronda, así que el empujón determinista no se
+        # aplica (el modelo ya decidió por su cuenta más arriba).
+        if mentioned:
+            return PMDirective(
+                intent=intent,
+                rationale=str(obj.get("rationale", "")),
+                specialists=specialists,
+            )
+
         # Deterministic collaboration nudge (supervisor/router pattern): the model
         # under-invites, so detect the disciplines THIS request touches and convene the
         # matching specialists instead of letting the PM plan solo. Only on a fresh,
         # multi-disciplinary turn (>=2 detected, no specialist has spoken yet); never
         # overrides ask_user / finish_planning.
-        latest_user = next(
-            (
-                str(e.get("content", ""))
-                for e in reversed(state.chat_history)
-                if e.get("role") == "user"
-            ),
-            "",
-        )
         suggested = _suggest_specialists(latest_user, state.team_roles)
         if intent == PMIntent.SPEAK_ALONE and len(suggested) >= 2 and not state.contributions:
             intent = PMIntent.INVITE_SPECIALISTS
@@ -385,12 +460,23 @@ class LLMPlanningModel:
             "Formaliza el PLAN acordado como un objeto JSON, SIN texto alrededor, con esta "
             "forma EXACTA:\n"
             '{"title": "<título corto>", "summary": "<resumen: alcance, decisiones, '
-            'riesgos>", "tasks": [{"id": "t1", "title": "<acción>", "description": '
-            '"<qué hacer y criterio de aceptación>", "role": "<rol>", "depends_on": []}]}\n'
+            'riesgos>", "phases": [{"title": "<fase>", "tasks": ["t1", "t2"]}], '
+            '"tasks": [{"id": "t1", "title": "<acción>", "description": '
+            '"<qué hacer>", "role": "<rol>", "complexity": "<xs|s|m|l|xl>", '
+            '"depends_on": [], "acceptance_criteria": '
+            '["<criterio verificable>", "<criterio verificable>"]}]}\n'
             "Reglas: ids únicos y cortos (t1, t2, …); `depends_on` referencia SOLO ids "
             "declarados; NO ciclos; ordena las tareas por dependencias; tareas accionables "
-            "y atómicas. `role` ∈ los roles del equipo cuando aplique. NO implementes ni "
-            f"escribas código: solo el plan. Roles del equipo: {roles or '(genérico)'}."
+            "y atómicas. `role` ∈ los roles del equipo cuando aplique. `complexity` ∈ "
+            "{xs, s, m, l, xl} estimando el esfuerzo de la tarea (usa `m` si dudas). "
+            "Agrupa las tareas en `phases` ordenadas por dependencias; cada fase lista los "
+            "ids de sus tareas y CADA tarea aparece en exactamente una fase. "
+            "Cada tarea lleva 2-5 "
+            "`acceptance_criteria`: condiciones CONCRETAS y VERIFICABLES que definen cuándo la "
+            "tarea está HECHA (p.ej. 'composer audit no reporta vulnerabilidades pendientes', "
+            "'el endpoint GET /hello responde 200 con el JSON acordado'). Son criterios "
+            "comprobables redactados en lenguaje claro, NO comandos a ejecutar. NO implementes "
+            f"ni escribas código: solo el plan. Roles del equipo: {roles or '(genérico)'}."
         )
         messages = [Message(role="system", content=system)]
         note = _context_note(state)
@@ -403,6 +489,77 @@ class LLMPlanningModel:
                 Message(role="system", content="Aportaciones de los especialistas:\n" + joined)
             )
         return _normalise_plan_draft(_extract_json(self._complete(messages)))
+
+
+_MAX_ACCEPTANCE_CRITERIA = 8
+_MAX_CRITERION_LEN = 300
+#: Valid task-complexity buckets (mirror sync_to_kanban / the cost model). A
+#: chat-planned task now carries its own estimate instead of defaulting to `m`
+#: for everything, so the cost breakdown weights tasks differently (c11).
+_VALID_COMPLEXITY = frozenset({"xs", "s", "m", "l", "xl"})
+_DEFAULT_COMPLEXITY = "m"
+
+# A-04: horas por nivel de complejidad. El planner emite `complexity` pero NUNCA
+# `estimated_hours`, así que `cost.py` caía a su default de 4 h para TODA tarea: el
+# Gantt pintaba barras idénticas (camino crítico arbitrario) y el «coste humano»
+# era `nº_tareas * 4 h * tarifa`. Un número con aspecto de dato y sin información.
+#
+# Estos valores son un punto de partida deliberadamente grosero. La mejora real es
+# calibrarlos con el histórico REAL del proyecto (`plan_retro` + duraciones de
+# `executions`) — task_wf_33; por eso el mapa vive en UN solo sitio y se sustituye
+# entero, no se parchea.
+_COMPLEXITY_HOURS: dict[str, float] = {"xs": 1.0, "s": 3.0, "m": 8.0, "l": 20.0, "xl": 40.0}
+
+
+def _coerce_estimated_hours(raw: Any, complexity: str) -> float:
+    """Horas de una tarea: las que declare el modelo, si son usables; si no, las
+    derivadas de su complejidad. Nunca ``0`` ni negativas (romperían el Gantt)."""
+    try:
+        hours = float(raw)
+    except (TypeError, ValueError):
+        hours = 0.0
+    if hours > 0:
+        return hours
+    return _COMPLEXITY_HOURS.get(complexity, _COMPLEXITY_HOURS[_DEFAULT_COMPLEXITY])
+
+
+def _normalise_summary(raw: Any) -> dict[str, Any]:
+    """El `summary` del spec es un OBJETO (``PlanSpecification.summary: dict``).
+
+    A-03: el draft del chat lo emitía como cadena y `create_plan` lo persiste sin
+    pasar por Pydantic, así que el 422 asomaba más tarde, en cualquier `PUT` que
+    reenviara el spec; y la UI, al hacer `Object.keys()` sobre una cadena, creía
+    que había resumen y pintaba una tarjeta vacía. Una cadena se envuelve en
+    ``{"description": …}``, que es la clave que la UI ya lee."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    text = str(raw or "").strip()
+    return {"description": text} if text else {}
+
+
+def _clean_acceptance_criteria(raw: Any) -> list[str]:
+    """Coerce a task's ``acceptance_criteria`` into a clean list of descriptive,
+    verifiable strings — the agent's "definition of done" (rendered by
+    ``providers._criterion_text``). Trims; flattens a ``{description}`` dict to its
+    text; drops empties/non-strings; caps count and per-criterion length. NOT
+    executable commands (those are out of the planner's scope — too unreliable)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        value = (
+            (item.get("description") or item.get("text") or item.get("criterion") or "")
+            if isinstance(item, dict)
+            else item
+        )
+        if not isinstance(value, str):
+            continue
+        text = value.strip()[:_MAX_CRITERION_LEN].strip()
+        if text:
+            out.append(text)
+        if len(out) >= _MAX_ACCEPTANCE_CRITERIA:
+            break
+    return out
 
 
 def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
@@ -421,6 +578,9 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
         title = str(t.get("title") or t.get("name") or "").strip()
         if not title:
             continue
+        complexity = str(t.get("complexity") or "").strip().lower()
+        if complexity not in _VALID_COMPLEXITY:
+            complexity = _DEFAULT_COMPLEXITY
         ids.append(tid)
         tasks.append(
             {
@@ -428,7 +588,12 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
                 "title": title[:255],
                 "description": str(t.get("description") or "").strip(),
                 "role": str(t.get("role") or "").strip(),
+                "complexity": complexity,
+                # A-04: derivadas de la complejidad salvo que el modelo dé un valor
+                # usable. Sin esto, `cost.py` caía a 4 h para TODAS.
+                "estimated_hours": _coerce_estimated_hours(t.get("estimated_hours"), complexity),
                 "depends_on": [str(d) for d in (t.get("depends_on") or []) if isinstance(d, str)],
+                "acceptance_criteria": _clean_acceptance_criteria(t.get("acceptance_criteria")),
             }
         )
     id_set = set(ids)
@@ -436,9 +601,37 @@ def _normalise_plan_draft(obj: dict[str, Any]) -> dict[str, Any]:
         t["depends_on"] = [d for d in t["depends_on"] if d in id_set and d != t["id"]]
     return {
         "title": str(obj.get("title") or "Plan del proyecto").strip()[:255],
-        "summary": str(obj.get("summary") or "").strip(),
+        "summary": _normalise_summary(obj.get("summary")),
+        "phases": _normalise_phases(obj.get("phases"), id_set),
         "tasks": tasks,
     }
+
+
+def _normalise_phases(raw: Any, valid_ids: set[str]) -> list[dict[str, Any]]:
+    """Coerce the LLM ``phases`` into ``[{title, tasks: [known ids]}]`` (c6).
+
+    Enables the ``phase`` sync scope for chat-planned plans, which previously
+    lacked ``phases`` entirely. Drops task ids that don't exist (so
+    ``sync_to_kanban`` never rejects a phase that references an unknown id) and
+    empty phases. Returns ``[]`` when nothing usable was produced — the phase
+    scope is then simply unavailable and ``total``/``selection`` still work.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for i, ph in enumerate(raw):
+        if not isinstance(ph, dict):
+            continue
+        title = str(ph.get("title") or ph.get("name") or f"Fase {i + 1}").strip()[:255]
+        phase_tasks: list[str] = []
+        seen: set[str] = set()
+        for t in ph.get("tasks") or []:
+            if isinstance(t, str) and t in valid_ids and t not in seen:
+                seen.add(t)
+                phase_tasks.append(t)
+        if phase_tasks:
+            out.append({"title": title or f"Fase {i + 1}", "tasks": phase_tasks})
+    return out
 
 
 __all__ = ["LLMPlanningModel"]

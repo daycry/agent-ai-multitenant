@@ -15,4 +15,13 @@ RUN npm install -g vitest@1 --omit=dev
 
 WORKDIR /workspace
 
+# prod-12 task_prod12_img_01 (sandbox-6): el worker fuerza uid 1000 en cada
+# run; la imagen le da un HOME escribible para que los dep-caches (pip/
+# composer/npm/...) funcionen, y arranca no-root tambien por defecto
+# (defensa en profundidad, como el agent-runtime). USER numerico: no
+# necesita entrada en /etc/passwd (uniforme en debian y alpine).
+RUN mkdir -p /home/agent && chown -R 1000:1000 /home/agent
+ENV HOME=/home/agent
+USER 1000:1000
+
 ENTRYPOINT ["sleep", "infinity"]

@@ -57,7 +57,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import CursorResult, func, literal, select
+from sqlalchemy import ColumnElement, CursorResult, func, literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -150,6 +150,130 @@ def _preference_to_response(pref: NotificationPreference) -> NotificationPrefere
         created_at=pref.created_at,
         updated_at=pref.updated_at,
     )
+
+
+# ===========================================================================
+# Event catalogue — the events a tenant can subscribe to (NOTIF-3)
+# ===========================================================================
+# La UI de preferencias hardcodeaba 4 eventos (uno inexistente, `review_needed`)
+# desalineados del registro real del dispatcher. Este catálogo es la fuente que
+# consume la UI. El api-server NO importa el dispatcher (frontera limpia), así
+# que la lista vive aquí y un test unitario la mantiene en sync con
+# `notification_dispatcher.event_mapping.EVENT_REGISTRY` (los tests sí pueden
+# importar ambos paquetes).
+NOTIFICATION_EVENT_CATALOG: tuple[dict[str, str], ...] = (
+    {"event_type": "task_blocked", "label_es": "Tarea bloqueada", "label_en": "Task blocked"},
+    {
+        "event_type": "task_unassignable",
+        "label_es": "Tarea sin agente",
+        "label_en": "Task has no agent",
+    },
+    {"event_type": "daily_standup", "label_es": "Standup diario", "label_en": "Daily standup"},
+    {
+        "event_type": "restore_drill_result",
+        "label_es": "Resultado del restore-drill",
+        "label_en": "Restore drill result",
+    },
+    {
+        "event_type": "config_proposal",
+        "label_es": "Propuesta de configuración",
+        "label_en": "Configuration proposal",
+    },
+    {
+        "event_type": "provider_recovered",
+        "label_es": "Proveedor LLM recuperado",
+        "label_en": "LLM provider recovered",
+    },
+    {"event_type": "plan_approved", "label_es": "Plan aprobado", "label_en": "Plan approved"},
+    {"event_type": "plan_rejected", "label_es": "Plan rechazado", "label_en": "Plan rejected"},
+    {"event_type": "plan_blocked", "label_es": "Plan bloqueado", "label_en": "Plan blocked"},
+    {"event_type": "plan_unblocked", "label_es": "Plan desbloqueado", "label_en": "Plan unblocked"},
+    {
+        "event_type": "execution_finished",
+        "label_es": "Ejecución finalizada",
+        "label_en": "Execution finished",
+    },
+    {
+        "event_type": "execution_failed",
+        "label_es": "Ejecución fallida",
+        "label_en": "Execution failed",
+    },
+    {
+        "event_type": "review_requested",
+        "label_es": "Revisión solicitada",
+        "label_en": "Review requested",
+    },
+    {
+        "event_type": "human_validation_needed",
+        "label_es": "Validación humana pendiente",
+        "label_en": "Human validation needed",
+    },
+    {
+        "event_type": "human_task_assigned",
+        "label_es": "Tarea humana asignada",
+        "label_en": "Human task assigned",
+    },
+    {
+        "event_type": "review_escalated",
+        "label_es": "Revisión escalada",
+        "label_en": "Review escalated",
+    },
+    {"event_type": "budget_alert", "label_es": "Alerta de presupuesto", "label_en": "Budget alert"},
+    {
+        "event_type": "guardrail_alert",
+        "label_es": "Alerta de guardrail",
+        "label_en": "Guardrail alert",
+    },
+    {
+        "event_type": "quality_drift_alert",
+        "label_es": "Deriva de calidad",
+        "label_en": "Quality drift alert",
+    },
+    {
+        "event_type": "agent_outlier_alert",
+        "label_es": "Agente atípico",
+        "label_en": "Agent outlier alert",
+    },
+    {
+        "event_type": "antivirus_unreachable",
+        "label_es": "Antivirus inaccesible",
+        "label_en": "Antivirus unreachable",
+    },
+    {
+        "event_type": "credential_rotation_failed",
+        "label_es": "Rotación de credenciales fallida",
+        "label_en": "Credential rotation failed",
+    },
+    {
+        "event_type": "fx_fetch_failed",
+        "label_es": "Actualización de divisas fallida",
+        "label_en": "FX update failed",
+    },
+    {
+        "event_type": "infra_alert",
+        "label_es": "Alerta de infraestructura",
+        "label_en": "Infrastructure alert",
+    },
+    {
+        "event_type": "cortex_message",
+        "label_es": "Mensaje del córtex",
+        "label_en": "Cortex message",
+    },
+    {
+        "event_type": "provider_credential_invalid",
+        "label_es": "Credencial del proveedor LLM fallando",
+        "label_en": "LLM provider credential failing",
+    },
+)
+
+
+@router.get("/event-catalog")
+async def get_event_catalog(
+    _: AuthPrincipal = Depends(require_tenant_member),
+) -> list[dict[str, str]]:
+    """Los eventos suscribibles, con etiquetas ES/EN — la fuente de la UI de
+    preferencias (antes hardcodeaba una lista desalineada del registro)."""
+    return list(NOTIFICATION_EVENT_CATALOG)
 
 
 # ===========================================================================
@@ -488,6 +612,8 @@ def _log_to_response(log: NotificationLog, *, read: bool) -> NotificationLogResp
         error=log.error,
         sent_at=log.sent_at,
         created_at=log.created_at,
+        subject=log.subject,
+        body=log.body,
         read=read,
     )
 
@@ -654,6 +780,147 @@ async def mark_all_logs_read(
     res = cast("CursorResult[Any]", await session.execute(stmt))
     marked = int(res.rowcount or 0)
 
+    return MarkReadResponse(marked=marked, unread=0)
+
+
+# ===========================================================================
+# Inbox de PLATAFORMA (AUD16-10) — System Admin, sesión admin BYPASSRLS.
+#
+# TODOS los envíos reales del sistema (infra_alert, cortex_message,
+# credential_rotation_failed, fx_fetch_failed…) son platform-scoped
+# (tenant_id IS NULL) y el inbox de tenant los excluye por diseño: sin este
+# camino, NINGUNA notificación llegaba de facto a un ojo humano
+# (notification_log_reads llevaba 0 filas en toda la historia). El read-marker
+# reusa notification_log_reads con tenant_id NULL (migración 0113).
+# ===========================================================================
+async def _platform_unread_count(session: AsyncSession, *, user_id: UUID) -> int:
+    read_subq = (
+        select(NotificationLogRead.log_id)
+        .where(NotificationLogRead.user_id == user_id)
+        .scalar_subquery()
+    )
+    stmt = (
+        select(func.count())
+        .select_from(NotificationLog)
+        .where(
+            NotificationLog.tenant_id.is_(None),
+            NotificationLog.id.not_in(read_subq),
+        )
+    )
+    return int((await session.execute(stmt)).scalar_one())
+
+
+@router.get("/platform/logs", response_model=NotificationInboxResponse)
+async def list_platform_notification_logs(
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status", max_length=16),
+    channel_type: str | None = Query(default=None, max_length=16),
+    event_type: str | None = Query(default=None, max_length=64),
+    unread_only: bool = Query(default=False),
+) -> NotificationInboxResponse:
+    """El inbox de plataforma: SOLO los envíos ``tenant_id IS NULL``, newest
+    first, paginado, con read-marker por usuario — la contrapartida System
+    Admin del inbox de tenant (misma forma de respuesta, mismos filtros)."""
+    read_marker = (
+        select(NotificationLogRead.id)
+        .where(
+            NotificationLogRead.log_id == NotificationLog.id,
+            NotificationLogRead.user_id == principal.user_id,
+        )
+        .exists()
+    )
+    conditions: list[ColumnElement[bool]] = [NotificationLog.tenant_id.is_(None)]
+    if status_filter is not None:
+        conditions.append(NotificationLog.status == status_filter)
+    if channel_type is not None:
+        conditions.append(NotificationLog.channel_type == channel_type)
+    if event_type is not None:
+        conditions.append(NotificationLog.event_type == event_type)
+    if unread_only:
+        conditions.append(~read_marker)
+
+    total = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(NotificationLog).where(*conditions)
+            )
+        ).scalar_one()
+    )
+    result = await session.execute(
+        select(NotificationLog, read_marker.label("is_read"))
+        .where(*conditions)
+        .order_by(NotificationLog.created_at.desc(), NotificationLog.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = [_log_to_response(row[0], read=bool(row[1])) for row in result.all()]
+    unread = await _platform_unread_count(session, user_id=principal.user_id)
+    return NotificationInboxResponse(
+        items=items, total=total, unread=unread, limit=limit, offset=offset
+    )
+
+
+@router.post("/platform/logs/{log_id}/read", response_model=MarkReadResponse)
+async def mark_platform_log_read(
+    log_id: UUID,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarkReadResponse:
+    """Marca leída una notificación de PLATAFORMA (idempotente).
+
+    Solo aplica a filas ``tenant_id IS NULL`` — una fila de tenant se marca por
+    su endpoint de tenant (404 aquí, sin filtrar la existencia cruzada)."""
+    log = (
+        await session.execute(
+            select(NotificationLog).where(
+                NotificationLog.id == log_id, NotificationLog.tenant_id.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if log is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="notification log not found"
+        )
+    stmt = (
+        pg_insert(NotificationLogRead)
+        .values(tenant_id=None, user_id=principal.user_id, log_id=log_id)
+        .on_conflict_do_nothing(constraint="uq_notification_log_reads_user_log")
+    )
+    res = cast("CursorResult[Any]", await session.execute(stmt))
+    marked = int(res.rowcount or 0)
+    unread = await _platform_unread_count(session, user_id=principal.user_id)
+    return MarkReadResponse(marked=marked, unread=unread)
+
+
+@router.post("/platform/logs/read-all", response_model=MarkReadResponse)
+async def mark_all_platform_logs_read(
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarkReadResponse:
+    """Marca leídas TODAS las notificaciones de plataforma pendientes del
+    System Admin llamante (idempotente, un solo INSERT…SELECT)."""
+    already_read = (
+        select(NotificationLogRead.log_id)
+        .where(NotificationLogRead.user_id == principal.user_id)
+        .scalar_subquery()
+    )
+    unread_logs = select(
+        func.gen_random_uuid().label("id"),
+        NotificationLog.tenant_id.label("tenant_id"),
+        literal(principal.user_id).label("user_id"),
+        NotificationLog.id.label("log_id"),
+    ).where(
+        NotificationLog.tenant_id.is_(None),
+        NotificationLog.id.not_in(already_read),
+    )
+    stmt = pg_insert(NotificationLogRead).from_select(
+        ["id", "tenant_id", "user_id", "log_id"], unread_logs
+    )
+    res = cast("CursorResult[Any]", await session.execute(stmt))
+    marked = int(res.rowcount or 0)
     return MarkReadResponse(marked=marked, unread=0)
 
 

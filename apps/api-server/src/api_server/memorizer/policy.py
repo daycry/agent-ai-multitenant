@@ -35,7 +35,18 @@ _MEMORISABLE_SCOPES: frozenset[str] = frozenset(s.value for s in MemoryScope)
 # `memory.memorizable_statuses` platform setting (Plan 06.17 task_06_17_04). Kept
 # here so the pure policy has a sensible default even when called without the
 # operator-resolved set (e.g. the human-session path / tests).
-_DEFAULT_ELIGIBLE_STATUSES: frozenset[str] = frozenset({ExecutionStatus.DONE.value})
+# P1-1 (investigación 2026-07-11): los FRACASOS también dejan lección por
+# defecto — un run failed/aborted/needs_human_review es de lo más informativo
+# (el callejón sin salida a evitar). Antes solo `done` aprendía; el operador
+# puede seguir estrechando el set vía la platform setting.
+_DEFAULT_ELIGIBLE_STATUSES: frozenset[str] = frozenset(
+    {
+        ExecutionStatus.DONE.value,
+        ExecutionStatus.FAILED.value,
+        ExecutionStatus.ABORTED.value,
+        "needs_human_review",
+    }
+)
 
 
 class MemorizeSkipReason(enum.StrEnum):
@@ -55,7 +66,16 @@ class MemorizeSkipReason(enum.StrEnum):
     SKIP_PRIVATE = "skip_private"  # agente IA con scope private (sin owner user)
     NO_TEAM = "no_team"  # scope team_shared pero el proyecto no tiene equipo
     NO_SCOPE = "no_scope"  # memory_scope NULL / no canónico (opt-out)
-    LLM_EMPTY = "llm_empty"  # el LLM no destiló ningún candidato
+    # F2.3 (auditoría 2026-07-02): llm_empty conflataba tres causas distintas y
+    # hacía indiagnosticables casos como el run done 019f1dcd. Ahora se separan:
+    LLM_EMPTY = "llm_empty"  # el LLM decidió que no hay nada que recordar (legítimo)
+    LLM_ERROR = "llm_error"  # la llamada al LLM falló (provider caído/timeout)
+    LLM_UNPARSEABLE = "llm_unparseable"  # el LLM respondió pero sin JSON parseable
+    # AUD16-21: el run lo cerró un finalizador ADMINISTRATIVO (sweeper de
+    # zombis, supersede por re-entrega, cancel, soft-timeout) — ese camino no
+    # pasa por el memorizer y antes dejaba la columna NULL (indistinguible de
+    # un bug del trigger).
+    ADMINISTRATIVE_FINALIZE = "administrative_finalize"
 
 
 @dataclass(frozen=True)

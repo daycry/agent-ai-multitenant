@@ -59,7 +59,12 @@ import {
   GitConfigSection,
   type GitConfig,
   type GitPolicies,
+  type LastGitSync,
 } from "@/components/projects/git-config-section";
+import { PreviewLauncher } from "@/components/projects/preview-launcher";
+import { ProjectGovernanceSection } from "@/components/projects/governance-section";
+import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
+import { RuntimeServicesSection } from "@/components/projects/runtime-services-section";
 import { ApiError, apiFetch } from "@/lib/api";
 
 type ProjectStatus = "active" | "paused" | "archived";
@@ -79,6 +84,18 @@ interface Project {
   git_config: GitConfig | null;
   // worker_config.git_policies guarda las políticas del flujo git del plan (ADR 0072).
   worker_config?: Record<string, unknown> | null;
+  // repository_config.review_image/review_port: app-preview de validación humana (ADR 0063).
+  repository_config?: Record<string, unknown> | null;
+  // task_wf_35: límites y gobierno. Los edita `ProjectGovernanceSection`, que
+  // recibe el proyecto entero y toma solo sus claves (`GovernanceValue`).
+  execution_budgets?: Record<string, unknown> | null;
+  guardrails_config?: Record<string, unknown> | null;
+  human_task_review_mode?: string | null;
+  budget_amount?: string | number | null;
+  budget_currency?: string | null;
+  budget_period?: string | null;
+  budget_period_start_day?: number | null;
+  budget_period_length_days?: number | null;
 }
 
 interface ProjectUpdate {
@@ -325,7 +342,35 @@ export default function ProjectHubPage() {
               policies={
                 (project.worker_config?.["git_policies"] as GitPolicies | undefined) ?? null
               }
+              lastSync={
+                (project.repository_config?.["last_git_sync"] as LastGitSync | undefined) ?? null
+              }
             />
+          </div>
+
+          {/* hallazgo #4: imagen/puerto del app-preview de validación humana (ADR 0063). */}
+          <div className="mb-6">
+            <ReviewPreviewSection projectId={projectId} value={project.repository_config ?? null} />
+          </div>
+
+          {/* ADR 0129: servicios de respaldo + env + imagen de runtime custom. */}
+          <div className="mb-6">
+            <RuntimeServicesSection
+              projectId={projectId}
+              value={project.repository_config ?? null}
+            />
+          </div>
+
+          {/* task_wf_35: presupuestos (por run y de gasto), modo de revisión de
+              tareas humanas y guardrails del proyecto — cuatro ajustes que el
+              backend acepta y ninguna pantalla ofrecía. */}
+          <div className="mb-6">
+            <ProjectGovernanceSection projectId={projectId} value={project} />
+          </div>
+
+          {/* ADR 0130: levantar la app del proyecto (rama por defecto) en preview 24h. */}
+          <div className="mb-6">
+            <PreviewLauncher scope="projects" id={projectId} title="Preview de la app (proyecto)" />
           </div>
 
           {/* Sub-sections grid */}

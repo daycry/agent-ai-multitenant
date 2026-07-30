@@ -58,28 +58,38 @@ ROLE_DEFAULT_SKILLS: dict[str, tuple[str, ...]] = {
 }
 
 
-# rol -> slugs de tool del catálogo `builtin_tools.py`. Todo rol lee (read/list/
-# search + semantic-search); los que producen código además escriben/ejecutan.
-_READ = ("read-file", "list-files", "search-code", "semantic-search")
+# rol -> slugs de tool del catálogo `builtin_tools.py`. Todo rol lee (read/list
+# + semantic-search); los que producen código además escriben/ejecutan.
+#
+# PROJ-08/F3 (auditoría 2026-07-17): `search-code`, `apply-patch` y
+# `summarize-text` se RETIRAN — no están cableadas en el runtime
+# (RUNTIME_WIRED_TOOL_NAMES): el agente las veía, las invocaba y fallaban
+# siempre, quemando iteraciones. El grep vive dentro de shell-exec/stack_exec;
+# el patching es write-file; resumir es el propio LLM.
+# F5 de registry-egress-followups (2026-07-28): los cuatro `run-*` se RETIRAN de
+# los defaults y se sustituyen por `stack-exec`. No es un recorte de capacidades:
+# `run-*` son `docker_command` y `DockerCommandTool` falla SIEMPRE dentro del
+# sandbox por diseño (la imagen del agent-runtime no lleva cliente Docker ni
+# socket), así que lo que los roles tenían concedido era una promesa falsa —
+# 62 grants vivos, un turno quemado por invocación.
+#
+# `stack-exec` (ADR 0093) es la vía que sí ejecuta: el worker corre el toolchain
+# del proyecto en su runtime-template. Un rol que producía código sin ella se
+# quedaría de verdad sin forma de correr tests o linters, y por eso se añade a
+# todos los que la necesitan en vez de dejarlos pelados.
+_READ = ("read-file", "list-files", "semantic-search")
 ROLE_DEFAULT_TOOLS: dict[str, tuple[str, ...]] = {
-    "project_manager": (*_READ, "summarize-text"),
-    "architect": (*_READ, "write-file", "apply-patch", "summarize-text"),
-    "backend_dev": (
-        *_READ,
-        "write-file",
-        "apply-patch",
-        "run-pytest",
-        "run-lint",
-        "run-typecheck",
-    ),
-    "frontend_dev": (*_READ, "write-file", "apply-patch", "run-lint", "run-build"),
-    "qa": (*_READ, "write-file", "apply-patch", "run-pytest", "run-lint"),
-    "reviewer": (*_READ, "run-lint", "run-typecheck"),
-    "devops": (*_READ, "write-file", "apply-patch", "run-build", "shell-exec"),
-    "security": (*_READ, "run-lint"),
-    "specialist": (*_READ, "write-file", "apply-patch", "http-get", "summarize-text"),
-    "researcher": (*_READ, "http-get", "summarize-text"),
-    "technical_writer": (*_READ, "write-file", "apply-patch", "summarize-text"),
+    "project_manager": _READ,
+    "architect": (*_READ, "write-file"),
+    "backend_dev": (*_READ, "write-file", "stack-exec"),
+    "frontend_dev": (*_READ, "write-file", "stack-exec"),
+    "qa": (*_READ, "write-file", "stack-exec"),
+    "reviewer": (*_READ, "stack-exec"),
+    "devops": (*_READ, "write-file", "stack-exec", "shell-exec"),
+    "security": (*_READ, "stack-exec"),
+    "specialist": (*_READ, "write-file", "http-get"),
+    "researcher": (*_READ, "http-get"),
+    "technical_writer": (*_READ, "write-file"),
 }
 
 

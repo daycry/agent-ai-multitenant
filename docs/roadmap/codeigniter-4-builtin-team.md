@@ -1,10 +1,10 @@
 ---
 plan_id: codeigniter-4-builtin-team
 title: Equipo built-in CodeIgniter 4 (correctivo — migración del seed demo a catálogo de fábrica)
-status: pending_human_validation
+status: completed
 blocking_plan: []
 started_at: 2026-06-01
-completed_at: null
+completed_at: 2026-06-08
 estimated_duration_calendar: 3-4 días
 estimated_effort_person_days: 3
 estimated_cost_human_eur: 1.200 € – 2.000 €
@@ -21,6 +21,12 @@ docs_language: es
 > built-in de fábrica** servido por el runner del catálogo
 > (`python -m api_server.seeds`). Lleva un `plan_id` descriptivo y no un número
 > de fase; no entra en el gate de fases del roadmap.
+>
+> **Estado (2026-07-06, auditoría de roadmap):** `status` corregido de
+> `pending_human_validation` a `completed` — PR #33 fusionado a `master` el 2026-06-08
+> (`f3c92b26 Merge pull request #33 from daycry/plan/codeigniter-4-builtin-team`); el seed
+> `apps/api-server/src/api_server/seeds/ci4_team.py` está en `master`. Quedó sin actualizar tanto
+> en la rama de origen como en `master` tras el merge.
 
 ## Cabecera
 

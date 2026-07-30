@@ -87,6 +87,22 @@ se acepta para entregar valor pronto sin sobre-construir.
 | Enum migrado deja categorías huérfanas                                    | Baja  | Bajo    | Migración reversible + saneo del seed a la lista canónica       |
 | Si se elige B, el `skill_match_score` del orquestador se queda sin insumo | Baja  | Bajo    | Documentar el impacto en el ADR al aceptar B                    |
 
+## Actualización 2026-07-23 — categoría `atlassian` (ADR 0127/0128)
+
+El enum cerrado se amplía de 6 a **7** con un séptimo valor, `atlassian`. A
+diferencia de los otros seis (dominios de trabajo: backend/frontend/devops/qa/
+research/docs), `atlassian` es un bucket de **integración**: agrupa 4 skills
+builtin que enseñan a los agentes a usar el MCP de Atlassian del proyecto
+(Jira + Confluence) — `atlassian-jira-task-tracking`, `atlassian-jira-review-notes`,
+`atlassian-confluence-docs`, `atlassian-jira-planning-context`. No cablean nombres
+de tool namespaced (el operador elige el nombre del server) ni identificadores
+(llegan por el plan), son idempotentes y degradan con gracia si el MCP no está.
+Las tools llegan como capacidad del proyecto en runtime (ADR 0128), así que estas
+skills llevan `required_tools` vacío. Sync en cuatro puntos (igual que la
+introducción del CHECK): `SkillCategory` (`domain.py`), migración
+`0117_skills_atlassian_category` (reconstruye `ck_skills_category`, reversible),
+mapas `CATEGORY_LABEL`/`ICON`/`ORDER` del frontend, y el seed `builtin_skills.py`.
+
 ## Trazabilidad
 
 - Roadmap: `docs/roadmap/06.18-tools-overhaul.md` (`task_06_18_13`); fork en `06.17` (`task_06_17_12`).

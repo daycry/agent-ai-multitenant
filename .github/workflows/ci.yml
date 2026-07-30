@@ -211,7 +211,38 @@ jobs:
         # value the unit suite reaches today over these packages; raise over time
         # toward conventions.md (70%/80%). Never lower. See [tool.coverage] in
         # pyproject.toml.
-        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=19
+        run: pytest tests/unit -v --cov=api_server --cov=workers --cov=orchestrator --cov-report=term --cov-fail-under=31
+
+      # agent-runtime suite (hallazgo #6, PASO 0): estos tests viven FUERA de
+      # tests/unit (el runtime es un paquete Docker aparte, ya instalado editable
+      # arriba) y clavaban el contrato de review (tag <verdict>, wire-format) y las
+      # señales de robustez F32 / truncado del claude_sdk (#10c) — pero el job no
+      # los corría, así que quedaban sin protección. Sin cobertura (miden el
+      # paquete agent_runtime, fuera del ratchet de api_server/workers/orchestrator).
+      - name: pytest agent-runtime suite
+        if: steps.detect.outputs.has_tests == 'true'
+        run: pytest docker/agent-runtimes/agent-runtime/tests -v
+
+      # browser-runtime suite (ADR 0080): la lógica de la sesión de navegador es
+      # PURA (catálogo cerrado de pasos, anti-SSRF, presupuestos, saneo de la
+      # salida) y se testea SIN Chromium — el navegador entra por un driver
+      # inyectable. PYTHONPATH al paquete de la imagen; sin cobertura (mide
+      # browser_runtime, fuera del ratchet). Estos controles de seguridad DEBEN
+      # protegerse en CI: es la mayor superficie de ataque nueva del sistema.
+      - name: pytest browser-runtime suite
+        if: steps.detect.outputs.has_tests == 'true'
+        run: pytest docker/agent-runtimes/browser-runtime/tests -v
+        env:
+          PYTHONPATH: docker/agent-runtimes/browser-runtime
+
+      # shared-llm suite: la capa de proveedores LLM (ADR 0021) vive en su propio
+      # paquete y sus tests quedaban FUERA de CI (hueco sistémico). El ADR 0097
+      # (sesión SDK persistente = mitad del hilo conversacional del 0110) añadió
+      # tests aquí que no tenían gate. Sin cobertura del ratchet (mide shared_llm).
+      # El test que necesita el claude-agent-sdk real se auto-salta si no está.
+      - name: pytest shared-llm suite
+        if: steps.detect.outputs.has_tests == 'true'
+        run: pytest packages/shared-llm/tests -v
 
       # Static hardening + documentation invariants (Plan prod-02 task_05,
       # findings tests-4). Both suites are static (no stack): tests/security
@@ -344,6 +375,21 @@ jobs:
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Build browser-runtime:v1 (ADR 0080). Como el agent-runtime, el worker lo
+      # lanza efímero en producción, así que su Dockerfile DEBE construir en CI
+      # o el operador descubriría en producción que la imagen no existe. Contexto
+      # raíz (el Dockerfile COPYa docker/agent-runtimes/browser-runtime/browser_runtime).
+      - name: Build browser-runtime:v1 (cortex browser image, ADR 0080)
+        if: steps.detect.outputs.has_compose == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/agent-runtimes/browser-runtime/Dockerfile
+          tags: browser-runtime:v1
+          load: true
+          cache-from: type=gha,scope=browser-runtime
+          cache-to: type=gha,mode=max,scope=browser-runtime
 
       # Cross-tenant isolation gate (Plan 06.14 task_06_14_16, tests-quality-6).
       # CLAUDE.md makes cross-tenant denial tests mandatory; under pytest 8.x a

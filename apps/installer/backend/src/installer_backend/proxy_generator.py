@@ -100,10 +100,14 @@ def generate_caddyfile(cfg: InstallerConfig) -> str:
 \tencode zstd gzip
 
 \t# 1) API pública versionada — SIN strip (ya nace en /api). DEBE ir antes del
-\t#    handle_path genérico o /api/v1/* se rompería a /v1/*. Se incluye la ruta
-\t#    desnuda `/api/v1` (sin sufijo) además de `/api/v1/*` para que tampoco caiga
-\t#    al strip genérico.
-\thandle /api/v1 /api/v1/* {{
+\t#    handle_path genérico o /api/v1/* se rompería a /v1/*. Matcher NOMBRADO:
+\t#    `handle` solo acepta UN matcher — dos paths inline (`handle /api/v1
+\t#    /api/v1/*`) son un ERROR de parseo de Caddyfile (cazado con `caddy
+\t#    validate` en la verificación del instalador, 2026-07-18: el proxy no
+\t#    habría arrancado nunca en producción). El matcher cubre la ruta desnuda
+\t#    `/api/v1` y `/api/v1/*` para que ninguna caiga al strip genérico.
+\t@apiv1 path /api/v1 /api/v1/*
+\thandle @apiv1 {{
 \t\treverse_proxy api-server:8000
 \t}}
 

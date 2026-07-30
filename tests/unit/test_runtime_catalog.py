@@ -31,10 +31,11 @@ pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILES_DIR = REPO_ROOT / "docker" / "agent-runtimes"
 
-# The plan-02 agent-runtime image is NOT a test-runtime template —
-# it's the agent loop container. Exclude it from the catalog-vs-fs
-# parity check.
-EXCLUDED_IMAGE_DIRS = frozenset({"agent-runtime"})
+# Dos imágenes de `docker/agent-runtimes/` NO son test-runtime templates y por
+# eso no están en el catálogo: el `agent-runtime` (el contenedor del bucle del
+# agente, plan-02) y el `browser-runtime` (la sesión de navegador sandboxeada del
+# córtex, ADR 0080 — la lanza el worker por sesión aprobada, no un plan de tests).
+EXCLUDED_IMAGE_DIRS = frozenset({"agent-runtime", "browser-runtime"})
 
 # Closed set listed in Plan 06 task_06_02. Test will fail if the
 # catalog drifts from this list.

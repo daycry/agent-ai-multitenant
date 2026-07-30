@@ -156,6 +156,11 @@ class BackupConfig:
     volumes: tuple[str, ...]
     volumes_mount_root: Path
     retention_days: int
+    # Bind mounts (rutas absolutas, NO named volumes) que también entran en el
+    # bundle. Auditoría 2026-07-02 (F0.4): /data/agent-platform (bare repos +
+    # worktrees de los agentes) no lo cubría ningún backup y un engine-restart
+    # de Docker Desktop lo arrasó perdiendo el trabajo comiteado de 8 tareas.
+    bind_paths: tuple[str, ...] = ()
     # Optional at-rest encryption (task_12_02). When True the engine expects an
     # injected BackupEncryptor; the Vault key NAME (not value) is here so the
     # engine can build a default encryptor from settings.
@@ -174,6 +179,7 @@ class BackupConfig:
             volumes=tuple(settings.backup_volumes),
             volumes_mount_root=Path(settings.backup_volumes_mount_root),
             retention_days=int(settings.backup_retention_days),
+            bind_paths=tuple(settings.backup_bind_paths),
             encryption_enabled=bool(settings.backup_encryption_enabled),
             encryption_vault_key=str(settings.backup_encryption_vault_key),
         )
@@ -184,11 +190,11 @@ class ArtifactRecord:
     """One captured artifact in the manifest."""
 
     name: str
-    kind: str  # "pg_dump" | "volume_tar"
+    kind: str  # "pg_dump" | "volume_tar" | "bind_tar"
     path: str  # relative to the bundle directory
     size_bytes: int
     sha256: str
-    # For a volume tar, which docker volume it came from.
+    # For a volume/bind tar, which docker volume or host path it came from.
     source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -279,6 +285,23 @@ def _dir_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
+def _bind_tar_excludes(bind_path: str, backup_root: Path) -> list[str]:
+    """``--exclude`` args para el tar de un bind (prod-04 A7).
+
+    Si ``backup_root`` está DENTRO de ``bind_path``, devuelve un exclude anclado
+    a la raíz archivada (``./<rel>``) para que el bundle no se auto-incluya
+    recursivamente. Fuera del bind → lista vacía (sin exclusión espuria).
+    Determinista y puro; tolerante a rutas no relativas."""
+    try:
+        rel = Path(backup_root).resolve().relative_to(Path(bind_path).resolve())
+    except (ValueError, OSError):
+        return []
+    rel_posix = rel.as_posix()
+    if not rel_posix or rel_posix == ".":
+        return []
+    return [f"--exclude=./{rel_posix}"]
+
+
 class BackupEngine:
     """Orchestrates one full-backup run behind an injectable command runner."""
 
@@ -325,6 +348,8 @@ class BackupEngine:
             artifacts.append(self._dump_database(bundle_dir))
             for volume in self._config.volumes:
                 artifacts.append(self._tar_volume(bundle_dir, volume))
+            for bind_path in self._config.bind_paths:
+                artifacts.append(self._tar_bind_path(bundle_dir, bind_path))
             encrypted = False
             if self._config.encryption_enabled:
                 artifacts = self._encrypt_bundle(bundle_dir, artifacts)
@@ -400,8 +425,12 @@ class BackupEngine:
         archive_name = f"{volume}.tar.gz"
         archive_path = bundle_dir / archive_name
         source_dir = self._config.volumes_mount_root / volume / "_data"
+        # `--create` es OBLIGATORIO en GNU tar («You must specify one of the
+        # '-Acdtrux' options»); faltaba desde Plan 12 y el runner fake de los
+        # tests nunca lo detectó — el primer backup real (2026-07-03) reventó aquí.
         args = [
             "tar",
+            "--create",
             "--gzip",
             f"--directory={source_dir}",
             f"--file={archive_path}",
@@ -422,6 +451,54 @@ class BackupEngine:
             size_bytes=archive_path.stat().st_size,
             sha256=_checksum_file(archive_path),
             source=volume,
+        )
+
+    def _tar_bind_path(self, bundle_dir: Path, bind_path: str) -> ArtifactRecord:
+        """tar + gzip un bind mount (ruta absoluta del host) dentro del bundle.
+
+        Auditoría 2026-07-02 (F0.4): los bare repos + worktrees de los agentes
+        viven en el bind /data/agent-platform (no un named volume) y quedaban
+        fuera del backup. El nombre del archivo es un slug de la ruta para que
+        dos binds distintos no colisionen. Mismo contrato clean-failure que los
+        volúmenes: si tar falla, el run entero falla.
+        """
+        slug = "-".join(part for part in Path(bind_path).parts if part not in ("/", "\\")) or "root"
+        slug = slug.replace(":", "").replace("\\", "-").replace("/", "-")
+        archive_name = f"bind-{slug}.tar.gz"
+        archive_path = bundle_dir / archive_name
+        args = [
+            "tar",
+            "--create",
+            "--gzip",
+            f"--directory={bind_path}",
+            f"--file={archive_path}",
+            # prod-04 A7: excluye el backup_root cuando vive DENTRO del bind_path
+            # (config por defecto: bind /data/agent-platform ⊇ backups). Sin esto
+            # cada backup se auto-incluía recursivamente (todos los bundles previos
+            # + los artefactos del run) → crecimiento cuadrático y/o rc≠0 de tar
+            # ("file changed as we read it"). Anclado con '.' relativo al directorio
+            # archivado. GNU tar ya excluye su propio --file por inode, pero NO el
+            # resto del árbol de backups.
+            *_bind_tar_excludes(bind_path, self._config.backup_root),
+            ".",
+        ]
+        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+        if result.returncode != 0:
+            raise BackupError(
+                f"tar of bind path {bind_path!r} failed (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        if not archive_path.exists():
+            raise BackupError(
+                f"tar of bind path {bind_path!r} reported success but produced no archive"
+            )
+        return ArtifactRecord(
+            name=archive_name,
+            kind="bind_tar",
+            path=archive_name,
+            size_bytes=archive_path.stat().st_size,
+            sha256=_checksum_file(archive_path),
+            source=bind_path,
         )
 
     def _encrypt_bundle(
@@ -450,6 +527,7 @@ class BackupEngine:
         member_names = [a.path for a in artifacts]
         args = [
             "tar",
+            "--create",
             f"--directory={bundle_dir}",
             f"--file={archive_path}",
             *member_names,

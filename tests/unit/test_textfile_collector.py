@@ -52,6 +52,26 @@ def _patch_logger(monkeypatch: pytest.MonkeyPatch) -> _RecordingLogger:
     return rec
 
 
+def test_published_file_is_world_readable(
+    tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-07-03: `mkstemp` crea el temp con modo 0600 y `os.replace` lo
+    conserva — un `.prom` publicado por root (workers-backup) quedaba ilegible
+    para node-exporter (uid nobody): «permission denied» en el collector y la
+    métrica jamás llegaba a Prometheus. El writer debe publicar 0644."""
+    import os
+    import stat
+
+    _patch_logger(monkeypatch)
+    target = tmp_path / "collector" / "m.prom"  # type: ignore[operator]
+
+    assert write_textfile_metric(target, lambda: "x 1\n", event_prefix="t") is True
+
+    mode = stat.S_IMODE(os.stat(target).st_mode)
+    # En Windows los bits POSIX son aproximados; lo esencial es lectura-para-todos.
+    assert mode & stat.S_IROTH, f"published .prom not world-readable (mode {oct(mode)})"
+
+
 def test_writes_when_collector_dir_is_creatable(
     tmp_path: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:

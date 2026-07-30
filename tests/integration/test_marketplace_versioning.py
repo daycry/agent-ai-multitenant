@@ -280,12 +280,17 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         # Three versions of the SAME logical listing (same source+name+kind,
         # global tenant). trust_level verified so the signature gate runs.
         await conn.execute(
+            # Manifest materializable (remediación 2026-07-17): un skill
+            # listing sin prompt_fragment ya no instala (422).
             "INSERT INTO marketplace_listings"
-            " (id, source_id, tenant_id, kind, name, version, trust_level, signature)"
+            " (id, source_id, tenant_id, kind, name, version, trust_level, signature, manifest)"
             " VALUES"
-            " ($1, $4, NULL, 'skill', 'evolving-skill', '1.0.0', 'verified', 'sig-placeholder'),"
-            " ($2, $4, NULL, 'skill', 'evolving-skill', '1.1.0', 'verified', 'sig-placeholder'),"
-            " ($3, $4, NULL, 'skill', 'evolving-skill', '2.0.0', 'verified', 'sig-placeholder')",
+            " ($1, $4, NULL, 'skill', 'evolving-skill', '1.0.0', 'verified', 'sig-placeholder',"
+            '  \'{"prompt_fragment": "usa el estilo v1"}\'::jsonb),'
+            " ($2, $4, NULL, 'skill', 'evolving-skill', '1.1.0', 'verified', 'sig-placeholder',"
+            '  \'{"prompt_fragment": "usa el estilo v1.1"}\'::jsonb),'
+            " ($3, $4, NULL, 'skill', 'evolving-skill', '2.0.0', 'verified', 'sig-placeholder',"
+            '  \'{"prompt_fragment": "usa el estilo v2"}\'::jsonb)',
             ids["v1_0_0"],
             ids["v1_1_0"],
             ids["v2_0_0"],

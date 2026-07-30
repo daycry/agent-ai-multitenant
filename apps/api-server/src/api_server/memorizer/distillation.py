@@ -78,7 +78,10 @@ _SYSTEM_PROMPT = (
     "(people, projects, components, technologies, files), e.g. "
     '["PostgreSQL", "RLS", "agent-runtime"]. Used to find this memory later.\n'
     "Return between 0 and 5 items. Return an empty array if the "
-    "execution produced nothing worth remembering."
+    "execution produced nothing worth remembering.\n"
+    "If the execution FAILED or was aborted, focus on the LESSON: the root "
+    "cause, the dead end to avoid, or the precondition that was missing — "
+    'prefer type "semantic" for those.'
 )
 
 
@@ -121,6 +124,55 @@ def _user_prompt(*, execution: Mapping[str, Any], agent: Mapping[str, Any]) -> s
     )
 
 
+@dataclass(frozen=True)
+class DistillationResult:
+    """El destilado + su CAUSA cuando viene vacío (F2.3, auditoría 2026-07-02).
+
+    ``llm_empty`` conflataba tres situaciones muy distintas — fallo de la
+    llamada LLM, respuesta no parseable y "no hay nada que recordar" (la única
+    legítima) — haciendo indiagnosticables casos como el run done 019f1dcd.
+
+    ``cause``: ``ok`` | ``llm_empty`` | ``llm_unparseable`` | ``llm_error``.
+    """
+
+    candidates: list[MemoryCandidate]
+    cause: str
+
+
+async def distil_execution_result(
+    *,
+    execution: Mapping[str, Any],
+    agent: Mapping[str, Any],
+    llm: LLMProvider,
+    model: str | None = None,
+) -> DistillationResult:
+    """Como :func:`distil_execution` pero con la causa separada (F2.3).
+
+    El worker persiste la causa como ``memorize_skip_reason`` cuando no hay
+    candidatos, así el operador distingue "provider caído" de "modelo que no
+    sigue el formato" de "nada que recordar".
+    """
+    messages: Sequence[Message] = [
+        Message(role="system", content=_SYSTEM_PROMPT),
+        Message(role="user", content=_user_prompt(execution=execution, agent=agent)),
+    ]
+    try:
+        response = await llm.complete(
+            messages,
+            model=model,
+            max_tokens=_DEFAULT_MAX_TOKENS,
+            temperature=0.2,
+        )
+    except Exception as exc:  # the LLM call failed — log and move on
+        logger.warning("memorizer.llm_call_failed", error=str(exc))
+        return DistillationResult(candidates=[], cause="llm_error")
+
+    candidates, parse_cause = _parse_response_result(response.content)
+    if candidates:
+        return DistillationResult(candidates=candidates, cause="ok")
+    return DistillationResult(candidates=[], cause=parse_cause)
+
+
 async def distil_execution(
     *,
     execution: Mapping[str, Any],
@@ -143,22 +195,8 @@ async def distil_execution(
     Returns:
         A list of 0..`MAX_CANDIDATES_PER_EXECUTION` candidates.
     """
-    messages: Sequence[Message] = [
-        Message(role="system", content=_SYSTEM_PROMPT),
-        Message(role="user", content=_user_prompt(execution=execution, agent=agent)),
-    ]
-    try:
-        response = await llm.complete(
-            messages,
-            model=model,
-            max_tokens=_DEFAULT_MAX_TOKENS,
-            temperature=0.2,
-        )
-    except Exception as exc:  # the LLM call failed — log and move on
-        logger.warning("memorizer.llm_call_failed", error=str(exc))
-        return []
-
-    return _parse_response(response.content)
+    result = await distil_execution_result(execution=execution, agent=agent, llm=llm, model=model)
+    return result.candidates
 
 
 _HUMAN_SYSTEM_PROMPT = (
@@ -272,12 +310,20 @@ async def distil_human_work_session(
 
 
 def _parse_response(text: str) -> list[MemoryCandidate]:
-    """Best-effort JSON extraction.
+    """Best-effort JSON extraction (compat). Ver `_parse_response_result`."""
+    return _parse_response_result(text)[0]
+
+
+def _parse_response_result(text: str) -> tuple[list[MemoryCandidate], str]:
+    """Best-effort JSON extraction, con causa (F2.3).
 
     Strategies, in order:
       1. parse the whole response as JSON;
       2. find the first ``[...]`` block and parse that;
-      3. give up and return [].
+      3. give up → ``([], "llm_unparseable")``.
+
+    Un array parseado sin candidatos válidos → ``([], "llm_empty")`` (la causa
+    legítima: el LLM decidió que no hay nada que recordar).
     """
     candidates_raw = _try_parse_json(text)
     if candidates_raw is None:
@@ -286,7 +332,7 @@ def _parse_response(text: str) -> list[MemoryCandidate]:
             candidates_raw = _try_parse_json(match.group(0))
     if not isinstance(candidates_raw, list):
         logger.info("memorizer.parse_failed", preview=text[:200])
-        return []
+        return [], "llm_unparseable"
 
     out: list[MemoryCandidate] = []
     for raw in candidates_raw:
@@ -320,7 +366,7 @@ def _parse_response(text: str) -> list[MemoryCandidate]:
                 entities=clean_entities,
             )
         )
-    return out
+    return out, "llm_empty" if not out else "ok"
 
 
 def _try_parse_json(text: str) -> Any:
@@ -333,7 +379,9 @@ def _try_parse_json(text: str) -> Any:
 __all__ = [
     "MAX_CANDIDATES_PER_EXECUTION",
     "MAX_CONTENT_CHARS",
+    "DistillationResult",
     "MemoryCandidate",
     "distil_execution",
+    "distil_execution_result",
     "distil_human_work_session",
 ]

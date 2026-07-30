@@ -88,22 +88,31 @@ def _make_query_then_raise(*messages: Any, exc: Exception):  # type: ignore[no-u
     return _q
 
 
-def test_api_key_is_exported_to_anthropic_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """API-key mode: the key lands in ANTHROPIC_API_KEY so the SDK authenticates."""
+def test_the_api_key_is_kept_off_the_process_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Modo API key: la clave NO se exporta al entorno del proceso.
+
+    Este test afirmaba lo contrario —que la clave aterrizaba en
+    `ANTHROPIC_API_KEY`— y con ello **fijaba el defecto** que el ADR 0076 tenía
+    anotado como prerequisito de seguridad. La credencial se entrega ahora por
+    llamada, vía `ClaudeAgentOptions.env`; el detalle y el escenario de fuga
+    entre proveedores están en `test_claude_agent_credential_isolation.py`.
+    """
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     ClaudeAgentProvider(api_key="sk-ant-test-DO-NOT-LEAK", query_fn=_make_query())
-    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-test-DO-NOT-LEAK"
+    assert os.environ.get("ANTHROPIC_API_KEY") is None
 
 
-def test_subscription_token_is_exported_to_claude_code_oauth_env(
+def test_the_subscription_token_is_kept_off_the_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Subscription Pro/Max mode (ADR 0063): a `claude setup-token` OAuth token
-    lands in CLAUDE_CODE_OAUTH_TOKEN — the env var the Claude Agent SDK reads to
-    authenticate against a subscription WITHOUT an API key."""
+    """Modo suscripción Pro/Max (ADR 0063): el token tampoco toca el entorno.
+
+    Mismo cambio y mismo motivo que el de la API key: antes se exportaba a
+    `CLAUDE_CODE_OAUTH_TOKEN` de forma global y permanente.
+    """
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     ClaudeAgentProvider(oauth_token="sk-ant-oat-test-DO-NOT-LEAK", query_fn=_make_query())
-    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-test-DO-NOT-LEAK"
+    assert os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") is None
 
 
 @pytest.mark.asyncio
@@ -326,7 +335,7 @@ def test_build_tool_options_keeps_native_allowed_tools() -> None:
     interceptor `can_use_tool` captura. Requiere el SDK real (opcional)."""
     pytest.importorskip("claude_agent_sdk")
     p = ClaudeAgentProvider(default_model="claude-sonnet-4-5")
-    options = p._build_tool_options(  # type: ignore[attr-defined]
+    options = p._build_tool_options(
         system="s",
         model="claude-sonnet-4-5",
         specs=[{"name": "cortex_remember", "description": "x", "parameters": {}}],

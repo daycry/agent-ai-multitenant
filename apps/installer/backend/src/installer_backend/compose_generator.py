@@ -51,6 +51,7 @@ references. Nothing here is logged.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 import yaml
@@ -71,7 +72,7 @@ IMAGE_MINIO = "minio/minio:RELEASE.2024-11-07T00-52-20Z"
 IMAGE_VAULT = "hashicorp/vault:1.17"
 IMAGE_CLAMAV = "clamav/clamav:1.4"
 IMAGE_DOCLING = "ghcr.io/docling-project/docling-serve:v1.20.0"
-IMAGE_OLLAMA = "ollama/ollama:0.5.7"
+IMAGE_OLLAMA = "ollama/ollama:0.31.1"
 IMAGE_PROMETHEUS = "prom/prometheus:v2.54.1"
 IMAGE_GRAFANA = "grafana/grafana:11.2.0"
 IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
@@ -114,12 +115,14 @@ CORE_SERVICES: tuple[str, ...] = (
     "clamav",
     "docling-serve",
     "egress-proxy",
+    "registry-proxy",
     "docker-socket-proxy",
     "migrations",
     "api-server",
     "orchestrator",
     "workers",
     "workers-privileged",
+    "cortex-beat",
     "notification-dispatcher",
     "admin-panel",
     "caddy",
@@ -466,6 +469,30 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     return svc
 
 
+def _registry_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    # ADR 0094: egress allowlisted de los runtime-templates a los registries de
+    # paquetes públicos. SOLO en agentic-net (egress a internet); NUNCA en
+    # agentic-agents — el agent-runtime no debe alcanzar github/pypi/etc. El
+    # worker lo conecta a los bridges efímeros per-task de los runtimes.
+    svc: dict[str, Any] = {
+        "build": "./registry-proxy",
+        "container_name": "agentic-registry-proxy",
+        "healthcheck": {
+            "test": [
+                "CMD-SHELL",
+                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    svc["cap_add"] = list(_INFRA_CAPS)  # tinyproxy setgid/setuid drop on start
+    return svc
+
+
 def _docker_socket_proxy_service(
     cfg: InstallerConfig,  # noqa: ARG001 — uniform builder signature
     *,
@@ -579,6 +606,10 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # is NOT here: it is optional (default None) and injected by the Vault
             # bootstrap (task 15_09), not the .env.
             "API_SERVER_JWT_SECRET": _env_ref("API_SERVER_JWT_SECRET", None, prod=prod),
+            # NOTIF-2: Bearer del ingest de Alertmanager (fail-closed sin el).
+            "API_SERVER_ALERTS_INGEST_TOKEN": _env_ref(
+                "API_SERVER_ALERTS_INGEST_TOKEN", None, prod=prod
+            ),
             "API_SERVER_MINIO_ACCESS_KEY": _env_ref("API_SERVER_MINIO_ACCESS_KEY", None, prod=prod),
             "API_SERVER_MINIO_SECRET_KEY": _env_ref("API_SERVER_MINIO_SECRET_KEY", None, prod=prod),
             "API_SERVER_SSO_ENCRYPTION_KEY": _env_ref(
@@ -668,7 +699,11 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         {
             "WORKERS_BROKER_URL": "redis://redis:6379/1",
             "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
-            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            # prod-01 A10 (auditoría 2026-07-06): DB 0, la MISMA que lee el WS del
+            # api-server (API_SERVER_REDIS_URL) y el orchestrator — los streams
+            # exec:{id} del worker se publican aquí. Con /3 (sin consumidor) el
+            # streaming en vivo de logs quedaba roto (manuals.yml ya lo corrigió).
+            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/0",
             "WORKERS_DATA_ROOT": cfg.storage.data_root,
             # Docker API via the least-privilege proxy, never the raw socket
             # (task_09, ADR 0060). DOCKER_HOST is read by the docker SDK itself,
@@ -720,7 +755,13 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
         "healthcheck": _healthcheck(
-            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
+            # G-06: ping a ESTE nodo — sin -d es un broadcast al broker
+            # compartido y contesta cualquier worker vivo (falso healthy). El
+            # timeout de 30s cubre el arranque de celery bajo carga (el default
+            # de 10s producía unhealthy crónico sin fallo real).
+            "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
+            timeout="30s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -734,21 +775,54 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     return svc
 
 
+#: Los named volumes que el backup taréa (prod-01 A9 / prod-04). El worker corre
+#: `tar` sobre sus _data (owned uid 999/100, modo 0700) → necesita root + el mount
+#: de /var/lib/docker/volumes. Los nombres llevan el prefijo del proyecto compose.
+_BACKUP_VOLUME_NAMES = (
+    "agentic-platform_minio_data",
+    "agentic-platform_redis_data",
+    "agentic-platform_vault_data",
+    "agentic-platform-agent-data",
+)
+
+
 def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     """Separate lane that drains ONLY the ``privileged`` queue (backups, key
-    rotation). Singleton (replicas=1) — its periodic jobs must not double-run —
-    and meant to carry the strictest sandbox profile (set in task_prod01_10).
-    Same image + WORKERS_* env as the generic pool; different queue + scale."""
+    rotation). Singleton (replicas=1) — its periodic jobs must not double-run.
+    Same image + WORKERS_* env as the generic pool; different queue + scale.
+
+    prod-01 A9 (auditoría 2026-07-06): esta lane ejecuta el volume-tar del
+    backup, que lee los ``_data`` de los named volumes (redis uid 999, vault uid
+    100) a 0700 → necesita correr como ROOT (``WORKERS_RUN_AS_ROOT=1``; el
+    entrypoint self-heal baja a 1000 salvo esta bandera) y bind-montear
+    ``/var/lib/docker/volumes``. Sin esto el volume-tar daba EACCES y el backup
+    fallaba en una instalación por el instalador (solo funcionaba en manuals.yml).
+    """
+    env = _workers_env(cfg, prod=prod)
+    env.update(
+        {
+            # Backup como root: leer los volume _data a 0700 (prod-01 A9 / prod-04).
+            "WORKERS_RUN_AS_ROOT": "1",
+            "WORKERS_BACKUP_VOLUMES": json.dumps(list(_BACKUP_VOLUME_NAMES)),
+        }
+    )
+    volumes = [*_workers_volumes(cfg), "/var/lib/docker/volumes:/var/lib/docker/volumes"]
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
         "command": (
             f"celery -A workers.celery_app worker "
             f"--queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1"
         ),
-        "environment": _workers_env(cfg, prod=prod),
-        "volumes": _workers_volumes(cfg),
+        "environment": env,
+        "volumes": volumes,
         "healthcheck": _healthcheck(
-            "celery -A workers.celery_app inspect ping -t 5 || exit 1", start_period="40s"
+            # G-06: ping a ESTE nodo — sin -d es un broadcast al broker
+            # compartido y contesta cualquier worker vivo (falso healthy). El
+            # timeout de 30s cubre el arranque de celery bajo carga (el default
+            # de 10s producía unhealthy crónico sin fallo real).
+            "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
+            timeout="30s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -756,7 +830,47 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
         },
         "networks": _WORKER_NETWORKS,
     }
+    # Corre como root (el volume-tar del backup lo exige); NO fijamos user 1000.
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["deploy"]["replicas"] = 1
+    return svc
+
+
+def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """El Celery beat (scheduler) — prod-01 A9 (auditoría 2026-07-06).
+
+    Sin este servicio, en una instalación por el instalador NADA se agenda:
+    backup diario, rotación de credenciales, sweepers de mantenimiento (zombis,
+    promoción DAG de red, reconciliación de pipeline, poda de worktrees/dep-cache),
+    sync de precios/FX, escalado humano y los bucles de fondo del córtex — todos
+    definidos en ``workers/beat_schedule.py``. Solo existía en ``manuals.yml``.
+    Singleton (un solo beat, o los jobs se duplican). Healthcheck propio: beat no
+    es un worker (``inspect ping`` no aplica) ni tiene HTTP — se comprueba que el
+    proceso beat es el PID 1 vivo del contenedor."""
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "command": "celery -A workers.celery_app beat --loglevel=info",
+        "environment": _workers_env(cfg, prod=prod),
+        "healthcheck": {
+            "test": [
+                "CMD",
+                "python",
+                "-c",
+                "import sys; sys.exit(0 if b'beat' in "
+                "open('/proc/1/cmdline','rb').read() else 1)",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "20s",
+        },
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": _WORKER_NETWORKS,
+    }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="512m"))
     svc["deploy"]["replicas"] = 1
     return svc
 
@@ -767,7 +881,12 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
         {
             "NOTIFY_BROKER_URL": "redis://redis:6379/1",
             "NOTIFY_RESULT_BACKEND": "redis://redis:6379/2",
-            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/3",
+            # AUD16 (H10): la DB del bus de eventos/DLQ debe ser la MISMA que
+            # miran los consumidores (workers/api-server/orchestrator = DB 0).
+            # Con la antigua DB 3, el stream dlq:notifications era invisible
+            # para el sampler de métricas y NotificationsDLQNotEmpty no podía
+            # disparar jamás en prod (dev ya usaba DB 0).
+            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/0",
             "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
                 "NOTIFY_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
             ),
@@ -776,8 +895,17 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
         "environment": env,
+        # -A debe ser el módulo REAL de la app (el mismo target del CMD del
+        # Dockerfile): `-A notification_dispatcher` no carga («no attribute
+        # 'celery'») y dejaba el servicio permanentemente unhealthy (cazado en
+        # vivo 2026-07-10). `-d celery@$$HOSTNAME` hace ping a ESTE nodo — el
+        # broker es compartido y un ping sin destino contestaría cualquier
+        # worker vivo aunque este contenedor estuviera roto.
         "healthcheck": _healthcheck(
-            "celery -A notification_dispatcher inspect ping -t 5 || exit 1", start_period="40s"
+            "celery -A notification_dispatcher.celery_app:app inspect ping "
+            "-d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
+            timeout="30s",
         ),
         "depends_on": {
             "postgres": {"condition": "service_healthy"},
@@ -1069,26 +1197,21 @@ def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
     """cAdvisor — per-container CPU/memory/network/fs metrics.
 
-    Unlike the other trusted services it MUST run ``privileged`` with host
-    cgroup/Docker mounts to read container stats, so it is NOT cap-dropped and
-    does NOT pin the AppArmor profile here. NOTE: this CONTRADICTS
-    docker/docker-compose.monitoring.yml, which DOES pin
-    ``apparmor=agentic-default`` on cAdvisor. Whether the profile is the right
-    posture for a privileged container (could it deny the host access it needs
-    on real Linux?) is an UNRESOLVED question, and the test suite encodes both
-    sides: tests/unit/test_compose_generator.py asserts NO apparmor here, while
-    tests/security/test_apparmor.py asserts apparmor on every generated service.
-    Resolving the contradiction is owned by the monitoring/sandbox hardening
-    plans (finding sandbox-8); until then the generator keeps its committed
-    behaviour (no apparmor on privileged cAdvisor) and the two security
-    assertions are xfail-quarantined. All mounts are read-only;
-    ``no-new-privileges`` is still set.
+    prod-12 task_prod12_cadv_01 (sandbox-8, decisión 5 opción a): cAdvisor ya
+    NO corre ``privileged`` ni monta ``/dev/kmsg`` — los stats de contenedor
+    salen de los bind-mounts read-only (cgroups vía /sys + /rootfs +
+    /var/lib/docker), que funcionan con ``cap_drop: [ALL]`` + AppArmor pineado
+    como cualquier otro servicio de primera parte (validado empíricamente:
+    families container_cpu/memory/network/fs presentes sin privileged; lo que
+    se pierde es la decodificación de eventos OOM-kill del kernel vía
+    /dev/kmsg — trade-off documentado en el runbook de monitoring, con el
+    override legacy-privileged como opt-in manual para quien lo necesite).
+    Esto RESUELVE la contradicción sandbox-8 con
+    docker/docker-compose.monitoring.yml (que siempre pineó apparmor).
     """
-    return {
+    svc: dict[str, Any] = {
         "image": IMAGE_CADVISOR,
         "command": ["--docker_only=true", "--housekeeping_interval=30s"],
-        "privileged": True,
-        "devices": ["/dev/kmsg"],
         "volumes": [
             "/:/rootfs:ro",
             "/var/run:/var/run:ro",
@@ -1096,7 +1219,6 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "/var/lib/docker/:/var/lib/docker:ro",
             "/dev/disk/:/dev/disk:ro",
         ],
-        "security_opt": ["no-new-privileges:true"],
         "healthcheck": {
             "test": ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"],
             "interval": "30s",
@@ -1105,10 +1227,9 @@ def _cadvisor_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "start_period": "30s",
         },
         "networks": ["agentic-net"],
-        "restart": "unless-stopped",
-        "logging": _logging_block(),
-        "deploy": {"resources": {"limits": {"cpus": "0.5", "memory": "256m"}}},
     }
+    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    return svc
 
 
 def _grafana_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
@@ -1151,12 +1272,14 @@ _BUILDERS = {
     "clamav": _clamav_service,
     "docling-serve": _docling_service,
     "egress-proxy": _egress_proxy_service,
+    "registry-proxy": _registry_proxy_service,
     "docker-socket-proxy": _docker_socket_proxy_service,
     "migrations": _migrations_service,
     "api-server": _api_server_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
     "workers-privileged": _workers_privileged_service,
+    "cortex-beat": _cortex_beat_service,
     "notification-dispatcher": _notification_dispatcher_service,
     "admin-panel": _admin_panel_service,
     "caddy": _reverse_proxy_service,
@@ -1315,6 +1438,7 @@ def generate_compose(
         "orchestrator",
         "workers",
         "workers-privileged",
+        "cortex-beat",
         "notification-dispatcher",
     )
 

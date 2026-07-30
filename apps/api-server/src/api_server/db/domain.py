@@ -152,12 +152,16 @@ class MemoryType(enum.StrEnum):
 class SkillCategory(enum.StrEnum):
     """Cerrada *categoría* de skill (ADR 0050, task_06_18_13).
 
-    Los seis valores son EXACTAMENTE las categorías que usan las 33 skills
-    seedeadas (``api_server.seeds.builtin_skills``). Antes este enum tenía nueve
-    valores divergentes (``coding``/``review``/``planning``/``data``/
-    ``security``…) que no coincidían con el seed y nunca se validaban; ADR 0050
-    los alinea y aplica un ``CHECK`` en BD (migración 0078) construido desde este
-    mismo conjunto, de modo que base de datos y aplicación concuerdan.
+    Los valores son EXACTAMENTE las categorías que usan las skills seedeadas
+    (``api_server.seeds.builtin_skills``). Antes este enum tenía nueve valores
+    divergentes (``coding``/``review``/``planning``/``data``/``security``…) que
+    no coincidían con el seed y nunca se validaban; ADR 0050 los alinea y aplica
+    un ``CHECK`` en BD (migración 0078, reconstruido por 0117) construido desde
+    este mismo conjunto, de modo que base de datos y aplicación concuerdan.
+
+    ``atlassian`` (2026-07-23) es un bucket de INTEGRACIÓN, no un dominio de
+    trabajo como los otros seis: agrupa las skills que enseñan a los agentes a
+    usar Jira/Confluence vía el MCP de Atlassian del proyecto (ADR 0127/0128).
     """
 
     BACKEND = "backend"
@@ -166,6 +170,7 @@ class SkillCategory(enum.StrEnum):
     QA = "qa"
     RESEARCH = "research"
     DOCS = "docs"
+    ATLASSIAN = "atlassian"
 
 
 class ToolCategory(enum.StrEnum):
@@ -336,6 +341,10 @@ class ExecutionStatus(enum.StrEnum):
     AWAITING_HUMAN_APPROVAL = "awaiting_human_approval"
     # Stopped by an explicit operator cancel request (POST /executions/{id}/cancel).
     CANCELLED = "cancelled"
+    # The AUTHORITATIVE self-review could not certify the output (ADR 0087):
+    # inconclusive verdict or exhausted retries. Terminal; the worker maps the
+    # TASK to `blocked` and the human inbox surfaces it for validation.
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
 
 
 class DocumentStatus(enum.StrEnum):
@@ -360,6 +369,11 @@ class ApprovalRequestStatus(enum.StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     TIMED_OUT = "timed_out"
+    # The task/plan/project was cancelled while this request was pending — the
+    # parked execution is sealed and the request leaves the inbox (CANCELAWAIT).
+    # Distinct from REJECTED ("a human said no") for honest audit. Fits the
+    # VARCHAR(16) column (9 chars), so no migration is needed.
+    CANCELLED = "cancelled"
 
 
 class HumanTaskAssignmentStatus(enum.StrEnum):
@@ -504,6 +518,21 @@ class Skill(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
     category: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_fragment: Mapped[str] = mapped_column(Text, nullable=False)
+    # ADR 0100 (pieza 1): provenance del marketplace — espejo de forked_from_*.
+    # NULL = fila nativa; poblado = materializada desde una instalación (la
+    # des-materialización de uninstall/revoke busca por source_installation_id).
+    source_listing_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_installation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_installations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # List of tool UUIDs. JSONB rather than a junction table -- the
     # association is a *recommendation*, not a hard FK, and tools may
     # come from outside this tenant's catalog (built-ins).
@@ -581,6 +610,21 @@ class Tool(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("60"))
     rate_limit_per_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Catalog marker -- see Skill.is_builtin.
+    # ADR 0100 (pieza 1): provenance del marketplace — espejo de forked_from_*.
+    # NULL = fila nativa; poblado = materializada desde una instalación (la
+    # des-materialización de uninstall/revoke busca por source_installation_id).
+    source_listing_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_installation_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_installations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     is_builtin: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
 
 
@@ -811,6 +855,10 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     # (PAT/clave SSH) NO va aquí — vive en Vault (projects/{id}/git).
     git_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     human_approval_policy: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # ADR 0102 D3: capa PROYECTO de los guardrails declarativos. El worker la
+    # fusiona con la capa plataforma (resolve_config, locked gana) y transporta
+    # el resultado al runtime en spec["guardrails"]. NULL = sin capa proyecto.
+    guardrails_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Plan 06.16 task_06_16_01: polyglot tool catalog. `allowed_commands`
     # is the per-project deny-by-default allowlist of program *basenames*
@@ -825,6 +873,25 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
         ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
     )
     default_runtime_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # prod-12 Fase B (gap4-2): per-project deny-by-default allowlist of FQDNs
+    # the HTTP tools (`http_request` + http_endpoint) may reach; `[]` = las
+    # tools de red no alcanzan nada. Entries are validated server-side
+    # (task_prod12_ssrf_03: FQDN en minusculas, sin esquema/puerto, nunca IPs
+    # literales/localhost/hosts internos del compose) y el runtime aplica
+    # ADEMAS el ssrf_guard por-resolucion (Fase A) — defensa en profundidad.
+    allowed_domains: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
+    )
+
+    # ADR 0128 fase 2: política OPCIONAL rol→tool de las tools MCP del proyecto.
+    # Mapea el nombre de una tool MCP (`<server>.<tool>`) → los roles de agente
+    # autorizados a usarla. Un tool SIN entrada queda abierto a todos los roles
+    # (default). `{}` = sin política (todo agente del proyecto ve toda tool MCP del
+    # proyecto). No afecta a builtins/tools de rol (siguen por-agente).
+    mcp_tool_roles: Mapped[dict[str, list[str]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
 
     # Soft-FK to the Vault entry that holds the project's secrets. Vault
     # is an external system so no DB-level FK.
@@ -895,6 +962,14 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     # (`make_plan_branch_name` → plan/{id8}-{slug}). Generated once at creation, never
     # changes when `title` does. Nullable: backfilled by migration 0099.
     slug: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    # Auto-PR result (ADR 0072 fase 2 / cadena-pr-plan). Populated by the
+    # `open_plan_pr` worker task at plan close so the URL/branch of the opened PR
+    # are visible in the API/UI instead of living only in worker logs (audit
+    # 2026-07-03, P6). `pr_error` records why a best-effort auto-PR failed.
+    # Migration 0102.
+    pr_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pr_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pr_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 32 chars so the wide ten-state machine (pending_approval,
     # pending_human_validation, ...) introduced in task_03_16 fits.
@@ -1110,9 +1185,37 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         String(32), nullable=False, server_default=text("'running'")
     )
     # Set when status='aborted' — a SafeguardCode (max_iterations_exceeded,
-    # repetitive_loop_detected, …). NULL on a clean run.
+    # repetitive_loop_detected, …). NULL on a clean run. ADR 0087 also uses it as
+    # the escalation reason (review_inconclusive / max_review_retries_exhausted).
     abort_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The agent's self-reported finish status (ADR 0087): 'success'|'failed'|
+    # 'partial' when it finished via the `submit_result` tool, else NULL (prose
+    # finish / claude_sdk). A HINT shown in the UI + given to the reviewer —
+    # distinct from `status` (the execution lifecycle outcome).
+    finish_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # `task_wf_52`: etiqueta del conjunto de PROMPTS del runtime que produjo el
+    # run. `EvalRun.subject_prompt_version` existía desde el Plan 14 y nadie lo
+    # poblaba, así que el dashboard de calidad agrupaba todo bajo «(sin
+    # versión)»: se medía la calidad sin poder atribuirla a un cambio. NULL en
+    # los runs anteriores al versionado y en los que no lo reportan.
+    prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # `task_wf_62`: digest de la IMAGEN del runtime que corrió. La etiqueta
+    # (`agent-runtime-php-phpunit:v1`) es flotante: reconstruirla cambia en
+    # silencio lo que ejecuta toda tarea PHP, sin forma de saber qué build
+    # produjo un resultado ni de volver atrás. NULL en los runs anteriores y
+    # cuando el daemon no lo reporta — es trazabilidad, nunca bloquea un run.
+    runtime_image_digest: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    # `task_wf_71`: guía que un humano escribe sobre un run EN MARCHA. Hasta
+    # ahora la única intervención posible era matarlo: si el agente iba por mal
+    # camino se tiraba todo el trabajo y se relanzaba a ciegas. El bucle la
+    # consulta una vez por iteración y la inyecta como sticky del turno
+    # siguiente. Se BORRA al entregarla — es una intervención puntual, no una
+    # instrucción permanente que se repita cada turno.
+    pending_guidance: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Por qué el Memorizer NO produjo memoria a partir de este run, como código
     # canónico (:class:`~api_server.memorizer.policy.MemorizeSkipReason`):
@@ -1138,6 +1241,17 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    # When the agent-runtime CONTAINER was created (M1). The row is `running` from
+    # the moment it is inserted — before model resolution (Vault), worktree
+    # provisioning (git) and `docker create`. The orphan sweeper must not reap a run
+    # still provisioning (no container to leak yet): it only treats a row as orphaned
+    # when this is set (a container did exist) and the daemon no longer lists it. A
+    # row still provisioning (NULL) is protected from the early reap and only falls to
+    # the conservative 7 h age backstop. NULL for a run that never launched / predates.
+    container_launched_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 
     # Cooperative cancellation (auditoría / task_prod06_cancel_01). The operator's
     # POST /executions/{id}/cancel stamps `cancel_requested_at`; the worker polls it

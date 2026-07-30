@@ -2,7 +2,7 @@
 title: Catálogo de MCP servers verificados (Plan 05)
 audience: backend-dev, devops, technical-writer, system-admin
 phase: 05-mcp-tools-avanzadas
-updated: 2026-05-28
+updated: 2026-07-23
 ---
 
 # Catálogo de MCP servers verificados
@@ -17,6 +17,56 @@ shape del `auth_ref` apuntando a Vault.
 > Convención: el campo `auth_ref` es siempre un puntero `vault:...` (CLAUDE.md
 > regla dura). Los tokens nunca viajan en JSON ni se quedan en la BD; Vault
 > es el único almacén de credenciales del platform.
+
+---
+
+## Qué se OFRECE en el picker (ADR 0117)
+
+> **Importante.** El agent-runtime **no empaqueta binarios stdio**, así que una
+> plantilla `stdio` (`command=...`) **nunca arrancaría** (el agente daría vueltas
+> buscando el binario y escalaría a un humano). Por eso el picker
+> (`GET /mcp-catalog` → `offered_catalog()`) **ofrece SOLO plantillas de transporte
+> HTTP** (`streamable_http`/`sse`). Todas las plantillas `stdio` históricas siguen
+> en `CATALOG` (validación en tiempo de ejecución + auditoría) pero **están ocultas**
+> del picker. Regla de oro: **usa siempre servers HTTP** — remotos o sidecars.
+
+Las tres plantillas **ofrecibles** hoy:
+
+| id              | transporte        | URL                                  | `auth_kind` | auth                                    | notas                                                                                                                        |
+| --------------- | ----------------- | ------------------------------------ | ----------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `context7`      | `streamable_http` | `https://mcp.context7.com/mcp`       | `none`      | opcional (key en cabecera)              | docs de librerías al día. Abrir `mcp.context7.com` en dominios permitidos (egress).                                          |
+| `atlassian`     | `streamable_http` | `http://mcp-atlassian:9000/mcp`      | `sidecar`   | en el ENV del sidecar                   | Jira+Confluence en un sidecar (`ghcr.io/sooperset/mcp-atlassian`) en la red `agentic-agents`; hostname interno → sin egress. |
+| `github-remote` | `streamable_http` | `https://api.githubcopilot.com/mcp/` | `static`    | PAT en cabecera `Authorization` (Vault) | MCP remoto oficial de GitHub. Abrir `api.githubcopilot.com` en dominios permitidos (egress).                                 |
+
+Sustituyen a las plantillas stdio equivalentes (jira-mcp/confluence-mcp → `atlassian`; github-mcp → `github-remote`), que quedan ocultas.
+
+### `auth_kind` — cómo autentica cada plantilla (ADR 0127)
+
+Cada plantilla declara **cómo** se autentican sus peticiones, y eso dirige la UX del picker:
+
+- **`none`** — servidor público, sin auth por petición (p.ej. `context7`).
+- **`static`** — token de larga vida (bearer/env) leído de Vault en cada petición (p.ej. `github-remote` con un PAT). No caduca en horas → sirve para runs autónomos.
+- **`sidecar`** — un sidecar self-hosted se autentica con **su propio** ENV; no hay token por petición que configurar aquí, pero **no es `none`** (el operador debe desplegar y configurar el sidecar). Es el caso de `atlassian`.
+- **`oauth`** — OAuth 2.1: el operador pulsa **«Conectar» una vez**, consiente en el proveedor y la plataforma **refresca el token sola** (multi-tenant limpio: cada tenant autoriza su cuenta). El núcleo (token store en Vault + `OAuthClientProvider` del SDK) está implementado en `shared_mcp.oauth`; el **flujo interactivo de consentimiento** se verifica en sesión con navegador. La primera plantilla `oauth` es `atlassian-remote` (remoto OFICIAL `mcp.atlassian.com`, alternativa al sidecar), **catalogada pero aún NO ofrecida** en el picker hasta esa verificación (`_UNAVAILABLE_TEMPLATE_IDS`).
+
+### Skills builtin que acompañan a Atlassian (ADR 0050 · categoría `atlassian`)
+
+Declarar el server no basta: el agente necesita saber **cómo** usarlo. Hay 4 skills
+builtin (categoría `atlassian`, visibles en el selector de skills de cualquier agente)
+que enseñan el comportamiento, sin cablear nombres de tool ni IDs (los IDs concretos —
+epic de Jira, página padre de Confluence — llegan por la descripción/comentarios del plan):
+
+| skill                             | para (roles sugeridos)                     | qué hace                                                                        |
+| --------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `atlassian-jira-task-tracking`    | backend_dev, frontend_dev, project_manager | crea/localiza la issue bajo el epic del plan y la transiciona al empezar/cerrar |
+| `atlassian-jira-review-notes`     | reviewer, qa                               | publica el veredicto como comentario y transiciona según apruebe/rechace        |
+| `atlassian-confluence-docs`       | technical_writer                           | crea/actualiza páginas hijas bajo la página padre del plan, sin duplicar        |
+| `atlassian-jira-planning-context` | project_manager, architect                 | busca issues/epics existentes antes de planificar, para no duplicar             |
+
+Todas son idempotentes (buscan antes de crear) y **degradan con gracia**: si el MCP de
+Atlassian no está en el run, no fallan la tarea — lo anotan en su PROGRESS y siguen.
+Asígnalas al agente desde su ficha (**Skills**); combínalas con la política rol→tool del
+proyecto (ADR 0128) para que solo el rol adecuado vea cada tool.
 
 ---
 

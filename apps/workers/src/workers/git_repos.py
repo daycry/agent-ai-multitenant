@@ -36,8 +36,10 @@ always on PATH in the test-runtime images).
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,6 +54,12 @@ DEFAULT_WORKTREE_TTL_S = 30 * 24 * 60 * 60
 # Git's well-known empty-tree object id — used to seed an empty ROOT commit in a
 # fresh local bare repo (prod-18) so worktrees can branch off a valid HEAD.
 _EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+# Espera acotada del PERDEDOR de la carrera de `git init --bare` (TOCTOU
+# 2026-07-03): dos tasks raíz del mismo plan provisionan el MISMO bare a la vez;
+# el perdedor espera a que el ganador termine de inicializarlo (ventana de ms).
+_INIT_RACE_WAIT_ATTEMPTS = 20
+_INIT_RACE_WAIT_DELAY_S = 0.25
 # Identity for platform-authored git ops with no human author (the seed commit).
 _PLATFORM_GIT_NAME = "Agentic Platform"
 _PLATFORM_GIT_EMAIL = "platform@agentic.local"
@@ -102,6 +110,34 @@ class BareRepoLayout:
 
 class GitCommandError(RuntimeError):
     """Raised when a ``git`` invocation returns non-zero."""
+
+
+def clean_args(preserve: Sequence[str]) -> tuple[str, ...]:
+    """``git clean`` argv that sweeps the worktree but KEEPS the dependency dirs.
+
+    ``clean -fdx`` runs before every run so the agent starts deterministic, but
+    the ``-x`` also sweeps IGNORED paths — which is where installed dependencies
+    live. Every retry therefore reinstalled from cold: minutes of wall clock,
+    egress through the allowlisted proxy, and a failure unrelated to the task
+    whenever a registry is down (task_wf_24, C-06).
+
+    Dropping the ``-x`` would have been the easy and wrong fix: a previous run's
+    ignored build artifacts would contaminate the next one, which is exactly what
+    the ``-x`` is for. Instead the dependency directories — declared by each
+    runtime template, not invented here — are excluded and everything else is
+    still swept.
+
+    Names are validated rather than passed through: they come from the catalog
+    today, but handing unvalidated strings to a git command line is the kind of
+    hole one does not leave open.
+    """
+    args: list[str] = ["clean", "-fdx"]
+    for raw in preserve:
+        name = str(raw).strip()
+        if not name or name.startswith("-") or name.startswith("/") or ".." in name:
+            raise ValueError(f"invalid dependency directory to preserve: {raw!r}")
+        args.extend(("-e", name))
+    return tuple(args)
 
 
 def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | None = None) -> str:
@@ -170,26 +206,91 @@ class BareRepoManager:
         path = self._layout.bare_repo_path(repo_name)
         if not path.exists():
             self._layout.repos_root.mkdir(parents=True, exist_ok=True)
-            _run_git("init", "--bare", str(path))
-            _log.info("bare_repo.init", tenant=self._layout.tenant_slug, repo=repo_name)
+            try:
+                _run_git("init", "--bare", str(path))
+                _log.info("bare_repo.init", tenant=self._layout.tenant_slug, repo=repo_name)
+            except GitCommandError as exc:
+                # TOCTOU (2026-07-03): dos tasks RAÍZ del mismo plan provisionan
+                # el MISMO bare a la vez; la perdedora del `git init` recibe
+                # rc=128 «cannot mkdir …: File exists» y su run moría
+                # `workspace_unavailable` (reset del plan CI4). Que el repo
+                # exista ES el estado deseado — esperar a que el ganador termine
+                # de inicializarlo en vez de fallar.
+                if "exists" not in str(exc).lower():
+                    raise
+                self._wait_repo_valid(path)
+                _log.info(
+                    "bare_repo.init_race_recovered",
+                    tenant=self._layout.tenant_slug,
+                    repo=repo_name,
+                )
         if remote_url is not None:
             self._set_remote(path, remote_url)
         return path
 
-    def seed_initial_commit_if_empty(self, repo_name: str) -> bool:
+    @staticmethod
+    def _wait_repo_valid(path: Path) -> None:
+        """Espera acotada a que ``path`` sea un repo git válido (el ganador de la
+        carrera de init puede seguir inicializándolo). Si nunca lo es (basura
+        previa, init abortada), re-lanza — mejor fallar alto que devolver un
+        path corrupto."""
+        last_exc: GitCommandError | None = None
+        for _ in range(_INIT_RACE_WAIT_ATTEMPTS):
+            try:
+                _run_git("-C", str(path), "rev-parse", "--is-bare-repository")
+                return
+            except GitCommandError as exc:
+                last_exc = exc
+                time.sleep(_INIT_RACE_WAIT_DELAY_S)
+        raise GitCommandError(
+            f"bare repo at {path} exists but never became valid (init race?): {last_exc}"
+        )
+
+    def has_commits(self, repo_name: str) -> bool:
+        """True iff the bare repo exists AND has at least one commit (born HEAD).
+
+        The gate the execution/review provisioning uses to decide whether the
+        base still needs rooting from the remote (ADR 0127-adjacent, CI4 «no
+        history in common» fix): an empty bare must be aligned to
+        ``origin/<default>`` BEFORE any synthetic seed, or the plan branch roots
+        on an orphan history the final PR can never merge."""
+        path = self._layout.bare_repo_path(repo_name)
+        if not path.exists():
+            return False
+        try:
+            _run_git("-C", str(path), "rev-parse", "--verify", "HEAD")
+            return True
+        except GitCommandError:
+            return False
+
+    def seed_initial_commit_if_empty(
+        self, repo_name: str, *, default_branch: str | None = None
+    ) -> bool:
         """Ensure the bare repo has a commit so worktrees can branch off it (prod-18).
 
         A fresh LOCAL bare (``git init --bare``, no remote/clone) is empty: HEAD is
         unborn and ``git worktree add … HEAD`` fails ("not a valid object name").
         Seed an empty ROOT commit (the well-known empty tree) on the bare's current
         HEAD branch, with a platform git identity. No-op if the repo already has
-        commits (e.g. it was cloned from a remote). Returns ``True`` iff it seeded."""
+        commits (e.g. it was cloned from a remote). Returns ``True`` iff it seeded.
+
+        ``default_branch`` (hardening, 2026-07-23): when given, the seed is placed
+        on ``refs/heads/<default_branch>`` instead of whatever ``git init --bare``
+        left in HEAD (host ``init.defaultBranch`` — often ``master``). Without
+        this, a bare seeded on ``master`` while the project's configured default
+        is ``main`` (or vice-versa) makes ``align_default_branch`` and the PR guard
+        look at a branch the seed never touched — the master-vs-main divergence
+        vector. Seeding on the CONFIGURED branch keeps all paths in lockstep."""
         path = self._layout.bare_repo_path(repo_name)
         try:
             _run_git("-C", str(path), "rev-parse", "--verify", "HEAD")
             return False  # already has at least one commit
         except GitCommandError:
             pass
+        # Name the seed branch from the configured default BEFORE committing, so
+        # the born ref matches what alignment + the PR guard target.
+        if default_branch:
+            _run_git("-C", str(path), "symbolic-ref", "HEAD", f"refs/heads/{default_branch}")
         ident = {
             "GIT_AUTHOR_NAME": _PLATFORM_GIT_NAME,
             "GIT_AUTHOR_EMAIL": _PLATFORM_GIT_EMAIL,
@@ -229,12 +330,14 @@ class BareRepoManager:
     # --- task_06_17 — periodic fetch + webhook hook --------------------
 
     def fetch_remote(self, repo_name: str, *, auth_env: dict[str, str] | None = None) -> None:
-        """Run ``git fetch origin`` against the bare repo.
+        """Run ``git fetch --prune origin`` against the bare repo.
 
-        Called both periodically (scheduled celery beat task) and from
-        the webhook receiver when a push lands at the remote (e.g.
-        GitHub / Azure DevOps webhook). Idempotent — fetching twice in
-        a row is cheap.
+        Invoked from ``clone_project_repo`` — on the manual "Sincronizar" action
+        (``POST /projects/{id}/git/sync``) and when the git config is (re)saved
+        (``PUT /projects/{id}/git``). A periodic beat task and a webhook receiver
+        with signature verification are NOT wired yet (audit 2026-07-03 P5/T6:
+        this docstring used to claim they were — gated → ADR 0098). Idempotent —
+        fetching twice in a row is cheap.
 
         ``auth_env`` (ADR 0072): variables de entorno de autenticación
         (GIT_ASKPASS/GIT_SSH_COMMAND) construidas por ``git_auth`` para
@@ -245,6 +348,62 @@ class BareRepoManager:
         if not path.exists():
             raise GitCommandError(f"bare repo {repo_name!r} does not exist at {path}")
         _run_git("fetch", "--prune", "origin", cwd=path, env_extra=auth_env)
+
+    def align_default_branch(self, repo_name: str, branch: str) -> str:
+        """Alinea la rama default LOCAL con ``origin/<branch>`` tras un fetch.
+
+        El clone inicial solo materializa ``refs/remotes/origin/*``; sin este
+        paso la rama default local no existe y el primer worktree la SIEMBRA
+        con una raíz sintética — si el remoto tiene (o gana después) su propia
+        historia, el PR final choca con «no history in common» (visto en vivo
+        con el plan CI4, 2026-07-09). Semántica conservadora:
+
+          * ``created``        — no había local: se crea apuntando al remoto
+            (y HEAD del bare pasa a esa rama).
+          * ``fast_forwarded`` — la local iba estrictamente por detrás.
+          * ``up_to_date``     — ya coinciden.
+          * ``remote_empty``   — el remoto no tiene esa rama; NO se inventa
+            nada (el caller decide si sembrar y avisa).
+          * ``diverged``       — historias sin ancestro común o local por
+            delante: NUNCA se reescribe trabajo local; se reporta.
+        """
+        path = self._layout.bare_repo_path(repo_name)
+        if not path.exists():
+            raise GitCommandError(f"bare repo {repo_name!r} does not exist at {path}")
+        remote_ref = f"refs/remotes/origin/{branch}"
+        local_ref = f"refs/heads/{branch}"
+        try:
+            remote_sha = _run_git("rev-parse", "--verify", remote_ref, cwd=path).strip()
+        except GitCommandError:
+            return "remote_empty"
+        try:
+            local_sha = _run_git("rev-parse", "--verify", local_ref, cwd=path).strip()
+        except GitCommandError:
+            _run_git("update-ref", local_ref, remote_sha, cwd=path)
+            _run_git("symbolic-ref", "HEAD", local_ref, cwd=path)
+            _log.info(
+                "bare.default_branch_created",
+                repo=repo_name,
+                branch=branch,
+                sha=remote_sha[:12],
+            )
+            return "created"
+        if local_sha == remote_sha:
+            return "up_to_date"
+        try:
+            # fast-forward SOLO si la local es ancestro estricto del remoto.
+            _run_git("merge-base", "--is-ancestor", local_sha, remote_sha, cwd=path)
+        except GitCommandError:
+            _log.warning(
+                "bare.default_branch_diverged",
+                repo=repo_name,
+                branch=branch,
+                local=local_sha[:12],
+                remote=remote_sha[:12],
+            )
+            return "diverged"
+        _run_git("update-ref", local_ref, remote_sha, local_sha, cwd=path)
+        return "fast_forwarded"
 
 
 # ---------------------------------------------------------------------------
@@ -298,10 +457,25 @@ class WorktreeManager:
         if wt_path.exists():
             return wt_path
         wt_path.parent.mkdir(parents=True, exist_ok=True)
+        # Recuperación (2026-07-03): si el directorio del worktree desapareció
+        # SIN pasar por git (wipe parcial, borrado manual), el bare conserva una
+        # registración huérfana y `git worktree add` rechaza re-crearlo («missing
+        # but already registered worktree»). Podar antes es barato e idempotente.
+        with contextlib.suppress(GitCommandError):
+            _run_git("worktree", "prune", cwd=self._repo_path)
 
-        if not self._branch_exists(branch):
+        if not self.branch_exists(branch):
             base_ref = base or "HEAD"
-            _run_git("branch", branch, base_ref, cwd=self._repo_path)
+            try:
+                _run_git("branch", branch, base_ref, cwd=self._repo_path)
+            except GitCommandError as exc:
+                # TOCTOU (auditoría 2026-07-02): dos tasks hermanas promovidas a
+                # la vez provisionan el MISMO plan branch; la perdedora del
+                # `git branch` recibía rc=128 «already exists» y su run moría
+                # `workspace_unavailable` (con el fail-fast F0.2). Que el branch
+                # ya exista ES el estado deseado — éxito idempotente.
+                if "already exists" not in str(exc):
+                    raise
 
         _run_git(
             "worktree",
@@ -321,7 +495,10 @@ class WorktreeManager:
         )
         return wt_path
 
-    def _branch_exists(self, branch: str) -> bool:
+    def branch_exists(self, branch: str) -> bool:
+        """¿Existe ``refs/heads/<branch>`` en el bare? Público porque la guarda
+        ``repo_history_lost`` (execution.py) lo consulta antes de materializar
+        el worktree de un plan con tareas ya completadas."""
         try:
             _run_git(
                 "show-ref",
@@ -335,8 +512,9 @@ class WorktreeManager:
         return True
 
     # --- task_06_19 — sync worktree to the plan branch HEAD ------------
+    # (`clean_args` lives at module level — see below.)
 
-    def sync_to_head(self, task_id: str, *, branch: str) -> None:
+    def sync_to_head(self, task_id: str, *, branch: str, preserve: Sequence[str] = ()) -> None:
         """Bring the worktree to ``branch``'s current HEAD.
 
         Called by the worker BEFORE handing control to the agent — so
@@ -344,10 +522,13 @@ class WorktreeManager:
         worktree was last touched are visible. The sequence:
             git -C <wt> fetch <bare-path> <branch>
             git -C <wt> reset --hard FETCH_HEAD
-            git -C <wt> clean -fdx
+            git -C <wt> clean -fdx [-e <preserved> ...]
         ``clean -fdx`` removes any leftover artifacts from a previous
         run (build outputs, untracked __pycache__) so the agent starts
         from a deterministic state.
+
+        ``preserve`` are dependency directories kept across the clean
+        (task_wf_24, C-06). See :func:`clean_args`.
         """
         wt = self._layout.worktree_path(task_id)
         if not wt.exists():
@@ -356,7 +537,7 @@ class WorktreeManager:
         # whether the bare is a real remote or a local on-disk repo.
         _run_git("fetch", str(self._repo_path), branch, cwd=wt)
         _run_git("reset", "--hard", "FETCH_HEAD", cwd=wt)
-        _run_git("clean", "-fdx", cwd=wt)
+        _run_git(*clean_args(preserve), cwd=wt)
         _log.info(
             "worktree.sync",
             tenant=self._layout.tenant_slug,
@@ -434,6 +615,75 @@ class WorktreeManager:
             removed.append(entry)
         return removed
 
+    def prune_by_policy(
+        self,
+        policy: dict[str, str],
+        *,
+        ttl_closed_s: int = 48 * 3600,
+        ttl_default_s: int = DEFAULT_WORKTREE_TTL_S,
+        now: float | None = None,
+    ) -> list[Path]:
+        """Poda por ESTADO (G-07): la poda ciega por mtime conservaba durante un
+        mes worktrees de planes ya cerrados y podía borrar el único resto de un
+        ``rebase_conflict`` (un commit fuera de rama).
+
+        ``policy`` mapea el nombre del worktree (task_id) a:
+          - ``"closed"``: el plan del worktree está cerrado → TTL 48h;
+          - ``"keep"``: la tarea está bloqueada → NUNCA se poda (es la escena
+            del crimen que el operador necesita inspeccionar);
+          - ``"default"`` (o sin entrada): TTL clásico de 30 días.
+
+        Red de rescate: antes de borrar, si el HEAD del worktree no está
+        contenido en NINGUNA rama del bare, se crea ``refs/rescue/{task_id}``
+        apuntándolo — el commit sobrevive al borrado y ``git gc`` no lo
+        recolecta. Tras la pasada corre ``git worktree prune`` (registros
+        stale del bare). Devuelve los paths borrados.
+        """
+        moment = now if now is not None else time.time()
+        removed: list[Path] = []
+        root = self._layout.worktrees_root
+        if not root.exists():
+            return removed
+
+        for entry in root.iterdir():
+            if not entry.is_dir():
+                continue
+            verdict = policy.get(entry.name, "default")
+            if verdict == "keep":
+                continue
+            ttl = ttl_closed_s if verdict == "closed" else ttl_default_s
+            try:
+                mtime = entry.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if mtime >= moment - ttl:
+                continue
+            self._rescue_unmerged_head(entry)
+            self._remove_worktree(entry)
+            removed.append(entry)
+
+        with contextlib.suppress(GitCommandError):
+            _run_git("worktree", "prune", cwd=self._repo_path)
+        return removed
+
+    def _rescue_unmerged_head(self, worktree: Path) -> None:
+        """Si el HEAD del worktree no está contenido en ninguna rama del bare,
+        créale ``refs/rescue/{task_id}`` para que sobreviva a la poda. Best-
+        effort: un worktree corrupto no debe frenar la limpieza del resto."""
+        try:
+            head = _run_git("rev-parse", "HEAD", cwd=worktree).strip()
+            containing = _run_git("branch", "--contains", head, cwd=self._repo_path).strip()
+            if not containing:
+                _run_git("update-ref", f"refs/rescue/{worktree.name}", head, cwd=self._repo_path)
+                _log.warning(
+                    "worktree.rescue_ref_created",
+                    worktree=worktree.name,
+                    head=head,
+                    repo=str(self._repo_path),
+                )
+        except GitCommandError as exc:
+            _log.warning("worktree.rescue_check_failed", worktree=worktree.name, error=str(exc))
+
     def _remove_worktree(self, path: Path) -> None:
         """Best-effort worktree removal.
 
@@ -450,8 +700,6 @@ class WorktreeManager:
         except GitCommandError:
             shutil.rmtree(path, ignore_errors=True)
             # Ask git to forget the now-missing entry.
-            import contextlib
-
             with contextlib.suppress(GitCommandError):
                 _run_git("worktree", "prune", cwd=self._repo_path)
 

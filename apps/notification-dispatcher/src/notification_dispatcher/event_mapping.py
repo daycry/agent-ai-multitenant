@@ -117,35 +117,105 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app", "telegram"),
     ),
+    # PROJ-05 (auditoría proyecto 2026-07-17): una tarea `ready` sin ningún
+    # agente candidato (proyecto sin equipo, rol sin agente) quedaba invisible
+    # — solo un WARNING en el log del orchestrator. Accionable: el operador
+    # debe asignar equipo/agente. El orchestrator dedupea por tarea (audit
+    # event testigo), así que no hay inundación del beat.
+    "task_unassignable": EventSpec(
+        "task_unassignable",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
     "plan_approved": EventSpec(
         "plan_approved",
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app",),
+    ),
+    # ADR 0120: el parte matinal del PM agente (workers.daily_standup). El
+    # cuerpo llega YA compuesto en el context (prosa del LLM o la versión
+    # estructurada fail-open) — la plantilla solo lo envuelve.
+    # ADR 0122: el vigía avisa también de la RECUPERACIÓN de un proveedor
+    # (la caída reusa provider_credential_invalid, ya registrado).
+    # ADR 0125: propuesta de mejora de configuración (gate humano — jamás
+    # se auto-aplica; la decisión vive en la ficha del agente).
+    # ADR 0126: resultado del restore-drill mensual (ok o fallo, siempre).
+    "restore_drill_result": EventSpec(
+        "restore_drill_result",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
+    "config_proposal": EventSpec(
+        "config_proposal",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app",),
+    ),
+    "provider_recovered": EventSpec(
+        "provider_recovered",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app",),
+    ),
+    "daily_standup": EventSpec(
+        "daily_standup",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
     ),
     "plan_rejected": EventSpec(
         "plan_rejected",
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app",),
     ),
-    "task_failed": EventSpec(
-        "task_failed",
+    # c3/T7 (audit 2026-07-03): a plan whose only remaining open tasks are `blocked`
+    # is escalated `in_progress -> blocked` by the orchestrator; the operator is
+    # notified so the stall is visible and they can unblock/retry a task.
+    "plan_blocked": EventSpec(
+        "plan_blocked",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
+    # M-1 (auditoría 2026-07-10, hallazgo #2): el simétrico — el plan volvió a
+    # in_progress (un gesto humano lo desatascó o la red del reconciler lo
+    # revirtió), así que la notificación de bloqueo previa queda obsoleta.
+    # Informativo, no accionable → solo in_app.
+    "plan_unblocked": EventSpec(
+        "plan_unblocked",
         lane=NotificationLane.DEFAULT,
         default_channel_types=("in_app",),
     ),
+    # prod-12 av_01 (ADR 0105): el backend antivirus lleva >N min inalcanzable —
+    # la ingesta está en fail-closed acumulando `pending_scan`; el operador debe
+    # levantar ClamAV (el sweep reescanea solo al volver).
+    "antivirus_unreachable": EventSpec(
+        "antivirus_unreachable",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
+    # NOTIF-3 (auditoría 2026-07-12): `task_failed` se RETIRÓ del registro —
+    # era imposible por diseño (las tareas nunca alcanzan un estado "failed":
+    # los fallos de run convergen en `blocked`, que ya notifica task_blocked).
+    # Mantenerlo daba cobertura ilusoria.
+    #
+    # execution_finished: EMITIDO por el worker al terminar un run `done`.
+    # Opt-in (sin default): un in_app por CADA ejecución inundaría el inbox;
+    # quien lo quiera crea la preferencia explícita (evento, canal).
     "execution_finished": EventSpec(
         "execution_finished",
         lane=NotificationLane.DEFAULT,
-        default_channel_types=("in_app",),
+        default_channel_types=(),
     ),
+    # execution_failed: EMITIDO por el worker cuando un run muere
+    # (failed/aborted) — antes solo quedaba en el log del worker.
     "execution_failed": EventSpec(
         "execution_failed",
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "telegram"),
     ),
+    # review_requested: EMITIDO por el orquestador al despachar la review de IA.
+    # Opt-in (sin default): cada review notificando a telegram sería ruido.
     "review_requested": EventSpec(
         "review_requested",
         lane=NotificationLane.DEFAULT,
-        default_channel_types=("in_app", "telegram"),
+        default_channel_types=(),
     ),
     "human_validation_needed": EventSpec(
         "human_validation_needed",
@@ -223,6 +293,33 @@ EVENT_REGISTRY: dict[str, EventSpec] = {
         "fx_fetch_failed",
         lane=NotificationLane.PRIORITY,
         default_channel_types=("in_app", "email"),
+    ),
+    # NOTIF-2 (auditoría 2026-07-12 / prod-08 alert_ingest_01) — una alerta de
+    # INFRAESTRUCTURA de Alertmanager (disco, OOM, backup, servicio caído)
+    # ingerida por /internal/alerts/ingest. Platform-scoped (tenant_id=None):
+    # solo el System Admin. Prioritaria y con fan-out a in-app + telegram (el
+    # canal ops más robusto); el contexto es secret-free (labels/annotations).
+    "infra_alert": EventSpec(
+        "infra_alert",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "telegram"),
+    ),
+    # C1 (córtex, 2026-07-12) — el córtex escribió primero (iniciativa
+    # proactiva). Platform-scoped (el owner es el System Admin).
+    "cortex_message": EventSpec(
+        "cortex_message",
+        lane=NotificationLane.DEFAULT,
+        default_channel_types=("in_app", "telegram"),
+    ),
+    # AUD16-23 (auditoría 2026-07-16) — un run abortó por credencial/cuota del
+    # provider LLM (oauth caducado, 401, session limit). Platform-scoped: la
+    # credencial es de plataforma y la renueva el System Admin. Prioritaria —
+    # hasta que se renueve, TODOS los runs de ese provider van a morir igual
+    # (el ciclo 07-02→07-08 acumuló 17 aborts sin que nadie se enterara).
+    "provider_credential_invalid": EventSpec(
+        "provider_credential_invalid",
+        lane=NotificationLane.PRIORITY,
+        default_channel_types=("in_app", "telegram"),
     ),
 }
 
@@ -569,13 +666,27 @@ def _decide_channel(
             reason=f"template render failed: {exc}",
         )
 
+    # NOTIF-1 (auditoría 2026-07-12): structured lleva TAMBIÉN body, event_type
+    # y severity (del contexto del evento, si la trae). Antes solo iba subject,
+    # así que WhatsApp rellenaba sus plantillas con body vacío (los params se
+    # resuelven de structured) y slack/teams/discord/webhook perdían la metadata
+    # de evento y el color por severidad.
+    structured: dict[str, Any] = {
+        "body": rendered.body,
+        "event_type": spec.notification_event_type,
+    }
+    if rendered.subject is not None:
+        structured["subject"] = rendered.subject
+    severity = event.context.get("severity")
+    if severity:
+        structured["severity"] = str(severity)
     send_request = {
         "channel_id": str(channel_id),
         "event_type": spec.notification_event_type,
         "tenant_id": event.tenant_id,
         "target": None,  # the dispatcher falls back to the channel config.
         "body": rendered.body,
-        "structured": ({"subject": rendered.subject} if rendered.subject is not None else None),
+        "structured": structured,
     }
 
     # Quiet hours: defer (don't drop) — compute an ETA past the window.

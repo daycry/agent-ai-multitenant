@@ -64,3 +64,25 @@ export function chatRefetchInterval(
 ): number | false {
   return isReplyInFlight(messages, nowMs) ? CHAT_POLL_MS : false;
 }
+
+/**
+ * How many messages a summary row folds (task_wf_06 d).
+ *
+ * A summary carries a `summary_replaces` attachment listing the ids it stands
+ * in for. The count is what turns an anonymous `system` banner into something
+ * the reader can judge — "resume 12 mensajes" says how much history is behind
+ * it. Returns 0 for any message that is not a summary or whose attachment is
+ * malformed, so the caller can fall back to the plain rendering.
+ */
+export function summaryFoldedCount(
+  attachments: ReadonlyArray<Record<string, unknown>> | undefined,
+): number {
+  if (!Array.isArray(attachments)) return 0;
+  for (const att of attachments) {
+    if (!att || typeof att !== "object") continue;
+    if ((att as Record<string, unknown>).kind !== "summary_replaces") continue;
+    const ids = (att as Record<string, unknown>).message_ids;
+    return Array.isArray(ids) ? ids.length : 0;
+  }
+  return 0;
+}

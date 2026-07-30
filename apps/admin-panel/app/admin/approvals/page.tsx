@@ -86,6 +86,17 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // ADR 0114: una pregunta del agente (ask_human) se presenta como pregunta —
+  // el texto y las opciones sugeridas en primer plano, y «Aprobar» pasa a ser
+  // «Responder» (la respuesta viaja en `reason` y guía el siguiente intento).
+  const isQuestion = request.category === "human_question";
+  const questionArgs = (request.action as { args?: Record<string, unknown> })?.args ?? {};
+  const questionText = isQuestion ? String(questionArgs.question ?? "") : "";
+  const questionOptions =
+    isQuestion && Array.isArray(questionArgs.options)
+      ? (questionArgs.options as unknown[]).map((o) => String(o))
+      : [];
+
   const resolve = useMutation({
     mutationFn: (approved: boolean) =>
       apiFetch(`/approvals/${request.id}/resolve`, {
@@ -116,15 +127,30 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
-        <pre className="bg-muted/40 overflow-x-auto rounded-md p-2 text-xs">
-          {JSON.stringify(request.action, null, 2)}
-        </pre>
+        {isQuestion ? (
+          <div className="space-y-2" data-testid={`question-${request.id}`}>
+            <p className="text-sm font-medium">{questionText}</p>
+            {questionOptions.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {questionOptions.map((opt) => (
+                  <Badge key={opt} variant="muted">
+                    {opt}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <pre className="bg-muted/40 overflow-x-auto rounded-md p-2 text-xs">
+            {JSON.stringify(request.action, null, 2)}
+          </pre>
+        )}
 
         <MarkdownTextarea
           data-testid={`reason-${request.id}`}
           value={reason}
           onChange={setReason}
-          placeholder="Motivo (opcional)"
+          placeholder={isQuestion ? "Tu respuesta para el agente" : "Motivo (opcional)"}
           rows={2}
         />
 
@@ -137,11 +163,11 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
         <div className="flex gap-2">
           <Button
             data-testid={`approve-${request.id}`}
-            disabled={resolve.isPending}
+            disabled={resolve.isPending || (isQuestion && !reason.trim())}
             onClick={() => resolve.mutate(true)}
           >
             <Check className="mr-1.5 h-4 w-4" />
-            Aprobar
+            {isQuestion ? "Responder" : "Aprobar"}
           </Button>
           <Button
             variant="outline"

@@ -419,6 +419,68 @@ async def test_clear_messages_empties_conversation_but_keeps_it(
 
 
 @pytest.mark.asyncio
+async def test_message_window_returns_the_NEWEST_and_paginates_backwards(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """A-01: la ventana por defecto son los mensajes MÁS RECIENTES, no los más antiguos.
+
+    El endpoint ordenaba ASC con `limit`, así que devolvía los N PRIMEROS: pasada
+    la ventana el feed se congelaba en el arranque de la conversación, el botón
+    «Generar Plan» (que mira el último mensaje `agent`) desaparecía para siempre y
+    el poll de respaldo evaluaba un mensaje viejo. Y sin `before` no había forma de
+    releer hacia atrás: cualquier ventana fija dejaba lo antiguo inalcanzable."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        conv = await client.post(
+            f"/projects/{seeded['project_a']}/conversations",
+            json={"title": "Chat largo"},
+            headers=headers,
+        )
+        conv_id = conv.json()["id"]
+
+        cn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            for i in range(12):
+                await cn.execute(
+                    "INSERT INTO messages (id, tenant_id, conversation_id, author_kind,"
+                    " author_user_id, content, mode, attachments, is_summary)"
+                    " VALUES ($1,$2,$3,'user',$4,$5,'planning','[]',false)",
+                    uuid7(),
+                    seeded["tenant_a"],
+                    UUID(conv_id),
+                    seeded["user_a"],
+                    f"m{i:02d}",
+                )
+        finally:
+            await cn.close()
+
+        # Ventana por defecto acotada: los 5 ÚLTIMOS, en orden cronológico.
+        page = await client.get(f"/conversations/{conv_id}/messages?limit=5", headers=headers)
+        assert page.status_code == 200, page.text
+        body = [m["content"] for m in page.json()]
+        assert body == ["m07", "m08", "m09", "m10", "m11"], body
+
+        # `before` pagina hacia ATRÁS desde el más antiguo que ya tenemos.
+        oldest_id = page.json()[0]["id"]
+        older = await client.get(
+            f"/conversations/{conv_id}/messages?limit=5&before={oldest_id}", headers=headers
+        )
+        assert older.status_code == 200, older.text
+        assert [m["content"] for m in older.json()] == ["m02", "m03", "m04", "m05", "m06"]
+
+        # `after` (paginación hacia delante) sigue intacto.
+        fwd = await client.get(
+            f"/conversations/{conv_id}/messages?limit=3&after={oldest_id}", headers=headers
+        )
+        assert [m["content"] for m in fwd.json()] == ["m08", "m09", "m10"]
+
+
+@pytest.mark.asyncio
 async def test_clear_messages_cross_tenant_is_404(configured_app, migrations_pg_dsn: str) -> None:
     """A conversation id not visible to the caller can't be cleared (RLS → 404)."""
     seeded = await _seed(migrations_pg_dsn)

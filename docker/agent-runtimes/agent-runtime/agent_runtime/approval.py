@@ -15,20 +15,73 @@ approval` — the policy contract, not importable across the sandbox.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from typing import Any
 
+from shared_domain.approval_categories import APPROVAL_CATEGORIES
 from shared_domain.tool_names import to_canonical
 
-# Builtin tool → sensitive-action category (spec §7.7). Keyed on CANONICAL
-# tool names (ADR 0048) so it matches what the runtime registers; a tool
-# absent from this map is not sensitive and is never gated.
+# Builtin tool → sensitive-action category. Keyed on CANONICAL tool names
+# (ADR 0048); a tool absent from this map is not sensitive and is never gated.
+#
+# The VALUES are the canonical categories of shared_domain.approval_categories
+# (the same vocabulary the policy presets are seeded with). They used to be
+# code_execution/file_write/network_access/agent_delegation, which intersected
+# NONE of the 13 preset categories, so requires_human always returned auto and
+# nothing was ever gated (audit 2026-07-03, g6, fail-open). test_approval_gate_
+# categories pins every value here to APPROVAL_CATEGORIES. NOTE: agent_invoke is
+# gated as code_changes for now; a dedicated `agent_delegation` canonical
+# category (with its UI/preset support) is deferred to prod-03.
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
-    "shell_exec": "code_execution",
-    "write_file": "file_write",
-    "http_get": "network_access",
-    "http_post": "network_access",
-    "agent_invoke": "agent_delegation",
+    "shell_exec": "code_changes",
+    "stack_exec": "code_changes",
+    "write_file": "code_changes",
+    # prod-03 A8 (auditoría 2026-07-06): estas tools estaban wired pero SIN
+    # categoría, así que escapaban al gate incluso bajo customer-external.
+    "delete_file": "code_changes",  # destructiva sobre el worktree (como write_file)
+    "run_pytest": "code_changes",  # ejecutan código arbitrario del repo
+    "run_lint": "code_changes",
+    "run_typecheck": "code_changes",
+    "run_build": "code_changes",
+    "send_notification": "external_communication",  # el preset promete gatear comunicación
+    "http_get": "external_http_get",
+    "http_post": "external_http_post",
+    "agent_invoke": "code_changes",
 }
+
+
+def tool_categories_from_specs(
+    raw_specs: Iterable[Mapping[str, Any]] | None,
+    base: Mapping[str, str] = DEFAULT_TOOL_CATEGORIES,
+) -> dict[str, str]:
+    """El mapa tool→categoría del run: builtins + lo que traiga cada ToolSpec.
+
+    T2 de `tools-y-cierre-plan-fixes` (residuo de g6). :data:`DEFAULT_TOOL_CATEGORIES`
+    está keyed por nombre canónico de builtin y una tool MCP se llama
+    ``<server>.<tool>``, un nombre que depende del servidor que declare el
+    proyecto: no cabe en un mapa estático. El api-server deriva su categoría del
+    ``security_level`` de la fila (``shared_domain.approval_categories.
+    spec_approval_category``) y la serializa en el spec; aquí se une al mapa
+    builtin justo antes de construir el gate.
+
+    Dos reglas que no son adorno:
+
+      * **el builtin gana la colisión** — un spec no puede rebajar el gate de
+        ``write_file`` declarándolo con una categoría más laxa;
+      * **una categoría fuera de las 13 se descarta** — propagarla haría creer
+        que la tool está cubierta cuando ``requires_human`` caería en ``auto``,
+        que es exactamente el fail-open de g6 reeditado en pequeño.
+    """
+    merged = dict(base)
+    for spec in raw_specs or ():
+        name = spec.get("name")
+        category = spec.get("approval_category")
+        if not name or not category or name in base:
+            continue
+        if category not in APPROVAL_CATEGORIES:
+            continue
+        merged[str(name)] = str(category)
+    return merged
 
 
 def requires_human(policy: dict[str, Any] | None, category: str) -> bool:

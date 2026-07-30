@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import sys
 import types
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from shared_llm.providers import ClaudeAgentProvider
@@ -90,3 +91,115 @@ def test_caller_allowed_natives_are_not_disabled(monkeypatch: pytest.MonkeyPatch
     assert "WebSearch" not in disallowed
     assert "WebFetch" not in disallowed
     assert captured.get("allowed_tools") == ["WebSearch", "WebFetch"]
+
+
+# ---------------------------------------------------------------------------
+# F31/P1.6 — the chat-shaped path (no host tools) must ALSO disable natives.
+# `_build_options` builds the options for complete()/stream()/run_agent(); only
+# the first two pass disallow_native_tools=True. We exercise the production path
+# (no query_fn) with a faked SDK so we can inspect the ClaudeAgentOptions kwargs.
+# ---------------------------------------------------------------------------
+def _build_options_captured(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    allowed_tools: list[str] | None,
+    disallow_native_tools: bool,
+) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", _fake_sdk(captured))
+    # No query_fn -> _build_options runs the real (faked-SDK) code path.
+    provider = ClaudeAgentProvider(default_model="claude-opus-4-8")
+    provider._build_options(
+        model="claude-opus-4-8",
+        system="s",
+        allowed_tools=allowed_tools,
+        max_turns=8,
+        effort=None,
+        disallow_native_tools=disallow_native_tools,
+    )
+    return captured
+
+
+def test_no_host_tools_path_disables_native_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `decide()`-style complete() with NO tools must not let the SDK auto-run its
+    native tools (Bash/Write/Read/WebSearch) outside the host-mediated loop."""
+    captured = _build_options_captured(monkeypatch, allowed_tools=None, disallow_native_tools=True)
+    disallowed = captured.get("disallowed_tools")
+    assert disallowed is not None, "the no-host-tools path must also set disallowed_tools"
+    for native in ("Bash", "Write", "Read", "WebSearch", "WebFetch", "Edit", "Task"):
+        assert native in disallowed, f"{native} must be disabled on the chat-shaped path"
+
+
+def test_no_host_tools_path_respects_caller_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicitly allowed natives (córtex WebSearch/WebFetch, ADR 0076) stay enabled
+    even on the no-host-tools path."""
+    captured = _build_options_captured(
+        monkeypatch, allowed_tools=["WebSearch", "WebFetch"], disallow_native_tools=True
+    )
+    disallowed = captured.get("disallowed_tools") or []
+    assert "WebSearch" not in disallowed
+    assert "WebFetch" not in disallowed
+    assert "Bash" in disallowed
+    assert captured.get("allowed_tools") == ["WebSearch", "WebFetch"]
+
+
+def test_run_agent_path_keeps_native_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run_agent() escape hatch (disallow_native_tools defaults to False) must
+    NOT disable the natives — that mode wants the SDK's full toolset."""
+    captured = _build_options_captured(monkeypatch, allowed_tools=None, disallow_native_tools=False)
+    assert captured.get("disallowed_tools") is None
+
+
+def test_complete_without_tools_requests_native_disable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end wiring: complete() with no tools calls _build_options with
+    disallow_native_tools=True (spy on the kwargs, like the effort regression test)."""
+
+    async def _q(prompt: str, options: Any) -> AsyncIterator[Any]:
+        # Generador async VACÍO: el `yield` bajo TYPE_CHECKING (False en
+        # runtime) mantiene la función como generador sin código inalcanzable.
+        if TYPE_CHECKING:  # pragma: no cover
+            yield None
+
+    provider = ClaudeAgentProvider(query_fn=_q, default_model="claude-opus-4-8")
+    seen: dict[str, Any] = {}
+    original = provider._build_options
+
+    def _spy(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return original(**kwargs)
+
+    provider._build_options = _spy  # type: ignore[method-assign]
+    import asyncio
+
+    from shared_llm.types import Message
+
+    asyncio.run(provider.complete([Message(role="user", content="hi")]))
+    assert seen.get("disallow_native_tools") is True
+
+
+def test_run_agent_does_not_request_native_disable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The escape hatch must not ask to disable natives."""
+
+    async def _q(prompt: str, options: Any) -> AsyncIterator[Any]:
+        # Generador async VACÍO: el `yield` bajo TYPE_CHECKING (False en
+        # runtime) mantiene la función como generador sin código inalcanzable.
+        if TYPE_CHECKING:  # pragma: no cover
+            yield None
+
+    provider = ClaudeAgentProvider(query_fn=_q, default_model="claude-opus-4-8")
+    seen: dict[str, Any] = {}
+    original = provider._build_options
+
+    def _spy(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return original(**kwargs)
+
+    provider._build_options = _spy  # type: ignore[method-assign]
+    import asyncio
+
+    async def _drain() -> None:
+        async for _ in provider.run_agent("hi"):
+            pass
+
+    asyncio.run(_drain())
+    assert seen.get("disallow_native_tools") in (None, False)

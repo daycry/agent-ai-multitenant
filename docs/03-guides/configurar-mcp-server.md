@@ -251,6 +251,64 @@ proyecto.
 
 ---
 
+## Que los agentes USEN las tools: dónde va cada cosa (y dónde el prompt)
+
+Configurar el server (arriba) es solo la mitad. Para que un agente llame
+una tool MCP durante un run tienen que cumplirse **tres capas**, cada una
+en su sitio:
+
+| Capa                    | Dónde se configura                                                | Qué hace                                                                                                     |
+| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Servidor** → proyecto | `/admin/projects/{id}/mcp-servers` (esta guía)                    | Declara la conexión. Al despachar un run, el orchestrator inyecta `mcp_servers` y el runtime abre la sesión. |
+| **Tools** → catálogo    | Botón **"Importar tools"** en la card del server                  | Descubre las tools del server y las materializa en el catálogo del tenant como `<server>.<tool>`.            |
+| **Tools** → agente      | `/admin/agents/{id}` → pestaña Tools (o `PUT /agents/{id}/tools`) | Solo los agentes con la tool asignada la ven: la allowlist del run es la **intersección** agente ∩ modo.     |
+
+Si te saltas la tercera capa, el server conecta pero el agente **no ve**
+las tools (la allowlist las filtra). Verás el step `mcp_wire` en el visor
+del run con las tools registradas, y aun así el modelo no las tendrá.
+
+### Dónde indicar el prompt
+
+Hay dos sitios, según lo que quieras:
+
+1. **En la tarea (recomendado para acciones puntuales).** La descripción
+   y los `acceptance_criteria` de la tarea del plan son lo que el runtime
+   convierte en objetivo del run. Nombra las tools por su nombre EXACTO
+   con namespace:
+
+   > _"Publica el resumen como página de Confluence usando la tool
+   > `atlassian.confluence_create_page` con `space_key` DOCS. Después
+   > transiciona la issue PROJ-42 a Done con
+   > `atlassian.jira_transition_issue`."_
+
+   Y en los acceptance criteria: _"Se invocó
+   `atlassian.confluence_create_page` con space_key DOCS"_ — el reviewer
+   valida contra eso.
+
+2. **En la persona del agente (para hábitos persistentes).** El
+   `system_prompt` del agente (guía
+   [persona-y-system-prompt](./persona-y-system-prompt.md)) viaja como
+   primer bloque del system prompt de TODOS sus runs. Es el sitio para
+   políticas del tipo: _"Cuando completes una tarea que tenga issue de
+   Jira asociada, transiciónala con `atlassian.jira_transition_issue`"_.
+
+### Trampas comprobadas (prueba e2e Atlassian, 2026-07-18)
+
+- **La tarea debe ser autocontenida.** Si el prompt dice "publica el
+  contenido de `docs/X.md`" y ese fichero no existe en el repo, el agente
+  quema todas sus iteraciones buscándolo y aborta **sin llamar jamás al
+  MCP**. O garantiza que el insumo existe, o pide al agente que lo cree
+  primero (`write_file`) y luego lo publique.
+- **Nombres exactos.** El modelo llama `atlassian.confluence_create_page`,
+  no `confluence_create_page`: el namespace `<server>.` forma parte del
+  nombre registrado.
+- **Diagnóstico.** El step `mcp_wire` del visor de runs dice si el server
+  conectó (y qué tools registró) o por qué falló. Sin ese step, el spec
+  del run no llevaba `mcp_servers` (¿proyecto sin el server declarado en
+  el momento del despacho?).
+
+---
+
 ## Preguntas frecuentes
 
 ### ¿Puedo añadir el mismo MCP a varios proyectos?

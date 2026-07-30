@@ -29,8 +29,7 @@ flowchart TB
     end
 
     subgraph frontends["Frontends (Next.js 14)"]
-        ADMIN["admin-panel<br/>System Admin + Tenant Admin"]
-        WEB["web-app<br/>tenants (Kanban, chat, KBs, docs)"]
+        ADMIN["admin-panel<br/>frontend único: tenants + System Admin"]
         INSTALLER["installer<br/>wizard 9 pasos (Fase 15)"]
     end
 
@@ -80,8 +79,8 @@ flowchart TB
         PROM["prometheus + grafana + loki + alertmanager"]
     end
 
-    NGINX --> ADMIN & WEB & INSTALLER
-    ADMIN & WEB --> API
+    NGINX --> ADMIN & INSTALLER
+    ADMIN --> API
     API --> PG & REDIS & MINIO & VAULT
     API --> ORCH
     ORCH --> REDIS

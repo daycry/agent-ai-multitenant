@@ -2,10 +2,21 @@
 title: Secuencia maestra de ejecución — implementar los planes pendientes fase a fase
 version: 1.0
 last_updated: 2026-05-29
-status: published
+status: obsolete
 ---
 
 # Secuencia Maestra de Ejecución
+
+> **⚠️ OBSOLETO (corregido 2026-07-06, auditoría de roadmap).** Este documento es una foto fija
+> del 2026-05-29 y nunca se actualizó mientras el roadmap avanzaba 8 fases más: dice "07-16 son
+> nuevos a implementar" pero esas 10 fases están hoy `completed`/`pending_human_validation` (código
+> implementado, en muchos casos desplegado). La sección "Estado real" y el orden de "olas" de abajo
+> **NO reflejan la realidad actual** — no los uses para decidir qué falta. Para el estado real,
+> lee el frontmatter (`status`/`started_at`/`completed_at`) de cada fichero de `docs/roadmap/`
+> directamente, o pide una auditoría fresca (esto mismo se hizo el 2026-07-06 y encontró
+> desactualización sistemática en 24 de 85 ficheros — ver `docs/07-changelog/` de esa fecha si
+> existe, o el historial de esta conversación). Se conserva el resto del documento como registro
+> histórico del protocolo de trabajo (TDD, PR por plan, gate humano), que SÍ sigue vigente.
 
 Este documento ordena la **implementación de todos los planes pendientes** del roadmap por
 dependencias (`blocking_plan`), respetando la regla de **una sola fase `in_progress` a la vez**,

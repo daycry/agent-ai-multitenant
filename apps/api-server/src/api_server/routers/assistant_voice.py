@@ -70,17 +70,74 @@ def _resolve_voice(requested: str, current: str) -> str:
     return requested if requested in _SUPPORTED_VOICES else current
 
 
+# Idioma de la voz Kokoro por la PRIMERA letra del prefijo (a/b = inglés,
+# e = español). El idioma de la RESPUESTA sigue a la voz elegida: el operador
+# que pone una voz española espera respuesta en español, pero gpt-oss razona
+# en inglés y a veces respondía en inglés aunque la pregunta fuese en español.
+_VOICE_LANGUAGE: dict[str, str] = {
+    "af_heart": "en",
+    "am_michael": "en",
+    "bf_emma": "en",
+    "bm_george": "en",
+    "ef_dora": "es",
+    "em_alex": "es",
+}
+
+
+def voice_language(voice: str) -> str:
+    """``"es"`` | ``"en"`` según la voz (default español — despliegue ES-first)."""
+    return _VOICE_LANGUAGE.get(voice, "es")
+
+
+def voice_language_instruction(voice: str) -> str:
+    """Instrucción imperativa para que la respuesta salga en el idioma de la voz
+    elegida, pase lo que pase con el razonamiento interno del modelo."""
+    if voice_language(voice) == "en":
+        return (
+            " CRITICAL: answer ONLY in English, regardless of the language of your "
+            "internal reasoning or the question."
+        )
+    return (
+        " IMPORTANTE: responde SIEMPRE en español, sea cual sea el idioma de tu "
+        "razonamiento interno o de la pregunta. NUNCA respondas en inglés."
+    )
+
+
+# RFC 6455: el payload de un frame de control cabe en 125 bytes; 2 van al
+# código de cierre → el reason del close se limita a 123 bytes UTF-8. Un
+# reason mayor hace LANZAR a ws.close() — y con el suppress de abajo el
+# navegador acababa viendo un 1006 mudo en vez del 1008 con diagnóstico
+# (visto en vivo: el detail de «no hay proveedor LLM» medía 205 bytes).
+_MAX_CLOSE_REASON_BYTES = 123
+
+
+def _clip_close_reason(reason: str) -> str:
+    """Recorta ``reason`` a ≤123 bytes UTF-8 sin partir un carácter multibyte."""
+    raw = reason.encode("utf-8")
+    if len(raw) <= _MAX_CLOSE_REASON_BYTES:
+        return reason
+    return raw[:_MAX_CLOSE_REASON_BYTES].decode("utf-8", errors="ignore")
+
+
 async def _reject(ws: WebSocket, reason: str) -> None:
+    """Cierra con 1008 SIN perder el diagnóstico.
+
+    El motivo completo viaja primero en un frame ``error`` (sin límite de
+    tamaño); el close lleva la versión recortada a 123 bytes para que el
+    cierre en sí nunca falle."""
     with contextlib.suppress(Exception):
-        await ws.close(code=_CLOSE_POLICY, reason=reason)
+        await ws.send_json({"type": "error", "detail": reason})
+    with contextlib.suppress(Exception):
+        await ws.close(code=_CLOSE_POLICY, reason=_clip_close_reason(reason))
 
 
-async def _respond(principal: AuthPrincipal, model: Any, user_text: str) -> str:
+async def _respond(principal: AuthPrincipal, model: Any, user_text: str, voice: str = "") -> str:
     """Run ONE assistant turn for `user_text`, reusing the chat brain verbatim.
 
     Opens a fresh RLS-bound tenant session per turn (like the REST chat endpoint),
     recalls the user's memory, folds it into the system prompt, and runs the
-    provider-agnostic graph. Returns the answer text."""
+    provider-agnostic graph. Returns the answer text. ``voice`` fija el idioma de
+    la respuesta al de la voz elegida (español para ef_/em_)."""
     tenant_id = require_tenant_id(principal)
     async with open_tenant_session(principal) as session:
         identity = await get_assistant_identity(session, tenant_id)
@@ -93,6 +150,8 @@ async def _respond(principal: AuthPrincipal, model: Any, user_text: str) -> str:
             known_facts=known_facts,
             remember_enabled="remember_about_me" in enabled_tools,
         )
+        if voice:
+            system_prompt += voice_language_instruction(voice)
         tool_ctx = AssistantToolContext(
             session=session, tenant_id=tenant_id, user_id=principal.user_id
         )
@@ -123,13 +182,21 @@ async def _run_turn(
     socket (the user can keep talking). ``audio_mime`` is the real content type
     the browser announced (MediaRecorder emits webm/opus, not wav) — propagating
     it (instead of hardcoding ``audio/wav``) is the shared STT robustness fix."""
+
+    async def _emit_transcript(user_text: str) -> None:
+        # Feedback inmediato tras el STT (antes del cerebro): el usuario ve sus
+        # palabras y el `thinking` mantiene tráfico mientras el modelo piensa —
+        # un turno largo (40-90s) ya no muere por el keepalive del WS.
+        await ws.send_json({"type": "transcript", "text": user_text})
+        await ws.send_json({"type": "thinking"})
+
     session = VoiceSession(
         transcribe=lambda a: stt.transcribe(a, content_type=audio_mime),
-        respond=lambda t: _respond(principal, model, t),
+        respond=lambda t: _respond(principal, model, t, voice),
         synthesize=lambda t: tts.synthesize(t, voice=voice),
     )
     try:
-        turn: VoiceTurn = await session.handle_turn(audio)
+        turn: VoiceTurn = await session.handle_turn(audio, on_transcript=_emit_transcript)
     except Exception as exc:  # media/provider failure must not kill the socket
         _log.warning("assistant_voice.turn_failed", error=str(exc))
         await ws.send_json({"type": "error", "detail": f"voice turn failed: {exc}"})
@@ -137,7 +204,6 @@ async def _run_turn(
     if turn.empty:
         await ws.send_json({"type": "turn_end", "empty": True})
         return
-    await ws.send_json({"type": "transcript", "text": turn.user_text})
     await ws.send_json({"type": "answer", "text": turn.answer_text})
     if turn.audio:
         await ws.send_bytes(turn.audio)

@@ -394,6 +394,56 @@ class InstallOrchestrator:
             gate_report=gate_report,
         )
 
+    async def analyze_for_install(
+        self,
+        *,
+        session: AsyncSession,
+        tenant_id: UUID,
+        actor: str,
+        listing: MarketplaceListing,
+    ) -> dict[str, Any]:
+        """Gate de análisis estático para la instalación FRESCA (task_prod12_mkt_01).
+
+        El install de Fase A no pasaba por NINGÚN gate (el TODO de ADR 0081);
+        este método cablea exactamente el que sí puede correr dentro del
+        api-server — bandit/semgrep son puro Python, sin Docker — reusando
+        ``_gate_static_analysis`` (el MISMO pipeline del update).
+
+        Semántica deliberada:
+          - política sin análisis requerido → ``skipped_reason=not_required``;
+          - artefacto AUSENTE en disco → ``skipped_reason=no_artifact`` y la
+            instalación SIGUE (bloquear aquí cerraría en falso toda
+            instalación pre-registry — la regresión H4 que ADR 0081 documenta;
+            el hueco restante es la Fase B/C: registry + sandbox out-of-process);
+          - hallazgos por encima de ``max_allowed_severity`` → audit row de
+            aborto comprometida + :class:`StaticAnalysisBlockedError` (422 en
+            el router), sin installation persistida.
+
+        Devuelve el fragmento de ``gate_report`` que el caller pliega en el
+        detail del audit row del install.
+        """
+        policy = trust_policy(listing.trust_level)
+        if not policy.static_analysis_required:
+            return {"static_analysis": {"skipped_reason": "not_required"}}
+        ctx = _GateContext(
+            session=session,
+            tenant_id=tenant_id,
+            actor=actor,
+            listing=listing,
+            gate_report={"trust_level": str(policy.level)},
+        )
+        try:
+            artifact = self._fetcher.fetch(listing)
+        except Exception as exc:
+            _log.warning(
+                "marketplace.install.analysis_skipped_no_artifact",
+                listing_id=str(listing.id),
+                error=str(exc),
+            )
+            return {"static_analysis": {"skipped_reason": "no_artifact", "detail": str(exc)}}
+        await self._gate_static_analysis(ctx, artifact, policy)
+        return ctx.gate_report
+
     async def update(
         self,
         *,

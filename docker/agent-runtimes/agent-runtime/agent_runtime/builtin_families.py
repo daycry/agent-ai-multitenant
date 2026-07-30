@@ -76,6 +76,7 @@ FAMILY_NOTIFICACION = "notificacion"
 FAMILY_ORQUESTACION = "orquestacion"
 FAMILY_CONOCIMIENTO = "conocimiento"
 FAMILY_MEMORIA = "memoria"
+FAMILY_STACK = "stack"
 
 ALL_FAMILIES: tuple[str, ...] = (
     FAMILY_FILE,
@@ -84,6 +85,7 @@ ALL_FAMILIES: tuple[str, ...] = (
     FAMILY_ORQUESTACION,
     FAMILY_CONOCIMIENTO,
     FAMILY_MEMORIA,
+    FAMILY_STACK,
 )
 
 _FALSY = {"0", "false", "no", "off", ""}
@@ -115,6 +117,7 @@ def register_builtin_families(
     sink: OrchestrationSink,
     allowed_domains: frozenset[str] = frozenset(),
     flags: dict[str, bool] | None = None,
+    task_id: str | None = None,
 ) -> list[str]:
     """Register every executable builtin family on ``registry`` under its
     canonical name, honouring the per-family feature flags.
@@ -126,6 +129,9 @@ def register_builtin_families(
       orchestration + notification families record their effects there.
     * ``allowed_domains`` — the project egress allowlist the network family
       binds to.
+    * ``task_id`` — the running task's id; the ``stack`` family (``stack_exec``)
+      needs it to tell the worker which worktree to run the command over. A bare
+      run (no api or no task id) skips it.
 
     Returns the canonical names actually registered (skips disabled families
     and the api-backed families when ``api is None``) so the boot path can log
@@ -142,6 +148,7 @@ def register_builtin_families(
         files = WorkspaceFiles(root=_workspace_root())
         _add("read_file", files.file_read)
         _add("write_file", files.file_write)
+        _add("delete_file", files.file_delete)
         _add("list_files", files.file_list)
 
     # --- network family: http_get / http_post (canonical) -------------------
@@ -180,18 +187,40 @@ def register_builtin_families(
         _add("memory_recall", memory.memory_recall)
         _add("memory_store", memory.memory_store)
 
+    # --- stack family: stack_exec (ADR 0093) --------------------------------
+    # Runs a command in the project's runtime-template via the worker (the
+    # sandbox has no Docker). Needs BOTH the internal-api client (the worker
+    # round-trip) and the task id (which worktree). A bare run lacks one or the
+    # other, so the tool is skipped honestly rather than failing every call.
+    if api is not None and task_id and family_enabled(FAMILY_STACK, flags):
+        from agent_runtime.stack_exec_tool import StackExecTool
+
+        _add("stack_exec", StackExecTool(api, str(task_id)))
+
     return registered
 
 
-# Runtime-only SYSTEM family tools (memory + orchestration). They have NO
-# catalog row (not in api_server.seeds.builtin_tools), so they can NEVER be in
-# a per-agent allowlist — yet every agent needs them to recall/store memory
-# (H0) and move the Kanban / invoke subagents (H3). They are therefore wired
-# regardless of `agent_tools` and exempt from the per-agent allowlist.
+# Runtime SYSTEM capability tools (memory + orchestration + KB search). Memory
+# and orchestration have NO catalog row (not in api_server.seeds.builtin_tools),
+# so they can NEVER be in a per-agent allowlist — yet every agent needs them to
+# recall/store memory (H0) and move the Kanban / invoke subagents (H3).
+# `rag_search` (P0-3, investigación 2026-07-11) IS a catalog tool
+# (semantic_search), but KB retrieval is as fundamental as memory: a mode
+# whitelist that omitted it silenced the agent's knowledge access. Only the
+# READ-ONLY search is exempted; the mutating knowledge tools (document_convert /
+# promote_to_kb) stay catalog-gated. All of these are wired regardless of
+# `agent_tools` and exempt from the per-agent allowlist.
 # MUST stay in sync with workers.agent_tool_schemas.SYSTEM_TOOL_NAMES (the two
 # packages deliberately do not import one another — the runtime is container-side).
 SYSTEM_FAMILY_TOOL_NAMES: frozenset[str] = frozenset(
-    {"memory_recall", "memory_store", "kanban_update", "task_comment", "agent_invoke"}
+    {
+        "memory_recall",
+        "memory_store",
+        "kanban_update",
+        "task_comment",
+        "agent_invoke",
+        "rag_search",
+    }
 )
 
 
@@ -202,18 +231,19 @@ def register_system_families(
     sink: OrchestrationSink,
     flags: dict[str, bool] | None = None,
 ) -> list[str]:
-    """Register ONLY the runtime-only SYSTEM families — orchestration + memory.
+    """Register ONLY the SYSTEM capabilities — orchestration + memory + KB search.
 
     These are wired ALWAYS by the boot path (even when the agent has no
     ``agent_tools`` and the catalog families stay un-wired), so memory recall /
-    store and the Kanban tools are available to every agent (H0/H3 / L5). The
-    catalog families (file / network / knowledge) remain gated on the presence
-    of ``tool_specs`` via :func:`register_builtin_families`.
+    store, the Kanban tools and the KB search are available to every agent
+    (H0/H3 / L5 / P0-3). The remaining catalog families (file / network / the
+    mutating knowledge tools) stay gated on the presence of ``tool_specs`` via
+    :func:`register_builtin_families`.
 
     Honours the same per-family flags as :func:`register_builtin_families`.
     ``api is None`` (a bare run with no minted token) skips the api-backed
-    memory family but still wires orchestration (sink-only). Returns the
-    canonical names actually registered.
+    memory + knowledge families but still wires orchestration (sink-only).
+    Returns the canonical names actually registered.
     """
     registered: list[str] = []
 
@@ -231,6 +261,13 @@ def register_system_families(
         memory = MemoryTools(api)
         _add("memory_recall", memory.memory_recall)
         _add("memory_store", memory.memory_store)
+
+    # P0-3: la búsqueda en la KB (read-only) es capacidad de sistema — sin ella
+    # un modo con whitelist dejaba al agente sin acceso al conocimiento en
+    # silencio. Los mutadores de la familia siguen en register_builtin_families.
+    if api is not None and family_enabled(FAMILY_CONOCIMIENTO, flags):
+        rag = RagTools(api)
+        _add("rag_search", rag.rag_search)
 
     return registered
 
@@ -250,6 +287,7 @@ def _verb_bound(http: HttpRequestTool, method: str) -> ToolFn:
 __all__ = [
     "ALL_FAMILIES",
     "FAMILY_FLAG_PREFIX",
+    "FAMILY_STACK",
     "SYSTEM_FAMILY_TOOL_NAMES",
     "family_enabled",
     "register_builtin_families",

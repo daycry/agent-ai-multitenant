@@ -208,6 +208,69 @@ async def test_bm25_only_returns_text_matches(
 
 
 # ---------------------------------------------------------------------------
+# AUD16-18: dedup por contenido — un slot del recall no se gasta dos veces en
+# la misma lección (duplicados exactos preexistentes al dedup del persist).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_recall_dedupes_identical_content_and_fills_the_slot(
+    schema_at_head, migrations_pg_dsn: str, app_database_url: str
+) -> None:
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn)
+
+    # Dos filas MÁS con el contenido EXACTO de `asyncpg_sql` (el caso real: 5
+    # filas idénticas del mismo batch del 07-07) — solo debe salir UNA, y el
+    # slot liberado lo ocupa la siguiente lección distinta.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        for _ in range(2):
+            await conn.execute(
+                "INSERT INTO memory_entries"
+                " (id, tenant_id, scope, type, content, project_id, embedding)"
+                " VALUES ($1, $2, 'project_shared', 'semantic', $3, $4, NULL)",
+                uuid4(),
+                seeded["tenant_id"],
+                "Project uses asyncpg and SQLAlchemy 2.x async; never psycopg3.",
+                seeded["project_id"],
+            )
+        # La lección DISTINTA que debe ocupar el slot liberado por el dedup
+        # (comparte término con la query: plainto_tsquery exige todos).
+        await conn.execute(
+            "INSERT INTO memory_entries"
+            " (id, tenant_id, scope, type, content, project_id, embedding)"
+            " VALUES ($1, $2, 'project_shared', 'semantic', $3, $4, NULL)",
+            uuid4(),
+            seeded["tenant_id"],
+            "asyncpg engines in Celery tasks must be disposed after each task.",
+            seeded["project_id"],
+        )
+    finally:
+        await conn.close()
+
+    engine, session = await _open_session(app_database_url, seeded["tenant_id"])
+    try:
+        hits = await recall(
+            session,
+            query="asyncpg",
+            tenant_id=seeded["tenant_id"],
+            scopes=["project_shared", "team_shared", "global"],
+            project_id=seeded["project_id"],
+            team_id=seeded["team_id"],
+            user_id=seeded["user_id"],
+            limit=2,
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+
+    contents = [h.content for h in hits]
+    assert len(contents) == len(set(contents)), contents
+    assert len(contents) == 2, contents
+
+
+# ---------------------------------------------------------------------------
 # Vector-only path
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio

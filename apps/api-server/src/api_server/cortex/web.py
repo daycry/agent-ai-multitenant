@@ -74,6 +74,22 @@ def _build_proxied_client(proxy_url: str | None, timeout: float) -> httpx.AsyncC
     )
 
 
+def _build_direct_client(timeout: float) -> httpx.AsyncClient:
+    """Cliente HTTP DIRECTO (sin egress-proxy) para el buscador INTERNO de
+    confianza (searxng en la red del docker).
+
+    El egress-proxy es para salidas a INTERNET (Brave, las URLs de resultados
+    en web_fetch); el hop api-server→searxng es tráfico interno de servicio y
+    NO debe atravesarlo — el proxy no alcanza el searxng interno («All
+    connection attempts failed», visto en vivo). searxng hace su propia salida
+    a los buscadores por su cuenta."""
+    return httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=False,
+        headers={"User-Agent": _USER_AGENT},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Saneo de HTML → texto (stdlib, sin dependencias nuevas)
 # ---------------------------------------------------------------------------
@@ -246,11 +262,15 @@ class SearXNGProvider:
     ) -> list[dict[str, str]]:
         limit = _normalize_limit(limit)
         endpoint = f"{self._base_url}/search"
-        assert_safe_url(endpoint, resolver=self._resolver)
+        # Backend de confianza (cortex.searxng_url, System Admin): vive en la red
+        # interna del docker con IP privada → allow_internal. El guard estricto se
+        # aplica a las URLs de los resultados en web_fetch.
+        assert_safe_url(endpoint, resolver=self._resolver, allow_internal=True)
         params = {"q": query, "format": "json"}
 
         owns = self._client is None
-        http = self._client or _build_proxied_client(self._proxy_url, self._timeout)
+        # searxng es INTERNO y de confianza → cliente DIRECTO, no el egress-proxy.
+        http = self._client or _build_direct_client(self._timeout)
         try:
             try:
                 response = await http.get(endpoint, params=params)
@@ -313,7 +333,9 @@ class BraveSearchProvider:
         self, query: str, *, limit: int = DEFAULT_SEARCH_LIMIT
     ) -> list[dict[str, str]]:
         limit = _normalize_limit(limit)
-        assert_safe_url(self._base_url, resolver=self._resolver)
+        # Backend de confianza (config del operador): allow_internal — el guard
+        # estricto se aplica a los resultados en web_fetch, no al buscador.
+        assert_safe_url(self._base_url, resolver=self._resolver, allow_internal=True)
         params = {"q": query, "count": str(limit)}
         headers = {"Accept": "application/json", "X-Subscription-Token": self._api_key}
 

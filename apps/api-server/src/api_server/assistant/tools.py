@@ -80,10 +80,15 @@ class AssistantToolContext:
 # Tool implementations
 # ---------------------------------------------------------------------------
 async def _tenant_projects_status(ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
-    """Consolidated count + per-project status of the tenant's projects."""
+    """Consolidated count + per-project status of the tenant's projects.
+
+    Excluye las PLANTILLAS (verificación en vivo 2026-07-18): la policy RLS
+    ``projects_template_read`` deja leer el catálogo builtin, así que sin el
+    filtro el asistente contaba 9 plantillas de la plataforma como «proyectos
+    activos» del tenant."""
     result = await ctx.session.execute(
         select(Project.id, Project.name, Project.status)
-        .where(Project.deleted_at.is_(None))
+        .where(Project.deleted_at.is_(None), Project.is_template.is_(False))
         .order_by(Project.created_at)
     )
     rows = result.all()
@@ -155,6 +160,54 @@ async def _tenant_recent_activity(
         select(func.count()).select_from(Task).where(Task.status.in_(_ACTIVE_TASK_STATUSES))
     )
     return {"active_task_count": int(total_active or 0), "recent": items}
+
+
+# A4 (investigación 2026-07-11): búsqueda en las KBs del tenant. El motor RAG
+# existía pero el asistente no tenía NINGUNA tool de conocimiento — «¿qué dice
+# nuestra documentación sobre X?» era imposible. Cross-proyecto: cualquier
+# chunk de una KB granted a algún proyecto del tenant (bajo la sesión RLS del
+# request solo se ven filas del propio tenant + built-ins). BM25 con la config
+# es_unaccent unificada (P0-4); el path vectorial queda para una segunda ola
+# (exigiría cablear el embedder al contexto de tools).
+_KB_SEARCH_LIMIT_MAX = 10
+_KB_SEARCH_SNIPPET = 500
+
+
+async def _search_knowledge(
+    ctx: AssistantToolContext, *, query: str = "", limit: int = 5, **_: Any
+) -> dict[str, Any]:
+    """Pasajes relevantes de las KBs del tenant (read-only, RLS-scoped)."""
+    from sqlalchemy import text as sa_text
+
+    q = str(query or "").strip()
+    if not q:
+        return {"hits": [], "note": "query vacía"}
+    k = max(1, min(int(limit or 5), _KB_SEARCH_LIMIT_MAX))
+    sql = sa_text(
+        """
+        SELECT chunks.content, documents.kb_id, documents.title
+        FROM chunks
+        JOIN documents ON documents.id = chunks.document_id
+             AND documents.deleted_at IS NULL
+        WHERE EXISTS (SELECT 1 FROM kb_projects kp WHERE kp.kb_id = documents.kb_id)
+          AND to_tsvector('public.es_unaccent', chunks.content)
+              @@ plainto_tsquery('public.es_unaccent', :q)
+        ORDER BY ts_rank_cd(
+            to_tsvector('public.es_unaccent', chunks.content),
+            plainto_tsquery('public.es_unaccent', :q)) DESC
+        LIMIT :k
+        """
+    )
+    rows = (await ctx.session.execute(sql, {"q": q, "k": k})).all()
+    return {
+        "hits": [
+            {
+                "document": str(row[2] or ""),
+                "snippet": str(row[0] or "")[:_KB_SEARCH_SNIPPET],
+            }
+            for row in rows
+        ]
+    }
 
 
 async def _tenant_budget_status(ctx: AssistantToolContext, **_: Any) -> dict[str, Any]:
@@ -440,6 +493,29 @@ ASSISTANT_TOOLS: dict[str, ToolEntry] = {
                 "(conteo total y por estado)."
             ),
             "parameters": {"type": "object", "properties": {}},
+        },
+    ),
+    "search_knowledge": ToolEntry(
+        impl=_search_knowledge,
+        schema={
+            "name": "search_knowledge",
+            "description": (
+                "Busca pasajes relevantes en las bases de conocimiento del "
+                "tenant (documentación, guías) y devuelve fragmentos citables."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Qué buscar."},
+                    "limit": {
+                        "type": "integer",
+                        "description": "Máximo de pasajes (1-10).",
+                        "minimum": 1,
+                        "maximum": 10,
+                    },
+                },
+                "required": ["query"],
+            },
         },
     ),
     "tenant_plans_summary": ToolEntry(

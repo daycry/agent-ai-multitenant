@@ -19,13 +19,12 @@ def test_branch_name_short_id_plus_slug() -> None:
 
 
 def test_branch_name_normalises_slug() -> None:
-    """Spaces, mixed case, accents → kebab-case alnum-only."""
+    """Spaces, mixed case, accents → kebab-case alnum-only. PROY2-14: los
+    acentos se TRANSLITERAN (búsqueda→busqueda), no se pierden letras."""
     from workers.plan_git import make_plan_branch_name
 
     name = make_plan_branch_name("abcdef0123", "Mejorar Búsqueda v2")
-    # The accents and the space get normalised; the result is
-    # safe for git refs.
-    assert name == "plan/abcdef01-mejorar-b-squeda-v2"
+    assert name == "plan/abcdef01-mejorar-busqueda-v2"
 
 
 def test_branch_name_handles_empty_slug() -> None:

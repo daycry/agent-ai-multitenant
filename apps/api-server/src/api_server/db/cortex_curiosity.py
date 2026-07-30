@@ -38,10 +38,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from api_server.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 #: Estados válidos del ciclo de vida de una persecución de curiosidad.
+#: ``surfaced`` (migración 0103): el tema ya se abrió en un turno (surfacing).
 CURIOSITY_STATUSES: tuple[str, ...] = (
     "selected",
     "searching",
     "digested",
+    "surfaced",
     "skipped",
     "failed",
 )
@@ -70,7 +72,7 @@ class CortexCuriosityPursuit(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             text("created_at DESC"),
         ),
         CheckConstraint(
-            "status IN ('selected', 'searching', 'digested', 'skipped', 'failed')",
+            "status IN ('selected', 'searching', 'digested', 'surfaced', 'skipped', 'failed')",
             name="ck_cortex_pursuits_status",
         ),
     )

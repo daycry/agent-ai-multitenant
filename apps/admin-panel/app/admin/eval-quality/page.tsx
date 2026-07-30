@@ -33,6 +33,8 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Spinner } from "@/components/ui/spinner";
+import { EvalRunResults } from "@/components/evals/eval-run-results";
+import { LaunchEvalRun } from "@/components/evals/launch-eval-run";
 import { ApiError, apiFetch } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -237,6 +239,10 @@ function PassRateBar({
 
 function DashboardBody() {
   const [windowDays, setWindowDays] = useState<number>(90);
+  // Qué corrida tiene el desglose abierto. Una sola a la vez: abrir varias a
+  // la vez dispara una petición por fila y el desglose se viene a mirar de uno
+  // en uno.
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
 
   const dashboard = useQuery({
     queryKey: ["eval-quality-dashboard", windowDays],
@@ -274,6 +280,17 @@ function DashboardBody() {
 
   return (
     <div className="space-y-6" data-testid="quality-dashboard">
+      {/* La acción que faltaba: hasta `task_wf_52b` este dashboard solo sabía
+          LEER corridas y no había forma de producir ninguna, así que llevaba
+          desde el Plan 14 pintando un vacío permanente. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-muted-foreground text-sm">
+          Una corrida mide un dataset dorado con un modelo sujeto y lo puntúa con un modelo juez
+          distinto.
+        </p>
+        <LaunchEvalRun />
+      </div>
+
       {/* Window selector */}
       <SegmentedControl
         label="Ventana:"
@@ -434,10 +451,11 @@ function DashboardBody() {
                     <th className="py-2 pr-3">Pass rate</th>
                     <th className="py-2 pr-3">Coste USD</th>
                     <th className="py-2 pr-3">Finalizó</th>
+                    <th className="py-2 pr-3">Detalle</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.data.map((r) => (
+                  {runs.data.flatMap((r) => [
                     <tr
                       key={r.id}
                       className="border-border border-t"
@@ -463,8 +481,25 @@ function DashboardBody() {
                       <td className="text-muted-foreground whitespace-nowrap py-2 pr-3">
                         {fmtWhen(r.finished_at)}
                       </td>
-                    </tr>
-                  ))}
+                      <td className="py-2 pr-3">
+                        <button
+                          type="button"
+                          className="text-primary text-xs underline-offset-2 hover:underline"
+                          onClick={() => setExpandedRun(expandedRun === r.id ? null : r.id)}
+                          data-testid={`run-results-toggle-${r.id}`}
+                        >
+                          {expandedRun === r.id ? "Ocultar" : "Ver items"}
+                        </button>
+                      </td>
+                    </tr>,
+                    expandedRun === r.id ? (
+                      <tr key={`${r.id}-results`} className="border-border border-t">
+                        <td colSpan={8} className="py-3">
+                          <EvalRunResults runId={r.id} />
+                        </td>
+                      </tr>
+                    ) : null,
+                  ])}
                 </tbody>
               </table>
             </div>

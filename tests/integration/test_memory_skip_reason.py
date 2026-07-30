@@ -224,12 +224,29 @@ async def test_private_ai_records_skip_private(
 # 2. team_shared sin equipo → motivo 'no_team'
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_team_shared_without_team_records_no_team(
+async def test_team_shared_without_team_routes_to_fallback_scope(
     schema_at_head, workers_settings, migrations_pg_dsn: str
 ) -> None:
+    """ADR 0071 (routing de owners): team_shared sin equipo ya NO es un skip
+    duro con 'no_team' — el scope semántico enruta al owner de fallback
+    (project_shared) y la memorización PROCEDE, dejando la razón NULL. El
+    candado antiguo pinneaba el skip total pre-routing."""
     seeded = await _seed(migrations_pg_dsn, memory_scope="team_shared", with_team=False)
     await _run_worker(seeded["execution_id"], workers_settings, _TWO_CANDIDATES)
-    assert await _skip_reason(migrations_pg_dsn, seeded["execution_id"]) == "no_team"
+    assert await _skip_reason(migrations_pg_dsn, seeded["execution_id"]) is None
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        scopes = {
+            r[0]
+            for r in await conn.fetch(
+                "SELECT DISTINCT scope FROM memory_entries WHERE source_execution_id = $1",
+                seeded["execution_id"],
+            )
+        }
+    finally:
+        await conn.close()
+    assert "team_shared" not in scopes, "sin equipo no puede existir memoria team_shared"
+    assert scopes, "el routing debe haber memorizado en el scope de fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +256,10 @@ async def test_team_shared_without_team_records_no_team(
 async def test_not_done_records_not_done(
     schema_at_head, workers_settings, migrations_pg_dsn: str
 ) -> None:
-    seeded = await _seed(migrations_pg_dsn, memory_scope="global", execution_status="aborted")
+    # AUD16-17 (aprender de fracasos): el default elegible es done + failed +
+    # aborted + needs_human_review — 'aborted' YA memoriza. Un run aún
+    # 'running' sigue siendo no-elegible y registra el motivo.
+    seeded = await _seed(migrations_pg_dsn, memory_scope="global", execution_status="running")
     await _run_worker(seeded["execution_id"], workers_settings, _TWO_CANDIDATES)
     assert await _skip_reason(migrations_pg_dsn, seeded["execution_id"]) == "not_done"
 

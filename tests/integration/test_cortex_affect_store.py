@@ -308,3 +308,54 @@ async def test_load_returns_latest_snapshot(
         latest = await load_affect_state(session, owner_id, now=now)
         assert latest.emotion.valence == pytest.approx(0.9)
         assert latest.drives.curiosity == pytest.approx(0.9)
+
+
+# ---------------------------------------------------------------------------
+# Baseline evolutivo: el decay converge al mood_baseline de la IDENTIDAD
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_decay_converges_to_identity_baseline(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    from api_server.cortex.affect_store import load_affect_state, save_affect_snapshot
+    from api_server.cortex.affective import BASELINE_PAD, AffectState, Drives, PADState
+    from api_server.cortex.identity import ensure_identity, update_identity
+
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+    other_id = seed["other_id"]
+    sessionmaker = _admin_sessionmaker(admin_database_url)
+
+    # El owner tiene un baseline EVOLUTIVO calibrado por la reflexión.
+    async with sessionmaker() as session:
+        identity = await ensure_identity(session, owner_id)
+        new_state = dict(identity.identity_state)
+        new_state["mood_baseline"] = {"valence": 0.3, "arousal": 0.45, "dominance": 0.1}
+        await update_identity(session, owner_id, new_state=new_state, reason="calibración test")
+        await session.commit()
+
+    extreme = AffectState(
+        emotion=PADState(valence=-0.8, arousal=0.95, dominance=-0.6, intensity=0.9),
+        mood=PADState(valence=-0.3, arousal=0.5, dominance=0.0),
+        drives=Drives(curiosity=0.5, bonding=0.5, coherence=0.5, competence=0.5),
+    )
+    written_at = datetime.now(UTC)
+    async with sessionmaker() as session:
+        await save_affect_snapshot(session, owner_user_id=owner_id, state=extreme)
+        await save_affect_snapshot(session, owner_user_id=other_id, state=extreme)
+        await session.commit()
+
+    # El decay lazy converge al baseline de la identidad, no al neutro del motor.
+    async with sessionmaker() as session:
+        decayed = await load_affect_state(session, owner_id, now=written_at + timedelta(hours=100))
+        assert decayed.emotion.valence == pytest.approx(0.3, abs=1e-2)
+        assert decayed.emotion.arousal == pytest.approx(0.45, abs=1e-2)
+        assert decayed.emotion.dominance == pytest.approx(0.1, abs=1e-2)
+
+    # Cross-owner: el baseline calibrado de A JAMÁS tiñe el decay de B (sin
+    # identidad propia, B converge al neutro del motor BASELINE_PAD).
+    async with sessionmaker() as session:
+        other = await load_affect_state(session, other_id, now=written_at + timedelta(hours=100))
+        assert other.emotion.valence == pytest.approx(BASELINE_PAD.valence, abs=1e-2)
+        assert other.emotion.arousal == pytest.approx(BASELINE_PAD.arousal, abs=1e-2)
+        assert other.emotion.dominance == pytest.approx(BASELINE_PAD.dominance, abs=1e-2)

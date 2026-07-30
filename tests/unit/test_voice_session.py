@@ -37,6 +37,63 @@ async def test_handle_turn_runs_stt_then_brain_then_tts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_on_transcript_fires_before_the_slow_brain_call() -> None:
+    """Streaming del transcript: el callback se dispara TRAS el STT y ANTES del
+    cerebro, para que el usuario vea sus palabras al instante (el turno completo
+    puede tardar 40-90s) y haya tráfico intermedio que aleje el keepalive."""
+    order: list[str] = []
+
+    async def transcribe(audio: bytes) -> str:
+        order.append("stt")
+        return "hola mundo"
+
+    async def respond(text: str) -> str:
+        order.append("brain")
+        return "respuesta"
+
+    async def synthesize(text: str) -> bytes:
+        order.append("tts")
+        return b"a"
+
+    seen: list[str] = []
+
+    async def on_transcript(user_text: str) -> None:
+        order.append("on_transcript")
+        seen.append(user_text)
+
+    turn = await VoiceSession(transcribe, respond, synthesize).handle_turn(
+        b"audio", on_transcript=on_transcript
+    )
+
+    assert order == ["stt", "on_transcript", "brain", "tts"]
+    assert seen == ["hola mundo"]
+    assert turn.user_text == "hola mundo"
+
+
+@pytest.mark.asyncio
+async def test_on_transcript_not_called_on_silence() -> None:
+    async def transcribe(audio: bytes) -> str:
+        return "   "
+
+    async def respond(text: str) -> str:  # pragma: no cover - must not run
+        raise AssertionError("brain must not run on silence")
+
+    async def synthesize(text: str) -> bytes:  # pragma: no cover
+        raise AssertionError("tts must not run on silence")
+
+    fired: list[str] = []
+
+    async def on_transcript(user_text: str) -> None:
+        fired.append(user_text)
+
+    turn = await VoiceSession(transcribe, respond, synthesize).handle_turn(
+        b"silence", on_transcript=on_transcript
+    )
+    assert turn.empty is True
+    assert fired == []  # sin habla no hay transcript que emitir
+
+
+@pytest.mark.asyncio
 async def test_empty_transcript_short_circuits_brain_and_tts() -> None:
     calls: list[str] = []
 

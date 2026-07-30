@@ -84,3 +84,50 @@ def test_sync_missing_worktree_raises(tmp_path: Path) -> None:
     wt_mgr, _layout, _bare = _setup(tmp_path)
     with pytest.raises(GitCommandError, match="not found"):
         wt_mgr.sync_to_head("does-not-exist", branch="plan/feat")  # type: ignore[attr-defined]
+
+
+def test_sync_preserves_dependency_dirs_but_still_sweeps_artifacts(tmp_path: Path) -> None:
+    """task_wf_24 (C-06): las dependencias instaladas sobreviven al sync, los
+    artefactos de build no.
+
+    El `clean -fdx` barría `vendor/` y `node_modules/` en cada sync, así que un
+    reintento reinstalaba en frío — minutos de reloj, egress por el proxy
+    allowlisted y, con un registro caído, un fallo ajeno a la tarea. Quitar el
+    `-x` habría sido el arreglo fácil y equivocado: los artefactos ignorados del
+    run anterior volverían a contaminar el siguiente. Este test fija las dos
+    mitades a la vez.
+    """
+    from shared_test_runtimes import catalog
+
+    wt_mgr, _layout, _bare = _setup(tmp_path)
+    wt_path = wt_mgr.add("task-deps", branch="plan/feat")  # type: ignore[attr-defined]
+
+    # Lo que un `composer install` / `npm ci` deja (ignorado por .gitignore).
+    (wt_path / ".gitignore").write_text("vendor/\nnode_modules/\nbuild/\n")
+    for name in ("vendor", "node_modules"):
+        (wt_path / name).mkdir()
+        (wt_path / name / "package.txt").write_text("dependencia instalada")
+    # Y lo que deja un build anterior: eso SÍ tiene que desaparecer.
+    (wt_path / "build").mkdir()
+    (wt_path / "build" / "output.bin").write_text("artefacto del run anterior")
+
+    wt_mgr.sync_to_head(  # type: ignore[attr-defined]
+        "task-deps", branch="plan/feat", preserve=catalog.dependency_dirs()
+    )
+
+    assert (wt_path / "vendor" / "package.txt").exists(), "se reinstalaría en frío"
+    assert (wt_path / "node_modules" / "package.txt").exists()
+    assert not (wt_path / "build").exists(), "un artefacto viejo contaminaría el run"
+
+
+def test_sync_without_preservation_is_unchanged(tmp_path: Path) -> None:
+    """Regresión: sin `preserve` el comportamiento es exactamente el de antes."""
+    wt_mgr, _layout, _bare = _setup(tmp_path)
+    wt_path = wt_mgr.add("task-plain", branch="plan/feat")  # type: ignore[attr-defined]
+    (wt_path / ".gitignore").write_text("vendor/\n")
+    (wt_path / "vendor").mkdir()
+    (wt_path / "vendor" / "x.txt").write_text("x")
+
+    wt_mgr.sync_to_head("task-plain", branch="plan/feat")  # type: ignore[attr-defined]
+
+    assert not (wt_path / "vendor").exists()

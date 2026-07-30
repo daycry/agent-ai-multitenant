@@ -264,6 +264,60 @@ async def test_memory_recall_filters_by_default_scope_ladder(
     assert not any("OTHER team" in c for c in contents), hits
 
 
+@pytest.mark.asyncio
+async def test_memory_recall_clamps_explicit_scopes_to_agent_ladder(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """Revisión memorias 2026-07-03 (D2): unos ``scopes`` explícitos NO pueden
+    ensanchar la lectura por encima de la escalera del ``agent.memory_scope``.
+    Un agente ``project_shared`` que pide ``team_shared`` no lo recibe (la
+    petición se recorta a su escalera: project_shared + global)."""
+    from api_server.auth.internal_agent import mint_agent_token
+
+    seeded = await _seed(migrations_pg_dsn, memory_scope="project_shared")
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO memory_entries"
+            " (id, tenant_id, scope, type, content, team_id, metadata)"
+            " VALUES ($1, $2, 'team_shared', 'semantic', $3, $4, '{}'::jsonb)",
+            uuid4(),
+            seeded["tenant_id"],
+            "asyncpg secreto del EQUIPO",
+            seeded["team_id"],
+        )
+        await conn.execute(
+            "INSERT INTO memory_entries"
+            " (id, tenant_id, scope, type, content, project_id, metadata)"
+            " VALUES ($1, $2, 'project_shared', 'semantic', $3, $4, '{}'::jsonb)",
+            uuid4(),
+            seeded["tenant_id"],
+            "asyncpg nota del PROYECTO",
+            seeded["project_id"],
+        )
+    finally:
+        await conn.close()
+
+    token = mint_agent_token(agent_id=seeded["agent_id"], tenant_id=seeded["tenant_id"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/internal/agent/memory-recall",
+            json={"query": "asyncpg", "scopes": ["team_shared"], "limit": 5},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    contents = [h["content"] for h in resp.json()["hits"]]
+    # team_shared queda fuera de la escalera de un agente project_shared…
+    assert not any("EQUIPO" in c for c in contents), contents
+    # …y la intersección vacía cae a la escalera completa del agente (no a vacío),
+    # así una petición mal formada no esteriliza el run.
+    assert any("PROYECTO" in c for c in contents), contents
+
+
 # ---------------------------------------------------------------------------
 # Tool adapter (MemoryTools wrapping InternalAgentAPI)
 # ---------------------------------------------------------------------------

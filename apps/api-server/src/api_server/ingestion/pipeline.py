@@ -63,7 +63,7 @@ class IngestionResult:
     """
 
     document_id: UUID
-    status: str  # 'indexed' | 'indexed_empty' | 'failed'
+    status: str  # 'indexed' | 'indexed_empty' | 'failed' | 'pending_scan'
     chunks_persisted: int
     error_message: str | None
 
@@ -77,6 +77,7 @@ async def ingest_document(
     docling: DoclingClient,
     embedder: Embedder,
     redis: Redis | None = None,
+    av_failure_mode: str = "fail_closed",
 ) -> IngestionResult:
     """End-to-end ingestion. The session is the tenant-scoped one the
     Celery wrapper opens; we own the lifecycle of the row but commit
@@ -99,7 +100,24 @@ async def ingest_document(
         msg = f"antivirus hit: {av_report.signature or 'unknown'}"
         return await _fail(session, doc, msg, redis)
     if av_report.verdict == AntivirusVerdict.ERROR:
-        # ERROR is a backend hiccup; we still index but log loudly.
+        if av_failure_mode != "fail_open":
+            # prod-12 av_01 / ADR 0105 (api-1): fail-CLOSED por defecto — un
+            # documento sin escanear NO se indexa. Queda en `pending_scan` y el
+            # sweep de pendientes lo reintenta cuando ClamAV vuelva.
+            msg = f"antivirus unavailable: {av_report.message or 'backend error'}"
+            logger.warning(
+                "ingestion.antivirus_unavailable",
+                document_id=str(doc.id),
+                message=av_report.message,
+            )
+            await _set_status(session, doc, "pending_scan", error=msg[:2000], redis=redis)
+            return IngestionResult(
+                document_id=doc.id,
+                status="pending_scan",
+                chunks_persisted=0,
+                error_message=msg[:2000],
+            )
+        # fail_open (solo dev/sandbox): indexar con warning, como antes.
         logger.warning(
             "ingestion.antivirus_error",
             document_id=str(doc.id),

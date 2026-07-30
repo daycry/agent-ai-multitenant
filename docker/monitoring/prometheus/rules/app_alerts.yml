@@ -1,0 +1,79 @@
+# Alertas de APLICACIÓN (prod-08 núcleo, 2026-07-12) — consumen las métricas
+# que los workers ya publican vía el textfile collector de node-exporter
+# (workers/queue_metrics.py + backup_metrics.py). Fluyen por Alertmanager →
+# POST /internal/alerts/ingest (NOTIF-2) → notificación al System Admin.
+groups:
+  - name: agentic-app
+    rules:
+      # Una cola Celery creciendo = ningún worker la drena (worker caído,
+      # cola sin consumidor — el caso notifications.* muerto en dev de
+      # 2026-07-10) o backlog fuera de control.
+      - alert: CeleryQueueGrowing
+        expr: agentic_celery_queue_depth > 50
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cola Celery {{ $labels.queue }} con backlog sostenido"
+          description: >-
+            La cola {{ $labels.queue }} lleva 15 minutos con más de 50 mensajes
+            ({{ $value }}). Comprueba que su worker está vivo y consumiendo.
+
+      # Un mensaje en la DLQ es trabajo PERDIDO (notificación no entregada tras
+      # agotar reintentos) hasta que un humano lo revisa.
+      - alert: NotificationsDLQNotEmpty
+        expr: agentic_dlq_depth > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter {{ $labels.stream }} con {{ $value }} entrada(s)"
+          description: >-
+            El stream {{ $labels.stream }} tiene entradas dead-lettered desde
+            hace 10 minutos: notificaciones que agotaron reintentos. Revisa el
+            canal (credenciales/URL) y re-encola o descarta.
+
+      # AUD16-09 (auditoría 2026-07-16): el sampler de métricas emite un
+      # heartbeat en cada pasada (30s). Sin heartbeat fresco, TODO lo demás de
+      # este fichero es información congelada — antes «No data» en un panel era
+      # indistinguible de «sampler muerto».
+      - alert: MetricsSamplerStale
+        expr: (time() - agentic_sampler_last_run_timestamp_seconds) > 300
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El sampler de métricas de la plataforma lleva >5m sin correr"
+          description: >-
+            agentic_sampler_last_run_timestamp_seconds tiene más de 5 minutos
+            ({{ $value | humanizeDuration }}): beat o el worker de mantenimiento
+            no están muestreando — las métricas agentic_* están congeladas.
+
+      # AUD16-09: un colector concreto falló en la última pasada (up=0) — la
+      # familia ausente ya no es muda (p.ej. executions_24h sin datos por DB
+      # caída vs. legítimamente cero runs).
+      - alert: MetricsCollectorDown
+        expr: agentic_sampler_collector_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Colector de métricas {{ $labels.collector }} fallando"
+          description: >-
+            El colector {{ $labels.collector }} del sampler lleva 5 minutos
+            reportando fallo (up=0). Revisa los logs del worker de
+            mantenimiento (maintenance.sample_queue_metrics.error).
+
+      # Muchas tareas bloqueadas sostenidas = el pipeline autónomo está parado
+      # esperando humanos (o un bug de convergencia).
+      - alert: TasksBlockedHigh
+        expr: agentic_tasks_by_status{status="blocked"} > 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} tareas bloqueadas desde hace 30 minutos"
+          description: >-
+            Hay más de 10 tareas en estado blocked de forma sostenida. Revisa
+            el inbox humano y el visor de runs: o hay decisiones pendientes o
+            el pipeline no converge.

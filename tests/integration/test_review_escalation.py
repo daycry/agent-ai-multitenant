@@ -1,4 +1,9 @@
-"""Integration tests: escalation to awaiting_human (Plan 06 task_06_34b2)."""
+"""Integration tests: review-exhaustion escalation (Plan 06 task_06_34b2).
+
+F43: the escalation target is the canonical ``blocked`` state (not the orphan
+``awaiting_human`` that existed in no enum / state-machine table) — consistent
+with ``reviewer_bridge`` and CLAUDE.md ppio 7.
+"""
 
 from __future__ import annotations
 
@@ -45,7 +50,8 @@ def test_third_rejection_escalates() -> None:
         lc.reject_review("t1", comment=comment)
 
     task = store.get("t1")
-    assert task.status == "awaiting_human"
+    # F43: escalation lands on `blocked`, not the orphan `awaiting_human`.
+    assert task.status == "blocked"
     assert task.retry_count == 3
     assert notifications == [("t1", 3)]
 
@@ -94,7 +100,7 @@ def test_human_actions_reset_or_close_task() -> None:
                 plan_id="p",
                 title="x",
                 description="x",
-                status="awaiting_human",
+                status="blocked",  # F43: escalated tasks live in `blocked`
                 retry_count=3,
             )
         )
@@ -137,7 +143,7 @@ def test_human_actions_recorded_in_audit_log() -> None:
             plan_id="p",
             title="x",
             description="x",
-            status="awaiting_human",
+            status="blocked",  # F43: escalated tasks live in `blocked`
             retry_count=3,
         )
     )

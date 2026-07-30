@@ -41,6 +41,13 @@ DEFAULT_RETENTION_FORGET_THRESHOLD: float = 0.1
 #: barrido igualmente; se listan para que la protección sea explícita y auditable.
 PROTECTED_KINDS: frozenset[str] = frozenset({"identity", "owner_model", "reflection", "learning"})
 
+#: Suelo del factor de frecuencia de recall: una memoria jamás recallada NO queda
+#: automáticamente condenada (protege el long-tail nuevo — calibración ADR 0077).
+RECALL_FREQUENCY_FLOOR: float = 0.5
+
+#: Nº de recalls a partir del cual el factor satura en 1.0 (uso real probado).
+RECALL_COUNT_SATURATION: int = 5
+
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     if x < lo:
@@ -77,6 +84,22 @@ def importance_of(metadata: dict[str, Any] | None) -> float:
         return DEFAULT_IMPORTANCE
 
 
+def recall_frequency_factor(recall_count: Any) -> float:
+    """El factor de frecuencia de recall ∈ ``[FLOOR, 1]`` desde el contador real.
+
+    ``FLOOR + (1-FLOOR) * min(1, count/SATURATION)``: una memoria jamás recallada
+    vale :data:`RECALL_FREQUENCY_FLOOR` (no condenada de oficio); a partir de
+    :data:`RECALL_COUNT_SATURATION` recalls, 1.0 (uso real probado). Tolerante:
+    un contador sucio/negativo cae al suelo (nunca lanza). El contador vive en
+    ``metadata_.recall_count`` y lo incrementa ``cortex_recall``."""
+    try:
+        count = max(0, int(recall_count))
+    except (TypeError, ValueError):
+        count = 0
+    saturation = min(1.0, count / RECALL_COUNT_SATURATION)
+    return RECALL_FREQUENCY_FLOOR + (1.0 - RECALL_FREQUENCY_FLOOR) * saturation
+
+
 def retention_score(
     *,
     created_at: datetime,
@@ -86,9 +109,10 @@ def retention_score(
 ) -> float:
     """``retention_score = importance * recency * recall_frequency`` (ADR 0077).
 
-    ``recall_frequency`` por defecto 1.0 (la plataforma aún no instrumenta el
-    contador de recalls; el factor queda preparado para cuando lo haga, sin cambiar
-    la forma de la fórmula). Resultado ∈ ``[0,1]``, determinista dado ``now``."""
+    ``recall_frequency`` viene de :func:`recall_frequency_factor` sobre el
+    contador real ``metadata_.recall_count`` (instrumentado por ``cortex_recall``);
+    default 1.0 para callers que no lo pasen (compatibilidad). Resultado ∈
+    ``[0,1]``, determinista dado ``now``."""
     importance = importance_of(metadata)
     recency = recency_factor(created_at, now)
     freq = _clamp(recall_frequency, 0.0, 1.0)
@@ -146,11 +170,14 @@ __all__ = [
     "DEFAULT_IMPORTANCE",
     "DEFAULT_RETENTION_FORGET_THRESHOLD",
     "PROTECTED_KINDS",
+    "RECALL_COUNT_SATURATION",
+    "RECALL_FREQUENCY_FLOOR",
     "RECENCY_HALF_LIFE_DAYS",
     "ForgetDecision",
     "decide_forget",
     "importance_of",
     "is_protected",
+    "recall_frequency_factor",
     "recency_factor",
     "retention_score",
 ]

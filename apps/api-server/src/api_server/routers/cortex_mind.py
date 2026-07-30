@@ -37,6 +37,7 @@ from api_server.cortex.identity import (
     update_identity,
 )
 from api_server.db.cortex_affect import CortexAffectSnapshot
+from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 from api_server.db.memory import MemoryEntry
 from api_server.db.models import User
 from api_server.db.platform_settings import PlatformSettingForbiddenError
@@ -46,6 +47,7 @@ from api_server.schemas.cortex_autonomy import (
     CortexAutonomyResponse,
     CortexAutonomyUpdateRequest,
 )
+from api_server.schemas.cortex_curiosity import CortexPursuitItem
 from api_server.schemas.cortex_identity import (
     CortexBaseline,
     CortexIdentityResponse,
@@ -57,6 +59,7 @@ from api_server.schemas.cortex_mind import (
     CortexAffectPoint,
     CortexDrives,
     CortexEpisodeItem,
+    CortexJournalEntry,
     CortexMindResponse,
 )
 
@@ -166,9 +169,15 @@ async def get_episodes(
     """Memorias episódicas emocionales del owner desde ``memory_entries`` (ADR 0077).
 
     Filtra ``user_id=owner`` + ``scope='private'`` + ``metadata_->>'cortex'='true'``
-    + (opcional) ``metadata_->'emotion'->>'mood_label' = :emotion``. Cada item lleva
+    + **``metadata_ ? 'emotion'``** + (opcional)
+    ``metadata_->'emotion'->>'mood_label' = :emotion``. Cada item lleva
     ``appraisal_reason`` para el hover del mapa afectivo. NUNCA devuelve memorias de
-    otro usuario (filtro ``user_id`` explícito)."""
+    otro usuario (filtro ``user_id`` explícito).
+
+    La condición de ``emotion`` PRESENTE no es redundante con el filtro opcional:
+    aquél solo actúa cuando se pasa el query param, y sin ésta el mapa se llenaba de
+    memorias sin afecto (las escribe ``cortex_remember``, que también marca
+    ``cortex=true``) pintadas con un PAD de ceros."""
     owner_id: UUID = principal.user_id
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session:
@@ -179,6 +188,14 @@ async def get_episodes(
                 MemoryEntry.scope == "private",
                 MemoryEntry.deleted_at.is_(None),
                 MemoryEntry.metadata_["cortex"].astext == "true",
+                # Cuarta condición del contrato (cortex-f2-afectivo.md): la
+                # memoria tiene que traer `emotion`. Faltaba, y `cortex=true` NO
+                # es exclusivo del distilador afectivo — lo escribe también
+                # `cortex_remember`, así que el mapa de episodios se llenaba de
+                # memorias SIN afecto que el render pinta con un PAD de ceros:
+                # un episodio neutro inventado donde no hubo emoción ninguna.
+                # Detectado al escribir el test del contrato completo (2026-07-28).
+                MemoryEntry.metadata_.has_key("emotion"),  # — operador JSONB `?`
             )
             .order_by(MemoryEntry.created_at.desc())
             .limit(limit)
@@ -206,6 +223,83 @@ async def get_episodes(
     return out
 
 
+@router.get("/journal", response_model=list[CortexJournalEntry])
+async def get_journal(
+    principal: AuthPrincipal = Depends(require_system_owner),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[CortexJournalEntry]:
+    """El diario del córtex (C4, investigación 2026-07-11): línea temporal única.
+
+    La vida interior existía (PAD, drives, episodios, pursuits) pero sin RELATO:
+    la narrativa es UN campo que cada reflexión sobrescribe. Este endpoint
+    reconstruye la línea temporal mezclando (a) las narrativas versionadas de
+    ``cortex_identity_history`` (dedup de consecutivas idénticas, con su
+    ``reason``) y (b) las memorias ``kind='reflection'`` / ``kind='learning'``
+    — entradas de diario de facto. Aislamiento: ``owner_user_id`` explícito."""
+    from api_server.db.cortex_identity import CortexIdentityHistory
+
+    owner_id: UUID = principal.user_id
+    sessionmaker = get_admin_sessionmaker()
+    entries: list[CortexJournalEntry] = []
+    async with sessionmaker() as session:
+        history = list(
+            (
+                await session.execute(
+                    select(CortexIdentityHistory)
+                    .where(CortexIdentityHistory.owner_user_id == owner_id)
+                    .order_by(CortexIdentityHistory.created_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        prev_narrative: str | None = None
+        for row in reversed(history):  # cronológico para dedup de consecutivas
+            narrative = str((row.identity_state or {}).get("narrative") or "").strip()
+            if narrative and narrative != prev_narrative:
+                entries.append(
+                    CortexJournalEntry(
+                        kind="narrative",
+                        content=narrative,
+                        reason=row.reason,
+                        created_at=row.created_at,
+                    )
+                )
+            prev_narrative = narrative or prev_narrative
+
+        memories = list(
+            (
+                await session.execute(
+                    select(MemoryEntry)
+                    .where(
+                        MemoryEntry.user_id == owner_id,
+                        MemoryEntry.scope == "private",
+                        MemoryEntry.deleted_at.is_(None),
+                        MemoryEntry.metadata_["cortex"].astext == "true",
+                        MemoryEntry.metadata_["kind"].astext.in_(("reflection", "learning")),
+                    )
+                    .order_by(MemoryEntry.created_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for mem in memories:
+            entries.append(
+                CortexJournalEntry(
+                    kind=str((mem.metadata_ or {}).get("kind") or "reflection"),
+                    content=mem.content,
+                    reason=None,
+                    created_at=mem.created_at,
+                )
+            )
+
+    entries.sort(key=lambda e: e.created_at, reverse=True)
+    return entries[:limit]
+
+
 # ===========================================================================
 # Identidad evolutiva del córtex (Córtex F3, ADR 0074/0077)
 # ===========================================================================
@@ -216,6 +310,43 @@ async def get_episodes(
 # DERIVA la reflexión periódica (clampeada + versionada) — el owner NO los pisa a
 # mano (guardrail de auto-modificación, ADR 0074). La identidad NUNCA se borra
 # (ADR 0077): cada cambio se versiona en ``cortex_identity_history``.
+@router.get("/curiosity/pursuits", response_model=list[CortexPursuitItem])
+async def list_curiosity_pursuits(
+    principal: AuthPrincipal = Depends(require_system_owner),
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[CortexPursuitItem]:
+    """El historial de curiosidad del owner ("lo que está aprendiendo", ADR 0078).
+
+    Filtro ``owner_user_id`` explícito (tenant-less, BYPASSRLS — ADR 0074), orden
+    ``created_at DESC``, filtro opcional por ``status``. Copy honesto en la UI:
+    es el bucle de curiosidad programado, no curiosidad consciente."""
+    owner_id = principal.user_id
+    stmt = (
+        select(CortexCuriosityPursuit)
+        .where(CortexCuriosityPursuit.owner_user_id == owner_id)
+        .order_by(CortexCuriosityPursuit.created_at.desc())
+        .limit(limit)
+    )
+    if status_filter:
+        stmt = stmt.where(CortexCuriosityPursuit.status == status_filter)
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        pursuits = (await session.execute(stmt)).scalars().all()
+    return [
+        CortexPursuitItem(
+            id=p.id,
+            topic=p.topic,
+            status=p.status,
+            created_at=p.created_at,
+            surfaced_at=p.surfaced_at,
+            learning_memory_id=p.learning_memory_id,
+            search_count=int(p.search_count),
+        )
+        for p in pursuits
+    ]
+
+
 def _identity_response(
     state: dict[str, Any], *, version: int, updated_by: str, onboarded_at: datetime | None
 ) -> CortexIdentityResponse:
@@ -226,6 +357,12 @@ def _identity_response(
     traits = clamp_traits(state.get("traits"))
     baseline = clamp_baseline(state.get("mood_baseline"))
     name = state.get("name")
+    raw_relationship = state.get("relationship_model")
+    relationship = (
+        {str(k): str(v) for k, v in raw_relationship.items()}
+        if isinstance(raw_relationship, dict)
+        else {}
+    )
     return CortexIdentityResponse(
         name=(name if isinstance(name, str) and name.strip() else None),
         core_values=[str(v) for v in (state.get("core_values") or [])],
@@ -234,6 +371,7 @@ def _identity_response(
         learning_goals=[str(v) for v in (state.get("learning_goals") or [])],
         traits=CortexTraits(**traits),
         mood_baseline=CortexBaseline(**baseline),
+        relationship_model=relationship,
         version=version,
         updated_by=updated_by,
         onboarded_at=onboarded_at,
@@ -339,6 +477,7 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     )
     from api_server.db.platform_settings import (
         get_cortex_autonomy_enabled,
+        get_cortex_browser_enabled,
         get_cortex_curiosity_daily_searches_cap,
         get_cortex_curiosity_drive_threshold,
         get_cortex_web_enabled,
@@ -348,6 +487,7 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     async with sessionmaker() as session:
         autonomy = await get_cortex_autonomy_enabled(session)
         web = await get_cortex_web_enabled(session)
+        browser = await get_cortex_browser_enabled(session)
         cap = await get_cortex_curiosity_daily_searches_cap(session)
         threshold = await get_cortex_curiosity_drive_threshold(session)
 
@@ -366,6 +506,7 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     return CortexAutonomyResponse(
         autonomy_enabled=autonomy,
         web_enabled=web,
+        browser_enabled=browser,
         curiosity_drive_threshold=threshold,
         circuit_breaker_open=breaker_open,
         budget=CortexAutonomyBudget(searches_today=searches_today, searches_cap=cap),
@@ -387,15 +528,18 @@ async def put_autonomy(
     payload: CortexAutonomyUpdateRequest,
     principal: AuthPrincipal = Depends(require_system_owner),
 ) -> CortexAutonomyResponse:
-    """Activa/desactiva el KILL-SWITCH global de los bucles autónomos (System Owner).
+    """Update PARCIAL de los gates del córtex (System Owner, desde la UI).
 
-    Escribe el platform setting ``cortex.autonomy_enabled`` con el owner como actor.
-    ``set_platform_setting`` re-verifica que el actor es System Admin (el owner del
-    despliegue lo es, ADR 0074); un owner que NO fuese admin recibiría un 403 honesto
-    en vez de una escritura silenciosa. Con OFF, la siguiente pasada de CADA bucle
-    sale no-op."""
+    ``autonomy_enabled`` flipa el kill-switch global (``cortex.autonomy_enabled``);
+    ``web_enabled`` el gate de la web del córtex (``cortex.web_enabled``, ADR
+    0067). ``set_platform_setting`` re-verifica que el actor es System Admin (el
+    owner del despliegue lo es, ADR 0074); un owner que NO fuese admin recibiría
+    un 403 honesto en vez de una escritura silenciosa. Con el kill-switch OFF,
+    la siguiente pasada de CADA bucle sale no-op."""
     from api_server.db.platform_settings import (
         CORTEX_AUTONOMY_ENABLED_KEY,
+        CORTEX_BROWSER_ENABLED_KEY,
+        CORTEX_WEB_ENABLED_KEY,
         set_platform_setting,
     )
 
@@ -407,9 +551,20 @@ async def put_autonomy(
                 status_code=status.HTTP_403_FORBIDDEN, detail="actor user not found"
             )
         try:
-            await set_platform_setting(
-                session, CORTEX_AUTONOMY_ENABLED_KEY, payload.autonomy_enabled, actor=actor
-            )
+            if payload.autonomy_enabled is not None:
+                await set_platform_setting(
+                    session, CORTEX_AUTONOMY_ENABLED_KEY, payload.autonomy_enabled, actor=actor
+                )
+            if payload.web_enabled is not None:
+                await set_platform_setting(
+                    session, CORTEX_WEB_ENABLED_KEY, payload.web_enabled, actor=actor
+                )
+            if payload.browser_enabled is not None:
+                # ADR 0080: encender el navegador NO da vía libre — solo permite
+                # que el córtex PIDA sesiones, que el owner aprueba una a una.
+                await set_platform_setting(
+                    session, CORTEX_BROWSER_ENABLED_KEY, payload.browser_enabled, actor=actor
+                )
         except PlatformSettingForbiddenError as exc:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return await _autonomy_snapshot(principal.user_id)

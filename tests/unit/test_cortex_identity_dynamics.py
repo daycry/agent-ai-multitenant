@@ -9,18 +9,23 @@ de forma ACOTADA y versionada (ADR 0074: guardrail de auto-modificación):
     narrative/language/learning_goals; jamás traits/mood_baseline/relationship_model.
   * ``apply_reflection_delta`` — compone clamp+bounded sobre traits/baseline +
     reescribe narrative, devolviendo el nuevo ``identity_state`` (puro).
+  * ``compute_diff`` — la auditoría del cambio: SOLO los campos que cambiaron.
 """
 
 from __future__ import annotations
 
+import pytest
 from api_server.cortex.identity import (
     apply_reflection_delta,
     bounded_update,
     clamp_baseline,
     clamp_traits,
+    compute_diff,
     default_identity_state,
     editable_owner_state,
 )
+
+pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +214,213 @@ def test_apply_reflection_delta_no_muta_el_input() -> None:
     apply_reflection_delta(current, narrative="x", traits={"openness": 1.0})
     assert current["narrative"] == snapshot["narrative"]
     assert current["traits"] == snapshot["traits"]
+
+
+def test_reflexion_repetida_converge_y_se_queda_quieta() -> None:
+    """El criterio «reflexión repetida converge (no oscila)» del plan, pero sobre el
+    paso COMPUESTO (clamp+bounded juntos), no solo sobre ``bounded_update``.
+
+    El defecto que atrapa: que la composición clamp→bounded→clamp introduzca
+    overshoot o un ciclo límite (el estado se pasa del objetivo y vuelve, ida y
+    vuelta indefinidamente). Con un mismo objetivo propuesto ciclo tras ciclo la
+    identidad debe acercarse de forma monótona, no cruzarlo nunca, y quedarse
+    EXACTAMENTE ahí — si el punto fijo no fuese estable, la identidad del córtex
+    "temblaría" para siempre y cada pasada emitiría una versión de histórico nueva
+    con un diff espurio.
+    """
+    state = default_identity_state()  # openness 0.5, valence 0.0
+    prev_openness = state["traits"]["openness"]
+    prev_valence = state["mood_baseline"]["valence"]
+    for _ in range(12):
+        state = apply_reflection_delta(
+            state,
+            traits={"openness": 0.8},
+            mood_baseline={"valence": 0.2},
+            max_delta_per_cycle=0.05,
+        )
+        openness = state["traits"]["openness"]
+        valence = state["mood_baseline"]["valence"]
+        # Monótono hacia el objetivo y sin cruzarlo (nada de overshoot).
+        assert openness >= prev_openness
+        assert openness <= 0.8 + 1e-9
+        assert valence >= prev_valence
+        assert valence <= 0.2 + 1e-9
+        prev_openness, prev_valence = openness, valence
+    # Punto fijo alcanzado y ESTABLE (las últimas pasadas ya no mueven nada).
+    assert abs(state["traits"]["openness"] - 0.8) < 1e-9
+    assert abs(state["mood_baseline"]["valence"] - 0.2) < 1e-9
+    again = apply_reflection_delta(
+        state,
+        traits={"openness": 0.8},
+        mood_baseline={"valence": 0.2},
+        max_delta_per_cycle=0.05,
+    )
+    assert compute_diff(state, again) == {}
+
+
+# ---------------------------------------------------------------------------
+# effective_mood_baseline — el set-point que el motor afectivo DEBE leer
+# ---------------------------------------------------------------------------
+def test_effective_baseline_lee_el_mood_baseline_calibrado() -> None:
+    from api_server.cortex.identity import effective_mood_baseline
+
+    state = default_identity_state()
+    state["mood_baseline"] = {"valence": 0.2, "arousal": 0.45, "dominance": -0.1}
+    pad = effective_mood_baseline(state)
+    assert pad.valence == 0.2
+    assert pad.arousal == 0.45
+    assert pad.dominance == -0.1
+    assert pad.intensity == 0.0
+
+
+def test_effective_baseline_arousal_cero_cae_al_neutro_del_motor() -> None:
+    # arousal <= 0.0 se trata como "sin calibrar": el motor usa 0.3 (calma
+    # despierta, BASELINE_PAD), no 0.0 (catatónico) — desajuste documentado.
+    from api_server.cortex.affective import BASELINE_PAD
+    from api_server.cortex.identity import effective_mood_baseline
+
+    pad = effective_mood_baseline(default_identity_state())
+    assert pad.valence == 0.0
+    assert pad.arousal == BASELINE_PAD.arousal
+    assert pad.dominance == 0.0
+
+
+def test_effective_baseline_sin_estado_es_neutro() -> None:
+    from api_server.cortex.affective import BASELINE_PAD
+    from api_server.cortex.identity import effective_mood_baseline
+
+    pad = effective_mood_baseline(None)
+    assert pad.valence == 0.0
+    assert pad.arousal == BASELINE_PAD.arousal
+    assert pad.dominance == 0.0
+
+
+def test_effective_baseline_clampa_fuera_de_rango() -> None:
+    from api_server.cortex.identity import effective_mood_baseline
+
+    pad = effective_mood_baseline(
+        {"mood_baseline": {"valence": 3.0, "arousal": 0.9, "dominance": -7.0}}
+    )
+    assert pad.valence == 1.0
+    assert pad.arousal == 0.9
+    assert pad.dominance == -1.0
+
+
+# ---------------------------------------------------------------------------
+# apply_owner_model_delta — merge acotado del "lo que sé de mi owner"
+# ---------------------------------------------------------------------------
+def test_owner_model_merge_anade_y_actualiza() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"prefiere": "brevedad"}
+    out = apply_owner_model_delta(current, {"prefiere": "evidencia", "stack": "python"})
+    assert out["relationship_model"]["prefiere"] == "evidencia"
+    assert out["relationship_model"]["stack"] == "python"
+    # el resto del estado se preserva.
+    assert out["name"] == current["name"]
+    assert out["traits"] == current["traits"]
+
+
+def test_owner_model_valor_vacio_borra_la_clave() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"obsoleto": "ya no aplica", "prefiere": "TDD"}
+    out = apply_owner_model_delta(current, {"obsoleto": ""})
+    assert "obsoleto" not in out["relationship_model"]
+    assert out["relationship_model"]["prefiere"] == "TDD"
+
+
+def test_owner_model_trunca_valores_largos() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    out = apply_owner_model_delta(default_identity_state(), {"nota": "x" * 500})
+    assert len(out["relationship_model"]["nota"]) <= 280
+
+
+def test_owner_model_cap_de_claves_prioriza_existentes() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"a": "1", "b": "2", "c": "3"}
+    out = apply_owner_model_delta(current, {"b": "2bis", "d": "4", "e": "5"}, max_keys=3)
+    rel = out["relationship_model"]
+    # las existentes (actualizadas) sobreviven; las nuevas no caben en el cap.
+    assert set(rel) == {"a", "b", "c"}
+    assert rel["b"] == "2bis"
+
+
+def test_owner_model_propuesta_invalida_es_noop() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"prefiere": "TDD"}
+    out = apply_owner_model_delta(current, None)
+    assert out["relationship_model"] == {"prefiere": "TDD"}
+    out2 = apply_owner_model_delta(current, "no soy un dict")  # type: ignore[arg-type]
+    assert out2["relationship_model"] == {"prefiere": "TDD"}
+
+
+def test_owner_model_no_muta_el_input() -> None:
+    from api_server.cortex.identity import apply_owner_model_delta
+
+    current = default_identity_state()
+    current["relationship_model"] = {"prefiere": "TDD"}
+    apply_owner_model_delta(current, {"prefiere": "otra cosa", "extra": "x"})
+    assert current["relationship_model"] == {"prefiere": "TDD"}
+
+
+# ---------------------------------------------------------------------------
+# compute_diff — la auditoría del cambio (el criterio del plan que faltaba)
+# ---------------------------------------------------------------------------
+# El plan pedía aquí «compute_diff ignora campos sin cambio» y este fichero ni
+# importaba la función (auditoría 2026-07-27): la única aserción del diff vivía en
+# integración y era `'name' not in diff_v2`. El diff es lo que se persiste en
+# ``cortex_identity_history.diff``, o sea la ÚNICA traza de qué tocó la reflexión;
+# si emitiera campos que no cambiaron, cada versión parecería reescribir la
+# identidad entera y la auditoría no serviría para nada.
+def test_compute_diff_ignora_los_campos_sin_cambio() -> None:
+    before = default_identity_state()
+    after = default_identity_state()
+    after["narrative"] = "He aprendido algo nuevo."
+    diff = compute_diff(before, after)
+    # SOLO el campo que cambió.
+    assert set(diff) == {"narrative"}
+    assert diff["narrative"] == {"before": "", "after": "He aprendido algo nuevo."}
+
+
+def test_compute_diff_de_estados_identicos_es_vacio() -> None:
+    state = default_identity_state()
+    # Una pasada que no mueve nada NO debe ensuciar el histórico con un diff.
+    assert compute_diff(state, dict(state)) == {}
+
+
+def test_compute_diff_detecta_un_cambio_dentro_de_un_dict_anidado() -> None:
+    """``traits``/``mood_baseline`` son dicts: el diff los compara por valor y emite
+    el bloque completo. Si comparara por identidad de objeto (``is``) o solo mirara
+    las claves de primer nivel por presencia, un cambio de rasgo pasaría invisible."""
+    before = default_identity_state()
+    after = default_identity_state()
+    after["traits"] = {**after["traits"], "openness": 0.55}
+    diff = compute_diff(before, after)
+    assert set(diff) == {"traits"}
+    assert diff["traits"]["before"]["openness"] == 0.5
+    assert diff["traits"]["after"]["openness"] == 0.55
+
+
+def test_compute_diff_marca_campo_nuevo_y_campo_retirado() -> None:
+    diff = compute_diff({"name": "Córtex", "obsoleto": "x"}, {"name": "Córtex", "nuevo": "y"})
+    # Un campo añadido entra con before=None; uno retirado, con after=None.
+    assert diff["nuevo"] == {"before": None, "after": "y"}
+    assert diff["obsoleto"] == {"before": "x", "after": None}
+    # y el que no cambió no aparece.
+    assert "name" not in diff
+
+
+def test_compute_diff_no_muta_los_estados_que_compara() -> None:
+    before = {"name": "Córtex", "traits": {"openness": 0.5}}
+    after = {"name": "Atlas", "traits": {"openness": 0.5}}
+    compute_diff(before, after)
+    assert before == {"name": "Córtex", "traits": {"openness": 0.5}}
+    assert after == {"name": "Atlas", "traits": {"openness": 0.5}}

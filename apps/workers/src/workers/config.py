@@ -6,6 +6,7 @@ Env-driven via pydantic-settings, prefix `WORKERS_`.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,10 +45,41 @@ class Settings(BaseSettings):
         "tails, kept off the broker (DB 1) and result backend (DB 2).",
     )
 
+    # ----- Ingesta: modo de fallo del antivirus (prod-12 av_01 / ADR 0105) ---
+    # fail_closed (default): con ClamAV inalcanzable el documento queda en
+    # `pending_scan` (NO se indexa) y el sweep lo reintenta. fail_open: se
+    # indexa con warning — SOLO aceptable en dev/sandbox.
+    av_failure_mode: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description="Qué hacer si el backend antivirus no responde durante la "
+        "ingesta: fail_closed = pending_scan + reintento (default producción); "
+        "fail_open = indexar con warning (solo dev/sandbox).",
+    )
+    # Cola del notification-dispatcher (misma que usa el orchestrator) para el
+    # aviso de antivirus inalcanzable > N minutos.
+    notifications_event_queue: str = Field(
+        default="notifications",
+        description="Celery queue the notification-dispatcher drains.",
+    )
+
     # ----- Agent-runtime containers (Plan 02 Fase B) -----
     agent_runtime_image: str = Field(
         default="agent-runtime:v1",
         description="Image the worker launches for each agent task.",
+    )
+    browser_runtime_image: str = Field(
+        default="browser-runtime:v1",
+        description=(
+            "Imagen del navegador sandboxeado (ADR 0080). Se lanza EFÍMERA, una por "
+            "sesión de navegación, y solo tras la aprobación del owner."
+        ),
+    )
+    browse_session_timeout_s: int = Field(
+        default=240,
+        description=(
+            "Techo de reloj de una sesión de navegación cuando no pide el suyo "
+            "(el runtime acota además páginas y bytes)."
+        ),
     )
     agent_network: str = Field(
         default="agentic-agents",
@@ -85,6 +117,27 @@ class Settings(BaseSettings):
         "ScriptedModelClient (ADR 0019). En producción: "
         "`http://egress-proxy:8888` (el servicio del compose, task_02_35).",
     )
+    registry_proxy_url: str = Field(
+        default="http://registry-proxy:8888",
+        description="URL del registry-proxy (allowlist de registries de "
+        "paquetes, ADR 0094) que el worker inyecta como HTTP(S)_PROXY en los "
+        "runtime-templates cuando un launch pide egress (dep_egress). Apunta al "
+        "alias con el que el worker conecta el proxy al bridge per-task. Vacío "
+        "= sin egress (los installs en frío fallan offline). El host debe "
+        "coincidir con `registry_proxy_alias`.",
+    )
+    registry_proxy_container: str = Field(
+        default="agentic-registry-proxy",
+        description="Nombre del contenedor del registry-proxy que el worker "
+        "resuelve por la API Docker (`containers.get`) para conectarlo al "
+        "bridge efímero de cada tarea (ADR 0094).",
+    )
+    registry_proxy_alias: str = Field(
+        default="registry-proxy",
+        description="Alias de red con el que el worker conecta el registry-proxy "
+        "al bridge per-task; el runtime lo resuelve por DNS embebido de docker "
+        "para alcanzar el proxy. Debe ser el host de `registry_proxy_url`.",
+    )
     container_mem_limit: str = Field(
         default="512m",
         description="Hard memory cap for an agent container (a leak or a "
@@ -93,6 +146,16 @@ class Settings(BaseSettings):
     container_pids_limit: int = Field(
         default=256,
         description="Max process count inside an agent container — caps " "fork bombs.",
+    )
+    test_runtime_pids_limit: int = Field(
+        default=1024,
+        description="Max process count inside a TEST/STACK runtime container "
+        "(task_wf_21, C-02). Deliberately higher than container_pids_limit: a test "
+        "container legitimately spawns far more processes than the agent loop "
+        "(parallel compilers, watchers, test servers), so inheriting the agent's "
+        "256 would trade a real risk for a false test failure. Still a hard cap: "
+        "without one, a runaway `make -j` or a fork bomb in the repo under test "
+        "had nothing stopping it. Override with WORKERS_TEST_RUNTIME_PIDS_LIMIT.",
     )
     container_tmp_size: str = Field(
         default="64m", description="Size of the /tmp tmpfs in an agent container."
@@ -106,8 +169,152 @@ class Settings(BaseSettings):
         default=600,
         description="Default wall-clock budget for one container run before "
         "the worker kills it. Per-task overrides land with the Fase C "
-        "safeguards (task_02_13).",
+        "safeguards (task_02_13). Applies to the fast HTTP providers "
+        "(ollama/azure_foundry/copilot); claude_sdk uses the longer budget below.",
     )
+    container_run_timeout_claude_sdk_s: int = Field(
+        default=7200,
+        description="Wall-clock budget for a `claude_sdk` agent container (2h). Much "
+        "longer than the base timeout: the Claude Agent SDK spawns the Claude Code "
+        "CLI (Node) and its high-effort / xhigh-reasoning model calls are slow "
+        "(~1-2 min each), whereas the HTTP providers finish well within "
+        "container_run_timeout_s. This value caps BOTH the container and the agent "
+        "loop's internal wall-clock safeguard (execution.py aligns them). Override "
+        "with WORKERS_CONTAINER_RUN_TIMEOUT_CLAUDE_SDK_S.",
+    )
+    container_grace_s: int = Field(
+        default=120,
+        description="Grace margin (seconds) the worker adds ON TOP of the "
+        "per-provider wall-clock budget to compute the container's HARD kill "
+        "timeout. The internal agent-loop wall-clock (the per-kind budget) must "
+        "fire FIRST so a budget exhaustion aborts cleanly inside the loop "
+        "(`max_wall_clock_exceeded`, keeping partials + finish_status) instead of "
+        "the container's hard kill always winning and mislabelling every "
+        "exhaustion as 'container timed out' (F19). Override with "
+        "WORKERS_CONTAINER_GRACE_S.",
+    )
+    container_home_size: str = Field(
+        default="64m",
+        description="Size of the agent container's HOME tmpfs (/home/agent). The "
+        "Claude Code CLI writes its config (.claude.json, .claude/) into HOME; "
+        "keeping HOME on its own tmpfs OUTSIDE /workspace stops that config from "
+        "polluting the project worktree (and the agent's model context).",
+    )
+    test_runtime_tmp_size: str = Field(
+        default="256m",
+        description="Size of the TEST/STACK runtime container's /tmp tmpfs. F3 de "
+        "registry-egress-followups: estaba escrito como literal de 64m y por ahí pasan "
+        "`composer install` y `npm ci`, que descargan y EXTRAEN en /tmp — composer ya "
+        "avisaba 'less than 100MiB of free space'. 256m deja holgura para un árbol de "
+        "deps normal sin acercarse al mem_limit del contenedor: las páginas del tmpfs "
+        "cuentan contra su cgroup de memoria, así que un /tmp desproporcionado cambia un "
+        "ENOSPC legible por un OOM-kill mudo (exit 137 sin mensaje). Un monorepo grande "
+        "puede necesitar más: WORKERS_TEST_RUNTIME_TMP_SIZE. El invariante 'nunca más de "
+        "la mitad del mem_limit' lo fija tests/unit/test_test_runtime_tmp_size.py.",
+    )
+    test_runtime_home_size: str = Field(
+        default="512m",
+        description="Size of the TEST/STACK runtime container's HOME tmpfs "
+        "(/home/agent). Deliberately much larger than container_home_size: the "
+        "agent container's HOME holds a CLI config (tens of KB), whereas a "
+        "toolchain's home holds dependency metadata and, when the project has no "
+        "warm dep-cache bind, the download cache itself (composer/npm/pip/maven). "
+        "Capping it at 64m would swap 'the worktree gets polluted' for "
+        "'a cold install fails with ENOSPC' (task_wf_20, C-01). The heavy path is "
+        "still the dep_cache bind mounted ON TOP of this tmpfs. Override with "
+        "WORKERS_TEST_RUNTIME_HOME_SIZE.",
+    )
+
+    agent_max_iterations_claude_sdk: int = Field(
+        default=50,
+        description="Agent-loop iteration cap for `claude_sdk` runs. The runtime "
+        "default (25) cut off multi-file tasks right as they finished writing — "
+        "the agent produced all deliverables but couldn't reach the final FINISH "
+        "turn, leaving the run `aborted` (max_iterations_exceeded) instead of "
+        "`done`. claude_sdk writes one file per iteration and is slow, so it needs "
+        "more headroom; the nudge + loop-detector keep the extra iterations "
+        "productive. Override with WORKERS_AGENT_MAX_ITERATIONS_CLAUDE_SDK.",
+    )
+    agent_max_iterations_review: int = Field(
+        default=25,
+        description="Agent-loop iteration cap para runs de REVIEW (F2b.5, "
+        "auditoría 2026-07-02). El reviewer corría con el presupuesto del "
+        "implementador (50 iter) cuando la evidencia post-ADR-0095 muestra "
+        "reviews convergiendo en 13-22 steps — la mitad basta y acota el coste "
+        "de un reviewer atascado. Override con "
+        "WORKERS_AGENT_MAX_ITERATIONS_REVIEW.",
+    )
+    agent_max_tokens_claude_sdk: int = Field(
+        default=500_000,
+        description="Presupuesto de tokens (in+out acumulados) para un run "
+        "implementador claude_sdk. El default del runtime (100k) se calibró "
+        "cuando la contabilidad de usage medía 0 (bug F1.4); con tokens REALES "
+        "un run sano de ~23 iteraciones ya cruza 100k (observado en el e2e del "
+        "2026-07-02: 102.957 tok) — 500k da margen a las 50 iteraciones; el "
+        "guardarraíl de coste (max_cost_usd) sigue acotando el gasto. Override "
+        "con WORKERS_AGENT_MAX_TOKENS_CLAUDE_SDK.",
+    )
+    agent_max_tokens_review: int = Field(
+        default=250_000,
+        description="Presupuesto de tokens para un run de REVIEW claude_sdk "
+        "(la mitad del de implementador; las reviews convergen en 13-22 "
+        "steps). Override con WORKERS_AGENT_MAX_TOKENS_REVIEW.",
+    )
+    container_run_timeout_review_claude_sdk_s: int = Field(
+        default=3600,
+        description="Wall-clock budget para un run de REVIEW claude_sdk (1h, "
+        "F2b.5): la mitad del budget de implementador (2h) — un review lee y "
+        "juzga, no escribe N ficheros. Override con "
+        "WORKERS_CONTAINER_RUN_TIMEOUT_REVIEW_CLAUDE_SDK_S.",
+    )
+
+    def container_timeout_for_kind(self, kind: str | None, *, is_review: bool = False) -> int:
+        """Per-provider container wall-clock budget. ``claude_sdk`` gets the
+        longer SDK timeout (Node CLI + slow high-effort/xhigh calls); every other
+        kind uses the base ``container_run_timeout_s``. Un run de REVIEW
+        claude_sdk usa su budget propio, más corto (F2b.5)."""
+        if kind == "claude_sdk":
+            if is_review:
+                return self.container_run_timeout_review_claude_sdk_s
+            return self.container_run_timeout_claude_sdk_s
+        return self.container_run_timeout_s
+
+    def container_timeout_with_grace_for_kind(
+        self, kind: str | None, *, is_review: bool = False
+    ) -> int:
+        """The container's HARD wall-clock kill timeout for ``kind``: the
+        per-provider budget (:meth:`container_timeout_for_kind`) PLUS
+        ``container_grace_s``. The internal agent-loop wall-clock uses the bare
+        budget, so it aborts cleanly (``max_wall_clock_exceeded``, with partials /
+        finish_status) BEFORE the container's hard kill fires — otherwise the kill
+        always wins and every exhaustion is mislabelled 'container timed out' (F19)."""
+        return self.container_timeout_for_kind(kind, is_review=is_review) + self.container_grace_s
+
+    def agent_max_iterations_for_kind(
+        self, kind: str | None, *, is_review: bool = False
+    ) -> int | None:
+        """Per-provider agent-loop iteration cap. ``claude_sdk`` gets a higher cap
+        so multi-file tasks write every deliverable AND reach the final FINISH
+        turn; other kinds return ``None`` (the runtime keeps its built-in default).
+        Un run de REVIEW usa el cap de review, más bajo (F2b.5)."""
+        if kind == "claude_sdk":
+            if is_review:
+                return self.agent_max_iterations_review
+            return self.agent_max_iterations_claude_sdk
+        return None
+
+    def agent_max_tokens_for_kind(self, kind: str | None, *, is_review: bool = False) -> int | None:
+        """Presupuesto de tokens por-provider (auditoría 2026-07-02). Solo
+        ``claude_sdk`` necesita un override: con la contabilidad de usage
+        arreglada (F1.4), su volumen real de tokens por iteración desborda el
+        default de 100k del runtime a mitad de un run sano. Otros kinds →
+        ``None`` (default del runtime)."""
+        if kind == "claude_sdk":
+            if is_review:
+                return self.agent_max_tokens_review
+            return self.agent_max_tokens_claude_sdk
+        return None
+
     seccomp_profile_path: str = Field(
         default="",
         description="Path to a custom seccomp JSON profile for the untrusted "
@@ -146,14 +353,6 @@ class Settings(BaseSettings):
         default=128,
         description="Max process count inside an aux-service container — caps fork bombs.",
     )
-    dind_proxy_mem_limit: str = Field(
-        default="128m",
-        description="Hard memory cap for the testcontainers DinD socket-proxy sidecar.",
-    )
-    dind_proxy_pids_limit: int = Field(
-        default=64,
-        description="Max process count inside the DinD socket-proxy sidecar.",
-    )
 
     # ----- Memorizer (Plan 04.5 task_04_5_02) -----
     memorizer_llm_base_url: str = Field(
@@ -164,8 +363,19 @@ class Settings(BaseSettings):
     )
     memorizer_llm_model: str = Field(
         default="llama3.1",
-        description="Model id the Memorizer asks for. Distillation is cheap; "
-        "a small local model is the right trade-off (no quota, no egress).",
+        description="Model id the Memorizer's FALLBACK distiller asks for. "
+        "Auditoría 2026-07-02 (F2.1): el camino primario es el provider del "
+        "AGENTE de la execution (memorizer_use_agent_provider); este modelo "
+        "local solo se usa cuando aquel no está disponible.",
+    )
+    memorizer_use_agent_provider: bool = Field(
+        default=True,
+        description="F2.1 (auditoría 2026-07-02): destilar memorias con el LLM "
+        "del AGENTE de la execution (resolución por provider_id, ADR 0082) en "
+        "vez del modelo local fijo — el 1b local producía ~50% ruido "
+        "(tautologías, URLs fabricadas) que contaminaba el recall. Desactívalo "
+        "para volver al modelo local (sin cuota, sin egress). Override con "
+        "WORKERS_MEMORIZER_USE_AGENT_PROVIDER.",
     )
 
     # ----- Córtex F2: distilador afectivo (ADR 0075) -----
@@ -296,6 +506,35 @@ class Settings(BaseSettings):
         "scheduled exchange-rates fetch. Default daily at 06:00 UTC (Plan 11.1). "
         "Operator-tunable; the beat process reads it at boot.",
     )
+    # ADR 0098 (eje 3): cadencia del barrido periodico de fetch de remotos git
+    # (`workers.sweep_project_git_remotes`). El interruptor vivo es el platform
+    # setting `git_fetch_sweep_enabled` (default OFF) que un System Admin flipa
+    # desde el panel; este cron solo fija CUANDO se evalua. Conservador (cada
+    # 30 min): el coste crece con el numero de proyectos con remoto.
+    # ADR 0110 (mitad HTTP, EXPERIMENTAL): hilo conversacional en memoria por
+    # run en los providers HTTP (azure_foundry/copilot/ollama). OFF por defecto
+    # — encenderlo cambia el shape del prompt por turno (KV-cache reutilizable,
+    # historial real) y debe validarse con runs e2e antes de generalizarlo.
+    runtime_conversation_thread: bool = Field(
+        default=False,
+        description="EXPERIMENTAL (ADR 0110): per-run in-memory conversation "
+        "thread for HTTP providers in the agent runtime. OFF by default.",
+    )
+    # ADR 0112 fase 2 (EXPERIMENTAL, OFF): mini-turno dedicado de reflexion en
+    # los providers HTTP cada 10 iteraciones + escalado determinista tras 2
+    # veredictos "stuck" consecutivos (abort_code reflection_stalled).
+    runtime_reflection_assess: bool = Field(
+        default=False,
+        description="EXPERIMENTAL (ADR 0112 fase 2): dedicated progress "
+        "self-assessment mini-turn for HTTP providers. OFF by default.",
+    )
+    git_fetch_cron: str = Field(
+        default="*/30 * * * *",
+        description="Cron (minute hour day-of-month month day-of-week) for the "
+        "periodic git-remote fetch sweep (ADR 0098). Default every 30 minutes; "
+        "the live ON/OFF lever is the `git_fetch_sweep_enabled` platform setting "
+        "(default OFF). The beat process reads this at boot.",
+    )
     ecb_fx_feed_url: str = Field(
         default="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
         description="URL of the ECB daily reference-rates XML feed (the default "
@@ -329,6 +568,11 @@ class Settings(BaseSettings):
         "7 días'). Bundles whose timestamp is older than now-this are pruned "
         "after a successful run. Operator-tunable.",
     )
+    knowledge_gc_retention_days: int = Field(
+        default=30,
+        description="G-03: gracia antes de que el GC de conocimiento hard-borre "
+        "un documento soft-borrado (chunks + blob + fila). Operator-tunable.",
+    )
     backup_volumes: list[str] = Field(
         default_factory=lambda: ["minio_data", "redis_data", "vault_data"],
         description="Docker named volumes captured in the tar+gzip step: MinIO "
@@ -341,6 +585,14 @@ class Settings(BaseSettings):
         "materialised (`<root>/<volume>/_data`). The backup tars each volume's "
         "_data tree from here. Override when volumes live elsewhere (e.g. a "
         "bind-mounted /data root).",
+    )
+    backup_bind_paths: list[str] = Field(
+        default_factory=lambda: ["/data/agent-platform"],
+        description="Bind mounts (rutas absolutas, NO named volumes) que también "
+        "entran en el bundle de backup. Por defecto los bare repos + worktrees "
+        "de los agentes (/data/agent-platform), que quedaban fuera de todo "
+        "backup y se perdieron en el wipe del bind del 2026-07-02 (auditoría "
+        "F0.4). Vacíala para excluirlos.",
     )
     backup_cron: str = Field(
         default="0 3 * * *",
@@ -548,11 +800,16 @@ class Settings(BaseSettings):
         "use (`docker compose --file <this>`).",
     )
     restore_app_services: list[str] = Field(
+        # ADR 0117 (c): `web-app` estuvo aquí y **no existe en ningún compose**
+        # — ni el versionado ni el que genera el instalador. `docker compose stop`
+        # con un servicio inexistente devuelve != 0, y `_stop_app_stack` eleva en
+        # ese caso: la restauración completa abortaba en el paso 3, ANTES de
+        # restaurar nada. Un fantasma en esta lista no es cosmética, es el
+        # simulacro de recuperación roto.
         default_factory=lambda: [
             "api-server",
             "orchestrator",
             "workers",
-            "web-app",
             "admin-panel",
         ],
         description="The APP services stopped (and brought back up) around a full "

@@ -225,6 +225,23 @@ async def get_cortex_web_enabled(session: AsyncSession) -> bool:
     return bool(value)
 
 
+# KILL-SWITCH del NAVEGADOR real del córtex (ADR 0080). Es una capacidad muy por
+# encima de leer la web: navega, ejecuta JS, clica, teclea y mantiene sesión. Por
+# eso arranca APAGADO y, aun encendido, cada sesión necesita la aprobación del
+# owner. Apagarlo corta de raíz: las tools desaparecen del catálogo y el despacho
+# las trata como desconocidas.
+CORTEX_BROWSER_ENABLED_KEY = "cortex.browser_enabled"
+DEFAULT_CORTEX_BROWSER_ENABLED = False
+
+
+async def get_cortex_browser_enabled(session: AsyncSession) -> bool:
+    """Si el navegador real del córtex (ADR 0080) está habilitado. Default OFF."""
+    value = await get_platform_setting(
+        session, CORTEX_BROWSER_ENABLED_KEY, default=DEFAULT_CORTEX_BROWSER_ENABLED
+    )
+    return bool(value)
+
+
 # ---------------------------------------------------------------------------
 # Autonomía del córtex (Córtex F4, ADR 0078) — bucles cognitivos de fondo
 # ---------------------------------------------------------------------------
@@ -385,6 +402,15 @@ DEFAULT_MEMORY_BACKFILL_ENABLED = True
 
 MEMORY_BACKFILL_BATCH_SIZE_KEY = "memory.backfill_batch_size"
 DEFAULT_MEMORY_BACKFILL_BATCH_SIZE = 50
+
+# ADR 0113: multiplicador del techo de presupuestos de ejecucion. 1.0 = el
+# techo historico (espejo de los budgets por-kind del worker); subirlo es una
+# decision explicita de coste del System Admin. Acotado para que un typo no
+# multiplique el gasto x1000.
+EXECUTION_BUDGET_CEILING_MULTIPLIER_KEY = "execution.budget_ceiling_multiplier"
+DEFAULT_EXECUTION_BUDGET_CEILING_MULTIPLIER = 1.0
+EXECUTION_BUDGET_CEILING_MULTIPLIER_MIN = 1.0
+EXECUTION_BUDGET_CEILING_MULTIPLIER_MAX = 4.0
 # Cotas de cordura: al menos 1 fila por lote; un techo generoso evita que un
 # typo cargue miles de contenidos en una sola petición al embedder.
 MEMORY_BACKFILL_BATCH_SIZE_MIN = 1
@@ -408,6 +434,28 @@ async def get_memory_backfill_enabled(session: AsyncSession) -> bool:
         session, MEMORY_BACKFILL_ENABLED_KEY, default=DEFAULT_MEMORY_BACKFILL_ENABLED
     )
     return bool(value)
+
+
+async def get_execution_budget_ceiling_multiplier(session: AsyncSession) -> float:
+    """Multiplicador del techo de presupuestos (ADR 0113), acotado [1.0, 4.0].
+
+    1.0 = comportamiento historico. Un proyecto pesado puede entonces pedir en
+    ``execution_budgets`` hasta techo x multiplicador (nunca por encima). El
+    wall-clock NO se multiplica: lo mata el timeout del contenedor del worker
+    (env), y superarlo solo produciria kills externos."""
+    value = await get_platform_setting(
+        session,
+        EXECUTION_BUDGET_CEILING_MULTIPLIER_KEY,
+        default=DEFAULT_EXECUTION_BUDGET_CEILING_MULTIPLIER,
+    )
+    try:
+        multiplier = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_EXECUTION_BUDGET_CEILING_MULTIPLIER
+    return max(
+        EXECUTION_BUDGET_CEILING_MULTIPLIER_MIN,
+        min(EXECUTION_BUDGET_CEILING_MULTIPLIER_MAX, multiplier),
+    )
 
 
 async def get_memory_backfill_batch_size(session: AsyncSession) -> int:
@@ -781,24 +829,36 @@ async def get_default_model_config(session: AsyncSession) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Estados de ejecución elegibles para memorización (Plan 06.17 task_06_17_04)
 # ---------------------------------------------------------------------------
-# El Memorizer solo destila ejecuciones "exitosas" — históricamente solo
-# ``done`` (``policy.py``). Este setting hace ese conjunto OPERATOR-CONFIGURABLE
-# (p.ej. añadir ``aborted`` para aprender de fallos): el worker lo lee en vivo y
-# se lo pasa a ``should_memorize``. Default ``["done"]`` (backward-compat). Solo
-# un System Admin lo escribe. Un valor que no sea una lista de
+# El Memorizer solo destila ejecuciones de estados elegibles. Este setting hace
+# ese conjunto OPERATOR-CONFIGURABLE (p.ej. estrecharlo a solo ``done``): el
+# worker lo lee en vivo y se lo pasa a ``should_memorize``. Solo un System
+# Admin lo escribe. Un valor que no sea una lista de
 # :class:`~api_server.db.domain.ExecutionStatus` válidos cae al default.
+#
+# AUD16-17 (auditoría 2026-07-16): el default incluye los FRACASOS — P1-1(a)
+# (investigación 2026-07-11) cambió el default de la política pura
+# (``policy._DEFAULT_ELIGIBLE_STATUSES``) pero este default operativo seguía en
+# ``("done",)``, y como el worker SIEMPRE pasa el resultado de
+# ``get_memorizable_statuses()``, el camino real nunca vio el default nuevo.
+# Ambos defaults deben ser EL MISMO conjunto (test_memorizable_statuses_default).
 MEMORY_MEMORIZABLE_STATUSES_KEY = "memory.memorizable_statuses"
-DEFAULT_MEMORY_MEMORIZABLE_STATUSES: tuple[str, ...] = ("done",)
+DEFAULT_MEMORY_MEMORIZABLE_STATUSES: tuple[str, ...] = (
+    "done",
+    "failed",
+    "aborted",
+    "needs_human_review",
+)
 
 
 async def get_memorizable_statuses(session: AsyncSession) -> frozenset[str]:
-    """Estados de ejecución que disparan memorización (default ``{"done"}``).
+    """Estados de ejecución que disparan memorización.
 
     Lo lee el worker del Memorizer en vivo y se lo pasa a ``should_memorize`` como
     conjunto elegible. Normaliza a un ``frozenset`` de estados
     :class:`~api_server.db.domain.ExecutionStatus` válidos; descarta entradas no
     reconocidas y, si la lista queda vacía o no es lista, cae al default
-    ``{"done"}`` (nunca deja al Memorizer sin ningún estado elegible)."""
+    ``DEFAULT_MEMORY_MEMORIZABLE_STATUSES`` (done + fracasos, AUD16-17 — nunca
+    deja al Memorizer sin ningún estado elegible)."""
     from api_server.db.domain import ExecutionStatus
 
     value = await get_platform_setting(
@@ -829,14 +889,20 @@ DEFAULT_DOUBLE_SIGNATURE_THRESHOLD = "0"
 # Execution time-limit backstop (Plan 06.14 task_06_14_04 / workers-orchestrator-10)
 # ---------------------------------------------------------------------------
 # Operator-tunable backstop applied per `run_execution` at enqueue time, so a
-# change takes effect for new runs without restarting the workers. Generous on
-# purpose — the agent-runtime enforces its own, tighter container_run_timeout_s;
-# these only catch a truly wedged task. Soft → SoftTimeLimitExceeded the task
-# can catch and finalise; hard → SIGKILL of the worker child.
+# change takes effect for new runs without restarting the workers. This is the
+# LAST resort — the agent-runtime enforces its own, tighter per-kind
+# container_run_timeout (600s thin, 7200s claude_sdk implementer + 120s grace),
+# which must fire FIRST. So these defaults sit ABOVE the largest container budget
+# (7320s) and BELOW the broker visibility timeout (25200s): otherwise Celery
+# SIGKILLs a legitimate 2h claude_sdk run at 35 min and, with
+# task_reject_on_worker_lost, the message is redelivered → a SECOND container +
+# double LLM cost while the first is still alive (prod-06 A3, auditoría
+# 2026-07-06). Soft → SoftTimeLimitExceeded the task can catch and finalise;
+# hard → SIGKILL of the worker child.
 EXECUTION_SOFT_TIME_LIMIT_KEY = "execution_soft_time_limit_s"
 EXECUTION_HARD_TIME_LIMIT_KEY = "execution_hard_time_limit_s"
-DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S = 1800
-DEFAULT_EXECUTION_HARD_TIME_LIMIT_S = 2100
+DEFAULT_EXECUTION_SOFT_TIME_LIMIT_S = 7500
+DEFAULT_EXECUTION_HARD_TIME_LIMIT_S = 7800
 
 
 async def get_execution_time_limits(session: AsyncSession) -> tuple[int, int]:
@@ -985,6 +1051,43 @@ DEFAULT_FX_SOURCE = "ecb"
 # workers.fx_fetcher.FX_FETCHER_SOURCES (the two packages deliberately do not
 # import one another at module load).
 FX_SOURCES = ("ecb",)
+
+
+# ADR 0098 (eje 3): interruptor vivo del BARRIDO periódico de fetch de remotos
+# git (`workers.sweep_project_git_remotes`). Default OFF: sondear los remotos de
+# todos los proyectos es una decisión consciente del System Admin (coste de red
+# + credenciales), no un default; el botón manual «Sincronizar» siempre está.
+# La CADENCIA es el knob aparte WORKERS_GIT_FETCH_CRON (leído por beat al boot).
+# ADR 0102 D3: capa PLATAFORMA de los guardrails declarativos (principio 10).
+# El orquestador la lee en cada dispatch, la fusiona con la capa proyecto
+# (resolve_config de shared-guardrails, locked gana) y la transporta al runtime
+# en spec["guardrails"]. Vacia -> el runtime usa su baseline LOG.
+GUARDRAILS_CONFIG_KEY = "guardrails_config"
+DEFAULT_GUARDRAILS_CONFIG: dict[str, Any] = {}
+
+
+async def get_guardrails_config(session: AsyncSession) -> dict[str, Any]:
+    """La capa plataforma de guardrails (dict declarativo, {} = baseline)."""
+    value = await get_platform_setting(
+        session, GUARDRAILS_CONFIG_KEY, default=DEFAULT_GUARDRAILS_CONFIG
+    )
+    return dict(value) if isinstance(value, dict) else {}
+
+
+GIT_FETCH_SWEEP_ENABLED_KEY = "git_fetch_sweep_enabled"
+DEFAULT_GIT_FETCH_SWEEP_ENABLED = False
+
+
+async def get_git_fetch_sweep_enabled(session: AsyncSession) -> bool:
+    """Whether the periodic git-remote fetch sweep is currently enabled.
+
+    Read by ``workers.sweep_project_git_remotes`` before doing any work; when
+    False the run is a no-op (no remote is contacted). Default OFF (ADR 0098).
+    """
+    value = await get_platform_setting(
+        session, GIT_FETCH_SWEEP_ENABLED_KEY, default=DEFAULT_GIT_FETCH_SWEEP_ENABLED
+    )
+    return bool(value)
 
 
 async def get_fx_fetch_enabled(session: AsyncSession) -> bool:

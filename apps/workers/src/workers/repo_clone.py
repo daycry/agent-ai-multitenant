@@ -10,7 +10,6 @@ loguea y se devuelve como estado, nunca propaga al worker.
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -23,17 +22,6 @@ from workers.git_auth import build_git_auth_env
 from workers.git_repos import BareRepoLayout, BareRepoManager
 
 _log = structlog.get_logger("workers.repo_clone")
-
-
-def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
-    return slug or "project"
-
-
-def _repo_name_from_url(url: str) -> str:
-    """Nombre del repo desde la URL del remoto (basename sin .git)."""
-    tail = url.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
-    return (tail[:-4] if tail.endswith(".git") else tail) or "repo"
 
 
 def _vault_store(settings: Settings) -> Any | None:
@@ -65,10 +53,17 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
             project = await session.get(Project, project_id)
             if project is None or not project.git_config:
                 return {"project_id": str(project_id), "status": "skipped:no_git_config"}
+            if not project.slug:
+                return {"project_id": str(project_id), "status": "skipped:no_project_slug"}
             org = await session.get(Organization, project.tenant_id)
             cfg = dict(project.git_config)
             tenant_slug = (org.slug if org is not None else None) or str(project.tenant_id)
-            project_slug = _slugify(project.name)
+            # Persisted projects.slug (ADR 0085), NOT slugify(name): the clone must
+            # land in the SAME bare that execution branches off — one bare per
+            # project, named by project.slug (audit 2026-07-03, P2). Fetching the
+            # remote here populates that bare, so worktrees branch off real remote
+            # content instead of an empty seed.
+            project_slug = project.slug
 
         remote_url = cfg.get("remote_url")
         if not remote_url:
@@ -100,18 +95,97 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
                 project_slug=project_slug,
             )
             mgr = BareRepoManager(layout)
-            repo_name = _repo_name_from_url(remote_url)
+            # One bare per project, named by project.slug — the SAME name execution
+            # and the auto-PR resolve via plan_git_identity (audit P2).
+            repo_name = project_slug
             mgr.ensure_repo(repo_name, remote_url=remote_url)
             mgr.fetch_remote(repo_name, auth_env=auth.env or None)
+            # La base local debe nacer de la historia del REMOTO, no de una
+            # raíz sintética (visto en vivo: PR final con «no history in
+            # common»). Conservador: crea/avanza (ff) la rama default local;
+            # un remoto vacío o una divergencia se reportan, nunca se pisan.
+            alignment = mgr.align_default_branch(
+                repo_name, str(cfg.get("default_branch") or "main")
+            )
+            if alignment in ("remote_empty", "diverged"):
+                _log.warning(
+                    "repo_clone.default_branch_not_aligned",
+                    project_id=str(project_id),
+                    repo=repo_name,
+                    alignment=alignment,
+                )
+        except Exception as exc:
+            # Persistimos el fallo para que la UI del proyecto lo VEA (el
+            # operador no sabía si la cola ejecutaba el clone) en vez de que
+            # muera solo en los logs del worker.
+            await _persist_sync_status(
+                sessionmaker, project_id, status="error", alignment=None, error=str(exc)
+            )
+            _log.warning("repo_clone.git_failed", project_id=str(project_id), error=str(exc))
+            return {"project_id": str(project_id), "status": f"error:{exc}"}
         finally:
             auth.cleanup()
-        _log.info("repo_clone.ok", project_id=str(project_id), repo=repo_name)
-        return {"project_id": str(project_id), "status": "ok", "repo": repo_name}
+        await _persist_sync_status(
+            sessionmaker, project_id, status="ok", alignment=alignment, error=None
+        )
+        _log.info(
+            "repo_clone.ok",
+            project_id=str(project_id),
+            repo=repo_name,
+            default_branch_alignment=alignment,
+        )
+        return {
+            "project_id": str(project_id),
+            "status": "ok",
+            "repo": repo_name,
+            "default_branch_alignment": alignment,
+        }
     finally:
         await engine.dispose()
 
 
-@app.task(name="workers.clone_project_repo")  # type: ignore[misc]
+async def _persist_sync_status(
+    sessionmaker: Any,
+    project_id: UUID,
+    *,
+    status: str,
+    alignment: str | None,
+    error: str | None,
+) -> None:
+    """Escribe el resultado del clone/sync en ``project.repository_config``.
+
+    Da al operador feedback de que la cola SÍ ejecutó (era su duda) y, sobre
+    todo, la ALINEACIÓN de la rama default local con el remoto: ``diverged``
+    explica por qué el PR final falla con «no history in common» (el caso
+    api-ci). Merge del dict (no pisa ``review_image``/``review_port``);
+    best-effort — un fallo aquí nunca rompe el clone ya hecho. El worker corre
+    como ``migrations_user`` (BYPASSRLS), así que la escritura no necesita
+    contexto de tenant."""
+    from datetime import UTC, datetime
+
+    from api_server.db.domain import Project
+
+    payload: dict[str, Any] = {
+        "at": datetime.now(tz=UTC).isoformat(),
+        "status": status,
+    }
+    if alignment is not None:
+        payload["default_branch_alignment"] = alignment
+    if error is not None:
+        payload["error"] = error[:500]
+    try:
+        async with sessionmaker() as session, session.begin():
+            project = await session.get(Project, project_id)
+            if project is not None:
+                project.repository_config = {
+                    **(project.repository_config or {}),
+                    "last_git_sync": payload,
+                }
+    except Exception as exc:  # pragma: no cover - defensive best-effort
+        _log.warning("repo_clone.persist_status_failed", project_id=str(project_id), error=str(exc))
+
+
+@app.task(name="workers.clone_project_repo")  # type: ignore[untyped-decorator]
 def clone_project_repo(project_id: str) -> dict[str, Any]:
     """Entry point Celery. Best-effort: nunca propaga (un fallo de red/credencial
     se devuelve como estado para que la UI/logs lo vean)."""

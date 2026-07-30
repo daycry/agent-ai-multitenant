@@ -31,6 +31,12 @@ from shared_mcp.exceptions import (
     MCPToolError,
     MCPTransportError,
 )
+from shared_mcp.oauth import (
+    VaultTokenStorage,
+    build_client_metadata,
+    build_oauth_provider,
+    oauth_vault_path,
+)
 from shared_mcp.types import (
     MCPServerConfig,
     MCPTool,
@@ -55,7 +61,11 @@ __all__ = [
     "StaticVaultResolver",
     "Transport",
     "VaultResolver",
+    "VaultTokenStorage",
     "apply_vault_auth",
+    "build_client_metadata",
+    "build_oauth_provider",
     "discover_tools",
+    "oauth_vault_path",
     "render_vault_path",
 ]

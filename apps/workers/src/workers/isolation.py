@@ -39,6 +39,13 @@ DOCKER_SOCKET_PATHS: tuple[str, ...] = ("/var/run/docker.sock", "/run/docker.soc
 # into the agent-runtime image.
 AGENT_UID_GID = "1000:1000"
 
+# The container HOME, declared by every runtime image (`ENV HOME=/home/agent`,
+# `mkdir -p /home/agent && chown 1000:1000`). It must live OUTSIDE /workspace:
+# with HOME pointing at the bind-mounted worktree, every dotfile the toolchain
+# (or the Claude Code CLI) writes lands in the project repo and gets committed
+# by `git add -A`. Shared with the test-runtime so both envelopes agree.
+AGENT_HOME = "/home/agent"
+
 
 class DockerSocketLeakError(RuntimeError):
     """Raised when a run config would expose the Docker socket to an agent."""
@@ -85,30 +92,56 @@ def assert_no_docker_socket(run_kwargs: dict[str, Any]) -> None:
         )
 
 
+def build_security_opt(settings: Settings) -> list[str]:
+    """The ``security_opt`` list EVERY container running user code must carry.
+
+    Shared by the agent-runtime and the test/stack runtime (task_wf_21, C-02).
+    Both execute code we do not control — the principle in CLAUDE.md §2 does not
+    distinguish between them — yet the seccomp/apparmor wiring lived only in this
+    module, so the hardened profiles the operator configures existed on disk and
+    were silently NOT applied to the test container. Duplicating the logic is
+    exactly what let the two envelopes diverge; hence one helper.
+
+    The Docker SDK forwards the seccomp profile's CONTENT, not its path, so it is
+    read here and the daemon never needs the file.
+    """
+    security_opt = ["no-new-privileges:true"]
+    seccomp = settings.seccomp_profile_path.strip()
+    if seccomp:
+        security_opt.append("seccomp=" + Path(seccomp).read_text(encoding="utf-8"))
+    apparmor = settings.apparmor_profile.strip()
+    if apparmor:
+        security_opt.append("apparmor=" + apparmor)
+    return security_opt
+
+
 def build_hardened_run_kwargs(
     settings: Settings,
     *,
     workspace_host_path: str | None = None,
+    workspace_read_only: bool = False,
 ) -> dict[str, Any]:
     """Build the locked-down kwargs for `docker.containers.run`.
 
-    When `workspace_host_path` is given, /workspace is a read-write bind
-    to that host directory; otherwise it is an ephemeral tmpfs. Either
-    way the container's root filesystem stays read-only.
+    When `workspace_host_path` is given, /workspace is a bind to that host
+    directory — read-write by default, or read-only when
+    `workspace_read_only` is set (ADR 0095: a REVIEW run mounts the
+    implementer's worktree read-only so it can read the code without
+    mutating it). Otherwise /workspace is an ephemeral tmpfs. Either way
+    the container's root filesystem stays read-only.
     """
-    security_opt = ["no-new-privileges:true"]
+    security_opt = build_security_opt(settings)
 
-    seccomp = settings.seccomp_profile_path.strip()
-    if seccomp:
-        # The Docker SDK forwards the profile *content*, not the path —
-        # read it here so the daemon never needs the file.
-        security_opt.append("seccomp=" + Path(seccomp).read_text(encoding="utf-8"))
-
-    apparmor = settings.apparmor_profile.strip()
-    if apparmor:
-        security_opt.append("apparmor=" + apparmor)
-
-    tmpfs = {"/tmp": f"rw,noexec,nosuid,size={settings.container_tmp_size}"}
+    # HOME is the CLI's own size-capped tmpfs OUTSIDE /workspace. The Claude Code
+    # CLI writes its config (.claude.json ~25KB, .claude/) into HOME; with
+    # HOME=/workspace that landed in the agent's project worktree and the agent
+    # read it back, polluting every model_call's context. nosuid like the rest;
+    # NOT noexec (the CLI may exec from its own cache), matching /workspace.
+    agent_home = AGENT_HOME
+    tmpfs = {
+        "/tmp": f"rw,noexec,nosuid,size={settings.container_tmp_size}",
+        agent_home: f"rw,nosuid,size={settings.container_home_size},uid=1000,gid=1000",
+    }
 
     kwargs: dict[str, Any] = {
         "cap_drop": ["ALL"],
@@ -119,12 +152,17 @@ def build_hardened_run_kwargs(
         "pids_limit": settings.container_pids_limit,
         "user": AGENT_UID_GID,
         "working_dir": "/workspace",
-        "environment": {"HOME": "/workspace", "PYTHONDONTWRITEBYTECODE": "1"},
+        "environment": {"HOME": agent_home, "PYTHONDONTWRITEBYTECODE": "1"},
     }
 
     if workspace_host_path:
         kwargs["mounts"] = [
-            Mount(target="/workspace", source=workspace_host_path, type="bind", read_only=False)
+            Mount(
+                target="/workspace",
+                source=workspace_host_path,
+                type="bind",
+                read_only=workspace_read_only,
+            )
         ]
     else:
         tmpfs["/workspace"] = (

@@ -256,6 +256,33 @@ class EvalRunResponse(BaseModel):
     updated_at: datetime
 
 
+class EvalResultResponse(BaseModel):
+    """El veredicto de UN item dentro de una corrida (`task_wf_52b`).
+
+    Las filas `eval_results` se escribían desde el Plan 14 y **ninguna ruta las
+    leía**: la corrida publicaba su `pass_rate` y nadie podía ver qué item había
+    fallado ni por qué. Un 60 % sin desglose no es accionable — dice que algo va
+    mal y no permite arreglarlo.
+
+    `criterion_scores` es el desglose por criterio (nombre, puntuación, umbral y
+    la justificación que escribió el juez), que es donde está la explicación.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    item_id: UUID | None
+    produced_output: str | None
+    criterion_scores: list[Any]
+    verdict: str
+    overall_score: Decimal | None
+    latency_ms: int | None
+    tokens: int | None
+    cost_usd: Decimal | None
+    created_at: datetime
+
+
 # ---------------------------------------------------------------------------
 # Eval-run diff — compare two runs of the same dataset (task_14_06)
 # ---------------------------------------------------------------------------

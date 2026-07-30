@@ -21,6 +21,8 @@ from uuid import uuid4
 
 import pytest
 from api_server.assistant.graph import (
+    FINISH_NUDGE,
+    AssistantState,
     ModelTurn,
     ScriptedAssistantModel,
     ToolInvocation,
@@ -67,6 +69,142 @@ def _stub_memory(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("api_server.cortex.tools.cortex_remember", _fake_remember)
     monkeypatch.setattr("api_server.cortex.tools.cortex_recall", _fake_recall)
+
+
+@pytest.mark.asyncio
+async def test_tool_failure_does_not_crash_the_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Una tool que LANZA (p.ej. web_fetch con el egress bloqueado) NO debe
+    tumbar el turno: el error se devuelve al modelo como resultado de la tool
+    y el modelo responde igualmente (con lo que ya tiene). Visto en vivo: un
+    web_fetch fallido mataba la voz del córtex con «voice turn failed» en vez
+    de responder desde los resultados de búsqueda."""
+
+    async def _boom(session, *, owner_user_id, tenant_id, query, **_: Any):
+        raise RuntimeError("All connection attempts failed")
+
+    monkeypatch.setattr("api_server.cortex.tools.cortex_recall", _boom)
+
+    model = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "tiempo"}),)),
+            ModelTurn(content="Según lo que sé, hace sol."),
+        ]
+    )
+    ctx = _ctx()
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(WRITE_TOOL, READ_TOOL),
+        tool_ctx=ctx,
+        chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
+    )
+    # El turno SOBREVIVE y responde; la tool que falló se registra igualmente.
+    assert result.content == "Según lo que sé, hace sol."
+    assert READ_TOOL in result.tools_called
+
+
+@pytest.mark.asyncio
+async def test_reasoning_preamble_of_a_tool_turn_never_becomes_the_answer() -> None:
+    """El `content` de un turno que PIDE una tool es preámbulo/razonamiento del
+    modelo (p.ej. gpt-oss emite «We need to use web_search»), NO una respuesta.
+    Si el turno final tras la tool sale VACÍO, la respuesta NUNCA debe ser ese
+    preámbulo — visto en vivo: el córtex «respondía» «We need to use
+    web_search» (además en inglés). Mejor una respuesta vacía que el
+    pensamiento crudo."""
+    model = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(
+                content="We need to use web_search.",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "tiempo"}),),
+            ),
+            ModelTurn(content=""),  # el modelo no produjo respuesta tras la tool
+        ]
+    )
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(WRITE_TOOL, READ_TOOL),
+        tool_ctx=_ctx(),
+        chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
+    )
+    assert "web_search" not in result.content
+    assert result.content == ""  # sin respuesta real → vacío, jamás el preámbulo
+
+
+@pytest.mark.asyncio
+async def test_real_answer_after_tool_is_used_not_the_preamble() -> None:
+    """El caso feliz: el preámbulo del turno-tool se ignora y se usa la
+    respuesta real del turno posterior."""
+    model = ScriptedAssistantModel(
+        turns=[
+            ModelTurn(
+                content="We need to use web_search.",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "tiempo"}),),
+            ),
+            ModelTurn(content="En Barcelona hace sol, 28 grados."),
+        ]
+    )
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(WRITE_TOOL, READ_TOOL),
+        tool_ctx=_ctx(),
+        chat_history=[{"role": "user", "content": "¿qué tiempo hace?"}],
+    )
+    assert result.content == "En Barcelona hace sol, 28 grados."
+
+
+@dataclass
+class _RecordingModel:
+    """Modelo scripted que ADEMÁS registra el estado que recibe cada ``decide``,
+    para poder afirmar qué se le pasó en el turno de cierre (finish)."""
+
+    turns: list[ModelTurn]
+    seen: list[AssistantState] = field(default_factory=list)
+    _cursor: int = 0
+
+    async def decide(self, state: AssistantState) -> ModelTurn:
+        self.seen.append(state)
+        index = min(self._cursor, len(self.turns) - 1)
+        self._cursor += 1
+        return self.turns[index]
+
+
+@pytest.mark.asyncio
+async def test_finish_reask_forces_prose_with_a_nudge() -> None:
+    """Modelo de razonamiento (gpt-oss:120b) que se queda pidiendo tools sin
+    comprometer NUNCA una respuesta: llama a la tool, y el turno siguiente vuelve
+    a pedir la MISMA tool (deduplicada) con content vacío → el loop llega a finish
+    sin respuesta. Antes eso devolvía answer="" (visto en vivo con «¿últimas
+    noticias de tecnología hoy?»). Ahora el turno de finish re-pregunta SIN tools y
+    con una orden imperativa (``FINISH_NUDGE``) que fuerza la redacción final."""
+    model = _RecordingModel(
+        turns=[
+            ModelTurn(
+                content="We need to search the web.",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "noticias"}),),
+            ),
+            # Misma firma → deduplicada → kept vacío → el loop enruta a finish.
+            ModelTurn(
+                content="",
+                tool_calls=(ToolInvocation(name=READ_TOOL, arguments={"query": "noticias"}),),
+            ),
+            # Re-ask del finish: ahora sí redacta.
+            ModelTurn(content="Hoy destacan tres noticias de tecnología."),
+        ]
+    )
+    result = await run_cortex_turn(
+        model,
+        system_prompt="Eres el córtex.",
+        enabled_tools=(READ_TOOL,),
+        tool_ctx=_ctx(),
+        chat_history=[{"role": "user", "content": "¿últimas noticias de tecnología hoy?"}],
+    )
+    assert result.content == "Hoy destacan tres noticias de tecnología."
+    # El ÚLTIMO decide es el re-ask del finish: sin tools y con la orden imperativa.
+    finish_state = model.seen[-1]
+    assert finish_state.enabled_tools == ()
+    assert finish_state.final_instruction == FINISH_NUDGE
 
 
 @pytest.mark.asyncio

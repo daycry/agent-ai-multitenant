@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -48,3 +49,9 @@ class ObjectStorage(Protocol):
     async def delete_object(self, *, key: str) -> None: ...
 
     async def object_exists(self, *, key: str) -> bool: ...
+
+    async def list_objects(self, *, prefix: str) -> Sequence[str]:
+        """All object keys under ``prefix``. Used by the knowledge GC
+        (G-03) to find blobs with no live ``documents`` row. Raises
+        :class:`ObjectStorageError` on infrastructure failure."""
+        ...

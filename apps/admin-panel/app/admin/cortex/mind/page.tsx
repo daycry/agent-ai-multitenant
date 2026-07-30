@@ -27,24 +27,36 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Brain, Info } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
 import {
   affectFrameToMind,
+  approveBrowseSession,
+  browseStepSummary,
   driveToPercent,
+  getBrowseSessions,
   getCortexAffectTimeseries,
+  getCortexAutonomy,
   getCortexEpisodes,
   getCortexMind,
+  cortexFetch,
+  getCortexPursuits,
   padToPercent,
+  rejectBrowseSession,
+  setCortexAutonomy,
+  type BrowseSession,
   type CortexAffectPoint,
+  type CortexAutonomy,
   type CortexEpisode,
   type CortexMind,
+  type CortexPursuit,
   type PadDimension,
 } from "@/lib/cortex";
 import { useCurrentUser } from "@/lib/use-current-user";
@@ -103,6 +115,21 @@ function CortexMindBody() {
     queryFn: () => getCortexEpisodes({ limit: 50 }),
     refetchOnWindowFocus: false,
     retry: false,
+  });
+
+  // C4 (investigación 2026-07-11): el diario — la capa narrativa que faltaba
+  // sobre la vida interior (narrativas versionadas + reflexiones/aprendizajes).
+  const journalQuery = useQuery<CortexJournalEntry[], ApiError>({
+    queryKey: ["cortex", "journal"],
+    queryFn: () => cortexFetch<CortexJournalEntry[]>("/journal?limit=50"),
+    refetchOnWindowFocus: false,
+  });
+  const pursuitsQuery = useQuery<CortexPursuit[], ApiError>({
+    queryKey: ["cortex", "pursuits"],
+    queryFn: () => getCortexPursuits({ limit: 20 }),
+    refetchOnWindowFocus: false,
+    retry: false,
+    refetchInterval: POLL_INTERVAL_MS,
   });
 
   // Un 403 en cualquier consulta = dejaste de ser owner tras cargar: refleja el
@@ -192,7 +219,372 @@ function CortexMindBody() {
           isError={episodesQuery.isError}
         />
       </div>
+
+      <div className="mt-6">
+        <LearningPanel
+          pursuits={pursuitsQuery.data ?? []}
+          isLoading={pursuitsQuery.isLoading}
+          isError={pursuitsQuery.isError}
+        />
+      </div>
+
+      <div className="mt-6">
+        <JournalPanel
+          entries={journalQuery.data ?? []}
+          isLoading={journalQuery.isLoading}
+          isError={journalQuery.isError}
+        />
+      </div>
+
+      <div className="mt-6">
+        <AutonomyPanel />
+      </div>
+
+      <div className="mt-6">
+        <BrowseInboxPanel />
+      </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inbox de aprobación de navegación (ADR 0080) — validación humana POR SESIÓN
+// ---------------------------------------------------------------------------
+
+function BrowseInboxPanel() {
+  const queryClient = useQueryClient();
+  const sessionsQuery = useQuery<BrowseSession[], ApiError>({
+    queryKey: ["cortex", "browse-sessions"],
+    queryFn: getBrowseSessions,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const decide = useMutation<BrowseSession, ApiError, { id: string; approve: boolean }>({
+    mutationFn: ({ id, approve }) => (approve ? approveBrowseSession(id) : rejectBrowseSession(id)),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["cortex", "browse-sessions"] }),
+  });
+
+  const sessions = sessionsQuery.data ?? [];
+
+  return (
+    <Card data-testid="cortex-browse-inbox">
+      <CardContent className="space-y-3 pt-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Navegación pendiente de tu aprobación</h2>
+          <span className="text-muted-foreground text-xs">
+            El córtex PIDE navegar; tú apruebas cada sesión viendo el guion exacto (ADR 0080)
+          </span>
+        </div>
+        {sessionsQuery.isLoading ? (
+          <p className="text-muted-foreground flex items-center gap-2 text-sm">
+            <Spinner />
+            Cargando…
+          </p>
+        ) : sessionsQuery.isError ? (
+          <p className="text-destructive text-sm">No se pudo cargar el inbox de navegación.</p>
+        ) : sessions.length === 0 ? (
+          <p className="text-muted-foreground text-sm" data-testid="cortex-browse-empty">
+            No hay sesiones de navegación pendientes.
+          </p>
+        ) : (
+          <ul className="space-y-3" data-testid="cortex-browse-list">
+            {sessions.map((s) => (
+              <li key={s.id} className="rounded-md border p-3" data-testid="cortex-browse-item">
+                <p className="text-sm font-medium">{s.goal}</p>
+                <ol className="text-muted-foreground mt-1 list-decimal space-y-0.5 pl-5 text-xs">
+                  {s.steps.map((step, i) => (
+                    <li key={i}>{browseStepSummary(step)}</li>
+                  ))}
+                </ol>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    size="sm"
+                    data-testid="cortex-browse-approve"
+                    disabled={decide.isPending}
+                    onClick={() => decide.mutate({ id: s.id, approve: true })}
+                  >
+                    Aprobar y navegar
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    data-testid="cortex-browse-reject"
+                    disabled={decide.isPending}
+                    onClick={() => decide.mutate({ id: s.id, approve: false })}
+                  >
+                    Rechazar
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {decide.isError ? (
+          <p className="text-destructive text-xs">No se pudo aplicar la decisión.</p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Diario (C4) — línea temporal: narrativas versionadas + reflexiones/aprendizajes
+// ---------------------------------------------------------------------------
+interface CortexJournalEntry {
+  kind: string;
+  content: string;
+  reason: string | null;
+  created_at: string;
+}
+
+const JOURNAL_KIND_LABEL: Record<string, string> = {
+  narrative: "narrativa",
+  reflection: "reflexión",
+  learning: "aprendizaje",
+};
+
+function JournalPanel({
+  entries,
+  isLoading,
+  isError,
+}: {
+  entries: CortexJournalEntry[];
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  return (
+    <Card data-testid="cortex-journal-panel">
+      <CardContent className="pt-6">
+        <h2 className="text-base font-semibold">Diario</h2>
+        <p className="text-muted-foreground mt-1 text-sm">
+          La línea temporal del córtex: cómo fue reescribiendo su narrativa (con el motivo de cada
+          cambio) y qué reflexionó o aprendió por el camino. Relato de un modelo computacional — no
+          consciencia.
+        </p>
+        {isLoading ? (
+          <p className="text-muted-foreground mt-4 text-sm">Cargando…</p>
+        ) : isError ? (
+          <p className="text-destructive mt-4 text-sm">No se pudo cargar el diario.</p>
+        ) : entries.length === 0 ? (
+          <p className="text-muted-foreground mt-4 text-sm italic" data-testid="journal-empty">
+            Aún no hay entradas: llegan con la primera reflexión (manual o programada) o el primer
+            aprendizaje de curiosidad.
+          </p>
+        ) : (
+          <ul className="mt-4 space-y-3" data-testid="journal-entries">
+            {entries.map((entry, idx) => (
+              <li key={idx} className="border-l-2 pl-3">
+                <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded-full border px-2 py-0.5">
+                    {JOURNAL_KIND_LABEL[entry.kind] ?? entry.kind}
+                  </span>
+                  <span>{new Date(entry.created_at).toLocaleString()}</span>
+                  {entry.reason ? <span className="italic">({entry.reason})</span> : null}
+                </div>
+                <p className="mt-1 text-sm whitespace-pre-wrap">{entry.content}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Autonomía — kill-switch de los bucles de fondo + gates + budget (ADR 0078)
+// ---------------------------------------------------------------------------
+function AutonomyPanel() {
+  const queryClient = useQueryClient();
+  const autonomyQuery = useQuery<CortexAutonomy, ApiError>({
+    queryKey: ["cortex", "autonomy"],
+    queryFn: getCortexAutonomy,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const toggleMutation = useMutation<
+    CortexAutonomy,
+    ApiError,
+    { autonomy_enabled?: boolean; web_enabled?: boolean; browser_enabled?: boolean }
+  >({
+    mutationFn: setCortexAutonomy,
+    onSuccess: (data) => queryClient.setQueryData(["cortex", "autonomy"], data),
+  });
+
+  const autonomy = autonomyQuery.data;
+
+  return (
+    <Card data-testid="cortex-autonomy-panel">
+      <CardContent className="space-y-3 pt-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Autonomía (bucles de fondo)</h2>
+          <span className="text-muted-foreground text-xs">
+            Curiosidad y reflexión programadas — con budget y kill-switch (ADR 0078)
+          </span>
+        </div>
+        {autonomyQuery.isLoading ? (
+          <p className="text-muted-foreground flex items-center gap-2 text-sm">
+            <Spinner />
+            Cargando…
+          </p>
+        ) : autonomyQuery.isError || !autonomy ? (
+          <p className="text-destructive text-sm">No se pudo cargar el estado de autonomía.</p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                variant={autonomy.autonomy_enabled ? "destructive" : "default"}
+                data-testid="cortex-autonomy-toggle"
+                disabled={toggleMutation.isPending}
+                onClick={() =>
+                  toggleMutation.mutate({ autonomy_enabled: !autonomy.autonomy_enabled })
+                }
+              >
+                {autonomy.autonomy_enabled ? "Apagar autonomía" : "Encender autonomía"}
+              </Button>
+              <span className="text-sm" data-testid="cortex-autonomy-state">
+                Estado:{" "}
+                <span
+                  className={
+                    autonomy.autonomy_enabled
+                      ? "font-medium text-emerald-600 dark:text-emerald-400"
+                      : "text-muted-foreground font-medium"
+                  }
+                >
+                  {autonomy.autonomy_enabled ? "ENCENDIDA" : "APAGADA"}
+                </span>
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid="cortex-web-toggle"
+                disabled={toggleMutation.isPending}
+                onClick={() => toggleMutation.mutate({ web_enabled: !autonomy.web_enabled })}
+              >
+                {autonomy.web_enabled ? "Deshabilitar web" : "Habilitar web"}
+              </Button>
+              <Button
+                size="sm"
+                variant={autonomy.browser_enabled ? "destructive" : "outline"}
+                data-testid="cortex-browser-toggle"
+                disabled={toggleMutation.isPending}
+                onClick={() =>
+                  toggleMutation.mutate({ browser_enabled: !autonomy.browser_enabled })
+                }
+              >
+                {autonomy.browser_enabled ? "Deshabilitar navegador" : "Habilitar navegador"}
+              </Button>
+              {toggleMutation.isError ? (
+                <span className="text-destructive text-xs">No se pudo cambiar el estado.</span>
+              ) : null}
+            </div>
+            <ul className="text-muted-foreground grid gap-1 text-xs sm:grid-cols-2">
+              <li>
+                Web del córtex:{" "}
+                <span className="text-foreground font-medium" data-testid="cortex-web-state">
+                  {autonomy.web_enabled ? "habilitada" : "deshabilitada"}
+                </span>{" "}
+                (búsqueda/lectura web vía egress-proxy con anti-SSRF)
+              </li>
+              <li>
+                Navegador real (ADR 0080):{" "}
+                <span className="text-foreground font-medium" data-testid="cortex-browser-state">
+                  {autonomy.browser_enabled ? "habilitado" : "deshabilitado"}
+                </span>{" "}
+                (Playwright sandboxeado; cada sesión la apruebas tú abajo)
+              </li>
+              <li>
+                Búsquedas de curiosidad hoy:{" "}
+                <span className="text-foreground font-medium">
+                  {autonomy.budget.searches_today} / {autonomy.budget.searches_cap}
+                </span>
+              </li>
+              <li>
+                Umbral del drive de curiosidad:{" "}
+                <span className="text-foreground font-medium">
+                  {autonomy.curiosity_drive_threshold}
+                </span>
+              </li>
+              <li>
+                Circuit-breaker:{" "}
+                <span className="text-foreground font-medium">
+                  {autonomy.circuit_breaker_open ? "abierto (pausado)" : "cerrado (ok)"}
+                </span>
+              </li>
+            </ul>
+            <p className="text-muted-foreground text-xs">{autonomy.note_es}</p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Lo que está aprendiendo — historial de curiosidad (ADR 0078, copy honesto)
+// ---------------------------------------------------------------------------
+
+/** Etiqueta ES por estado del ciclo de vida de un pursuit. */
+const PURSUIT_STATUS_LABELS: Record<string, string> = {
+  selected: "elegido",
+  searching: "investigando",
+  digested: "aprendido — pendiente de contarlo",
+  surfaced: "comentado en conversación",
+  skipped: "descartado",
+  failed: "falló",
+};
+
+function LearningPanel({
+  pursuits,
+  isLoading,
+  isError,
+}: {
+  pursuits: CortexPursuit[];
+  isLoading: boolean;
+  isError: boolean;
+}) {
+  return (
+    <Card data-testid="cortex-learning-panel">
+      <CardContent className="space-y-3 pt-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Lo que está aprendiendo</h2>
+          <span className="text-muted-foreground text-xs">
+            Bucle de curiosidad programado — no es curiosidad consciente
+          </span>
+        </div>
+        {isLoading ? (
+          <p className="text-muted-foreground flex items-center gap-2 text-sm">
+            <Spinner />
+            Cargando…
+          </p>
+        ) : isError ? (
+          <p className="text-destructive text-sm">No se pudo cargar el historial de curiosidad.</p>
+        ) : pursuits.length === 0 ? (
+          <EmptyState
+            title="Aún no hay temas"
+            description="Cuando el bucle de curiosidad investigue un tema que menciones, aparecerá aquí y el córtex lo sacará en la próxima conversación."
+          />
+        ) : (
+          <ul className="divide-border divide-y" data-testid="cortex-learning-list">
+            {pursuits.map((pursuit) => (
+              <li key={pursuit.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="truncate text-sm">{pursuit.topic}</span>
+                <span
+                  className={
+                    pursuit.status === "surfaced"
+                      ? "text-muted-foreground shrink-0 text-xs"
+                      : "shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400"
+                  }
+                >
+                  {PURSUIT_STATUS_LABELS[pursuit.status] ?? pursuit.status}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

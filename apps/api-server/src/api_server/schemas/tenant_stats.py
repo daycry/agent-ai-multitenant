@@ -220,6 +220,10 @@ class ExecutionRunRow(BaseModel):
     model: str | None
     verdict: str
     succeeded: bool
+    # ADR 0087: the agent's structured self-reported finish status
+    # (success|failed|partial) or None — a hint, distinct from `verdict` (the
+    # execution lifecycle status).
+    finish_status: str | None = None
     retry_count: int
     duration_ms: int | None
     total_tokens: int

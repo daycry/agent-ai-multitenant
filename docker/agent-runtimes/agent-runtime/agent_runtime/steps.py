@@ -59,8 +59,16 @@ def model_call_step(
     cost_usd: float,
     summary: str,
     status: str = "ok",
+    provider: str | None = None,
+    cache_read_tokens: int = 0,
 ) -> dict[str, Any]:
-    """An LLM call step — token counts and cost are captured here."""
+    """An LLM call step — token counts and cost are captured here.
+
+    ``provider`` (AUD16-15) es el KIND del proveedor del run (claude_sdk/
+    ollama/azure_foundry/copilot): sin él, el price-snapshot del api-server
+    buscaba en el catálogo con provider="" y el coste facturable quedó NULL
+    en el 100% de las executions.
+    """
     step = _base(index, StepKind.MODEL_CALL, node, summary, status)
     step.update(
         model=model,
@@ -69,6 +77,14 @@ def model_call_step(
         total_tokens=tokens_in + tokens_out,
         cost_usd=round(cost_usd, 6),
     )
+    if provider:
+        step["provider"] = provider
+    # `task_wf_63`: cuántos tokens del prompt sirvió la CACHÉ del proveedor.
+    # Viaja por iteración —no agregado— porque la pregunta que interesa es si
+    # el prefijo se reutiliza a medida que crece el contexto, y eso solo se ve
+    # turno a turno. `0` cuando el proveedor no lo reporta (Ollama local).
+    if cache_read_tokens:
+        step["cache_read_tokens"] = int(cache_read_tokens)
     return step
 
 
@@ -96,8 +112,15 @@ def memory_read_step(
     hits: int,
     summary: str,
     status: str = "ok",
+    placeholder: bool = False,
 ) -> dict[str, Any]:
-    """A memory recall step (placeholder — real memory arrives Plan 04)."""
+    """A memory recall step.
+
+    ``placeholder=True`` marca honestamente un recall SIN cablear (bare run sin
+    API interno) — desde 2026-07-03 el boot cablea el recall real contra
+    ``/internal/agent/memory-recall`` y el default pasa a ``False``."""
     step = _base(index, StepKind.MEMORY_READ, node, summary, status)
-    step.update(query=query, hits=hits, placeholder=True)
+    step.update(query=query, hits=hits)
+    if placeholder:
+        step["placeholder"] = True
     return step

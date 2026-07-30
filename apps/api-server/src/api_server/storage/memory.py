@@ -49,6 +49,10 @@ class InMemoryObjectStorage:
         async with self._lock:
             return key in self._store
 
+    async def list_objects(self, *, prefix: str) -> list[str]:
+        async with self._lock:
+            return [k for k in self._store if k.startswith(prefix)]
+
 
 # Module-level singleton makes it trivial for the test fixture to
 # override `Depends(get_object_storage)` once and have all routes

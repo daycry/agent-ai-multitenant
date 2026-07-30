@@ -28,12 +28,17 @@ async def create_review_session(
     session: AsyncSession,
     *,
     tenant_id: UUID,
-    plan_id: UUID,
+    plan_id: UUID | None,
     spec: dict[str, Any],
     expires_at: datetime,
     container_ids: list[str] | None = None,
+    kind: str = "plan",
 ) -> ReviewSession:
-    """Persist a freshly-spawned session. `id` is auto-generated."""
+    """Persist a freshly-spawned session. `id` is auto-generated.
+
+    ``plan_id`` is optional since ADR 0130: an on-demand PROJECT preview
+    (``kind='preview'``) has no plan. The DB check enforces plan_id NULL ⇒
+    kind='preview'."""
     row = ReviewSession(
         tenant_id=tenant_id,
         plan_id=plan_id,
@@ -41,6 +46,7 @@ async def create_review_session(
         container_ids=list(container_ids or []),
         expires_at=expires_at,
         status="running",
+        kind=kind,
     )
     session.add(row)
     await session.flush()
@@ -61,11 +67,16 @@ async def get_review_session(session: AsyncSession, session_id: UUID) -> ReviewS
 async def list_review_sessions_for_plan(
     session: AsyncSession, plan_id: UUID
 ) -> list[ReviewSession]:
-    """All sessions of a plan, newest first."""
+    """Human-validation sessions of a plan, newest first.
+
+    Excludes on-demand previews (``kind='preview'``, ADR 0130) so a preview a
+    user launched for the plan never masquerades as its validation session in
+    the panel / corrections view / verdict flow."""
     result = await session.execute(
         select(ReviewSession)
         .where(
             ReviewSession.plan_id == plan_id,
+            ReviewSession.kind == "plan",
             ReviewSession.deleted_at.is_(None),
         )
         .order_by(ReviewSession.created_at.desc())
@@ -73,15 +84,46 @@ async def list_review_sessions_for_plan(
     return list(result.scalars().all())
 
 
+async def list_active_preview_sessions(
+    session: AsyncSession,
+    *,
+    project_id: UUID | None = None,
+    plan_id: UUID | None = None,
+) -> list[ReviewSession]:
+    """Active (running/suspended) on-demand previews (ADR 0130), newest first.
+
+    Filter by ``plan_id`` for a plan preview, or by ``project_id`` (matched
+    against ``spec->>'project_id'``) for a project preview. Used by the poll
+    endpoint (hand the operator the signed app URL) and to avoid piling up
+    duplicate previews for the same target."""
+    stmt = select(ReviewSession).where(
+        ReviewSession.kind == "preview",
+        ReviewSession.status.in_(("running", "suspended")),
+        ReviewSession.deleted_at.is_(None),
+    )
+    if plan_id is not None:
+        stmt = stmt.where(ReviewSession.plan_id == plan_id)
+    else:
+        stmt = stmt.where(ReviewSession.plan_id.is_(None))
+    if project_id is not None:
+        stmt = stmt.where(ReviewSession.spec["project_id"].astext == str(project_id))
+    stmt = stmt.order_by(ReviewSession.created_at.desc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def list_running_overdue(
     session: AsyncSession, now: datetime | None = None
 ) -> list[ReviewSession]:
-    """`status='running' AND expires_at < now`. Driven by the
-    `expire_review_runtimes` beat schedule (Plan 06.5 task_06_5_13)."""
+    """Sesiones ACTIVAS (`running` O `suspended`) con `expires_at < now`.
+    Driven by the `expire_review_runtimes` beat schedule (Plan 06.5
+    task_06_5_13). PROY2-07: una `suspended` vencida también expira — antes
+    quedaba zombie para siempre y el autostart/reconciler la contaba como
+    activa (ACTIVE_REVIEW_STATUSES), bloqueando nuevas sesiones del plan."""
     when = now or datetime.now(UTC)
     result = await session.execute(
         select(ReviewSession).where(
-            ReviewSession.status == "running",
+            ReviewSession.status.in_(("running", "suspended")),
             ReviewSession.expires_at < when,
             ReviewSession.deleted_at.is_(None),
         )
@@ -128,6 +170,31 @@ async def mark_terminal(
         row.rejection_reason = rejection_reason
     await session.flush()
     return row
+
+
+async def mark_other_plan_sessions_terminal(
+    session: AsyncSession,
+    plan_id: UUID,
+    *,
+    exclude_session_id: UUID,
+) -> int:
+    """PROY2-07: al cerrar el plan (veredicto), las OTRAS sesiones activas
+    (`running`/`suspended`) del plan se marcan `expired` — quedaban zombies
+    contando como activas para el autostart/reconciler. Devuelve cuántas cerró."""
+    result = await session.execute(
+        select(ReviewSession).where(
+            ReviewSession.plan_id == plan_id,
+            ReviewSession.id != exclude_session_id,
+            ReviewSession.status.in_(("running", "suspended")),
+            ReviewSession.deleted_at.is_(None),
+        )
+    )
+    rows = list(result.scalars().all())
+    for row in rows:
+        row.status = "expired"
+    if rows:
+        await session.flush()
+    return len(rows)
 
 
 async def mark_rerun_requested(session: AsyncSession, session_id: UUID) -> ReviewSession | None:

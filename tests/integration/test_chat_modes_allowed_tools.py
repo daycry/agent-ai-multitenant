@@ -159,7 +159,18 @@ def test_agent_spec_omits_allowlist_when_none() -> None:
     assert "allowed_tools" not in spec
 
 
-_SYSTEM_TOOLS = {"memory_recall", "memory_store", "kanban_update", "task_comment", "agent_invoke"}
+# AUD16-02: kanban_update/agent_invoke ya NO se anuncian al LLM (sin drain
+# worker-side su ok=true era éxito falso). El set anunciado vive en
+# workers.agent_tool_schemas.SYSTEM_TOOL_NAMES e incluye además las
+# capacidades del grafo (update_plan P1-6, ask_human ADR 0114).
+_SYSTEM_TOOLS = {
+    "memory_recall",
+    "memory_store",
+    "task_comment",
+    "rag_search",
+    "update_plan",
+    "ask_human",
+}
 
 
 def test_agent_spec_injects_model_tool_schemas_for_allowlisted_tools() -> None:

@@ -39,10 +39,15 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     ids = {
         "tenant": uuid4(),
         "project": uuid4(),
+        "project_paused": uuid4(),
         "plan_run": uuid4(),
         "plan_draft": uuid4(),
+        "plan_deleted": uuid4(),
+        "plan_paused": uuid4(),
         "root_run": uuid4(),
         "root_draft": uuid4(),
+        "root_deleted": uuid4(),
+        "root_paused": uuid4(),
     }
     conn = await asyncpg.connect(dsn)
     try:
@@ -56,28 +61,42 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         )
         await conn.execute(
             "INSERT INTO projects (id, tenant_id, name, status, is_template)"
-            " VALUES ($1, $2, 'P', 'active', false)",
+            " VALUES ($1, $2, 'P', 'active', false), ($3, $2, 'PP', 'paused', false)",
             ids["project"],
             ids["tenant"],
+            ids["project_paused"],
         )
         await conn.execute(
-            "INSERT INTO plans (id, tenant_id, project_id, title, status) VALUES"
-            " ($1, $2, $3, 'Running', 'in_progress'), ($4, $2, $3, 'Draft', 'draft')",
+            "INSERT INTO plans (id, tenant_id, project_id, title, status, deleted_at) VALUES"
+            " ($1, $2, $3, 'Running', 'in_progress', NULL),"
+            " ($4, $2, $3, 'Draft', 'draft', NULL),"
+            " ($5, $2, $3, 'Deleted', 'in_progress', now()),"
+            " ($6, $2, $7, 'Paused', 'in_progress', NULL)",
             ids["plan_run"],
             ids["tenant"],
             ids["project"],
             ids["plan_draft"],
+            ids["plan_deleted"],
+            ids["plan_paused"],
+            ids["project_paused"],
         )
         await conn.execute(
             "INSERT INTO tasks (id, tenant_id, project_id, plan_id, title, status, priority) VALUES"
             " ($1, $2, $3, $4, 'root-run', 'backlog', 'medium'),"
-            " ($5, $2, $3, $6, 'root-draft', 'backlog', 'medium')",
+            " ($5, $2, $3, $6, 'root-draft', 'backlog', 'medium'),"
+            " ($7, $2, $3, $8, 'root-deleted', 'backlog', 'medium'),"
+            " ($9, $2, $10, $11, 'root-paused', 'backlog', 'medium')",
             ids["root_run"],
             ids["tenant"],
             ids["project"],
             ids["plan_run"],
             ids["root_draft"],
             ids["plan_draft"],
+            ids["root_deleted"],
+            ids["plan_deleted"],
+            ids["root_paused"],
+            ids["project_paused"],
+            ids["plan_paused"],
         )
         return ids
     finally:
@@ -100,9 +119,15 @@ async def test_promote_ready_plans_beat(
         async with sessionmaker() as session:
             root_run = await session.get(Task, ids["root_run"])
             root_draft = await session.get(Task, ids["root_draft"])
+            root_deleted = await session.get(Task, ids["root_deleted"])
+            root_paused = await session.get(Task, ids["root_paused"])
         # The in_progress plan's root is promoted; the draft plan's root is not.
         assert root_run is not None and root_run.status == TaskStatus.READY.value
         assert root_draft is not None and root_draft.status == TaskStatus.BACKLOG.value
+        # PROY2-13: a soft-deleted in_progress plan is skipped entirely.
+        assert root_deleted is not None and root_deleted.status == TaskStatus.BACKLOG.value
+        # P1-01: a paused project's plans do not promote.
+        assert root_paused is not None and root_paused.status == TaskStatus.BACKLOG.value
         assert result["plans_touched"] == 1
         assert result["promoted"] == 1
     finally:

@@ -159,3 +159,53 @@ async def test_publish_and_read_telemetry_frame(redis_client: Redis) -> None:
     # delete limpia el stream.
     await delete_cortex_affect_stream(redis_client, owner)
     assert await redis_client.xrange(cortex_telemetry_stream_key(owner)) == []
+
+
+# ---------------------------------------------------------------------------
+# Baseline evolutivo embebido en la clave viva (retrocompatible)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_baseline_embebido_round_trip(redis_client: Redis) -> None:
+    from api_server.cortex.affect_cache import read_affect_state, write_affect_state
+    from api_server.cortex.affective import AffectState, Drives, PADState
+
+    owner = str(uuid4())
+    now = datetime.now(UTC)
+    state = AffectState(
+        emotion=PADState(valence=-0.8, arousal=0.95, dominance=-0.6, intensity=0.9),
+        mood=PADState(valence=0.0, arousal=0.3, dominance=0.0),
+        drives=Drives(curiosity=0.5, bonding=0.5, coherence=0.5, competence=0.5),
+    )
+    baseline = PADState(valence=0.4, arousal=0.5, dominance=0.2)
+    await write_affect_state(redis_client, owner, state, now=now, baseline=baseline)
+
+    # El decay lazy en lectura converge al baseline EMBEBIDO, no al neutro.
+    decayed = await read_affect_state(redis_client, owner, now=now + timedelta(hours=100))
+    assert decayed is not None
+    assert decayed.emotion.valence == pytest.approx(0.4, abs=1e-2)
+    assert decayed.emotion.arousal == pytest.approx(0.5, abs=1e-2)
+    assert decayed.emotion.dominance == pytest.approx(0.2, abs=1e-2)
+
+
+@pytest.mark.asyncio
+async def test_clave_vieja_sin_baseline_decae_al_neutro_del_motor(redis_client: Redis) -> None:
+    import json
+
+    from api_server.cortex.affect_cache import affect_cache_key, read_affect_state
+    from api_server.cortex.affective import BASELINE_PAD
+
+    owner = str(uuid4())
+    now = datetime.now(UTC)
+    # Clave escrita por la versión ANTERIOR del serializador (sin "baseline").
+    legacy = {
+        "updated_at": now.isoformat(),
+        "emotion": {"valence": 0.9, "arousal": 0.9, "dominance": 0.5, "intensity": 0.8},
+        "mood": {"valence": 0.2, "arousal": 0.4, "dominance": 0.1},
+        "drives": {"curiosity": 0.5, "bonding": 0.5, "coherence": 0.5, "competence": 0.5},
+    }
+    await redis_client.set(affect_cache_key(owner), json.dumps(legacy))
+
+    decayed = await read_affect_state(redis_client, owner, now=now + timedelta(hours=100))
+    assert decayed is not None
+    assert decayed.emotion.valence == pytest.approx(BASELINE_PAD.valence, abs=1e-2)
+    assert decayed.emotion.arousal == pytest.approx(BASELINE_PAD.arousal, abs=1e-2)

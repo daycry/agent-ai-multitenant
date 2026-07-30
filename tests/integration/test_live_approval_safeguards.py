@@ -113,9 +113,9 @@ async def test_a_sensitive_action_parks_the_execution_for_approval(
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
-        ids = await _seed(sm, approval_policy={"categories": {"code_execution": "human_required"}})
+        ids = await _seed(sm, approval_policy={"categories": {"code_changes": "human_required"}})
 
-        # shell_exec maps to the `code_execution` category — gated.
+        # shell_exec maps to the canonical `code_changes` category — gated (g6).
         model = {
             "kind": "scripted",
             "decisions": [{"kind": "act", "tool": "shell_exec", "tool_args": {"cmd": "ls"}}],
@@ -147,7 +147,7 @@ async def test_a_sensitive_action_parks_the_execution_for_approval(
         assert len(requests) == 1
         request = requests[0]
         assert request.status == "pending"
-        assert request.category == "code_execution"
+        assert request.category == "code_changes"
         assert request.action["tool"] == "shell_exec"
     finally:
         await redis.aclose()
@@ -164,7 +164,7 @@ async def test_a_non_sensitive_tool_is_never_gated(
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
-        ids = await _seed(sm, approval_policy={"categories": {"code_execution": "human_required"}})
+        ids = await _seed(sm, approval_policy={"categories": {"code_changes": "human_required"}})
 
         model = {
             "kind": "scripted",

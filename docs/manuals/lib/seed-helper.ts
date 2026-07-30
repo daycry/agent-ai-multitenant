@@ -14,8 +14,14 @@ function readAsset<T>(file: string): T | null {
   }
 }
 
-function seed(): { phpProjectId?: string; phpPlanId?: string | null } {
-  return readAsset<{ phpProjectId?: string; phpPlanId?: string | null }>("seed.json") || {};
+type SeedFile = {
+  phpProjectId?: string;
+  phpPlanId?: string | null;
+  correctionsPlanId?: string | null;
+};
+
+function seed(): SeedFile {
+  return readAsset<SeedFile>("seed.json") || {};
 }
 
 export function seededPhpProjectId(): string {
@@ -27,6 +33,12 @@ export function seededPhpProjectId(): string {
 export function seededPhpPlanId(): string {
   if (process.env.MANUALS_PHP_PLAN_ID) return process.env.MANUALS_PHP_PLAN_ID;
   return String(seed().phpPlanId || "");
+}
+
+/** El plan RECHAZADO con correcciones propuestas (ADR 0107) para el manual 12. */
+export function seededCorrectionsPlanId(): string {
+  if (process.env.MANUALS_CORRECTIONS_PLAN_ID) return process.env.MANUALS_CORRECTIONS_PLAN_ID;
+  return String(seed().correctionsPlanId || "");
 }
 
 export type DockerStack = {

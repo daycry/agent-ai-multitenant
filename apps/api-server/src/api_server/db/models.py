@@ -37,6 +37,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import INET, JSONB, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
 
+# Córtex F1 (ADR 0074): import the córtex models so they register on
+# ``Base.metadata``. The Alembic env imports this module, so this guarantees the
+# autogenerate metadata + the running app both see the tenant-less córtex tables
+# (re-exported in ``__all__``).
+from api_server.db.assistant_chat import AssistantConversation, AssistantTurn
 from api_server.db.base import (
     Base,
     SoftDeleteMixin,
@@ -44,11 +49,7 @@ from api_server.db.base import (
     TimestampMixin,
     UUIDPrimaryKeyMixin,
 )
-
-# Córtex F1 (ADR 0074): import the córtex models so they register on
-# ``Base.metadata``. The Alembic env imports this module, so this guarantees the
-# autogenerate metadata + the running app both see the tenant-less córtex tables
-# (re-exported in ``__all__``).
+from api_server.db.browse_repo import BrowseSession
 from api_server.db.cortex import CortexConversation, CortexTurn
 
 # Córtex F2 (ADR 0075): import the affect-snapshot model so it registers on
@@ -62,6 +63,21 @@ from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 # Córtex F3 (ADR 0074/0077): import the identity models so they register on
 # ``Base.metadata`` (same reason as the F1/F2 models above).
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
+from api_server.db.llm_usage import LLMUsageEvent
+
+# Marketplace (ADR 0100): import the marketplace models so they register on
+# ``Base.metadata``. ``Tool.source_installation_id`` (and ``Skill``'s) FK-reference
+# ``marketplace_installations``; the Tool/Skill mappers cannot configure unless
+# these are registered. Keeping them in this aggregator makes it COMPLETE, so any
+# context that imports ``db.models`` (tests, Alembic env) gets a resolvable mapper
+# — without it, importing db.models in isolation raised NoReferencedTableError.
+from api_server.db.marketplace import (
+    MarketplaceAuditEntry,
+    MarketplaceInstallation,
+    MarketplaceListing,
+    MarketplaceShare,
+    MarketplaceSource,
+)
 
 
 class UserRole(enum.StrEnum):
@@ -477,10 +493,11 @@ class SSOConfiguration(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixi
 
     __tablename__ = "sso_configurations"
     __table_args__ = (
-        # Global identity: one enabled config per provider/kind for the
-        # whole platform (ADR 0047). Replaces the per-tenant
-        # uq_sso_config_tenant_provider.
-        UniqueConstraint("provider", name="uq_sso_config_provider"),
+        # Multi-provider (2026-07-18, migración 0115): se retiró el
+        # uq_sso_config_provider — la plataforma admite N configs por kind
+        # (p.ej. Google Y Microsoft a la vez). El flujo es per-provider-id de
+        # punta a punta (login /{provider_id}/…, state con provider_id), así
+        # que el constraint era el único bloqueo.
         Index(
             "ix_sso_configurations_enabled",
             "provider",
@@ -906,9 +923,17 @@ class WebauthnCredential(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timestamp
 class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     __tablename__ = "review_sessions"
 
-    plan_id: Mapped[UUID] = mapped_column(
-        ForeignKey("plans.id", ondelete="CASCADE"), nullable=False
+    # NULLABLE since ADR 0130: an on-demand PROJECT preview has no plan (a plan
+    # preview / human-validation session still carries one). Invariant enforced
+    # by ck_review_sessions_plan_or_preview: plan_id NULL ⇒ kind='preview'.
+    plan_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("plans.id", ondelete="CASCADE"), nullable=True
     )
+    # ADR 0130 discriminator: 'plan' = human-validation review (verdict writes
+    # back to the plan); 'preview' = on-demand app-preview (24h, no verdict).
+    # Plan-scoped review queries filter kind='plan' so previews never masquerade
+    # as the validation session.
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'plan'"))
     # Serialized `ReviewRuntimeSpec` — full enough to re-hydrate the
     # session and re-issue signed URLs after a worker restart.
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -1126,7 +1151,16 @@ __all__ = [
     "ApiTokenScope",
     "AuditAction",
     "AuditLog",
+    "BrowseSession",
     "CortexAffectSnapshot",
+    "AssistantConversation",
+    "LLMUsageEvent",
+    "MarketplaceAuditEntry",
+    "MarketplaceInstallation",
+    "MarketplaceListing",
+    "MarketplaceShare",
+    "MarketplaceSource",
+    "AssistantTurn",
     "CortexConversation",
     "CortexCuriosityPursuit",
     "CortexIdentity",

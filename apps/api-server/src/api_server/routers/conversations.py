@@ -37,13 +37,14 @@ from api_server.auth.deps import (
     schedule_after_commit,
 )
 from api_server.chat.modes import list_chat_modes
-from api_server.chat.responder import schedule_reply
+from api_server.chat.responder import schedule_reply, team_planning_roles
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
     Message,
     MessageAuthorKind,
 )
+from api_server.db.conversation_compression import SUMMARY_REPLACES_KIND
 from api_server.db.domain import Project
 from api_server.events import (
     EVENT_CONVERSATION_MODE_CHANGED,
@@ -55,6 +56,7 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
+    require_project_active,
     require_tenant_id,
     soft_delete,
 )
@@ -66,6 +68,7 @@ from api_server.schemas.conversations import (
     ConversationUpdateRequest,
     MessageCreateRequest,
     MessageResponse,
+    PlanningRolesResponse,
     to_conversation_response,
     to_message_response,
 )
@@ -79,6 +82,9 @@ conversations_router = APIRouter(prefix="/conversations", tags=["conversations"]
 # read-only que la seccion Persona consume para componer el "prompt efectivo"
 # (rol + modo) sin hardcodear los prompts de modo en el frontend.
 chat_modes_router = APIRouter(prefix="/chat-modes", tags=["conversations"])
+# Quién puede ser @-mencionado en el chat de ESTE proyecto (`task_wf_43`). Va
+# aparte porque el recurso cuelga del proyecto, no de una conversación.
+project_planning_roles_router = APIRouter(prefix="/projects/{project_id}", tags=["conversations"])
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +335,32 @@ async def post_message(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="solo se pueden publicar mensajes con author_kind='user' por esta vía",
         )
+    # Misma familia por la puerta de al lado (auditoría adversarial 2026-07-25):
+    # `is_summary` + un attachment `summary_replaces` declaran que un mensaje
+    # SUSTITUYE a otros en la ventana de contexto. Desde que el prompt del equipo
+    # pasa por `load_context_window`, publicar eso a mano dejaba a cualquier
+    # miembro del tenant borrar mensajes AJENOS del contexto que lee el equipo,
+    # sin rastro en el feed (`GET /messages` los sigue devolviendo). El único
+    # escritor legítimo de cobertura es `compress_old_messages`, que autora como
+    # `system`. `_replaced_message_ids` lo re-verifica del lado de la lectura.
+    if payload.is_summary or any(
+        isinstance(att, dict) and att.get("kind") == SUMMARY_REPLACES_KIND
+        for att in payload.attachments
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="los resúmenes de conversación los escribe el sistema, no el cliente",
+        )
 
     conv = await _load_conversation(session, conversation_id)
+
+    # P1-01: el chat del equipo se detiene con el proyecto — cada mensaje de
+    # usuario dispara una respuesta LLM (coste) y puede materializar un plan.
+    project = (
+        await session.execute(select(Project).where(Project.id == conv.project_id))
+    ).scalar_one_or_none()
+    if project is not None:
+        require_project_active(project)
 
     # Resolve author_user_id from the principal when the caller is a
     # human user and didn't pass it explicitly.
@@ -400,19 +430,49 @@ async def list_messages(
             " chronologically without extra columns."
         ),
     ),
+    before: UUID | None = Query(
+        default=None,
+        description=(
+            "Return the messages immediately BEFORE this UUID (older ones), newest"
+            " of them last. Backward pagination for a chat that scrolls up; ignored"
+            " when `after` is set."
+        ),
+    ),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MessageResponse]:
+    """La ventana del chat. Sin cursor devuelve los mensajes MÁS RECIENTES.
+
+    A-01: esto ordenaba ASC con `limit`, así que devolvía los N PRIMEROS. Pasada
+    la ventana el feed se quedaba congelado en el arranque de la conversación, el
+    botón «Generar Plan» —que mira el último mensaje `agent`— desaparecía para
+    siempre, y el poll de respaldo evaluaba un mensaje viejo. Un chat quiere su
+    cola, no su cabecera.
+
+    Tres modos, todos devolviendo orden cronológico ascendente:
+      * sin cursor  → los `limit` más recientes,
+      * `after`     → los `limit` siguientes (hacia delante; el que ya existía),
+      * `before`    → los `limit` anteriores (hacia atrás, para el scroll up).
+    """
     # Verify the conversation exists (also enforces RLS): otherwise a
     # tenant-B caller asking for tenant-A's id would get [] rather than 404.
     await _load_conversation(session, conversation_id)
 
     stmt = select(Message).where(Message.conversation_id == conversation_id)
     if after is not None:
-        stmt = stmt.where(Message.id > after)
-    stmt = stmt.order_by(Message.id).limit(limit)
-    result = await session.execute(stmt)
-    return [to_message_response(m) for m in result.scalars().all()]
+        # Hacia delante desde el cursor: la cabecera de ese tramo ya es la que se
+        # quiere, así que el orden de la consulta ya es el final.
+        rows = (
+            await session.execute(stmt.where(Message.id > after).order_by(Message.id).limit(limit))
+        ).scalars()
+        return [to_message_response(m) for m in rows]
+    # Sin cursor (los más recientes) y `before` (los anteriores a uno dado) se
+    # resuelven igual: tomar por la COLA con DESC y revertir para devolver
+    # cronológico. Sin el DESC la cláusula `limit` recorta por el lado equivocado.
+    if before is not None:
+        stmt = stmt.where(Message.id < before)
+    rows_desc = (await session.execute(stmt.order_by(Message.id.desc()).limit(limit))).scalars()
+    return [to_message_response(m) for m in reversed(list(rows_desc))]
 
 
 # ===========================================================================
@@ -442,6 +502,31 @@ async def list_chat_mode_catalog(
     ]
 
 
+# ===========================================================================
+# Planning roles of the project's team (task_wf_43)
+# ===========================================================================
+@project_planning_roles_router.get("/planning-roles", response_model=PlanningRolesResponse)
+async def list_project_planning_roles(
+    project_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> PlanningRolesResponse:
+    """Los roles que el equipo de este proyecto puede poner a hablar en el chat.
+
+    El compositor los usa para el autocompletado de `@`. Antes la lista estaba
+    hardcodeada con los nueve `PlanningRole` del enum, así que ofrecía mencionar
+    a un especialista que el equipo no tiene: el turno salía vacío y la mención
+    parecía rota. Aquí sale el equipo REAL, que es también con el que
+    `pm_decide` intersecta la mención en el servidor — una sola fuente.
+
+    Siempre incluye `project_manager`: es el único rol obligatorio y el que
+    conduce cada turno de planificación.
+    """
+    project = await _verify_project_visible(session, project_id)
+    roles = await team_planning_roles(session, project)
+    return PlanningRolesResponse(roles=sorted(r.value for r in roles))
+
+
 # Keep `ChatMode` reachable from this module so external callers can
 # import all chat-router public surface from one place.
 __all__ = [
@@ -449,4 +534,5 @@ __all__ = [
     "chat_modes_router",
     "conversations_router",
     "project_conversations_router",
+    "project_planning_roles_router",
 ]

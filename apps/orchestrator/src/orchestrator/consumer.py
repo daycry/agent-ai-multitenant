@@ -30,6 +30,18 @@ _log = structlog.get_logger("orchestrator.consumer")
 # task_06_14_05 / workers-orchestrator-4).
 EventHandler = Callable[[TaskEvent], Awaitable[None]]
 
+
+class TransientHandlerError(Exception):
+    """Raised by a handler when its failure is TRANSIENT (e.g. a DB blip).
+
+    The default ``raise`` contract dead-letters + ACKs the event, which is
+    right for a poison message but WRONG for a trigger we still want to act on
+    once the blip clears (a plan-close or a review dispatch — C3 F05). When the
+    handler raises this, the consumer leaves the entry UNACKED in the Pending
+    Entries List so ``reclaim_stale_pending`` retries it later instead of
+    silently dropping the trigger. It is NEVER dead-lettered."""
+
+
 # Events whose handler raised are XADDed here before the caller ACKs, so a
 # failed dispatch is observable and replayable instead of silently lost.
 # Mirrors the workers' `dlq:executions` stream (task_06_14_04).
@@ -147,8 +159,11 @@ class StreamConsumer:
         for _stream, entries in response:
             for entry_id, fields in entries:
                 result.ids.append(entry_id)
-                await self._dispatch(entry_id, fields, result)
-                await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
+                # A transient handler failure (TransientHandlerError) returns
+                # False: we DON'T ACK so the entry stays pending and a later
+                # reclaim retries it (C3 F05); everything else is ACKed.
+                if await self._dispatch(entry_id, fields, result):
+                    await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
 
         return result
 
@@ -183,8 +198,10 @@ class StreamConsumer:
                     await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
                     continue
                 result.ids.append(entry_id)
-                await self._dispatch(entry_id, fields, result)
-                await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
+                # As in consume_once: a transient failure stays unacked so a
+                # subsequent reclaim retries it; everything else is ACKed.
+                if await self._dispatch(entry_id, fields, result):
+                    await self._redis.xack(s.events_stream, s.consumer_group, entry_id)
             if not entries or next_cursor in ("0-0", b"0-0"):
                 break
             cursor = next_cursor
@@ -197,14 +214,17 @@ class StreamConsumer:
             )
         return result
 
-    async def _dispatch(self, entry_id: str, fields: dict[str, str], result: ConsumeResult) -> None:
+    async def _dispatch(self, entry_id: str, fields: dict[str, str], result: ConsumeResult) -> bool:
         """Parse + hand one entry to the handler, updating counters.
 
-        Malformed entries are counted and skipped (still ACKed by the
-        caller so a poison message can't wedge the group). A handler that
-        raises is counted as `failed` and pushed to the dead-letter stream
-        BEFORE the caller ACKs, so the failed dispatch is observable and
-        replayable rather than silently lost (workers-orchestrator-4).
+        Returns whether the caller should ACK the entry. Malformed entries are
+        counted and ACKed (``True``) so a poison message can't wedge the group.
+        A handler that raises :class:`TransientHandlerError` is counted ``failed``
+        but NOT dead-lettered and NOT ACKed (``False``) — the entry stays in the
+        PEL for a later reclaim so a plan-close / review trigger is retried, not
+        lost (C3 F05). Any other handler exception is counted ``failed`` and
+        pushed to the dead-letter stream before the caller ACKs (``True``), so it
+        is observable and replayable rather than silently lost (workers-4).
         """
         try:
             event = parse_event(entry_id, fields)
@@ -212,10 +232,23 @@ class StreamConsumer:
             self.stats.malformed += 1
             result.malformed += 1
             _log.warning("orchestrator.event_malformed", entry=entry_id, error=str(exc))
-            return
+            return True
 
         try:
             await self._handler(event)
+        except TransientHandlerError as exc:
+            # Transient (DB blip): keep the entry pending for reclaim — do NOT
+            # dead-letter (that would drop the trigger with no retry).
+            self.stats.failed += 1
+            result.failed += 1
+            _log.warning(
+                "orchestrator.handler_transient",
+                entry=entry_id,
+                type=event.type,
+                task_id=event.task_id,
+                error=str(exc),
+            )
+            return False
         except Exception as exc:  # handler errors must not kill the loop
             self.stats.failed += 1
             result.failed += 1
@@ -227,10 +260,11 @@ class StreamConsumer:
                 error=str(exc),
             )
             await self._dead_letter(event, exc)
-            return
+            return True
 
         self.stats.processed += 1
         result.processed += 1
+        return True
 
     async def _dead_letter(self, event: TaskEvent, exc: Exception) -> None:
         """Best-effort: record a failed event on the dead-letter stream.

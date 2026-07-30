@@ -9,7 +9,9 @@ import httpx
 import pytest
 from shared_llm.exceptions import AuthError, ProviderError, RateLimitError
 from shared_llm.providers._openai_compat import (
+    _loads_args,
     check_status,
+    completion_signals,
     iter_sse_chunks,
     parse_chat_completion,
     parse_sse_delta,
@@ -80,6 +82,28 @@ def test_parse_chat_completion_text_only() -> None:
     assert resp.usage.output_tokens == 5
 
 
+def test_parse_chat_completion_populates_typed_stop_reason() -> None:
+    """M-4 (auditoría 2026-07-10): el campo tipado ``stop_reason`` prometía estar
+    «normalizado del provider» pero los providers HTTP nunca lo poblaban (solo
+    claude_sdk, #10c) — trampa para quien confíe en él. Ahora viaja el
+    ``finish_reason`` del payload; ausente → None (fakes/shapes viejos)."""
+
+    def _with(finish_reason: str | None) -> dict[str, object]:
+        choice: dict[str, object] = {"message": {"role": "assistant", "content": "x"}}
+        if finish_reason is not None:
+            choice["finish_reason"] = finish_reason
+        return {"model": "m", "choices": [choice], "usage": {}}
+
+    assert (
+        parse_chat_completion(_with("length"), provider="x", fallback_model="m").stop_reason
+        == "length"
+    )
+    assert (
+        parse_chat_completion(_with("stop"), provider="x", fallback_model="m").stop_reason == "stop"
+    )
+    assert parse_chat_completion(_with(None), provider="x", fallback_model="m").stop_reason is None
+
+
 def test_parse_chat_completion_with_tool_calls() -> None:
     data = {
         "model": "m1",
@@ -130,6 +154,100 @@ def test_parse_chat_completion_raises_provider_error_on_malformed_body(
     KeyError/IndexError escaping the LLM layer."""
     with pytest.raises(ProviderError):
         parse_chat_completion(body, provider="x", fallback_model="default")
+
+
+# ---------------------------------------------------------------------------
+# F32 — robustness signals: tell "corrupt/truncated args" from "no args"
+# ---------------------------------------------------------------------------
+def test_loads_args_still_degrades_malformed_to_empty_for_execution() -> None:
+    """The parse path always needs *a* dict, so a corrupt payload still degrades
+    to {} here (best-effort) — backward-compatible. The distinction lives in
+    `completion_signals`, not in this helper."""
+    assert _loads_args('{"a": 1}') == {"a": 1}
+    assert _loads_args(None) == {}
+    assert _loads_args("") == {}
+    assert _loads_args('{"a": 1') == {}  # truncated/corrupt -> still {}
+    assert _loads_args("not json") == {}
+
+
+def test_completion_signals_flags_truncated_response() -> None:
+    """finish_reason == 'length' means the body (incl. tool-call args JSON) may be
+    cut off — exposed so the caller does not trust a half-baked tool call."""
+    data = {
+        "choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": "x"}}],
+    }
+    sig = completion_signals(data)
+    assert sig.truncated is True
+    assert sig.malformed_tool_args is False
+
+
+def test_completion_signals_flags_malformed_tool_args_not_absent_args() -> None:
+    """A tool call whose `arguments` is present-but-corrupt is flagged; a tool call
+    with NO/empty args is NOT flagged (the key distinction the audit asked for)."""
+    corrupt = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "tool_calls": [
+                        {"id": "1", "function": {"name": "submit_result", "arguments": '{"a": 1'}}
+                    ]
+                },
+            }
+        ]
+    }
+    assert completion_signals(corrupt).malformed_tool_args is True
+
+    empty = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {"id": "1", "function": {"name": "submit_result", "arguments": ""}}
+                    ]
+                },
+            }
+        ]
+    }
+    sig_empty = completion_signals(empty)
+    assert sig_empty.malformed_tool_args is False
+    assert sig_empty.truncated is False
+
+
+def test_completion_signals_is_safe_on_unexpected_shapes() -> None:
+    """`raw` can be any shape across providers; signals must never raise."""
+    for bad in (None, "nope", {}, {"choices": "x"}, {"choices": [None]}):
+        sig = completion_signals(bad)
+        assert sig.truncated is False
+        assert sig.malformed_tool_args is False
+
+
+def test_parse_chat_completion_keeps_raw_for_signal_extraction() -> None:
+    """The caller derives signals from `CompletionResponse.raw`, which is the
+    original payload — verify a truncated/corrupt tool call round-trips."""
+    data = {
+        "model": "m1",
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "c1", "function": {"name": "submit_result", "arguments": '{"a"'}}
+                    ],
+                },
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+    resp = parse_chat_completion(data, provider="x", fallback_model="default")
+    # Execution still gets a (best-effort empty) dict...
+    assert resp.tool_calls is not None
+    assert resp.tool_calls[0].arguments == {}
+    # ...but the signal recovers the lost information.
+    sig = completion_signals(resp.raw)
+    assert sig.truncated is True
+    assert sig.malformed_tool_args is True
 
 
 def test_parse_sse_delta_recognises_content_and_done() -> None:
@@ -188,6 +306,47 @@ async def test_iter_sse_chunks_yields_deltas_then_done() -> None:
     chunks = [c async for c in iter_sse_chunks(resp, provider="test")]
     assert "".join(c.delta for c in chunks if not c.done) == "hello"
     assert chunks[-1].done is True
+
+
+@pytest.mark.asyncio
+async def test_iter_sse_chunks_accumulates_tool_call_deltas() -> None:
+    """AUD16-06: los deltas de `tool_calls` del stream ya no se descartan en
+    silencio — se acumulan por índice y viajan en el chunk final `done`."""
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
+            b'"type":"function","function":{"name":"echo","arguments":""}}]}}]}\n\n',
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            b'"function":{"arguments":"{\\"text\\": "}}]}}]}\n\n',
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            b'"function":{"arguments":"\\"hi\\"}"}}]}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+    resp = httpx.Response(200, content=body, headers={"Content-Type": "text/event-stream"})
+    chunks = [c async for c in iter_sse_chunks(resp, provider="test")]
+
+    final = chunks[-1]
+    assert final.done is True
+    assert final.tool_calls is not None and len(final.tool_calls) == 1
+    call = final.tool_calls[0]
+    assert call.id == "call_1"
+    assert call.name == "echo"
+    assert call.arguments == {"text": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_iter_sse_chunks_without_tool_calls_leaves_field_none() -> None:
+    body = b"".join(
+        [
+            b'data: {"choices":[{"delta":{"content":"hola"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+    )
+    resp = httpx.Response(200, content=body, headers={"Content-Type": "text/event-stream"})
+    chunks = [c async for c in iter_sse_chunks(resp, provider="test")]
+    assert chunks[-1].done is True
+    assert chunks[-1].tool_calls is None
 
 
 @pytest.mark.asyncio

@@ -42,12 +42,12 @@ sola pantalla, el **verbo único** "Asignar/Quitar" y la **escalera de niveles**
 Capacitar es responder a cuatro preguntas del operador. Cada una se apoya en un
 mecanismo real del código; ninguna es decorativa.
 
-| Vía          | Pregunta                      | Qué asignas                                                    | Guía dedicada                                                                                                          |
-| ------------ | ----------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **SABER**    | ¿Qué corpus curado consulta?  | Knowledge Bases (RAG) de rol y de stack + catálogo global      | [kb-ingestion.md](./kb-ingestion.md), [rol-vs-stack](./knowledge-bases-rol-vs-stack.md)                                |
-| **RECORDAR** | ¿Qué recuerda entre runs?     | El `memory_scope` (private/team_shared/project_shared/global)  | [memoria-de-agentes.md](./memoria-de-agentes.md)                                                                       |
-| **SER**      | ¿Quién es y cómo se comporta? | Persona: proveedor/modelo/temperatura, system prompt, skills   | [persona-y-system-prompt.md](./persona-y-system-prompt.md), [skills-de-agentes.md](./skills-de-agentes.md)             |
-| **HACER**    | ¿Qué puede ejecutar?          | Tools + comandos del stack + runtime (lo define el Plan 06.18) | [asignar-tools-a-agentes.md](./asignar-tools-a-agentes.md), [comandos-y-runtime](./comandos-y-runtime-por-proyecto.md) |
+| Vía          | Pregunta                      | Qué asignas                                                    | Guía dedicada                                                                                                                                                        |
+| ------------ | ----------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SABER**    | ¿Qué corpus curado consulta?  | Knowledge Bases (RAG) de rol y de stack + catálogo global      | [kb-ingestion.md](./kb-ingestion.md), [rol-vs-stack](./knowledge-bases-rol-vs-stack.md)                                                                              |
+| **RECORDAR** | ¿Qué recuerda entre runs?     | El `memory_scope` (private/team_shared/project_shared/global)  | [memoria-de-agentes.md](./memoria-de-agentes.md)                                                                                                                     |
+| **SER**      | ¿Quién es y cómo se comporta? | Persona: proveedor/modelo/temperatura, system prompt, skills   | [persona-y-system-prompt.md](./persona-y-system-prompt.md), [skills-de-agentes.md](./skills-de-agentes.md)                                                           |
+| **HACER**    | ¿Qué puede ejecutar?          | Tools + comandos del stack + runtime (lo define el Plan 06.18) | [asignar-tools-a-agentes.md](./asignar-tools-a-agentes.md), [comandos-y-runtime](./comandos-y-runtime-por-proyecto.md), [recetas e2e](./recetas-mcp-tools-skills.md) |
 
 - **SABER** es conocimiento **curado y consultable** (RAG sobre KBs): lo que el
   agente puede **mirar** cuando lo necesita.

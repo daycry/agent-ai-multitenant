@@ -27,7 +27,7 @@ def test_plan_has_open_tasks_after_checkbox_fail() -> None:
 
     open_tasks = [
         t
-        for status in ("backlog", "in_progress", "in_review", "awaiting_human")
+        for status in ("backlog", "in_progress", "in_review", "awaiting_human_approval")
         for t in store.list_by_status("plan-X", status)
     ]
     assert len(open_tasks) == 1
@@ -53,7 +53,7 @@ def test_plan_has_no_open_tasks_once_spawned_tasks_done() -> None:
 
     open_tasks = [
         t
-        for status in ("backlog", "in_progress", "in_review", "awaiting_human")
+        for status in ("backlog", "in_progress", "in_review", "awaiting_human_approval")
         for t in store.list_by_status("plan-X", status)
     ]
     assert open_tasks == []

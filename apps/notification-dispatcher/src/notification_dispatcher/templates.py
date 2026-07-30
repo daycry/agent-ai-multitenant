@@ -103,6 +103,59 @@ class RenderedNotification:
 # ---------------------------------------------------------------------------
 _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
     # --- plan_approved -----------------------------------------------------
+    # ADR 0126 — resultado del restore-drill mensual.
+    ("restore_drill_result", "es"): TemplateSource(
+        subject="{% if ok %}Restore-drill OK{% else %}Restore-drill FALLIDO{% endif %}",
+        body="{{ detail | default('(sin detalle)') }}",
+    ),
+    ("restore_drill_result", "en"): TemplateSource(
+        subject="{% if ok %}Restore drill OK{% else %}Restore drill FAILED{% endif %}",
+        body="{{ detail | default('(no detail)') }}",
+    ),
+    # ADR 0125 — propuesta de configuración con los datos del leaderboard.
+    ("config_proposal", "es"): TemplateSource(
+        subject="Propuesta: cambiar el modelo de {{ agent_name | default('(agente)') }}",
+        body=(
+            "Con tus datos reales, el agente «{{ agent_name | default('(agente)') }}» "
+            "rinde mejor con {{ to_model | default('?') }} que con "
+            "{{ from_model | default('?') }} ({{ evidence | default('') }}). "
+            "Si estás de acuerdo, cámbialo en la ficha del agente — nada se aplica solo."
+        ),
+    ),
+    ("config_proposal", "en"): TemplateSource(
+        subject="Proposal: change the model of {{ agent_name | default('(agent)') }}",
+        body=(
+            "On your real data, agent \"{{ agent_name | default('(agent)') }}\" "
+            "performs better with {{ to_model | default('?') }} than with "
+            "{{ from_model | default('?') }} ({{ evidence | default('') }}). "
+            "If you agree, change it on the agent page — nothing is applied automatically."
+        ),
+    ),
+    # ADR 0122 — vigía de credenciales: recuperación de un proveedor.
+    ("provider_recovered", "es"): TemplateSource(
+        subject="Proveedor recuperado: {{ provider_name | default('(sin nombre)') }}",
+        body=(
+            "El proveedor LLM «{{ provider_name | default('(sin nombre)') }}» "
+            "({{ provider_kind | default('?') }}) vuelve a responder."
+        ),
+    ),
+    ("provider_recovered", "en"): TemplateSource(
+        subject="Provider recovered: {{ provider_name | default('(unnamed)') }}",
+        body=(
+            "LLM provider \"{{ provider_name | default('(unnamed)') }}\" "
+            "({{ provider_kind | default('?') }}) is responding again."
+        ),
+    ),
+    # ADR 0120 — standup diario: el cuerpo llega compuesto por el worker
+    # (prosa del PM o versión estructurada fail-open); aquí solo se envuelve.
+    ("daily_standup", "es"): TemplateSource(
+        subject="Standup diario — {{ date | default('hoy') }}",
+        body="{{ standup_body | default('(sin datos)') }}",
+    ),
+    ("daily_standup", "en"): TemplateSource(
+        subject="Daily standup — {{ date | default('today') }}",
+        body="{{ standup_body | default('(no data)') }}",
+    ),
     ("plan_approved", "es"): TemplateSource(
         subject="Plan aprobado: {{ plan_name | default('(sin nombre)') }}",
         body=(
@@ -119,23 +172,67 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "was approved by {{ approver | default('an administrator') }}."
         ),
     ),
-    # --- task_failed -------------------------------------------------------
-    ("task_failed", "es"): TemplateSource(
-        subject="Tarea fallida: {{ task_title | default('(sin título)') }}",
+    # --- antivirus_unreachable (prod-12 av_01 / ADR 0105) -------------------
+    ("antivirus_unreachable", "es"): TemplateSource(
+        subject="Antivirus inalcanzable ({{ minutes_down | default('?') }} min)",
         body=(
-            "La tarea «{{ task_title | default('(sin título)') }}» "
+            "El backend antivirus (ClamAV) lleva {{ minutes_down | default('?') }} "
+            "minutos sin responder. La ingesta de documentos esta en fail-closed: "
+            "los documentos nuevos quedan en `pending_scan` (no se indexan) y se "
+            "reescanearan solos cuando el antivirus vuelva. Revisa el servicio clamav."
+        ),
+    ),
+    ("antivirus_unreachable", "en"): TemplateSource(
+        subject="Antivirus unreachable ({{ minutes_down | default('?') }} min)",
+        body=(
+            "The antivirus backend (ClamAV) has been unreachable for "
+            "{{ minutes_down | default('?') }} minutes. Document ingestion is "
+            "fail-closed: new documents stay in `pending_scan` (not indexed) and "
+            "will be rescanned automatically once the antivirus is back. Check the "
+            "clamav service."
+        ),
+    ),
+    # --- plan_blocked (c3/T7) ---------------------------------------------
+    ("plan_blocked", "es"): TemplateSource(
+        subject="Plan bloqueado: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "El plan «{{ plan_name | default('(sin nombre)') }}» "
             "del proyecto «{{ project_name | default('(sin proyecto)') }}» "
-            "ha fallado. Motivo: {{ reason | default('desconocido') }}."
+            "quedó bloqueado: todas las tareas restantes están bloqueadas y "
+            "ninguna puede avanzar sola. Revísalo y desbloquea o reintenta una "
+            "tarea para continuar."
         ),
     ),
-    ("task_failed", "en"): TemplateSource(
-        subject="Task failed: {{ task_title | default('(untitled)') }}",
+    ("plan_blocked", "en"): TemplateSource(
+        subject="Plan blocked: {{ plan_name | default('(unnamed)') }}",
         body=(
-            "Task \"{{ task_title | default('(untitled)') }}\" "
+            "Plan \"{{ plan_name | default('(unnamed)') }}\" "
             "in project \"{{ project_name | default('(no project)') }}\" "
-            "failed. Reason: {{ reason | default('unknown') }}."
+            "is blocked: every remaining task is blocked and none can advance "
+            "on its own. Review it and unblock or retry a task to continue."
         ),
     ),
+    # --- plan_unblocked (M-1, auditoría 2026-07-10) --------------------------
+    ("plan_unblocked", "es"): TemplateSource(
+        subject="Plan reactivado: {{ plan_name | default('(sin nombre)') }}",
+        body=(
+            "El plan «{{ plan_name | default('(sin nombre)') }}» volvió a "
+            "estar en curso: su bloqueo ya no está justificado (una tarea se "
+            "desatascó o la red del reconciler lo revirtió). Si recibiste un "
+            "aviso de bloqueo anterior, ya no requiere acción."
+        ),
+    ),
+    ("plan_unblocked", "en"): TemplateSource(
+        subject="Plan reactivated: {{ plan_name | default('(unnamed)') }}",
+        body=(
+            "Plan \"{{ plan_name | default('(unnamed)') }}\" is back in "
+            "progress: its block is no longer justified (a task was un-stuck "
+            "or the reconciler net reverted it). Any earlier blocked alert "
+            "for this plan needs no further action."
+        ),
+    ),
+    # --- task_failed: RETIRADO (NOTIF-3) — evento imposible por diseño (los
+    # fallos de run convergen en `blocked`, que ya notifica task_blocked).
     # --- execution_finished ------------------------------------------------
     ("execution_finished", "es"): TemplateSource(
         subject="Ejecución finalizada: {{ plan_name | default('(sin nombre)') }}",
@@ -185,6 +282,25 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "Task \"{{ task_title | default('(untitled)') }}\" "
             "in project \"{{ project_name | default('(no project)') }}\" "
             "is blocked. Reason: {{ reason | default('unknown') }}."
+        ),
+    ),
+    # --- task_unassignable (PROJ-05, auditoría 2026-07-17) -------------------
+    ("task_unassignable", "es"): TemplateSource(
+        subject="Tarea sin agente: {{ task_title | default('(sin título)') }}",
+        body=(
+            "La tarea «{{ task_title | default('(sin título)') }}» está lista "
+            "pero ningún agente puede tomarla: el proyecto no tiene equipo "
+            "asignado o ningún agente cubre el rol requerido. Asigna un equipo "
+            "o un agente al proyecto para que el despacho continúe."
+        ),
+    ),
+    ("task_unassignable", "en"): TemplateSource(
+        subject="Task has no agent: {{ task_title | default('(untitled)') }}",
+        body=(
+            "Task \"{{ task_title | default('(untitled)') }}\" is ready but no "
+            "agent can take it: the project has no team assigned or no agent "
+            "covers the required role. Assign a team or an agent to the "
+            "project so dispatch can continue."
         ),
     ),
     # --- plan_rejected -----------------------------------------------------
@@ -427,6 +543,76 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
             "{{ error | default('(no detail)') }}. The catalog keeps its last "
             "good rates (conversion falls back to the most-recent prior rate); "
             "check the exchange-rates source."
+        ),
+    ),
+    # --- infra_alert (NOTIF-2 / prod-08 alert_ingest_01) --------------------
+    # Alerta de infraestructura de Alertmanager, platform-scoped. El contexto
+    # son labels/annotations secret-free (alertname/severity/summary/...).
+    ("infra_alert", "es"): TemplateSource(
+        subject=(
+            "[{{ severity | default('warning') | upper }}] "
+            "{{ alertname | default('Alerta de infraestructura') }}"
+            "{% if status == 'resolved' %} — RESUELTA{% endif %}"
+        ),
+        body=(
+            "Alerta de infraestructura {{ status | default('firing') }}: "
+            "{{ alertname | default('(sin nombre)') }} "
+            "({{ severity | default('warning') }})"
+            "{% if instance %} en {{ instance }}{% endif %}. "
+            "{{ summary | default('') }} {{ description | default('') }}"
+        ),
+    ),
+    ("infra_alert", "en"): TemplateSource(
+        subject=(
+            "[{{ severity | default('warning') | upper }}] "
+            "{{ alertname | default('Infrastructure alert') }}"
+            "{% if status == 'resolved' %} — RESOLVED{% endif %}"
+        ),
+        body=(
+            "Infrastructure alert {{ status | default('firing') }}: "
+            "{{ alertname | default('(unnamed)') }} "
+            "({{ severity | default('warning') }})"
+            "{% if instance %} on {{ instance }}{% endif %}. "
+            "{{ summary | default('') }} {{ description | default('') }}"
+        ),
+    ),
+    # --- cortex_message (C1, iniciativa proactiva del córtex) ---------------
+    ("cortex_message", "es"): TemplateSource(
+        subject="El córtex te ha escrito",
+        body=(
+            "Tu córtex tomó la iniciativa y te dejó un mensaje: "
+            "{{ preview | default('(abre el chat para leerlo)') }}"
+        ),
+    ),
+    ("cortex_message", "en"): TemplateSource(
+        subject="Your cortex reached out",
+        body=(
+            "Your cortex took the initiative and left you a message: "
+            "{{ preview | default('(open the chat to read it)') }}"
+        ),
+    ),
+    # --- provider_credential_invalid (AUD16-23) ------------------------------
+    # Credencial/cuota del provider LLM fallando: hasta renovarla, todos los
+    # runs de ese provider morirán igual. El detail es el fragmento del abort
+    # con el marcador (sin secretos).
+    ("provider_credential_invalid", "es"): TemplateSource(
+        subject="Credencial del proveedor LLM fallando",
+        body=(
+            "Un run abortó por credencial o cuota del proveedor LLM "
+            "({{ abort_code | default('provider_error') }}) en la tarea "
+            "«{{ task_title | default('(sin título)') }}». Hasta renovar la "
+            "credencial, los siguientes runs fallarán igual. Detalle: "
+            "{{ detail | default('(sin detalle)') }}"
+        ),
+    ),
+    ("provider_credential_invalid", "en"): TemplateSource(
+        subject="LLM provider credential failing",
+        body=(
+            "A run aborted on an LLM provider credential/quota failure "
+            "({{ abort_code | default('provider_error') }}) on task "
+            "'{{ task_title | default('(untitled)') }}'. Until the credential "
+            "is renewed, subsequent runs will fail the same way. Detail: "
+            "{{ detail | default('(no detail)') }}"
         ),
     ),
 }

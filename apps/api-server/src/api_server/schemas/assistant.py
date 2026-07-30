@@ -14,6 +14,9 @@ gating; these schemas only shape the payloads).
 
 from __future__ import annotations
 
+from datetime import datetime
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from api_server.assistant.config import (
@@ -29,6 +32,10 @@ class AssistantChatRequest(BaseModel):
     model_config = _BASE_CONFIG
 
     message: str = Field(min_length=1, max_length=4000)
+    # A1 (investigación 2026-07-11): hilo persistente. Ausente = se crea un
+    # hilo nuevo y su id vuelve en la respuesta (human_10_04: el asistente
+    # mantiene contexto entre mensajes).
+    conversation_id: UUID | None = None
 
 
 class AssistantChatResponse(BaseModel):
@@ -37,6 +44,25 @@ class AssistantChatResponse(BaseModel):
     answer: str
     tools_called: list[str]
     rounds: int
+    conversation_id: UUID | None = None
+
+
+class AssistantConversationItem(BaseModel):
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    title: str | None
+    updated_at: datetime
+
+
+class AssistantTurnItem(BaseModel):
+    model_config = _BASE_CONFIG
+
+    role: str
+    content: str
+    tools_called: list[str] = Field(default_factory=list)
+    rounds: int = 0
+    created_at: datetime
 
 
 class AssistantIdentityResponse(BaseModel):

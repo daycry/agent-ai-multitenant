@@ -99,7 +99,7 @@ def test_launch_mounts_worktree_and_depcache() -> None:
     mounts = main.kwargs["mounts"]
     targets = {m["Target"] for m in mounts}
     assert "/workspace" in targets
-    assert "/root/.cache/pip" in targets
+    assert "/home/agent/.cache/pip" in targets
 
 
 def test_launch_applies_hardening_envelope() -> None:
@@ -116,6 +116,24 @@ def test_launch_applies_hardening_envelope() -> None:
     assert main.kwargs["user"] == "1000:1000"
     # Bridge is the task's private one — not the default agent network.
     assert main.kwargs["network"].startswith("test-runtime-python-pytest")
+
+
+def test_launch_keeps_container_alive_via_entrypoint_not_doubled_command() -> None:
+    # The runtime images set ENTRYPOINT ["sleep","infinity"] to stay up for
+    # exec_run. Passing command ["sleep","infinity"] too makes the daemon run
+    # `sleep infinity sleep infinity` → "invalid time interval 'sleep'" → the
+    # container exits immediately and every exec_run hits 409 "not running"
+    # (broke run_command AND the post-hoc checks for every template). The runner
+    # must drive keep-alive via `entrypoint`, with no appended `command`.
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.launch(_spec_for_python_pytest())
+
+    main = started[0]
+    assert main.kwargs.get("entrypoint") == ["sleep", "infinity"]
+    assert "command" not in main.kwargs  # would append to the image ENTRYPOINT
 
 
 def test_launch_runs_default_pre_install_then_check() -> None:
@@ -200,15 +218,160 @@ def test_cleanup_runs_even_if_main_run_raises() -> None:
     network.remove.assert_called_once()
 
 
-def test_open_network_policy_creates_non_internal_bridge() -> None:
+def test_run_command_runs_single_command_without_pre_install() -> None:
+    # ADR 0093 / stack_exec: run_command executes ONE caller command in the stack
+    # runtime — NO default_pre_install (the agent's own `composer install` would
+    # otherwise be doubled), NO acceptance checks.
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    runner = TestRuntimeRunner(Settings(), client=client)
+    rc, logs = runner.run_command(
+        _spec_for_python_pytest(), "composer install --no-interaction", timeout_s=120
+    )
+
+    assert len(started) == 1
+    main = started[0]
+    # Exactly one exec_run (the command) — no pre_install, no checks.
+    assert main.exec_run.call_count == 1
+    assert "composer install --no-interaction" in main.exec_run.call_args.args[0][-1]
+    assert rc == 0
+    assert "check passed" in logs  # the fake exec_run output
+
+
+def test_run_command_always_cleans_up() -> None:
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    network = client.networks.create.return_value
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.run_command(_spec_for_python_pytest(), "php spark migrate", timeout_s=60)
+
+    for c in started:
+        c.remove.assert_called_once_with(force=True)
+    network.remove.assert_called_once()
+
+
+def test_bridge_is_always_internal_even_for_open() -> None:
+    # ADR 0094 D1 (sentinel): the per-task bridge is ALWAYS internal — 'open' no
+    # longer creates a non-internal bridge (raw NAT). Egress, when a launch asks
+    # for it, is proxied through the allowlisted registry-proxy, never raw.
     from workers.test_runtime import TestRuntimeRunner
 
     client, _ = _fake_client()
     runner = TestRuntimeRunner(Settings(), client=client)
-    runner.launch(_spec_for_python_pytest(network_policy="open"))
+    for policy in ("open", "registries", "none", None):
+        client.networks.create.reset_mock()
+        runner.launch(_spec_for_python_pytest(network_policy=policy))
+        kwargs = client.networks.create.call_args.kwargs
+        assert kwargs["internal"] is True, f"policy={policy!r} must stay internal"
 
-    kwargs = client.networks.create.call_args.kwargs
-    assert kwargs["internal"] is False
+
+def test_no_egress_by_default_does_not_attach_proxy_or_inject_env() -> None:
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.launch(_spec_for_python_pytest())  # dep_egress False, policy none
+
+    client.containers.get.assert_not_called()  # no proxy resolved
+    env = started[0].kwargs["environment"]
+    assert "HTTP_PROXY" not in env
+    assert "GIT_CONFIG_COUNT" not in env
+
+
+def test_dep_egress_attaches_proxy_with_alias_and_injects_proxy_env() -> None:
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, started = _fake_client()
+    network = client.networks.create.return_value
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.run_command(_spec_for_python_pytest(dep_egress=True), "composer install", timeout_s=60)
+
+    client.containers.get.assert_called_once_with("agentic-registry-proxy")
+    proxy = client.containers.get.return_value
+    network.connect.assert_called_once_with(proxy, aliases=["registry-proxy"])
+    env = started[0].kwargs["environment"]
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        assert env[key] == "http://registry-proxy:8888"
+    # git-based deps forced over HTTPS so they traverse the HTTP proxy
+    assert env["GIT_CONFIG_COUNT"] == "3"
+
+
+def test_run_command_disconnects_proxy_at_cleanup_never_removes_it() -> None:
+    from workers.test_runtime import TestRuntimeRunner
+
+    client, _ = _fake_client()
+    network = client.networks.create.return_value
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.run_command(_spec_for_python_pytest(dep_egress=True), "composer install", timeout_s=60)
+
+    proxy = client.containers.get.return_value
+    network.disconnect.assert_called_once_with(proxy, force=True)
+    proxy.remove.assert_not_called()  # the shared proxy is NEVER removed
+
+
+def test_launch_drops_egress_before_the_check_phase() -> None:
+    # ADR 0094 D2: pre_install runs with egress; the proxy is disconnected BEFORE
+    # the first acceptance check so the test phase runs offline (fail-closed).
+    from workers.test_runtime import TestRuntimeRunner
+
+    events: list[tuple[str, Any]] = []
+
+    def _run(image: str, **kwargs: Any) -> MagicMock:
+        c = MagicMock()
+        c.id = "main"
+
+        def _exec(cmd: Any, **_kw: Any) -> MagicMock:
+            events.append(("exec", cmd))
+            return MagicMock(exit_code=0, output=b"ok\n")
+
+        c.exec_run = MagicMock(side_effect=_exec)
+        return c
+
+    client = MagicMock()
+    client.containers.run.side_effect = _run
+    net = MagicMock()
+    net.name = "test-runtime-python-pytest-abcd"
+    net.disconnect.side_effect = lambda *a, **k: events.append(("disconnect", (a, k)))
+    client.networks.create.return_value = net
+
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.launch(_spec_for_python_pytest(dep_egress=True))
+
+    kinds = [e[0] for e in events]
+    assert kinds.count("disconnect") == 1, "exactly one disconnect (not double in cleanup)"
+    disc = kinds.index("disconnect")
+    check_idx = next(
+        i for i, e in enumerate(events) if e[0] == "exec" and "pytest tests/unit" in e[1][-1]
+    )
+    assert disc >= 1, "at least one pre_install exec ran before the disconnect"
+    assert disc < check_idx, "egress dropped before the check phase"
+
+
+def test_cache_env_is_injected_even_without_egress() -> None:
+    # The warm-cache alignment helps offline acceptance runs too — cache_env is
+    # always injected; only the proxy/git-https env is egress-gated.
+    from shared_test_runtimes.types import RuntimeTemplate
+    from workers.test_runtime import RuntimePlan, TestRuntimeRunner, TestRuntimeSpec
+
+    tmpl = RuntimeTemplate(
+        id="php-phpunit",
+        docker_image="img:v1",
+        dep_cache_mount="/home/agent/.composer/cache",
+        cache_env=(("COMPOSER_CACHE_DIR", "/home/agent/.composer/cache"),),
+    )
+    client, started = _fake_client()
+    runner = TestRuntimeRunner(Settings(), client=client)
+    runner.run_command(
+        TestRuntimeSpec(plan=RuntimePlan(template=tmpl, checks=()), worktree_host_path="/wt"),
+        "composer install",
+        timeout_s=60,
+    )
+
+    env = started[0].kwargs["environment"]
+    assert env["COMPOSER_CACHE_DIR"] == "/home/agent/.composer/cache"
+    assert "HTTP_PROXY" not in env  # no egress requested
 
 
 def test_template_cpu_memory_defaults_carry_through() -> None:

@@ -156,6 +156,25 @@ async def test_reject_with_retries_left_goes_to_backlog(
     assert row["retry_count"] == 1
     assert await _audit_count(migrations_pg_dsn, ids["task"]) == 1
 
+    # P1-1 (investigación 2026-07-11): el rechazo deja LECCIÓN reutilizable —
+    # una memoria semántica project_shared, determinista (sin LLM).
+    import asyncpg as _asyncpg
+
+    conn = await _asyncpg.connect(migrations_pg_dsn)
+    try:
+        mem = await conn.fetchrow(
+            "SELECT content, scope, type FROM memory_entries"
+            " WHERE tenant_id = $1 AND scope = 'project_shared'"
+            " ORDER BY created_at DESC LIMIT 1",
+            ids["tenant"],
+        )
+    finally:
+        await conn.close()
+    assert mem is not None
+    assert "Review rechazó" in mem["content"]
+    assert "fix the parser" in mem["content"]
+    assert mem["type"] == "semantic"
+
 
 @pytest.mark.asyncio
 async def test_reject_at_max_retries_escalates_to_blocked(

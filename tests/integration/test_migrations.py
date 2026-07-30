@@ -342,9 +342,10 @@ def test_sso_global_migration_drops_tenant_scoping(alembic_config, admin_pg_dsn:
     assert "sso_configurations" not in _rls_enabled_tables(admin_pg_dsn)
     assert ("sso_configurations", "tenant_isolation") not in _policies(admin_pg_dsn)
 
-    # Global unique by provider; per-tenant unique gone.
+    # Multi-provider (0115): NEITHER unique remains at head — several
+    # configs of the same kind may coexist (display_name disambiguates).
     uniques = _unique_constraints(admin_pg_dsn, "sso_configurations")
-    assert "uq_sso_config_provider" in uniques
+    assert "uq_sso_config_provider" not in uniques
     assert "uq_sso_config_tenant_provider" not in uniques
 
 
@@ -364,11 +365,12 @@ def test_sso_global_migration_is_reversible(alembic_config, admin_pg_dsn: str) -
     assert "uq_sso_config_tenant_provider" in uniques
     assert "uq_sso_config_provider" not in uniques
 
-    # Re-upgrade restores the global shape.
+    # Re-upgrade restores the global shape (head = multi-provider 0115:
+    # the singleton unique stays dropped).
     command.upgrade(alembic_config, "head")
     assert not _column_exists(admin_pg_dsn, "sso_configurations", "tenant_id")
     assert _column_exists(admin_pg_dsn, "sso_configurations", "button_label")
-    assert "uq_sso_config_provider" in _unique_constraints(admin_pg_dsn, "sso_configurations")
+    assert "uq_sso_config_provider" not in _unique_constraints(admin_pg_dsn, "sso_configurations")
 
 
 def test_sso_global_migration_consolidates_per_tenant_rows(

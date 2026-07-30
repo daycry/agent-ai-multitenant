@@ -14,8 +14,13 @@ compose/runtime and then VALIDATES them **structurally**:
     layer;
   * each profile CONFINES writes (it grants a bounded set of writable dirs, not
     a blanket ``/** rw``), and the untrusted agent-runtime profile is STRICTER
-    than the shared default (it only writes ``/workspace`` + ``/tmp`` and denies
-    ``/var/lib`` / ``/data`` / ``/root`` writes);
+    than the shared default (it only writes ``/workspace``, ``/tmp`` and its own
+    tmpfs HOME, and denies ``/var/lib`` / ``/data`` / ``/root`` writes);
+  * the paths the worker actually hands the sandbox — its ``HOME`` and every
+    runtime template's dependency cache — are WRITABLE under the profile the
+    worker pins on that same container. Confinement that blocks the container's
+    own job is not hardening, it is an outage, and the two artifacts silently
+    drifted apart for a month;
   * every long-lived platform service in the prod compose files references an
     AppArmor profile via ``security_opt: apparmor=…`` (host-agent exemptions
     cAdvisor/node-exporter documented);
@@ -63,12 +68,12 @@ PROD_COMPOSE_FILES: tuple[Path, ...] = (
     DOCKER_DIR / "docker-compose.monitoring.yml",
 )
 
-# Host-agent / privileged services that legitimately need the host surface and
-# are exempt from the AppArmor pin (mirrors the seccomp suite). cAdvisor runs
-# privileged (which disables the per-container LSM confinement anyway);
-# node-exporter mounts host /proc,/sys,/ ro and reads them. Both keep
-# no-new-privileges + read-only mounts.
-APPARMOR_EXEMPT_SERVICES = frozenset({"cadvisor", "node-exporter"})
+# Host-agent services that legitimately need the host surface and are exempt
+# from the AppArmor pin (mirrors the seccomp suite): node-exporter mounts host
+# /proc,/sys,/ ro and reads them (keeps no-new-privileges + read-only mounts).
+# cAdvisor dejó de estar exento: desde prod-12 cadv_01 (sandbox-8) corre SIN
+# privileged y con el hardening estándar (cap_drop ALL + apparmor pineado).
+APPARMOR_EXEMPT_SERVICES = frozenset({"node-exporter"})
 
 # The escape / host-tamper primitives every profile MUST deny. Each entry is a
 # regex matched against the profile text — a ``deny`` rule covering it.
@@ -136,6 +141,72 @@ def _writable_path_rules(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Path-rule EVALUATION.
+#
+# `_writable_path_rules` answers "which globs grant a write". To answer the
+# question the confinement actually turns on — "could the container write THIS
+# path?" — the globs have to be matched, and `deny` has to win: in AppArmor a
+# deny rule is absolute and NO allow rule can override it.
+# ---------------------------------------------------------------------------
+
+#: (is_deny, compiled path glob, permission flags)
+_PathRule = tuple[bool, "re.Pattern[str]", str]
+
+
+def _glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Translate an AppArmor path glob into a regex.
+
+    ``**`` spans path separators, ``*`` and ``?`` do not — the distinction that
+    makes ``/home/**`` match ``/home/agent/.npm`` while ``/home/*`` does not.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "*" and pattern[i + 1 : i + 2] == "*":
+            out.append(".*")
+            i += 2
+            continue
+        if ch == "*":
+            out.append("[^/]*")
+        elif ch == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    return re.compile("^" + "".join(out) + r"\Z")
+
+
+def _path_rules(text: str) -> list[_PathRule]:
+    rules: list[_PathRule] = []
+    for raw in _strip_comments(text).splitlines():
+        line = raw.strip().rstrip(",")
+        if not line:
+            continue
+        is_deny = line.startswith("deny ")
+        if is_deny:
+            line = line[len("deny ") :].strip()
+        m = re.match(r"^(?:owner\s+)?(/\S*)\s+([rwmklxiapcget]+)$", line)
+        if not m:
+            continue
+        rules.append((is_deny, _glob_to_regex(m.group(1)), m.group(2)))
+    return rules
+
+
+def _may_write(text: str, path: str) -> bool:
+    """Whether the profile lets the confined process WRITE ``path``.
+
+    Two AppArmor rules, applied in this order: a matching ``deny`` refuses
+    outright, and with no matching allow the access is refused anyway
+    (default-deny). Both matter here — see the meta-test below.
+    """
+    rules = _path_rules(text)
+    if any(deny and "w" in perms and rx.match(path) for deny, rx, perms in rules):
+        return False
+    return any(not deny and "w" in perms and rx.match(path) for deny, rx, perms in rules)
+
+
+# ---------------------------------------------------------------------------
 # Compose helpers (reuse the tolerant loader posture of the seccomp suite)
 # ---------------------------------------------------------------------------
 
@@ -179,6 +250,15 @@ def _rendered_services(path: Path) -> dict[str, dict[str, Any]]:
         merged.update({k: v for k, v in spec.items() if k != "<<"})
         out[name] = merged
     return out
+
+
+def _effective_services(path: Path) -> dict[str, dict[str, Any]]:
+    """Los servicios que este compose DEFINE, sin los fragmentos de override que
+    solo parchean un servicio declarado en otro fichero (ver
+    ``tests/security/_compose.py``)."""
+    from tests.security._compose import defined_services
+
+    return defined_services(_rendered_services(path))
 
 
 def _security_opt(spec: dict[str, Any]) -> list[str]:
@@ -299,14 +379,89 @@ def test_each_profile_confines_writes_to_a_bounded_set_of_dirs() -> None:
         ), f"{path.name}: /tmp must be writable (scratch space) — got {writable}"
 
 
+def test_the_container_home_is_writable_under_the_agent_profile() -> None:
+    """The HOME the worker hands the sandbox must be writable under the profile
+    the worker pins on that same container.
+
+    These two artifacts drifted for a month without anyone noticing, because
+    each was internally consistent: the profile (2026-05-31) encoded "the
+    sandbox writes /workspace and /tmp", and then the agent's HOME moved OUT of
+    /workspace to a container-local tmpfs (498ade16, 2026-06-26) precisely so
+    the CLI would stop committing its dotfiles into the project worktree. The
+    profile kept its `deny /home/** wklx`. Nothing failed in CI because AppArmor
+    only enforces on a Linux host with the profile loaded — and that is the
+    installer's default (`WORKERS_APPARMOR_PROFILE=agent-runtime`).
+
+    So the invariant is pinned against the CODE, not against a literal: move
+    HOME again and this fails instead of the deployment.
+    """
+    from workers.isolation import AGENT_HOME
+
+    text = _read(AGENT_PROFILE)
+    probe = f"{AGENT_HOME}/.config/probe"
+    assert _may_write(text, probe), (
+        f"the agent/test sandbox runs with HOME={AGENT_HOME} (workers.isolation) "
+        f"but agent-runtime.profile refuses to write {probe} — every toolchain "
+        "write to the home dies with EACCES"
+    )
+
+
+def test_every_runtime_template_dep_cache_is_writable_under_the_agent_profile() -> None:
+    """Every runtime template in the catalog points its dependency cache inside
+    that HOME, so the same drift breaks `pip install`, `npm ci`, `composer
+    install`, `go mod download`, maven, gradle, bundler, cargo and nuget — the
+    entire test/stack execution path, on a real installed stack."""
+    from shared_test_runtimes.catalog import CATALOG
+
+    text = _read(AGENT_PROFILE)
+    caches = {t.id: t.dep_cache_mount for t in CATALOG.values() if t.dep_cache_mount}
+    assert caches, "expected the catalog to declare dependency caches"
+    blocked = sorted(
+        f"{tid} -> {mount}" for tid, mount in caches.items() if not _may_write(text, f"{mount}/x")
+    )
+    assert not blocked, (
+        "agent-runtime.profile refuses writes to these dependency caches, so "
+        "installing dependencies fails inside the sandbox: " + ", ".join(blocked)
+    )
+
+
+def test_the_write_evaluator_honours_deny_over_allow() -> None:
+    """Meta-test, and the reason the fix REMOVED the blanket deny instead of
+    just adding a grant next to it: in AppArmor a `deny` beats every `allow`, so
+    a profile carrying both rules is still broken — and would have looked fixed
+    to a reader. The third case pins the other half: dropping the deny does not
+    open /home, because with only `/** r` granted the rest stays default-denied.
+    """
+    allow = "profile p {\n  /home/agent/** rwkix,\n}\n"
+    allow_and_deny = "profile p {\n  /home/agent/** rwkix,\n  deny /home/** wklx,\n}\n"
+    read_only = "profile p {\n  /** r,\n}\n"
+
+    assert _may_write(allow, "/home/agent/.npm/x") is True
+    assert _may_write(allow_and_deny, "/home/agent/.npm/x") is False
+    assert _may_write(read_only, "/home/agent/.npm/x") is False
+    # `**` spans separators, `*` does not — the profile's confinement depends on it.
+    assert _may_write("profile p {\n  /home/* rw,\n}\n", "/home/agent/.npm/x") is False
+
+
 def test_agent_runtime_profile_is_stricter_than_the_default() -> None:
     """The untrusted agent/test sandbox can only write LESS than the shared
-    services: it grants /workspace + /tmp and explicitly denies writes to
-    /var/lib, /data and /root. A regression that widened the sandbox fails."""
+    services: it grants /workspace, /tmp and its own HOME, and explicitly denies
+    writes to /var/lib, /data and /root. A regression that widened the sandbox
+    fails.
+
+    HOME belongs on that list and is not a loosening: it is a container-local
+    tmpfs the worker sizes per container, nosuid, thrown away with the
+    container — strictly less exposed than the bind-mounted /workspace that has
+    always been writable here.
+    """
+    from workers.isolation import AGENT_HOME
+
     agent_text = _read(AGENT_PROFILE)
     writable = _writable_path_rules(agent_text)
-    # The sandbox writes only under /workspace or /tmp.
-    stray = sorted(r for r in writable if not r.startswith(("/workspace", "/tmp", "/proc")))
+    # The sandbox writes only under /workspace, /tmp or its own HOME.
+    stray = sorted(
+        r for r in writable if not r.startswith(("/workspace", "/tmp", "/proc", AGENT_HOME))
+    )
     assert not stray, (
         "the agent-runtime sandbox grants writes outside /workspace + /tmp — "
         f"untrusted code must be confined: {stray}"
@@ -337,7 +492,7 @@ def test_every_prod_service_references_an_apparmor_profile() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if name in APPARMOR_EXEMPT_SERVICES:
                 continue
             if not _references_apparmor(spec):
@@ -354,7 +509,7 @@ def test_pinned_compose_apparmor_names_resolve_to_a_shipped_profile() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             for opt in _security_opt(spec):
                 if not opt.startswith("apparmor="):
                     continue
@@ -373,7 +528,7 @@ def test_no_prod_service_runs_apparmor_unconfined() -> None:
     for path in PROD_COMPOSE_FILES:
         if not path.exists():
             continue
-        for name, spec in _rendered_services(path).items():
+        for name, spec in _effective_services(path).items():
             if "apparmor=unconfined" in _security_opt(spec):
                 offenders.append(f"{path.name}:{name}")
     assert not offenders, "services running apparmor=unconfined: " + ", ".join(offenders)
@@ -384,17 +539,6 @@ def test_no_prod_service_runs_apparmor_unconfined() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Postura AppArmor de cAdvisor sin resolver (finding sandbox-8). Este test "
-        "exige apparmor en TODO servicio generado, pero "
-        "tests/unit/test_compose_generator.py asserta que el cAdvisor privilegiado "
-        "NO debe fijarlo, y docker-compose.monitoring.yml SI lo fija: contradiccion "
-        "committeada. La decision (alinear en un sentido u otro) es de prod-08/prod-12; "
-        "prod-02 lo deja en cuarentena para que el resto de tests/security gatee CI."
-    ),
-    strict=False,
-)
 def test_compose_generator_emits_apparmor_on_every_service() -> None:
     """The installer's compose generator wires the same AppArmor pin into every
     generated service (so an installed stack matches the committed compose's

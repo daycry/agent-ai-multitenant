@@ -20,24 +20,29 @@ y la tabla de NIVELES) vive en
 | [asignar-tools-a-agentes.md](./asignar-tools-a-agentes.md)                 | Asignar tools (y skills) a un agente y leer el set efectivo (HACER)           |
 | [comandos-y-runtime-por-proyecto.md](./comandos-y-runtime-por-proyecto.md) | Autorizar comandos del stack (PHP/Node/.NET) + runtime por proyecto           |
 | [configurar-mcp-server.md](./configurar-mcp-server.md)                     | Añadir un servidor MCP a un proyecto (catálogo o custom)                      |
+| [recetas-mcp-tools-skills.md](./recetas-mcp-tools-skills.md)               | Recetario e2e: MCP (Atlassian, Context7…), custom tools y skills con ejemplos |
 | [human-agents.md](./human-agents.md)                                       | Crear, configurar, asignar y operar tareas de Human Agents                    |
 
 ## Operar la plataforma
 
-| Guía                                                             | Para qué                                                             |
-| ---------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [roles-y-permisos.md](./roles-y-permisos.md)                     | Qué puede hacer cada rol del tenant (RBAC) y cómo se diferencian     |
-| [configurar-proveedores-llm.md](./configurar-proveedores-llm.md) | Configurar los 4 proveedores LLM del catálogo cerrado (System Admin) |
-| [publicar-en-marketplace.md](./publicar-en-marketplace.md)       | Publicar/despublicar skills, tools y MCP servers en el marketplace   |
-| [plan-to-kanban-sync.md](./plan-to-kanban-sync.md)               | Cómo se sincroniza la vista Plan con el Kanban                       |
-| [api-publica-y-webhooks.md](./api-publica-y-webhooks.md)         | Usar la API v1 (token + SDKs + curl) y registrar webhooks entrantes  |
+| Guía                                                               | Para qué                                                                       |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| [roles-y-permisos.md](./roles-y-permisos.md)                       | Qué puede hacer cada rol del tenant (RBAC) y cómo se diferencian               |
+| [configurar-proveedores-llm.md](./configurar-proveedores-llm.md)   | Configurar los 4 proveedores LLM del catálogo cerrado (System Admin)           |
+| [publicar-en-marketplace.md](./publicar-en-marketplace.md)         | Publicar/despublicar skills, tools y MCP servers en el marketplace             |
+| [plan-to-kanban-sync.md](./plan-to-kanban-sync.md)                 | Cómo se sincroniza la vista Plan con el Kanban                                 |
+| [validacion-humana-de-planes.md](./validacion-humana-de-planes.md) | Probar la app del plan, aprobar/rechazar y el ciclo de correcciones (ADR 0107) |
+| [app-review-images.md](./app-review-images.md)                     | Construir la imagen de app-preview, con ejemplos PHP/Node/Python/Go            |
+| [api-publica-y-webhooks.md](./api-publica-y-webhooks.md)           | Usar la API v1 (token + SDKs + curl) y registrar webhooks entrantes            |
 
 ## Desarrollo, demos y diseño
 
-| Guía                                                 | Para qué                                                                |
-| ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| [watching-e2e-tests.md](./watching-e2e-tests.md)     | Ver los specs Playwright en directo (headed, slow-mo, UI inspector)     |
-| [run-demo-human-tests.md](./run-demo-human-tests.md) | Ejecutar los scripts demo de tests humanos (Plan 02 + Plan 04.5)        |
-| [design-tokens.md](./design-tokens.md)               | Tokens de diseño del frontend                                           |
-| [ui-conventions.md](./ui-conventions.md)             | Design-system del admin-panel: primitivas, componentes, estados, a11y   |
-| [gotchas/](./gotchas/)                               | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…) |
+| Guía                                                                     | Para qué                                                                                                                                |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [watching-e2e-tests.md](./watching-e2e-tests.md)                         | Ver los specs Playwright en directo (headed, slow-mo, UI inspector)                                                                     |
+| [run-demo-human-tests.md](./run-demo-human-tests.md)                     | Ejecutar los scripts demo de tests humanos (Plan 02 + Plan 04.5)                                                                        |
+| [design-tokens.md](./design-tokens.md)                                   | Tokens de diseño del frontend                                                                                                           |
+| [ui-conventions.md](./ui-conventions.md)                                 | Design-system del admin-panel: primitivas, componentes, estados, a11y                                                                   |
+| [gotchas/](./gotchas/)                                                   | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…)                                                                 |
+| [../../CONTINUE_HERE.md](../../CONTINUE_HERE.md)                         | Por dónde va el trabajo ahora mismo: rama, bloqueos, qué espera al operador                                                             |
+| [verificar-antes-de-implementar.md](./verificar-antes-de-implementar.md) | Prácticas de trabajo: por qué un plan «pendiente» miente, cómo evitar que un test fije el defecto, y guardas que no pueden pasar vacías |

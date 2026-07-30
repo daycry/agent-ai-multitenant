@@ -22,6 +22,7 @@ tenant context.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Any, Literal
 from uuid import UUID
 
@@ -43,16 +44,18 @@ from sqlalchemy import select
 from workers.review_runtime import sign_review_url, verify_review_url
 
 from api_server.auth.deps import get_redis
-from api_server.celery_client import enqueue_open_plan_pr
+from api_server.celery_client import enqueue_event_dispatch, enqueue_open_plan_pr
 from api_server.config import get_settings
 from api_server.db.domain import Plan
 from api_server.db.models import ReviewSession as ReviewSessionRow
 from api_server.db.review_session_repo import (
+    mark_other_plan_sessions_terminal,
     mark_rerun_requested,
     mark_terminal,
     touch_activity,
 )
 from api_server.db.session import get_admin_sessionmaker
+from api_server.routers._helpers import move_plan
 
 router = APIRouter(tags=["review"])
 
@@ -123,6 +126,7 @@ _SPA_HTML = """<!doctype html>
     </p>
   </header>
   <main>
+    {app_note}
     <p class="placeholder">
       Esta es la shell del SPA de review. El asset bundle (Plan 06
       task_06_29) montara aqui los 4 paneles (terminal / logs WS /
@@ -166,7 +170,19 @@ async def serve_review_spa(
     async with sm() as db, db.begin():
         await touch_activity(db, session_id)
 
-    return HTMLResponse(content=_SPA_HTML.format(session_id=session_id))
+    # hallazgo #4: si el proyecto no tiene app-preview configurada, dilo aquí en
+    # claro (la checklist y el veredicto funcionan igual sin ella).
+    app_note = ""
+    if (row.spec or {}).get("app_configured") is False:
+        app_note = (
+            '<p style="border:1px solid #7a5c1e;background:#2a2410;color:#e8c96a;'
+            'padding:0.75rem 1rem;border-radius:6px;">'
+            "Este proyecto no tiene app-preview configurada: define "
+            "<code>repository_config.review_image</code> (una imagen construida y "
+            "publicada por la CI del propio proyecto) en los ajustes del proyecto. "
+            "La checklist y el veredicto de esta sesi&oacute;n funcionan sin ella.</p>"
+        )
+    return HTMLResponse(content=_SPA_HTML.format(session_id=session_id, app_note=app_note))
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +329,10 @@ def _session_json(row: ReviewSessionRow) -> dict[str, Any]:
         # Relative path the SPA hits for the live app (same signature carried in
         # the page URL the browser already has).
         "app_path": f"/review/{row.id}/app/",
+        # hallazgo #4: false = el proyecto no pineó imagen y NO hay contenedor;
+        # el SPA muestra el aviso en vez de un iframe roto. Ausente en sesiones
+        # legacy → true (comportamiento anterior).
+        "app_configured": bool(spec.get("app_configured", True)),
         "expires_at": row.expires_at.isoformat() if row.expires_at else None,
     }
 
@@ -389,6 +409,18 @@ async def proxy_review_app(
         raise HTTPException(status_code=404, detail="review session not found")
     if row.status not in {"running", "suspended"}:
         raise HTTPException(status_code=410, detail=f"review session is {row.status}")
+    # hallazgo #4: sin imagen configurada no hay contenedor que proxyear —
+    # mensaje accionable en vez del críptico error de DNS del placeholder.
+    if (row.spec or {}).get("app_configured") is False:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this project has no app-preview configured: set "
+                "repository_config.review_image (an image built and published by "
+                "the project's own CI — ADR 0063) in the project settings; the "
+                "checklist and verdict of this review session work without it"
+            ),
+        )
 
     # Opening / interacting with the app counts as activity.
     sm = get_admin_sessionmaker()
@@ -461,13 +493,26 @@ async def submit_verdict(
         )
         if row is None:
             raise HTTPException(status_code=404, detail="review session not found")
-        plan = await db.get(Plan, row.plan_id)
+        plan = None
         plan_status: str | None = None
         # ADR 0072 fase 2: contexto para el auto-PR si el plan pasa a completed.
         pr_ctx: tuple[UUID, UUID, str] | None = None
+        # ADR 0130: un preview on-demand no tiene plan (plan_id NULL) — se marca
+        # terminal (arriba) pero NO hay write-back al plan ni barrido de hermanas.
+        if row.plan_id is not None:
+            # PROY2-07: el cierre del plan termina las OTRAS sesiones activas
+            # (running/suspended de tandas previas) — sin esto quedaban zombies
+            # que el autostart/reconciler contaba como activas.
+            await mark_other_plan_sessions_terminal(db, row.plan_id, exclude_session_id=row.id)
+            plan = await db.get(Plan, row.plan_id)
         if plan is not None:
             if plan.status == "pending_human_validation":
-                plan.status = "completed" if body.verdict == "approved" else "rejected"
+                # c2/T3 (audit 2026-07-03): encaminar el cierre por la máquina de
+                # estados (la ÚNICA puerta), no una asignación cruda de .status. La
+                # transición pending_human_validation→completed|rejected es legal (la
+                # misma de hoy); se PRESERVA el orden completar→encolar-PR (ADR 0072
+                # fase 2), sin cambio de comportamiento.
+                move_plan(db, plan, "completed" if body.verdict == "approved" else "rejected")
                 if plan.status == "completed" and plan.project_id is not None:
                     pr_ctx = (plan.project_id, plan.id, plan.title or "")
             plan_status = plan.status
@@ -487,6 +532,22 @@ async def submit_verdict(
                 f"Plan: {plan_title}\nID: {plan_id}"
             ),
         )
+    # NOTIF-3 (auditoría 2026-07-12): plan_rejected estaba registrado
+    # (+plantillas ES/EN) pero NADIE lo emitía. Post-commit (el begin() de
+    # arriba ya cerró) y best-effort — nunca rompe el veredicto ya persistido.
+    if body.verdict == "rejected" and plan is not None:
+        with contextlib.suppress(Exception):
+            await enqueue_event_dispatch(
+                {
+                    "event_type": "plan_rejected",
+                    "tenant_id": str(plan.tenant_id),
+                    "context": {
+                        "plan_name": plan.title or "",
+                        "plan_id": str(plan.id),
+                        "reason": body.rejection_reason or "",
+                    },
+                }
+            )
     return {
         "session_id": str(session_id),
         "verdict": body.verdict,

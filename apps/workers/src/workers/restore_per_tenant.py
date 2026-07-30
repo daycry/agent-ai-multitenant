@@ -280,6 +280,9 @@ class PerTenantRestoreResult:
     object_store_restored: bool
     preview: PerTenantRestorePreview
     verification: VerificationReport
+    # PROJ-03: filas huérfanas borradas por el sweep de integridad post-restore
+    # (0 en un restore limpio o en dry-run; -1 si el sweep falló best-effort).
+    fk_orphans_deleted: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -292,6 +295,7 @@ class PerTenantRestoreResult:
             "object_store_restored": self.object_store_restored,
             "preview": self.preview.to_dict(),
             "verification": self.verification.to_dict(),
+            "fk_orphans_deleted": self.fk_orphans_deleted,
         }
 
 
@@ -456,6 +460,12 @@ class PerTenantRestoreEngine:
         # -- OBJECT STORAGE: re-extract ONLY the tenant's slice (<tenant_id>/).
         object_restored = self._restore_object_store_slice(bundle_dir, manifest, tenant_id)
 
+        # -- POST-RESTORE INTEGRITY SWEEP (PROJ-03): el copiado corre con los FK
+        # triggers apagados; si el bundle y la base viva divergen quedan filas
+        # huérfanas que ninguna FK volverá a validar. Best-effort: un fallo del
+        # sweep no invalida el restore ya commiteado (queda -1 + WARNING).
+        orphans_deleted = self._post_restore_integrity_sweep(tenant_id)
+
         _log.info(
             "restore_per_tenant.done",
             tenant_id=tenant_id,
@@ -473,6 +483,7 @@ class PerTenantRestoreEngine:
             object_store_restored=object_restored,
             preview=preview,
             verification=report,
+            fk_orphans_deleted=orphans_deleted,
         )
 
     def preview(self, bundle: str | Path, *, tenant_id: str) -> PerTenantRestorePreview:
@@ -498,6 +509,49 @@ class PerTenantRestoreEngine:
             raise PerTenantRestoreError(
                 f"tenant_id {tenant_id!r} is not a UUID; refusing to build a tenant predicate"
             )
+
+    def _post_restore_integrity_sweep(self, tenant_id: str) -> int:
+        """Corre el sweep de huérfanos referenciales tras el copiado (PROJ-03).
+
+        El copiado filtrado va con ``session_replication_role = replica``; ver
+        :mod:`workers.maintenance.integrity`. Best-effort: el restore ya está
+        commiteado — un fallo aquí deja WARNING y devuelve -1, nunca revienta.
+        Devuelve el total de filas huérfanas borradas (0 = restore limpio)."""
+        import asyncio
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from workers.maintenance.integrity import sweep_fk_orphans
+
+        async def _run() -> int:
+            url = self._config.admin_database_url.replace(
+                "postgresql://", "postgresql+asyncpg://", 1
+            )
+            engine = create_async_engine(url)
+            try:
+                sm = async_sessionmaker(engine, expire_on_commit=False)
+                async with sm() as session, session.begin():
+                    report = await sweep_fk_orphans(session)
+                return sum(report.values())
+            finally:
+                await engine.dispose()
+
+        try:
+            deleted = asyncio.run(_run())
+        except Exception as exc:
+            _log.warning(
+                "restore_per_tenant.integrity_sweep_failed",
+                tenant_id=tenant_id,
+                error=str(exc),
+            )
+            return -1
+        if deleted:
+            _log.warning(
+                "restore_per_tenant.integrity_sweep",
+                tenant_id=tenant_id,
+                orphans_deleted=deleted,
+            )
+        return deleted
 
     def _locate_bundle(self, bundle: str | Path) -> Path:
         """Resolve ``bundle`` (a bundle id or a path) to an existing directory."""

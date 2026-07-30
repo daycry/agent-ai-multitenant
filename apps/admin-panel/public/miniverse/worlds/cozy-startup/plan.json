@@ -1,0 +1,314 @@
+{
+  "name": "cozy-startup-office",
+  "gridCols": 20,
+  "gridRows": 16,
+  "textures": [
+    {
+      "id": "main_floor",
+      "prompt": "worn light oak wood floor texture, straight top-down bird's eye view",
+      "role": "floor"
+    },
+    {
+      "id": "exposed_brick_wall",
+      "prompt": "exposed reddish-brown brick wall texture, straight top-down bird's eye view",
+      "role": "wall"
+    },
+    {
+      "id": "concrete_accent",
+      "prompt": "subtle light gray polished concrete floor texture, straight top-down bird's eye view",
+      "role": "accent"
+    }
+  ],
+  "props": [
+    {
+      "id": "wooden_desk_single",
+      "prompt": "single rectangular wooden desk, light wood, minimalist design, with monitor, keyboard, and small succulent plant, straight top-down bird's eye view",
+      "count": 4,
+      "w": 3,
+      "h": 2,
+      "layer": "below",
+      "anchorType": "work"
+    },
+    {
+      "id": "ergonomic_chair",
+      "prompt": "modern ergonomic office chair, dark gray fabric, straight top-down bird's eye view",
+      "count": 4,
+      "w": 1,
+      "h": 1,
+      "layer": "above",
+      "anchorType": "rest"
+    },
+    {
+      "id": "tall_potted_plant",
+      "prompt": "tall lush green potted plant in a simple terracotta pot, vibrant leaves, straight top-down bird's eye view",
+      "count": 6,
+      "w": 1,
+      "h": 1,
+      "layer": "below"
+    },
+    {
+      "id": "bookshelf_packed",
+      "prompt": "tall wooden bookshelf packed with various colorful books and quirky trinkets, straight top-down bird's eye view",
+      "count": 1,
+      "w": 1,
+      "h": 2,
+      "layer": "below"
+    },
+    {
+      "id": "coffee_bar_counter",
+      "prompt": "light wooden coffee bar counter with a white countertop, straight top-down bird's eye view",
+      "count": 1,
+      "w": 4,
+      "h": 1,
+      "layer": "below",
+      "anchorType": "utility"
+    },
+    {
+      "id": "espresso_machine",
+      "prompt": "shiny silver professional espresso machine on a counter, with a few coffee cups nearby, straight top-down bird's eye view",
+      "count": 1,
+      "w": 1,
+      "h": 0.5,
+      "layer": "above",
+      "anchorType": "utility"
+    },
+    {
+      "id": "mini_fridge",
+      "prompt": "small, under-counter mini fridge, matte black finish, straight top-down bird's eye view",
+      "count": 1,
+      "w": 1,
+      "h": 0.75,
+      "layer": "below"
+    },
+    {
+      "id": "bean_bag_chair_dark",
+      "prompt": "large dark gray bean bag chair, slightly deflated, inviting and cozy, straight top-down bird's eye view",
+      "count": 2,
+      "w": 1.5,
+      "h": 1.5,
+      "layer": "below",
+      "anchorType": "rest"
+    },
+    {
+      "id": "bean_bag_chair_light",
+      "prompt": "large light beige bean bag chair, slightly deflated, inviting and cozy, straight top-down bird's eye view",
+      "count": 1,
+      "w": 1.5,
+      "h": 1.5,
+      "layer": "below",
+      "anchorType": "rest"
+    },
+    {
+      "id": "low_coffee_table",
+      "prompt": "small, round wooden coffee table, low height, natural finish, straight top-down bird's eye view",
+      "count": 1,
+      "w": 1.5,
+      "h": 1.5,
+      "layer": "below",
+      "anchorType": "social"
+    },
+    {
+      "id": "large_window",
+      "prompt": "large industrial-style window, multi-pane, letting in bright natural light, straight top-down bird's eye view",
+      "count": 3,
+      "w": 2,
+      "h": 1,
+      "layer": "below"
+    },
+    {
+      "id": "wooden_framed_whiteboard",
+      "prompt": "large rectangular whiteboard with a light wooden frame, some scribbled notes and diagrams, marker tray, straight top-down bird's eye view",
+      "count": 1,
+      "w": 2,
+      "h": 1,
+      "layer": "below"
+    },
+    {
+      "id": "area_rug_lounge",
+      "prompt": "soft, geometric pattern area rug in muted tones, creating a cozy zone, straight top-down bird's eye view",
+      "count": 1,
+      "w": 4,
+      "h": 3,
+      "layer": "below"
+    }
+  ],
+  "layout": {
+    "floor": [
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+      [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    ],
+    "placements": [
+      {
+        "propsIndex": 10,
+        "x": 3,
+        "y": 0
+      },
+      {
+        "propsIndex": 10,
+        "x": 8,
+        "y": 0
+      },
+      {
+        "propsIndex": 10,
+        "x": 13,
+        "y": 0
+      },
+      {
+        "propsIndex": 11,
+        "x": 0,
+        "y": 6
+      },
+      {
+        "propsIndex": 0,
+        "x": 2,
+        "y": 3
+      },
+      {
+        "propsIndex": 1,
+        "x": 3,
+        "y": 4.5
+      },
+      {
+        "propsIndex": 0,
+        "x": 7,
+        "y": 3
+      },
+      {
+        "propsIndex": 1,
+        "x": 8,
+        "y": 4.5
+      },
+      {
+        "propsIndex": 0,
+        "x": 2,
+        "y": 8
+      },
+      {
+        "propsIndex": 1,
+        "x": 3,
+        "y": 9.5
+      },
+      {
+        "propsIndex": 0,
+        "x": 7,
+        "y": 8
+      },
+      {
+        "propsIndex": 1,
+        "x": 8,
+        "y": 9.5
+      },
+      {
+        "propsIndex": 2,
+        "x": 5,
+        "y": 2
+      },
+      {
+        "propsIndex": 2,
+        "x": 10,
+        "y": 2
+      },
+      {
+        "propsIndex": 2,
+        "x": 1,
+        "y": 7
+      },
+      {
+        "propsIndex": 2,
+        "x": 10,
+        "y": 7
+      },
+      {
+        "propsIndex": 3,
+        "x": 1,
+        "y": 12
+      },
+      {
+        "propsIndex": 4,
+        "x": 14,
+        "y": 2
+      },
+      {
+        "propsIndex": 5,
+        "x": 14.5,
+        "y": 2.25
+      },
+      {
+        "propsIndex": 6,
+        "x": 17,
+        "y": 2.25
+      },
+      {
+        "propsIndex": 2,
+        "x": 14,
+        "y": 1
+      },
+      {
+        "propsIndex": 12,
+        "x": 14,
+        "y": 10
+      },
+      {
+        "propsIndex": 9,
+        "x": 15,
+        "y": 11
+      },
+      {
+        "propsIndex": 7,
+        "x": 13.5,
+        "y": 10.5
+      },
+      {
+        "propsIndex": 8,
+        "x": 16.5,
+        "y": 10.5
+      },
+      {
+        "propsIndex": 2,
+        "x": 18,
+        "y": 13
+      },
+      {
+        "propsIndex": 2,
+        "x": 13,
+        "y": 8
+      }
+    ],
+    "wanderPoints": [
+      {
+        "name": "wander_central_north",
+        "x": 6,
+        "y": 6
+      },
+      {
+        "name": "wander_central_south",
+        "x": 6,
+        "y": 11
+      },
+      {
+        "name": "wander_coffee",
+        "x": 16,
+        "y": 4
+      },
+      {
+        "name": "wander_lounge",
+        "x": 15,
+        "y": 13
+      }
+    ]
+  }
+}

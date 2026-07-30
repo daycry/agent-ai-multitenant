@@ -177,6 +177,17 @@ async def persist_memory_candidates(
 
     # Embebe el contenido en el momento de crear (best-effort) cuando hay
     # embedder; si falla / no se pasa, queda NULL y el back-fill lo rellena.
+    # P1-2 (investigación 2026-07-11): dedup por contenido normalizado — la
+    # única idempotencia era por source_execution_id (mismo run), así que dos
+    # runs distintos que aprendían la misma lección creaban filas duplicadas
+    # para siempre (sin beat de consolidación). Mismo criterio que el córtex:
+    # contenido normalizado idéntico, vivo, en el MISMO scope+owner ⇒ skip.
+    candidates = await _dedup_against_existing(
+        session, candidates, tenant_id=tenant_id, scope=scope, owner=owner
+    )
+    if not candidates:
+        return []
+
     embeddings = await _embed_contents(embedder, [c.content for c in candidates])
 
     rows: list[MemoryEntry] = []
@@ -209,6 +220,42 @@ async def persist_memory_candidates(
         ),
     )
     return rows
+
+
+async def _dedup_against_existing(
+    session: AsyncSession,
+    candidates: Sequence[MemoryCandidate],
+    *,
+    tenant_id: UUID,
+    scope: str,
+    owner: Mapping[str, Any],
+) -> list[MemoryCandidate]:
+    """Filtra candidatos cuyo contenido normalizado ya existe vivo (P1-2)."""
+    from sqlalchemy import func, select
+
+    kept: list[MemoryCandidate] = []
+    seen_batch: set[str] = set()
+    for cand in candidates:
+        normalised = " ".join(cand.content.split()).lower()
+        if not normalised or normalised in seen_batch:
+            continue
+        seen_batch.add(normalised)
+        conditions = [
+            MemoryEntry.tenant_id == tenant_id,
+            MemoryEntry.scope == scope,
+            MemoryEntry.deleted_at.is_(None),
+            func.lower(func.regexp_replace(MemoryEntry.content, r"\s+", " ", "g")) == normalised,
+        ]
+        for key, value in owner.items():
+            conditions.append(getattr(MemoryEntry, key) == value)
+        existing = (
+            await session.execute(select(MemoryEntry.id).where(*conditions).limit(1))
+        ).scalar_one_or_none()
+        if existing is None:
+            kept.append(cand)
+        else:
+            logger.info("memorizer.deduped", tenant_id=str(tenant_id), scope=scope)
+    return kept
 
 
 __all__ = ["persist_memory_candidates"]

@@ -130,6 +130,28 @@ def test_minimal_config_has_all_core_services() -> None:
         assert name not in services
 
 
+def test_event_bus_redis_db_is_consistent_across_services() -> None:
+    """AUD16 menor C/H10: el dispatcher escribía su DLQ (dlq:notifications) en
+    la DB 3 de Redis mientras el sampler de métricas (workers, DB 0) y el resto
+    del bus de eventos miran la DB 0 — en prod agentic_dlq_depth habría sido
+    SIEMPRE 0 y la alerta NotificationsDLQNotEmpty no podría disparar jamás.
+    Productor y consumidores del bus/DLQ deben compartir la MISMA DB."""
+    compose = generate_compose(_config())
+    services = compose["services"]
+    assert isinstance(services, dict)
+
+    def _env(service: str, key: str) -> str:
+        env = services[service]["environment"]  # type: ignore[index]
+        assert isinstance(env, dict)
+        return str(env[key])
+
+    workers_events = _env("workers", "WORKERS_EVENTS_REDIS_URL")
+    notify_events = _env("notification-dispatcher", "NOTIFY_EVENTS_REDIS_URL")
+    assert (
+        notify_events == workers_events
+    ), f"DLQ writer ({notify_events}) y reader ({workers_events}) en DBs distintas"
+
+
 def test_minimal_compose_top_level_shape() -> None:
     compose = generate_compose(_config())
     assert compose["name"] == "agentic-platform"
@@ -391,10 +413,14 @@ def test_monitoring_includes_alertmanager_and_cadvisor() -> None:
 
     cad = services["cadvisor"]
     assert cad["image"].startswith("gcr.io/cadvisor/cadvisor:")
-    # Privileged metrics collector: read-only host mounts, no cap_drop/apparmor.
-    assert cad["privileged"] is True
-    assert "cap_drop" not in cad
-    assert all("apparmor=" not in o for o in cad["security_opt"])
+    # prod-12 cadv_01 (sandbox-8, decisión 5a): cAdvisor dejó de ser privileged
+    # — los stats salen de los bind-mounts read-only, así que lleva el MISMO
+    # hardening que el resto (cap_drop ALL + apparmor + no-new-privileges).
+    assert "privileged" not in cad
+    assert "devices" not in cad  # /dev/kmsg (decodificar OOM-kills) retirado
+    assert cad["cap_drop"] == ["ALL"]
+    assert any("apparmor=" in o for o in cad["security_opt"])
+    assert all(v.endswith(":ro") for v in cad["volumes"])
 
 
 # ---------------------------------------------------------------------------
@@ -498,10 +524,9 @@ def test_hardening_defaults_on_every_service() -> None:
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
     one_shots = {"ollama-bootstrap", "migrations"}
-    # cAdvisor MUST run privileged with host mounts to read container stats, so
-    # it is deliberately NOT cap-dropped and does NOT pin AppArmor (both would
-    # deny the host access it needs). It still sets no-new-privileges + limits.
-    privileged = {"cadvisor"}
+    # prod-12 cadv_01: ya no queda ningún servicio privileged en el compose
+    # generado (cAdvisor pasó al hardening estándar).
+    privileged: set[str] = set()
     for name, svc in compose["services"].items():
         assert svc["restart"] == ("no" if name in one_shots else "unless-stopped"), name
         opts = svc["security_opt"]
@@ -559,6 +584,20 @@ def test_python_app_healthchecks_do_not_rely_on_wget() -> None:
         flat = " ".join(compose["services"][name]["healthcheck"]["test"])
         assert "wget" not in flat and "curl" not in flat, f"{name} healthcheck uses a missing tool"
         assert "python" in flat, f"{name} healthcheck must use python (no wget in the image)"
+
+
+def test_notification_dispatcher_healthcheck_loads_a_real_celery_app() -> None:
+    """Bug cazado en vivo (2026-07-10, al desplegar el dispatcher en dev):
+    ``celery -A notification_dispatcher inspect ping`` NO carga la app —
+    «Module 'notification_dispatcher' has no attribute 'celery'» — así que el
+    servicio quedaba permanentemente unhealthy pese al worker `ready`. El -A
+    debe apuntar al módulo real (``notification_dispatcher.celery_app:app``,
+    el mismo target del CMD del Dockerfile) y hacer ping a SU nodo (-d
+    celery@$$HOSTNAME), no a cualquier worker del broker compartido."""
+    compose = generate_compose(_config(), monitoring=False)
+    flat = " ".join(compose["services"]["notification-dispatcher"]["healthcheck"]["test"])
+    assert "notification_dispatcher.celery_app:app" in flat
+    assert "HOSTNAME" in flat
 
 
 def test_generated_services_rely_on_docker_default_seccomp() -> None:
@@ -757,6 +796,26 @@ def test_workers_celery_app_target_is_the_importable_module() -> None:
         ), f"{name} healthcheck 'celery inspect ping' must target -A workers.celery_app"
 
 
+def test_workers_healthchecks_ping_their_own_node() -> None:
+    """G-06 (auditoría proyecto 2026-07-17): ``celery inspect ping`` sin ``-d``
+    es un broadcast al broker COMPARTIDO — contesta cualquier worker vivo, así
+    que un contenedor roto seguía healthy mientras otra lane respondiera (y
+    viceversa: se colgaba esperando a todos). El ping debe ir a SU nodo
+    (``-d celery@$$HOSTNAME``), como el fix del dispatcher del 2026-07-10."""
+    services = generate_compose(_config())["services"]
+    for name in ("workers", "workers-privileged", "notification-dispatcher"):
+        flat = " ".join(services[name]["healthcheck"]["test"])
+        assert "-d celery@$$HOSTNAME" in flat, (
+            f"{name} healthcheck must ping its OWN node (-d celery@$$HOSTNAME), "
+            "not broadcast to the shared broker"
+        )
+        # La otra mitad de G-06: celery tarda >10s en arrancar bajo carga — el
+        # timeout corto producía unhealthy crónico sin fallo real.
+        assert (
+            services[name]["healthcheck"]["timeout"] == "30s"
+        ), f"{name} healthcheck timeout must be 30s (celery startup under load)"
+
+
 def test_workers_lanes_bind_data_root_and_seccomp_profiles() -> None:
     services = generate_compose(_config(data_root="/data/agent-platform"))["services"]
     for name in ("workers", "workers-privileged"):
@@ -916,3 +975,48 @@ def test_workers_reach_docker_via_proxy_and_join_agents_network(service_name: st
     nets = svc["networks"]
     assert "agentic-agents" in nets, f"{service_name} must join agentic-agents (launch runtimes)"
     assert "agentic-docker" in nets, f"{service_name} must join the socket-proxy network"
+
+
+# --- prod-01 A9/A10 (auditoría 2026-07-06): el compose GENERADO por el
+# instalador divergía del stack real (manuals.yml). Estos tests fijan la
+# reconciliación.
+def test_workers_events_redis_url_matches_consumers() -> None:
+    """A10: el worker publica los streams exec:{id} en WORKERS_EVENTS_REDIS_URL,
+    pero el WS del api-server (y el orchestrator) los LEEN en la DB 0 del Redis.
+    Con /3 (sin consumidor) el streaming en vivo queda roto — manuals.yml ya lo
+    corrigió a /0 con un comentario explícito; el generador debía seguirlo."""
+    services = generate_compose(_config())["services"]
+    workers_events = services["workers"]["environment"]["WORKERS_EVENTS_REDIS_URL"]
+    api_redis = services["api-server"]["environment"]["API_SERVER_REDIS_URL"]
+    # Ambos deben apuntar a la MISMA base de datos Redis (el stream de eventos).
+    assert workers_events.rsplit("/", 1)[-1] == api_redis.rsplit("/", 1)[-1] == "0"
+
+
+def test_cortex_beat_service_is_present_and_schedules() -> None:
+    """A9: sin un servicio Celery beat, en una instalación por el instalador
+    NADA se agenda (backups, rotación, mantenimiento, sync de precios, córtex).
+    Solo existía en manuals.yml."""
+    services = generate_compose(_config())["services"]
+    assert "cortex-beat" in services, "falta el servicio Celery beat en el compose generado"
+    beat = services["cortex-beat"]
+    cmd = beat["command"]
+    joined = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    assert "beat" in joined, "el servicio cortex-beat debe lanzar `celery ... beat`"
+    # Comparte el broker/DB de los workers (agenda las mismas colas).
+    assert beat["environment"]["WORKERS_BROKER_URL"].startswith("redis://")
+
+
+def test_privileged_lane_can_run_backups() -> None:
+    """A9: la lane privileged drena la cola de backups, pero corría sin
+    WORKERS_RUN_AS_ROOT ni el mount de /var/lib/docker/volumes → el volume-tar
+    daba EACCES leyendo los _data a 0700 (redis uid 999, vault uid 100)."""
+    svc = generate_compose(_config())["services"]["workers-privileged"]
+    env = svc["environment"]
+    assert (
+        env.get("WORKERS_RUN_AS_ROOT") == "1"
+    ), "la lane de backups necesita root para leer los volume _data a 0700"
+    assert "WORKERS_BACKUP_VOLUMES" in env, "faltan los volúmenes a taréar (WORKERS_BACKUP_VOLUMES)"
+    vols = " ".join(svc.get("volumes", []))
+    assert (
+        "/var/lib/docker/volumes" in vols
+    ), "falta el mount de los volúmenes Docker para el backup"

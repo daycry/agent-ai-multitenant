@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { reconnectDelayMs, resolveWsBase } from "@/lib/ws";
+vi.mock("@/lib/auth", () => ({ getToken: vi.fn() }));
+vi.mock("@/lib/tenant-storage", () => ({ getTenantId: vi.fn() }));
+
+import { getToken } from "@/lib/auth";
+import { getTenantId } from "@/lib/tenant-storage";
+import { reconnectDelayMs, resolveWsBase, wsUrl } from "@/lib/ws";
 
 /**
  * prod-01 / prod-09 — single-origin behind the Caddy reverse proxy. The
@@ -33,6 +38,27 @@ describe("resolveWsBase", () => {
 
   it("normalises a relative base without a leading slash", () => {
     expect(resolveWsBase("api", { protocol: "http:", host: "h" })).toBe("ws://h/api");
+  });
+});
+
+describe("wsUrl", () => {
+  // API_URL defaults to the absolute http://localhost:8001, so resolveWsBase
+  // gives ws://localhost:8001 without needing a browser `window`.
+  beforeEach(() => {
+    vi.mocked(getToken).mockReturnValue("tok");
+    vi.mocked(getTenantId).mockReturnValue(null);
+  });
+
+  it("appends the acting-as tenant_id when one is selected (WS mirror of X-Tenant-Id)", () => {
+    vi.mocked(getTenantId).mockReturnValue("ten-1");
+    expect(wsUrl("/ws/conversation/c1")).toBe(
+      "ws://localhost:8001/ws/conversation/c1?token=tok&tenant_id=ten-1",
+    );
+  });
+
+  it("omits tenant_id when no tenant is selected", () => {
+    vi.mocked(getTenantId).mockReturnValue(null);
+    expect(wsUrl("/ws/conversation/c1")).toBe("ws://localhost:8001/ws/conversation/c1?token=tok");
   });
 });
 

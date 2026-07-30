@@ -90,3 +90,19 @@ del volumen destino con un contenedor auxiliar análogo al de copia.
   [health-check.md](./health-check.md).
 - Confirma que `GET /admin/system-health` reporta `postgres: ok`.
 - Verifica que puedes hacer login en el admin-panel.
+
+## Copia offsite (AUD16-19)
+
+El upload offsite solo corre para bundles **verificados** y contra los
+destinos habilitados en la platform setting `backup_destinations` (panel
+admin). Si no hay destino configurado, `uploaded=[]` es lo esperado — la
+alerta `BackupOffsiteStale` está _gated_ y **no arma** hasta que exista un
+primer upload bueno (métrica `agentic_backup_offsite_last_success_timestamp_
+seconds > 0`); a partir de ahí, >8 días sin upload alerta.
+
+- Métricas: `agentic_backup_offsite_uploaded` (artefactos del último run) y
+  `agentic_backup_offsite_last_success_timestamp_seconds` (último upload
+  bueno; se preserva en runs sin upload).
+- Configurar un destino offsite es decisión del operador (gated en el plan
+  `remediacion-auditoria-dirigida-2026-07-16`); hasta entonces la única
+  copia vive en el volumen local de `/backups`.

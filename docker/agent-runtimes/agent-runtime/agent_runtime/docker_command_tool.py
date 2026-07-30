@@ -136,12 +136,26 @@ class DockerCommandTool:
             return self.docker_client
         # Lazy import — avoids importing the docker SDK at module load
         # time when this module is only browsed (e.g. by docs build).
-        import docker  # type: ignore[import-not-found]
+        import docker
 
         self.docker_client = docker.from_env()
         return self.docker_client
 
     def __call__(self, args: dict[str, Any]) -> ToolResult:
+        # task_prod12_docker_01 (sandbox-7, decisión 3 opción b): dentro del
+        # sandbox NO hay cliente docker ni socket POR DISEÑO — sin el seam de
+        # tests, fallar rápido con la vía real en vez de un ImportError críptico
+        # tras quemar un turno del agente.
+        if self.docker_client is None:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"'{self.name}' is not supported inside the agent sandbox (no "
+                    "Docker client/socket by design). Use the stack_exec tool "
+                    "instead (ADR 0093): the worker runs your project toolchain "
+                    "(tests/lint/build) in the project's runtime template."
+                ),
+            )
         try:
             command = render_command(self.command_template, args)
         except KeyError as exc:

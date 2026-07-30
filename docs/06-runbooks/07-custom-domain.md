@@ -2,14 +2,16 @@
 title: Publicar la plataforma bajo un dominio propio (custom domain)
 docs_language: es
 audience: system admin, operador
-updated: 2026-06-19
+updated: 2026-07-18
 ---
 
 # Runbook — Publicar la plataforma bajo un dominio propio
 
-Cómo exponer la plataforma en un dominio público (p.ej.
-`https://agentic.miempresa.com`), qué piezas se configuran y **cómo afecta a los
-proveedores SSO**. Se apoya en el reverse proxy del
+Cómo exponer la plataforma en un dominio público (usamos
+**`https://example.com`** como ejemplo en todo el runbook), qué piezas se
+configuran y **cómo afecta a los proveedores SSO**. Para el camino completo de
+una instalación de producción de cero a publicada, ver
+[08-instalacion-produccion.md](08-instalacion-produccion.md). Se apoya en el reverse proxy del
 [ADR 0061](../05-architecture-decisions/0061-reverse-proxy-tls.md) (Caddy,
 single-origin) y en el
 [ADR 0069](../05-architecture-decisions/0069-origen-publico-y-prefijo-api-separados-sso.md)
@@ -56,7 +58,7 @@ caso el API es alcanzable en `https://dominio/api`, por eso el prefijo es `/api`
 Dos settings independientes (System Admin), live (sin reinicio):
 
 - **Origen público** (`app.public_base_url`): el `scheme://host[:port]` del
-  dominio, **sin path** (p.ej. `https://agentic.miempresa.com`). Es la URL del
+  dominio, **sin path** (p.ej. `https://example.com`). Es la URL del
   frontend; de ella penden las rutas SSO.
 - **Prefijo de API** (`app.api_path_prefix`, ADR 0069): el segmento bajo el que
   se publica el API. **`/api`** en single-origin; **vacío** si el API cuelga de
@@ -71,7 +73,7 @@ registrar en el IdP.
 **Por env (bootstrap)**, p.ej. en el `.env` del despliegue:
 
 ```bash
-API_SERVER_SSO_REDIRECT_BASE_URL=https://agentic.miempresa.com   # origen
+API_SERVER_SSO_REDIRECT_BASE_URL=https://example.com   # origen
 API_SERVER_API_PATH_PREFIX=/api                                  # prefijo (vacío si no aplica)
 ```
 
@@ -97,7 +99,10 @@ Las URLs que el IdP debe conocer se **derivan** del origen + prefijo:
 Pasos:
 
 1. Tras fijar dominio + prefijo, **copia** desde la pantalla SSO el callback OIDC
-   y/o el SP EntityID + ACS.
+   y/o el SP EntityID + ACS. Desde la migración 0115 puedes tener **varios
+   proveedores SSO configurados a la vez** (p.ej. Google Y Microsoft): cada
+   config habilitada pinta su botón en `/login` y todas comparten el mismo
+   callback/ACS global — registra las URLs en CADA IdP.
 2. **Regístralos en el IdP** (Okta/Entra/Auth0/ADFS…): el redirect URI en la app
    OIDC; el EntityID + ACS en el SP SAML.
 3. Estos valores deben **coincidir EXACTAMENTE** con los registrados. Si más
@@ -113,8 +118,8 @@ Pasos:
 
 ```bash
 # La cadena pública (sustituye el dominio):
-curl -s -o /dev/null -w "%{http_code}\n" https://agentic.miempresa.com/            # 200 (SPA)
-curl -s -o /dev/null -w "%{http_code}\n" https://agentic.miempresa.com/api/healthz # 200 (API)
+curl -s -o /dev/null -w "%{http_code}\n" https://example.com/            # 200 (SPA)
+curl -s -o /dev/null -w "%{http_code}\n" https://example.com/api/healthz # 200 (API)
 
 # El callback efectivo que verá el IdP (System Admin, vía la API):
 #   GET /api/auth/sso/oidc/callback-url  ->  {"callback_url": "https://.../api/auth/sso/oidc/callback"}

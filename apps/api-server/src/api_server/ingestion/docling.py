@@ -23,6 +23,16 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# G-01 (auditoría proyecto 2026-07-17): la ruta REAL de docling-serve 1.20.x.
+# El cliente llamaba a `/v1/convert` (retirada → 404); el servicio expone
+# `/v1/convert/{source,file}` (conversión cruda) y `/v1/chunk/hybrid/file`
+# (conversión + chunking listo-para-embedding en una llamada). Usamos el
+# chunker híbrido: nos da directamente los chunks que el pipeline indexa, sin
+# re-implementar el troceo. El contract-test cruza esta constante con el
+# snapshot del openapi pineado (tests/unit/fixtures/), así un bump que retire
+# la ruta rompe en CI en vez de en producción (la lección del hot-fix perdido).
+DOCLING_CHUNK_ROUTE = "/v1/chunk/hybrid/file"
+
 
 class DoclingParseError(RuntimeError):
     """Raised when docling-serve fails to parse a document. The
@@ -68,12 +78,14 @@ class DoclingClient(Protocol):
 # Real implementation
 # ---------------------------------------------------------------------------
 class HttpDoclingClient:
-    """Real client. Hits ``POST /v1/convert`` on docling-serve and
-    flattens the structured response into :class:`DoclingChunk`.
+    """Real client. Hits ``POST /v1/chunk/hybrid/file`` on docling-serve
+    (convert + hybrid chunking in one call) and flattens the
+    ``ChunkDocumentResponse`` into :class:`DoclingChunk`.
 
     Tests don't touch this — they pass a fake. The real-vs-fake
     contract is enforced by mypy via the :class:`DoclingClient`
-    Protocol.
+    Protocol; the route is contract-tested against the pinned openapi
+    snapshot (G-01).
     """
 
     def __init__(
@@ -96,11 +108,12 @@ class HttpDoclingClient:
     ) -> list[DoclingChunk]:
         try:
             response = await self._client.post(
-                f"{self._base_url}/v1/convert",
-                files={"file": (filename, data, content_type)},
-                # Ask docling to return its structured representation
-                # *with* per-section bboxes for the citation viewer.
-                data={"output_format": "json", "include_bbox": "true"},
+                f"{self._base_url}{DOCLING_CHUNK_ROUTE}",
+                files={"files": (filename, data, content_type)},
+                # JSON body (not the zip variant); merge peer chunks so short
+                # sibling paragraphs land together — the default the embedder
+                # wants. Everything else stays on docling-serve's defaults.
+                data={"target_type": "inbody", "chunking_merge_peers": "true"},
             )
         except httpx.HTTPError as exc:
             raise DoclingParseError(f"docling-serve request failed: {exc}") from exc
@@ -115,46 +128,35 @@ class HttpDoclingClient:
 
 
 def _flatten_chunks(body: dict[str, Any]) -> list[DoclingChunk]:
-    """Best-effort projection from docling-serve's response onto the
-    `DoclingChunk` list.
+    """Project a ``ChunkDocumentResponse`` onto the `DoclingChunk` list.
 
-    docling-serve ships several response shapes between minor
-    versions. We walk a few well-known keys and tolerate the
-    differences. Anything we can't recognise falls through silently —
-    a document that yields zero chunks is still a valid (empty)
-    indexed document; the operator sees ``status=indexed`` with
-    ``page_count=0`` and re-uploads.
+    Shape (docling-serve 1.20.x ``/v1/chunk/hybrid/file``):
+    ``{"chunks": [{"chunk_index", "text"|"raw_text", "headings"?,
+    "captions"?, "page_numbers"?, "doc_items"?, "metadata"?}, ...]}``.
+    The chunking endpoint carries NO coordinates, so the bbox degrades to
+    page-only (``x/y/w/h = 0``) from the first ``page_numbers`` entry — the
+    citation viewer still groups by page and scrolls; the overlay is
+    zero-sized. Unpaginated sources (no ``page_numbers``) yield ``bbox=None``.
+
+    ``list[Any]`` (not ``list[dict]``) keeps the per-item ``isinstance`` guard
+    reachable — a flaky gateway can mix non-dicts into the array. Zero
+    recognised chunks is still a valid (empty) indexed document.
     """
-    # Annotated as `list[Any]` (not `list[dict]`) so the per-item
-    # `isinstance(raw, dict)` check stays *reachable* — docling-serve
-    # has been known to mix strings into the section list in older
-    # versions.
-    chunks: list[Any] = []
-    # Common shapes:
-    #   {"chunks": [...]} (newer docling-serve)
-    #   {"document": {"chunks": [...]}}
-    #   {"document": {"sections": [...]}} (older variants)
-    if isinstance(body.get("chunks"), list):
-        chunks = body["chunks"]
-    elif isinstance(body.get("document"), dict):
-        doc = body["document"]
-        if isinstance(doc.get("chunks"), list):
-            chunks = doc["chunks"]
-        elif isinstance(doc.get("sections"), list):
-            chunks = doc["sections"]
+    raw_chunks = body.get("chunks")
+    chunks: list[Any] = raw_chunks if isinstance(raw_chunks, list) else []
 
     out: list[DoclingChunk] = []
-    for ordinal, raw in enumerate(chunks):
+    ordinal = 0
+    for raw in chunks:
         if not isinstance(raw, dict):
             continue
-        text = raw.get("text") or raw.get("content")
+        text = raw.get("text") or raw.get("raw_text")
         if not isinstance(text, str) or not text.strip():
             continue
-        bbox_raw = raw.get("bbox") or raw.get("bounding_box")
-        bbox = bbox_raw if isinstance(bbox_raw, dict) else None
-        meta = {
-            k: v for k, v in raw.items() if k not in {"text", "content", "bbox", "bounding_box"}
-        }
+        bbox = _page_bbox(raw.get("page_numbers"))
+        # Everything that isn't the chunk text becomes citation metadata
+        # (headings/captions/doc_items/num_tokens/…), minus the raw duplicates.
+        meta = {k: v for k, v in raw.items() if k not in {"text", "raw_text", "chunk_index"}}
         out.append(
             DoclingChunk(
                 ordinal=ordinal,
@@ -163,7 +165,16 @@ def _flatten_chunks(body: dict[str, Any]) -> list[DoclingChunk]:
                 metadata=meta,
             )
         )
+        ordinal += 1
     return out
+
+
+def _page_bbox(page_numbers: Any) -> dict[str, Any] | None:
+    """A page-only bbox from a chunk's ``page_numbers`` (coords 0 — the
+    chunking endpoint doesn't return geometry). ``None`` when unpaginated."""
+    if isinstance(page_numbers, list) and page_numbers and isinstance(page_numbers[0], int):
+        return {"page": page_numbers[0], "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0}
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +206,7 @@ class StaticDoclingClient:
 
 
 __all__ = [
+    "DOCLING_CHUNK_ROUTE",
     "DoclingChunk",
     "DoclingClient",
     "DoclingParseError",

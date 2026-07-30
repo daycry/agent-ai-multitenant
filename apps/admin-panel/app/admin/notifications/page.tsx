@@ -120,10 +120,19 @@ const SECRET_SOURCE_LABEL: Record<SecretSource, string> = {
   encrypted: "cifrado en reposo",
 };
 
-// A small, curated list of system events the preference UI offers. The
-// backend accepts any event string, but these are the ones the dispatcher's
-// event_mapping emits today.
-const EVENT_TYPES = ["task_blocked", "plan_approved", "review_needed", "budget_alert"] as const;
+// NOTIF-3: el catálogo de eventos se sirve desde el backend
+// (GET /notifications/event-catalog, en sync con el EVENT_REGISTRY real del
+// dispatcher vía test). El hardcode anterior ofrecía 4 eventos, uno inexistente
+// (review_needed). Fallback mínimo por si el endpoint falla.
+interface EventCatalogEntry {
+  event_type: string;
+  label_es: string;
+  label_en: string;
+}
+const EVENT_CATALOG_FALLBACK: EventCatalogEntry[] = [
+  { event_type: "task_blocked", label_es: "Tarea bloqueada", label_en: "Task blocked" },
+  { event_type: "budget_alert", label_es: "Alerta de presupuesto", label_en: "Budget alert" },
+];
 
 function apiErrorBody(err: unknown): string {
   return err instanceof ApiError ? err.body : String(err);
@@ -698,6 +707,13 @@ function PreferencesTab() {
     queryFn: () => apiFetch<NotificationChannel[]>("/notifications/channels"),
     refetchOnWindowFocus: false,
   });
+  const catalogQuery = useQuery({
+    queryKey: ["notification-event-catalog"],
+    queryFn: () => apiFetch<EventCatalogEntry[]>("/notifications/event-catalog"),
+    refetchOnWindowFocus: false,
+  });
+  const eventCatalog =
+    catalogQuery.data && catalogQuery.data.length > 0 ? catalogQuery.data : EVENT_CATALOG_FALLBACK;
 
   const upsertMutation = useMutation({
     mutationFn: (body: PreferenceUpsertBody) =>
@@ -758,9 +774,14 @@ function PreferencesTab() {
                 </tr>
               </thead>
               <tbody>
-                {EVENT_TYPES.map((event) => (
+                {eventCatalog.map(({ event_type: event, label_es }) => (
                   <tr key={event} className="border-t" data-testid={`preferences-row-${event}`}>
-                    <td className="py-2 pr-4 font-mono text-xs">{event}</td>
+                    <td className="py-2 pr-4">
+                      <span className="block text-xs">{label_es}</span>
+                      <span className="text-muted-foreground block font-mono text-[10px]">
+                        {event}
+                      </span>
+                    </td>
                     {channelTypes.map((type) => {
                       const rule = byKey.get(`${event}::${type}`);
                       const enabled = rule?.enabled ?? true;

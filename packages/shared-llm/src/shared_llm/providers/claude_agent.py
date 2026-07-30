@@ -18,7 +18,6 @@ so a deployment without Claude doesn't drag the SDK + the Node CLI in.
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -53,11 +52,9 @@ _SDK_NATIVE_TOOLS: tuple[str, ...] = (
     "Read",
     "Write",
     "Edit",
-    "MultiEdit",
     "NotebookEdit",
     "Glob",
     "Grep",
-    "LS",
     "Task",
     "Agent",
     "TodoWrite",
@@ -67,10 +64,75 @@ _SDK_NATIVE_TOOLS: tuple[str, ...] = (
     "ExitPlanMode",
     "WebSearch",
     "WebFetch",
-    "SlashCommand",
     "ListMcpResources",
     "ReadMcpResource",
 )
+
+
+def _model_usage_tokens(mu: Any) -> tuple[int, int]:
+    """Suma (input, output) del mapa ``model_usage`` del ResultMessage (F1.4).
+
+    El CLI lo emite por modelo y en camelCase (``inputTokens``); se aceptan
+    ambas formas. ``(0, 0)`` cuando no hay mapa."""
+    total_in = total_out = 0
+    if isinstance(mu, dict):
+        for per_model in mu.values():
+            total_in += _usage_get(per_model, "inputTokens") or _usage_get(
+                per_model, "input_tokens"
+            )
+            total_out += _usage_get(per_model, "outputTokens") or _usage_get(
+                per_model, "output_tokens"
+            )
+    return total_in, total_out
+
+
+def _usage_get(u: Any, name: str, default: int = 0) -> int:
+    """Read a usage field whether the SDK exposes ``usage`` as an OBJECT (attribute)
+    or a DICT (key). The Claude Agent SDK's ResultMessage carries ``total_cost_usd``
+    as a message attribute but its ``usage`` may arrive as a plain dict — in which
+    case ``getattr(u, "input_tokens")`` silently returned 0, so runs showed cost>0
+    with tokens=0. This reads both shapes."""
+    if u is None:
+        return default
+    val = u.get(name, default) if isinstance(u, dict) else getattr(u, name, default)
+    return int(val or 0)
+
+
+def _harvest_stop_reason(messages: list[Any]) -> str | None:
+    """El motivo de parada del turno (hallazgo #10c): el ``stop_reason`` del ÚLTIMO
+    ``AssistantMessage`` (el que decide si el turno acabó truncado), con el del
+    ``ResultMessage`` como respaldo. ``getattr`` defensivo: los fakes/SDK antiguos
+    sin el atributo devuelven ``None`` (retrocompatible). Cosechado aparte de
+    ``_harvest`` para no tocar su firma. ``"max_tokens"`` aguas arriba = TRUNCADO
+    (F32), lo que hoy el ``raw``-lista de claude_sdk no permite derivar.
+
+    Límites DELIBERADOS de la heurística (auditoría 2026-07-10, marginales con el
+    CLI real; documentados en vez de sobre-ingeniería):
+
+    * Assistant-vs-Result se distingue por la PRESENCIA de ``total_cost_usd`` /
+      ``model_usage`` (no por el tipo, que los fakes no comparten): un
+      ``ResultMessage`` de ERROR con ambos a ``None`` que trajera ``stop_reason``
+      se clasificaría como assistant y podría pisar al último assistant real.
+    * La semántica es «último ``stop_reason`` NO-VACÍO», no «stop_reason del
+      último mensaje»: un assistant intermedio truncado seguido de un mensaje
+      final SIN señal deja el turno marcado como truncado — dirección
+      conservadora a propósito (mejor reintentar de más que aceptar un
+      entregable cortado como FINISH, F32 fail-closed)."""
+    assistant_reason: str | None = None
+    result_reason: str | None = None
+    for msg in messages:
+        reason = getattr(msg, "stop_reason", None)
+        if not reason:
+            continue
+        is_result = getattr(msg, "total_cost_usd", None) is not None or (
+            getattr(msg, "model_usage", None) is not None
+        )
+        if is_result:
+            result_reason = str(reason)
+        else:
+            assistant_reason = str(reason)  # el último AssistantMessage manda
+    return assistant_reason or result_reason
+
 
 # Markers in the CLI's error ``result`` text that mean "fix your credential", so a
 # failed run raises the typed ``AuthError`` (actionable: tell the operator to set
@@ -143,19 +205,20 @@ class ClaudeAgentProvider:
         # claude_agent_sdk.query. None -> real SDK is loaded lazily.
         query_fn: Any | None = None,
     ) -> None:
-        if api_key:
-            os.environ["ANTHROPIC_API_KEY"] = api_key
-        if oauth_token:
-            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
-        if (
-            not (api_key or oauth_token)
-            and not os.environ.get("ANTHROPIC_API_KEY")
-            and query_fn is None
-        ):
-            # Pro/Max subscription users may rely on ambient auth (a token
-            # already in the environment / the SDK's own credentials). We do
-            # NOT fail here — the SDK surfaces an auth error at call time.
-            pass
+        # ADR 0076 (prerequisito de seguridad): la credencial vive en la
+        # INSTANCIA, nunca en `os.environ`. Escribirla en el entorno del proceso
+        # la dejaba en `/proc/self/environ`, la heredaba cualquier hijo y no se
+        # limpiaba jamás — pero lo caro era otra cosa: el catálogo admite varias
+        # filas del mismo kind (la columna `slug`, migración 0083), así que la
+        # clave del proveedor A quedaba puesta para siempre y un proveedor B con
+        # suscripción OAuth podía acabar facturando a la cuenta de A. Se entrega
+        # por llamada vía `ClaudeAgentOptions.env` (ver `_auth_env`).
+        self._api_key = api_key or None
+        self._oauth_token = oauth_token or None
+        # Sin credencial configurada NO se toca nada: un usuario Pro/Max puede
+        # depender de auth ambiental (token ya en el entorno o credenciales del
+        # propio SDK). Tampoco se falla aquí — el SDK da el error de auth en la
+        # llamada, que es donde el operador puede leerlo.
         self._default_model = default_model
         self._default_allowed_tools = default_allowed_tools or []
         self._default_system_prompt = default_system_prompt
@@ -187,6 +250,7 @@ class ClaudeAgentProvider:
         allowed_tools: list[str] | None,
         max_turns: int,
         effort: str | None = None,
+        disallow_native_tools: bool = False,
     ) -> Any:
         if self._query_fn is not None:
             return None  # the injected fake accepts whatever we pass
@@ -202,15 +266,60 @@ class ClaudeAgentProvider:
         extra: dict[str, Any] = {}
         if effort:
             extra["effort"] = effort
+        resolved_allowed = (
+            allowed_tools if allowed_tools is not None else self._default_allowed_tools
+        )
+        # F31/P1.6: the chat-shaped path (`complete()`/`stream()` con `tools` vacías)
+        # NO debe permitir que el SDK auto-ejecute sus tools NATIVAS (Bash/Write/
+        # Read/WebSearch…) fuera del ToolRegistry/approval/loop-detection del host.
+        # Sin esto, un `decide()` "sin tools" podía disparar ejecución nativa fuera
+        # del lazo mediado por el host. Desactivamos las nativas salvo las que el
+        # caller permita explícitamente (córtex WebSearch/WebFetch, ADR 0076). El
+        # camino `run_agent()` (escape hatch agéntico) NO activa esto: ahí las
+        # nativas son justo lo que se quiere.
+        if disallow_native_tools:
+            _allowed = set(resolved_allowed)
+            disabled = [name for name in _SDK_NATIVE_TOOLS if name not in _allowed]
+            if disabled:
+                extra["disallowed_tools"] = disabled
+        auth_env = self._auth_env()
+        if auth_env:
+            extra["env"] = auth_env
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
-            allowed_tools=(
-                allowed_tools if allowed_tools is not None else self._default_allowed_tools
-            ),
+            allowed_tools=resolved_allowed,
             max_turns=max_turns,
             **extra,
         )
+
+    def _auth_env(self) -> dict[str, str]:
+        """La credencial de ESTE proveedor, para el subproceso del CLI.
+
+        El transporte del SDK FUSIONA `options.env` sobre el entorno heredado y
+        deja ganar a lo nuestro. Que sea una fusión y no un reemplazo tiene una
+        consecuencia que hay que atender: no basta con poner la credencial
+        propia. Si el proceso arrastra un `ANTHROPIC_API_KEY` de otro sitio —el
+        despliegue, código antiguo, otro proveedor— el CLI lo vería igual y
+        podría preferirlo. Por eso el modo elegido **anula explícitamente** la
+        variable del otro modo con cadena vacía: es lo máximo que permite una
+        interfaz que solo sabe añadir claves, y equivale a «no uses esa vía».
+
+        Sin credencial configurada devuelve `{}` y no se toca el entorno: ahí la
+        auth ambiental es justo lo que el usuario Pro/Max quiere.
+        """
+        if not (self._api_key or self._oauth_token):
+            return {}
+        env: dict[str, str] = {}
+        env["ANTHROPIC_API_KEY"] = self._api_key or ""
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = self._oauth_token or ""
+        return env
+
+    def __repr__(self) -> str:
+        """Sin credenciales: un `repr` con la clave acaba en un traceback, y de
+        ahí en Loki."""
+        mode = "api_key" if self._api_key else ("oauth" if self._oauth_token else "ambient")
+        return f"ClaudeAgentProvider(model={self._default_model!r}, auth={mode})"
 
     @staticmethod
     def _flatten(messages: Sequence[Message]) -> tuple[str | None, str]:
@@ -229,9 +338,24 @@ class ClaudeAgentProvider:
 
     @staticmethod
     def _harvest(messages: list[Any]) -> tuple[list[str], Usage]:
-        """Walk SDK messages: collect text blocks + the final usage."""
+        """Walk SDK messages: collect text blocks + the turn's usage.
+
+        Auditoría 2026-07-02 (F1.4): en un turno con tool call interrumpido
+        (``can_use_tool`` deny+interrupt) el ``ResultMessage`` llega sin
+        ``usage`` — o no llega — así que los runs cuyo cada turno acababa en
+        tool call persistían ``total_tokens=0`` con ``cost>0``. La cosecha usa
+        tres canales por orden de autoridad:
+
+          1. el ``usage`` agregado del ResultMessage (si trae tokens);
+          2. la SUMA de los ``usage`` por-AssistantMessage del turno;
+          3. el ``model_usage`` del ResultMessage (mapa por modelo; el CLI lo
+             emite en camelCase ``inputTokens``/``outputTokens``).
+        """
         text_parts: list[str] = []
         usage = Usage()
+        assistant_in = assistant_out = 0
+        result_in = result_out = 0
+        model_usage_in = model_usage_out = 0
         for msg in messages:
             content = getattr(msg, "content", None)
             if isinstance(content, list):
@@ -239,15 +363,31 @@ class ClaudeAgentProvider:
                     text = getattr(block, "text", None)
                     if text:
                         text_parts.append(text)
+            is_result = getattr(msg, "total_cost_usd", None) is not None or (
+                getattr(msg, "model_usage", None) is not None
+            )
             u = getattr(msg, "usage", None)
             if u:
-                usage.input_tokens = int(getattr(u, "input_tokens", usage.input_tokens) or 0)
-                usage.output_tokens = int(getattr(u, "output_tokens", usage.output_tokens) or 0)
-                usage.cache_read_tokens = int(getattr(u, "cache_read_input_tokens", 0) or 0)
-                usage.cache_write_tokens = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+                if is_result:
+                    result_in = _usage_get(u, "input_tokens")
+                    result_out = _usage_get(u, "output_tokens")
+                else:
+                    assistant_in += _usage_get(u, "input_tokens")
+                    assistant_out += _usage_get(u, "output_tokens")
+                usage.cache_read_tokens = _usage_get(u, "cache_read_input_tokens")
+                usage.cache_write_tokens = _usage_get(u, "cache_creation_input_tokens")
+            mu_in, mu_out = _model_usage_tokens(getattr(msg, "model_usage", None))
+            model_usage_in += mu_in
+            model_usage_out += mu_out
             cost = getattr(msg, "total_cost_usd", None)
             if cost is not None:
                 usage.cost_usd = float(cost)
+        if result_in or result_out:
+            usage.input_tokens, usage.output_tokens = result_in, result_out
+        elif assistant_in or assistant_out:
+            usage.input_tokens, usage.output_tokens = assistant_in, assistant_out
+        else:
+            usage.input_tokens, usage.output_tokens = model_usage_in, model_usage_out
         return text_parts, usage
 
     # ------------------------------------------------------------------
@@ -298,6 +438,9 @@ class ClaudeAgentProvider:
             # turns (1)". 8 deja responder + algún paso interno; overridable.
             max_turns=max_turns,
             effort=effort,
+            # F31/P1.6: sin host tools, NO permitir ejecución nativa del SDK fuera
+            # del lazo mediado por el host (salvo lo que el caller permita).
+            disallow_native_tools=True,
         )
         query_fn = self._query()
         collected: list[Any] = []
@@ -314,6 +457,7 @@ class ClaudeAgentProvider:
             usage=usage,
             tool_calls=None,  # no tools requested
             raw=collected,
+            stop_reason=_harvest_stop_reason(collected),
         )
 
     async def _complete_with_tools(
@@ -377,6 +521,7 @@ class ClaudeAgentProvider:
                 usage=usage,
                 tool_calls=tool_calls,
                 raw=collected,
+                stop_reason=_harvest_stop_reason(collected),
             )
         text_parts, usage = self._harvest(collected)
         tool_calls = _harvest_tool_calls(collected)
@@ -390,6 +535,7 @@ class ClaudeAgentProvider:
             usage=usage,
             tool_calls=tool_calls or None,
             raw=collected,
+            stop_reason=_harvest_stop_reason(collected),
         )
 
     def _build_tool_options(
@@ -465,6 +611,9 @@ class ClaudeAgentProvider:
         disabled = [name for name in _SDK_NATIVE_TOOLS if name not in _allowed]
         if disabled:
             extra["disallowed_tools"] = disabled
+        auth_env = self._auth_env()
+        if auth_env:
+            extra["env"] = auth_env
         return ClaudeAgentOptions(
             model=model or self._default_model,
             system_prompt=system if system is not None else self._default_system_prompt,
@@ -494,6 +643,9 @@ class ClaudeAgentProvider:
             # turns (1)". 8 deja responder + algún paso interno; overridable.
             max_turns=int(kwargs.pop("max_turns", 8)),
             effort=kwargs.pop("effort", None),
+            # F31/P1.6: same chat-shaped guard as complete() — no native SDK tool
+            # execution outside the host-mediated loop.
+            disallow_native_tools=True,
         )
         query_fn = self._query()
         last_usage: Usage | None = None
@@ -510,14 +662,10 @@ class ClaudeAgentProvider:
                 u = getattr(msg, "usage", None)
                 if u or getattr(msg, "total_cost_usd", None) is not None:
                     last_usage = Usage(
-                        input_tokens=int(getattr(u, "input_tokens", 0) or 0) if u else 0,
-                        output_tokens=int(getattr(u, "output_tokens", 0) or 0) if u else 0,
-                        cache_read_tokens=(
-                            int(getattr(u, "cache_read_input_tokens", 0) or 0) if u else 0
-                        ),
-                        cache_write_tokens=(
-                            int(getattr(u, "cache_creation_input_tokens", 0) or 0) if u else 0
-                        ),
+                        input_tokens=_usage_get(u, "input_tokens"),
+                        output_tokens=_usage_get(u, "output_tokens"),
+                        cache_read_tokens=_usage_get(u, "cache_read_input_tokens"),
+                        cache_write_tokens=_usage_get(u, "cache_creation_input_tokens"),
                         cost_usd=float(getattr(msg, "total_cost_usd", 0.0) or 0.0),
                     )
         except Exception as exc:
@@ -559,12 +707,6 @@ class ClaudeAgentProvider:
     async def aclose(self) -> None:
         return None
 
-    # Convenience for tests that want to verify api_key handling.
-    @staticmethod
-    def assert_api_key_present() -> None:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise AuthError("ANTHROPIC_API_KEY is not set")
-
 
 def _to_agent_event(msg: Any) -> AgentRunEvent:
     """Translate one SDK message into a typed `AgentRunEvent`."""
@@ -573,14 +715,10 @@ def _to_agent_event(msg: Any) -> AgentRunEvent:
     raw_usage = getattr(msg, "usage", None)
     if cost is not None:
         usage = Usage(
-            input_tokens=int(getattr(raw_usage, "input_tokens", 0) or 0) if raw_usage else 0,
-            output_tokens=int(getattr(raw_usage, "output_tokens", 0) or 0) if raw_usage else 0,
-            cache_read_tokens=(
-                int(getattr(raw_usage, "cache_read_input_tokens", 0) or 0) if raw_usage else 0
-            ),
-            cache_write_tokens=(
-                int(getattr(raw_usage, "cache_creation_input_tokens", 0) or 0) if raw_usage else 0
-            ),
+            input_tokens=_usage_get(raw_usage, "input_tokens"),
+            output_tokens=_usage_get(raw_usage, "output_tokens"),
+            cache_read_tokens=_usage_get(raw_usage, "cache_read_input_tokens"),
+            cache_write_tokens=_usage_get(raw_usage, "cache_creation_input_tokens"),
             cost_usd=float(cost),
         )
         return AgentRunEvent(kind="result", usage=usage, raw=msg)
@@ -633,25 +771,22 @@ def _unwrap_tool_schemas(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _json_schema_to_tool_schema(parameters: dict[str, Any] | None) -> dict[str, Any]:
-    """Map a JSON-Schema ``parameters`` object to the ``@tool`` decorator's simple
-    ``{field: python_type}`` form. The stub tool is never executed (the host runs
-    the real one), so this only needs to advertise field names/types to the model.
+    """The ``input_schema`` the ``@tool`` decorator advertises for a host tool.
+
+    AUD16-05 (auditoría 2026-07-16): el decorador del SDK acepta un JSON Schema
+    crudo, así que el schema viaja ÍNTEGRO — el mapa simplificado
+    ``{campo: tipo}`` que se generaba antes descartaba ``required``, ``enum``,
+    las descriptions por campo y los objetos anidados, y el modelo en
+    claude_sdk adivinaba valores que en los providers HTTP veía especificados
+    (p. ej. los scopes de ``memory_recall``). El stub nunca se ejecuta (el host
+    corre la tool real); esto solo informa al modelo.
+
+    Una spec sin ``properties`` utilizables cae al mínimo genérico de siempre.
     """
-    props = (parameters or {}).get("properties") or {}
-    typemap: dict[str, type] = {
-        "string": str,
-        "integer": int,
-        "number": float,
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-    }
-    schema = {
-        name: typemap.get(str((spec or {}).get("type")), str)
-        for name, spec in props.items()
-        if isinstance(name, str)
-    }
-    return schema or {"input": str}
+    params = parameters or {}
+    if isinstance(params, dict) and params.get("properties"):
+        return dict(params)
+    return {"type": "object", "properties": {"input": {"type": "string"}}}
 
 
 def _strip_mcp_prefix(name: str) -> str:

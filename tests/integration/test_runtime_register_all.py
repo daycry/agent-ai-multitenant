@@ -126,7 +126,11 @@ def test_registered_file_tool_executes_ok(tmp_path: Any, monkeypatch: pytest.Mon
     assert read.output["content"] == "hi"
 
 
-def test_registered_orchestration_tool_executes_ok() -> None:
+def test_registered_orchestration_tool_reports_honestly() -> None:
+    """Contrato honesto AUD16-02: kanban_update NO está cableado a la
+    plataforma — devolvía ok=True fingiendo efecto (el sink era un buffer que
+    nadie consumía). Ahora responde ok=False con la explicación; task_comment
+    sí emite al sink y sigue ok=True."""
     registry = ToolRegistry()
     sink = OrchestrationSink()
     register_builtin_families(
@@ -136,8 +140,11 @@ def test_registered_orchestration_tool_executes_ok() -> None:
         allowed_domains=frozenset(),
     )
     result = registry.call("kanban_update", {"task_id": "t-1", "status": "done"})
-    assert result.ok is True
-    assert sink.effects[0]["effect"] == "kanban_update"
+    assert result.ok is False
+    assert "not wired" in (result.error or "")
+    comment = registry.call("task_comment", {"task_id": "t-1", "body": "hola"})
+    assert comment.ok is True
+    assert sink.effects[0]["effect"] == "task_comment"
 
 
 # ---------------------------------------------------------------------------

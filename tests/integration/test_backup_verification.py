@@ -129,13 +129,19 @@ def _arg_value(argv: list[str], prefix: str) -> str:
     raise AssertionError(f"no arg with prefix {prefix!r} in {argv!r}")
 
 
-def _config(tmp_path: Path, *, encryption_enabled: bool = False) -> BackupConfig:
+def _config(
+    tmp_path: Path,
+    *,
+    encryption_enabled: bool = False,
+    bind_paths: tuple[str, ...] = (),
+) -> BackupConfig:
     return BackupConfig(
         backup_root=tmp_path / "backups",
         database_url="postgresql://migrations_user:db-pw@db:5432/agentic_platform",
         volumes=("minio_data", "redis_data"),
         volumes_mount_root=tmp_path / "volumes",
         retention_days=7,
+        bind_paths=bind_paths,
         encryption_enabled=encryption_enabled,
         encryption_vault_key=_VAULT_KEY_NAME,
     )
@@ -175,6 +181,26 @@ def test_good_backup_verifies_ok(tmp_path: Path) -> None:
     assert (CHECK_TAR_LIST, "minio_data.tar.gz") in checks_by_kind
     assert (CHECK_TAR_LIST, "redis_data.tar.gz") in checks_by_kind
     assert all(c.ok for c in report.checks)
+
+
+def test_bind_tar_gets_structural_tar_list_check(tmp_path: Path) -> None:
+    """prod-04 (auditoría 2026-07-06): un artefacto ``bind_tar`` (bare repos +
+    worktrees — lo más valioso) debe recibir el mismo ``tar -tf`` estructural que
+    un ``volume_tar``. Antes solo se le comprobaba el checksum → una corrupción
+    estructural coherente con el manifest pasaba como válida."""
+    runner = FakeRunner()
+    bind = tmp_path / "binddata"
+    bind.mkdir()
+    bundle = _build_bundle(tmp_path, runner, bind_paths=(str(bind),))
+
+    report = BackupVerifier(runner=runner).verify_bundle(bundle)
+
+    checks_by_kind = {(c.check, c.artifact) for c in report.checks}
+    bind_tar_lists = [
+        c for c in report.checks if c.check == CHECK_TAR_LIST and c.artifact.startswith("bind-")
+    ]
+    assert bind_tar_lists, f"el bind_tar no recibió CHECK_TAR_LIST; checks={checks_by_kind}"
+    assert all(c.ok for c in bind_tar_lists)
 
 
 def test_verification_invokes_pg_restore_list_and_tar_list(tmp_path: Path) -> None:

@@ -25,10 +25,12 @@ Scope note — what this file deliberately does NOT duplicate:
     assert the *catalog-level* structural invariants (coverage, closure,
     runtime-wired honesty) that guard the same SoT from the other direction.
   * ``test_tool_runtime_availability.py::test_runtime_wired_set_matches_runtime_executor``
-    already proves ``RUNTIME_WIRED_TOOL_NAMES == register_builtin_families(...)
-    | {run_*} | {shell_exec}``. We do NOT re-register the families here; we
-    import and reuse that invariant's helper so the catalog layer references the
-    runtime executor through the single existing check rather than copying it.
+    already proves the DIRECTIONAL invariant between ``RUNTIME_WIRED_TOOL_NAMES``
+    and what the runtime boot registers (``register_builtin_families(...) |
+    {shell_exec}``, plus the set registered-but-deliberately-unadvertised). We do
+    NOT re-register the families here; we import and reuse that invariant's
+    helper so the catalog layer references the runtime executor through the
+    single existing check rather than copying it.
 
 Pure imports (no DB / Redis / Docker), but marked ``integration`` because they
 cross the api-server / agent-runtime / shared-domain package boundary — the
@@ -124,8 +126,8 @@ def test_runtime_wired_set_is_the_shared_executor_invariant() -> None:
     """Reference (not duplicate) the runtime↔shared-domain invariant.
 
     We import the existing check and run it so this catalog contract FAILS too
-    if the shared set drifts from ``register_builtin_families(...) | {run_*} |
-    {shell_exec}`` — without copying the registration logic into this file.
+    if the shared set drifts from what the runtime boot actually registers —
+    without copying the registration logic into this file.
     """
     from tests.integration.test_tool_runtime_availability import (
         test_runtime_wired_set_matches_runtime_executor,
@@ -133,11 +135,23 @@ def test_runtime_wired_set_is_the_shared_executor_invariant() -> None:
 
     test_runtime_wired_set_matches_runtime_executor()
 
-    # And every run_* docker_command tool the catalog offers is in the shared
-    # wired set (the catalog promises these are executable).
+    # F5 (2026-07-28): el catálogo ya NO siembra ninguna `run_*`. Antes este
+    # assert exigía lo contrario (`assert run_tools, "expected the catalog to seed
+    # run_* docker_command tools"`) y además que estuvieran wired — las dos cosas
+    # dejaron de ser ciertas a la vez, porque `DockerCommandTool` falla siempre
+    # dentro del sandbox y ofrecerlas era una promesa falsa. La vía real es
+    # `stack_exec`.
+    #
+    # Se invierte en vez de borrarse para que reintroducir una fila `run_*` en la
+    # semilla rompa aquí, nombrándola, en lugar de morir en un run.
     run_tools = {t.name for t in BUILTIN_TOOLS if t.name.startswith("run_")}
-    assert run_tools, "expected the catalog to seed run_* docker_command tools"
-    assert run_tools <= RUNTIME_WIRED_TOOL_NAMES, sorted(run_tools - RUNTIME_WIRED_TOOL_NAMES)
+    assert not run_tools, (
+        "el catálogo volvió a sembrar tools run_*, que no pueden ejecutarse dentro "
+        f"del sandbox (usa stack_exec): {sorted(run_tools)}"
+    )
+    assert RUNTIME_WIRED_TOOL_NAMES.isdisjoint(
+        {"run_pytest", "run_lint", "run_typecheck", "run_build"}
+    )
 
 
 # ===========================================================================

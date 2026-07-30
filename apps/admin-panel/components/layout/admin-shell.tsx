@@ -5,6 +5,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  Building2,
+  Trophy,
   BarChart3,
   Bell,
   BellRing,
@@ -16,6 +18,7 @@ import {
   Coins,
   Cpu,
   DatabaseBackup,
+  DoorOpen,
   FileText,
   FolderKanban,
   Gauge,
@@ -129,7 +132,17 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
       { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
+      // ADR 0123: todo lo que espera decisión humana, por antigüedad.
+      { href: "/admin/human-queue", label: "Esperan tu decisión", Icon: DoorOpen },
+      // MFA (tanda 2026-07-19): ajuste PERSONAL (cualquier usuario) — la
+      // verificación en dos pasos de la propia cuenta, no del tenant.
+      { href: "/admin/settings/security", label: "Seguridad", Icon: ShieldCheck },
       { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
+      // ADR 0118: el tenant en vivo como piso 2D sobre telemetría real.
+      { href: "/admin/office", label: "La Oficina", Icon: Building2 },
+      { href: "/admin/runs", label: "Runs", Icon: Activity },
+      // ADR 0121: ranking modelo×agente con la carga real del tenant.
+      { href: "/admin/leaderboard", label: "Rendimiento", Icon: Trophy },
       { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
       { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
       { href: "/admin/assistant", label: "Asistente", Icon: Bot, adminOnly: true },

@@ -1,0 +1,29 @@
+{
+  "info": {
+    "version": "1.20.0"
+  },
+  "paths": {
+    "/health": true,
+    "/openapi-3.0.json": true,
+    "/ready": true,
+    "/v1/chunk/hierarchical/file": true,
+    "/v1/chunk/hierarchical/file/async": true,
+    "/v1/chunk/hierarchical/source": true,
+    "/v1/chunk/hierarchical/source/async": true,
+    "/v1/chunk/hybrid/file": true,
+    "/v1/chunk/hybrid/file/async": true,
+    "/v1/chunk/hybrid/source": true,
+    "/v1/chunk/hybrid/source/async": true,
+    "/v1/clear/converters": true,
+    "/v1/clear/results": true,
+    "/v1/convert/file": true,
+    "/v1/convert/file/async": true,
+    "/v1/convert/source": true,
+    "/v1/convert/source/async": true,
+    "/v1/memory/counts": true,
+    "/v1/memory/stats": true,
+    "/v1/result/{task_id}": true,
+    "/v1/status/poll/{task_id}": true,
+    "/version": true
+  }
+}

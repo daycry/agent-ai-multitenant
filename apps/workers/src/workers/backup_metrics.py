@@ -56,6 +56,12 @@ _log = structlog.get_logger("workers.backup_metrics")
 _M_LAST_SUCCESS = "agentic_backup_last_success"
 _M_LAST_SUCCESS_TS = "agentic_backup_last_success_timestamp_seconds"
 _M_LAST_RUN_TS = "agentic_backup_last_run_timestamp_seconds"
+# AUD16-19: la copia OFFSITE era invisible (uploaded=[] en todos los bundles y
+# ninguna métrica lo decía). El timestamp del último upload BUENO se preserva
+# en runs sin upload — la regla BackupOffsiteStale mide desde ahí y solo arma
+# cuando alguna vez hubo offsite (ts > 0): un host sin destino no alerta.
+_M_OFFSITE_UPLOADED = "agentic_backup_offsite_uploaded"
+_M_OFFSITE_LAST_TS = "agentic_backup_offsite_last_success_timestamp_seconds"
 
 
 def render_backup_metrics(
@@ -63,13 +69,16 @@ def render_backup_metrics(
     success: bool,
     now: float,
     last_success_ts: float,
+    offsite_uploaded: int = 0,
+    offsite_last_success_ts: float = 0.0,
 ) -> str:
     """Render the Prometheus text-exposition body for a backup run.
 
     Pure function (no I/O) so the format is unit-testable. ``last_success_ts`` is
     the timestamp to publish for the last *successful* run — the caller passes
     ``now`` on success or the previously-recorded value (``0`` if never) on
-    failure, so a failed run does not reset the age clock.
+    failure, so a failed run does not reset the age clock. Same contract for
+    ``offsite_last_success_ts`` (AUD16-19).
     """
     lines = [
         f"# HELP {_M_LAST_SUCCESS} 1 if the most recent backup run verified good, 0 if it failed.",
@@ -81,26 +90,35 @@ def render_backup_metrics(
         f"# HELP {_M_LAST_RUN_TS} Unix time of the most recent backup run (any outcome).",
         f"# TYPE {_M_LAST_RUN_TS} gauge",
         f"{_M_LAST_RUN_TS} {now:.0f}",
+        f"# HELP {_M_OFFSITE_UPLOADED} Artifacts uploaded offsite by the most recent run.",
+        f"# TYPE {_M_OFFSITE_UPLOADED} gauge",
+        f"{_M_OFFSITE_UPLOADED} {max(0, offsite_uploaded)}",
+        f"# HELP {_M_OFFSITE_LAST_TS} Unix time of the most recent offsite upload (0 = never).",
+        f"# TYPE {_M_OFFSITE_LAST_TS} gauge",
+        f"{_M_OFFSITE_LAST_TS} {offsite_last_success_ts:.0f}",
     ]
     return "\n".join(lines) + "\n"
 
 
-def _read_last_success_ts(path: Path) -> float:
-    """Best-effort read of the previously-published success timestamp.
+def _read_published_ts(path: Path, metric: str) -> float:
+    """Best-effort read of a previously-published timestamp gauge.
 
-    Lets a failed run preserve the age clock (so ``BackupTooOld`` keeps measuring
-    from the last good backup, not from the failure). Any parse/IO error → 0.
+    Lets a failed run preserve the age clock (so ``BackupTooOld`` /
+    ``BackupOffsiteStale`` keep measuring from the last GOOD run, not from the
+    failure). Any parse/IO error → 0.
     """
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            if line.startswith(_M_LAST_SUCCESS_TS + " "):
+            if line.startswith(metric + " "):
                 return float(line.split(" ", 1)[1].strip())
     except (OSError, ValueError):
         return 0.0
     return 0.0
 
 
-def write_backup_metrics(path: str | os.PathLike[str], *, success: bool) -> bool:
+def write_backup_metrics(
+    path: str | os.PathLike[str], *, success: bool, offsite_uploaded: int = 0
+) -> bool:
     """Atomically write the backup health metrics file.
 
     Returns ``True`` if the file was written, ``False`` on any (swallowed)
@@ -115,11 +133,26 @@ def write_backup_metrics(path: str | os.PathLike[str], *, success: bool) -> bool
         # Called only once the collector dir is known to exist (phase 1 of the
         # helper). On success advance the success clock to now; on failure
         # preserve the previously-published success timestamp so the age alert
-        # keeps measuring from the last GOOD backup.
-        last_success_ts = now if success else _read_last_success_ts(target)
-        return render_backup_metrics(success=success, now=now, last_success_ts=last_success_ts)
+        # keeps measuring from the last GOOD backup. Same contract for the
+        # offsite clock (AUD16-19).
+        last_success_ts = now if success else _read_published_ts(target, _M_LAST_SUCCESS_TS)
+        offsite_last_ts = (
+            now if offsite_uploaded > 0 else _read_published_ts(target, _M_OFFSITE_LAST_TS)
+        )
+        return render_backup_metrics(
+            success=success,
+            now=now,
+            last_success_ts=last_success_ts,
+            offsite_uploaded=offsite_uploaded,
+            offsite_last_success_ts=offsite_last_ts,
+        )
 
     ok = write_textfile_metric(target, _render, event_prefix="backup.metrics")
     if ok:
-        _log.info("backup.metrics.written", path=str(target), success=success)
+        _log.info(
+            "backup.metrics.written",
+            path=str(target),
+            success=success,
+            offsite_uploaded=offsite_uploaded,
+        )
     return ok

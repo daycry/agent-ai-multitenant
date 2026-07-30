@@ -46,12 +46,12 @@ from api_server.db.models import User
 from api_server.db.platform_settings import get_default_memory_scope, get_memorizable_statuses
 from api_server.memorizer import (
     count_memories_for_source,
-    distil_execution,
     distil_human_work_session,
     persist_memory_candidates,
     should_memorize,
     should_memorize_human_session,
 )
+from api_server.memorizer.distillation import distil_execution_result
 from api_server.memorizer.policy import (
     MemorizeSkipReason,
     resolve_effective_memory_scope,
@@ -90,11 +90,15 @@ def _default_embedder_factory(settings: Settings) -> Embedder:
 
 
 def _default_llm_factory(settings: Settings) -> LLMProvider:
-    """Default provider: Ollama on the URL the workers Settings carries.
+    """FALLBACK provider: Ollama on the URL the workers Settings carries.
 
-    The Memorizer doesn't need a powerful model — a small local one
-    is the right trade-off (cheap, no quota, no egress). Override via
-    ``WORKERS_MEMORIZER_LLM_BASE_URL`` / ``WORKERS_MEMORIZER_LLM_MODEL``.
+    Auditoría 2026-07-02 (F2.1): la premisa "the Memorizer doesn't need a
+    powerful model" resultó falsa — el modelo pequeño local (llama3.2:1b)
+    producía ~50% ruido (tautologías, contradicciones, URLs fabricadas) que
+    contaminaba el recall. El camino PRIMARIO es ahora el provider del AGENTE
+    de la execution (:func:`_build_agent_llm`, resolución por provider_id, ADR
+    0082); este factory queda como fallback cuando aquel no está disponible.
+    Override via ``WORKERS_MEMORIZER_LLM_BASE_URL`` / ``WORKERS_MEMORIZER_LLM_MODEL``.
     """
     return OllamaProvider(
         base_url=settings.memorizer_llm_base_url,
@@ -102,7 +106,134 @@ def _default_llm_factory(settings: Settings) -> LLMProvider:
     )
 
 
-@app.task(name="workers.memorize_execution")  # type: ignore[misc]
+async def _resolve_inherited_model_config(
+    session: AsyncSession,
+    agent_cfg: Mapping[str, Any],
+    project_ctx: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """La MISMA cadena de herencia que el dispatch (ADR 0065/0082), aquí.
+
+    AUD16-14: un agente con modelo heredado tiene ``model_config`` sin
+    provider/model — la herencia se resuelve en el dispatch y NO se
+    materializa en la fila, así que leer el config crudo condenaba al
+    destilador al fallback ``llama3.2:1b`` para siempre. Resuelve
+    agente→equipo→proyecto→default de plataforma con la función pura del
+    dispatch. Devuelve el config efectivo, o ``None`` si ni la cadena pina
+    provider+model."""
+    from api_server.db.platform_settings import (
+        config_needs_default_model,
+        get_default_model_config,
+        resolve_model_config_chain,
+    )
+
+    merged = dict(agent_cfg)
+    if not config_needs_default_model(merged):
+        return merged
+    project_cfg: dict[str, Any] = {}
+    team_cfg: dict[str, Any] = {}
+    if project_ctx and project_ctx.get("id") is not None:
+        project_row = await session.get(Project, project_ctx["id"])
+        project_cfg = dict(getattr(project_row, "model_config", None) or {})
+        team_id = project_ctx.get("team_id")
+        if team_id is not None:
+            team_row = await session.get(Team, team_id)
+            team_cfg = dict(getattr(team_row, "model_config", None) or {})
+    platform_default = await get_default_model_config(session)
+    resolved = resolve_model_config_chain(merged, team_cfg, project_cfg, platform_default)
+    if not resolved or not resolved.get("model"):
+        return None
+    return dict(resolved)
+
+
+async def _build_agent_llm(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    agent: Mapping[str, Any],
+    *,
+    project: Mapping[str, Any] | None = None,
+) -> tuple[LLMProvider, str] | None:
+    """El LLM del AGENTE de la execution para destilar (F2.1, ADR 0082/0065).
+
+    Lee ``agent.model_config`` (provider_id + model) y, cuando el agente
+    HEREDA el modelo (config sin pinear, AUD16-14), resuelve la cadena
+    plataforma→proyecto→equipo→agente como hace el dispatch antes de rendirse.
+    Construye el provider con su credencial de Vault. Devuelve ``(provider,
+    model_id)`` o ``None`` (cadena irresoluble, provider inactivo, Vault
+    caído, SDK ausente…) para que el caller caiga al Ollama local — SIEMPRE
+    con un log del motivo (el fallback silencioso escondió este bug durante
+    semanas). Best-effort: nunca propaga."""
+    model_config = dict(agent.get("model_config") or {})
+    try:
+        from api_server.llm_providers.factory import build_llm_provider
+
+        from workers.execution import _default_vault_store
+
+        async with sessionmaker() as session:
+            provider_id = model_config.get("provider_id")
+            model = model_config.get("model")
+            if not provider_id or not model:
+                resolved = await _resolve_inherited_model_config(session, model_config, project)
+                if resolved is None:
+                    _log.info(
+                        "memorizer.distill_fallback",
+                        reason="model_config_unresolvable",
+                        agent_id=str(agent.get("id")),
+                    )
+                    return None
+                provider_id = resolved.get("provider_id")
+                model = resolved.get("model")
+                if (not provider_id) and resolved.get("provider") and model:
+                    # Pineado solo por kind: la fila ACTIVA más nueva del kind
+                    # (misma semántica que el dispatch, "dos vías").
+                    from api_server.db.llm_providers import list_active_llm_providers_by_kind
+
+                    rows = await list_active_llm_providers_by_kind(
+                        session, str(resolved["provider"])
+                    )
+                    provider_id = rows[0].id if rows else None
+                if not provider_id or not model:
+                    _log.info(
+                        "memorizer.distill_fallback",
+                        reason="inherited_config_incomplete",
+                        agent_id=str(agent.get("id")),
+                    )
+                    return None
+            provider = await build_llm_provider(
+                session,
+                provider_id=UUID(str(provider_id)),
+                model=str(model),
+                vault=_default_vault_store(),
+            )
+    except Exception as exc:
+        _log.warning("memorizer.agent_provider_unavailable", error=str(exc))
+        return None
+    if provider is None:
+        _log.info(
+            "memorizer.distill_fallback",
+            reason="provider_inactive_or_missing",
+            agent_id=str(agent.get("id")),
+        )
+        return None
+    return provider, str(model)
+
+
+async def _select_distiller(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    agent: Mapping[str, Any],
+    *,
+    settings: Settings,
+    llm_factory: LLMFactory,
+    project: Mapping[str, Any] | None = None,
+) -> tuple[LLMProvider, str]:
+    """El (provider, etiqueta-de-modelo) con el que destilar (F2.1): el del
+    agente si está habilitado y disponible; si no, el fallback local."""
+    if settings.memorizer_use_agent_provider:
+        built = await _build_agent_llm(sessionmaker, agent, project=project)
+        if built is not None:
+            return built
+    return llm_factory(settings), settings.memorizer_llm_model
+
+
+@app.task(name="workers.memorize_execution")  # type: ignore[untyped-decorator]
 def memorize_execution(execution_id: str) -> dict[str, Any]:
     """Celery entry point. Run the Memorizer for one finished Execution.
 
@@ -200,17 +331,36 @@ async def _memorize_execution_async(  # noqa: PLR0911
             )
             return _result(execution_id, 0, f"skipped:{last_skip.value}")
 
-        llm = llm_factory(settings)
+        # F2.1 (auditoría 2026-07-02): destilar con el LLM del AGENTE de la
+        # execution (provider_id, ADR 0082) — el modelo local pequeño producía
+        # ~50% ruido que contaminaba el recall. Fallback al Ollama local si el
+        # provider del agente no está disponible (best-effort, nunca bloquea).
+        llm, distill_model_label = await _select_distiller(
+            sessionmaker,
+            ctx["agent"],
+            settings=settings,
+            llm_factory=llm_factory,
+            # AUD16-14: el contexto de proyecto/equipo permite resolver el
+            # modelo HEREDADO del agente (la fila sola no lo pina).
+            project=ctx.get("project"),
+        )
         try:
-            candidates = await distil_execution(
+            distillation = await distil_execution_result(
                 execution=ctx["execution"], agent=ctx["agent"], llm=llm
             )
         finally:
             await llm.aclose()
+        candidates = distillation.candidates
 
         if not candidates:
-            await _record_skip_reason(sessionmaker, execution_id, MemorizeSkipReason.LLM_EMPTY)
-            return _result(execution_id, 0, "ok:no_candidates")
+            # F2.3: persistir la CAUSA real (llm_error / llm_unparseable /
+            # llm_empty) — antes las tres se conflataban en llm_empty.
+            skip = {
+                "llm_error": MemorizeSkipReason.LLM_ERROR,
+                "llm_unparseable": MemorizeSkipReason.LLM_UNPARSEABLE,
+            }.get(distillation.cause, MemorizeSkipReason.LLM_EMPTY)
+            await _record_skip_reason(sessionmaker, execution_id, skip)
+            return _result(execution_id, 0, f"ok:no_candidates:{skip.value}")
 
         embedder = embedder_factory(settings) if embedder_factory is not None else None
         try:
@@ -221,7 +371,11 @@ async def _memorize_execution_async(  # noqa: PLR0911
                 owners=owners,
                 tenant_id=ctx["tenant_id"],
                 agent_id=ctx["agent"]["id"],
-                extra_metadata={"distill_model": getattr(llm, "name", "unknown")},
+                # F2.3: provider Y modelo real (antes solo el nombre del
+                # provider — 'ollama' — que no permitía atribuir la calidad).
+                extra_metadata={
+                    "distill_model": f"{getattr(llm, 'name', 'unknown')}:{distill_model_label}"
+                },
                 embedder=embedder,
                 source_execution_id=execution_id,
             )
@@ -280,6 +434,8 @@ async def _load_context(session: AsyncSession, execution_id: UUID) -> dict[str, 
             "id": agent.id,
             "role": agent.role,
             "memory_scope": agent.memory_scope,
+            # F2.1: el destilador usa el provider del agente (ADR 0082).
+            "model_config": dict(agent.model_config or {}),
         },
         "task": {
             "id": task.id,
@@ -445,7 +601,7 @@ def _result(execution_id: UUID, persisted: int, reason: str) -> dict[str, Any]:
 # does not, which is why _resolve_owner skips private for AI).
 
 
-@app.task(name="workers.memorize_human_work_session")  # type: ignore[misc]
+@app.task(name="workers.memorize_human_work_session")  # type: ignore[untyped-decorator]
 def memorize_human_work_session(work_session_id: str) -> dict[str, Any]:
     """Celery entry point. Run the Memorizer for one finished HumanWorkSession.
 
@@ -523,7 +679,7 @@ async def _memorize_human_work_session_async(
         try:
             candidates = await distil_human_work_session(
                 session=ctx["session"],
-                agent=ctx["agent"],  # type: ignore[arg-type]
+                agent=ctx["agent"],
                 user=ctx["user"],
                 llm=llm,
             )
@@ -715,7 +871,10 @@ def trigger_memorize_human_work_session(work_session_id: UUID, task_status: str)
 # aborted/failed runs (06.17 added the setting but the trigger shadowed it).
 # Gating on terminal-ness (not the policy) fixes that and keeps this
 # fire-and-forget path free of DB reads.
-_TERMINAL_STATUSES = frozenset({"done", "failed", "aborted", "cancelled"})
+# Auditoría 2026-07-02 (F1.3): needs_human_review también es terminal (la
+# escalación ADR 0087) — su ausencia repetía el mismo bug: 12 runs escalados
+# sin intento de memorizar ni skip_reason, y el setting inalcanzable.
+_TERMINAL_STATUSES = frozenset({"done", "failed", "aborted", "cancelled", "needs_human_review"})
 
 
 def trigger_memorize(execution_id: UUID, status: str) -> bool:

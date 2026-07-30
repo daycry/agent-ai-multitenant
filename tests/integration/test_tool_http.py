@@ -63,6 +63,22 @@ def _tool(**kw: object) -> HttpRequestTool:
     return HttpRequestTool(**kw)  # type: ignore[arg-type]
 
 
+@pytest.fixture(autouse=True)
+def _pin_loopback(monkeypatch: pytest.MonkeyPatch):
+    """El guard anti-SSRF (remediación prod-12/AUD16) prohíbe IPs literales y
+    loopback — correcto en producción, pero estos tests ejercitan el ROUNDTRIP
+    real (timeout, caps de body, códigos) contra un server local. Se pinnea la
+    validación a 127.0.0.1; el guard tiene su propia suite dedicada
+    (docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py)."""
+    import agent_runtime.http_tool as http_tool_mod
+    from agent_runtime.ssrf_guard import PinnedDestination
+
+    def _fake_validate(host: str, **_kw: object) -> PinnedDestination:
+        return PinnedDestination(host=host, ip="127.0.0.1", all_ips=("127.0.0.1",))
+
+    monkeypatch.setattr(http_tool_mod, "validate_destination", _fake_validate)
+
+
 def test_request_to_an_allowed_domain_succeeds(http_port: int) -> None:
     result = _tool()({"url": f"http://127.0.0.1:{http_port}/ok"})
     assert result.ok is True

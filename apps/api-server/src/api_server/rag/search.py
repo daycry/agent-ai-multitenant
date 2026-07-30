@@ -7,7 +7,8 @@ junction controlling which KBs a project can read.
 Three building blocks:
 
   - :func:`bm25_chunks`     — text relevance via `ts_rank_cd` on the
-    GIN FTS index installed by migration 0022.
+    GIN FTS index (migration 0022, rebuilt with ``public.es_unaccent``
+    by migration 0107 so Spanish accents/inflections match — P0-4).
   - :func:`vector_chunks`   — pgvector cosine similarity on the HNSW
     index, skipping chunks with NULL embeddings (the ingestion
     pipeline back-fills them; until then BM25 still surfaces them).
@@ -37,6 +38,11 @@ from api_server.memorizer.recall import (
     VECTOR_K_DEFAULT,
     fuse_rankings,
 )
+
+# Configuración FTS única para TODAS las rutas de búsqueda sobre chunks (P0-4):
+# spanish + unaccent (migración 0079). Debe coincidir con la expresión del
+# índice ix_chunks_content_fts (migración 0107) — divergir = seq scan.
+_TS_CONFIG = "public.es_unaccent"
 
 
 @dataclass(frozen=True)
@@ -103,12 +109,12 @@ async def bm25_chunks(
     sql = (
         "SELECT chunks.id"
         " FROM chunks"
-        " WHERE to_tsvector('simple', chunks.content)"
-        "        @@ plainto_tsquery('simple', :q)"
+        f" WHERE to_tsvector('{_TS_CONFIG}', chunks.content)"
+        f"        @@ plainto_tsquery('{_TS_CONFIG}', :q)"
         + _kb_visibility_filter(with_agent=agent_id is not None)
         + " ORDER BY ts_rank_cd("
-        "          to_tsvector('simple', chunks.content),"
-        "          plainto_tsquery('simple', :q)) DESC"
+        f"          to_tsvector('{_TS_CONFIG}', chunks.content),"
+        f"          plainto_tsquery('{_TS_CONFIG}', :q)) DESC"
         "  LIMIT :limit"
     )
     params: dict[str, object] = {
@@ -351,9 +357,9 @@ async def _kb_bm25_chunks(
 ) -> list[UUID]:
     """Top-`limit` chunk ids por ts_rank_cd, acotados a la KB.
 
-    Usa la misma configuración TS español/inglés + unaccent que el recall
-    de memoria (``public.es_unaccent``, migración 0079) para que
-    ``arquitectura`` case ``arquitecturas`` en el preview."""
+    Usa la MISMA configuración TS que ``bm25_chunks`` y que el índice
+    ``ix_chunks_content_fts`` (``_TS_CONFIG``, migraciones 0079/0107) para que
+    ``arquitectura`` case ``arquitecturas`` y la búsqueda vaya indexada."""
     if not query.strip():
         return []
     sql = (
@@ -362,11 +368,11 @@ async def _kb_bm25_chunks(
         " JOIN documents ON documents.id = chunks.document_id"
         " WHERE documents.kb_id = :kb_id"
         "   AND documents.deleted_at IS NULL"
-        "   AND to_tsvector('public.es_unaccent', chunks.content)"
-        "        @@ plainto_tsquery('public.es_unaccent', :q)"
+        f"   AND to_tsvector('{_TS_CONFIG}', chunks.content)"
+        f"        @@ plainto_tsquery('{_TS_CONFIG}', :q)"
         " ORDER BY ts_rank_cd("
-        "          to_tsvector('public.es_unaccent', chunks.content),"
-        "          plainto_tsquery('public.es_unaccent', :q)) DESC"
+        f"          to_tsvector('{_TS_CONFIG}', chunks.content),"
+        f"          plainto_tsquery('{_TS_CONFIG}', :q)) DESC"
         " LIMIT :limit"
     )
     result = await session.execute(text(sql), {"q": query, "kb_id": kb_id, "limit": limit})

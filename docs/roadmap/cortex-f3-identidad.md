@@ -1,27 +1,42 @@
 ---
 title: "Córtex F3 — Identidad evolutiva + reflexión periódica"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
   - "docs/roadmap/cortex-system-owner.md (Fase 3)"
-  - "F1 — Córtex conversacional con memoria persistente (cortex_conversations/cortex_turns, grafo, recall híbrido, app/admin/cortex) — GATED, NO implementado"
-  - "F2 — Modelo afectivo + Panel de Mente (cortex_affect_snapshots, motor PAD, drives Redis, mood_baseline) — GATED, NO implementado"
+  - "F1 — Córtex conversacional con memoria persistente — IMPLEMENTADO"
+  - "F2 — Modelo afectivo + Panel de Mente — IMPLEMENTADO"
   - "ADR 0074 (rol system_owner / tablas BYPASSRLS; accepted-f0, F3 proposed)"
   - "ADR 0078 (bucles de fondo; proposed — exige aprobación + kill-switch)"
   - "ADR 0077 (protección identity/owner_model en olvido; proposed)"
   - "ADR 0021 (catálogo LLM cerrado) / ADR 0070 (reasoning_effort)"
-started_at: null
+started_at: 2026-06-24
+completed_at: null
 phase: F3
-gated: true
+gated: false
 docs_language: es
 ---
 
 # Córtex F3 — Identidad evolutiva + reflexión periódica (ADR 0074/0078)
 
-> **🔒 GATED — NO IMPLEMENTAR sin aprobación.** F3 depende de F1 y F2 (ambas `proposed`/sin código:
-> un `glob **/*cortex*` solo encuentra los docs y `tests/integration/test_cortex_f0_ownership.py`).
-> F3 introduce además un **bucle Celery beat autónomo** (reflexión) que consume LLM/coste cuando
-> nadie habla → regido por ADR 0078 (budget caps + kill-switch desde el MVP). Requiere: F1+F2 merged,
-> luz verde explícita del operador para F3, y promover ADR 0074/0078 al alcance F3.
+> **Auditoría 2026-07-27 — las casillas de este plan se verificaron una a una
+> contra el código.** Las marcadas `[x]` lo están con evidencia `file:line` y una
+> segunda pasada adversarial; las que siguen sin marcar tienen su hueco concreto
+> descrito en
+> [`gaps-cortex-2026-07-27.md`](gaps-cortex-2026-07-27.md) (informe:
+> [`auditoria-cortex-2026-07-27.md`](auditoria-cortex-2026-07-27.md)).
+> Antes de implementar una casilla sin marcar, **abre el fichero**: la pasada
+> adversarial dio al menos un falso positivo comprobado.
+
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). El
+> banner "GATED — F1/F2 sin código" era cierto el día que se escribió el diseño (commit `cf8f7cd`)
+> pero quedó congelado mientras F1-F3 se implementaban: `cortex/identity.py`, migración
+> `0094_cortex_identity`, endpoints `GET/PUT /identity` + `POST /reflect` en `cortex_mind.py`,
+> worker `cortex_reflection.py` (fail-open, clamp Δ≤0.05/ciclo), con `test_cortex_f3_identity_endpoints.py`/
+> `test_cortex_f3_reflection.py`/`test_cortex_identity_dynamics.py` en verde. Ver
+> [cortex-identidad-real.md](cortex-identidad-real.md) para el productor del `owner_model`
+> (relationship_model) añadido encima el 2026-07-06, que esta fase deja como campo vacío sin
+> escritor. Checkboxes de tareas NO re-verificados línea a línea; el status refleja el veredicto
+> agregado, no un cierre formal con changelog propio.
 
 ## Objetivo
 
@@ -91,14 +106,14 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
 
 ### F3.0 — Precondiciones (verificación, NO código)
 
-- [ ] **Verificar que F1 y F2 están merged y verdes**
+- [x] **Verificar que F1 y F2 están merged y verdes**
   - Confirmar existencia de: `apps/api-server/src/api_server/cortex/graph.py` (o el grafo del córtex de F1), `cortex_conversations`/`cortex_turns` (migración F1), `cortex_affect_snapshots` + motor PAD + `mood_baseline` (F2), y `app/admin/cortex/page.tsx`.
   - Confirmar el **número de migración base**: el HEAD actual es `0091_system_owner_f0` (`apps/api-server/migrations/versions/20260623_0091_system_owner_f0.py`). Si F1/F2 ya consumieron `0092..009N`, F3 encadena `down_revision` sobre la ÚLTIMA migración de F2 y renumera (no asumir 0092 a ciegas).
   - **Criterio de aceptación**: `alembic heads` devuelve una sola cabeza y los módulos F1/F2 importan sin error. Si falta cualquiera → **DETENER** (F3 no es implementable).
 
 ### F3.1 — Migración de tablas de identidad
 
-- [ ] **Migración `cortex_identity` + `cortex_identity_history`**
+- [x] **Migración `cortex_identity` + `cortex_identity_history`**
   - Crear: `apps/api-server/migrations/versions/20260624_0092_cortex_identity.py` (encadenar `down_revision` a la última migración de F2; ej. `0091_system_owner_f0` solo si F1/F2 no añadieron migraciones — ver F3.0).
   - TDD: test `tests/integration/test_cortex_f3_identity_migration.py::test_upgrade_creates_tables_and_unique_owner` → `alembic upgrade head`, inserta dos filas con el MISMO `owner_user_id` → espera `asyncpg.UniqueViolationError` (singleton por `uq_cortex_identity_owner`); `test_downgrade_drops_tables` → `downgrade -1` deja el esquema sin las dos tablas. Patrón de fixture: `tests/integration/test_cortex_f0_ownership.py` (`alembic_config`, `command.upgrade`, `migrations_pg_dsn`).
   - Implementar `upgrade()` con `op.create_table` (columnas arriba) + índices; `downgrade()` con `op.drop_table` en orden inverso. Estilo: `apps/api-server/migrations/versions/20260618_0084_memory_entities.py` (JSONB `server_default text("'{}'::jsonb")`, índices nombrados).
@@ -152,7 +167,7 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - TDD: `tests/integration/test_cortex_f3_reflection.py` — inyectando un modelo scripted + embedder determinista (patrón `HashEmbedder` de `maintenance.py` back-fill tests): una pasada deriva traits/baseline CLAMPEADOS+BOUNDED, crea fila history con diff, persiste memoria `kind='reflection'`, y NO toca filas de otro owner (cross-owner). Con budget excedido → no-op. Sin SDK → fail-open no-op (no crash).
   - **Criterio**: reflexión determinista en su aplicación, gated por budget/kill-switch, cross-owner aislada, fail-open.
 
-- [ ] **Entrada en `build_beat_schedule` (cadencia configurable, GATED)**
+- [x] **Entrada en `build_beat_schedule` (cadencia configurable, GATED)**
   - Modificar: `apps/workers/src/workers/beat_schedule.py` — añadir `CORTEX_REFLECT_BEAT_ENTRY = "cortex-reflect"` y, en `build_beat_schedule`, `sched[CORTEX_REFLECT_BEAT_ENTRY] = {"task":"workers.cortex_reflect","schedule":_parse_cron(cfg.cortex_reflect_cron),"options":{"queue":"default"}}`. Añadir `cortex_reflect_cron` (default ej. cada 6h) + `cortex_reflect_enabled` a `workers/config.py` Settings (patrón `price_sync_cron`/`price_sync_enabled`). El beat NO se enciende salvo `cortex_reflect_enabled` (palanca de platform_settings que el owner posee) — kill-switch operativo.
   - TDD: `tests/integration/test_cortex_f3_beat_schedule.py` — `build_beat_schedule` incluye la entrada con la cadencia de Settings; deshabilitado por defecto → el body es no-op.
   - **Criterio**: la entrada existe, cadencia configurable, deshabilitada por defecto (opt-in del owner).

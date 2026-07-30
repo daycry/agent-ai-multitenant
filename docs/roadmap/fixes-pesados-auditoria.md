@@ -1,8 +1,9 @@
 ---
 title: "Fixes pesados de la auditoría — mini-diseños TDD"
 type: plan
-status: pending_approval
+status: completed
 date: 2026-06-22
+completed_at: 2026-07-06
 author: claude-opus (workflow diseño + revisión adversarial)
 related: auditoria-zonas-2026-06.md
 docs_language: es
@@ -10,11 +11,18 @@ docs_language: es
 
 # Fixes pesados de la auditoría — mini-diseños TDD
 
+> **Estado (2026-07-06, auditoría de roadmap)**: `status` corregido de `pending_approval` a
+> `completed` — los 3 diseños se ejecutaron (2 verbatim, 1 redimensionado), ver notas inline en
+> cada sección.
+
 > Los 3 hallazgos de la auditoría que **no son quick-wins** (migraciones + workers + Celery + tests de integración). Cada uno fue diseñado por un agente y **revisado adversarialmente** por otro que leyó los tests/código y encontró **bloqueantes reales**. Severidad/origen en `auditoria-zonas-2026-06.md`. Implementar con TDD, respetando los **must-address** de la revisión.
 
 ---
 
 ## 1 · Endpoint de cancelación de ejecución (`POST /executions/{id}/cancel`) — esfuerzo L
+
+> **Implementado (2026-07-06, auditoría de roadmap)**: commit `acc67e6 feat(executions):
+cancelación cooperativa`, verbatim con este diseño.
 
 **Problema:** cancelar una tarea no revoca la task Celery ni mata el contenedor; el run sigue gastando LLM hasta el timeout.
 
@@ -39,6 +47,12 @@ docs_language: es
 
 ## 2 · Respuesta del chat → Celery durable — esfuerzo M
 
+> **Redimensionado (2026-07-06, auditoría de roadmap)**: NO se implementó como aquí se diseñaba
+> (migrar el responder a Celery). `ciclo-vida-planes-fixes.md` T6 (c9) optó por una solución más
+> ligera: idempotencia + sweep de recuperación al arranque en api-server, evitando el cambio
+> arquitectónico grande (el responder vive junto a los proveedores LLM). Ver esa tarea para el
+> detalle real implementado.
+
 **Problema:** la respuesta del equipo corre como `asyncio.create_task` en proceso; se pierde al reiniciar y nada la reintenta.
 
 **Enfoque (patrón "memorize-style"):** `workers/chat_reply.py` con `@app.task` que hace `asyncio.run(respond_to_conversation(...))`; `trigger_respond_to_conversation` encola con `apply_async` (best-effort). `responder.schedule_reply` deja de hacer `create_task` y encola Celery. Idempotencia/serialización: columna `conversations.reply_pending_at` (migración 0090) + lock Redis `SET NX EX` por conversación + barrido `reap_orphan_chat_replies` (beat) para huérfanas.
@@ -54,6 +68,12 @@ docs_language: es
 ---
 
 ## 3 · Idempotencia/dedup de la auto-destilación — esfuerzo M
+
+> **Implementado (2026-07-06, auditoría de roadmap)**: commit `1579832 fix(memorizer): guard de
+idempotencia evita re-destilar` — exactamente la "recomendación de alcance" de este diseño
+> ("entregar primero solo el guard (1)"): `count_memories_for_source`/`"ok:already_memorized"` en
+> `apps/workers/src/workers/memorizer.py:206-209`. El backstop de índice UNIQUE (punto 3) y la
+> transacción única (punto 2) NO se implementaron — quedan como segunda entrega si se necesita.
 
 **Problema:** `task_acks_late=True` global → un redelivery re-destila (otra llamada LLM) y re-persiste filas duplicadas; `_persist_routed` commitea por-grupo (estado parcial).
 

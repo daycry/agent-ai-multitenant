@@ -77,3 +77,46 @@ def test_int_keys_stay_int() -> None:
 def test_ceiling_excludes_review_retries() -> None:
     # max_review_retries is owned by platform_settings (ADR 0013), never here.
     assert "max_review_retries" not in EXECUTION_BUDGET_CEILING
+
+
+# --- prod-06 A2 (auditoría 2026-07-06): el techo no debe estrangular los
+# presupuestos por-kind legítimos de claude_sdk (500k tokens / 50 iter / 7200s).
+# Si el operador (o el platform-default) fija esos valores, resolve_execution_budgets
+# NO debe clamparlos por debajo — antes el techo era 100k/25/600 y los pisaba,
+# reviviendo el corte a ~23 iteraciones que arregló la remediación 07c91cc.
+_CLAUDE_SDK_IMPLEMENTER_BUDGET = {
+    "max_tokens": 500_000,
+    "max_iterations": 50,
+    "max_wall_clock_s": 7200.0,
+}
+
+
+def test_ceiling_admits_claude_sdk_per_kind_budgets() -> None:
+    for key, legit in _CLAUDE_SDK_IMPLEMENTER_BUDGET.items():
+        assert EXECUTION_BUDGET_CEILING[key] >= legit, (
+            f"el techo de {key} ({EXECUTION_BUDGET_CEILING[key]}) estrangula el "
+            f"presupuesto por-kind legítimo de claude_sdk ({legit})"
+        )
+
+
+def test_operator_can_set_claude_sdk_sized_budgets() -> None:
+    out = resolve_execution_budgets(
+        platform_default=None,
+        project_override=dict(_CLAUDE_SDK_IMPLEMENTER_BUDGET),
+    )
+    assert out == {
+        "max_tokens": 500_000,
+        "max_iterations": 50,
+        "max_wall_clock_s": 7200.0,
+    }
+
+
+def test_absurd_values_still_clamped_after_raise() -> None:
+    out = resolve_execution_budgets(
+        platform_default=None,
+        project_override={"max_tokens": 10_000_000, "max_iterations": 9_999},
+    )
+    assert out == {
+        "max_tokens": EXECUTION_BUDGET_CEILING["max_tokens"],
+        "max_iterations": EXECUTION_BUDGET_CEILING["max_iterations"],
+    }

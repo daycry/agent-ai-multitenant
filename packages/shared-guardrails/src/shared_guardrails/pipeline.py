@@ -23,6 +23,7 @@ from shared_guardrails.types import (
     GuardrailOutcome,
     HookPoint,
     PipelineDecision,
+    Severity,
     most_severe_action,
 )
 
@@ -96,7 +97,27 @@ class GuardrailPipeline:
         triggered_actions: list[Action] = []
 
         for item in bound:
-            result = item.guardrail.check(context)
+            # ADR 0102 D5: un check que REVIENTA nunca tumba el pipeline. Con
+            # on_error="warn" (default) es fail-open: outcome no disparado con
+            # el error como detalle. Con on_error="block" es fail-closed: el
+            # fallo dispara con acción block (checks críticos del operador).
+            try:
+                result = item.guardrail.check(context)
+            except Exception as exc:
+                fail_closed = item.spec.on_error == "block"
+                outcomes.append(
+                    GuardrailOutcome(
+                        type=item.spec.type,
+                        triggered=fail_closed,
+                        severity=Severity.HIGH if fail_closed else Severity.LOW,
+                        detail=f"check crashed ({type(exc).__name__}: {exc})",
+                        action=Action.BLOCK if fail_closed else None,
+                        payload={"on_error": item.spec.on_error},
+                    )
+                )
+                if fail_closed:
+                    triggered_actions.append(Action.BLOCK)
+                continue
             # Config action overrides the guardrail's own suggestion.
             action = item.spec.action if item.spec.action is not None else result.suggested_action
             outcomes.append(

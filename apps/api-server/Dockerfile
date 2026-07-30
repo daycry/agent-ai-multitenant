@@ -113,6 +113,15 @@ RUN groupadd --gid 1000 app \
 
 COPY --from=builder /opt/venv /opt/venv
 
+# prod-01 C1 (auditoría 2026-07-06): the one-shot `migrations` compose service
+# runs `alembic upgrade head` from this image, so the image MUST ship alembic.ini
+# + migrations/ (they are SIBLINGS of src/, never included by `pip install .`).
+# Without them a fresh install fails with "No config file 'alembic.ini' found"
+# and the schema is never created. WORKDIR is /app, and alembic.ini has
+# `script_location = migrations` (relative), so both must live at /app.
+COPY --chown=1000:1000 apps/api-server/alembic.ini /app/alembic.ini
+COPY --chown=1000:1000 apps/api-server/migrations/ /app/migrations/
+
 WORKDIR /app
 USER 1000:1000
 
@@ -124,4 +133,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=4).status==200 else 1)"
 
 # create_app is a no-arg FastAPI factory (api_server.main:create_app).
-CMD ["uvicorn", "api_server.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+#
+# --ws-ping-interval/--ws-ping-timeout: el keepalive por defecto de la lib
+# `websockets` (ping cada 20s, timeout 20s) MATABA los turnos de voz (ADR 0073):
+# un turno STT→LLM→TTS son 40-90s de silencio legítimo y, si el pong del
+# navegador se retrasa (pestaña en segundo plano, proxy de Docker Desktop en
+# Windows), uvicorn cierra con 1011 «keepalive ping timeout». 60/120 tolera esos
+# turnos largos y sigue detectando conexiones muertas en ~3 min. Aplica a todos
+# los WS (task stream, planning chat), a los que un keepalive laxo no perjudica.
+CMD ["uvicorn", "api_server.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", \
+     "--ws-ping-interval", "60", "--ws-ping-timeout", "120"]

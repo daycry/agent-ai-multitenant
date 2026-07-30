@@ -65,7 +65,9 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers.assistant_voice import (
     _MAX_UTTERANCE_BYTES,
     _SUPPORTED_VOICES,  # noqa: F401  (re-exported allowlist; kept for parity/tests)
+    _reject,
     _resolve_voice,
+    voice_language_instruction,
 )
 from api_server.routers.cortex import build_cortex_default_model
 from api_server.routers.llm_providers import get_provider_vault_store
@@ -109,9 +111,9 @@ async def get_cortex_voice_model(
     return await build_cortex_default_model(vault)
 
 
-async def _reject(ws: WebSocket, reason: str) -> None:
-    with contextlib.suppress(Exception):
-        await ws.close(code=_CLOSE_POLICY, reason=reason)
+# El _reject compartido (frame `error` + reason recortado a 123 bytes, RFC
+# 6455) se importa de assistant_voice — antes cada WS llevaba su copia y un
+# detail largo derribaba el socket con un 1006 mudo.
 
 
 async def _resolve_voice_model(
@@ -180,6 +182,8 @@ async def _run_turn(
 
     async def _respond(user_text: str) -> str:
         # ONE admin transaction (owner-scoped, no RLS) — mirrors POST /turns.
+        # The affect read for prosody above is passed down so the self-context
+        # does not re-read it (single load per turn).
         async with admin_sessionmaker() as session, session.begin():
             result, conv_id, turn_id = await run_cortex_voice_turn(
                 session,
@@ -187,10 +191,20 @@ async def _run_turn(
                 owner_user_id=owner_id,
                 user_text=user_text,
                 conversation_id=state.conversation_id,
+                affect=affect,
+                now=now,
+                language_instruction=voice_language_instruction(state.voice),
             )
         state.conversation_id = conv_id
         cortex_turn_id_holder["id"] = turn_id
         return result.content
+
+    async def _emit_transcript(user_text: str) -> None:
+        # Transcript + thinking tras el STT (antes del cerebro): feedback
+        # inmediato y tráfico intermedio que evita que el keepalive del WS mate
+        # un turno del córtex largo pero legítimo (40-90s con razonamiento).
+        await ws.send_json({"type": "transcript", "text": user_text})
+        await ws.send_json({"type": "thinking"})
 
     session = VoiceSession(
         transcribe=_transcribe,
@@ -198,7 +212,7 @@ async def _run_turn(
         synthesize=lambda t: tts.synthesize(t, voice=state.voice, speed=speed),
     )
     try:
-        turn: VoiceTurn = await session.handle_turn(audio)
+        turn: VoiceTurn = await session.handle_turn(audio, on_transcript=_emit_transcript)
     except CortexNoTenantError as exc:
         await ws.send_json({"type": "error", "detail": f"cortex has no tenant: {exc}"})
         return
@@ -211,7 +225,6 @@ async def _run_turn(
         await ws.send_json({"type": "turn_end", "empty": True})
         return
 
-    await ws.send_json({"type": "transcript", "text": turn.user_text})
     await ws.send_json({"type": "answer", "text": turn.answer_text})
     # Affect frame for the avatar (color/expression/sway) BEFORE the audio.
     await ws.send_json(affect_frame(affect))
@@ -302,7 +315,7 @@ async def cortex_voice(
         await _reject(ws, str(exc.detail))
         return
 
-    state = _VoiceLoopState(voice=get_settings().assistant_tts_default_voice)
+    state = _VoiceLoopState(voice=get_settings().cortex_tts_default_voice)
     await ws.send_json({"type": "ready", "voice": state.voice})
     try:
         while await _handle_frame(

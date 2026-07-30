@@ -12,8 +12,10 @@ focused on the auth + endpoint layout that actually differs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -30,6 +32,24 @@ from shared_llm.types import CompletionResponse, Message, StreamChunk, ToolCall,
 # narrow tuple keeps `KeyboardInterrupt` / `asyncio.CancelledError` from
 # being swallowed.
 _STREAM_ERRORS: tuple[type[BaseException], ...] = (httpx.HTTPError, OSError)
+
+
+@contextlib.asynccontextmanager
+async def typed_transport_errors(*, provider: str) -> AsyncIterator[None]:
+    """Convert raw httpx/OS transport errors into the layer's typed error.
+
+    AUD16 (2026-07-16): ``stream()`` ya envolvía los errores de red mid-stream
+    (``iter_sse_chunks``), pero un ``httpx.ReadTimeout``/``ConnectError`` en
+    ``complete()`` escapaba CRUDO hasta el caller (el córtex lo convirtió en un
+    500 sin manejar el 07-13). Los errores YA tipados del layer (``AuthError``,
+    ``RateLimitError``, ``ProviderError`` de ``check_status``) pasan intactos.
+    """
+    try:
+        yield
+    except (AuthError, RateLimitError, ProviderError):
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        raise ProviderError(f"{provider}: transport error — {exc}") from exc
 
 
 def to_openai_messages(messages: Sequence[Message]) -> list[dict[str, Any]]:
@@ -101,11 +121,25 @@ def parse_chat_completion(
                 )
             )
     usage_d = data.get("usage") or {}
+    # `task_wf_63`: los tokens de prompt SERVIDOS DESDE CACHÉ. Los proveedores
+    # OpenAI-compatibles los reportan anidados en `prompt_tokens_details`, y
+    # nadie los leía: `Usage.cache_read_tokens` existía y solo lo poblaba
+    # claude_sdk, así que no había forma de saber si la caché de prefijo estaba
+    # funcionando en tres de los cuatro proveedores del catálogo. Medir antes de
+    # optimizar es el punto entero de esta tarea.
+    details = usage_d.get("prompt_tokens_details") or {}
+    cached = int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
     usage = Usage(
         input_tokens=int(usage_d.get("prompt_tokens", 0)),
         output_tokens=int(usage_d.get("completion_tokens", 0)),
+        cache_read_tokens=cached,
         cost_usd=float(usage_d.get("cost", 0.0) or 0.0),
     )
+    # M-4 (auditoría 2026-07-10): el campo tipado `stop_reason` viaja también en
+    # los providers HTTP (antes solo claude_sdk lo poblaba, #10c) — el
+    # finish_reason verbatim del payload; ausente → None. `completion_signals`
+    # sigue derivando el truncado del raw (misma señal, sin cambio de conducta).
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
     return CompletionResponse(
         content=content,
         model=str(data.get("model") or fallback_model),
@@ -113,6 +147,7 @@ def parse_chat_completion(
         usage=usage,
         tool_calls=tool_calls,
         raw=data,
+        stop_reason=str(finish_reason) if finish_reason is not None else None,
     )
 
 
@@ -123,6 +158,9 @@ def parse_sse_delta(line: str) -> tuple[str | None, bool]:
       - `(None, False)` for irrelevant lines (keep-alive, comment, ...).
       - `(text, False)` for a real content delta.
       - `(None, True)` for the terminator `[DONE]`.
+
+    Tool-call deltas are NOT surfaced here (text-only API, kept stable);
+    `iter_sse_chunks` accumulates them separately (AUD16-06).
     """
     if not line or not line.startswith("data: "):
         return None, False
@@ -139,6 +177,54 @@ def parse_sse_delta(line: str) -> tuple[str | None, bool]:
     return None, False
 
 
+def _sse_tool_call_deltas(line: str) -> list[dict[str, Any]]:
+    """The raw ``delta.tool_calls`` entries of one SSE line (``[]`` if none)."""
+    if not line or not line.startswith("data: "):
+        return []
+    payload = line[6:].strip()
+    if payload == "[DONE]":
+        return []
+    try:
+        chunk = json.loads(payload)
+    except json.JSONDecodeError:
+        return []
+    delta = chunk.get("choices", [{}])[0].get("delta", {})
+    raw = delta.get("tool_calls")
+    return [tc for tc in raw if isinstance(tc, dict)] if isinstance(raw, list) else []
+
+
+def _merge_tool_call_delta(acc: dict[int, dict[str, Any]], tc: dict[str, Any]) -> None:
+    """Fold one streamed tool-call delta into the per-index accumulator.
+
+    OpenAI streams a tool call as: first delta with ``index``/``id``/
+    ``function.name`` (+ an ``arguments`` fragment), then more deltas whose
+    ``function.arguments`` fragments concatenate into the JSON args string.
+    """
+    index = int(tc.get("index") or 0)
+    slot = acc.setdefault(index, {"id": "", "name": "", "arguments": ""})
+    if tc.get("id"):
+        slot["id"] = str(tc["id"])
+    fn = tc.get("function")
+    if isinstance(fn, dict):
+        if fn.get("name"):
+            slot["name"] = str(fn["name"])
+        fragment = fn.get("arguments")
+        if isinstance(fragment, str):
+            slot["arguments"] += fragment
+
+
+def _accumulated_tool_calls(acc: dict[int, dict[str, Any]]) -> list[ToolCall] | None:
+    """The finished `ToolCall`s from the accumulator (None when none arrived)."""
+    if not acc:
+        return None
+    calls = [
+        ToolCall(id=slot["id"], name=slot["name"], arguments=_loads_args(slot["arguments"]))
+        for _, slot in sorted(acc.items())
+        if slot["name"]
+    ]
+    return calls or None
+
+
 async def iter_sse_chunks(resp: httpx.Response, *, provider: str) -> AsyncIterator[StreamChunk]:
     """Yield `StreamChunk`s from an open streaming `/chat/completions` body.
 
@@ -152,12 +238,21 @@ async def iter_sse_chunks(resp: httpx.Response, *, provider: str) -> AsyncIterat
     the loop and convert such failures to `ProviderError`, matching the
     pattern in `claude_agent.ClaudeAgentProvider.stream()`. The terminal
     `done=True` chunk is emitted by this helper on the `[DONE]` marker.
+
+    AUD16-06: los deltas de `tool_calls` ya no se descartan en silencio — se
+    acumulan por índice y viajan parseados en el chunk final `done=True`
+    (`StreamChunk.tool_calls`); sin tool calls el campo queda en None.
     """
+    tool_call_acc: dict[int, dict[str, Any]] = {}
     try:
         async for line in resp.aiter_lines():
+            for tc_delta in _sse_tool_call_deltas(line):
+                _merge_tool_call_delta(tool_call_acc, tc_delta)
             delta, done = parse_sse_delta(line)
             if done:
-                yield StreamChunk(delta="", done=True)
+                yield StreamChunk(
+                    delta="", done=True, tool_calls=_accumulated_tool_calls(tool_call_acc)
+                )
                 return
             if delta:
                 yield StreamChunk(delta=delta)
@@ -166,22 +261,94 @@ async def iter_sse_chunks(resp: httpx.Response, *, provider: str) -> AsyncIterat
 
 
 def _loads_args(raw: Any) -> dict[str, Any]:
-    """Parse a tool-call arguments payload leniently."""
+    """Parse a tool-call arguments payload leniently (best-effort dict).
+
+    Kept for the parse path: tool execution always needs *a* dict, so a
+    malformed payload still degrades to ``{}`` here. To tell a *corrupt*
+    payload apart from genuinely *absent* args, use `completion_signals`
+    (F32) — this helper alone cannot, by design.
+    """
+    args, _ = _parse_args_checked(raw)
+    return args
+
+
+def _parse_args_checked(raw: Any) -> tuple[dict[str, Any], bool]:
+    """Parse tool-call ``arguments``; return ``(args, malformed)``.
+
+    ``malformed`` is ``True`` only when the payload was *present* but could
+    not be decoded into a JSON object (corrupt or truncated mid-string).
+    A genuinely absent/empty payload is NOT malformed — it yields
+    ``({}, False)`` — so the caller never confuses "no args" with "the
+    model produced garbage we silently dropped".
+    """
     if isinstance(raw, dict):
-        return raw
+        return raw, False
     if not raw:
-        return {}
+        return {}, False
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return {}, True
+    if isinstance(parsed, dict):
+        return parsed, False
+    # Valid JSON but not an object (a bare string/number/list) — not usable
+    # as tool arguments, so it is just as corrupt as undecodable text.
+    return {}, True
+
+
+@dataclass
+class CompletionSignals:
+    """Robustness flags for one ``/chat/completions`` payload (F32).
+
+    Without these, `_loads_args` collapses a corrupt tool-call into ``{}``
+    and the layer above turns an empty ``submit_result`` into an empty
+    deliverable / an empty ``submit_verdict`` into ``inconclusive`` — and
+    runs *real* tools with empty args — all silently. These flags let the
+    caller distinguish "the model gave us nothing" from "we lost what the
+    model gave us".
+    """
+
+    # finish_reason == "length": the provider hit the token cap, so the body
+    # (incl. any tool-call ``arguments`` JSON) may be cut off mid-string.
+    truncated: bool = False
+    # At least one tool call carried an ``arguments`` payload that was present
+    # but not a valid JSON object (corrupt / truncated) — see `_parse_args_checked`.
+    malformed_tool_args: bool = False
+
+
+def completion_signals(data: Any) -> CompletionSignals:
+    """Derive `CompletionSignals` from a raw ``/chat/completions`` payload.
+
+    Safe on any shape (re-uses the same defensive walk as `parse_chat_completion`),
+    so callers can pass ``CompletionResponse.raw`` directly. A non-dict / unexpected
+    payload yields the all-``False`` default rather than raising.
+    """
+    if not isinstance(data, dict):
+        return CompletionSignals()
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    if not isinstance(choice, dict):
+        return CompletionSignals()
+    truncated = choice.get("finish_reason") == "length"
+    message = choice.get("message")
+    malformed = False
+    if isinstance(message, dict):
+        for tc in message.get("tool_calls") or []:
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            _, tc_malformed = _parse_args_checked((fn or {}).get("arguments"))
+            if tc_malformed:
+                malformed = True
+                break
+    return CompletionSignals(truncated=truncated, malformed_tool_args=malformed)
 
 
 __all__ = [
+    "CompletionSignals",
     "check_status",
+    "completion_signals",
     "iter_sse_chunks",
     "parse_chat_completion",
     "parse_sse_delta",
     "to_openai_messages",
+    "typed_transport_errors",
 ]

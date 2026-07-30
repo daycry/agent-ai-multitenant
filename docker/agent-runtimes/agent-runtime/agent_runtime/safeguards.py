@@ -24,15 +24,63 @@ DEFAULT_MAX_REVIEW_RETRIES = 3
 
 
 class SafeguardCode(enum.StrEnum):
-    """Abort codes — recorded on the execution when a safeguard trips."""
+    """Abort / escalation codes — recorded on the execution as ``abort_code``.
+
+    Two families share this enum so the graph has ONE source of truth (F27):
+
+      * cumulative-budget safeguards (``MAX_*``, ``REPETITIVE_LOOP``) — a hard
+        abort when a resource envelope is breached;
+      * self-review escalation + provider-failure codes
+        (``REVIEW_INCONCLUSIVE`` … ``PROVIDER_TIMEOUT``) — the run ends
+        ``needs_human_review``/``aborted`` with a clear, persisted reason instead
+        of crashing or silently passing.
+
+    The string VALUES are part of the persisted contract (``executions.abort_code``,
+    the worker's task-blocking reasons, the UI). Do NOT change an existing value.
+    """
 
     MAX_ITERATIONS = "max_iterations_exceeded"
     MAX_TOKENS = "max_tokens_exceeded"
     MAX_COST = "max_cost_exceeded"
     MAX_WALL_CLOCK = "max_wall_clock_exceeded"
     MAX_TOOL_CALLS = "max_tool_calls_exceeded"
-    MAX_REVIEW_RETRIES = "max_review_retries_exceeded"
     REPETITIVE_LOOP = "repetitive_loop_detected"
+    # ADR 0089-D4: a research-only streak that ignores the soft nudge (read-churn)
+    # trips this hard backstop well before max_iterations, escalating the produced
+    # work instead of burning the whole budget re-reading.
+    RESEARCH_EXHAUSTED = "research_exhausted"
+    # Self-review escalation codes (ADR 0087). The values are exactly the strings
+    # already persisted by the loop ('review_inconclusive' /
+    # 'max_review_retries_exhausted'); the old dead 'max_review_retries_exceeded'
+    # member was removed (F27 — it never matched what the graph wrote).
+    REVIEW_INCONCLUSIVE = "review_inconclusive"
+    MAX_REVIEW_RETRIES_EXHAUSTED = "max_review_retries_exhausted"
+    # A repetitive-loop trip that happens DURING a self-review retry cycle: the
+    # churn is the SYMPTOM, a self-review that keeps rejecting the same output
+    # (often a contradictory / unsatisfiable acceptance spec) is the CAUSE. The
+    # graph reports this legible code + the persistent reviewer feedback instead
+    # of the opaque 'repetitive_loop_detected', so the operator can act on it
+    # (systemic fix 2026-07-01).
+    SELF_REVIEW_STALEMATE = "self_review_stalemate"
+    # A self-declared incompletion (finish_status failed/partial) that a review
+    # PASS must not override into 'done' (ADR 0087 addendum D1, P2.2).
+    AGENT_REPORTED_FAILURE = "agent_reported_failure"
+    # Provider-layer failure that survived Phase-1 retries (F25/P1.5): the run
+    # ends cleanly aborted instead of crashing to execution.error.
+    PROVIDER_ERROR = "provider_error"
+    PROVIDER_TIMEOUT = "provider_timeout"
+    # AUD16-20: N fallos de TRANSPORTE consecutivos de stack_exec (el worker /
+    # docker-socket-proxy no responde — 5xx/timeout). Es infraestructura rota,
+    # no estrategia del agente: cortar en vez de quemar el presupuesto entero
+    # (el detector de bucle no salta con args distintos y stack_exec es
+    # producing-tool, exento de las guardas de research).
+    STACK_EXEC_UNAVAILABLE = "stack_exec_unavailable"
+    # `task_wf_50`: un guardrail configurado como `block` en el hook `pre_llm`
+    # rechazó el prompt del turno. No es un fallo del agente ni de la
+    # plataforma: es la política del tenant negándose a mandar al modelo un
+    # contexto marcado. Se corta con código propio para que no se confunda con
+    # un abort por presupuesto.
+    GUARDRAIL_BLOCKED = "guardrail_blocked"
 
 
 @dataclass(frozen=True)

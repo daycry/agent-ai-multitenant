@@ -29,6 +29,7 @@ truth; the matrix tests pin the combinations.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,7 +37,24 @@ from typing import Any, Literal
 
 import structlog
 
-from workers.git_repos import GitCommandError, _run_git
+from workers.git_repos import BareRepoLayout, GitCommandError, _run_git
+
+# Optimistic-concurrency retries for the worktree→bare push: sibling tasks of the
+# same plan push to the SAME plan branch, so a losing task must rebase onto the
+# branch tip and retry. A handful of retries covers any realistic contention.
+_PUSH_RECONCILE_RETRIES = 5
+
+
+def _is_non_fast_forward(exc: GitCommandError) -> bool:
+    """Whether a push failed because the branch advanced (a sibling pushed first)."""
+    msg = str(exc).lower()
+    return (
+        "non-fast-forward" in msg
+        or "fast-forwards" in msg
+        or "failed to push some refs" in msg
+        or "[rejected]" in msg
+    )
+
 
 _log = structlog.get_logger("workers.plan_git")
 
@@ -73,10 +91,91 @@ def make_plan_branch_name(plan_id: str, slug: str) -> str:
         'plan/abc123'
     """
     short = plan_id.replace("-", "").lower()[:_PLAN_ID_SHORT_LEN] or plan_id
-    norm = _SLUG_RE.sub("-", (slug or "").lower()).strip("-")
+    # PROY2-14: transliterar acentos/diéresis/ñ (NFKD) en vez de perder letras
+    # ("Búsqueda" → "busqueda", no "b-squeda") — espejo de api_server.slug.
+    import unicodedata
+
+    folded = (
+        unicodedata.normalize("NFKD", slug or "").encode("ascii", "ignore").decode("ascii").lower()
+    )
+    norm = _SLUG_RE.sub("-", folded).strip("-")
     if not norm:
         return f"plan/{short}"
     return f"plan/{short}-{norm}"
+
+
+@dataclass(frozen=True)
+class PlanGitIdentity:
+    """A plan's git coordinates: which bare repo holds its commits + its branch.
+
+    ``project_slug`` is BOTH the ``BareRepoLayout`` directory and the bare repo
+    name (one bare per project, ADR 0085 decision 2), so the on-disk bare is
+    ``.../{tenant_slug}/{project_slug}/repos/{project_slug}.git``.
+    """
+
+    project_slug: str
+    plan_branch: str
+
+
+def plan_git_identity(plan_id: str, plan_slug: str, project_slug: str) -> PlanGitIdentity:
+    """Single source of truth for a plan's git identity (bare repo + branch).
+
+    Execution, clone and the auto-PR MUST resolve IDENTICAL coordinates, so this
+    is the only place that derives them. Callers pass the PERSISTED slugs
+    (``projects.slug`` / ``plans.slug``, generated once at creation, ADR 0085) —
+    never re-slugify a name/title. Re-slugifying the (prefixed) title in the
+    auto-PR while execution used ``plan.slug`` is exactly what made the PR branch
+    diverge from the branch that held the commits (audit 2026-07-03, P1/P2).
+    """
+    return PlanGitIdentity(
+        project_slug=project_slug,
+        plan_branch=make_plan_branch_name(plan_id, plan_slug),
+    )
+
+
+def worktree_layout(
+    *,
+    data_root: str | Path,
+    tenant_slug: str,
+    project_slug: str,
+) -> BareRepoLayout:
+    """La primitiva de LAYOUT de :func:`worktree_coordinates` (remate I-2, auditoría
+    2026-07-10): el sitio que solo necesita el layout — la resolución read-only del
+    worktree del review, que no tiene plan a mano — la llama directamente en vez de
+    reconstruir ``BareRepoLayout`` a mano, y no puede divergir de los demás.
+
+    IDENTIDAD DooD (CRÍTICO): ``settings.data_root`` es un path DAEMON-SIDE que el worker
+    monta en la MISMA ruta y entrega VERBATIM al daemon como bind source. NO normaliza
+    (``Path(data_root)`` sin ``resolve()``/realpath) para preservar la identidad
+    container-side == daemon-side de los binds ``/workspace``."""
+    return BareRepoLayout(
+        data_root=Path(data_root), tenant_slug=tenant_slug, project_slug=project_slug
+    )
+
+
+def worktree_coordinates(
+    *,
+    data_root: str | Path,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+) -> tuple[BareRepoLayout, str]:
+    """``(BareRepoLayout, plan_branch)`` — las coordenadas de worktree que TODOS los
+    sitios (provisión, resolución read-only, commit/push, review, back-fill) deben
+    derivar IDÉNTICAS (hallazgo #10a). Antes cada uno reconstruía el ``BareRepoLayout``
+    + ``make_plan_branch_name`` a mano — 5+ puntos propensos a divergir del contrato de
+    :func:`plan_git_identity` («Execution, clone and the auto-PR MUST resolve IDENTICAL
+    coordinates»). El layout sale de :func:`worktree_layout` (misma primitiva que usa
+    la resolución read-only del review); ver allí el invariante DooD de no-normalización.
+
+    El ``repo_name`` (nombre del bare, ADR 0085 = ``project_slug`` salvo override legacy
+    por-request) lo resuelve cada caller y lo pasa a ``layout.bare_repo_path`` /
+    ``WorktreeManager``."""
+    return (
+        worktree_layout(data_root=data_root, tenant_slug=tenant_slug, project_slug=project_slug),
+        make_plan_branch_name(plan_id, plan_slug),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +302,7 @@ class PlanGitWorkflow:
         policies: PlanGitPolicies,
         pr_opener: PrOpener | None = None,
         auth_env: dict[str, str] | None = None,
+        base_branch: str | None = None,
     ) -> None:
         self._bare_path = bare_repo_path
         self._plan_branch = plan_branch
@@ -211,29 +311,126 @@ class PlanGitWorkflow:
         # ADR 0072: env de auth git (GIT_ASKPASS/GIT_SSH_COMMAND) para el push al
         # remoto. None = remoto local o ya autenticable por el host.
         self._auth_env = auth_env
+        # Rama base del PR (default_branch del git config). Cuando está
+        # presente, open_plan_pr verifica ANTES de llamar a la API que la base
+        # remota comparte historia con la rama del plan — el 422 «no history
+        # in common» del proveedor deja de ser el primer aviso.
+        self._base_branch = base_branch
 
     @property
     def plan_branch(self) -> str:
         return self._plan_branch
 
+    def _base_ancestry_guard(self) -> str | None:
+        """Motivo accionable para NO llamar a la API del proveedor, o ``None``.
+
+        Re-fetch de la rama base + ``merge-base`` contra la rama del plan.
+        Best-effort: un fallo transitorio del fetch (red/credenciales) NO
+        bloquea el intento de PR (contrato anterior); solo bloquean los dos
+        casos deterministas — base ausente en el remoto e historias sin
+        ancestro común (el caso api-ci: base local sembrada sintética).
+        """
+        base = self._base_branch
+        if not base:
+            return None
+        try:
+            _run_git("fetch", "origin", base, cwd=self._bare_path, env_extra=self._auth_env)
+        except GitCommandError as exc:
+            if "couldn't find remote ref" in str(exc).lower():
+                return (
+                    f"el remoto no tiene la rama base '{base}': haz un push inicial de esa "
+                    "rama o corrige default_branch en el git del proyecto"
+                )
+            _log.warning("plan_pr.base_fetch_failed", base=base, error=str(exc))
+            return None  # transitorio → no bloquear el intento
+        try:
+            _run_git("merge-base", "FETCH_HEAD", self._plan_branch, cwd=self._bare_path)
+        except GitCommandError:
+            return (
+                f"la rama base '{base}' del remoto no comparte historia con la rama del plan "
+                "(la base local se sembró sin el contenido del remoto): re-sincroniza el git "
+                "del proyecto y rebasa la rama del plan, o ajusta default_branch"
+            )
+        return None
+
     # ----- task_06_23 — transitions ------------------------------------
 
     def push_review_to_bare(self, worktree_path: Path) -> str:
-        """worktree → bare. Always runs after a passing review.
+        """worktree → bare, reconciling concurrent sibling commits.
 
-        Pushes the worktree's HEAD to the plan branch on the bare
-        repo. The worker calls this after the auto-review step says
-        the task is ``done``.
+        Pushes the worktree's HEAD to the plan branch on the bare repo. Several
+        sibling tasks of the same plan share ONE plan branch, so a plain push
+        fails *non-fast-forward* whenever another task pushed first — which used
+        to surface as ``commit_failed`` and blocked the task. We rebase this
+        task's commit onto the branch's current tip and retry (optimistic
+        concurrency). A genuine rebase CONFLICT (two tasks changed the same
+        lines) is NOT a transient race — it is re-raised as a
+        :class:`GitCommandError` so the caller escalates it for resolution.
 
         Returns the sha now on the bare's branch tip.
         """
-        _run_git(
-            "push",
-            str(self._bare_path),
-            f"HEAD:refs/heads/{self._plan_branch}",
-            cwd=worktree_path,
-        )
-        return _run_git("rev-parse", f"refs/heads/{self._plan_branch}", cwd=self._bare_path).strip()
+        # The rebase replays our commit; give git an identity for the new
+        # committer (the worktree carries no user.name/email config).
+        committer_env = {
+            "GIT_AUTHOR_NAME": "Agentic Platform",
+            "GIT_AUTHOR_EMAIL": "noreply@agentic.local",
+            "GIT_COMMITTER_NAME": "Agentic Platform",
+            "GIT_COMMITTER_EMAIL": "noreply@agentic.local",
+        }
+        last_exc: GitCommandError | None = None
+        for _ in range(_PUSH_RECONCILE_RETRIES):
+            try:
+                _run_git(
+                    "push",
+                    str(self._bare_path),
+                    f"HEAD:refs/heads/{self._plan_branch}",
+                    cwd=worktree_path,
+                )
+                return _run_git(
+                    "rev-parse", f"refs/heads/{self._plan_branch}", cwd=self._bare_path
+                ).strip()
+            except GitCommandError as exc:
+                if not _is_non_fast_forward(exc):
+                    raise
+                last_exc = exc
+                # Reconcile: replay our commit on top of the branch's current tip.
+                _run_git("fetch", str(self._bare_path), self._plan_branch, cwd=worktree_path)
+                try:
+                    _run_git("rebase", "FETCH_HEAD", cwd=worktree_path, env_extra=committer_env)
+                except GitCommandError as rebase_exc:
+                    # Anticipo ADR 0099: capturar el contexto ESTRUCTURADO del
+                    # conflicto (ficheros en disputa + shas de ambos lados)
+                    # ANTES del abort — despues ya no existe. Best-effort: si
+                    # git falla aqui, el contexto queda parcial pero el error
+                    # original se propaga igual.
+                    context: dict[str, Any] = {"plan_branch": self._plan_branch}
+                    with contextlib.suppress(GitCommandError):
+                        context["files"] = [
+                            line.strip()
+                            for line in _run_git(
+                                "diff", "--name-only", "--diff-filter=U", cwd=worktree_path
+                            ).splitlines()
+                            if line.strip()
+                        ][:50]
+                    with contextlib.suppress(GitCommandError):
+                        context["worktree_sha"] = _run_git(
+                            "rev-parse", "HEAD", cwd=worktree_path
+                        ).strip()
+                    with contextlib.suppress(GitCommandError):
+                        context["branch_sha"] = _run_git(
+                            "rev-parse", "FETCH_HEAD", cwd=worktree_path
+                        ).strip()
+                    with contextlib.suppress(GitCommandError):
+                        _run_git("rebase", "--abort", cwd=worktree_path)
+                    conflict_error = GitCommandError(
+                        f"push_review_to_bare: rebase onto {self._plan_branch} conflicted "
+                        f"(another task changed the same lines): {rebase_exc}"
+                    )
+                    conflict_error.conflict_context = context  # type: ignore[attr-defined]
+                    raise conflict_error from rebase_exc
+        # Exhausted retries — persistent contention; surface the last push error.
+        assert last_exc is not None  # the loop only exits here via a non-ff push
+        raise last_exc
 
     def push_branch_to_remote(self, *, force: bool = False) -> bool:
         """bare → remote. Gated by ``branch_push_mode``.
@@ -304,6 +501,21 @@ class PlanGitWorkflow:
                 branch=self._plan_branch,
                 url=None,
                 skipped_reason="no pr_opener wired",
+            )
+
+        guard = self._base_ancestry_guard()
+        if guard is not None:
+            _log.warning(
+                "plan_pr.base_guard_skip",
+                repo=self._bare_path.stem,
+                branch=self._plan_branch,
+                reason=guard,
+            )
+            return PrInfo(
+                repo_name=self._bare_path.stem,
+                branch=self._plan_branch,
+                url=None,
+                skipped_reason=guard,
             )
 
         url = self._pr_opener(title, body)

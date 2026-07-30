@@ -19,13 +19,16 @@ runs user/third-party code (CLAUDE.md §2):
   * **read-only root filesystem** — only a size-capped ``/tmp`` (and the
     read-only workspace mount) are present; nothing the probe writes
     survives, and it cannot tamper with its own image.
-  * **network policy honored** — ``none`` (an internal bridge with no
-    egress, the default and the only safe choice for an *experimental*
-    listing's first run), ``restricted`` (an internal bridge — egress to
-    the consented ``allowed_domains`` is enforced by the platform's egress
-    proxy, never by handing the container the open internet), or ``open``
-    (a non-internal bridge — only ever reached via explicit per-permission
-    consent, plan decision (b)/(c)).
+  * **network policy honored, NUNCA NAT crudo** (ADR 0094 / mitad
+    marketplace de task_prod12_net_01) — el bridge es SIEMPRE ``internal``.
+    ``none`` (sin egress, el default y la única opción sana para el primer
+    run de un listing *experimental*), ``restricted`` (bridge interno —
+    el egress a los ``allowed_domains`` consentidos lo impone el proxy de
+    la plataforma, nunca entregando internet al contenedor) y ``open``
+    (bridge interno + el ``registry-proxy`` allowlistado conectado al
+    bridge e inyectado como ``HTTP(S)_PROXY`` — solo alcanzable por
+    consentimiento por-permiso explícito; sin proxy configurado, ``open``
+    queda OFFLINE, jamás NAT crudo).
   * **mem_limit + pids_limit** — a leak or a fork-bomb cannot exhaust the
     host.
   * **the Docker socket is NEVER mounted** — :func:`assert_no_docker_socket`
@@ -55,6 +58,7 @@ handling with the client mocked.
 from __future__ import annotations
 
 import contextlib
+import os
 import secrets
 from dataclasses import dataclass, field
 from typing import Any
@@ -64,6 +68,16 @@ import structlog
 from api_server.marketplace.trust import NetworkPolicy
 
 _log = structlog.get_logger("marketplace.sandbox")
+
+# Defaults del registry-proxy (ADR 0094) — los mismos convenios del compose
+# que usa el worker (workers.config): el servicio compartido allowlistado y
+# su alias DNS en el bridge per-sandbox. Sobrescribibles por entorno; vacíos
+# = 'open' queda offline (nunca NAT crudo).
+DEFAULT_REGISTRY_PROXY_URL = os.environ.get("REGISTRY_PROXY_URL", "http://registry-proxy:8888")
+DEFAULT_REGISTRY_PROXY_CONTAINER = os.environ.get(
+    "REGISTRY_PROXY_CONTAINER", "agentic-registry-proxy"
+)
+DEFAULT_REGISTRY_PROXY_ALIAS = os.environ.get("REGISTRY_PROXY_ALIAS", "registry-proxy")
 
 # Labels stamped on every container/network the sandbox launches, so the
 # same reaper that sweeps the test-runtime can sweep a leaked sandbox.
@@ -209,12 +223,13 @@ class SandboxSpec:
     env: dict[str, str] = field(default_factory=dict)
 
     def is_egress_allowed(self) -> bool:
-        """True when the bridge must allow egress (only ``open``).
+        """True when the probe gets PROXIED egress (only ``open``).
 
-        ``restricted`` still rides an *internal* bridge: the consented
-        ``allowed_domains`` are enforced upstream by the egress proxy, not
-        by giving the container the raw internet. Only ``open`` (explicit
-        per-permission consent) gets a non-internal bridge.
+        Desde ADR 0094 / task_prod12_net_01 esto ya NO significa bridge
+        no-interno: el bridge es siempre interno y ``open`` se materializa
+        conectando el ``registry-proxy`` allowlistado al bridge (más el env
+        ``HTTP(S)_PROXY``). ``restricted`` sigue interno y offline aquí (el
+        enforcement por-dominio del proxy de plataforma es upstream).
         """
         return self.network_policy == NetworkPolicy.OPEN
 
@@ -240,6 +255,11 @@ class SandboxResult:
     truncated: bool = False
     container_id: str = ""
     network_name: str = ""
+    # task_prod12_net_01: la política de red efectiva del run y si el egress
+    # fue proxificado (registry-proxy conectado) — el install flow lo pliega
+    # en el audit row, de modo que cada uso de 'open' queda registrado.
+    network_policy: str = ""
+    proxied_egress: bool = False
 
     @property
     def passed(self) -> bool:
@@ -269,7 +289,9 @@ def _shell_quote(command: str) -> str:
     return "'" + command.replace("'", "'\"'\"'") + "'"
 
 
-def build_sandbox_run_kwargs(spec: SandboxSpec, network_name: str) -> dict[str, Any]:
+def build_sandbox_run_kwargs(
+    spec: SandboxSpec, network_name: str, *, proxy_url: str | None = None
+) -> dict[str, Any]:
     """Build the hardened ``docker.containers.run`` kwargs for the probe.
 
     Extracted as a module-level helper (the test-runtime precedent) so the
@@ -278,8 +300,22 @@ def build_sandbox_run_kwargs(spec: SandboxSpec, network_name: str) -> dict[str, 
     private bridge + no docker socket. The container is started detached
     sleeping; the smoke command runs via ``exec_run`` so the runner can
     register the container for teardown BEFORE executing anything.
+
+    ``proxy_url`` (solo bajo ``open`` con registry-proxy conectado) inyecta
+    ``HTTP(S)_PROXY`` para que el egress del probe atraviese la allowlist —
+    el mismo cableado que el test-runtime hace para ``dep_egress`` (ADR 0094).
     """
     env: dict[str, str] = {"HOME": spec.workspace_mount_path, **dict(spec.env)}
+    if proxy_url:
+        env.update(
+            {
+                "HTTP_PROXY": proxy_url,
+                "HTTPS_PROXY": proxy_url,
+                "http_proxy": proxy_url,
+                "https_proxy": proxy_url,
+                "NO_PROXY": "localhost,127.0.0.1",
+            }
+        )
 
     mounts: list[Any] = []
     if spec.workspace_host_path:
@@ -339,8 +375,27 @@ class MarketplaceSandbox:
     via ``docker.from_env()``.
     """
 
-    def __init__(self, *, client: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        client: Any = None,
+        registry_proxy_url: str | None = None,
+        registry_proxy_container: str | None = None,
+        registry_proxy_alias: str | None = None,
+    ) -> None:
         self._client = client
+        # ADR 0094 / task_prod12_net_01: el único egress posible es el
+        # registry-proxy allowlistado. None → defaults del compose; "" →
+        # explícitamente sin proxy ('open' queda offline).
+        self._registry_proxy_url = (
+            DEFAULT_REGISTRY_PROXY_URL if registry_proxy_url is None else registry_proxy_url
+        )
+        self._registry_proxy_container = (
+            DEFAULT_REGISTRY_PROXY_CONTAINER
+            if registry_proxy_container is None
+            else registry_proxy_container
+        )
+        self._registry_proxy_alias = registry_proxy_alias or DEFAULT_REGISTRY_PROXY_ALIAS
 
     @property
     def client(self) -> Any:
@@ -362,11 +417,22 @@ class MarketplaceSandbox:
         timeout, is a non-exceptional :class:`SandboxResult` with
         ``passed is False``.
         """
-        network = self._create_bridge(spec)
+        network = self._create_bridge()
         network_name = getattr(network, "name", "") or ""
         container: Any = None
+        proxy: Any = None
         try:
-            container = self._start(spec, network_name)
+            if spec.is_egress_allowed():
+                # 'open' = egress PROXIFICADO por la allowlist, nunca NAT
+                # crudo (ADR 0094). Cada uso queda en el log estructurado y
+                # en el resultado (→ audit row del install flow).
+                proxy = self._attach_registry_proxy(network)
+                _log.info(
+                    "marketplace.sandbox.egress",
+                    network_policy=str(spec.network_policy),
+                    proxied=proxy is not None,
+                )
+            container = self._start(spec, network_name, proxied=proxy is not None)
             exit_code, stdout, stderr, timed_out, truncated = self._exec_smoke(spec, container)
             result = SandboxResult(
                 smoke_command=spec.smoke_command,
@@ -377,6 +443,8 @@ class MarketplaceSandbox:
                 truncated=truncated,
                 container_id=getattr(container, "id", "") or "",
                 network_name=network_name,
+                network_policy=str(spec.network_policy),
+                proxied_egress=proxy is not None,
             )
             _log.info(
                 "marketplace.sandbox.done",
@@ -387,15 +455,16 @@ class MarketplaceSandbox:
             )
             return result
         finally:
-            self._cleanup(container, network)
+            self._cleanup(container, network, proxy=proxy)
 
     # --- bridge ---------------------------------------------------------
-    def _create_bridge(self, spec: SandboxSpec) -> Any:
+    def _create_bridge(self) -> Any:
         """Create a one-shot bridge for this probe.
 
-        ``internal=True`` (no egress to the host gateway) for every policy
-        except ``open``; the bridge name is randomised so two concurrent
-        sandboxes on the same host never collide.
+        ``internal=True`` SIEMPRE (ADR 0094 D1 / task_prod12_net_01): el
+        bridge nunca recibe NAT crudo, tampoco bajo ``open`` — el egress de
+        ``open`` es el registry-proxy conectado al bridge. The bridge name
+        is randomised so two concurrent sandboxes never collide.
         """
         suffix = secrets.token_hex(4)
         name = f"marketplace-sandbox-{suffix}"
@@ -403,16 +472,44 @@ class MarketplaceSandbox:
             return self.client.networks.create(
                 name,
                 driver="bridge",
-                internal=not spec.is_egress_allowed(),
+                internal=True,
                 labels=dict(SANDBOX_LABELS),
             )
         except Exception as exc:  # docker.errors.APIError et al.
             raise SandboxError(f"could not create sandbox network: {exc}") from exc
 
+    def _attach_registry_proxy(self, network: Any) -> Any:
+        """Conecta el registry-proxy allowlistado al bridge interno del probe
+        (mismo patrón que workers.test_runtime._attach_registry_proxy).
+
+        Devuelve el contenedor del proxy, o ``None`` cuando no está
+        configurado/alcanzable — el probe queda OFFLINE (fail-safe: nunca se
+        compensa con NAT crudo). El proxy es un servicio compartido: aquí
+        solo se CONECTA; el teardown lo desconecta y jamás lo borra."""
+        if not self._registry_proxy_url or not self._registry_proxy_container:
+            _log.warning(
+                "marketplace.sandbox.egress_unconfigured",
+                detail="registry proxy url/container unset; probe stays offline",
+            )
+            return None
+        try:
+            proxy = self.client.containers.get(self._registry_proxy_container)
+        except Exception as exc:  # NotFound / APIError — proxy not running
+            _log.warning(
+                "marketplace.sandbox.registry_proxy_unavailable",
+                container=self._registry_proxy_container,
+                error=str(exc),
+            )
+            return None
+        network.connect(proxy, aliases=[self._registry_proxy_alias])
+        return proxy
+
     # --- launch ---------------------------------------------------------
-    def _start(self, spec: SandboxSpec, network_name: str) -> Any:
+    def _start(self, spec: SandboxSpec, network_name: str, *, proxied: bool = False) -> Any:
         """Launch the probe container (sleeping; no smoke command yet)."""
-        run_kwargs = build_sandbox_run_kwargs(spec, network_name)
+        run_kwargs = build_sandbox_run_kwargs(
+            spec, network_name, proxy_url=self._registry_proxy_url if proxied else None
+        )
         # Defence-in-depth tripwire — never expose the daemon socket.
         assert_no_docker_socket(run_kwargs)
         try:
@@ -452,12 +549,17 @@ class MarketplaceSandbox:
         return exit_code, stdout, stderr, timed_out, (out_trunc or err_trunc)
 
     # --- cleanup --------------------------------------------------------
-    def _cleanup(self, container: Any, network: Any) -> None:
+    def _cleanup(self, container: Any, network: Any, *, proxy: Any = None) -> None:
         """Tear down the container + network. ALWAYS runs (finally).
 
         Every step is best-effort and swallowed: a teardown that itself
-        raises must not mask the real result/error from :meth:`run`.
+        raises must not mask the real result/error from :meth:`run`. El
+        registry-proxy compartido se DESCONECTA primero (nunca se borra) —
+        con un endpoint aún conectado, ``network.remove()`` fallaría.
         """
+        if proxy is not None and network is not None:
+            with contextlib.suppress(Exception):
+                network.disconnect(proxy, force=True)
         if container is not None:
             with contextlib.suppress(Exception):
                 container.remove(force=True)

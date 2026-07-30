@@ -61,6 +61,23 @@ class VaultResolver(Protocol):
         """
         ...
 
+    def write(self, auth_ref: str, values: dict[str, str]) -> None:
+        """Persist `values` at `auth_ref`, overwriting the whole entry.
+
+        Added for ADR 0127 (generic OAuth connector): the OAuth token
+        store must be able to WRITE — the SDK's ``OAuthClientProvider``
+        refreshes an expiring access token and calls back into the
+        :class:`shared_mcp.oauth.VaultTokenStorage` to persist the new
+        ``{access_token, refresh_token, ...}`` pair. A read-only resolver
+        cannot express that (which is exactly why static bearer tokens
+        pasted by hand go stale). Semantics mirror KV-v2
+        ``create_or_update_secret``: the entry is replaced, not merged.
+
+        Raises:
+            MCPAuthError: pointer is malformed or Vault refused the write.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class StaticVaultResolver:
@@ -81,6 +98,12 @@ class StaticVaultResolver:
         # Hand back a copy so callers can mutate freely without
         # poisoning the resolver's state.
         return dict(entry)
+
+    def write(self, auth_ref: str, values: dict[str, str]) -> None:
+        # Store a copy so the caller can keep mutating its dict without
+        # aliasing our state. The dataclass is frozen but we only mutate
+        # the (mutable) dict's contents, never rebind the field.
+        self.values[auth_ref] = dict(values)
 
 
 @dataclass(frozen=True)
@@ -104,17 +127,27 @@ class HvacVaultResolver:
 
     client: Any  # hvac.Client — left untyped to avoid importing hvac
 
-    def resolve(self, auth_ref: str) -> dict[str, str]:
+    @staticmethod
+    def _split(auth_ref: str) -> tuple[str, str]:
+        """Parse ``vault:<mount>/data/<path>`` → ``(mount, sub_path)``.
+
+        Shared by :meth:`resolve` and :meth:`write` so the read and
+        write halves can never disagree on how a pointer maps to a
+        KV-v2 (mount, path).
+        """
         if not auth_ref.startswith(VAULT_PREFIX):
             raise MCPAuthError(f"auth_ref must start with {VAULT_PREFIX!r}, got {auth_ref!r}")
         path = auth_ref[len(VAULT_PREFIX) :]
-        # KV v2 paths embed `/data/`; we split there to get (mount, sub-path).
         marker = "/data/"
         if marker not in path:
             raise MCPAuthError(
                 f"auth_ref {auth_ref!r} is not a KV v2 path " f"(expected '<mount>/data/<path>')"
             )
         mount, _, sub_path = path.partition(marker)
+        return mount, sub_path
+
+    def resolve(self, auth_ref: str) -> dict[str, str]:
+        mount, sub_path = self._split(auth_ref)
         try:
             resp = self.client.secrets.kv.v2.read_secret_version(mount_point=mount, path=sub_path)
         except Exception as exc:  # hvac raises a zoo of exception types
@@ -128,6 +161,17 @@ class HvacVaultResolver:
         # Coerce to plain {str: str} so the downstream merge into env /
         # headers can't trip on non-string values.
         return {str(k): str(v) for k, v in data.items()}
+
+    def write(self, auth_ref: str, values: dict[str, str]) -> None:
+        mount, sub_path = self._split(auth_ref)
+        try:
+            self.client.secrets.kv.v2.create_or_update_secret(
+                mount_point=mount,
+                path=sub_path,
+                secret=dict(values),
+            )
+        except Exception as exc:  # hvac raises a zoo of exception types
+            raise MCPAuthError(f"Vault write failed for {auth_ref!r}: {exc}") from exc
 
 
 def apply_vault_auth(

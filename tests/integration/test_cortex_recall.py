@@ -194,3 +194,78 @@ async def test_recall_hybrid_owner_only(
     assert all("otro usuario" not in h for h in hits)
     # The most relevant (most query overlap) ranks first.
     assert hits[0] == "Al owner le interesa la arquitectura hexagonal y los puertos"
+
+
+# ---------------------------------------------------------------------------
+# recall_frequency real: el recall instrumenta el uso (SOLO devueltos, SOLO owner)
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_recall_incrementa_contador_solo_en_devueltos_y_solo_owner(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    from api_server.cortex.memory import cortex_recall, cortex_remember
+
+    seed = await _seed_owner_and_other(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+    other_id = seed["other_id"]
+    tenant_id = seed["tenant_id"]
+
+    sessionmaker = _admin_sessionmaker(admin_database_url)
+    async with sessionmaker() as session:
+        await cortex_remember(
+            session,
+            owner_user_id=owner_id,
+            tenant_id=tenant_id,
+            content="Al owner le interesa la arquitectura hexagonal",
+        )
+        # Memoria del owner SIN relación con la query: no debe contarse.
+        await cortex_remember(
+            session,
+            owner_user_id=owner_id,
+            tenant_id=tenant_id,
+            content="zzz qqq televisor amarillo",
+        )
+        # Memoria del OTRO usuario con el MISMO contenido: jamás se cuenta.
+        await cortex_remember(
+            session,
+            owner_user_id=other_id,
+            tenant_id=tenant_id,
+            content="Al owner le interesa la arquitectura hexagonal",
+        )
+        await session.commit()
+
+    async with sessionmaker() as session:
+        facts = await cortex_recall(
+            session,
+            owner_user_id=owner_id,
+            tenant_id=tenant_id,
+            query="arquitectura hexagonal",
+            limit=1,
+        )
+        await session.commit()
+    assert facts == ["Al owner le interesa la arquitectura hexagonal"]
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        rows = await conn.fetch(
+            "SELECT user_id, content, metadata FROM memory_entries WHERE deleted_at IS NULL"
+        )
+    finally:
+        await conn.close()
+
+    import json
+
+    counters: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+        counters[(str(row["user_id"]), row["content"])] = meta
+
+    devuelta = counters[(str(owner_id), "Al owner le interesa la arquitectura hexagonal")]
+    assert devuelta.get("recall_count") == 1
+    assert devuelta.get("last_recalled_at")
+
+    no_devuelta = counters[(str(owner_id), "zzz qqq televisor amarillo")]
+    assert "recall_count" not in no_devuelta
+
+    ajena = counters[(str(other_id), "Al owner le interesa la arquitectura hexagonal")]
+    assert "recall_count" not in ajena

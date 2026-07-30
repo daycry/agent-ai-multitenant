@@ -457,6 +457,18 @@ async def require_tenant_admin(
     return principal
 
 
+async def principal_is_tenant_admin(session: AsyncSession, principal: AuthPrincipal) -> bool:
+    """The non-raising counterpart of :func:`require_tenant_admin` — True if the
+    principal is a system admin OR the active tenant's admin. For OPTIONAL overrides
+    (e.g. the c1/T2 ``force`` escape hatch on an otherwise member-gated endpoint)."""
+    if principal.is_system_admin:
+        return True
+    if principal.tenant_id is None:
+        return False
+    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+    return membership is not None and membership.role == UserRole.TENANT_ADMIN.value
+
+
 async def require_can_approve_plan(
     principal: AuthPrincipal = Depends(get_principal),
     session: AsyncSession = Depends(get_tenant_session),

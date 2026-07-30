@@ -21,6 +21,12 @@ restart` y `stop/start` los preservan). El único comando que destruye
 datos es `docker compose down -v` (la `-v` borra volúmenes): **no lo
 uses** en este runbook.
 
+En **Windows/Docker Desktop (WSL2)** hay un matiz extra: los bare repos + worktrees
+viven en un bind dentro de la VM WSL2, frágil ante `wsl --shutdown` / Clean-Purge.
+Antes de cualquier operación destructiva, consulta
+[data-durability-windows-wsl2.md](./data-durability-windows-wsl2.md) y respalda
+`/data/agent-platform` con `scripts/backup-data.ps1`.
+
 ## Pasos
 
 ### Reiniciar un solo servicio

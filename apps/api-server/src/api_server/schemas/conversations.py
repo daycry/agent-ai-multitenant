@@ -186,3 +186,13 @@ def to_message_response(m: Message) -> MessageResponse:
         is_summary=m.is_summary,
         created_at=m.created_at,
     )
+
+
+class PlanningRolesResponse(BaseModel):
+    """Los roles del equipo del proyecto que pueden hablar en una sesión de
+    planificación — es decir, los que se pueden @-mencionar (`task_wf_43`).
+
+    Se devuelve un objeto y no una lista pelada para poder añadir metadatos
+    (etiqueta, agente asignado) sin romper a los clientes."""
+
+    roles: list[str]

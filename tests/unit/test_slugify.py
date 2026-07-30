@@ -25,9 +25,12 @@ def test_drops_non_alnum_keeps_digits() -> None:
     assert slugify("Plan v1.2 (final)") == "plan-v1-2-final"
 
 
-def test_unicode_and_accents_degrade() -> None:
-    # Non-ascii is dropped (path-safe ascii only); never raises.
-    assert slugify("Café Münster") == "caf-mnster"
+def test_unicode_and_accents_transliterate() -> None:
+    # PROY2-14: acentos/diéresis/ñ se transliteran (no se pierden letras);
+    # sigue siendo ascii path-safe y nunca lanza.
+    assert slugify("Café Münster") == "cafe-munster"
+    assert slugify("Planificación") == "planificacion"
+    assert slugify("Diseño según año") == "diseno-segun-ano"
 
 
 def test_empty_or_symbol_only_falls_back() -> None:
@@ -42,6 +45,12 @@ def test_max_length_truncation() -> None:
     assert out == "x" * 40
 
 
-def test_truncation_does_not_leave_trailing_hyphen() -> None:
-    out = slugify("aaaa bbbb cccc", max_length=6)
-    assert not out.endswith("-")
+def test_truncation_cuts_at_word_boundary() -> None:
+    # PROY2-14: el corte no deja media palabra ("aaaa-b") ni guion colgando.
+    assert slugify("aaaa bbbb cccc", max_length=6) == "aaaa"
+    assert slugify("plataforma agentes ia", max_length=15) == "plataforma"
+
+
+def test_truncation_without_boundary_still_hard_cuts() -> None:
+    # Una sola palabra más larga que el máximo se corta duro (no hay frontera).
+    assert slugify("supercalifragilistico", max_length=8) == "superca" + "l"

@@ -1,21 +1,40 @@
 ---
 title: "Córtex F5 — Voz y avatar afectivo del system_owner + olvido de memoria"
-status: pending_approval
+status: pending_human_validation
 blocking_plan:
-  - "cortex-system-owner.md F1 (córtex conversacional con memoria persistente)"
-  - "cortex-system-owner.md F2 (modelo afectivo PAD + Panel de Mente)"
-  - "cortex-system-owner.md F4 (curiosidad + kill-switch/budget) — sólo para el bucle de mantenimiento"
+  - "cortex-system-owner.md F1 (córtex conversacional con memoria persistente) — IMPLEMENTADO"
+  - "cortex-system-owner.md F2 (modelo afectivo PAD + Panel de Mente) — IMPLEMENTADO"
+  - "cortex-system-owner.md F4 (curiosidad + kill-switch/budget) — IMPLEMENTADO"
   - "ADR 0073 (modo voz STT/TTS/avatar) — proposed"
   - "ADR 0075 (modelo afectivo computacional) — proposed"
   - "ADR 0077 (política de olvido) — debe pasar de proposed a accepted antes de F5.7"
-started_at: null
+started_at: 2026-06-24
+completed_at: null
 related_adrs: ["0073", "0075", "0077", "0021", "0070", "0074"]
 docs_language: es
 ---
 
 # Córtex F5 — Voz/avatar afectivo + olvido
 
-> **🔒 GATED.** Última fase del Córtex. Depende de F1-F4 (hoy SIN código: no existe `apps/api-server/src/api_server/cortex/`, ni tablas `cortex_*`, ni `app/admin/cortex`, ni claves Redis `cortex:*`). Este plan **reutiliza el modo voz del asistente (ADR 0073) verbatim** y lo conecta al cerebro + afecto del córtex. La migración encadena desde `0091` (HEAD actual) → **`0092`**.
+> **Auditoría 2026-07-27 — las casillas de este plan se verificaron una a una
+> contra el código.** Las marcadas `[x]` lo están con evidencia `file:line` y una
+> segunda pasada adversarial; las que siguen sin marcar tienen su hueco concreto
+> descrito en
+> [`gaps-cortex-2026-07-27.md`](gaps-cortex-2026-07-27.md) (informe:
+> [`auditoria-cortex-2026-07-27.md`](auditoria-cortex-2026-07-27.md)).
+> Antes de implementar una casilla sin marcar, **abre el fichero**: la pasada
+> adversarial dio al menos un falso positivo comprobado.
+
+> **✅ IMPLEMENTADO Y DESPLEGADO** (verificado 2026-07-06 — auditoría de estado del roadmap). La
+> frase "hoy SIN código: no existe `apps/api-server/src/api_server/cortex/`" es falsa desde el
+> primer commit de F1 (2026-06-24): el directorio existe con 18+ ficheros. Código real de F5:
+> `cortex/voice_affect.py`, `voice_turn.py`, router `cortex_voice.py` (WS `/ws/owner/cortex/voice`),
+> `cortex/forgetting.py` (olvido, docstring propio "Córtex F4/F5") + worker `cortex_maintenance.py`
+> (entrada `sched["cortex-maintenance"]`), con `test_cortex_voice_ws.py`/`test_cortex_voice_turn.py`/
+> `test_cortex_forgetting.py` en verde, y frontend `cortex-voice-call.tsx`/`cortex-avatar.tsx`. Ver
+> [cortex-identidad-real.md](cortex-identidad-real.md) para `recall_frequency` real (este plan lo
+> dejaba a 1.0 hardcodeado). Checkboxes de tareas NO re-verificados línea a línea; el status
+> refleja el veredicto agregado, no un cierre formal con changelog propio.
 
 ## Objetivo
 
@@ -56,7 +75,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
 
 ### Fase A — Modulación de voz por arousal (sustrato medios, NO gated por F1)
 
-- [ ] **A1. `HttpTextToSpeech.synthesize(speed=...)` — parámetro de velocidad Kokoro**
+- [x] **A1. `HttpTextToSpeech.synthesize(speed=...)` — parámetro de velocidad Kokoro**
   - Ficheros: `apps/api-server/src/api_server/assistant/voice_clients.py` (modificar: añadir `speed: float = 1.0` a `synthesize` y al `Protocol TextToSpeech`, incluyéndolo en el payload `/v1/audio/speech` sólo si `!= 1.0`).
   - TDD:
     1. Escribe en `tests/unit/test_voice_session.py` un test nuevo `test_http_tts_forwards_speed_param`: monta `httpx.MockTransport`, llama `synthesize("hola", voice="ef_dora", speed=1.4)`, asserta que `body["speed"] == 1.4`. Falla (no existe el kwarg).

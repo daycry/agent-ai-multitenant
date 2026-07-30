@@ -188,8 +188,9 @@ async def test_task_crud_with_status_moves(configured_app, migrations_pg_dsn: st
         listed = await client.get(base, headers=headers)
         assert {t["id"] for t in listed.json()} == {task_id}
 
-        # Status move: backlog -> in_progress -> done
-        for new_status in ("in_progress", "done"):
+        # Status move through the LEGAL pipeline (c1/T2: PUT enforces the state
+        # machine — backlog→in_progress is now a 409, must go via ready/in_review).
+        for new_status in ("ready", "in_progress", "in_review", "done"):
             upd = await client.put(
                 f"{base}/{task_id}",
                 json={"status": new_status},
@@ -267,6 +268,42 @@ async def test_task_dependencies_lifecycle(configured_app, migrations_pg_dsn: st
 
 
 @pytest.mark.asyncio
+async def test_delete_task_blocked_when_others_depend_on_it(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """HARDDEP: borrar un prerequisito del que otra tarea depende dejaría al
+    dependiente vacuamente elegible (task_dependencies CASCADEa) → promocionaría a
+    ready como si el prerequisito hubiera terminado. El DELETE debe dar 409 hasta
+    que se retire la arista; borrar el DEPENDIENTE (hoja) sí se permite."""
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/projects/{seeded['project_a']}/tasks"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        prereq = (await client.post(base, json={"title": "Prereq"}, headers=headers)).json()["id"]
+        dependent = await client.post(
+            base, json={"title": "Dependent", "depends_on": [prereq]}, headers=headers
+        )
+        dependent_id = dependent.json()["id"]
+
+        # Borrar el prerequisito con un dependiente vivo → 409 (no corromper el DAG).
+        blocked = await client.delete(f"{base}/{prereq}", headers=headers)
+        assert blocked.status_code == 409, blocked.text
+        # Sigue existiendo (no se borró).
+        assert (await client.get(f"{base}/{prereq}", headers=headers)).status_code == 200
+
+        # Borrar la hoja (nadie depende de ella) sí se permite.
+        leaf = await client.delete(f"{base}/{dependent_id}", headers=headers)
+        assert leaf.status_code == 204
+        # Y ahora el prerequisito ya se puede borrar.
+        now_ok = await client.delete(f"{base}/{prereq}", headers=headers)
+        assert now_ok.status_code == 204
+
+
+@pytest.mark.asyncio
 async def test_task_dependency_must_be_same_project(configured_app, migrations_pg_dsn: str) -> None:
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
@@ -292,9 +329,11 @@ async def test_task_dependency_must_be_same_project(configured_app, migrations_p
 
 
 @pytest.mark.asyncio
-async def test_task_self_dependency_blocked_by_db(configured_app, migrations_pg_dsn: str) -> None:
-    """ck_task_dependencies_no_self_loop must fire even if the app would
-    let it through. We trigger this by PUTting depends_on=[<own id>]."""
+async def test_task_self_dependency_rejected(configured_app, migrations_pg_dsn: str) -> None:
+    """La autodependencia se rechaza en la capa API con 422 (validación
+    aguas arriba); el CHECK de BD ck_task_dependencies_no_self_loop queda
+    como candado de último recurso (antes este test forzaba el 409 de la
+    constraint porque la app la dejaba pasar)."""
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
@@ -310,7 +349,7 @@ async def test_task_self_dependency_blocked_by_db(configured_app, migrations_pg_
             json={"depends_on": [task_id]},
             headers=headers,
         )
-    assert resp.status_code == 409
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -48,6 +48,12 @@ def test_completed_only_archives_next() -> None:
     assert allowed_transitions("completed") == frozenset({"archived"})
 
 
+def test_rejected_can_reopen_by_accepting_corrections() -> None:
+    """ADR 0107: aceptar tareas correctivas reactiva el plan rechazado
+    (rejected -> in_progress), además de los destinos clásicos."""
+    assert allowed_transitions("rejected") == frozenset({"draft", "archived", "in_progress"})
+
+
 def test_transition_function_stamps_approved_metadata() -> None:
     """Going INTO `approved` records approved_at and approved_by;
     other transitions only touch `status`."""
@@ -205,21 +211,48 @@ async def test_router_advances_a_legal_transition_chain(
     ) as client:
         create = await client.post(
             f"/projects/{seeded['project_id']}/plans",
-            json={"title": "lifecycle plan"},
+            # PROY2: un plan sin tareas no puede aprobarse — la spec mínima
+            # lleva una tarea para que el gate del approve pase.
+            json={
+                "title": "lifecycle plan",
+                "specification": {
+                    "tasks": [
+                        {
+                            "id": "t1",
+                            "role": "backend_dev",
+                            "title": "una tarea",
+                            "description": "trabajo",
+                        }
+                    ]
+                },
+            },
             headers=headers,
         )
         assert create.status_code == 201
         plan_id = create.json()["id"]
         assert create.json()["status"] == "draft"
 
-        for next_status in ("pending_approval", "approved"):
-            upd = await client.put(
-                f"/plans/{plan_id}",
-                json={"status": next_status},
-                headers=headers,
-            )
-            assert upd.status_code == 200, upd.text
-            assert upd.json()["status"] == next_status
+        upd = await client.put(
+            f"/plans/{plan_id}",
+            json={"status": "pending_approval"},
+            headers=headers,
+        )
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["status"] == "pending_approval"
+
+        # PROY2-01: la transición a `approved` es PRIVILEGIADA — el PUT
+        # genérico la rechaza (403 con puntero al endpoint gated) y solo
+        # POST /plans/{id}/approve (RBAC + doble firma) la ejecuta.
+        via_put = await client.put(
+            f"/plans/{plan_id}",
+            json={"status": "approved"},
+            headers=headers,
+        )
+        assert via_put.status_code == 403
+        assert via_put.json()["detail"]["error"] == "privileged_transition_requires_gated_endpoint"
+        upd = await client.post(f"/plans/{plan_id}/approve", headers=headers)
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["status"] == "approved"
 
         # `approved` stamps approved_at + approved_by.
         body = upd.json()
@@ -245,17 +278,28 @@ async def test_router_rejects_illegal_transition_with_409(
         )
         plan_id = create.json()["id"]
 
-        # draft -> completed is not allowed.
+        # draft -> completed: `completed` es además PRIVILEGIADO (PROY2-02),
+        # así que el guard de privilegio responde ANTES que el de legalidad.
         bad = await client.put(
             f"/plans/{plan_id}",
             json={"status": "completed"},
+            headers=headers,
+        )
+        assert bad.status_code == 403
+        assert bad.json()["detail"]["error"] == "privileged_transition_requires_gated_endpoint"
+
+        # draft -> pending_human_validation: ilegal y NO privilegiado → el 409
+        # de la máquina de estados con el par ofensor.
+        bad = await client.put(
+            f"/plans/{plan_id}",
+            json={"status": "pending_human_validation"},
             headers=headers,
         )
         assert bad.status_code == 409
         body = bad.json()
         assert body["detail"]["error"] == "invalid_plan_transition"
         assert body["detail"]["from"] == "draft"
-        assert body["detail"]["to"] == "completed"
+        assert body["detail"]["to"] == "pending_human_validation"
 
         # The plan stayed in draft despite the failed call.
         again = await client.get(f"/plans/{plan_id}", headers=headers)

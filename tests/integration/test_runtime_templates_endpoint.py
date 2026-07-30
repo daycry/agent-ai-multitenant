@@ -191,7 +191,7 @@ async def test_runtime_templates_projects_full_catalog(
     by_id = {row["id"]: row for row in body}
 
     py = by_id["python-pytest"]
-    assert py["dep_cache_mount"] == "/root/.cache/pip"
+    assert py["dep_cache_mount"] == "/home/agent/.cache/pip"
     assert py["network_policy"] == "none"
     # ES + EN labels are served from the backend (not hardcoded in the front).
     assert py["label"]["es"]

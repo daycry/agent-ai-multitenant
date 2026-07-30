@@ -1,9 +1,9 @@
 ---
 plan_id: prod-12-hardening-tools-agentes
 title: Hardening de tools de agentes — SSRF, egress, reaper y marketplace
-status: pending_approval
+status: pending_human_validation
 blocking_plan: null
-started_at: null
+started_at: 2026-06-30
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 17
@@ -22,7 +22,7 @@ priority: P1
 | Campo                              | Valor                                  |
 | ---------------------------------- | -------------------------------------- |
 | **ID del Plan**                    | `prod-12-hardening-tools-agentes`      |
-| **Estado**                         | `pending_approval`                     |
+| **Estado**                         | `in_progress`                          |
 | **Prioridad**                      | P1                                     |
 | **Bloqueado por**                  | — (coordinar con prod-01 y prod-06)    |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                            |
@@ -30,6 +30,31 @@ priority: P1
 | **Rama git sugerida**              | `plan/prod-12-hardening-tools-agentes` |
 
 ---
+
+> **Estado (2026-07-06, auditoría de roadmap)**: frontmatter corregido de `pending_approval`/
+> `started_at: null` a `in_progress`/`started_at: 2026-06-30` para que coincida con la nota que el
+> propio cuerpo del documento ya llevaba fechada en `task_prod12_net_01` (ADR 0094 aprobado, mitad
+> de la tarea implementada y desplegada — ver esa sección para el detalle). El resto del plan
+> (marketplace, reaper, resto de SSRF/egress) sigue sin empezar.
+>
+> **Estado (2026-07-08, tanda autónoma)**: **Fases A y B COMPLETAS** (`9cd2eb5` — ssrf*01/02/03 +
+> allow_01/02, ver nota en la Fase A) y **task_prod12_docker_01 HECHA** (`4d53f92`, opción b).
+> **task_prod12_mkt_01 investigada y BLOQUEADA**: `InstallOrchestrator.install()` (gates
+> completos) existe, pero corre sobre el `source_dir` de un artefacto FETCHEADO — la primera
+> instalación no tiene registry de artefactos ni materialización del contenido del listing
+> (el mismo gap H4/M1 de la auditoría de marketplace 2026-06-24); cablear solo el analizador
+> exige antes materializar el manifest a disco. Pendientes: net_01 (mitad marketplace),
+> img_01, reaper_01, mkt_01 (tras materialización), av_01 (+ADR corto), cadv_01, docs_01
+> (añadir además: UI del panel para `allowed_domains` y el follow-up de retirar run*\* de
+> seeds — docker_01 opción a).
+>
+> **Estado (2026-07-08, 2ª pasada — DESBLOQUEO de mkt_01)**: la lectura «bloqueada» era más
+> estricta de lo necesario — el gate de análisis NO exige registry: cuando el artefacto del
+> listing existe en disco (`MARKETPLACE_ARTIFACT_ROOT`, catálogo oficial) se analiza; cuando
+> no existe, se registra un skip honesto (`no_artifact`) sin cerrar en falso el catálogo
+> pre-registry (ADR 0081 sigue documentando el gap de firma+sandbox). **mkt_01 HECHA**
+> (`03f7251`) y **net_01 CERRADA** (mitad marketplace: bridge interno siempre, registry-proxy
+> y texto de consentimiento — ver nota en la tarea). Solo queda **docs_01** de este plan.
 
 ## Resumen
 
@@ -124,9 +149,21 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 ### Fase A — Defensa SSRF en las tools HTTP del agent-runtime (gap4-1, gap4-3)
 
+> **HECHAS (2026-07-08, `9cd2eb5`) — Fases A y B completas.** Variantes de ubicación respecto al
+> plan: los tests del runtime viven en `docker/agent-runtimes/agent-runtime/tests/` (convención
+> del árbol) — `test_ssrf_guard.py` (20) y `test_http_tools_destination_validation.py` (7); la
+> validación del api-server en `tests/integration/test_allowed_domains_validation.py` (12, con
+> la migración 0105 que CREA la columna `projects.allowed_domains` — no existía); el cableado en
+> `tests/unit/test_execution_request_allowed_domains.py` (6, incluye el test-centinela del
+> riesgo 1) y el e2e de la cadena en `tests/e2e/test_agent_http_allowlist_chain.py` (5, sin
+> Docker: seams de resolver/transporte sobre el código de producción). El opt-in sandbox para
+> rangos privados on-prem (decisión de task_prod12_ssrf_03) queda deliberadamente SIN
+> implementar — documentado en `docs/04-reference/tools.md`. Falta la UI del panel para editar
+> `allowed_domains` (hoy vía API), anotado en task_prod12_docs_01.
+
 #### `task_prod12_ssrf_01` — Guard de destino con resolución y validación de IP
 
-- [ ] **Título**: Crear `agent_runtime/ssrf_guard.py` (módulo compartido) que: resuelva
+- [x] **Título**: Crear `agent_runtime/ssrf_guard.py` (módulo compartido) que: resuelva
       el hostname UNA vez (`getaddrinfo`, A y AAAA), valide TODAS las IPs resueltas con
       `ipaddress` (`is_private`, `is_loopback`, `is_link_local`, `is_reserved`,
       `is_multicast`, más 169.254.169.254 y fd00::/8/::1 explícitos) y rechace si
@@ -147,7 +184,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_ssrf_02` — Anclaje de DNS y `follow_redirects=False` explícito
 
-- [ ] **Título**: Cerrar la ventana TOCTOU: conectar a la IP validada (transporte httpx
+- [x] **Título**: Cerrar la ventana TOCTOU: conectar a la IP validada (transporte httpx
       con resolución fijada/cacheada preservando Host y SNI, decisión 1) en vez de dejar
       que `client.stream()` re-resuelva (http_tool.py:54-56, http_endpoint_tool.py:149-156).
       Pasar `follow_redirects=False` de forma EXPLÍCITA al construir `httpx.Client()` en
@@ -164,7 +201,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_ssrf_03` — Validar las entradas de allowlist en el api-server
 
-- [ ] **Título**: En el endpoint del api-server que persiste `allowed_domains` del
+- [x] **Título**: En el endpoint del api-server que persiste `allowed_domains` del
       proyecto, validar cada entrada: rechazar IP literales, `localhost`, nombres
       no-FQDN y los hostnames internos del compose (vault, api-server, redis, postgres,
       minio…), salvo opt-in explícito de proyecto sandbox (plantilla de validación
@@ -182,7 +219,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_allow_01` — Propagar `allowed_domains` del proyecto al spec del agente
 
-- [ ] **Título**: Añadir el campo `allowed_domains` a `ExecutionRequest`
+- [x] **Título**: Añadir el campo `allowed_domains` a `ExecutionRequest`
       (apps/workers/src/workers/execution.py:91-146, incluyendo `as_dict`/`from_dict`),
       poblarlo en el dispatcher/orchestrator desde el campo del proyecto, y emitirlo en
       `_agent_spec` (execution.py:226) para que `__main__.py:120` del runtime deje de
@@ -200,7 +237,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_allow_02` — Test e2e de la cadena de allowlist + documentación
 
-- [ ] **Título**: Test e2e: proyecto con `allowed_domains=["example.com"]` → el agente
+- [x] **Título**: Test e2e: proyecto con `allowed_domains=["example.com"]` → el agente
       alcanza example.com con `http_get`, recibe rechazo claro para cualquier otro host,
       para IP literales y para hosts que resuelven a rango privado. Documentar en
       `docs/04-reference/` la semántica (lista vacía = deny-all, defensa de IP siempre
@@ -219,7 +256,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_net_01` — `network_policy='open'` sin internet crudo
 
-- [ ] **Título**: Redactar ADR (decisión 2) y, tras aprobación, implementar: en
+- [x] **Título**: Redactar ADR (decisión 2) y, tras aprobación, implementar: en
       `TestRuntimeRunner._create_bridge` (apps/workers/src/workers/test_runtime.py:581-588,
       hoy `internal = policy != "open"`) y en el sandbox del marketplace
       (apps/api-server/src/api_server/marketplace/sandbox.py:211), la política 'open'
@@ -227,6 +264,20 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       con allowlist por proyecto (opción a) o queda restringida a runtimes confiables
       con auditoría (opción b). En ambos casos: registrar cada uso de 'open' en el audit
       log y reflejar el riesgo en el texto de la consola de consentimiento.
+- **Estado (2026-06-30)**: ADR redactado y aprobado → **ADR 0094** (opción a). La mitad de
+  **`TestRuntimeRunner`** está IMPLEMENTADA + DESPLEGADA + verificada e2e: `_create_bridge` es
+  siempre `internal=True` (fin del NAT crudo de 'open'); el egress va por el nuevo `registry-proxy`
+  (allowlist de registries públicos) que el worker conecta al bridge per-task; audit-log
+  `stack_exec_egress`.
+- **HECHA (2026-07-08) — mitad marketplace**: `marketplace/sandbox.py` con la MISMA semántica —
+  `_create_bridge` siempre `internal=True`; 'open' = attach del `registry-proxy` al bridge +
+  `HTTP(S)_PROXY` inyectado (sin proxy configurado, 'open' queda OFFLINE, nunca NAT crudo);
+  cada uso de 'open' al log estructurado + `SandboxResult.network_policy/proxied_egress` (→
+  audit row del install); texto de la consola de consentimiento actualizado con la semántica
+  real. Tests: `test_install_sandbox.py` re-pineado (bridge interno para TODAS las políticas,
+  attach+env+detach, offline sin proxy). La **allowlist por-proyecto** (registries/git privados
+  con credenciales) es F1 de `registry-egress-followups.md` — diferida por decisión del operador
+  2026-06-30 (solapa con ADR 0067 B0.2, gated).
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -237,7 +288,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 #### `task_prod12_img_01` — Imágenes de test-runtime no-root y dep-cache escribible
 
-- [ ] **Título**: Hornear `USER 1000:1000` y un home escribible (`/home/agent`) en los
+- [x] **Título**: Hornear `USER 1000:1000` y un home escribible (`/home/agent`) en los
       Dockerfiles de los templates de test-runtime (p.ej.
       docker/agent-runtimes/python-pytest/Dockerfile:32, hoy sin `USER`, y el resto del
       catálogo), igual que ya hace el agent-runtime como defensa en profundidad. Alinear
@@ -245,6 +296,10 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       (`/root/.cache/pip`, `/root/.nuget/packages`…) con rutas bajo `/home/agent`
       escribibles por el uid 1000 que el worker fuerza (test_runtime.py:756) — hoy el
       cacheo de dependencias falla en silencio y reinstala en cada run.
+- **Nota (2026-06-30, ADR 0094)**: la alineación `cache_env` por plantilla ya se añadió (apunta cada
+  tool a su `dep_cache_mount` montado). composer/npm/go cachean por el bind-mount uid-1000;
+  pip/gem/nuget-global que escriben en rutas root SIGUEN necesitando esta tarea (imágenes
+  `USER 1000` + home escribible). Ver `docs/roadmap/registry-egress-followups.md` (F4).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -258,9 +313,31 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 
 ### Fase D — Reaper de huérfanos y tool `docker_command` (sandbox-5, sandbox-7)
 
+> **HECHA (2026-07-08) — task_prod12_docker_01, opción (b) del propio item**: el executor
+> `DockerCommandTool` falla rápido con error accionable («not supported inside the agent
+> sandbox… use stack*exec, ADR 0093») sin tocar `docker.from_env()`; el seam de tests conserva
+> el camino real. Test `tests/test_docker_command_tool_retired.py` + el boot-test actualizado
+> (antes solo pasaba inyectando un módulo `docker` fake — el camino muerto exacto del hallazgo).
+> Se eligió (b) sobre la (a) recomendada deliberadamente: con `stack_exec` como vía real ya
+> desplegada, extirpar la familia del catálogo/seeds (run*\* en builtin_tools + equipos) es
+> cirugía de producto con estado en BD — queda anotada como follow-up en task_prod12_docs_01.
+
+> **HECHAS (2026-07-08) — task_prod12_img_01 y task_prod12_cadv_01**:
+> img_01: los 14 templates hornean `/home/agent` (chown 1000) + `ENV HOME` + `USER 1000:1000`
+> (numérico — uniforme debian/alpine) y el catálogo repunta TODOS los dep-caches y `cache_env`
+> de `/root/...`//`/usr/local/...` a `/home/agent/...`; imágenes PHP reconstruidas y verificadas
+> (uid 1000, HOME escribible). Tests: `test_runtime_catalog_dep_cache_paths.py` +
+> `test_test_runtime_nonroot_cache.py` (+ 35 de regresión dep-cache/launch actualizados).
+> cadv_01: **opción (a) validada empíricamente** (sonda no-privileged + cap-drop ALL sirve
+> container_cpu/memory/network/fs) → cAdvisor sin `privileged` ni `/dev/kmsg` en el generador Y
+> en el overlay de dev, con apparmor pineado; los DOS xfail-cuarentena de sandbox-8
+> (apparmor/seccomp) retirados y los sets del pentest endurecidos (0 servicios privileged).
+> Trade-off (OOM-kill events) + override opt-in documentados en
+> `docs/06-runbooks/monitoring-cadvisor.md`.
+
 #### `task_prod12_reaper_01` — Reaper beat de contenedores y redes huérfanos
 
-- [ ] **Título**: Nueva tarea beat en apps/workers/src/workers/maintenance.py (registrada
+- [x] **Título**: Nueva tarea beat en apps/workers/src/workers/maintenance.py (registrada
       en beat_schedule.py) que liste `containers.list(filters={'label':
 'com.agentic-platform.managed=true'})` (el label ya se estampa en container.py:31
       "para encontrar y reapear huérfanos"), identifique los que no tienen ejecución viva
@@ -278,9 +355,16 @@ de ingestión es fail-open si ClamAV está caído (api-1).
     command: "pytest tests/integration/test_orphan_container_reaper.py -v"
   ```
 
+> **HECHA (2026-07-08) — task_prod12_reaper_01**: `workers.reap_orphans` (cada 10 min,
+> `maintenance/orphan_reaper.py`) — contenedores `managed=true` sin asociación VIVA (execution
+> `running` / review `running|suspended`; criterio de vida COMPARTIDO con el sweeper de zombis
+> de prod-06, nunca doble-kill) + redes bridge de test-runtime vacías; gracia anti-carrera 10
+> min; sin label de asociación solo cae a hard-limit+25 %. `idle_sweep_pools` se conserva (es el
+> heartbeat de pools in-process, otra cosa). Test `tests/integration/test_orphan_container_reaper.py`.
+
 #### `task_prod12_docker_01` — Retirar (o degradar con error claro) la tool `docker_command`
 
-- [ ] **Título**: Aplicar la decisión 3: la tool `docker_command`
+- [x] **Título**: Aplicar la decisión 3: la tool `docker_command`
       (docker/agent-runtimes/agent-runtime/agent*runtime/docker_command_tool.py:139)
       hace `docker.from_env()` dentro del sandbox, pero la imagen no instala el paquete
       `docker` (pyproject.toml:6) ni recibe socket por diseño (Dockerfile:8 "carries NO
@@ -302,7 +386,7 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_mkt_01` — Análisis estático en la PRIMERA instalación del marketplace
 
-- [ ] **Título**: Cablear `InstallOrchestrator._run_static_analysis`
+- [x] **Título**: Cablear `InstallOrchestrator._run_static_analysis`
       (apps/api-server/src/api_server/marketplace/install.py:618, bandit/semgrep ya
       implementados y funcionando) también en `install_listing`
       (routers/marketplace.py:902, donde vive el `TODO(Plan 09 Fase B/C)`), igual que ya
@@ -310,6 +394,12 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
       Persistir los hallazgos del análisis y respetar el gate de consentimiento existente
       (community/experimental instalan DISABLED hasta consentir). Test que verifica que
       install y update pasan por el MISMO pipeline de análisis.
+- **HECHA (2026-07-08, `03f7251`)**: `InstallOrchestrator.analyze_for_install` (mismo
+  `_gate_static_analysis` del update) cableado en `install_listing`; bloqueo → 422 + audit
+  de aborto; artefacto ausente → skip honesto `no_artifact` (no cierra en falso el catálogo
+  pre-registry, ADR 0081); informe en `detail.gates.static_analysis`; consent gate intacto.
+  Test `test_marketplace_install_static_analysis.py` (4) incluye el pin «mismo pipeline»
+  (el MISMO analyzer inyectado ve install y update).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -320,7 +410,7 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_av_01` — Antivirus fail-closed configurable con `pending_scan`
 
-- [ ] **Título**: Aplicar la decisión 4 (tras ADR corto aprobado): en el pipeline de
+- [x] **Título**: Aplicar la decisión 4 (tras ADR corto aprobado): en el pipeline de
       ingestión (apps/api-server/src/api_server/ingestion/pipeline.py:101-107), ante
       `AntivirusVerdict.ERROR` (clamd inalcanzable/timeout, antivirus.py:101) NO indexar:
       dejar el documento en estado `pending_scan` y reintentar vía el sweep de Celery
@@ -336,11 +426,19 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
     command: "pytest tests/integration/test_ingestion_av_fail_closed.py -v"
   ```
 
+> **HECHA (2026-07-08) — task_prod12_av_01, ADR 0105 (opción a de la decisión 4)**:
+> fail-closed por defecto (`WORKERS_AV_FAILURE_MODE`, `fail_open` solo dev/sandbox); ante
+> `AntivirusVerdict.ERROR` el documento queda en `pending_scan` (CHECK ampliada, migración
+> **0106**, reversible) y el sweep de pendientes existente lo re-encola solo; notificación
+> `antivirus_unreachable` (in_app+telegram, umbral 15 min, re-aviso 6 h) registrada en el
+> notification-dispatcher con plantillas es/en. Tests: `test_ingestion_av_fail_closed.py`
+> (fail-closed, fail-open legacy, sweep re-encola) + regresión ingesta y dispatcher verdes.
+
 ### Fase F — cAdvisor y cierre documental (sandbox-8)
 
 #### `task_prod12_cadv_01` — Minimizar privilegios de cAdvisor o documentar el trade-off
 
-- [ ] **Título**: Aplicar la decisión 5 sobre el servicio cAdvisor del overlay de
+- [x] **Título**: Aplicar la decisión 5 sobre el servicio cAdvisor del overlay de
       monitoring (apps/installer/backend/src/installer_backend/compose_generator.py:636,
       hoy `privileged: True` + `/dev/kmsg` + montajes `/:/rootfs:ro`,
       `/var/run:/var/run:ro` — que expone el socket Docker en lectura — y
@@ -358,13 +456,22 @@ documentando que la ejecución real de tests va por`TestRuntimeRunner` del worke
 
 #### `task_prod12_docs_01` — Documentación de referencia y runbook
 
-- [ ] **Título**: Actualizar `docs/04-reference/` con la superficie endurecida: semántica
+- [x] **Título**: Actualizar `docs/04-reference/` con la superficie endurecida: semántica
       de `allowed_domains` y defensas SSRF de las tools HTTP, semántica final de
       `network_policy` (según ADR de la decisión 2), catálogo de tools sin
       `docker_command` (o con su error documentado), modo de fallo del antivirus y
       estados de documento (`pending_scan`). Añadir al runbook de monitoring el apartado
       de cAdvisor y, si aparecieron trampas de toolchain durante el plan, registrarlas
       en `docs/03-guides/gotchas/`.
+- **HECHA (2026-07-09)**: `04-reference/tools.md` (SSRF/allowed*domains ya estaba; añadido
+  «docker_command retirada → stack_exec» y la tabla final de `network_policy` ADR 0094),
+  `04-reference/marketplace.md` (gate de análisis en el install + sandbox sin NAT crudo),
+  `04-reference/domain-model.md` (`pending_scan` + `rejected` no-terminal ADR 0107);
+  runbook `06-runbooks/monitoring-cadvisor.md` ya escrito con cadv_01; gotchas registradas
+  durante el plan (build del panel, base-image de workers/orchestrator). Guías nuevas:
+  `03-guides/app-review-images.md` y `03-guides/validacion-humana-de-planes.md`.
+  Follow-ups que NO entran aquí: UI de `allowed_domains` en ajustes del proyecto y
+  retirada total de `run*\*`de seeds (F5) — anotados en`registry-egress-followups.md`.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Depende de**: task_prod12_allow_02, task_prod12_net_01, task_prod12_docker_01, task_prod12_av_01, task_prod12_cadv_01
 - **Tests automáticos**: no aplica (documentación); el gate es la revisión humana del PR.

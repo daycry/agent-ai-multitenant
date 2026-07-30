@@ -10,6 +10,7 @@ a task move it to status='cancelled' or 'done' via PUT instead.
 
 from __future__ import annotations
 
+import contextlib
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -22,21 +23,31 @@ from api_server.auth.deps import (
     AuthPrincipal,
     get_redis,
     get_tenant_session,
+    principal_is_tenant_admin,
     require_tenant_admin,
     require_tenant_member,
     schedule_after_commit,
 )
 from api_server.celery_client import revoke_job_callback
+from api_server.chat.criteria_llm import (
+    format_sibling_context,
+    generate_task_acceptance_criteria,
+)
+from api_server.chat.dag import DAGCycleError, assert_acyclic_with_override
 from api_server.chat.dag_enforcement import (
     DependenciesNotDoneError,
     assert_dependencies_done,
 )
-from api_server.db.domain import Project, Task, TaskDependency, TaskStatus
+from api_server.chat.planning_llm import _clean_acceptance_criteria
+from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
+from api_server.db.domain import Plan, Project, Task, TaskDependency, TaskStatus
 from api_server.db.execution_repo import cancel_running_executions_for_task
 from api_server.events import publish_task_created, publish_task_status_changed
+from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
+    require_project_active,
     require_tenant_id,
 )
 from api_server.routers._pagination import (
@@ -44,12 +55,16 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
+from api_server.routers.llm_providers import get_provider_vault_store
+from api_server.routers.task_lifecycle import reactivate_plan_if_unstuck
 from api_server.schemas.tasks import (
+    GeneratedAcceptanceCriteria,
     TaskCreateRequest,
     TaskResponse,
     TaskUpdateRequest,
     to_task_response,
 )
+from api_server.task_state_machine import allowed_transitions
 
 router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 
@@ -69,6 +84,27 @@ async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Pr
     return project
 
 
+async def _plan_sibling_context(session: AsyncSession, task: Task) -> str:
+    """Digest of the OTHER tasks in this task's plan (title + criteria) so criteria
+    generation stays coherent with a sibling's decisions (a shared response
+    contract, an error format, …). Empty when the task belongs to no plan.
+
+    This is the fix for the CI4 "Implementar controladores" block: without it the
+    generator emitted a "ResponseTrait" criterion that contradicted a sibling
+    contract task's ``{message, meta}`` shape, making the self-review unsatisfiable."""
+    if task.plan_id is None:
+        return ""
+    rows = (
+        await session.execute(
+            select(Task.title, Task.acceptance_criteria).where(
+                Task.plan_id == task.plan_id, Task.id != task.id
+            )
+        )
+    ).all()
+    siblings = [(str(title), _clean_acceptance_criteria(criteria)) for title, criteria in rows]
+    return format_sibling_context(siblings)
+
+
 async def _load_dependencies(session: AsyncSession, task_id: UUID) -> list[UUID]:
     result = await session.execute(
         select(TaskDependency.depends_on_task_id).where(TaskDependency.task_id == task_id)
@@ -76,20 +112,51 @@ async def _load_dependencies(session: AsyncSession, task_id: UUID) -> list[UUID]
     return [r[0] for r in result.all()]
 
 
+async def _assert_no_dependency_cycle(
+    session: AsyncSession, task_id: UUID, project_id: UUID, depends_on: list[UUID]
+) -> None:
+    """Rechaza (422 ``dag_cycle``) si sustituir las aristas de ``task_id`` por
+    ``depends_on`` cerrase un ciclo en el grafo de dependencias del proyecto."""
+    task_ids = list(
+        (await session.execute(select(Task.id).where(Task.project_id == project_id)))
+        .scalars()
+        .all()
+    )
+    edge_rows = (
+        await session.execute(
+            select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                TaskDependency.task_id.in_(task_ids)
+            )
+        )
+    ).all()
+    edges: dict[str, list[str]] = {str(t): [] for t in task_ids}
+    for tid, dep in edge_rows:
+        edges.setdefault(str(tid), []).append(str(dep))
+    try:
+        assert_acyclic_with_override(edges, str(task_id), [str(d) for d in depends_on])
+    except DAGCycleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"error": "dag_cycle", "cycle": exc.cycle},
+        ) from exc
+
+
 async def _set_dependencies(
     session: AsyncSession, task_id: UUID, project_id: UUID, depends_on: list[UUID]
 ) -> None:
     """Replace the task's dependencies atomically. All referenced tasks
     must belong to the same project (cross-project deps don't make sense
-    in this MVP)."""
+    in this MVP) AND the same plan (PROY2-05), and the resulting graph must
+    stay acyclic across the whole project (PROY2-04)."""
     if depends_on:
         result = await session.execute(
-            select(Task.id).where(
+            select(Task.id, Task.plan_id).where(
                 Task.id.in_(depends_on),
                 Task.project_id == project_id,
             )
         )
-        present = {r[0] for r in result.all()}
+        rows = result.all()
+        present = {r[0] for r in rows}
         missing = set(depends_on) - present
         if missing:
             missing_ids = sorted(str(x) for x in missing)
@@ -97,6 +164,24 @@ async def _set_dependencies(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"dependency task(s) not found in this project: {missing_ids}",
             )
+
+        # PROY2-05: una tarea solo puede depender de tareas de SU MISMO plan
+        # (o ambas free-tasks: plan_id NULL). Una dependencia cross-plan
+        # crearía un DAG que ningún plan puede completar de forma coherente.
+        this_plan = (
+            await session.execute(select(Task.plan_id).where(Task.id == task_id))
+        ).scalar_one_or_none()
+        cross = sorted(str(tid) for tid, pid in rows if pid != this_plan)
+        if cross:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "cross_plan_dependency", "task_ids": cross},
+            )
+
+        # PROY2-04: rechazar ciclos sobre el grafo de TODO el proyecto — un ciclo
+        # puede construirse en dos PUT (A→B, luego B→A) que el validador del spec
+        # por-request no ve.
+        await _assert_no_dependency_cycle(session, task_id, project_id, depends_on)
 
     await session.execute(sql_delete(TaskDependency).where(TaskDependency.task_id == task_id))
     for dep_id in depends_on:
@@ -180,6 +265,58 @@ async def get_task(
 
 
 # ---------------------------------------------------------------------------
+# POST /projects/{project_id}/tasks/{task_id}/generate-acceptance-criteria
+# ---------------------------------------------------------------------------
+@router.post(
+    "/{task_id}/generate-acceptance-criteria",
+    response_model=GeneratedAcceptanceCriteria,
+)
+async def generate_acceptance_criteria(
+    project_id: UUID,
+    task_id: UUID,
+    _: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+) -> GeneratedAcceptanceCriteria:
+    """Propose acceptance criteria for one task via the project's chat LLM
+    (ADR 0021), taking any EXISTING criteria into account so a regenerate
+    refines rather than ignores them. Does NOT persist: the operator reviews
+    (and confirms against a comparison when the task already had criteria)
+    before saving via PUT."""
+    project = await _verify_project_visible(session, project_id)
+    result = await session.execute(
+        select(Task).where(Task.id == task_id, Task.project_id == project_id)
+    )
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
+
+    sibling_context = await _plan_sibling_context(session, task)
+
+    effective = await resolve_chat_model_config(session, project)
+    provider, _kind, api_model = await _resolve_chat_provider(session, effective, vault)
+    if provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay proveedor LLM configurado para el chat de este proyecto.",
+        )
+    try:
+        proposal = await generate_task_acceptance_criteria(
+            provider,
+            title=task.title,
+            description=task.description,
+            existing=_clean_acceptance_criteria(task.acceptance_criteria),
+            project_context={"name": project.name, "description": project.description or ""},
+            model=api_model,
+            sibling_context=sibling_context,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await provider.aclose()
+    return GeneratedAcceptanceCriteria(acceptance_criteria=proposal)
+
+
+# ---------------------------------------------------------------------------
 # POST /projects/{project_id}/tasks
 # ---------------------------------------------------------------------------
 @router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
@@ -190,7 +327,34 @@ async def create_task(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    # P1-01: un proyecto pausado/archivado no acepta tareas nuevas.
+    require_project_active(await _verify_project_visible(session, project_id))
+
+    # PROY2-03: una tarea solo puede NACER backlog o ready (no in_progress/done/
+    # in_review/blocked, que saltarían el DAG y su máquina de estados).
+    if payload.status not in (TaskStatus.BACKLOG, TaskStatus.READY):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": "invalid_initial_task_status",
+                "allowed": [TaskStatus.BACKLOG.value, TaskStatus.READY.value],
+            },
+        )
+    # P1-06: si la tarea cuelga de un plan, el plan debe ser VISIBLE (RLS) y del
+    # MISMO proyecto — el FK de Postgres bypassea RLS, así que sin esto una
+    # tarea podría colgar de un plan de otro proyecto (o tenant) y contaminar
+    # el cierre de aquel plan.
+    if payload.plan_id is not None:
+        plan = (
+            await session.execute(
+                select(Plan).where(Plan.id == payload.plan_id, Plan.deleted_at.is_(None))
+            )
+        ).scalar_one_or_none()
+        if plan is None or plan.project_id != project_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "plan_not_in_project", "plan_id": str(payload.plan_id)},
+            )
 
     task = Task(
         tenant_id=tenant_id,
@@ -215,6 +379,13 @@ async def create_task(
     if payload.depends_on:
         await _set_dependencies(session, task.id, project_id, payload.depends_on)
 
+    # Vía (D) del hallazgo #2 (I-1, auditoría 2026-07-10): crear una tarea
+    # avanzable en un plan blocked invalida el bloqueo (ya hay vía de avance) —
+    # misma semántica que la free-task. No-op si el plan no está blocked. Va tras
+    # ``_set_dependencies``: el snapshot debe ver las aristas de la tarea nueva.
+    if payload.plan_id is not None:
+        await reactivate_plan_if_unstuck(session, payload.plan_id)
+
     await session.refresh(task)
     deps = await _load_dependencies(session, task.id)
     # Notify the orchestrator AFTER the request transaction commits (see
@@ -227,6 +398,17 @@ async def create_task(
     return to_task_response(task, deps)
 
 
+async def _reactivate_both_plans(
+    session: AsyncSession, old_plan_id: UUID | None, new_plan_id: UUID | None
+) -> None:
+    """Re-evalúa origen y destino de un movimiento de plan (M-3); no-op por lado
+    cuando no hay plan o el plan no está ``blocked``."""
+    if old_plan_id is not None:
+        await reactivate_plan_if_unstuck(session, old_plan_id)
+    if new_plan_id is not None:
+        await reactivate_plan_if_unstuck(session, new_plan_id)
+
+
 # ---------------------------------------------------------------------------
 # PUT /projects/{project_id}/tasks/{task_id}
 # ---------------------------------------------------------------------------
@@ -235,6 +417,11 @@ async def update_task(
     project_id: UUID,
     task_id: UUID,
     payload: TaskUpdateRequest,
+    force: bool = Query(
+        default=False,
+        description="tenant_admin override: apply an otherwise-illegal status "
+        "transition (c1/T2). Ignored toward `done`.",
+    ),
     principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
@@ -274,11 +461,36 @@ async def update_task(
                 },
             ) from exc
 
+        # c1/T2 (audit 2026-07-03, ratified opt B): the state machine is the SINGLE
+        # gate — an illegal transition is a 409 Conflict (distinct from the DAG 422),
+        # so a drag&drop backlog→done can no longer fake a `done` that the
+        # trg_compute_task_ready trigger amplifies into promoting dependents. Runs AFTER
+        # the DAG check (a pending dependency stays a 422). A tenant_admin may FORCE an
+        # otherwise-illegal move (force=true) EXCEPT toward `done` — a forced false-done
+        # would re-open exactly the amplification this closes. The board uses the AI
+        # table (assignee_agent_type=None); human-task moves go via the human inbox.
+        if payload.status.value not in allowed_transitions(old_status):
+            forced = (
+                force
+                and payload.status.value != TaskStatus.DONE.value
+                and await principal_is_tenant_admin(session, principal)
+            )
+            if not forced:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "illegal_transition",
+                        "from": old_status,
+                        "to": payload.status.value,
+                    },
+                )
+
     # Dependencies are handled out-of-band; remove them from the scalar
     # update so apply_partial_update doesn't try to setattr a list of
     # UUIDs onto the SA column.
     sent = payload.model_fields_set
     deps_change = "depends_on" in sent
+    old_plan_id = task.plan_id
     payload_for_obj = payload.model_copy(update={"depends_on": None})
     payload_for_obj.__pydantic_fields_set__.discard("depends_on")
 
@@ -288,6 +500,14 @@ async def update_task(
         enum_fields=("status", "priority", "estimated_complexity"),
     )
     await session.flush()
+
+    # M-3 (auditoría 2026-07-10, hallazgo #2): mover la tarea de plan re-evalúa
+    # AMBOS extremos — sacar la tarea blocked desatasca el ORIGEN (como borrarla)
+    # y meter una avanzable desatasca el DESTINO (como crearla dentro). No-op en
+    # planes que no estén blocked. Los branches de status/deps de abajo solo
+    # miran task.plan_id (el destino) y solo ante cambio de status/aristas.
+    if task.plan_id != old_plan_id:
+        await _reactivate_both_plans(session, old_plan_id, task.plan_id)
 
     if deps_change:
         await _set_dependencies(session, task.id, project_id, payload.depends_on or [])
@@ -306,6 +526,11 @@ async def update_task(
                 get_redis(), task, old_status=old_status, new_status=new_status
             ),
         )
+        # hallazgo #2 (QA 2026-07-07): dragging a task out of the Bloqueada
+        # column must re-evaluate its blocked plan too — same snapshot-based
+        # reversal as the human actions (task_lifecycle).
+        if old_status == TaskStatus.BLOCKED.value and task.plan_id is not None:
+            await reactivate_plan_if_unstuck(session, task.plan_id)
         # prod-06 cancel_01: cancelling a task in flight must also cancel its
         # running execution(s) — seal cancel_requested_at (the worker polls it
         # to kill the container + finalise as cancelled) and revoke the queued
@@ -314,6 +539,12 @@ async def update_task(
             for execution in await cancel_running_executions_for_task(session, task.id):
                 if execution.celery_task_id:
                     schedule_after_commit(session, revoke_job_callback(execution.celery_task_id))
+    # hallazgo #2: editar SOLO las dependencias (sin cambio de status) puede
+    # desatascar un backlog transitivamente bloqueado (quitar la arista que lo ata
+    # a la tarea blocked) → re-evaluar el plan. El branch de status de arriba ya
+    # cubre las SALIDAS de blocked; aquí basta el caso sin cambio de status.
+    elif deps_change and task.plan_id is not None:
+        await reactivate_plan_if_unstuck(session, task.plan_id)
     return to_task_response(task, deps)
 
 
@@ -338,6 +569,35 @@ async def delete_task(
         extra_filters=(Task.project_id == project_id,),
         soft_delete_aware=False,
     )
-    # task_dependencies rows CASCADE off the task; no manual cleanup.
+    # HARDDEP: refuse to hard-delete a task other tasks DEPEND ON. task_dependencies
+    # has ON DELETE CASCADE on depends_on_task_id, so deleting a prerequisite would
+    # silently drop the dependents' dependency rows → they'd promote to `ready` as if
+    # the prerequisite had completed (DAG corruption). Force the operator to remove
+    # the edge (or delete the dependents) first. Deleting a leaf is unaffected.
+    dependents = (
+        (
+            await session.execute(
+                select(TaskDependency.task_id).where(TaskDependency.depends_on_task_id == task_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if dependents:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"task is a dependency of {len(dependents)} other task(s); "
+                "remove the dependency or delete them first"
+            ),
+        )
+    # hallazgo #2 (QA 2026-07-07): borrar la tarea blocked (hoja) elimina la CAUSA
+    # del bloqueo del plan → re-evaluar. Capturamos plan_id ANTES del delete (el
+    # objeto queda expirado tras el flush). reactivate_plan_if_unstuck es no-op si
+    # el plan no está blocked, así que es seguro llamarlo siempre que haya plan.
+    plan_id = task.plan_id
+    # task_dependencies rows (where this task is the dependent) CASCADE off it.
     await session.delete(task)
     await session.flush()
+    if plan_id is not None:
+        await reactivate_plan_if_unstuck(session, plan_id)

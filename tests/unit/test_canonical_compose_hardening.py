@@ -68,7 +68,8 @@ def test_official_infra_images_keep_self_init_caps() -> None:
     services = _services()
     for name in ("postgres", "redis", "clamav"):
         assert set(services[name].get("cap_add") or []) >= infra_caps, name
-    if "egress-proxy" in services:  # tinyproxy setgid/setuid on start
-        assert set(services["egress-proxy"].get("cap_add") or []) >= infra_caps
+    for proxy in ("egress-proxy", "registry-proxy"):  # tinyproxy setgid/setuid on start
+        if proxy in services:
+            assert set(services[proxy].get("cap_add") or []) >= infra_caps
     vault_caps = set(services["vault"].get("cap_add") or [])
     assert vault_caps >= infra_caps | {"IPC_LOCK", "SETFCAP"}

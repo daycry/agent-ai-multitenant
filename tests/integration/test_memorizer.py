@@ -256,9 +256,11 @@ async def test_full_flow_persists_team_shared_memories(
 
 
 @pytest.mark.asyncio
-async def test_aborted_execution_does_not_persist(schema_at_head, migrations_pg_dsn: str) -> None:
-    """Policy short-circuits before any LLM call."""
-    decision = should_memorize(status="aborted", memory_scope="team_shared")
+async def test_running_execution_does_not_persist(schema_at_head, migrations_pg_dsn: str) -> None:
+    """Policy short-circuits before any LLM call. (P1-1: aborted/failed ahora
+    SÍ son memorizables por defecto — la lección del fracaso; el especimen de
+    estado no-elegible pasa a ser uno no terminal.)"""
+    decision = should_memorize(status="running", memory_scope="team_shared")
     assert decision.memorise is False
     # The integration check: persist_memory_candidates is never called,
     # so no row lands. We assert by counting the table.
@@ -343,3 +345,49 @@ async def _one_candidate(content: str, type_: str):
     from api_server.memorizer.distillation import MemoryCandidate
 
     return MemoryCandidate(content=content, type=type_, tags=())
+
+
+@pytest.mark.asyncio
+async def test_duplicate_content_across_runs_is_deduped(
+    schema_at_head, migrations_pg_dsn: str, app_database_url: str
+) -> None:
+    """P1-2 (investigación 2026-07-11): dos persistencias con el MISMO contenido
+    normalizado en el mismo scope+owner dejan UNA fila — antes cada run que
+    aprendía la misma lección duplicaba para siempre (solo había idempotencia
+    por source_execution_id)."""
+    from api_server.memorizer.persistence import persist_memory_candidates
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    seeded = await _seed(migrations_pg_dsn)
+
+    engine = create_async_engine(app_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        for _attempt in range(2):
+            async with sm() as session:
+                await _set_tenant(session, seeded["tenant_id"])
+                await persist_memory_candidates(
+                    session,
+                    [await _one_candidate("composer.lock  se comitea SIEMPRE", "semantic")],
+                    tenant_id=seeded["tenant_id"],
+                    scope="project_shared",
+                    project_id=seeded["project_id"],
+                    source_execution_id=None,
+                )
+                await session.commit()
+    finally:
+        await engine.dispose()
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        n = await conn.fetchval(
+            "SELECT count(*) FROM memory_entries WHERE tenant_id = $1"
+            " AND content ILIKE '%composer.lock%'",
+            seeded["tenant_id"],
+        )
+    finally:
+        await conn.close()
+    assert n == 1

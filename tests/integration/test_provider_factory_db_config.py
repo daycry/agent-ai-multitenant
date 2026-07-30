@@ -65,6 +65,10 @@ async def _drive(client: Any, handler: Any) -> None:
     provider's per-request `_headers()`, so the mock sees the resolved auth.
     """
     client.provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    # Los providers "owned" crean su httpx client POR LLAMADA (fix del
+    # "Event loop is closed" del planning bridge) e ignoran _client: hay que
+    # marcar el client como inyectado para que _acquire use el mock.
+    client.provider._owns_client = False
     await client.provider.complete([Message(role="user", content="hi")], model="m")
 
 

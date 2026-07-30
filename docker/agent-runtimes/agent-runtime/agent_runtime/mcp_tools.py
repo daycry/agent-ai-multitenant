@@ -11,8 +11,11 @@ How it works:
   - :class:`MCPToolRunner` owns a **background thread** with its own
     asyncio loop. The thread starts at :meth:`MCPToolRunner.start`
     and dies at :meth:`MCPToolRunner.close`.
-  - :meth:`connect` opens one or more MCP sessions inside that loop
-    using an `AsyncExitStack`, so they all close together at shutdown.
+  - :meth:`connect` opens each MCP session inside that loop in a
+    DEDICATED owner task (`_ServerHandle`) that holds the transport's
+    ``async with`` from enter to exit — anyio cancel scopes must exit in
+    the task that entered them, so no other shape survives an HTTP
+    transport's teardown.
   - :meth:`call_tool` is sync from the caller's view: under the hood
     it submits the coroutine to the background loop via
     ``asyncio.run_coroutine_threadsafe`` and blocks until the
@@ -40,10 +43,12 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import Callable, Generator
 from concurrent.futures import Future
-from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import jsonschema
 from shared_mcp import (
     MCPAuthError,
@@ -60,6 +65,90 @@ from shared_mcp import (
 from agent_runtime.tools import ToolFn, ToolRegistry, ToolResult
 
 logger = logging.getLogger(__name__)
+
+
+class MediatedBearerAuth(httpx.Auth):
+    """``httpx.Auth`` que pide el access token a la plataforma, no a Vault.
+
+    La mitad de sandbox de la opción C del ADR 0131. El contenedor no confiable
+    no guarda credenciales: por cada sesión MCP pide a ``/internal/agent/
+    mcp-oauth-token`` un access token acotado a un servidor, y ahí se acaba lo
+    que tiene. Ni token de Vault (la llave del almacén) ni refresh token (la
+    credencial de larga duración) bajan hasta aquí.
+
+    El refresco lo dispara un **401 real** del servidor remoto, no una cuenta
+    atrás: la plataforma canjea el refresh token, lo persiste y devuelve uno
+    nuevo, y la petición se reintenta UNA vez. Un segundo 401 se propaga — si el
+    token recién emitido tampoco vale, reintentar es girar en vacío.
+    """
+
+    # httpx tiene que leer el cuerpo de la respuesta antes de devolvernos el
+    # control, o el `yield` de reintento se quedaría con un stream a medias.
+    requires_response_body = True
+
+    def __init__(self, fetch: Callable[[bool], tuple[str, str]], server_name: str) -> None:
+        self._fetch = fetch
+        self._server_name = server_name
+        self._cached: tuple[str, str] | None = None
+
+    def _token(self, *, refresh: bool) -> tuple[str, str]:
+        if refresh or self._cached is None:
+            self._cached = self._fetch(refresh)
+        return self._cached
+
+    def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
+        token_type, token = self._token(refresh=False)
+        request.headers["Authorization"] = f"{token_type} {token}"
+        response = yield request
+        if response.status_code != 401:
+            return
+        token_type, token = self._token(refresh=True)
+        request.headers["Authorization"] = f"{token_type} {token}"
+        yield request
+
+
+def build_oauth_auth(config: MCPServerConfig, *, api: Any | None) -> Any:
+    """The ``httpx.Auth`` for a server connected via OAuth 2.1, or ``None``.
+
+    The last hop of ADR 0127 (task_wf_12, B-03). The interactive flow was
+    complete — discovery, DCR, PKCE, token + registration in Vault — but the run
+    opened the session WITHOUT ``auth=``, so the remote server answered 401 and
+    the whole feature delivered nothing to autonomous execution, the one case it
+    was designed for.
+
+    ADR 0131 decidió POR DÓNDE llega esa credencial. No por Vault: el diseño
+    anterior pedía un ``AGENT_VAULT_TOKEN`` dentro del sandbox —una llave del
+    almacén de secretos en el contenedor que ejecuta código no controlado, justo
+    lo que el principio 2 de CLAUDE.md prohíbe— y por eso esa variable no se fijó
+    nunca en ningún sitio y la función no llegó a funcionar. Ahora se pide a la
+    plataforma por el API interno que el runtime ya tiene cableado, igual que
+    ``stack_exec`` pide al worker lo que el sandbox no puede hacer.
+
+    ``None`` cuando el servidor no usa OAuth (sin ``oauth_ref``), así que el
+    resto conecta exactamente igual que antes. Lanza :class:`MCPAuthError` cuando
+    el servidor SÍ declara OAuth y no hay API interno: sin él no hay token, y
+    conectar igualmente saldría como un 401 opaco del remoto en vez de decir qué
+    falta.
+
+    Se manda el NOMBRE del servidor, no el ``oauth_ref``: la ruta de Vault la
+    construye el servidor con el tenant del token y el proyecto del run. Mandar
+    la ruta sería entregarle al sandbox la capacidad de pedir la credencial de
+    otro proyecto cambiando una cadena.
+    """
+    if not config.oauth_ref:
+        return None
+    if api is None:
+        raise MCPAuthError(
+            f"server {config.name!r} uses OAuth but this run has no internal API "
+            "(no AGENTIC_INTERNAL_TOKEN) — its access token cannot be requested"
+        )
+
+    def _fetch(refresh: bool) -> tuple[str, str]:
+        payload = api.mcp_oauth_token(server=config.name, refresh=refresh)
+        return str(payload.get("token_type") or "Bearer"), str(payload["access_token"])
+
+    return MediatedBearerAuth(_fetch, config.name)
+
 
 # Fallback output ceiling (bytes, UTF-8) used when a tool's owning server
 # config is unavailable (e.g. a tool registered against a closed runner).
@@ -118,6 +207,27 @@ def _validate_args(args: dict[str, Any], input_schema: dict[str, Any]) -> str | 
 # ---------------------------------------------------------------------------
 # Sync-over-async bridge
 # ---------------------------------------------------------------------------
+@dataclass
+class _ServerHandle:
+    """Una sesión MCP viva y la task del loop de fondo que la POSEE.
+
+    anyio exige que un cancel scope salga en la MISMA task que lo entró; los
+    transportes del SDK (`streamablehttp_client`, `sse_client`) crean task
+    groups en su ``__aenter__``, así que entrar el context manager en la task
+    de ``connect()`` y salirlo en la de ``close()`` (el patrón AsyncExitStack
+    anterior) reventaba con "Attempted to exit cancel scope in a different
+    task" en cada teardown HTTP. Ahora ``_serve()`` es la única dueña del
+    ``async with`` completo: entra, publica (session, tools), espera ``stop``
+    y sale — todo en una task. ``close()`` solo señala ``stop`` y espera el
+    join.
+    """
+
+    join: Future[Any]
+    stop: asyncio.Event
+    session: MCPSession
+    tools: list[MCPTool] = field(default_factory=list)
+
+
 class MCPToolRunner:
     """Holds N open MCP sessions and exposes them to sync callers.
 
@@ -138,7 +248,9 @@ class MCPToolRunner:
     sync registry (typically the agent loop's thread).
     """
 
-    def __init__(self, vault_resolver: VaultResolver | None = None) -> None:
+    def __init__(
+        self, vault_resolver: VaultResolver | None = None, *, api: Any | None = None
+    ) -> None:
         """
         Args:
             vault_resolver: optional secret resolver. When a connected
@@ -152,12 +264,17 @@ class MCPToolRunner:
         """
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
-        self._stack: AsyncExitStack | None = None
+        # One owning task PER connected server (F23 kept the per-server
+        # isolation; the owner-task shape is what fixes the anyio cross-task
+        # cancel-scope violation — see _ServerHandle).
+        self._handles: dict[str, _ServerHandle] = {}
         self._sessions: dict[str, MCPSession] = {}
         self._tools: dict[str, list[MCPTool]] = {}
         self._started = False
         self._lock = threading.Lock()
         self._vault_resolver = vault_resolver
+        # Cliente del API interno para la credencial OAuth (ADR 0131 opción C).
+        self._api = api
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -179,13 +296,8 @@ class MCPToolRunner:
             self._thread.start()
             ready.wait(timeout=5.0)
             assert self._loop is not None, "background loop never started"
-            self._stack = AsyncExitStack()
-
-            async def _enter_stack() -> None:
-                assert self._stack is not None
-                await self._stack.__aenter__()
-
-            self._submit(_enter_stack()).result(timeout=5.0)
+            # No global stack to enter: each server gets its own stack at
+            # :meth:`connect` time (F23).
             self._started = True
 
     def close(self) -> None:
@@ -195,21 +307,46 @@ class MCPToolRunner:
             if not self._started:
                 return
             try:
-                if self._stack is not None:
-                    self._submit(self._stack.__aexit__(None, None, None)).result(timeout=10.0)
-            except Exception:
-                logger.exception("error closing MCP exit stack")
+                # Close each server INDEPENDENTLY with its own timeout budget
+                # (F23): signal its owner task to unwind (the `async with` exits
+                # INSIDE that task — anyio-safe) and join it. One server that
+                # hangs on teardown cannot starve the close of the others.
+                for name, handle in list(self._handles.items()):
+                    try:
+                        if self._loop is not None:
+                            self._loop.call_soon_threadsafe(handle.stop.set)
+                        handle.join.result(timeout=10.0)
+                    except Exception:
+                        logger.exception("error closing MCP session for %r", name)
             finally:
-                self._stack = None
+                self._handles.clear()
                 self._sessions.clear()
                 self._tools.clear()
+                # Drain any still-in-flight tasks (a cancelled connect coroutine,
+                # an out-of-band stack-discard from a timed-out server) so the
+                # loop stops with no pending tasks — otherwise the interpreter
+                # logs "Task was destroyed but it is pending" on teardown (F23).
                 if self._loop is not None and self._loop.is_running():
+                    try:
+                        self._submit(self._drain_pending_tasks()).result(timeout=5.0)
+                    except Exception:
+                        logger.exception("error draining MCP loop tasks")
                     self._loop.call_soon_threadsafe(self._loop.stop)
                 if self._thread is not None:
                     self._thread.join(timeout=5.0)
                 self._loop = None
                 self._thread = None
                 self._started = False
+
+    @staticmethod
+    async def _drain_pending_tasks() -> None:
+        """Cancel + await every other task on the loop (teardown hygiene, F23)."""
+        current = asyncio.current_task()
+        pending = [task for task in asyncio.all_tasks() if task is not current]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def __enter__(self) -> MCPToolRunner:
         self.start()
@@ -231,15 +368,44 @@ class MCPToolRunner:
         if config.name in self._sessions:
             raise ValueError(f"server {config.name!r} is already connected")
 
-        async def _do() -> tuple[MCPSession, list[MCPTool]]:
-            assert self._stack is not None
-            session = await self._stack.enter_async_context(
-                MCPClient.connect(config, vault_resolver=self._vault_resolver)
-            )
-            tools = await session.list_tools()
-            return session, tools
+        # `_serve` OWNS the whole `async with` (enter → publish → wait → exit)
+        # so every anyio cancel scope enters and exits in this one task. The
+        # thread-safe `started` future hands (session, tools, stop) back to the
+        # sync caller; on failure it carries the exception instead.
+        started: Future[tuple[MCPSession, list[MCPTool], asyncio.Event]] = Future()
 
-        session, tools = self._submit(_do()).result(timeout=config.timeout_s * 2)
+        auth = build_oauth_auth(config, api=self._api)
+
+        async def _serve() -> None:
+            try:
+                async with MCPClient.connect(
+                    config, vault_resolver=self._vault_resolver, auth=auth
+                ) as session:
+                    tools = await session.list_tools()
+                    stop = asyncio.Event()
+                    started.set_result((session, tools, stop))
+                    await stop.wait()
+            except BaseException as exc:  # — must reach the sync caller
+                if not started.done():
+                    started.set_exception(exc)
+                    return
+                raise
+
+        join: Future[Any] = self._submit(_serve())
+        try:
+            session, tools, stop = started.result(timeout=config.timeout_s * 2)
+        except TimeoutError as exc:
+            # Cancelling `join` cancels the serve task; the `async with` then
+            # unwinds INSIDE that task (anyio-safe), closing whatever the
+            # partial connect opened. This server never reaches `_handles`, so
+            # it cannot stall `close()` (F23).
+            join.cancel()
+            raise MCPTransportError(
+                f"server {config.name!r} connect timed out after {config.timeout_s * 2}s"
+            ) from exc
+        self._handles[config.name] = _ServerHandle(
+            join=join, stop=stop, session=session, tools=tools
+        )
         self._sessions[config.name] = session
         self._tools[config.name] = tools
         return tools

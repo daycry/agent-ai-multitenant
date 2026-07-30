@@ -35,6 +35,7 @@ from collections.abc import Iterable
 _CATALOG_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "apply_patch",
+        "delete_file",
         "http_get",
         "http_post",
         "list_files",
@@ -47,6 +48,7 @@ _CATALOG_TOOL_NAMES: frozenset[str] = frozenset(
         "semantic_search",
         "send_notification",
         "shell_exec",
+        "stack_exec",
         "summarize_text",
         "write_file",
     }
@@ -76,6 +78,7 @@ CANONICAL_TOOL_NAMES: frozenset[str] = _CATALOG_TOOL_NAMES | _ORCHESTRATION_TOOL
 _ALIAS_TO_CANONICAL: dict[str, frozenset[str]] = {
     "file_read": frozenset({"read_file"}),
     "file_write": frozenset({"write_file"}),
+    "file_delete": frozenset({"delete_file"}),
     "file_list": frozenset({"list_files"}),
     "http_request": frozenset({"http_get", "http_post"}),
     "notify_user": frozenset({"send_notification"}),
@@ -108,16 +111,23 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         # file family
         "read_file",
         "write_file",
+        "delete_file",
         "list_files",
         # network family
         "http_get",
         "http_post",
-        # orchestration family
-        "kanban_update",
+        # orchestration family — SOLO `task_comment`. Las otras tres
+        # (`kanban_update`, `agent_invoke`, `send_notification`) validan sus
+        # argumentos y devuelven `ok=False, "not wired"` porque el drain
+        # worker-side previsto nunca aterrizó: anunciarlas al modelo es una
+        # promesa falsa que le quema un turno con un error que no puede
+        # resolver. AUD16-02 retiró las dos primeras del ANUNCIO pero no de
+        # esta lista, y por esa divergencia `send_notification` siguió
+        # llegando al esquema. Se reincorporan cuando exista su consumidor;
+        # `tests/unit/test_runtime_wired_contract.py` fija el invariante.
+        # `task_comment` SÍ tiene drain real (el worker lo persiste como
+        # comentario del plan al cerrar el run).
         "task_comment",
-        "agent_invoke",
-        # notification family
-        "send_notification",
         # knowledge family (semantic_search aliases onto rag_search)
         "rag_search",
         "document_convert",
@@ -125,13 +135,27 @@ RUNTIME_WIRED_TOOL_NAMES: frozenset[str] = frozenset(
         # memory family
         "memory_recall",
         "memory_store",
-        # run_* docker_command tools
-        "run_pytest",
-        "run_lint",
-        "run_typecheck",
-        "run_build",
+        # NOTA — los cuatro `run_*` SALIERON de esta lista (F5 de
+        # registry-egress-followups, 2026-07-28). Son `docker_command`, y
+        # `DockerCommandTool` dentro del sandbox falla SIEMPRE por diseño: la
+        # imagen del agent-runtime no instala el paquete `docker` ni recibe
+        # socket (ver `test_docker_command_tool_retired`). Anunciarlas al modelo
+        # era prometerle cuatro tools imposibles — el mismo fallo B-04 que
+        # `send_notification`, y con 62 grants vivos detrás. La vía real es
+        # `stack_exec`: el worker corre el toolchain en el runtime-template del
+        # proyecto (ADR 0093).
+        #
+        # Siguen en `_CATALOG_TOOL_NAMES` a propósito, y eso NO es un descuido:
+        # si dejaran de ser nombres canónicos, `is_unwired_platform_builtin` no
+        # los reconocería como builtins de plataforma, `tool_is_runtime_wired`
+        # caería al atajo por `implementation_type` —que devuelve True para
+        # `docker_command`— y una fila superviviente en una BD sin migrar
+        # volvería a ser asignable y anunciable. `test_runtime_wired_contract`
+        # fija las dos mitades.
         # per-project shell
         "shell_exec",
+        # stack family — worker-mediated toolchain exec (ADR 0093)
+        "stack_exec",
     }
 )
 
@@ -170,10 +194,35 @@ def is_runtime_wired(name: str) -> bool:
     return bool(to_canonical(name) & RUNTIME_WIRED_TOOL_NAMES)
 
 
+def is_unwired_platform_builtin(name: str) -> bool:
+    """Un nombre CANÓNICO de plataforma que el runtime no sabe ejecutar.
+
+    La distinción que hay que tener clara: una tool de tenant con
+    ``implementation_type`` tipado (``http_endpoint``, ``python_function``, …)
+    la cablea ``register_tool_specs`` **se llame como se llame** — su tipo es la
+    autoridad. Un builtin de plataforma, no: su nombre está en el catálogo
+    canónico y lo que decide si existe ejecutor es
+    :data:`RUNTIME_WIRED_TOOL_NAMES`, no lo que ponga la fila sembrada.
+
+    ``send_notification`` es el caso que lo demuestra: la semilla lo declara
+    ``python_function``, así que cualquier comprobación que cortocircuite por el
+    tipo dirá que es ejecutable — y no lo es, porque su drain worker-side nunca
+    aterrizó y devuelve ``ok=False, "not wired"``. Anunciárselo al modelo le
+    quema un turno con un error que no puede resolver, y decírselo al operador
+    en el diagnóstico le hace perseguir un fantasma.
+
+    Vive aquí, en el dominio, porque la regla la necesitan a la vez el worker
+    (para no anunciar la tool) y el api-server (para no declararla ejecutable), y
+    dos copias de esta misma frase es exactamente cómo se separaron la última vez.
+    """
+    return name in CANONICAL_TOOL_NAMES and not is_runtime_wired(name)
+
+
 __all__ = [
     "CANONICAL_TOOL_NAMES",
     "RUNTIME_WIRED_TOOL_NAMES",
     "is_runtime_wired",
+    "is_unwired_platform_builtin",
     "to_canonical",
     "to_canonical_set",
 ]

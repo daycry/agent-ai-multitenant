@@ -145,7 +145,14 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
 
 #### `task_prod03_01` — Fuente única de las 13 categorías + remapeo del gate
 
-- [ ] **Título**: Mover `CATEGORIES` a `packages/shared-domain`
+> **Estado (2026-07-06, auditoría de roadmap)**: implementado y desplegado por el commit `13c4ad0`
+> ("fix(security): cierra el fail-open del gate de validación humana (g6, P0)"), que dice
+> explícitamente "absorbe la Fase A no-gated de prod-03". Verificado:
+> `packages/shared-domain/src/shared_domain/approval_categories.py` existe con el remapeo exacto
+> (`shell_exec→code_changes`, `http_get→external_http_get`, `http_post→external_http_post`,
+> `write_file→code_changes`) en `docker/agent-runtimes/agent-runtime/agent_runtime/approval.py:33-40`.
+
+- [x] **Título**: Mover `CATEGORIES` a `packages/shared-domain`
       (p. ej. `shared_domain/approval_categories.py`), importarlas desde
       `apps/api-server/src/api_server/seeds/builtin_approval_policies.py:31`,
       y remapear `DEFAULT_TOOL_CATEGORIES`
@@ -396,6 +403,11 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
   ```
 
 #### `task_prod03_12` — Pipeline en los 4 hooks del bucle del agente
+
+> **Estado (2026-07-06, auditoría de roadmap)**: PARCIAL — solo el hook `post_tool` está cableado
+> (`docker/agent-runtimes/agent-runtime/agent_runtime/graph.py:958`, ADR 0102 "g1 slice mínimo",
+> commits `a905612`/`60d1c87`). Los otros 3 hooks (`pre_llm`, `post_llm`, `pre_tool`) y el
+> `GuardrailPipeline` instanciado desde config NO existen todavía — no marcar `[x]`.
 
 - [ ] **Título**: Instanciar `GuardrailPipeline` desde la config del spec en
       el runtime y ejecutarlo en los 4 puntos de

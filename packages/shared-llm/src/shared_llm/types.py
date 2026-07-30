@@ -80,6 +80,13 @@ class CompletionResponse:
     # bits we did not surface in typed fields. Not part of the contract;
     # do not rely on its shape across providers.
     raw: Any = None
+    # Por qué terminó la generación, normalizado del provider (OpenAI-compat:
+    # ``finish_reason``; Claude SDK: ``stop_reason``). ``"max_tokens"``/``"length"``
+    # señalan TRUNCADO — parte del contrato tipado (a diferencia de ``raw``), para
+    # que la detección de truncado (F32) proteja también a claude_sdk, cuyo ``raw``
+    # es una lista de mensajes SDK de la que ``completion_signals`` no puede derivar
+    # la señal (hallazgo #10c). ``None`` cuando el provider no la reporta.
+    stop_reason: str | None = None
 
 
 @dataclass
@@ -88,11 +95,17 @@ class StreamChunk:
 
     `done=True` chunks carry the final `usage` if the provider reports
     it at the end of the stream (most OpenAI-compatible endpoints do).
+
+    AUD16-06: `tool_calls` viaja SOLO en el chunk final (`done=True`) cuando el
+    stream emitió deltas de tool calls — antes se descartaban en silencio y un
+    caller que streamease con tools perdía la llamada sin rastro. Los deltas se
+    acumulan por índice y llegan ya parseados (args dict, no fragmentos).
     """
 
     delta: str
     done: bool = False
     usage: Usage | None = None
+    tool_calls: list[ToolCall] | None = None
 
 
 @dataclass

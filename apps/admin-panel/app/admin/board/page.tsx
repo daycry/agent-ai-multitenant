@@ -19,15 +19,18 @@
  * updates the cache; on failure we revert and surface an inline banner.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { fetchAllPages, type PaginatedResult } from "@/lib/paginate";
 import { computeDepState } from "@/lib/task-deps";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
@@ -57,10 +60,26 @@ interface Task {
   depends_on: string[];
 }
 
-interface Team {
+// c8/T11 (ADR 0008): the top row shows real PLANS (GET /plans), not projects.
+interface Plan {
   id: string;
-  name: string;
+  project_id: string;
+  title: string;
+  status: string;
 }
+
+// Plan lifecycle → badge colour for the plan cards.
+const PLAN_STATUS_VARIANT: Record<string, BadgeVariant> = {
+  pending_approval: "muted",
+  approved: "info",
+  in_progress: "primary",
+  blocked: "danger",
+  pending_human_validation: "warning",
+  completed: "success",
+  cancelled: "muted",
+  rejected: "danger",
+  archived: "muted",
+};
 
 // --------------------------------------------------------------------------
 // Status columns. Keep cancelled at the end — it's terminal-but-rare.
@@ -98,12 +117,17 @@ function describeMoveError(err: unknown, target: Task["status"]): string {
   if (err instanceof ApiError) {
     try {
       const parsed = JSON.parse(err.body) as {
-        detail?: { error?: string; pending?: unknown[] };
+        detail?: { error?: string; pending?: unknown[]; from?: string; to?: string };
       };
       if (parsed.detail?.error === "dependencies_not_done") {
         const n = parsed.detail.pending?.length ?? 0;
         const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
         return `No se puede mover a «${label}»: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+      }
+      // c1/T2: the state machine rejected this move (409 illegal_transition).
+      if (parsed.detail?.error === "illegal_transition") {
+        const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
+        return `Movimiento no permitido a «${label}»: no es una transición válida desde el estado actual de la tarea.`;
       }
     } catch {
       // body wasn't the structured DAG error — fall back to the raw text.
@@ -123,43 +147,58 @@ export default function BoardPage() {
 
   const projectsQuery = useQuery({
     queryKey: ["projects", "tenant"],
-    queryFn: () => apiFetch<Project[]>("/projects"),
+    queryFn: () => fetchAllPages<Project>("/projects"),
     refetchOnWindowFocus: false,
   });
 
-  const teamsQuery = useQuery({
-    queryKey: ["teams", "list"],
-    queryFn: () => apiFetch<Team[]>("/teams"),
+  // c8/T11: the top row is a Kanban of real PLANS across the tenant's projects
+  // (GET /plans). projectsQuery stays only to label each plan with its project name.
+  // PROY2-08: fetchAllPages agota las páginas (>100 planes ya no desaparecen).
+  const plansQuery = useQuery({
+    queryKey: ["plans", "tenant"],
+    queryFn: () => fetchAllPages<Plan>("/plans"),
     refetchOnWindowFocus: false,
   });
-
-  const plans = useMemo(
-    () => (projectsQuery.data ?? []).filter((p) => !p.is_template),
+  const plans = useMemo(() => plansQuery.data?.items ?? [], [plansQuery.data]);
+  const projectsById = useMemo(
+    () => new Map((projectsQuery.data?.items ?? []).map((p) => [p.id, p] as const)),
     [projectsQuery.data],
   );
 
   // Auto-select the first plan once data lands.
   const effectiveSelected =
     selectedId && plans.some((p) => p.id === selectedId) ? selectedId : (plans[0]?.id ?? null);
+  const selectedPlan = plans.find((p) => p.id === effectiveSelected) ?? null;
 
-  const teamsById = useMemo(
-    () => new Map((teamsQuery.data ?? []).map((t) => [t.id, t] as const)),
-    [teamsQuery.data],
-  );
-
+  // §6: the bottom board shows ONLY the selected plan's tasks (never a flat board
+  // mixing tasks from several plans). Filter by plan_id within the plan's project.
+  // PROY2-08: paginado exhaustivo — un plan de 200 tareas pinta las 200.
   const tasksQuery = useQuery({
-    queryKey: ["tasks", "by-project", effectiveSelected],
-    queryFn: () => apiFetch<Task[]>(`/projects/${effectiveSelected}/tasks`),
-    enabled: !!effectiveSelected,
+    queryKey: ["tasks", "by-plan", effectiveSelected],
+    queryFn: () =>
+      fetchAllPages<Task>(
+        `/projects/${selectedPlan?.project_id}/tasks?plan_id=${effectiveSelected}`,
+      ),
+    enabled: !!selectedPlan,
     refetchOnWindowFocus: false,
   });
+  const boardTruncated = Boolean(plansQuery.data?.truncated || tasksQuery.data?.truncated);
+  const tasks = useMemo(() => tasksQuery.data?.items ?? [], [tasksQuery.data]);
 
   // taskId -> status, for resolving each card's dependency state (the padlock)
   // and the "can't go ready while a dependency is pending" drag guard.
-  const statusById = useMemo(
-    () => new Map((tasksQuery.data ?? []).map((t) => [t.id, t.status] as const)),
-    [tasksQuery.data],
-  );
+  const statusById = useMemo(() => new Map(tasks.map((t) => [t.id, t.status] as const)), [tasks]);
+
+  // hallazgo #3: desbloquear un plan desde su tarjeta (misma mutación que el
+  // detalle y la página escalated — reactiva el plan y re-encola sus blocked).
+  const unblockPlan = useMutation({
+    mutationFn: async (planId: string) =>
+      apiFetch<{ status: string }>(`/plans/${planId}/unblock`, { method: "POST" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["plans", "tenant"] });
+      void queryClient.invalidateQueries({ queryKey: ["tasks", "by-plan"] });
+    },
+  });
 
   const moveTask = useMutation({
     mutationFn: async ({ task, newStatus }: { task: Task; newStatus: Task["status"] }) => {
@@ -170,18 +209,18 @@ export default function BoardPage() {
     },
     onMutate: async ({ task, newStatus }) => {
       // Optimistic cache update so the card jumps columns instantly.
-      const key = ["tasks", "by-project", effectiveSelected];
+      const key = ["tasks", "by-plan", effectiveSelected];
       await queryClient.cancelQueries({ queryKey: key });
-      const prev = queryClient.getQueryData<Task[]>(key);
-      queryClient.setQueryData<Task[]>(
-        key,
-        (prev ?? []).map((t) => (t.id === task.id ? { ...t, status: newStatus } : t)),
-      );
+      const prev = queryClient.getQueryData<PaginatedResult<Task>>(key);
+      queryClient.setQueryData<PaginatedResult<Task>>(key, {
+        truncated: prev?.truncated ?? false,
+        items: (prev?.items ?? []).map((t) => (t.id === task.id ? { ...t, status: newStatus } : t)),
+      });
       return { prev };
     },
     onError: (err, vars, context) => {
       if (context?.prev) {
-        queryClient.setQueryData(["tasks", "by-project", effectiveSelected], context.prev);
+        queryClient.setQueryData(["tasks", "by-plan", effectiveSelected], context.prev);
       }
       setDragError(describeMoveError(err, vars.newStatus));
     },
@@ -189,7 +228,7 @@ export default function BoardPage() {
   });
 
   function onDrop(newStatus: Task["status"], taskId: string) {
-    const task = (tasksQuery.data ?? []).find((t) => t.id === taskId);
+    const task = tasks.find((t) => t.id === taskId);
     if (!task || task.status === newStatus) return;
     // Mirror the server DAG guard in the UI: refuse to drag a card into `ready`
     // while an upstream dependency is still pending (the card shows a padlock).
@@ -212,8 +251,8 @@ export default function BoardPage() {
   // task_02_21 / task_02_23 — a task.status_changed event (from any
   // source: another user, an agent) moves the card live, no refresh.
   const kanbanUrl = useMemo(
-    () => (effectiveSelected ? wsUrl(`/ws/kanban/${effectiveSelected}`) : null),
-    [effectiveSelected],
+    () => (selectedPlan ? wsUrl(`/ws/kanban/${selectedPlan.project_id}`) : null),
+    [selectedPlan],
   );
 
   const onKanbanEvent = useCallback(
@@ -224,12 +263,15 @@ export default function BoardPage() {
         task_id?: string;
         payload?: { new_status?: string };
       };
-      const key = ["tasks", "by-project", effectiveSelected];
+      const key = ["tasks", "by-plan", effectiveSelected];
       const newStatus = event.payload?.new_status;
       if (event.type === "task.status_changed" && event.task_id && newStatus) {
-        queryClient.setQueryData<Task[]>(key, (prev) =>
-          (prev ?? []).map((t) => (t.id === event.task_id ? { ...t, status: newStatus } : t)),
-        );
+        queryClient.setQueryData<PaginatedResult<Task>>(key, (prev) => ({
+          truncated: prev?.truncated ?? false,
+          items: (prev?.items ?? []).map((t) =>
+            t.id === event.task_id ? { ...t, status: newStatus } : t,
+          ),
+        }));
       } else if (event.type === "task.created") {
         void queryClient.invalidateQueries({ queryKey: key });
       }
@@ -239,6 +281,35 @@ export default function BoardPage() {
 
   useWebSocket(kanbanUrl, onKanbanEvent);
 
+  // ---- Real-time: la FILA DE PLANES (task_wf_32) ------------------------
+  // El socket es de TENANT y no de proyecto: esta fila lista los planes de
+  // todos los proyectos, así que uno por proyecto dejaría rancias las demás
+  // tarjetas. Sin esto, un plan que pasa a `pending_human_validation` o a
+  // `blocked` —las dos transiciones que ocurren SIN gesto humano— se quedaba
+  // en su columna hasta que alguien recargara.
+  const plansUrl = useMemo(() => wsUrl("/ws/plans"), []);
+
+  const onPlanEvent = useCallback(
+    (data: unknown) => {
+      const event = data as { type?: string; plan_id?: string; payload?: { new_status?: string } };
+      const newStatus = event.payload?.new_status;
+      if (event.type !== "plan.status_changed" || !event.plan_id || !newStatus) return;
+      queryClient.setQueryData<PaginatedResult<Plan>>(["plans", "tenant"], (prev) => ({
+        truncated: prev?.truncated ?? false,
+        items: (prev?.items ?? []).map((p) =>
+          p.id === event.plan_id ? { ...p, status: newStatus } : p,
+        ),
+      }));
+      // La cabecera del plan abierto (progreso, PR, coste) también envejece con
+      // la transición: se invalida en vez de parchearse, porque su contenido no
+      // se deduce del estado nuevo.
+      void queryClient.invalidateQueries({ queryKey: ["plan-status", event.plan_id] });
+    },
+    [queryClient],
+  );
+
+  useWebSocket(plansUrl, onPlanEvent);
+
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
@@ -246,6 +317,16 @@ export default function BoardPage() {
         title="Tablero"
         description="Planes (gerencial) arriba, tareas (operativa) abajo. Arrastra una tarea entre columnas para cambiar su estado."
       />
+
+      {/* PROY2-08: si se tocó el tope de paginación, decirlo en vez de callar. */}
+      {boardTruncated && (
+        <Card className="mb-4 border-amber-500 p-3" data-testid="board-truncated-warning">
+          <p className="text-sm text-amber-600 dark:text-amber-400">
+            El tablero muestra un máximo de 2000 filas por listado; hay más elementos que no se
+            están mostrando. Usa los filtros por proyecto/estado para acotar.
+          </p>
+        </Card>
+      )}
 
       {/* ============ Plans row ============ */}
       <section data-testid="plans-row" className="mb-8">
@@ -258,26 +339,24 @@ export default function BoardPage() {
           )}
         </div>
 
-        {projectsQuery.isLoading && (
-          <p className="text-muted-foreground text-sm">Cargando planes…</p>
-        )}
+        {plansQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando planes…</p>}
 
-        {projectsQuery.isError && (
+        {plansQuery.isError && (
           <Card className="border-destructive p-4">
             <p className="text-destructive text-sm">
-              Could not load plans:{" "}
-              {projectsQuery.error instanceof ApiError
-                ? projectsQuery.error.body
-                : String(projectsQuery.error)}
+              No se pudieron cargar los planes:{" "}
+              {plansQuery.error instanceof ApiError
+                ? plansQuery.error.body
+                : String(plansQuery.error)}
             </p>
           </Card>
         )}
 
-        {projectsQuery.data && plans.length === 0 && (
+        {plansQuery.data && plans.length === 0 && (
           <Card className="p-8 text-center" data-testid="plans-empty">
             <p className="text-muted-foreground text-sm">
-              Este tenant aún no tiene planes activos. Crea un proyecto desde una plantilla para
-              empezar.
+              Este tenant aún no tiene planes. Crea un plan desde el chat de planning de un proyecto
+              para empezar.
             </p>
           </Card>
         )}
@@ -288,7 +367,7 @@ export default function BoardPage() {
             data-testid="plans-grid"
           >
             {plans.map((p) => {
-              const team = p.team_id ? teamsById.get(p.team_id) : null;
+              const project = projectsById.get(p.project_id);
               const active = effectiveSelected === p.id;
               return (
                 <Card
@@ -300,18 +379,31 @@ export default function BoardPage() {
                   className={cn(active && "border-primary shadow-md ring-1 ring-primary/30")}
                 >
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-base">{p.name}</CardTitle>
-                    {team && (
+                    <CardTitle className="text-base">{p.title}</CardTitle>
+                    {project && (
                       <Badge variant="info" className="w-fit">
-                        {team.name}
+                        {project.name}
                       </Badge>
                     )}
                   </CardHeader>
-                  <CardContent className="flex items-center justify-between gap-2">
-                    <p className="text-muted-foreground line-clamp-2 text-xs">
-                      {p.description ?? "Sin descripción."}
-                    </p>
-                    <Badge variant={p.status === "active" ? "success" : "muted"}>{p.status}</Badge>
+                  <CardContent className="flex items-center justify-end gap-2">
+                    {/* hallazgo #3 (QA 2026-07-07): un plan bloqueado ofrece el
+                        desbloqueo AQUÍ, no solo en /plans/{id}/escalated. */}
+                    {p.status === "blocked" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={unblockPlan.isPending}
+                        data-testid={`plan-unblock-${p.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unblockPlan.mutate(p.id);
+                        }}
+                      >
+                        Desbloquear
+                      </Button>
+                    )}
+                    <Badge variant={PLAN_STATUS_VARIANT[p.status] ?? "muted"}>{p.status}</Badge>
                   </CardContent>
                 </Card>
               );
@@ -330,7 +422,7 @@ export default function BoardPage() {
                 className="text-muted-foreground text-sm font-normal"
                 data-testid="board-selected-name"
               >
-                — {plans.find((p) => p.id === effectiveSelected)?.name ?? ""}
+                — {selectedPlan?.title ?? ""}
               </span>
             )}
           </h2>
@@ -342,7 +434,7 @@ export default function BoardPage() {
             )}
             {tasksQuery.data && (
               <p className="text-muted-foreground text-xs">
-                {tasksQuery.data.length} {tasksQuery.data.length === 1 ? "tarea" : "tareas"}
+                {tasks.length} {tasks.length === 1 ? "tarea" : "tareas"}
               </p>
             )}
           </div>
@@ -367,7 +459,7 @@ export default function BoardPage() {
             data-testid="board-columns"
           >
             {COLUMNS.map((col) => {
-              const colTasks = (tasksQuery.data ?? []).filter((t) => t.status === col.id);
+              const colTasks = tasks.filter((t) => t.status === col.id);
               return (
                 <KanbanColumn
                   key={col.id}
@@ -469,58 +561,83 @@ function KanbanColumn({
 
 function TaskCard({ task, statusById }: { task: Task; statusById: ReadonlyMap<string, string> }) {
   const dep = computeDepState(task.depends_on, statusById);
+  const [runsOpen, setRunsOpen] = useState(false);
+  // A drag fires dragstart (not click), but guard anyway so a drag that ends on
+  // the same card never opens the panel — click-vs-drag (runs-visor C2).
+  const draggingRef = useRef(false);
 
   function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
+    draggingRef.current = true;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", task.id);
   }
 
+  function handleClick() {
+    if (draggingRef.current) return;
+    setRunsOpen(true);
+  }
+
   return (
-    <div
-      draggable
-      onDragStart={handleDragStart}
-      data-testid={`task-card-${task.id}`}
-      data-blocked={dep.blocked ? "true" : "false"}
-      className={cn(
-        "bg-card rounded-md border p-2 text-sm shadow-sm",
-        "cursor-grab transition-shadow active:cursor-grabbing",
-        "hover:border-primary/40 hover:shadow-md",
-        dep.blocked && "border-danger/40",
-      )}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <p className="font-medium leading-tight">{task.title}</p>
-        {dep.blocked ? (
-          <span
-            title={`Bloqueada por ${dep.pendingCount} dependencia${
-              dep.pendingCount === 1 ? "" : "s"
-            } sin completar`}
-            data-testid={`task-lock-${task.id}`}
-            className="mt-0.5 shrink-0"
-          >
-            <Lock className="text-danger h-3.5 w-3.5" aria-label="Bloqueada por dependencias" />
-          </span>
-        ) : (
-          dep.hasDeps && (
+    <>
+      <div
+        draggable
+        onDragStart={handleDragStart}
+        onDragEnd={() => {
+          // Clear after the click event would have fired, so the drag never
+          // counts as a click that opens the panel.
+          window.setTimeout(() => {
+            draggingRef.current = false;
+          }, 0);
+        }}
+        onClick={handleClick}
+        data-testid={`task-card-${task.id}`}
+        data-blocked={dep.blocked ? "true" : "false"}
+        className={cn(
+          "bg-card rounded-md border p-2 text-sm shadow-sm",
+          "cursor-grab transition-shadow active:cursor-grabbing",
+          "hover:border-primary/40 hover:shadow-md",
+          dep.blocked && "border-danger/40",
+        )}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-medium leading-tight">{task.title}</p>
+          {dep.blocked ? (
             <span
-              title="Todas las dependencias completadas"
-              data-testid={`task-lock-open-${task.id}`}
+              title={`Bloqueada por ${dep.pendingCount} dependencia${
+                dep.pendingCount === 1 ? "" : "s"
+              } sin completar`}
+              data-testid={`task-lock-${task.id}`}
               className="mt-0.5 shrink-0"
             >
-              <LockOpen
-                className="text-muted-foreground h-3.5 w-3.5"
-                aria-label="Dependencias completadas"
-              />
+              <Lock className="text-danger h-3.5 w-3.5" aria-label="Bloqueada por dependencias" />
             </span>
-          )
-        )}
+          ) : (
+            dep.hasDeps && (
+              <span
+                title="Todas las dependencias completadas"
+                data-testid={`task-lock-open-${task.id}`}
+                className="mt-0.5 shrink-0"
+              >
+                <LockOpen
+                  className="text-muted-foreground h-3.5 w-3.5"
+                  aria-label="Dependencias completadas"
+                />
+              </span>
+            )
+          )}
+        </div>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
+          {task.description && (
+            <span className="text-muted-foreground line-clamp-1 text-xs">{task.description}</span>
+          )}
+        </div>
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
-        {task.description && (
-          <span className="text-muted-foreground line-clamp-1 text-xs">{task.description}</span>
-        )}
-      </div>
-    </div>
+      <TaskDetailSheet
+        task={runsOpen ? { id: task.id, project_id: task.project_id, title: task.title } : null}
+        open={runsOpen}
+        onOpenChange={setRunsOpen}
+      />
+    </>
   );
 }

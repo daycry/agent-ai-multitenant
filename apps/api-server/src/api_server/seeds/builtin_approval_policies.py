@@ -19,6 +19,7 @@ import json
 from dataclasses import dataclass
 from uuid import UUID, uuid5
 
+from shared_domain.approval_categories import APPROVAL_CATEGORIES
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,23 +27,10 @@ from api_server.seeds import PLATFORM_TENANT_ID
 
 POLICY_SEED_NAMESPACE: UUID = UUID("00000000-0000-0000-0000-000000000015")
 
-# Categories of sensitive actions (spec §7.7-7.8). Order matters for
-# stability when serialized to JSON.
-CATEGORIES: tuple[str, ...] = (
-    "code_changes",
-    "git_commit",
-    "git_push",
-    "external_http_get",
-    "external_http_post",
-    "secrets_access",
-    "data_migration",
-    "production_deploy",
-    "infra_provision",
-    "secret_rotation",
-    "external_communication",
-    "data_export_pii",
-    "user_management",
-)
+# Categories of sensitive actions (spec §7.7-7.8). Single source in
+# shared-domain (APPROVAL_CATEGORIES) so the sandboxed runtime approval gate
+# uses the SAME vocabulary — they had diverged, opening a fail-open hole (g6).
+CATEGORIES: tuple[str, ...] = APPROVAL_CATEGORIES
 
 
 def _policy_id(slug: str) -> UUID:
@@ -115,6 +103,25 @@ BUILTIN_POLICIES: tuple[BuiltinPolicy, ...] = (
         decisions=_all("human_required"),
     ),
 )
+
+
+# The preset applied to a project that has NO explicit ``human_approval_policy``
+# (A8b). Was fail-open (policy None → gate never instantiated → everything auto);
+# now a project without a policy inherits this preset's decisions. Overridable at
+# runtime via the ``default_approval_policy_preset`` platform setting.
+DEFAULT_APPROVAL_POLICY_PRESET = "development"
+
+_POLICIES_BY_SLUG: dict[str, BuiltinPolicy] = {p.slug: p for p in BUILTIN_POLICIES}
+
+
+def preset_decisions(slug: str) -> dict[str, str]:
+    """The category→decision map of a built-in preset by slug (A8b).
+
+    Every preset's ``decisions`` covers ALL canonical categories (built on
+    ``_all(...)``), so the result is fully specified — no unlisted-category gap. An
+    unknown slug falls back to the safe default preset (never fail-open to auto)."""
+    policy = _POLICIES_BY_SLUG.get(slug) or _POLICIES_BY_SLUG[DEFAULT_APPROVAL_POLICY_PRESET]
+    return dict(policy.decisions)
 
 
 # ---------------------------------------------------------------------------

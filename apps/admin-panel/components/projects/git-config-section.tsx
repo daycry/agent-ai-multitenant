@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { GitBranch } from "lucide-react";
+import { AlertTriangle, GitBranch, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -25,6 +25,29 @@ export interface GitConfig {
   auth_mode: string;
 }
 
+/** Resultado del último clone/sync que el worker persiste en repository_config
+ *  (feedback de que la cola SÍ ejecutó + la alineación de la rama con el remoto). */
+export interface LastGitSync {
+  at?: string;
+  status?: string; // ok | error
+  default_branch_alignment?: string; // created | fast_forwarded | up_to_date | remote_empty | diverged
+  error?: string;
+}
+
+const ALIGNMENT_COPY: Record<string, { warn: boolean; text: string }> = {
+  created: { warn: false, text: "Rama por defecto local creada desde el remoto." },
+  fast_forwarded: { warn: false, text: "Rama por defecto local actualizada al remoto." },
+  up_to_date: { warn: false, text: "Rama por defecto local al día con el remoto." },
+  remote_empty: {
+    warn: true,
+    text: "El remoto no tiene la rama por defecto (repo vacío). Haz un push inicial; hasta entonces el PR del plan no podrá abrirse.",
+  },
+  diverged: {
+    warn: true,
+    text: "La base local NO comparte historia con la rama por defecto del remoto — el PR del plan fallará con «no history in common». Reconcilia el repo (rebasa la rama del plan sobre el remoto) o revisa la rama por defecto configurada.",
+  },
+};
+
 /** Políticas del flujo git del plan (worker_config.git_policies, ADR 0072 fase 2). */
 export interface GitPolicies {
   branch_push_mode: string;
@@ -36,11 +59,13 @@ export function GitConfigSection({
   projectId,
   value,
   policies,
+  lastSync,
   isReadOnly = false,
 }: {
   projectId: string;
   value: GitConfig | null;
   policies?: GitPolicies | null;
+  lastSync?: LastGitSync | null;
   isReadOnly?: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -91,6 +116,21 @@ export function GitConfigSection({
       setToken("");
       setSshKey("");
       void queryClient.invalidateQueries({ queryKey: ["projects", projectId] });
+    },
+  });
+
+  // Botón «Sincronizar»: re-encola el clone/fetch del remoto (el operador no
+  // sabía si la cola ejecutaba; ahora el resultado se ve abajo tras unos segundos).
+  const sync = useMutation<{ status: string }, ApiError>({
+    mutationFn: () => apiFetch(`/projects/${projectId}/git/sync`, { method: "POST" }),
+    onSuccess: () => {
+      // Refresca el proyecto un par de veces para captar el last_git_sync que
+      // el worker escribe al terminar (el clone tarda unos segundos).
+      const refresh = () =>
+        void queryClient.invalidateQueries({ queryKey: ["projects", projectId] });
+      refresh();
+      setTimeout(refresh, 2500);
+      setTimeout(refresh, 6000);
     },
   });
 
@@ -251,7 +291,11 @@ export function GitConfigSection({
             >
               <option value="forbidden">No hacer nada</option>
               <option value="branch_only_pr_required">Abrir PR (revisión humana)</option>
-              <option value="direct_to_default_allowed">Merge directo a la rama base</option>
+              {/* "Merge directo a la rama base" (direct_to_default_allowed) retirado
+                  (cadena-pr T5 / P4, auditoría 2026-07-03): apply_push_policy no tiene
+                  caller de producción, así que la opción se comportaba IDÉNTICA a "Abrir
+                  PR". El merge directo real (fast-forward del default branch) es una
+                  decisión de producto → ADR 0098 (gated). */}
             </Select>
           </div>
         </div>
@@ -264,12 +308,63 @@ export function GitConfigSection({
       )}
       {save.isSuccess && (
         <p className="text-sm text-emerald-600" role="status">
-          Guardado. Clone encolado.
+          Guardado. Sincronización con el remoto encolada — el resultado aparece abajo en unos
+          segundos.
+        </p>
+      )}
+      {sync.isSuccess && !save.isSuccess && (
+        <p className="text-sm text-emerald-600" role="status">
+          Sincronización encolada.
+        </p>
+      )}
+      {sync.isError && (
+        <p className="text-destructive text-sm" data-testid="git-sync-error">
+          {sync.error?.body ?? "Error al encolar la sincronización"}
         </p>
       )}
 
+      {/* Estado del último clone/sync — feedback de que la cola SÍ ejecutó, más
+          la alineación de la rama con el remoto (diverged explica el PR fallido). */}
+      {lastSync?.at ? (
+        <div className="bg-muted/30 space-y-1 rounded-md border p-3" data-testid="git-last-sync">
+          <p className="text-xs">
+            <span className="text-muted-foreground">Última sincronización:</span>{" "}
+            {new Date(lastSync.at).toLocaleString("es-ES")} ·{" "}
+            <span className={lastSync.status === "ok" ? "text-emerald-600" : "text-destructive"}>
+              {lastSync.status === "ok" ? "correcta" : "con error"}
+            </span>
+          </p>
+          {lastSync.error ? <p className="text-destructive text-xs">{lastSync.error}</p> : null}
+          {lastSync.default_branch_alignment &&
+          ALIGNMENT_COPY[lastSync.default_branch_alignment] ? (
+            <p
+              className={
+                ALIGNMENT_COPY[lastSync.default_branch_alignment].warn
+                  ? "text-warning-soft-foreground flex items-start gap-1.5 text-xs"
+                  : "text-muted-foreground text-xs"
+              }
+              data-testid="git-alignment"
+            >
+              {ALIGNMENT_COPY[lastSync.default_branch_alignment].warn ? (
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              ) : null}
+              {ALIGNMENT_COPY[lastSync.default_branch_alignment].text}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {!isReadOnly && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            disabled={!value?.remote_url || sync.isPending || save.isPending}
+            onClick={() => sync.mutate()}
+            data-testid="git-sync"
+          >
+            <RefreshCw className={`mr-1.5 h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} />
+            {sync.isPending ? "Sincronizando…" : "Sincronizar"}
+          </Button>
           <Button
             disabled={!remoteUrl.trim() || save.isPending}
             onClick={() => save.mutate()}

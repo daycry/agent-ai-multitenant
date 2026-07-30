@@ -48,9 +48,11 @@ opt-in.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
@@ -59,6 +61,7 @@ from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tena
 from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
 from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem, EvalResult, EvalRun
 from api_server.evals.diff import DatasetMismatchError, RunDiff, diff_runs
+from api_server.evals.judge import JudgeResponseError, SameModelJudgeError, run_eval
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -76,6 +79,7 @@ from api_server.schemas.evals import (
     EvalDatasetItemUpdateRequest,
     EvalDatasetResponse,
     EvalDatasetUpdateRequest,
+    EvalResultResponse,
     EvalRunDiffResponse,
     EvalRunResponse,
     ItemChangeResponse,
@@ -85,6 +89,13 @@ from api_server.schemas.evals import (
 )
 
 router = APIRouter(tags=["evals"])
+
+# Techo de llamadas a modelo de UNA corrida lanzada por `POST /eval-runs`.
+# La corrida es síncrona (se ejecuta dentro de la petición), así que el límite
+# real no es el dinero sino el timeout del gateway. Con 200 llamadas y un
+# proveedor razonable la petición cabe; por encima, morir a la mitad deja al
+# operador con un 504 y sin explicación.
+MAX_SYNC_EVAL_CALLS = 200
 
 
 def _dataset_to_response(dataset: EvalDataset, *, item_count: int = 0) -> EvalDatasetResponse:
@@ -553,6 +564,80 @@ async def get_eval_run(
     return EvalRunResponse.model_validate(run)
 
 
+@router.get("/eval-runs/{run_id}/results", response_model=list[EvalResultResponse])
+async def list_eval_run_results(
+    run_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> list[EvalResultResponse]:
+    """El desglose por item de una corrida. tenant_admin. 404 cross-tenant.
+
+    `task_wf_52b`: las filas `eval_results` se escribían desde el Plan 14 y
+    ninguna ruta las leía. La corrida publicaba su `pass_rate` y **no había
+    forma de ver qué item falló ni por qué** — un 60 % sin desglose dice que
+    algo va mal y no deja arreglarlo.
+
+    Se resuelve la corrida primero (404 si es de otro tenant) para no filtrar
+    por la puerta de atrás la existencia de un run ajeno con una lista vacía.
+    """
+    require_tenant_id(principal)
+    run = await get_writable_or_404(
+        session,
+        EvalRun,
+        run_id,
+        principal,
+        not_found_detail="run not found",
+        soft_delete_aware=False,
+    )
+    # Los fallos primero: es lo que se viene a mirar cuando una corrida baja de
+    # nota, y en un dataset grande evita paginar buscándolos.
+    stmt = (
+        select(EvalResult)
+        .where(EvalResult.run_id == run.id)
+        .order_by(EvalResult.overall_score.asc().nullsfirst(), EvalResult.id)
+    )
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    rows = list((await session.execute(stmt)).scalars().all())
+    names = await _criterion_names(session, run.dataset_id)
+    return [_result_to_response(row, names) for row in rows]
+
+
+async def _criterion_names(session: AsyncSession, dataset_id: UUID) -> dict[str, str]:
+    """`criterion_id -> nombre` de los criterios del dataset."""
+    rows = (
+        await session.execute(
+            select(EvalCriterion.id, EvalCriterion.name).where(
+                EvalCriterion.dataset_id == dataset_id
+            )
+        )
+    ).all()
+    return {str(cid): name for cid, name in rows}
+
+
+def _result_to_response(result: EvalResult, names: dict[str, str]) -> EvalResultResponse:
+    """El resultado con el NOMBRE de cada criterio resuelto.
+
+    `CriterionScore.to_json()` persiste `criterion_id`, no el nombre — correcto
+    para la fila (el nombre puede cambiar y el histórico no debe mentir), pero
+    ilegible en pantalla: sin esto el desglose sería una lista de filas
+    idénticas tituladas con un UUID, y saber QUÉ criterio falló es justo para lo
+    que se abre.
+    """
+    scores: list[Any] = []
+    for entry in result.criterion_scores or []:
+        if not isinstance(entry, dict):
+            continue
+        resolved = dict(entry)
+        # Un criterio borrado del dataset después de la corrida ya no tiene
+        # nombre que resolver; se dice así en vez de fingir uno.
+        resolved["name"] = names.get(str(entry.get("criterion_id")), "(criterio retirado)")
+        scores.append(resolved)
+    response = EvalResultResponse.model_validate(result)
+    return response.model_copy(update={"criterion_scores": scores})
+
+
 # ---------------------------------------------------------------------------
 # Promote a real APPROVED task into a dataset as a golden item
 # ---------------------------------------------------------------------------
@@ -781,3 +866,197 @@ def _item_to_response(item: EvalDatasetItem, *, created: bool) -> PromoteToDatas
 
 
 __all__ = ["router"]
+
+
+# ---------------------------------------------------------------------------
+# Lanzar una corrida — el PRODUCTOR que faltaba (`task_wf_52b`)
+# ---------------------------------------------------------------------------
+class EvalRunCreateRequest(BaseModel):
+    dataset_id: UUID
+    # Modelo del SUJETO evaluado. Debe diferir del juez: un modelo juzgándose a
+    # sí mismo se aprueba, y el motor lo rechaza con `SameModelJudgeError`.
+    subject_model: str
+    judge_model: str
+    # Etiqueta del conjunto de prompts que produjo los outputs bajo juicio
+    # (`task_wf_52`). Sin ella el dashboard agrupa bajo «(sin versión)» y la
+    # corrida no se puede atribuir a un cambio, que es para lo que se mide.
+    subject_prompt_version: str | None = None
+    subject_agent_id: UUID | None = None
+
+
+@router.post(
+    "/eval-runs",
+    response_model=EvalRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_eval_run(
+    payload: EvalRunCreateRequest,
+    principal: AuthPrincipal = Depends(require_tenant_admin),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> EvalRunResponse:
+    """Lanza una corrida contra un dataset dorado. tenant_admin.
+
+    `task_wf_52b`: el subsistema de evals estaba construido entero —módulos,
+    tablas, endpoints, dashboard— y **sus tablas vacías, porque no había
+    ninguna vía de producirlas**. El router tenía CRUD de las entradas y solo
+    lectura de las salidas: faltaba exactamente esto.
+
+    Juez y sujeto son LLM reales de la capa de proveedores (`shared_llm`,
+    ADR 0021), no dobles de test. El **sujeto produce** una salida para cada
+    item y el **juez** la compara contra el `expected_output` del item —la
+    referencia, que salió de un run REAL ya aprobado vía
+    `POST /tasks/{id}/promote-to-dataset`—. Los items fijan el material, así
+    que dos corridas distintas se comparan sobre exactamente lo mismo: es lo
+    que permite medir si un cambio de prompt mejoró o empeoró.
+
+    409 si juez y sujeto son el mismo modelo: un modelo juzgándose a sí mismo
+    se aprueba.
+    """
+    require_tenant_id(principal)
+    if payload.judge_model == payload.subject_model:
+        # `run_eval` también lo comprueba; hacerlo aquí evita abrir proveedor y
+        # crear la fila del run para nada.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "same_model_judge",
+                "message": (
+                    "el juez debe ser un modelo distinto del sujeto "
+                    "(un modelo juzgándose a sí mismo se aprueba)"
+                ),
+            },
+        )
+    dataset = await get_writable_or_404(
+        session,
+        EvalDataset,
+        payload.dataset_id,
+        principal,
+        not_found_detail="dataset not found",
+    )
+
+    items = list(
+        (
+            await session.execute(
+                select(EvalDatasetItem).where(EvalDatasetItem.dataset_id == dataset.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not items:
+        # Una corrida sobre un dataset vacío daría un `pass_rate` de 100 % sin
+        # haber juzgado nada — el peor dato posible: parece perfecto.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"error": "empty_dataset", "message": "el dataset no tiene items que juzgar"},
+        )
+
+    # La corrida se ejecuta DENTRO del request, y son `items x (1 sujeto + N
+    # criterios)` llamadas a LLM. Pasado cierto tamaño el request muere por
+    # timeout a mitad de camino: el operador ve un 504, la transacción se
+    # deshace y no queda ni el run ni una explicación. Decirlo por adelantado,
+    # con el número concreto, es infinitamente mejor que morir a la mitad.
+    criteria_count = int(
+        (
+            await session.execute(
+                select(func.count(EvalCriterion.id)).where(
+                    EvalCriterion.dataset_id == dataset.id,
+                    EvalCriterion.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one()
+    )
+    planned_calls = len(items) * (1 + max(criteria_count, 1))
+    if planned_calls > MAX_SYNC_EVAL_CALLS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": "dataset_too_large",
+                "message": (
+                    f"esta corrida serían {planned_calls} llamadas a modelo "
+                    f"({len(items)} items x {criteria_count} criterios) y se ejecuta dentro de "
+                    f"la petición; el máximo son {MAX_SYNC_EVAL_CALLS}. Parte el dataset o "
+                    "reduce criterios."
+                ),
+                "planned_calls": planned_calls,
+                "max_calls": MAX_SYNC_EVAL_CALLS,
+            },
+        )
+
+    judge, subject = await _build_eval_seams(session, payload.judge_model, payload.subject_model)
+    run = EvalRun(
+        id=uuid7(),
+        tenant_id=principal.tenant_id,
+        dataset_id=dataset.id,
+        subject_agent_id=payload.subject_agent_id,
+        subject_prompt_version=payload.subject_prompt_version,
+    )
+    session.add(run)
+    await session.flush()
+
+    try:
+        # El SUJETO produce; el juez compara contra `expected_output`. Pasar la
+        # referencia como salida del sujeto la compararía consigo misma: 100 %
+        # de aciertos siempre, midiendo nada. Un eval que siempre pasa es peor
+        # que no tenerlo, porque da confianza.
+        await run_eval(
+            session,
+            run,
+            judge=judge,
+            subject_model=payload.subject_model,
+            subject=subject,
+        )
+    except SameModelJudgeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "same_model_judge", "message": str(exc)},
+        ) from exc
+    except JudgeResponseError as exc:
+        # El juez contestó algo que el motor no sabe puntuar (prosa en vez del
+        # JSON del contrato: típico de un modelo pequeño). Sin esto sería un 500
+        # mudo y el operador no sabría que el problema es SU elección de juez.
+        # La transacción se deshace, así que no queda un run a medias.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "judge_unparseable",
+                "message": (
+                    f"el modelo juez «{payload.judge_model}» devolvió algo que no se puede "
+                    f"puntuar ({exc}). Prueba con un modelo más capaz como juez."
+                ),
+            },
+        ) from exc
+
+    await session.refresh(run)
+    return EvalRunResponse.model_validate(run)
+
+
+async def _build_eval_seams(
+    session: AsyncSession, judge_model: str, subject_model: str
+) -> tuple[Any, Any]:
+    """El juez y el sujeto, sobre la capa de proveedores del sistema.
+
+    Se resuelve por la MISMA vía que el chat (proveedor activo + credencial de
+    Vault): un segundo camino de LLM que mantener es como acaban divergiendo
+    las credenciales y el catálogo.
+    """
+    from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
+    from api_server.evals.llm_judge import LLMJudgeModel, LLMSubjectModel
+    from api_server.routers.llm_providers import get_provider_vault_store
+
+    effective = await resolve_chat_model_config(session, project=None)
+    provider, _kind, api_model = await _resolve_chat_provider(
+        session, effective, get_provider_vault_store()
+    )
+    if provider is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "no_llm_provider",
+                "message": "no hay proveedor LLM activo para actuar de juez",
+            },
+        )
+    return (
+        LLMJudgeModel(provider=provider, model=judge_model or api_model),
+        LLMSubjectModel(provider=provider, model=subject_model or api_model),
+    )

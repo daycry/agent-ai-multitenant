@@ -94,6 +94,18 @@ class CortexEpisodeItem(BaseModel):
     appraisal_reason: str | None = None
 
 
+class CortexJournalEntry(BaseModel):
+    """Una entrada del diario del córtex (C4): narrativa versionada o memoria
+    de reflexión/aprendizaje, en línea temporal única."""
+
+    model_config = _BASE_CONFIG
+
+    kind: str  # narrative | reflection | learning
+    content: str
+    reason: str | None = None
+    created_at: datetime
+
+
 __all__ = [
     "HONESTY_NOTE_EN",
     "HONESTY_NOTE_ES",
@@ -101,5 +113,6 @@ __all__ = [
     "CortexDrives",
     "CortexEpisodeItem",
     "CortexHonesty",
+    "CortexJournalEntry",
     "CortexMindResponse",
 ]

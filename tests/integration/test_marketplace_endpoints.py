@@ -115,16 +115,26 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             ids["source"],
         )
         # Global catalog listing (signed) + one private listing per tenant.
+        # Manifest materializable (remediación 2026-07-17: install MATERIALIZA
+        # de verdad y valida el manifest — un tool listing sin
+        # implementation_type es 422; los skill listings materializan por
+        # name/description sin manifest).
         await conn.execute(
             "INSERT INTO marketplace_listings"
             " (id, source_id, tenant_id, kind, name, version, trust_level,"
-            "  requested_permissions, signature)"
+            "  requested_permissions, signature, manifest)"
             " VALUES"
             " ($1, $2, NULL, 'tool', 'public-tool', '1.0.0', 'verified',"
             '  \'[{"type": "allowed_domains", "value": ["api.x.com"]}]\'::jsonb,'
-            "  'sig-secret-do-not-leak'),"
-            " ($3, $2, $4, 'skill', 'priv-a-skill', '0.1.0', 'community', '[]'::jsonb, NULL),"
-            " ($5, $2, $6, 'skill', 'priv-b-skill', '0.1.0', 'experimental', '[]'::jsonb, NULL)",
+            "  'sig-secret-do-not-leak',"
+            '  \'{"implementation_type": "http_endpoint",'
+            '     "implementation_ref": "https://api.x.com/tool/{q}",'
+            '     "input_schema": {"type": "object",'
+            '       "properties": {"q": {"type": "string"}}}}\'::jsonb),'
+            " ($3, $2, $4, 'skill', 'priv-a-skill', '0.1.0', 'community', '[]'::jsonb, NULL,"
+            "  '{}'::jsonb),"
+            " ($5, $2, $6, 'skill', 'priv-b-skill', '0.1.0', 'experimental', '[]'::jsonb, NULL,"
+            "  '{}'::jsonb)",
             ids["global_listing"],
             ids["source"],
             ids["private_a"],

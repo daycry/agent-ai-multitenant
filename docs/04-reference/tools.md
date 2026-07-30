@@ -145,8 +145,9 @@ frontend; `default_runtime_template` se valida con `field_validator` en
 `agent_runtime.__main__.run_task` construye un `WiringContext` y registra
 **todas** las familias bajo su nombre **canónico**
 (`register_builtin_families`: file / red / orquestación / notificación /
-conocimiento / memoria) + los `run_*` (`docker_command`, vía
-`register_tool_specs` desde los `tool_specs` que serializa el orquestador)
+conocimiento / memoria) + los `run_*` (vía `register_tool_specs` desde los
+`tool_specs` que serializa el orquestador — hoy **fallan rápido**: ver
+«`docker_command` retirada» más abajo)
 
 - `shell_exec` (por proyecto, desde `allowed_commands`) + MCP
   (`register_mcp_server` por cada server de `project.mcp_servers`). Cada
@@ -161,3 +162,84 @@ conocimiento / memoria) + los `run_*` (`docker_command`, vía
   `docs/05-architecture-decisions/`).
 - Plan: [`docs/roadmap/06.18-tools-overhaul.md`](../roadmap/06.18-tools-overhaul.md).
 - Changelog: [`docs/07-changelog/06.18-tools-overhaul.md`](../07-changelog/06.18-tools-overhaul.md).
+
+## Red de las tools HTTP: `allowed_domains` + defensa SSRF (prod-12)
+
+Desde prod-12 Fase A/B (2026-07-08), la superficie de red de los agentes
+(`http_request` y las tools `http_endpoint`) se gobierna así:
+
+- **`projects.allowed_domains`** (TEXT[], deny-by-default): la allowlist de
+  FQDNs que las tools HTTP del proyecto pueden alcanzar. **Lista vacía =
+  deny-all** (ninguna petición sale — el comportamiento histórico, antes
+  accidental, ahora explícito). El orquestador la enhebra en cada run
+  (`ExecutionRequest.allowed_domains` → `spec.allowed_domains`).
+- **Validación al guardar** (`task_prod12_ssrf_03`): el api-server normaliza
+  cada entrada (minúsculas, sin esquema/puerto/ruta) y **rechaza** IPs
+  literales, `localhost`/`*.localhost`, hostnames internos del compose
+  (`vault`, `redis`, `postgres`, `minio`, `api-server`…, y
+  `host.docker.internal`) y nombres no-FQDN, con mensaje claro (422).
+- **Guard SSRF por-resolución** (`agent_runtime/ssrf_guard.py`, Fase A): en
+  CADA petición el runtime resuelve el hostname UNA vez (A+AAAA), valida
+  TODAS las IPs (rechaza loopback, RFC1918, link-local, ULA/fd00::/8,
+  multicast, reservadas y el endpoint de metadata `169.254.169.254`) y
+  **conecta a la IP pineada** preservando `Host` y SNI — sin ventana
+  DNS-rebinding (gap4-1). Las IPs literales en la URL se rechazan siempre.
+- **Redirects**: `follow_redirects=False` explícito (gap4-3) — un 30x de un
+  dominio permitido hacia un host interno NUNCA se sigue; la tool devuelve la
+  respuesta 30x tal cual.
+- **Centinela de CI**: `tests/unit/test_execution_request_allowed_domains.py`
+  falla si la emisión de `allowed_domains` existe sin el guard aplicado en
+  ambas tools (riesgo 1 del plan prod-12). Cadena e2e:
+  `tests/e2e/test_agent_http_allowlist_chain.py`.
+- **Diagnóstico para el operador**: `domain not allowed: <host>` (no está en
+  la allowlist; la respuesta incluye la lista vigente) vs `destination
+rejected: …` (el ssrf_guard vetó la resolución — IP literal, rango interno
+  o rebinding). El egress-proxy de prod-01 es una segunda capa cuando llegue;
+  esta defensa se sostiene sola.
+
+> Caso on-prem (rangos privados legítimos, p. ej. un GitLab en 10.x): hoy NO
+> hay opt-in — la denylist de rangos internos aplica siempre. El opt-in por
+> proyecto sandbox queda documentado como decisión pendiente en el plan
+> prod-12 (task_prod12_ssrf_03).
+
+## `docker_command` retirada — el toolchain va por `stack_exec` (ADR 0093)
+
+La familia `run_*` (`run_tests`, `run_lint`, …) se cableaba sobre la tool
+`docker_command`, que dentro del sandbox del agente es **inservible por
+diseño**: el contenedor del agente no tiene socket Docker (Principio 2), así
+que `docker.from_env()` nunca puede funcionar ahí. Desde prod-12
+`task_prod12_docker_01` (opción b):
+
+- **`DockerCommandTool` falla rápido** con un error accionable — `«docker
+no está soportado dentro del sandbox del agente; usa stack_exec»` — sin
+  intentar tocar el daemon. El agente no quema turnos en un camino muerto.
+- **La vía real es `stack_exec`** (ADR 0093): el agente PIDE al worker
+  ejecutar su toolchain (`composer install`, `phpunit`, `php spark`, `npm
+test`, `pytest`…) y el worker lo corre en el **runtime-template** del stack
+  (imagen mantenida por la plataforma) sobre el worktree de la tarea, con la
+  misma política de red endurecida (ver siguiente sección). El resultado
+  (rc + stdout/err truncados) vuelve al agente como observación.
+- Las filas `run_*` siguen en el catálogo de plataforma por compatibilidad
+  con proyectos que las tuvieran asignadas; su retirada total (seeds +
+  contract tests) es el follow-up F5 de
+  [`registry-egress-followups`](../roadmap/registry-egress-followups.md).
+
+## `network_policy` de los runtimes: nunca NAT crudo (ADR 0094)
+
+La política de red de un runtime-template (test-runtime del worker y sandbox
+de instalación del marketplace) tiene tres valores, y desde ADR 0094 **ningún
+valor entrega internet crudo** — el bridge per-task/per-probe es SIEMPRE
+`internal=True`:
+
+| Valor        | Semántica efectiva                                                                                                                                                                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`       | Sin red: solo los sidecars del propio bridge interno.                                                                                                                                                                                                |
+| `restricted` | Bridge interno; sin egress (el enforcement por-dominio del proxy de plataforma es una capa upstream).                                                                                                                                                |
+| `open`       | Alias de `registries`: bridge interno + **registry-proxy** allowlistado conectado al bridge e inyectado como `HTTP(S)_PROXY`. Solo registries públicos de paquetes y git por HTTPS; cada uso queda en el audit log. Sin proxy configurado → OFFLINE. |
+
+El `registry-proxy` es un segundo tinyproxy compartido (servicio del compose)
+con allowlist de registries públicos (Packagist, PyPI, npm, Go proxy, NuGet,
+crates.io, RubyGems…) y git hosts; el worker/sandbox lo **conecta** al bridge
+efímero al arrancar y lo **desconecta** al terminar (nunca lo destruye).
+Registries/git **privados** con credenciales = follow-up F1 (diferido,
+solapa ADR 0067 B0.2).

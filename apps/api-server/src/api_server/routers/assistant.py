@@ -26,9 +26,12 @@ rather than fabricating answers.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from shared_llm.reasoning import reasoning_call_kwargs
 from sqlalchemy import select
@@ -60,6 +63,7 @@ from api_server.auth.deps import (
     require_system_admin,
     require_tenant_admin,
 )
+from api_server.db.assistant_chat import AssistantConversation, AssistantTurn
 from api_server.db.llm_providers import (
     REASONING_OPTIONS_BY_KIND,
     get_llm_provider,
@@ -69,11 +73,13 @@ from api_server.db.models import Organization, User
 from api_server.db.session import get_admin_sessionmaker
 from api_server.llm_providers.factory import build_llm_provider
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.llm_usage import record_llm_usage
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.assistant import (
     AssistantChatRequest,
     AssistantChatResponse,
+    AssistantConversationItem,
     AssistantDefaultModelResponse,
     AssistantDefaultModelUpdateRequest,
     AssistantIdentityResponse,
@@ -82,6 +88,7 @@ from api_server.schemas.assistant import (
     AssistantModelOptionsResponse,
     AssistantModelResponse,
     AssistantModelUpdateRequest,
+    AssistantTurnItem,
     to_identity_response,
 )
 
@@ -194,6 +201,289 @@ async def get_assistant_model(
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# A1 — hilos persistentes del asistente (espejo tenant-scoped del córtex).
+# ---------------------------------------------------------------------------
+# Turnos recientes que entran al prompt (pares user/assistant). El resto del
+# hilo queda en BD para la UI; el prompt no crece sin límite.
+_HISTORY_TURNS_LIMIT = 20
+_TITLE_MAX = 60
+
+
+async def _resolve_conversation(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    user_id: UUID,
+    conversation_id: UUID | None,
+    first_message: str,
+) -> AssistantConversation:
+    """El hilo del usuario (SOLO suyo — 404 si es de otro) o uno nuevo."""
+    if conversation_id is not None:
+        conv = (
+            await session.execute(
+                select(AssistantConversation).where(
+                    AssistantConversation.id == conversation_id,
+                    AssistantConversation.tenant_id == tenant_id,
+                    AssistantConversation.user_id == user_id,
+                    AssistantConversation.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if conv is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found"
+            )
+        return conv
+    title = first_message.strip()[:_TITLE_MAX] or None
+    conv = AssistantConversation(tenant_id=tenant_id, user_id=user_id, title=title)
+    session.add(conv)
+    await session.flush()
+    return conv
+
+
+async def _conversation_history(
+    session: AsyncSession, *, conversation_id: UUID
+) -> list[dict[str, str]]:
+    """Los últimos turnos del hilo como {role, content} (cronológicos)."""
+    rows = list(
+        (
+            await session.execute(
+                select(AssistantTurn.role, AssistantTurn.content)
+                .where(
+                    AssistantTurn.conversation_id == conversation_id,
+                    AssistantTurn.deleted_at.is_(None),
+                )
+                .order_by(AssistantTurn.created_at.desc())
+                .limit(_HISTORY_TURNS_LIMIT)
+            )
+        ).all()
+    )
+    return [{"role": str(r[0]), "content": str(r[1])} for r in reversed(rows)]
+
+
+async def _persist_turns(
+    session: AsyncSession,
+    *,
+    conversation: AssistantConversation,
+    user_id: UUID,
+    user_message: str,
+    answer: str,
+    tools_called: list[str],
+    rounds: int,
+) -> None:
+    """Persiste el par user/assistant y refresca el updated_at del hilo."""
+    session.add(
+        AssistantTurn(
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            user_id=user_id,
+            role="user",
+            content=user_message,
+        )
+    )
+    session.add(
+        AssistantTurn(
+            tenant_id=conversation.tenant_id,
+            conversation_id=conversation.id,
+            user_id=user_id,
+            role="assistant",
+            content=answer,
+            tools_called=tools_called,
+            rounds=rounds,
+        )
+    )
+    conversation.updated_at = datetime.now(UTC)
+    await session.flush()
+
+
+@router.post("/chat/stream")
+async def assistant_chat_stream(
+    payload: AssistantChatRequest,
+    principal: AuthPrincipal = Depends(require_assistant_access),
+    session: AsyncSession = Depends(get_tenant_session),
+    model: AssistantModelClient = Depends(get_assistant_model),
+) -> StreamingResponse:
+    """El mismo turno que /chat pero con PROGRESO en vivo (SSE) — A2 fase 1.
+
+    Antes el usuario miraba «Pensando…» hasta la respuesta completa (hasta 6
+    rondas de tools, cada una un complete() entero). Frames:
+      * ``progress`` {rounds, tools_called} por paso del grafo;
+      * ``answer``  {answer, tools_called, rounds, conversation_id} al final;
+      * ``error``   {detail} si el proveedor falla (el stream cierra limpio).
+    Fase 2: frames ``answer_delta`` {text} con la redaccion final token-a-token."""
+    import asyncio as _asyncio
+    import json as _json
+
+    tenant_id = require_tenant_id(principal)
+    identity = await get_assistant_identity(session, tenant_id)
+    tool_ctx = AssistantToolContext(session=session, tenant_id=tenant_id, user_id=principal.user_id)
+    enabled_tools = identity.effective_tools()
+    known_facts = await recall_user_memories(
+        session, tenant_id=tenant_id, user_id=principal.user_id
+    )
+    system_prompt = augment_system_prompt(
+        identity.system_prompt(),
+        known_facts=known_facts,
+        remember_enabled="remember_about_me" in enabled_tools,
+    )
+    conversation = await _resolve_conversation(
+        session,
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
+        conversation_id=payload.conversation_id,
+        first_message=payload.message,
+    )
+    history = await _conversation_history(session, conversation_id=conversation.id)
+
+    queue: _asyncio.Queue[tuple[str, dict[str, Any]]] = _asyncio.Queue()
+
+    async def _on_progress(frame: dict[str, Any]) -> None:
+        await queue.put(("progress", frame))
+
+    # A2 fase 2 (ADR 0073 F2): deltas token-a-token de la redaccion final
+    # (camino FINISH_NUDGE del grafo) como frames `answer_delta`.
+    async def _on_delta(text: str) -> None:
+        await queue.put(("answer_delta", {"text": text}))
+
+    async def _run() -> None:
+        try:
+            result = await run_assistant_turn(
+                model,
+                system_prompt=system_prompt,
+                enabled_tools=enabled_tools,
+                tool_ctx=tool_ctx,
+                chat_history=[*history, {"role": "user", "content": payload.message}],
+                on_progress=_on_progress,
+                on_delta=_on_delta,
+            )
+            await _persist_turns(
+                session,
+                conversation=conversation,
+                user_id=principal.user_id,
+                user_message=payload.message,
+                answer=result.content,
+                tools_called=list(result.tools_called),
+                rounds=result.rounds,
+            )
+            # ADR 0116: contabilidad del consumo (best-effort).
+            await record_llm_usage(
+                session,
+                source="assistant",
+                model_client=model,
+                tenant_id=tenant_id,
+                user_id=principal.user_id,
+            )
+            await session.commit()
+            await queue.put(
+                (
+                    "answer",
+                    {
+                        "answer": result.content,
+                        "tools_called": list(result.tools_called),
+                        "rounds": result.rounds,
+                        "conversation_id": str(conversation.id),
+                    },
+                )
+            )
+        except (AuthError, RateLimitError, LLMError) as exc:
+            await queue.put(("error", {"detail": f"el proveedor LLM falló: {exc}"}))
+        except Exception as exc:  # el stream cierra limpio, nunca cuelga
+            await queue.put(("error", {"detail": str(exc)}))
+        finally:
+            await queue.put(("end", {}))
+
+    async def _events() -> Any:
+        task = _asyncio.create_task(_run())
+        try:
+            while True:
+                kind, data = await queue.get()
+                if kind == "end":
+                    break
+                yield f"event: {kind}\ndata: {_json.dumps(data)}\n\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/conversations", response_model=list[AssistantConversationItem])
+async def list_assistant_conversations(
+    principal: AuthPrincipal = Depends(require_assistant_access),
+    session: AsyncSession = Depends(get_tenant_session),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> list[AssistantConversationItem]:
+    """Los hilos del usuario, más reciente primero (A1)."""
+    tenant_id = require_tenant_id(principal)
+    rows = list(
+        (
+            await session.execute(
+                select(AssistantConversation)
+                .where(
+                    AssistantConversation.tenant_id == tenant_id,
+                    AssistantConversation.user_id == principal.user_id,
+                    AssistantConversation.deleted_at.is_(None),
+                )
+                .order_by(AssistantConversation.updated_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        AssistantConversationItem(id=r.id, title=r.title, updated_at=r.updated_at) for r in rows
+    ]
+
+
+@router.get("/conversations/{conversation_id}/turns", response_model=list[AssistantTurnItem])
+async def list_assistant_turns(
+    conversation_id: UUID,
+    principal: AuthPrincipal = Depends(require_assistant_access),
+    session: AsyncSession = Depends(get_tenant_session),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> list[AssistantTurnItem]:
+    """Los turnos de un hilo del usuario (cronológicos; 404 si no es suyo)."""
+    tenant_id = require_tenant_id(principal)
+    conv = await _resolve_conversation(
+        session,
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
+        conversation_id=conversation_id,
+        first_message="",
+    )
+    rows = list(
+        (
+            await session.execute(
+                select(AssistantTurn)
+                .where(
+                    AssistantTurn.conversation_id == conv.id,
+                    AssistantTurn.deleted_at.is_(None),
+                )
+                .order_by(AssistantTurn.created_at.asc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        AssistantTurnItem(
+            role=r.role,
+            content=r.content,
+            tools_called=[str(t) for t in (r.tools_called or [])],
+            rounds=r.rounds,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
 @router.post("/chat", response_model=AssistantChatResponse)
 async def assistant_chat(
     payload: AssistantChatRequest,
@@ -219,13 +509,25 @@ async def assistant_chat(
         known_facts=known_facts,
         remember_enabled="remember_about_me" in enabled_tools,
     )
+    # A1 (investigación 2026-07-11): hilo persistente — resolver/crear la
+    # conversación del usuario y alimentar el prompt con su historial reciente
+    # (human_10_04: «mantiene contexto entre mensajes»; antes cada POST enviaba
+    # SOLO el mensaje actual y una recarga lo perdía todo).
+    conversation = await _resolve_conversation(
+        session,
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
+        conversation_id=payload.conversation_id,
+        first_message=payload.message,
+    )
+    history = await _conversation_history(session, conversation_id=conversation.id)
     try:
         result = await run_assistant_turn(
             model,
             system_prompt=system_prompt,
             enabled_tools=enabled_tools,
             tool_ctx=tool_ctx,
-            chat_history=[{"role": "user", "content": payload.message}],
+            chat_history=[*history, {"role": "user", "content": payload.message}],
         )
     except AuthError as exc:
         # Bad/expired provider credential — most often a misconfigured provider
@@ -249,10 +551,28 @@ async def assistant_chat(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"el proveedor LLM del asistente falló: {exc}",
         ) from exc
+    await _persist_turns(
+        session,
+        conversation=conversation,
+        user_id=principal.user_id,
+        user_message=payload.message,
+        answer=result.content,
+        tools_called=list(result.tools_called),
+        rounds=result.rounds,
+    )
+    # ADR 0116: el consumo del asistente por fin se contabiliza (best-effort).
+    await record_llm_usage(
+        session,
+        source="assistant",
+        model_client=model,
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
+    )
     return AssistantChatResponse(
         answer=result.content,
         tools_called=list(result.tools_called),
         rounds=result.rounds,
+        conversation_id=conversation.id,
     )
 
 

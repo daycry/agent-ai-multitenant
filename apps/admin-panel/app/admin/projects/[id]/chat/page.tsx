@@ -30,7 +30,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
-import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
+import { chatRefetchInterval, isReplyInFlight, summaryFoldedCount } from "@/lib/chat-feed";
 import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
@@ -65,21 +65,10 @@ interface Message {
   created_at: string;
 }
 
-// Built-in PlanningRoles mirrored from
-// `api_server.chat.planning_graph.PlanningRole`. Used by the @-mention
-// autocomplete (task_03_12) — the operator can address a specific
-// specialist directly from the chat composer.
-const PLANNING_ROLES = [
-  "project_manager",
-  "architect",
-  "backend_dev",
-  "frontend_dev",
-  "qa",
-  "reviewer",
-  "devops",
-  "security",
-  "technical_writer",
-] as const;
+// A-01: cuántos mensajes carga el feed. Un turno de planning emite entre 6 y 10
+// (framing del PM → un especialista por rol → síntesis), así que 100 cubre unos
+// diez turnos completos. El endpoint devuelve LOS MÁS RECIENTES.
+const MESSAGE_WINDOW = 100;
 
 interface ModeOption {
   value: string;
@@ -176,6 +165,19 @@ export default function ProjectChatPage() {
     enabled: Boolean(projectId),
   });
 
+  // task_wf_43: a quién se puede @-mencionar EN ESTE proyecto. La lista salía
+  // del enum completo, así que ofrecía especialistas que el equipo no tiene: la
+  // mención se enviaba, el servidor la descartaba por no estar en el equipo y el
+  // turno quedaba vacío. La composición del equipo cambia poco, de ahí el
+  // staleTime largo.
+  const planningRolesQuery = useQuery({
+    queryKey: ["planning-roles", projectId],
+    queryFn: () => apiFetch<{ roles: string[] }>(`/projects/${projectId}/planning-roles`),
+    refetchOnWindowFocus: false,
+    enabled: Boolean(projectId),
+    staleTime: 5 * 60_000,
+  });
+
   // Auto-select the most recent conversation as soon as the list lands.
   useEffect(() => {
     if (activeConversationId) return;
@@ -245,7 +247,14 @@ export default function ProjectChatPage() {
   // exercises this query because it doesn't mock /messages.
   const messagesQuery = useQuery({
     queryKey: ["messages", activeConversationId],
-    queryFn: () => apiFetch<Message[]>(`/conversations/${activeConversationId}/messages`),
+    // A-01: límite EXPLÍCITO. El endpoint devuelve los más RECIENTES (antes daba
+    // los primeros N, y pasada la ventana el feed se congelaba en el arranque de
+    // la conversación y «Generar Plan» desaparecía). Para releer lo anterior está
+    // `?before=<id>`, que este feed aún no usa: la ventana cubre de sobra un turno.
+    queryFn: () =>
+      apiFetch<Message[]>(
+        `/conversations/${activeConversationId}/messages?limit=${MESSAGE_WINDOW}`,
+      ),
     refetchOnWindowFocus: false,
     enabled: Boolean(activeConversationId),
     // Safety net for live updates: the WebSocket below pushes each step in real time, but if
@@ -501,6 +510,7 @@ export default function ProjectChatPage() {
           {activeConversation ? (
             <ChatComposer
               disabled={postMessage.isPending}
+              roles={planningRolesQuery.data?.roles ?? []}
               onSubmit={(content) =>
                 postMessage.mutate({
                   conversationId: activeConversation.id,
@@ -667,7 +677,59 @@ function MessageFeed({ messages, loading }: MessageFeedProps) {
   );
 }
 
+/**
+ * A folded-history summary (task_wf_06 d).
+ *
+ * Summaries are `system`-authored, so without this they rendered as the tiny
+ * italic centred banner used for "modo cambiado" — a multi-paragraph digest of
+ * a dozen messages squeezed into a notice the eye skips. The reader could not
+ * tell the team's memory had been rewritten, nor how much history sat behind it.
+ *
+ * Collapsed by default (it stands in for history the reader already scrolled
+ * past) and expandable. The originals are NOT hidden: `GET /messages` still
+ * returns them, so they remain above in the feed — folding only affects the
+ * context the model reads.
+ */
+function SummaryRow({ message, folded }: { message: Message; folded: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm"
+      data-testid="chat-message-summary"
+      data-message-id={message.id}
+    >
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 text-left"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        data-testid="chat-summary-toggle"
+      >
+        <span className="text-xs font-medium">
+          🗂️ Resumen de {folded} {folded === 1 ? "mensaje anterior" : "mensajes anteriores"}
+        </span>
+        <span className="text-muted-foreground text-[10px] uppercase tracking-wide">
+          {open ? "ocultar" : "ver resumen"}
+        </span>
+      </button>
+      {open ? (
+        <div className="mt-2 border-t border-amber-500/20 pt-2" data-testid="chat-summary-body">
+          {renderPlanDraft(message.content)}
+          <p className="text-muted-foreground mt-2 text-[10px]">
+            El equipo lee este resumen en lugar de esos mensajes. Los originales siguen más arriba
+            en la conversación.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function MessageRow({ message }: { message: Message }) {
+  const folded = summaryFoldedCount(message.attachments);
+  if (message.is_summary && folded > 0) {
+    return <SummaryRow message={message} folded={folded} />;
+  }
   if (message.author_kind === "system") {
     return (
       <div
@@ -713,10 +775,14 @@ function MessageRow({ message }: { message: Message }) {
 // --------------------------------------------------------------------------
 interface ChatComposerProps {
   disabled: boolean;
+  /** Roles del equipo REAL del proyecto (`GET /projects/{id}/planning-roles`).
+   * Vacío mientras carga o si el proyecto no tiene equipo: sin sugerencias es
+   * preferible a sugerir a alguien que no va a contestar. */
+  roles: readonly string[];
   onSubmit: (content: string) => void;
 }
 
-function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
+function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
   const [value, setValue] = useState("");
   // Markdown preview toggle. The edit view keeps the raw <textarea> so @-mention
   // tracking (cursor/onChange) stays intact; preview renders the same markdown
@@ -726,9 +792,7 @@ function ChatComposer({ disabled, onSubmit }: ChatComposerProps) {
   // partial mention token ("@" followed by 0+ word-chars, no space).
   const mention = parsePendingMention(value);
 
-  const suggestions = mention
-    ? PLANNING_ROLES.filter((r) => r.startsWith(mention.query.toLowerCase()))
-    : [];
+  const suggestions = mention ? roles.filter((r) => r.startsWith(mention.query.toLowerCase())) : [];
 
   // Take the text+mention to operate on as explicit args rather than
   // relying on the enclosing closure (frontend-admin-panel-4): the click

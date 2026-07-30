@@ -250,3 +250,44 @@ def test_backup_metrics_written_atomically(tmp_path: Path) -> None:
     # No temp files left behind.
     leftovers = list(target.parent.glob("*.tmp"))
     assert not leftovers, leftovers
+
+
+# ---------------------------------------------------------------------------
+# AUD16-19: la copia OFFSITE era invisible — uploaded=[] en todos los bundles
+# y ninguna métrica/alerta lo decía. El emitter publica cuántos artefactos
+# subieron en el último run y cuándo fue el último upload BUENO (preservado en
+# fallos, como el success_ts); la regla BackupOffsiteStale solo arma cuando
+# ALGUNA vez hubo offsite (ts > 0) — un host sin destino configurado no alerta
+# (decisión gated del operador), lo dice el runbook.
+# ---------------------------------------------------------------------------
+def test_backup_offsite_metrics_are_rendered() -> None:
+    from workers.backup_metrics import render_backup_metrics
+
+    ok = render_backup_metrics(
+        success=True,
+        now=1_700_000_000.0,
+        last_success_ts=1_700_000_000.0,
+        offsite_uploaded=2,
+        offsite_last_success_ts=1_700_000_000.0,
+    )
+    assert "agentic_backup_offsite_uploaded 2" in ok
+    assert "agentic_backup_offsite_last_success_timestamp_seconds 1700000000" in ok
+
+    none_up = render_backup_metrics(
+        success=True,
+        now=1_700_000_100.0,
+        last_success_ts=1_700_000_100.0,
+        offsite_uploaded=0,
+        offsite_last_success_ts=1_700_000_000.0,
+    )
+    assert "agentic_backup_offsite_uploaded 0" in none_up
+    # Sin upload en este run, el reloj del último upload BUENO se preserva.
+    assert "agentic_backup_offsite_last_success_timestamp_seconds 1700000000" in none_up
+
+
+def test_backup_offsite_stale_alert(alerts: dict[str, dict[str, Any]]) -> None:
+    rule = alerts["BackupOffsiteStale"]
+    assert "agentic_backup_offsite_last_success_timestamp_seconds" in rule["expr"]
+    # Gated: sin offsite jamás configurado (ts == 0) la regla no arma.
+    assert "> 0" in rule["expr"]
+    assert rule["labels"]["severity"] in {"warning", "critical"}

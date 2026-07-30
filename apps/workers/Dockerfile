@@ -28,12 +28,27 @@ USER root
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git openssh-client \
  && rm -rf /var/lib/apt/lists/*
+
+# pg_dump (Plan 12 backup / durabilidad 2026-07-03): el engine de backup corre
+# pg_dump DESDE el worker (cola privileged) y la imagen no lo traía — el backup
+# diario nunca pudo completar. La base (Debian 13/trixie) empaqueta el cliente
+# 17, que dumpea servidores 16 sin problema (pg_dump es retro-compatible; el
+# mismatch fatal es solo cliente MÁS VIEJO que servidor).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-17 \
+ && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY apps/workers/pyproject.toml ./
 COPY apps/workers/src/ ./src/
 RUN pip install --no-cache-dir .
 WORKDIR /app
-USER 1000:1000
+
+# Self-heal de /data/agent-platform (auditoría runs 2026-07-02): el bind puede
+# reaparecer root:root tras un engine-restart sin que el one-shot del compose
+# vuelva a correr. El entrypoint arranca como root, repara la propiedad si hace
+# falta y cae a uid 1000 con setpriv antes de ejecutar el comando.
+COPY --chmod=755 apps/workers/docker-entrypoint.sh /usr/local/bin/workers-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/workers-entrypoint.sh"]
 
 # Celery worker. Queue routing (heavy/gpu/test/review) is refined in Fase B
 # (task_06); the default worker consumes the configured queues. Beat (periodic

@@ -15,8 +15,6 @@ loop deterministically; the docker_command tool's client is monkeypatched.
 from __future__ import annotations
 
 import json
-import sys
-import types
 from typing import Any, ClassVar
 
 import pytest
@@ -96,19 +94,15 @@ def test_assigned_network_tool_is_wired_not_unknown(
 
 
 # ---------------------------------------------------------------------------
-# An assigned run_* docker_command tool resolves its image and runs.
+# An assigned run_* docker_command tool is WIRED (not "unknown tool") but its
+# in-sandbox execution is retired (task_prod12_docker_01, sandbox-7): the call
+# fails fast pointing at stack_exec (ADR 0093) instead of a cryptic
+# ImportError/daemon error. Before, this test only passed because it injected a
+# fake `docker` module — the exact production path the audit flagged as dead.
 # ---------------------------------------------------------------------------
-def test_assigned_run_pytest_is_wired_and_runs(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_assigned_run_pytest_is_wired_but_sandbox_execution_is_retired(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from unittest.mock import MagicMock
-
-    fake_client = MagicMock()
-    fake_client.containers.run.return_value = b"1 passed\n"
-    fake_docker = types.ModuleType("docker")
-    fake_docker.from_env = lambda: fake_client  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "docker", fake_docker)
-
     spec = {
         "task": {"id": "t-3", "title": "test", "description": ""},
         "model": _scripted("run_pytest", {"path": "tests/"}),
@@ -127,8 +121,10 @@ def test_assigned_run_pytest_is_wired_and_runs(
         ],
     }
     step = _act_step(_run(spec, capsys))
-    assert step["result"]["ok"] is True
-    assert "unknown tool" not in (step["result"].get("error") or "")
+    error = step["result"].get("error") or ""
+    assert "unknown tool" not in error
+    assert step["result"]["ok"] is False
+    assert "stack_exec" in error
 
 
 # ---------------------------------------------------------------------------
@@ -172,35 +168,38 @@ def test_no_tool_specs_does_not_register_extra_families(
 def test_orchestration_tool_runs_without_tool_specs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A tool-less agent (no agent_tools) can still call kanban_update — the
-    orchestration family is wired regardless of tool_specs (H0/H3 / L5)."""
+    """A tool-less agent (no agent_tools) can still call task_comment — the
+    orchestration family is wired regardless of tool_specs (H0/H3 / L5).
+    (AUD16-02: kanban_update ahora devuelve error honesto 'not wired', así que
+    el canario de la familia es task_comment, la que tiene consumidor real.)"""
     spec = {
         "task": {"id": "t-8", "title": "move", "description": ""},
-        "model": _scripted("kanban_update", {"task_id": "t-8", "status": "in_progress"}),
+        "model": _scripted("task_comment", {"task_id": "t-8", "body": "avanzando"}),
     }
     step = _act_step(_run(spec, capsys))
     assert step["result"]["ok"] is True
     assert "unknown tool" not in (step["result"].get("error") or "")
-    assert step["result"]["output"]["effect"] == "kanban_update"
+    assert step["result"]["output"]["effect"] == "task_comment"
 
 
 def test_orchestration_tool_allowed_despite_restrictive_allowlist(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An agent restricted to read_file can STILL call kanban_update — system
+    """An agent restricted to read_file can STILL call task_comment — system
     family tools are exempt from the per-agent allowlist (H3): otherwise
-    assigning any tool silences the orchestrator's kanban/comment/invoke."""
+    assigning any tool silences the orchestrator's kanban/comment/invoke.
+    (AUD16-02: canario cambiado a task_comment, la tool con consumidor real.)"""
     monkeypatch.setenv("AGENT_WORKSPACE_ROOT", str(tmp_path))
     spec = {
         "task": {"id": "t-9", "title": "move", "description": ""},
-        "model": _scripted("kanban_update", {"task_id": "t-9", "status": "done"}),
+        "model": _scripted("task_comment", {"task_id": "t-9", "body": "nota del agente"}),
         "allowed_tools": ["read_file"],
         "tool_specs": [{"name": "read_file", "implementation_type": "builtin", "config": {}}],
     }
     step = _act_step(_run(spec, capsys))
     assert step["result"]["ok"] is True
     assert "not allowed" not in (step["result"].get("error") or "")
-    assert step["result"]["output"]["effect"] == "kanban_update"
+    assert step["result"]["output"]["effect"] == "task_comment"
 
 
 def test_block_all_allowlist_still_blocks_system_tools(
@@ -234,8 +233,11 @@ class _FakeMcpRunner:
 
     instances: ClassVar[list[_FakeMcpRunner]] = []
 
-    def __init__(self, vault_resolver: Any = None) -> None:
+    def __init__(self, vault_resolver: Any = None, *, api: Any = None) -> None:
         self.vault_resolver = vault_resolver
+        # ADR 0131 opción C: el runner necesita el API interno para pedir la
+        # credencial OAuth, que ya no sale de Vault dentro del sandbox.
+        self.api = api
         self.started = False
         self.closed = False
         self.connected: list[str] = []

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Callable
 from typing import Any
 from uuid import UUID
@@ -104,6 +105,65 @@ async def _aclose(obj: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Disponibilidad del antivirus (prod-12 av_01 / ADR 0105)
+# ---------------------------------------------------------------------------
+# Best-effort: marca cuándo empezó la racha de fallos del backend AV y, pasado
+# el umbral, emite UNA notificación al operador vía notification-dispatcher
+# (re-aviso como mucho cada 6 h). La regla de alerta "de verdad" vive en
+# prod-08; esto es la señal temprana que ese plan cablea.
+_AV_DOWN_KEY = "ingestion:av_down_since"
+_AV_NOTIFIED_KEY = "ingestion:av_down_notified"
+_AV_NOTIFY_AFTER_S = 15 * 60
+_AV_RENOTIFY_TTL_S = 6 * 3600
+_DISPATCH_EVENT_TASK = "notification_dispatcher.dispatch_event"
+
+
+async def _track_av_availability(
+    redis: Any,
+    settings: Settings,
+    *,
+    tenant_id: str | None,
+    unavailable: bool,
+) -> None:
+    """Registra la racha de indisponibilidad del AV y avisa pasado el umbral.
+
+    Nunca rompe la ingesta: cualquier error aquí se loguea y se traga."""
+    if redis is None:
+        return
+    try:
+        if not unavailable:
+            await redis.delete(_AV_DOWN_KEY)
+            return
+        now = time.time()
+        await redis.set(_AV_DOWN_KEY, str(now), nx=True)
+        raw = await redis.get(_AV_DOWN_KEY)
+        if raw is None:
+            return
+        since = float(raw.decode() if isinstance(raw, bytes | bytearray) else raw)
+        if (now - since) < _AV_NOTIFY_AFTER_S:
+            return
+        # Single-flight del aviso (nx + TTL de re-aviso).
+        if not await redis.set(_AV_NOTIFIED_KEY, "1", nx=True, ex=_AV_RENOTIFY_TTL_S):
+            return
+        from workers.celery_app import app as celery_app
+
+        celery_app.send_task(
+            _DISPATCH_EVENT_TASK,
+            args=[
+                {
+                    "event_type": "antivirus_unreachable",
+                    "tenant_id": tenant_id or "",
+                    "context": {"minutes_down": int((now - since) // 60)},
+                }
+            ],
+            queue=settings.notifications_event_queue,
+        )
+        _log.warning("ingestion.antivirus_down_notified", minutes_down=int((now - since) // 60))
+    except Exception as exc:  # pragma: no cover — best-effort
+        _log.warning("ingestion.av_tracking_failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Async core
 # ---------------------------------------------------------------------------
 async def _ingest_document_async(
@@ -143,6 +203,7 @@ async def _ingest_document_async(
                     docling=docling,
                     embedder=embedder,
                     redis=redis,
+                    av_failure_mode=settings.av_failure_mode,
                 )
                 await session.commit()
             except LookupError as exc:
@@ -154,6 +215,20 @@ async def _ingest_document_async(
                     "chunks": 0,
                     "error": str(exc),
                 }
+        # prod-12 av_01: racha de indisponibilidad del AV → aviso al operador.
+        av_unavailable = result.status == "pending_scan"
+        tenant_for_alert: str | None = None
+        if av_unavailable:
+            async with sessionmaker() as session:
+                row = await session.execute(
+                    text("SELECT tenant_id FROM documents WHERE id = :doc"),
+                    {"doc": str(result.document_id)},
+                )
+                tenant = row.scalar_one_or_none()
+                tenant_for_alert = str(tenant) if tenant is not None else None
+        await _track_av_availability(
+            redis, settings, tenant_id=tenant_for_alert, unavailable=av_unavailable
+        )
         return {
             "document_id": str(result.document_id),
             "status": result.status,
@@ -210,7 +285,9 @@ async def _sweep_pending_documents_async(
             rows = await session.execute(
                 text(
                     "UPDATE documents SET enqueued_at = now()"
-                    " WHERE status = 'pending'"
+                    # pending_scan (prod-12 av_01): documento a la espera de que
+                    # el antivirus vuelva — el mismo sweep lo reintenta.
+                    " WHERE status IN ('pending', 'pending_scan')"
                     "   AND deleted_at IS NULL"
                     "   AND created_at < now() - make_interval(secs => :age)"
                     "   AND (enqueued_at IS NULL"
@@ -235,13 +312,13 @@ async def _sweep_pending_documents_async(
 # ---------------------------------------------------------------------------
 # Celery tasks
 # ---------------------------------------------------------------------------
-@app.task(name="workers.ingest_document")  # type: ignore[misc]
+@app.task(name="workers.ingest_document")  # type: ignore[untyped-decorator]
 def ingest_document_task(document_id: str) -> dict[str, Any]:
     """Celery entry point. Ingest one document end-to-end."""
     return asyncio.run(_ingest_document_async(UUID(document_id), settings=get_settings()))
 
 
-@app.task(name="workers.sweep_pending_documents")  # type: ignore[misc]
+@app.task(name="workers.sweep_pending_documents")  # type: ignore[untyped-decorator]
 def sweep_pending_documents() -> dict[str, Any]:
     """Beat task: re-enqueue documents stuck in ``pending``."""
     return asyncio.run(

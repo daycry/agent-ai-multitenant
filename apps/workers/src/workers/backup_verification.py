@@ -234,7 +234,11 @@ class BackupVerifier:
         # 3. Structural checks per kind.
         if kind == "pg_dump":
             results.append(self._check_pg_restore_list(target, name=name))
-        elif kind == "volume_tar":
+        elif kind in ("volume_tar", "bind_tar"):
+            # prod-04 (auditoría 2026-07-06): el bind_tar (bare repos + worktrees)
+            # es también un .tar.gz y merece el mismo `tar -tf` estructural que un
+            # volume_tar — antes solo se le comprobaba el checksum, así que una
+            # corrupción coherente con el manifest pasaba como válida.
             results.append(self._check_tar_list(target, name=name))
         elif kind == "encrypted_bundle" and self._encryptor is not None:
             # The plaintext is wrapped; only the blob's checksum is verifiable

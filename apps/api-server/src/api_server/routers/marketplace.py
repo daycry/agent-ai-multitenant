@@ -34,9 +34,9 @@ install / uninstall are tenant-admin writes (:func:`require_tenant_admin`).
 This repo has no per-membership ``project_owner`` role — project-scoped
 writes are gated to ``tenant_admin`` exactly like ``/projects`` and the
 skills/tools routers, so we reuse that helper. The per-permission consent
-flow and the trust / static-analysis / sandbox gates are **Phase B-C**;
-in Phase A the install simply persists the row and records an audit entry
-(the ``# TODO(Plan 09 Fase B/C)`` markers point at where they hook in).
+flow (``api_server.marketplace.consent``) and the signature / trust /
+sandbox gates de las Fases B-C están CABLEADOS en el install/update de este
+router (N-17, auditoría 2026-07-17: este docstring decía que eran futuros).
 """
 
 from __future__ import annotations
@@ -256,6 +256,11 @@ async def _revoke_installation(
     installation.status = InstallationStatus.REVOKED.value
     installation.revoked_at = now
     installation.revoked_by = principal.user_id
+    # ADR 0100 (pieza 2): la capacidad materializada cae CON su instalación,
+    # en la misma transacción (test de no-orfandad).
+    from api_server.marketplace.materialize import dematerialize_installation
+
+    await dematerialize_installation(session, installation_id=installation.id)
     installation.deleted_at = now
 
     # Mandatory append-only audit (plan decision): same transaction as the
@@ -847,6 +852,7 @@ async def install_listing(
     payload: InstallationCreateRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
+    orchestrator: InstallOrchestrator = Depends(get_install_orchestrator),
 ) -> MarketplaceInstallationResponse:
     """Install a listing into the caller's tenant (optionally a project).
 
@@ -855,14 +861,16 @@ async def install_listing(
     returns the row. The duplicate-live-install guard (partial unique
     index ``uq_marketplace_installations_live``) surfaces as a 409.
 
-    DEFERRED (ADR 0081): this fresh-install path does NOT run the security
-    gates (signature / static-analysis / sandbox) — those exist in
-    :meth:`InstallOrchestrator.install` and are wired ONLY to the *update* path
-    today. Wiring them here is blocked on the registry runtime + an
-    out-of-process sandbox the api-server can invoke (it deliberately has no
-    Docker socket, Principle 2): doing it naïvely would fail every install
-    closed (community/experimental need the sandbox; verified needs a signing
-    key + on-disk artifact). The per-permission consent gate IS enforced below
+    Static analysis (task_prod12_mkt_01) DOES run here: the SAME
+    bandit/semgrep pipeline the update path uses
+    (:meth:`InstallOrchestrator.analyze_for_install`) — a finding above the
+    trust policy aborts with 422 + an audit row; a listing with no on-disk
+    artifact records an honest skip and installs (pre-registry gap).
+
+    STILL DEFERRED (ADR 0081): signature verification + the sandbox probe —
+    blocked on the registry runtime + an out-of-process sandbox the
+    api-server can invoke (it deliberately has no Docker socket,
+    Principle 2). The per-permission consent gate IS enforced below
     (a non-verified listing lands ``DISABLED`` with no permissions). See
     ADR 0081 for the full Phase B/C plan.
     """
@@ -907,11 +915,26 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         )
 
-    # DEFERRED to Phase B/C (ADR 0081): run the pre-install gates
-    # (signature → static analysis → sandbox probe) before persisting, by
-    # routing through InstallOrchestrator.install() like perform_installation_update
-    # already does. Blocked on an out-of-process sandbox runner (the api-server has
-    # no Docker socket) + the artifact registry. The audit H4 documents the gap.
+    # Gate de análisis estático (task_prod12_mkt_01): el MISMO pipeline
+    # bandit/semgrep que el update, vía el orchestrator. Un hallazgo por
+    # encima de la política aborta (audit row + 422); un artefacto ausente
+    # en disco se registra como skip honesto y la instalación sigue —
+    # bloquear ahí cerraría en falso todo el catálogo pre-registry.
+    # DEFERRED to Phase B/C (ADR 0081): signature + sandbox probe — blocked
+    # on an out-of-process sandbox runner (the api-server has no Docker
+    # socket) + the artifact registry.
+    try:
+        analysis_gates = await orchestrator.analyze_for_install(
+            session=session,
+            tenant_id=tenant_id,
+            actor=_actor(principal),
+            listing=listing,
+        )
+    except InstallError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"install blocked by static analysis: {exc}",
+        ) from exc
 
     # Trust-level consent gate (plan decisions (a)+(b), task_09_07).
     # community / experimental listings ALWAYS require explicit
@@ -951,6 +974,29 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         ) from exc
 
+    # ADR 0100 (pieza 2): una instalación que nace ENABLED (listing verified)
+    # MATERIALIZA su capacidad nativa en la misma transacción — skill o tool
+    # de red (mcp_tool/http_endpoint); python/docker quedan diferidos honestos
+    # hasta el sandbox out-of-process (ADR 0081 B/C). Un manifest inválido
+    # aborta el install entero (422): nunca un ENABLED a medias.
+    materialize_summary: dict[str, object] | None = None
+    if initial_status == InstallationStatus.ENABLED.value:
+        from api_server.marketplace.materialize import (
+            MaterializeError,
+            materialize_installation,
+        )
+
+        try:
+            materialize_summary = (
+                await materialize_installation(session, installation=installation, listing=listing)
+            ).as_dict()
+        except MaterializeError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"install cannot materialise its capability: {exc}",
+            ) from exc
+
     # Append-only audit: who installed what. Mandatory — the install and
     # its audit row live in the same transaction so they commit atomically.
     session.add(
@@ -967,6 +1013,11 @@ async def install_listing(
                 "status": initial_status,
                 "granted_permissions": granted,
                 "project_id": (str(payload.project_id) if payload.project_id else None),
+                # task_prod12_mkt_01: el informe del gate de análisis (o su
+                # skip honesto) viaja en el mismo audit row del install.
+                "gates": analysis_gates,
+                # ADR 0100: qué materializó (o por qué se difirió).
+                "materialization": materialize_summary,
             },
         )
     )
@@ -1065,6 +1116,29 @@ async def decide_consent(
     installation.status = (
         InstallationStatus.ENABLED.value if outcome.enable else InstallationStatus.DISABLED.value
     )
+
+    # ADR 0100 (pieza 2): el flip de consent decide la capacidad viva en la
+    # MISMA transacción — enable materializa (o re-materializa: re-enable
+    # resucita la fila soft-borrada); quedarse disabled la retira (una
+    # capacidad no sobrevive a su permiso). Manifest inválido → 422 y el
+    # enable entero aborta.
+    from api_server.marketplace.materialize import (
+        MaterializeError,
+        dematerialize_installation,
+        materialize_installation,
+    )
+
+    if outcome.enable:
+        try:
+            await materialize_installation(session, installation=installation, listing=listing)
+        except MaterializeError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"enable cannot materialise its capability: {exc}",
+            ) from exc
+    else:
+        await dematerialize_installation(session, installation_id=installation.id)
 
     actor = _actor(principal)
     detail = {

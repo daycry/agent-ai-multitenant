@@ -199,6 +199,143 @@ async def test_model_call_records_price_snapshot_and_cost(
 
 
 # ===========================================================================
+# AUD16-15: la clave del RUNTIME (kind + modelo nativo) resuelve el catálogo.
+# Los steps de producción llevaban provider="" (o el KIND claude_sdk/ollama…)
+# mientras el catálogo LiteLLM nombra por familia (anthropic, ollama/<m>…):
+# price_snapshot_cost_usd quedó NULL en 128/128 executions.
+# ===========================================================================
+async def _seed_extra_price(
+    sm: async_sessionmaker,
+    *,
+    provider: str,
+    model_id: str,
+    input_price: Decimal = Decimal("1.0"),
+    output_price: Decimal = Decimal("2.0"),
+) -> None:
+    async with sm() as s, s.begin():
+        await s.execute(
+            text(
+                "INSERT INTO model_prices"
+                " (id, provider, model_id, modality, input_price, output_price)"
+                " VALUES (:i, :prov, :m, 'text', :inp, :out)"
+            ),
+            {
+                "i": uuid4(),
+                "prov": provider,
+                "m": model_id,
+                "inp": input_price,
+                "out": output_price,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_kind_resolves_catalog_provider_alias(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """provider='claude_sdk' (el kind que registra el runtime) casa con la fila
+    anthropic/<model> del catálogo."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task_and_price(sm)  # anthropic / claude-sonnet-4-5
+
+        result = _FakeResult(steps=[_model_call_step(provider="claude_sdk")])
+        async with sm() as s, s.begin():
+            execution = await record_execution(
+                s, tenant_id=ids["tenant"], task_id=ids["task"], result=result
+            )
+            execution_id = execution.id
+        async with sm() as s:
+            loaded = await get_execution(s, execution_id)
+        assert loaded is not None
+        snap = _first_model_call(loaded.steps_log)["price_snapshot"]
+        assert snap["available"] is True, snap
+        assert loaded.price_snapshot_cost_usd is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_step_without_provider_prices_via_unique_model_match(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """Steps históricos sin provider: si el model_id casa con EXACTAMENTE una
+    fila current del catálogo, se usa — nunca se adivina entre varias."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task_and_price(sm)
+
+        result = _FakeResult(steps=[_model_call_step(provider="")])
+        async with sm() as s, s.begin():
+            execution = await record_execution(
+                s, tenant_id=ids["tenant"], task_id=ids["task"], result=result
+            )
+            execution_id = execution.id
+        async with sm() as s:
+            loaded = await get_execution(s, execution_id)
+        assert loaded is not None
+        snap = _first_model_call(loaded.steps_log)["price_snapshot"]
+        assert snap["available"] is True, snap
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_model_only_match_stays_unknown(
+    _migrated: None, admin_database_url: str
+) -> None:
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task_and_price(sm)
+        # Mismo model_id bajo OTRO provider → el match por-modelo deja de ser único.
+        await _seed_extra_price(sm, provider="otherprov", model_id=_MODEL)
+
+        result = _FakeResult(steps=[_model_call_step(provider="")])
+        async with sm() as s, s.begin():
+            execution = await record_execution(
+                s, tenant_id=ids["tenant"], task_id=ids["task"], result=result
+            )
+            execution_id = execution.id
+        async with sm() as s:
+            loaded = await get_execution(s, execution_id)
+        assert loaded is not None
+        snap = _first_model_call(loaded.steps_log)["price_snapshot"]
+        assert snap["available"] is False, snap
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_ollama_kind_matches_litellm_prefixed_model_id(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """El catálogo guarda ids estilo LiteLLM ('ollama/<m>'); el runtime registra
+    el nombre nativo pelado — el lookup prueba también el id prefijado."""
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed_task_and_price(sm, seed_price=False)
+        await _seed_extra_price(sm, provider="ollama", model_id="ollama/gpt-oss:120b")
+
+        result = _FakeResult(steps=[_model_call_step(provider="ollama", model="gpt-oss:120b")])
+        async with sm() as s, s.begin():
+            execution = await record_execution(
+                s, tenant_id=ids["tenant"], task_id=ids["task"], result=result
+            )
+            execution_id = execution.id
+        async with sm() as s:
+            loaded = await get_execution(s, execution_id)
+        assert loaded is not None
+        snap = _first_model_call(loaded.steps_log)["price_snapshot"]
+        assert snap["available"] is True, snap
+    finally:
+        await engine.dispose()
+
+
+# ===========================================================================
 # A later catalog price change does NOT alter the historical snapshot
 # ===========================================================================
 @pytest.mark.asyncio

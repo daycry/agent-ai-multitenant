@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
@@ -41,6 +41,9 @@ from shared_mcp.exceptions import (
     MCPTransportError,
 )
 from shared_mcp.types import MCPServerConfig, MCPTool, MCPToolResult, Transport
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import httpx
 
 
 @dataclass
@@ -128,6 +131,7 @@ class MCPClient:
         config: MCPServerConfig,
         *,
         vault_resolver: VaultResolver | None = None,
+        auth: httpx.Auth | None = None,
     ) -> AsyncIterator[MCPSession]:
         """Open + initialise a session, yield it, close on exit.
 
@@ -141,6 +145,14 @@ class MCPClient:
         ``headers`` (http transports) *before* the transport opens —
         cleartext credentials never reach the on-disk config or the
         Project.mcp_servers JSONB blob.
+
+        ``auth`` (ADR 0127) is an optional ``httpx.Auth`` handed to the
+        HTTP transports (sse / streamable_http) — in practice the SDK's
+        ``OAuthClientProvider`` from :func:`shared_mcp.oauth.build_oauth_provider`,
+        which adds the bearer + auto-refreshes it. It is ignored for the
+        stdio transport (no HTTP client to attach to). ``auth`` and a
+        static ``auth_ref`` header are complementary; using both on the
+        same server is a config smell (double credential).
 
         Errors are normalised:
             * Auth resolution → :class:`MCPAuthError`.
@@ -160,7 +172,7 @@ class MCPClient:
         try:
             async with AsyncExitStack() as stack:
                 try:
-                    read_stream, write_stream = await _open_streams(stack, config)
+                    read_stream, write_stream = await _open_streams(stack, config, auth=auth)
                 except MCPError:
                     raise
                 except BaseExceptionGroup as eg:
@@ -213,13 +225,21 @@ class MCPClient:
             raise MCPTransportError(f"MCP session against {config.name!r} failed: {inner}") from eg
 
 
-async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple[Any, Any]:
+async def _open_streams(
+    stack: AsyncExitStack,
+    config: MCPServerConfig,
+    *,
+    auth: httpx.Auth | None = None,
+) -> tuple[Any, Any]:
     """Open the right transport for `config.transport` and return its
     `(read_stream, write_stream)` pair. Registers cleanup on `stack`.
 
     `streamable_http` actually yields three values (the third is a
     `get_session_id` callback); we drop it because we don't expose
     HTTP-session-id resumption yet.
+
+    ``auth`` (ADR 0127) is forwarded to the HTTP transports only; stdio
+    has no HTTP client to carry an ``httpx.Auth``.
     """
     transport: Transport = config.transport
 
@@ -238,6 +258,7 @@ async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple
                 url=config.url or "",
                 headers=dict(config.headers) or None,
                 sse_read_timeout=config.timeout_s * 10,  # longer than per-call
+                auth=auth,
             )
         )
         return read_stream, write_stream
@@ -249,6 +270,7 @@ async def _open_streams(stack: AsyncExitStack, config: MCPServerConfig) -> tuple
                 headers=dict(config.headers) or None,
                 timeout=config.timeout_s,
                 sse_read_timeout=config.timeout_s * 10,
+                auth=auth,
             )
         )
         return read_stream, write_stream

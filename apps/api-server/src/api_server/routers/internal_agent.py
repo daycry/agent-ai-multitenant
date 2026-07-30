@@ -77,6 +77,66 @@ async def health(
 
 
 # ---------------------------------------------------------------------------
+# /run-stack  (ADR 0093 — stack_exec)
+# ---------------------------------------------------------------------------
+class RunStackRequest(BaseModel):
+    model_config = _BASE_CONFIG
+
+    task_id: UUID
+    command: str = Field(min_length=1, max_length=4000)
+    timeout_s: int = Field(default=600, ge=1, le=3600)
+    # ADR 0093 (2026-07-24): optional working directory relative to the worktree
+    # root (e.g. "ci4build") so a project scaffolded under a subdir runs its
+    # toolchain there. Validated worker-side (no absolute path / no `..`).
+    cwd: str | None = Field(default=None, max_length=512)
+
+
+class RunStackResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    exit_code: int
+    logs: str
+    timed_out: bool
+
+
+@router.post("/run-stack", response_model=RunStackResponse)
+async def run_stack(
+    payload: RunStackRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+) -> RunStackResponse:
+    """Run a stack command (``composer install`` / ``vendor/bin/phpunit`` /
+    ``php spark``) in the project's runtime template via the worker (ADR 0093).
+
+    The agent-runtime cannot launch containers (no Docker socket — principle 2),
+    so it asks the worker, which has Docker and already knows how to launch the
+    stack runtime over the task's worktree. The worker gates the command against
+    the project's ``allowed_commands`` (deny-by-default) before running it. The
+    tenant is pinned by the minted agent token; the ``task_id`` comes from the
+    runtime's own task spec.
+    """
+    from api_server.celery_client import run_stack_command_and_wait
+
+    try:
+        result = await run_stack_command_and_wait(
+            tenant_id=principal.tenant_id,
+            task_id=payload.task_id,
+            command=payload.command,
+            timeout_s=payload.timeout_s,
+            cwd=payload.cwd,
+        )
+    except Exception as exc:  # broker / result-backend failure or worker timeout
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"stack command did not complete: {exc}",
+        ) from exc
+    return RunStackResponse(
+        exit_code=int(result.get("exit_code", -1)),
+        logs=str(result.get("logs", "")),
+        timed_out=bool(result.get("timed_out", False)),
+    )
+
+
+# ---------------------------------------------------------------------------
 # /memory-recall
 # ---------------------------------------------------------------------------
 class MemoryRecallRequest(BaseModel):
@@ -103,6 +163,127 @@ class MemoryRecallResponse(BaseModel):
     model_config = _BASE_CONFIG
 
     hits: list[MemoryRecallHitOut]
+
+
+class McpOAuthTokenRequest(BaseModel):
+    """El sandbox pide el token de UN servidor, POR NOMBRE."""
+
+    model_config = _BASE_CONFIG
+
+    server: str = Field(min_length=1, max_length=200)
+    # `True` solo tras un 401 real del servidor remoto: fuerza el canje del
+    # refresh token. Lo dispara el 401, no un reloj (ver `issue_access_token`).
+    refresh: bool = False
+
+
+class McpOAuthTokenResponse(BaseModel):
+    model_config = _BASE_CONFIG
+
+    access_token: str
+    token_type: str
+
+
+async def _resolve_run_project(
+    session: AsyncSession, *, agent: Agent, principal: AgentPrincipal
+) -> Project | None:
+    """El proyecto DEL RUN, resuelto siempre en el servidor.
+
+    Distinto a propósito de :func:`_resolve_effective_project`, que sirve para
+    LEER memoria/RAG y por eso tiene la regla —con flag— del agente global que
+    hereda el proyecto de la tarea. Una credencial no se hereda: el proyecto es
+    el de la tarea que este run ejecuta, y si el token no porta tarea, el del
+    propio agente. Nunca el que diga el cliente.
+    """
+    if principal.task_id is not None:
+        task = (
+            await session.execute(
+                select(Task).where(
+                    Task.id == principal.task_id,
+                    # Defensa en profundidad sobre RLS: una tarea de otro tenant
+                    # no resuelve proyecto ninguno.
+                    Task.tenant_id == principal.tenant_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if task is not None and task.project_id is not None:
+            return (
+                await session.execute(select(Project).where(Project.id == task.project_id))
+            ).scalar_one_or_none()
+    if agent.project_id is not None:
+        return (
+            await session.execute(select(Project).where(Project.id == agent.project_id))
+        ).scalar_one_or_none()
+    return None
+
+
+@router.post("/mcp-oauth-token", response_model=McpOAuthTokenResponse)
+async def mcp_oauth_token(
+    payload: McpOAuthTokenRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+    session: AsyncSession = Depends(get_agent_tenant_session),
+) -> McpOAuthTokenResponse:
+    """El access token vigente de un servidor MCP con OAuth (ADR 0131, opción C).
+
+    El sandbox no habla con Vault. Pide el token por aquí y la plataforma hace lo
+    privilegiado: leer Vault, refrescar si el servidor remoto devolvió 401 y
+    persistir el token nuevo. Al contenedor solo baja un access token acotado a
+    un servidor y efímero — ni la llave del almacén, ni el refresh token.
+
+    La frontera de tenant NO depende de lo que mande el cliente. El sandbox envía
+    un NOMBRE de servidor; la ruta de Vault se construye aquí con el tenant del
+    token y el proyecto del run resuelto en servidor. Aceptar la ruta ya montada
+    (el ``oauth_ref`` que el runtime recibe) habría sido convertirla en una vía
+    para leer credenciales de otro proyecto — o de otro tenant— con solo cambiar
+    una cadena. Y el nombre se valida contra los ``mcp_servers`` DE ESE proyecto:
+    un servidor que el proyecto no declara no tiene token que dar.
+    """
+    from shared_mcp.catalog import uses_oauth
+
+    from api_server.mcp_oauth_flow import McpOAuthError, find_server_url, issue_access_token
+    from api_server.routers.mcp import get_vault_resolver
+
+    agent, _ = await _resolve_agent_context(session, principal.agent_id, principal.tenant_id)
+    project = await _resolve_run_project(session, agent=agent, principal=principal)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="este run no tiene proyecto: no hay credenciales MCP que resolver",
+        )
+
+    servers = [s for s in (project.mcp_servers or []) if isinstance(s, dict)]
+    server_url = find_server_url(servers, payload.server)
+    if server_url is None or not uses_oauth(server_url):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"el proyecto no declara un servidor MCP con OAuth llamado {payload.server!r}",
+        )
+
+    resolver = get_vault_resolver()
+    if resolver is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="el api-server no tiene Vault configurado: no puede resolver credenciales MCP",
+        )
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            grant = await issue_access_token(
+                tenant_id=str(principal.tenant_id),
+                project_id=str(project.id),
+                server_name=payload.server,
+                server_url=server_url,
+                resolver=resolver,
+                http_client=http_client,
+                refresh=payload.refresh,
+            )
+    except McpOAuthError as exc:
+        # 409: el estado guardado no sirve y lo arregla un humano reconectando —
+        # no es un fallo transitorio que reintentar.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return McpOAuthTokenResponse(access_token=grant.access_token, token_type=grant.token_type)
 
 
 async def _resolve_agent_context(
@@ -222,7 +403,12 @@ async def memory_recall(
     # proyecto efectivo, de modo que read = write = ``task.project_id`` para el
     # agente global — sin la asimetría histórica.
     project = await _resolve_effective_project(session, agent=agent, principal=principal)
-    scopes = payload.scopes or _default_readable_scopes(agent.memory_scope)
+    # D2 (revisión memorias 2026-07-03): unos scopes explícitos se RECORTAN a la
+    # escalera del agente — antes la saltaban (un agente project_shared podía
+    # leer team_shared/global de su equipo/tenant). Intersección vacía → la
+    # escalera completa, para que una petición mal formada no esterilice el run.
+    ladder = _default_readable_scopes(agent.memory_scope)
+    scopes = [s for s in payload.scopes if s in ladder] or ladder
     team_id = project.team_id if project is not None else None
     project_id = project.id if project is not None else None
 
@@ -792,3 +978,57 @@ def _resolve_store_owner(*, scope: str, project: Project | None) -> dict[str, UU
         return {"user_id": None, "team_id": project.team_id, "project_id": None}
     # MemoryScope.PRIVATE — no user attribution for an AI agent.
     return None
+
+
+# ---------------------------------------------------------------------------
+# /pending-guidance (`task_wf_71`)
+# ---------------------------------------------------------------------------
+class PendingGuidanceRequest(BaseModel):
+    task_id: UUID
+
+
+class PendingGuidanceResponse(BaseModel):
+    guidance: str | None = None
+
+
+@router.post("/pending-guidance", response_model=PendingGuidanceResponse)
+async def pending_guidance(
+    payload: PendingGuidanceRequest,
+    principal: AgentPrincipal = Depends(get_agent_principal),
+) -> PendingGuidanceResponse:
+    """La guía que un humano ha escrito para ESTE run, si la hay (`task_wf_71`).
+
+    POST y no GET porque **consume**: la guía se borra al entregarla. Dejarla
+    puesta la repetiría en cada iteración y el agente acabaría re-aplicando una
+    corrección que ya hizo.
+
+    Se busca por la tarea del token —no por un `execution_id` que el sandbox no
+    conoce— y solo sobre la ejecución `running`: el run-lock garantiza que solo
+    hay una. El tenant lo fija el token minteado, así que un run no puede leer
+    la guía de otro.
+    """
+    from sqlalchemy import select
+
+    from api_server.db.domain import Execution
+    from api_server.db.session import get_sessionmaker
+
+    sessionmaker = get_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        row = (
+            await session.execute(
+                select(Execution)
+                .where(
+                    Execution.task_id == payload.task_id,
+                    Execution.tenant_id == principal.tenant_id,
+                    Execution.status == "running",
+                )
+                .order_by(Execution.created_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None or not row.pending_guidance:
+            return PendingGuidanceResponse(guidance=None)
+        guidance = str(row.pending_guidance)
+        row.pending_guidance = None
+    return PendingGuidanceResponse(guidance=guidance)

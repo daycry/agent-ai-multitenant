@@ -64,7 +64,7 @@ def _build_vault_client(settings: Settings) -> VaultRotationClient:
     return FakeVaultRotationClient()
 
 
-@app.task(name="workers.rotate_credentials")  # type: ignore[misc]
+@app.task(name="workers.rotate_credentials")  # type: ignore[untyped-decorator]
 def rotate_credentials_task() -> dict[str, Any]:
     """Run the scheduled credential-rotation cycle.
 

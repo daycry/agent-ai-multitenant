@@ -36,13 +36,13 @@ def _build_monitors() -> list[ServiceMonitor]:
 
     # docker SDK ships incomplete type stubs; both attributes do exist
     # at runtime.
-    client = docker.from_env()  # type: ignore[attr-defined]
+    client = docker.from_env()
     monitors: list[ServiceMonitor] = []
     for svc in services:
         container_name = f"{project}-{svc}-1"
         try:
             container = client.containers.get(container_name)
-        except docker.errors.NotFound:  # type: ignore[attr-defined]
+        except docker.errors.NotFound:
             _logger.warning("watchdog.container_missing", container=container_name)
             continue
         monitors.append(ServiceMonitor(name=svc, container=container))

@@ -23,6 +23,7 @@ typed exceptions so the per-tool adapters can map them to
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +32,13 @@ import httpx
 # Defaults — overridden by env in :func:`from_env`.
 _DEFAULT_TIMEOUT_S = 15.0
 _DEFAULT_API_URL = "http://api-server:8000"
+
+# Reachability probe retry policy (F22 / audit C5). A single GET that hit a
+# transient hiccup (a connect race while the api-server's network alias settles,
+# a momentary refusal) used to tear down the whole run; a short bounded retry
+# absorbs the hiccup before declaring the API down.
+_DEFAULT_REACHABLE_ATTEMPTS = 3
+_DEFAULT_REACHABLE_BACKOFF_S = 0.5
 
 
 class InternalAPIError(RuntimeError):
@@ -108,7 +116,12 @@ class InternalAgentAPI:
             self.client.close()
             self.client = None
 
-    def ensure_reachable(self) -> None:
+    def ensure_reachable(
+        self,
+        *,
+        attempts: int = _DEFAULT_REACHABLE_ATTEMPTS,
+        backoff_s: float = _DEFAULT_REACHABLE_BACKOFF_S,
+    ) -> None:
         """Fail LOUDLY at boot if the api-server's internal API is not reachable
         (Plan prod-01 task_11 / sandbox-4). A bare run with no token never gets
         here (``from_env`` raised first); when a token WAS injected we are a
@@ -116,28 +129,44 @@ class InternalAgentAPI:
         error — not a silent skip of the knowledge/memory families.
 
         Probes the unauthenticated ``/healthz`` (a route, not the proxy) so a
-        network/route misconfiguration surfaces immediately.
+        network/route misconfiguration surfaces immediately. A single GET is too
+        brittle (F22): a transient connect race tumbles the whole run, so we
+        retry ``attempts`` times with a short linear backoff and only raise
+        :class:`InternalAPIUnreachableError` once every attempt has failed.
         """
         if self.client is None:
             raise InternalAPIError("client has been closed")
-        try:
-            response = self.client.get(f"{self.base_url}/healthz")
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise InternalAPIUnreachableError(
-                f"internal API at {self.base_url} is not reachable: {exc!r}. The sandbox "
-                "needs a network route to api-server (agentic-agents) and must bypass the "
-                "egress-proxy (trust_env=False)."
-            ) from exc
+        last_exc: httpx.HTTPError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self.client.get(f"{self.base_url}/healthz")
+                response.raise_for_status()
+                return
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt < attempts:
+                    # Transient hiccup — back off (linearly) and retry before
+                    # declaring the API down.
+                    time.sleep(backoff_s * attempt)
+        raise InternalAPIUnreachableError(
+            f"internal API at {self.base_url} is not reachable after {attempts} "
+            f"attempt(s): {last_exc!r}. The sandbox needs a network route to api-server "
+            "(agentic-agents) and must bypass the egress-proxy (trust_env=False)."
+        ) from last_exc
 
-    def _post(self, path: str, json: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self, path: str, json: dict[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
         if self.client is None:
             raise InternalAPIError("client has been closed")
         url = f"{self.base_url}{path}"
+        # ``timeout`` overrides the client default per request — a stack command
+        # (composer install) can take minutes, far longer than the 15s default.
         response = self.client.post(
             url,
             json=json,
             headers={"Authorization": f"Bearer {self.bearer_token}"},
+            timeout=timeout if timeout is not None else self.timeout_s,
         )
         if response.status_code >= 400:
             raise InternalAPIHTTPError(response.status_code, response.text)
@@ -159,6 +188,17 @@ class InternalAgentAPI:
         payload = self._post("/internal/agent/memory-recall", body)
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
+
+    def pending_guidance(self, *, task_id: str) -> str | None:
+        """La guía que un humano acaba de escribir para este run, o ``None``.
+
+        CONSUME: el servidor la borra al entregarla. El bucle la pide una vez
+        por iteración; el timeout es corto a propósito — es una comodidad, y no
+        puede hacer esperar al run si el api-server va lento.
+        """
+        payload = self._post("/internal/agent/pending-guidance", {"task_id": task_id}, timeout=5.0)
+        guidance = payload.get("guidance")
+        return str(guidance) if guidance else None
 
     def memory_store(
         self,
@@ -189,6 +229,34 @@ class InternalAgentAPI:
         hits: list[dict[str, Any]] = payload.get("hits") or []
         return hits
 
+    def run_stack(
+        self, *, task_id: str, command: str, timeout_s: int = 600, cwd: str | None = None
+    ) -> dict[str, Any]:
+        """Run a stack command (``composer install`` / ``vendor/bin/phpunit`` /
+        ``php spark``) in the project's runtime template via the worker (ADR 0093).
+
+        The sandbox cannot launch containers; this asks the worker, which has
+        Docker. Returns ``{exit_code, logs, timed_out}``. Waits the command's own
+        budget + a margin (the HTTP call blocks until the worker finishes).
+
+        El margen es MAYOR que el del server (``run_stack_command_and_wait``,
+        ``timeout_s + 120``): si empatan, la carrera la gana httpx y el agente ve
+        un ``ReadTimeout`` opaco en vez del 502 estructurado con causa que emite
+        el api-server cuando es ÉL quien agota la espera (plan
+        guardas-research-por-novedad D2, run 019f252e)."""
+        payload: dict[str, Any] = {
+            "task_id": task_id,
+            "command": command,
+            "timeout_s": int(timeout_s),
+        }
+        if cwd:
+            payload["cwd"] = cwd
+        return self._post(
+            "/internal/agent/run-stack",
+            payload,
+            timeout=float(timeout_s) + 180.0,
+        )
+
     def document_convert(self, *, document_id: str) -> dict[str, Any]:
         """Structured chunks of an existing Document. v1 reads them
         from the chunks table; full re-parse mode lands with chat-
@@ -207,6 +275,17 @@ class InternalAgentAPI:
         if title is not None:
             body["title"] = title
         return self._post("/internal/agent/promote-to-kb", body)
+
+    def mcp_oauth_token(self, *, server: str, refresh: bool = False) -> dict[str, Any]:
+        """El access token vigente de un servidor MCP con OAuth (ADR 0131, C).
+
+        Se manda el NOMBRE del servidor, nunca la ruta de Vault: esa la compone
+        el servidor con el tenant del token y el proyecto del run. Con
+        ``refresh=True`` —solo tras un 401 real del remoto— la plataforma canjea
+        el refresh token, lo persiste y devuelve el nuevo. El refresh token no
+        baja nunca hasta aquí.
+        """
+        return self._post("/internal/agent/mcp-oauth-token", {"server": server, "refresh": refresh})
 
 
 __all__ = [

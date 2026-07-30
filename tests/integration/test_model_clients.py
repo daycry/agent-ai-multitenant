@@ -101,6 +101,35 @@ def _mock_async_http(handler: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+# ---------------------------------------------------------------------------
+# AUD16-01 — wire-format helpers: the HTTP providers pass `tools` VERBATIM to
+# the OpenAI-compatible body, so EVERY entry must carry the
+# {"type": "function", "function": {...}} envelope. A bare
+# {name, description, parameters} dict is a 400 on strict endpoints
+# (Azure/Copilot) and a nameless husk on Ollama.
+# ---------------------------------------------------------------------------
+def _assert_openai_tool_envelope(tools: list[dict[str, Any]]) -> None:
+    assert isinstance(tools, list) and tools
+    for entry in tools:
+        assert entry.get("type") == "function", f"tool without envelope: {entry}"
+        fn = entry.get("function")
+        assert isinstance(fn, dict) and fn.get("name"), f"tool without function/name: {entry}"
+
+
+def _tool_names(tools: list[dict[str, Any]]) -> list[str]:
+    return [entry["function"]["name"] for entry in tools]
+
+
+def _capture_body(seen: dict[str, Any]) -> Any:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/copilot_internal/v2/token"):
+            return httpx.Response(200, json={"token": "jwt-1", "expires_at": 9_999_999_999})
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_chat_text("done"))
+
+    return handler
+
+
 # ===========================================================================
 # Azure Foundry — OpenAI-compatible gateway (replaces LiteLLM)
 # ===========================================================================
@@ -150,8 +179,32 @@ def test_azure_decide_targets_apim_url_with_subscription_key() -> None:
     assert "api-version=" in seen["url"]
     assert seen["sub"] == "sub-test"
     assert isinstance(seen["body"]["messages"], list) and seen["body"]["messages"]
-    # decide() offers the tool catalog so the model can act.
-    assert seen["body"]["tools"] == _TOOLS
+    # decide() offers the tool catalog (plus the ADR 0087 `submit_result`
+    # finisher) so the model can act and close with a structured outcome.
+    assert seen["body"]["tools"][: len(_TOOLS)] == _TOOLS
+    _assert_openai_tool_envelope(seen["body"]["tools"])
+    assert _tool_names(seen["body"]["tools"]) == ["echo", "submit_result"]
+
+
+def test_azure_decide_wire_format_wraps_every_tool() -> None:
+    # AUD16-01: submit_result travelled BARE next to the wrapped agent tools,
+    # which is a 400 on APIM's strict schema — every entry must be enveloped.
+    seen: dict[str, Any] = {}
+    _azure(_capture_body(seen)).decide(_STATE)
+    _assert_openai_tool_envelope(seen["body"]["tools"])
+    assert _tool_names(seen["body"]["tools"]) == ["echo", "submit_result"]
+
+
+def test_azure_review_wire_format_wraps_submit_verdict() -> None:
+    seen: dict[str, Any] = {}
+    _azure(_capture_body(seen)).review(_STATE)
+    _assert_openai_tool_envelope(seen["body"]["tools"])
+    assert _tool_names(seen["body"]["tools"]) == ["submit_verdict"]
+    # F34: the verdict is still FORCED via tool_choice.
+    assert seen["body"]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "submit_verdict"},
+    }
 
 
 def test_azure_review_parses_a_pass() -> None:
@@ -212,6 +265,22 @@ def test_ollama_cloud_sends_bearer_token() -> None:
     assert seen["auth"] == "Bearer sk-cloud"
 
 
+def test_ollama_decide_wire_format_wraps_every_tool() -> None:
+    # AUD16-01: Ollama unmarshals a bare dict into a nameless tool husk — the
+    # model would never see submit_result. Every entry must be enveloped.
+    seen: dict[str, Any] = {}
+    _ollama(_capture_body(seen)).decide(_STATE)
+    _assert_openai_tool_envelope(seen["body"]["tools"])
+    assert _tool_names(seen["body"]["tools"]) == ["echo", "submit_result"]
+
+
+def test_ollama_review_wire_format_wraps_submit_verdict() -> None:
+    seen: dict[str, Any] = {}
+    _ollama(_capture_body(seen)).review(_STATE)
+    _assert_openai_tool_envelope(seen["body"]["tools"])
+    assert _tool_names(seen["body"]["tools"]) == ["submit_verdict"]
+
+
 # ===========================================================================
 # GitHub Copilot — OpenAI-compat + JWT auth (provider handles the mint)
 # ===========================================================================
@@ -241,6 +310,19 @@ def test_copilot_decide_uses_the_jwt_and_vscode_headers() -> None:
     assert seen["auth"] == "Bearer jwt-1"
     assert seen["agent"].startswith("GitHubCopilotChat/")
     assert seen["integration"] == "vscode-chat"
+
+
+def test_copilot_decide_wire_format_wraps_every_tool() -> None:
+    seen: dict[str, Any] = {}
+    client = CopilotModelClient(
+        model="gpt-4o",
+        github_token="gho_test",
+        tools=_TOOLS,
+        http_client=_mock_async_http(_capture_body(seen)),
+    )
+    client.decide(_STATE)
+    _assert_openai_tool_envelope(seen["body"]["tools"])
+    assert _tool_names(seen["body"]["tools"]) == ["echo", "submit_result"]
 
 
 # ===========================================================================

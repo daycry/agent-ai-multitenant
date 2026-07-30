@@ -41,6 +41,22 @@ from alembic import command
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def _fresh_global_state_shield():
+    """Blindaje de orden (tanda 2, 2026-07-19): este fichero fallaba SOLO en
+    la suite completa (pasa aislado) — estado global heredado del fichero
+    anterior (engines/caches vivos). Reset al ENTRAR en cada test: barato,
+    idempotente y sin efecto cuando el estado ya está limpio."""
+    from api_server.auth.deps import reset_redis_cache
+    from api_server.config import get_settings
+    from api_server.db.session import reset_engine_cache
+
+    get_settings.cache_clear()
+    reset_engine_cache()
+    reset_redis_cache()
+    yield
+
+
 # ===========================================================================
 # Layer 1 — the resolver: project stack → RuntimeTemplate, with fallback
 # ===========================================================================
@@ -168,18 +184,43 @@ def test_tool_dispatch_falls_back_to_tool_default_without_project() -> None:
     assert fn.image == "agent-runtime-python-pytest:v1"  # type: ignore[attr-defined]
 
 
-def test_tool_dispatch_unknown_runtime_is_clear_error_at_boot() -> None:
+def test_tool_dispatch_unknown_runtime_skips_tool_not_the_run() -> None:
+    """Contrato desde 602a24b: una spec malformada de tipo VÁLIDO se salta con
+    warning — no tumba el run entero. El error temprano y claro del catálogo lo
+    da el WORKER en dispatch (`_resolve_tool_spec_images` sí lanza, ver el test
+    dispatch-side de abajo); aquí el runtime degrada por-tool."""
     from agent_runtime.tool_wiring import WiringContext, register_tool_specs
     from agent_runtime.tools import ToolRegistry
-    from workers.test_runtime import RuntimeResolutionError, resolve_run_runtime_image
+    from workers.test_runtime import resolve_run_runtime_image
 
     registry = ToolRegistry()
     ctx = WiringContext(
         project_default_runtime="totally-not-a-runtime",
         runtime_image_resolver=resolve_run_runtime_image,
     )
+    registered = register_tool_specs(
+        registry, [_run_tool_spec("run_pytest", "python-pytest")], ctx=ctx
+    )
+    assert registered == []
+    assert "run_pytest" not in registry._tools
+
+
+def test_dispatch_side_unknown_runtime_still_raises() -> None:
+    """La garantía en la que se apoya el skip del runtime: el worker resuelve las
+    imágenes ANTES de lanzar el contenedor y un runtime desconocido revienta el
+    dispatch con un error claro, no un boot silenciosamente cojo."""
+    from workers.execution import _resolve_tool_spec_images
+    from workers.test_runtime import RuntimeResolutionError
+
+    spec = {
+        "implementation_type": "docker_command",
+        "config": {
+            "command_template": ["pytest", "{path}"],
+            "runtime_template": "totally-not-a-runtime",
+        },
+    }
     with pytest.raises(RuntimeResolutionError, match="totally-not-a-runtime"):
-        register_tool_specs(registry, [_run_tool_spec("run_pytest", "python-pytest")], ctx=ctx)
+        _resolve_tool_spec_images([spec], None)
 
 
 def test_explicit_image_still_works_backward_compatible() -> None:
@@ -199,14 +240,17 @@ def test_explicit_image_still_works_backward_compatible() -> None:
     assert registry._tools["hello"].image == "alpine:3.20"  # type: ignore[attr-defined]
 
 
-def test_docker_command_without_image_or_resolver_raises() -> None:
+def test_docker_command_without_image_or_resolver_skips_tool() -> None:
+    """Mismo contrato 602a24b: sin `image` explícita ni resolver en el contexto,
+    la tool se salta (warning) en vez de tumbar el boot del run."""
     from agent_runtime.tool_wiring import register_tool_specs
     from agent_runtime.tools import ToolRegistry
 
     registry = ToolRegistry()
     # No explicit image, a runtime_template but NO resolver in the context.
-    with pytest.raises(ValueError, match="explicit `image` or a `runtime_template`"):
-        register_tool_specs(registry, [_run_tool_spec("run_pytest", "python-pytest")])
+    registered = register_tool_specs(registry, [_run_tool_spec("run_pytest", "python-pytest")])
+    assert registered == []
+    assert "run_pytest" not in registry._tools
 
 
 # ===========================================================================

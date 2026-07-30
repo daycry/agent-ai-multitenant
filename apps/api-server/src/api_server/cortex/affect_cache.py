@@ -49,29 +49,44 @@ def affect_cache_key(owner_user_id: str) -> str:
     return f"cortex:affect:{owner_user_id}"
 
 
-def _serialize(state: AffectState, *, updated_at: datetime) -> str:
-    """JSON del estado vivo + el ``updated_at`` que ancla el decay lazy."""
-    return json.dumps(
-        {
-            "updated_at": updated_at.astimezone(UTC).isoformat(),
-            "emotion": {
-                "valence": state.emotion.valence,
-                "arousal": state.emotion.arousal,
-                "dominance": state.emotion.dominance,
-                "intensity": state.emotion.intensity,
-            },
-            "mood": {
-                "valence": state.mood.valence,
-                "arousal": state.mood.arousal,
-                "dominance": state.mood.dominance,
-            },
-            "drives": state.drives.as_dict(),
+def _serialize(
+    state: AffectState, *, updated_at: datetime, baseline: PADState | None = None
+) -> str:
+    """JSON del estado vivo + el ``updated_at`` que ancla el decay lazy.
+
+    ``baseline`` (opcional) es el set-point EVOLUTIVO de la identidad: viaja
+    embebido en la clave para que las lecturas decaigan hacia el temperamento
+    del córtex sin tocar la BD. Ausente ⇒ las lecturas caen al neutro del motor
+    (retrocompatible con claves escritas antes de este campo)."""
+    payload: dict[str, object] = {
+        "updated_at": updated_at.astimezone(UTC).isoformat(),
+        "emotion": {
+            "valence": state.emotion.valence,
+            "arousal": state.emotion.arousal,
+            "dominance": state.emotion.dominance,
+            "intensity": state.emotion.intensity,
+        },
+        "mood": {
+            "valence": state.mood.valence,
+            "arousal": state.mood.arousal,
+            "dominance": state.mood.dominance,
+        },
+        "drives": state.drives.as_dict(),
+    }
+    if baseline is not None:
+        payload["baseline"] = {
+            "valence": baseline.valence,
+            "arousal": baseline.arousal,
+            "dominance": baseline.dominance,
         }
-    )
+    return json.dumps(payload)
 
 
-def _deserialize(raw: str) -> tuple[AffectState, datetime] | None:
-    """Reconstruye ``(state, updated_at)`` del JSON; ``None`` si está corrupto."""
+def _deserialize(raw: str) -> tuple[AffectState, datetime, PADState | None] | None:
+    """Reconstruye ``(state, updated_at, baseline?)``; ``None`` si está corrupto.
+
+    ``baseline`` es ``None`` en claves antiguas (sin el campo) o ilegibles — el
+    lector cae entonces al neutro del motor (retrocompatible)."""
     try:
         data = json.loads(raw)
         emo = data["emotion"]
@@ -94,7 +109,19 @@ def _deserialize(raw: str) -> tuple[AffectState, datetime] | None:
         ),
         drives=Drives.from_mapping(data.get("drives") or {}),
     )
-    return state, updated_at
+    baseline: PADState | None = None
+    raw_baseline = data.get("baseline")
+    if isinstance(raw_baseline, dict):
+        try:
+            baseline = PADState(
+                valence=float(raw_baseline["valence"]),
+                arousal=float(raw_baseline["arousal"]),
+                dominance=float(raw_baseline["dominance"]),
+                intensity=0.0,
+            )
+        except (KeyError, TypeError, ValueError):
+            baseline = None
+    return state, updated_at, baseline
 
 
 def _elapsed_seconds(updated_at: datetime, now: datetime) -> float:
@@ -112,16 +139,18 @@ async def write_affect_state(
     state: AffectState,
     *,
     now: datetime,
+    baseline: PADState | None = None,
 ) -> None:
     """Persiste el estado vivo del owner en Redis (best-effort, con TTL).
 
     Guarda ``now`` como ``updated_at`` para que la siguiente lectura calcule el
-    decay lazy. Nunca lanza: el snapshot de la BD ya es la fuente de verdad, así
-    que un fallo de Redis no debe romper al distilador."""
+    decay lazy, y (si se pasa) el ``baseline`` evolutivo de la identidad hacia
+    el que esa lectura decae. Nunca lanza: el snapshot de la BD ya es la fuente
+    de verdad, así que un fallo de Redis no debe romper al distilador."""
     try:
         await redis.set(
             affect_cache_key(owner_user_id),
-            _serialize(state, updated_at=now),
+            _serialize(state, updated_at=now, baseline=baseline),
             ex=AFFECT_CACHE_TTL_S,
         )
     except Exception as exc:  # caché best-effort; la BD es la fuente de verdad
@@ -152,11 +181,13 @@ async def read_affect_state(
     parsed = _deserialize(raw if isinstance(raw, str) else raw.decode())
     if parsed is None:
         return None
-    state, updated_at = parsed
+    state, updated_at, baseline = parsed
     elapsed_s = _elapsed_seconds(updated_at, now)
     if elapsed_s <= 0.0:
         return state
-    baseline = neutral_affect_state().emotion
+    if baseline is None:
+        # Clave anterior a la era del baseline embebido: neutro del motor.
+        baseline = neutral_affect_state().emotion
     return AffectState(
         emotion=decay_emotion(state.emotion, baseline, elapsed_s=elapsed_s),
         mood=state.mood,  # capa lenta: no decae con el reloj

@@ -150,6 +150,41 @@ async def test_searxng_provider_normalizes_results() -> None:
 
 
 @pytest.mark.asyncio
+async def test_searxng_connects_directly_not_through_egress_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """searxng es infra INTERNA de confianza → cliente DIRECTO, no el egress-proxy.
+
+    Visto en vivo: enrutar el hop api-server→searxng por el egress-proxy (que
+    es para salidas a Internet) daba «All connection attempts failed». Sin
+    client inyectado, el provider debe usar ``_build_direct_client`` y NUNCA
+    ``_build_proxied_client`` (que además exigiría un proxy_url)."""
+    from api_server.cortex import web
+
+    used: list[str] = []
+
+    def _fake_direct(timeout: float) -> httpx.AsyncClient:
+        used.append("direct")
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"results": []}))
+        )
+
+    def _fake_proxied(
+        proxy_url: str | None, timeout: float
+    ) -> httpx.AsyncClient:  # pragma: no cover
+        used.append("proxied")
+        raise AssertionError("searxng NO debe salir por el egress-proxy")
+
+    monkeypatch.setattr(web, "_build_direct_client", _fake_direct)
+    monkeypatch.setattr(web, "_build_proxied_client", _fake_proxied)
+
+    # Sin client y sin proxy_url: antes esto reventaba con «no hay egress-proxy».
+    provider = SearXNGProvider("http://searxng:8080", resolver=_PUBLIC)
+    await provider.search("hola", limit=3)
+    assert used == ["direct"]
+
+
+@pytest.mark.asyncio
 async def test_searxng_provider_respects_limit() -> None:
     payload = {
         "results": [{"title": str(i), "url": f"https://x/{i}", "content": ""} for i in range(10)]

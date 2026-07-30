@@ -23,10 +23,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
-# Closed set of plan statuses — mirrors docs/roadmap/README.md's
-# documented states.
+# Closed set of plan statuses. The SINGLE authoritative list lives in
+# ``api_server.db.domain.PlanStatus`` (StrEnum); this Literal mirrors it EXACTLY
+# so the pure, DB-agnostic transitions here need not import the SQLAlchemy-laden
+# domain module. ``tests/unit/test_plan_status_consistency.py`` pins the two sets
+# equal so they cannot drift again (audit 2026-07-03, c10).
 PlanStatus = Literal[
+    "draft",
     "pending_approval",
+    "pending_second_approval",
     "approved",
     "in_progress",
     "blocked",
@@ -38,10 +43,22 @@ PlanStatus = Literal[
 ]
 
 # Statuses that count a task as "open" — i.e. neither ``done`` nor
-# ``cancelled``. A plan still has open tasks ⇒ it can't transition
-# to ``pending_human_validation``.
+# ``cancelled``. A plan still has open tasks ⇒ it can't transition to
+# ``pending_human_validation``. This is the canonical NON-TERMINAL TaskStatus set:
+# the human-routing states (``ready``/``assigned_to_human``) and
+# ``awaiting_human_approval`` MUST count as open, or a plan would close while a
+# task still awaits work/approval. (The orphan ``awaiting_human`` that used to sit
+# here was never a real status — F43; it is now ``blocked`` everywhere.)
 _OPEN_TASK_STATUSES = frozenset(
-    {"backlog", "in_progress", "in_review", "awaiting_human", "blocked"}
+    {
+        "backlog",
+        "ready",
+        "assigned_to_human",
+        "in_progress",
+        "awaiting_human_approval",
+        "in_review",
+        "blocked",
+    }
 )
 
 
@@ -66,11 +83,14 @@ class TaskSnapshot:
     """Minimal shape ``compute_plan_progress`` needs.
 
     Production wires this from ``Task`` rows; tests use dataclass
-    literals."""
+    literals. ``depends_on`` (task ids this task waits on) lets
+    :func:`transition_to_blocked` tell a truly-advanceable task from one that is
+    transitively stuck behind a blocked/cancelled dependency (prod-06 A1)."""
 
     id: str
     status: str
     cost_eur: float = 0.0
+    depends_on: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +157,7 @@ def transition_to_pending_human_validation(
             reason=f"plan is {current_status!r}, only in_progress can transition",
         )
 
-    open_tasks = [t for t in tasks if t.status in _OPEN_TASK_STATUSES or t.status == "in_review"]
+    open_tasks = [t for t in tasks if t.status in _OPEN_TASK_STATUSES]
     if open_tasks:
         return TransitionResult(
             new_status="in_progress",
@@ -150,6 +170,173 @@ def transition_to_pending_human_validation(
     )
 
 
+def transition_to_blocked(
+    current_status: PlanStatus,
+    tasks: Iterable[TaskSnapshot],
+) -> TransitionResult:
+    """Escalate a STUCK plan from ``in_progress`` to ``blocked``.
+
+    A plan whose only remaining OPEN tasks are ``blocked`` — or ``backlog`` tasks
+    transitively STUCK behind a blocked/cancelled dependency — would otherwise sit
+    ``in_progress`` forever: ``blocked`` counts as open, so
+    :func:`transition_to_pending_human_validation` never fires, and no automatic
+    route moves the plan out (audit 2026-07-03 c3; prod-06 A1 auditoría
+    2026-07-06). This transition surfaces the stall so the operator is signalled
+    and can unblock/retry a task. A no-op when there is nothing blocked, or when a
+    task can still advance ON ITS OWN.
+
+    "Can advance on its own" is NOT simply "not blocked": the DAG promotion only
+    moves a ``backlog`` task to ``ready`` when ALL its dependencies are ``done``
+    (``dag_promotion``), so a ``backlog`` task whose dependency is ``blocked`` /
+    ``cancelled`` — or itself transitively stuck — will never advance. We compute
+    the set of tasks that CAN eventually complete via fixpoint and only count
+    those as advanceable.
+    """
+    if current_status != "in_progress":
+        return TransitionResult(
+            new_status=current_status,
+            transitioned=False,
+            reason=f"plan is {current_status!r}, only in_progress can transition",
+        )
+    materialised = list(tasks)
+    open_tasks = [t for t in materialised if t.status in _OPEN_TASK_STATUSES]
+    blocked = [t for t in open_tasks if t.status == "blocked"]
+    if not blocked:
+        return TransitionResult(
+            new_status="in_progress", transitioned=False, reason="no blocked tasks"
+        )
+
+    completable = _completable_task_ids(materialised)
+    # A task is advanceable if it can still reach `done` on its own AND is not
+    # itself blocked (a blocked task needs human action, it does not "advance").
+    advanceable = [t for t in open_tasks if t.status != "blocked" and t.id in completable]
+    if advanceable:
+        return TransitionResult(
+            new_status="in_progress",
+            transitioned=False,
+            reason=f"{len(advanceable)} task(s) can still advance",
+        )
+    return TransitionResult(new_status="blocked", transitioned=True)
+
+
+def decide_plan_closure(
+    current_status: PlanStatus,
+    tasks: Iterable[TaskSnapshot],
+) -> TransitionResult:
+    """La decisión de cierre de un plan `in_progress`, en UN solo sitio
+    (`task_wf_58`).
+
+    Al terminar una tarea hay que decidir lo mismo desde dos servicios: el
+    orchestrator, cuando consume el evento `task.done`, y el reconciler, como
+    red de seguridad cuando ese evento se pierde. Los dos hacían la misma
+    secuencia —¿pasa a validación humana? si no, ¿está atascado?— escrita dos
+    veces en dos apps, con un comentario prometiendo que eran iguales.
+
+    Ahora es una función. Una promesa en un comentario se rompe sin que nada
+    falle; una función compartida no puede divergir.
+
+    Devuelve el resultado de :func:`transition_to_pending_human_validation` si
+    dispara, si no el de :func:`transition_to_blocked`. El orden importa: un
+    plan cuyas tareas están TODAS hechas va a validación aunque alguna estuviera
+    bloqueada antes; solo si no puede cerrarse se plantea si está atascado.
+    """
+    materialised = list(tasks)
+    if not materialised:
+        # Un snapshot vacío satisface «todas las tareas hechas» por vacuidad, y
+        # cerrar un plan sin trabajo materializado sería declarar validado algo
+        # que nadie hizo. El reconciler ya lo salta antes de llegar aquí; la
+        # función no debería depender de que su llamante se acuerde.
+        return TransitionResult(
+            new_status=current_status,
+            transitioned=False,
+            reason="the plan has no materialised tasks",
+        )
+    result = transition_to_pending_human_validation(current_status, materialised)
+    if result.transitioned:
+        return result
+    return transition_to_blocked(current_status, materialised)
+
+
+def has_open_tasks(tasks: Iterable[TaskSnapshot]) -> bool:
+    """¿Queda alguna tarea NO terminal (ni ``done`` ni ``cancelled``) en el snapshot?
+
+    Distingue los dos productores de plan-``blocked`` (C-1, auditoría 2026-07-10):
+    el escalado por snapshot (:func:`transition_to_blocked`) exige ≥1 tarea
+    ``blocked``, así que un plan bloqueado con snapshot todo-terminal solo puede
+    venir de la escalación C8 F40 (review expirada sobre ``pending_human_validation``)
+    — y ese bloqueo debe levantarlo un humano, no una red automática."""
+    return any(t.status in _OPEN_TASK_STATUSES for t in tasks)
+
+
+def transition_from_blocked(
+    current_status: PlanStatus,
+    tasks: Iterable[TaskSnapshot],
+) -> TransitionResult:
+    """Revert a plan from ``blocked`` back to ``in_progress`` once its task
+    snapshot no longer justifies the block — the inverse of
+    :func:`transition_to_blocked` (hallazgo #2, QA 2026-07-07).
+
+    Fires when the escalation would NOT fire on this snapshot from
+    ``in_progress``: either nothing is blocked anymore, or at least one open
+    task can advance on its own. A plan whose tasks are now ALL done/cancelled
+    also reverts — the ordinary completion path
+    (:func:`transition_to_pending_human_validation`, orchestrator) takes over
+    from there. A no-op for any other plan status and while the plan is still
+    genuinely stuck, so callers can invoke it unconditionally after un-sticking
+    a task.
+    """
+    if current_status != "blocked":
+        return TransitionResult(
+            new_status=current_status,
+            transitioned=False,
+            reason=f"plan is {current_status!r}, only blocked can revert",
+        )
+    materialised = list(tasks)
+    would_block = transition_to_blocked("in_progress", materialised)
+    if would_block.transitioned:
+        return TransitionResult(
+            new_status="blocked",
+            transitioned=False,
+            reason="snapshot still justifies the block",
+        )
+    return TransitionResult(new_status="in_progress", transitioned=True)
+
+
+#: Task statuses that are actively progressing (work queued/running/awaiting) and
+#: will reach a terminal state without being gated behind an unmet dependency.
+_ADVANCING_TASK_STATUSES = frozenset(
+    {"ready", "assigned_to_human", "in_progress", "awaiting_human_approval", "in_review"}
+)
+
+
+def _completable_task_ids(tasks: list[TaskSnapshot]) -> set[str]:
+    """The set of task ids that CAN still reach ``done`` (prod-06 A1, fixpoint).
+
+    A task can complete if it is ``done``, actively advancing, or ``backlog``
+    with EVERY dependency completable. It CANNOT if it is ``blocked``/``cancelled``
+    or ``backlog`` with any dependency that cannot complete. Iterated to a
+    fixpoint so a chain of ``backlog`` tasks behind a blocked one is all stuck.
+    A dependency id not present in the plan is treated as satisfied (defensive:
+    a hard-deleted dep must not wedge the whole plan)."""
+    by_id = {t.id: t for t in tasks}
+    completable: set[str] = {
+        t.id for t in tasks if t.status == "done" or t.status in _ADVANCING_TASK_STATUSES
+    }
+    # Fixpoint over backlog tasks: add a backlog task once all its deps are known
+    # completable; repeat until no change.
+    changed = True
+    while changed:
+        changed = False
+        for t in tasks:
+            if t.id in completable or t.status != "backlog":
+                continue
+            deps_ok = all(dep not in by_id or dep in completable for dep in t.depends_on)
+            if deps_ok:
+                completable.add(t.id)
+                changed = True
+    return completable
+
+
 # ---------------------------------------------------------------------------
 # task_06_37 — transition to completed
 # ---------------------------------------------------------------------------
@@ -159,13 +346,29 @@ def transition_to_completed(
     current_status: PlanStatus,
     *,
     human_verdict: Literal["approved", "rejected"] | None,
-    pr_merged: bool,
 ) -> TransitionResult:
-    """Plan goes to ``completed`` iff human approved AND PRs merged.
+    """A plan goes to ``completed`` iff the HUMAN approved it.
 
-    Called by the orchestrator after both the review-runtime emits an
-    ``approved`` verdict and the PR-merge webhook fires. Returns a
-    no-op when either condition isn't met yet."""
+    There used to be two definitions of the terminal state and they
+    contradicted each other (D-07, task_wf_36):
+
+    * The REAL path (``routers/review.py``) moves the plan to ``completed`` as
+      soon as the human verdict is ``approved``, and enqueues the auto-PR
+      AFTERWARDS (ADR 0072 fase 2). So a ``completed`` plan's PR may not exist
+      yet.
+    * This function additionally required ``pr_merged=True``. Its only caller was
+      the un-wired demo ``plan_runner``, so the written rule governed nothing and
+      said the opposite of the code that actually runs.
+
+    Resolved in favour of what the system does: ``completed`` means "validated by
+    the human", and the PR's state is reported separately (the plan header from
+    task_wf_30 shows it, including why it failed). Requiring the merge would have
+    needed a merge webhook that does not exist, and would have left every plan
+    hanging on an event nobody emits.
+
+    Returns a no-op when the plan is not awaiting validation, or when the human
+    has not approved it — the human gate is still the only way through.
+    """
     if current_status != "pending_human_validation":
         return TransitionResult(
             new_status=current_status,
@@ -178,12 +381,6 @@ def transition_to_completed(
             transitioned=False,
             reason=f"human verdict is {human_verdict!r}, not 'approved'",
         )
-    if not pr_merged:
-        return TransitionResult(
-            new_status=current_status,
-            transitioned=False,
-            reason="PR not merged yet",
-        )
     return TransitionResult(new_status="completed", transitioned=True)
 
 
@@ -193,6 +390,8 @@ __all__ = [
     "TaskSnapshot",
     "TransitionResult",
     "compute_plan_progress",
+    "transition_from_blocked",
+    "transition_to_blocked",
     "transition_to_completed",
     "transition_to_pending_human_validation",
 ]

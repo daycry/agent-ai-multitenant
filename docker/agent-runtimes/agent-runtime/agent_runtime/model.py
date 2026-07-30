@@ -19,6 +19,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from agent_runtime.state import ReviewState
+
 
 class DecisionKind(enum.StrEnum):
     ACT = "act"  # call a tool
@@ -34,6 +36,16 @@ class ModelDecision:
     tool_args: dict[str, Any] = field(default_factory=dict)
     output: str | None = None
     rationale: str = ""
+    # The agent's self-reported finish status (ADR 0087, structured finish):
+    # "success" | "failed" | "partial" when the model finished via the
+    # `submit_result` tool, else None (prose finish / ACT). It is a HINT shown in
+    # the UI and given to the reviewer — NOT the authoritative verdict.
+    finish_status: str | None = None
+    # ADR 0111: extra READ-ONLY tool calls the model emitted in the same turn
+    # (the consecutive read-only prefix beyond `tool`, cap enforced at the
+    # decision layer). `act` runs them all in ONE iteration; mutators never
+    # ride here (one-action semantics preserved). Each item: {"tool", "args"}.
+    batch_calls: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -42,6 +54,8 @@ class ModelDecision:
             "tool_args": dict(self.tool_args),
             "output": self.output,
             "rationale": self.rationale,
+            "finish_status": self.finish_status,
+            "batch_calls": [dict(call) for call in self.batch_calls],
         }
 
 
@@ -54,11 +68,22 @@ class ModelResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    # `task_wf_63`: tokens del prompt servidos desde la CACHÉ del proveedor.
+    # 0 cuando el proveedor no lo reporta (Ollama local no tiene caché de API).
+    cache_read_tokens: int = 0
 
 
 @dataclass(frozen=True)
 class ReviewResponse:
-    """A `review` result — did the output pass self-review?"""
+    """A `review` result — did the output pass self-review?
+
+    The self-review is an AUTHORITATIVE gate (ADR 0087). The verdict is
+    three-state: ``passed`` is True (certified) or False, and when the verdict
+    could NOT be determined reliably — no structured verdict and ambiguous prose,
+    or malformed tool args — ``inconclusive`` is True (``passed`` stays False so
+    it never auto-passes). The loop ESCALATES an inconclusive verdict (and an
+    exhausted retry budget) to a human instead of passing or aborting.
+    """
 
     passed: bool
     feedback: str = ""
@@ -66,6 +91,8 @@ class ReviewResponse:
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0
+    # True when the verdict is untrustworthy → escalate to human (ADR 0087).
+    inconclusive: bool = False
 
 
 @runtime_checkable
@@ -74,7 +101,11 @@ class ModelClient(Protocol):
 
     def decide(self, state: dict[str, Any]) -> ModelResponse: ...
 
-    def review(self, state: dict[str, Any]) -> ReviewResponse: ...
+    # M-5 (auditoría 2026-07-10, hallazgo #6): la review ve el estado TIPADO —
+    # `ReviewState` = AgentState + la clave inyectada `written_files` — así que
+    # mypy verifica de verdad el contrato (antes el tipo era solo documentación
+    # y quien protegía era únicamente el scanner AST del test-contrato).
+    def review(self, state: ReviewState) -> ReviewResponse: ...
 
 
 @dataclass
@@ -98,7 +129,7 @@ class ScriptedModelClient:
         self._decide_cursor += 1
         return self.decisions[index]
 
-    def review(self, state: dict[str, Any]) -> ReviewResponse:  # noqa: ARG002
+    def review(self, state: ReviewState) -> ReviewResponse:  # noqa: ARG002
         if not self.reviews:
             return ReviewResponse(passed=True)
         index = min(self._review_cursor, len(self.reviews) - 1)

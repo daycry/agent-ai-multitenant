@@ -71,11 +71,14 @@ OutputParser = Literal[
 #   restricted  — attached to an ephemeral docker network with only the
 #                 task's compose services (postgres-test, redis-test).
 #                 No egress to the host or the internet.
-#   open        — attached to the worker's default network. Only used
-#                 by templates that *intentionally* hit external
-#                 services (e.g. a generic-http runner pointing at a
-#                 staging API). Never the default — must be opt-in.
-NetworkPolicy = Literal["none", "restricted", "open"]
+#   registries  — internal bridge + the worker transiently attaches the
+#                 allowlisted ``registry-proxy`` so dependency installs
+#                 (composer/pip/npm/go/nuget/…) resolve their registries.
+#                 No raw NAT; egress is proxied + allowlisted (ADR 0094).
+#   open        — historically: attached to a non-internal bridge with raw
+#                 NAT. Redefined by ADR 0094 as an alias of ``registries``
+#                 (proxied egress, never raw internet) for back-compat.
+NetworkPolicy = Literal["none", "restricted", "registries", "open"]
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,29 @@ class RuntimeTemplate:
     # Default network policy. Most templates default to ``none`` so
     # the test container has no internet access.
     network_policy: NetworkPolicy = "none"
+
+    # Per-tool cache env vars the worker injects so the tool's
+    # ``$HOME``-relative default cache lands on the bind-mounted
+    # ``dep_cache_mount`` (ADR 0094). A tuple of ``(key, value)`` pairs
+    # to stay frozen/hashable; e.g.
+    # ``(("COMPOSER_CACHE_DIR", "/root/.composer/cache"),)``. Read it as
+    # a dict with ``dict(template.cache_env)``.
+    cache_env: tuple[tuple[str, str], ...] = ()
+
+    # Directories INSIDE the worktree that hold installed dependencies
+    # (``vendor``, ``node_modules``, ``.venv``…) — task_wf_24 / C-06.
+    #
+    # ``sync_to_head`` runs ``git clean -fdx`` before every run; the ``-x``
+    # sweeps IGNORED files too, so it wiped these and every retry reinstalled
+    # from cold (minutes of wall clock, egress through the allowlisted proxy,
+    # and a failure unrelated to the task whenever a registry is down). These
+    # names are excluded from that clean; everything else is still swept, so the
+    # determinism the ``-x`` bought is preserved.
+    #
+    # BUILD OUTPUTS (``target``, ``dist``, ``build``) must NOT be listed: keeping
+    # them would reintroduce exactly the contamination the ``-x`` exists to
+    # prevent. Only what an installer would re-download.
+    dependency_dirs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id or not self.id.strip():

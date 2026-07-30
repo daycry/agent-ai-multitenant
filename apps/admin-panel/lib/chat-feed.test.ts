@@ -5,6 +5,7 @@ import {
   PLANNING_INFLIGHT_WINDOW_MS,
   chatRefetchInterval,
   isReplyInFlight,
+  summaryFoldedCount,
   type FeedMessage,
 } from "@/lib/chat-feed";
 
@@ -58,5 +59,32 @@ describe("chatRefetchInterval", () => {
   it("polls while in flight and stops otherwise", () => {
     expect(chatRefetchInterval([msg({ author_kind: "user" })], NOW)).toBe(CHAT_POLL_MS);
     expect(chatRefetchInterval([msg({ attachments: [{ x: 1 }] })], NOW)).toBe(false);
+  });
+});
+
+describe("summaryFoldedCount", () => {
+  it("reports how many messages the summary stands in for", () => {
+    expect(summaryFoldedCount([{ kind: "summary_replaces", message_ids: ["a", "b", "c"] }])).toBe(
+      3,
+    );
+  });
+
+  it("ignores the other attachment kinds a summary carries", () => {
+    expect(
+      summaryFoldedCount([
+        { kind: "summary_record", requisitos: ["r"] },
+        { kind: "summary_replaces", message_ids: ["a"] },
+      ]),
+    ).toBe(1);
+  });
+
+  it("is 0 for an ordinary message so the caller falls back to plain rendering", () => {
+    expect(summaryFoldedCount([])).toBe(0);
+    expect(summaryFoldedCount(undefined)).toBe(0);
+    expect(summaryFoldedCount([{ kind: "planning_directive" }])).toBe(0);
+  });
+
+  it("survives a malformed attachment instead of crashing the feed", () => {
+    expect(summaryFoldedCount([{ kind: "summary_replaces", message_ids: "nope" }])).toBe(0);
   });
 });

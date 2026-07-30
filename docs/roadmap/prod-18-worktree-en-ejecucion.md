@@ -1,7 +1,7 @@
 ---
 plan_id: prod-18-worktree-en-ejecucion
 title: Worktree en la ejecución del agente — código persistente, commit y test-runtime real
-status: in_progress
+status: pending_human_validation
 blocking_plan: null
 started_at: 2026-06-26
 completed_at: null
@@ -22,7 +22,7 @@ priority: P2
 | Campo                            | Valor                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
 | **ID del Plan**                  | `prod-18-worktree-en-ejecucion`                                          |
-| **Estado**                       | `in_progress`                                                            |
+| **Estado**                       | `pending_human_validation`                                               |
 | **Prioridad**                    | P2                                                                       |
 | **Bloqueado por**                | — (las bibliotecas son de Plan 06, `completed`)                          |
 | **Tiempo estimado (calendario)** | 3-4 semanas                                                              |
@@ -30,6 +30,13 @@ priority: P2
 | **ADRs relacionados**            | `0072` (git por proyecto), `0063` B2 (worktree del plan), `0084`/prod-17 |
 
 ---
+
+> **Estado (2026-07-06, auditoría de roadmap)**: `status` corregido de `in_progress` (congelado
+> desde 2026-06-26) a `pending_human_validation`. PR #57 fusionado a `master` (`e78ed2b`); 4/5
+> checkboxes hechos, el único pendiente (`task_prod18_e2e_01`) requiere runner Docker real. Trabajo
+> colateral posterior que avanza este mismo subsistema sin actualizar este doc: `bdea0af`
+> (2026-07-03, durabilidad de worktrees/data-root) y ADR 0095 D1 (montaje read-only del worktree
+> para el reviewer, ver prod-17).
 
 ## Resumen
 

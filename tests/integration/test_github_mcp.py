@@ -78,8 +78,11 @@ def test_scm_family_matches_declared_set() -> None:
     test to surface — the family is a load-bearing contract for the
     UI picker grouping. Adding a new SCM template requires bumping
     SCM_IDS above so the parametrized tests pick it up too."""
+    # SCM_IDS is the stdio family (the parametrized stdio/env tests use it).
+    # `github-remote` is the HTTP replacement (ADR 0117) — same scm category
+    # for picker grouping, but not stdio, so it's tracked separately here.
     scm_members = {tid for tid, t in CATALOG.items() if t.category == "scm"}
-    assert scm_members == set(SCM_IDS)
+    assert scm_members == set(SCM_IDS) | {"github-remote"}
 
 
 # ---------------------------------------------------------------------------

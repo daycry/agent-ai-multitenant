@@ -63,6 +63,33 @@ async def test_two_tasks_share_plan_branch_distinct_worktrees(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_provision_survives_concurrent_branch_creation_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auditoría 2026-07-02: dos tasks hermanas promovidas A LA VEZ provisionan
+    el MISMO plan branch; la perdedora del `git branch` moría con rc=128
+    «a branch named ... already exists» (TOCTOU tras `branch_exists`) y, con el
+    fail-fast F0.2, su run abortaba `workspace_unavailable`. La creación de la
+    branch es ahora idempotente: "already exists" es éxito, no error."""
+    from workers.git_repos import WorktreeManager
+
+    settings = Settings(data_root=str(tmp_path))
+    plan_id = str(uuid4())
+    kwargs = {"tenant_slug": "acme", "project_slug": "api-ci", "plan_id": plan_id, "plan_slug": "p"}
+
+    a = await _provision_worktree(settings, task_id="task-a", **kwargs)  # crea el branch
+    assert a is not None
+    # Simula al PERDEDOR de la carrera: su check dijo "no existe" justo antes
+    # de que el ganador la creara.
+    monkeypatch.setattr(WorktreeManager, "branch_exists", lambda self, branch: False)
+
+    b = await _provision_worktree(settings, task_id="task-b", **kwargs)
+
+    assert b is not None
+    assert Path(b).is_dir()
+
+
+@pytest.mark.asyncio
 async def test_commit_and_push_persists_agent_output_to_bare(tmp_path: Path) -> None:
     settings = Settings(data_root=str(tmp_path))
     plan_id = str(uuid4())
@@ -74,7 +101,12 @@ async def test_commit_and_push_persists_agent_output_to_bare(tmp_path: Path) -> 
     (Path(wt) / "out.txt").write_text("hello from the agent\n", encoding="utf-8")
 
     await _commit_and_push_worktree(
-        settings, host_path=wt, task_id="task-1", execution_id="exec-1", **kwargs
+        settings,
+        host_path=wt,
+        task_id="task-1",
+        execution_id="exec-1",
+        project_id=str(uuid4()),
+        **kwargs,
     )
 
     bare = str(tmp_path / "projects" / "acme" / "api-ci" / "repos" / "api-ci.git")
@@ -99,7 +131,12 @@ async def test_commit_and_push_noop_on_clean_worktree(tmp_path: Path) -> None:
 
     # Must not raise even though there is nothing to commit.
     await _commit_and_push_worktree(
-        settings, host_path=wt, task_id="task-1", execution_id="exec-1", **kwargs
+        settings,
+        host_path=wt,
+        task_id="task-1",
+        execution_id="exec-1",
+        project_id=str(uuid4()),
+        **kwargs,
     )
 
     bare = str(tmp_path / "projects" / "acme" / "api-ci" / "repos" / "api-ci.git")
@@ -115,16 +152,23 @@ async def test_run_task_tests_threads_worktree_and_filters_criteria(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """prod-18 test_01: the test-runtime is invoked with the worktree path and ONLY
-    the automated acceptance criteria (manual/human checks dropped)."""
+    the automated acceptance criteria (manual/human checks dropped).
+
+    task_wf_22: el seam observado cambió de `_run_test_runtime` (en proceso) a
+    `dispatch_test_runtime_and_wait` (cola `test`). Lo que este test fija —qué
+    request se construye— es exactamente igual de válido; lo que cambió es DÓNDE
+    se ejecuta ese request."""
     from workers.execution import _run_task_tests
 
     captured: dict = {}
 
-    async def _fake_run(request: dict, _settings: Settings) -> dict:
+    async def _fake_dispatch(request: dict) -> dict:
         captured["request"] = request
         return {"status": "completed"}
 
-    monkeypatch.setattr("workers.tasks._run_test_runtime", _fake_run)
+    monkeypatch.setattr(
+        "workers.tasks.test_runtime_task.dispatch_test_runtime_and_wait", _fake_dispatch
+    )
     tenant, task = uuid4(), uuid4()
     criteria = [
         {"id": "a", "runtime": "python-pytest", "command": "pytest -q"},
@@ -151,12 +195,14 @@ async def test_run_task_tests_noop_without_automated_criteria(
 
     called = False
 
-    async def _fake_run(request: dict, _settings: Settings) -> dict:
+    async def _fake_dispatch(request: dict) -> dict:
         nonlocal called
         called = True
         return {}
 
-    monkeypatch.setattr("workers.tasks._run_test_runtime", _fake_run)
+    monkeypatch.setattr(
+        "workers.tasks.test_runtime_task.dispatch_test_runtime_and_wait", _fake_dispatch
+    )
     await _run_task_tests(
         Settings(data_root=str(tmp_path)),
         tenant_id=uuid4(),

@@ -18,14 +18,18 @@ RLS-bound session, so tenant isolation is enforced by the database.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
+import structlog
 from langgraph.graph import END, START, StateGraph
 
 from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
+
+_log = structlog.get_logger("api_server.assistant.graph")
 
 # A node is async because the tool round awaits DB queries.
 AssistantNode = Callable[["AssistantState"], Awaitable["AssistantState"]]
@@ -53,6 +57,24 @@ MAX_CALLS_PER_TOOL = 3
 # ``cortex_remember`` (Plan F1) is the córtex's memory WRITE tool and shares the
 # exact same 1/turn guarantee — it reuses this graph, so it reuses this cap.
 _PER_TOOL_CALL_CAP: dict[str, int] = {"remember_about_me": 1, "cortex_remember": 1}
+
+# Orden imperativa del turno de CIERRE. Con preguntas amplias (visto en vivo:
+# «¿últimas noticias de tecnología hoy?») gpt-oss:120b NUNCA comprometía una
+# respuesta: tras el web_search seguía emitiendo tool_calls NATIVAS de su
+# herramienta `browser` (harmony: `web_fetch {cursor,id}` para «abrir» un
+# resultado) con `content` vacío, ronda tras ronda, hasta terminar con answer="".
+# Prohibir «llamar a herramientas» a secas no bastaba: el modelo quería NAVEGAR
+# (abrir/scroll), no llamar a nuestras tools. Hay que prohibir EXPLÍCITAMENTE el
+# browsing. En el nodo `finish` re-preguntamos SIN herramientas y con esta orden
+# como instrucción final (tras los resultados de tools). Verificado e2e 3/3: con
+# la prohibición de navegar, gpt-oss redacta el resumen desde los snippets. No
+# fija idioma (lo hace el system prompt); vale para asistente y córtex.
+FINISH_NUDGE = (
+    "Ya tienes en esta conversación los resultados de búsqueda necesarios. Está "
+    "TERMINANTEMENTE PROHIBIDO abrir páginas, navegar, hacer scroll o pedir más "
+    "búsquedas o herramientas. Redacta AHORA la respuesta final para el usuario, "
+    "breve y en prosa, ÚNICAMENTE con la información que ya tienes."
+)
 
 
 def _tool_call_cap(name: str) -> int:
@@ -152,6 +174,11 @@ class AssistantState:
     # The latest non-empty content the model produced this turn — used as the
     # answer when the loop ends without a fresh content turn.
     last_content: str | None = None
+    # Instrucción imperativa a incrustar como ÚLTIMO mensaje del prompt (tras los
+    # resultados de tools). Solo la fija el nodo `finish` (FINISH_NUDGE) para forzar
+    # una respuesta en prosa cuando el modelo no ha comprometido ninguna. El adapter
+    # LLM la renderiza; el asistente/córtex normales la dejan en None.
+    final_instruction: str | None = None
     # Signatures (name+args) of tool calls already executed this turn, so an
     # over-eager model re-calling the SAME tool doesn't loop (a weak/reasoning
     # model otherwise repeats the same call until the round ceiling).
@@ -200,16 +227,22 @@ def _admissible_tool_calls(
 def _node_decide(model: AssistantModelClient) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         turn = await model.decide(state)
-        if turn.content:
+        # SOLO guardamos como último contenido válido el de un turno que NO pide
+        # tools: cuando el modelo llama a una tool, su `content` es un preámbulo
+        # de razonamiento («We need to use web_search»), no una respuesta. Si se
+        # guardara, un turno final vacío lo devolvería como respuesta (visto en
+        # vivo: el córtex «respondía» su propio pensamiento, además en inglés).
+        if turn.content and not turn.tool_calls:
             state.last_content = turn.content
         # Filter to the calls the host will actually run (enabled, not already
         # executed, under the per-tool cap incl. this round) — see _admissible_tool_calls.
         kept = _admissible_tool_calls(state, turn.tool_calls)
         state.pending = ModelTurn(content=turn.content, tool_calls=kept)
         if not kept:
-            # No new work to do → this is the answer (the model's content, or
-            # the latest content it produced earlier this turn).
-            state.answer = turn.content or state.last_content or ""
+            # No new work to do → this is the answer. Si el turno actual trae
+            # respuesta, esa; si viene vacío, la última respuesta REAL previa
+            # (nunca un preámbulo de tool); si tampoco hay, vacío.
+            state.answer = (turn.content if not turn.tool_calls else "") or state.last_content or ""
         return state
 
     return _run
@@ -222,7 +255,16 @@ def _node_run_tools(tool_runner: ToolRunner) -> AssistantNode:
         state.rounds += 1
         for call in state.pending.tool_calls:
             state.executed_signatures.add(_signature(call))
-            result = await tool_runner(call.name, state.tool_ctx, call.arguments)
+            try:
+                result: Any = await tool_runner(call.name, state.tool_ctx, call.arguments)
+            except Exception as exc:
+                # Una tool que falla (p.ej. web_fetch con el egress bloqueado, un
+                # timeout de red) NO debe tumbar el turno: se devuelve el error al
+                # modelo como resultado, y este responde con lo que ya tiene (los
+                # snippets de búsqueda, la memoria…). Antes la excepción propagaba
+                # y mataba la respuesta entera («voice turn failed»).
+                _log.warning("assistant.tool_failed", tool=call.name, error=str(exc))
+                result = {"error": f"la herramienta '{call.name}' falló: {exc}"}
             state.tools_called.append(call.name)
             state.tool_results.append({"tool": call.name, "result": result})
         return state
@@ -239,7 +281,10 @@ def _route_after_decide(state: AssistantState) -> str:
     return "finish"
 
 
-def _node_finish(model: AssistantModelClient) -> AssistantNode:
+def _node_finish(
+    model: AssistantModelClient,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
+) -> AssistantNode:
     async def _run(state: AssistantState) -> AssistantState:
         if state.answer:
             return state
@@ -247,9 +292,23 @@ def _node_finish(model: AssistantModelClient) -> AssistantNode:
             state.answer = state.last_content
             return state
         # The model kept calling tools without ever answering. Ask once more
-        # with NO tools available so it MUST produce a textual answer, grounded
-        # on the tool results gathered so far.
-        final = replace(state, enabled_tools=(), pending=None)
+        # with NO tools available AND an imperative order (FINISH_NUDGE) so it
+        # MUST produce a textual answer, grounded on the tool results gathered so
+        # far. Sin la orden, un modelo de razonamiento se quedaba pidiendo tools
+        # (deduplicadas) y devolvía content vacío → answer="" (silencio).
+        final = replace(state, enabled_tools=(), pending=None, final_instruction=FINISH_NUDGE)
+        # A2 fase 2 (ADR 0073 F2): con `on_delta` y un modelo que sepa streamear,
+        # la redacción final llega token-a-token; los deltas jamás rompen el
+        # turno (best-effort) y la respuesta es su concatenación.
+        decide_stream = getattr(model, "decide_stream", None)
+        if on_delta is not None and decide_stream is not None:
+            parts: list[str] = []
+            async for delta in decide_stream(final):
+                parts.append(delta)
+                with contextlib.suppress(Exception):
+                    await on_delta(delta)
+            state.answer = "".join(parts)
+            return state
         turn = await model.decide(final)
         state.answer = turn.content or ""
         return state
@@ -265,6 +324,7 @@ def build_assistant_graph(
     *,
     state_type: type = AssistantState,
     tool_runner: ToolRunner = run_assistant_tool,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> Any:
     """Compile the one-turn tool-use loop.
 
@@ -275,7 +335,7 @@ def build_assistant_graph(
     graph: StateGraph[Any] = StateGraph(state_type)
     graph.add_node("decide", _node_decide(model))
     graph.add_node("run_tools", _node_run_tools(tool_runner))
-    graph.add_node("finish", _node_finish(model))
+    graph.add_node("finish", _node_finish(model, on_delta))
 
     graph.add_edge(START, "decide")
     graph.add_conditional_edges(
@@ -297,12 +357,20 @@ async def run_assistant_turn(
     enabled_tools: tuple[str, ...],
     tool_ctx: AssistantToolContext,
     chat_history: Sequence[dict[str, Any]] | None = None,
+    on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> AssistantTurnResult:
     """Build the graph, run one full turn, return the synthesised answer.
 
     The answer is what the endpoint persists as an ``agent`` message in
     the conversation. ``tools_called`` lets the caller assert the read
     tools were exercised.
+
+    A2 fase 1 (investigación 2026-07-11): ``on_progress`` (opcional) recibe un
+    frame por paso del grafo — {"rounds", "tools_called"} — para que el endpoint
+    SSE muestre progreso vivo (las rondas de tools SON la latencia real). Sin
+    callback, byte-a-byte el comportamiento previo. El streaming token-a-token
+    queda para ADR 0073 F2 (decide_stream + provider.stream).
     """
     initial = AssistantState(
         system_prompt=system_prompt,
@@ -310,8 +378,18 @@ async def run_assistant_turn(
         enabled_tools=enabled_tools,
         tool_ctx=tool_ctx,
     )
-    compiled = build_assistant_graph(model)
-    final = await compiled.ainvoke(initial)
+    compiled = build_assistant_graph(model, on_delta=on_delta)
+    if on_progress is None:
+        final = await compiled.ainvoke(initial)
+    else:
+        final = None
+        async for chunk in compiled.astream(initial, stream_mode="values"):
+            final = chunk
+            state = AssistantState(**chunk) if isinstance(chunk, dict) else chunk
+            with contextlib.suppress(Exception):  # el progreso jamás rompe el turno
+                await on_progress(
+                    {"rounds": state.rounds, "tools_called": list(state.tools_called)}
+                )
     final_state = AssistantState(**final) if isinstance(final, dict) else final
     return AssistantTurnResult(
         content=final_state.answer or "",
@@ -321,6 +399,7 @@ async def run_assistant_turn(
 
 
 __all__ = [
+    "FINISH_NUDGE",
     "MAX_TOOL_ROUNDS",
     "AssistantModelClient",
     "AssistantState",

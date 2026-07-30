@@ -45,6 +45,11 @@ class McpTemplateDto(BaseModel):
     docs_url: str
     category: str
     requires_auth: bool = Field(description="True when the template declares a secret_keys list.")
+    auth_kind: str = Field(
+        description="How requests authenticate: 'static' (token field), 'oauth' "
+        "(Connect button), 'sidecar' (deploy a self-hosted sidecar; no per-request "
+        "token), or 'none' (public server). ADR 0127."
+    )
 
 
 def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
@@ -66,15 +71,48 @@ def _to_dto(template: McpServerTemplate) -> McpTemplateDto:
         docs_url=template.docs_url,
         category=template.category,
         requires_auth=bool(template.secret_keys),
+        auth_kind=template.auth_kind,
     )
+
+
+# Explicit deny-list for HTTP templates that must NOT be offered (e.g. a server
+# retired by a security advisory). stdio templates are withheld WHOLESALE by
+# transport (see ``offered_catalog``), so they don't need listing here.
+# ``docling-mcp`` stays here for the historical g5 guarantee/test, though the
+# transport rule below would withhold it anyway.
+# ``atlassian-remote`` (ADR 0127, auth_kind="oauth") is now OFFERED: the
+# interactive «Connect» flow (routers/mcp_oauth.py + frontend McpOAuthConnect)
+# is wired end-to-end. The final consent still happens in the operator's
+# browser against the live Atlassian authorization server.
+_UNAVAILABLE_TEMPLATE_IDS: frozenset[str] = frozenset({"docling-mcp"})
+
+
+def offered_catalog() -> list[McpServerTemplate]:
+    """The MCP templates the picker OFFERS as assignable, in stable insertion
+    order (the admin-panel groups by category without re-sorting).
+
+    Two filters (ADR 0117):
+
+    * **Transport** — only HTTP transports (``sse`` / ``streamable_http``) are
+      offered. The agent-runtime image packages NO stdio binaries, so every
+      ``stdio`` template would fail at ``mcp_wire`` (the agent loops looking for
+      a binary and escalates). They stay in ``CATALOG`` for conduct-time
+      validation + audit, but are never offered.
+    * **Explicit deny-list** — ``_UNAVAILABLE_TEMPLATE_IDS`` withholds specific
+      HTTP templates if one is ever retired.
+    """
+    return [
+        t
+        for t in CATALOG.values()
+        if t.transport != "stdio" and t.id not in _UNAVAILABLE_TEMPLATE_IDS
+    ]
 
 
 @router.get("", response_model=list[McpTemplateDto])
 async def list_mcp_catalog(
     _principal: AuthPrincipal = Depends(require_tenant_member),
 ) -> list[McpTemplateDto]:
-    """Return every MCP template the platform knows about, in stable
-    insertion order so the admin-panel can group by category without
-    a second sort step.
+    """Return every ASSIGNABLE MCP template (HTTP-only; see ``offered_catalog``)
+    so the picker never offers a server that cannot start in the runtime.
     """
-    return [_to_dto(t) for t in CATALOG.values()]
+    return [_to_dto(t) for t in offered_catalog()]

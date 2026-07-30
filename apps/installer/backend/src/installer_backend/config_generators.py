@@ -119,6 +119,11 @@ class GeneratedSecrets:
     minio_root_user: str
     minio_root_password: str
     jwt_secret: str
+    # NOTIF-2 / prod-08: Bearer que Alertmanager presenta en
+    # /internal/alerts/ingest (API_SERVER_ALERTS_INGEST_TOKEN). El lado
+    # Alertmanager (http_config.authorization en su yml) se templetiza en
+    # prod-08; hasta entonces el operador lo copia del .env al yml.
+    alerts_ingest_token: str
     review_url_signing_secret: str
     sso_encryption_key: str
     notification_encryption_key: str
@@ -149,6 +154,7 @@ def generate_secrets() -> GeneratedSecrets:
         minio_root_user=f"minio-{secrets.token_hex(8)}",
         minio_root_password=_token(),
         jwt_secret=_token(),
+        alerts_ingest_token=_token(),
         review_url_signing_secret=_token(),
         sso_encryption_key=_token(),
         notification_encryption_key=_token(),
@@ -227,6 +233,7 @@ def build_env_vars(
         # --- api-server secrets (API_SERVER_ prefixed) ---
         "API_SERVER_ENVIRONMENT": runtime_env,
         "API_SERVER_JWT_SECRET": secrets_.jwt_secret,
+        "API_SERVER_ALERTS_INGEST_TOKEN": secrets_.alerts_ingest_token,
         "API_SERVER_REVIEW_URL_SIGNING_SECRET": secrets_.review_url_signing_secret,
         "API_SERVER_SSO_ENCRYPTION_KEY": secrets_.sso_encryption_key,
         "API_SERVER_NOTIFICATION_ENCRYPTION_KEY": secrets_.notification_encryption_key,

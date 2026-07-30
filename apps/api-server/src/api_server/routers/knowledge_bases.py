@@ -183,6 +183,16 @@ async def create_kb(
             detail="kb name already exists in tenant",
         ) from exc
     await session.refresh(kb)
+
+    # KB Q1: auto-grant al proyecto de origen (un grant NORMAL de kb_projects —
+    # auditable y revocable; nada pasa a ser visible "mágicamente"). El
+    # proyecto debe ser del tenant (la sesión RLS ya lo garantiza al leerlo).
+    if payload.project_id is not None:
+        project = await session.get(Project, payload.project_id)
+        if project is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+        session.add(KnowledgeBaseProject(kb_id=kb.id, project_id=project.id, tenant_id=tenant_id))
+        await session.flush()
     return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 
@@ -377,6 +387,11 @@ async def delete_kb(
 ) -> None:
     require_tenant_id(principal)
     kb = await _load_kb(session, kb_id)
+    # G-03: soft-borra en cascada los documentos de la KB para que el GC recupere
+    # sus chunks + blobs; antes quedaban vivos bajo una KB muerta, eternos.
+    from api_server.db.knowledge_gc import soft_delete_kb_cascade
+
+    await soft_delete_kb_cascade(session, kb_id=kb_id)
     await soft_delete(session, kb)
 
 

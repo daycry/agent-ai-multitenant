@@ -132,9 +132,15 @@ def test_docker_command_spec_registers_with_mocked_client(
     registered = register_tool_specs(registry, specs)
     assert registered == ["hello"]
 
+    # Contrato honesto (ADR 0093): dentro del sandbox NO hay Docker (principio
+    # 2: sin socket) — un docker_command no puede ejecutar y lo dice,
+    # redirigiendo a stack_exec (el worker corre el toolchain en el
+    # runtime-template). Antes fingía ejecutar vía un client inyectado que en
+    # producción jamás existe.
     result = registry.call("hello", {})
-    assert result.ok is True
-    assert result.output == "hello\n"
+    assert result.ok is False
+    assert "stack_exec" in (result.error or "")
+    fake_client.containers.run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +176,36 @@ def test_unknown_implementation_type_raises_at_boot() -> None:
                 )
             ],
         )
+
+
+# ---------------------------------------------------------------------------
+# A malformed/incomplete spec is SKIPPED, never crashes the whole run. A single
+# misconfigured Tool row (e.g. an http_endpoint with no url_template — observed in
+# production: agent-runtime error KeyError 'url_template' killed the run at
+# iteration 0) must not take down every task on the agent.
+# ---------------------------------------------------------------------------
+def test_http_endpoint_without_url_template_is_skipped_not_crash() -> None:
+    registry = ToolRegistry()
+    specs = [
+        # KNOWN type, but its config is incomplete (no url_template) — unusable.
+        ToolSpec(name="broken-http", implementation_type="http_endpoint", config={}),
+        # A valid sibling in the same batch must still register.
+        ToolSpec(
+            name="adder",
+            implementation_type="python_function",
+            config={"code": "def run(args):\n    return 1\n"},
+        ),
+    ]
+    registered = register_tool_specs(registry, specs)
+    assert registered == ["adder"]
+    assert "broken-http" not in registry.names()
+
+
+def test_malformed_python_function_without_code_is_skipped() -> None:
+    registry = ToolRegistry()
+    specs = [ToolSpec(name="no-code", implementation_type="python_function", config={})]
+    # No `code` key → the builder would KeyError; it must be skipped, not crash.
+    assert register_tool_specs(registry, specs) == []
 
 
 # ---------------------------------------------------------------------------

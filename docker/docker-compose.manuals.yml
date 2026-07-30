@@ -30,6 +30,8 @@ services:
       API_SERVER_BROKER_URL: redis://redis:6379/1
       API_SERVER_RESULT_BACKEND: redis://redis:6379/2
       API_SERVER_JWT_SECRET: dev-only-jwt-secret-change-me
+      # NOTIF-2: debe coincidir con el Bearer de alertmanager.yml (dev).
+      API_SERVER_ALERTS_INGEST_TOKEN: dev-alerts-ingest-token
       # High limit so the Playwright manual capture is never rate-limited.
       API_SERVER_LOGIN_RATE_LIMIT_COUNT: "1000"
       API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS: "60"
@@ -53,6 +55,12 @@ services:
       # modelo al 1er arranque; el WS de voz es best-effort si aún no están listos.
       API_SERVER_ASSISTANT_STT_URL: http://stt:8000
       API_SERVER_ASSISTANT_TTS_URL: http://tts:8880
+      # Web del córtex (ADR 0067): searxng por la red interna (directo) y el
+      # egress-proxy para web_fetch/Brave. El default del setting es
+      # `http://localhost:8888` (inservible dentro del contenedor); aquí se
+      # apunta al servicio real del compose.
+      API_SERVER_CORTEX_EGRESS_PROXY_URL: http://egress-proxy:8888
+      API_SERVER_CORTEX_SEARXNG_URL: http://searxng:8080
       API_SERVER_CLAMAV_HOST: clamav
       API_SERVER_CLAMAV_PORT: "3310"
       API_SERVER_EGRESS_PROXY_HOST: egress-proxy
@@ -125,7 +133,13 @@ services:
       IMAGES: "1"
       NETWORKS: "1"
       POST: "1"
-      EXEC: "0"
+      # EXEC=1: el worker corre comandos DENTRO de los runtime-templates que él
+      # mismo lanza (TestRuntimeRunner._exec → exec_run): los checks post-hoc de
+      # tests Y el puente stack_exec (ADR 0093). Con EXEC=0 todo exec_run daba
+      # 403 Forbidden. Sigue siendo mínimo-privilegio: el proxy vive en la red
+      # dedicada agentic-docker (solo workers↔proxy) y el agent-runtime NUNCA
+      # toca el socket (principio 2). ADR 0060.
+      EXEC: "1"
       VOLUMES: "0"
       SWARM: "0"
       SECRETS: "0"
@@ -169,24 +183,35 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # worktrees-init — one-shot: a Docker named volume is created owned by root,
-  # but the worker runs as UID 1000 and must create bare repos + worktrees under
-  # /data/agent-platform (prod-18). chown the mount once so it survives
-  # `docker compose down -v` (which drops the volume and recreates it root-owned).
+  # worktrees-init — one-shot: el volumen se crea root:root, pero el worker corre
+  # como UID 1000 y debe crear bare repos + worktrees en el data-root (prod-18).
+  # chown al levantar el stack; el entrypoint del worker (docker-entrypoint.sh)
+  # se auto-repara además en cada arranque (auditoría 2026-07-02) — este one-shot
+  # queda como red de seguridad.
   # ---------------------------------------------------------------------------
   worktrees-init:
     image: busybox:1.36
     user: "0:0"
     command:
-      ["sh", "-c", "mkdir -p /data/agent-platform && chown -R 1000:1000 /data/agent-platform"]
+      [
+        "sh",
+        "-c",
+        "mkdir -p /var/lib/docker/volumes/agentic-platform-agent-data/_data && chown -R 1000:1000 /var/lib/docker/volumes/agentic-platform-agent-data/_data",
+      ]
     volumes:
-      # DooD identity bind: the worker creates worktrees here and then asks the
-      # host daemon to bind them into the ephemeral agent-runtime. The daemon
-      # resolves the bind SOURCE on the host FS, so it must be the SAME path in
-      # worker and host — a named volume only exists inside the worker and the
-      # daemon can't find it (bind source path does not exist). See gotcha
-      # worktree-bind-dood-empty-vs-named-volume. Matches the installer (prod).
-      - /data/agent-platform:/data/agent-platform
+      # DURABILIDAD (2026-07-03): el data-root de agentes ya NO es un bind al
+      # rootfs de la VM de Docker Desktop (efímero — cada engine-restart lo
+      # recreaba VACÍO; así se perdieron los bare repos el 2026-07-02). Ahora es
+      # el named volume EXTERNO agentic-platform-agent-data (vive en el VHDX
+      # persistente de docker-desktop-data, como postgres_data), montado EN SU
+      # RUTA DAEMON-SIDE (/var/lib/docker/volumes/<vol>/_data) para conservar la
+      # identidad de rutas que exige el bind DooD hacia los agent-runtime: el
+      # daemon resuelve el bind-source en el FS del host, así que el path debe
+      # ser el MISMO dentro del worker y en el host (ver gotcha
+      # worktree-bind-dood-empty-vs-named-volume). Bootstrap una única vez:
+      #   docker volume create agentic-platform-agent-data
+      # `external: true` ⇒ ni siquiera `docker compose down -v` lo elimina.
+      - agent_data:/var/lib/docker/volumes/agentic-platform-agent-data/_data
     networks: [agentic-net]
     restart: "no"
 
@@ -217,8 +242,27 @@ services:
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
-      WORKERS_DATA_ROOT: /data/agent-platform
+      # ADR 0080: el navegador sandboxeado del córtex (imagen construida aparte,
+      # como agent-runtime); el worker lo lanza efímero por sesión aprobada.
+      WORKERS_BROWSER_RUNTIME_IMAGE: browser-runtime:v1
+      WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
       WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # task_wf_55: los perfiles ENDURECIDOS que el worker pina sobre los
+      # sandboxes que lanza. Existían en disco (y el instalador ya los pinaba en
+      # el compose que genera) pero el stack de dev corría con los perfiles por
+      # DEFECTO de Docker — o sea, el entorno donde se prueba todo era el menos
+      # protegido de los dos. El JSON viene del bind de ./seccomp de abajo.
+      #
+      # Sobrescribibles desde el .env: si un toolchain choca con el perfil
+      # estricto, `WORKERS_SECCOMP_PROFILE_PATH=` en el .env lo desactiva sin
+      # tocar el compose.
+      WORKERS_SECCOMP_PROFILE_PATH: ${WORKERS_SECCOMP_PROFILE_PATH-/etc/agentic/seccomp/agent-runtime.json}
+      # AppArmor queda VACÍO por defecto a propósito: pinar un perfil que el
+      # host no tiene cargado hace fallar la creación del contenedor, y el dev
+      # típico es Docker Desktop sobre WSL2, que no trae AppArmor. En un host
+      # Linux con el perfil cargado (`apparmor_parser docker/apparmor/
+      # agent-runtime.profile`) se activa con WORKERS_APPARMOR_PROFILE=agent-runtime.
+      WORKERS_APPARMOR_PROFILE: ${WORKERS_APPARMOR_PROFILE-}
       # ADR 0072: el worker resuelve la credencial git del proyecto desde Vault
       # (mismo Vault dev que el api-server) al clonar/fetch repos privados.
       WORKERS_VAULT_URL: http://vault:8200
@@ -251,29 +295,194 @@ services:
       WORKERS_CORTEX_AFFECT_LLM_BASE_URL: http://ollama:11434/v1
       WORKERS_CORTEX_AFFECT_LLM_MODEL: llama3.2:1b
     volumes:
-      # DooD identity bind: the worker creates worktrees here and then asks the
-      # host daemon to bind them into the ephemeral agent-runtime. The daemon
-      # resolves the bind SOURCE on the host FS, so it must be the SAME path in
-      # worker and host — a named volume only exists inside the worker and the
-      # daemon can't find it (bind source path does not exist). See gotcha
-      # worktree-bind-dood-empty-vs-named-volume. Matches the installer (prod).
-      - /data/agent-platform:/data/agent-platform
+      # Data-root DURABLE (2026-07-03): named volume EXTERNO montado en su ruta
+      # daemon-side para que los binds DooD (worker → daemon → agent-runtime)
+      # resuelvan el MISMO path dentro y fuera. Racional completo + bootstrap en
+      # worktrees-init.
+      - agent_data:/var/lib/docker/volumes/agentic-platform-agent-data/_data
       - ./seccomp:/etc/agentic/seccomp:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       docker-socket-proxy: { condition: service_started }
-      # Named volumes are created root:root; the worker runs as UID 1000 and
-      # would get EACCES creating /data/agent-platform/projects (worktree
-      # provisioning). Gate startup on the one-shot chown below.
+      # El volumen se crea root:root; el worker corre como UID 1000 y tendría
+      # EACCES creando <data-root>/projects (provisión de worktrees). Gate
+      # sobre el chown one-shot.
       worktrees-init: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD-SHELL", "celery -A workers.celery_app inspect ping -t 5 || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+        ]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 5
       start_period: 60s
     networks: [agentic-net, agentic-agents, agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # workers-aux — pool AUXILIAR de Celery (auditoría 2026-07-03, plan
+  # guardas-research-por-novedad D1): consume test/review/privileged con pool
+  # PROPIA. Sin él, el worker principal (default,ingestion,test,review,
+  # concurrency=2) se auto-inanea: un agent-run bloqueado esperando el resultado
+  # de stack_exec (cola test) ocupa el mismo slot que ese comando necesita — con
+  # 2 runs en vuelo, la cola test no tiene consumidor y el agente muere por
+  # ReadTimeout a los 300 s (run 019f252e). La cola `privileged` (backup diario,
+  # Plan 12) tampoco tenía consumidor en dev (hallazgo F0.4). Mismo image/env
+  # que workers.
+  # ---------------------------------------------------------------------------
+  workers-aux:
+    image: agentic-platform/workers:ci
+    command:
+      [
+        "celery",
+        "-A",
+        "workers.celery_app",
+        "worker",
+        "--queues=test,review",
+        "--concurrency=2",
+        "--loglevel=info",
+      ]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+      WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
+      WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
+      # ADR 0080: el navegador sandboxeado del córtex (imagen construida aparte,
+      # como agent-runtime); el worker lo lanza efímero por sesión aprobada.
+      WORKERS_BROWSER_RUNTIME_IMAGE: browser-runtime:v1
+      WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
+      WORKERS_EGRESS_PROXY_URL: http://egress-proxy:8888
+      # task_wf_55: los perfiles ENDURECIDOS que el worker pina sobre los
+      # sandboxes que lanza. Existían en disco (y el instalador ya los pinaba en
+      # el compose que genera) pero el stack de dev corría con los perfiles por
+      # DEFECTO de Docker — o sea, el entorno donde se prueba todo era el menos
+      # protegido de los dos. El JSON viene del bind de ./seccomp de abajo.
+      #
+      # Sobrescribibles desde el .env: si un toolchain choca con el perfil
+      # estricto, `WORKERS_SECCOMP_PROFILE_PATH=` en el .env lo desactiva sin
+      # tocar el compose.
+      WORKERS_SECCOMP_PROFILE_PATH: ${WORKERS_SECCOMP_PROFILE_PATH-/etc/agentic/seccomp/agent-runtime.json}
+      # AppArmor queda VACÍO por defecto a propósito: pinar un perfil que el
+      # host no tiene cargado hace fallar la creación del contenedor, y el dev
+      # típico es Docker Desktop sobre WSL2, que no trae AppArmor. En un host
+      # Linux con el perfil cargado (`apparmor_parser docker/apparmor/
+      # agent-runtime.profile`) se activa con WORKERS_APPARMOR_PROFILE=agent-runtime.
+      WORKERS_APPARMOR_PROFILE: ${WORKERS_APPARMOR_PROFILE-}
+      WORKERS_VAULT_URL: http://vault:8200
+      WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      API_SERVER_MINIO_URL: http://minio:9000
+      API_SERVER_MINIO_ACCESS_KEY: minioadmin
+      API_SERVER_MINIO_SECRET_KEY: changeme-dev-only
+      API_SERVER_DOCLING_SERVE_URL: http://docling-serve:5001
+      API_SERVER_OLLAMA_URL: http://ollama:11434
+      API_SERVER_CLAMAV_HOST: clamav
+      API_SERVER_CLAMAV_PORT: "3310"
+      WORKERS_MEMORY_EMBEDDER_BASE_URL: http://ollama:11434
+      WORKERS_MEMORIZER_LLM_BASE_URL: http://ollama:11434/v1
+      WORKERS_MEMORIZER_LLM_MODEL: llama3.2:1b
+      WORKERS_CORTEX_AFFECT_LLM_BASE_URL: http://ollama:11434/v1
+      WORKERS_CORTEX_AFFECT_LLM_MODEL: llama3.2:1b
+    volumes:
+      # Mismo data-root durable que `workers` (ver worktrees-init).
+      - agent_data:/var/lib/docker/volumes/agentic-platform-agent-data/_data
+      - ./seccomp:/etc/agentic/seccomp:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      docker-socket-proxy: { condition: service_started }
+      worktrees-init: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net, agentic-agents, agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # workers-backup — pool DEDICADO de la cola `privileged` (backup diario Plan 12
+  # + restores). Corre como ROOT dentro de su contenedor (WORKERS_RUN_AS_ROOT):
+  # el paso volume-tar lee los _data de redis (uid 999) y vault (uid 100), ambos
+  # 0700 — ilegibles para uid 1000 — y un restore además ESCRIBE en ellos. Este
+  # pool NO ejecuta runs de agentes (solo privileged), así que el resto de
+  # workers siguen degradando a uid 1000. Montajes: /var/lib/docker/volumes RW
+  # (tar en backup, extract en restore) y /backups → bind al host WINDOWS
+  # (repo/.backups/), fuera del VHDX de Docker: los bundles sobreviven incluso
+  # a perder Docker Desktop entero.
+  # ---------------------------------------------------------------------------
+  workers-backup:
+    image: agentic-platform/workers:ci
+    command:
+      [
+        "celery",
+        "-A",
+        "workers.celery_app",
+        "worker",
+        "--queues=privileged",
+        "--concurrency=1",
+        "--loglevel=info",
+      ]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+      WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
+      WORKERS_RUN_AS_ROOT: "1"
+      # workers.rotate_credentials (cola privileged, Plan 15) toca Vault.
+      WORKERS_VAULT_URL: http://vault:8200
+      WORKERS_VAULT_TOKEN: ${API_SERVER_VAULT_TOKEN:-dev-root-token}
+      # Backup (F0.4 + durabilidad 2026-07-03): los volúmenes de infra llevan el
+      # prefijo real del proyecto compose (agentic-platform_*) — los defaults del
+      # código («minio_data», …) no existen en este stack — y el data-root de
+      # agentes entra como CUARTO volumen (ya no es un bind, así que
+      # WORKERS_BACKUP_BIND_PATHS queda vacío).
+      WORKERS_BACKUP_ROOT: /backups
+      WORKERS_BACKUP_VOLUMES: '["agentic-platform_minio_data","agentic-platform_redis_data","agentic-platform_vault_data","agentic-platform-agent-data"]'
+      WORKERS_BACKUP_BIND_PATHS: "[]"
+      # pg_dump corre DENTRO del contenedor → URL libpq al postgres del stack
+      # (el default del código apunta a localhost:15432, el puerto publicado en
+      # el host, inalcanzable desde aquí).
+      WORKERS_BACKUP_DATABASE_URL: postgresql://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      # La métrica de salud del backup (BackupLastRunFailed/BackupTooOld) va al
+      # textfile collector de node-exporter — su volumen ya es visible bajo el
+      # mount de /var/lib/docker/volumes (el default /host/textfile no existe
+      # en este contenedor y la métrica moría en un path local invisible).
+      WORKERS_BACKUP_METRICS_TEXTFILE_PATH: /var/lib/docker/volumes/agentic-platform_node_exporter_textfile/_data/agentic_backup.prom
+    volumes:
+      # Paso volume-tar (backup) + extract (restore) sobre <root>/<vol>/_data.
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+      # Destino de los bundles (WORKERS_BACKUP_ROOT) — host Windows.
+      - ../.backups/agent-platform:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net]
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
@@ -358,11 +567,86 @@ services:
     networks: [agentic-net]
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # notification-dispatcher — el consumidor de las colas notifications.* (M-1,
+  # auditoría 2026-07-10). Sin él, TODO evento del dispatcher (plan_blocked /
+  # plan_unblocked, review_escalated, budget_alert, human_validation_needed…)
+  # se encolaba en dev sin que nadie lo convirtiera en notificación (in-app
+  # incluidas): los workers dev solo consumen default/test/review/ingestion/
+  # privileged. Espejo dev del servicio que el installer genera en prod
+  # (compose_generator._notification_dispatcher_service): mismo broker /1 que
+  # publica el api-server y misma DB con el usuario de plataforma. Imagen en
+  # capas sobre la base api-server (mismo patrón BASE_IMAGE que workers):
+  #   docker build -f apps/notification-dispatcher/Dockerfile \
+  #     --build-arg BASE_IMAGE=agentic-platform/api-server:manuals \
+  #     -t agentic-platform/notification-dispatcher:manuals .
+  # ---------------------------------------------------------------------------
+  notification-dispatcher:
+    image: agentic-platform/notification-dispatcher:manuals
+    environment:
+      NOTIFY_ENVIRONMENT: dev
+      NOTIFY_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      NOTIFY_BROKER_URL: redis://redis:6379/1
+      NOTIFY_RESULT_BACKEND: redis://redis:6379/2
+      NOTIFY_EVENTS_REDIS_URL: redis://redis:6379/0
+    healthcheck:
+      # -A = el módulo real de la app (el del CMD del Dockerfile); `-d
+      # celery@$$HOSTNAME` pinga ESTE nodo (el broker /1 es compartido con los
+      # workers y un ping sin destino contestaría cualquiera).
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A notification_dispatcher.celery_app:app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [agentic-net]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Sidecar WhatsApp neonize/whatsmeow (ADR 0109) — OPCIONAL, apagado por
+  # defecto (profile). Arranque:
+  #   docker compose ... --profile neonize up -d whatsapp-neonize
+  # Primera vez: emparejar con QR (docker logs -f whatsapp-neonize) — runbook
+  # docs/06-runbooks/whatsapp-neonize-pairing.md. Build:
+  #   docker build -t agentic-platform/whatsapp-neonize:dev docker/whatsapp-neonize
+  # El canal whatsapp del tenant usa provider "neonize" + secreto = NEONIZE_TOKEN.
+  # ---------------------------------------------------------------------------
+  whatsapp-neonize:
+    image: agentic-platform/whatsapp-neonize:dev
+    profiles: [neonize]
+    environment:
+      NEONIZE_TOKEN: dev-neonize-token
+      NEONIZE_SESSION_DB: /data/session.sqlite3
+    volumes:
+      - whatsapp_neonize_session:/data
+    networks: [agentic-net]
+    restart: unless-stopped
+
 volumes:
+  # Sesión whatsmeow del sidecar neonize (ADR 0109): borrarla obliga a
+  # re-emparejar por QR.
+  whatsapp_neonize_session:
+    name: agentic_whatsapp_neonize_session
   # Unseal keys + root token del Vault persistente (Camino B). Volumen docker,
   # NO en el repo. Borrarlo obliga a re-inicializar Vault (perderías los secretos).
   vault_init:
     name: agentic_vault_init
+  # Data-root de agentes: bare repos + worktrees + dep-cache (durabilidad
+  # 2026-07-03). EXTERNO — bootstrap una única vez con
+  #   docker volume create agentic-platform-agent-data
+  # — y DURABLE: sobrevive engine-restarts de Docker Desktop (vive en el VHDX
+  # persistente, como postgres_data) Y a `docker compose down -v` (external
+  # nunca se elimina). Se monta en su ruta daemon-side; racional en
+  # worktrees-init.
+  agent_data:
+    name: agentic-platform-agent-data
+    external: true
 
 networks:
   # Red interna dedicada SOLO al tráfico workers ↔ docker-socket-proxy (ADR 0060).

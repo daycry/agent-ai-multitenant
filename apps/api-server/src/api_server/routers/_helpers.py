@@ -42,6 +42,24 @@ def require_tenant_id(principal: AuthPrincipal) -> UUID:
 
 
 # ---------------------------------------------------------------------------
+# Project state guard (P1-01)
+# ---------------------------------------------------------------------------
+def require_project_active(project: Any) -> None:
+    """Las operaciones que CREAN o ARRANCAN trabajo (planes, tareas, chat,
+    start-execution) exigen `project.status == active` — pausar/archivar un
+    proyecto dejó de ser decorativo. Las lecturas no pasan por aquí."""
+    if project.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "project_not_active",
+                "status": project.status,
+                "message": "El proyecto no está activo; reanúdalo para operar sobre él.",
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Writable lookup
 # ---------------------------------------------------------------------------
 async def get_writable_or_404(
@@ -134,3 +152,26 @@ async def soft_delete(session: AsyncSession, obj: Any) -> None:
     handled by the per-request transaction in `get_tenant_session`."""
     obj.deleted_at = datetime.now(tz=UTC)
     await session.flush()
+
+
+def move_plan(session: AsyncSession, plan: Any, target: str, *, actor: UUID | None = None) -> None:
+    """Mueve un plan por la máquina de estados Y anuncia el movimiento
+    (`task_wf_32`).
+
+    Las dos cosas juntas, en una sola llamada, a propósito: mientras fueran dos
+    líneas separadas, cada endpoint nuevo tendría que acordarse de la segunda —
+    y el tablero gerencial se quedaría rancio justo en la transición que a
+    alguien se le olvidó. El anuncio viaja post-commit (ver
+    :func:`publish_plan_transition_after_commit`) y es best-effort: un fallo de
+    Redis no tumba la transición.
+
+    Los caminos del orchestrator y del worker de mantenimiento NO pasan por
+    aquí — escriben con UPDATE crudo para tener guarda atómica— y publican a
+    mano tras su propio commit.
+    """
+    from api_server.chat.plan_state_machine import transition_plan_status
+    from api_server.events import publish_plan_transition_after_commit
+
+    old_status = plan.status
+    transition_plan_status(plan, target, actor=actor)
+    publish_plan_transition_after_commit(session, plan, old_status)

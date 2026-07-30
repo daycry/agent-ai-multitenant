@@ -38,8 +38,9 @@ def test_human_approved_task_has_full_audit_trail() -> None:
     store = InMemoryTaskStore()
     lc = TaskLifecycle(store=store)
     task = lc.create_free_task(plan_id="p", title="Manual fix", description="...", actor="alice")
-    # Worker picks it up + does the review.
-    task.status = "awaiting_human"
+    # Worker picks it up + does the review; review-exhaustion escalates to
+    # `blocked` (F43 — the orphan `awaiting_human` no longer exists).
+    task.status = "blocked"
     task.retry_count = 3
     store.save(task)
     lc.apply_human_action(task.id, "approve_manual", actor="alice")

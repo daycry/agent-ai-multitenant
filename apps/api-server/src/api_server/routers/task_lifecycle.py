@@ -13,7 +13,7 @@ Endpoints in this router:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -23,13 +23,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_redis,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
+    schedule_after_commit,
 )
-from api_server.db.domain import Task
+from api_server.chat.dag_enforcement import DependenciesNotDoneError, assert_dependencies_done
+from api_server.db.domain import Plan, Task, TaskDependency
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
-from api_server.routers._helpers import require_tenant_id
+from api_server.events import publish_task_status_changed
+from api_server.plan_progress import PlanStatus as PlanStatusLiteral
+from api_server.plan_progress import TaskSnapshot, transition_from_blocked
+from api_server.routers._helpers import move_plan, require_tenant_id
 
 router = APIRouter(prefix="/tasks", tags=["task-lifecycle"])
 
@@ -84,6 +90,7 @@ HumanAction = Literal[
     "reassign_with_guidance",  # task → backlog, retry_count++
     "block_with_reason",  # task → blocked
     "cancel",  # task → cancelled
+    "retry",  # T7c: blocked task → ready (backlog if deps pending) + reset retry + reactivate plan
 ]
 
 
@@ -105,7 +112,89 @@ _ACTION_TABLE: dict[HumanAction, tuple[str, str, bool]] = {
     "reassign_with_guidance": ("backlog", "human_action", True),
     "block_with_reason": ("blocked", "human_action", False),
     "cancel": ("cancelled", "human_action", False),
+    "retry": ("ready", "human_action", False),  # reset + plan reactivation handled specially
 }
+
+
+async def apply_task_retry(session: AsyncSession, task: Task) -> str:
+    """Un-stick a blocked task (T7c/c3): move it to ``ready`` (or ``backlog`` when a
+    dependency is still pending — the DAG would reject ``ready``) and RESET the retry
+    budget so the re-run is not immediately re-blocked. Returns the new status.
+
+    The caller owns plan reactivation + the re-dispatch event (they differ per entry
+    point: a single-task ``retry`` action vs. a whole-plan unblock)."""
+    try:
+        await assert_dependencies_done(session, task.id, "ready")
+        task.status = "ready"
+    except DependenciesNotDoneError:
+        task.status = "backlog"
+    task.retry_count = 0
+    return task.status
+
+
+async def reactivate_plan_if_unstuck(session: AsyncSession, plan_id: UUID) -> bool:
+    """Revert a ``blocked`` plan to ``in_progress`` when its task snapshot no
+    longer justifies the block (hallazgo #2, QA 2026-07-07).
+
+    Called after ANY human gesture that un-sticks a task (human-action, the
+    Kanban PUT) so freeing the last stuck task never demands a SECOND
+    plan-level click. Snapshot-based (:func:`transition_from_blocked`): a plan
+    that is still genuinely stuck — another blocked task, a transitively-stuck
+    backlog chain — stays ``blocked``. Returns whether the plan was reverted.
+    The session runs under tenant RLS, so the lookups are tenant-scoped.
+
+    M-2 (auditoría 2026-07-10): la fila del plan se lee ``FOR UPDATE`` — sin el
+    lock, una transición concurrente (otro admin cancelando el plan) podía
+    perderse por lost-update en read-committed (read-ORM + write sin guard). El
+    camino equivalente del reconciler ya era atómico (``UPDATE ... WHERE
+    status='blocked'``)."""
+    plan = await session.get(Plan, plan_id, with_for_update=True)
+    if plan is None or plan.status != "blocked":
+        return False
+    rows = (
+        await session.execute(select(Task.id, Task.status).where(Task.plan_id == plan.id))
+    ).all()
+    dep_rows = (
+        await session.execute(
+            select(TaskDependency.task_id, TaskDependency.depends_on_task_id).where(
+                TaskDependency.task_id.in_([r.id for r in rows])
+            )
+        )
+    ).all()
+    deps_by_task: dict[str, list[str]] = {}
+    for dr in dep_rows:
+        deps_by_task.setdefault(str(dr.task_id), []).append(str(dr.depends_on_task_id))
+    snapshots = [
+        TaskSnapshot(
+            id=str(r.id),
+            status=r.status,
+            depends_on=tuple(deps_by_task.get(str(r.id), ())),
+        )
+        for r in rows
+    ]
+    result = transition_from_blocked(cast(PlanStatusLiteral, plan.status), snapshots)
+    if not result.transitioned:
+        return False
+    move_plan(session, plan, "in_progress")
+    # M-1 (auditoría 2026-07-10): notificar la reversión — el simétrico del
+    # `plan_blocked` del escalado, para que una notificación de bloqueo previa no
+    # quede accionable en falso. Post-commit (la fila debe ser durable) y
+    # best-effort (enqueue_event_dispatch traga fallos de broker).
+    plan_name, plan_tenant = plan.title or "", str(plan.tenant_id)
+
+    async def _notify_unblocked() -> None:
+        from api_server.celery_client import enqueue_event_dispatch
+
+        await enqueue_event_dispatch(
+            {
+                "event_type": "plan_unblocked",
+                "tenant_id": plan_tenant,
+                "context": {"plan_name": plan_name, "plan_id": str(plan_id)},
+            }
+        )
+
+    schedule_after_commit(session, _notify_unblocked)
+    return True
 
 
 @router.post("/{task_id}/human-action")
@@ -147,11 +236,33 @@ async def apply_human_action(
             ),
         )
 
+    original_status = task_row.status
     new_status, kind, bump_retry = _ACTION_TABLE[payload.action]
-    task_row.status = new_status
-    if bump_retry:
-        task_row.retry_count += 1
+    if payload.action == "retry":
+        # T7c (c3, ratified A+D): un-stick a blocked task (→ready/backlog + reset
+        # the retry budget); the plan re-evaluation below picks it up.
+        await apply_task_retry(session, task_row)
+    else:
+        task_row.status = new_status
+        if bump_retry:
+            task_row.retry_count += 1
     await session.flush()
+    # hallazgo #2 (QA 2026-07-07): ANY human action that moves a task out of
+    # `blocked` re-evaluates its blocked plan against the snapshot — not just
+    # `retry`. Snapshot-based: a plan still genuinely stuck stays blocked.
+    if original_status == "blocked" and task_row.plan_id is not None:
+        await reactivate_plan_if_unstuck(session, task_row.plan_id)
+
+    # T7c: a retried task that reached `ready` must reach the orchestrator so it is
+    # re-dispatched (its plan is in_progress again). Deferred to after commit so the
+    # consumer reads the committed status (same pattern as PUT /tasks).
+    if payload.action == "retry" and task_row.status == "ready":
+        schedule_after_commit(
+            session,
+            lambda: publish_task_status_changed(
+                get_redis(), task_row, old_status=original_status, new_status="ready"
+            ),
+        )
 
     event_payload: dict[str, object] = {
         "action": payload.action,

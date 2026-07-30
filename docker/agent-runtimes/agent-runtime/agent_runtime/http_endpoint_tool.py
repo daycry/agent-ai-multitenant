@@ -37,12 +37,20 @@ URL-encodes values, so a malicious template can't break out.
 from __future__ import annotations
 
 import re
+import socket
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
 
+from agent_runtime.ssrf_guard import (
+    PinnedDestination,
+    Resolver,
+    SsrfViolationError,
+    pinned_url,
+    validate_destination,
+)
 from agent_runtime.tools import ToolResult
 
 _ALLOWED_SCHEMES = ("http", "https")
@@ -108,8 +116,10 @@ class HttpEndpointTool:
     allowed_domains: frozenset[str] = frozenset()
     timeout_s: float = 30.0
     max_body_bytes: int = 1_000_000
-    # Test seam — None = build a fresh httpx.Client() per call.
+    # Test seams — None = build a fresh httpx.Client() per call; production
+    # resolves with the real getaddrinfo.
     client: httpx.Client | None = None
+    resolver: Resolver = socket.getaddrinfo
 
     def _render(self, args: dict[str, Any]) -> str | ToolResult:
         try:
@@ -120,7 +130,7 @@ class HttpEndpointTool:
                 error=f"missing required placeholder: {exc.args[0]}",
             )
 
-    def _validate_url(self, url: str) -> str | ToolResult:
+    def _validate_url(self, url: str) -> tuple[str, PinnedDestination] | ToolResult:
         parsed = urlparse(url)
         if parsed.scheme not in _ALLOWED_SCHEMES:
             return ToolResult(ok=False, error=f"unsupported URL scheme: {parsed.scheme!r}")
@@ -133,14 +143,24 @@ class HttpEndpointTool:
                 error=f"domain not allowed: {host}",
                 output={"allowed": sorted(self.allowed_domains)},
             )
-        return url
+        # prod-12 Fase A (gap4-1): validate what the rendered host resolves to
+        # and pin the connection to that address (anti-rebinding).
+        try:
+            pin = validate_destination(host, resolver=self.resolver)
+        except SsrfViolationError as exc:
+            return ToolResult(ok=False, error=f"destination rejected: {exc}")
+        return url, pin
 
-    def _request(self, url: str, body: Any | None) -> ToolResult:
+    def _request(self, url: str, pin: PinnedDestination, body: Any | None) -> ToolResult:
         # Merge static headers + static query string. Per-call headers
         # are NOT accepted — that's a deliberate choice: a pre-cooked
         # tool has a fixed contract; arbitrary headers belong to the
         # generic http_request builtin.
         headers = dict(self.static_headers)
+        # Connect to the pinned IP, keep virtual-hosting + TLS SNI on the
+        # original hostname; redirects explicitly OFF (gap4-3).
+        headers["Host"] = pin.host
+        target = pinned_url(url, pin)
         # When a Client is injected (tests), reuse it; otherwise
         # build a short-lived one.
         client_ctx = _NoopExitClient(self.client) if self.client is not None else httpx.Client()
@@ -148,11 +168,13 @@ class HttpEndpointTool:
             client_ctx as client,
             client.stream(
                 self.method,
-                url,
+                target,
                 timeout=self.timeout_s,
                 headers=headers,
                 params=self.static_query or None,
                 json=body if body is not None else None,
+                follow_redirects=False,
+                extensions={"sni_hostname": pin.host},
             ) as response,
         ):
             total = 0
@@ -196,10 +218,10 @@ class HttpEndpointTool:
         validated = self._validate_url(rendered)
         if isinstance(validated, ToolResult):
             return validated
-        url = validated
+        url, pin = validated
         body = args.get("body")
         try:
-            return self._request(url, body)
+            return self._request(url, pin, body)
         except httpx.TimeoutException:
             return ToolResult(ok=False, error=f"request timed out after {self.timeout_s}s")
         except httpx.HTTPError as exc:

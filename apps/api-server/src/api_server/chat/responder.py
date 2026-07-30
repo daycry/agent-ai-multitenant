@@ -32,7 +32,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import structlog
@@ -40,8 +41,9 @@ from redis.asyncio import Redis
 from shared_llm.base import LLMProvider
 from shared_llm.reasoning import reasoning_call_kwargs
 from shared_llm.types import Message as LLMMessage
-from sqlalchemy import select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from api_server.assistant.model_config import to_provider_model_name
 from api_server.chat.planning_graph import (
@@ -52,7 +54,9 @@ from api_server.chat.planning_graph import (
     SpecialistContribution,
 )
 from api_server.chat.planning_llm import LLMPlanningModel
+from api_server.chat.summariser import LLMSummariser
 from api_server.db.conversation import Conversation, Message
+from api_server.db.conversation_compression import compress_old_messages, load_context_window
 from api_server.db.domain import Agent, Plan, Project, Team, TeamMember
 from api_server.db.llm_providers import get_llm_provider
 from api_server.db.memory import MemoryEntry
@@ -64,10 +68,11 @@ from api_server.db.platform_settings import (
 )
 from api_server.db.session import get_admin_sessionmaker
 from api_server.events import EVENT_MESSAGE_CREATED, publish_conversation_event
+from api_server.ingestion.embeddings import OllamaEmbedder
 from api_server.llm_providers.factory import build_llm_provider, build_provider_from_kind
 from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import LLMProviderVaultStore
-from api_server.rag.search import recall_chunks
+from api_server.rag.tool import rag_search
 
 _log = structlog.get_logger("api_server.chat.responder")
 
@@ -75,6 +80,30 @@ _log = structlog.get_logger("api_server.chat.responder")
 # discussion/execution reply) is bounded independently so one slow/hung step never
 # sinks the whole turn; the orphaned worker thread is bounded by the provider's own
 # network timeout. A faster chat model (per-project chat model_config) keeps steps short.
+# A-02: cuántos mensajes de la conversación alimentan el prompt de planning.
+# `load_context_window` devuelve LOS MÁS RECIENTES y sustituye los tramos ya
+# comprimidos por su resumen, así que este tope acota el prompt sin perder el
+# arranque una vez la compresión esté cableada (task_wf_06).
+_PLANNING_CONTEXT_MESSAGES = 50
+
+# A-13 / task_wf_06 e: segunda guarda del contexto. `_PLANNING_CONTEXT_MESSAGES` es
+# un contador y un contador no ve que 50 filas muy largas desbordan igual que 500
+# cortas. Con la compresión encendida el contador casi nunca muerde; esto cubre lo
+# que no puede ver.
+_PLANNING_CONTEXT_TOKENS = 24_000
+
+# task_wf_06 c: umbrales de compresión del chat de PROYECTO. Los defaults del
+# módulo (20/10) están pensados para un chat 1-a-1; aquí **un turno son 6-10
+# mensajes** (framing del PM + N especialistas + síntesis), así que 10 partiría un
+# turno por la mitad. Con 40/20 se pliegan 2-3 turnos enteros por pasada.
+#
+# INVARIANTE: el umbral tiene que quedar por DEBAJO de la ventana de contexto. Si
+# no, el contador truncaría la conversación antes de que la compresión llegase a
+# ejecutarse nunca, y lo viejo se perdería en silencio en vez de resumirse.
+# `test_chat_compression_thresholds` lo fija.
+_CHAT_COMPRESSION_THRESHOLD = 40
+_CHAT_COMPRESSION_WINDOW = 20
+
 _STEP_TIMEOUT_S = 150.0
 _DEFAULT_TEMPERATURE = 0.7
 
@@ -275,7 +304,12 @@ def _plan_summary(plan: Plan) -> str:
 
 
 async def build_project_context(
-    session: AsyncSession, project: Project | None, query_text: str
+    session: AsyncSession,
+    project: Project | None,
+    query_text: str,
+    *,
+    agent_id: UUID | None = None,
+    embedder: Any | None = None,
 ) -> dict[str, Any]:
     """Assemble what the team needs to know to plan well in an EXISTING project:
     identity + prior plans + project-scoped memories + relevant docs/code (RAG).
@@ -285,7 +319,13 @@ async def build_project_context(
     for claude_sdk), the system RETRIEVES the context and injects it into the planning
     prompt (``project_context`` already reaches every planning prompt). Identical for
     ollama / claude_sdk / azure / copilot. Each source is best-effort: a failure is
-    omitted, never sinks the turn."""
+    omitted, never sinks the turn.
+
+    P0-5 (investigación 2026-07-11): ``agent_id`` une las KBs granted al agente
+    (rol — ``agent_knowledge_bases``, Plan 06.9) con las del proyecto, y
+    ``embedder`` habilita el path vectorial del recall híbrido — sin él el
+    planning era BM25-only (``vector_chunks`` devolvía siempre []). Ambos son
+    opcionales y best-effort (Ollama caído → BM25, igual que los agentes)."""
     if project is None:
         return {}
     ctx: dict[str, Any] = {"name": project.name, "description": project.description or ""}
@@ -330,16 +370,19 @@ async def build_project_context(
         if mems:
             ctx["memories"] = [str(m) for m in mems]
 
-    # Relevant docs/code from the project's KBs (RAG; BM25-only when no embedding,
-    # so no embedder dependency on the hot path).
+    # Relevant docs/code from the project's KBs — the same end-to-end retrieval
+    # the agents use (rag_search: embed best-effort → hybrid recall → top-N),
+    # including the agent's role-granted KBs when we know who plans (P0-5).
     if query_text.strip():
         with contextlib.suppress(Exception):
-            hits = await recall_chunks(
+            hits = await rag_search(
                 session,
                 query=query_text,
                 tenant_id=project.tenant_id,
                 project_id=project.id,
+                agent_id=agent_id,
                 limit=5,
+                embedder=embedder,
             )
             if hits:
                 ctx["docs"] = [h.content[:500] for h in hits]
@@ -399,7 +442,13 @@ async def _simple_reply(
     system = _MODE_PROMPTS.get(mode, _MODE_PROMPTS["discussion"])
     messages = [LLMMessage(role="system", content=system)]
     for entry in history:
-        role = entry["role"] if entry["role"] in ("user", "assistant", "system") else "user"
+        raw_role = str(entry["role"])
+        # El history llega de JSONB (str libre); LLMMessage.role es un Literal —
+        # el `in` garantiza el valor en runtime, el cast solo informa a mypy.
+        role = cast(
+            Literal["system", "user", "assistant"],
+            raw_role if raw_role in ("user", "assistant", "system") else "user",
+        )
         messages.append(LLMMessage(role=role, content=str(entry["content"])))
     resp = await provider.complete(messages, model=model, temperature=temperature, **extra)
     return resp.content or ""
@@ -452,6 +501,72 @@ async def _persist_and_publish(
     )
 
 
+async def compress_conversation_best_effort(
+    *,
+    conversation_id: UUID,
+    provider: LLMProvider,
+    api_model: str,
+    redis: Redis,
+) -> Message | None:
+    """Fold the oldest whole turns of a long conversation into one summary row.
+
+    Called at the START of a turn, not the end, for three reasons: the user's
+    message is already durable (``schedule_after_commit``), so the feed ends on a
+    clean turn boundary and the in-flight turn cannot be folded; the provider the
+    turn just built is still open (``_produce_reply`` closes it in its ``finally``);
+    and THIS turn already reads the fresh summary instead of waiting for the next
+    one. A periodic beat would leave a window between "the conversation got long"
+    and "it got compressed" that the next turn falls into.
+
+    Best-effort in the strict sense: any failure leaves the conversation
+    uncompressed and the turn proceeds. Returns the summary row, or ``None``.
+    """
+    sm = get_admin_sessionmaker()
+    summary: Message | None = None
+    try:
+        async with sm() as session, session.begin():
+            summary = await compress_old_messages(
+                session,
+                conversation_id,
+                LLMSummariser(provider=provider, model=api_model),
+                threshold_messages=_CHAT_COMPRESSION_THRESHOLD,
+                window_messages=_CHAT_COMPRESSION_WINDOW,
+                align_to_turns=True,
+            )
+    except Exception as exc:
+        _log.warning(
+            "chat.compression_failed",
+            conversation_id=str(conversation_id),
+            error_type=exc.__class__.__name__,
+        )
+        return None
+    if summary is None:
+        return None
+    _log.info(
+        "chat.conversation_compressed",
+        conversation_id=str(conversation_id),
+        summary_id=str(summary.id),
+    )
+    # The summary IS a row of the feed, so an open chat must see it appear rather
+    # than discover it on the next reload.
+    await publish_conversation_event(
+        redis,
+        str(conversation_id),
+        event_type=EVENT_MESSAGE_CREATED,
+        payload={
+            "message_id": str(summary.id),
+            "author_kind": summary.author_kind,
+            "author_user_id": None,
+            "author_agent_id": None,
+            "content": summary.content,
+            "mode": summary.mode,
+            "attachments": summary.attachments,
+            "is_summary": True,
+        },
+    )
+    return summary
+
+
 async def _system_notice(
     *, tenant_id: UUID, conversation_id: UUID, mode: str, content: str, redis: Redis
 ) -> None:
@@ -485,6 +600,70 @@ def _pm_framing(directive: PMDirective, specialists: tuple[PlanningRole, ...]) -
     head = f"**{_role_label(PlanningRole.PROJECT_MANAGER)}**\n\n"
     body = f"{rationale}\n\n" if rationale else ""
     return f"{head}{body}_Consulto con: {who}_"
+
+
+# The structured plan-draft (pm_plan_draft) is a SEPARATE call from the prose
+# synthesis and can come back empty on a slow/flaky model (e.g. a local model
+# under load, or a step timeout) even when the synthesis is a complete plan.
+# Retry it once before giving up so a transient miss doesn't cost the user the
+# "Generar Plan" button.
+_DRAFT_ATTEMPTS = 2
+
+
+def _finish_planning_attachment(draft: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Build the finish_planning attachment — the UI's "Generar Plan" button
+    contract (``isFinishPlanningReady``) that lets ``create_plan`` materialise
+    the tasks — from a structured plan draft. ``None`` when the draft has no
+    usable tasks (self-gating: a clarifying/empty turn attaches nothing)."""
+    if not draft.get("tasks"):
+        return None
+    return [
+        {
+            "kind": "planning_directive",
+            "intent": "finish_planning",
+            "title": draft.get("title") or "Plan del proyecto",
+            "specification": {
+                # A-03: OBJETO, no cadena — `PlanSpecification.summary` es un dict
+                # y el draft se persiste sin pasar por Pydantic, así que emitir la
+                # forma correcta AQUÍ es lo que evita el 422 posterior.
+                # `_normalise_plan_draft` ya lo deja normalizado.
+                "summary": draft.get("summary") or {},
+                "phases": draft.get("phases") or [],
+                "tasks": draft["tasks"],
+            },
+        }
+    ]
+
+
+async def _resolve_plan_attachment(
+    model: LLMPlanningModel,
+    state: PlanningState,
+    contributions: list[SpecialistContribution],
+    conversation_id: UUID,
+) -> list[dict[str, Any]] | None:
+    """Run ``pm_plan_draft`` (bounded by ``_STEP_TIMEOUT_S``) and turn it into the
+    finish_planning attachment, RETRYING once. The structured draft is a separate
+    call from the prose synthesis and can come back empty/time out on a slow or
+    flaky model; one retry recovers the button on a transient miss. Best-effort:
+    returns ``None`` (no button) if both attempts fail — never raises."""
+    for attempt in range(_DRAFT_ATTEMPTS):
+        try:
+            draft = await asyncio.wait_for(
+                asyncio.to_thread(model.pm_plan_draft, state, contributions),
+                timeout=_STEP_TIMEOUT_S,
+            )
+        except Exception as exc:  # best-effort (incl. timeout); retry then give up
+            _log.warning(
+                "chat.planning_draft_failed",
+                conversation_id=str(conversation_id),
+                attempt=attempt,
+                error_type=exc.__class__.__name__,
+            )
+            continue
+        attachments = _finish_planning_attachment(draft)
+        if attachments is not None:
+            return attachments
+    return None
 
 
 async def _stream_planning(
@@ -584,32 +763,27 @@ async def _stream_planning(
     # self-gates — it only yields tasks when a real plan exists, so a clarifying turn attaches
     # nothing. Best-effort: a failed/empty draft just means no button — the prose synthesis posts.
     attachments: list[dict[str, Any]] | None = None
-    if directive.intent != PMIntent.ASK_USER and synthesis.strip():
-        try:
-            draft = await _step(model.pm_plan_draft, state, contributions)
-            if draft.get("tasks"):
-                # kind/intent match the UI's "Generar Plan" button contract
-                # (isFinishPlanningReady); the spec lets create_plan materialise tasks.
-                attachments = [
-                    {
-                        "kind": "planning_directive",
-                        "intent": "finish_planning",
-                        "title": draft.get("title") or "Plan del proyecto",
-                        "specification": {
-                            "summary": draft.get("summary") or "",
-                            "tasks": draft["tasks"],
-                        },
-                    }
-                ]
-        except Exception as exc:  # draft is best-effort; never sinks the synthesis
-            _log.warning(
-                "chat.planning_draft_failed",
-                conversation_id=str(conversation_id),
-                error_type=exc.__class__.__name__,
-            )
+    plan_presented = directive.intent != PMIntent.ASK_USER and bool(synthesis.strip())
+    if plan_presented:
+        attachments = await _resolve_plan_attachment(model, state, contributions, conversation_id)
     if synthesis.strip():
         await _emit(synthesis, default_agent_id, attachments)
         published = True
+    # The PM presented a plan in prose but the structured draft stayed empty even
+    # after the retry: don't leave the user with a "listo" message and no
+    # "Generar Plan" button — tell them so they can retry, instead of silence.
+    if plan_presented and attachments is None:
+        await _system_notice(
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            mode=mode,
+            content=(
+                "⚠️ El equipo preparó el plan, pero no pude estructurarlo automáticamente "
+                "para el botón «Generar Plan». Reintenta enviando el mensaje de nuevo "
+                "(o escribe «genera el plan»)."
+            ),
+            redis=redis,
+        )
     return published
 
 
@@ -722,6 +896,25 @@ async def respond_to_conversation(
                 _log.warning("chat.responder_cross_tenant_project", id=str(project.id))
                 return
 
+            # c9 (audit 2026-07-03): idempotency guard. If the conversation's LATEST
+            # message is already a reply (agent/system), this user turn was answered —
+            # by the original detached task or a prior resume() — so skip. This makes
+            # respond_to_conversation safe to call repeatedly, which the durability
+            # sweep (resume_pending_replies) relies on to never double-reply.
+            latest_kind = (
+                await session.execute(
+                    select(Message.author_kind)
+                    .where(
+                        Message.conversation_id == conversation_id,
+                        Message.tenant_id == tenant_id,
+                    )
+                    .order_by(Message.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if latest_kind is not None and latest_kind != "user":
+                return
+
             effective = await resolve_chat_model_config(session, project)
             temperature = float(effective.get("temperature", _DEFAULT_TEMPERATURE))
             provider, kind, api_model = await _resolve_chat_provider(session, effective, vault)
@@ -745,28 +938,53 @@ async def respond_to_conversation(
             default_agent_id = role_agents.get(PlanningRole.PROJECT_MANAGER) or next(
                 iter(role_agents.values()), None
             )
-            rows = (
-                (
-                    await session.execute(
-                        select(Message)
-                        .where(
-                            Message.conversation_id == conversation_id,
-                            Message.tenant_id == tenant_id,
-                        )
-                        .order_by(Message.created_at)
-                        .limit(50)
-                    )
-                )
-                .scalars()
-                .all()
+            # A-02/A-13: esto hacía su propia consulta `order_by(created_at).limit(50)`,
+            # es decir, alimentaba el prompt con los mensajes MÁS ANTIGUOS: pasado el
+            # 51 el equipo dejaba de ver lo que el usuario acababa de pedir y seguía
+            # razonando sobre el arranque de la conversación, sin ninguna señal visible.
+            #
+            # `load_context_window` (el cargador de `db.conversation_compression`, que
+            # `planning_context` YA usaba para el contexto auxiliar) devuelve los más
+            # RECIENTES y sustituye por su resumen los tramos ya comprimidos. Usarlo
+            # aquí alinea las dos vías: hasta ahora el cargador correcto alimentaba el
+            # contexto secundario y el roto la conversación que el modelo realmente lee.
+            #
+            # Y antes de leer la ventana, plegar los turnos viejos si toca: así este
+            # mismo turno ya razona sobre el resumen en lugar de esperar al siguiente
+            # (task_wf_06 c). Nunca lanza: si falla, se sigue sin comprimir.
+            await compress_conversation_best_effort(
+                conversation_id=conversation_id,
+                provider=provider,
+                api_model=api_model,
+                redis=redis,
+            )
+            rows = await load_context_window(
+                session,
+                conversation_id,
+                max_messages=_PLANNING_CONTEXT_MESSAGES,
+                max_tokens=_PLANNING_CONTEXT_TOKENS,
             )
             # Ground the planning in the project's existing state (prior plans,
             # project memories, docs/code via RAG) — provider-agnostic context, not an
             # agent browsing the repo. The latest USER message drives the doc retrieval.
+            # P0-5: con el embedder real el retrieval es híbrido (BM25+vector) y el
+            # agent_id del PM une sus KBs de rol; ambos best-effort (Ollama caído →
+            # BM25-only dentro de rag_search).
             latest_user_text = next(
                 (m.content for m in reversed(list(rows)) if m.author_kind == "user"), ""
             )
-            project_context = await build_project_context(session, project, latest_user_text)
+            query_embedder = OllamaEmbedder()
+            try:
+                project_context = await build_project_context(
+                    session,
+                    project,
+                    latest_user_text,
+                    agent_id=default_agent_id,
+                    embedder=query_embedder,
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    await query_embedder.aclose()
         # An 'agent' message needs an agent to attribute to. No team agents → the
         # team can't speak; tell the user instead of failing on the DB CHECK.
         if default_agent_id is None:
@@ -867,12 +1085,86 @@ def schedule_reply(
     return _factory
 
 
+# c9 (audit 2026-07-03): durability of the chat turn. The team reply runs as a
+# DETACHED in-process task (schedule_reply), so a restart mid-turn drops it. A
+# startup sweep resumes turns left unanswered. Only STALE turns (older than this)
+# are resumed — a fresh turn is still being handled in-process.
+_RESUME_STALE_SECONDS = 30
+_RESUME_SWEEP_LOCK = "chat:resume:pending"
+_RESUME_MAX = 200
+
+
+async def resume_pending_replies(*, vault: LLMProviderVaultStore | None, redis: Redis) -> int:
+    """Resume chat turns left unanswered when a previous api-server process died (c9).
+
+    The user's message is durable; the team reply is not (it runs detached in-process).
+    At startup this finds every conversation whose LATEST message is a user message
+    older than ``_RESUME_STALE_SECONDS`` and re-schedules the reply.
+    ``respond_to_conversation`` is idempotent (it skips an already-answered
+    conversation), so a redundant resume is a no-op. A redis single-flight lock keeps
+    multiple uvicorn workers from all sweeping. Best-effort — never raises. Returns the
+    number of conversations resumed.
+    """
+    try:
+        got_lock = await redis.set(_RESUME_SWEEP_LOCK, b"1", nx=True, ex=300)
+    except Exception:  # redis down — skip rather than risk an unbounded resume storm
+        _log.warning("chat.resume_sweep_no_redis")
+        return 0
+    if not got_lock:
+        return 0
+
+    older_than = datetime.now(tz=UTC) - timedelta(seconds=_RESUME_STALE_SECONDS)
+    later = aliased(Message)
+    sm = get_admin_sessionmaker()
+    try:
+        async with sm() as session:
+            rows = (
+                await session.execute(
+                    select(Message.conversation_id, Message.tenant_id, Message.mode)
+                    .where(
+                        Message.author_kind == "user",
+                        Message.created_at < older_than,
+                        ~exists().where(
+                            and_(
+                                later.conversation_id == Message.conversation_id,
+                                later.created_at > Message.created_at,
+                            )
+                        ),
+                    )
+                    .limit(_RESUME_MAX)
+                )
+            ).all()
+    except Exception as exc:  # a query failure must not stop api-server startup
+        _log.warning("chat.resume_sweep_query_failed", error=str(exc))
+        return 0
+
+    resumed = 0
+    for conversation_id, tenant_id, mode in rows:
+        task = asyncio.create_task(
+            respond_to_conversation(
+                conversation_id=conversation_id,
+                tenant_id=tenant_id,
+                mode=mode,
+                vault=vault,
+                redis=redis,
+            )
+        )
+        _PENDING_REPLIES.add(task)
+        task.add_done_callback(_PENDING_REPLIES.discard)
+        resumed += 1
+    if resumed:
+        _log.info("chat.resumed_pending_replies", count=resumed)
+    return resumed
+
+
 __all__ = [
     "build_chat_provider",
+    "compress_conversation_best_effort",
     "history_from_messages",
     "planning_roles_from_strings",
     "resolve_chat_model_config",
     "respond_to_conversation",
+    "resume_pending_replies",
     "schedule_reply",
     "team_planning_roles",
 ]

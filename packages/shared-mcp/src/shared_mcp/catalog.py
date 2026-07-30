@@ -94,6 +94,16 @@ class McpServerTemplate:
     # falls back to "other" for unknown values.
     category: str = "other"
 
+    # How a project's REQUESTS to this server authenticate (ADR 0127) — drives
+    # the picker UX: "static" → token field (bearer/env from Vault), "oauth" →
+    # a "Connect" button (interactive consent once, tokens auto-refreshed),
+    # "sidecar" → nothing per-request (a self-hosted sidecar authenticates via
+    # its OWN env; the operator deploys + configures the sidecar, not a token
+    # here), "none" → genuinely no auth (public server). Left blank → derived in
+    # ``__post_init__`` from ``secret_keys`` (present → "static", absent →
+    # "none"); "oauth"/"sidecar" are always set explicitly.
+    auth_kind: str = ""
+
     def __post_init__(self) -> None:
         # Mirror MCPServerConfig.__post_init__ — keeping these in
         # lockstep means a bad template fails at import time, not at
@@ -112,6 +122,16 @@ class McpServerTemplate:
                 raise ValueError(
                     f"template {self.id!r}: transport={self.transport!r} must not set `command`"
                 )
+        # Derive auth_kind when left blank (frozen dataclass → object.__setattr__).
+        # "oauth" is never derived (it's set explicitly); blank → static/none by
+        # whether the template declares any secret.
+        if not self.auth_kind:
+            object.__setattr__(self, "auth_kind", "static" if self.secret_keys else "none")
+        elif self.auth_kind not in ("none", "static", "oauth", "sidecar"):
+            raise ValueError(
+                f"template {self.id!r}: auth_kind must be none|static|oauth|sidecar, "
+                f"got {self.auth_kind!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +617,101 @@ SEQUENTIAL_THINKING_MCP = McpServerTemplate(
 
 
 # ---------------------------------------------------------------------------
+# HTTP templates (ADR 0117). The agent-runtime cannot spawn stdio binaries, so
+# the OFFERED catalog is HTTP-only: remote servers (Context7, GitHub) and the
+# Atlassian sidecar. The stdio templates above stay catalogued (conduct-time
+# validation + audit) but are withheld from the picker (see mcp_catalog.py).
+# ---------------------------------------------------------------------------
+CONTEXT7_MCP = McpServerTemplate(
+    id="context7",
+    display_name="Context7 (docs de librerías al día)",
+    description=(
+        "Documentación ACTUALIZADA de frameworks/librerías (resolve-library-id + "
+        "get-library-docs): los agentes consultan la API real en vez de recordarla. "
+        "Remoto público — funciona SIN credencial (con rate limits); una API key opcional "
+        "sube el límite (guárdala en Vault y añádela como cabecera). ⚠️ Requiere abrir "
+        "`mcp.context7.com` en los dominios permitidos del proyecto (egress deny-by-default)."
+    ),
+    transport="streamable_http",
+    url="https://mcp.context7.com/mcp",
+    default_timeout_s=60.0,
+    maintainer="Upstash (Context7)",
+    repo_url="https://github.com/upstash/context7",
+    docs_url="https://context7.com",
+    category="docs",
+)
+
+ATLASSIAN_MCP = McpServerTemplate(
+    id="atlassian",
+    display_name="Atlassian (Jira + Confluence)",
+    description=(
+        "UN solo server para Jira (buscar/comentar/transicionar issues) y Confluence "
+        "(crear/editar páginas). Se despliega como SIDECAR self-hosted "
+        "(`ghcr.io/sooperset/mcp-atlassian`, `--transport streamable-http`) en la red "
+        "`agentic-agents`; el token de API de Atlassian va en el ENV del sidecar, no en la "
+        "petición — por eso el server no declara auth aquí. Al ser hostname interno no pasa "
+        "por egress. Sustituye a las plantillas stdio jira-mcp/confluence-mcp (validado e2e)."
+    ),
+    transport="streamable_http",
+    url="http://mcp-atlassian:9000/mcp",
+    default_timeout_s=60.0,
+    # A sidecar authenticates itself via its OWN env (the Atlassian API
+    # token lives in the sidecar container, not in the request). So there
+    # is no per-request auth to configure here — but it is NOT "none"
+    # either (the picker must tell the operator "deploy the sidecar",
+    # not "this is a public server"). See ADR 0127.
+    auth_kind="sidecar",
+    maintainer="sooperset (community)",
+    repo_url="https://github.com/sooperset/mcp-atlassian",
+    docs_url="https://github.com/sooperset/mcp-atlassian#readme",
+    category="issues",
+)
+
+ATLASSIAN_REMOTE_MCP = McpServerTemplate(
+    id="atlassian-remote",
+    display_name="Atlassian (MCP remoto oficial · OAuth)",
+    description=(
+        "Servidor MCP OFICIAL y HOSPEDADO por Atlassian (`mcp.atlassian.com`) para Jira + "
+        "Confluence, autenticado con OAuth 2.1 (ADR 0127): el operador pulsa «Conectar» UNA "
+        "vez, consiente en Atlassian, y la plataforma refresca el token sola. Multi-tenant "
+        "limpio (cada tenant autoriza SU cuenta; sin sidecar ni bot compartido). Alternativa "
+        "al sidecar `atlassian` para quien no quiera desplegar infra. ⚠️ Requiere abrir "
+        "`mcp.atlassian.com` en los dominios permitidos del proyecto (egress)."
+    ),
+    # Endpoint OFICIAL streamable-HTTP (`/v1/sse` está deprecado, retirada jun-2026).
+    transport="streamable_http",
+    url="https://mcp.atlassian.com/v1/mcp",
+    default_timeout_s=60.0,
+    auth_kind="oauth",
+    maintainer="Atlassian",
+    repo_url="https://www.atlassian.com/platform/remote-mcp-server",
+    docs_url="https://support.atlassian.com/rovo/docs/setting-up-ides/",
+    category="issues",
+)
+
+GITHUB_REMOTE_MCP = McpServerTemplate(
+    id="github-remote",
+    display_name="GitHub (MCP remoto oficial)",
+    description=(
+        "Servidor MCP HOSPEDADO por GitHub (issues, PRs, repos, Actions) sobre HTTP — no "
+        "necesita binario local (a diferencia de github-mcp stdio). Auth con un PAT (o token "
+        "OAuth) en la cabecera `Authorization`: guárdalo en Vault como el valor completo "
+        "`Bearer <token>`. ⚠️ Requiere abrir `api.githubcopilot.com` en los dominios "
+        "permitidos del proyecto (egress)."
+    ),
+    transport="streamable_http",
+    url="https://api.githubcopilot.com/mcp/",
+    secret_keys=("Authorization",),
+    vault_path_template="vault:secret/data/mcp/github/{project_id}",
+    default_timeout_s=60.0,
+    maintainer="GitHub",
+    repo_url="https://github.com/github/github-mcp-server",
+    docs_url="https://docs.github.com/copilot/using-github-copilot/using-the-github-mcp-server",
+    category="scm",
+)
+
+
+# ---------------------------------------------------------------------------
 # Registry — a dict so callers can ``CATALOG[id]`` without scanning.
 # ---------------------------------------------------------------------------
 CATALOG: dict[str, McpServerTemplate] = {
@@ -629,8 +744,52 @@ CATALOG: dict[str, McpServerTemplate] = {
         PUPPETEER_BROWSER_MCP,
         MEMORY_MCP,
         SEQUENTIAL_THINKING_MCP,
+        # HTTP templates (ADR 0117) — the only ones OFFERED in the picker.
+        CONTEXT7_MCP,
+        ATLASSIAN_MCP,
+        GITHUB_REMOTE_MCP,
+        # OAuth remote (ADR 0127) — catalogued but WITHHELD from the picker
+        # until the interactive consent flow is verified against the live
+        # provider (see mcp_catalog._UNAVAILABLE_TEMPLATE_IDS).
+        ATLASSIAN_REMOTE_MCP,
     )
 }
+
+
+#: ``auth_kind`` that means "OAuth 2.1, connected once from the admin panel"
+#: (ADR 0127). Kept here so callers match the string in one place.
+OAUTH_AUTH_KIND = "oauth"
+
+
+def template_for_url(url: str | None) -> McpServerTemplate | None:
+    """Find the catalog template a declared server URL corresponds to.
+
+    ``Project.mcp_servers`` does NOT persist ``auth_kind`` — the picker writes
+    the transport/url/headers a template implies and forgets which template it
+    came from. The admin panel already recovers it by URL; this is the same
+    lookup, shared so the dispatch does not re-implement it.
+
+    Tolerant to a trailing slash, since the operator may have edited the URL by
+    hand. Returns ``None`` for a tenant's own server (not in the catalog).
+    """
+    if not url:
+        return None
+    wanted = url.rstrip("/")
+    for template in CATALOG.values():
+        if template.url and template.url.rstrip("/") == wanted:
+            return template
+    return None
+
+
+def uses_oauth(url: str | None) -> bool:
+    """Whether the server at ``url`` authenticates with OAuth 2.1 (ADR 0127).
+
+    A URL the catalog does not know is NOT treated as OAuth: inventing a flow
+    nobody consented to would turn a plain misconfiguration into a confusing
+    "OAuth consent required" at the first tool call.
+    """
+    template = template_for_url(url)
+    return template is not None and template.auth_kind == OAUTH_AUTH_KIND
 
 
 def render_vault_path(template: McpServerTemplate, *, project_id: str) -> str | None:
@@ -646,11 +805,15 @@ def render_vault_path(template: McpServerTemplate, *, project_id: str) -> str | 
 
 
 __all__ = [
+    "ATLASSIAN_MCP",
+    "ATLASSIAN_REMOTE_MCP",
     "AZURE_DEVOPS_MCP",
     "BITBUCKET_MCP",
     "BRAVE_SEARCH_MCP",
     "CATALOG",
     "CONFLUENCE_MCP",
+    "CONTEXT7_MCP",
+    "GITHUB_REMOTE_MCP",
     "DISCORD_MCP",
     "DOCLING_MCP",
     "FILESYSTEM_MCP",
@@ -673,5 +836,8 @@ __all__ = [
     "SLACK_MCP",
     "TAVILY_MCP",
     "Transport",
+    "OAUTH_AUTH_KIND",
     "render_vault_path",
+    "template_for_url",
+    "uses_oauth",
 ]

@@ -233,15 +233,19 @@ async def _revoke_session(sid: UUID) -> None:
         await redis.aclose()
 
 
-def _token(user_id: UUID, tenant_id: UUID | None, sid: UUID) -> str:
+def _token(
+    user_id: UUID, tenant_id: UUID | None, sid: UUID, *, is_system_admin: bool = False
+) -> str:
     from api_server.auth.jwt import encode_jwt
 
-    return encode_jwt(user_id=user_id, session_id=sid, tenant_id=tenant_id)
+    return encode_jwt(
+        user_id=user_id, session_id=sid, tenant_id=tenant_id, is_system_admin=is_system_admin
+    )
 
 
-def _mint(user_id: UUID, tenant_id: UUID | None) -> str:
+def _mint(user_id: UUID, tenant_id: UUID | None, *, is_system_admin: bool = False) -> str:
     sid = asyncio.run(_mint_token(user_id, tenant_id))
-    return _token(user_id, tenant_id, sid)
+    return _token(user_id, tenant_id, sid, is_system_admin=is_system_admin)
 
 
 async def _publish(redis_url: str, stream: str, fields: dict[str, str]) -> None:
@@ -414,3 +418,69 @@ def test_ws_rejects_missing_token(ws_client) -> None:
 
 def test_ws_rejects_invalid_token(ws_client) -> None:
     _expect_1008(ws_client, f"/ws/kanban/{uuid4()}?token=not-a-jwt")
+
+
+# ===========================================================================
+# System-admin acting-as-tenant override (?tenant_id=) — the WS mirror of the
+# REST X-Tenant-Id header. Regression for "live WS silent under a cross-tenant
+# admin view": the browser WebSocket API can't send headers, so a superadmin
+# viewing a tenant that isn't their JWT `tid` had every stream rejected and the
+# client reconnected forever. The query param lets an admin — and ONLY an
+# admin — tail the streams of the tenant they are acting as.
+# ===========================================================================
+def test_ws_execution_allows_sysadmin_acting_as_tenant(
+    ws_client, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    ids = asyncio.run(_seed(migrations_pg_dsn))
+    # Superadmin whose JWT home tenant is B, acting as tenant A via ?tenant_id=.
+    token = _mint(ids["user_b"], ids["tenant_b"], is_system_admin=True)
+    asyncio.run(
+        _publish(
+            test_redis_url,
+            f"exec:{ids['execution_a']}",
+            {
+                "type": "step.started",
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps({"n": 1}),
+            },
+        )
+    )
+    url = f"/ws/executions/{ids['execution_a']}?token={token}&tenant_id={ids['tenant_a']}"
+    with ws_client.websocket_connect(url) as ws:
+        event = ws.receive_json()
+    assert event["type"] == "step.started"
+    assert event["payload"] == {"n": 1}
+
+
+def test_ws_conversation_allows_sysadmin_acting_as_tenant(
+    ws_client, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    ids = asyncio.run(_seed(migrations_pg_dsn))
+    token = _mint(ids["user_b"], ids["tenant_b"], is_system_admin=True)
+    asyncio.run(
+        _publish(
+            test_redis_url,
+            f"conv:{ids['conversation_a']}",
+            {
+                "type": "message.created",
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "payload": json.dumps({"content": "hola"}),
+            },
+        )
+    )
+    url = f"/ws/conversation/{ids['conversation_a']}?token={token}&tenant_id={ids['tenant_a']}"
+    with ws_client.websocket_connect(url) as ws:
+        event = ws.receive_json()
+    assert event["type"] == "message.created"
+    assert event["payload"]["content"] == "hola"
+
+
+def test_ws_non_admin_query_tenant_does_not_bypass(ws_client, migrations_pg_dsn: str) -> None:
+    ids = asyncio.run(_seed(migrations_pg_dsn))
+    # A NON-admin from tenant B tries to reach tenant A's stream via the query
+    # param — it must be ignored (still scoped to tenant B) and rejected.
+    token = _mint(ids["user_b"], ids["tenant_b"])  # is_system_admin=False
+    _expect_1008(
+        ws_client,
+        f"/ws/executions/{ids['execution_a']}?token={token}&tenant_id={ids['tenant_a']}",
+    )

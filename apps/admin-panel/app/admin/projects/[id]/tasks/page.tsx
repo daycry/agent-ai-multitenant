@@ -16,7 +16,7 @@
  * en una misma columna).
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -40,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ViewToggle, type ViewMode } from "@/components/ui/view-toggle";
+import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -88,6 +89,29 @@ const PRIORITY_VARIANT: Record<string, BadgeVariant> = {
 
 const PLAN_FILTER_ALL = "all";
 const PLAN_FILTER_NULL = "null";
+
+// Turn a failed Kanban move into a human message: the server replies 422
+// `dependencies_not_done` (DAG) or 409 `illegal_transition` (state machine, c1/T2).
+function describeTaskMoveError(err: unknown): string {
+  if (err instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(err.body) as {
+        detail?: { error?: string; pending?: unknown[] };
+      };
+      if (parsed.detail?.error === "dependencies_not_done") {
+        const n = parsed.detail.pending?.length ?? 0;
+        return `No se puede mover: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+      }
+      if (parsed.detail?.error === "illegal_transition") {
+        return "Movimiento no permitido: no es una transición válida desde el estado actual.";
+      }
+    } catch {
+      // body wasn't the structured error — fall through to the raw text.
+    }
+    return err.body;
+  }
+  return String(err);
+}
 
 export default function ProjectTasksPage() {
   const params = useParams<{ id: string }>();
@@ -158,7 +182,7 @@ export default function ProjectTasksPage() {
       if (context?.prev) {
         queryClient.setQueryData(["project-tasks", projectId], context.prev);
       }
-      setDragError(err instanceof ApiError ? err.body : String(err));
+      setDragError(describeTaskMoveError(err));
     },
     onSuccess: () => setDragError(null),
   });
@@ -455,29 +479,50 @@ function KanbanColumn({
 }
 
 function TaskCard({ task }: { task: Task }) {
+  const [detailOpen, setDetailOpen] = useState(false);
+  // A drag fires dragstart (not click), but guard so a drag that ends on the same
+  // card never opens the detail (click-vs-drag).
+  const draggingRef = useRef(false);
+
   function handleDragStart(e: React.DragEvent<HTMLDivElement>) {
+    draggingRef.current = true;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", task.id);
   }
   return (
-    <div
-      draggable
-      onDragStart={handleDragStart}
-      data-testid={`tasks-card-${task.id}`}
-      className={cn(
-        "bg-card rounded-md border p-2 text-sm shadow-sm",
-        "cursor-grab transition-shadow active:cursor-grabbing",
-        "hover:border-primary/40 hover:shadow-md",
-      )}
-    >
-      <p className="font-medium leading-tight">{task.title}</p>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
-        {task.plan_id === null && (
-          <span className="text-muted-foreground/70 text-[10px] italic">sin plan</span>
+    <>
+      <div
+        draggable
+        onDragStart={handleDragStart}
+        onDragEnd={() => {
+          window.setTimeout(() => {
+            draggingRef.current = false;
+          }, 0);
+        }}
+        onClick={() => {
+          if (!draggingRef.current) setDetailOpen(true);
+        }}
+        data-testid={`tasks-card-${task.id}`}
+        className={cn(
+          "bg-card rounded-md border p-2 text-sm shadow-sm",
+          "cursor-grab transition-shadow active:cursor-grabbing",
+          "hover:border-primary/40 hover:shadow-md",
         )}
+      >
+        <p className="font-medium leading-tight">{task.title}</p>
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
+          {task.plan_id === null && (
+            <span className="text-muted-foreground/70 text-[10px] italic">sin plan</span>
+          )}
+        </div>
       </div>
-    </div>
+      <TaskDetailSheet
+        task={detailOpen ? { id: task.id, project_id: task.project_id, title: task.title } : null}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+      />
+    </>
   );
 }
 

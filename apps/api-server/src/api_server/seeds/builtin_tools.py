@@ -1,8 +1,10 @@
 """Built-in tool catalog (task_01_11; shell_exec added task_06_16_02;
-git family retired task_06_18_06).
+git family retired task_06_18_06; delete_file added R6/ADR 0089;
+stack_exec added ADR 0093).
 
-Fifteen tool definitions covering file ops, code runtime, HTTP,
-knowledge, notifications and one shell command. The ``git`` family was
+Seventeen tool definitions covering file ops, code runtime, HTTP,
+knowledge, notifications and two stack commands (shell_exec +
+stack_exec). The ``git`` family was
 removed (ADR 0049): it had no runtime executor, so it could never run.
 Each row's ``is_runtime_wired`` (derived in ``ToolResponse``) tells the
 operator which of these the agent-runtime can actually execute today.
@@ -62,25 +64,29 @@ def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Catalog -- 15 tools (git family retired, task_06_18_06)
+# Catalog -- 17 tools (git family retired task_06_18_06; delete_file added R6;
+# stack_exec added ADR 0093)
 # ---------------------------------------------------------------------------
 BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # ----- File / Project -----
     BuiltinTool(
         "read-file",
         "read_file",
-        "Lee un archivo del repo del proyecto y devuelve su contenido.",
+        "Read a file from the project repo and return its contents.",
         "file",
         "builtin",
         "safe",
         10,
-        _obj({"path": {"type": "string", "description": "Ruta relativa al repo root."}}, ["path"]),
+        _obj(
+            {"path": {"type": "string", "description": "Path relative to the repo root."}},
+            ["path"],
+        ),
         _obj({"content": {"type": "string"}, "size_bytes": {"type": "integer"}}, ["content"]),
     ),
     BuiltinTool(
         "write-file",
         "write_file",
-        "Escribe (o sobreescribe) un archivo. Sandboxed: solo bajo el worktree de la tarea.",
+        "Write (or overwrite) a file. Sandboxed: only under the task's worktree.",
         "file",
         "builtin",
         "sandboxed",
@@ -95,9 +101,25 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         _obj({"bytes_written": {"type": "integer"}}, ["bytes_written"]),
     ),
     BuiltinTool(
+        "delete-file",
+        "delete_file",
+        "Delete a file from the task's worktree. Sandboxed: only under the worktree. "
+        "Use it to remove stale/duplicate files from previous attempts and reconcile the "
+        "deliverable.",
+        "file",
+        "builtin",
+        "sandboxed",
+        10,
+        _obj(
+            {"path": {"type": "string", "description": "Path relative to the worktree."}},
+            ["path"],
+        ),
+        _obj({"deleted": {"type": "boolean"}}, ["deleted"]),
+    ),
+    BuiltinTool(
         "apply-patch",
         "apply_patch",
-        "Aplica un patch en formato unified diff sobre el worktree de la tarea.",
+        "Apply a patch in unified diff format to the task's worktree.",
         "file",
         "builtin",
         "sandboxed",
@@ -108,7 +130,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "list-files",
         "list_files",
-        "Lista archivos por patrón glob bajo una ruta.",
+        "List files matching a glob pattern under a path.",
         "file",
         "builtin",
         "safe",
@@ -124,7 +146,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "search-code",
         "search_code",
-        "Busca texto/regex en el código (estilo grep). Devuelve coincidencias con contexto.",
+        "Search the code for text/regex (grep-style). Returns matches with context.",
         "file",
         "builtin",
         "safe",
@@ -154,75 +176,24 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
         ),
     ),
     # ----- Code runtime -----
-    BuiltinTool(
-        "run-pytest",
-        "run_pytest",
-        "Ejecuta pytest dentro del runtime python-pytest. Devuelve summary + output.",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        600,
-        _obj(
-            {
-                "path": {"type": "string", "default": "tests/"},
-                "args": {"type": "array", "items": {"type": "string"}, "default": []},
-            }
-        ),
-        _obj(
-            {
-                "exit_code": {"type": "integer"},
-                "passed": {"type": "integer"},
-                "failed": {"type": "integer"},
-                "stdout": {"type": "string"},
-            },
-            ["exit_code"],
-        ),
-        implementation_ref="python-pytest",
-    ),
-    BuiltinTool(
-        "run-lint",
-        "run_lint",
-        "Corre el linter del proyecto (ruff/eslint según stack).",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        120,
-        _obj({"path": {"type": "string", "default": "."}}),
-        _obj({"exit_code": {"type": "integer"}, "issues": {"type": "array"}}, ["exit_code"]),
-    ),
-    BuiltinTool(
-        "run-typecheck",
-        "run_typecheck",
-        "Ejecuta el type checker (mypy / tsc / pyright según stack).",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        180,
-        _obj({"path": {"type": "string", "default": "."}}),
-        _obj({"exit_code": {"type": "integer"}, "errors": {"type": "array"}}, ["exit_code"]),
-    ),
-    BuiltinTool(
-        "run-build",
-        "run_build",
-        "Ejecuta el build del proyecto (npm build / cargo build / ...).",
-        "runtime",
-        "docker_command",
-        "sandboxed",
-        600,
-        _obj(
-            {
-                "target": {"type": "string", "default": "default"},
-                "release": {"type": "boolean", "default": False},
-            }
-        ),
-        _obj(
-            {
-                "exit_code": {"type": "integer"},
-                "artifacts": {"type": "array", "items": {"type": "string"}},
-            },
-            ["exit_code"],
-        ),
-    ),
+    # RETIRADAS (F5 de registry-egress-followups, 2026-07-28; ADR 0093 D3): las
+    # cuatro `run_*` (run-pytest / run-lint / run-typecheck / run-build) eran
+    # `docker_command`, y `DockerCommandTool` dentro del sandbox falla SIEMPRE por
+    # diseño: la imagen del agent-runtime «carries NO Docker client» y no recibe
+    # socket (Dockerfile + `test_docker_command_tool_retired`). Ofrecerlas era
+    # prometer al operador —y anunciarle al modelo— cuatro tools que no pueden
+    # ejecutarse: el mismo fallo B-04 de `send_notification`, con 62 grants vivos
+    # detrás el día de la retirada y un turno quemado por invocación.
+    #
+    # La vía que SÍ ejecuta el toolchain es `stack-exec` (ADR 0093): el worker lo
+    # corre en el runtime-template del proyecto, con su egress y su caché de
+    # dependencias. Los defaults de rol ya la conceden en su lugar.
+    #
+    # Sus NOMBRES siguen en `_CATALOG_TOOL_NAMES` a propósito —a diferencia de la
+    # familia `git_*` de abajo, que salió del todo—: si dejaran de ser canónicos,
+    # `tool_is_runtime_wired` caería al atajo por `implementation_type` (que dice
+    # True para `docker_command`) y una fila superviviente en una BD sin migrar
+    # volvería a ser asignable. Ver `tests/unit/test_runtime_wired_contract.py`.
     # ----- Git -----
     # RETIRED (task_06_18_06, ADR 0049): the four git tools (git_status /
     # git_diff / git_commit / git_log) carried a UI category but NO runtime
@@ -233,7 +204,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "http-get",
         "http_get",
-        "GET HTTP genérico. Restringido por allowed_networks del proyecto.",
+        "Generic HTTP GET. Restricted by the project's allowed_networks.",
         "network",
         "http_endpoint",
         "sandboxed",
@@ -258,7 +229,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "http-post",
         "http_post",
-        "POST JSON. Sujeto a allowed_networks y human_approval_policy del proyecto.",
+        "JSON POST. Subject to the project's allowed_networks and human_approval_policy.",
         "network",
         "http_endpoint",
         "sandboxed",
@@ -281,7 +252,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "semantic-search",
         "semantic_search",
-        "Búsqueda semántica (pgvector) en las knowledge bases del proyecto.",
+        "Semantic search (pgvector) over the project's knowledge bases.",
         "knowledge",
         "builtin",
         "safe",
@@ -313,7 +284,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "summarize-text",
         "summarize_text",
-        "Resume un texto largo a una longitud objetivo (palabras).",
+        "Summarize a long text to a target length (in words).",
         "knowledge",
         "builtin",
         "safe",
@@ -331,7 +302,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     BuiltinTool(
         "send-notification",
         "send_notification",
-        "Envía una notificación al asistente personal del usuario o por email.",
+        "Send a notification to the user's personal assistant or by email.",
         "notification",
         "python_function",
         "sandboxed",
@@ -355,11 +326,21 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
     # binaries in the project's `allowed_commands` allowlist (deny-by-
     # default; empty list = nothing runs). The runtime instantiates a
     # per-project `ShellExecTool(allowed_commands=…)` (Plan 06.16 wiring).
+    # F1.6b (auditoría 2026-07-02): la descripción sugería git ("Úsalo para git…",
+    # ejemplos 'git status'/'git add -A') mientras el system prompt del runtime
+    # dice "never invoke git" — contradicción directa que quemaba turnos (git ni
+    # siquiera está en la allowlist y devuelve exit 128 en el sandbox: la
+    # plataforma comitea por el agente al terminar).
     BuiltinTool(
         "shell-exec",
         "shell_exec",
-        "Ejecuta un comando del stack del proyecto, restringido a la allowlist del proyecto "
-        "(deny-by-default). El comando se parsea como argv (shlex) y corre con timeout, sin shell.",
+        "Run a command INSIDE the agent's sandbox (thin utility image), restricted to the "
+        "project's allowlist (deny-by-default). The command is parsed as argv (shlex) and "
+        "runs with a timeout, without a shell. Use it for file utilities inside the sandbox "
+        "itself (ls, cat, grep, mv, ...). NEVER for git — the platform versions your changes "
+        "automatically when you finish — and it does NOT run the stack toolchain "
+        "(php/composer/phpunit/npm): those binaries are not in the sandbox; use stack_exec "
+        "for them.",
         "command",
         "builtin",
         "privileged",
@@ -369,13 +350,15 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                 "command": {
                     "type": "string",
                     "description": (
-                        "Comando completo a ejecutar; su primer token (basename) debe estar en "
-                        "la allowlist del proyecto. Ej.: 'composer install' o 'vendor/bin/phpunit'."
+                        "Full command to run in the sandbox; its first token (basename) must "
+                        "be in the project's allowlist. E.g. 'ls -la' or 'grep -r TODO src'. "
+                        "For composer/phpunit/php spark use stack_exec (the stack runtime); "
+                        "git is NOT allowed (versioning is automatic)."
                     ),
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Directorio de trabajo relativo al workspace (opcional).",
+                    "description": "Working directory relative to the workspace (optional).",
                 },
             },
             ["command"],
@@ -385,6 +368,65 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
                 "exit_code": {"type": "integer"},
                 "stdout": {"type": "string"},
                 "stderr": {"type": "string"},
+            },
+            ["exit_code"],
+        ),
+    ),
+    # ----- Stack exec (ADR 0093) -----
+    # `stack_exec` runs a command in the project's RUNTIME-TEMPLATE (php-phpunit,
+    # node-jest, …) — where the toolchain (composer/php/phpunit, npm) actually
+    # exists — by asking the worker, which has Docker. The sandbox itself is a
+    # thin python+git image, so `shell_exec` (which runs IN the sandbox) cannot
+    # run `composer install`; `stack_exec` can. Same allowlist gate as
+    # `shell_exec` (deny-by-default), enforced worker-side. `privileged` like
+    # `shell_exec` (orthogonal security axis, ADR 0044).
+    BuiltinTool(
+        "stack-exec",
+        "stack_exec",
+        "Run a command from the project's toolchain (composer/phpunit/php spark, npm, ...) in "
+        "the stack's runtime-template, on the task's worktree. The worker launches it (the "
+        "sandbox has neither Docker nor the toolchain). Restricted to the project's allowlist "
+        "(deny-by-default). Use it to install dependencies and run the stack's tests/build; "
+        "shell_exec CANNOT (it runs in the thin sandbox, which lacks the toolchain). The "
+        "command runs from the worktree ROOT by default; if the project lives in a "
+        "SUBDIRECTORY (e.g. it was scaffolded under 'ci4build/'), pass 'cwd' so the toolchain "
+        "bootstraps with the right relative paths — do NOT use 'cd' or shell chaining "
+        "(unsupported: one program per call).",
+        "command",
+        "builtin",
+        "privileged",
+        600,
+        _obj(
+            {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Full command to run in the stack runtime; its first token must be "
+                        "in the project's allowlist. E.g. 'composer install', "
+                        "'vendor/bin/phpunit' or 'php spark migrate'."
+                    ),
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": (
+                        "Optional working directory RELATIVE to the worktree root (e.g. "
+                        "'ci4build'). Use it when the project is in a subdirectory so commands "
+                        "like 'vendor/bin/phpunit' resolve. Must stay inside the worktree (no "
+                        "absolute path, no '..'). Omit when the project is at the worktree root."
+                    ),
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Budget in seconds (optional, default 600).",
+                },
+            },
+            ["command"],
+        ),
+        _obj(
+            {
+                "exit_code": {"type": "integer"},
+                "logs": {"type": "string"},
+                "timed_out": {"type": "boolean"},
             },
             ["exit_code"],
         ),

@@ -145,6 +145,75 @@ async def enqueue_clone_project_repo(project_id: UUID) -> bool:
     return True
 
 
+async def run_stack_command_and_wait(
+    *, tenant_id: UUID, task_id: UUID, command: str, timeout_s: int, cwd: str | None = None
+) -> dict[str, Any]:
+    """Enqueue ``workers.run_stack_command`` and BLOCK for its result (ADR 0093).
+
+    Unlike the fire-and-forget enqueues above, ``stack_exec`` is synchronous: the
+    agent needs ``rc``+logs back before continuing, so we wait on the result
+    backend. The command runs in the project's runtime template (where the
+    toolchain exists), NOT in the agent sandbox. Routed to the ``test`` queue so
+    it never competes with the agent-run slot that is blocked waiting on this
+    (deadlock avoidance, ADR 0093). The blocking send+get runs off the event loop.
+    """
+    request = {
+        "tenant_id": str(tenant_id),
+        "task_id": str(task_id),
+        "command": command,
+        "timeout_s": int(timeout_s),
+        # ADR 0093 (2026-07-24): optional working dir relative to the worktree.
+        "cwd": cwd,
+    }
+
+    def _send_and_wait() -> dict[str, Any]:
+        async_result = get_celery_client().send_task(
+            "workers.run_stack_command", args=[request], queue="test"
+        )
+        # Wait the command's own budget + a margin for container spin-up/teardown.
+        result = async_result.get(timeout=timeout_s + 120)
+        return dict(result) if isinstance(result, dict) else {}
+
+    return await asyncio.to_thread(_send_and_wait)
+
+
+async def compute_plan_code_diff_and_wait(
+    *,
+    tenant_slug: str,
+    project_slug: str,
+    plan_id: str,
+    plan_slug: str,
+    timeout_s: int = 60,
+) -> dict[str, Any]:
+    """Delegar el diff de código de un plan al WORKER y BLOQUEAR por su resultado.
+
+    El git corre sobre el bare real, que solo el worker ve (posee el volumen
+    ``agent-data`` y el ``data_root`` correcto; la api-server no lo monta → si lo
+    calculara en proceso daría ``FileNotFoundError`` → 500). Mismo patrón síncrono
+    que :func:`run_stack_command_and_wait`. Devuelve el dict del worker
+    (``{ok: True, ...}`` / ``{ok: False, error}``); un fallo de broker/timeout se
+    traduce a ``{ok: False, error}`` para que el endpoint responda 404, nunca 500."""
+    request = {
+        "tenant_slug": tenant_slug,
+        "project_slug": project_slug,
+        "plan_id": plan_id,
+        "plan_slug": plan_slug,
+    }
+
+    def _send_and_wait() -> dict[str, Any]:
+        async_result = get_celery_client().send_task(
+            "workers.compute_plan_code_diff", args=[request], queue="default"
+        )
+        result = async_result.get(timeout=timeout_s)
+        return dict(result) if isinstance(result, dict) else {"ok": False, "error": "empty result"}
+
+    try:
+        return await asyncio.to_thread(_send_and_wait)
+    except Exception as exc:
+        _log.warning("code_diff.enqueue_failed", plan_id=plan_id, error=str(exc))
+        return {"ok": False, "error": "diff worker unavailable"}
+
+
 async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, body: str) -> bool:
     """Encola el auto-PR de un plan (ADR 0072 fase 2): push autenticado de la rama
     + apertura del PR/MR por proveedor. La rama se deriva en el worker de
@@ -158,6 +227,27 @@ async def enqueue_open_plan_pr(project_id: UUID, plan_id: UUID, *, title: str, b
         )
     except Exception as exc:
         _log.warning("plan_pr.enqueue_failed", project_id=str(project_id), error=str(exc))
+        return False
+    return True
+
+
+async def enqueue_compose_review_runtime(request: dict[str, Any]) -> bool:
+    """Encola el spawn de un review-runtime / app-preview (ADR 0062/0130).
+
+    Reutiliza la task ``workers.compose_review_runtime`` (cola ``review``): crea
+    la fila ``review_sessions``, resuelve el worktree y lanza el contenedor. El
+    ``request`` lleva ``kind`` ('plan'|'preview'), ``plan_id`` opcional,
+    ``preview_ref`` (rama a previsualizar) y ``expires_in_seconds``. Best-effort:
+    un fallo del broker no rompe el endpoint (el operador reintenta)."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.compose_review_runtime",
+            kwargs={"request": request},
+            queue="review",
+        )
+    except Exception as exc:
+        _log.warning("review_runtime.enqueue_failed", error=str(exc))
         return False
     return True
 
@@ -460,3 +550,23 @@ __all__ = [
     "get_restore_job_status",
     "reset_celery_client_cache",
 ]
+
+
+async def enqueue_browse_session(session_id: UUID) -> bool:
+    """Lanza la sesión de navegación que el owner acaba de APROBAR (ADR 0080).
+
+    No es best-effort silencioso: si el broker falla, el llamador lo sabe y se
+    lo dice al owner — una sesión aprobada que nunca corre es peor que un error
+    (el córtex se quedaría esperando un resultado que no va a llegar). La fila
+    queda en ``approved``, así que re-aprobar/reintentar es seguro."""
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            "workers.browse_session",
+            args=[str(session_id)],
+            queue="default",
+        )
+    except Exception as exc:
+        _log.warning("browse.enqueue_failed", session_id=str(session_id), error=str(exc))
+        return False
+    return True

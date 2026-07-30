@@ -15,8 +15,18 @@ def test_done_with_canonical_scope_returns_memorise_true() -> None:
         assert decision.reason == "ok"
 
 
-@pytest.mark.parametrize("status", ["aborted", "failed", "running", "awaiting_human_approval"])
-def test_non_done_status_returns_memorise_false(status: str) -> None:
+# P1-1 (investigación 2026-07-11): los FRACASOS también dejan lección por
+# defecto — un run failed/aborted/needs_human_review es de lo más informativo
+# (el callejón sin salida a evitar). Solo los estados NO terminales o de
+# aprobación siguen fuera.
+@pytest.mark.parametrize("status", ["failed", "aborted", "needs_human_review"])
+def test_failures_are_memorisable_by_default(status: str) -> None:
+    decision = should_memorize(status=status, memory_scope="private")
+    assert decision.memorise is True, status
+
+
+@pytest.mark.parametrize("status", ["running", "awaiting_human_approval", "cancelled"])
+def test_non_terminal_or_cancelled_statuses_return_memorise_false(status: str) -> None:
     decision = should_memorize(status=status, memory_scope="private")
     assert decision.memorise is False
     assert status in decision.reason

@@ -71,6 +71,9 @@ interface CatalogTool {
   implementation_type: string;
   security_level: string;
   is_builtin: boolean;
+  // ADR 0049 / F3: si el runtime puede EJECUTARLA de verdad. false = el agente
+  // la vería en su prompt pero moriría como `unknown tool`.
+  is_runtime_wired: boolean;
 }
 
 interface AgentToolRow {
@@ -142,6 +145,16 @@ function categoryRank(cat: string): number {
  */
 function isBasic(tool: { is_builtin: boolean }): boolean {
   return tool.is_builtin;
+}
+
+/**
+ * ADR 0128: las tools MCP las aporta el PROYECTO en runtime, NO se conceden
+ * por-agente. Se excluyen de la lista asignable de "Avanzadas" (que sigue
+ * gestionando las tools custom NO-MCP: http_endpoint / python_function /
+ * docker_command). Una tool es MCP por `implementation_type` o por `category`.
+ */
+function isMcp(tool: { implementation_type: string; category: string }): boolean {
+  return tool.implementation_type === "mcp_tool" || tool.category === "mcp";
 }
 
 export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentToolsSectionProps) {
@@ -254,10 +267,14 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
     [catalog, q, lang],
   );
   const basicTools = useMemo(() => matches.filter(isBasic), [matches]);
-  const advancedTools = useMemo(() => matches.filter((t) => !isBasic(t)), [matches]);
+  // ADR 0128: "Avanzadas" = custom NO-MCP (las MCP las aporta el proyecto).
+  const advancedTools = useMemo(() => matches.filter((t) => !isBasic(t) && !isMcp(t)), [matches]);
 
   const totalBasic = useMemo(() => catalog.filter(isBasic).length, [catalog]);
-  const totalAdvanced = useMemo(() => catalog.filter((t) => !isBasic(t)).length, [catalog]);
+  const totalAdvanced = useMemo(
+    () => catalog.filter((t) => !isBasic(t) && !isMcp(t)).length,
+    [catalog],
+  );
 
   return (
     <Card data-testid="agent-tools-section">
@@ -392,6 +409,19 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
               </TabsContent>
 
               <TabsContent value="advanced">
+                {/* ADR 0128: las tools MCP las aporta el PROYECTO, no se asignan
+                    por-agente. Se excluyen de esta lista y se explica dónde van. */}
+                <div
+                  className="border-info/30 bg-info-soft text-info-soft-foreground mb-3 flex items-start gap-2 rounded-md border p-3 text-xs"
+                  data-testid="agent-tools-mcp-project-note"
+                >
+                  <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    Las tools MCP se configuran a nivel de proyecto (ADR 0128) — usa la{" "}
+                    <span className="font-medium">sección MCP del proyecto</span>. Aquí solo se
+                    asignan tools custom (HTTP · Python · contenedor).
+                  </span>
+                </div>
                 <GroupedToolList
                   tools={advancedTools}
                   selected={selected}
@@ -404,15 +434,15 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                       "Ninguna tool avanzada coincide con la búsqueda."
                     ) : (
                       <>
-                        No hay tools avanzadas (custom · MCP). Créalas en el{" "}
+                        No hay tools custom. Créalas en el{" "}
                         <Link
                           href="/admin/tools"
                           className="text-primary font-medium underline-offset-4 hover:underline"
                           data-testid="agent-tools-catalog-link"
                         >
                           catálogo de tools
-                        </Link>{" "}
-                        o configura un MCP server en el proyecto.
+                        </Link>
+                        . (Las tools MCP se configuran en el proyecto.)
                       </>
                     )
                   }
@@ -631,6 +661,25 @@ function ToolRow({
               </Badge>
             </TooltipTrigger>
           </Tooltip>
+          {tool.is_runtime_wired === false && (
+            <Tooltip
+              content={
+                lang === "es"
+                  ? "El runtime aún no puede ejecutar esta tool: el agente la vería pero fallaría al invocarla."
+                  : "The runtime cannot execute this tool yet: the agent would see it but every call would fail."
+              }
+            >
+              <TooltipTrigger
+                aria-label={lang === "es" ? "No ejecutable en runtime" : "Not runtime-wired"}
+                data-testid={`agent-tool-not-wired-badge-${tool.id}`}
+              >
+                <Badge variant="warning" className="gap-1">
+                  <Info aria-hidden="true" className="h-3 w-3" />
+                  {lang === "es" ? "No ejecutable" : "Not wired"}
+                </Badge>
+              </TooltipTrigger>
+            </Tooltip>
+          )}
         </div>
       </div>
     </li>

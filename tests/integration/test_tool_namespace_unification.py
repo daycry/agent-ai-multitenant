@@ -52,19 +52,26 @@ def test_approval_categories_are_keyed_on_canonical_names() -> None:
 def test_approval_gate_gates_canonical_write_and_network() -> None:
     # A write (canonical write_file) and a network call (canonical http_get/
     # http_post) must be classified as sensitive — the bypass ADR 0048 flags.
-    write_gate = ApprovalGate({"categories": {"file_write": "human_required"}})
-    assert write_gate.review("write_file") == "file_write"
+    write_gate = ApprovalGate({"categories": {"code_changes": "human_required"}})
+    assert write_gate.review("write_file") == "code_changes"
 
-    net_gate = ApprovalGate({"categories": {"network_access": "human_required"}})
-    assert net_gate.review("http_get") == "network_access"
-    assert net_gate.review("http_post") == "network_access"
+    net_gate = ApprovalGate(
+        {
+            "categories": {
+                "external_http_get": "human_required",
+                "external_http_post": "human_required",
+            }
+        }
+    )
+    assert net_gate.review("http_get") == "external_http_get"
+    assert net_gate.review("http_post") == "external_http_post"
 
 
 def test_approval_gate_tolerates_legacy_alias_at_call_time() -> None:
     # Defence in depth: even if a legacy alias name reaches the gate, it still
     # resolves to the canonical category (no bypass).
-    write_gate = ApprovalGate({"categories": {"file_write": "human_required"}})
-    assert write_gate.review("file_write") == "file_write"
+    write_gate = ApprovalGate({"categories": {"code_changes": "human_required"}})
+    assert write_gate.review("file_write") == "code_changes"
 
 
 def test_combine_no_longer_empties_on_name_mismatch() -> None:
