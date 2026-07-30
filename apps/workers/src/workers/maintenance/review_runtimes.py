@@ -12,10 +12,11 @@ from typing import Any
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -213,7 +214,7 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
     # task_wf_32: transiciones de plan ganadas en esta pasada, anunciadas al
     # tablero gerencial tras el commit (el mismo momento que la notificación).
     plan_moves: list[dict[str, Any]] = []
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         # 1. Overdue → expired + plan blocked + escalation notification.

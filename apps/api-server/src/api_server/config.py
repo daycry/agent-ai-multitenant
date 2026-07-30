@@ -66,6 +66,48 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ----- Pool de conexiones (prod-13 task_prod13_06, hallazgo db-2/perf-2) --
+    # Los cuatro engines iban con los defaults de SQLAlchemy (pool_size=5 +
+    # max_overflow=10 = 15 conexiones, pool_timeout=30 s, sin reciclado). Con la
+    # transacción por request retenida durante el turno LLM completo, ~15 chats
+    # concurrentes agotaban el pool y TODA la API empezaba a dar TimeoutError.
+    # Ahora son settings de entorno, con los defaults de la decisión clave 4 del
+    # plan para un despliegue de una sola máquina.
+    db_pool_size: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Conexiones que cada engine mantiene abiertas de forma permanente. "
+            "El total contra PostgreSQL es (pool_size + max_overflow) x nº de "
+            "engines del proceso, y tiene que caber en `max_connections`."
+        ),
+    )
+    db_max_overflow: int = Field(
+        default=20,
+        ge=0,
+        description=(
+            "Conexiones EXTRA que el pool puede abrir por encima de `pool_size` "
+            "en un pico, y que cierra al devolverlas."
+        ),
+    )
+    db_pool_timeout: float = Field(
+        default=10.0,
+        gt=0,
+        description=(
+            "Segundos que una request espera por una conexión libre antes de "
+            "fallar. Corto a propósito: 30 s de espera es una request que el "
+            "cliente ya abandonó, y mientras espera retiene su worker."
+        ),
+    )
+    db_pool_recycle: int = Field(
+        default=1800,
+        description=(
+            "Segundos tras los que una conexión se descarta y se vuelve a abrir. "
+            "Evita heredar conexiones que un pgbouncer/firewall intermedio dio "
+            "por muertas. -1 desactiva el reciclado."
+        ),
+    )
+
     # ----- Auth / sessions -----
     jwt_secret: SecretStr = Field(
         default=SecretStr("dev-only-jwt-secret-change-me"),

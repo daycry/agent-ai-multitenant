@@ -22,12 +22,13 @@ priority: P1
 | Campo                              | Valor                            |
 | ---------------------------------- | -------------------------------- |
 | **ID del Plan**                    | `prod-11-cadena-suministro`      |
-| **Estado**                         | `pending_approval`               |
 | **Prioridad**                      | P1                               |
 | **Bloqueado por**                  | `prod-02-ci-en-verde`            |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                      |
 | **Tiempo estimado (persona-días)** | 10                               |
 | **Rama git sugerida**              | `plan/prod-11-cadena-suministro` |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

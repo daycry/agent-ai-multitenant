@@ -60,6 +60,8 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import integrity_conflict
+from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.conversations import (
     ChatModeResponse,
@@ -167,7 +169,7 @@ async def create_conversation(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="conversation.create") from exc
     await session.refresh(conv)
     return to_conversation_response(conv)
 
@@ -175,18 +177,29 @@ async def create_conversation(
 @project_conversations_router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
     project_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ConversationResponse]:
+    """Los hilos del proyecto, más antiguo primero, PAGINADO (prod-13, api-6).
+
+    Devolvía todas las conversaciones del proyecto sin cota. Un proyecto vivo
+    acumula cientos de hilos y el listado del tablero los arrastraba enteros en
+    cada carga. El orden por `created_at` se desempata por `id`: sin desempate, dos
+    hilos creados en el mismo instante pueden salir en las DOS páginas o en
+    ninguna, que es el fallo clásico de paginar por OFFSET sin orden total.
+    """
     await _verify_project_visible(session, project_id)
-    result = await session.execute(
+    stmt = (
         select(Conversation)
         .where(
             Conversation.project_id == project_id,
             Conversation.deleted_at.is_(None),
         )
-        .order_by(Conversation.created_at)
+        .order_by(Conversation.created_at, Conversation.id)
     )
+    result = await session.execute(apply_pagination(stmt, limit=limit, offset=offset))
     return [to_conversation_response(c) for c in result.scalars().all()]
 
 
@@ -392,7 +405,7 @@ async def post_message(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="message.create") from exc
     await session.refresh(message)
     await _publish_message_event(redis, message)
     # The team replies to a USER message (Plan 04 wiring): planning → multi-agent

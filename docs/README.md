@@ -16,6 +16,21 @@ La estructura tiene **7 carpetas numeradas obligatorias** que un guardrail estru
 
 Esta estructura es un Diátaxis adaptado: amplía las 4 categorías originales (tutorials, how-to, reference, explanation) a 7 más operativas para proyectos software profesionales.
 
+## Carpetas de ESTE monorepo que no son de la plantilla
+
+Las 7 numeradas son el contrato que valida el guardrail estructural. Este repo de
+plataforma tiene además estas, que **no** forman parte de la plantilla y que un
+proyecto nuevo no debe copiar (inventariadas en prod-15, `task_gov_cabeceras_07`,
+para que dejen de parecer huérfanas):
+
+| Carpeta             | Qué es                                                                                                                                                                                                                                                                                                                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context/`          | Contexto de desarrollo del propio sistema: `architecture-overview.md`, `conventions.md`, `glossary.md`, `tech-stack.md`, memoria del asistente.                                                                                                                                                                                               |
+| `roadmap/`          | Los planes de construcción de la plataforma (ver [su índice](./roadmap/README.md)).                                                                                                                                                                                                                                                           |
+| `manuals/`          | Manuales de usuario: fuente Markdown + PDF generado (entregables versionados a propósito, con carve-out en `.pre-commit-config.yaml`).                                                                                                                                                                                                        |
+| `provider-example/` | **Código de referencia, no documentación**: el esqueleto de `llm_layer/` que sirvió de base a `packages/shared-llm` y que el ADR [0021](./05-architecture-decisions/0021-shared-llm-layer-catalogo-cerrado.md) cita explícitamente. Se queda donde está para no romper esa referencia; no se mueve a una carpeta canónica porque no es prosa. |
+| `superpowers/`      | Skills y material de apoyo del entorno de agentes.                                                                                                                                                                                                                                                                                            |
+
 ## Reglas de Formato
 
 Cada archivo Markdown:

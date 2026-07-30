@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { translate } from "@/lib/i18n";
+
 import {
   NAV_GROUPS,
   navItemVisible,
@@ -40,7 +42,10 @@ const visibleHrefs = (scope: NavScope): string[] =>
 describe("gating del ítem REAL 'Settings' (/admin/settings)", () => {
   it("está declarado adminOnly", () => {
     const settings = navItem("/admin/settings");
-    expect(settings.label).toBe("Settings");
+    // El nav guarda la clave del diccionario desde prod-16 `task_prod16_02`; el
+    // texto visible se comprueba a través de `translate`.
+    expect(settings.labelKey).toBe("settings");
+    expect(translate("es", "nav", settings.labelKey)).toBe("Settings");
     expect(settings.adminOnly).toBe(true);
   });
 

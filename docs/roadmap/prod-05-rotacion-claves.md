@@ -22,13 +22,14 @@ priority: P0
 | Campo                              | Valor                                                          |
 | ---------------------------------- | -------------------------------------------------------------- |
 | **ID del Plan**                    | `prod-05-rotacion-claves`                                      |
-| **Estado**                         | `pending_approval`                                             |
 | **Prioridad**                      | P0                                                             |
 | **Bloqueado por**                  | — (null)                                                       |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                                                    |
 | **Tiempo estimado (persona-días)** | 13                                                             |
 | **Rama git sugerida**              | `plan/prod-05-rotacion-claves`                                 |
 | **Origen**                         | Auditoría de producción 2026-06-10 (hallazgos gap2-1 … gap2-7) |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

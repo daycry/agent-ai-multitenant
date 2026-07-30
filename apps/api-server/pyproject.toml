@@ -28,13 +28,22 @@ dependencies = [
 
   # Auth
   "argon2-cffi>=23.1,<24",
-  "python-jose[cryptography]>=3.3,<4",
+  # ONE JOSE stack (prod-09 task_prod09_17, quality-10). `joserfc` signs and
+  # verifies BOTH token families — human sessions (`auth/jwt.py`) and the
+  # worker→api tokens (`auth/internal_agent.py`) — and verifies OIDC ID tokens
+  # against the IdP's JWKS (`auth/sso/oidc.py`). It used to arrive only
+  # transitively via authlib while `python-jose` did the session half; declared
+  # explicitly now that production code imports it directly. NOTE for anyone
+  # touching `auth/jwt.py`: joserfc's `jwt.decode` does NOT validate `exp` —
+  # that is a separate `JWTClaimsRegistry` call. See the docstring there.
+  "joserfc>=1.0,<2",
   # Enterprise SSO / OIDC (Plan 08 task_08_01). Authlib drives the
-  # OIDC authorization-code flow; it also ships `joserfc`, which we use
-  # to verify the ID-token signature against the IdP's JWKS. Client
-  # secrets are Fernet-encrypted at rest (cryptography, already present
-  # via python-jose[cryptography]) or Vault-resolved.
+  # OIDC authorization-code flow. Client secrets are Fernet-encrypted at rest,
+  # which is why `cryptography` is declared below on its own account: it used to
+  # ride in as the `python-jose[cryptography]` extra, and dropping python-jose
+  # would otherwise have left a direct import with no declared source.
   "authlib>=1.3,<2",
+  "cryptography>=42,<47",
   # SAML 2.0 (Plan 08 task_08_04). python3-saml drives the SP-initiated
   # AuthnRequest + the ACS assertion validation. It binds the NATIVE
   # xmlsec/libxml2 libraries, which can fail to install on some hosts;
@@ -52,7 +61,7 @@ dependencies = [
   # W3C WebAuthn server ceremony: it builds the registration / authentication
   # options the browser passes to navigator.credentials, and verifies the
   # attestation / assertion the authenticator returns. Pure-Python (it binds
-  # `cryptography`, already present via python-jose[cryptography]), so it is
+  # `cryptography`, declared above), so it is
   # fully testable offline with crafted fixtures — no real authenticator. We
   # store only the credential id + COSE public key + signature counter; the
   # public key is not a secret, and the counter is what defeats cloned-token

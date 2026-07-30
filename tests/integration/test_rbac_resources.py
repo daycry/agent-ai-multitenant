@@ -255,6 +255,24 @@ _ADMIN_GATED: list[tuple[str, str, dict[str, Any]]] = [
     ("PUT", "/tenant-settings/hourly-rate", {"hourly_rate": "75.00"}),
 ]
 
+#: Endpoints con `require_system_admin`: ni `tenant_user` NI `tenant_admin`
+#: pasan. Lista separada de `_ADMIN_GATED` a propósito, porque el positivo de
+#: aquel (`test_admin_gated_allows_tenant_admin`) sería falso para estos.
+#:
+#: prod-15 `task_gov_rbac_matrix_08`: `platform_settings` y `ollama` los añadió
+#: la auditoría 2026-06 (docsroadmap-5); `embeddings` lo encontró prod-15 al
+#: escribir la guardia estática `tests/unit/test_rbac_matrix_drift.py`.
+_SYSTEM_ADMIN_GATED: list[tuple[str, str, dict[str, Any]]] = [
+    ("GET", "/admin/platform-settings", {}),
+    ("GET", "/admin/platform-settings/_registry", {}),
+    ("GET", "/admin/platform-settings/model-options", {}),
+    ("PUT", "/admin/platform-settings/cortex.autonomy_enabled", {"value": "false"}),
+    ("GET", "/admin/ollama/models", {}),
+    ("POST", "/admin/ollama/models/pull", {"model": "llama3"}),
+    ("DELETE", "/admin/ollama/models", {"model": "llama3"}),
+    ("GET", "/admin/embeddings/available-models", {}),
+]
+
 _MEMBER_GATED: list[tuple[str, str]] = [
     ("GET", "/projects"),
     ("GET", "/agents"),
@@ -323,6 +341,70 @@ async def test_member_gated_rejects_stranger(
         base_url="http://test",
     ) as client:
         resp = await client.request(method, path, headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 403, f"{method} {path}: {resp.status_code} {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# System-admin-gated endpoints — el tenant_admin TAMPOCO pasa
+#
+# Es lo que distingue estos endpoints de `_ADMIN_GATED`: la superficie de
+# plataforma (`/admin/platform-settings`, `/admin/ollama`,
+# `/admin/embeddings`) corre sobre el engine BYPASSRLS y muta el host o
+# ajustes sin `tenant_id`. Si alguien retirase el `require_system_admin`, la
+# respuesta dejaría de ser 403 (sería 200, 404 o 422) y estos tests lo dirían:
+# no pueden pasar vacíos.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "body"), _SYSTEM_ADMIN_GATED)
+async def test_system_admin_gated_rejects_tenant_admin(
+    configured_app, migrations_pg_dsn: str, method: str, path: str, body: dict[str, Any]
+) -> None:
+    seed = await _seed_db(migrations_pg_dsn)
+    token = await _mint(seed["admin_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.request(
+            method, path, headers={"Authorization": f"Bearer {token}"}, json=body
+        )
+    assert resp.status_code == 403, f"{method} {path}: {resp.status_code} {resp.text}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "body"), _SYSTEM_ADMIN_GATED)
+async def test_system_admin_gated_rejects_tenant_user(
+    configured_app, migrations_pg_dsn: str, method: str, path: str, body: dict[str, Any]
+) -> None:
+    seed = await _seed_db(migrations_pg_dsn)
+    token = await _mint(seed["plain_user"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.request(
+            method, path, headers={"Authorization": f"Bearer {token}"}, json=body
+        )
+    assert resp.status_code == 403, f"{method} {path}: {resp.status_code} {resp.text}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "path", "body"), _SYSTEM_ADMIN_GATED)
+async def test_system_admin_gated_rejects_stranger(
+    configured_app, migrations_pg_dsn: str, method: str, path: str, body: dict[str, Any]
+) -> None:
+    seed = await _seed_db(migrations_pg_dsn)
+    token = await _mint(seed["stranger"], seed["tenant"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.request(
+            method, path, headers={"Authorization": f"Bearer {token}"}, json=body
+        )
     assert resp.status_code == 403, f"{method} {path}: {resp.status_code} {resp.text}"
 
 

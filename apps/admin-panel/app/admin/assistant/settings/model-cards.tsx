@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   clearAssistantDefaultModel,
   clearAssistantModel,
@@ -42,11 +43,6 @@ import {
 
 function modelsFor(providers: AssistantModelOption[], providerId: string): string[] {
   return providers.find((p) => p.provider_id === providerId)?.models ?? [];
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof ApiError) return error.body;
-  return String(error);
 }
 
 /** Shared provider + model selects. ``providerId === ""`` means "none picked".
@@ -155,6 +151,7 @@ function ProviderModelSelects({
 // Tenant Admin — the assistant's model (override → inherits platform default)
 // ---------------------------------------------------------------------------
 export function AssistantModelCard({ enabled }: { enabled: boolean }) {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");
@@ -325,6 +322,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
 // System Admin — the platform default model (inherited by tenants)
 // ---------------------------------------------------------------------------
 export function PlatformDefaultModelCard() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");

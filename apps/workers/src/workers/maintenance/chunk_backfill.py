@@ -18,10 +18,11 @@ from typing import Any
 
 import structlog
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 from workers.maintenance.memory_backfill import (
     _BACKFILL_MAX_BATCHES_PER_RUN,
     EmbedderFactory,
@@ -55,7 +56,7 @@ async def _backfill_chunk_embeddings_async(
         get_memory_backfill_throttle_ms,
     )
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     updated = 0
     batches = 0

@@ -30,8 +30,10 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
+from redis.asyncio import Redis
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from shared_llm.reasoning import reasoning_call_kwargs
 from sqlalchemy import select
@@ -59,10 +61,12 @@ from api_server.assistant.tools import AssistantToolContext
 from api_server.auth.deps import (
     AuthPrincipal,
     get_admin_session,
+    get_redis,
     get_tenant_session,
     require_system_admin,
     require_tenant_admin,
 )
+from api_server.auth.rate_limit import RateLimiter
 from api_server.db.assistant_chat import AssistantConversation, AssistantTurn
 from api_server.db.llm_providers import (
     REASONING_OPTIONS_BY_KIND,
@@ -70,6 +74,7 @@ from api_server.db.llm_providers import (
     list_llm_providers,
 )
 from api_server.db.models import Organization, User
+from api_server.db.platform_settings import get_platform_setting
 from api_server.db.session import get_admin_sessionmaker
 from api_server.llm_providers.factory import build_llm_provider
 from api_server.llm_providers.vault import LLMProviderVaultStore
@@ -91,6 +96,145 @@ from api_server.schemas.assistant import (
     AssistantTurnItem,
     to_identity_response,
 )
+
+# ---------------------------------------------------------------------------
+# Errores del proveedor LLM: mensaje acotado al cliente, detalle en el log
+# ---------------------------------------------------------------------------
+_logger = structlog.get_logger(__name__)
+
+# Los mensajes de error de un proveedor LLM son texto ajeno y no auditado: pueden
+# traer la URL del endpoint interno, cabeceras, un fragmento del cuerpo de la
+# petición (que incluye el prompt del usuario) y, con proveedores que ecoan la
+# request, la propia credencial. Devolverlos crudos al navegador con `{exc}` era
+# la mitad de tipo LLM del hallazgo api-5. Se sustituye por un mensaje estable
+# por CLASE de error, que es lo único que el cliente necesita para reaccionar.
+_PROVIDER_ERROR_MESSAGES: dict[str, str] = {
+    "auth": (
+        "El proveedor LLM rechazó las credenciales. Revisa la credencial del "
+        "proveedor o elige otro modelo."
+    ),
+    "rate_limit": (
+        "El proveedor LLM está limitando las peticiones. Inténtalo de nuevo en unos segundos."
+    ),
+    "provider": "El proveedor LLM del asistente falló. Revisa su estado o elige otro modelo.",
+    "unexpected": "El asistente no pudo completar la respuesta.",
+}
+
+
+def _provider_error_detail(exc: BaseException, *, kind: str, context: str) -> str:
+    """Mensaje para el cliente; el texto real del proveedor va SOLO al log."""
+    _logger.warning(
+        "assistant.provider_error",
+        context=context,
+        kind=kind,
+        error_type=type(exc).__name__,
+        error=str(exc),
+    )
+    return _PROVIDER_ERROR_MESSAGES[kind]
+
+
+# ---------------------------------------------------------------------------
+# Rate limit del chat del asistente (prod-13 task_prod13_20, hallazgo api-4)
+# ---------------------------------------------------------------------------
+# `POST /assistant/chat` y `/chat/stream` disparan un turno LLM entero (hasta 6
+# rondas de tools, cada una un `complete()`). No tenían NINGÚN límite de QPS: un
+# bucle desde el navegador —o una pestaña con un reintento roto— podía encadenar
+# turnos hasta agotar el pool de conexiones y la cuota del proveedor.
+#
+# Esto es la válvula de CAUDAL, no de coste (el coste lo lleva prod-07). Dos
+# ventanas deslizantes en el mismo gesto:
+#
+#   * por `user_id`: el techo de una persona;
+#   * por `tenant_id`: el techo del tenant, para que 30 usuarios de un tenant no
+#     sumen 30 veces el límite individual y tumben la plataforma para el resto.
+#
+# El presupuesto es un platform setting (el operador lo sube sin redeploy) con
+# defaults conservadores pero holgados para el uso humano real: un turno de
+# asistente tarda segundos, así que 20 mensajes/minuto por persona ya es tecleo
+# imposible, y sirve de tope sin molestar a nadie.
+ASSISTANT_CHAT_RATE_LIMIT_KEY = "assistant.chat_rate_limit_per_user_per_minute"
+ASSISTANT_CHAT_TENANT_RATE_LIMIT_KEY = "assistant.chat_rate_limit_per_tenant_per_minute"
+DEFAULT_ASSISTANT_CHAT_RATE_LIMIT = 20
+DEFAULT_ASSISTANT_CHAT_TENANT_RATE_LIMIT = 120
+_ASSISTANT_CHAT_WINDOW_SECONDS = 60
+
+_HDR_LIMIT = "X-RateLimit-Limit"
+_HDR_REMAINING = "X-RateLimit-Remaining"
+_HDR_RESET = "X-RateLimit-Reset"
+_HDR_RETRY_AFTER = "Retry-After"
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    """Un platform setting mal puesto (texto, 0, negativo) NO puede desactivar el
+    límite en silencio: cae al default. Fail-closed sobre configuración basura."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+async def enforce_assistant_chat_rate_limit(
+    response: Response,
+    principal: AuthPrincipal,
+    session: AsyncSession,
+    redis: Redis,
+) -> None:
+    """429 cuando el usuario (o su tenant) se pasa del caudal, con headers.
+
+    No es una `Depends` porque necesita la sesión de tenant YA abierta para leer
+    los platform settings, y ordenar dependencias entre sí para eso es más frágil
+    que llamarla como primera línea del handler.
+    """
+    tenant_id = require_tenant_id(principal)
+    limiter = RateLimiter(redis)
+
+    per_user = _positive_int(
+        await get_platform_setting(session, ASSISTANT_CHAT_RATE_LIMIT_KEY),
+        default=DEFAULT_ASSISTANT_CHAT_RATE_LIMIT,
+    )
+    per_tenant = _positive_int(
+        await get_platform_setting(session, ASSISTANT_CHAT_TENANT_RATE_LIMIT_KEY),
+        default=DEFAULT_ASSISTANT_CHAT_TENANT_RATE_LIMIT,
+    )
+
+    # El del usuario primero: sus headers son los que le sirven de algo. El cap del
+    # tenant se comprueba igual aunque el usuario haya pasado, porque es un techo
+    # independiente.
+    user_result = await limiter.check_with_headers(
+        f"ratelimit:assistant_chat:user:{principal.user_id}",
+        limit=per_user,
+        window_seconds=_ASSISTANT_CHAT_WINDOW_SECONDS,
+    )
+    tenant_result = await limiter.check_with_headers(
+        f"ratelimit:assistant_chat:tenant:{tenant_id}",
+        limit=per_tenant,
+        window_seconds=_ASSISTANT_CHAT_WINDOW_SECONDS,
+    )
+
+    response.headers[_HDR_LIMIT] = str(user_result.limit)
+    response.headers[_HDR_REMAINING] = str(user_result.remaining)
+    response.headers[_HDR_RESET] = str(user_result.reset_at)
+
+    breached = user_result if not user_result.allowed else tenant_result
+    if breached.allowed:
+        return
+    scope = "user" if breached is user_result else "tenant"
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={
+            "error": "assistant_chat_rate_limited",
+            "scope": scope,
+            "message": ("Demasiados mensajes al asistente en poco tiempo; espera unos segundos."),
+        },
+        headers={
+            _HDR_RETRY_AFTER: str(breached.retry_after),
+            _HDR_LIMIT: str(breached.limit),
+            _HDR_REMAINING: str(breached.remaining),
+            _HDR_RESET: str(breached.reset_at),
+        },
+    )
+
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -300,9 +444,11 @@ async def _persist_turns(
 @router.post("/chat/stream")
 async def assistant_chat_stream(
     payload: AssistantChatRequest,
+    response: Response,
     principal: AuthPrincipal = Depends(require_assistant_access),
     session: AsyncSession = Depends(get_tenant_session),
     model: AssistantModelClient = Depends(get_assistant_model),
+    redis: Redis = Depends(get_redis),
 ) -> StreamingResponse:
     """El mismo turno que /chat pero con PROGRESO en vivo (SSE) — A2 fase 1.
 
@@ -315,6 +461,7 @@ async def assistant_chat_stream(
     import asyncio as _asyncio
     import json as _json
 
+    await enforce_assistant_chat_rate_limit(response, principal, session, redis)
     tenant_id = require_tenant_id(principal)
     identity = await get_assistant_identity(session, tenant_id)
     tool_ctx = AssistantToolContext(session=session, tenant_id=tenant_id, user_id=principal.user_id)
@@ -387,9 +534,27 @@ async def assistant_chat_stream(
                 )
             )
         except (AuthError, RateLimitError, LLMError) as exc:
-            await queue.put(("error", {"detail": f"el proveedor LLM falló: {exc}"}))
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "detail": _provider_error_detail(
+                            exc, kind="provider", context="assistant.chat_stream"
+                        )
+                    },
+                )
+            )
         except Exception as exc:  # el stream cierra limpio, nunca cuelga
-            await queue.put(("error", {"detail": str(exc)}))
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "detail": _provider_error_detail(
+                            exc, kind="unexpected", context="assistant.chat_stream"
+                        )
+                    },
+                )
+            )
         finally:
             await queue.put(("end", {}))
 
@@ -408,7 +573,15 @@ async def assistant_chat_stream(
     return StreamingResponse(
         _events(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        # Los headers del `Response` INYECTADO se descartan cuando el handler
+        # devuelve su propia respuesta, así que los de rate limit hay que
+        # copiarlos aquí a mano o el cliente del stream nunca los ve (el 429 sí
+        # los lleva: van en la `HTTPException`).
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            **dict(response.headers),
+        },
     )
 
 
@@ -487,10 +660,13 @@ async def list_assistant_turns(
 @router.post("/chat", response_model=AssistantChatResponse)
 async def assistant_chat(
     payload: AssistantChatRequest,
+    response: Response,
     principal: AuthPrincipal = Depends(require_assistant_access),
     session: AsyncSession = Depends(get_tenant_session),
     model: AssistantModelClient = Depends(get_assistant_model),
+    redis: Redis = Depends(get_redis),
 ) -> AssistantChatResponse:
+    await enforce_assistant_chat_rate_limit(response, principal, session, redis)
     tenant_id = require_tenant_id(principal)
     identity = await get_assistant_identity(session, tenant_id)
     tool_ctx = AssistantToolContext(
@@ -536,20 +712,17 @@ async def assistant_chat(
         # browser would see an opaque "Failed to fetch" instead of this hint).
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "el proveedor LLM rechazó las credenciales (auth); revisa la "
-                f"credencial del proveedor o elige otro modelo. Detalle: {exc}"
-            ),
+            detail=_provider_error_detail(exc, kind="auth", context="assistant.chat"),
         ) from exc
     except RateLimitError as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"el proveedor LLM está limitando las peticiones: {exc}",
+            detail=_provider_error_detail(exc, kind="rate_limit", context="assistant.chat"),
         ) from exc
     except LLMError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"el proveedor LLM del asistente falló: {exc}",
+            detail=_provider_error_detail(exc, kind="provider", context="assistant.chat"),
         ) from exc
     await _persist_turns(
         session,

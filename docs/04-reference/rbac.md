@@ -103,19 +103,64 @@ API nunca las devuelve (write-only).
 
 #### `llm_providers.py` (Plan 11.2)
 
-| Endpoint                         | Método | Rol mínimo     |
-| -------------------------------- | ------ | -------------- |
-| `/admin/llm-providers`           | GET    | `system_admin` |
-| `/admin/llm-providers`           | POST   | `system_admin` |
-| `/admin/llm-providers/{id}`      | GET    | `system_admin` |
-| `/admin/llm-providers/{id}`      | PUT    | `system_admin` |
-| `/admin/llm-providers/{id}`      | DELETE | `system_admin` |
-| `/admin/llm-providers/{id}/test` | POST   | `system_admin` |
+| Endpoint                                | Método | Rol mínimo     |
+| --------------------------------------- | ------ | -------------- |
+| `/admin/llm-providers`                  | GET    | `system_admin` |
+| `/admin/llm-providers`                  | POST   | `system_admin` |
+| `/admin/llm-providers/{id}`             | GET    | `system_admin` |
+| `/admin/llm-providers/{id}`             | PUT    | `system_admin` |
+| `/admin/llm-providers/{id}`             | DELETE | `system_admin` |
+| `/admin/llm-providers/{id}/test`        | POST   | `system_admin` |
+| `/admin/llm-providers/{id}/sync-models` | POST   | `system_admin` |
 
 > `POST` recibe la credencial como `SecretStr` y la escribe en Vault; la
 > BD guarda sólo `secret_vault_path`. `PUT` rota la credencial si se
 > envía. `DELETE` borra también el secreto de Vault. `/test` hace un
 > liveness probe clasificado leyendo el secreto de Vault, sin echo-arlo.
+> `/sync-models` refresca el catálogo de modelos del provider.
+
+#### `platform_settings.py` — ajustes de plataforma (añadido tras Plan 06.8)
+
+| Endpoint                                 | Método | Rol mínimo     |
+| ---------------------------------------- | ------ | -------------- |
+| `/admin/platform-settings`               | GET    | `system_admin` |
+| `/admin/platform-settings/_registry`     | GET    | `system_admin` |
+| `/admin/platform-settings/model-options` | GET    | `system_admin` |
+| `/admin/platform-settings/{key}`         | PUT    | `system_admin` |
+
+> Los cuatro llevan `require_system_admin` sobre la sesión BYPASSRLS
+> (`get_admin_session`): los ajustes son **platform-global**, sin
+> `tenant_id` ni RLS. `_registry` devuelve el catálogo de claves
+> permitidas (`PUT` de una clave fuera del registry es 4xx, no un
+> ajuste nuevo); `model-options` alimenta los selectores de modelo del
+> panel. `PUT` deja `audit_log`.
+>
+> **No estaba en esta matriz hasta prod-15** (hallazgo docsroadmap-5).
+> La guardia que lo evita en adelante es
+> `tests/unit/test_rbac_matrix_drift.py`, que falla si aparece un prefijo
+> o una ruta `/admin/*` sin fila aquí.
+
+#### `ollama.py` — gestión de modelos Ollama (ADR 0056)
+
+| Endpoint                    | Método | Rol mínimo     |
+| --------------------------- | ------ | -------------- |
+| `/admin/ollama/models`      | GET    | `system_admin` |
+| `/admin/ollama/models/pull` | POST   | `system_admin` |
+| `/admin/ollama/models`      | DELETE | `system_admin` |
+
+> Reutiliza a propósito la auth de la plataforma (`require_system_admin`)
+> en vez de montar una auth paralela no-tenant-aware contra el Ollama del
+> stack. `pull` y `delete` mutan el host: nunca `tenant_admin`.
+> Tampoco estaba en la matriz hasta prod-15.
+
+#### `embeddings.py` — catálogo de modelos de embedding
+
+| Endpoint                             | Método | Rol mínimo     |
+| ------------------------------------ | ------ | -------------- |
+| `/admin/embeddings/available-models` | GET    | `system_admin` |
+
+> Hallazgo **nuevo** de prod-15, que la auditoría 2026-06 no listó: este
+> router tampoco figuraba en la matriz. Sólo lee el catálogo disponible.
 
 #### `copilot_device_flow.py` — Device Flow de GitHub Copilot (Plan 11.2)
 
@@ -130,16 +175,19 @@ API nunca las devuelve (write-only).
 
 #### `model_prices.py` (catálogo global — Plan 11, asociación a provider en 11.2)
 
-| Endpoint                   | Método | Rol mínimo     |
-| -------------------------- | ------ | -------------- |
-| `/model-prices`            | GET    | `tenant_user`  |
-| `/model-prices/current`    | GET    | `tenant_user`  |
-| `/model-prices/{id}`       | GET    | `tenant_user`  |
-| `/admin/model-prices`      | GET    | `system_admin` |
-| `/admin/model-prices`      | POST   | `system_admin` |
-| `/admin/model-prices/{id}` | PATCH  | `system_admin` |
-| `/admin/model-prices/{id}` | DELETE | `system_admin` |
-| `/admin/model-prices/sync` | POST   | `system_admin` |
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/model-prices`                  | GET    | `tenant_user`  |
+| `/model-prices/current`          | GET    | `tenant_user`  |
+| `/model-prices/{id}`             | GET    | `tenant_user`  |
+| `/admin/model-prices`            | GET    | `system_admin` |
+| `/admin/model-prices`            | POST   | `system_admin` |
+| `/admin/model-prices/{id}`       | PATCH  | `system_admin` |
+| `/admin/model-prices/{id}`       | DELETE | `system_admin` |
+| `/admin/model-prices/sync`       | POST   | `system_admin` |
+| `/admin/model-prices/sync/diff`  | POST   | `system_admin` |
+| `/admin/model-prices/sync/apply` | POST   | `system_admin` |
+| `/admin/model-prices/sync/audit` | GET    | `system_admin` |
 
 > El catálogo de lectura (`/model-prices`) es read-open para cualquier
 > member (RLS de lectura global, espeja `exchange_rates`); las mutaciones
@@ -579,12 +627,14 @@ son `tenant_admin`. Detalle en [evals-stats.md](./evals-stats.md).
 
 ### `backup.py` (Plan 12)
 
-| Endpoint                                | Método           | Rol mínimo                                        |
-| --------------------------------------- | ---------------- | ------------------------------------------------- |
-| `/admin/backup/schedule`                | GET              | `tenant_member`                                   |
-| `/admin/backup/schedule`                | PUT              | `system_admin`                                    |
-| `/admin/backup/destinations` (+`/test`) | GET / PUT / POST | `tenant_member` (GET) · `system_admin` (mutación) |
-| `/admin/backup/restore/*`               | \*               | `system_admin`                                    |
+| Endpoint                                 | Método | Rol mínimo      |
+| ---------------------------------------- | ------ | --------------- |
+| `/admin/backup/schedule`                 | GET    | `tenant_member` |
+| `/admin/backup/schedule`                 | PUT    | `system_admin`  |
+| `/admin/backup/destinations`             | GET    | `tenant_member` |
+| `/admin/backup/destinations`             | PUT    | `system_admin`  |
+| `/admin/backup/destinations/{name}/test` | POST   | `system_admin`  |
+| `/admin/backup/restore/*`                | \*     | `system_admin`  |
 
 > Restaurar es estrictamente `system_admin` (corre sobre BYPASSRLS). Ver
 > [backup-restore.md](./backup-restore.md) +

@@ -24,9 +24,22 @@ import asyncpg
 import pytest
 from alembic import command
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
+from joserfc import jwt
+from joserfc.jwk import OctKey
 
 pytestmark = pytest.mark.integration
+
+
+def _mint(claims: dict[str, object], *, secret: str, algorithm: str) -> str:
+    """Sign a token with an ARBITRARY key — the point of these tests.
+
+    Deliberately does not go through `sign_claims`: several cases here mint with
+    the wrong secret or without the `kind` claim, which the production helper
+    would never do. Uses `joserfc` directly since prod-09 task_prod09_17 retired
+    python-jose from the tree.
+    """
+    signed: str = jwt.encode({"alg": algorithm, "typ": "JWT"}, claims, OctKey.import_key(secret))
+    return signed
 
 
 _PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -170,9 +183,9 @@ def test_decode_rejects_human_jwt(configured_app) -> None:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=15)).timestamp()),
     }
-    human_token = jwt.encode(
+    human_token = _mint(
         human_claims,
-        settings.jwt_secret.get_secret_value(),
+        secret=settings.jwt_secret.get_secret_value(),
         algorithm=settings.jwt_algorithm,
     )
 
@@ -187,9 +200,9 @@ def test_decode_rejects_human_jwt(configured_app) -> None:
     # domain: a token signed with the internal secret but without the claim
     # (i.e. an internal caller trying to pass a session-shaped token) is
     # rejected for what it is, not just for its signature.
-    same_key_no_kind = jwt.encode(
+    same_key_no_kind = _mint(
         human_claims,
-        settings.internal_token_secret.get_secret_value(),
+        secret=settings.internal_token_secret.get_secret_value(),
         algorithm=settings.jwt_algorithm,
     )
     with pytest.raises(InvalidAgentTokenError, match="not an agent token"):
@@ -237,7 +250,7 @@ def test_decode_rejects_wrong_signature(configured_app) -> None:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),
     }
-    forged = jwt.encode(claims, "wrong-secret", algorithm=settings.jwt_algorithm)
+    forged = _mint(claims, secret="wrong-secret", algorithm=settings.jwt_algorithm)
     with pytest.raises(InvalidAgentTokenError):
         decode_agent_token(forged)
 

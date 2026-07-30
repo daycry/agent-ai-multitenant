@@ -185,7 +185,10 @@ async def test_status_event_is_published_after_conduct_and_after_the_lock(
     async def spy_publish(_redis: Any, _task: Any, *, old_status: str, new_status: str) -> None:
         calls.append(f"publish:{old_status}->{new_status}")
 
-    monkeypatch.setattr(run_cycle, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+    # `worker_engine` y no `create_async_engine`: ver la nota en
+    # tests/unit/test_stack_exec_errors.py::_wire_db — el engine compartido de la
+    # remediación cambió la costura, no lo que este test fija (el ORDEN del finalize).
+    monkeypatch.setattr(run_cycle, "worker_engine", lambda *_a, **_k: _FakeEngine())
     monkeypatch.setattr(run_cycle, "Redis", _FakeRedis)
     monkeypatch.setattr(lock_mod, "acquire_run_lock", spy_acquire)
     monkeypatch.setattr(lock_mod, "release_run_lock", spy_release)

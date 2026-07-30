@@ -42,10 +42,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -195,7 +196,7 @@ async def _run_shadow_evals_async(settings: Settings) -> dict[str, Any]:
         return {"status": "off", "reason": "rate_zero", "sampled": 0}
 
     sampler = DeterministicSampler()
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sampled = 0
     skipped_same_model = 0
     errors = 0

@@ -67,7 +67,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT, type MessageKey } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.admin.{UserListItem,MembershipResponse}.
@@ -104,12 +106,17 @@ type MembershipRole = "tenant_admin" | "tenant_user" | "plan_approver" | "system
 
 const ROLES: MembershipRole[] = ["tenant_admin", "tenant_user", "plan_approver", "system_operator"];
 
-const ROLE_LABEL: Record<MembershipRole, string> = {
-  tenant_admin: "Tenant Admin",
-  tenant_user: "Tenant User",
+/**
+ * Rol → clave del diccionario (prod-16 `task_prod16_03`). El mapa guarda la
+ * CLAVE, no el texto, para que el `<option>` se traduzca sin que el catálogo de
+ * roles dependa del idioma.
+ */
+const ROLE_LABEL_KEY: Record<MembershipRole, MessageKey<"users">> = {
+  tenant_admin: "roleTenantAdmin",
+  tenant_user: "roleTenantUser",
   // ADR 0079: aprueba planes del tenant sin ser admin (segregación de funciones).
-  plan_approver: "Aprobador de planes",
-  system_operator: "System Operator",
+  plan_approver: "rolePlanApprover",
+  system_operator: "roleSystemOperator",
 };
 
 const ROLE_BADGE: Record<string, BadgeVariant> = {
@@ -119,20 +126,18 @@ const ROLE_BADGE: Record<string, BadgeVariant> = {
   system_operator: "warning",
 };
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 // ===========================================================================
 // Page
 // ===========================================================================
 export default function UsersPage() {
+  const t = useT("users");
+
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8" data-testid="users-page">
       <PageHeader
         icon={<Users className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Usuarios"
-        description="Usuarios globales de la plataforma. El acceso a cada tenant lo dan las membership (usuario↔tenant + rol) que asigna el System Admin (ADR 0047)."
+        title={t("title")}
+        description={t("description")}
         data-testid="users-header"
       />
       {/* La pantalla completa es solo System Admin: el backend gatea con
@@ -143,9 +148,7 @@ export default function UsersPage() {
           <Card className="mt-6" data-testid="users-forbidden">
             <CardContent className="flex items-center gap-3 py-10">
               <ShieldAlert className="text-muted-foreground h-5 w-5 shrink-0" />
-              <p className="text-muted-foreground text-sm">
-                Esta sección es exclusiva del System Admin de la plataforma.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("forbidden")}</p>
             </CardContent>
           </Card>
         }
@@ -157,6 +160,7 @@ export default function UsersPage() {
 }
 
 function UsersContent() {
+  const t = useT("users");
   const [query, setQuery] = useState("");
   const [membershipsTarget, setMembershipsTarget] = useState<AdminUser | null>(null);
 
@@ -183,10 +187,10 @@ function UsersContent() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar por email o nombre…"
+            placeholder={t("searchPlaceholder")}
             className="pl-9"
             data-testid="users-search"
-            aria-label="Buscar usuarios"
+            aria-label={t("searchLabel")}
           />
         </div>
       </div>
@@ -197,16 +201,14 @@ function UsersContent() {
           isError={usersQuery.isError}
           error={usersQuery.error}
           isEmpty={filtered.length === 0}
-          loadingLabel="Cargando usuarios…"
+          loadingLabel={t("loading")}
           loadingTestId="users-loading"
           errorTestId="users-error"
           empty={
             <Card>
               <CardContent className="py-10 text-center">
                 <p className="text-muted-foreground text-sm italic" data-testid="users-empty">
-                  {query.trim() === ""
-                    ? "No hay usuarios en la plataforma."
-                    : "Ningún usuario coincide con la búsqueda."}
+                  {query.trim() === "" ? t("emptyNone") : t("emptyNoMatch")}
                 </p>
               </CardContent>
             </Card>
@@ -216,11 +218,11 @@ function UsersContent() {
             <Table>
               <TableHeader className="bg-muted">
                 <TableRow>
-                  <TableHead className="px-3">Usuario</TableHead>
-                  <TableHead className="px-3">Email</TableHead>
-                  <TableHead className="px-3">Tipo</TableHead>
-                  <TableHead className="px-3">Estado</TableHead>
-                  <TableHead className="px-3 text-right">Acceso a tenants</TableHead>
+                  <TableHead className="px-3">{t("colUser")}</TableHead>
+                  <TableHead className="px-3">{t("colEmail")}</TableHead>
+                  <TableHead className="px-3">{t("colType")}</TableHead>
+                  <TableHead className="px-3">{t("colStatus")}</TableHead>
+                  <TableHead className="px-3 text-right">{t("colTenantAccess")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -232,17 +234,17 @@ function UsersContent() {
                       {u.is_system_admin ? (
                         <Badge variant="primary">
                           <ShieldCheck className="mr-1 h-3 w-3" />
-                          System Admin
+                          {t("typeSystemAdmin")}
                         </Badge>
                       ) : (
-                        <Badge variant="muted">Usuario</Badge>
+                        <Badge variant="muted">{t("typeUser")}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="px-3">
                       {u.is_active ? (
-                        <Badge variant="success">activo</Badge>
+                        <Badge variant="success">{t("userActive")}</Badge>
                       ) : (
-                        <Badge variant="muted">inactivo</Badge>
+                        <Badge variant="muted">{t("userInactive")}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="px-3">
@@ -254,7 +256,7 @@ function UsersContent() {
                           data-testid={`user-memberships-open-${u.id}`}
                         >
                           <Building2 className="mr-1 h-3.5 w-3.5" />
-                          Gestionar tenants
+                          {t("manageTenants")}
                         </Button>
                       </div>
                     </TableCell>
@@ -282,6 +284,9 @@ interface MembershipsDialogProps {
 }
 
 function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
+  const t = useT("users");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const membershipsKey = ["admin-user-memberships", user.id];
 
@@ -347,11 +352,8 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())} size="lg">
       <DialogContent data-testid="memberships-dialog">
         <DialogHeader>
-          <DialogTitle>Acceso a tenants — {user.full_name ?? user.email}</DialogTitle>
-          <DialogDescription>
-            El acceso a cada tenant lo da una membership con un rol. Sin membership activa, el
-            usuario no entra a ningún tenant (ADR 0047).
-          </DialogDescription>
+          <DialogTitle>{t("dialogTitle", { who: user.full_name ?? user.email })}</DialogTitle>
+          <DialogDescription>{t("dialogDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody>
           {/* Existing memberships ------------------------------------------------ */}
@@ -360,7 +362,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
             isError={membershipsQuery.isError}
             error={membershipsQuery.error}
             isEmpty={memberships.length === 0}
-            loadingLabel="Cargando membership…"
+            loadingLabel={t("membershipsLoading")}
             loadingTestId="memberships-loading"
             errorTestId="memberships-error"
             empty={
@@ -368,7 +370,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                 className="text-muted-foreground rounded-lg border border-dashed p-4 text-center text-sm italic"
                 data-testid="memberships-empty"
               >
-                El usuario no tiene acceso a ningún tenant. Asígnale uno abajo.
+                {t("membershipsEmpty")}
               </p>
             }
           >
@@ -376,10 +378,10 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
               <Table>
                 <TableHeader className="bg-muted">
                   <TableRow>
-                    <TableHead className="px-3">Tenant</TableHead>
-                    <TableHead className="px-3">Rol</TableHead>
-                    <TableHead className="px-3">Estado</TableHead>
-                    <TableHead className="px-3 text-right">Acciones</TableHead>
+                    <TableHead className="px-3">{t("colTenant")}</TableHead>
+                    <TableHead className="px-3">{t("colRole")}</TableHead>
+                    <TableHead className="px-3">{t("colStatus")}</TableHead>
+                    <TableHead className="px-3 text-right">{t("colActions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -411,11 +413,11 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                             disabled={updateMutation.isPending}
                             className="h-8 text-xs"
                             data-testid={`membership-role-${m.id}`}
-                            aria-label={`Rol de ${m.tenant_name}`}
+                            aria-label={t("roleOf", { tenant: m.tenant_name })}
                           >
                             {ROLES.map((r) => (
                               <option key={r} value={r}>
-                                {ROLE_LABEL[r]}
+                                {t(ROLE_LABEL_KEY[r])}
                               </option>
                             ))}
                           </Select>
@@ -433,18 +435,20 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                           disabled={updateMutation.isPending}
                           className="focus-visible:ring-ring focus-visible:ring-offset-background cursor-pointer rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                           data-testid={`membership-toggle-${m.id}`}
-                          aria-label={m.is_active ? "Desactivar membership" : "Activar membership"}
+                          aria-label={
+                            m.is_active ? t("deactivateMembership") : t("activateMembership")
+                          }
                           aria-pressed={m.is_active}
                         >
                           {m.is_active ? (
                             <Badge variant={ROLE_BADGE[m.role] ?? "success"}>
                               <Check className="mr-1 h-3 w-3" />
-                              activa
+                              {t("membershipActive")}
                             </Badge>
                           ) : (
                             <Badge variant="muted">
                               <X className="mr-1 h-3 w-3" />
-                              inactiva
+                              {t("membershipInactive")}
                             </Badge>
                           )}
                         </button>
@@ -457,7 +461,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                             onClick={() => revokeMutation.mutate(m.id)}
                             disabled={revokeMutation.isPending}
                             data-testid={`membership-revoke-${m.id}`}
-                            aria-label="Revocar acceso"
+                            aria-label={t("revokeAccess")}
                           >
                             <Trash2 className="text-destructive h-3.5 w-3.5" />
                           </Button>
@@ -478,11 +482,11 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
 
           {/* Assign form --------------------------------------------------------- */}
           <div className="mt-6 rounded-xl border p-4" data-testid="membership-assign">
-            <Label className="text-sm font-semibold">Asignar acceso a un tenant</Label>
+            <Label className="text-sm font-semibold">{t("assignTitle")}</Label>
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="flex-1 space-y-1">
                 <Label htmlFor="assign-tenant" className="text-xs">
-                  Tenant
+                  {t("colTenant")}
                 </Label>
                 <Select
                   id="assign-tenant"
@@ -492,9 +496,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                   data-testid="assign-tenant"
                 >
                   <option value="">
-                    {availableTenants.length === 0
-                      ? "Sin tenants disponibles"
-                      : "Selecciona un tenant…"}
+                    {availableTenants.length === 0 ? t("noTenantsAvailable") : t("pickTenant")}
                   </option>
                   {availableTenants.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -505,7 +507,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
               </div>
               <div className="space-y-1 sm:w-48">
                 <Label htmlFor="assign-role" className="text-xs">
-                  Rol
+                  {t("colRole")}
                 </Label>
                 <Select
                   id="assign-role"
@@ -515,7 +517,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                 >
                   {ROLES.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABEL[r]}
+                      {t(ROLE_LABEL_KEY[r])}
                     </option>
                   ))}
                 </Select>
@@ -526,13 +528,11 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
                 data-testid="assign-submit"
               >
                 <Plus className="mr-1 h-3.5 w-3.5" />
-                {assignMutation.isPending ? "Asignando…" : "Asignar"}
+                {assignMutation.isPending ? t("assigning") : t("assign")}
               </Button>
             </div>
             {availableTenants.length === 0 && tenants.length > 0 ? (
-              <p className="text-muted-foreground mt-2 text-xs">
-                El usuario ya tiene acceso a todos los tenants existentes.
-              </p>
+              <p className="text-muted-foreground mt-2 text-xs">{t("allTenantsAssigned")}</p>
             ) : null}
             {assignMutation.isError ? (
               <p className="text-destructive mt-2 text-xs" data-testid="assign-error">
@@ -543,7 +543,7 @@ function MembershipsDialog({ user, onClose }: MembershipsDialogProps) {
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} data-testid="memberships-close">
-            Cerrar
+            {tCommon("close")}
           </Button>
         </DialogFooter>
       </DialogContent>

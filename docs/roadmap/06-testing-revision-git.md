@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                                   |
 | ---------------------------------- | ------------------------------------------------------- |
 | **ID del Plan**                    | `06-testing-revision-git`                               |
-| **Estado**                         | `pending_approval`                                      |
 | **Bloqueado por**                  | `03-chat-planning-aprobacion`, `05-mcp-tools-avanzadas` |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                                             |
 | **Tiempo estimado (persona-días)** | 85-105                                                  |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                                            |
 | **Rama git**                       | `plan/06-testing-revision-git`                          |
 | **Secciones del .docx**            | [12.4, 12.5, 12.6, 14, 31.7, 31.12]                     |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

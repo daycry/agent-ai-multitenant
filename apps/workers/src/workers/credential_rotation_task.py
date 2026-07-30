@@ -28,7 +28,7 @@ import asyncio
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
@@ -41,6 +41,7 @@ from workers.credential_rotation import (
     configure_db_secrets_engine_role,
     rotate_credentials,
 )
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.credential_rotation_task")
 
@@ -99,7 +100,7 @@ async def _rotate_credentials(
     # never route the beat schedule (mirrors workers.maintenance / backup_task).
     from api_server.db.platform_settings import get_cred_rotation_enabled
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:

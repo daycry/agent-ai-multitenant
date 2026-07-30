@@ -35,6 +35,7 @@ from api_server.auth.deps import (
 )
 from api_server.db.knowledge import KbCategory
 from api_server.routers._helpers import require_tenant_id
+from api_server.routers._integrity import integrity_conflict
 from api_server.schemas.knowledge import (
     KbCategoryCreateRequest,
     KbCategoryResponse,
@@ -137,7 +138,7 @@ async def create_kb_category(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="kb_category.create") from exc
     await session.refresh(cat)
     return to_kb_category_response(cat)
 

@@ -27,6 +27,7 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { CortexModelSection } from "./cortex-model-section";
 
@@ -72,12 +73,6 @@ interface ProviderOption {
   kind: string;
   display_name: string;
   models: string[];
-}
-
-function errorText(err: unknown): string {
-  if (err instanceof ApiError) return err.body || err.message;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 export default function PlatformDefaultsPage() {
@@ -176,6 +171,7 @@ function SettingControl({
   def: SettingDef;
   current: SettingValue | undefined;
 }) {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const initial = current ? current.value : def.default;
   const [value, setValue] = useState<unknown>(initial);

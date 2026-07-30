@@ -9,10 +9,11 @@ import contextlib
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -39,7 +40,7 @@ async def _promote_ready_plans_async(settings: Settings) -> dict[str, Any]:
     from redis.asyncio import Redis
     from sqlalchemy import select
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     redis = Redis.from_url(settings.events_redis_url)
     plans_touched = 0
     promoted = 0

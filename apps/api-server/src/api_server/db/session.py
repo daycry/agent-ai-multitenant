@@ -18,6 +18,28 @@ from sqlalchemy.ext.asyncio import (
 from api_server.config import get_settings
 
 
+def pool_kwargs() -> dict[str, object]:
+    """Los cuatro parámetros de pool, leídos de settings (prod-13 task_prod13_06).
+
+    Antes los engines se creaban con los defaults de SQLAlchemy — `pool_size=5`,
+    `max_overflow=10`, `pool_timeout=30`, sin `pool_recycle` — y ninguno era
+    visible ni ajustable sin tocar código. Con la transacción por request
+    retenida durante el turno LLM, esas 15 conexiones se agotaban con ~15 chats
+    concurrentes y toda la API empezaba a devolver `TimeoutError` (db-2/perf-2).
+
+    Se expone como función y no como constante para que un cambio de env var se
+    recoja al reconstruir el engine (los tests lo hacen con
+    `reset_engine_cache()`), no al importar el módulo.
+    """
+    settings = get_settings()
+    return {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout,
+        "pool_recycle": settings.db_pool_recycle,
+    }
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> AsyncEngine:
     """Engine for normal application traffic (NOBYPASSRLS role)."""
@@ -26,6 +48,7 @@ def get_engine() -> AsyncEngine:
         settings.database_url,
         pool_pre_ping=True,
         future=True,
+        **pool_kwargs(),
     )
 
 
@@ -46,6 +69,7 @@ def get_admin_engine() -> AsyncEngine:
         settings.admin_database_url,
         pool_pre_ping=True,
         future=True,
+        **pool_kwargs(),
     )
 
 

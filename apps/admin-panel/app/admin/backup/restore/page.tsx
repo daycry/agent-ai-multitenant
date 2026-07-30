@@ -47,7 +47,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface BackupListItem {
   backup_id: string;
@@ -95,10 +96,6 @@ interface RestoreJobStatus {
 }
 
 type RestoreKind = "full" | "per_tenant";
-
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 function formatBytes(n: number | null): string {
   if (n === null) return "—";
@@ -149,6 +146,7 @@ export default function RestorePage() {
 }
 
 function RestoreWorkspace() {
+  const errorText = useErrorText();
   const [selected, setSelected] = useState<string | null>(null);
   const [kind, setKind] = useState<RestoreKind>("full");
   const [tenantId, setTenantId] = useState("");

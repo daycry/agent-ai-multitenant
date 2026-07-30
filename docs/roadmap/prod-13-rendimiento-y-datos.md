@@ -22,12 +22,13 @@ priority: P1
 | Campo                              | Valor                                                            |
 | ---------------------------------- | ---------------------------------------------------------------- |
 | **ID del Plan**                    | `prod-13-rendimiento-y-datos`                                    |
-| **Estado**                         | `pending_approval`                                               |
 | **Prioridad**                      | P1                                                               |
 | **Bloqueado por**                  | — (independiente; coordinación con prod-04/05/06/10, ver tareas) |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                                                      |
 | **Tiempo estimado (persona-días)** | 21                                                               |
 | **Rama git sugerida**              | `plan/prod-13-rendimiento-y-datos`                               |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

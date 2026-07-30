@@ -30,7 +30,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface BackupSchedule {
   enabled: boolean;
@@ -44,11 +45,8 @@ const DEFAULT_SCHEDULE: BackupSchedule = {
   retention_days: 7,
 };
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 export default function BackupSchedulePage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const [enabled, setEnabled] = useState(DEFAULT_SCHEDULE.enabled);

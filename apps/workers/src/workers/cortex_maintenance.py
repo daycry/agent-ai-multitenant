@@ -45,10 +45,11 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.cortex_maintenance")
 
@@ -102,7 +103,7 @@ async def _run_maintenance(settings: Settings, *, now: datetime | None = None) -
     Corre BYPASSRLS (sin ``set_config app.tenant_id``); TODO acceso filtra
     ``owner_user_id`` explícito."""
     now = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         # (1) Kill-switch global (ADR 0078): OFF (default) ⇒ no-op total.

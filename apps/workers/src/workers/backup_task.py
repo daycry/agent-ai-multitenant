@@ -24,13 +24,14 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.backup import BackupConfig, BackupError, run_full_backup
 from workers.backup_metrics import write_backup_metrics
 from workers.backup_verification import verify_bundle
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine, worker_session
 
 _log = structlog.get_logger("workers.backup_task")
 
@@ -71,7 +72,7 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
 
     cron = settings.backup_cron
     retention_days = int(settings.backup_retention_days)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
@@ -153,14 +154,9 @@ async def _read_backup_destinations(settings: Settings) -> list[dict[str, Any]]:
     from the same ``backup_destinations`` platform setting the admin panel writes."""
     from api_server.db.platform_settings import get_backup_destinations
 
-    engine = create_async_engine(settings.database_url)
-    try:
-        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-        async with sessionmaker() as db:
-            dests: list[dict[str, Any]] = list(await get_backup_destinations(db))
-            return dests
-    finally:
-        await engine.dispose()
+    async with worker_session(settings) as db:
+        dests: list[dict[str, Any]] = list(await get_backup_destinations(db))
+        return dests
 
 
 async def _upload_bundle_to_destinations(

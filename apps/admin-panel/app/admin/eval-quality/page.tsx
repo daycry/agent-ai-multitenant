@@ -35,7 +35,8 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { Spinner } from "@/components/ui/spinner";
 import { EvalRunResults } from "@/components/evals/eval-run-results";
 import { LaunchEvalRun } from "@/components/evals/launch-eval-run";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.eval_quality. All pass_rate are fractions
@@ -131,10 +132,6 @@ const STATUS_BADGE: Record<string, BadgeVariant> = {
   failed: "danger",
   cancelled: "warning",
 };
-
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 function fmtWhen(iso: string | null): string {
   if (!iso) return "—";
@@ -238,6 +235,7 @@ function PassRateBar({
 }
 
 function DashboardBody() {
+  const errorText = useErrorText();
   const [windowDays, setWindowDays] = useState<number>(90);
   // Qué corrida tiene el desglose abierto. Una sola a la vez: abrir varias a
   // la vez dispara una petición por fila y el desglose se viene a mirar de uno

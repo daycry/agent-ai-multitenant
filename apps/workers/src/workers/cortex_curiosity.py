@@ -59,10 +59,11 @@ from shared_llm.base import LLMProvider
 from shared_llm.providers import OllamaProvider
 from shared_llm.types import Message
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 if TYPE_CHECKING:  # solo para tipar; el import real es perezoso (patrón del módulo)
     from api_server.cortex.researcher import ResearchResult
@@ -225,7 +226,7 @@ async def _run_curiosity_loop(  # noqa: PLR0911, PLR0912, PLR0915
     Posee el engine lifecycle; corre BYPASSRLS (sin ``set_config app.tenant_id``);
     captura sus propias excepciones (best-effort, nunca tumba beat)."""
     now = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     redis = _get_redis()
     try:

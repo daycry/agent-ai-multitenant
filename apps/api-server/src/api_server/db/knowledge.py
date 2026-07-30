@@ -32,6 +32,7 @@ from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     ForeignKey,
@@ -149,8 +150,9 @@ class Document(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Sof
     source_mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     # MinIO object key — never the raw bytes.
     source_storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    # BIGINT desde la migración 0126: `Integer` desbordaba a los 2 GiB (db-9).
     source_size_bytes: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
+        BigInteger, nullable=False, server_default=text("0")
     )
 
     status: Mapped[str] = mapped_column(

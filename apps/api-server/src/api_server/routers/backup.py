@@ -29,6 +29,8 @@ write. Each successful write is audited (``backup.schedule_updated``).
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -238,7 +240,13 @@ async def test_backup_destination(
     factory_config = {"type": match["type"], "name": match["name"], **match.get("config", {})}
     try:
         destination = build_destination(factory_config, secrets=EnvSecretsProvider())
-        result = destination.test_connectivity()
+        # `test_connectivity` es SÍNCRONO y hace red: `head_bucket` de boto3, un
+        # `stat` de paramiko, `rclone lsd`. Contra un destino inalcanzable se
+        # queda esperando el timeout del socket, y ejecutado en el bucle de
+        # eventos congela TODAS las requests y WebSockets del api-server
+        # (hallazgo api-3). `to_thread` lo saca a un hilo del executor: la
+        # petición sigue esperando, el resto de la plataforma no.
+        result = await asyncio.to_thread(destination.test_connectivity)
     except DestinationError as exc:
         # A config the factory rejects (shouldn't happen post-validation) maps to
         # a clean not-ok result rather than a 500 — the UI renders FAIL + detail.
@@ -361,21 +369,33 @@ async def _list_remote_backups(session: AsyncSession) -> list[tuple[str, str]]:
     from workers.backup_destinations import DestinationError, build_destination
     from workers.backup_encryption import EnvSecretsProvider
 
-    out: list[tuple[str, str]] = []
     secrets = EnvSecretsProvider()
+
+    def _list_one(item: dict[str, object]) -> list[tuple[str, str]]:
+        """Build the adapter and enumerate it. SÍNCRONO y con red — se ejecuta
+        en un hilo, nunca en el bucle de eventos (hallazgo api-3): con N destinos
+        remotos configurados, uno solo inalcanzable bloqueaba el api-server
+        entero durante su timeout de socket."""
+        name = str(item["name"])
+        factory_config = {
+            "type": item["type"],
+            "name": item["name"],
+            **(item.get("config") or {}),  # type: ignore[dict-item]
+        }
+        try:
+            destination = build_destination(factory_config, secrets=secrets)
+            return [(entry.name, name) for entry in destination.list_remote()]
+        except DestinationError:
+            # One unreachable / misconfigured destination must not fail the list.
+            return []
+        except Exception:  # pragma: no cover - defensive: never 500 the list
+            return []
+
+    out: list[tuple[str, str]] = []
     for item in items:
         if not item.get("enabled", True):
             continue
-        factory_config = {"type": item["type"], "name": item["name"], **item.get("config", {})}
-        try:
-            destination = build_destination(factory_config, secrets=secrets)
-            for entry in destination.list_remote():
-                out.append((entry.name, item["name"]))
-        except DestinationError:
-            # One unreachable / misconfigured destination must not fail the list.
-            continue
-        except Exception:  # pragma: no cover - defensive: never 500 the list
-            continue
+        out.extend(await asyncio.to_thread(_list_one, item))
     return out
 
 

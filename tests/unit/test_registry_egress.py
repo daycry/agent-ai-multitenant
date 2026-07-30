@@ -177,7 +177,10 @@ async def test_stack_exec_requests_dep_egress(
     class _Engine:
         async def dispose(self) -> None: ...
 
-    monkeypatch.setattr(tasks, "create_async_engine", lambda _url: _Engine())
+    # `worker_engine` y no `create_async_engine`: ver la nota en
+    # tests/unit/test_stack_exec_errors.py::_wire_db — el engine compartido cambió
+    # la costura, no lo que se prueba.
+    monkeypatch.setattr(tasks, "worker_engine", lambda _settings: _Engine())
     monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: (lambda: _Session()))
     monkeypatch.setattr("docker.from_env", lambda: MagicMock())
     monkeypatch.setattr(

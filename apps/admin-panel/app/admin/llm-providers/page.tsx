@@ -82,7 +82,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.llm_providers + db.llm_providers enums.
@@ -152,10 +153,6 @@ const TEST_STATUS_LABEL: Record<string, string> = {
   upstream_error: "error del proveedor",
 };
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 function isKind(value: string): value is ProviderKind {
   return (KINDS as string[]).includes(value);
 }
@@ -197,6 +194,7 @@ export default function LlmProvidersPage() {
 }
 
 function LlmProvidersContent() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -516,6 +514,7 @@ interface ProviderFormDialogProps {
 }
 
 function ProviderFormDialog({ mode, provider, onClose, onSaved }: ProviderFormDialogProps) {
+  const errorText = useErrorText();
   const isEdit = mode === "edit";
 
   // `kind` is immutable on edit (a kind change is a different provider).
@@ -824,6 +823,7 @@ function CopilotDeviceFlowDialog({
   onClose,
   onAuthorized,
 }: CopilotDeviceFlowDialogProps) {
+  const errorText = useErrorText();
   const [phase, setPhase] = useState<DeviceFlowPhase>("idle");
   const [start, setStart] = useState<DeviceFlowStart | null>(null);
   const [pollStatus, setPollStatus] = useState<string>("");

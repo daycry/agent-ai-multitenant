@@ -90,7 +90,10 @@ async def test_run_execution_skips_when_lock_held(monkeypatch: pytest.MonkeyPatc
         async def dispose(self) -> None: ...
 
     monkeypatch.setattr(tasks_mod, "Redis", _FakeRedisFactory)
-    monkeypatch.setattr(tasks_mod, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+    # `task_audit14_06`: el engine ya no se construye aquí a mano; lo da la
+    # factoría común (`workers.db.worker_engine`), que es el nombre importado en
+    # este módulo y por tanto el lookup site que hay que parchear.
+    monkeypatch.setattr(tasks_mod, "worker_engine", lambda *_a, **_k: _FakeEngine())
 
     async def _boom(*_a: object, **_k: object) -> object:
         raise AssertionError("conduct_execution NO debe llamarse con el lock tomado")
@@ -162,7 +165,7 @@ async def test_pending_task_event_publishes_after_lock_release(
         async def dispose(self) -> None: ...
 
     monkeypatch.setattr(tasks_mod, "Redis", _FakeRedisFactory)
-    monkeypatch.setattr(tasks_mod, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+    monkeypatch.setattr(tasks_mod, "worker_engine", lambda *_a, **_k: _FakeEngine())
 
     sentinel_task = object()
     outcome = ExecutionOutcome(
@@ -227,7 +230,7 @@ async def test_outcome_without_pending_event_publishes_nothing(
         async def dispose(self) -> None: ...
 
     monkeypatch.setattr(tasks_mod, "Redis", _FakeRedisFactory)
-    monkeypatch.setattr(tasks_mod, "create_async_engine", lambda *_a, **_k: _FakeEngine())
+    monkeypatch.setattr(tasks_mod, "worker_engine", lambda *_a, **_k: _FakeEngine())
 
     async def _fake_conduct(*_a: object, **_k: object) -> ExecutionOutcome:
         return ExecutionOutcome(execution_id="e-2", status="done", abort_code=None)

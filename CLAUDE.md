@@ -39,40 +39,56 @@ El sistema se opera como un stack **Docker Compose en una sola máquina** (no Ku
 
 12. **Idiomas soportados**: **ES + EN únicamente** en esta versión. No invertir esfuerzo en más idiomas.
 
-## Estructura del Repositorio (Esperada)
+## Estructura del Repositorio (Real)
+
+Este árbol describe el repo **como está hoy**, no como se planeó. Las carpetas
+marcadas `RESERVADA` contienen solo `.gitkeep`: la funcionalidad existe, pero
+vive integrada en otro servicio (ADR 0033 para asistente/memorizer). No las
+uses como punto de partida ni asumas que hay código dentro. El test
+`tests/unit/test_docs_governance.py::test_claude_md_tree_matches_repo` falla si
+este árbol y `apps/`/`packages/` divergen.
 
 ```
 agentic-platform/
 ├── CLAUDE.md                        # este archivo
 ├── apps/
 │   ├── api-server/                  # FastAPI + REST/WebSocket. Aloja además el
-│   │                                #   memorizer y el asistente personal
+│   │                                #   memorizer, el asistente y los webhooks
 │   ├── orchestrator/                # Asignación de tareas a workers
 │   ├── workers/                     # Celery workers (default/heavy/gpu/test/review).
 │   │                                #   Aloja además el despacho de webhooks
 │   ├── notification-dispatcher/     # Servicio propio
+│   ├── watchdog/                    # Vigilante de salud de contenedores
+│   │                                #   (reinicio con backoff exponencial)
 │   ├── memorizer/                   # RESERVADA (vacía) — vive en api_server/memorizer/
 │   ├── webhook-dispatcher/          # RESERVADA (vacía) — vive en los workers
 │   ├── personal-assistant/          # RESERVADA (vacía) — vive en api_server/assistant/
-│   ├── installer/                   # Wizard UI bootstrap
+│   ├── installer/                   # Wizard UI bootstrap (backend/ + frontend/)
 │   └── admin-panel/                 # Frontend ÚNICO: tenants + System Admin,
 │                                    #   separados por RBAC y rutas (ADR 0117 c)
 ├── packages/
-│   ├── shared-domain/               # Modelos Pydantic compartidos
-│   ├── shared-db/                   # SQLAlchemy + Alembic
-│   ├── shared-auth/                 # JWT + RBAC + Casbin
+│   ├── shared-domain/               # Enums y constantes de dominio compartidas
 │   ├── shared-llm/                  # Capa LLM async (Claude SDK + Copilot + Azure Foundry + Ollama) — ADR 0021
 │   ├── shared-mcp/                  # Cliente MCP genérico
 │   ├── shared-guardrails/           # Motor de guardrails
-│   └── shared-test-runtimes/        # Definiciones de runtime templates
+│   ├── shared-test-runtimes/        # Definiciones de runtime templates
+│   ├── sdk-python/                  # SDK público generado del OpenAPI v1 (Plan 13)
+│   ├── sdk-typescript/              # SDK público generado del OpenAPI v1 (Plan 13)
+│   ├── shared-db/                   # RESERVADA (vacía) — SQLAlchemy y Alembic
+│   │                                #   viven en api_server/db/ y api-server/migrations/
+│   └── shared-auth/                 # RESERVADA (vacía) — JWT y RBAC viven en
+│                                    #   api_server/auth/
 ├── docker/
 │   ├── docker-compose.yml           # Stack principal
 │   ├── docker-compose.dev.yml       # Overrides desarrollo
 │   ├── docker-compose.gpu.yml       # Overrides GPU (opcional)
+│   ├── docker-compose.monitoring.yml# Overlay de observabilidad
 │   └── agent-runtimes/              # Dockerfiles de runtime templates
 ├── docs/
 │   ├── context/                     # Contextualización para el desarrollo
-│   ├── roadmap/                     # Planes por fase (00 a 15)
+│   ├── roadmap/                     # Planes: numerados (00 a 16) + serie
+│   │                                #   correctiva prod-01…prod-18 + descriptivos
+│   ├── manuals/                     # Manuales de usuario (fuente + PDF generado)
 │   ├── 01-overview/                 # 7 carpetas canónicas del producto
 │   ├── 02-getting-started/
 │   ├── 03-guides/
@@ -81,13 +97,17 @@ agentic-platform/
 │   ├── 06-runbooks/
 │   └── 07-changelog/
 ├── scripts/
-│   ├── install.sh
+│   ├── install.sh                   # Tooling de plataforma
 │   ├── uninstall.sh
-│   └── backup.sh
+│   ├── backup.sh
+│   ├── dev/                         # Scripts de desarrollo (up/down/e2e/builds)
+│   └── demos/                       # Demos de tests humanos por fase
 └── tests/
     ├── unit/
     ├── integration/
-    └── e2e/
+    ├── e2e/
+    ├── security/
+    └── smoke/
 ```
 
 ## Stack Tecnológico (Resumen)
@@ -167,7 +187,8 @@ Solo cuando se cumplen TODOS los criterios de cierre del plan:
 2. Todos los tests automáticos en verde.
 3. Tests humanos del plan validados por un humano.
 4. Entrada generada en `docs/07-changelog/{plan_id}.md`.
-5. PR del plan mergeado a `main`.
+5. PR del plan mergeado a `master` (la rama por defecto de este repo es
+   `master`, no `main`).
 
 Edita el frontmatter:
 
@@ -222,7 +243,8 @@ tengan `status: completed`.
 - ❌ Escribir queries SQL sin filtro por `tenant_id` o sin middleware que lo inyecte.
 - ❌ Instalar lenguajes adicionales (PHP, Node, Go, Java) en la imagen de los workers. Eso vive en runtime templates separados.
 - ❌ Hacer `docker compose up -d --build` sin antes verificar que las migraciones Alembic son reversibles.
-- ❌ Pushear directamente a `main` del repo del propio sistema. Todo va por PR.
+- ❌ Pushear directamente a la rama por defecto del repo del propio sistema, que
+  es `master` y no `main`. Todo va por PR.
 - ❌ Comitear secretos. Vault es la única vía de credenciales.
 - ❌ Crear features nuevas no documentadas en el .docx sin pasar antes por ADR.
 - ❌ Asumir Kubernetes / multi-máquina. El alcance actual es Docker Compose en una sola máquina.

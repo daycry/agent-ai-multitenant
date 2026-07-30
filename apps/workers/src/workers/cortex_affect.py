@@ -51,10 +51,11 @@ from shared_llm.providers import OllamaProvider
 from shared_llm.types import Message
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.cortex_affect")
 
@@ -123,7 +124,7 @@ async def _distill_affect_async(
     El reloj entra como ``now`` (default: ahora) para hacer el decay determinista
     en los tests."""
     now = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:

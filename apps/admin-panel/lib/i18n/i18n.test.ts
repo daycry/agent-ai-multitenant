@@ -43,15 +43,42 @@ describe("dictionary — invariantes", () => {
   });
 
   it("ninguna traducción es un copia-pega del castellano sin traducir", () => {
-    // Palabras que legítimamente se escriben igual en los dos idiomas.
-    const identicalOnPurpose = new Set(["login.emailLabel"]);
+    // Palabras que legítimamente se escriben igual en los dos idiomas: términos
+    // que la UI castellana ya usaba en inglés (Dashboard, Runs, Settings…) y
+    // nombres de producto. Esta lista sólo debe crecer con casos así; si crece
+    // con verdaderas traducciones pendientes, el test deja de servir para nada.
+    const identicalOnPurpose = new Set([
+      "login.emailLabel",
+      "nav.dashboard",
+      "nav.runs",
+      "nav.knowledgeBases",
+      "nav.guardrails",
+      "nav.marketplace",
+      "nav.settings",
+      "nav.ollama",
+      "nav.sso",
+      "nav.backup",
+      "users.colEmail",
+      "users.colTenant",
+      // Nombres de rol del backend: se muestran tal cual a propósito.
+      "users.typeSystemAdmin",
+      "users.roleTenantAdmin",
+      "users.roleTenantUser",
+      "users.roleSystemOperator",
+    ]);
 
-    const untranslated = everyEntry()
-      .filter(({ texts }) => texts.es === texts.en)
-      .map(({ ns, key }) => `${ns}.${key}`)
-      .filter((id) => !identicalOnPurpose.has(id));
+    const identical = new Set(
+      everyEntry()
+        .filter(({ texts }) => texts.es === texts.en)
+        .map(({ ns, key }) => `${ns}.${key}`),
+    );
 
-    expect(untranslated).toEqual([]);
+    expect([...identical].filter((id) => !identicalOnPurpose.has(id))).toEqual([]);
+
+    // La otra dirección: una excepción que ya no aplica (porque la clave se
+    // borró o porque alguien SÍ la tradujó) debe salir de la lista. Sin esto la
+    // allowlist crece y nunca mengua, y acaba tapando lo que debía vigilar.
+    expect([...identicalOnPurpose].filter((id) => !identical.has(id))).toEqual([]);
   });
 });
 

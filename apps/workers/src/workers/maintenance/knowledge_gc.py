@@ -23,9 +23,10 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import CursorResult, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -171,7 +172,7 @@ async def _run() -> dict[str, int]:
     from workers.config import get_settings
 
     settings = get_settings()
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
         return await collect_knowledge_garbage(

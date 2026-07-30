@@ -63,6 +63,7 @@ import {
 } from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { PriceFormDialog, PriceHistoryDialog, SyncDiffDialog } from "./model-price-dialogs";
 import {
@@ -70,7 +71,6 @@ import {
   SOURCE_BADGE,
   UNIT_LABEL,
   activeFamilies,
-  errorText,
   fmtDate,
   fmtUsd,
   type LlmProvider,
@@ -82,6 +82,7 @@ import {
 // Page
 // ===========================================================================
 export default function ModelPricesPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const { isSystemAdmin } = useCurrentUser();
 

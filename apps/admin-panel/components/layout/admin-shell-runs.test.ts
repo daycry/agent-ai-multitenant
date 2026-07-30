@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NAV_GROUPS } from "@/components/layout/admin-shell";
+import { translate } from "@/lib/i18n";
 
 describe("nav Trabajo → Runs (runs-visor B3)", () => {
   it("contains the Runs entry pointing at /admin/runs", () => {
@@ -12,7 +13,10 @@ describe("nav Trabajo → Runs (runs-visor B3)", () => {
     expect(trabajo).toBeDefined();
     const runs = trabajo?.items.find((i) => i.href === "/admin/runs");
     expect(runs).toBeDefined();
-    expect(runs?.label).toBe("Runs");
+    // El texto vive en el diccionario desde prod-16 `task_prod16_02`.
+    expect(runs?.labelKey).toBe("runs");
+    expect(translate("es", "nav", "runs")).toBe("Runs");
+    expect(translate("en", "nav", "runs")).toBe("Runs");
   });
 
   it("is visible to any member (no adminOnly gating on the item)", () => {

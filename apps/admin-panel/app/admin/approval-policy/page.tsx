@@ -56,7 +56,17 @@ const CATEGORY_LABELS: Array<{ id: string; label: string; hint: string }> = [
   { id: "external_http_get", label: "HTTP GET externo", hint: "Lecturas a internet" },
   { id: "external_http_post", label: "HTTP POST externo", hint: "Escrituras a internet" },
   { id: "secrets_access", label: "Acceso a secretos", hint: "Lectura de Vault" },
-  { id: "data_migration", label: "Migración de datos", hint: "DDL / alembic" },
+  {
+    id: "data_migration",
+    // El hint decía solo «DDL / alembic», y desde prod-03 task_prod03_02 esta
+    // categoría gatea además `promote_to_kb` (copiar un documento y sus chunks a
+    // otra KB del tenant, de donde lo leerá por RAG cualquier proyecto con
+    // grant). Un operador que leyera «DDL» descartaría la categoría por
+    // irrelevante y dejaría en `auto` la única puerta que hay sobre la escritura
+    // persistente en la base de conocimiento.
+    label: "Migración de datos",
+    hint: "DDL / alembic y promoción de documentos a otra KB (promote_to_kb)",
+  },
   { id: "production_deploy", label: "Despliegue producción", hint: "Rolling out a prod" },
   { id: "infra_provision", label: "Aprovisionar infra", hint: "Crear recursos" },
   { id: "secret_rotation", label: "Rotación de secretos", hint: "Vault rotate" },

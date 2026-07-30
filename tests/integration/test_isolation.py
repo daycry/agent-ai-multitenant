@@ -242,9 +242,11 @@ async def test_invalid_jwt_signature_is_401(configured_app) -> None:
     # Token signed with a different secret.
     from datetime import datetime, timedelta
 
-    from jose import jwt as jose_jwt
+    from joserfc import jwt as jose_jwt
+    from joserfc.jwk import OctKey
 
     bad_token = jose_jwt.encode(
+        {"alg": "HS256", "typ": "JWT"},
         {
             "sub": str(uuid4()),
             "sid": str(uuid4()),
@@ -252,8 +254,7 @@ async def test_invalid_jwt_signature_is_401(configured_app) -> None:
             "iat": int(datetime.now(tz=UTC).timestamp()),
             "exp": int((datetime.now(tz=UTC) + timedelta(hours=1)).timestamp()),
         },
-        "WRONG-SECRET",
-        algorithm="HS256",
+        OctKey.import_key("WRONG-SECRET"),
     )
 
     async with AsyncClient(

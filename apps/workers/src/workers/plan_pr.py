@@ -129,9 +129,11 @@ async def push_plan_branch_to_remote(
     ``pushed`` / ``skipped:<reason>`` / ``error:<msg>``.
     """
     from api_server.db.domain import Project
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    engine = create_async_engine(settings.database_url)
+    from workers.db import worker_engine
+
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:
@@ -284,8 +286,9 @@ async def _resolve_pr_context(sessionmaker: Any, project_id: UUID, plan_id: str)
 async def _open_plan_pr_async(
     project_id: UUID, plan_id: str, *, title: str, body: str, settings: Settings
 ) -> dict[str, Any]:
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from workers.db import worker_engine
     from workers.plan_docs import generate_plan_closure_docs_async
 
     # T8 (c4): la documentación de cierre se genera y commitea ANTES de abrir el
@@ -297,7 +300,7 @@ async def _open_plan_pr_async(
     docs = await generate_plan_closure_docs_async(settings, plan_id)
     _log.info("plan_pr.closure_docs", plan_id=plan_id, status=docs.get("status"))
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         ctx = await _resolve_pr_context(sessionmaker, project_id, plan_id)

@@ -76,7 +76,11 @@ def _wire_db(
     class _Engine:
         async def dispose(self) -> None: ...
 
-    monkeypatch.setattr(tasks, "create_async_engine", lambda _url: _Engine())
+    # `worker_engine`, no `create_async_engine`: la remediación de la auditoría
+    # integral sustituyó las 36 creaciones directas de engine por el helper
+    # compartido, así que la costura a parchear cambió de nombre. El doble sigue
+    # siendo el mismo y lo que el test verifica no cambia.
+    monkeypatch.setattr(tasks, "worker_engine", lambda _settings: _Engine())
     monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: (lambda: _Session()))
     monkeypatch.setattr("docker.from_env", lambda: MagicMock())
 

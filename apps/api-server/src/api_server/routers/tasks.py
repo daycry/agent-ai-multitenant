@@ -50,6 +50,7 @@ from api_server.routers._helpers import (
     require_project_active,
     require_tenant_id,
 )
+from api_server.routers._integrity import integrity_conflict
 from api_server.routers._pagination import (
     apply_pagination,
     limit_query,
@@ -193,7 +194,7 @@ async def _set_dependencies(
         # The DB CHECK ck_task_dependencies_no_self_loop catches a task
         # depending on itself, even if the application logic somehow
         # let it through.
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="task.dependencies") from exc
 
 
 # ---------------------------------------------------------------------------

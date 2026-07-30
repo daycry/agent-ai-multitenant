@@ -417,6 +417,25 @@ class Agent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
         ),
         Index("ix_agents_scope_project", "scope", "project_id"),
         Index("ix_agents_forked_from", "forked_from_agent_id"),
+        # Unicidad del nombre por tenant, PARTIDA en dos por `project_id`
+        # (migración 0126). NO es un único `(tenant_id, name)`: un agente
+        # `project_local` forkeado de su plantilla `global_tenant_template`
+        # conserva el nombre por diseño, así que ese índice habría roto el fork.
+        Index(
+            "uq_agents_tenant_project_name_live",
+            "tenant_id",
+            "project_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND project_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_agents_tenant_name_global_live",
+            "tenant_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL AND project_id IS NULL"),
+        ),
         # scope <-> project_id invariant (spec §5.7.5):
         #   global_builtin / global_tenant_template -> project_id IS NULL
         #   project_local                           -> project_id IS NOT NULL
@@ -499,6 +518,14 @@ class Skill(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
             "ix_skills_tenant_category",
             "tenant_id",
             "category",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Único por tenant sobre los vivos (migración 0126, patrón 0077).
+        Index(
+            "uq_skills_tenant_name_live",
+            "tenant_id",
+            "name",
+            unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
@@ -697,10 +724,15 @@ class AgentTool(Base, TenantScopedMixin, TimestampMixin):
 class Team(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "teams"
     __table_args__ = (
+        # Único por tenant sobre los vivos (migración 0126, réplica del patrón
+        # `uq_tools_tenant_name` de 0077). Antes de 0126 este mismo par de
+        # columnas existía como índice NO único (`ix_teams_tenant_name`): servía
+        # para buscar, no para impedir el duplicado.
         Index(
-            "ix_teams_tenant_name",
+            "uq_teams_tenant_name_live",
             "tenant_id",
             "name",
+            unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
@@ -1018,7 +1050,10 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
 
-    created_by: Mapped[UUID] = mapped_column(
+    # `ON DELETE SET NULL` + `nullable=True`: el tipo TIENE que admitir None
+    # (db-9). Se declaraba `Mapped[UUID]` sobre una columna nullable, así que
+    # mypy creía imposible el caso que la propia FK provoca al borrar al autor.
+    created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
@@ -1195,6 +1230,10 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_executions_task_id", "task_id"),
         Index("ix_executions_tenant_status", "tenant_id", "status"),
+        # Ventanas de gasto por tenant (`budgets/consumption.py`), listados de
+        # runs y el sweep de presupuestos: igualdad por tenant + rango por
+        # fecha. Migración 0126. El orden NO es intercambiable.
+        Index("ix_executions_tenant_created_at", "tenant_id", "created_at"),
         CheckConstraint("iterations >= 0", name="ck_executions_iterations_non_negative"),
         CheckConstraint("total_tokens >= 0", name="ck_executions_total_tokens_non_negative"),
         CheckConstraint("total_cost_usd >= 0", name="ck_executions_total_cost_non_negative"),

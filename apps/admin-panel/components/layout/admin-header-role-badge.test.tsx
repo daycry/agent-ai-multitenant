@@ -24,8 +24,11 @@ vi.mock("@/lib/use-current-user", () => ({
 vi.mock("@/components/layout/tenant-picker", () => ({
   TenantPicker: () => <div data-testid="tenant-picker-stub" />,
 }));
+// `useLangOptional` es lo que consume `useT()` (prod-16 `task_prod16_02`): sin
+// él en el mock, la cabecera migrada al diccionario petaría al renderizar.
 vi.mock("@/lib/lang-context", () => ({
   useLang: () => ({ lang: "es", setLang: vi.fn() }),
+  useLangOptional: () => "es",
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock("@/lib/api", () => ({

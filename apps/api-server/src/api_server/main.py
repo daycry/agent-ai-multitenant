@@ -62,6 +62,7 @@ from api_server.routers.evals import router as evals_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.guardrail_alerts import router as guardrail_alerts_router
 from api_server.routers.guardrail_events import router as guardrail_events_router
+from api_server.routers.health import router as health_router
 from api_server.routers.human_agents import router as human_agents_router
 from api_server.routers.human_inbox import router as human_inbox_router
 from api_server.routers.human_queue import router as human_queue_router
@@ -402,9 +403,11 @@ def create_app() -> FastAPI:
 
     instrument_fastapi(app)
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    # `/healthz` (liveness) y `/readyz` (readiness) viven juntos en
+    # `routers/health.py` desde `task_audit14_08`: son un PAR y la asimetría entre
+    # ellos —liveness no toca dependencias externas, readiness sí— sólo se
+    # entiende leyéndolos a la vez. El contrato de `/healthz` no cambió.
+    app.include_router(health_router)
 
     @app.get("/me", response_model=None)
     async def me(

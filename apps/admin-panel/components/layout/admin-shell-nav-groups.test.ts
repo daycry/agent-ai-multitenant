@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { translate } from "@/lib/i18n";
+import type { Lang } from "@/lib/i18n/types";
+
 import { NAV_GROUPS, navGroupVisible, visibleNavGroups, type NavScope } from "./admin-shell";
 
 /**
@@ -69,12 +72,38 @@ describe("NAV_GROUPS — estructura (human_menu_01 v1)", () => {
     expect(planOrder).toEqual([...PLAN_GROUP_IDS]);
   });
 
-  it("etiqueta cada grupo del plan con su nombre visible", () => {
-    expect(groupById("trabajo").label).toBe("Trabajo");
-    expect(groupById("recursos").label).toBe("Recursos");
-    expect(groupById("config-tenant").label).toBe("Configuración del tenant");
-    expect(groupById("plataforma").label).toBe("Plataforma");
-    expect(groupById("ayuda").label).toBe("Ayuda");
+  // Desde prod-16 `task_prod16_02` el nav no guarda el texto sino la clave del
+  // diccionario, así que la aserción pasa por `translate`. Sigue comprobando el
+  // MISMO hecho visible (qué lee el usuario en cada grupo) y añade el de EN, que
+  // antes no existía porque el sidebar era ES-only.
+  it("etiqueta cada grupo del plan con su nombre visible en ES y EN", () => {
+    const label = (id: string, lang: Lang) => translate(lang, "nav", groupById(id).labelKey);
+
+    expect(label("trabajo", "es")).toBe("Trabajo");
+    expect(label("recursos", "es")).toBe("Recursos");
+    expect(label("config-tenant", "es")).toBe("Configuración del tenant");
+    expect(label("plataforma", "es")).toBe("Plataforma");
+    expect(label("ayuda", "es")).toBe("Ayuda");
+
+    expect(label("trabajo", "en")).toBe("Work");
+    expect(label("recursos", "en")).toBe("Resources");
+    expect(label("config-tenant", "en")).toBe("Tenant settings");
+    expect(label("plataforma", "en")).toBe("Platform");
+    expect(label("ayuda", "en")).toBe("Help");
+  });
+
+  it("traduce TODOS los ítems del nav a los dos idiomas, sin dejar ninguno crudo", () => {
+    const items = NAV_GROUPS.flatMap((g) => g.items);
+    // Guarda contra el vaciado: si el nav se queda sin ítems, el test pasaría
+    // vacío (verificar-antes-de-implementar §4).
+    expect(items.length).toBeGreaterThanOrEqual(30);
+
+    for (const item of items) {
+      for (const lang of ["es", "en"] as const) {
+        const text = translate(lang, "nav", item.labelKey);
+        expect(text.trim(), `${item.href} en ${lang}`).not.toBe("");
+      }
+    }
   });
 
   it("no deja ningún grupo vacío (un grupo sin ítems no se renderiza)", () => {

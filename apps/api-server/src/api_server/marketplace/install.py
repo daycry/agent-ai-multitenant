@@ -53,6 +53,7 @@ commit them atomically.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -606,7 +607,16 @@ class InstallOrchestrator:
         self, ctx: _GateContext, artifact: FetchedArtifact, policy: Any
     ) -> None:
         """Gate 4: static analysis; abort when a finding exceeds the policy."""
-        report = self._run_static_analysis(artifact.source_dir, ctx.listing)
+        # `_run_static_analysis` lanza bandit y semgrep por `subprocess.run`
+        # SÍNCRONO, con hasta 120 s de timeout cada uno. Ejecutado en el bucle
+        # de eventos congelaba durante minutos TODAS las requests y WebSockets
+        # del api-server (hallazgo perf-1). `to_thread` es la mitigación que el
+        # plan prod-13 llama "intermedia": el request sigue durando lo que dura
+        # el análisis, pero deja de secuestrar el proceso entero. Mover la
+        # puerta a Celery + 202 sigue siendo lo correcto y es otra tarea.
+        report = await asyncio.to_thread(
+            self._run_static_analysis, artifact.source_dir, ctx.listing
+        )
         ctx.gate_report["static_analysis"] = {
             "ran": list(report.ran),
             "skipped": [name for name, _ in report.skipped],
@@ -633,7 +643,10 @@ class InstallOrchestrator:
 
     async def _gate_sandbox(self, ctx: _GateContext, artifact: FetchedArtifact) -> None:
         """Gate 5: run the sandbox smoke check (abort on a failing probe)."""
-        result = self._run_sandbox(artifact)
+        # Igual que la puerta 4: el SDK de Docker es síncrono de principio a
+        # fin (crear el contenedor, esperar, leer logs) y bloquearía el bucle
+        # de eventos mientras corre la prueba de humo (perf-1).
+        result = await asyncio.to_thread(self._run_sandbox, artifact)
         ctx.gate_report["sandbox"] = {
             "exit_code": result.exit_code,
             "timed_out": result.timed_out,

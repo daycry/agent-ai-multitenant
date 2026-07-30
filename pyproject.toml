@@ -183,12 +183,10 @@ follow_imports = "skip"
 module = ["claude_agent_sdk", "claude_agent_sdk.*"]
 ignore_missing_imports = true
 
-# `python-jose` ships without type stubs. We only use a narrow surface
-# (jwt.encode / jwt.decode / JWTError) so adopting types-python-jose
-# would add weight without buying much.
-[[tool.mypy.overrides]]
-module = ["jose", "jose.*"]
-ignore_missing_imports = true
+# `python-jose` salió del árbol el 2026-07-29 (prod-09 task_prod09_17): la pila
+# JOSE es una sola, `joserfc`, que SÍ trae `py.typed` — así que este override
+# (`module = ["jose", "jose.*"]`, con su nota sobre `types-python-jose`) dejó de
+# tener sujeto y se retiró en vez de quedarse como config muerta.
 
 # `pgvector` (>=0.3) ships .pyi stubs for the asyncpg/numpy adapters
 # but not for `pgvector.sqlalchemy.Vector`; treat the whole module as
@@ -447,6 +445,16 @@ filterwarnings = [
     # el loop. RETIRAR al cablear esa sesión: entonces el aviso dejaría de ser
     # ruido de test y habría que tratarlo como fuga real.
     "ignore:unclosed event loop:ResourceWarning",
+    # `joserfc.jwk.OctKey` avisa (SecurityWarning) al envolver un secreto HMAC de
+    # menos de 112 bits. Lo dispara la FIXTURE, no el código: 181 ficheros de test
+    # firman con `"test-secret"` (11 caracteres). En producción es INALCANZABLE —
+    # `Settings._require_strong_secrets` rechaza cualquier secreto de firma por
+    # debajo de 32 caracteres fuera de `environment=dev`, y el default de dev tiene
+    # 29 — y fuera de pytest el aviso sigue saliendo, así que este filtro no tapa
+    # nada real. Apareció al unificar la pila JOSE (prod-09 task_prod09_17):
+    # python-jose no comprobaba la longitud de la clave.
+    # RETIRAR cuando las fixtures usen secretos representativos (>= 32).
+    "ignore:Key size should be >= 112 bits",
 ]
 markers = [
   "unit: unit tests (fast, no I/O)",

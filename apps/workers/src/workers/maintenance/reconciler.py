@@ -21,10 +21,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import structlog
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 from workers.maintenance.worktree_backfill import _reconcile_unpushed_worktrees
 
 _log = structlog.get_logger("workers.maintenance")
@@ -848,7 +849,7 @@ async def _reconcile_pipeline_state_async(
     from redis.asyncio import Redis
 
     moment = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     own_redis = redis is None
     redis_client = redis if redis is not None else Redis.from_url(settings.events_redis_url)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)

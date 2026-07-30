@@ -22,12 +22,13 @@ priority: P1
 | Campo                              | Valor                                  |
 | ---------------------------------- | -------------------------------------- |
 | **ID del Plan**                    | `prod-12-hardening-tools-agentes`      |
-| **Estado**                         | `in_progress`                          |
 | **Prioridad**                      | P1                                     |
 | **Bloqueado por**                  | — (coordinar con prod-01 y prod-06)    |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                            |
 | **Tiempo estimado (persona-días)** | 17 (suma de tareas: 17,0)              |
 | **Rama git sugerida**              | `plan/prod-12-hardening-tools-agentes` |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -369,8 +370,8 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       hace `docker.from_env()` dentro del sandbox, pero la imagen no instala el paquete
       `docker` (pyproject.toml:6) ni recibe socket por diseño (Dockerfile:8 "carries NO
       Docker client") — hoy los `run*\*`(run_pytest/run_lint/…) inyectados por esta vía
-fallan en la primera llamada. Opción (a): retirarla del catálogo y del wiring,
-documentando que la ejecución real de tests va por`TestRuntimeRunner` del worker.
+  fallan en la primera llamada. Opción (a): retirarla del catálogo y del wiring,
+  documentando que la ejecución real de tests va por`TestRuntimeRunner` del worker.
       Opción (b): error explícito "no soportado en sandbox" en boot. Actualizar la
       asignación de tools en seeds/catálogo para que el operador no pueda asignar una
       tool muerta.

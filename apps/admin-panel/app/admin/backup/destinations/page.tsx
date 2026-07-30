@@ -34,7 +34,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 type DestinationType = "s3" | "b2" | "sftp" | "rclone";
 
@@ -87,10 +88,6 @@ const TYPE_LABELS: Record<DestinationType, string> = {
   rclone: "rclone (genérico)",
 };
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 function emptyDestination(): Destination {
   return { type: "s3", name: "", enabled: true, config: {} };
 }
@@ -104,6 +101,7 @@ function isComplete(dest: Destination): boolean {
 }
 
 export default function BackupDestinationsPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [destinations, setDestinations] = useState<Destination[]>([]);
   const [testResults, setTestResults] = useState<Record<string, ConnectivityResult | "pending">>(

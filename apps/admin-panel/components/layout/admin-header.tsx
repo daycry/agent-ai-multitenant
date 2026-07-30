@@ -18,8 +18,9 @@
  *        siempre (POST /auth/logout → limpiar token + tenant → /login).
  *
  * El selector ES/EN consume `useLang()` del contexto montado en
- * `app/admin/layout.tsx`; cualquier pantalla que llame al hook ve
- * el cambio inmediatamente.
+ * `app/providers.tsx` (layout RAÍZ, desde prod-16 `task_prod16_01`);
+ * cualquier pantalla que llame al hook ve el cambio inmediatamente. Los
+ * textos propios de la cabecera salen del diccionario (`useT("shell")`).
  *
  * Behavior-preserving: se conservan TODAS las rutas, llamadas a la
  * API y los `data-testid` existentes (admin-header, open-mobile-nav,
@@ -33,6 +34,7 @@ import { useRouter } from "next/navigation";
 import { Building2, ChevronDown, LogOut, Menu, Sparkles, UserRound } from "lucide-react";
 
 import { TenantPicker } from "@/components/layout/tenant-picker";
+import { useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -41,6 +43,7 @@ import { clearTenantId as clearStoredTenant } from "@/lib/tenant-storage";
 import { useCurrentUser, type CurrentUser } from "@/lib/use-current-user";
 
 export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
+  const t = useT("shell");
   const { lang, setLang } = useLang();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -76,7 +79,7 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
             "hover:bg-sidebar-border -ml-2 inline-flex h-10 w-10 items-center justify-center rounded-md",
             "md:hidden",
           )}
-          aria-label="Abrir menú"
+          aria-label={t("openMenu")}
           data-testid="open-mobile-nav"
         >
           <Menu className="h-5 w-5" />
@@ -196,10 +199,11 @@ function RoleBadge() {
 }
 
 function LangSwitcher({ lang, onChange }: { lang: Lang; onChange: (l: Lang) => void }) {
+  const t = useT("shell");
   return (
     <div
       role="group"
-      aria-label="Idioma"
+      aria-label={t("language")}
       className={cn(
         "bg-sidebar-border/60 border-sidebar-border",
         "inline-flex items-center rounded-md border p-0.5 text-xs",
@@ -236,9 +240,14 @@ function avatarInitial(user: CurrentUser | null): string {
   return source ? source.charAt(0).toUpperCase() : "?";
 }
 
-/** Texto principal mostrado junto al avatar (nombre o, en su defecto, email). */
-function displayName(user: CurrentUser | null): string {
-  return user?.full_name?.trim() || user?.email?.trim() || "Mi cuenta";
+/**
+ * Texto principal mostrado junto al avatar (nombre o, en su defecto, email).
+ *
+ * El fallback llega traducido desde el componente: la función es pura para
+ * poder testearla sin provider, así que no llama al hook.
+ */
+function displayName(user: CurrentUser | null, fallback: string): string {
+  return user?.full_name?.trim() || user?.email?.trim() || fallback;
 }
 
 function UserMenu({
@@ -250,12 +259,13 @@ function UserMenu({
   setOpen: (o: boolean) => void;
   onLogout: () => void;
 }) {
+  const t = useT("shell");
   const { user } = useCurrentUser();
   const menuRef = useRef<HTMLDivElement>(null);
   const firstItemRef = useRef<HTMLAnchorElement>(null);
 
   const initial = avatarInitial(user);
-  const name = displayName(user);
+  const name = displayName(user, t("myAccount"));
   const email = user?.email ?? null;
   // Evita duplicar nombre/email cuando coinciden (login por email sin nombre).
   const showEmailLine = Boolean(email) && email !== name;
@@ -283,7 +293,7 @@ function UserMenu({
         data-testid="user-menu"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Cuenta de ${name}`}
+        aria-label={t("accountOf", { name })}
         title={name}
       >
         <span
@@ -308,7 +318,7 @@ function UserMenu({
           <div
             className="bg-popover text-popover-foreground absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-md border shadow-lg"
             role="menu"
-            aria-label="Menú de usuario"
+            aria-label={t("userMenu")}
             data-testid="user-menu-popover"
           >
             {/* Identidad: nombre + email (también visible cuando el botón los oculta). */}
@@ -326,7 +336,7 @@ function UserMenu({
                 role="menuitem"
               >
                 <UserRound className="h-4 w-4" />
-                Perfil
+                {t("profile")}
               </Link>
               <button
                 type="button"
@@ -336,7 +346,7 @@ function UserMenu({
                 role="menuitem"
               >
                 <LogOut className="h-4 w-4" />
-                Cerrar sesión
+                {t("logout")}
               </button>
             </div>
           </div>

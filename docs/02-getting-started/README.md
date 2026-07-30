@@ -16,6 +16,14 @@ primer login como System Admin.
 | [01-installation.md](./01-installation.md) | Prerequisitos, bootstrap del entorno y arranque del stack Docker    |
 | [03-first-run.md](./03-first-run.md)       | Primer arranque: `up.ps1`/`up.sh`, registrar admin, crear un tenant |
 
+> **El hueco `02-*` no es un fichero perdido.** La numeración salta de `01` a
+> `03`, y comprobado en el historial completo de git
+> (`git log --all --name-only -- docs/02-getting-started/`) **nunca existió un
+> `02-*`**: no se borró nada, el `03` se creó ya con ese número. Los índices
+> numeran **orden de lectura**, no continuidad, y renumerar `03-first-run.md`
+> rompería los enlaces que lo citan sin aportar nada. Anotado en prod-15
+> (`task_gov_cabeceras_07`) para que nadie más lo busque.
+
 ## Orden recomendado
 
 1. Lee [01-overview](../01-overview/) para entender qué es el sistema.

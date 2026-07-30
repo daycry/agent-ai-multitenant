@@ -14,10 +14,11 @@ from typing import Any
 
 import structlog
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -96,7 +97,7 @@ async def _sample_queue_metrics_async(
 
     own_redis = redis is None
     redis_client = redis if redis is not None else Redis.from_url(settings.broker_url)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     queue_depths: dict[str, int] = {}
     status_counts: dict[str, int] = {}
     dlq_depths: dict[str, int] = {}

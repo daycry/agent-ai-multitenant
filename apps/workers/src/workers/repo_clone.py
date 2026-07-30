@@ -44,9 +44,11 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
     from api_server.db.domain import Project
     from api_server.db.models import Organization
     from api_server.git_integration import project_git_secret_path
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    engine = create_async_engine(settings.database_url)
+    from workers.db import worker_engine
+
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:

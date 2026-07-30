@@ -22,11 +22,11 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from workers.beat_schedule import GIT_FETCH_BEAT_ENTRY
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_sessionmaker
 
 _log = structlog.get_logger("workers.git_remote_sweep")
 
@@ -57,17 +57,13 @@ async def _sweep_project_git_remotes_async(
     recorre todos los tenants) y el clone es el de ADR 0072."""
     from api_server.db import platform_settings
 
-    engine = None
-    if session_factory is None:
-        engine = create_async_engine(settings.database_url)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with session_factory() as db:
+    async with worker_sessionmaker(settings, override=session_factory) as sessions:
+        async with sessions() as db:
             enabled = await platform_settings.get_git_fetch_sweep_enabled(db)
         if not enabled:
             _log.info("git_remote_sweep.skipped", reason="disabled")
             return {"enabled": False, "skipped": True}
-        async with session_factory() as db:
+        async with sessions() as db:
             rows = await db.execute(
                 sa_text(
                     "SELECT id FROM projects"
@@ -76,9 +72,6 @@ async def _sweep_project_git_remotes_async(
                 )
             )
             project_ids = [row[0] for row in rows.all()]
-    finally:
-        if engine is not None:
-            await engine.dispose()
 
     if clone is None:
         from workers.repo_clone import _clone_project_repo_async

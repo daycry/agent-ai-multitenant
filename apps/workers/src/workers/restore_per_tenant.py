@@ -519,15 +519,19 @@ class PerTenantRestoreEngine:
         Devuelve el total de filas huérfanas borradas (0 = restore limpio)."""
         import asyncio
 
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
+        from workers.db import worker_engine
         from workers.maintenance.integrity import sweep_fk_orphans
 
         async def _run() -> int:
             url = self._config.admin_database_url.replace(
                 "postgresql://", "postgresql+asyncpg://", 1
             )
-            engine = create_async_engine(url)
+            # `url=` a secas: el restore escribe en la copia, no en la BD de
+            # `Settings.database_url`, y `PerTenantRestoreConfig` sólo tiene
+            # `admin_database_url`.
+            engine = worker_engine(url=url)
             try:
                 sm = async_sessionmaker(engine, expire_on_commit=False)
                 async with sm() as session, session.begin():

@@ -22,13 +22,14 @@ priority: P0
 | Campo                              | Valor                                                                                   |
 | ---------------------------------- | --------------------------------------------------------------------------------------- |
 | **ID del Plan**                    | `prod-03-guardrails-validacion-humana`                                                  |
-| **Estado**                         | `pending_approval`                                                                      |
 | **Prioridad**                      | P0                                                                                      |
 | **Bloqueado por**                  | — (null)                                                                                |
 | **Tiempo estimado (calendario)**   | 4 semanas                                                                               |
 | **Tiempo estimado (persona-días)** | 18,5                                                                                    |
 | **Rama git sugerida**              | `plan/prod-03-guardrails-validacion-humana`                                             |
 | **Origen**                         | Auditoría integral de producción 2026-06-10 (dimensión guardrails, calificación _poor_) |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

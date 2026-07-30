@@ -32,6 +32,7 @@ binding — the same optional-dep seam the MCP layer uses for its resolver.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -79,6 +80,14 @@ admin_router = APIRouter(prefix="/admin/llm-providers", tags=["admin", "llm-prov
 # ---------------------------------------------------------------------------
 _UNSET: object = object()
 
+# Techo de espera (segundos) de CADA llamada HTTP a Vault desde el api-server.
+# Corto a propósito: Vault vive en el mismo host (docker-compose de una sola
+# máquina), así que una lectura sana tarda milisegundos; cualquier cosa por
+# encima de esto es Vault caído, sellado o inalcanzable, y el llamante prefiere
+# un error rápido a una request colgada. No es un setting de entorno porque no es
+# una palanca operativa: es la frontera entre "lento" y "roto".
+_VAULT_TIMEOUT_SECONDS = 5.0
+
 
 class _StoreCache:
     """Module-level singleton holding the store (class attr, not a global,
@@ -113,7 +122,16 @@ def get_provider_vault_store() -> LLMProviderVaultStore | None:
         _StoreCache.value = None
         return None
 
-    client = hvac.Client(url=settings.vault_url, token=settings.vault_token.get_secret_value())
+    # `hvac` va sobre `requests`, que SIN `timeout` espera indefinidamente. Un
+    # Vault caído o inalcanzable dejaba la lectura del secreto colgada dentro de
+    # un handler async → el bucle de eventos del api-server congelado, y con él
+    # todas las requests y WebSockets (hallazgo perf-7). Con el timeout el fallo
+    # es acotado: la request devuelve error en segundos y la API sigue viva.
+    client = hvac.Client(
+        url=settings.vault_url,
+        token=settings.vault_token.get_secret_value(),
+        timeout=_VAULT_TIMEOUT_SECONDS,
+    )
     store: LLMProviderVaultStore = HvacLLMProviderVaultStore(client=client)
     _StoreCache.value = store
     return store
@@ -204,7 +222,7 @@ async def create_provider(
     secret_path = provider_secret_path(provider.id)
     if credential:
         try:
-            store.write_secret(secret_path, credential)
+            await asyncio.to_thread(store.write_secret, secret_path, credential)
         except LLMProviderVaultError as exc:
             # The DB write hasn't committed yet (admin session opened a
             # transaction) — roll back so we never persist a provider whose
@@ -283,7 +301,7 @@ async def update_provider(
         store = _require_store(vault)
         secret_path = provider.secret_vault_path or provider_secret_path(provider.id)
         try:
-            store.write_secret(secret_path, credential)
+            await asyncio.to_thread(store.write_secret, secret_path, credential)
         except LLMProviderVaultError as exc:
             await session.rollback()
             raise HTTPException(
@@ -317,7 +335,7 @@ async def delete_provider(
     if provider.secret_vault_path:
         store = _require_store(vault)
         try:
-            store.delete_secret(provider.secret_vault_path)
+            await asyncio.to_thread(store.delete_secret, provider.secret_vault_path)
         except LLMProviderVaultError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -350,7 +368,7 @@ async def test_provider(
     secret: dict[str, str] = {}
     if provider.secret_vault_path:
         try:
-            secret = store.read_secret(provider.secret_vault_path)
+            secret = await asyncio.to_thread(store.read_secret, provider.secret_vault_path)
         except LLMProviderVaultError as exc:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

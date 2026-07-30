@@ -359,14 +359,25 @@ def test_the_real_cortex_path_still_sees_its_whole_history(migrated: str) -> Non
 
 
 # ===========================================================================
-# 5. Reversibilidad de verdad: head → -1 → head
+# 5. Reversibilidad de verdad: head → antes-de-la-0125 → head
 # ===========================================================================
+
+#: La revisión ANTERIOR a la 0125, o sea el estado que su `downgrade` debe restaurar.
+#: Se nombra explícitamente y NO se usa `-1`: con `-1` el test solo funcionaba
+#: mientras la 0125 fuera la cabeza, y la primera migración que aterrizó encima
+#: (`0126_perf_indexes_uniqueness`) lo puso rojo sin que nada estuviera roto —
+#: bajaba un paso, se quedaba en la 0125 y encontraba su RLS todavía puesta, que es
+#: exactamente lo correcto. Anclado a la revisión, el test sigue midiendo lo suyo por
+#: muchas migraciones que se apilen después.
+_REVISION_BEFORE = "0124_junction_tenant_rls"
+
+
 def test_migration_round_trip_restores_and_reapplies(
     alembic_config: object, migrations_pg_dsn: str
 ) -> None:
     command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
     try:
-        command.downgrade(alembic_config, "-1")  # type: ignore[arg-type]
+        command.downgrade(alembic_config, _REVISION_BEFORE)  # type: ignore[arg-type]
         cat = asyncio.run(_catalog(migrations_pg_dsn))
         assert cat["cortex_conversations"]["rls"] is False, "el downgrade dejó la RLS puesta"
         assert not [

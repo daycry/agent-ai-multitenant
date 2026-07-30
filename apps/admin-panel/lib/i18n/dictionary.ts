@@ -16,12 +16,23 @@
  * No metas aquí texto que venga del backend ya bilingüe (`note_es`/`note_en`
  * del córtex, por ejemplo): eso se elige con `useLangOptional()`.
  *
- * ## Estado de la migración
+ * ## Estado de la migración (2026-07-30)
  *
- * Esta es la FUNDACIÓN: sólo `common` y `login` están migrados. Los ~100
- * ficheros restantes son `task_prod16_02` a `task_prod16_04` y siguen con
- * ternarios `lang === "es" ? …` inline; `scripts/check-i18n.mjs` lleva la
- * cuenta y su allowlist debe ir MENGUANDO, nunca creciendo.
+ * Migrado: `login`, el shell entero (cabecera + sidebar de 6 grupos y ~39
+ * ítems), `select-tenant`, `no-access`, `users` y los mensajes de error de la
+ * capa de API. Eso cubre `task_prod16_01`, `task_prod16_02` y la primera
+ * pantalla de `task_prod16_03`.
+ *
+ * **Pendiente**: el resto de `task_prod16_03` (`tenants`, `tenant-stats`,
+ * `backup/*`, `settings/*`, `projects/*`, `agents/*`) y todo
+ * `task_prod16_04` (~250 ficheros: marketplace, guardrails, knowledge-bases,
+ * llm-providers, model-prices, ollama, notifications, docs, assistant, tools,
+ * memories, córtex…).
+ *
+ * `scripts/check-i18n.mjs` lleva la cuenta con DOS trinquetes —ternarios
+ * `lang === "es" ? …` y castellano cableado en atributos de UI— y sus dos
+ * allowlists sólo pueden MENGUAR. Lo que ya está migrado no aparece en ellas, y
+ * por tanto está protegido contra regresión.
  */
 
 import type { Dictionary } from "./types";
@@ -38,6 +49,267 @@ export const dictionary = {
    */
   common: {
     loading: { es: "Cargando…", en: "Loading…" },
+    close: { es: "Cerrar", en: "Close" },
+  },
+
+  /**
+   * Mensajes de error de la capa de API (`lib/api-error.ts`).
+   *
+   * Son los textos con los que se sustituye el cuerpo crudo del backend cuando
+   * éste no trae un `detail` legible: antes de prod-16 `task_prod16_05` las 14
+   * copias de `errorText` pintaban `err.body` tal cual, así que un 502 de nginx
+   * o un traceback de Python acababan en pantalla.
+   *
+   * Se redactan en segunda persona y sin jerga HTTP: quien los lee es un
+   * operador, no quien depura el backend.
+   */
+  errors: {
+    badRequest: {
+      es: "La petición no es válida. Revisa los datos e inténtalo de nuevo.",
+      en: "The request is not valid. Check the data and try again.",
+    },
+    unauthorized: {
+      es: "Tu sesión no es válida o ha caducado. Vuelve a iniciar sesión.",
+      en: "Your session is invalid or has expired. Please sign in again.",
+    },
+    forbidden: {
+      es: "No tienes permiso para hacer esto.",
+      en: "You do not have permission to do this.",
+    },
+    notFound: {
+      es: "No se encontró lo que buscabas.",
+      en: "What you were looking for could not be found.",
+    },
+    conflict: {
+      es: "La operación choca con el estado actual. Recarga y vuelve a intentarlo.",
+      en: "The operation conflicts with the current state. Reload and try again.",
+    },
+    invalidData: {
+      es: "Algún dato no es correcto. Revisa el formulario.",
+      en: "Some data is not correct. Please review the form.",
+    },
+    tooManyRequests: {
+      es: "Demasiadas peticiones. Espera un momento y vuelve a intentarlo.",
+      en: "Too many requests. Please wait a moment and try again.",
+    },
+    server: {
+      es: "El servidor ha fallado. Si se repite, avisa a administración.",
+      en: "The server failed. If it keeps happening, contact an administrator.",
+    },
+    network: {
+      es: "No se pudo contactar con el servidor. Comprueba tu conexión.",
+      en: "Could not reach the server. Check your connection.",
+    },
+    unexpected: {
+      es: "Ha ocurrido un error inesperado.",
+      en: "An unexpected error occurred.",
+    },
+    // El status va DENTRO del texto a propósito: sin él, un código raro (418,
+    // 507…) daría un mensaje indistinguible del genérico y nadie podría
+    // reportarlo.
+    withStatus: {
+      es: "El servidor respondió con un error {status}.",
+      en: "The server replied with error {status}.",
+    },
+  },
+
+  /**
+   * Navegación del panel: los 6 grupos y sus ~40 ítems (`components/layout/admin-shell.tsx`).
+   *
+   * Las claves son estables e independientes del texto (`humanQueue`, no
+   * `esperanTuDecision`) porque `NAV_GROUPS` las lleva en `labelKey` y los tests
+   * de estructura del menú las comparan; cambiar un texto no debe tocar el test
+   * de RBAC. El `data-testid` de cada enlace se sigue derivando del `href`, así
+   * que los e2e no dependen de esto.
+   *
+   * Varias entradas son idénticas en los dos idiomas (Dashboard, Runs,
+   * Marketplace, Settings, Guardrails, Backups, Auth/SSO, Knowledge Bases): son
+   * los términos que la UI castellana ya usaba en inglés. Están declaradas en la
+   * allowlist del test del diccionario para que no las confunda con un
+   * copia-pega sin traducir.
+   */
+  nav: {
+    // --- grupos ---
+    groupTrabajo: { es: "Trabajo", en: "Work" },
+    groupRecursos: { es: "Recursos", en: "Resources" },
+    groupConfigTenant: { es: "Configuración del tenant", en: "Tenant settings" },
+    groupPlataforma: { es: "Plataforma", en: "Platform" },
+    groupCortex: { es: "Córtex", en: "Cortex" },
+    groupAyuda: { es: "Ayuda", en: "Help" },
+
+    // --- grupo Trabajo ---
+    dashboard: { es: "Dashboard", en: "Dashboard" },
+    inbox: { es: "Mis tareas", en: "My tasks" },
+    humanQueue: { es: "Esperan tu decisión", en: "Awaiting your decision" },
+    security: { es: "Seguridad", en: "Security" },
+    board: { es: "Tablero", en: "Board" },
+    office: { es: "La Oficina", en: "The Office" },
+    runs: { es: "Runs", en: "Runs" },
+    leaderboard: { es: "Rendimiento", en: "Performance" },
+    approvals: { es: "Aprobaciones", en: "Approvals" },
+    notificationsInbox: { es: "Bandeja", en: "Inbox" },
+    assistant: { es: "Asistente", en: "Assistant" },
+
+    // --- grupo Recursos ---
+    agents: { es: "Agentes", en: "Agents" },
+    tools: { es: "Catálogo", en: "Catalog" },
+    humanAgents: { es: "Agentes humanos", en: "Human agents" },
+    teams: { es: "Equipos", en: "Teams" },
+    projects: { es: "Proyectos", en: "Projects" },
+    knowledgeBases: { es: "Knowledge Bases", en: "Knowledge Bases" },
+    memories: { es: "Memorias", en: "Memories" },
+    documents: { es: "Documentos", en: "Documents" },
+
+    // --- grupo Configuración del tenant ---
+    guardrails: { es: "Guardrails", en: "Guardrails" },
+    approvalPolicy: { es: "Validación humana", en: "Human validation" },
+    notifications: { es: "Notificaciones", en: "Notifications" },
+    evalQuality: { es: "Calidad (Evals)", en: "Quality (Evals)" },
+    tenantStats: { es: "Estadísticas", en: "Statistics" },
+    marketplace: { es: "Marketplace", en: "Marketplace" },
+    settings: { es: "Settings", en: "Settings" },
+
+    // --- grupo Plataforma ---
+    users: { es: "Usuarios", en: "Users" },
+    llmProviders: { es: "Proveedores LLM", en: "LLM providers" },
+    ollama: { es: "Ollama & Embeddings", en: "Ollama & Embeddings" },
+    platformDefaults: { es: "Valores por defecto", en: "Defaults" },
+    modelPrices: { es: "Modelos & Precios", en: "Models & Prices" },
+    sso: { es: "Auth/SSO", en: "Auth/SSO" },
+    backup: { es: "Backups", en: "Backups" },
+    backupDestinations: { es: "Destinos backup", en: "Backup destinations" },
+    backupRestore: { es: "Restaurar backup", en: "Restore backup" },
+
+    // --- grupo Córtex ---
+    cortex: { es: "Córtex", en: "Cortex" },
+    cortexMind: { es: "Panel de Mente", en: "Mind panel" },
+    cortexIdentity: { es: "Identidad", en: "Identity" },
+
+    // --- grupo Ayuda ---
+    docs: { es: "Documentación", en: "Documentation" },
+  },
+
+  /**
+   * Cabecera y sidebar (`components/layout/admin-header.tsx`, `admin-shell.tsx`).
+   *
+   * El nombre del producto ("Agentic Platform") NO está aquí: un nombre propio
+   * no se traduce. Las etiquetas del badge de rol (`system_admin`/`admin`/`user`)
+   * tampoco: son los identificadores del backend y el test
+   * `admin-header-role-badge.test.tsx` los lee tal cual.
+   */
+  shell: {
+    openMenu: { es: "Abrir menú", en: "Open menu" },
+    closeMenu: { es: "Cerrar menú", en: "Close menu" },
+    language: { es: "Idioma", en: "Language" },
+    userMenu: { es: "Menú de usuario", en: "User menu" },
+    accountOf: { es: "Cuenta de {name}", en: "{name}'s account" },
+    myAccount: { es: "Mi cuenta", en: "My account" },
+    profile: { es: "Perfil", en: "Profile" },
+    logout: { es: "Cerrar sesión", en: "Sign out" },
+    loggingOut: { es: "Cerrando sesión…", en: "Signing out…" },
+  },
+
+  /** `app/select-tenant/page.tsx`. */
+  selectTenant: {
+    title: { es: "Elige un espacio de trabajo", en: "Choose a workspace" },
+    help: {
+      es: "Tienes acceso a varios espacios. Selecciona con cuál quieres entrar.",
+      en: "You have access to several workspaces. Pick the one you want to enter.",
+    },
+    errorList: {
+      es: "No se pudo cargar la lista de espacios de trabajo.",
+      en: "The list of workspaces could not be loaded.",
+    },
+    errorActivate: {
+      es: "No se pudo activar ese espacio de trabajo. Inténtalo de nuevo.",
+      en: "That workspace could not be activated. Please try again.",
+    },
+  },
+
+  /** `app/no-access/page.tsx`. */
+  noAccess: {
+    title: { es: "Sin acceso a la plataforma", en: "No access to the platform" },
+    body: {
+      es: "No tienes permisos asignados en la plataforma. Contacta con el administrador para que te asigne acceso a un espacio de trabajo.",
+      en: "You have no permissions assigned on the platform. Contact your administrator so they can grant you access to a workspace.",
+    },
+  },
+
+  /**
+   * `app/admin/users/page.tsx` — usuarios globales y sus memberships (ADR 0047).
+   *
+   * Los nombres de rol (`Tenant Admin`, `Tenant User`, `System Operator`) NO se
+   * traducen: son los identificadores que expone el backend y lo que el operador
+   * ve en logs y en la API. `plan_approver` sí, porque no tiene forma canónica en
+   * inglés en el backend.
+   *
+   * Cuidado con activo/activa: en castellano el género cambia según el sustantivo
+   * (un usuario activo, una membership activa) y en inglés no, así que hacen falta
+   * dos claves aunque en EN coincidan.
+   */
+  users: {
+    title: { es: "Usuarios", en: "Users" },
+    description: {
+      es: "Usuarios globales de la plataforma. El acceso a cada tenant lo dan las membership (usuario↔tenant + rol) que asigna el System Admin (ADR 0047).",
+      en: "Platform-wide users. Access to each tenant comes exclusively from the memberships (user↔tenant + role) the System Admin grants here (ADR 0047).",
+    },
+    forbidden: {
+      es: "Esta sección es exclusiva del System Admin de la plataforma.",
+      en: "This section is reserved for the platform System Admin.",
+    },
+    searchPlaceholder: { es: "Buscar por email o nombre…", en: "Search by email or name…" },
+    searchLabel: { es: "Buscar usuarios", en: "Search users" },
+    loading: { es: "Cargando usuarios…", en: "Loading users…" },
+    emptyNone: { es: "No hay usuarios en la plataforma.", en: "There are no users yet." },
+    emptyNoMatch: {
+      es: "Ningún usuario coincide con la búsqueda.",
+      en: "No user matches your search.",
+    },
+    colUser: { es: "Usuario", en: "User" },
+    colEmail: { es: "Email", en: "Email" },
+    colType: { es: "Tipo", en: "Type" },
+    colStatus: { es: "Estado", en: "Status" },
+    colTenantAccess: { es: "Acceso a tenants", en: "Tenant access" },
+    typeSystemAdmin: { es: "System Admin", en: "System Admin" },
+    typeUser: { es: "Usuario", en: "User" },
+    userActive: { es: "activo", en: "active" },
+    userInactive: { es: "inactivo", en: "inactive" },
+    manageTenants: { es: "Gestionar tenants", en: "Manage tenants" },
+
+    dialogTitle: { es: "Acceso a tenants — {who}", en: "Tenant access — {who}" },
+    dialogDescription: {
+      es: "El acceso a cada tenant lo da una membership con un rol. Sin membership activa, el usuario no entra a ningún tenant (ADR 0047).",
+      en: "Access to a tenant is granted by a membership with a role. Without an active membership the user cannot enter any tenant (ADR 0047).",
+    },
+    membershipsLoading: { es: "Cargando membership…", en: "Loading memberships…" },
+    membershipsEmpty: {
+      es: "El usuario no tiene acceso a ningún tenant. Asígnale uno abajo.",
+      en: "This user has no tenant access. Grant one below.",
+    },
+    colTenant: { es: "Tenant", en: "Tenant" },
+    colRole: { es: "Rol", en: "Role" },
+    colActions: { es: "Acciones", en: "Actions" },
+    roleOf: { es: "Rol de {tenant}", en: "Role for {tenant}" },
+    deactivateMembership: { es: "Desactivar membership", en: "Deactivate membership" },
+    activateMembership: { es: "Activar membership", en: "Activate membership" },
+    membershipActive: { es: "activa", en: "active" },
+    membershipInactive: { es: "inactiva", en: "inactive" },
+    revokeAccess: { es: "Revocar acceso", en: "Revoke access" },
+
+    assignTitle: { es: "Asignar acceso a un tenant", en: "Grant access to a tenant" },
+    noTenantsAvailable: { es: "Sin tenants disponibles", en: "No tenants available" },
+    pickTenant: { es: "Selecciona un tenant…", en: "Select a tenant…" },
+    assigning: { es: "Asignando…", en: "Assigning…" },
+    assign: { es: "Asignar", en: "Assign" },
+    allTenantsAssigned: {
+      es: "El usuario ya tiene acceso a todos los tenants existentes.",
+      en: "This user already has access to every existing tenant.",
+    },
+
+    roleTenantAdmin: { es: "Tenant Admin", en: "Tenant Admin" },
+    roleTenantUser: { es: "Tenant User", en: "Tenant User" },
+    rolePlanApprover: { es: "Aprobador de planes", en: "Plan approver" },
+    roleSystemOperator: { es: "System Operator", en: "System Operator" },
   },
 
   /** `app/login/page.tsx`. */

@@ -46,7 +46,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.routers.embeddings + api_server.routers.ollama.
@@ -75,12 +76,6 @@ interface OllamaModel {
 interface OllamaModelsResponse {
   ollama_reachable: boolean;
   models: OllamaModel[];
-}
-
-function errorText(err: unknown): string {
-  if (err instanceof ApiError) return err.body || err.message;
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
 
 function formatBytes(bytes: number | null): string {
@@ -243,6 +238,7 @@ function EmbeddingsBody({ data }: { data: EmbeddingModelsResponse }) {
 // Section 2 — Ollama model management (list / pull / delete).
 // ---------------------------------------------------------------------------
 function ModelsSection() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [pullName, setPullName] = useState("");
   const [actionMsg, setActionMsg] = useState<string | null>(null);

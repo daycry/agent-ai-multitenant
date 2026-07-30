@@ -91,6 +91,49 @@ def test_azure_bearer_only_builds_a_runtime_client() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1.bis El WORKER (camino de dispatch) usa la tabla
+#
+# La copia nº1 de la lista de arriba — ``workers/model_resolver`` — era la que
+# faltaba en este fichero, y era justo la que seguía divergiendo: mantuvo su
+# propio mapeo (sin el bearer_token de Azure) mientras el runtime y el factory ya
+# estaban alineados. Un test de paridad que no cubre la copia que diverge da
+# confianza injustificada, que es peor que no tenerlo.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("kind", _KINDS)
+def test_worker_overlay_matches_the_table(kind: str) -> None:
+    from workers.model_resolver import _overlay_provider_fields
+
+    mapping = CREDENTIAL_FIELDS[kind]
+    secret = {vault_field: f"secreto-{vault_field}" for vault_field, _ in mapping.secret_fields}
+
+    from_worker = _overlay_provider_fields(
+        {"kind": kind}, kind, base_url="https://endpoint.example", secret=secret
+    )
+    from_table = overlay_credentials(
+        {"kind": kind}, kind, base_url="https://endpoint.example", secret=secret
+    )
+    assert from_worker == from_table
+
+
+def test_azure_bearer_only_survives_the_dispatch_path() -> None:
+    """El caso concreto de la divergencia, en el camino del worker: el spec que
+    viaja al contenedor tiene que llevar el bearer. Antes se descartaba aquí, así
+    que un azure bearer-only era configurable, probable y utilizable por el
+    asistente… e IRRESOLUBLE por dispatch."""
+    from workers.model_resolver import _overlay_provider_fields
+
+    merged = _overlay_provider_fields(
+        {"kind": "azure_foundry"},
+        "azure_foundry",
+        base_url="https://apim.example",
+        secret={"bearer_token": "jwt-aad"},
+    )
+    assert merged["bearer_token"] == "jwt-aad"
+    assert merged["apim_base_url"] == "https://apim.example"
+    assert "subscription_key" not in merged
+
+
+# ---------------------------------------------------------------------------
 # 2. El factory (asistente / córtex) acepta los mismos campos
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("kind", ("azure_foundry", "copilot", "ollama"))

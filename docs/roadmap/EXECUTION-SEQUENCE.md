@@ -1,22 +1,32 @@
 ---
-title: Secuencia maestra de ejecución — implementar los planes pendientes fase a fase
+title: "[HISTÓRICO] Secuencia maestra de ejecución — foto fija del 2026-05-29"
 version: 1.0
 last_updated: 2026-05-29
-status: obsolete
+archived_at: 2026-07-29
+archived_by: prod-15 task_gov_indices_06 (decisión D3)
+status: archived
 ---
 
-# Secuencia Maestra de Ejecución
+# [HISTÓRICO] Secuencia Maestra de Ejecución
 
-> **⚠️ OBSOLETO (corregido 2026-07-06, auditoría de roadmap).** Este documento es una foto fija
-> del 2026-05-29 y nunca se actualizó mientras el roadmap avanzaba 8 fases más: dice "07-16 son
-> nuevos a implementar" pero esas 10 fases están hoy `completed`/`pending_human_validation` (código
-> implementado, en muchos casos desplegado). La sección "Estado real" y el orden de "olas" de abajo
-> **NO reflejan la realidad actual** — no los uses para decidir qué falta. Para el estado real,
-> lee el frontmatter (`status`/`started_at`/`completed_at`) de cada fichero de `docs/roadmap/`
-> directamente, o pide una auditoría fresca (esto mismo se hizo el 2026-07-06 y encontró
-> desactualización sistemática en 24 de 85 ficheros — ver `docs/07-changelog/` de esa fecha si
-> existe, o el historial de esta conversación). Se conserva el resto del documento como registro
-> histórico del protocolo de trabajo (TDD, PR por plan, gate humano), que SÍ sigue vigente.
+> **⛔ DOCUMENTO ARCHIVADO — no es fuente de verdad de nada.**
+>
+> Es una **foto fija del 2026-05-29**. Se archiva por la decisión **D3** del plan
+> [prod-15](./prod-15-gobernanza-roadmap-docs.md): duplicar estado es la causa raíz del drift
+> (hallazgos docsroadmap-3 y docsroadmap-6), y este documento es el ejemplo de libro — prometía
+> actualizarse "al cerrar cada ola" y no lo hizo ni una vez mientras el roadmap avanzaba 8 fases.
+>
+> **Lo que dice y ya no es cierto**: "10 completados" (hoy hay muchos más), "07-16 son nuevos a
+> implementar" (esas 10 fases están hoy `completed`/`pending_human_validation`, en muchos casos
+> desplegadas), y la "violación de 3×`in_progress`" que lista está resuelta desde hace semanas.
+>
+> **Dónde está el estado real, sin excepciones**: el **frontmatter YAML** de cada fichero de
+> [`docs/roadmap/`](./README.md) (`status` / `started_at` / `completed_at`). No hay ni habrá un
+> segundo sitio; si algún día vuelve a haberlo, volverá a mentir.
+>
+> **Qué se conserva y por qué**: la sección _«Protocolo de ejecución (por plan)»_ — TDD, un PR por
+> plan, gate humano antes del merge — que **sigue vigente** y es lo único de aquí que puedes usar.
+> El resto es arqueología.
 
 Este documento ordena la **implementación de todos los planes pendientes** del roadmap por
 dependencias (`blocking_plan`), respetando la regla de **una sola fase `in_progress` a la vez**,
@@ -101,5 +111,7 @@ sin inconsistencias); (d) preparar la guía de pruebas humanas; (e) abrir PR; (f
 
 ## Seguimiento
 
-El progreso por tarea se mantiene en cada plan (`[ ]`/`[x]`) y en la lista de tareas de la sesión.
-Este documento se actualiza al cerrar cada ola.
+El progreso por tarea se mantiene en cada plan (`[ ]`/`[x]`); el estado del plan, en su
+frontmatter. **Este documento NO se actualiza** — está archivado (ver el banner de arriba). La
+promesa original de "actualizar al cerrar cada ola" se retira aquí explícitamente: era la que lo
+dejó mintiendo durante 8 fases.

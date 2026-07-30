@@ -259,9 +259,11 @@ def daily_standup_task() -> dict[str, int]:
     settings = get_settings()
 
     async def _main() -> dict[str, int]:
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        engine = create_async_engine(settings.database_url)
+        from workers.db import worker_engine
+
+        engine = worker_engine(settings)
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         try:
             tenants = await _load_tenant_configs(sessionmaker)

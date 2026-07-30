@@ -39,7 +39,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.tenant_stats. success_rate are fractions in
@@ -156,10 +157,6 @@ const VERDICT_BADGE: Record<string, BadgeVariant> = {
   failed: "danger",
   awaiting_human_approval: "warning",
 };
-
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 function fmtWhen(iso: string | null): string {
   if (!iso) return "—";
@@ -328,6 +325,7 @@ function RunsExplorer({
   windowDays: number;
   displayCurrency: DisplayCurrency;
 }) {
+  const errorText = useErrorText();
   const [page, setPage] = useState(0);
   const [filters, setFilters] = useState<RunFilters>({
     role: "",
@@ -590,6 +588,7 @@ function CostSegmentation({ cons }: { cons: ConsumptionSummary }) {
 // Body
 // ---------------------------------------------------------------------------
 function StatsBody() {
+  const errorText = useErrorText();
   const [windowDays, setWindowDays] = useState<number>(90);
   const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>("USD");
 

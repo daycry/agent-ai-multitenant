@@ -194,6 +194,12 @@ el problema ya esté documentado.
 - [auth-rate-limit-dev-loop.md](./auth-rate-limit-dev-loop.md)
   — el rate limit de `/auth/login` se acumula entre runs del E2E
   y trips 429; limpia `rl:login:*` antes de probar.
+- [joserfc-decode-no-valida-exp.md](./joserfc-decode-no-valida-exp.md)
+  — `joserfc.jwt.decode` verifica la FIRMA y nada más: acepta tokens caducados
+  sin un solo error (la validación de `exp` es una llamada aparte a
+  `JWTClaimsRegistry`), y con una clave `str` lanza un `ValueError` que no es
+  `JoseError` → 500 en vez de 401. Migrar desde `python-jose` deja la suite en
+  verde con las sesiones convertidas en eternas.
 
 ### ci / github actions
 

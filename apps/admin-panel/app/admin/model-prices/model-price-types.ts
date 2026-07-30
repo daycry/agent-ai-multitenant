@@ -4,7 +4,6 @@
 // moneda). Sin JSX ni hooks: módulo .ts importable desde page y dialogs.
 
 import { type BadgeVariant } from "@/components/ui/badge";
-import { ApiError } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.model_prices + db.model_prices enums.
@@ -154,10 +153,6 @@ export const SOURCE_BADGE: Record<string, BadgeVariant> = {
   litellm: "info",
   provider_api: "success",
 };
-
-export function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 /** Canonical USD price formatting; the catalog stores `Numeric(18,10)` strings. */
 export function fmtUsd(value: string | null): string {

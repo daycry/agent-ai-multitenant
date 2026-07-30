@@ -27,10 +27,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -179,7 +180,7 @@ async def _reap_orphans_async(
     moment = now or datetime.now(UTC)
     containers_removed = 0
     networks_removed = 0
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         managed = list(client.containers.list(all=True, filters=_MANAGED_FILTER))
         by_exec, by_review, untagged = _classify(managed, moment)

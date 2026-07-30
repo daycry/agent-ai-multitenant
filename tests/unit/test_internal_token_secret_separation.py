@@ -24,6 +24,10 @@ Pure unit tests: both code paths only need ``get_settings``, which is patched.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -55,6 +59,39 @@ def _settings(**overrides: Any) -> Settings:
     return Settings(**base)
 
 
+def _b64(raw: bytes) -> bytes:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+
+def _sign_hs256(claims: dict[str, Any], secret: str) -> str:
+    """Mint an HS256 JWT with the stdlib only.
+
+    These tests are the signature-level proof that the two token families live in
+    different key domains, so they must not lean on the same JOSE library the
+    code under test uses (prod-09 task_prod09_17 unified it on `joserfc`; before
+    that this file imported `python-jose`). hmac + base64url is the wire format
+    itself — it cannot agree with a bug in the implementation.
+    """
+    signing_input = (
+        _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+        + b"."
+        + _b64(json.dumps(claims).encode())
+    )
+    signature = _b64(hmac.new(secret.encode(), signing_input, hashlib.sha256).digest())
+    return (signing_input + b"." + signature).decode()
+
+
+def _verify_hs256(token: str, secret: str) -> dict[str, Any]:
+    """Return the claims iff the HMAC checks out; raise ``AssertionError`` if not."""
+    header_b64, payload_b64, signature_b64 = token.split(".")
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    expected = _b64(hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()).decode()
+    assert hmac.compare_digest(expected, signature_b64), "HMAC does not verify under this key"
+    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+    claims: dict[str, Any] = json.loads(base64.urlsafe_b64decode(padded))
+    return claims
+
+
 @pytest.fixture()
 def separated(monkeypatch: pytest.MonkeyPatch) -> Settings:
     """Patch ``get_settings`` in BOTH signing modules to the same Settings."""
@@ -82,18 +119,16 @@ def test_the_defaults_are_two_distinct_secrets() -> None:
 def test_agent_token_is_signed_with_the_internal_secret(separated: Settings) -> None:
     """Signature-level proof, not just "it round-trips": verify the minted token
     under each key explicitly."""
-    from jose import JWTError, jwt
-
     token = mint_agent_token(agent_id=uuid4(), tenant_id=uuid4())
 
     # Verifies under the internal secret...
-    claims = jwt.decode(token, _INTERNAL_SECRET, algorithms=["HS256"])
+    claims = _verify_hs256(token, _INTERNAL_SECRET)
     assert claims["kind"] == "agent"
 
     # ...and NOT under the session secret. This is the assertion that would have
     # failed before task_prod09_03.
-    with pytest.raises(JWTError):
-        jwt.decode(token, _JWT_SECRET, algorithms=["HS256"])
+    with pytest.raises(AssertionError, match="does not verify"):
+        _verify_hs256(token, _JWT_SECRET)
 
 
 def test_agent_token_is_rejected_by_the_human_jwt_validator(separated: Settings) -> None:
@@ -126,10 +161,8 @@ def test_a_worker_cannot_forge_a_system_admin_session(separated: Settings) -> No
     decoded cleanly and, once paired with any live ``sid``, was a cross-tenant
     System-Admin session.
     """
-    from jose import jwt
-
     now = datetime.now(tz=UTC)
-    forged = jwt.encode(
+    forged = _sign_hs256(
         {
             "sub": str(uuid4()),
             "sid": str(uuid4()),
@@ -138,7 +171,6 @@ def test_a_worker_cannot_forge_a_system_admin_session(separated: Settings) -> No
             "exp": int((now + timedelta(hours=1)).timestamp()),
         },
         _INTERNAL_SECRET,  # all a compromised worker has
-        algorithm="HS256",
     )
     with pytest.raises(InvalidTokenError):
         decode_jwt(forged)

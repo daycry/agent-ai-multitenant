@@ -33,7 +33,8 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.guardrail_events.
@@ -100,10 +101,6 @@ const ACTION_LABEL: Record<string, string> = {
   escalate_to_human: "escalar",
   transform: "transformar",
 };
-
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 function fmtWhen(iso: string): string {
   const d = new Date(iso);
@@ -196,6 +193,7 @@ function BarRow({
 }
 
 function DashboardBody() {
+  const errorText = useErrorText();
   const [windowDays, setWindowDays] = useState<number>(30);
 
   const { data, isLoading, isError, error } = useQuery({

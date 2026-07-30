@@ -103,9 +103,30 @@ from app.domain.agent import Agent
 
 ### Commits
 
-Convención: **Conventional Commits** con trailers obligatorios. Los commits de
-tareas de agentes llevan `Plan-Id` / `Task-Id` / `Execution-Id`; los commits
-generados por Claude Code añaden además `Co-Authored-By`.
+Convención: **Conventional Commits**. Los trailers `Plan-Id` / `Task-Id` /
+`Execution-Id` son **obligatorios en los commits de tareas de plan** (ramas
+`plan/*`) y **opcionales en mantenimiento** (`master`, `work/*`, `hotfix/*`,
+`docs/*`). Los commits generados por Claude Code añaden además `Co-Authored-By`.
+
+> **Por qué esta regla y no "obligatorios siempre"** (decisión D2 de
+> [prod-15](../roadmap/prod-15-gobernanza-roadmap-docs.md), hallazgo quality-9):
+> hasta 2026-07-29 este documento decía "obligatorios" sin matices y la práctica
+> decía otra cosa — **643 de 1460** commits no-merge llevaban `Plan-Id` (44 %), y
+> 10 de los últimos 30. Una norma que se incumple la mitad de las veces no
+> disciplina: enseña que las normas del repo son opcionales. Se elige exigirlos
+> **donde sirven de algo** (la trazabilidad tarea↔commit que el sistema usa para
+> poblar el PR del plan) en vez de exigirlos en todas partes y en ninguna.
+>
+> Lo aplica el hook `commit-msg` [`scripts/check_commit_trailers.py`](../../scripts/check_commit_trailers.py),
+> registrado en `.pre-commit-config.yaml`. Exentos siempre: merges, `Revert`,
+> `fixup!`/`squash!`/`amend!`. Tests: `tests/unit/test_commit_msg_hook.py`.
+>
+> Instalar el stage (una vez por clon — `pre-commit install` solo instala
+> `pre-commit`, no `commit-msg`):
+>
+> ```bash
+> pre-commit install --hook-type commit-msg
+> ```
 
 ```
 feat(users): implement POST /users endpoint
@@ -120,7 +141,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ```
 
 Para planes documentales o de tooling sin `Execution-Id` real basta
-`Plan-Id` + `Task-Id` (+ `Co-Authored-By`).
+`Plan-Id` + `Task-Id` (+ `Co-Authored-By`). Eso es también lo que exige el hook:
+`Execution-Id` no se pide nunca, porque solo existe cuando el commit lo produjo
+una ejecución de agente.
 
 Tipos permitidos: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `perf`, `build`, `ci`.
 
@@ -128,7 +151,10 @@ Scopes recomendados: nombre del módulo o capa (`users`, `auth`, `kanban`, `docs
 
 ### Ramas
 
-- `main`: rama default, protegida. Solo se mergea desde PRs.
+- `master`: rama default de **este** repo, protegida. Solo se mergea desde PRs.
+  No existe `main` (comprobable con `git symbolic-ref refs/remotes/origin/HEAD`);
+  renombrarla exigiría tocar CI, protecciones y hábitos, y se declaró fuera de
+  alcance en prod-15.
 - `plan/{plan_id_short}-{slug}`: rama por plan, creada automáticamente al sincronizar al Kanban.
 - `hotfix/{descripcion}`: para fixes urgentes fuera del flujo de planning normal.
 - `docs/{descripcion}`: para cambios de docs aislados (poco usado, normalmente los docs van con el plan).

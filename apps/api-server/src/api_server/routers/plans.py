@@ -101,6 +101,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import integrity_conflict
 from api_server.routers._pagination import (
     apply_pagination,
     limit_query,
@@ -390,7 +391,7 @@ async def create_plan(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="plan.create") from exc
     await session.refresh(plan)
 
     # Back-link the conversation to the plan so the chat UI can show
@@ -1405,8 +1406,15 @@ async def approve_plan(
     illegal move.
     """
     require_tenant_id(principal)
+    # `for_update=True` (prod-13 task_prod13_22, hallazgo api-10): la decisión de
+    # abajo —primera firma vs. segunda, y si el segundo firmante coincide con el
+    # primero— se toma sobre el `status`/`first_approved_by` que se acaban de leer.
+    # Sin el bloqueo de fila, dos admins pulsando "Aprobar" simultáneamente leían
+    # los dos `pending_approval` con `first_approved_by = NULL`, los dos escribían
+    # su firma y el plan acababa APROBADO con una sola firma humana real: justo la
+    # garantía que la doble firma existe para dar.
     plan = await get_writable_or_404(
-        session, Plan, plan_id, principal, not_found_detail="plan not found"
+        session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
 
     # Decide the target status: single firma, first of two, or second of two.
@@ -1570,8 +1578,10 @@ async def start_plan_execution(
     an already-running plan is a no-op that just re-ensures the Kanban.
     """
     require_tenant_id(principal)
+    # `FOR UPDATE` (api-10): dos "Empezar" simultáneos leían los dos `approved`,
+    # los dos pasaban la máquina de estados y los dos materializaban el Kanban.
     plan = await get_writable_or_404(
-        session, Plan, plan_id, principal, not_found_detail="plan not found"
+        session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
     # P1-01: un proyecto pausado/archivado no arranca ejecuciones.
     require_project_active(await _verify_project_visible(session, plan.project_id))
@@ -1651,8 +1661,10 @@ async def approve_and_start_plan(
     se llevaría también la firma.
     """
     require_tenant_id(principal)
+    # Mismo bloqueo de fila que `/approve` (api-10): este endpoint TAMBIÉN firma,
+    # así que sin `FOR UPDATE` la carrera de la doble firma entra por aquí.
     plan = await get_writable_or_404(
-        session, Plan, plan_id, principal, not_found_detail="plan not found"
+        session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
     if plan.status != PlanStatus.PENDING_APPROVAL.value:
         raise HTTPException(

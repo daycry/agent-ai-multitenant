@@ -44,12 +44,17 @@ import {
 
 import { AdminHeader } from "@/components/layout/admin-header";
 import { GlobalProgress } from "@/components/layout/global-progress";
+import { useT, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
 
+/** Las claves válidas del namespace `nav`: un typo no compila. */
+export type NavKey = MessageKey<"nav">;
+
 export interface NavItem {
   href: string;
-  label: string;
+  /** Clave del namespace `nav` del diccionario (NO el texto). */
+  labelKey: NavKey;
   Icon: typeof LayoutDashboard;
   /** Si `adminOnly`, sólo se muestra a tenant_admin / system_admin. */
   adminOnly?: boolean;
@@ -62,7 +67,8 @@ export interface NavItem {
 export interface NavGroup {
   /** Identificador estable: clave de localStorage + `data-testid`. */
   id: string;
-  label: string;
+  /** Clave del namespace `nav` del diccionario (NO el texto). */
+  labelKey: NavKey;
   Icon: typeof LayoutDashboard;
   items: NavItem[];
   /** Ámbito del grupo entero (RBAC + ADR 0028). */
@@ -127,105 +133,105 @@ export function visibleNavGroups(groups: NavGroup[], scope: NavScope): NavGroup[
 export const NAV_GROUPS: NavGroup[] = [
   {
     id: "trabajo",
-    label: "Trabajo",
+    labelKey: "groupTrabajo",
     Icon: Briefcase,
     items: [
-      { href: "/admin/dashboard", label: "Dashboard", Icon: LayoutDashboard },
-      { href: "/admin/inbox", label: "Mis tareas", Icon: ListChecks },
+      { href: "/admin/dashboard", labelKey: "dashboard", Icon: LayoutDashboard },
+      { href: "/admin/inbox", labelKey: "inbox", Icon: ListChecks },
       // ADR 0123: todo lo que espera decisión humana, por antigüedad.
-      { href: "/admin/human-queue", label: "Esperan tu decisión", Icon: DoorOpen },
+      { href: "/admin/human-queue", labelKey: "humanQueue", Icon: DoorOpen },
       // MFA (tanda 2026-07-19): ajuste PERSONAL (cualquier usuario) — la
       // verificación en dos pasos de la propia cuenta, no del tenant.
-      { href: "/admin/settings/security", label: "Seguridad", Icon: ShieldCheck },
-      { href: "/admin/board", label: "Tablero", Icon: LayoutGrid },
+      { href: "/admin/settings/security", labelKey: "security", Icon: ShieldCheck },
+      { href: "/admin/board", labelKey: "board", Icon: LayoutGrid },
       // ADR 0118: el tenant en vivo como piso 2D sobre telemetría real.
-      { href: "/admin/office", label: "La Oficina", Icon: Building2 },
-      { href: "/admin/runs", label: "Runs", Icon: Activity },
+      { href: "/admin/office", labelKey: "office", Icon: Building2 },
+      { href: "/admin/runs", labelKey: "runs", Icon: Activity },
       // ADR 0121: ranking modelo×agente con la carga real del tenant.
-      { href: "/admin/leaderboard", label: "Rendimiento", Icon: Trophy },
-      { href: "/admin/approvals", label: "Aprobaciones", Icon: BellRing },
-      { href: "/admin/notifications/inbox", label: "Bandeja", Icon: Inbox },
-      { href: "/admin/assistant", label: "Asistente", Icon: Bot, adminOnly: true },
+      { href: "/admin/leaderboard", labelKey: "leaderboard", Icon: Trophy },
+      { href: "/admin/approvals", labelKey: "approvals", Icon: BellRing },
+      { href: "/admin/notifications/inbox", labelKey: "notificationsInbox", Icon: Inbox },
+      { href: "/admin/assistant", labelKey: "assistant", Icon: Bot, adminOnly: true },
     ],
   },
   {
     id: "recursos",
-    label: "Recursos",
+    labelKey: "groupRecursos",
     Icon: Library,
     adminOnly: true,
     items: [
-      { href: "/admin/agents", label: "Agentes", Icon: Bot },
-      { href: "/admin/tools", label: "Catálogo", Icon: Wrench },
-      { href: "/admin/human-agents", label: "Agentes humanos", Icon: UserRound, adminOnly: true },
-      { href: "/admin/teams", label: "Equipos", Icon: Users },
-      { href: "/admin/projects", label: "Proyectos", Icon: FolderKanban },
-      { href: "/admin/knowledge-bases", label: "Knowledge Bases", Icon: Library },
-      { href: "/admin/memories", label: "Memorias", Icon: Brain },
-      { href: "/admin/documents", label: "Documentos", Icon: FileText },
+      { href: "/admin/agents", labelKey: "agents", Icon: Bot },
+      { href: "/admin/tools", labelKey: "tools", Icon: Wrench },
+      { href: "/admin/human-agents", labelKey: "humanAgents", Icon: UserRound, adminOnly: true },
+      { href: "/admin/teams", labelKey: "teams", Icon: Users },
+      { href: "/admin/projects", labelKey: "projects", Icon: FolderKanban },
+      { href: "/admin/knowledge-bases", labelKey: "knowledgeBases", Icon: Library },
+      { href: "/admin/memories", labelKey: "memories", Icon: Brain },
+      { href: "/admin/documents", labelKey: "documents", Icon: FileText },
     ],
   },
   {
     id: "config-tenant",
-    label: "Configuración del tenant",
+    labelKey: "groupConfigTenant",
     Icon: SlidersHorizontal,
     adminOnly: true,
     items: [
-      { href: "/admin/guardrails", label: "Guardrails", Icon: ShieldAlert, adminOnly: true },
+      { href: "/admin/guardrails", labelKey: "guardrails", Icon: ShieldAlert, adminOnly: true },
       {
         href: "/admin/approval-policy",
-        label: "Validación humana",
+        labelKey: "approvalPolicy",
         Icon: ShieldCheck,
         adminOnly: true,
       },
-      { href: "/admin/notifications", label: "Notificaciones", Icon: Bell, adminOnly: true },
-      { href: "/admin/eval-quality", label: "Calidad (Evals)", Icon: Gauge, adminOnly: true },
-      { href: "/admin/tenant-stats", label: "Estadísticas", Icon: BarChart3, adminOnly: true },
-      { href: "/admin/marketplace", label: "Marketplace", Icon: Store, adminOnly: true },
-      { href: "/admin/settings", label: "Settings", Icon: Settings, adminOnly: true },
+      { href: "/admin/notifications", labelKey: "notifications", Icon: Bell, adminOnly: true },
+      { href: "/admin/eval-quality", labelKey: "evalQuality", Icon: Gauge, adminOnly: true },
+      { href: "/admin/tenant-stats", labelKey: "tenantStats", Icon: BarChart3, adminOnly: true },
+      { href: "/admin/marketplace", labelKey: "marketplace", Icon: Store, adminOnly: true },
+      { href: "/admin/settings", labelKey: "settings", Icon: Settings, adminOnly: true },
     ],
   },
   {
     id: "plataforma",
-    label: "Plataforma",
+    labelKey: "groupPlataforma",
     Icon: Server,
     systemAdminOnly: true,
     items: [
       // Administración de usuarios global (ADR 0047): listar usuarios y
       // gestionar sus memberships (usuario↔tenant + rol). Solo System Admin.
-      { href: "/admin/users", label: "Usuarios", Icon: Users, systemAdminOnly: true },
-      { href: "/admin/llm-providers", label: "Proveedores LLM", Icon: Cpu, systemAdminOnly: true },
+      { href: "/admin/users", labelKey: "users", Icon: Users, systemAdminOnly: true },
+      { href: "/admin/llm-providers", labelKey: "llmProviders", Icon: Cpu, systemAdminOnly: true },
       {
         href: "/admin/ollama",
-        label: "Ollama & Embeddings",
+        labelKey: "ollama",
         Icon: Sparkles,
         systemAdminOnly: true,
       },
       {
         href: "/admin/settings/platform-defaults",
-        label: "Valores por defecto",
+        labelKey: "platformDefaults",
         Icon: SlidersHorizontal,
         systemAdminOnly: true,
       },
       {
         href: "/admin/model-prices",
-        label: "Modelos & Precios",
+        labelKey: "modelPrices",
         Icon: Coins,
         systemAdminOnly: true,
       },
       // SSO recolocado de "Ajustes del tenant" → "Plataforma" (ADR 0028).
       // La ruta NO cambia (/admin/settings/sso); el backend de SSO sigue
       // siendo per-tenant (ADR 0031) — aquí solo cambia el sitio en el menú.
-      { href: "/admin/settings/sso", label: "Auth/SSO", Icon: KeyRound, systemAdminOnly: true },
-      { href: "/admin/backup", label: "Backups", Icon: DatabaseBackup, systemAdminOnly: true },
+      { href: "/admin/settings/sso", labelKey: "sso", Icon: KeyRound, systemAdminOnly: true },
+      { href: "/admin/backup", labelKey: "backup", Icon: DatabaseBackup, systemAdminOnly: true },
       {
         href: "/admin/backup/destinations",
-        label: "Destinos backup",
+        labelKey: "backupDestinations",
         Icon: DatabaseBackup,
         systemAdminOnly: true,
       },
       {
         href: "/admin/backup/restore",
-        label: "Restaurar backup",
+        labelKey: "backupRestore",
         Icon: DatabaseBackup,
         systemAdminOnly: true,
       },
@@ -236,22 +242,22 @@ export const NAV_GROUPS: NavGroup[] = [
     // dueño del despliegue — el backend (require_system_owner, DB-authoritative)
     // sigue siendo la barrera real; esto es solo UX.
     id: "cortex",
-    label: "Córtex",
+    labelKey: "groupCortex",
     Icon: Brain,
     systemOwnerOnly: true,
     items: [
-      { href: "/admin/cortex", label: "Córtex", Icon: Brain, systemOwnerOnly: true },
+      { href: "/admin/cortex", labelKey: "cortex", Icon: Brain, systemOwnerOnly: true },
       // Panel de Mente (Córtex F2, ADR 0075): estado afectivo del córtex en vivo.
       {
         href: "/admin/cortex/mind",
-        label: "Panel de Mente",
+        labelKey: "cortexMind",
         Icon: Activity,
         systemOwnerOnly: true,
       },
       // Identidad evolutiva (Córtex F3, ADR 0074/0077): onboarding co-diseñado.
       {
         href: "/admin/cortex/identity",
-        label: "Identidad",
+        labelKey: "cortexIdentity",
         Icon: Sparkles,
         systemOwnerOnly: true,
       },
@@ -259,9 +265,9 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     id: "ayuda",
-    label: "Ayuda",
+    labelKey: "groupAyuda",
     Icon: HelpCircle,
-    items: [{ href: "/admin/docs", label: "Documentación", Icon: BookOpen }],
+    items: [{ href: "/admin/docs", labelKey: "docs", Icon: BookOpen }],
   },
 ];
 
@@ -344,6 +350,7 @@ function SidebarContent({
   // Plan 06.8 task_06_8_08: ocultar items admin-only para tenant_user.
   // Córtex F1 (ADR 0074): grupo systemOwnerOnly visible solo al System Owner.
   // El check del backend sigue siendo la fuente de verdad — esto es UX.
+  const t = useT("shell");
   const { isTenantAdmin, isSystemAdmin, isSystemOwner } = useCurrentUser();
 
   // Grupos visibles por ámbito, con sus ítems ya filtrados por gating de ítem.
@@ -376,7 +383,7 @@ function SidebarContent({
             type="button"
             onClick={onClose}
             className="text-sidebar-muted-foreground hover:bg-sidebar-border hover:text-sidebar-foreground inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors"
-            aria-label="Cerrar menú"
+            aria-label={t("closeMenu")}
           >
             <X className="h-4 w-4" />
           </button>
@@ -408,6 +415,7 @@ function NavGroupBlock({
   isActive: (href: string) => boolean;
   onItemClick: () => void;
 }) {
+  const t = useT("nav");
   const hasActiveItem = group.items.some((item) => isActive(item.href));
   // El grupo arranca abierto si contiene la ruta activa; tras montar se
   // reconcilia con la preferencia persistida en localStorage (si existe).
@@ -451,7 +459,7 @@ function NavGroupBlock({
         )}
       >
         <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span className="flex-1 text-left">{group.label}</span>
+        <span className="flex-1 text-left">{t(group.labelKey)}</span>
         <ChevronDown
           aria-hidden="true"
           className={cn("h-3.5 w-3.5 shrink-0 transition-transform", open ? "" : "-rotate-90")}
@@ -462,7 +470,7 @@ function NavGroupBlock({
         // Hijos indentados + guía vertical de árbol bajo la cabecera del grupo,
         // para que la jerarquía padre→hijo se distinga de un vistazo.
         <ul className="ml-3 mt-1 flex flex-col gap-1 border-l border-sidebar-border pl-2">
-          {group.items.map(({ href, label, Icon: ItemIcon }) => {
+          {group.items.map(({ href, labelKey, Icon: ItemIcon }) => {
             const active = isActive(href);
             return (
               <li key={href}>
@@ -487,7 +495,7 @@ function NavGroupBlock({
                     />
                   )}
                   <ItemIcon className="h-4 w-4 shrink-0" />
-                  <span>{label}</span>
+                  <span>{t(labelKey)}</span>
                 </Link>
               </li>
             );

@@ -39,9 +39,11 @@ derives it from ``settings.data_root`` via
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
+from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,20 +124,51 @@ def get_docs_repo_resolver() -> DocsRepoResolver:
     return _resolve
 
 
+@lru_cache(maxsize=1)
+def get_shared_embed_client() -> httpx.AsyncClient:
+    """El cliente httpx COMPARTIDO de proceso contra Ollama (perf-9).
+
+    Mismo patrón que :func:`api_server.auth.deps.get_redis`: singleton perezoso
+    cacheado, reseteable en tests. Antes, cada request de búsqueda construía un
+    ``OllamaEmbedder()`` nuevo y con él un ``httpx.AsyncClient`` nuevo — un
+    handshake TCP (y TLS, si Ollama está detrás de proxy) por búsqueda, y un
+    pool de conexiones que nacía y moría sin reutilizar nada. Con un cliente
+    único el keep-alive hacia Ollama sobrevive entre requests.
+
+    El timeout es el mismo que el default de ``OllamaEmbedder`` (60 s): embeber
+    un lote grande es lento y el que manda aquí es el modelo, no la red.
+    """
+    return httpx.AsyncClient(
+        timeout=60.0,
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+    )
+
+
+def reset_shared_embed_client_cache() -> None:
+    """Test hook: olvida el cliente cacheado (espejo de ``reset_redis_cache``).
+
+    NO lo cierra: cerrarlo pide un `await` y este hook se llama desde el
+    `finally` síncrono de las fixtures. El cliente huérfano lo recoge el GC junto
+    con su bucle de eventos.
+    """
+    get_shared_embed_client.cache_clear()
+
+
 async def get_query_embedder() -> AsyncIterator[Embedder]:
     """Provide the query embedder for semantic search (overridable in tests).
 
-    Production yields the real :class:`OllamaEmbedder` (owns an httpx client we
-    close after the request). Tests register an override via
+    Production yields a real :class:`OllamaEmbedder` sobre el cliente httpx
+    COMPARTIDO del proceso: el embedder es un envoltorio barato de crear, el
+    cliente no. Como el cliente se inyecta, ``OllamaEmbedder._owns_client`` es
+    ``False`` y su ``aclose()`` es un no-op — por eso ya no se llama aquí:
+    cerrarlo mataría el pool compartido para las siguientes requests.
+
+    Tests register an override via
     ``app.dependency_overrides[get_query_embedder]`` returning the deterministic
     :class:`~api_server.ingestion.embeddings.HashEmbedder` so no network /
     running Ollama is required (it is down in CI).
     """
-    embedder = OllamaEmbedder()
-    try:
-        yield embedder
-    finally:
-        await embedder.aclose()
+    yield OllamaEmbedder(client=get_shared_embed_client())
 
 
 async def _require_visible_project(session: AsyncSession, project_id: UUID) -> None:

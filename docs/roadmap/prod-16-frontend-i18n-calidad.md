@@ -22,12 +22,13 @@ priority: P2
 | Campo                              | Valor                           |
 | ---------------------------------- | ------------------------------- |
 | **ID del Plan**                    | `prod-16-frontend-i18n-calidad` |
-| **Estado**                         | `pending_approval`              |
 | **Prioridad**                      | P2                              |
 | **Bloqueado por**                  | — (ninguno; ver coordinación)   |
 | **Tiempo estimado (calendario)**   | 15-20 días laborables           |
 | **Tiempo estimado (persona-días)** | 18,5                            |
 | **Rama git sugerida**              | `plan/prod-16-frontend-i18n`    |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 Plan correctivo nº 16 (último) de la serie derivada de la auditoría integral
 de producción de 2026-06-10. Cierra los hallazgos **frontend-9**,

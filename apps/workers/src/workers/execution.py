@@ -888,9 +888,11 @@ async def _run_task_tests(
     try:
         from api_server.db.domain import Project, Task
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        engine = create_async_engine(settings.database_url)
+        from workers.db import worker_engine
+
+        engine = worker_engine(settings)
         try:
             sm = async_sessionmaker(engine, expire_on_commit=False)
             async with sm() as session:
@@ -1023,6 +1025,11 @@ class _PreparedRun:
     plan_has_prior_work: bool
     resolved_model: dict[str, Any] | None
     resolution_error: str | None
+    # El abort_code que trae la ModelResolutionError (prod-07 task_prod07_07):
+    # `model_unresolved` (catálogo) o `vault_unavailable` (Vault caído). Estaba
+    # fijado a mano en el fail-fast, así que un fallo de Vault se reportaba como
+    # problema de catálogo y mandaba a mirar al sitio equivocado.
+    resolution_abort_code: str = "model_unresolved"
 
 
 async def _prepare_run(
@@ -1133,6 +1140,7 @@ async def _prepare_run(
     # ejecución se finaliza como fallida con motivo explícito.
     resolved_model: dict[str, Any] | None = None
     resolution_error: str | None = None
+    resolution_abort_code = "model_unresolved"
     try:
         resolved_model = await resolve_model_spec(
             session,
@@ -1141,6 +1149,7 @@ async def _prepare_run(
         )
     except ModelResolutionError as exc:
         resolution_error = str(exc)
+        resolution_abort_code = exc.abort_code
     return _PreparedRun(
         execution_id=execution.id,
         approval_policy=approval_policy,
@@ -1151,6 +1160,7 @@ async def _prepare_run(
         plan_has_prior_work=plan_has_prior_work,
         resolved_model=resolved_model,
         resolution_error=resolution_error,
+        resolution_abort_code=resolution_abort_code,
     )
 
 
@@ -1718,8 +1728,12 @@ async def conduct_execution(
             "workers.model_resolution_failed",
             execution_id=exec_id,
             error=prepared.resolution_error,
+            abort_code=prepared.resolution_abort_code,
         )
-        failfast = ("model_unresolved", prepared.resolution_error)
+        # El código VIENE del error (task_prod07_07): `vault_unavailable` manda a
+        # revisar Vault, `model_unresolved` a revisar el catálogo. Fijarlo aquí
+        # borraba esa distinción justo en el sitio donde el operador la lee.
+        failfast = (prepared.resolution_abort_code, prepared.resolution_error)
     elif workspace.error is not None:
         # Fail-fast (F0.2): sin workspace NO se lanza el contenedor. El código
         # distingue el data_root inaccesible (`workspace_unavailable`) del

@@ -73,6 +73,21 @@ repos:
         pass_filenames: false
         require_serial: true
 
+  # -------------------- Git / trazabilidad --------------------
+  # Trailers de plan (prod-15 task_gov_trailers_09, decisión D2 opción B).
+  # SOLO exige `Plan-Id`/`Task-Id` cuando la rama actual es `plan/*`; en
+  # mantenimiento (master, work/*, hotfix/*, docs/*) son opcionales. Merges,
+  # reverts y fixup!/squash! están exentos siempre. La regla escrita en
+  # docs/context/conventions.md y la practicada coinciden por primera vez:
+  # medido el 2026-07-29, solo 643 de 1460 commits no-merge llevaban Plan-Id.
+  - repo: local
+    hooks:
+      - id: commit-trailers
+        name: trailers Plan-Id/Task-Id en ramas plan/*
+        entry: python scripts/check_commit_trailers.py
+        language: system
+        stages: [commit-msg]
+
   # -------------------- TypeScript / JavaScript --------------------
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8

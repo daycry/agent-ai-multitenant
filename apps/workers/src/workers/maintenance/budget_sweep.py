@@ -8,10 +8,11 @@ import asyncio
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -45,7 +46,7 @@ async def _refresh_budgets_async(
     from api_server.db.models import Organization
     from sqlalchemy import select
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     tenants = 0
     newly_paused = 0
     newly_cleared = 0

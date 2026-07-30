@@ -167,11 +167,12 @@ def config_advisor_task() -> dict[str, int]:
     settings = get_settings()
 
     async def _main() -> dict[str, int]:
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
+        from workers.db import worker_engine
         from workers.standup import CeleryStandupNotifier
 
-        engine = create_async_engine(settings.database_url)
+        engine = worker_engine(settings)
         try:
             sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
             stats = await _load_combo_stats(sessionmaker)

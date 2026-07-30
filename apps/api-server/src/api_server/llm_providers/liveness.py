@@ -14,17 +14,28 @@ Per kind (the four ADR-0021 paths):
                         OllamaProvider talks to it), optional bearer. A 2xx is
                         OK; a 401/403 is AUTH_ERROR; a connect failure is
                         CONNECTION_ERROR.
-  * ``azure_foundry`` — GET the APIM gateway base with the
-                        ``Ocp-Apim-Subscription-Key`` header. A reachable
-                        gateway that does not reject the key is OK; a
-                        401/403 is AUTH_ERROR.
-  * ``claude_sdk`` /  — subscription / OAuth paths with no cheap public
-    ``copilot``         liveness endpoint (a real check would mint a token /
-                        run a completion — out of scope here, and the
-                        Copilot Device Flow is task_11_2_03). The probe
-                        instead verifies the credential is PRESENT in Vault
-                        and returns OK ("credential configured") or a
-                        CONFIG_ERROR when it is missing.
+  * ``azure_foundry`` — GET the APIM gateway with EITHER auth form the
+                        factory accepts: ``Ocp-Apim-Subscription-Key`` when the
+                        row carries a subscription key, or ``Authorization:
+                        Bearer`` when it is bearer-only (APIM validating an AAD
+                        JWT). A reachable gateway that does not reject the
+                        credential is OK; a 401/403 is AUTH_ERROR.
+  * ``copilot``       — mints the short-lived JWT against
+                        ``api.github.com/copilot_internal/v2/token`` with the
+                        stored OAuth token, exactly as
+                        ``CopilotProvider._ensure_jwt`` does at run time. This
+                        is the check that notices a REVOKED token.
+  * ``claude_sdk``    — subscription path with no cheap public liveness
+                        endpoint. The probe verifies the credential is PRESENT
+                        in Vault and SAYS SO in ``detail`` ("no live call for
+                        this kind"), so the UI can render a weaker green
+                        instead of implying a verified connection.
+
+Both of the first two used to lie (prod-07 task_prod07_11, llm-12): copilot only
+checked that the token EXISTED in Vault — a revoked token stayed there, so the
+probe went green and the run died with a 401 later — and azure rejected
+bearer-only configs with CONFIG_ERROR even though the factory builds them and
+the assistant uses them happily.
 
 The classified status is a small closed enum the UI renders; the
 ``detail`` is a human string that, by construction, contains no secret.
@@ -93,7 +104,9 @@ async def probe_provider(
             return await _probe_ollama(client, base_url=base_url, secret=secret)
         if kind == LLMProviderKind.AZURE_FOUNDRY.value:
             return await _probe_azure_foundry(client, base_url=base_url, secret=secret)
-        if kind in (LLMProviderKind.CLAUDE_SDK.value, LLMProviderKind.COPILOT.value):
+        if kind == LLMProviderKind.COPILOT.value:
+            return await _probe_copilot(client, secret=secret)
+        if kind == LLMProviderKind.CLAUDE_SDK.value:
             return _probe_credential_present(kind=kind, secret=secret)
         # Unknown kind should never reach here (the DB CHECK + schema gate
         # it), but classify rather than crash.
@@ -137,18 +150,60 @@ async def _probe_azure_foundry(
             status=LivenessStatus.CONFIG_ERROR,
             detail="Azure Foundry provider has no APIM base_url configured",
         )
+    # APIM accepts EITHER auth form and so does the factory (`_build_azure_*`):
+    # the subscription key (quotas/billing) or a Bearer JWT that APIM validates.
+    # Requiring the subscription key here rejected a config that works — the
+    # operator could not validate a bearer-only provider at all (task_prod07_11).
     api_key = secret.get(SECRET_FIELD_API_KEY)
-    if not api_key:
+    bearer = secret.get(SECRET_FIELD_BEARER_TOKEN)
+    if api_key:
+        headers = {"Ocp-Apim-Subscription-Key": api_key}
+    elif bearer:
+        headers = {"Authorization": f"Bearer {bearer}"}
+    else:
         return LivenessResult(
             ok=False,
             status=LivenessStatus.CONFIG_ERROR,
-            detail="Azure Foundry provider has no API key configured in Vault",
+            detail=(
+                "Azure Foundry provider has neither an API key nor a bearer "
+                "token configured in Vault"
+            ),
         )
-    headers = {"Ocp-Apim-Subscription-Key": api_key}
     # List deployments/models is the cheapest authenticated GET the APIM
-    # gateway forwards; a reachable gateway that accepts the key is OK.
+    # gateway forwards; a reachable gateway that accepts the credential is OK.
     url = f"{base_url.rstrip('/')}/openai/models?api-version=2024-10-21"
     return await _probe_get(client, url, headers=headers, provider="Azure Foundry")
+
+
+# GitHub's Copilot token endpoint — the same URL `CopilotProvider._ensure_jwt`
+# calls on every run. Kept in sync deliberately: probing anything else would
+# check something the run does not do.
+_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+
+
+async def _probe_copilot(client: httpx.AsyncClient, *, secret: dict[str, str]) -> LivenessResult:
+    """Mint the Copilot JWT: the only check that sees a REVOKED token.
+
+    The previous probe asserted the OAuth token was PRESENT in Vault. Revoking a
+    token in GitHub does not remove it from Vault, so a dead provider showed
+    green and the failure surfaced later as a 401 inside a run — misattributing
+    the cause. The mint is a single cheap GET and is exactly what the provider
+    does at run time, so a green here means the run can authenticate.
+    """
+    oauth_token = secret.get(SECRET_FIELD_OAUTH_TOKEN)
+    if not oauth_token:
+        # No credential at all is CONFIGURATION, not authentication — and there
+        # is nothing to call with.
+        return LivenessResult(
+            ok=False,
+            status=LivenessStatus.CONFIG_ERROR,
+            detail="copilot provider has no OAuth token configured in Vault",
+        )
+    headers = {
+        "Authorization": f"token {oauth_token}",
+        "Accept": "application/json",
+    }
+    return await _probe_get(client, _COPILOT_TOKEN_URL, headers=headers, provider="Copilot")
 
 
 def _probe_credential_present(*, kind: str, secret: dict[str, str]) -> LivenessResult:

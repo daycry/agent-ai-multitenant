@@ -234,11 +234,12 @@ def plan_retro_task() -> dict[str, int]:
 
     async def _main() -> dict[str, int]:
         from redis.asyncio import Redis
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
+        from workers.db import worker_engine
         from workers.memorizer import _default_llm_factory
 
-        engine = create_async_engine(settings.database_url)
+        engine = worker_engine(settings)
         redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
         try:
             sessionmaker = async_sessionmaker(engine, expire_on_commit=False)

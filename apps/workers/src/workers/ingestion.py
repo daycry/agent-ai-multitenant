@@ -40,10 +40,11 @@ from uuid import UUID
 import structlog
 from redis.asyncio import Redis
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.ingestion")
 
@@ -184,7 +185,7 @@ async def _ingest_document_async(
     """
     from api_server.ingestion import ingest_document
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
     storage = storage_factory()
@@ -278,7 +279,7 @@ async def _sweep_pending_documents_async(
     both claim the same document (the second's predicate no longer matches the
     freshly-stamped rows).
     """
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session, session.begin():

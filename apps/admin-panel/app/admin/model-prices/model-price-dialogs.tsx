@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import {
   DIFF_STATUS_BADGE,
@@ -35,7 +36,6 @@ import {
   SOURCES,
   UNIT_LABEL,
   UNITS,
-  errorText,
   fmtDate,
   fmtPct,
   fmtUsd,
@@ -68,6 +68,7 @@ interface SyncDiffDialogProps {
 }
 
 export function SyncDiffDialog({ onClose, onApplied, syncFamilies }: SyncDiffDialogProps) {
+  const errorText = useErrorText();
   const [confirmed, setConfirmed] = useState(false);
 
   const diffQuery = useQuery({
@@ -301,6 +302,7 @@ interface PriceFormDialogProps {
 }
 
 export function PriceFormDialog({ mode, price, onClose, onSaved }: PriceFormDialogProps) {
+  const errorText = useErrorText();
   const isEdit = mode === "edit";
 
   // The catalog key (provider/model_id/modality) is immutable on edit.
@@ -526,6 +528,7 @@ interface PriceHistoryDialogProps {
 }
 
 export function PriceHistoryDialog({ target, onClose }: PriceHistoryDialogProps) {
+  const errorText = useErrorText();
   const historyQuery = useQuery({
     queryKey: ["model-prices", "history", target],
     queryFn: () => {

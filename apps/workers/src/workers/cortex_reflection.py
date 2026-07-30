@@ -61,10 +61,11 @@ from shared_llm.base import LLMProvider
 from shared_llm.providers import OllamaProvider
 from shared_llm.types import Message
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.cortex_reflection")
 
@@ -187,7 +188,7 @@ async def _reflect_scheduled_async(
     El kill-switch se mira aquí para salir barato sin resolver owners, y ``_reflect_async``
     lo vuelve a mirar por owner (es donde vive el gobierno completo, ADR 0078, para que el
     disparo manual también lo respete). La redundancia es intencional: una consulta."""
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         from api_server.db.models import User
@@ -240,7 +241,7 @@ async def _reflect_async(
     ventana del budget sea determinista en test.
     """
     now = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         # (0) Gobierno (ADR 0078): kill-switch global y budget diario por owner,

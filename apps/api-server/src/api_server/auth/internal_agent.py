@@ -43,11 +43,11 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
-from jose import JWTError, jwt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import _parse_bearer
+from api_server.auth.jwt import InvalidTokenError, sign_claims, verify_claims
 from api_server.config import get_settings
 from api_server.db.domain import Agent, Project
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
@@ -118,13 +118,12 @@ def mint_agent_token(
     }
     if task_id is not None:
         claims["task"] = str(task_id)
-    encoded: str = jwt.encode(
+    return sign_claims(
         claims,
         # DEDICATED key, never `jwt_secret` (task_prod09_03 / secrets-9).
-        settings.internal_token_secret.get_secret_value(),
+        secret=settings.internal_token_secret.get_secret_value(),
         algorithm=settings.jwt_algorithm,
     )
-    return encoded
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +149,13 @@ def decode_agent_token(token: str) -> AgentPrincipal:
     """
     settings = get_settings()
     try:
-        claims = jwt.decode(
+        claims = verify_claims(
             token,
             # DEDICATED key, never `jwt_secret` (task_prod09_03 / secrets-9).
-            settings.internal_token_secret.get_secret_value(),
-            algorithms=[settings.jwt_algorithm],
+            secret=settings.internal_token_secret.get_secret_value(),
+            algorithm=settings.jwt_algorithm,
         )
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise InvalidAgentTokenError(str(exc)) from exc
 
     if claims.get("kind") != _AGENT_KIND_CLAIM:

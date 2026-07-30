@@ -16,10 +16,11 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 from workers.docker_client import get_docker_client
 
 _log = structlog.get_logger("workers.tasks")
@@ -122,7 +123,7 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
     # C8 F41: enforce the per-tenant cap on the PRODUCTION path — the in-memory
     # ReviewRuntimeManager.create cap never ran here. We refuse the N+1-th BEFORE
     # creating a row or a container (so a runaway never piles up sessions).
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as session:

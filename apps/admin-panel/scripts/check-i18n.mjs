@@ -8,15 +8,21 @@
  * `task_prod16_04`: mientras dure, hace falta un trinquete que impida que la
  * deuda CREZCA.
  *
- * Reglas:
+ * Son DOS trinquetes con la misma mecánica, cada uno con su allowlist:
  *
- * - Un fichero que no esté en `ALLOWLIST` y tenga ternarios ⇒ error. Es el caso
- *   importante: código NUEVO que vuelve a traducir a mano.
- * - Un fichero de la allowlist con MÁS ternarios que los anotados ⇒ error.
+ *   1. **Ternarios** `lang === "es" ? …` — traducir a mano (`ALLOWLIST`).
+ *   2. **Atributos de UI con castellano cableado** — el grueso real de la deuda,
+ *      añadido en `task_prod16_03` (`ATTR_ALLOWLIST`, ver `ATTR_PATTERN`).
+ *
+ * Reglas (idénticas para los dos):
+ *
+ * - Un fichero que no esté en su allowlist y tenga infractores ⇒ error. Es el
+ *   caso importante: código NUEVO que vuelve a escribir castellano fijo.
+ * - Un fichero de la allowlist con MÁS de los anotados ⇒ error.
  * - Con MENOS ⇒ aviso: has migrado, baja el número (no falla, para no bloquear
  *   una mejora, pero se ve en la salida).
  * - `--strict` (lo usa `task_prod16_04` al cerrar la migración): cualquier
- *   ternario, esté o no en la allowlist, es error.
+ *   infractor, esté o no en la allowlist, es error.
  *
  * La propia guarda se autocomprueba: si el descubrimiento deja de encontrar
  * ficheros o deja de encontrar los infractores conocidos, falla en vez de pasar
@@ -73,6 +79,116 @@ const ALLOWLIST = {
 
 const PATTERN = /lang === "es"/g;
 
+/**
+ * Segundo trinquete: castellano CABLEADO en un atributo que ve el usuario.
+ *
+ * El de los ternarios sólo cubre los ficheros que ya traducían a mano, que eran
+ * 18. El grueso de la deuda de frontend-9 no son ternarios: son literales fijos
+ * que con el toggle en EN se quedan en castellano y no se queja nadie.
+ *
+ * Detectar "esto está en castellano" en general es adivinar. Detectarlo en un
+ * atributo con un carácter que SÓLO existe en castellano (tilde, ñ, ¿, ¡) es
+ * exacto: cero falsos positivos, a cambio de no ver los literales sin acentuar.
+ * Es un suelo, no un techo — el barrido de `task_prod16_04` sigue necesitando
+ * ojo humano (test `human_prod16_01`).
+ *
+ * Sólo atributos que el usuario LEE: `className`, `data-testid` o `href` con una
+ * ñ no son un problema de traducción.
+ */
+const UI_ATTRS = [
+  "placeholder",
+  "aria-label",
+  "title",
+  "loadingLabel",
+  "emptyLabel",
+  "description",
+  "label",
+];
+const SPANISH_CHARS = "áéíóúüñÁÉÍÓÚÜÑ¿¡";
+const ATTR_PATTERN = new RegExp(`(?:${UI_ATTRS.join("|")})="[^"]*[${SPANISH_CHARS}][^"]*"`, "g");
+
+/**
+ * Deuda de atributos conocida el 2026-07-30. **Sólo puede MENGUAR.**
+ *
+ * Los ficheros migrados (login, shell, sidebar, select-tenant, no-access, users)
+ * NO están aquí: están a cero y el trinquete los mantiene así.
+ */
+const ATTR_ALLOWLIST = {
+  "app/admin/agents/[id]/agent-skills-section.tsx": 2,
+  "app/admin/agents/[id]/agent-tools-section.tsx": 3,
+  "app/admin/agents/page.tsx": 1,
+  "app/admin/approval-policy/page.tsx": 2,
+  "app/admin/approvals/page.tsx": 1,
+  "app/admin/assistant/page.tsx": 2,
+  "app/admin/assistant/settings/page.tsx": 1,
+  "app/admin/backup/destinations/page.tsx": 1,
+  "app/admin/backup/page.tsx": 2,
+  "app/admin/backup/restore/page.tsx": 1,
+  "app/admin/cortex/identity/page.tsx": 6,
+  "app/admin/cortex/mind/page.tsx": 3,
+  "app/admin/cortex/page.tsx": 7,
+  "app/admin/docs/doc-diff-view.tsx": 2,
+  "app/admin/docs/docs-search-panel.tsx": 1,
+  "app/admin/docs/docs-sidebar.tsx": 1,
+  "app/admin/docs/page.tsx": 2,
+  "app/admin/documents/[id]/citations/page.tsx": 1,
+  "app/admin/documents/[id]/ingestion/page.tsx": 1,
+  "app/admin/eval-quality/page.tsx": 2,
+  "app/admin/executions/[id]/page.tsx": 2,
+  "app/admin/guardrails/page.tsx": 2,
+  "app/admin/human-agents/page.tsx": 1,
+  "app/admin/inbox/history-tab.tsx": 2,
+  "app/admin/inbox/page.tsx": 2,
+  "app/admin/inbox/submit-dialog.tsx": 1,
+  "app/admin/knowledge-bases/categories/page.tsx": 1,
+  "app/admin/knowledge-bases/kb-sections.tsx": 1,
+  "app/admin/knowledge-bases/page.tsx": 1,
+  "app/admin/llm-providers/page.tsx": 2,
+  "app/admin/marketplace/installations/[id]/permissions/page.tsx": 1,
+  "app/admin/marketplace/listings/[id]/playwright-config/page.tsx": 2,
+  "app/admin/marketplace/page.tsx": 1,
+  "app/admin/memories/page.tsx": 1,
+  "app/admin/model-prices/model-price-dialogs.tsx": 1,
+  "app/admin/model-prices/page.tsx": 3,
+  "app/admin/notifications/inbox/page.tsx": 2,
+  "app/admin/notifications/page.tsx": 1,
+  "app/admin/office/page.tsx": 3,
+  "app/admin/ollama/page.tsx": 1,
+  "app/admin/plans/[id]/escalated/page.tsx": 1,
+  "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 2,
+  "app/admin/projects/[id]/chat/page.tsx": 3,
+  "app/admin/projects/[id]/commands/page.tsx": 1,
+  "app/admin/projects/[id]/dep-cache/page.tsx": 1,
+  "app/admin/projects/[id]/incoming-webhooks/page.tsx": 1,
+  "app/admin/projects/[id]/knowledge-bases/page.tsx": 1,
+  "app/admin/projects/[id]/mcp-servers/page.tsx": 1,
+  "app/admin/projects/[id]/memories/page.tsx": 1,
+  "app/admin/projects/[id]/plans/[planId]/plan-spec-sections.tsx": 2,
+  "app/admin/projects/[id]/tasks/page.tsx": 1,
+  "app/admin/settings/hourly-rate/page.tsx": 1,
+  "app/admin/settings/memories/page.tsx": 1,
+  "app/admin/settings/page.tsx": 1,
+  "app/admin/settings/platform-defaults/page.tsx": 1,
+  "app/admin/settings/sso/page.tsx": 2,
+  "app/admin/settings/sso/saml/page.tsx": 4,
+  "app/admin/tenant-stats/page.tsx": 4,
+  "app/admin/tools/page.tsx": 7,
+  "app/developers/api-reference/page.tsx": 3,
+  "app/developers/sdks/page.tsx": 1,
+  "app/developers/tutorials/page.tsx": 1,
+  "app/developers/webhooks/page.tsx": 2,
+  "components/cortex/cortex-voice-call.tsx": 1,
+  "components/executions/replay-bar.tsx": 1,
+  "components/projects/git-config-section.tsx": 2,
+  "components/projects/governance-section.tsx": 2,
+  "components/projects/runtime-services-section.tsx": 3,
+  "components/shared/form-section.tsx": 2,
+  "components/tasks/task-detail-sheet.tsx": 2,
+  "components/tasks/task-human-actions.tsx": 5,
+  "components/ui/entity-combobox.tsx": 1,
+  "lib/plan-gantt.tsx": 1,
+};
+
 /** Mínimo de ficheros que el recorrido DEBE ver para creerse a sí mismo. */
 const MIN_FILES_SCANNED = 50;
 
@@ -120,10 +236,18 @@ function main() {
   const isFixture = root !== APP_ROOT;
 
   const counts = new Map();
+  const attrCounts = new Map();
   for (const rel of files) {
     if (EXEMPT_PREFIXES.some((prefix) => rel.startsWith(prefix))) continue;
-    const hits = (readFileSync(join(root, rel), "utf8").match(PATTERN) ?? []).length;
+    const source = readFileSync(join(root, rel), "utf8");
+
+    const hits = (source.match(PATTERN) ?? []).length;
     if (hits > 0) counts.set(rel, hits);
+
+    // Los tests llevan castellano en sus fixtures a propósito: no es UI.
+    if (/\.test\.tsx?$/.test(rel)) continue;
+    const attrHits = (source.match(ATTR_PATTERN) ?? []).length;
+    if (attrHits > 0) attrCounts.set(rel, attrHits);
   }
 
   const errors = [];
@@ -142,10 +266,30 @@ function main() {
     }
   }
 
+  for (const [rel, hits] of attrCounts) {
+    const allowed = strict ? 0 : (ATTR_ALLOWLIST[rel] ?? 0);
+    if (hits > allowed) {
+      errors.push(
+        allowed === 0
+          ? `${rel}: ${hits} atributo(s) de UI con texto castellano fijo. Usa useT() de @/lib/i18n.`
+          : `${rel}: ${hits} atributo(s) en castellano, la allowlist permite ${allowed}. La deuda no puede crecer.`,
+      );
+    } else if (hits < allowed) {
+      notes.push(
+        `${rel}: ${hits} < ${allowed} atributos permitidos — baja el número en la allowlist.`,
+      );
+    }
+  }
+
   if (!strict) {
     for (const rel of Object.keys(ALLOWLIST)) {
       if (!counts.has(rel) && !isFixture) {
         notes.push(`${rel}: ya no tiene ternarios — bórralo de la allowlist.`);
+      }
+    }
+    for (const rel of Object.keys(ATTR_ALLOWLIST)) {
+      if (!attrCounts.has(rel) && !isFixture) {
+        notes.push(`${rel}: ya no tiene atributos en castellano — bórralo de la allowlist.`);
       }
     }
   }
@@ -164,11 +308,19 @@ function main() {
           "de búsqueda dejó de funcionar (o la migración terminó y toca --strict).",
       );
     }
+    if (!strict && attrCounts.size === 0) {
+      errors.push(
+        "no se encontró NINGÚN atributo en castellano y su allowlist no está vacía: " +
+          "ATTR_PATTERN dejó de funcionar (o la migración terminó y toca --strict).",
+      );
+    }
   }
 
   const pending = [...counts.values()].reduce((a, b) => a + b, 0);
+  const attrPending = [...attrCounts.values()].reduce((a, b) => a + b, 0);
   console.log(
-    `check-i18n: ${files.length} ficheros, ${pending} ternario(s) pendientes en ${counts.size} fichero(s)` +
+    `check-i18n: ${files.length} ficheros, ${pending} ternario(s) pendientes en ${counts.size} fichero(s), ` +
+      `${attrPending} atributo(s) pendientes en ${attrCounts.size} fichero(s)` +
       `${strict ? " [strict]" : ""}`,
   );
   for (const note of notes) console.log(`  aviso: ${note}`);

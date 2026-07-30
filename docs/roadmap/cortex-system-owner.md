@@ -5,9 +5,10 @@ status: pending_human_validation
 date: 2026-06-22
 started_at: 2026-06-23
 completed_at: null
-author: claude-opus (workflow multi-agente: research + panel de diseño + jueces)
+author: "claude-opus (workflow multi-agente: research + panel de diseño + jueces)"
 blocking_plan: null
-related_adrs: ["0074", "0075", "0076", "0077", "0078", "0021", "0064", "0070", "0073", "0059", "0067"]
+related_adrs:
+  ["0074", "0075", "0076", "0077", "0078", "0021", "0064", "0070", "0073", "0059", "0067"]
 docs_language: es
 ---
 

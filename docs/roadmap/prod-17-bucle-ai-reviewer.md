@@ -22,12 +22,13 @@ priority: P2
 | Campo                            | Valor                                                        |
 | -------------------------------- | ------------------------------------------------------------ |
 | **ID del Plan**                  | `prod-17-bucle-ai-reviewer`                                  |
-| **Estado**                       | `pending_human_validation`                                   |
 | **Prioridad**                    | P2                                                           |
 | **Bloqueado por**                | prod-06 (usa su transición a `in_review` y la promoción DAG) |
 | **Tiempo estimado (calendario)** | 2-3 semanas                                                  |
 | **Rama git sugerida**            | `plan/prod-17-bucle-ai-reviewer`                             |
 | **ADR semilla**                  | `0084` (accepted, Opción B) + `0027` (bucle)                 |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from redis.asyncio import Redis
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,12 @@ from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
 from api_server.routers._helpers import require_tenant_id, soft_delete
+from api_server.routers._pagination import (
+    MAX_PAGE_SIZE,
+    apply_pagination,
+    limit_query,
+    offset_query,
+)
 from api_server.routers.docs_viewer import get_query_embedder
 from api_server.schemas.knowledge import (
     ChunkSearchHit,
@@ -656,15 +662,24 @@ async def upload_document(
 @router.get("/{kb_id}/documents", response_model=list[DocumentResponse])
 async def list_documents(
     kb_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[DocumentResponse]:
+    """Los documentos de la KB, más reciente primero, PAGINADO (prod-13, api-6).
+
+    Una KB de manuales tiene miles de documentos y este listado los devolvía
+    todos. El desempate por `id` da orden total: sin él, dos documentos subidos en
+    el mismo instante pueden aparecer en dos páginas o en ninguna.
+    """
     await _load_kb(session, kb_id)
-    result = await session.execute(
+    stmt = (
         select(Document)
         .where(Document.kb_id == kb_id, Document.deleted_at.is_(None))
-        .order_by(Document.created_at.desc())
+        .order_by(Document.created_at.desc(), Document.id)
     )
+    result = await session.execute(apply_pagination(stmt, limit=limit, offset=offset))
     return [to_document_response(d) for d in result.scalars().all()]
 
 
@@ -753,30 +768,75 @@ documents_router = APIRouter(prefix="/documents", tags=["documents"])
 @documents_router.get("/{document_id}/citations")
 async def get_document_citations(
     document_id: UUID,
+    limit: int = limit_query(default=MAX_PAGE_SIZE),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
-    """Return the Document + all its chunks ordered by `ordinal`,
+    """Return the Document + a PAGE of its chunks ordered by `ordinal`,
     suitable for the citation viewer (Plan 04 task_04_25).
 
     Tenant isolation rides on RLS; cross-tenant access would surface
     as 404. We deliberately do NOT require knowing the kb_id —
     document_id is enough, and the viewer is often deep-linked from
     a citation in chat where only the document_id is on hand.
+
+    Dos arreglos de prod-13 (perf-8 + api-6):
+
+      * **Columnas explícitas, no la entidad `Chunk`.** `select(Chunk)` traía
+        también `embedding`, un `vector(768)`: ~3 KB por fila que el visor no usa
+        para nada. Un PDF de 2.000 chunks eran 6 MB de vectores por el cable en
+        cada apertura del visor. Se seleccionan las cinco columnas que el payload
+        realmente contiene.
+      * **Paginado por `ordinal`**, con `limit`/`offset` compartidos. El
+        `ordinal` es único por documento, así que el orden ya es total y no hace
+        falta desempate.
+
+    Dos decisiones sobre la paginación que NO son cosméticas, porque el visor de
+    citas del admin-panel llama a este endpoint SIN `limit`:
+
+      * el default es `MAX_PAGE_SIZE`, no `DEFAULT_PAGE_SIZE`. Con 100 por
+        defecto, un PDF de 2.000 chunks habría dejado al visor pintando los
+        resaltados de las primeras páginas y NINGUNO del resto, sin decir nada:
+        cambiar una respuesta pesada por una respuesta silenciosamente incompleta
+        no es una mejora.
+      * la respuesta lleva `total` y `has_more`. Aunque el cliente aún no pagine,
+        la truncación pasa a ser **detectable** en vez de invisible — el visor
+        puede avisar, y quien depure sabe que faltan filas. Cablear el paginado en
+        el front es trabajo del admin-panel (fuera de este cambio).
     """
     doc = await _load_document(session, document_id)
+    total = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Chunk).where(Chunk.document_id == document_id)
+            )
+        ).scalar_one()
+    )
     chunk_rows = await session.execute(
-        select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.ordinal)
+        apply_pagination(
+            select(
+                Chunk.id,
+                Chunk.ordinal,
+                Chunk.content,
+                Chunk.bbox,
+                Chunk.metadata_,
+            )
+            .where(Chunk.document_id == document_id)
+            .order_by(Chunk.ordinal),
+            limit=limit,
+            offset=offset,
+        )
     )
     chunks = [
         {
-            "id": str(c.id),
-            "ordinal": c.ordinal,
-            "content": c.content,
-            "bbox": c.bbox,
-            "metadata": c.metadata_,
+            "id": str(row.id),
+            "ordinal": row.ordinal,
+            "content": row.content,
+            "bbox": row.bbox,
+            "metadata": row.metadata_,
         }
-        for c in chunk_rows.scalars().all()
+        for row in chunk_rows.all()
     ]
     return {
         "document": {
@@ -794,6 +854,13 @@ async def get_document_citations(
             "error_message": doc.error_message,
         },
         "chunks": chunks,
+        # Metadatos de paginación: `total` es el recuento REAL de chunks del
+        # documento, no `len(chunks)`. Sin esto, un cliente que no pagina no
+        # tiene forma de saber que le faltan filas.
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(chunks) < total,
     }
 
 

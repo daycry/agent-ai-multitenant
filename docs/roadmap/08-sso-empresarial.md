@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `08-sso-empresarial`                      |
-| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/08-sso-empresarial`                 |
 | **Secciones del .docx**            | [20]                                      |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -120,6 +121,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_03` — UI configuración OIDC por tenant
 
 - [x] **Título**: UI configuración OIDC por tenant
+
 <!-- e2e (e2e/sso-oidc-config.spec.ts) escrito pero NO ejecutado: PENDING HUMAN VERIFICATION.
      Verde: typecheck + lint + build del admin-panel, CRUD backend (15 tests integración OIDC config). -->
 
@@ -142,6 +144,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_04` — Integración SAML con python3-saml (SP-initiated y IdP-initiated)
 
 - [x] **Título**: Integración SAML con python3-saml (SP-initiated y IdP-initiated)
+
 <!-- python3-saml + xmlsec 1.3.17 instalado OK en este host (wheel Windows);
      flujo SAML COMPLETO implementado y verde, incluida la validación de firma
      XML del assertion (no bloqueado-por-xmlsec en este entorno). El import de
@@ -170,6 +173,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_05` — Configuración de firma y cifrado XML
 
 - [x] **Título**: Configuración de firma y cifrado XML
+
 <!-- xmlsec 1.3.17 + python3-saml instalados OK en este host (wheel Windows):
      la firma/cifrado XML (la parte nativa) NO está bloqueada-por-xmlsec aquí y
      el camino completo corre verde. Implementado: migración 0034 reversible
@@ -194,6 +198,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
      assertion manipulada/sin firma RECHAZADA (400); aislamiento cross-tenant
      (la clave SP de A no se filtra en la request de B). OIDC + login local +
      SAML 08_04 intactos (37 tests verdes). -->
+
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
@@ -257,6 +262,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_08` — SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
 
 - [x] **Título**: SCIM 2.0 endpoints para creación/actualización/eliminación de usuarios desde IdP
+
 <!-- SCIM 2.0 (RFC 7643/7644) AÑADIDO junto a login local + OIDC + SAML (no
      los toca). Endpoints /scim/v2/Users (POST/GET-id/GET-list+filter/PUT/
      PATCH/DELETE) autenticados por bearer token per-tenant (tabla
@@ -278,6 +284,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
      cross-tenant (token A no ve/toca B), CRUD de tokens + token revocado
      401. pre-commit verde (black/ruff/mypy). Login local + OIDC + SAML
      intactos (87 tests verdes: 18 auth/OIDC + 45 SAML + 24 JIT/OIDC). -->
+
 - **NO bloqueado por xmlsec**: SCIM no usa SAML/xmlsec.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: m
@@ -296,6 +303,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_09` — MFA TOTP con pyotp (setup, QR, verificación)
 
 - [x] **Título**: MFA TOTP con pyotp (setup, QR, verificación)
+
 <!-- MFA TOTP (RFC 6238, pyotp) AÑADIDO como SEGUNDO factor OPT-IN junto al
      login local + OIDC + SAML (no los toca). Un usuario SIN TOTP confirmado
      entra EXACTAMENTE igual que antes (regresión cubierta). Endpoints
@@ -323,6 +331,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
      (@cross_tenant: el factor de B no se ve desde A vía status, RLS).
      pre-commit verde (black/ruff/mypy). Login local + OIDC + JIT + SCIM
      intactos (33 tests de regresión verdes). -->
+
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -391,6 +400,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_13` — Documentación, ADRs, changelog
 
 - [x] **Título**: Documentación, ADRs, changelog
+
 <!-- Cerrado: changelog docs/07-changelog/08-sso-empresarial.md (qué se entregó,
      endpoints nuevos, migraciones 0032..0040, vars de entorno, decisiones y
      notas de seguridad); ADR 0031 (modelo de sesión SSO = Redis no JWT
@@ -400,6 +410,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
      (todas las tareas done; faltan tests humanos + PR para completed). Verde:
      pre-commit (prettier/markdownlint) sobre los .md cambiados; auto_08_13_a
      (el changelog existe). -->
+
 - **Tiempo estimado**: 6 h
 - **Complejidad**: s
 - **Rol sugerido**: technical-writer

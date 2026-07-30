@@ -29,6 +29,7 @@ import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
 import { reasoningLabel, selectableReasoningOptions } from "@/lib/model-selection";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   clearCortexModel,
   getCortexModel,
@@ -43,12 +44,8 @@ function modelsFor(providers: CortexModelOption[], providerId: string): string[]
   return providers.find((p) => p.provider_id === providerId)?.models ?? [];
 }
 
-function errorText(error: unknown): string {
-  if (error instanceof ApiError) return error.body;
-  return String(error);
-}
-
 export function CortexModelSection() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");

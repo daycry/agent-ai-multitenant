@@ -7,7 +7,8 @@ for real once ``SMOKE_BASE_URL`` (+ optional credentials / monitoring URLs)
 point at a deployed stack.
 
 Mapping to the post-deploy checklist:
-  * health/readiness of the api-server         -> test_health
+  * liveness of the api-server                 -> test_healthz
+  * readiness of the api-server                -> test_readyz
   * auth/login probe                           -> test_login
   * minimal authenticated API v1 call          -> test_api_v1_with_token
   * admin-panel reachability                   -> test_admin_panel_reachable
@@ -21,11 +22,24 @@ import httpx
 from tests.smoke import probes
 
 
-def test_health(smoke_client: httpx.Client, smoke_base_url: str) -> None:
-    """The api-server answers ``GET /healthz`` with a 2xx (service is up)."""
+def test_healthz(smoke_client: httpx.Client, smoke_base_url: str) -> None:
+    """The api-server answers ``GET /healthz`` with a 2xx (the process is up)."""
     result = probes.probe_health(smoke_client, smoke_base_url)
     assert result.reachable, result.detail
     assert result.ok, f"health check failed: {result.detail}"
+
+
+def test_readyz(smoke_client: httpx.Client, smoke_base_url: str) -> None:
+    """``GET /readyz`` is 200 — the deployed process can actually serve traffic.
+
+    Added by ``task_audit14_08``: ``/healthz`` only proves the process answers.
+    On a freshly deployed stack the interesting failure is «up but not wired»
+    (PostgreSQL or Redis unreachable from the container), and only readiness
+    catches it. A 503 here names the broken dependency in its body.
+    """
+    result = probes.probe_health(smoke_client, smoke_base_url, path="/readyz")
+    assert result.reachable, result.detail
+    assert result.ok, f"readiness check failed: {result.detail}"
 
 
 def test_login(

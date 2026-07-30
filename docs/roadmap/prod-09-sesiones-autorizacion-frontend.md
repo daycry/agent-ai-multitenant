@@ -22,13 +22,14 @@ priority: P1
 | Campo                              | Valor                                       |
 | ---------------------------------- | ------------------------------------------- |
 | **ID del Plan**                    | `prod-09-sesiones-autorizacion-frontend`    |
-| **Estado**                         | `pending_approval`                          |
 | **Prioridad**                      | P1                                          |
 | **Bloqueado por**                  | — (`blocking_plan: null`)                   |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                                 |
 | **Tiempo estimado (persona-días)** | 20                                          |
 | **Rama git sugerida**              | `plan/prod-09-sesiones-autorizacion`        |
 | **Origen**                         | Auditoría integral de producción 2026-06-10 |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

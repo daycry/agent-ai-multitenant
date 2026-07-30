@@ -55,7 +55,8 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.marketplace
@@ -120,10 +121,6 @@ const STATUS_BADGE: Record<string, { variant: BadgeVariant; label: string }> = {
 /** Listings carrying a non-null tenant_id are the caller tenant's PRIVATE rows. */
 function isPrivate(listing: MarketplaceListing): boolean {
   return listing.tenant_id !== null;
-}
-
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
 }
 
 // ===========================================================================
@@ -191,6 +188,7 @@ export default function MarketplaceAdminPage() {
 // Catalog — browse global + own private listings
 // ===========================================================================
 function CatalogTab() {
+  const errorText = useErrorText();
   const listingsQuery = useQuery({
     queryKey: ["marketplace-listings"],
     queryFn: () => apiFetch<MarketplaceListing[]>("/marketplace/listings?limit=100"),
@@ -334,6 +332,7 @@ function PublishCallout() {
 // Installed — consent / revoke / uninstall
 // ===========================================================================
 function InstalledTab() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const installedQuery = useQuery({
@@ -471,6 +470,7 @@ function InstalledTab() {
 // Shares — cross-tenant sharing (opt-in, explicit grant, System-Admin audited)
 // ===========================================================================
 function SharesTab() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const listingsQuery = useQuery({

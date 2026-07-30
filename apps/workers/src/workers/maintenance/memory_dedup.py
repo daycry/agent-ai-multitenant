@@ -20,6 +20,8 @@ import structlog
 from sqlalchemy import CursorResult, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from workers.db import worker_engine
+
 _log = structlog.get_logger("workers.maintenance")
 
 # Todas-menos-la-más-antigua por grupo exacto. COALESCE con el UUID cero para
@@ -66,11 +68,11 @@ async def consolidate_exact_duplicate_memories(session: AsyncSession) -> int:
 
 async def run() -> int:
     """Entry point de deploy: engine propio, una transacción, dispose."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from workers.config import get_settings
 
-    engine = create_async_engine(get_settings().database_url)
+    engine = worker_engine(get_settings())
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
         async with sm() as session, session.begin():

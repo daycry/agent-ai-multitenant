@@ -10,6 +10,7 @@ helpers fall back to the platform default.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,10 +30,95 @@ class PlatformSettingForbiddenError(PermissionError):
     """Raised when a non-System-Admin attempts to write a platform setting."""
 
 
+# ---------------------------------------------------------------------------
+# Caché Redis de lectura (prod-13 task_prod13_21, hallazgo perf-10)
+# ---------------------------------------------------------------------------
+# `get_platform_setting` se llama en 48 sitios, varios de ellos en el camino
+# caliente de CADA run y de cada mensaje del asistente, y cada llamada era un
+# round-trip a PostgreSQL para leer una fila que cambia una vez al mes.
+#
+# TTL corto + invalidación explícita al escribir, y en ese orden de prioridades:
+# la decisión clave 6 del plan dice que ANTE LA DUDA GANA LA FRESCURA, porque
+# entre estas claves hay límites de seguridad (`max_review_retries`, el budget de
+# rate limit del asistente) y un valor rancio es una guarda relajada. 30 s es el
+# techo de lo rancio que puede estar un valor si la invalidación fallase.
+_CACHE_PREFIX = "psetting:"
+_CACHE_TTL_SECONDS = 30
+
+# Un `None` cacheado tiene que distinguirse de "no está en caché", porque la
+# ausencia de la fila es el caso COMÚN (casi todas las claves usan su default) y
+# es justo el que más se beneficia de no ir a la BD. Se cachea el JSON
+# `{"v": <valor>}` y la ausencia como `{}`.
+_MISSING: dict[str, Any] = {}
+
+
+def _cache_key(key: str) -> str:
+    return f"{_CACHE_PREFIX}{key}"
+
+
+async def _cached_read(key: str) -> tuple[bool, Any]:
+    """`(hit, valor)`. Un fallo de Redis es `(False, None)`: se cae a la BD.
+
+    Import perezoso de `auth.deps` a propósito: `auth.deps` importa `db.session`
+    y `db.models`, así que un import de módulo aquí cerraría el ciclo.
+    """
+    try:
+        from api_server.auth.deps import get_redis
+
+        raw = await get_redis().get(_cache_key(key))
+    except Exception:  # Redis caído / no configurado: la BD sigue siendo la verdad
+        return (False, None)
+    if raw is None:
+        return (False, None)
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):  # pragma: no cover - basura en la clave
+        return (False, None)
+    if not isinstance(payload, dict):  # pragma: no cover - idem
+        return (False, None)
+    return (True, payload.get("v"))
+
+
+async def _cache_write(key: str, value: Any, *, found: bool) -> None:
+    try:
+        from api_server.auth.deps import get_redis
+
+        payload = {"v": value} if found else _MISSING
+        await get_redis().setex(_cache_key(key), _CACHE_TTL_SECONDS, json.dumps(payload))
+    except Exception:  # el cacheo es best-effort; nunca rompe la lectura
+        return
+
+
+async def invalidate_platform_setting_cache(key: str) -> None:
+    """Borra la entrada de caché de `key`. Best-effort, idempotente."""
+    try:
+        from api_server.auth.deps import get_redis
+
+        await get_redis().delete(_cache_key(key))
+    except Exception:
+        return
+
+
 async def get_platform_setting(session: AsyncSession, key: str, *, default: Any = None) -> Any:
-    """Read a platform setting; return `default` when it has never been set."""
+    """Read a platform setting; return `default` when it has never been set.
+
+    Sirve de la caché Redis cuando hay entrada fresca (TTL 30 s), y sigue siendo
+    correcta si Redis no está: en ese caso es exactamente la función de antes.
+
+    OJO con el contrato de `default`: lo que se cachea es **si la fila existe y su
+    valor**, NO el `default`. Dos llamantes con defaults distintos para la misma
+    clave siguen recibiendo cada uno el suyo — cachear el resultado final habría
+    hecho que el primero en llegar impusiera su default al otro.
+    """
+    hit, cached = await _cached_read(key)
+    if hit:
+        return default if cached is None else cached
+
     row = await session.get(PlatformSetting, key)
-    return row.value if row is not None else default
+    found = row is not None
+    value = row.value if row is not None else None
+    await _cache_write(key, value, found=found)
+    return value if found else default
 
 
 async def set_platform_setting(
@@ -46,6 +132,14 @@ async def set_platform_setting(
 
     Raises `PlatformSettingForbiddenError` for any other actor — a Tenant
     Admin included. The caller owns the transaction (this flushes).
+
+    Invalida la caché DOS veces, y las dos hacen falta:
+
+      * ahora mismo, para que nada sirva el valor viejo desde ya;
+      * y de nuevo TRAS EL COMMIT, porque entre el flush y el commit un lector
+        concurrente todavía ve el valor antiguo en la BD y podría repoblar la
+        caché con él — una invalidación sola dejaría el valor viejo cacheado 30 s
+        DESPUÉS de haberlo cambiado, que es el peor de los dos mundos.
     """
     if not actor.is_system_admin:
         raise PlatformSettingForbiddenError(
@@ -60,7 +154,24 @@ async def set_platform_setting(
         row.value = value
         row.updated_by = actor.id
     await session.flush()
+    await invalidate_platform_setting_cache(key)
+    _schedule_cache_invalidation(session, key)
     return row
+
+
+def _schedule_cache_invalidation(session: AsyncSession, key: str) -> None:
+    """Registra la segunda invalidación para después del commit.
+
+    `schedule_after_commit` solo lo consume `open_tenant_session`; un llamante que
+    abra la sesión por su cuenta (un worker, un seed) no lo ejecutará, y por eso la
+    invalidación inmediata de arriba NO es redundante.
+    """
+    try:
+        from api_server.auth.deps import schedule_after_commit
+
+        schedule_after_commit(session, lambda: invalidate_platform_setting_cache(key))
+    except Exception:  # pragma: no cover - defensivo
+        return
 
 
 # ---------------------------------------------------------------------------

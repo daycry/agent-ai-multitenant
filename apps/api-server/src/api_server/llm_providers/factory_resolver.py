@@ -79,6 +79,7 @@ async def resolve_provider_config(
     kind: str,
     *,
     vault: LLMProviderVaultStore | None,
+    strict_vault: bool = False,
 ) -> ResolvedProviderConfig | None:
     """Resolve `kind` to its DB+Vault config, or `None` when no active row.
 
@@ -90,10 +91,21 @@ async def resolve_provider_config(
     `vault` is the injectable store (the same seam the admin CRUD uses). A
     missing store (`None`) is treated as "no credential available": the row
     still wins for `base_url`, but the secret dict is empty (the factory
-    leaves any env credential in place). A Vault transport error is
-    swallowed to an empty secret rather than raising, so a transient Vault
-    blip degrades to the env fallback instead of failing the run; no secret
-    value is ever in scope to be logged.
+    leaves any env credential in place).
+
+    `strict_vault` picks what a Vault TRANSPORT failure means, because the two
+    callers disagree and both are right (prod-07 task_prod07_07, llm-9):
+
+      * ``False`` (default, the assistant/córtex path) — swallow it to an empty
+        secret. The factory keeps the env credential, so a Vault blip degrades
+        instead of failing the request.
+      * ``True`` (the worker's dispatch path) — re-raise
+        :class:`LLMProviderVaultError`. There the "env fallback" DOES NOT EXIST:
+        the agent-runtime sandbox holds no credentials (principio #2), so a
+        silent empty secret launches a container that dies with a 401 blaming
+        the provider for an outage in Vault.
+
+    No secret value is ever in scope to be logged, either way.
     """
     rows = await list_active_llm_providers_by_kind(session, kind)
     if not rows:
@@ -106,8 +118,8 @@ async def resolve_provider_config(
         try:
             secret = vault.read_secret(row.secret_vault_path)
         except LLMProviderVaultError:
-            # Degrade to no-credential rather than fail the resolution; the
-            # factory keeps the env credential. Nothing sensitive is logged.
+            if strict_vault:
+                raise
             secret = {}
 
     return ResolvedProviderConfig(base_url=row.base_url, secret=secret)

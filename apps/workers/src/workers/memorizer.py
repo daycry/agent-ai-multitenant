@@ -60,10 +60,11 @@ from api_server.memorizer.policy import (
 from shared_llm.base import LLMProvider
 from shared_llm.providers import OllamaProvider
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 if TYPE_CHECKING:
     from api_server.ingestion.embeddings import Embedder
@@ -263,7 +264,7 @@ async def _memorize_execution_async(  # noqa: PLR0911
 ) -> dict[str, Any]:
     """Async core. Tests inject a fake `llm_factory` to avoid the
     network; ``embedder_factory`` es opcional (best-effort embed-al-crear)."""
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:
@@ -629,7 +630,7 @@ async def _memorize_human_work_session_async(
 ) -> dict[str, Any]:
     """Async core. Tests inject a fake `llm_factory` to avoid the network;
     ``embedder_factory`` es opcional (best-effort embed-al-crear)."""
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:
