@@ -1,6 +1,6 @@
 ---
 title: "ADR 0136: Dominios criptográficos worker ↔ api-server — secreto HMAC dedicado para los tokens internos"
-status: proposed
+status: accepted
 date: 2026-07-29
 deciders: [operador]
 relates_to: [0012, 0024, 0054]
@@ -10,19 +10,15 @@ task: task_prod09_03
 
 # ADR 0136: Dominios criptográficos worker ↔ api-server
 
-> **Estado: `proposed`.** Nadie lo ha aprobado, y por eso el frontmatter dice
-> `proposed` y este párrafo también.
+> **Estado: `accepted`** (2026-07-31, decidido por el operador).
 >
-> Pero **no es una pregunta abierta, y hay que decir por qué con precisión**. El
-> plan `prod-09` ya recomendaba el secreto dedicado (Decisión 3); al leer el
-> código para escribir este ADR resultó que **la decisión ya está implementada en
-> el árbol de trabajo** por `task_prod09_03`. Así que este documento no pide
-> elegir: **ratifica una decisión ya tomada en código, y documenta los dos
-> bloqueos de arranque que su aterrizaje ha dejado abiertos** y que hay que cerrar
-> antes de que cualquier stack generado por el instalador vuelva a levantar.
+> **Decisión tomada: Ratificada la Opción 1 — secreto HMAC dedicado para los tokens internos.**
 >
-> Escribir esto como si la decisión estuviera pendiente habría sido el pecado
-> documental de la casa: un ADR que dice `proposed` sobre algo que ya corre.
+> No había nada que elegir: la decisión ya estaba implementada y este ADR la
+> ratifica. Sus dos condiciones de cierre están **cerradas el 2026-07-31** (ver
+> §Condiciones): el instalador genera y propaga `API_SERVER_INTERNAL_TOKEN_SECRET`
+> a los dos servicios, y el mapeo del entorno vive en el enum. La asimétrica queda
+> como mejora futura, no como trabajo pendiente.
 
 ## Contexto verificado (2026-07-29)
 
@@ -99,9 +95,16 @@ refactor sobre **un solo** sitio de minteo. **No es motivo para rehacer lo
 implementado**; queda anotada como la forma de cerrar el hueco de verificación si
 el hueco vuelve a morder.
 
-### Prueba de que el hueco de verificación es real: dos bloqueos de arranque vivos
+### Prueba de que el hueco de verificación es real: dos bloqueos de arranque ~~vivos~~ YA CERRADOS
 
-Ninguno de los dos es teórico. Los he reproducido.
+> **Los dos se cerraron el 2026-07-31** (ver §Condiciones de cierre). Esta sección
+> se conserva **tal cual se escribió**, en presente y con la reproducción delante,
+> porque es la evidencia de por qué el hueco de verificación del contrato importaba:
+> dos guardas fail-closed correctas dejaron el stack generado sin arrancar, y solo se
+> supo al reproducirlo a mano. Leer «no arranca» aquí es leer el diagnóstico, no el
+> estado de hoy.
+
+Ninguno de los dos era teórico. Los reproduje.
 
 **(1) El instalador no genera el secreto nuevo.** Cero ocurrencias de
 `INTERNAL_TOKEN_SECRET` en `docker/`, en `apps/installer/` y en `scripts/`. El
@@ -214,9 +217,26 @@ Y **tres condiciones de cierre**, porque sin ellas la decisión está a medias y
 despliegue no levanta:
 
 1. **El instalador debe generar y propagar `API_SERVER_INTERNAL_TOKEN_SECRET`**
-   (`config_generators.build_env_vars` + el env del api-server **y del worker** en
-   `compose_generator`). Hoy no existe en ninguno de los tres sitios y el
-   api-server no arranca en prod por ello.
+   ✅ **CERRADA el 2026-07-31.** `GeneratedSecrets` lo mintea con un draw
+   independiente (la guarda de `config.py` rechaza el arranque si coincide con
+   `jwt_secret`), `build_env_vars` lo escribe en el `.env`, y el compose lo emite
+   para el api-server **y para el worker**.
+
+   Al implementarlo apareció una segunda avería **más grave que la buscada**: el
+   worker del compose generado no recibía **ningún** `API_SERVER_*`. Así que, al
+   mintear el token del sandbox, sus `Settings` de api-server (1) se creían en
+   `dev` —los guards anti-defaults no disparaban ahí: el fail-open que sobrevivió
+   a `task_prod09_02`— y (2) firmaban con el **secreto por defecto**, que el
+   api-server, con el real, rechazaba. El sandbox no habría podido llamar a
+   `/internal/agent/*`, y en silencio. Se emiten ahora las dos variables.
+
+   Guardas: `test_internal_token_secret_reaches_api_server_and_workers`,
+   `test_internal_token_secret_differs_from_the_jwt_secret` y
+   `test_workers_get_the_api_server_environment_so_its_guards_fire` (parametrizado
+   por los tres perfiles). Prueba de extremo a extremo: `Settings()` construido con
+   el `.env` generado arranca con `environment='prod'`; antes levantaba
+   `ValueError: … still use dev defaults: API_SERVER_INTERNAL_TOKEN_SECRET`.
+
 2. **El valor de `<PREFIX>ENVIRONMENT` que emite el instalador tiene que estar en
    `{dev, staging, prod}`.** ✅ **CERRADA el 2026-07-30.** Era real, y su causa era
    que el mapeo existía en **uno** de los dos generadores:

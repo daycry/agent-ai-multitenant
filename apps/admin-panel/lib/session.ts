@@ -20,7 +20,6 @@
  */
 
 import { apiFetch } from "@/lib/api";
-import { setToken } from "@/lib/auth";
 import { clearTenantId, setTenantId } from "@/lib/tenant-storage";
 
 export type ResolutionState = "no_access" | "single" | "multiple" | "admin";
@@ -53,14 +52,16 @@ export async function resolveSession(): Promise<SessionResolution> {
 }
 
 /**
- * Apply a `single`-state resolution: swap in the minted tenant-scoped
- * token and persist the only tenant as active. Used when a screen
- * re-resolves and finds exactly one membership.
+ * Apply a `single`-state resolution: persist the only tenant as active.
+ *
+ * It no longer stores a token (ADR 0133). `/auth/session/resolve` DOES mint a
+ * tenant-scoped one for this state, but it delivers it by re-issuing the
+ * httpOnly session cookie — the browser swaps the credential on its own and the
+ * `access_token` in the body is there only for API clients. Renamed from
+ * `setTokenForSingle` on purpose: a name that still said "set token" would send
+ * the next reader looking for storage that must not exist.
  */
-export function setTokenForSingle(resolution: SessionResolution): void {
-  if (resolution.access_token) {
-    setToken(resolution.access_token);
-  }
+export function applySingleResolution(resolution: SessionResolution): void {
   const only = resolution.memberships[0];
   if (only) {
     setTenantId(only.tenant_id);
@@ -79,8 +80,9 @@ export async function resolveAndRoute(): Promise<string> {
   const resolution = await resolveSession();
 
   if (resolution.state === "single") {
-    // The backend minted a tenant-scoped token for the only membership.
-    setTokenForSingle(resolution);
+    // The backend minted a tenant-scoped session for the only membership and
+    // already re-issued the cookie; we only record which tenant is active.
+    applySingleResolution(resolution);
     return HOME_ROUTE;
   }
 
@@ -111,10 +113,11 @@ export async function resolveAndRoute(): Promise<string> {
  * active tenant before entering the app.
  */
 export async function selectTenant(tenantId: string): Promise<void> {
-  const res = await apiFetch<{ access_token: string }>("/auth/session/select-tenant", {
+  await apiFetch<{ access_token: string }>("/auth/session/select-tenant", {
     method: "POST",
     body: { tenant_id: tenantId },
   });
-  setToken(res.access_token);
+  // The tenant-scoped session arrives as a re-issued cookie (ADR 0133); the
+  // only thing left for the client is remembering which tenant is active.
   setTenantId(tenantId);
 }

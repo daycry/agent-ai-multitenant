@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/projects/{id}/commands (Plan 06.16 task_06_16_04).
@@ -80,13 +81,7 @@ async function setup(
   const capture: Capture = { puts: [] };
   let current = { ...project };
 
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route(`${BASE}/me`, (route) =>
     route.fulfill({

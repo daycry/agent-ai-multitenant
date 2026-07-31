@@ -45,6 +45,7 @@ import asyncio
 import contextlib
 import json
 import time
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -52,6 +53,7 @@ import structlog
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
+from api_server.auth.cookies import SESSION_COOKIE_NAME
 from api_server.auth.deps import (
     AuthPrincipal,
     get_redis,
@@ -92,6 +94,76 @@ _CLOSE_POLICY = 1008
 
 def _decode(value: object) -> str:
     return value.decode() if isinstance(value, bytes) else str(value)
+
+
+# ---------------------------------------------------------------------------
+# Origin gate (ADR 0133, condición 2) — anti Cross-Site WebSocket Hijacking
+# ---------------------------------------------------------------------------
+def _normalise_origin(value: str) -> str:
+    """Lowercase + drop a trailing slash. An env var written
+    ``https://panel.example.com/`` is a typo, not a different site, and a
+    mismatch there locks the real panel out — the loudest possible failure for
+    the least interesting reason."""
+    return value.strip().rstrip("/").lower()
+
+
+def derive_self_origin(ws: Any) -> str | None:
+    """The api-server's OWN public origin, as the browser addressed it.
+
+    In production panel and API are the SAME origin behind Caddy (panel on
+    ``/``, api on ``/api/*``), so the legitimate ``Origin`` of a socket IS this
+    value — deriving it means a correct deployment needs no extra env var.
+
+    The scheme comes from ``X-Forwarded-Proto`` when the request arrived through
+    a proxy (the upstream hop is plain http, so trusting the socket scheme would
+    derive ``http://`` for an ``https://`` page and reject the real panel), and
+    from the socket scheme otherwise. Not forgeable by an attacker: a page on
+    evil.com sends ``Origin: https://evil.com`` with OUR ``Host``, so the two
+    disagree and the socket is rejected.
+    """
+    host = ws.headers.get("host")
+    if not host:
+        return None
+    forwarded = ws.headers.get("x-forwarded-proto")
+    if forwarded:
+        proto = forwarded.split(",")[0].strip().lower()
+    else:
+        proto = "https" if ws.url.scheme == "wss" else "http"
+    if proto not in ("http", "https"):
+        return None
+    return _normalise_origin(f"{proto}://{host}")
+
+
+def origin_is_allowed(
+    origin: str | None,
+    *,
+    allowlist: Sequence[str],
+    self_origin: str | None,
+    require_origin: bool = False,
+) -> bool:
+    """Whether a handshake claiming ``origin`` may open a socket.
+
+    The WebSocket handshake does NOT honour CORS, so this is the only thing
+    standing between a cookie-authenticated socket and any page on the internet
+    (the browser attaches the session cookie to a handshake from ANY origin).
+    While the credential was a ``?token=`` query param the attack was impossible
+    by construction — which is exactly why the check never existed and why
+    adding cookies WITHOUT it would leave the system worse than before.
+
+    ``require_origin`` is the subtle half: an absent ``Origin`` is normal for a
+    non-browser client (which carries no ambient credential), but a browser
+    ALWAYS sends one, so a COOKIE-authenticated socket without it is not a
+    browser doing the normal thing — reject.
+    """
+    if origin is None:
+        return not require_origin
+    candidate = _normalise_origin(origin)
+    if not candidate:
+        return False
+    allowed = {_normalise_origin(o) for o in allowlist if o}
+    if self_origin:
+        allowed.add(_normalise_origin(self_origin))
+    return candidate in allowed
 
 
 def _to_event(entry_id: object, fields: dict[Any, Any]) -> dict[str, Any]:
@@ -161,6 +233,52 @@ async def _resolve_principal(
         tenant_id=tenant_id,
         is_system_admin=is_system_admin,
     )
+
+
+async def _authenticate_socket(
+    ws: WebSocket,
+    token: str | None,
+    sessions: SessionStore,
+    tenant_id_override: str | None = None,
+) -> tuple[AuthPrincipal, str] | None:
+    """Origin gate + credential resolution for an already-accepted socket.
+
+    Returns ``(principal, credential)`` — the credential is handed back so the
+    pump can keep re-validating it (task_prod09_13) whichever channel it came
+    from — or ``None`` after closing the socket with 1008.
+
+    SINGLE entry point on purpose: an endpoint that resolved the principal on
+    its own would silently skip the ``Origin`` check, and a missing CSWSH gate
+    is invisible until someone exploits it. Every ``/ws/*`` handler in this
+    module (and in ``cortex_ws`` / ``cortex_voice``) goes through here, which
+    ``tests/unit/test_ws_origin_gate_wired.py`` verifies statically.
+
+    Credential precedence mirrors REST (:func:`auth.deps.read_credential`): an
+    explicit ``?token=`` wins, the session cookie is the fallback. The cookie is
+    what the panel uses since ADR 0133 — same-origin means the browser sends it
+    in the handshake, so the JWT no longer travels in a URL that ends up in
+    access logs, proxies and Loki.
+    """
+    cookie_token = ws.cookies.get(SESSION_COOKIE_NAME)
+    credential = token or cookie_token
+    from_cookie = not token and bool(cookie_token)
+
+    settings = get_settings()
+    if not origin_is_allowed(
+        ws.headers.get("origin"),
+        allowlist=settings.cors_allowed_origins,
+        self_origin=derive_self_origin(ws),
+        require_origin=from_cookie,
+    ):
+        _log.warning("api_server.ws_origin_rejected", origin=ws.headers.get("origin"))
+        await _reject(ws, "origin not allowed")
+        return None
+
+    principal = await _resolve_principal(credential, sessions, tenant_id_override)
+    if principal is None or credential is None:
+        await _reject(ws, "unauthenticated")
+        return None
+    return principal, credential
 
 
 async def _owns_resource(principal: AuthPrincipal, model: type[Any], resource_id: str) -> bool:
@@ -314,10 +432,10 @@ async def execution_stream(
 ) -> None:
     """Stream one execution's step events — only to a member of its tenant."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Execution, execution_id):
         await _reject(ws, "forbidden")
         return
@@ -348,10 +466,10 @@ async def kanban_stream(
     project ids are globally-unique UUIDs already).
     """
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Project, project_id):
         await _reject(ws, "forbidden")
         return
@@ -394,10 +512,10 @@ async def plans_stream(
     escaparate de toda la plataforma.
     """
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if principal.tenant_id is None:
         await _reject(ws, "forbidden")
         return
@@ -430,10 +548,10 @@ async def conversation_stream(
     only to a member of its tenant. The REST endpoint
     POST /conversations/{id}/messages is the sole producer."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Conversation, conversation_id):
         await _reject(ws, "forbidden")
         return
@@ -463,10 +581,10 @@ async def document_stream(
     events to the per-document Redis stream as it walks scan → parse →
     embed → persist."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Document, document_id):
         await _reject(ws, "forbidden")
         return

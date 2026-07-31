@@ -27,7 +27,9 @@ as their default model and the per-call ``model`` overrides it.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+from time import monotonic as _monotonic
 from typing import Any
 from uuid import UUID
 
@@ -153,6 +155,72 @@ def build_provider_from_kind(
     return builder(base_url=base_url, secret=secret, model=model)
 
 
+# ---------------------------------------------------------------------------
+# Credencial de Vault: fuera del event loop y cacheada (prod-13 task_prod13_03)
+# ---------------------------------------------------------------------------
+# `hvac` va sobre `requests`, que es SÍNCRONO. Llamarlo desde este `async def`
+# bloqueaba el bucle de eventos del api-server durante todo lo que Vault tardase
+# — y este es el camino del CHAT DEL ASISTENTE, que construye el proveedor en
+# cada mensaje (hallazgo perf-7). Dos arreglos, y hacen falta los dos:
+#
+#   * `asyncio.to_thread`: la llamada síncrona sale del hilo del loop, así que un
+#     Vault lento degrada ESA petición en vez de congelar la API entera;
+#   * caché por `provider_id` con TTL corto: sin ella cada mensaje era un
+#     round-trip a Vault, y `to_thread` por mensaje solo mueve el coste de sitio.
+#
+# El TTL es de 30 s — el extremo BAJO del rango 30-60 s que pedía el plan, por la
+# misma razón que la caché de platform settings: ante la duda gana la frescura.
+# Aquí lo rancio no es un valor, es una CREDENCIAL: 30 s es el techo de lo que
+# puede tardar en entrar una credencial rotada si nadie invalida a mano.
+#
+# La credencial se guarda EN PROCESO, nunca en Redis: sacarla del proceso que ya
+# la tiene en memoria sería crear una segunda copia del secreto en un sistema con
+# otra superficie de acceso, justo lo que el ADR 0028 evita.
+PROVIDER_SECRET_CACHE_TTL_SECONDS = 30
+
+# provider_id (str) -> (instante de caducidad monotónico, credencial)
+_SECRET_CACHE: dict[str, tuple[float, dict[str, str]]] = {}
+
+
+def invalidate_provider_secret_cache(provider_id: object) -> None:
+    """Olvida la credencial cacheada de `provider_id`. Idempotente.
+
+    Es el gancho que la rotación de credenciales (prod-05) debe llamar tras
+    escribir un secreto nuevo: sin él, la credencial vieja sigue sirviéndose
+    hasta que venza el TTL."""
+    _SECRET_CACHE.pop(str(provider_id), None)
+
+
+def clear_provider_secret_cache() -> None:
+    """Vacía la caché entera (arranque de tests, cambio de store inyectado)."""
+    _SECRET_CACHE.clear()
+
+
+async def _read_secret_cached(
+    vault: LLMProviderVaultStore, *, provider_id: object, path: str
+) -> dict[str, str]:
+    """La credencial de `provider_id`, de la caché o de Vault.
+
+    Un fallo de Vault devuelve ``{}`` y **no se cachea**: cachear el fallo
+    convertiría un parpadeo de Vault en 30 s de proveedor sin autenticar. Se
+    devuelve una copia para que un llamante que mute el dict no envenene la
+    entrada cacheada.
+    """
+    key = str(provider_id)
+    entry = _SECRET_CACHE.get(key)
+    if entry is not None and entry[0] > _monotonic():
+        return dict(entry[1])
+    try:
+        secret = await asyncio.to_thread(vault.read_secret, path)
+    except LLMProviderVaultError:
+        # Degrada a no-credencial en vez de tumbar la construcción; el proveedor
+        # concreto puede tirar de una credencial de entorno. Nada sensible se
+        # loguea, y el fallo NO entra en la caché.
+        return {}
+    _SECRET_CACHE[key] = (_monotonic() + PROVIDER_SECRET_CACHE_TTL_SECONDS, dict(secret))
+    return dict(secret)
+
+
 async def build_llm_provider(
     admin_session: AsyncSession,
     *,
@@ -180,12 +248,9 @@ async def build_llm_provider(
     # which selects by kind and does not go through here.)
     secret: dict[str, str] = {}
     if row.secret_vault_path and vault is not None:
-        try:
-            secret = vault.read_secret(row.secret_vault_path)
-        except LLMProviderVaultError:
-            # Degrade to no-credential rather than fail the build; the concrete
-            # provider may still use an env credential. Nothing sensitive logged.
-            secret = {}
+        secret = await _read_secret_cached(
+            vault, provider_id=provider_id, path=row.secret_vault_path
+        )
     return build_provider_from_kind(row.kind, base_url=row.base_url, secret=secret, model=model)
 
 
@@ -224,4 +289,11 @@ async def list_provider_models(
                 await aclose()
 
 
-__all__ = ["build_llm_provider", "build_provider_from_kind", "list_provider_models"]
+__all__ = [
+    "PROVIDER_SECRET_CACHE_TTL_SECONDS",
+    "build_llm_provider",
+    "build_provider_from_kind",
+    "clear_provider_secret_cache",
+    "invalidate_provider_secret_cache",
+    "list_provider_models",
+]

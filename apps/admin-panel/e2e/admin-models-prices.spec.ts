@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/model-prices — the System-Admin 'Modelos & Precios'
@@ -85,13 +86,7 @@ const OLD_PRICE = {
 
 /** Route both /me and the read catalog. Returns nothing; per-test write routes added by callers. */
 async function setup(page: Page, listRows: unknown[] = [CURRENT_PRICE]): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({

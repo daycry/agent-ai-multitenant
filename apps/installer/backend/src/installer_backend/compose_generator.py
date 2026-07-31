@@ -610,6 +610,12 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # is NOT here: it is optional (default None) and injected by the Vault
             # bootstrap (task 15_09), not the .env.
             "API_SERVER_JWT_SECRET": _env_ref("API_SERVER_JWT_SECRET", None, prod=prod),
+            # ADR 0136: secreto DEDICADO de los tokens internos del sandbox. Sin él
+            # el api-server NO ARRANCA en prod (guard fail-closed de anti-defaults),
+            # y su ausencia en el generador es la que dejó el stack sin levantar.
+            "API_SERVER_INTERNAL_TOKEN_SECRET": _env_ref(
+                "API_SERVER_INTERNAL_TOKEN_SECRET", None, prod=prod
+            ),
             # NOTIF-2: Bearer del ingest de Alertmanager (fail-closed sin el).
             "API_SERVER_ALERTS_INGEST_TOKEN": _env_ref(
                 "API_SERVER_ALERTS_INGEST_TOKEN", None, prod=prod
@@ -732,6 +738,27 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_DATABASE_URL", None, prod=prod),
             "WORKERS_BACKUP_ENCRYPTION_ENABLED": "true",
             "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY": "agentic-platform/backups/encryption-key",
+            # --- las DOS variables con prefijo AJENO que el worker necesita ---
+            # El worker mintea el token del sandbox (`AGENTIC_INTERNAL_TOKEN`)
+            # importando `mint_agent_token` del paquete del api-server, así que ese
+            # camino lee `api_server.config` y sus variables `API_SERVER_*`. Es la
+            # excepción al contrato de prefijos: el worker corre DOS clases de
+            # Settings. Sin estas dos, el stack generado tenía dos averías:
+            #
+            #   1. sin `API_SERVER_INTERNAL_TOKEN_SECRET`, el worker firmaba con el
+            #      default de dev y el api-server —que sí lleva el real— rechazaba
+            #      el token: el sandbox no podía llamar a `/internal/agent/*`;
+            #   2. sin `API_SERVER_ENVIRONMENT`, ese `Settings` se creía en `dev`,
+            #      así que los guards anti-defaults NO disparaban dentro del worker
+            #      y la avería (1) ocurría en silencio en vez de al arrancar.
+            #
+            # El valor del secreto es el MISMO que el del api-server a propósito:
+            # los dos lados verifican la misma firma. Lo que NO puede compartir es
+            # `API_SERVER_JWT_SECRET`, que ya no viaja al worker (ADR 0136).
+            "API_SERVER_ENVIRONMENT": cfg.system.environment.runtime_value,
+            "API_SERVER_INTERNAL_TOKEN_SECRET": _env_ref(
+                "API_SERVER_INTERNAL_TOKEN_SECRET", None, prod=prod
+            ),
         }
     )
     return env

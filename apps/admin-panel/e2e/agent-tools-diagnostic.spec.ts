@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/projects/{id}/agent-tools-diagnostic (Plan 05 task_05_15).
@@ -48,9 +49,7 @@ async function setup(
     mcp_servers: McpFixture[];
   },
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/projects/${PROJECT_ID}/agent-tools-diagnostic`, (route) =>
     route.fulfill({
       status: 200,

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the escalated-tasks panel (Plan 06 task_06_34b3).
@@ -16,9 +17,7 @@ async function setup(
 ): Promise<void> {
   const tasks = opts.tasks ?? [];
   const onAction = opts.onAction;
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/api/plans/${PLAN_ID}/escalated-tasks`, (route) =>
     route.fulfill({
       status: 200,

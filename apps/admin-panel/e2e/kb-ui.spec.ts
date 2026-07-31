@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/projects/{id}/knowledge-bases (Plan 04 task_04_24).
@@ -73,9 +74,7 @@ async function setup(page: Page, { withKBs = true } = {}): Promise<Capture> {
   };
   let documents: DocFixture[] = withKBs ? [DOC_FIXTURE] : [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   // GET /projects/{id}/knowledge-bases
   await page.route(`http://localhost:8001/projects/${PROJECT_ID}/knowledge-bases`, (route) =>

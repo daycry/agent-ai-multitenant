@@ -38,7 +38,8 @@ import { useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
-import { clearToken } from "@/lib/auth";
+import { clearClientSession } from "@/lib/auth";
+import { purgeSessionCache } from "@/lib/session-cache";
 import { clearTenantId as clearStoredTenant } from "@/lib/tenant-storage";
 import { useCurrentUser, type CurrentUser } from "@/lib/use-current-user";
 
@@ -54,9 +55,13 @@ export function AdminHeader({ onOpenMobileNav }: { onOpenMobileNav: () => void }
     } catch (err) {
       if (!(err instanceof ApiError)) console.error(err);
     } finally {
-      clearToken();
+      clearClientSession();
       // Drop the active-tenant choice too — next login starts fresh.
       clearStoredTenant();
+      // ...and the TanStack cache (frontend-4, task_prod09_11). The root layout
+      // does NOT unmount on logout, so without this a login as another user in
+      // the same tab paints the PREVIOUS user's data until every refetch lands.
+      purgeSessionCache();
       router.replace("/login");
     }
   }

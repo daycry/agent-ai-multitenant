@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the agent hub page (Plan 06.6 task_06_6_05).
@@ -24,9 +25,7 @@ const TENANT_AGENT = {
 };
 
 async function setup(page: Page, agent: object = TENANT_AGENT): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/agents/${AGENT_ID}`, (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({

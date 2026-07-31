@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/projects/{id}/incoming-webhooks (Plan 13 task_13_11).
@@ -101,13 +102,7 @@ async function setup(
   const capture: Capture = { posts: [], puts: [], rotates: 0, deletes: 0 };
   let configs = [...initial];
 
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route(`${BASE}/me`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(identity) }),

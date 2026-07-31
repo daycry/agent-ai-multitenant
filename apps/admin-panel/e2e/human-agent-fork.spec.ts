@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the Human Agents gallery — CLONE-AND-FORK flow (Plan 16 task_16_07).
@@ -90,13 +91,7 @@ async function setup(
   identity: typeof TENANT_ADMIN | typeof PLAIN_USER = TENANT_ADMIN,
   opts: { onClone?: () => void } = {},
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   let forked = false;
 

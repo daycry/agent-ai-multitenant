@@ -171,6 +171,7 @@ export const dictionary = {
 
     // --- grupo Plataforma ---
     users: { es: "Usuarios", en: "Users" },
+    invitations: { es: "Invitaciones", en: "Invitations" },
     llmProviders: { es: "Proveedores LLM", en: "LLM providers" },
     ollama: { es: "Ollama & Embeddings", en: "Ollama & Embeddings" },
     platformDefaults: { es: "Valores por defecto", en: "Defaults" },
@@ -337,6 +338,102 @@ export const dictionary = {
     errorUnreachable: {
       es: "No se pudo contactar con el servidor.",
       en: "Could not reach the server.",
+    },
+  },
+
+  /**
+   * `app/accept-invite/page.tsx` — canje de una invitación (ADR 0134).
+   *
+   * Ojo con los mensajes de error: el backend devuelve un 403 GENÉRICO para
+   * todos los motivos de rechazo (token inventado, caducado, revocado, ya
+   * canjeado, o para otro email) precisamente para no volver a abrir el oráculo
+   * de enumeración que cerró el ADR. La UI **no debe inventar** un motivo
+   * concreto que no sabe: dice qué hacer (pedir otra invitación), no qué pasó.
+   */
+  acceptInvite: {
+    title: { es: "Aceptar invitación", en: "Accept invitation" },
+    tagline: {
+      es: "Crea tu cuenta con la invitación que te han enviado",
+      en: "Create your account with the invitation you were sent",
+    },
+    emailLabel: { es: "Email", en: "Email" },
+    emailHelp: {
+      es: "Tiene que ser el mismo email al que se envió la invitación.",
+      en: "It must be the same email the invitation was sent to.",
+    },
+    nameLabel: { es: "Nombre y apellidos", en: "Full name" },
+    passwordLabel: { es: "Contraseña", en: "Password" },
+    tokenLabel: { es: "Código de invitación", en: "Invitation code" },
+    submit: { es: "Crear cuenta", en: "Create account" },
+    submitting: { es: "Creando…", en: "Creating…" },
+    successTitle: { es: "Cuenta creada", en: "Account created" },
+    successBody: {
+      es: "Ya puedes iniciar sesión con tu email y tu contraseña.",
+      en: "You can now sign in with your email and password.",
+    },
+    goToLogin: { es: "Ir a iniciar sesión", en: "Go to sign in" },
+    errorRejected: {
+      es: "Esta invitación no es válida. Puede haber caducado, haber sido revocada o haberse usado ya. Pide una nueva al administrador.",
+      en: "This invitation is not valid. It may have expired, been revoked or already been used. Ask your administrator for a new one.",
+    },
+    errorDuplicate: {
+      es: "Ya existe una cuenta con ese email. Inicia sesión en lugar de crear una nueva.",
+      en: "An account with that email already exists. Sign in instead of creating a new one.",
+    },
+    errorUnreachable: {
+      es: "No se pudo contactar con el servidor.",
+      en: "Could not reach the server.",
+    },
+  },
+
+  /** `app/admin/invitations/page.tsx` — emisión y revocación (ADR 0134). */
+  invitations: {
+    title: { es: "Invitaciones", en: "Invitations" },
+    description: {
+      es: "El registro público está cerrado: un usuario nuevo solo entra con una invitación emitida aquí, que caduca y sirve una sola vez.",
+      en: "Public sign-up is closed: a new user can only join with an invitation issued here, which expires and can be used once.",
+    },
+    forbidden: {
+      es: "Esta sección es exclusiva del System Admin de la plataforma.",
+      en: "This section is reserved for the platform System Admin.",
+    },
+    empty: { es: "No hay invitaciones todavía.", en: "No invitations yet." },
+    issue: { es: "Emitir invitación", en: "Issue invitation" },
+    issuing: { es: "Emitiendo…", en: "Issuing…" },
+    emailLabel: { es: "Email", en: "Email" },
+    tenantLabel: { es: "Espacio de trabajo", en: "Workspace" },
+    roleLabel: { es: "Rol", en: "Role" },
+    ttlLabel: { es: "Caduca en (horas)", en: "Expires in (hours)" },
+    colEmail: { es: "Email", en: "Email" },
+    colTenant: { es: "Espacio", en: "Workspace" },
+    colRole: { es: "Rol", en: "Role" },
+    colCode: { es: "Código", en: "Code" },
+    colStatus: { es: "Estado", en: "Status" },
+    colExpires: { es: "Caduca", en: "Expires" },
+    colActions: { es: "Acciones", en: "Actions" },
+    revoke: { es: "Revocar", en: "Revoke" },
+    statusPending: { es: "Pendiente", en: "Pending" },
+    statusRedeemed: { es: "Canjeada", en: "Redeemed" },
+    statusRevoked: { es: "Revocada", en: "Revoked" },
+    statusExpired: { es: "Caducada", en: "Expired" },
+    /**
+     * El aviso que acompaña al token recién emitido. No es decoración: el valor
+     * en claro no se persiste en ninguna parte, así que si el admin cierra el
+     * diálogo sin copiarlo, la única salida es revocar y emitir otra.
+     */
+    tokenOnceTitle: { es: "Copia el código ahora", en: "Copy the code now" },
+    tokenOnceBody: {
+      es: "Este código solo se muestra una vez: no se guarda en ninguna parte. Si lo pierdes, revoca la invitación y emite otra.",
+      en: "This code is shown only once: it is stored nowhere. If you lose it, revoke the invitation and issue a new one.",
+    },
+    linkLabel: { es: "Enlace para el invitado", en: "Link for the invitee" },
+    roleTenantAdmin: { es: "Tenant Admin", en: "Tenant Admin" },
+    roleTenantUser: { es: "Tenant User", en: "Tenant User" },
+    rolePlanApprover: { es: "Aprobador de planes", en: "Plan approver" },
+    roleSystemOperator: { es: "System Operator", en: "System Operator" },
+    errorDuplicate: {
+      es: "Ya hay una invitación pendiente para ese email en ese espacio.",
+      en: "There is already a pending invitation for that email in that workspace.",
     },
   },
 } as const satisfies Dictionary;

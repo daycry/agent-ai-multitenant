@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for inline plan comments (Plan 03 task_03_21).
@@ -45,9 +46,7 @@ async function setup(page: Page): Promise<PostCapture> {
   const capture: PostCapture = { calls: 0, lastBody: {} };
   const persisted: Array<Record<string, unknown>> = [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({

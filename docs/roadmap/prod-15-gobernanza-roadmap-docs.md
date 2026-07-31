@@ -130,7 +130,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_claude_md_01` — CLAUDE.md refleja el repo real
 
-- [ ] **Título**: Actualizar estructura, rama y componentes de CLAUDE.md
+- [x] **Título**: Actualizar estructura, rama y componentes de CLAUDE.md
 - **Descripción**: En `CLAUDE.md`: (1) en el árbol "Estructura del Repositorio" (líneas
   46-56), anotar `web-app`, `memorizer`, `personal-assistant`, `webhook-dispatcher`,
   `shared-auth`, `shared-db` y `shared-domain` como "previsto — hoy integrado en api-server
@@ -150,7 +150,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_arch_overview_02` — architecture-overview alineado con la topología real
 
-- [ ] **Título**: Plano de control = los 5 servicios que el installer genera
+- [x] **Título**: Plano de control = los 5 servicios que el installer genera
 - **Descripción**: En `docs/context/architecture-overview.md` (líneas 33, 104-105, 433):
   sustituir la lista del plano de control (que incluye personal-assistant,
   webhook-dispatcher, memorizer y web-app) por los servicios reales de
@@ -172,7 +172,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_adr_gates_03` — ADR: destino de las fases con gate saltado
 
-- [ ] **Título**: ADR (proposed) con las opciones de D1 para decisión humana
+- [x] **Título**: ADR (proposed) con las opciones de D1 para decisión humana
 - **Descripción**: Redactar `docs/05-architecture-decisions/00XX-gates-validacion-humana-roadmap.md`
   con las opciones A/B/híbrida de D1, el inventario exacto de fases afectadas (las ~26 en
   `pending_human_validation`, con `started_at` y `blocking_plan` incumplido de cada una) y la
@@ -185,6 +185,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_reestado_04` — Aplicar la decisión: re-estado honesto + cola de validación
 
 - [ ] **Título**: Frontmatter de las ~26 fases coherente con la decisión del ADR
+  - ⏳ **Pendiente (2026-07-31):** el ADR 0138 sigue `proposed` (nadie ha firmado A/B/C), así que no hay `gate_override` en ningún frontmatter, `CLAUDE.md` no reconoce el override y `test_started_phase_declares_its_gate` sigue en `xfail(strict=True)` documentando las 6 fases en deuda.
 - **Descripción**: Tras aprobación humana del ADR (task 03): añadir `gate_override` (o el
   mecanismo decidido) al frontmatter de cada fase empezada con gate saltado; actualizar la
   sección "Reglas Duras del Protocolo" de CLAUDE.md para reconocer el override explícito;
@@ -204,7 +205,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_changelogs_05` — Changelogs faltantes de 06.8 y 06.9
 
-- [ ] **Título**: Crear `docs/07-changelog/06.8-rbac-enforcement.md` y `06.9-agent-scoped-kbs.md`
+- [x] **Título**: Crear `docs/07-changelog/06.8-rbac-enforcement.md` y `06.9-agent-scoped-kbs.md`
 - **Descripción**: Son los dos únicos planes con código mergeado sin entrada de changelog
   (el resto de fases pendientes sí la tienen). Generarlas con el formato de las existentes
   (p.ej. `06.10-kb-categories.md`), resumiendo lo entregado y los tests que lo cubren.
@@ -218,7 +219,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_indices_06` — EXECUTION-SEQUENCE.md y README.md del roadmap al día
 
-- [ ] **Título**: Archivar EXECUTION-SEQUENCE como histórico y corregir el README
+- [x] **Título**: Archivar EXECUTION-SEQUENCE como histórico y corregir el README
 - **Descripción**: Según D3: añadir banner de histórico a `EXECUTION-SEQUENCE.md` (estado
   congelado a 2026-05-29: dice "10 completados" cuando hay 16, lista como violación viva
   3 fases ya `completed`, clasifica 07–16 como "nuevos") y retirar su pretensión de
@@ -235,7 +236,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_cabeceras_07` — Una sola fuente de estado por plan + huecos canónicos
 
-- [ ] **Título**: Eliminar el campo "Estado" duplicado de las cabeceras de los planes
+- [x] **Título**: Eliminar el campo "Estado" duplicado de las cabeceras de los planes
 - **Descripción**: Según docsroadmap-6: retirar la fila `| **Estado** | ... |` de la tabla de
   cabecera de todos los planes en `docs/roadmap/*.md` (ya está desincronizada: 06.8 dice
   `pending_approval` con frontmatter `pending_human_validation`; 15 dice `in_progress`),
@@ -254,7 +255,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_rbac_matrix_08` — Matriz RBAC al día + guardia anti-drift
 
-- [ ] **Título**: Añadir `/admin/platform-settings` y `/admin/ollama` a rbac.md y al test parametrizado
+- [x] **Título**: Añadir `/admin/platform-settings` y `/admin/ollama` a rbac.md y al test parametrizado
 - **Descripción**: Según docsroadmap-5: añadir a `docs/04-reference/rbac.md` las secciones de
   `platform_settings.py` (4 endpoints, prefix `/admin/platform-settings`) y `ollama.py`
   (3 endpoints, prefix `/admin/ollama`), ambos `require_system_admin`; añadir sus filas al
@@ -274,7 +275,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_trailers_09` — Política real de trailers de commit
 
-- [ ] **Título**: Conventions.md y práctica de trailers convergen (D2)
+- [x] **Título**: Conventions.md y práctica de trailers convergen (D2)
 - **Descripción**: Según quality-9 (solo 80/662 commits no-merge llevan `Plan-Id`; ninguno de
   los últimos ~30): aplicar la opción decidida de D2. Con la recomendación B: editar
   `docs/context/conventions.md:106-123` para que los trailers sean obligatorios solo en
@@ -297,6 +298,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_higiene_10` — Higiene de raíz y reordenación de scripts/
 
 - [ ] **Título**: Borrar restos locales y mover demos de fase a `scripts/demos/`
+  - ⏳ **Pendiente (2026-07-31):** nada hecho — `scripts/__pycache__/` sigue ahí, los ~27 `demo_human_*`/`setup_demo_*` siguen en la raíz de `scripts/` (no existe `scripts/demos/`) y `tests/unit/test_scripts_layout.py` no está escrito.
 - **Descripción**: Según quality-11 (nada de esto está trackeado en git; es higiene local +
   reorganización): (1) borrar `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` (bytecode
   huérfano de un script eliminado) y los logs locales de la raíz (`admin-panel-dev.log`,
@@ -318,6 +320,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_app_boundary_11` — Restaurar la frontera apps: backup sin importar workers
 
 - [ ] **Título**: `routers/backup.py` deja de hacer `from workers...` (api-9, D5)
+  - ⏳ **Pendiente (2026-07-31):** `routers/backup.py:234` y `:369` siguen importando `workers.backup_destinations`/`workers.backup_encryption` (y hay 5 ficheros más de `api_server` que importan `workers`); no existen ni `tests/unit/test_app_boundaries.py` ni `tests/integration/test_backup_destination_endpoints.py`.
 - **Descripción**: `celery_client.py:6` declara "we never import the workers package", pero
   `routers/backup.py:222` y `:351` importan `workers.backup_destinations` y
   `workers.backup_encryption` para test de conectividad y listado remoto, ejecutando

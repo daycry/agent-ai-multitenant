@@ -153,6 +153,10 @@ el problema ya esté documentado.
 - [windows-git-crlf-vs-hooks.md](./windows-git-crlf-vs-hooks.md)
   — `core.autocrlf` pelea con `mixed-line-ending`; arreglado con
   `.gitattributes`.
+- [python-write-text-crlf-en-windows.md](./python-write-text-crlf-en-windows.md)
+  — editar un fuente con `pathlib.write_text()` desde un script (p. ej. para
+  mutar y restaurar al comprobar un RED) lo reescribe ENTERO en CRLF, y
+  `git diff` no lo enseña. Usa `write_bytes` o `newline="\n"`.
 - [windows-commit-to-branch-not-reentrant.md](./windows-commit-to-branch-not-reentrant.md)
   — el helper de tests `commit_to_branch` no puede llamarse dos veces sobre la
   MISMA rama: su `rmtree(ignore_errors=True)` no borra los objetos read-only de

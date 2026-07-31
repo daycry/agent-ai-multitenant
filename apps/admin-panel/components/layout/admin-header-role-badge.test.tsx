@@ -35,7 +35,7 @@ vi.mock("@/lib/api", () => ({
   apiFetch: vi.fn(),
   ApiError: class ApiError extends Error {},
 }));
-vi.mock("@/lib/auth", () => ({ clearToken: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ clearClientSession: vi.fn() }));
 vi.mock("@/lib/tenant-storage", () => ({ clearTenantId: vi.fn() }));
 
 import { AdminHeader } from "@/components/layout/admin-header";

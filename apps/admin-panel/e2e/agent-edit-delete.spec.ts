@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the agent edit + delete dialogs (Plan 06.6 task_06_6_07).
@@ -31,9 +32,7 @@ async function setup(
     onDelete?: () => void;
   } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/agents", (route) =>
     route.fulfill({
       status: 200,

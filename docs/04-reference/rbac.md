@@ -640,6 +640,28 @@ son `tenant_admin`. Detalle en [evals-stats.md](./evals-stats.md).
 > [backup-restore.md](./backup-restore.md) +
 > [runbooks de DR](../06-runbooks/dr-full-restore.md).
 
+### `invitations.py` — invitaciones de registro (ADR 0134)
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/admin/invitations`             | POST   | `system_admin` |
+| `/admin/invitations`             | GET    | `system_admin` |
+| `/admin/invitations/{id}/revoke` | POST   | `system_admin` |
+
+> El operador cerró el registro público en el
+> [ADR 0134](../05-architecture-decisions/0134-auto-registro-en-produccion.md)
+> (opción C): se entra con un token de invitación. Emitir uno es, en la práctica,
+> **conceder acceso a la plataforma**, así que los tres verbos son
+> `system_admin` — no `tenant_admin`.
+>
+> El token se guarda **hasheado**, nunca en claro, y solo se muestra una vez al
+> emitirlo (mismo trato que `api_tokens` y `scim_tokens`).
+>
+> **La excepción de arranque**: si la tabla `users` está vacía, `POST /auth/register`
+> acepta sin invitación y promociona a ese primer usuario — si no, una instalación
+> nueva quedaría inaccesible para siempre, y con ella el rol System Owner, que es
+> el único que abre el córtex.
+
 ### `docs_viewer.py` — visor de docs por proyecto (Plan 15)
 
 El visor lee el árbol `docs/` del repo del proyecto (no muta nada).

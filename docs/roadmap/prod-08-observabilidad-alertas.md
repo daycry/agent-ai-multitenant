@@ -114,7 +114,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_alert_ingest_01` — Endpoint `POST /internal/alerts/ingest`
 
-- [ ] **Título**: Implementar la ingestión de alertas de Alertmanager en el api-server con
+- [x] **Título**: Implementar la ingestión de alertas de Alertmanager en el api-server con
       fan-out al canal de System Admin
 - **Descripción**: nuevo router `apps/api-server/src/api_server/routers/internal_alerts.py`
   (prefijo `/internal/alerts`) que parsea el payload webhook v4 de Alertmanager
@@ -247,7 +247,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_celery_logging_09` — `configure_logging()` en los dos servicios Celery
 
-- [ ] **Título**: Pipeline JSON + PII-masking en workers y notification-dispatcher
+- [x] **Título**: Pipeline JSON + PII-masking en workers y notification-dispatcher
 - **Descripción**: en `apps/workers/src/workers/celery_app.py:45` y
   `apps/notification-dispatcher/src/notification_dispatcher/celery_app.py`, conectar la señal
   `celery.signals.setup_logging` → `configure_logging(service=...)` del paquete compartido. Test
@@ -263,7 +263,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_request_id_10` — `request_id` a través de la frontera Celery
 
-- [ ] **Título**: Propagar `request_id` en los headers de cada tarea Celery y bindearlo en
+- [x] **Título**: Propagar `request_id` en los headers de cada tarea Celery y bindearlo en
       `task_prerun`
 - **Descripción**: al encolar desde el api-server (puntos de `apply_async` del dispatch,
   `db/domain.py:1007`), incluir el `request_id` del contextvar (`logging/context.py:92`) como

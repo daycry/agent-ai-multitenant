@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the Execution Timeline (task_02_22).
@@ -72,9 +73,7 @@ const EXECUTION = {
 };
 
 async function setup(page: Page) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   // Match the api-server origin exactly — a `**/executions/...` glob
   // would also catch the `/admin/executions/...` page navigation.
   await page.route(`http://localhost:8001/executions/${EXEC_ID}`, (route) =>

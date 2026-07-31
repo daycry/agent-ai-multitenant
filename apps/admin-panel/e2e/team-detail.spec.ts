@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { sessionToken } from "./helpers/session";
 
 /**
  * E2E for the Team Detail screen (task_01_20).
@@ -86,7 +87,11 @@ test("add-member dialog enforces project selection in fork mode", async ({ page 
   await login(page);
 
   await page.goto("/admin/teams");
-  const token: string | null = await page.evaluate(() => localStorage.getItem("agentic.token"));
+  // ADR 0133: the session is an httpOnly cookie, so the PAGE cannot read it —
+  // that is the point. Playwright can, from the browser context, which is what
+  // this spec needs to sign its own `page.request` calls (page.request bypasses
+  // `apiFetch`, so no cookie/CSRF wiring happens for it).
+  const token: string | null = await sessionToken(page);
   expect(token).toBeTruthy();
 
   const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8001";

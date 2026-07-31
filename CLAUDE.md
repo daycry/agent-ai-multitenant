@@ -207,6 +207,46 @@ Y a continuación, si procede, activa la siguiente fase (aquella cuyos plan_ids 
 - ❌ NUNCA empezar una fase si algún plan listado en su `blocking_plan` no está `completed`.
 - ❌ NUNCA editar el roadmap para "saltarse" pasos o reordenarlos sin que un humano apruebe el cambio.
 
+### La excepción al gate: `gate_override` (ADR 0138)
+
+La regla dura de arriba tiene UNA salida, y está reglada. Si una fase tiene que
+empezar con un `blocking_plan` sin `completed`, se declara en su frontmatter:
+
+```yaml
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: 11-guardrails-precios
+  reason: >-
+    Por qué se acepta empezar igualmente, con detalle suficiente para que alguien
+    lo audite dentro de seis meses.
+```
+
+**La justificación es obligatoria y la comprueba un test**
+(`test_gate_override_carries_a_written_justification`): un override sin `reason`
+escrito, o con uno de menos de 80 caracteres, rompe la suite. Sin esa exigencia el
+campo sería la forma barata de saltarse el protocolo, que es justo lo que el ADR
+0138 descartó.
+
+Dos cosas más que vigilan los tests:
+
+- **La deuda no crece a espaldas de nadie**: una fase nueva empezada con el gate
+  saltado y sin override rompe la suite (`test_gate_debt_inventory_has_not_grown`).
+- **El override caduca**: cuando su bloqueante llega de verdad a `completed`, hay
+  que retirarlo. Un override huérfano dice que hubo una excepción donde ya no la
+  hay (`test_gate_override_only_where_the_gate_is_actually_unmet`).
+
+El caso que motivó el mecanismo: seis fases arrancaron con el gate incumplido, y en
+dos de ellas **el override ya lo había escrito un humano**… en un campo duplicado de
+la tabla de cabecera que otra tarea venía a borrar por desincronizado. Sin un sitio
+previsto, la excepción se anota donde nadie la va a leer.
+
+Y la causa de fondo, que el ADR 0138 mide: el cuello de botella no es la
+indisciplina, es que **ninguna fase llega a `completed` porque eso exige validación
+humana**, así que toda fase que dependa de una ya terminada lee su gate como
+incumplido aunque el trabajo esté hecho.
+
 El campo `blocking_plan` es siempre una **lista YAML** de plan_ids (puede ser
 vacía representada como `null`, o tener uno o varios elementos). Una fase solo
 puede pasar a `in_progress` cuando TODOS los plan_ids de su `blocking_plan`

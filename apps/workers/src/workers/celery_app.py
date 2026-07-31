@@ -28,10 +28,29 @@ unrouted tasks fall through to `default`.
 
 from __future__ import annotations
 
+from api_server.logging.celery_pipeline import install_celery_logging
 from celery import Celery
 from kombu import Queue
 
 from workers.config import Settings, get_settings
+
+# prod-08 Fase C (observability-3 / observability-7). Hasta 2026-07-31 los
+# workers NUNCA configuraban el logging: sus líneas salían con el formato por
+# defecto de Celery — texto plano, sin campo `service` y **sin el enmascarado
+# PII** que el api-server sí aplica. Un email o un JWT logueado desde un task
+# aterrizaba en claro en `docker logs`.
+#
+# Se instala AL IMPORTAR el módulo porque eso es exactamente lo que hace el CLI
+# (`celery -A workers.celery_app`) antes de arrancar nada: así la señal
+# `setup_logging` ya está conectada cuando Celery intenta imponer su propio
+# handler, y `task_prerun` bindea el `request_id` que viajó en las cabeceras
+# del mensaje desde la petición HTTP que lo encoló.
+#
+# El import de `api_server` no cruza una frontera de despliegue: el Dockerfile
+# de workers se construye SOBRE la imagen de api-server (`ARG BASE_IMAGE`), y
+# este paquete ya importa `api_server` en ~50 sitios más (db, memorizer,
+# cortex, ingestion). Ver ADR 0141.
+install_celery_logging(service="workers")
 
 # Canonical queue names. Order is informational only. ``heavy``/``gpu`` removed
 # by ADR 0083 (prod-06 colas_02): dead lanes with no producer/consumer on a

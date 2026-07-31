@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E del flujo completo de capacitación — Plan 06.17 task_06_17_16.
@@ -153,9 +154,7 @@ const CAPS_GLOBAL_AGENT = {
 async function setup(page: Page, opts: { caps?: object; agent?: object } = {}): Promise<void> {
   const caps = opts.caps ?? CAPS_EMPTY;
   const agent = opts.agent ?? AGENT;
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/chat-modes", (route) =>
     route.fulfill({
       status: 200,

@@ -88,7 +88,22 @@ dependencies = [
   "opentelemetry-api>=1.27,<2",
   "opentelemetry-sdk>=1.27,<2",
   "opentelemetry-instrumentation-fastapi>=0.48b0,<1",
-  "opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1",
+  # RETIRADA `opentelemetry-instrumentation-sqlalchemy` (ADR 0140, prod-08
+  # task_prod08_otel_cleanup_13): estaba declarada desde la fase 0 y
+  # `SQLAlchemyInstrumentor` no se invocaba en ningún sitio. Peso muerto en la
+  # imagen + un docstring que prometía un tracing de queries inexistente.
+  # `tests/unit/test_telemetry_setup.py` impide que vuelva, y generaliza la
+  # guarda a cualquier `opentelemetry-instrumentation-*` sin llamante.
+
+  # Exporter Prometheus (prod-08 Fase B, hallazgo observability-2). Se elige
+  # `prometheus_client` a pelo y NO `prometheus-fastapi-instrumentator`: una
+  # dependencia menos y control total sobre los labels, que es donde está el
+  # riesgo real (cardinalidad). Pure-Python, sin deps transitivas.
+  #
+  # IMPORTANTE para el despliegue: las imágenes de workers,
+  # notification-dispatcher y orchestrator se construyen SOBRE la de
+  # api-server, así que este paquete las alcanza a todas con un solo build.
+  "prometheus-client>=0.20,<1",
   "opentelemetry-instrumentation-asyncpg>=0.48b0,<1",
   "opentelemetry-instrumentation-redis>=0.48b0,<1",
   "opentelemetry-instrumentation-httpx>=0.48b0,<1",

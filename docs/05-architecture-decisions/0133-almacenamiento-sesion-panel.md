@@ -1,6 +1,6 @@
 ---
 title: "ADR 0133: Almacenamiento de la sesión del panel — cookie httpOnly vs localStorage"
-status: proposed
+status: accepted
 date: 2026-07-29
 deciders: [operador]
 relates_to: [0002, 0010, 0015, 0047, 0074, 0117]
@@ -10,15 +10,14 @@ task: task_prod09_06
 
 # ADR 0133: Almacenamiento de la sesión del panel — cookie httpOnly vs localStorage
 
-> **Estado: `proposed`.** Nadie ha decidido todavía. Este documento existe para
-> que el operador elija; las tareas `task_prod09_07` … `task_prod09_12` del plan
-> `prod-09` están escritas asumiendo la Opción A y hay que reescribirlas si se
-> elige otra.
+> **Estado: `accepted`** (2026-07-31, decidido por el operador).
 >
-> `task_prod09_06` pedía **un** ADR con la Decisión 1 y la Decisión 4 del plan.
-> Se han separado en dos documentos porque son decisiones independientes con
-> radios de explosión distintos: éste y el [ADR 0134](./0134-auto-registro-en-produccion.md)
-> (auto-registro). Los dos juntos cierran `task_prod09_06`.
+> **Decisión tomada: Opción A — cookie `httpOnly + Secure + SameSite=Lax` con doble-submit CSRF.**
+>
+> El operador eligió cerrar el robo del token por XSS. Las dos condiciones del ADR
+> son vinculantes: la migración de los 93 specs e2e va con un helper de sesión, no
+> spec a spec, y la validación de `Origin` en el WebSocket entra en la MISMA PR que
+> emite la cookie — hacerlo al revés deja el sistema peor que hoy en el intervalo.
 
 ## Contexto verificado
 

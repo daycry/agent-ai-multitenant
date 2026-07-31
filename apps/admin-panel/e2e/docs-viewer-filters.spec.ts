@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the docs visor filters + bookmarks (Plan 07 Fase D, task_07_15).
@@ -92,14 +93,8 @@ const SEARCH_HITS = {
 const TENANT_ID = "tenant-e2e";
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(
-    ([tenant]) => {
-      window.localStorage.setItem("agentic.token", "e2e-fake-token");
-      // Scope bookmarks to a known tenant so we can assert the storage key.
-      window.localStorage.setItem("admin-panel.tenant-id", tenant);
-    },
-    [TENANT_ID],
-  );
+  // Scope bookmarks to a known tenant so we can assert the storage key.
+  await seedSession(page, { tenantId: TENANT_ID });
   await page.route("**/projects", (route) =>
     route.fulfill({
       status: 200,

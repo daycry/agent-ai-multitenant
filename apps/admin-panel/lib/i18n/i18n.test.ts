@@ -65,6 +65,14 @@ describe("dictionary — invariantes", () => {
       "users.roleTenantAdmin",
       "users.roleTenantUser",
       "users.roleSystemOperator",
+      // ADR 0134 — mismas dos razones que arriba: "Email" se escribe igual, y
+      // los nombres de rol del backend se muestran tal cual.
+      "acceptInvite.emailLabel",
+      "invitations.emailLabel",
+      "invitations.colEmail",
+      "invitations.roleTenantAdmin",
+      "invitations.roleTenantUser",
+      "invitations.roleSystemOperator",
     ]);
 
     const identical = new Set(

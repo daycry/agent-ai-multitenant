@@ -1,14 +1,29 @@
-"""OpenTelemetry tracing setup.
+"""OpenTelemetry tracing setup — alcance REAL (ADR 0140, prod-08 Fase D).
 
-Phase 0:
-  - One TracerProvider per process, exporter is the in-memory exporter
-    in tests and ConsoleSpanExporter elsewhere.
-  - Auto-instrumentation for FastAPI, SQLAlchemy, asyncpg, Redis, httpx.
-  - W3C TraceContext propagator (default) so trace_id flows across HTTP
-    boundaries via the `traceparent` header.
+Este docstring describía un sistema que no existe. Prometía
+«auto-instrumentation for FastAPI, SQLAlchemy, asyncpg, Redis, httpx» cuando
+``SQLAlchemyInstrumentor`` **nunca se ha invocado**, y anunciaba una «Phase 12»
+que cambiaría el exporter a OTLP/Tempo y que no está planificada. Un operador
+podía leerlo y concluir que sus queries lentas ya estaban trazadas.
 
-Phase 12 will swap the exporter to OTLP/Tempo without touching callers
-— `configure_tracing()` is the single seam.
+Lo que este módulo hace HOY:
+
+  - Un ``TracerProvider`` por proceso.
+  - Auto-instrumentación de **FastAPI, asyncpg, Redis y httpx** (las cuatro que
+    de verdad se instrumentan; SQLAlchemy NO).
+  - Propagador W3C TraceContext, de modo que ``traceparent`` cruza las
+    fronteras HTTP.
+  - **Un único exporter: Console, y opt-in** (``API_SERVER_OTEL_CONSOLE=1``).
+    En tests, el exporter en memoria. Sin esa variable **los spans se generan
+    y se descartan**: no hay backend de trazas desplegado.
+
+El ADR 0140 declara el tracing distribuido (OTLP + Tempo/Jaeger) FUERA DE
+ALCANCE v1: la correlación entre servicios la cubre ``request_id``, que sí
+viaja de punta a punta —incluida la frontera Celery— desde prod-08 Fase C
+(``api_server.logging.celery_pipeline``) y es buscable en Loki.
+
+``configure_tracing()`` sigue siendo la costura única si algún día se adopta
+OTLP: el cambio es de exporter, no de llamantes.
 """
 
 from __future__ import annotations

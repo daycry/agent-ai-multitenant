@@ -135,7 +135,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_01` — Retry con backoff en los consumidores de los 4 providers
 
-- [ ] **Título**: Helper `with_retries()` en shared-llm + aplicación en runtime y asistente
+- [x] **Título**: Helper `with_retries()` en shared-llm + aplicación en runtime y asistente
 - **Descripción**: crear `packages/shared-llm/src/shared_llm/retry.py` con backoff
   exponencial + jitter (2-3 intentos) que reintente `RateLimitError` (respetando
   `Retry-After` — `check_status` en `_openai_compat.py:61` debe adjuntar el header
@@ -157,7 +157,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_02` — Event loop único por ejecución en el agent-runtime + aclose
 
-- [ ] **Título**: Eliminar `asyncio.run` por llamada (bug "Event loop is closed")
+- [x] **Título**: Eliminar `asyncio.run` por llamada (bug "Event loop is closed")
 - **Descripción**: sustituir `_run()` (`agent_runtime/providers.py:186-194`) por un
   `asyncio.Runner` persistente por ejecución (o hilo dedicado con loop propio) de
   modo que el `httpx.AsyncClient` que el provider crea una vez en su constructor
@@ -179,7 +179,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_03` — Errores de stream no-2xx legibles
 
-- [ ] **Título**: `await resp.aread()` antes de `check_status` en streaming
+- [x] **Título**: `await resp.aread()` antes de `check_status` en streaming
 - **Descripción**: en `ollama.py:156`, `azure_foundry.py:134` y
   `copilot.py:368/380`, cuando `resp.status_code >= 400` dentro del bloque
   `client.stream(...)`, leer el cuerpo (`await resp.aread()`) antes de llamar a
@@ -198,7 +198,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_04` — `usage` y `tool_calls` en el streaming OpenAI-compat
 
-- [ ] **Título**: `stream_options.include_usage` + parseo de tool_calls en SSE
+- [x] **Título**: `stream_options.include_usage` + parseo de tool_calls en SSE
 - **Descripción**: añadir `stream_options: {"include_usage": true}` al body de
   `stream()` en los tres providers OpenAI-compat; extender
   `parse_sse_delta`/`iter_sse_chunks` (`_openai_compat.py:111-152`) para parsear
@@ -218,6 +218,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 #### `task_prod07_05` — Cierre de providers en `/assistant/chat`
 
 - [ ] **Título**: `get_assistant_model` como dependencia async-generator con `aclose()`
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `routers/assistant.py::get_assistant_model` sigue haciendo `return` del provider (sin `yield`/`finally: await provider.aclose()`) y falta `tests/integration/test_assistant_provider_teardown.py`.
 - **Descripción**: convertir `get_assistant_model`
   (`apps/api-server/src/api_server/routers/assistant.py:150`) en async generator
   de FastAPI (`yield` + `finally: await provider.aclose()`), siguiendo el patrón
@@ -233,7 +234,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_06` — `ClaudeAgentProvider` sin mutar `os.environ`
 
-- [ ] **Título**: Credencial por env del subproceso del query SDK, no process-global
+- [x] **Título**: Credencial por env del subproceso del query SDK, no process-global
 - **Descripción**: eliminar `os.environ["ANTHROPIC_API_KEY"] = api_key`
   (`claude_agent.py:51-52`); pasar la credencial por las opciones/env por
   invocación que acepta el claude-agent-sdk. Si no es viable en todos los caminos,
@@ -253,7 +254,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_07` — Vault fail-fast en el dispatch (`vault_unavailable`)
 
-- [ ] **Título**: Fallo de Vault → `ModelResolutionError`, no 401 opaco en el sandbox
+- [x] **Título**: Fallo de Vault → `ModelResolutionError`, no 401 opaco en el sandbox
 - **Descripción**: en `apps/workers/src/workers/model_resolver.py` (resolve del
   spec, líneas 94-118), cuando la fila tiene `secret_vault_path` y el kind
   requiere credencial (azure_foundry, copilot, ollama-cloud), tratar
@@ -277,7 +278,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_08` — Unificar el mapeo kind→credencial triplicado
 
-- [ ] **Título**: Tabla única en shared-llm consumida por worker, runtime y factory
+- [x] **Título**: Tabla única en shared-llm consumida por worker, runtime y factory
 - **Descripción**: extraer el mapeo kind→campos (azure*foundry→apim_base_url/
   subscription_key/bearer_token, copilot→github_token, ollama→base_url/api_key) a
   `packages/shared-llm/src/shared_llm/credential_fields.py` y hacer que lo
@@ -300,6 +301,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_09` — Capacidades `claude_sdk` honestas
 
 - [ ] **Título**: Bloqueo/aviso explícito de tools+claude_sdk, timeout del SDK y ADR
+  - ⏳ **Pendiente (2026-07-31):** solo está (c), el `asyncio.wait_for` del SDK (7 tests verdes); faltan (a) la validación que rechaza tools+claude_sdk — `pytest tests/integration/test_model_config_validation.py -k claude_sdk` no selecciona NINGÚN test —, (b) la nota de limitación en el catálogo y (d) el ADR con las opciones A/B.
 - **Descripción**: hoy `ClaudeAgentProvider.complete()` ignora tools/max_tokens/
   temperature (`claude_agent.py:152-154`) y `ClaudeSDKModelClient.decide()` siempre
   devuelve FINISH (`agent_runtime/providers.py:343-347`): un agente claude_sdk con
@@ -325,6 +327,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_10` — Credencial fuera del env del contenedor
 
 - [ ] **Título**: Mount tmpfs read-only para el secreto; env solo con puntero
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — la credencial sigue viajando dentro de `AGENT_TASK_SPEC` (`workers/execution.py`), no hay mount tmpfs por `extra_mounts` y falta `docker/agent-runtimes/agent-runtime/tests/test_spec_secret_file.py`.
 - **Descripción**: mover api_key/subscription_key/github_token de
   `AGENT_TASK_SPEC` (`apps/workers/src/workers/execution.py:303-305`) a un
   fichero en tmpfs montado read-only vía el seam ya existente
@@ -351,7 +354,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_11` — Test de conexión que detecta tokens revocados
 
-- [ ] **Título**: Probe real para copilot y soporte bearer-only en azure_foundry
+- [x] **Título**: Probe real para copilot y soporte bearer-only en azure_foundry
 - **Descripción**: en `apps/api-server/src/api_server/llm_providers/liveness.py`:
   para copilot, ejecutar el mint del JWT (`copilot_internal/v2/token`, ya
   implementado en `copilot.py:264-273`) y distinguir 401 — hoy un token revocado
@@ -374,6 +377,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_12` — `provider` y clave de catálogo en los pasos `model_call`
 
 - [ ] **Título**: El runtime registra provider/kind y model id casable con el catálogo
+  - ⏳ **Pendiente (2026-07-31):** el `provider` del step `model_call` ya se registra (venía de AUD16-15, no de este plan) y `execution_repo` lo lee, pero el test que el plan exige no existe: `pytest tests/integration/test_execution_capture.py -k snapshot_provider` no selecciona NINGÚN test, así que la clave de catálogo del model id sigue sin acreditar.
 - **Descripción**: `model_call_step`
   (`docker/agent-runtimes/agent-runtime/agent_runtime/steps.py:52-72`) no registra
   `provider`, así que `snapshot_execution_prices` busca con `provider=""`
@@ -394,6 +398,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_13` — `total_cost_usd` real desde los snapshots de precio
 
 - [ ] **Título**: Cuando el runtime reporta 0, persistir la suma de snapshots y que budgets la consuma
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — no existe `tests/integration/test_execution_cost_finalize.py` ni la columna/override de coste estimado que la decisión clave pedía elegir aquí.
 - **Descripción**: `_openai_compat.py:99` solo rellena `usage.cost_usd` si el
   endpoint añade `cost` (Ollama/Copilot nunca; APIM solo con policy), y ese 0 se
   persiste en `finalize_execution` (`execution_repo.py:254`) y lo suman los
@@ -415,6 +420,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_14` — Test de integración e2e: coste > 0 y budgets consumiendo
 
 - [ ] **Título**: Pipeline completo con modelo del catálogo asserta coste real
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — no existe `tests/integration/test_execution_cost_e2e.py`, y depende de task_prod07_12 y task_prod07_13, ambas abiertas.
 - **Descripción**: test de integración que ejecuta el pipeline con un fake
   provider OpenAI-compat (sin campo `cost` en usage, como Ollama/Copilot reales)
   y un modelo presente en el catálogo de precios, y asserta:
@@ -437,6 +443,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_15` — Memorizer dentro del catálogo `llm_providers`
 
 - [ ] **Título**: Resolver el LLM del Memorizer vía catálogo (DB row > env)
+  - ⏳ **Pendiente (2026-07-31):** parcial y por otra vía: el camino primario es el provider del agente por `provider_id` (ADR 0082), pero `_default_llm_factory` sigue construyendo `OllamaProvider` desde env, no hay contador de fallos consecutivos de destilación y `pytest tests/integration/test_memorizer.py -k provider_resolution` no selecciona NINGÚN test.
 - **Descripción**: `_default_llm_factory`
   (`apps/workers/src/workers/memorizer.py:87-97`) construye `OllamaProvider`
   directamente con `WORKERS_MEMORIZER_LLM_BASE_URL` (default
@@ -459,6 +466,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_16` — Documentación de referencia de la capa LLM
 
 - [ ] **Título**: Referencia: retry, streaming, capacidades por kind, costes, Vault
+  - ⏳ **Pendiente (2026-07-31):** `docs/04-reference/llm-providers.md` existe pero la tarea documenta lo implementado y depende del resto de fases, con 8 de 16 tareas aún abiertas (costes enteros incluidos); falta además la entrada de changelog del plan.
 - **Descripción**: crear/ampliar `docs/04-reference/llm-providers.md` con: la
   política de retry (qué se reintenta y qué no), el contrato de streaming
   (chunk final con usage/tool_calls), la matriz de capacidades por kind (incluida

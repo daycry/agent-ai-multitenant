@@ -28,13 +28,14 @@ import json
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 from webauthn.helpers import bytes_to_base64url
 
+from api_server.auth.cookies import issue_session_cookies
 from api_server.auth.deps import (
     AuthPrincipal,
     get_mfa_challenge_store,
@@ -240,6 +241,7 @@ async def totp_disable(
 @router.post("/totp/verify", response_model=LoginResponse)
 async def totp_verify(
     payload: MfaTotpVerifyRequest,
+    response: Response,
     challenges: MfaChallengeStore = Depends(get_mfa_challenge_store),
     sessions: SessionStore = Depends(get_session_store),
 ) -> LoginResponse:
@@ -287,6 +289,11 @@ async def totp_verify(
         tenant_id=challenge.tenant_id,
         is_system_admin=challenge.is_system_admin,
     )
+    # ADR 0133: the second factor mints the SAME session the non-MFA path does,
+    # so it must deliver it the SAME way. Without this an MFA user logs in
+    # successfully and the panel bounces them straight back to /login, because
+    # `middleware.ts` gates on a cookie nobody set.
+    issue_session_cookies(response, token=token, max_age_seconds=ttl_seconds)
     return LoginResponse(access_token=token, token_type="bearer", expires_in=ttl_seconds)
 
 
@@ -500,6 +507,7 @@ async def webauthn_login_begin(
 @router.post("/webauthn/login/finish", response_model=LoginResponse)
 async def webauthn_login_finish(
     payload: WebauthnLoginFinishRequest,
+    response: Response,
     mfa_challenges: MfaChallengeStore = Depends(get_mfa_challenge_store),
     challenges: WebauthnChallengeStore = Depends(get_webauthn_challenge_store),
     sessions: SessionStore = Depends(get_session_store),
@@ -569,6 +577,11 @@ async def webauthn_login_finish(
         tenant_id=challenge_ctx.tenant_id,
         is_system_admin=challenge_ctx.is_system_admin,
     )
+    # ADR 0133: the second factor mints the SAME session the non-MFA path does,
+    # so it must deliver it the SAME way. Without this an MFA user logs in
+    # successfully and the panel bounces them straight back to /login, because
+    # `middleware.ts` gates on a cookie nobody set.
+    issue_session_cookies(response, token=token, max_age_seconds=ttl_seconds)
     return LoginResponse(access_token=token, token_type="bearer", expires_in=ttl_seconds)
 
 

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the "Probar conexión" button inside the MCP server editor
@@ -20,9 +21,7 @@ import { expect, test, type Page } from "@playwright/test";
 const PROJECT_ID = "11111111-0000-0000-0000-000000000001";
 
 async function loadPageWithStubbedProject(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`http://localhost:8001/projects/${PROJECT_ID}`, (route) => {
     if (route.request().method() === "GET") {

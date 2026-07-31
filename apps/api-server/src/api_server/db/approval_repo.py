@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from shared_domain.approval_action import action_fingerprint, canonical_tool_key, changed_args
 from sqlalchemy import ColumnElement, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +34,7 @@ from api_server.db.domain import (
     TaskStatus,
 )
 from api_server.db.platform_settings import get_platform_setting
+from api_server.db.task_audit_repo import append_audit_event
 
 # Abort code stamped on an execution whose approval request timed out.
 APPROVAL_TIMEOUT_ABORT_CODE = "approval_timeout_exceeded"
@@ -114,6 +116,145 @@ def requires_human_approval(policy: dict[str, Any] | None, category: str) -> boo
     return str(categories.get(category, "auto")) == "human_required"
 
 
+# ---------------------------------------------------------------------------
+# Qué autoriza una aprobación humana — ADR 0135 (G1+S1+T1+N3)
+# ---------------------------------------------------------------------------
+#: Cuántas acciones ya aprobadas de la task viajan al run siguiente (las más
+#: recientes primero). Hermano del `_HUMAN_ANSWERS_MAX` del ADR 0114: la lista
+#: es una CAPACIDAD que se entrega al sandbox, así que va acotada.
+APPROVED_ACTIONS_MAX = 20
+#: Cuántas aprobaciones previas de la task se miran para armar el delta (N3) y
+#: contar las repeticiones. Mayor que el tope de arriba a propósito: contar mal
+#: las repeticiones desactivaría el techo del bucle.
+_PRIOR_APPROVALS_SCAN = 50
+
+
+def _tool_and_args(action: Any) -> tuple[str, Any]:
+    """El par ``(tool, args)`` de un ``ApprovalRequest.action`` persistido.
+
+    Lo que se hashea es **lo que la UI enseñó**, y la UI vuelca el `action`
+    entero; las anotaciones que este módulo añade para el revisor (N3) viven en
+    claves HERMANAS, nunca dentro de `args`, justo para que no toquen la huella.
+    """
+    if not isinstance(action, dict):
+        return "", None
+    return str(action.get("tool") or ""), action.get("args")
+
+
+async def _approved_requests_of_task(
+    session: AsyncSession, *, task_id: UUID, tenant_id: UUID, limit: int
+) -> list[ApprovalRequest]:
+    """Las solicitudes APROBADAS de esta task, más recientes primero.
+
+    El predicado ``tenant_id`` no es decorativo: los dos llamantes de este
+    lector (el worker que monta el spec y el motor que anota el delta) corren
+    con roles BYPASSRLS, donde RLS no acota nada. Es la única defensa, igual que
+    en el lector hermano del ADR 0114.
+
+    ``human_question`` queda fuera: una respuesta de ``ask_human`` (ADR 0114) no
+    es la autorización de una tool —su ``args`` es la pregunta— y viaja por su
+    propio raíl (``human_answers``).
+    """
+    result = await session.execute(
+        select(ApprovalRequest)
+        .where(
+            ApprovalRequest.task_id == task_id,
+            ApprovalRequest.tenant_id == tenant_id,
+            ApprovalRequest.status == ApprovalRequestStatus.APPROVED,
+            ApprovalRequest.category != HUMAN_QUESTION_CATEGORY,
+        )
+        .order_by(ApprovalRequest.resolved_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def read_approved_actions(
+    session: AsyncSession,
+    *,
+    task_id: UUID,
+    tenant_id: UUID,
+    limit: int = APPROVED_ACTIONS_MAX,
+) -> list[dict[str, Any]]:
+    """Las acciones que un humano ya autorizó en ESTA task (ADR 0135).
+
+    El worker las serializa en el spec como ``approved_actions`` y el gate del
+    sandbox (:class:`agent_runtime.approval.ApprovalGate`) las canjea antes de
+    aparcar. Cada entrada es ``{tool, args_hash, category, resolved_at}``: viaja
+    la HUELLA, no los argumentos, porque el `args` de un ``write_file`` puede
+    ser un fichero entero y el spec viaja en una variable de entorno.
+
+    Una fila cuya acción no admite huella canónica (sin tool, args no
+    serializables) se descarta: sin huella no hay comparación posible, y sin
+    comparación la única respuesta segura es volver a preguntar.
+    """
+    rows = await _approved_requests_of_task(
+        session, task_id=task_id, tenant_id=tenant_id, limit=limit
+    )
+    actions: list[dict[str, Any]] = []
+    for row in rows:
+        tool, args = _tool_and_args(row.action)
+        digest = action_fingerprint(tool, args)
+        if digest is None:
+            continue
+        actions.append(
+            {
+                "tool": canonical_tool_key(tool),
+                "args_hash": digest,
+                "category": row.category,
+                "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+            }
+        )
+    return actions
+
+
+async def _prior_approval_context(
+    session: AsyncSession,
+    *,
+    task_id: UUID,
+    tenant_id: UUID,
+    tool: str,
+    args: Any,
+) -> dict[str, Any] | None:
+    """Lo que el revisor necesita para decidir en dos segundos (N3).
+
+    El operador eligió N3 —«re-aparcar, pero enseñando el diff»— precisamente
+    porque un LLM no es determinista: si la acción es un «casi igual» de una que
+    ya aprobó, la nueva solicitud lleva la anterior y el delta. Y si es la MISMA
+    exacta, lleva cuántas veces la aprobó ya, que es la señal de que el bucle
+    está vivo y hay que llamar a alguien en vez de seguir aprobando.
+
+    ``None`` cuando no hay nada que contar (la solicitud queda byte a byte como
+    antes de este ADR).
+    """
+    digest = action_fingerprint(tool, args)
+    key = canonical_tool_key(tool)
+    if not key:
+        return None
+    rows = await _approved_requests_of_task(
+        session, task_id=task_id, tenant_id=tenant_id, limit=_PRIOR_APPROVALS_SCAN
+    )
+    exact = 0
+    closest: dict[str, Any] | None = None
+    for row in rows:
+        prior_tool, prior_args = _tool_and_args(row.action)
+        if canonical_tool_key(prior_tool) != key:
+            continue
+        prior_digest = action_fingerprint(prior_tool, prior_args)
+        if digest is not None and prior_digest == digest:
+            exact += 1
+        elif closest is None:
+            closest = {
+                "request_id": str(row.id),
+                "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+                "args": prior_args,
+                "changed_args": changed_args(prior_args, args),
+            }
+    if not exact and closest is None:
+        return None
+    return {"same_action_approved_times": exact, "closest_prior": closest}
+
+
 async def request_approval_if_needed(
     session: AsyncSession,
     *,
@@ -127,9 +268,26 @@ async def request_approval_if_needed(
     Returns the persisted `ApprovalRequest` and parks the execution in
     `awaiting_human_approval` when a human is required; returns None
     (the action may proceed) otherwise. The caller owns the transaction.
+
+    ADR 0135 (N3): cuando esta acción se parece a una que el humano YA aprobó en
+    esta misma task, la solicitud se persiste con una clave hermana
+    ``prior_approvals`` que lleva la anterior y el delta. Es una ANOTACIÓN para
+    el revisor: no toca ``tool`` ni ``args``, que es lo que se hashea.
     """
     if not requires_human_approval(project.human_approval_policy, category):
         return None
+
+    if category != HUMAN_QUESTION_CATEGORY:
+        tool, args = _tool_and_args(action)
+        context = await _prior_approval_context(
+            session,
+            task_id=execution.task_id,
+            tenant_id=execution.tenant_id,
+            tool=tool,
+            args=args,
+        )
+        if context is not None:
+            action = {**action, "prior_approvals": context}
 
     request = ApprovalRequest(
         tenant_id=execution.tenant_id,
@@ -239,6 +397,14 @@ async def resolve_approval(
     o el job de caducidad ganó la transición (prod-03 task_prod03_04). En ese
     caso NADA se muta: es la señal con la que el router responde 409 sin tener
     que leer el estado por su cuenta, que es de donde salía la carrera.
+
+    ADR 0135 — el techo del bucle: aprobar **gasta un reintento**. Hasta ahora
+    esto no tocaba ``retry_count`` (solo lo bumpeaban los rechazos de review),
+    así que aprobar→re-ejecutar→re-aparcar era literalmente infinito, y con
+    coste: los presupuestos son por EJECUCIÓN, o sea que cada re-despacho
+    estrenaba techo de tokens entero. Al llegar a ``max_retries`` la task queda
+    ``blocked`` con un evento de auditoría legible en vez de seguir girando.
+    Rechazar NO gasta reintento: ya bloquea por sí solo.
     """
     now = datetime.now(UTC)
     won = await claim_pending_approval(
@@ -263,8 +429,8 @@ async def resolve_approval(
             execution.status = ExecutionStatus.DONE
             execution.completed_at = datetime.now(UTC)
         if task is not None:
-            task.status = TaskStatus.BACKLOG
             task.assigned_agent_id = None
+            await _spend_retry_or_block(session, task, request)
     else:
         if execution is not None:
             execution.status = ExecutionStatus.ABORTED
@@ -275,6 +441,71 @@ async def resolve_approval(
 
     await session.flush()
     return request
+
+
+#: Motivo del bloqueo por techo de re-aprobaciones — lo lee el operador en el
+#: histórico de la tarea, así que se nombra una sola vez.
+APPROVAL_RETRY_CAPPED_KIND = "approval_retry_capped"
+
+
+async def _spend_retry_or_block(
+    session: AsyncSession, task: Task, request: ApprovalRequest
+) -> None:
+    """Cobra un reintento a la task aprobada y decide si aún puede re-ejecutar.
+
+    Por debajo del techo vuelve a ``backlog`` (el comportamiento del ADR 0020);
+    al alcanzarlo queda ``blocked`` con un evento de auditoría que dice cuántas
+    veces se aprobó ESTA MISMA acción — que es la pregunta que se hace quien
+    encuentra la tarea parada.
+
+    ``human_question`` NO paga: responder a un ``ask_human`` (ADR 0114) no es
+    re-intentar una acción, es darle al agente el dato que le faltaba, y ese
+    raíl es non-terminal por diseño. Cobrárselo bloquearía una tarea por hacer
+    tres preguntas legítimas — una regresión sobre una feature ya entregada, y
+    fuera de lo que este ADR viene a acotar.
+    """
+    if request.category == HUMAN_QUESTION_CATEGORY:
+        task.status = TaskStatus.BACKLOG
+        return
+
+    max_retries = task.max_retries if task.max_retries is not None else 3
+    task.retry_count = (task.retry_count or 0) + 1
+    if task.retry_count < max_retries:
+        task.status = TaskStatus.BACKLOG
+        return
+
+    task.status = TaskStatus.BLOCKED
+    tool, args = _tool_and_args(request.action)
+    repeats = 0
+    digest = action_fingerprint(tool, args)
+    if digest is not None:
+        for row in await _approved_requests_of_task(
+            session,
+            task_id=task.id,
+            tenant_id=task.tenant_id,
+            limit=_PRIOR_APPROVALS_SCAN,
+        ):
+            if row.id == request.id:
+                continue
+            prior_tool, prior_args = _tool_and_args(row.action)
+            if action_fingerprint(prior_tool, prior_args) == digest:
+                repeats += 1
+    await append_audit_event(
+        session,
+        tenant_id=task.tenant_id,
+        task_id=task.id,
+        kind=APPROVAL_RETRY_CAPPED_KIND,
+        actor="approval-engine",
+        payload={
+            "escalated": True,
+            "reason": "approval_retry_limit_reached",
+            "retry_count": task.retry_count,
+            "max_retries": max_retries,
+            "category": request.category,
+            "tool": canonical_tool_key(tool),
+            "same_action_approved_times": repeats,
+        },
+    )
 
 
 def _stale_pending_filter(cutoff: datetime, tenant_id: UUID | None) -> list[ColumnElement[bool]]:

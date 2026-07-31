@@ -22,11 +22,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
 const replaceMock = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: replaceMock }) }));
 
-const getTokenMock = vi.fn<() => string | null>();
-const clearTokenMock = vi.fn();
+const hasSessionMock = vi.fn<() => boolean>();
+const clearClientSessionMock = vi.fn();
 vi.mock("@/lib/auth", () => ({
-  getToken: () => getTokenMock(),
-  clearToken: (...a: unknown[]) => clearTokenMock(...a),
+  hasSession: () => hasSessionMock(),
+  clearClientSession: (...a: unknown[]) => clearClientSessionMock(...a),
 }));
 
 const clearTenantIdMock = vi.fn();
@@ -38,7 +38,7 @@ import { ApiError } from "@/lib/api";
 import NoAccessPage from "@/app/no-access/page";
 
 beforeEach(() => {
-  getTokenMock.mockReturnValue("identity-token");
+  hasSessionMock.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -76,7 +76,7 @@ describe("pantalla de sin permisos", () => {
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/login"));
     expect(apiFetchMock).toHaveBeenCalledWith("/auth/logout", { method: "POST" });
-    expect(clearTokenMock).toHaveBeenCalledTimes(1);
+    expect(clearClientSessionMock).toHaveBeenCalledTimes(1);
     expect(clearTenantIdMock).toHaveBeenCalledTimes(1);
   });
 
@@ -87,13 +87,13 @@ describe("pantalla de sin permisos", () => {
 
     fireEvent.click(screen.getByTestId("no-access-logout"));
 
-    await waitFor(() => expect(clearTokenMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(clearClientSessionMock).toHaveBeenCalledTimes(1));
     expect(clearTenantIdMock).toHaveBeenCalledTimes(1);
     expect(replaceMock).toHaveBeenCalledWith("/login");
   });
 
   it("un acceso directo sin token rebota al login", async () => {
-    getTokenMock.mockReturnValue(null);
+    hasSessionMock.mockReturnValue(false);
     render(<NoAccessPage />);
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/login"));

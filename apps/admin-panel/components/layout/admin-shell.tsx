@@ -36,6 +36,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Store,
+  Ticket,
   UserRound,
   Users,
   Wrench,
@@ -199,6 +200,10 @@ export const NAV_GROUPS: NavGroup[] = [
       // Administración de usuarios global (ADR 0047): listar usuarios y
       // gestionar sus memberships (usuario↔tenant + rol). Solo System Admin.
       { href: "/admin/users", labelKey: "users", Icon: Users, systemAdminOnly: true },
+      // ADR 0134: con el registro público cerrado, ésta es la ÚNICA vía de
+      // producto para dar de alta a alguien nuevo. Sin entrada en el menú, la
+      // pantalla existiría y nadie la encontraría.
+      { href: "/admin/invitations", labelKey: "invitations", Icon: Ticket, systemAdminOnly: true },
       { href: "/admin/llm-providers", labelKey: "llmProviders", Icon: Cpu, systemAdminOnly: true },
       {
         href: "/admin/ollama",

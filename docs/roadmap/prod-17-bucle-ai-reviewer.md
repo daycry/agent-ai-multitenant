@@ -13,6 +13,15 @@ created_by: prod-06-dag_03-defer-2026-06
 spec_sections_referenced: [12.5, 12.6]
 docs_language: es
 priority: P2
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: prod-06-ciclo-vida-ejecucion
+  reason: >-
+    `prod-06` está entregado y en `pending_human_validation`. La única casilla que le
+    queda a prod-17 es una e2e que exige runner Docker y lanzar runs reales, que la
+    orden vigente del operador tiene vetado hasta dar el sistema por verificado.
 ---
 
 # Plan prod-17 — Bucle del AI reviewer

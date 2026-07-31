@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the project delete dialog with confirm-by-name
@@ -39,9 +40,7 @@ const PROJECT_FIXTURE = {
 };
 
 async function setup(page: Page, opts: { onDelete?: () => void } = {}): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/projects/${PROJECT_ID}`, async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({

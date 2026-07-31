@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/memories (Plan 04 task_04_06).
@@ -85,9 +86,7 @@ async function setup(page: Page): Promise<Capture> {
     global: [],
   };
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(/http:\/\/localhost:8001\/memories(\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());

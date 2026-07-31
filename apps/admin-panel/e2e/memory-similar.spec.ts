@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the similar-memories dialog (Plan 06.7 task_06_7_08).
@@ -53,9 +54,7 @@ async function setup(
     onDiscard?: (id: string) => void;
   } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/memories?**", (route) =>
     route.fulfill({
       status: 200,

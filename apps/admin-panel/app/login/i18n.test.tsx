@@ -17,8 +17,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LanguageProvider } from "@/lib/lang-context";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-vi.mock("@/lib/auth", () => ({ setToken: vi.fn() }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock("@/lib/session", () => ({ resolveAndRoute: vi.fn(async () => "/admin/dashboard") }));
 // Los botones SSO hacen su propio fetch de providers — fuera de este test.
 vi.mock("@/components/login/provider-buttons", () => ({ ProviderButtons: () => null }));

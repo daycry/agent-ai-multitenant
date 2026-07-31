@@ -3,14 +3,20 @@
 /**
  * WebSocket helper for the real-time endpoints (Plan 02 Fase E).
  *
- * The browser WebSocket API cannot set an Authorization header, so the
- * JWT travels as a `?token=` query parameter — same token `lib/api`
- * uses for REST calls.
+ * The browser WebSocket API cannot set an Authorization header, which is why
+ * the JWT used to travel as a `?token=` query parameter — straight into access
+ * logs, proxy logs and Loki. Since ADR 0133 the session is a cookie, and the
+ * browser attaches cookies to the WebSocket handshake on its own, so the
+ * credential is gone from the URL with no ticket mechanism to invent (this is
+ * what makes `task_prod09_12` unnecessary rather than merely deferred).
+ *
+ * The handshake does NOT honour CORS, so an ambient cookie would otherwise let
+ * ANY page open our sockets; the api-server validates `Origin` on every
+ * `/ws/*` endpoint (`routers/ws.py`, same delivery — ADR 0133 condición 2).
  */
 
 import { useEffect, useRef } from "react";
 
-import { getToken } from "@/lib/auth";
 import { getTenantId } from "@/lib/tenant-storage";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
@@ -40,9 +46,9 @@ export function resolveWsBase(apiUrl: string, loc?: WsLoc): string {
 }
 
 /**
- * Build a `ws(s)://` URL for an api-server WebSocket path, with the token and
- * — for a superadmin acting on behalf of a tenant — the selected `tenant_id`
- * attached as query params.
+ * Build a `ws(s)://` URL for an api-server WebSocket path with — for a
+ * superadmin acting on behalf of a tenant — the selected `tenant_id` attached
+ * as a query param. The SESSION is not in the URL: it rides the cookie.
  *
  * The tenant_id is the WebSocket mirror of the `X-Tenant-Id` REST header
  * (`lib/api`): the browser WebSocket API can't set headers, so the tenant the
@@ -53,8 +59,6 @@ export function resolveWsBase(apiUrl: string, loc?: WsLoc): string {
 export function wsUrl(path: string): string {
   const base = resolveWsBase(API_URL);
   const params = new URLSearchParams();
-  const token = getToken();
-  if (token) params.set("token", token);
   const tenantId = getTenantId();
   if (tenantId) params.set("tenant_id", tenantId);
   const query = params.toString();

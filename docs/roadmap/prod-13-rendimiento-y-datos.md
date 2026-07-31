@@ -144,6 +144,10 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       endpoint de instalación/actualización devuelve 202 + recurso de estado
       consultable; `asyncio.to_thread` como mitigación intermedia en
       `marketplace/install.py:514-517,559`.
+  - ⏳ **Pendiente (2026-07-31):** solo está la mitigación intermedia — las dos
+    puertas ya corren fuera del bucle (verificado en
+    `tests/unit/test_no_blocking_calls_in_event_loop.py`); falta la task Celery en
+    cola dedicada y el endpoint que devuelve 202 + recurso de estado consultable.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -163,6 +167,10 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       adaptadores de `workers/backup_destinations.py` cuando se invocan desde el
       api-server. **Coordinación**: prod-04 reescribe el backup y api-9 (frontera
       apps) puede mover esto a Celery — este task garantiza solo el no-bloqueo.
+  - ⏳ **Pendiente (2026-07-31):** el `to_thread` de las dos llamadas está y se
+    verifica (`tests/unit/test_no_blocking_calls_in_event_loop.py`); faltan los
+    timeouts de conexión explícitos y cortos en los adaptadores de
+    `workers/backup_destinations.py` (solo hay `timeout_s=3600` en rclone).
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -173,12 +181,21 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_03` — Vault: timeout explícito, `to_thread` y caché del secreto
 
-- [ ] **Título**: Pasar `timeout` corto al `hvac.Client` (`routers/llm_providers.py:116`),
+- [x] **Título**: Pasar `timeout` corto al `hvac.Client` (`routers/llm_providers.py:116`),
       envolver `vault.read_secret` en `asyncio.to_thread` dentro de
       `build_llm_provider` (`llm_providers/factory.py:175-183`) y cachear la
       credencial por `provider_id` con TTL corto (30-60 s) para no ir a Vault en
       cada mensaje del chat. **Coordinación**: prod-05 (rotación) debe invalidar
       esta caché al rotar; prod-10 (Vault operable) hereda el timeout.
+  - ✅ **Cerrada (2026-07-31):** la mitad del panel ya estaba (el `timeout=5 s` del
+    `hvac.Client` y el `to_thread` de las cuatro llamadas al store); ahora también
+    la del CHAT — `build_llm_provider` lee el secreto por `asyncio.to_thread` y lo
+    cachea EN PROCESO por `provider_id` con TTL de 30 s (el extremo bajo del rango,
+    porque lo rancio aquí es una credencial). Un fallo de Vault NO se cachea. El
+    gancho que prod-05 debe llamar al rotar es
+    `factory.invalidate_provider_secret_cache(provider_id)`; hasta que lo llame, el
+    TTL acota la ventana. La credencial no va a Redis a propósito (ADR 0028: no se
+    crea una segunda copia del secreto fuera del proceso que ya lo tiene).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -195,6 +212,9 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       `file.read()` completo), y validar content-type/extensión contra la lista
       de formatos soportados por Docling. Reutilizar el patrón ya existente en
       `incoming_webhooks.py:160-171`.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `knowledge_bases.py:604` sigue
+    haciendo `payload = await file.read()` y comprobando el tamaño DESPUÉS, sin
+    rechazo por `Content-Length` ni lectura por chunks.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -209,6 +229,10 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       (`docs_viewer.py:125-138`, `internal_agent.py:198,295`,
       `ingestion/embeddings.py:86-89`) por un `httpx.AsyncClient` singleton de
       proceso (mismo patrón `lru_cache` que `get_redis`), con keep-alive hacia Ollama.
+  - ⏳ **Pendiente (2026-07-31):** solo `docs_viewer.py` usa el cliente
+    compartido (`get_shared_embed_client`, verificado); siguen construyendo un
+    `OllamaEmbedder()` por llamada `chat/responder.py:976`,
+    `docs_structure/kb_sync.py:222,337` y `seeds/catalog_ingestion.py:185`.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -225,6 +249,10 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       como settings de entorno y aplicarlos en `get_engine` y `get_admin_engine`
       (`db/session.py:21-58`), con los defaults de la decisión clave 4 y métrica
       de saturación del pool expuesta (coordinación con prod-08 para la alerta).
+  - ⏳ **Pendiente (2026-07-31):** los cuatro settings existen con los defaults
+    de la decisión clave 4 y llegan a los DOS engines (verificado en
+    `tests/unit/test_engine_pool_settings.py`); falta exponer la métrica de
+    saturación del pool — el api-server no publica métricas todavía.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -242,6 +270,9 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       `tool_ctx` y abren sesiones cortas; `GET /knowledge-bases/{id}/search`
       (`knowledge_bases.py:294-301`) embebe contra Ollama fuera de la sesión.
       Persistencia del resultado en sesión nueva.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — la sesión de
+    `open_tenant_session` sigue viva durante `run_assistant_turn` y las tools no
+    reciben ningún session-factory tenant-aware en `tool_ctx`.
 - **Tiempo**: 2,5 días · **Complejidad**: l
 - **Depende de**: `task_prod13_06`
 - **Tests automáticos**:
@@ -256,7 +287,7 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_08` — `NullPool` en los engines por tarea Celery
 
-- [ ] **Título**: Pasar `poolclass=NullPool` a los `create_async_engine` de las
+- [x] **Título**: Pasar `poolclass=NullPool` a los `create_async_engine` de las
       tareas Celery (`workers/ingestion.py:127,192`, `workers/maintenance.py:287`)
       para que cada tarea cueste exactamente 1 conexión sin pool ocioso (perf-11).
 - **Tiempo**: 0,25 días · **Complejidad**: s
@@ -273,6 +304,8 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       en una transacción por seed, separando `seed_catalog_ingestion`
       (`catalog_ingestion.py:55`, embeds por red) a su propia transacción/lote por
       documento. La idempotencia existente (uuid5, hash de corpus) hace el cambio seguro.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `seeds/__main__.py:52` sigue
+    envolviendo TODOS los seeds en un único `session.begin()`.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -285,11 +318,15 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_10` — Índice FTS de chunks coherente con la query `es_unaccent`
 
-- [ ] **Título**: Migración Alembic que reconstruya `ix_chunks_content_fts` con
+- [x] **Título**: Migración Alembic que reconstruya `ix_chunks_content_fts` con
       `to_tsvector('public.es_unaccent', content)` (réplica de lo que 0079 hizo
       con memory_entries) y unificar `bm25_chunks` (`rag/search.py:103-113`) con
       la misma configuración que usa el preview (`search.py:349-361`), para que
       agente y operador vean los mismos resultados. Downgrade real.
+  - ✅ **Ya estaba hecha antes de este plan (verificado 2026-07-31):** la
+    migración `0107_chunks_fts_es_unaccent` reconstruyó el índice con
+    `public.es_unaccent` y su downgrade restaura el `'simple'` de la 0022;
+    `rag/search.py` unifica ambas rutas sobre `_TS_CONFIG`.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -305,6 +342,11 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       (`budgets/consumption.py:216-224`) como rango sargable sobre TIMESTAMPTZ
       (sin `func.date()`), definiendo la zona horaria del corte. **Coordinación**:
       prod-06 cablea el sweep de presupuestos (db-1) que depende de este índice.
+  - ⏳ **Pendiente (2026-07-31):** el índice `ix_executions_tenant_created_at`
+    está (migración 0126, verificado con su orden de columnas en
+    `tests/integration/test_perf_indexes_and_uniqueness.py`); falta la mitad del
+    código — `budgets/consumption.py:216` sigue con `func.date(...)`, o sea no
+    sargable, así que el índice todavía no lo usa nadie.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -321,6 +363,9 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       recall con dos tenants desbalanceados (corpus 95/5) que falle si el tenant
       pequeño recibe 0 resultados. Redactar ADR propuesto para índices parciales/
       particionado por tenant (decisión futura, no se implementa).
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `rag/search.py` no contiene ni
+    `hnsw.iterative_scan` ni `ef_search`, no hay test de recall con tenants
+    desbalanceados y el ADR de índices parciales/particionado no está escrito.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -331,11 +376,17 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_13` — Unicidad por tenant en teams/skills/agents + tipos coherentes
 
-- [ ] **Título**: Replicar el patrón 0077 (`uq_tools_tenant_name`): índice único
+- [x] **Título**: Replicar el patrón 0077 (`uq_tools_tenant_name`): índice único
       parcial `WHERE deleted_at IS NULL` sobre `(tenant_id, name)` para teams
       (`domain.py:634-640`), skills y agents, con dedup "latest wins" previo en la
       migración. En la misma pasada: `source_size_bytes` a `BigInteger` y
       `Plan.created_by` a `UUID | None` (db-9, hallazgos fusionados).
+  - ℹ️ **Desviación aceptada (2026-07-31):** `agents` NO lleva un
+    `(tenant_id, name)` sino DOS índices parciales partidos por `project_id`
+    (`uq_agents_tenant_project_name_live` y `uq_agents_tenant_name_global_live`):
+    un fork `project_local` conserva a propósito el nombre de su plantilla
+    `global_tenant_template` y el índice ingenuo lo habría prohibido. Migración
+    0126, con round-trip de downgrade probado.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -355,6 +406,8 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       plans/tasks/executions), con modo dry-run y log de recuento por tabla.
       **Coordinación**: prod-06 corrige antes el orden blob/commit (db-3) — la
       purga es quien borra los blobs de MinIO de documentos soft-deleted.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — no existe ninguna task de purga
+    en `workers/maintenance/` ni entrada en `beat_schedule.py`.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -370,6 +423,9 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       archivar `executions.steps_log` (`db/domain.py:1060`) de runs antiguos y
       aplicar la retención decidida a `audit_log`, `guardrail_events` y
       `notifications`. La task entra detrás del flag/setting que el ADR defina.
+  - ⏳ **Pendiente (2026-07-31):** bloqueada por decisión de producto — el ADR de
+    retención (decisión clave 3) no está escrito y borrar auditoría lo decide el
+    operador; no hay task ni entrada de beat.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: `task_prod13_14` (comparte infraestructura de purga)
 - **Tests automáticos**:
@@ -381,12 +437,21 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_16` — Embeds por lotes + backfill de chunks sin vector
 
-- [ ] **Título**: Trocear el embed de ingesta en lotes (p. ej. 64 chunks/request,
+- [x] **Título**: Trocear el embed de ingesta en lotes (p. ej. 64 chunks/request,
       `ingestion/pipeline.py:123-147`) y añadir task beat `backfill_chunk_embeddings`
       gemela de `backfill_memory_embeddings` (`workers/maintenance.py:249-368`)
       sobre `chunks WHERE embedding IS NULL`, reutilizando el patrón
       `FOR UPDATE SKIP LOCKED` + throttle + platform settings ya existente. Cierra
       el hueco "documento verde en la UI pero invisible para el RAG vectorial".
+  - ✅ **Cerrada (2026-07-31):** el backfill YA EXISTÍA (P1-11b) pero sin un solo
+    test propio; ahora lo tiene, y muerde: quitarle el `documents.deleted_at IS NULL`
+    pone 4 de sus 6 tests en rojo. La mitad que faltaba de verdad —el troceo de la
+    ingesta— está hecha con `EMBED_BATCH_SIZE = 64`. Dos decisiones que el plan no
+    fijaba y conviene tener escritas: un lote que falla se pierde **solo a sí mismo**
+    (antes un `EmbeddingError` dejaba el documento entero sin vector), y un embedder
+    que devuelve menos vectores de los pedidos descarta ese lote en vez de emparejar
+    por posición — eso último además arregla un `ValueError` que escapaba a Celery
+    desde el `zip(strict=True)`, pese a que el pipeline promete no levantar nunca.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -402,7 +467,7 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_17` — Paginar conversaciones, documentos de KB y citas (sin vector)
 
-- [ ] **Título**: Aplicar `limit_query()/offset_query()` (`routers/_pagination.py`)
+- [x] **Título**: Aplicar `limit_query()/offset_query()` (`routers/_pagination.py`)
       a `GET /projects/{id}/conversations` (`conversations.py:171`),
       `GET /knowledge-bases/{kb_id}/documents` (`knowledge_bases.py:637`) y
       `GET /documents/{id}/citations` (`knowledge_bases.py:733-746`, paginado por
@@ -425,6 +490,9 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       y materializar `last_model`/`tokens_in`/`tokens_out` como columnas
       denormalizadas al cerrar el run (patrón ya existente con
       `total_tokens`/`total_cost_usd`), con migración + backfill.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `routers/tenant_stats.py` sigue
+    expandiendo `steps_log` con `jsonb_array_elements` en el listado y el export,
+    y no hay columnas denormalizadas de `last_model`/`tokens_in`/`tokens_out`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -441,6 +509,9 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       arrancando en `$` (solo eventos nuevos; el backlog lo da la carga REST
       inicial del tablero), eliminando el filtrado por tenant/proyecto en Python
       y el replay de 10k entradas por socket.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `events.py` solo publica en el
+    stream global `EVENTS_STREAM = "events:tasks"` y `/ws/kanban` lo sigue
+    consumiendo con filtrado por tenant/proyecto en Python.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -451,7 +522,7 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_20` — Rate limit en `POST /assistant/chat`
 
-- [ ] **Título**: Añadir dependencia de rate limit por `user_id` (y cap por tenant)
+- [x] **Título**: Añadir dependencia de rate limit por `user_id` (y cap por tenant)
       al endpoint (`routers/assistant.py:167`), reutilizando
       `RateLimiter.check_with_headers` (`auth/rate_limit.py:51`) con budget
       configurable en platform_settings. **Coordinación**: prod-07 añade los
@@ -466,11 +537,24 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_21` — Caché Redis para membership y platform_settings
 
-- [ ] **Título**: Cachear en Redis (TTL ≤ 60 s + invalidación al escribir) el
+- [x] **Título**: Cachear en Redis (TTL ≤ 60 s + invalidación al escribir) el
       lookup de membership por request (`auth/deps.py:308-352`) y
       `get_platform_setting` (`db/platform_settings.py:32`), con invalidación en
       los endpoints de escritura correspondientes. Medir antes/después con la
       métrica de QPS por query (decisión clave 6: la frescura gana).
+  - ✅ **Cerrada (2026-07-31):** la de `platform_settings` ya estaba; la de
+    membership vive ahora en `api_server/cache/membership.py` (TTL 30 s, la mitad
+    del máximo, porque lo que se cachea es un permiso). **La invalidación NO se
+    sembró por los endpoints de escritura**, y a propósito: las membresías se
+    escriben desde cuatro sitios (panel admin, SCIM, mapeo de grupos SSO, siembra
+    de tenant) y el quinto llegará sin que nadie se acuerde de la caché — el patrón
+    "mecanismo entregado, cero llamantes" del apartado 5 de
+    `verificar-antes-de-implementar.md`. Cuelga de eventos de mapper del ORM y se
+    ejecuta DESPUÉS del commit. Precio dicho en voz alta: un UPDATE en SQL crudo
+    fuera del ORM no invalida (ninguna vía de aplicación escribe así; el TTL acota
+    el resto). Los tres tests que mandan son los de revocación —retirar acceso,
+    degradar rol y CONCEDER acceso—: desactivando la invalidación, los tres pasan a
+    rojo.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -485,6 +569,12 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       (`routers/_helpers.py:77`) y usarlo en `approve_plan`/`apply_human_action`
       (`plans.py:471,495`) y `task_lifecycle.py:140`, cerrando la carrera de doble
       firma simultánea (api-10). Test de concurrencia con dos firmas en paralelo.
+  - ⏳ **Pendiente (2026-07-31):** el `for_update=True` está implementado y
+    verificado (`tests/unit/test_row_lock_and_pagination.py` compila el SELECT y
+    exige `FOR UPDATE` + filtro de tenant, y las tres transiciones que firman lo
+    piden); falta el test de concurrencia con dos firmas en paralelo, que es lo
+    único que demuestra que el lock serializa DENTRO de la transacción del
+    request y no se suelta al instante.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -495,12 +585,18 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_23` — No exponer `str(exc.orig)` en respuestas 409
 
-- [ ] **Título**: Sustituir el patrón `detail=str(exc.orig)` de los seis routers
+- [x] **Título**: Sustituir el patrón `detail=str(exc.orig)` de los seis routers
       (`conversations.py:159,311`, `plans.py:158`, `projects.py:212`,
       `tasks.py:108`, `kb_categories.py:140`) por un exception handler global de
       `IntegrityError` que mapee constraint→mensaje de dominio estable (el patrón
       correcto ya existe en `api_v1/router.py:137`), y sanear el `{exc}` del
       proveedor LLM en `assistant.py:209-220`.
+  - ℹ️ **Desviación aceptada (2026-07-31):** el mapeo constraint→mensaje de
+    dominio vive en el helper compartido `routers/_integrity.py`
+    (`integrity_conflict`) en vez de en un exception handler global; el efecto es
+    el mismo y una guarda recorre los routers para que ninguno vuelva a
+    `detail=str(exc.orig)`. El saneado del error del proveedor LLM
+    (`_provider_error_detail`) está hecho pero NO tiene test propio.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml

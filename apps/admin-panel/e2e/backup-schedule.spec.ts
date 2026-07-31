@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/backup — the System-Admin 'Programación de backups' screen
@@ -67,13 +68,7 @@ async function setup(
   identity: typeof SYSTEM_ADMIN | typeof TENANT_USER = SYSTEM_ADMIN,
   schedule: typeof DEFAULT_SCHEDULE = DEFAULT_SCHEDULE,
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({

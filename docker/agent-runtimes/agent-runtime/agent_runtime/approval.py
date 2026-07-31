@@ -15,9 +15,11 @@ approval` — the policy contract, not importable across the sandbox.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from shared_domain.approval_action import action_fingerprint
 from shared_domain.approval_categories import APPROVAL_CATEGORIES
 from shared_domain.tool_names import to_canonical
 
@@ -155,13 +157,35 @@ class ApprovalGate:
         self,
         policy: dict[str, Any] | None,
         tool_categories: dict[str, str] | None = None,
+        approved_actions: Iterable[Mapping[str, Any]] | None = None,
     ) -> None:
         self._policy = policy
         self._tool_categories = tool_categories or DEFAULT_TOOL_CATEGORIES
+        # ADR 0135: las acciones que un humano YA aprobó en ESTA task, por
+        # huella canónica. Es un multiset: dos aprobaciones de la misma acción
+        # dan dos canjes, ni uno más (T1). Una entrada sin `args_hash` —fila
+        # corrupta, spec de una versión vieja— no autoriza nada: la lista es
+        # una capacidad que se entrega al sandbox, así que se construye
+        # cerrada por omisión.
+        self._authorized: Counter[str] = Counter(
+            digest
+            for entry in (approved_actions or ())
+            if (digest := str(entry.get("args_hash") or ""))
+        )
 
-    def review(self, tool: str | None) -> str | None:
+    def review(self, tool: str | None, args: Any = None) -> str | None:
         """Return the sensitive category gating `tool`, or None if the
-        tool may run without approval."""
+        tool may run without approval.
+
+        ADR 0135 — ``args`` es lo que convierte esto en una autorización y no en
+        un permiso por tool: cuando la categoría exige humano, se compara la
+        acción EXACTA (``tool`` canónico + ``args`` verbatim) contra las que el
+        humano aprobó en esta task. Si coincide, la llamada pasa y **la
+        autorización se consume** (un canje, T1). Si no coincide —otra tool de
+        la misma categoría, un espacio de más en el ``content``, o una llamada
+        que ni siquiera trae ``args``— se aparca como siempre y el humano vuelve
+        a decidir viendo el delta (N3, que arma el api-server).
+        """
         if not tool:
             return None
         # Resolve legacy aliases (file_write → write_file, http_request →
@@ -170,5 +194,22 @@ class ApprovalGate:
         for canonical in to_canonical(tool):
             category = self._tool_categories.get(canonical)
             if category is not None and requires_human(self._policy, category):
+                if self._redeem(tool, args):
+                    return None
                 return category
         return None
+
+    def _redeem(self, tool: str, args: Any) -> bool:
+        """Canjea la autorización de esta acción exacta, si la hay.
+
+        ``action_fingerprint`` devuelve ``None`` cuando la acción no admite
+        representación canónica (args no serializables, ``NaN``): sin huella no
+        hay canje posible y se aparca, que es la dirección segura.
+        """
+        if not self._authorized:
+            return False
+        digest = action_fingerprint(tool, args)
+        if digest is None or self._authorized[digest] <= 0:
+            return False
+        self._authorized[digest] -= 1
+        return True

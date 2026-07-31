@@ -383,11 +383,18 @@ services:
   egress-proxy:
     build: ./egress-proxy
     container_name: agentic-egress-proxy
+    # prod-08 / deploy-9: el test terminaba en `|| true`, así que SIEMPRE
+    # devolvía 0 y el contenedor salía `healthy` con tinyproxy muerto. Como
+    # este proxy es la ÚNICA salida de los agent-runtimes hacia los LLM
+    # (ADR 0019), los agentes se quedaban sin red y el stack no delataba la
+    # causa. `|| exit 1` hace que el estado sea honesto y que `ServiceDown` /
+    # el watchdog puedan actuar. Guardado por
+    # tests/unit/test_compose_healthchecks_honest.py.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || exit 1",
         ]
       interval: 30s
       timeout: 5s
@@ -413,11 +420,15 @@ services:
   registry-proxy:
     build: ./registry-proxy
     container_name: agentic-registry-proxy
+    # prod-08 / deploy-9: mismo `|| true` que el egress-proxy (misma imagen
+    # tinyproxy, mismo copy-paste). Aquí un proxy muerto se manifiesta como
+    # builds/instalaciones de dependencias que fallan dentro de los
+    # runtime-templates sin causa aparente.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || exit 1",
         ]
       interval: 30s
       timeout: 5s

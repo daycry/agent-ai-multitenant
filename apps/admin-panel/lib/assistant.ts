@@ -282,17 +282,20 @@ export async function streamAssistantChat(
   onDelta?: (text: string) => void,
 ): Promise<AssistantChatResponse> {
   const { apiUrl } = await import("@/lib/api");
-  const { getToken } = await import("@/lib/auth");
+  const { CSRF_HEADER, getCsrfToken } = await import("@/lib/auth");
   const { getTenantId } = await import("@/lib/tenant-storage");
   const headers = new Headers({ "Content-Type": "application/json" });
-  const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  // Hand-rolled fetch (SSE, not JSON) so it repeats what `apiFetch` does:
+  // session by cookie + the CSRF proof, since this is a POST (ADR 0133).
+  const csrf = getCsrfToken();
+  if (csrf) headers.set(CSRF_HEADER, csrf);
   const tenantId = getTenantId();
   if (tenantId) headers.set("X-Tenant-Id", tenantId);
 
   const response = await fetch(apiUrl("/assistant/chat/stream"), {
     method: "POST",
     headers,
+    credentials: "include",
     body: JSON.stringify(
       conversationId ? { message, conversation_id: conversationId } : { message },
     ),

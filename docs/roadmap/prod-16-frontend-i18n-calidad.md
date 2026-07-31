@@ -130,7 +130,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 
 #### `task_prod16_01` — Infraestructura i18n: diccionario tipado + `useT()` + `<html lang>` + guard
 
-- [ ] **Título**: Crear `apps/admin-panel/lib/i18n/` con tipos `Lang`/claves
+- [x] **Título**: Crear `apps/admin-panel/lib/i18n/` con tipos `Lang`/claves
       por módulo, hook `useT(namespace)` sobre el `LanguageProvider`
       existente (`lib/lang-context.tsx`), efecto que sincroniza
       `document.documentElement.lang` con el idioma activo (hoy
@@ -157,6 +157,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `components/layout/admin-header.tsx` y la sidebar; eliminar los 63
       ternarios inline de los 12 ficheros que ya "traducen" a mano,
       moviéndolos a claves del diccionario.
+  - ⏳ **Pendiente (2026-07-31):** login, `select-tenant`, `no-access`, header y shell YA usan `useT()`, pero el spec `e2e/lang-toggle.spec.ts` que el plan exige no existe (y es Playwright, no ejecutable en esta pasada) y los ternarios inline no están eliminados: `check-i18n.mjs` cuenta 77 en 18 ficheros.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
   ```yaml
@@ -171,6 +172,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `tenants`, `tenant-stats`, `backup/*` (3 páginas), `settings/*`,
       `projects/*` y `agents/*` (las dos últimas con sus secciones). Reducir
       la allowlist de `check-i18n.mjs` en cada lote.
+  - ⏳ **Pendiente (2026-07-31):** solo `users` está migrada; `tenants`, `tenant-stats`, `backup/*`, `settings/*`, `projects/*` y `agents/*` siguen en la `ATTR_ALLOWLIST` de `check-i18n.mjs`, y su test (`e2e/lang-toggle-core.spec.ts`) es Playwright y no existe.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
@@ -186,6 +188,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       notifications, docs, assistant, tools, memories…) en lotes, vaciar la
       allowlist de `check-i18n.mjs` y hacer barrido final: con el toggle en
       EN no debe quedar ninguna cadena de UI en castellano (y viceversa).
+  - ⏳ **Pendiente (2026-07-31):** `node scripts/check-i18n.mjs --strict` sale 1 — quedan 77 ternarios en 18 ficheros y 136 atributos de UI en castellano en 73 ficheros; las dos allowlists están lejos de vaciarse.
 - **Tiempo**: 3 días · **Complejidad**: l · **Depende de**: `task_prod16_03`
 - **Tests automáticos**:
   ```yaml
@@ -198,7 +201,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 
 #### `task_prod16_05` — `errorText` único en `lib/api.ts` con humanización
 
-- [ ] **Título**: Extraer el helper duplicado en 13 ficheros (users, backup
+- [x] **Título**: Extraer el helper duplicado en 13 ficheros (users, backup
       ×3, llm-providers, model-prices, tenant-stats, marketplace, guardrails,
       eval-quality, ollama, platform-defaults, assistant/model-cards) a
       `lib/api.ts`. La versión común parsea el body JSON, extrae el `detail`
@@ -220,6 +223,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       colocadas (tabla, diálogos de edición, sync, filtros) siguiendo el
       patrón existente de `app/admin/agents/[id]/*-section.tsx`. Objetivo:
       `page.tsx` < 400 líneas, ninguna sección > 500.
+  - ⏳ **Pendiente (2026-07-31):** partida a medias por el tramo de modularización #9 (`679b4237`, 2026-07-10), no por prod-16 — `page.tsx` bajó a 512 líneas (el objetivo es < 400) y `model-price-dialogs.tsx` tiene 686 (el objetivo es ≤ 500); además el test que exige es Playwright.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_05`
 - **Tests automáticos**:
   ```yaml
@@ -235,6 +239,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `app/admin/projects/[id]/plans/[planId]/page.tsx`. Refactor mecánico:
       sin cambios de comportamiento, los specs e2e existentes deben pasar sin
       tocar sus aserciones.
+  - ⏳ **Pendiente (2026-07-31):** las dos páginas ya estaban partidas por el tramo de modularización #9 (`39072e22` y `415a2578`, 2026-07-09/10), no por prod-16: `mcp-servers/page.tsx` 249 líneas y `plans/[planId]/page.tsx` 153, pero `mcp-server-sections.tsx` quedó en 1125 líneas — ahí solo se movió el bulto — y la verificación que pide el plan es Playwright.
 - **Tiempo**: 1,5 días · **Complejidad**: m · **Depende de**: `task_prod16_06`
 - **Tests automáticos**:
   ```yaml
@@ -250,6 +255,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       agents/[id] (813) y notifications (810). Añadir a `check-i18n.mjs` (o
       script hermano `check-component-size.mjs`) un guard que falle si algún
       `page.tsx` supera 800 líneas, para que la deuda no vuelva a crecer.
+  - ⏳ **Pendiente (2026-07-31):** `scripts/check-component-size.mjs` no existe y siguen sobre 800 líneas nueve `page.tsx`: llm-providers 996, sso/saml 943, projects/[id]/chat 926, sso 915, teams/[team_id] 914, cortex/mind 914, tenant-stats 861, notifications 831 y agents/[id] 824.
 - **Tiempo**: 2,5 días · **Complejidad**: l · **Depende de**: `task_prod16_07`
 - **Tests automáticos**:
   ```yaml
@@ -267,6 +273,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       de `llm-providers/page.tsx` (6 interfaces) y `model-prices`. Si D3=B:
       eliminar el script y la dev-dep `openapi-typescript` de
       `apps/admin-panel/package.json`.
+  - ⏳ **Pendiente (2026-07-31):** D3 sin decidir y ninguna de las dos ramas ejecutada — no existe `apps/admin-panel/types/`, y `generate:api-types` + la dev-dep `openapi-typescript` siguen en `package.json`.
 - **Tiempo**: 1,5 días · **Complejidad**: m · **Depende de**: `task_prod16_08`
 - **Tests automáticos**:
   ```yaml
@@ -284,6 +291,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       modelos compartidos). Refactor puro: mismas rutas, mismos
       `response_model`, tests de integración SSO existentes en verde sin
       modificarlos.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `routers/sso.py` sigue siendo un solo fichero y ha CRECIDO a 1562 líneas (el plan lo midió en 1494); no existe el paquete `routers/sso/`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Coordinación**: **ejecutar después de mergear prod-09** (que modifica el
   callback OIDC/ACS para redirigir al panel) para no pisar su diff.
@@ -301,6 +309,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `llm.py`…), manteniendo `db/domain.py` como fachada de re-export para
       no romper los imports existentes. Verificar que `alembic` no detecta
       diferencias de esquema tras el refactor (autogenerate vacío).
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `db/domain.py` sigue monolítico y ha CRECIDO a 1768 líneas (el plan lo midió en 1506); no existe el paquete `db/models/` por agregados (`db/models.py`, 1183 líneas, es otra cosa: las 5 tablas de la fase 0) ni el test `tests/integration/test_alembic_autogenerate_clean.py`.
 - **Tiempo**: 1,5 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -320,6 +329,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       agents; un módulo por tipo de destino en backup_destinations). Tarea
       **recortable** si D4 lo decide; en ese caso documentar el aplazamiento
       en el changelog del plan.
+  - ⏳ **Pendiente (2026-07-31):** sin empezar y sin decidir D4 — los cuatro ficheros siguen enteros (`agents.py` 1461, `marketplace.py` 1465, `backup_destinations.py` 1392, `litellm_sync.py` 1338), y los dos routers han crecido respecto a lo que midió el plan.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_10`
 - **Coordinación**: `backup_destinations.py` lo toca prod-04 y
   `marketplace.py` lo tocan prod-03/prod-12 — ejecutar esta tarea la última

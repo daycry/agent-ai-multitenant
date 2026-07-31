@@ -45,6 +45,7 @@ provider is resolved by its global id, never by a tenant.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
@@ -55,6 +56,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
+from api_server.auth.cookies import issue_session_cookies
 from api_server.auth.deps import (
     AuthPrincipal,
     get_admin_session,
@@ -165,6 +167,90 @@ _SAML_ACS_PATH = "/auth/sso/saml/acs"
 # `oidc_login` / `saml_login` routes below.
 _OIDC_LOGIN_PATH_TEMPLATE = "/auth/sso/{provider_id}/oidc/login"
 _SAML_LOGIN_PATH_TEMPLATE = "/auth/sso/{provider_id}/saml/login"
+
+# ---------------------------------------------------------------------------
+# Landing in the PANEL after SSO (prod-09 task_prod09_09, frontend-1)
+# ---------------------------------------------------------------------------
+# Where the callback / ACS send the browser once the session cookie is set. The
+# panel page resolves the tenant (`resolveAndRoute`) and routes on.
+#
+# NOTE the topology (ADR 0061/0069): the PANEL sits at the ORIGIN ROOT and the
+# api-server under `api_path_prefix` (`/api`). So the landing origin is the
+# public base URL WITHOUT the API prefix — using `_effective_redirect_base()`
+# here would send the user to `https://host/api/auth/callback`, which the panel
+# does not serve.
+_PANEL_CALLBACK_PATH = "/auth/callback"
+
+
+class InvalidLandingOriginError(ValueError):
+    """The configured public base URL cannot be turned into a safe redirect."""
+
+
+def sso_landing_url(origin: str) -> str:
+    """``{origin}/auth/callback``, or raise if ``origin`` is not a plain origin.
+
+    The value comes from a System-Admin-writable platform setting
+    (``app.public_base_url``) with an env fallback, i.e. it is CONFIGURATION —
+    never a request parameter — so this is not an open-redirect gate in the
+    usual sense. It is still worth having: a redirect built from a mistyped or
+    tampered setting is how an open redirect (``//evil.example``), a phishing
+    authority (``https://good@evil.example``) or a header injection
+    (``\\r\\nSet-Cookie:``) would enter, and the failure is silent — the browser
+    just goes somewhere else with a fresh session cookie in hand.
+
+    Deliberately NOT ``urlparse``-only: ``urlparse("//evil.example")`` yields an
+    empty scheme and a netloc, which reads as "relative" and is exactly the case
+    that must be refused.
+    """
+    candidate = origin.strip()
+    if not candidate:
+        raise InvalidLandingOriginError("public base URL is empty")
+    if any(ch in candidate for ch in ("\r", "\n", "\t")):
+        raise InvalidLandingOriginError("public base URL contains control characters")
+    parsed = urlparse(candidate)
+    if parsed.scheme not in ("http", "https"):
+        raise InvalidLandingOriginError(f"unsupported scheme: {parsed.scheme!r}")
+    if not parsed.netloc:
+        raise InvalidLandingOriginError("public base URL has no host")
+    if "@" in parsed.netloc:
+        raise InvalidLandingOriginError("public base URL must not carry credentials")
+    return f"{candidate.rstrip('/')}{_PANEL_CALLBACK_PATH}"
+
+
+async def _effective_panel_origin() -> str:
+    """The PANEL's public origin — the same override chain as the SSO base URL,
+    minus the API path prefix (see :data:`_PANEL_CALLBACK_PATH`)."""
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        override = await get_app_public_base_url_override(session)
+    return (override or get_settings().sso_redirect_base_url).rstrip("/")
+
+
+async def _identity_session_redirect(sessions: SessionStore, *, user_id: UUID) -> RedirectResponse:
+    """Mint the identity session, put it in the cookie and BOUNCE to the panel.
+
+    This is frontend-1: the callback used to answer ``LoginResponse`` JSON, so a
+    user who logged in through their IdP landed on a page of raw JSON with the
+    access token in it and no session anywhere — the SSO flow simply had no last
+    mile. With the session in a cookie (ADR 0133) the last mile is a redirect:
+    the browser carries the credential on its own.
+
+    303 (not 302/307): the SAML ACS arrives as a POST, and only ``See Other``
+    guarantees the browser switches to GET for the landing page.
+    """
+    minted = await _issue_identity_session(sessions, user_id=user_id)
+    try:
+        landing = sso_landing_url(await _effective_panel_origin())
+    except InvalidLandingOriginError as exc:
+        # Fail LOUD. Silently falling back to some default origin would hand a
+        # fresh session cookie to whatever that origin happens to be.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="the platform public base URL is not a valid origin",
+        ) from exc
+    response = RedirectResponse(url=landing, status_code=status.HTTP_303_SEE_OTHER)
+    issue_session_cookies(response, token=minted.access_token, max_age_seconds=minted.expires_in)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -619,15 +705,20 @@ async def oidc_login(
 # ---------------------------------------------------------------------------
 # GET /auth/sso/oidc/callback
 # ---------------------------------------------------------------------------
-@router.get("/oidc/callback", response_model=LoginResponse)
+@router.get("/oidc/callback")
 async def oidc_callback(
     code: str = Query(...),
     state: str = Query(...),
     flow: OIDCFlow = Depends(get_oidc_flow),
     state_store: OIDCStateStore = Depends(get_oidc_state_store),
     sessions: SessionStore = Depends(get_session_store),
-) -> LoginResponse:
-    """Complete the OIDC login and mint an IDENTITY session (ADR 0047).
+) -> RedirectResponse:
+    """Complete the OIDC login, set the session cookie and land in the PANEL.
+
+    Answers a 303 to ``{panel}/auth/callback`` — NOT the ``LoginResponse`` JSON
+    it used to return (frontend-1: an SSO login ended on a page of raw JSON,
+    with the token in the address bar's page and no session anywhere).
+
 
     The single-use ``state`` carries the global provider that started the
     flow; we resolve THAT provider, assert it is still the enabled config,
@@ -677,7 +768,7 @@ async def oidc_callback(
         ) from exc
 
     user_id = await _provision_identity(email=userinfo.email, full_name=userinfo.full_name)
-    return await _issue_identity_session(sessions, user_id=user_id)
+    return await _identity_session_redirect(sessions, user_id=user_id)
 
 
 # ===========================================================================
@@ -764,7 +855,7 @@ async def saml_login(
 # ---------------------------------------------------------------------------
 # POST /auth/sso/saml/acs  (GLOBAL Assertion Consumer Service — ADR 0047)
 # ---------------------------------------------------------------------------
-@router.post("/saml/acs", response_model=LoginResponse)
+@router.post("/saml/acs")
 async def saml_acs(
     # The SAML spec names these form fields `SAMLResponse` / `RelayState`
     # (CamelCase, fixed by the binding). We accept those on the wire via
@@ -773,8 +864,9 @@ async def saml_acs(
     relay_state: str | None = Form(default=None, alias="RelayState"),
     relay_store: SAMLRelayStateStore = Depends(get_saml_relay_state_store),
     sessions: SessionStore = Depends(get_session_store),
-) -> LoginResponse:
-    """Consume a SAML ``SAMLResponse`` and mint an IDENTITY session (ADR 0047).
+) -> RedirectResponse:
+    """Consume a SAML ``SAMLResponse``, set the session cookie and land in the PANEL.
+
 
     The ACS is GLOBAL (one SP identity for the platform). Handles BOTH
     bindings of arrival:
@@ -835,7 +927,7 @@ async def saml_acs(
         ) from exc
 
     user_id = await _provision_identity(email=userinfo.email, full_name=userinfo.full_name)
-    return await _issue_identity_session(sessions, user_id=user_id)
+    return await _identity_session_redirect(sessions, user_id=user_id)
 
 
 async def _issue_identity_session(sessions: SessionStore, *, user_id: UUID) -> LoginResponse:

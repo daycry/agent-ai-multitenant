@@ -5,6 +5,31 @@
 groups:
   - name: agentic-app
     rules:
+      # prod-08 Fase B: LA alerta que faltaba. `up` la sintetiza Prometheus en
+      # cada scrape (1 = el target respondió, 0 = no). Hasta 2026-07-31 no
+      # había ninguna regla sobre ella, así que un servicio caído —incluido el
+      # api-server— no disparaba absolutamente nada: todas las demás alertas de
+      # este fichero se apoyan en métricas que un servicio muerto deja de
+      # emitir, y una métrica AUSENTE no dispara ninguna regla. «No data» y
+      # «todo bien» eran indistinguibles.
+      #
+      # `critical` a propósito: es la clase que alertmanager.yml enruta también
+      # al receiver de respaldo email/Slack. Si el caído es el api-server, la
+      # notificación por la plataforma no puede entregarse a sí misma.
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "El target {{ $labels.job }} ({{ $labels.instance }}) no responde"
+          description: >-
+            Prometheus lleva 2 minutos sin poder scrapear {{ $labels.instance }}
+            del job {{ $labels.job }}. Si es api-server, la plataforma está
+            caída para los usuarios. Si es node-exporter, se han ido con él
+            TODAS las métricas de aplicación (viajan por su textfile
+            collector). Comprueba `docker compose ps` y los logs del servicio.
+
       # Una cola Celery creciendo = ningún worker la drena (worker caído,
       # cola sin consumidor — el caso notifications.* muerto en dev de
       # 2026-07-10) o backlog fuera de control.

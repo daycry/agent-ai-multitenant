@@ -47,3 +47,30 @@ scrape_configs:
   - job_name: cadvisor
     static_configs:
       - targets: ["cadvisor:8080"]
+
+  # ---------------------------------------------------------------------------
+  # Métricas de APLICACIÓN (prod-08 Fase B — hallazgo observability-2).
+  #
+  # Hasta 2026-07-31 aquí solo había infraestructura, y eso dejaba un agujero
+  # que no se ve a simple vista: `up` es una serie que Prometheus SINTETIZA por
+  # cada target scrapeado. Sin target no hay serie, y sin serie la regla
+  # `ServiceDown` (`up == 0`) no puede escribirse. Es decir: un api-server
+  # caído no disparaba ninguna alerta; el operador se enteraba porque la UI
+  # dejaba de cargar.
+  #
+  # Alcanzable por nombre DNS dentro de `agentic-net`. El endpoint no publica
+  # puerto al host y no expone datos de tenant (solo agregados de proceso).
+  # ---------------------------------------------------------------------------
+  - job_name: api-server
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api-server:8000"]
+
+  # NOTA sobre los workers: NO se scrapean por HTTP a propósito. Celery corre en
+  # modo prefork (N procesos hijos), así que un `start_http_server` por proceso
+  # se pelearía por el puerto y expondría el estado de UN hijo al azar. Sus
+  # métricas viajan por el textfile-collector de node-exporter
+  # (`workers/queue_metrics.py`, muestreo cada 30s), que consulta la BD y el
+  # broker y por tanto ve el sistema entero. Que el worker esté vivo se detecta
+  # con `MetricsSamplerStale` (el heartbeat del sampler), no con `up`. Ver el
+  # ADR 0141.

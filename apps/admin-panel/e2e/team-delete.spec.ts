@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for team delete with confirm-by-name (Plan 06.6 task_06_6_09).
@@ -21,9 +22,7 @@ const TEAM_FIXTURE = {
 };
 
 async function setup(page: Page, opts: { onDelete?: () => void } = {}): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/teams/${TEAM_ID}`, async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
@@ -67,9 +66,7 @@ test("confirm disabled until name matches; matching name fires DELETE", async ({
 
 test("builtin team hides edit/delete buttons", async ({ page }) => {
   const builtin = { ...TEAM_FIXTURE, is_builtin: true };
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/teams/${TEAM_ID}`, (route) =>
     route.fulfill({
       status: 200,

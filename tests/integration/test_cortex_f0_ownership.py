@@ -70,12 +70,26 @@ async def _truncate_users(dsn: str) -> None:
 
 
 async def _register(client: AsyncClient, email: str) -> dict:
+    """Alta del PRIMER usuario por la puerta de arranque (ADR 0134).
+
+    Solo vale con la tabla ``users`` vacía. Para los siguientes hay
+    :func:`_seed_extra_user`, porque desde el ADR 0134 el registro está cerrado
+    y el segundo usuario ya no puede darse de alta por aquí.
+    """
     resp = await client.post(
         "/auth/register",
         json={"email": email, "password": "Sup3r-secret-pw!", "full_name": email.split("@")[0]},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _seed_extra_user(dsn: str, email: str) -> dict:
+    """Un usuario NO-primero, sembrado directamente (ver ``_user_seeding``)."""
+    from tests.integration._user_seeding import seed_user
+
+    user_id = await seed_user(dsn, email, "Sup3r-secret-pw!", full_name=email.split("@")[0])
+    return {"id": user_id, "is_system_owner": False, "is_system_admin": False}
 
 
 async def _login_me(client: AsyncClient, email: str) -> dict:
@@ -96,7 +110,7 @@ async def test_first_user_is_system_owner_second_is_not(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
         alice = await _register(client, "alice@acme.io")
-        bob = await _register(client, "bob@acme.io")
+        bob = await _seed_extra_user(migrations_pg_dsn, "bob@acme.io")
         # Bootstrap: the very first user is the owner (and admin); the rest are not.
         assert alice["is_system_owner"] is True
         assert alice["is_system_admin"] is True
@@ -115,7 +129,7 @@ async def test_system_owner_is_a_singleton(configured_app, migrations_pg_dsn: st
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
         await _register(client, "alice@acme.io")  # owner
-        bob = await _register(client, "bob@acme.io")
+        bob = await _seed_extra_user(migrations_pg_dsn, "bob@acme.io")
 
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
@@ -144,7 +158,7 @@ async def test_require_system_owner_gate_checks_the_db(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
         alice = await _register(client, "alice@acme.io")
-        bob = await _register(client, "bob@acme.io")
+        bob = await _seed_extra_user(migrations_pg_dsn, "bob@acme.io")
 
     owner_principal = AuthPrincipal(
         user_id=UUID(alice["id"]), session_id=uuid7(), tenant_id=None, is_system_owner=True

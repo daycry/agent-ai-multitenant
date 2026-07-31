@@ -146,6 +146,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_01` — Hardening en TODA la superficie `/admin/*`
 
 - [ ] **Título**: Aplicar `require_hardened_system_admin` a los 9 routers admin restantes + test de contrato (authz-1)
+  - ⏳ **Pendiente (2026-07-31):** implementado y con 5 de los 6 tests de `test_admin_hardening_surface.py` en verde, pero `test_dev_does_not_over_enforce_the_widened_surface` está ROJO en local (el handler muere con `InsufficientPrivilegeError` sobre `platform_settings` porque `service_user` no tiene GRANT en la BD dev).
 - **Tiempo**: 8 h · **Complejidad**: m
 - Cablear `dependencies=[Depends(require_hardened_system_admin)]` en los
   `APIRouter` de `routers/backup.py:61` (prioritario: restore destructivo),
@@ -166,7 +167,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 
 #### `task_prod09_02` — Guard fail-closed para el secreto JWT y el entorno
 
-- [ ] **Título**: `environment` como enum cerrado + rechazo del secreto default salvo `dev` explícito (authz-2)
+- [x] **Título**: `environment` como enum cerrado + rechazo del secreto default salvo `dev` explícito (authz-2)
 - **Tiempo**: 4 h · **Complejidad**: s
 - En `config.py`: (1) validar `environment` contra `{dev, staging, prod}` y
   fallar el arranque ante valores no reconocidos (hoy `config.py:377` los trata
@@ -186,6 +187,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_03` — Separar el secreto de tokens internos de workers
 
 - [ ] **Título**: `internal_token_secret` dedicado para `AGENTIC_INTERNAL_TOKEN` (secrets-9)
+  - ⏳ **Pendiente (2026-07-31):** el código y sus tests están (firma/verificación con el secreto dedicado), pero la decisión vive en el **ADR 0136, aún `proposed`**, y el contrato de despliegue de `docker/docker-compose.yml:54-66` sigue diciendo que el worker solo necesita `API_SERVER_JWT_SECRET`.
 - **Tiempo**: 8 h · **Complejidad**: m
 - Nuevo setting `internal_token_secret` (sin default en staging/prod, sujeto al
   guard de task_prod09_02). `auth/internal_agent.py:112,138` firma y verifica
@@ -204,7 +206,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 
 #### `task_prod09_04` — Revocación inmediata de privilegios de System Admin
 
-- [ ] **Título**: Re-verificar `is_system_admin` contra BD + revocar sesiones al cambiar el flag (authz-4)
+- [x] **Título**: Re-verificar `is_system_admin` contra BD + revocar sesiones al cambiar el flag (authz-4)
 - **Tiempo**: 6 h · **Complejidad**: m
 - En `auth/deps.py:170`, `require_system_admin` re-verifica `users.is_system_admin`
   por PK (lectura barata, ya se hace en `/auth/me`) en vez de fiarse solo del
@@ -222,6 +224,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_05` — `/auth/register` con rate limit y login constant-time
 
 - [ ] **Título**: Rate limit por IP en register + verificación Argon2 dummy + setting de auto-registro (authz-6, authz-7)
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `register` no inyecta el `RateLimiter`, no hay hash Argon2 dummy en `login` ni setting `allow_self_registration` (y su default lo decide el **ADR 0134, `proposed`**); tampoco existen los dos ficheros de test.
 - **Tiempo**: 6 h · **Complejidad**: s
 - (1) Inyectar el `RateLimiter` existente (patrón de `routers/auth.py:217-255`)
   en `register` (`auth.py:169-211`) con ventana por IP. (2) En `login`
@@ -242,6 +245,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_06` — ADR: almacenamiento de sesión del panel y auto-registro
 
 - [ ] **Título**: ADR `docs/05-architecture-decisions/` con opciones A/B de la Decisión 1 + Decisión 4, para aprobación humana
+  - ⏳ **Parcial (2026-07-31):** el **ADR 0133** (sesión del panel) está **`accepted`** — el operador eligió la Opción A, cookie `httpOnly+Secure+SameSite=Lax` con doble-submit CSRF, y sus dos condiciones (helper para los ~93 specs e2e y validación de `Origin` en el WS en la MISMA entrega) son vinculantes y están cumplidas. El **ADR 0134** (auto-registro) sigue `proposed`, así que la casilla no cierra.
 - **Tiempo**: 4 h · **Complejidad**: s
 - Documentar cookie httpOnly+CSRF (A, recomendada) vs localStorage+CSP (B), el
   handoff SSO asociado a cada opción y el default de `allow_self_registration`.
@@ -250,7 +254,8 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 
 #### `task_prod09_07` — Backend: sesión por cookie httpOnly + CSRF
 
-- [ ] **Título**: Emitir la sesión como cookie `httpOnly+Secure+SameSite=Lax` con doble-submit CSRF (frontend-2, secrets-10)
+- [x] **Título**: Emitir la sesión como cookie `httpOnly+Secure+SameSite=Lax` con doble-submit CSRF (frontend-2, secrets-10)
+  - ✅ **Hecho (2026-07-31):** `auth/cookies.py` (nuevo) emite `agentic_session` httpOnly+Secure+SameSite=Lax y `agentic_csrf` legible; `get_principal` acepta cookie **además** de Bearer (`read_credential`) y exige `X-CSRF-Token` en toda mutación autenticada POR COOKIE; login, `session/resolve`, `select-tenant`, `mfa/totp/verify`, `mfa/webauthn/login/finish` y el callback SSO emiten la cookie, y `logout` la expira. El `access_token` se conserva en el cuerpo: es la pata de compatibilidad de `curl`/SDK/`scripts/`, y el agujero era `localStorage`, no la respuesta del login. `auto_prod09_07_a` ejecutado: **9 passed**.
 - **Tiempo**: 12 h · **Complejidad**: l
 - Depende de: `task_prod09_06`. En `routers/auth.py` (login, select-tenant,
   logout): `Set-Cookie` httpOnly con el token de sesión + cookie legible de
@@ -268,6 +273,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_08` — Frontend: eliminar localStorage y gate en middleware
 
 - [ ] **Título**: `middleware.ts` de Next + `apiFetch` con `credentials: 'include'` + retirar `getToken`/`localStorage` (frontend-2, secrets-10)
+  - ⏳ **Implementado, e2e SIN EJECUTAR (2026-07-31):** existe `apps/admin-panel/middleware.ts` (gate de `/admin/*`, `/select-tenant` y `/no-access`, con `?next=`), `lib/api.ts` va con `credentials:'include'` + `X-CSRF-Token`, y `lib/auth.ts` **ya no exporta `getToken`/`setToken`/`clearToken`** (cero ocurrencias de `agentic.token` fuera de comentarios). Los ~93 specs e2e migrados MECÁNICAMENTE con `e2e/helpers/session.ts` (condición 1 del ADR): 100 llamadas a `seedSession` en 92 ficheros. `auto_prod09_08_a` (vitest) verde: **72 passed** en 10 ficheros. `auto_prod09_08_b` es Playwright y **no se ha ejecutado** — no hay navegador en este entorno; la casilla no cierra hasta que alguien corra la suite.
 - **Tiempo**: 12 h · **Complejidad**: l
 - Depende de: `task_prod09_07`. Sustituir `lib/auth.ts:9-13` (localStorage) y el
   Bearer de `lib/api.ts:54-57` por cookies; añadir cabecera CSRF en mutaciones;
@@ -287,6 +293,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_09` — SSO end-to-end: del IdP al panel con sesión
 
 - [ ] **Título**: Callback OIDC y ACS SAML redirigen al panel con la sesión, en vez de devolver JSON crudo (frontend-1)
+  - ⏳ **Implementado, e2e SIN EJECUTAR (2026-07-31):** `oidc_callback` y `saml_acs` devuelven **303** a `{panel}/auth/callback` con `Set-Cookie`, ya no `LoginResponse` JSON; el destino lo construye `sso_landing_url()`, que rechaza esquemas no-http(s), `//protocol-relative`, credenciales en la autoridad y CR/LF (anti open-redirect y anti response-splitting). Página nueva `app/auth/callback/page.tsx` que llama a `resolveAndRoute()`. `auto_prod09_09_a` ejecutado: **1 passed** (`test_sso_callback_redirect.py`). `auto_prod09_09_b` es Playwright y **no se ha ejecutado**.
 - **Tiempo**: 12 h · **Complejidad**: l
 - Depende de: `task_prod09_07`. En `routers/sso.py` (callback OIDC :602-660, ACS
   SAML :747-818, `_issue_identity_session` :845): sustituir el `LoginResponse`
@@ -309,6 +316,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_10` — Manejo global de 401 y expiración de sesión
 
 - [ ] **Título**: 401 centralizado → limpiar sesión + redirect a `/login` conservando la ruta; usar `expires_in` (frontend-3)
+  - ⏳ **Implementado, e2e SIN EJECUTAR (2026-07-31):** `lib/api.ts` trata el 401 en un solo sitio (limpia la cookie CSRF + el tenant y llama a un handler inyectado); `app/providers.tsx` lo cablea a `queryClient.clear()` + `router.replace('/login?next=…')`, y `app/login/page.tsx` honra el `?next=` filtrado por `safeNextRoute()` (rechaza absolutas, `//` y `/\\`). El 401 de `/auth/login` y `/auth/mfa/*` NO redirige: es la respuesta normal a una contraseña mala, y rebotar a `/login` desde `/login` se come el mensaje de error. Acreditado por vitest (`lib/api.test.ts`, 8 tests, con ciclo rojo-verde de las tres aserciones clave) — pero `auto_prod09_10_a` es Playwright y **no se ha ejecutado**.
 - **Tiempo**: 6 h · **Complejidad**: m
 - En `lib/api.ts:74-77` (o `QueryCache.onError` en `app/providers.tsx:13`):
   ante 401, limpiar sesión/tenant, `queryClient.clear()` y redirect a
@@ -326,6 +334,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_11` — Purga de caché TanStack en logout y cambio de identidad
 
 - [ ] **Título**: `queryClient.clear()` en logout; `resetQueries` en cambio de tenant (frontend-4)
+  - ⏳ **Implementado, e2e SIN EJECUTAR (2026-07-31):** `lib/session-cache.ts` (nuevo) expone `purgeSessionCache()` —llamado desde el logout de `components/layout/admin-header.tsx` y de `app/no-access/page.tsx`, y desde el 401 global— y `resetTenantScopedQueries()`, que sustituye el `invalidateQueries` de `lib/tenant-context.tsx` por `resetQueries` (invalidar seguía sirviendo las filas del tenant SALIENTE hasta que aterrizaba el refetch). `auto_prod09_11_a` es Playwright y **no se ha ejecutado**.
 - **Tiempo**: 3 h · **Complejidad**: s
 - En `components/layout/admin-header.tsx:48-58` y `app/no-access/page.tsx:35-46`
   añadir `queryClient.clear()` al logout (hoy la caché sobrevive en el root
@@ -344,6 +353,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 #### `task_prod09_12` — Ticket WS efímero de un solo uso (fuera el `?token=`)
 
 - [ ] **Título**: `POST /ws/ticket` autenticado → nonce Redis TTL 30 s canje único; los 4 endpoints `/ws/*` aceptan `?ticket=` (api-8, frontend-5, tenancy-4)
+  - ⏳ **El ADR 0133 la deja sin objeto; su OBJETIVO está cumplido (2026-07-31):** con la sesión en cookie el handshake la lleva solo, así que `lib/ws.ts` **ya no adjunta el JWT a la URL** (`?token=` retirado; queda `?tenant_id=`, que no es secreto) y el ticket deja de hacer falta — el propio ADR lo anticipa («hace innecesario el ticket WS de `task_prod09_12`»). Lo que SÍ era obligatorio, y entra en la misma entrega, es la **condición 2**: los 8 handlers `/ws/*` que autentican con la sesión (5 de `ws.py` + `cortex_ws` + `cortex_voice` + `assistant_voice`) validan `Origin` contra `cors_allowed_origins` ∪ el origen público propio derivado de `Host`/`X-Forwarded-Proto`, cerrando el CSWSH que la cookie abriría. Sin eso la migración habría dejado el WebSocket PEOR que antes. Tests: `tests/unit/test_ws_origin_gate.py` (11) + `tests/unit/test_ws_origin_gate_wired.py` (guarda estática que falla si un handler resuelve el principal por su cuenta) — **12 passed**, con ciclo rojo-verde comprobado desactivando el gate en `cortex_ws`. **Cerrar o cancelar esta casilla es decisión del operador**: el `POST /ws/ticket` literal no existe y, según el ADR, no debería.
 - **Tiempo**: 10 h · **Complejidad**: m
 - Endpoint REST autenticado que deposita un nonce en Redis ligado a
   `(user_id, session_id)`; `_resolve_principal` en `routers/ws.py:85-118` canjea
@@ -361,7 +371,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 
 #### `task_prod09_13` — Re-validación periódica de sesiones WS
 
-- [ ] **Título**: `_pump` re-comprueba sesión Redis y expiración cada N segundos; cierre 1008 al revocarse (authz-3)
+- [x] **Título**: `_pump` re-comprueba sesión Redis y expiración cada N segundos; cierre 1008 al revocarse (authz-3)
 - **Tiempo**: 6 h · **Complejidad**: m
 - En `routers/ws.py:136-184`, el bucle XREAD re-valida cada ~30 s (configurable)
   que la sesión sigue viva y el token/ticket no ha expirado, cerrando con 1008
@@ -379,7 +389,7 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 
 #### `task_prod09_14` — Security headers + `/docs` condicional en FastAPI
 
-- [ ] **Título**: Middleware de cabeceras (nosniff, frame-deny, Referrer-Policy; HSTS con TLS) y Swagger UI apagado en producción (api-7)
+- [x] **Título**: Middleware de cabeceras (nosniff, frame-deny, Referrer-Policy; HSTS con TLS) y Swagger UI apagado en producción (api-7)
 - **Tiempo**: 4 h · **Complejidad**: s
 - En `main.py:243-253`: middleware ligero que añade `X-Content-Type-Options:
 nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
@@ -396,6 +406,7 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
 #### `task_prod09_15` — Cabeceras en `next.config.js` + build fail-fast
 
 - [ ] **Título**: `headers()` con CSP, `frame-ancestors 'none'`, nosniff y Referrer-Policy; assert de `NEXT_PUBLIC_API_URL` en build prod (frontend-6, frontend-8)
+  - ⏳ **Pendiente (2026-07-31):** implementado (`next.config.js` + `lib/security-headers.js`, con `lib/security-headers.test.ts` en verde: 23 tests), pero el test que el plan exige es el e2e de Playwright `e2e/security-headers.spec.ts`, que no existe ni se ha corrido.
 - **Tiempo**: 8 h · **Complejidad**: m
 - En `apps/admin-panel/next.config.js:8-12`: `async headers()` con CSP
   restrictiva (calibrar para Next/mermaid: nonce o hashes, evitar
@@ -417,6 +428,7 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
 #### `task_prod09_16` — Anti-replay en webhooks entrantes
 
 - [ ] **Título**: Ventana de frescura + clave de dedup obligatoria para entregas sin `delivery_id` (authz-5)
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — `webhooks/signatures.py` no verifica ventana de timestamp y un origen `generic` sin cabecera de delivery sigue con `delivery_id=NULL` (replay infinito); falta el test de integración.
 - **Tiempo**: 8 h · **Complejidad**: m
 - En `webhooks/signatures.py:148-186` y `routers/incoming_webhooks.py:229-281`:
   (1) verificar timestamp dentro de una ventana cuando el origen lo soporte,
@@ -434,7 +446,7 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
 
 #### `task_prod09_17` — Una sola pila JOSE: migrar a `joserfc`
 
-- [ ] **Título**: `auth/jwt.py` con `joserfc`; retirar `python-jose`, su override mypy y `types-python-jose` (quality-10)
+- [x] **Título**: `auth/jwt.py` con `joserfc`; retirar `python-jose`, su override mypy y `types-python-jose` (quality-10)
 - **Tiempo**: 6 h · **Complejidad**: m
 - Depende de: `task_prod09_03` (toca los mismos módulos de firma). Migrar la
   superficie estrecha (`jwt.encode`/`jwt.decode`/`JWTError`) de
@@ -454,6 +466,7 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
 #### `task_prod09_18` — Documentación de sesión y autorización
 
 - [ ] **Título**: Actualizar `docs/04-reference/` (auth/sesiones, matriz admin endurecida, tickets WS) y runbook de lockout admin
+  - ⏳ **Pendiente (2026-07-31):** sin empezar — no hay referencia de sesiones/tickets WS en `docs/04-reference/` ni runbook de recuperación de lockout admin en `docs/06-runbooks/` (y el gate es revisión humana).
 - **Tiempo**: 6 h · **Complejidad**: s
 - Documentar: flujo de sesión por cookie + CSRF, handoff SSO, ciclo de vida del
   ticket WS, separación de secretos (`jwt_secret` vs `internal_token_secret`,

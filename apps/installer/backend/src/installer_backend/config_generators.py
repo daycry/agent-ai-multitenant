@@ -118,6 +118,13 @@ class GeneratedSecrets:
     minio_root_user: str
     minio_root_password: str
     jwt_secret: str
+    # ADR 0136: secreto DEDICADO para los tokens internos del sandbox
+    # (`AGENTIC_INTERNAL_TOKEN`), independiente de `jwt_secret`. Antes uno solo
+    # firmaba las sesiones humanas Y los tokens del sandbox, y como quien mintea
+    # el del sandbox es el WORKER, comprometerlo permitía forjar la sesión de
+    # cualquier System Admin. `config.py` tiene una guarda que rechaza el arranque
+    # si los dos coinciden, así que este draw tiene que ser independiente.
+    internal_token_secret: str
     # NOTIF-2 / prod-08: Bearer que Alertmanager presenta en
     # /internal/alerts/ingest (API_SERVER_ALERTS_INGEST_TOKEN). El lado
     # Alertmanager (http_config.authorization en su yml) se templetiza en
@@ -153,6 +160,7 @@ def generate_secrets() -> GeneratedSecrets:
         minio_root_user=f"minio-{secrets.token_hex(8)}",
         minio_root_password=_token(),
         jwt_secret=_token(),
+        internal_token_secret=_token(),
         alerts_ingest_token=_token(),
         review_url_signing_secret=_token(),
         sso_encryption_key=_token(),
@@ -232,6 +240,11 @@ def build_env_vars(
         # --- api-server secrets (API_SERVER_ prefixed) ---
         "API_SERVER_ENVIRONMENT": runtime_env,
         "API_SERVER_JWT_SECRET": secrets_.jwt_secret,
+        # ADR 0136. Lleva prefijo `API_SERVER_` aunque el WORKER también lo
+        # necesite: quien mintea el token del sandbox es el worker, pero lo hace
+        # importando `mint_agent_token` del paquete del api-server, así que lee
+        # `api_server.config` y por tanto las variables `API_SERVER_*`.
+        "API_SERVER_INTERNAL_TOKEN_SECRET": secrets_.internal_token_secret,
         "API_SERVER_ALERTS_INGEST_TOKEN": secrets_.alerts_ingest_token,
         "API_SERVER_REVIEW_URL_SIGNING_SECRET": secrets_.review_url_signing_secret,
         "API_SERVER_SSO_ENCRYPTION_KEY": secrets_.sso_encryption_key,

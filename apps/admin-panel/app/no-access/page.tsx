@@ -18,7 +18,8 @@ import { ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
+import { clearClientSession, hasSession } from "@/lib/auth";
+import { purgeSessionCache } from "@/lib/session-cache";
 import { useT } from "@/lib/i18n";
 import { clearTenantId } from "@/lib/tenant-storage";
 
@@ -28,9 +29,11 @@ export default function NoAccessPage() {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
-  // A direct hit with no token is meaningless — bounce to login.
+  // `middleware.ts` already bounces a session-less visitor before this page
+  // is served; this is the belt-and-braces case where the session died between
+  // the navigation and the render.
   useEffect(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       router.replace("/login");
     }
   }, [router]);
@@ -42,8 +45,9 @@ export default function NoAccessPage() {
     } catch (err) {
       if (!(err instanceof ApiError)) console.error(err);
     } finally {
-      clearToken();
+      clearClientSession();
       clearTenantId();
+      purgeSessionCache();
       router.replace("/login");
     }
   }

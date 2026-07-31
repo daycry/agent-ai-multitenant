@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/guardrails — the tenant guardrails dashboard (Plan 11
@@ -92,13 +93,7 @@ const DASHBOARD = {
 };
 
 async function setupAdmin(page: Page, me: unknown = TENANT_ADMIN): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(me) }),

@@ -12,6 +12,15 @@ estimated_cost_ai_eur: 100 € – 180 €
 created_by: system_architect
 spec_sections_referenced: [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]
 docs_language: es
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: 10-asistente-personal y 11-guardrails-precios
+  reason: >-
+    Los dos bloqueantes entregados y en `pending_human_validation`. **El override ya
+    lo había escrito un humano** en el campo duplicado de la cabecera, igual que en
+    `15-instalador-produccion`, y se rescató antes de la limpieza.
 ---
 
 # Plan 16 — Human Agents y Workflows Mixtos Humano-IA

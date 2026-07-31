@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/llm-providers — the System-Admin 'Proveedores LLM'
@@ -88,13 +89,7 @@ async function setup(
   page: Page,
   listRows: unknown[] = [OLLAMA_PROVIDER, COPILOT_PROVIDER],
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({

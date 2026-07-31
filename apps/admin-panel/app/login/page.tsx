@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useState } from "react";
 import { Sparkles } from "lucide-react";
 
@@ -12,9 +12,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
-import { setToken } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
-import { resolveAndRoute } from "@/lib/session";
+import { HOME_ROUTE, resolveAndRoute } from "@/lib/session";
 
 interface LoginResponse {
   access_token: string;
@@ -34,8 +33,25 @@ function isMfaRequired(data: LoginResponse | MfaRequiredResponse): data is MfaRe
   return (data as MfaRequiredResponse).status === "mfa_required";
 }
 
+/**
+ * A `?next=` worth honouring: a SERVER-RELATIVE path, nothing else.
+ *
+ * The parameter is written by `middleware.ts` and by the global 401 handler,
+ * but it arrives in the URL, so it is attacker-supplied by definition. A bare
+ * "starts with /" check is not enough: `//evil.example` also starts with a
+ * slash and the browser reads it as protocol-relative — the classic open
+ * redirect, here pointed at a freshly authenticated session.
+ */
+export function safeNextRoute(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/")) return null;
+  if (raw.startsWith("//") || raw.startsWith("/\\")) return null;
+  return raw;
+}
+
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   // i18n vía diccionario (prod-16 `task_prod16_01`). Antes esta pantalla
   // mezclaba los dos idiomas a mano: "Sign in" junto a "Panel de
   // administración multi-tenant" (hallazgo frontend-9).
@@ -48,14 +64,20 @@ export default function LoginPage() {
   // tarjeta muestra el paso de código en lugar del formulario de password.
   const [mfaToken, setMfaToken] = useState<string | null>(null);
 
-  async function completeSession(data: LoginResponse) {
+  async function completeSession(_data: LoginResponse) {
     // The login token proves IDENTITY only (no tenant yet). Resolve the
     // user's memberships to decide where to land: enter the tenant
     // directly (single), pick one (multiple) or the no-access screen
     // (none) — ADR 0047 / task_sso_03.
-    setToken(data.access_token);
-    const next = await resolveAndRoute();
-    router.push(next);
+    // ADR 0133: the session arrived as an httpOnly cookie in this very
+    // response — there is nothing to store. `data.access_token` is the
+    // API-client compatibility leg and the panel must ignore it.
+    const resolved = await resolveAndRoute();
+    // Come back to where the user was when the session expired — but only if
+    // the resolution says they belong in the app at all (a user routed to the
+    // tenant picker or the no-access screen must NOT be bounced past it).
+    const wanted = safeNextRoute(searchParams.get("next"));
+    router.push(wanted && resolved === HOME_ROUTE ? wanted : resolved);
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {

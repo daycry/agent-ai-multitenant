@@ -29,7 +29,7 @@ from uuid import UUID
 
 import structlog
 from api_server.auth.internal_agent import mint_agent_token
-from api_server.db.approval_repo import request_approval_if_needed
+from api_server.db.approval_repo import read_approved_actions, request_approval_if_needed
 from api_server.db.domain import Plan, Project, Task, TaskStatus
 from api_server.db.execution_repo import (
     create_running_execution,
@@ -136,6 +136,7 @@ def _build_runtime_env(
     conversation_thread: bool = False,
     reflection_assess: bool = False,
     code_diff: str | None = None,
+    approved_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -160,23 +161,27 @@ def _build_runtime_env(
     (backward-compat, el comportamiento actual). El runtime también degrada con
     gracia si el token expira o el api-server no responde.
     """
-    env: dict[str, str] = {
-        "AGENT_TASK_SPEC": json.dumps(
-            _agent_spec(
-                request,
-                approval_policy,
-                model_spec=model_spec,
-                acceptance_criteria=acceptance_criteria,
-                wall_clock_budget_s=wall_clock_budget_s,
-                max_iterations_budget=max_iterations_budget,
-                max_tokens_budget=max_tokens_budget,
-                guardrails=guardrails,
-                conversation_thread=conversation_thread,
-                reflection_assess=reflection_assess,
-                code_diff=code_diff,
-            )
-        ),
-    }
+    spec = _agent_spec(
+        request,
+        approval_policy,
+        model_spec=model_spec,
+        acceptance_criteria=acceptance_criteria,
+        wall_clock_budget_s=wall_clock_budget_s,
+        max_iterations_budget=max_iterations_budget,
+        max_tokens_budget=max_tokens_budget,
+        guardrails=guardrails,
+        conversation_thread=conversation_thread,
+        reflection_assess=reflection_assess,
+        code_diff=code_diff,
+    )
+    # ADR 0135: las acciones que un humano YA aprobó en esta task. Sin esto,
+    # aprobar no autorizaba nada — el gate del sandbox, que no tiene BD ni
+    # memoria entre runs, volvía a aparcar la MISMA acción y el bucle no tenía
+    # techo. Solo se emite la clave cuando hay algo autorizado: «sin clave» es
+    # el comportamiento de siempre para un primer despacho.
+    if approved_actions:
+        spec["approved_actions"] = approved_actions
+    env: dict[str, str] = {"AGENT_TASK_SPEC": json.dumps(spec)}
     # Sin agente asignado no hay sujeto para el token: lo dejamos fuera y el
     # runtime mantiene su comportamiento sin API interna (backward-compat).
     if request.agent_id:
@@ -1013,6 +1018,9 @@ class _PreparedRun:
 
     execution_id: UUID
     approval_policy: dict[str, Any] | None
+    # ADR 0135: las acciones que un humano ya aprobó en ESTA task, por huella
+    # canónica — el gate del sandbox las canjea en vez de re-aparcarlas.
+    approved_actions: list[dict[str, Any]]
     # ADR 0102 D3: config de guardrails resuelta (plataforma+proyecto) o None.
     guardrails: dict[str, Any] | None
     # (tenant_slug, project_slug, project_id, plan_id, plan_slug) del worktree RW
@@ -1096,6 +1104,15 @@ async def _prepare_run(
     project = await session.get(Project, task.project_id)
     approval_policy = await _resolve_effective_approval_policy(session, project)
     guardrails_config = await _resolve_effective_guardrails(session, project)
+    # ADR 0135: lo que un humano ya autorizó en esta task viaja al run siguiente.
+    # SOLO al implementador: un run de REVIEW propone sus propias acciones y
+    # nadie aprobó ninguna para él — canjearle las del implementador sería darle
+    # una capacidad que ningún revisor leyó.
+    approved_actions: list[dict[str, Any]] = []
+    if not request.review:
+        approved_actions = await read_approved_actions(
+            session, task_id=task_id, tenant_id=tenant_id
+        )
     # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
     # materialise the task's git worktree. An IMPLEMENTER run gets a fresh RW
     # worktree; a REVIEW run mounts the implementer's existing worktree READ-ONLY
@@ -1153,6 +1170,7 @@ async def _prepare_run(
     return _PreparedRun(
         execution_id=execution.id,
         approval_policy=approval_policy,
+        approved_actions=approved_actions,
         guardrails=guardrails_config,
         worktree_inputs=worktree_inputs,
         review_worktree=review_worktree,
@@ -1341,6 +1359,9 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             max_tokens_budget=settings.agent_max_tokens_for_kind(
                 resolved_kind, is_review=request.review
             ),
+            # ADR 0135: lo que un humano ya aprobó en esta task — el gate del
+            # sandbox lo canjea en vez de volver a aparcar la misma acción.
+            approved_actions=prepared.approved_actions,
         ),
         labels={"com.agentic-platform.execution-id": exec_id},
         workspace_host_path=workspace.host_path,

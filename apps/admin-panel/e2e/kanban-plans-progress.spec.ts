@@ -1,4 +1,5 @@
 import { test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the plans Kanban progress badge (Plan 06 task_06_35).
@@ -10,9 +11,7 @@ import { test, type Page } from "@playwright/test";
  */
 
 async function setup(page: Page, plans: object[]): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/api/plans", (route) =>
     route.fulfill({
       status: 200,

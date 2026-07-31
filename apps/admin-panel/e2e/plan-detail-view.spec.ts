@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the plan detail page that renders the canonical template
@@ -74,9 +75,7 @@ const FULL_PLAN = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({
@@ -170,9 +169,7 @@ test("back link points to the project plans list", async ({ page }) => {
 
 test("empty specification renders a friendly placeholder", async ({ page }) => {
   const empty = { ...FULL_PLAN, id: PLAN_ID, specification: {} };
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) => {
     return route.fulfill({
       status: 200,

@@ -854,8 +854,12 @@ class _AgentLoop:
                 return result
 
             # Approval gate: a sensitive tool is parked *before* it runs.
+            # ADR 0135: los ARGS viajan con la llamada — lo que un humano
+            # autoriza es la acción exacta (tool + args verbatim), no la tool.
             category = (
-                self.deps.approval.review(decision.tool) if self.deps.approval is not None else None
+                self.deps.approval.review(decision.tool, decision.tool_args)
+                if self.deps.approval is not None
+                else None
             )
             if category is not None:
                 steps.append(

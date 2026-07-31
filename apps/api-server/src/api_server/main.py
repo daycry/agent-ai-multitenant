@@ -27,7 +27,9 @@ from api_server.config import get_settings
 from api_server.db.models import Organization, User, UserOrganizationMembership
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging, get_logger
+from api_server.logging.celery_pipeline import install_request_id_propagation
 from api_server.logging.context import REQUEST_ID_HEADER, RequestContextMiddleware
+from api_server.metrics import install_metrics
 from api_server.middleware.security_headers import SecurityHeadersMiddleware
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
@@ -70,6 +72,7 @@ from api_server.routers.incoming_webhook_configs import router as incoming_webho
 from api_server.routers.incoming_webhooks import router as incoming_webhooks_router
 from api_server.routers.internal_agent import router as internal_agent_router
 from api_server.routers.internal_alerts import router as internal_alerts_router
+from api_server.routers.invitations import router as invitations_admin_router
 from api_server.routers.kb_categories import router as kb_categories_router
 from api_server.routers.knowledge_bases import (
     documents_router,
@@ -120,6 +123,16 @@ if os.environ.get("API_SERVER_OTEL_CONSOLE") == "1":
     add_console_exporter()
 configure_logging(service="api-server")
 
+# prod-08 Fase C (observability-7): el api-server no CONSUME tasks Celery, solo
+# los produce — así que instala únicamente la mitad productora. Un handler de
+# `before_task_publish` copia el `request_id` del contextvar de la petición
+# HTTP a las cabeceras del mensaje; en el worker, `task_prerun` lo rebindea.
+# Sin esto la traza moría en la frontera Celery y no había forma de unir «el
+# usuario pulsó ejecutar» con «el worker falló» salvo por marcas de tiempo.
+# Vía señal, no vía call-site: cubre TODOS los productores (incluidos los que
+# alguien añada mañana) sin tocar un solo `apply_async`.
+install_request_id_propagation()
+
 _logger = get_logger(__name__)
 
 # CORS allow-lists (secrets-config-4). The pre-Plan-06.14 config used the
@@ -132,7 +145,16 @@ _logger = get_logger(__name__)
 # preflight response is an explicit, auditable contract rather than a
 # reflect-everything wildcard.
 _CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-_CORS_ALLOW_HEADERS = ["Authorization", "Content-Type", "X-Tenant-Id", "X-Request-ID"]
+# `X-CSRF-Token` is the double-submit half of the cookie session (ADR 0133): in
+# dev the panel (:3000) and the api-server (:8001) are different ORIGINS, so
+# without it the preflight rejects every mutation the panel makes.
+_CORS_ALLOW_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "X-Tenant-Id",
+    "X-Request-ID",
+    "X-CSRF-Token",
+]
 
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -231,6 +253,9 @@ def _register_routers(app: FastAPI) -> None:
         scim_router,
         mfa_router,
         admin_router,
+        # ADR 0134: `/admin/invitations`. Va bajo `/admin`, así que
+        # `_is_admin_surface` le engancha el endurecimiento en el montaje.
+        invitations_admin_router,
         agents_router,
         human_agents_router,
         human_inbox_router,
@@ -380,6 +405,14 @@ def create_app() -> FastAPI:
     # layer — its headers wrap even the generic 500 emitted by the global
     # exception handler below.
     app.add_middleware(RequestContextMiddleware)
+    # prod-08 Fase B (observability-2): exporter Prometheus. Registra el
+    # middleware que cuenta peticiones/latencia y la ruta GET /metrics.
+    # Añadido AQUÍ, por dentro de RequestContextMiddleware, para que mida el
+    # tiempo de la petición sin incluir el coste de CORS/headers de seguridad.
+    # Sin este target no existe la serie `up` del api-server y la regla
+    # ServiceDown es inescribible: hasta ahora, un api-server caído no
+    # disparaba ninguna alerta.
+    install_metrics(app)
     # Baseline response headers (task_prod09_14, api-7): nosniff, frame-deny,
     # Referrer-Policy and — only over TLS, only outside dev — HSTS. Added AFTER
     # RequestContextMiddleware and BEFORE CORS so it ends up between them: it must

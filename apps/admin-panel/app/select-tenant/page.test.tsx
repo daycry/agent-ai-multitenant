@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSessionMock = vi.fn();
 const selectTenantMock = vi.fn();
-const setTokenForSingleMock = vi.fn();
+const applySingleResolutionMock = vi.fn();
 vi.mock("@/lib/session", async (importOriginal) => {
   // Las CONSTANTES de ruta son las de verdad: si cambiaran, este test debe
   // seguir afirmando el destino real, no una copia mía.
@@ -25,7 +25,7 @@ vi.mock("@/lib/session", async (importOriginal) => {
     ...actual,
     resolveSession: () => resolveSessionMock(),
     selectTenant: (...a: unknown[]) => selectTenantMock(...a),
-    setTokenForSingle: (...a: unknown[]) => setTokenForSingleMock(...a),
+    applySingleResolution: (...a: unknown[]) => applySingleResolutionMock(...a),
   };
 });
 
@@ -35,8 +35,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: replaceMock, push: pushMock }),
 }));
 
-const getTokenMock = vi.fn<() => string | null>();
-vi.mock("@/lib/auth", () => ({ getToken: () => getTokenMock() }));
+// ADR 0133: la pantalla ya no lee un token — sólo pregunta si hay sesión
+// (cookie CSRF legible); el gate duro es `middleware.ts`.
+const hasSessionMock = vi.fn<() => boolean>();
+vi.mock("@/lib/auth", () => ({ hasSession: () => hasSessionMock() }));
 
 import { HOME_ROUTE, NO_ACCESS_ROUTE, type SessionResolution } from "@/lib/session";
 import SelectTenantPage from "@/app/select-tenant/page";
@@ -54,7 +56,7 @@ const resolution = (over: Partial<SessionResolution>): SessionResolution => ({
 });
 
 beforeEach(() => {
-  getTokenMock.mockReturnValue("identity-token");
+  hasSessionMock.mockReturnValue(true);
   resolveSessionMock.mockResolvedValue(resolution({}));
 });
 
@@ -132,11 +134,11 @@ describe("pantalla de elección de espacio de trabajo", () => {
     render(<SelectTenantPage />);
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith(HOME_ROUTE));
-    expect(setTokenForSingleMock).toHaveBeenCalledWith(single);
+    expect(applySingleResolutionMock).toHaveBeenCalledWith(single);
   });
 
   it("un acceso directo sin token rebota al login sin llamar al backend", async () => {
-    getTokenMock.mockReturnValue(null);
+    hasSessionMock.mockReturnValue(false);
     render(<SelectTenantPage />);
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/login"));

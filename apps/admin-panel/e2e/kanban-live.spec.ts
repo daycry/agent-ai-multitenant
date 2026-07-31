@@ -1,4 +1,5 @@
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the live dual Kanban (task_02_23).
@@ -12,9 +13,7 @@ const PROJECT_ID = "00000000-0000-0000-0000-000000000001";
 const TASK_ID = "10000000-0000-0000-0000-000000000001";
 
 async function setupBoard(page: Page): Promise<{ socket: () => WebSocketRoute }> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/projects", (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({

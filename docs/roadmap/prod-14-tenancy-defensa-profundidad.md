@@ -141,6 +141,7 @@ dependa de la disciplina de código en cada query futura:
       migración debe **fallar ruidosamente** si detecta una fila junction cuyo
       padre e hijo pertenecen a tenants distintos (pre-check con SELECT antes del
       backfill). Downgrade real (drop policy + columna).
+  - ⏳ **Pendiente (2026-07-31):** la migración `0124_junction_tenant_rls` está entregada y `tests/integration/test_junction_tenant_rls.py` pasa 13/13, pero el test que este plan cita —`test_migrations_v2.py -k junction`— sigue siendo `test_junctions_do_not_have_rls`, que afirma lo CONTRARIO y está EN ROJO desde la 0124.
 - **Tiempo**: 6 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -151,7 +152,7 @@ dependa de la disciplina de código en cada query futura:
 
 #### `task_prod14_02` — ORM y caminos de escritura pueblan tenant_id
 
-- [ ] **Título**: Añadir la columna a los 4 modelos de asociación en
+- [x] **Título**: Añadir la columna a los 4 modelos de asociación en
       `apps/api-server/src/api_server/db/domain.py` y revisar TODOS los puntos
       que insertan filas junction (al menos: asignación de tools/skills en
       `routers/agents.py` — incluido el fork de agentes, línea ~370 —,
@@ -171,7 +172,7 @@ dependa de la disciplina de código en cada query futura:
 
 #### `task_prod14_03` — Tests cross_tenant de denegación en junctions
 
-- [ ] **Título**: Nuevo `tests/integration/test_junction_tenant_rls.py` marcado
+- [x] **Título**: Nuevo `tests/integration/test_junction_tenant_rls.py` marcado
       `@cross_tenant`: para cada una de las 4 tablas, sesión `app_user` con
       `app.tenant_id` del tenant B no ve ni puede insertar/borrar filas del
       tenant A (incluido `agent_tools.config_override`, que transporta config
@@ -199,6 +200,7 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
       (o equivalente documentado en runbook) idempotente para BD existentes.
       Password vía env `SERVICE_USER_PASSWORD` con placeholder solo-dev
       (la eliminación de defaults conocidos es de **prod-10**).
+  - ⏳ **Pendiente (2026-07-31):** el rol, sus grants y el script de upgrade están entregados y verdes (`docker/postgres/init/04-service-role.sql` + `docker/postgres/upgrade/20260730-service-user.sh`, 13/13 en `test_db_roles_service_user.py`), pero la contraseña es un literal DENTRO del `.sql`: un arranque limpio no honra `SERVICE_USER_PASSWORD`, y ni el compose ni `docker/.env.example` la declaran.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -219,6 +221,7 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
       referencia. `migrations_user` queda referenciado únicamente por Alembic
       (`migrations/env.py`). Anotar en el plan **prod-01** que el
       `compose_generator` del installer debe emitir la nueva variable.
+  - ⏳ **Pendiente (2026-07-31):** los defaults de `database_url` de los 4 servicios ya apuntan a `service_user` (verificado en los cuatro `config.py`), pero faltan `SERVICE_USER_PASSWORD` en `docker/.env.example` y el compose, la nota en **prod-01** sobre el `compose_generator`, y el test que cita este bloque (`tests/integration/test_execution_persistence.py`) no existe.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Depende de**: `task_prod14_04`
 - **Tests automáticos**:
@@ -230,7 +233,7 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
 
 #### `task_prod14_06` — Test de privilegios: service_user no puede tocar DDL ni RLS
 
-- [ ] **Título**: `tests/integration/test_db_roles_service_user.py`: conectado
+- [x] **Título**: `tests/integration/test_db_roles_service_user.py`: conectado
       como `service_user`, (a) `ALTER TABLE agents DISABLE ROW LEVEL SECURITY`
       falla con `InsufficientPrivilege`; (b) `DROP POLICY`/`DROP TABLE`/`CREATE
 TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
@@ -248,7 +251,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
 
 #### `task_prod14_07` — Meta-test: toda tabla con tenant_id tiene RLS completa
 
-- [ ] **Título**: Nuevo `tests/integration/test_rls_invariant.py` que, tras
+- [x] **Título**: Nuevo `tests/integration/test_rls_invariant.py` que, tras
       `alembic upgrade head`, cruza `information_schema.columns` (tablas públicas
       con columna `tenant_id`) contra `pg_class.relrowsecurity`,
       `pg_class.relforcerowsecurity` y `pg_policies`: (a) toda tabla con
@@ -283,6 +286,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       contexto tenant devuelve usuarios sin membership activa en el tenant del
       caller (mínimo: lookups del asistente, `human_agents`, listados de
       miembros).
+  - ⏳ **Pendiente (2026-07-31):** el inventario de los `select(User…)` sí está hecho y clasificado (tabla del ADR 0137), pero `tests/integration/test_users_directory_isolation.py` NO existe: no hay ninguna guarda `@cross_tenant` que impida la fuga del directorio.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -299,6 +303,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       `user_org_memberships` + excepción `app.user_id`), trade-offs (impacto en
       login/SCIM/SSO pre-tenant, coste de migración de queries) y recomendación.
       La decisión la toma un humano; la implementación es follow-up.
+  - ⏳ **Pendiente (2026-07-31):** el documento existe y es completo (`docs/05-architecture-decisions/0137-users-global-rls.md`, con inventario, opciones y recomendación), pero nació `status: accepted` decidiendo por su cuenta cuando este plan lo pedía `proposed`: falta la ratificación del operador, que es el gate declarado de esta tarea.
 - **Tiempo**: 2 h · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); la revisión humana del ADR es el
   gate.
@@ -318,6 +323,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       `domain.py:855`). Los endpoints de creación/edición deben mapear la
       violación de unicidad a 409 con mensaje claro (la resolución por nombre en
       la UI de asignación es prioridad declarada del operador).
+  - ⏳ **Pendiente (2026-07-31):** los índices únicos parciales, `Document.source_size_bytes → BIGINT` y `Plan.created_by: UUID | None` están (migración 0126, verde en `test_perf_indexes_and_uniqueness.py`), pero el dedup **soft-borra** los perdedores en vez de renombrarlos `-dup-{n}` —lo contrario de la decisión clave nº 4, que reservaba esa alternativa a una decisión humana— y ni `agents.py`, ni `teams.py`, ni `skills.py` llaman a `integrity_conflict`, así que un nombre duplicado sale como 500 y no como 409.
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -337,6 +343,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       (`"project not found"`). Si **prod-06/prod-13** añaden el filtro
       `deleted_at` al dispatch del orchestrator, este helper es la referencia
       canónica del predicado.
+  - ⏳ **Pendiente (2026-07-31):** `routers/_guards.py` existe con `verify_project_visible` y su variante `_id`, pero las CUATRO copias siguen intactas en `tasks.py:76`, `plans.py:140`, `conversations.py:95` e `incoming_webhook_configs.py:88`: el módulo tiene cero llamantes de producción (solo lo importa `tests/unit/test_project_visibility_guard.py`).
 - **Tiempo**: 2 h · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml

@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
 
 type DocumentStatus = "pending" | "processing" | "indexed" | "indexed_empty" | "failed";
 
@@ -254,10 +255,14 @@ function UploadDialog({
       formData.append("file", file);
       if (title.trim()) formData.append("title", title.trim());
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-      const token = localStorage.getItem("agentic.token");
+      // Multipart upload, so it cannot go through `apiFetch` (which JSON-encodes
+      // the body). It repeats the same session contract by hand: cookie via
+      // `credentials` + the CSRF proof, since this is a POST (ADR 0133).
+      const csrf = getCsrfToken();
       const response = await fetch(`${apiUrl}/knowledge-bases/${kbId}/documents`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+        headers: csrf ? { [CSRF_HEADER]: csrf } : {},
         body: formData,
       });
       if (!response.ok) {

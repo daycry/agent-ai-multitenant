@@ -181,7 +181,7 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
 
 #### `task_prod03_02` — Cobertura del gate: todas las tools wired + MCP/custom
 
-- [ ] **Título**: Extender el mapa tool→categoría a todas las tools
+- [x] **Título**: Extender el mapa tool→categoría a todas las tools
       runtime-wired (`packages/shared-domain/src/shared_domain/tool_names.py:106-136`):
       `send_notification`→`external_communication`, `run_pytest`/`run_lint`/
       `run_build`→`code_changes` (o `code_execution`), `promote_to_kb` y
@@ -216,6 +216,7 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
       en vez del `"auto"` hardcodeado; actualizar los 4 seeds. Cubre
       guardrails-3 (fail-open sin política) y el fail-open de guardrails-2.
       Depende de `task_prod03_01`.
+  - ⏳ **Pendiente (2026-07-31):** la mitad (a) está cerrada desde el **ADR 0104** (`accepted`, decidido por el operador el 2026-07-07): `_resolve_effective_approval_policy` hereda el preset `development` y `tests/unit/test_default_approval_policy.py` lo cubre; falta solo la clave `unlisted_category`, que sigue sin decidir —`requires_human_approval` mantiene el `"auto"` hardcodeado y el ADR 0135 (`proposed`) la difiere expresamente al ADR de política de fallo del motor.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -228,7 +229,7 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
 
 #### `task_prod03_04` — Resolución atómica (fin de la carrera check-then-act)
 
-- [ ] **Título**: Reescribir `resolve_approval`
+- [x] **Título**: Reescribir `resolve_approval`
       (`apps/api-server/src/api_server/db/approval_repo.py:98-147`) como
       `UPDATE approval_requests SET status=... WHERE id=:id AND
 status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
@@ -262,6 +263,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       evento de timeout para el dispatcher de notificaciones (el enrutado de
       alertas queda en prod-08). Cubre guardrails-5. Depende de
       `task_prod03_04`.
+  - ⏳ **Pendiente (2026-07-31):** la task `workers.expire_stale_approvals`, la constante `APPROVAL_EXPIRY_BEAT_ENTRY`, su entrada de beat cada 15 min en `default` y el registro en `celery_app(imports=…)` están entregados, pero `tests/integration/test_approval_expiry_job.py` da **2 rojos de 7**: la caché Redis de platform settings que introdujo prod-13 sirve valores rancios porque el helper del test escribe la fila sin invalidarla.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -275,7 +277,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_06` — Aprobar autoriza la acción (fin del bucle ADR 0020)
 
-- [ ] **Título**: Implementar la opción (a) de la decisión clave 2: al
+- [x] **Título**: Implementar la opción (a) de la decisión clave 2: al
       aprobar, `resolve_approval`
       (`apps/api-server/src/api_server/db/approval_repo.py:141-147`) registra
       la acción autorizada (tool + hash normalizado de args + categoría +
@@ -288,6 +290,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       extensión del ADR 0020, que esta tarea redacta y somete a aprobación
       humana ANTES de implementar. Cubre guardrails-7. Depende de
       `task_prod03_04`; coordinar con prod-06 (Opción B futura).
+  - ✅ **Hecho (2026-07-31)** con el [ADR 0135](../05-architecture-decisions/0135-que-autoriza-una-aprobacion-humana.md) ya `accepted`: **G1+S1+T1+N3** — aprobar autoriza esa acción exacta, en esa task, una vez. La huella canónica vive en `shared_domain/approval_action.py` (una sola implementación para los dos extremos: `to_canonical` + `json.dumps(sort_keys, UTF-8)` + SHA-256, **sin** normalización con pérdida); `read_approved_actions` (approval_repo) la emite con predicado `tenant_id` explícito y tope `APPROVED_ACTIONS_MAX`; `_build_runtime_env` la serializa como `approved_actions`; `ApprovalGate.review(tool, args)` la canjea, **una vez por run**. **Dos desvíos del enunciado de arriba, ambos deliberados**: (1) el **fallback por `(tool, categoría)` con TTL corto queda RECHAZADO** por el operador —convertía la ruta laxa en la ruta normal—, sustituido por N3 (re-preguntar enseñando el delta, `action.prior_approvals` + bloque en la UI de aprobaciones); (2) **no hay TTL temporal** porque la vigencia elegida fue T1 (un canje), no T2. Además `resolve_approval` gasta un reintento por aprobación y escala a `blocked` con evento `approval_retry_capped` al llegar a `max_retries`: el bucle deja de ser infinito. `tests/integration/test_approval_no_repark_loop.py` (13) + `tests/unit/test_approval_action_fingerprint.py` (18) + `tests/unit/test_approval_gate_authorized_actions.py` (14) + `docker/agent-runtimes/agent-runtime/tests/test_boot_approved_actions.py` (4) + `tests/unit/test_agent_spec_approved_actions.py` (3), todos en verde. **Queda como deuda con nombre**: la persistencia del canje (`consumed_at`) NO se implementó — tal cual la propone el ADR produce un livelock cuadrático, porque al re-ejecutarse la task DESDE CERO el agente vuelve a proponer las acciones ya consumidas; el canje es por run.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -310,6 +313,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       migraciones guardrail son `20260530_0052_guardrail_events` y
       `20260530_0053_guardrail_alert_rules` — no existe persistencia de
       configs. Cubre guardrails-4 (persistencia).
+  - ⏳ **Pendiente (2026-07-31):** sigue sin existir la tabla `guardrail_configs` ni su migración; la única persistencia de config hoy son `platform_settings.guardrails_config` y `projects.guardrails_config` (migración 0110, ADR 0102 D3), o sea dos capas sueltas y sin scope `tenant`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -332,6 +336,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       consumirán el dispatch (`task_prod03_11`) y el chat
       (`task_prod03_14`). Cubre guardrails-4 (baseline + candados). Depende
       de `task_prod03_07`.
+  - ⏳ **Pendiente (2026-07-31):** sin la tabla de `task_prod03_07` no hay baseline de plataforma con `locked: true` sembrado, ni CRUD con `resolve_config(..., strict=True)`, ni servicio `get_effective_guardrail_config`; `LockedFieldOverrideError` sigue sin usarse fuera de tests.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -356,6 +361,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       (`packages/shared-guardrails/src/shared_guardrails/checks/content_safety.py:394-404`)
       con la misma política en vez de pasar silenciosamente
       (`types.py:181` solo mira `action`). Cubre guardrails-8.
+  - ⏳ **Pendiente (2026-07-31):** `on_error: block|warn` YA existe, está validado en `config.py` y aplicado en `pipeline.run` desde el **ADR 0102 D5**, con cobertura en `tests/unit/test_guardrails_engine.py`; falta lo otro: el default sigue siendo `warn` para todos (el plan pide `block` para los `locked`) y el `available: False` de `content_safety` continúa pasando en silencio.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -376,6 +382,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       caso. Cubre guardrails-10; coordinación: prod-13 trata el event loop en
       global, este seam se cierra aquí para no cablear (Fase D) un motor
       bloqueante.
+  - ⏳ **Pendiente (2026-07-31):** el límite de tamaño de input sí está (el truncado D6 de `run_hook` en el runtime, con test), pero el seam async NO: no hay ni un `to_thread` en `api_server/guardrails/planning.py`, así que `pipeline.run` sigue corriendo dentro del event loop en los dos hosts.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -395,6 +402,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       que recibe el runtime (mismo canal que `approval_policy`,
       `__main__.py:248`), con límite de tamaño y versión para invalidación.
       Cubre guardrails-1 (transporte). Depende de `task_prod03_08`.
+  - ⏳ **Pendiente (2026-07-31):** la premisa «hoy CERO referencias a guardrails» ya es falsa — `_resolve_effective_guardrails` fusiona plataforma+proyecto vía `resolve_config`, con tope de tamaño, y viaja en `spec["guardrails"]` (ADR 0102 D3); falta la capa TENANT y la versión para invalidación, ambas dependientes de la tabla de `task_prod03_07`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -405,12 +413,15 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_12` — Pipeline en los 4 hooks del bucle del agente
 
-> **Estado (2026-07-06, auditoría de roadmap)**: PARCIAL — solo el hook `post_tool` está cableado
-> (`docker/agent-runtimes/agent-runtime/agent_runtime/graph.py:958`, ADR 0102 "g1 slice mínimo",
-> commits `a905612`/`60d1c87`). Los otros 3 hooks (`pre_llm`, `post_llm`, `pre_tool`) y el
-> `GuardrailPipeline` instanciado desde config NO existen todavía — no marcar `[x]`.
+> **Estado (2026-07-31, contabilidad del roadmap)**: la nota anterior («PARCIAL — solo `post_tool`»,
+> 2026-07-06) ha caducado. Los CUATRO hooks están cableados en `graph.py`: `pre_tool`/`post_tool` por
+> el ADR 0102 D2 (`_screened_tool_call`) y `pre_llm`/`post_llm` por `task_wf_50`; el
+> `GuardrailPipeline` se instancia desde la config del spec en `guardrails.build_pipeline`. Verificado
+> ejecutando los cuatro ficheros de test del runtime (24/24 en verde, ver detalle abajo). Lo único que
+> queda del bloque es papel: el disclaimer de `tools.py:15-17` es ya falso y no se ha retirado (el de
+> `chat/modes.py:62-64` sigue siendo cierto porque el chat de planning lo cablea `task_prod03_14`).
 
-- [ ] **Título**: Instanciar `GuardrailPipeline` desde la config del spec en
+- [x] **Título**: Instanciar `GuardrailPipeline` desde la config del spec en
       el runtime y ejecutarlo en los 4 puntos de
       `docker/agent-runtimes/agent-runtime/agent_runtime/graph.py`:
       `pre_llm` antes de `model.invoke` (nodo plan), `post_llm` sobre la
@@ -439,7 +450,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_13` — Persistencia de eventos de guardrails desde el worker
 
-- [ ] **Título**: El runtime (sandboxed, sin DB) acumula las decisiones del
+- [x] **Título**: El runtime (sandboxed, sin DB) acumula las decisiones del
       pipeline en el result envelope; el worker las persiste al recoger el
       resultado vía `record_pipeline_decision` (tabla `guardrail_events`,
       migración 0052, hoy sin datos de producción), tenant-scoped y
@@ -468,6 +479,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       cableado real lo entrega este plan (coordinar con prod-15, que audita
       el roadmap completo). Cubre guardrails-9 y parte de guardrails-1.
       Depende de `task_prod03_08`, `task_prod03_10`.
+  - ⏳ **Pendiente (2026-07-31):** `run_planning_chat_guardrails` y `gate_generate_plan` siguen con CERO llamantes fuera de su propio módulo —ni `routers/conversations.py` ni `routers/plans.py` importan nada de `api_server.guardrails`—, así que el chat de planning entra al modelo sin pasar por el motor.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -487,6 +499,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       solicitud no atendida expira por el job. Es el test de regresión del
       titular de la auditoría («ni siquiera Cliente Externo detiene una sola
       tool»). Depende de Fases A, B y D completas.
+  - ⏳ **Pendiente (2026-07-31):** `tests/e2e/test_customer_external_preset_gates.py` no existe, y su tramo central («aprobar continúa SIN re-aparcar la misma acción») no se puede escribir todavía porque `task_prod03_06` no está implementada.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -505,6 +518,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       fallo (decisión 1+3) y extensión del ADR 0020 (decisión 2) con estado
       según apruebe el humano; actualizar el estado «falta el job» del ADR
       0016 (`0016-motor-validacion-humana.md:98`).
+  - ⏳ **Pendiente (2026-07-31):** faltan `docs/04-reference/validacion-humana.md`, `docs/06-runbooks/aprobaciones-atascadas.md`, la tabla tool→categoría dentro de `docs/04-reference/guardrails.md` (que sí existe, pero sin ella) y el ADR de política de fallo; el ADR 0135, que cubriría la decisión 2, sigue `proposed`.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Tests automáticos**: revisión humana de docs (sin test automático; el
   linter de Markdown de CI debe pasar).

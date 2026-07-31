@@ -88,14 +88,17 @@ async def resolve_approval_request(
             status_code=status.HTTP_409_CONFLICT,
             detail="approval request was already resolved by someone else",
         )
-    # Tell the board about the task transition (best-effort).
-    new_status = TaskStatus.BACKLOG if payload.approved else TaskStatus.BLOCKED
+    # Tell the board about the task transition (best-effort). El estado nuevo se
+    # LEE de la tarea, no se deduce del verbo: desde el ADR 0135 una aprobación
+    # puede acabar en `blocked` en vez de `backlog` (al agotar `max_retries`, el
+    # techo del bucle aprobar→re-ejecutar→re-aparcar). Deducirlo dejaba el
+    # tablero enseñando una columna que ya no era cierta.
     task = await session.get(Task, resolved.task_id)
     if task is not None:
         await publish_task_status_changed(
             redis,
             task,
             old_status=TaskStatus.AWAITING_HUMAN_APPROVAL,
-            new_status=new_status,
+            new_status=task.status,
         )
     return to_approval_response(resolved)

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the approval UI (task_02_26).
@@ -27,9 +28,7 @@ async function setup(page: Page): Promise<ResolveCapture> {
   const capture: ResolveCapture = { calls: 0, lastBody: {} };
   let resolved = false;
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   // The feed empties once the request is resolved.
   await page.route("http://localhost:8001/approvals", (route) =>

@@ -45,7 +45,7 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.assistant import get_assistant_model, require_assistant_access
 from api_server.routers.llm_providers import get_provider_vault_store
-from api_server.routers.ws import _resolve_principal
+from api_server.routers.ws import _authenticate_socket
 
 _log = structlog.get_logger("api_server.assistant_voice")
 
@@ -291,10 +291,13 @@ async def assistant_voice(
 ) -> None:
     """Per-turn spoken conversation with the personal assistant."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    # ADR 0133 condición 2: el gate de `Origin` va en la MISMA entrega que la
+    # cookie. Este socket también autentica con la sesión, así que sin él la
+    # migración a cookie ABRIRÍA aquí un CSWSH que hoy no existe.
+    authenticated = await _authenticate_socket(ws, token, sessions)
+    if authenticated is None:
         return
+    principal, _credential = authenticated
     # Personal-assistant tenant gate (Tenant Admin + feature toggle). The gate
     # opens its own RLS session; an HTTPException → policy close (never a 500).
     try:

@@ -1,6 +1,6 @@
 ---
 title: "ADR 0134: Auto-registro de usuarios en producción"
-status: proposed
+status: accepted
 date: 2026-07-29
 deciders: [operador]
 relates_to: [0074, 0133]
@@ -10,10 +10,20 @@ task: task_prod09_06
 
 # ADR 0134: Auto-registro de usuarios en producción
 
-> **Estado: `proposed`.** Es una decisión de **producto** —cambia quién puede
-> entrar en el sistema—, no una de implementación, así que la toma el operador.
-> Junto con el [ADR 0133](./0133-almacenamiento-sesion-panel.md) cierra
-> `task_prod09_06` del plan `prod-09`.
+> **Estado: `accepted`** (2026-07-31, decidido por el operador).
+>
+> **Decisión tomada: Opción C — registro **por invitación**.**
+>
+> El operador eligió la opción MÁS restrictiva de las tres, por encima de la
+> recomendación del ADR (que era la A, el ajuste `allow_self_registration`). El
+> registro público se cierra y se entra con un token emitido por un admin: hay que
+> construir emisión, caducidad, canje y la pantalla correspondiente.
+>
+> Sigue siendo obligatorio el arreglo del **System Owner**, y ahora con más motivo:
+> hoy el único sitio que asigna `is_system_owner` es el registro público con la
+> tabla `users` vacía, así que al cerrarlo hay que dar esa vía por otro lado o el
+> córtex queda inalcanzable para siempre. El arranque de la primera instalación es
+> parte del alcance de esta decisión, no un detalle de implementación.
 
 ## Contexto verificado
 

@@ -34,6 +34,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
+import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
 
 // --------------------------------------------------------------------------
 // Types (mirror the backend responses)
@@ -211,14 +212,18 @@ function AddKnowledgeSection({
         });
       }
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-      const token = localStorage.getItem("agentic.token");
+      // Multipart upload, so it cannot go through `apiFetch` (which JSON-encodes
+      // the body). It repeats the same session contract by hand: cookie via
+      // `credentials` + the CSRF proof, since this is a POST (ADR 0133).
+      const csrf = getCsrfToken();
       for (const [index, file] of files.entries()) {
         setStatus(`Subiendo ${index + 1}/${files.length}: ${file.name}`);
         const formData = new FormData();
         formData.append("file", file);
         const response = await fetch(`${apiUrl}/knowledge-bases/${kb.id}/documents`, {
           method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: "include",
+          headers: csrf ? { [CSRF_HEADER]: csrf } : {},
           body: formData,
         });
         if (!response.ok) {
@@ -542,10 +547,14 @@ function UploadDialog({
       formData.append("file", file);
       if (title.trim()) formData.append("title", title.trim());
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-      const token = localStorage.getItem("agentic.token");
+      // Multipart upload, so it cannot go through `apiFetch` (which JSON-encodes
+      // the body). It repeats the same session contract by hand: cookie via
+      // `credentials` + the CSRF proof, since this is a POST (ADR 0133).
+      const csrf = getCsrfToken();
       const response = await fetch(`${apiUrl}/knowledge-bases/${kbId}/documents`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+        headers: csrf ? { [CSRF_HEADER]: csrf } : {},
         body: formData,
       });
       if (!response.ok) {

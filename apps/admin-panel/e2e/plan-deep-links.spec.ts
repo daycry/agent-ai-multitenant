@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for plan → escalated/review deep links (Plan 06.6 task_06_6_12).
@@ -26,9 +27,7 @@ function planFixture(status: string): object {
 }
 
 async function setup(page: Page, planStatus: string): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/plans/${PLAN_ID}`, (route) =>
     route.fulfill({
       status: 200,

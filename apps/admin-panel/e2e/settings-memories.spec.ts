@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/settings/memories (Plan 06.7 task_06_7_07).
@@ -52,9 +53,7 @@ async function setup(
   page: Page,
   opts: { onPut?: (key: string, body: object) => void } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/tenant-settings/_registry", (route) =>
     route.fulfill({
       status: 200,

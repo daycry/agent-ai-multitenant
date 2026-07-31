@@ -23,14 +23,14 @@ import { Building2 } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { getToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
 import {
   HOME_ROUTE,
   NO_ACCESS_ROUTE,
   resolveSession,
   selectTenant,
-  setTokenForSingle,
+  applySingleResolution,
   type ResolvedMembership,
 } from "@/lib/session";
 
@@ -42,7 +42,7 @@ export default function SelectTenantPage() {
   const [pending, setPending] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       router.replace("/login");
       return;
     }
@@ -58,7 +58,7 @@ export default function SelectTenantPage() {
         if (resolution.state === "single") {
           // Only one tenant — enter it directly (the backend already
           // minted the tenant-scoped token in the resolution).
-          setTokenForSingle(resolution);
+          applySingleResolution(resolution);
           router.replace(HOME_ROUTE);
           return;
         }

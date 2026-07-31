@@ -63,6 +63,11 @@ from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 # Córtex F3 (ADR 0074/0077): import the identity models so they register on
 # ``Base.metadata`` (same reason as the F1/F2 models above).
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
+
+# Alta por invitación (ADR 0134): import the invitation model so it registers on
+# ``Base.metadata`` (same reason as the córtex models above) — el Alembic env
+# importa este módulo, así que el autogenerate no la vería si no.
+from api_server.db.invitation import UserInvitation
 from api_server.db.llm_usage import LLMUsageEvent
 
 # Marketplace (ADR 0100): import the marketplace models so they register on
@@ -1178,6 +1183,7 @@ __all__ = [
     "TaskAuditEvent",
     "TenantSetting",
     "User",
+    "UserInvitation",
     "UserOrganizationMembership",
     "UserRole",
 ]

@@ -7,7 +7,7 @@ client, embedder) into one async function:
   2. read bytes from storage,
   3. AV scan — fail fast on `INFECTED`,
   4. docling-serve parse + chunk,
-  5. embed chunks in one batch,
+  5. embed chunks in bounded batches (:data:`EMBED_BATCH_SIZE`),
   6. persist `chunks` rows and update `documents` (`indexed_at`,
      `page_count`, `status`),
   7. emit a final `document.status` event with the count.
@@ -51,6 +51,21 @@ from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.storage import ObjectStorage
 
 logger = structlog.get_logger(__name__)
+
+# Chunks por petición al embedder (prod-13 task_prod13_16, hallazgo perf-4).
+#
+# La ingesta embebía TODOS los chunks del documento en una sola llamada. Con un
+# manual de cientos de páginas eso son miles de textos en una petición: tarda
+# minutos, carga el cuerpo entero en memoria a los dos lados y, si revienta, deja
+# el documento COMPLETO sin vector — el hueco "verde en la UI, invisible para el
+# RAG vectorial". Troceando, el fallo se acota al lote y el resto del documento
+# queda recuperable por vector desde ya; el backfill
+# (``workers.backfill_chunk_embeddings``) rellena los NULL que queden.
+#
+# 64 es el valor que fija el plan: suficientemente grande para no convertir un
+# documento normal en decenas de round-trips, suficientemente pequeño para que un
+# lote quepa holgado en la petición de Ollama.
+EMBED_BATCH_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -138,24 +153,8 @@ async def ingest_document(
 
     await _emit_progress(redis, doc.id, stage="chunked", detail=f"{len(docling_chunks)} chunks")
 
-    # 4. embed in one batch (empty list = nothing to embed)
-    embeddings: list[list[float] | None]
-    if docling_chunks:
-        try:
-            vectors = await embedder.embed([c.content for c in docling_chunks])
-            embeddings = list(vectors)
-        except EmbeddingError as exc:
-            # Embeddings are nice-to-have — BM25 still works without them.
-            # Log + persist with NULL embeddings; the back-fill job
-            # (Plan 04 Fase D follow-up) can retry later.
-            logger.warning(
-                "ingestion.embedder_failed",
-                document_id=str(doc.id),
-                error=str(exc),
-            )
-            embeddings = [None] * len(docling_chunks)
-    else:
-        embeddings = []
+    # 4. embed TROCEADO en lotes (lista vacía = nada que embeber)
+    embeddings = await _embed_in_batches([c.content for c in docling_chunks], embedder, doc.id)
 
     await _emit_progress(
         redis,
@@ -207,6 +206,56 @@ async def ingest_document(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+async def _embed_in_batches(
+    contents: list[str], embedder: Embedder, document_id: UUID
+) -> list[list[float] | None]:
+    """Embebe `contents` en lotes de :data:`EMBED_BATCH_SIZE`, en orden.
+
+    Devuelve SIEMPRE una lista de la misma longitud que `contents`, alineada
+    posición a posición: el elemento *i* es el vector del texto *i*, o ``None``.
+
+    Dos degradaciones, ambas acotadas al LOTE y no al documento:
+
+      * ``EmbeddingError`` (Ollama caído/lento) → ese lote va a ``None``. Los
+        embeddings son un nice-to-have: BM25 sigue funcionando sin ellos y el
+        backfill los rellenará. Cortar la ingesta entera sería peor.
+      * el embedder devuelve un número de vectores DISTINTO del pedido → el lote
+        entero va a ``None``. Emparejar por posición una respuesta corta cruzaría
+        vectores con chunks ajenos, un daño silencioso que envenena el RAG sin
+        que nada falle. Es el mismo criterio que ya aplica
+        ``workers.maintenance.chunk_backfill``. Antes de esta tarea el desajuste
+        levantaba ``ValueError`` desde el ``zip(strict=True)`` de más abajo, que
+        escapaba a Celery pese a que este pipeline promete no levantar nunca.
+    """
+    embeddings: list[list[float] | None] = []
+    for start in range(0, len(contents), EMBED_BATCH_SIZE):
+        batch = contents[start : start + EMBED_BATCH_SIZE]
+        try:
+            vectors = list(await embedder.embed(batch))
+        except EmbeddingError as exc:
+            logger.warning(
+                "ingestion.embedder_failed",
+                document_id=str(document_id),
+                error=str(exc),
+                batch_start=start,
+                batch_size=len(batch),
+            )
+            embeddings.extend([None] * len(batch))
+            continue
+        if len(vectors) != len(batch):
+            logger.warning(
+                "ingestion.embedder_count_mismatch",
+                document_id=str(document_id),
+                expected=len(batch),
+                got=len(vectors),
+                batch_start=start,
+            )
+            embeddings.extend([None] * len(batch))
+            continue
+        embeddings.extend(vectors)
+    return embeddings
+
+
 async def _load_document(session: AsyncSession, document_id: UUID) -> Document:
     result = await session.execute(
         select(Document).where(Document.id == document_id, Document.deleted_at.is_(None))

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for editing a task's acceptance criteria from the TaskDetailSheet.
@@ -47,9 +48,7 @@ async function setup(
 ): Promise<void> {
   const state = { criteria: opts.initialCriteria ?? [] };
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   // Mocks are anchored to the API origin (:8001) — NOT a bare `**/projects/...`
   // glob, which would also intercept the page navigation `:3000/admin/projects/

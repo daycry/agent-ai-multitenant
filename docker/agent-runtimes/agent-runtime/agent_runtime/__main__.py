@@ -1032,8 +1032,16 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             # que un `<server>.<tool>` —el nombre que un mapa estático no puede
             # contener— también es gateable. Sin esto, ni el preset «Cliente
             # Externo» detenía una integración externa.
+            # ADR 0135: `approved_actions` son las acciones que un humano YA
+            # aprobó en ESTA task (huella canónica de tool+args). Sin pasarlas,
+            # aprobar no autoriza nada: el gate vuelve a aparcar la misma acción
+            # y el bucle del ADR 0020 sigue vivo, ahora con coste por vuelta.
             approval=(
-                ApprovalGate(policy, tool_categories_from_specs(spec.get("tool_specs")))
+                ApprovalGate(
+                    policy,
+                    tool_categories_from_specs(spec.get("tool_specs")),
+                    approved_actions=spec.get("approved_actions"),
+                )
                 if policy
                 else None
             ),

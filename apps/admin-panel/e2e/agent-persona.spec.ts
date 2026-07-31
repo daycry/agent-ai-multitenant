@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E de la sección Persona (SER) del agente — Plan 06.17 task_06_17_11.
@@ -97,9 +98,7 @@ async function setupDetail(
   opts: { onPut?: (body: Record<string, unknown>) => void; agent?: object } = {},
 ): Promise<void> {
   const agent = opts.agent ?? AGENT;
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/chat-modes", (route) =>
     route.fulfill({
       status: 200,
@@ -252,9 +251,7 @@ async function setupCatalog(
   page: Page,
   opts: { onPost?: (body: Record<string, unknown>) => void } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/chat-modes", (route) =>
     route.fulfill({
       status: 200,

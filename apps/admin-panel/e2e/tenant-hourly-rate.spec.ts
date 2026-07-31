@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the tenant hourly-rate admin screen (Plan 03 task_03_26).
@@ -19,9 +20,7 @@ async function setup(
   const capture: PutCapture = { calls: 0, lastBody: {} };
   let stored = { ...initial };
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("http://localhost:8001/tenant-settings/hourly-rate", (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({

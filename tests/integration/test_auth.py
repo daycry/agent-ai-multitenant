@@ -1,8 +1,11 @@
 """End-to-end tests for the /auth/* router.
 
 Covers:
-  - POST /auth/register creates a user and returns 201 + UserResponse.
-  - POST /auth/register with a duplicate email returns 409.
+  - POST /auth/register bootstraps the FIRST user (201 + UserResponse) —
+    la única alta sin invitación que queda tras el ADR 0134.
+  - POST /auth/register de cualquier otro devuelve un 403 genérico.
+    El circuito completo de la invitación (emisión, canje, un solo uso,
+    caducidad, membresía) vive en ``test_auth_invitations.py``.
   - POST /auth/login with valid credentials returns 200 + JWT/expires_in
     and provisions a server-side session in Redis.
   - POST /auth/login with bad password returns 401 (and never leaks
@@ -73,6 +76,19 @@ def configured_app(
     monkeypatch.setenv("API_SERVER_LOGIN_RATE_LIMIT_COUNT", "5")
     monkeypatch.setenv("API_SERVER_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
 
+    # Registro Prometheus PROPIO por test. `install_metrics` declara los
+    # colectores contra `get_default_registry()`, que es el `REGISTRY` global del
+    # proceso, así que el SEGUNDO `create_app()` de un mismo proceso pytest
+    # revienta con `DuplicateTimeseries`. El módulo soporta inyectar un registro
+    # pero su call-site no lo usa; mientras se arregla allí, aquí se hace lo que
+    # su propio docstring dice ("cada test usa el suyo"). Inocuo tras el arreglo.
+    from prometheus_client import CollectorRegistry
+
+    monkeypatch.setattr(
+        "api_server.metrics.get_default_registry",
+        lambda: CollectorRegistry(),
+    )
+
     from api_server.auth.deps import reset_redis_cache
     from api_server.config import get_settings
     from api_server.db.session import reset_engine_cache
@@ -99,9 +115,13 @@ def configured_app(
 async def test_register_first_user_becomes_system_admin(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """Fresh install: the very first registered user is auto-promoted
-    to system admin so the operator has a way in. Subsequent users
-    default to non-admin (covered by the next test)."""
+    """Fresh install: the very first registered user is auto-promoted to system
+    admin **y system owner** so the operator has a way in.
+
+    Tras el ADR 0134 ésta es la ÚNICA alta que no exige invitación, y por eso es
+    también la puerta de arranque de una instalación nueva: si dejara de
+    funcionar, un despliegue recién levantado quedaría inaccesible para siempre.
+    """
     await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
@@ -121,6 +141,9 @@ async def test_register_first_user_becomes_system_admin(
     assert body["email"] == "alice@example.com"
     assert body["full_name"] == "Alice"
     assert body["is_system_admin"] is True
+    # ADR 0134 / ADR 0074: y también System Owner, o el córtex entero queda
+    # inalcanzable en cuanto se cierra el registro público.
+    assert body["is_system_owner"] is True
     assert body["is_active"] is True
     assert "id" in body
     # Password must never round-trip.
@@ -129,18 +152,23 @@ async def test_register_first_user_becomes_system_admin(
 
 
 @pytest.mark.asyncio
-async def test_register_subsequent_user_is_not_admin(
+async def test_register_is_closed_once_a_user_exists(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """Second user (and onward) keeps the DB default
-    `is_system_admin=false`. Promotion to admin afterwards is the
-    job of /admin/users (system-admin gated)."""
+    """ADR 0134: con la tabla ``users`` poblada, el registro exige invitación.
+
+    Éste era ``test_register_subsequent_user_is_not_admin`` y afirmaba que el
+    segundo usuario se creaba (sin ser admin). Ya no se crea: el segundo usuario
+    entra por ``/admin/invitations``. Que un invitado NO salga admin ni owner se
+    comprueba en ``test_auth_invitations.py``, donde hay invitación de verdad
+    que canjear.
+    """
     await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
     ) as client:
-        # Seed a first user; this one becomes admin.
+        # Seed a first user; this one becomes admin + owner.
         first = await client.post(
             "/auth/register",
             json={"email": "operator@example.com", "password": "longenoughpw"},
@@ -148,18 +176,27 @@ async def test_register_subsequent_user_is_not_admin(
         assert first.status_code == 201
         assert first.json()["is_system_admin"] is True
 
-        # Anyone after is non-admin until promoted.
+        # Anyone after is turned away, generically.
         resp = await client.post(
             "/auth/register",
             json={"email": "alice@example.com", "password": "longenoughpw"},
         )
 
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["is_system_admin"] is False
+    assert resp.status_code == 403, resp.text
 
 
 @pytest.mark.asyncio
-async def test_register_duplicate_email_returns_409(configured_app) -> None:
+async def test_register_duplicate_email_no_longer_leaks_a_409(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El oráculo de enumeración por 409 queda cerrado, no movido de sitio.
+
+    Éste era ``test_register_duplicate_email_returns_409`` y fijaba justo el
+    comportamiento que el ADR 0134 señala como problema: un email ya registrado
+    devolvía 409 y uno nuevo 201, con lo que cualquiera podía confirmar
+    direcciones. Sin invitación, ahora ambos casos devuelven la MISMA respuesta.
+    """
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
@@ -170,20 +207,29 @@ async def test_register_duplicate_email_returns_409(configured_app) -> None:
         )
         assert first.status_code == 201
 
-        second = await client.post(
+        known = await client.post(
             "/auth/register",
             json={"email": "dup@example.com", "password": "anotherlongpw"},
         )
+        unknown = await client.post(
+            "/auth/register",
+            json={"email": "never-seen@example.com", "password": "anotherlongpw"},
+        )
 
-    assert second.status_code == 409
-    assert "already registered" in second.text.lower()
+    assert known.status_code == 403, known.text
+    assert unknown.status_code == known.status_code
+    assert known.json() == unknown.json()
+    assert "already registered" not in known.text.lower()
 
 
 # ---------------------------------------------------------------------------
 # /auth/login
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_login_returns_jwt_with_expires_in(configured_app) -> None:
+async def test_login_returns_jwt_with_expires_in(configured_app, migrations_pg_dsn: str) -> None:
+    # ADR 0134: el alta solo pasa con `users` vacía (o con invitación), así que
+    # los tests de login siembran su usuario por la puerta de arranque.
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
@@ -205,7 +251,8 @@ async def test_login_returns_jwt_with_expires_in(configured_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_login_wrong_password_is_401(configured_app) -> None:
+async def test_login_wrong_password_is_401(configured_app, migrations_pg_dsn: str) -> None:
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
@@ -245,6 +292,7 @@ async def test_login_writes_an_audit_trail(configured_app, migrations_pg_dsn: st
     write_audit_log afirmaba 'called from login' pero ningún call site existía
     en auth (audit_log llevaba 0 filas en toda la historia). success y failure
     quedan registrados con ip y sin credenciales en el payload."""
+    await _truncate_users(migrations_pg_dsn)
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         await conn.execute("DELETE FROM audit_log")
@@ -292,7 +340,8 @@ async def test_login_writes_an_audit_trail(configured_app, migrations_pg_dsn: st
 # /auth/me
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_me_returns_user_info(configured_app) -> None:
+async def test_me_returns_user_info(configured_app, migrations_pg_dsn: str) -> None:
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
@@ -329,7 +378,8 @@ async def test_me_returns_user_info(configured_app) -> None:
 # /auth/logout
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_logout_revokes_session_immediately(configured_app) -> None:
+async def test_logout_revokes_session_immediately(configured_app, migrations_pg_dsn: str) -> None:
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
@@ -362,12 +412,13 @@ async def test_logout_revokes_session_immediately(configured_app) -> None:
 # Rate limiting — auto_00_10_b
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_rate_limit(configured_app) -> None:
+async def test_rate_limit(configured_app, migrations_pg_dsn: str) -> None:
     """The 6th login attempt within the window returns 429.
 
     Limit is 5/window per IP and per email; we hit the IP limit first
     because all attempts come from the same fake client.
     """
+    await _truncate_users(migrations_pg_dsn)
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",

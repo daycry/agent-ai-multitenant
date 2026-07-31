@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E (DELIVERABLE — written for CI/human, NOT executed in this environment;
@@ -81,9 +82,7 @@ async function setup(
     effective: Record<string, EffectiveFixture>;
   },
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/projects/${PROJECT_ID}/agent-tools-diagnostic`, (route) =>
     route.fulfill({
       status: 200,

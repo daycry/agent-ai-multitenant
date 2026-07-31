@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the personal inbox — "Tareas asignadas a mí" (Plan 16 task_16_08).
@@ -70,13 +71,7 @@ async function setup(
   page: Page,
   opts: { onAction?: (path: string, body: Record<string, unknown>) => void } = {},
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("**/me", (route) =>
     route.fulfill({
@@ -226,13 +221,7 @@ test("any assignment can be escalated to the admin", async ({ page }) => {
 });
 
 test("an empty inbox shows the empty state", async ({ page }) => {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
   await page.route("**/me", (route) =>
     route.fulfill({
       status: 200,

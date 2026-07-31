@@ -1,6 +1,6 @@
 ---
 title: "ADR 0135: Qué autoriza exactamente una aprobación humana (extensión del ADR 0020)"
-status: proposed
+status: accepted
 date: 2026-07-29
 deciders: [operador]
 relates_to: [0016, 0020, 0048, 0104, 0111, 0114]
@@ -10,11 +10,18 @@ task: task_prod03_06
 
 # ADR 0135: Qué autoriza exactamente una aprobación humana
 
-> **Estado: `proposed`.** El [ADR 0020](./0020-task-awaiting-human-approval.md)
-> documenta el bucle como **limitación aceptada**; esto es su extensión y hace
-> falta decidirla antes de implementar `task_prod03_06`. La decisión no es «¿lo
-> arreglamos?» (sí) sino **«qué queda autorizado cuando un humano aprueba»**, y
-> esa pregunta tiene respuestas con perfiles de riesgo distintos.
+> **Estado: `accepted`** (2026-07-31, decidido por el operador).
+>
+> **Decisión tomada: Opción G1+S1+T1+N3 — aprobar autoriza **esa acción exacta, en esa task, una vez**.**
+>
+> El operador eligió la recomendación. Un «casi igual» vuelve a preguntar mostrando
+> qué cambió. Queda RECHAZADO el fallback por `(tool, categoría)` con TTL que
+> proponía el plan: autorizaría más de lo que el revisor leyó.
+>
+> Las dos reglas de normalización son parte de la decisión, no del cómo: se hashea
+> TODO el `args` verbatim, y se hashea **lo que la UI enseñó** (el
+> `ApprovalRequest.action` persistido). Si algún día la UI resume la acción en vez
+> de mostrarla entera, esta garantía se rompe y hay que revisar este ADR.
 
 ## Contexto verificado
 

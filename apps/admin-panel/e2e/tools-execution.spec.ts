@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the UI-level "a real assigned tool executes (not 'unknown tool')"
@@ -163,9 +164,7 @@ async function setup(
   const assigned = opts.assigned ?? [];
   const rejectIds = new Set(opts.rejectIds ?? []);
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/agents/${AGENT_ID}`, (route) => json(route, agentBody()));

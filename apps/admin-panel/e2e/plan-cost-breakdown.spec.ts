@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the cost breakdown table on the plan detail page
@@ -81,9 +82,7 @@ const COST_FIXTURE = {
 };
 
 async function setup(page: Page, costOverride: typeof COST_FIXTURE | null = null): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) =>
     route.fulfill({
       status: 200,

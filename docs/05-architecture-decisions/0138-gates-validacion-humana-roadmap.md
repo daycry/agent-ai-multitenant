@@ -1,8 +1,8 @@
 ---
 title: "ADR 0138: Qué hacer con las fases empezadas sin cumplir su gate — el mecanismo se decide aquí, la campaña de validación no"
-status: proposed
+status: accepted
 date: 2026-07-29
-deciders: []
+deciders: [operador]
 relates_to: [0117]
 plan_referenced: prod-15-gobernanza-roadmap-docs
 task: task_gov_adr_gates_03
@@ -10,6 +10,21 @@ docs_language: es
 ---
 
 # ADR 0138: Gates de validación humana del roadmap
+
+> **Estado: `accepted`** (2026-07-31, decidido por el operador).
+>
+> **Decisión tomada: Opción C — híbrida: el mecanismo `gate_override` ahora, la campaña de validación al ritmo del operador.**
+>
+> El operador eligió la recomendación. Se implanta el campo `gate_override` en los
+> **6** frontmatter afectados **con justificación obligatoria por escrito** —esa
+> obligación es lo que impide que el override deje de ser una excepción— más el
+> párrafo correspondiente en `CLAUDE.md`.
+>
+> La campaña de validación humana NO se calendariza aquí: este ADR decide el
+> mecanismo. Y conviene recordar por qué hace falta: en dos de las seis fases el
+> override humano YA estaba escrito, en un campo duplicado de la tabla de cabecera
+> que otra tarea venía a borrar. Sin un sitio previsto, la excepción se anota donde
+> nadie la lee.
 
 > **`proposed` a propósito, y esta es la parte importante de la decisión.**
 > Este ADR **cierra la parte técnica** (§Decisión) porque es mía: la forma exacta

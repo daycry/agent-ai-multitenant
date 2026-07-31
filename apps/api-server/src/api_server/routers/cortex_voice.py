@@ -75,7 +75,7 @@ from api_server.routers.assistant_voice import (
 )
 from api_server.routers.cortex import build_cortex_default_model
 from api_server.routers.llm_providers import get_provider_vault_store
-from api_server.routers.ws import _resolve_principal
+from api_server.routers.ws import _authenticate_socket
 
 _log = structlog.get_logger("api_server.cortex_voice")
 
@@ -315,10 +315,10 @@ async def cortex_voice(
 ) -> None:
     """Per-turn spoken conversation with the córtex — System Owner only."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions)
+    if authenticated is None:
         return
+    principal, _credential = authenticated
     # DB-authoritative owner gate (ADR 0074): the `own` claim is only a hint, so a
     # non-owner (even with a forged claim) is rejected here, BEFORE the brain is
     # built or any turn runs — never touching the córtex on a rejected socket.

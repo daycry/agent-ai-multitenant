@@ -38,6 +38,7 @@ import asyncpg
 import httpx
 import pytest
 from alembic import command
+from api_server.auth.cookies import SESSION_COOKIE_NAME
 from api_server.auth.passwords import hash_password
 from api_server.auth.sso.secrets import encrypt_client_secret
 from httpx import ASGITransport, AsyncClient
@@ -289,7 +290,18 @@ async def _password_login(client: AsyncClient, email: str) -> str:
 
 
 async def _sso_login(client: AsyncClient, provider_id: UUID, idp: _FakeIdP) -> str:
-    """Complete an OIDC login offline and return the identity token."""
+    """Complete an OIDC login offline and return the identity token.
+
+    Desde el ADR 0133 (aceptado 2026-07-31, `task_prod09_09`) el callback ya NO
+    devuelve el token en un JSON: emite la sesión como cookie httpOnly y
+    **redirige al panel** (303). Devolver el JWT en el cuerpo de una respuesta
+    que el NAVEGADOR sigue era la mitad del agujero que la cookie viene a cerrar:
+    el panel tenía que leerlo de ahí para aparcarlo en `localStorage`.
+
+    El helper lee ahora la cookie, que es lo que un navegador haría, y de paso
+    fija el contrato nuevo: sin cookie de sesión no hay login, por mucho que el
+    redirect sea 303.
+    """
     start = await client.get(f"/auth/sso/{provider_id}/oidc/login")
     assert start.status_code == 307, start.text
     params = dict(httpx.URL(start.headers["location"]).params)
@@ -297,8 +309,13 @@ async def _sso_login(client: AsyncClient, provider_id: UUID, idp: _FakeIdP) -> s
     cb = await client.get(
         "/auth/sso/oidc/callback", params={"code": "fake-code", "state": params["state"]}
     )
-    assert cb.status_code == 200, cb.text
-    return cb.json()["access_token"]
+    assert cb.status_code == 303, cb.text
+    token = cb.cookies.get(SESSION_COOKIE_NAME) or client.cookies.get(SESSION_COOKIE_NAME)
+    assert token, (
+        "el callback SSO redirige pero no deja la cookie de sesión: el usuario "
+        f"aterrizaría en el panel sin credencial (cookies={dict(cb.cookies)})"
+    )
+    return token
 
 
 # ===========================================================================

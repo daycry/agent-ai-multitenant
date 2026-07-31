@@ -88,12 +88,19 @@ de los cuatro documentos actualmente `in_progress`.
 
 #### `task_audit14_01` — Compose monitoring endurecido y tests overlay-aware
 
-- [ ] **Título**: Corregir `textfile-init` y evaluar `workers` tras fusionar base+overlay
+- [x] **Título**: Corregir `textfile-init` y evaluar `workers` tras fusionar base+overlay
 - **Descripción**: Añadir a `textfile-init` el baseline compatible con BusyBox
   (`no-new-privileges`, `cap_drop: [ALL]`, AppArmor validado). Refactorizar helpers
   de `tests/security` para renderizar `docker-compose.yml` +
   `docker-compose.monitoring.yml` como despliegue real; conservar asserts separados
   para servicios definidos solo en el overlay y documentar one-shot/host-agent.
+- ℹ️ **Comando `auto_audit14_01_b` obsoleto (verificado 2026-07-31):**
+  `docker compose -f docker-compose.yml -f docker-compose.monitoring.yml config`
+  sale con código 1 («service "workers" has neither an image nor a build
+  context»), y no por esta tarea: el compose base ya solo trae infraestructura —
+  los servicios de aplicación los genera el instalador y viven en
+  `docker-compose.manuals.yml`. El render del despliegue real, añadiendo ese
+  tercer fichero, sale 0.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -112,6 +119,9 @@ de los cuatro documentos actualmente `in_progress`.
   inventario de todas las tablas córtex, rutas BYPASSRLS y efecto sobre login,
   memoria, backups y tests cross-owner. La decisión es humana; no modificar el
   meta-test para hacerlo verde antes de ratificarla.
+- ⏳ **Pendiente (2026-07-31):** el ADR no existe — ningún fichero de
+  `docs/05-architecture-decisions/` menciona `cortex_conversations`, así que la
+  opción A/B/C sigue sin plantearse ni ratificarse.
 - **Tiempo**: 0,5 días · **Complejidad**: m
 - **Tests automáticos**: lint/frontmatter de ADR; gate humano para la decisión.
 
@@ -121,6 +131,11 @@ de los cuatro documentos actualmente `in_progress`.
 - **Descripción**: Implementar la opción ratificada sin perder el filtro
   `owner_user_id`; añadir defensa estructural, actualizar modelos/repositorios y
   hacer que el invariante de RLS exprese la regla elegida sin falsos negativos.
+- ⏳ **Pendiente (2026-07-31):** la implementación parece entregada —migración
+  `0125_cortex_conv_rls` (RLS + FORCE + política por `owner_user_id`) con
+  `tests/integration/test_cortex_conversations_rls.py` y round-trip—, pero se
+  hizo SIN el ADR de `task_audit14_02`: no se marca hasta que el operador
+  ratifique cuál de las opciones A/B/C es la elegida y el ADR lo recoja.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_audit14_02`
 - **Tests automáticos**:
   ```yaml
@@ -143,6 +158,9 @@ de los cuatro documentos actualmente `in_progress`.
 - **Descripción**: Documentar las opciones de la decisión 3 con coste de migración,
   dimensión pgvector, query sobre varias KB, reindexado, rollback y UX. Medir el
   inventario real de modelos configurados antes de recomendar la migración final.
+- ⏳ **Pendiente (2026-07-31):** el ADR no existe y la última sesión lo declaró
+  explícitamente fuera de alcance («modelo de embeddings único vs multi-modelo»
+  en el «NO ENTREGADO, Y A PROPÓSITO» del commit `4d1c3590`).
 - **Tiempo**: 0,5 días · **Complejidad**: m
 - **Tests automáticos**: lint/frontmatter de ADR; script read-only de inventario.
 
@@ -153,6 +171,9 @@ de los cuatro documentos actualmente `in_progress`.
   selector engañoso conservando una migración compatible; para B, resolver modelo
   antes de construir embedder, validar dimensión, agrupar query por modelo y añadir
   reindexado explícito. En ambos casos, error visible y métrica ante mismatch.
+- ⏳ **Pendiente (2026-07-31):** bloqueada por `task_audit14_04` — sin ADR
+  ratificado no hay opción que implementar, y
+  `tests/integration/test_kb_embedding_model_contract.py` no existe.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_audit14_04`
 - **Tests automáticos**:
   ```yaml
@@ -171,12 +192,18 @@ de los cuatro documentos actualmente `in_progress`.
 
 #### `task_audit14_06` — Factoría única de sesiones de worker con NullPool
 
-- [ ] **Título**: Sustituir las 36 creaciones directas de engine en workers
+- [x] **Título**: Sustituir las 36 creaciones directas de engine en workers
 - **Descripción**: Crear módulo de infraestructura de BD para workers que devuelva
   engine/sessionmaker owner-aware, `poolclass=NullPool`, `pool_pre_ping` donde
   proceda y cierre garantizado. Migrar los 30 módulos por lotes pequeños sin cambiar
   semántica tenant. Prohibir imports directos de `create_async_engine` fuera del
   módulo y tests.
+- ℹ️ **Desviación aceptada (2026-07-31):** la guarda de la prohibición vive en
+  `tests/unit/test_worker_engines_nullpool.py` (hoy es un muro: `PENDING_MIGRATION`
+  está vacía) y no en `tests/docs/test_worker_db_factory_contract.py`, que nunca
+  se creó. `pool_pre_ping` se dejó DESACTIVADO a propósito: con `NullPool` cada
+  checkout abre conexión nueva y el ping sería un `SELECT 1` por sesión a cambio
+  de nada — decisión fijada en un test para que no parezca un olvido.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -197,6 +224,9 @@ de los cuatro documentos actualmente `in_progress`.
 - **Descripción**: Añadir setting de timeout de envío, envolver `send_json`, cerrar
   con código documentado y cancelar/await de `reader` y `xread` en todos los caminos.
   No cambiar todavía el transporte de credencial, que pertenece a `prod-09`.
+- ⏳ **Pendiente (2026-07-31):** sin empezar — `routers/ws.py:290` sigue con un
+  `await ws.send_json(event)` sin timeout, no hay setting de deadline de envío y
+  `tests/unit/test_ws_pump_backpressure.py` no existe.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -215,6 +245,13 @@ de los cuatro documentos actualmente `in_progress`.
   con PostgreSQL y Redis, timeout por check, respuesta 503 estructurada sin secretos
   y test de degradación parcial. Cablear el consumidor correcto (proxy/compose) sin
   crear restart loops por dependencias opcionales como Vault/Ollama/Docling.
+- ⏳ **Pendiente (2026-07-31):** `/readyz` existe y está bien probado (PostgreSQL
+  - Redis, deadline por check, 503 estructurado, saneado de credenciales,
+    degradación parcial y recuperación sin reinicio: 6 tests verdes en
+    `tests/integration/test_health_readiness.py` + `tests/unit/test_readiness_scrub.py`);
+    falta el último tramo, cablear al consumidor — ningún `healthcheck` de
+    `docker/`, del generador de compose del instalador ni del proxy consulta
+    `/readyz`, así que hoy es un mecanismo sin llamantes.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -235,6 +272,10 @@ de los cuatro documentos actualmente `in_progress`.
   innecesaria (mover defaults dentro del hook cuando sea suficiente). Elegir una
   combinación soportada y fijada de Next/ESLint/TypeScript; actualizar lockfile y
   convertir warnings de lint en gate. Coordinar el upgrade mayor con `prod-16`.
+- ⏳ **Pendiente (2026-07-31):** sin empezar — `npm --prefix apps/admin-panel run
+lint` sigue emitiendo los OCHO warnings `react-hooks/exhaustive-deps` (en
+  `approval-policy`, `knowledge-bases`, `plans`, `tasks` y `users`), el lint no es
+  gate y la matriz Next/ESLint/TypeScript no se ha fijado.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -253,6 +294,9 @@ de los cuatro documentos actualmente `in_progress`.
   healthchecks y workers; marcar el punto MCP de `analisis-diferidos-2026-07-12.md`
   como resuelto con evidencia del test, sin reescribir el resto del informe.
   Coordinar la normalización global de estados con `prod-15`.
+- ⏳ **Pendiente (2026-07-31):** bloqueada por sus dependencias — de las cuatro
+  (03, 05, 06, 08) solo 06 está cerrada, así que no hay decisiones firmes que
+  documentar todavía.
 - **Tiempo**: 0,5 días · **Complejidad**: s · **Depende de**: tareas 03, 05, 06, 08
 - **Tests automáticos**:
   ```yaml

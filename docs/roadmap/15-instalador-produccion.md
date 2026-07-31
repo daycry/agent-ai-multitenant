@@ -29,6 +29,17 @@ estimated_cost_ai_eur: 150 € – 240 €
 created_by: system_architect
 spec_sections_referenced: [22]
 docs_language: es
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: 07, 08, 09, 10, 11, 12, 13 y 14
+  reason: >-
+    Ocho bloqueantes, los ocho entregados y en `pending_human_validation`. **El
+    override ya lo había escrito un humano**: estaba en el campo `| **Estado** |`
+    duplicado de la tabla de cabecera, que `task_gov_cabeceras_07` venía a retirar
+    por desincronizado, y se rescató como nota en prosa antes de borrarlo. Este
+    campo es el sitio previsto que le faltaba.
 ---
 
 # Plan 15 — Instalador, Endurecimiento y Producción

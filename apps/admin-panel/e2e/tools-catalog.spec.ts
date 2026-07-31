@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the navigable tool catalog at /admin/tools (Plan 06.18
@@ -103,9 +104,7 @@ async function json(route: Route, body: unknown, status = 200): Promise<void> {
 }
 
 async function setupCatalog(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/tools**`, (route) => {
     // List call (GET) returns the catalog. POST/PUT/DELETE handled per-test.
@@ -242,9 +241,7 @@ test("the sidebar exposes a Catálogo item linking to /admin/tools", async ({ pa
 test("the agent-tools empty state links to the catalog (clickable, not plain text)", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/agents/${AGENT_ID}`, (route) =>
     json(route, {

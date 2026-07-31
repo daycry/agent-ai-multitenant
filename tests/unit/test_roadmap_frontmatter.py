@@ -15,7 +15,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -197,16 +196,6 @@ def test_gate_debt_inventory_has_not_grown() -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Deuda docsroadmap-2: 6 fases empezadas con el gate saltado y sin "
-        "`gate_override`. El mecanismo lo decide un humano en el ADR 0138 "
-        "(decisión D1 de prod-15); hasta entonces este test documenta la deuda "
-        "en rojo esperado. Al firmarse el ADR pasará a XPASS y habrá que "
-        "retirar este marcador."
-    ),
-)
 def test_started_phase_declares_its_gate() -> None:
     """Toda fase empezada tiene su `blocking_plan` cumplido o un `gate_override`.
 
@@ -270,4 +259,69 @@ def test_changelog_debt_has_not_grown() -> None:
     assert still_missing == set(_CHANGELOG_DEBT_2026_07_29), (
         "la deuda de changelogs se saldó: retira de _CHANGELOG_DEBT_2026_07_29 "
         f"lo que ya tiene entrada ({set(_CHANGELOG_DEBT_2026_07_29) - still_missing})"
+    )
+
+
+#: Longitud mínima de la justificación de un `gate_override`. No es un número
+#: mágico: es lo que separa «pendiente de validar» —que no explica nada— de una
+#: razón que alguien pueda auditar dentro de seis meses. El ADR 0138 eligió la
+#: opción híbrida precisamente porque un override que no cuesta nada de escribir
+#: deja de ser una excepción.
+_MIN_JUSTIFICACION = 80
+
+
+def test_gate_override_carries_a_written_justification() -> None:
+    """Un `gate_override` sin justificación auditable no vale.
+
+    El mecanismo lo firmó el operador en el ADR 0138 (opción C, 2026-07-31) con
+    una condición explícita: la justificación es OBLIGATORIA y por escrito. Sin
+    esta guarda, el campo se convierte en la forma barata de saltarse el
+    protocolo de CLAUDE.md, que es justo el riesgo que el ADR nombra al descartar
+    la opción B a secas.
+    """
+    ofensores: dict[str, str] = {}
+    for _path, fm in _plans():
+        override = fm.get("gate_override")
+        if not override:
+            continue
+        plan_id = str(fm.get("plan_id"))
+        if not isinstance(override, dict):
+            ofensores[plan_id] = "no es un mapa con approved_by/date/adr/reason"
+            continue
+        faltan = [k for k in ("approved_by", "date", "adr", "reason") if not override.get(k)]
+        if faltan:
+            ofensores[plan_id] = f"le faltan campos: {faltan}"
+            continue
+        razon = str(override["reason"]).strip()
+        if len(razon) < _MIN_JUSTIFICACION:
+            ofensores[plan_id] = (
+                f"justificación de {len(razon)} caracteres, mínimo {_MIN_JUSTIFICACION}"
+            )
+    assert not ofensores, (
+        "gate_override sin justificación auditable (ADR 0138 exige approved_by, "
+        f"date, adr y un reason escrito): {ofensores}"
+    )
+
+
+def test_gate_override_only_where_the_gate_is_actually_unmet() -> None:
+    """Nadie deja un override puesto cuando su bloqueante ya se cerró.
+
+    Un override huérfano es peor que ninguno: dice que hubo una excepción donde
+    ya no la hay, y la próxima lectura del roadmap se la cree. Al cerrarse de
+    verdad un `blocking_plan`, hay que retirar el override de sus dependientes.
+    """
+    plans = _plans()
+    by_id = {str(fm.get("plan_id")): fm for _, fm in plans}
+    huerfanos: list[str] = []
+    for _path, fm in plans:
+        if not fm.get("gate_override"):
+            continue
+        deps = fm.get("blocking_plan") or []
+        deps = deps if isinstance(deps, list) else [deps]
+        sin_cerrar = [d for d in deps if str(by_id.get(str(d), {}).get("status")) != "completed"]
+        if deps and not sin_cerrar:
+            huerfanos.append(str(fm["plan_id"]))
+    assert not huerfanos, (
+        "fases con `gate_override` cuyo bloqueante YA está completed: retíralo, "
+        f"la excepción caducó: {huerfanos}"
     )

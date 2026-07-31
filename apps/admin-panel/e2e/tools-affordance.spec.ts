@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the affordance overhaul of the "Tools del agente" section in
@@ -142,9 +143,7 @@ async function setup(
   const id = scope === "global_builtin" ? BUILTIN_AGENT_ID : AGENT_ID;
   const assigned = opts.assigned ?? [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/agents/${id}`, (route) => json(route, agentBody(scope)));

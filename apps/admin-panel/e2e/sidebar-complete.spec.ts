@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E del sidebar global (Plan 06.6 `task_06_6_10`), REPARADA para el menú
@@ -70,16 +71,14 @@ const GROUPS_WITH_ENTRIES = [...new Set(EXPECTED_ENTRIES.map((e) => e.group))];
 const NAV_GROUP_LS_PREFIX = "agentic.nav.group.";
 
 async function setup(page: Page, opts: { openGroups?: string[] } = {}): Promise<void> {
+  await seedSession(page, { tenantId: TENANT_ID });
   await page.addInitScript(
-    (seed: { tenantId: string; prefix: string; openGroups: string[] }) => {
-      window.localStorage.setItem("agentic.token", "e2e-fake-token");
-      window.localStorage.setItem("admin-panel.tenant-id", seed.tenantId);
+    (seed: { prefix: string; openGroups: string[] }) => {
       for (const id of seed.openGroups) {
         window.localStorage.setItem(seed.prefix + id, "1");
       }
     },
     {
-      tenantId: TENANT_ID,
       prefix: NAV_GROUP_LS_PREFIX,
       openGroups: opts.openGroups ?? [],
     },

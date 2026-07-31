@@ -9,16 +9,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * sin test (21 `*.test.ts` y ninguno suyo), y es el que decide si alguien sin
  * memberships entra o no.
  *
- * Se testea con `apiFetch`, `setToken` y el almacenamiento de tenant
- * mockeados: lo que se acredita es la MÁQUINA DE ESTADOS, incluidos los
- * efectos (qué token se guarda, qué tenant se persiste o se limpia).
+ * Se testea con `apiFetch` y el almacenamiento de tenant mockeados: lo que se
+ * acredita es la MÁQUINA DE ESTADOS y sus efectos (qué tenant se persiste o se
+ * limpia).
+ *
+ * Desde el ADR 0133 el efecto «guardar token» YA NO EXISTE: la sesión —también
+ * la tenant-scoped que acuñan `resolve` y `select-tenant`— viaja como cookie
+ * httpOnly re-emitida por el servidor. Las aserciones de abajo comprueban que
+ * el cliente no guarda nada: si alguien repone un `setToken`, el mock de
+ * `@/lib/auth` (que ya no lo exporta) revienta el import.
  */
 
 const apiFetchMock = vi.fn();
 vi.mock("@/lib/api", () => ({ apiFetch: (...args: unknown[]) => apiFetchMock(...args) }));
-
-const setTokenMock = vi.fn();
-vi.mock("@/lib/auth", () => ({ setToken: (...a: unknown[]) => setTokenMock(...a) }));
 
 const setTenantIdMock = vi.fn();
 const clearTenantIdMock = vi.fn();
@@ -34,7 +37,7 @@ import {
   resolveAndRoute,
   resolveSession,
   selectTenant,
-  setTokenForSingle,
+  applySingleResolution,
   type ResolutionState,
   type SessionResolution,
 } from "@/lib/session";
@@ -58,7 +61,6 @@ function resolution(
 
 beforeEach(() => {
   apiFetchMock.mockReset();
-  setTokenMock.mockReset();
   setTenantIdMock.mockReset();
   clearTenantIdMock.mockReset();
 });
@@ -99,7 +101,6 @@ describe("resolveAndRoute — los cuatro estados", () => {
     );
 
     await expect(resolveAndRoute()).resolves.toBe(HOME_ROUTE);
-    expect(setTokenMock).toHaveBeenCalledWith("scoped-token");
     expect(setTenantIdMock).toHaveBeenCalledWith(TENANT_A.tenant_id);
     expect(clearTenantIdMock).not.toHaveBeenCalled();
   });
@@ -112,7 +113,6 @@ describe("resolveAndRoute — los cuatro estados", () => {
     await expect(resolveAndRoute()).resolves.toBe(SELECT_TENANT_ROUTE);
     // El tenant lo elige el usuario en la pantalla; aquí no se decide.
     expect(setTenantIdMock).not.toHaveBeenCalled();
-    expect(setTokenMock).not.toHaveBeenCalled();
     expect(clearTenantIdMock).not.toHaveBeenCalled();
   });
 
@@ -125,7 +125,6 @@ describe("resolveAndRoute — los cuatro estados", () => {
     // Sin elección explícita: el TenantProvider le aterriza en un tenant real.
     expect(clearTenantIdMock).toHaveBeenCalledTimes(1);
     // No se acuña token nuevo: sigue con el de identidad.
-    expect(setTokenMock).not.toHaveBeenCalled();
     expect(setTenantIdMock).not.toHaveBeenCalled();
   });
 
@@ -134,27 +133,26 @@ describe("resolveAndRoute — los cuatro estados", () => {
 
     await expect(resolveAndRoute()).resolves.toBe(NO_ACCESS_ROUTE);
     expect(clearTenantIdMock).toHaveBeenCalledTimes(1);
-    expect(setTokenMock).not.toHaveBeenCalled();
     expect(setTenantIdMock).not.toHaveBeenCalled();
   });
 });
 
-describe("setTokenForSingle", () => {
-  it("guarda token + tenant cuando el backend acuñó uno", () => {
-    setTokenForSingle(resolution("single", { memberships: [TENANT_B], access_token: "scoped-2" }));
-    expect(setTokenMock).toHaveBeenCalledWith("scoped-2");
+describe("applySingleResolution", () => {
+  it("persiste el tenant único; el token NO se guarda (llega por cookie)", () => {
+    applySingleResolution(
+      resolution("single", { memberships: [TENANT_B], access_token: "scoped-2" }),
+    );
     expect(setTenantIdMock).toHaveBeenCalledWith(TENANT_B.tenant_id);
   });
 
-  it("no revienta si no vino token ni memberships", () => {
-    setTokenForSingle(resolution("single"));
-    expect(setTokenMock).not.toHaveBeenCalled();
+  it("no revienta si no vino membership", () => {
+    applySingleResolution(resolution("single"));
     expect(setTenantIdMock).not.toHaveBeenCalled();
   });
 });
 
 describe("selectTenant", () => {
-  it("POSTea la elección y activa el token acuñado para ESE tenant", async () => {
+  it("POSTea la elección y activa ESE tenant (la sesión la re-emite la cookie)", async () => {
     apiFetchMock.mockResolvedValueOnce({ access_token: "picked-token" });
 
     await selectTenant(TENANT_B.tenant_id);
@@ -163,7 +161,6 @@ describe("selectTenant", () => {
       method: "POST",
       body: { tenant_id: TENANT_B.tenant_id },
     });
-    expect(setTokenMock).toHaveBeenCalledWith("picked-token");
     expect(setTenantIdMock).toHaveBeenCalledWith(TENANT_B.tenant_id);
   });
 
@@ -171,7 +168,6 @@ describe("selectTenant", () => {
     apiFetchMock.mockRejectedValueOnce(new Error("403 forbidden"));
 
     await expect(selectTenant("t-not-mine")).rejects.toThrow("403 forbidden");
-    expect(setTokenMock).not.toHaveBeenCalled();
     expect(setTenantIdMock).not.toHaveBeenCalled();
   });
 });
