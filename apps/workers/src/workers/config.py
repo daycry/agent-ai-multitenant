@@ -632,6 +632,47 @@ class Settings(BaseSettings):
         "Además evitan el rc≠0 de tar por «file changed as we read it» sobre un "
         "worktree que un agente está escribiendo. Vacía = capturarlo todo.",
     )
+    # ----- Coherencia de la captura (prod-04 task_prod_04_06) -----
+    # Redis alojaba su estado en el bundle DE REBOTE, dentro del tar del bind del
+    # data-root: un `appendonlydir` en escritura activa, acumulado durante días,
+    # copiado mientras el servidor le escribía. Ahora es un artefacto propio
+    # precedido de un `BGREWRITEAOF` completado.
+    # OJO con la trampa que esto esquiva, medida contra redis:7-alpine el
+    # 2026-07-31: capturar SOLO el `dump.rdb` (que era la letra del plan) restaura
+    # una base VACÍA, porque con `--appendonly yes` un Redis que encuentra un RDB y
+    # ningún `appendonlydir` no lee el RDB — crea un AOF nuevo vacío y sirve
+    # DBSIZE 0, sin un solo error. Se captura el directorio (AOF + RDB).
+    backup_redis_dir: str = Field(
+        default="",
+        description="Ruta del host con el directorio de datos de Redis "
+        "(`appendonlydir/` + `dump.rdb`), capturada como artefacto `redis_tar` tras "
+        "un BGREWRITEAOF completado. Vacía = no respaldar Redis, que es una opción "
+        "legítima si se declara recreable (sesiones caídas, colas re-encoladas) "
+        "pero es una DECISIÓN, no un descuido: el ADR de consistencia del bundle la "
+        "plantea explícitamente.",
+    )
+    backup_redis_url: str = Field(
+        default="",
+        description="URL con la que el backup le pide a Redis el BGREWRITEAOF. "
+        "Vacía = usar `broker_url`, que el worker ya tiene y apunta al MISMO "
+        "servidor (el rewrite es global, no por-db).",
+    )
+    backup_stable_snapshot_paths: list[str] = Field(
+        default_factory=list,
+        description="Bind paths cuya captura se VERIFICA estable: huella del árbol "
+        "(ruta, tamaño, mtime) antes y después del tar; si cambió, se reintenta "
+        "`backup_snapshot_retries` veces y, si no converge, el backup falla. Para el "
+        "file backend de Vault, cuya copia rota no da ninguna señal hasta que "
+        "alguien intenta desellar el Vault restaurado en pleno DR. "
+        "Deliberadamente NO para MinIO: se escribe todo el rato por diseño y "
+        "exigirle estabilidad convertiría el backup nocturno en un fallo nocturno.",
+    )
+    backup_snapshot_retries: int = Field(
+        default=2,
+        description="Reintentos de una captura verificada antes de fallar el run. "
+        "Una escritura suelta no debe tirar el backup; un árbol que no se queda "
+        "quieto sí, porque la copia no sería coherente.",
+    )
     backup_cron: str = Field(
         default="0 3 * * *",
         description="Cron (minute hour day-of-month month day-of-week) for the "
@@ -1130,6 +1171,13 @@ class Settings(BaseSettings):
                 f"environment={self.environment!r} but WORKERS_DATABASE_URL still uses "
                 "dev-default credentials. Set it to a real secret (Vault-backed in production)."
             )
+        # El DSN del backup (`backup_database_url`) es una SEGUNDA credencial con
+        # su propio default de dev, y también hay que rechazarlo fuera de dev —
+        # pero NO aquí: eso convertiría «el backup nocturno no correría» en «la
+        # flota de workers entera no arranca», que es un radio de explosión mayor
+        # que el problema. Se comprueba en `workers.backup.BackupConfig.from_settings`,
+        # que falla el run del backup con un mensaje accionable antes de gastar una
+        # hora en el pg_dump (prod-04 task_prod_04_09).
         return self
 
     model_config = SettingsConfigDict(

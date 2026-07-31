@@ -138,6 +138,12 @@ class RestoreConfig:
     # of every project) is re-extracted. Empty = do not restore them, which loses
     # the code of every project: only for a deliberate DB-only restore.
     projects_root: str = ""
+    # prod-04 task_prod_04_06 — dónde se re-extrae el artefacto `redis_tar` (el
+    # `appendonlydir` capturado tras un BGREWRITEAOF, más el `dump.rdb`). Vacío =
+    # no restaurar Redis, que es coherente con no respaldarlo (la opción
+    # «recreable» del ADR de consistencia) pero NO con haberlo respaldado: un
+    # artefacto que nadie extrae es peso muerto y confianza injustificada.
+    redis_dir: str = ""
     # The bind paths the operator declared for CAPTURE. A `bind_tar` artifact is
     # only restored when its recorded source is in THIS list — the manifest is
     # ours, but extracting to an arbitrary absolute path read out of a file is
@@ -180,6 +186,7 @@ class RestoreConfig:
             app_services=tuple(settings.restore_app_services),
             volume_services=tuple(settings.restore_volume_services),
             projects_root=str(settings.backup_projects_root),
+            redis_dir=str(settings.backup_redis_dir),
             bind_paths=tuple(settings.backup_bind_paths),
             autostart_on_failure=bool(settings.restore_autostart_on_failure),
             required_db_role=str(settings.restore_required_db_role),
@@ -696,12 +703,16 @@ class RestoreEngine:
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """Restore every captured data artifact. Returns ``(volumes, host_paths)``.
 
-        Tres clases, con semántica DISTINTA a propósito:
+        Cuatro clases, con semántica DISTINTA a propósito:
 
         * ``volume_tar`` → vaciar y re-extraer ``<mount_root>/<volume>/_data``:
           el volumen restaurado es EXACTAMENTE el capturado, sin supervivientes.
         * ``projects_tar`` → vaciar y re-extraer la raíz de proyectos (los bare
           repos). Mismo criterio: es un árbol que la plataforma posee entero.
+        * ``redis_tar`` → vaciar y re-extraer el data dir de Redis. Vaciar es
+          OBLIGATORIO aquí: un ``appendonlydir`` residual con una secuencia más
+          alta que la capturada le gana al restaurado, porque Redis lee el
+          manifest que encuentra (task_prod_04_06).
         * ``bind_tar`` → extraer **SIN vaciar**, y solo si el ``source`` está en
           los bind paths declarados. Vaciar aquí sería catastrófico: el tar del
           bind excluye deliberadamente ``backup_root``, que suele vivir DENTRO del
@@ -716,8 +727,9 @@ class RestoreEngine:
         artifacts = manifest.get("artifacts", [])
         volume_artifacts = [a for a in artifacts if a.get("kind") == "volume_tar"]
         projects_artifacts = [a for a in artifacts if a.get("kind") == "projects_tar"]
+        redis_artifacts = [a for a in artifacts if a.get("kind") == "redis_tar"]
         bind_artifacts = [a for a in artifacts if a.get("kind") == "bind_tar"]
-        if not (volume_artifacts or projects_artifacts or bind_artifacts):
+        if not (volume_artifacts or projects_artifacts or redis_artifacts or bind_artifacts):
             return (), ()
 
         # Los servicios dueños de los volúmenes se paran igual: los repos y los
@@ -745,6 +757,24 @@ class RestoreEngine:
                 )
                 continue
             self._extract_into(bundle_dir / archive_name, Path(target), wipe=True, label="projects")
+            paths.append(target)
+
+        # prod-04 task_prod_04_06 — Redis. `wipe=True` y no por simetría estética:
+        # el destino puede tener un `appendonlydir` con una secuencia MÁS ALTA que
+        # la capturada, y Redis lee el manifest que encuentre. Extraer por encima
+        # dejaría ficheros de dos generaciones y un manifest que apunta a la vieja:
+        # el clásico restore que «funciona» y sirve datos de otro momento.
+        for art in redis_artifacts:
+            archive_name = str(art.get("path") or art.get("name") or "")
+            target = self._config.redis_dir
+            if not target:
+                _log.warning(
+                    "restore.redis.skipped",
+                    reason="sin redis_dir: Redis NO se restaura (sesiones y colas vacías)",
+                    captured_from=art.get("source"),
+                )
+                continue
+            self._extract_into(bundle_dir / archive_name, Path(target), wipe=True, label="redis")
             paths.append(target)
 
         declared_binds = {str(Path(p)) for p in self._config.bind_paths}

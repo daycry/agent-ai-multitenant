@@ -156,14 +156,31 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_06` — Captura coherente: Redis BGSAVE, Vault snapshot y ADR de consistencia del bundle
 
-> **Estado (2026-07-31, prod-04)**: ABIERTO a propósito. El punto (3) es un **ADR con
-> opciones para un humano** (quiesce corto de escritores vs snapshot de FS vs skew aceptado) y
-> la implementación de (1) y (2) DEPENDE de cuál se elija: si dirección acepta el skew, Redis
-> pasa a «no respaldado por recreable» y no hay BGSAVE que añadir. Implementar una de las tres
-> antes de la decisión sería elegir por dirección y luego tirarlo.
-> Mitigación parcial ya en el árbol: el tar de los binds y el de `projects_tar` excluyen
-> `worktrees`/`dep-cache`, que eran la fuente principal de «file changed as we read it»
-> (escrituras vivas durante la captura).
+> **Estado (2026-07-31, prod-04)**: (1) y (2) HECHOS, (3) redactado y **ABIERTO a propósito**
+> — el ADR es una decisión de dirección y la casilla no se marca hasta que alguien la tome.
+>
+> Lo entregado, porque era estrictamente mejor con cualquiera de las tres opciones:
+>
+> - **(1) Redis**: `BGREWRITEAOF` (con `aof_last_bgrewrite_status` comprobado) + artefacto
+>   propio `redis_tar`, verificado y **restaurado** (`wipe=True`). **La letra del task era
+>   incorrecta y se midió**: «capturar solo el `dump.rdb`» restaura una base **VACÍA**, porque
+>   con `--appendonly yes` (como lo arranca el compose) Redis ignora el RDB si no hay
+>   `appendonlydir` — crea un AOF nuevo y sirve `DBSIZE 0` sin un solo error. Medido contra
+>   `redis:7-alpine` el 2026-07-31; documentado en
+>   `docs/03-guides/gotchas/redis-aof-ignores-a-restored-rdb.md`.
+> - **(2) Vault**: captura verificada estable (huella por CONTENIDO antes/después del tar,
+>   reintentos, y fallo del run si no converge). La primera versión comparaba
+>   `(tamaño, mtime)` y una ejecución real de la suite la pilló dando «estable» sobre un
+>   árbol recién reescrito.
+> - Skew residual medido y documentado en `04-disaster-recovery.md` («Skew residual del
+>   bundle»), que es la condición previa para que la decisión del ADR sea informada.
+>
+> Lo que falta para marcar la casilla: **la decisión humana del
+> [ADR 0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md)**
+> (quiesce corto / snapshot de FS / skew aceptado) + la ligada «¿Redis es crítico o
+> recreable?» + la de `vault_data` dentro o fuera del blob cifrado (que task_prod_04_07 pedía
+> anotar aquí). Implementar una de las tres antes de que dirección elija sería decidir por
+> ella y luego tirarlo. El ADR trae el coste y la estimación de cada opción.
 
 - [ ] **Título**: Eliminar la captura en caliente ingenua y documentar el skew residual aceptado
 - **Descripción**: (1) Redis: antes del tar, lanzar `BGSAVE` y capturar solo el `dump.rdb` resultante (o, si dirección lo decide, declarar Redis como no respaldado por recreable — opción del ADR); dejar de tarear el AOF en escritura activa (`docker-compose.yml:104-107`). (2) Vault: captura coherente del file backend (parar el servicio un instante o copia atómica verificada). (3) Redactar **ADR propuesto** «Consistencia del bundle de backup» con las opciones de la Decisión clave 3 (quiesce corto / snapshot FS / skew aceptado), el orden de captura resultante y el skew residual medido — decisión para humano. Implementar la opción elegida tras aprobación (presupuestado: quiesce corto).
@@ -205,28 +222,42 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_09` — Defaults de producción del backup en el instalador
 
-> **Estado (2026-07-31, prod-04)**: PARCIAL, y el hallazgo cambió de forma. Lo que el task
-> daba por hecho («`config_generators.py` solo emite `WORKERS_BACKUP_ROOT`») ya no es cierto:
-> prod-01 añadió `WORKERS_BACKUP_DATABASE_URL`, `WORKERS_BACKUP_VOLUMES` (con el prefijo del
-> proyecto compose) y el bind de `/var/lib/docker/volumes` en `workers-privileged`.
-> **Pero el DSN que emite es la URL de SQLAlchemy** (`WORKERS_BACKUP_DATABASE_URL` =
-> `_env_ref("WORKERS_DATABASE_URL")` = `postgresql+asyncpg://…`), y libpq NO entiende el
-> sufijo `+driver`: el backup diario de una instalación de producción moría en el primer
-> `pg_dump`. Saneado en el motor (`workers.backup.libpq_url`, cubierto por
-> `tests/integration/test_backup_full.py`), que es donde no depende de que todos los
-> generadores de `.env` se acuerden.
-> Queda abierto lo que vive en `apps/installer/**` (territorio de prod-01): emitir el DSN ya
-> en forma libpq y el test `apps/installer/backend/tests/test_backup_env_defaults.py` que
-> este task pide — ese directorio de tests ni siquiera existe todavía.
+> **Estado (2026-07-31, prod-04)**: CERRADO, y el hallazgo era PEOR de lo que el task
+> describía. Lo que decía («`config_generators.py` solo emite `WORKERS_BACKUP_ROOT`») ya no
+> era cierto —prod-01 añadió `WORKERS_BACKUP_DATABASE_URL` y `WORKERS_BACKUP_VOLUMES`— pero
+> los valores que emitía describían **otra máquina**:
+>
+> 1. **DSN**: `WORKERS_BACKUP_DATABASE_URL` = `${WORKERS_DATABASE_URL}` = la URL de
+>    SQLAlchemy (`postgresql+asyncpg://`), que libpq no entiende. Saneado en el motor
+>    (`workers.backup.libpq_url`) **y** ahora emitido ya en forma libpq por el instalador.
+> 2. **Volúmenes FANTASMA** (esto no lo había visto nadie): el compose generado monta
+>    **binds** bajo `{data_root}` y **no declara ningún named volume**, pero
+>    `_BACKUP_VOLUME_NAMES` emitía los nombres del stack de manuales
+>    (`agentic-platform_minio_data`, …). `tar` sobre
+>    `/var/lib/docker/volumes/<fantasma>/_data` devuelve rc≠0 y el contrato clean-failure
+>    **borraba el bundle entero, pg_dump bueno incluido**. El backup de una instalación por
+>    el instalador fallaba TODAS las noches.
+> 3. **PGDATA vivo en los tars**: el default `backup_bind_paths=["/data/agent-platform"]`
+>    tarea el data dir de PostgreSQL (copia rota + «file changed as we read it» → rc≠0) y los
+>    modelos de Ollama (decenas de GB por bundle). Ahora los bind paths son explícitos.
+> 4. **Cifrado encendido a medias**: el compose emitía `ENCRYPTION_ENABLED=true` sin emitir
+>    la clave ni la huella de custodia, y el motor es fail-closed (task_prod_04_07) → el
+>    backup fallaba antes del dump. Se emite `false` y el opt-in en dos pasos (generar clave
+>    → custodiarla → encender) está en `dr-manual-backup.md`.
+>
+> El test vive en `tests/unit/test_backup_env_contract.py` y no en
+> `apps/installer/backend/tests/`, que es lo que el task pedía: ese directorio no existe ni
+> tiene configuración de pytest, y el patrón de la casa para cruzar instalador↔runtime es
+> `tests/unit/test_compose_env_contract.py`. 12 tests, verde.
 
-- [ ] **Título**: El backup diario no puede apuntar a `localhost:15432` ni a volúmenes con nombre inexistentes
+- [x] **Título**: El backup diario no puede apuntar a `localhost:15432` ni a volúmenes con nombre inexistentes
 - **Descripción**: `config_generators.py:241-242` solo emite `WORKERS_BACKUP_ROOT`, dejando los defaults dev de `workers/config.py` (pg*dump a `localhost:15432` con password dev; tars de `/var/lib/docker/volumes/...` cuando el compose generado usa bind-mounts bajo `{data_root}`). Emitir `WORKERS_BACKUP_DATABASE_URL` (DSN al servicio postgres con la credencial generada) y `WORKERS_BACKUP_VOLUMES`/`WORKERS_BACKUP_VOLUMES_MOUNT_ROOT` coherentes con el layout de bind-mounts del compose generado (`compose_generator.py:255,277,301-303`). Test que genera el `.env` y valida que la config efectiva de backup no contiene `localhost:15432` ni `changeme-` y que las rutas de captura existen en el layout generado. **Coordinación**: el instalador es territorio de prod-01 (este plan solo toca las claves `WORKERS_BACKUP*\*`); la alerta de «último backup correcto > 24 h» ya existe (`BackupTooOld`) y su enrutado a humanos es prod-08.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod_04_09_a
     runtime: python-pytest
-    command: "pytest apps/installer/backend/tests/test_backup_env_defaults.py -v"
+    command: "pytest tests/unit/test_backup_env_contract.py -v"
   ```
 
 #### `task_prod_04_10` — Restore por tenant sin mutar el `_data` de un MinIO vivo
@@ -366,7 +397,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 1. Todas las tareas con `[x]` y sus tests automáticos en verde (incluido el test de humo con tar REAL y el de runner real — no cuentan los verdes del `FakeRunner`).
 2. Los 4 tests humanos pass, con el acta del drill (`human_prod_04_01`) archivada como evidencia.
-3. ADR «Consistencia del bundle de backup» (y, si procede, ADR «PITR/WAL archiving») creados en `docs/05-architecture-decisions/` y decididos por un humano.
+3. ADR «Consistencia del bundle de backup» (y, si procede, ADR «PITR/WAL archiving») creados en `docs/05-architecture-decisions/` y decididos por un humano. **Estado**: el ADR existe ([0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md), `proposed`) con las tres opciones presupuestadas y las dos decisiones ligadas (¿Redis crítico? ¿`vault_data` dentro del blob?); **falta la decisión**.
 4. Runbooks DR (`04-disaster-recovery.md`, `dr-full-restore.md`, `dr-manual-backup.md`, `dr-tenant-restore.md`, `dr-drill.md`) veraces y verificados contra el código.
 5. Entrada de changelog en `docs/07-changelog/prod-04-backup-dr-restaurable.md`.
 6. PR del plan mergeado a `master` y frontmatter actualizado a `completed`.

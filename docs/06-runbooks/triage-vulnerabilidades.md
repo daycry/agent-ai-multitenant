@@ -20,12 +20,16 @@ escrito un gate SCA muere en dos semanas por fatiga de alertas.
 
 ## 1. Qué se escanea, dónde y con qué umbral
 
+Resumen operativo. La ficha completa —con el porqué de cada umbral, el reparto
+de Trivy entre los tres workflows y lo que queda deliberadamente sin pinear— está
+en la referencia [cadena-suministro.md](../04-reference/cadena-suministro.md).
+
 | Superficie                              | Herramienta                          | Dónde corre                                   | Umbral                             | Excepciones         |
 | --------------------------------------- | ------------------------------------ | --------------------------------------------- | ---------------------------------- | ------------------- |
-| Dependencias Python (13 distribuciones) | `pip-audit --strict --skip-editable` | `ci.yml` → job `security-scan`                | cualquier aviso conocido           | `.pip-audit-ignore` |
+| Dependencias Python (14 distribuciones) | `pip-audit --strict --skip-editable` | `ci.yml` → job `security-scan`                | cualquier aviso conocido           | `.pip-audit-ignore` |
 | npm `apps/admin-panel`                  | `npm audit --omit=dev`               | `ci.yml` → job `security-scan`                | `--audit-level=high`               | (ver §5)            |
 | npm `apps/installer`                    | `npm audit --omit=dev`               | `ci.yml` → job `security-scan`                | `--audit-level=high`               | (ver §5)            |
-| Imagen base `api-server`                | Trivy                                | `ci.yml` → job `build-images`                 | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| 5 imágenes de plataforma                | Trivy                                | `ci.yml` → job `build-images`                 | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
 | 14 runtime templates                    | Trivy                                | `build-runtime-templates.yml` (matriz)        | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
 | 5 imágenes publicables                  | Trivy                                | `release-images.yml`                          | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
 | Drift del lockfile                      | `uv lock --check`                    | `ci.yml` → job `lint-python` (**bloqueante**) | cualquier desincronía              | ninguna             |
@@ -202,6 +206,20 @@ el backlog heredado. Para flipearlo hacen falta **dos pasos, ambos humanos**:
    abarca todo 14.x (y arrastra un `postcss` empotrado) y el único fix es
    **next 16**, un salto de major con roturas. Eso necesita su propio plan.
    Mientras tanto el gate npm no puede ser obligatorio sin mentir.
+
+   Medición del 2026-07-31 sobre `next` 14.2.35 ya instalado (`node -e` lo
+   confirma en las dos superficies), para que nadie tenga que repetirla:
+
+   | Comando                                       | admin-panel | installer  |
+   | --------------------------------------------- | ----------- | ---------- |
+   | `npm audit --omit=dev --audit-level=critical` | exit **0**  | exit **0** |
+   | `npm audit --omit=dev --audit-level=high`     | exit **1**  | exit **1** |
+
+   Es decir: la **crítica** que motivó el hallazgo (`GHSA-955p-x3mx-jcvp`,
+   divulgación no autenticada de Server Functions) **está cerrada**; quedan 2
+   avisos `high` sin fix dentro de 14.x. `npm audit fix --force` propondría
+   `next@16`: no se ejecuta a ciegas.
+
 2. **Quitar el `continue-on-error`** del job en `.github/workflows/ci.yml` y
    añadir `SCA (pip-audit + npm audit)` a los **checks requeridos de branch
    protection** (Settings → Branches → `master`). Esa lista la administra
@@ -252,7 +270,10 @@ uv lock --check
 
 ## Relacionado
 
+- [Referencia: cadena de suministro](../04-reference/cadena-suministro.md) — la
+  ficha técnica de qué se escanea, con qué umbral y qué queda sin pinear.
 - [ADR 0147 — lockfile Python: uv workspace](../05-architecture-decisions/0147-lockfile-python-uv-vs-pip-tools.md)
+- [ADR 0148 — distribución de las imágenes runtime](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md) (`proposed`)
 - [Plan prod-11 — cadena de suministro](../roadmap/prod-11-cadena-suministro.md)
 - [Auditoría de dependencias 2026-06](./auditoria-dependencias-2026-06.md)
 - [gotchas del toolchain](../03-guides/gotchas/)

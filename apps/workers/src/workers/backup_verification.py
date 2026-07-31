@@ -234,7 +234,7 @@ class BackupVerifier:
         # 3. Structural checks per kind.
         if kind == "pg_dump":
             results.append(self._check_pg_restore_list(target, name=name))
-        elif kind in ("volume_tar", "bind_tar", "projects_tar"):
+        elif kind in ("volume_tar", "bind_tar", "projects_tar", "redis_tar"):
             # prod-04 (auditoría 2026-07-06): el bind_tar (bare repos + worktrees)
             # es también un .tar.gz y merece el mismo `tar -tf` estructural que un
             # volume_tar — antes solo se le comprobaba el checksum, así que una

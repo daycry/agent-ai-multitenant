@@ -40,14 +40,60 @@ archivan WAL. Si dirección necesita un RPO menor, hace falta WAL archiving
 propuesto**, no algo que exista hoy.
 
 Qué NO cubre el RPO: lo que no entra en el bundle. Hoy entran el dump lógico de
-PostgreSQL, los volúmenes de MinIO/Redis/Vault, los **bare repos de los
-proyectos** (`projects_tar`) y los bind paths declarados. Los worktrees por
-tarea y la cache de dependencias quedan fuera **a propósito**: son regenerables
-desde el bare repo.
+PostgreSQL, el estado de MinIO y de Vault, el data dir de **Redis**
+(`redis_tar`), los **bare repos de los proyectos** (`projects_tar`) y los bind
+paths declarados. Los worktrees por tarea y la cache de dependencias quedan fuera
+**a propósito**: son regenerables desde el bare repo. `clamav` (firmas de virus)
+y los modelos de `ollama` también: se re-descargan, y meter decenas de GB en cada
+bundle nocturno haría inviable la retención.
 
 Señal de que el RPO se está incumpliendo: la alerta `BackupTooOld` (último
 backup correcto > 24 h) y `BackupLastRunFailed`. Su enrutado a humanos es
 prod-08; aquí solo se garantiza que la señal se emite.
+
+## Skew residual del bundle: qué NO es coherente, y hasta dónde
+
+Esto es lo que hay que saber ANTES de un DR, porque cambia lo que se considera un
+restore correcto. El bundle se ensambla con el stack **vivo**, así que cada
+artefacto retrata un instante distinto (prod-04 task_prod_04_06, hallazgo gap3-3).
+La decisión de si eso se acepta, se elimina con un quiesce corto de escritores o
+con un snapshot de filesystem está **pendiente de dirección** en el
+[ADR 0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md).
+Mientras no se decida, esto es el estado real:
+
+| Artefacto           | Instante | Coherencia interna                                      |
+| ------------------- | -------- | ------------------------------------------------------- |
+| `pg_dump` (lógico)  | t₀       | **Total** — snapshot MVCC                               |
+| `redis_tar`         | t₁       | **Sí** — `BGREWRITEAOF` completado y comprobado antes   |
+| `bind_tar` de Vault | t₂       | **Verificada** — huella del árbol antes/después del tar |
+| `bind_tar` de MinIO | t₃       | **NO** — se escribe durante la captura                  |
+| `projects_tar`      | t₄       | **NO** — un agente puede comitear durante la captura    |
+
+Entre t₀ y t₄ puede haber minutos. Consecuencias que hay que **esperar**, no
+tratar como incidencia:
+
+1. **Documentos sin binario (o binarios sin fila).** Un documento subido entre t₀
+   y t₃ tiene fila en la BD y su blob no viajó. `restore_reconcile` lo enumera; la
+   acción correcta es marcarlo para re-subida, no dudar del restore.
+2. **Un commit de agente que no está en el bare repo restaurado**, si cayó después
+   de t₄. La tarea se re-ejecuta.
+3. **Redis**: se pierde, como mucho, la cola del incr del AOF que se escribiese
+   durante el tar. Redis la tolera por diseño (`aof-load-truncated yes` descarta
+   el último comando incompleto y arranca). Traducido: algunas sesiones caídas y
+   algún mensaje de cola re-encolado desde la BD.
+
+Lo que **NO** es skew aceptable y por tanto falla el backup en vez de producirse:
+un árbol de Vault que cambia durante su captura (el motor reintenta y, si no
+converge, aborta el run), y un `BGREWRITEAOF` que termina con estado ≠ `ok`.
+
+> **Trampa de Redis, medida.** Capturar solo el `dump.rdb` —lo que parece la vía
+> obvia— restaura una base **vacía**: con `--appendonly yes` (como lo arranca el
+> compose), un Redis que encuentra un `dump.rdb` y ningún `appendonlydir` no lee
+> el RDB, crea un AOF nuevo vacío y sirve `DBSIZE 0`, sin un solo error. Por eso el
+> artefacto es el **directorio** (AOF + RDB) y el restore lo extrae **vaciando** el
+> destino: un `appendonlydir` residual con una secuencia más alta que la capturada
+> le ganaría al restaurado, porque Redis lee el manifest que encuentra.
+> Verificación post-restore obligatoria: `redis-cli DBSIZE` > 0.
 
 ## Cuándo y qué camino elegir
 
@@ -251,21 +297,40 @@ Tras cualquiera de los dos restores:
    alembic upgrade head    # como migrations_user
    ```
 
-3. **Reconciliación de los cuatro almacenes** (solo restore completo) — un
-   bundle son fotos tomadas en instantes ligeramente distintos; el restore no se
-   da por bueno hasta que la base de datos, MinIO, Vault y los repos git cuentan
-   la misma historia:
+3. **Redis no volvió vacío** (solo restore completo) — la comprobación de una
+   línea que separa «Redis restaurado» de «Redis arrancó de cero y nadie lo
+   notó». Es el síntoma exacto de la trampa del `dump.rdb` descrita arriba:
+
+   ```bash
+   docker compose -f docker/docker-compose.yml exec redis \
+     redis-cli -a "$REDIS_PASSWORD" DBSIZE     # tiene que ser > 0
+   ```
+
+   Y en los logs del contenedor tiene que aparecer `DB loaded from base file
+appendonly.aof.<n>.base.rdb`. Si en su lugar dice `Creating AOF base file … on
+server start`, Redis **no** cargó el backup: el `appendonlydir` no llegó al
+   data dir. Revisa que el artefacto `redis_tar` esté en el manifest y que
+   `WORKERS_BACKUP_REDIS_DIR` apunte al bind correcto.
+
+4. **Reconciliación de los cuatro almacenes** (solo restore completo) — un
+   bundle son fotos tomadas en instantes ligeramente distintos (ver
+   [«Skew residual del bundle»](#skew-residual-del-bundle-qué-no-es-coherente-y-hasta-dónde));
+   el restore no se da por bueno hasta que la base de datos, MinIO, Vault y los
+   repos git cuentan la misma historia:
 
    ```bash
    python -m workers.restore_reconcile
    ```
 
-   Sale con código ≠ 0 si hay divergencias críticas.
+   Sale con código ≠ 0 si hay divergencias críticas. **Las divergencias que el
+   skew explica (un documento sin binario, un commit posterior a la captura de su
+   repo) son esperadas**: se anotan en el acta del drill y se resuelven
+   re-subiendo o re-ejecutando, no cuestionando el restore.
 
-4. **Login y datos** — un usuario del tenant restaurado hace login con sus
+5. **Login y datos** — un usuario del tenant restaurado hace login con sus
    credenciales previas y ve sus proyectos / planes / conversaciones intactos
    al punto del backup elegido.
-5. **Smoke tests post-deploy** (`task_15_26`) — ejercitan los caminos
+6. **Smoke tests post-deploy** (`task_15_26`) — ejercitan los caminos
    críticos de extremo a extremo sobre el stack recuperado:
 
    ```bash
@@ -276,11 +341,11 @@ Tras cualquiera de los dos restores:
    quedan en verde; contra el stack recuperado **sí** corren y validan la
    recuperación.
 
-6. **Aislamiento (solo restore selectivo)** — confirma que un usuario de
+7. **Aislamiento (solo restore selectivo)** — confirma que un usuario de
    **otro** tenant sigue viendo sus datos actuales **sin cambios**, y que el
    audit log refleja quién hizo el restore y sobre qué tenant.
 
-7. **Ejecutar un plan de punta a punta** — el paso que descubre lo que ningún
+8. **Ejecutar un plan de punta a punta** — el paso que descubre lo que ningún
    otro descubre (credenciales de proveedor que no sobrevivieron, imágenes de
    runtime ausentes, un worktree que no se puede crear sobre el bare restaurado).
    Obligatorio en el simulacro; muy recomendable tras un DR real.

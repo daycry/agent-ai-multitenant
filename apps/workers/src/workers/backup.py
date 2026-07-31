@@ -59,6 +59,11 @@ from typing import Any, Protocol
 
 import structlog
 
+from workers.backup_consistency import (
+    PersistenceFlusher,
+    fingerprint_diff,
+    tree_fingerprint,
+)
 from workers.backup_encryption import ENCRYPTED_SUFFIX, BackupEncryptor
 from workers.config import Settings, get_settings
 
@@ -170,6 +175,24 @@ class BackupConfig:
     # are regenerable (`worktrees`, `dep-cache`). Also avoids tar's rc≠0 "file
     # changed as we read it" over a worktree an agent is writing.
     transient_excludes: tuple[str, ...] = ()
+    # prod-04 task_prod_04_06 — el directorio de datos de Redis (host path). Se
+    # captura como artefacto PROPIO y precedido de un BGREWRITEAOF, en vez de
+    # entrar de rebote en un bind tar sobre un AOF en escritura activa. Vacío = no
+    # capturar Redis (la opción «recreable» del ADR de consistencia).
+    redis_dir: str = ""
+    # URL con la que hablarle a Redis para pedirle el rewrite. Vacío = no se puede
+    # consolidar la persistencia; el motor lo trata como error si `redis_dir` está
+    # configurado, porque capturar el AOF sin rewrite es la captura ingenua.
+    redis_url: str = ""
+    # prod-04 task_prod_04_06 — bind paths cuya captura se VERIFICA estable
+    # (huella del árbol antes y después del tar). Para el file backend de Vault,
+    # que se escribe rara vez pero cuya copia rota no da ninguna señal hasta que
+    # alguien intenta desellar el Vault restaurado. Deliberadamente NO se aplica a
+    # MinIO: se escribe todo el rato por diseño y exigirle estabilidad convertiría
+    # el backup nocturno en un fallo nocturno.
+    stable_snapshot_paths: tuple[str, ...] = ()
+    # Reintentos de la captura verificada antes de darla por imposible.
+    snapshot_retries: int = 2
     # Optional at-rest encryption (task_12_02). When True the engine expects an
     # injected BackupEncryptor; the Vault key NAME (not value) is here so the
     # engine can build a default encryptor from settings.
@@ -183,6 +206,13 @@ class BackupConfig:
     # encrypted bundle whose key is not in custody is unrecoverable if the host
     # dies, which is the exact scenario a backup exists for.
     require_key_custody: bool = False
+    # prod-04 task_prod_04_09 (hallazgo deploy-4). Si el `.env` no emite
+    # `WORKERS_BACKUP_DATABASE_URL`, el motor hereda el default de DEV
+    # (`…changeme-migrations-dev-only@localhost:15432`) y `pg_dump` sale a buscar
+    # un postgres que dentro del contenedor de un worker no existe. True fuera de
+    # dev: mejor abortar con un mensaje que diga qué variable falta que producir un
+    # fallo de conexión cada noche a las 03:00.
+    require_production_dsn: bool = False
     # Wall-clock caps for the two heavy commands. Generous; a hung pg_dump or
     # tar is a problem, but a legitimate multi-GB dump must not be killed.
     pg_dump_timeout_s: int = 3600
@@ -201,6 +231,13 @@ class BackupConfig:
             bind_paths=tuple(settings.backup_bind_paths),
             projects_root=str(settings.backup_projects_root),
             transient_excludes=tuple(settings.backup_transient_excludes),
+            redis_dir=str(settings.backup_redis_dir),
+            # Con qué conexión pedirle el rewrite: la propia del backup si se
+            # configuró, y si no la del broker de Celery, que el worker ya tiene y
+            # apunta al MISMO servidor (BGREWRITEAOF es global, no por-db).
+            redis_url=str(settings.backup_redis_url or settings.broker_url),
+            stable_snapshot_paths=tuple(settings.backup_stable_snapshot_paths),
+            snapshot_retries=int(settings.backup_snapshot_retries),
             encryption_enabled=bool(settings.backup_encryption_enabled),
             encryption_vault_key=str(settings.backup_encryption_vault_key),
             key_custody_fingerprint=str(settings.backup_key_custody_fingerprint).strip().lower(),
@@ -208,6 +245,9 @@ class BackupConfig:
             # se avisa, fuera de dev se falla. Un bundle cifrado sin clave en
             # custodia es irrecuperable, y enterarse en el DR es demasiado tarde.
             require_key_custody=settings.environment != "dev",
+            # Fail-CLOSED («todo lo que no es dev»), no una lista de entornos que
+            # haya que acordarse de ampliar el día que aparezca un cuarto.
+            require_production_dsn=settings.environment != "dev",
         )
 
 
@@ -216,7 +256,9 @@ class ArtifactRecord:
     """One captured artifact in the manifest."""
 
     name: str
-    kind: str  # "pg_dump" | "volume_tar" | "projects_tar" | "bind_tar" | "encrypted_bundle"
+    # "pg_dump" | "volume_tar" | "projects_tar" | "bind_tar" | "redis_tar"
+    # | "encrypted_bundle"
+    kind: str
     path: str  # relative to the bundle directory
     size_bytes: int
     sha256: str
@@ -388,10 +430,15 @@ class BackupEngine:
         *,
         runner: CommandRunner | None = None,
         encryptor: BackupEncryptor | None = None,
+        redis_flusher: PersistenceFlusher | None = None,
         now: datetime | None = None,
     ) -> None:
         self._config = config
         self._runner: CommandRunner = runner or SubprocessRunner()
+        # El seam que le pide a Redis un AOF fresco antes de tarearlo
+        # (task_prod_04_06). No cabe en el CommandRunner: es una conversación por
+        # red, no un subproceso. Producción lo construye en run_full_backup().
+        self._redis_flusher = redis_flusher
         # The Vault-keyed AES-256 encryptor — only used when encryption is
         # enabled. Tests inject one backed by a StaticSecretsProvider; in
         # production it is built from settings in run_full_backup().
@@ -417,9 +464,11 @@ class BackupEngine:
         if bundle_dir.exists():
             raise BackupError(f"backup bundle {bundle_dir} already exists")
 
-        # Custodia de la clave ANTES de gastar una hora en pg_dump + tar: si el
-        # bundle va a salir cifrado con una clave que nadie puede recuperar, no
-        # merece la pena producirlo (task_prod_04_07).
+        # Los dos gates ANTES de gastar una hora en pg_dump + tar: un bundle
+        # cifrado con una clave que nadie puede recuperar no merece la pena
+        # producirlo (task_prod_04_07), y un DSN de dev no va a producir ninguno
+        # (task_prod_04_09).
+        self._assert_production_dsn()
         key_fingerprint = self._assert_key_custody()
 
         bundle_dir.mkdir(parents=True, exist_ok=False)
@@ -433,6 +482,9 @@ class BackupEngine:
             projects = self._tar_projects(bundle_dir)
             if projects is not None:
                 artifacts.append(projects)
+            redis_art = self._tar_redis(bundle_dir)
+            if redis_art is not None:
+                artifacts.append(redis_art)
             for bind_path in self._config.bind_paths:
                 artifacts.append(self._tar_bind_path(bundle_dir, bind_path))
             encrypted = False
@@ -472,6 +524,38 @@ class BackupEngine:
         )
 
     # -- steps --------------------------------------------------------------
+
+    def _assert_production_dsn(self) -> None:
+        """Rechazar el DSN de DEV del backup fuera de dev (task_prod_04_09).
+
+        `Settings.backup_database_url` es una SEGUNDA credencial con su propio
+        default de desarrollo, y el guard anti-defaults del `Settings` solo mira
+        `database_url`. Un `.env` de producción que no emita
+        `WORKERS_BACKUP_DATABASE_URL` deja al `pg_dump` diario apuntando a
+        `localhost:15432` con `changeme-migrations-dev-only`: dentro del contenedor
+        de un worker no hay ningún postgres ahí, así que el backup fallaba todas
+        las noches con un error de conexión que nadie relaciona con la variable que
+        falta. Y un backup que falla en silencio no se descubre hasta el desastre.
+
+        No se comprueba al arrancar el worker a propósito: negarle el boot a la
+        flota entera por una variable del backup es un radio de explosión mayor que
+        el problema. Aquí falla el run —el único que necesita el DSN— con un mensaje
+        accionable y antes de gastar una hora en el dump.
+        """
+        if not self._config.require_production_dsn:
+            return
+        dsn = self._config.database_url.lower()
+        markers = [m for m in ("changeme", "dev-only") if m in dsn]
+        if not markers:
+            return
+        raise BackupError(
+            "WORKERS_BACKUP_DATABASE_URL sigue con la credencial de DESARROLLO "
+            f"(marcadores: {', '.join(markers)}). El pg_dump saldría a buscar "
+            f"{_sanitize_db_url(self._config.database_url)}, que dentro del "
+            "contenedor del worker no existe: el backup fallaría cada noche. Emite "
+            "el DSN libpq del postgres del stack "
+            "(postgresql://migrations_user:<password>@postgres:5432/agentic_platform)."
+        )
 
     def _assert_key_custody(self) -> str | None:
         """Comprobar la custodia offsite de la clave de cifrado (task_prod_04_07).
@@ -657,6 +741,125 @@ class BackupEngine:
             source=str(source_dir),
         )
 
+    def _tar_redis(self, bundle_dir: Path) -> ArtifactRecord | None:
+        """Capturar Redis con un AOF FRESCO, no en caliente (task_prod_04_06).
+
+        Redis alojaba su estado en el bundle de rebote, dentro del tar del bind del
+        data-root: un ``appendonlydir`` en escritura activa, acumulado durante días,
+        copiado mientras el servidor le escribía. Ahora es un artefacto propio y va
+        precedido de un ``BGREWRITEAOF`` completado, que deja un base file recién
+        cerrado y un incr recién abierto.
+
+        Lo que NO se hace, y el plan pedía: «BGSAVE y capturar solo el dump.rdb».
+        **Medido contra redis:7-alpine el 2026-07-31, eso restaura una base
+        vacía**: con ``--appendonly yes`` (como lo arranca el compose) un Redis que
+        encuentra un ``dump.rdb`` y ningún ``appendonlydir`` NO lee el RDB — crea un
+        AOF nuevo y vacío y sirve ``DBSIZE 0``. Habría sido un bundle que pasa toda
+        verificación y pierde las sesiones, el broker y los rate limits en silencio.
+        Así que se captura el directorio entero (AOF + el RDB si está), que es lo
+        que el restore puede volver a poner sin gimnasia de configuración.
+
+        Devuelve ``None`` cuando no hay ``redis_dir`` configurado (Redis declarado
+        recreable) o cuando todavía no existe en disco.
+        """
+        root = self._config.redis_dir
+        if not root:
+            _log.info("backup.redis.skipped", reason="no redis_dir configured")
+            return None
+        source_dir = Path(root)
+        if not source_dir.is_dir():
+            _log.warning("backup.redis.skipped", reason="not on disk", path=str(source_dir))
+            return None
+
+        flusher = self._redis_flusher
+        if flusher is None:
+            raise BackupError(
+                "redis_dir está configurado pero no hay forma de hablar con redis "
+                "(sin `redis_url` ni flusher inyectado): capturar el appendonlydir sin "
+                "un BGREWRITEAOF previo es la captura en caliente que este paso quita"
+            )
+        try:
+            operation = flusher.flush()
+        except Exception as exc:
+            raise BackupError(f"no se pudo consolidar la persistencia de redis: {exc}") from exc
+
+        # Miembros explícitos en vez de '.': si mañana alguien mete un socket o un
+        # fichero temporal en el data dir, no entra en el bundle por accidente.
+        members = [name for name in ("appendonlydir", "dump.rdb") if (source_dir / name).exists()]
+        if not members:
+            raise BackupError(
+                f"el directorio de datos de redis {root!r} no contiene ni appendonlydir "
+                f"ni dump.rdb tras el {operation}: no hay nada restaurable que capturar"
+            )
+
+        archive_name = "redis.tar.gz"
+        archive_path = bundle_dir / archive_name
+        args = [
+            "tar",
+            "--create",
+            "--gzip",
+            f"--directory={source_dir}",
+            f"--file={archive_path}",
+            *members,
+        ]
+        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+        if result.returncode != 0:
+            raise BackupError(
+                f"tar of redis data dir {root!r} failed (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        if not archive_path.exists():
+            raise BackupError(f"tar of redis data dir {root!r} produced no archive")
+        _log.info("backup.redis.captured", operation=operation, members=members)
+        return ArtifactRecord(
+            name=archive_name,
+            kind="redis_tar",
+            path=archive_name,
+            size_bytes=archive_path.stat().st_size,
+            sha256=_checksum_file(archive_path),
+            source=str(source_dir),
+        )
+
+    def _run_tar_verified(self, args: list[str], source_dir: Path, *, label: str) -> CommandResult:
+        """Ejecutar un ``tar`` comprobando que el árbol de origen no cambió.
+
+        Para el file backend de Vault (task_prod_04_06). Una copia tomada a mitad
+        de una escritura puede dejar el barrel de claves inconsistente, y eso no da
+        ninguna señal: se descubre cuando alguien intenta desellar el Vault
+        restaurado, en pleno DR. Aquí se detecta en el momento.
+
+        Se reintenta porque una escritura suelta no debe tirar el backup nocturno;
+        si el árbol NO se queda quieto, el run falla, que es la única respuesta
+        honesta (la alternativa es guardar una copia rota sin decirlo). El quiesce
+        corto de escritores es la opción que decide el ADR de consistencia.
+        """
+        attempts = max(1, self._config.snapshot_retries + 1)
+        changed: list[str] = []
+        for attempt in range(1, attempts + 1):
+            before = tree_fingerprint(source_dir)
+            result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+            if result.returncode != 0:
+                return result  # el llamante ya traduce el rc a BackupError
+            changed = fingerprint_diff(before, tree_fingerprint(source_dir))
+            if not changed:
+                if attempt > 1:
+                    _log.info("backup.snapshot.stable_on_retry", label=label, attempt=attempt)
+                return result
+            _log.warning(
+                "backup.snapshot.unstable",
+                label=label,
+                attempt=attempt,
+                of=attempts,
+                changed=changed[:10],
+            )
+        raise BackupError(
+            f"el árbol de {label} ({source_dir}) cambió durante la captura en los "
+            f"{attempts} intentos: la copia no sería coherente. Ficheros que se "
+            f"movieron: {changed[:10]}. Si esto es habitual, la vía es el quiesce "
+            "corto de escritores en la ventana del backup (ADR de consistencia del "
+            "bundle)."
+        )
+
     def _tar_bind_path(self, bundle_dir: Path, bind_path: str) -> ArtifactRecord:
         """tar + gzip un bind mount (ruta absoluta del host) dentro del bundle.
 
@@ -701,7 +904,13 @@ class BackupEngine:
             *_transient_excludes(self._config.transient_excludes),
             ".",
         ]
-        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+        # task_prod_04_06: los binds declarados «estables» (el file backend de
+        # Vault) se capturan comprobando que el árbol no se movió mientras tar
+        # leía. El resto (MinIO, que se escribe por diseño) va directo.
+        if str(Path(bind_path)) in {str(Path(p)) for p in self._config.stable_snapshot_paths}:
+            result = self._run_tar_verified(args, Path(bind_path), label=f"bind {bind_path}")
+        else:
+            result = self._runner.run(args, timeout=self._config.tar_timeout_s)
         if result.returncode != 0:
             raise BackupError(
                 f"tar of bind path {bind_path!r} failed (rc={result.returncode}): "
@@ -857,16 +1066,25 @@ def run_full_backup(
     settings: Settings | None = None,
     runner: CommandRunner | None = None,
     encryptor: BackupEncryptor | None = None,
+    redis_flusher: PersistenceFlusher | None = None,
     now: datetime | None = None,
 ) -> BackupResult:
     """Convenience entrypoint: build the engine from settings and run it.
 
     This is what ``scripts/backup.sh`` and the beat task call. ``runner`` /
-    ``encryptor`` / ``now`` are injectable for tests; production leaves them
-    ``None`` (real subprocess, real clock, and — when encryption is enabled —
-    a default Vault/env-backed :class:`BackupEncryptor`).
+    ``encryptor`` / ``redis_flusher`` / ``now`` are injectable for tests;
+    production leaves them ``None`` (real subprocess, real clock, and — when
+    enabled — a default Vault/env-backed :class:`BackupEncryptor` plus a
+    :class:`RedisAofRewriter` talking to the configured Redis).
     """
     cfg = BackupConfig.from_settings(settings or get_settings())
+    if redis_flusher is None and cfg.redis_dir and cfg.redis_url:
+        # task_prod_04_06: sin esto, `_tar_redis` falla a propósito — capturar el
+        # appendonlydir sin pedir antes un AOF fresco es la captura en caliente
+        # ingenua que este paso existe para quitar.
+        from workers.backup_consistency import RedisAofRewriter
+
+        redis_flusher = RedisAofRewriter(url=cfg.redis_url)
     if encryptor is None and cfg.encryption_enabled:
         # Build the default Vault/env-backed encryptor. The provider resolves
         # the AES-256 key from the platform's secret mechanism (Vault → env);
@@ -877,4 +1095,10 @@ def run_full_backup(
             provider=EnvSecretsProvider(),
             vault_key_name=cfg.encryption_vault_key,
         )
-    return BackupEngine(cfg, runner=runner, encryptor=encryptor, now=now).run_full_backup()
+    return BackupEngine(
+        cfg,
+        runner=runner,
+        encryptor=encryptor,
+        redis_flusher=redis_flusher,
+        now=now,
+    ).run_full_backup()

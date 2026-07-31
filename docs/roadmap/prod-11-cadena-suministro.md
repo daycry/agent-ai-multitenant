@@ -164,6 +164,34 @@ integridad de las imágenes en build).
     runtime: node-jest
     command: "cd apps/installer && npm ci && npm audit --omit=dev --audit-level=high && npm run build"
   ```
+- **Estado verificado (2026-07-31)**: la **subida está aplicada** — `next` y
+  `eslint-config-next` en `14.2.35` en los dos `package.json` y en los dos
+  `package-lock.json`; `node -e` confirma 14.2.35 instalado; la suite vitest del
+  admin-panel en verde (778 tests / 94 ficheros). Lo acreditan dos guardas en
+  verde: `test_npm_surfaces_pin_a_patched_next` y
+  `test_npm_surfaces_pin_a_matching_eslint_config_next`.
+  **La casilla NO se marca porque su test no puede pasar.** `npm audit` medido
+  hoy sobre 14.2.35 ya instalado:
+
+  | Comando                                       | admin-panel | installer  |
+  | --------------------------------------------- | ----------- | ---------- |
+  | `npm audit --omit=dev --audit-level=critical` | exit **0**  | exit **0** |
+  | `npm audit --omit=dev --audit-level=high`     | exit **1**  | exit **1** |
+
+  Es decir: **la crítica del hallazgo está cerrada** (`GHSA-955p-x3mx-jcvp`,
+  divulgación no autenticada de Server Functions), que era el síntoma que el
+  Resumen de este plan describe. Pero quedan **2 avisos `high`** cuyo rango
+  abarca **todo 14.x** (uno de ellos arrastra un `postcss` empotrado) y el único
+  fix que ofrece npm es **`next@16`**, un salto de major con roturas: eso no cabe
+  en una tarea de 4 h ni se hace con `npm audit fix --force` a ciegas.
+  **Necesita su propio plan o ADR** (migración a next 16 del admin-panel y del
+  frontend del installer). Mientras no exista, `auto_prod11_01_a/b` seguirán en
+  rojo por diseño y el gate npm no puede ser obligatorio sin mentir — lo cual
+  bloquea a su vez `task_sca_gate_08`.
+  Constancia escrita en tres sitios para que nadie repita la medición:
+  `docs/06-runbooks/triage-vulnerabilidades.md` §6,
+  `docs/04-reference/cadena-suministro.md` §4 y el comentario de cabecera del
+  job `security-scan` en `ci.yml`.
 
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
@@ -209,6 +237,15 @@ integridad de las imágenes en build).
   ```
   (test que recorre `.github/workflows/*.yml` y falla si algún `uses:`
   referencia un tag mutable en lugar de un SHA de 40 caracteres.)
+- **Recuento verificado (2026-07-31)**: no son 17 usos, son **46** en **4**
+  workflows (`ci.yml`, `build-runtime-templates.yml`,
+  `eval-on-prompt-change.yml` y `release-images.yml`, que no existía cuando se
+  escribió el plan). **Los 46 van pineados por SHA de 40 caracteres**, y los 46
+  llevan su tag legible en comentario `# vN`. Guardas ejecutadas en verde:
+  `test_actions_pinned_by_commit_sha` y
+  `test_pinned_actions_carry_a_readable_tag_comment`, ambas con aserción de que
+  el descubrimiento encontró ≥17 — así no pueden pasar vacíamente si alguien
+  vacía un workflow.
 
 #### `task_composer_checksum_04` — Verificar el instalador de Composer en las imágenes PHP
 
@@ -255,7 +292,7 @@ integridad de las imágenes en build).
 
 #### `task_npm_audit_06` — npm audit en admin-panel e installer dentro de CI
 
-- [ ] **Título**: `npm audit --audit-level=high --omit=dev` en las 2 superficies npm
+- [x] **Título**: `npm audit --audit-level=high --omit=dev` en las 2 superficies npm
 - **Descripción**: Añadir a `security-scan` dos pasos `npm ci && npm audit
 --omit=dev --audit-level=high` en `apps/admin-panel` y `apps/installer`.
   Nota de coordinación con `prod-02-ci-en-verde`: el job `lint-typescript`
@@ -274,10 +311,23 @@ integridad de las imágenes en build).
     runtime: node-jest
     command: "cd apps/installer && npm audit --omit=dev --audit-level=high"
   ```
+- **Estado verificado (2026-07-31)**: **HECHO**. `ci.yml` job
+  `security-scan` tiene los dos pasos (`npm audit (admin-panel)` y
+  `npm audit (installer)`), ambos con `--omit=dev --audit-level=high`. Lo
+  acreditan dos guardas que se ejecutaron en verde:
+  `test_security_scan_runs_npm_audit_on_both_surfaces` y
+  `test_npm_audit_uses_the_agreed_threshold` (28 passed en
+  `tests/unit/test_supply_chain_config.py`).
+  **Ojo con los dos comandos de arriba**: son el gate que la tarea INSTALA, no
+  una comprobación de que el paso exista. Hoy salen en **exit 1** en las dos
+  superficies por el backlog heredado de `next` (ver `task_next_update_01`), que
+  es justamente lo que un escáner debe hacer cuando hay una vulnerabilidad. El
+  job corre en modo informe (`continue-on-error: true`) a propósito hasta que
+  `task_sca_gate_08` lo convierta en gate.
 
 #### `task_trivy_07` — Trivy sobre imágenes de apps y runtimes
 
-- [ ] **Título**: Escaneo Trivy HIGH/CRITICAL tras cada build de imagen
+- [x] **Título**: Escaneo Trivy HIGH/CRITICAL tras cada build de imagen
 - **Descripción**: (a) En `ci.yml` job `build-images` (líneas 347-393), añadir
   tras cada `docker build` un paso `aquasecurity/trivy-action` con
   `severity: HIGH,CRITICAL`, `exit-code: 1`, `ignore-unfixed: true` y
@@ -297,6 +347,21 @@ integridad de las imágenes en build).
   ```
   (test que verifica que cada job que construye imágenes en los workflows va
   seguido de un paso trivy-action con severity y exit-code correctos.)
+- **Estado verificado (2026-07-31)**: **HECHO**, y con más cobertura que la que
+  pedía la tarea: **9 pasos `trivy-action` estáticos** repartidos en los tres
+  workflows, que a la hora de correr escanean **24 imágenes** — 5 en
+  `ci.yml:build-images` (api-server, installer, installer backend,
+  agent-runtime, browser-runtime), 14 en la matriz de
+  `build-runtime-templates.yml` (donde el smoke de WORKDIR se conserva pero deja
+  de ser el único gate) y 5 en `release-images.yml`, donde el escaneo bloquea la
+  publicación. Todos con `severity: HIGH,CRITICAL`, `exit-code: "1"`,
+  `ignore-unfixed: true`, `.trivyignore` y caché de la DB. Guardas ejecutadas en
+  verde: `test_image_building_jobs_are_scanned_by_trivy` (descubrimiento: un job
+  nuevo que construya imágenes sin escanearlas sale rojo; la única excepción,
+  `ci.yml:test-integration`, está declarada con motivo) y
+  `test_trivy_steps_gate_on_high_and_critical`.
+  El reparto de cobertura entre los tres workflows está documentado en
+  `docs/04-reference/cadena-suministro.md` §1.
 
 #### `task_sca_gate_08` — Triage del backlog y conversión en gate obligatorio
 
@@ -318,6 +383,22 @@ integridad de las imágenes en build).
   ```
   (falla si el job `security-scan` conserva `continue-on-error: true` o si
   alguna entrada de las ignore-lists carece de justificación/fecha.)
+- **Estado verificado (2026-07-31)**: **NO implementable por un agente, y hoy
+  además bloqueada.** Dos motivos independientes:
+  1. Quitar el `continue-on-error` y añadir `SCA (pip-audit + npm audit)` a los
+     checks requeridos exige **permisos de administración del repo** (Settings →
+     Branches). No hay vía de código.
+  2. Aunque los hubiera, el gate npm nacería en rojo permanente: ver la medición
+     de `task_next_update_01` (2 avisos `high` de `next` sin fix dentro de 14.x).
+     **Primero hay que resolver el backlog**, y eso pide un plan de migración a
+     next 16.
+     Lo que sí está listo para ese día: la mitad de las excepciones está entregada y
+     acreditada — `.trivyignore` y `.pip-audit-ignore` existen y **cada entrada
+     lleva justificación legible + `# review: YYYY-MM-DD` propio**, verificado por
+     `test_sca_ignore_lists_exist_and_document_every_exception` (parametrizado sobre
+     los dos ficheros, en verde). El modo del job es explícito, no un olvido
+     (`test_security_scan_declares_its_gate_mode`), así que flipearlo es un cambio
+     de una línea. El procedimiento completo, en el runbook §6.
 
 ### Fase C — Lockfile Python y builds reproducibles
 
@@ -360,6 +441,44 @@ integridad de las imágenes en build).
     runtime: python-pytest
     command: "pytest tests/unit -v  # la suite completa sigue verde instalada desde el lock"
   ```
+- **Estado verificado (2026-07-31)**: los tres sub-puntos (a), (b) y (c) están
+  **implementados y acreditados**:
+  - (a) **todos** los `pip install -e` de **todos** los workflows llevan
+    `-c constraints.txt` — 20+ invocaciones, incluidas las de
+    `eval-on-prompt-change.yml`, que instala la api-server y quedaría con otra
+    resolución (`test_ci_installs_python_deps_with_constraints`, en verde);
+  - (b) el `Dockerfile` del agent-runtime hace `COPY constraints.txt` y sus 4+
+    `pip install` llevan `-c` (`test_agent_runtime_dockerfile_installs_with_constraints`);
+  - (c) `uv lock --check` corre en `ci.yml` → `lint-python`, y va ahí a propósito:
+    es higiene de repo, no un hallazgo de vulnerabilidad, así que **no hereda el
+    modo informe** de `security-scan` (`test_ci_checks_the_lock_for_drift`).
+
+  Ejecutado a mano: `uv lock --check` → **exit 0** (212 paquetes resueltos), y
+  `constraints.txt` es **byte a byte** la salida de `uv export …` (198 pines
+  `==`, 0 líneas de diferencia). O sea: el lock no ha derivado y el fichero que
+  consume CI no está editado a mano.
+
+- **Por qué la casilla NO se marca**: falta `auto_prod11_10_b`, que es
+  precisamente el que protege del **riesgo 4** («la resolución congelada rompe
+  algo que los rangos abiertos ocultaban»), y es una verificación **de CI**: el
+  `.venv` local se instaló desde rangos y **no** desde el lock, así que correr la
+  suite con él no prueba nada. Con CI caído no hay dónde ejecutarlo.
+  El riesgo residual queda **acotado y nombrado**, medido comparando `pip freeze`
+  del venv contra `constraints.txt`: de 170 paquetes comparables, 74 divergen,
+  pero **72 son el venv retrasado** (el lock los sube). Solo hay **2 bajadas**, y
+  las dos cruzan major:
+  - `cryptography` 48.0.0 → **46.0.7**, porque `apps/api-server/pyproject.toml:46`
+    declara `cryptography>=42,<47`. El lock hace lo correcto: **es el venv local
+    el que viola el rango declarado**. Nuestro código solo usa
+    `cryptography.fernet`, `.exceptions`, `hazmat.primitives.ciphers.aead` y
+    `hazmat.primitives.serialization`, API estable en ambas ramas.
+  - `cbor2` 6.1.1 → **5.9.0**. Ningún módulo del repo lo importa: entra solo por
+    `webauthn`, que declara `cbor2>=5.6.5`, así que 5.9.0 está soportado por la
+    librería que lo consume.
+
+  Es decir: bajo por inspección, pero **no verificado**. Con CI en pie, la
+  casilla se cierra corriendo `auto_prod11_10_b` en un entorno instalado con
+  `-c constraints.txt`.
 
 ### Fase D — Pin por digest e imágenes inmutables
 
@@ -390,10 +509,39 @@ integridad de las imágenes en build).
     runtime: python-pytest
     command: "pytest tests/unit/test_runtime_catalog.py -v  # el catálogo sigue consistente con los Dockerfiles"
   ```
+- **Estado verificado (2026-07-31)**: la parte de `docker/` está **HECHA y
+  acreditada**, con más alcance del que decía la tarea: los `FROM` externos bajo
+  `docker/` son **22 en 19 Dockerfiles** (no 17 — el árbol creció desde que se
+  escribió el plan) y **los 22 llevan `@sha256:` con el tag dentro de la
+  referencia**. Guardas ejecutadas en verde: `test_docker_bases_pinned_by_digest`
+  (descubrimiento, con aserción de que encontró ≥20) y
+  `test_digest_pinned_bases_keep_their_tag_readable` (prohíbe el
+  `FROM python@sha256:…` sin tag, que sería inauditable y dejaría a Dependabot
+  sin poder proponer la siguiente versión).
+- **Por qué la casilla NO se marca — y no es solo falta de tiempo**: quedan
+  `postgres:16-alpine` y `redis:7-alpine` de
+  `apps/workers/src/workers/test_runtime.py` (`DEFAULT_POSTGRES` :326 /
+  `DEFAULT_REDIS` :340, la numeración se movió respecto al plan). Pinearlos ahí
+  **choca con la regla dura de esta misma fase**: la dependencia
+  `task_dependabot_02 → task_digest_pin_11` existe porque «sin refresco
+  automático, no se pinea», y el ecosistema `docker` de Dependabot parsea
+  **Dockerfiles y ficheros compose, no fuentes Python**. Un `@sha256:` en una
+  constante de módulo no tendría vehículo de refresco: sería exactamente la
+  congelación de CVEs del riesgo 3, y encima en dos imágenes que el worker
+  levanta para ejecutar tests de código no confiable.
+  **Decisión que falta (no es implementación, es diseño)**, tres salidas:
+  (a) mover las dos referencias a un fichero que Dependabot sí parsee —un
+  `docker-compose.aux.yml` o un Dockerfile trivial— y pinear allí;
+  (b) pinear en Python y aceptar una revisión manual mensual, anotada en el
+  runbook con fecha de revisión como las excepciones SCA;
+  (c) dejarlas por tag y declararlo excepción razonada (son sidecars efímeros de
+  un test, sin datos persistentes ni exposición de red fuera del bridge
+  per-tarea).
+  Sin esa decisión no se puede cerrar la casilla honestamente.
 
 #### `task_registry_adr_12` — ADR: registry y tags inmutables para los runtimes
 
-- [ ] **Título**: ADR propuesto — distribución de imágenes runtime por digest
+- [x] **Título**: ADR propuesto — distribución de imágenes runtime por digest
 - **Descripción**: Redactar ADR en `docs/05-architecture-decisions/` con
   opciones para sustituir el esquema actual (catalog.py:31
   `_IMAGE_TAG = "v1"`, :41 `agent-runtime-{slug}:v1`, build local con
@@ -409,12 +557,32 @@ integridad de las imágenes en build).
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento ADR); la revisión humana del ADR
   es el gate.
+- **Estado verificado (2026-07-31)**: ADR redactado —
+  `docs/05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md`,
+  `status: proposed`, con las tres opciones del plan, recomendación razonada (a:
+  GHCR + digest, con b como mirror opcional) y las dos condiciones para que no
+  empeore nada. **Sigue `proposed` a propósito**: dónde vive el registry, quién
+  publica y qué red necesita el host de un tenant son decisiones de producto, no
+  de toolchain — a diferencia del ADR 0147, que nació `accepted` por ser
+  toolchain puro. **La firma humana es el gate** y la rastrea el criterio de
+  cierre 5, no esta casilla.
+  El campo `digest` opcional en `catalog.py` **NO se ha añadido**: un campo que
+  nadie puebla antes de que la decisión se firme sería el patrón que esta base
+  repite (mecanismo entregado, cero llamantes — trampa nº5 de
+  `verificar-antes-de-implementar.md`) y prejuzgaría la opción. Entra con la
+  implementación, que es de `prod-01`.
+  Guardas ejecutadas en verde en `tests/docs/test_supply_chain_docs.py`:
+  `test_registry_adr_is_proposed_and_points_at_the_plan`,
+  `test_registry_adr_offers_the_three_options_with_a_recommendation`,
+  `test_registry_adr_names_the_status_quo_it_replaces` y
+  `test_registry_adr_does_not_claim_implementation` (esta última se pone roja si
+  alguien toca el catálogo sin cerrar el ADR).
 
 ### Fase E — Documentación y runbook
 
 #### `task_runbook_13` — Runbook de triage de vulnerabilidades y política de excepciones
 
-- [ ] **Título**: `docs/06-runbooks/triage-vulnerabilidades.md` + referencia
+- [x] **Título**: `docs/06-runbooks/triage-vulnerabilidades.md` + referencia
 - **Descripción**: Documentar: cómo leer un fallo de `security-scan`
   (pip-audit/npm audit/Trivy), criterios para actualizar vs suprimir, formato
   obligatorio de las entradas de `.trivyignore` e ignore-list (justificación +
@@ -428,8 +596,29 @@ integridad de las imágenes en build).
   ```yaml
   - id: auto_prod11_13_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_docs_structure.py -k runbook_triage -v"
+    command: "pytest tests/docs/test_supply_chain_docs.py -k runbook_triage -v"
   ```
+- **Estado verificado (2026-07-31)**: **HECHO**. `docs/06-runbooks/triage-vulnerabilidades.md`
+  (7 secciones: qué se escanea, cómo leer cada fallo, actualizar vs suprimir,
+  cómo valorar el riesgo real, política de excepciones con formato obligatorio y
+  calendario, del modo informe al gate, y flujo de los PRs de Dependabot) +
+  el resumen de referencia `docs/04-reference/cadena-suministro.md`, indexado en
+  `docs/04-reference/README.md` y enlazado en los dos sentidos con el runbook.
+  **Corrección del test id**: el plan apuntaba a
+  `tests/unit/test_docs_structure.py`, un fichero que no existe ni existió; los
+  invariantes de documentación de este repo viven en `tests/docs/`. La guarda se
+  escribió allí (`tests/docs/test_supply_chain_docs.py`, **15 passed**; con
+  `-k runbook_triage`, **6 passed**) y el comando de arriba se ha corregido.
+  Las guardas son de **descubrimiento**, no de subcadena: la lista de escáneres
+  se deriva de los workflows y la de ficheros de excepción de la raíz del repo,
+  así que añadir Grype u osv-scanner a CI —o un `.otro-ignore`— sin documentarlo
+  las pone en rojo. Ciclo de mutación ejecutado: renombrar el «Calendario de
+  revisión», romper el formato `# review: YYYY-MM-DD` y renombrar
+  `.pip-audit-ignore` puso 2 guardas en rojo; restaurado, verde otra vez.
+  **Dependencia invertida a propósito**: el plan la hacía depender de
+  `task_sca_gate_08`, pero documentar el gate DESPUÉS de encenderlo deja al
+  operador sin criterio justo en la semana de triage. El runbook §6 documenta el
+  estado actual (modo informe) y los dos pasos humanos que faltan para flipearlo.
 
 ## Hallazgos de auditoría cubiertos
 

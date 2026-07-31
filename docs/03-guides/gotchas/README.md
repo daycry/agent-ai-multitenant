@@ -203,6 +203,12 @@ el problema ya esté documentado.
 
 ### redis / auth
 
+- [redis-aof-ignores-a-restored-rdb.md](./redis-aof-ignores-a-restored-rdb.md)
+  — con `appendonly yes` (como lo arranca el compose), un Redis que encuentra un
+  `dump.rdb` y ningún `appendonlydir` **no lee el RDB**: crea un AOF vacío y
+  sirve `DBSIZE 0` sin un solo error. Un backup/restore basado en `BGSAVE` +
+  `dump.rdb` restaura sesiones, broker de Celery y rate limits VACÍOS y nadie se
+  entera. Se captura el `appendonlydir` tras un `BGREWRITEAOF`.
 - [auth-rate-limit-dev-loop.md](./auth-rate-limit-dev-loop.md)
   — el rate limit de `/auth/login` se acumula entre runs del E2E
   y trips 429; limpia `rl:login:*` antes de probar.

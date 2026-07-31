@@ -433,3 +433,74 @@ def test_the_engine_hands_pg_dump_a_libpq_dsn_even_from_a_sqlalchemy_setting(
     dsn = next(a for a in argv if a.startswith("--dbname="))
     assert "+asyncpg" not in dsn, f"pg_dump recibió una URL de SQLAlchemy: {dsn}"
     assert dsn == "--dbname=postgresql://migrations_user:p@postgres:5432/agentic"
+
+
+def _settings_with_dev_backup_dsn(tmp_path: Path, **overrides: object) -> object:
+    """`Settings` cuyo `backup_database_url` es el DEFAULT DE DEV.
+
+    O sea: `postgresql://migrations_user:changeme-migrations-dev-only@localhost:15432`.
+    El guard de credenciales-dev del propio Settings solo mira `database_url`, así
+    que hay que darle uno sintético para poder construirlo fuera de dev — que es
+    justo la mitad del agujero: la segunda credencial no la miraba nadie.
+    """
+    from workers.config import Settings
+
+    volumes = tmp_path / "volumes"
+    (volumes / "minio_data" / "_data").mkdir(parents=True, exist_ok=True)
+    base: dict[str, object] = {
+        "database_url": "postgresql+asyncpg://service_user:sintetica@postgres:5432/agentic",
+        "backup_root": str(tmp_path / "backups"),
+        "backup_volumes": ["minio_data"],
+        "backup_volumes_mount_root": str(volumes),
+        "backup_bind_paths": [],
+        "backup_projects_root": "",
+    }
+    base.update(overrides)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+def test_a_dev_default_backup_dsn_aborts_the_run_outside_dev(tmp_path: Path) -> None:
+    """Fuera de dev, un `WORKERS_BACKUP_DATABASE_URL` sin emitir es fatal.
+
+    Es la mitad de deploy-4 que el saneado a libpq NO cubre: si la variable falta
+    del todo, el motor hereda el default de dev y `pg_dump` sale a buscar
+    `localhost:15432` con `changeme-migrations-dev-only`. Dentro del contenedor de
+    un worker eso no es «otra base de datos»: no es ninguna. El backup fallaba
+    todas las noches con un error de conexión que nadie relaciona con una variable
+    que falta.
+
+    Se comprueba en el motor y no en el arranque del worker a propósito: negarle
+    el boot a la flota entera de workers por una variable del backup es un radio
+    de explosión mayor que el problema. Aquí falla el run del backup, con un
+    mensaje que dice qué variable emitir, y ANTES de gastar una hora en el dump.
+    """
+    settings = _settings_with_dev_backup_dsn(tmp_path, environment="prod")
+    runner = FakeRunner()
+
+    with pytest.raises(BackupError, match="WORKERS_BACKUP_DATABASE_URL"):
+        run_full_backup(settings=settings, runner=runner, now=_NOW)  # type: ignore[arg-type]
+
+    # Ni un comando lanzado ni un bundle a medias: el gate va antes de todo.
+    assert runner.calls == []
+    assert not (tmp_path / "backups" / _NOW.strftime("%Y%m%dT%H%M%SZ")).exists()
+
+
+def test_the_dev_default_backup_dsn_is_tolerated_in_dev(tmp_path: Path) -> None:
+    """En dev el default ES el valor correcto (un postgres publicado en
+    `localhost:15432` por el compose de desarrollo). Fallar aquí convertiría el
+    guard en un estorbo y alguien lo apagaría — y con él, el caso de producción."""
+    settings = _settings_with_dev_backup_dsn(tmp_path, environment="dev")
+    result = run_full_backup(settings=settings, runner=FakeRunner(), now=_NOW)  # type: ignore[arg-type]
+    assert result.bundle_dir.exists()
+
+
+def test_a_real_backup_dsn_passes_the_gate_outside_dev(tmp_path: Path) -> None:
+    """No-vacuidad: el gate tiene que dejar pasar el DSN que el instalador emite,
+    o el test de arriba pasaría con un motor que simplemente nunca respalda."""
+    settings = _settings_with_dev_backup_dsn(
+        tmp_path,
+        environment="prod",
+        backup_database_url="postgresql://migrations_user:g3n3r4d4@postgres:5432/agentic_platform",
+    )
+    result = run_full_backup(settings=settings, runner=FakeRunner(), now=_NOW)  # type: ignore[arg-type]
+    assert result.bundle_dir.exists()

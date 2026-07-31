@@ -41,6 +41,7 @@ This module's pure functions (``generate_secrets`` / ``render_env_file`` /
 
 from __future__ import annotations
 
+import json
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -189,6 +190,59 @@ def _database_urls(secrets_: GeneratedSecrets) -> dict[str, str]:
     return {"DATABASE_URL": app_url, "ADMIN_DATABASE_URL": admin_url}
 
 
+def _backup_env(cfg: InstallerConfig, secrets_: GeneratedSecrets) -> dict[str, str]:
+    """Las variables que describen QUÉ respalda el backup en ESTE stack (prod-04).
+
+    Hallazgo deploy-4. El motor de backup es correcto y sus defaults son los de
+    **desarrollo**: `pg_dump` contra `localhost:15432` con credencial `changeme-`,
+    y `tar` de los *named volumes* que existen en el stack de manuales. El compose
+    que genera el instalador no se parece a eso: monta **binds** bajo
+    ``{data_root}`` y no declara ningún named volume. El resultado era un backup
+    diario que fallaba todas las noches — el peor sitio donde tener un fallo
+    silencioso, porque no se nota hasta el día del desastre.
+
+    Las cuatro claves de aquí las emite quien conoce el layout (este generador),
+    no quien tiene que adivinarlo:
+
+    * ``WORKERS_BACKUP_DATABASE_URL`` — DSN en forma **libpq** (sin el sufijo
+      ``+asyncpg`` de SQLAlchemy, que libpq no entiende) contra el servicio
+      ``postgres`` del compose y con la credencial generada.
+    * ``WORKERS_BACKUP_VOLUMES`` — vacío **a propósito**: en este layout no hay
+      named volumes que tarear. Explícito y no por omisión, para que el default
+      de dev no se cuele.
+    * ``WORKERS_BACKUP_BIND_PATHS`` — los dos stores que se capturan por
+      filesystem: los objetos de MinIO y el file backend de Vault (sin él, ningún
+      secreto del stack restaurado se puede descifrar). Deliberadamente NO el data
+      root entero: eso metía el ``PGDATA`` vivo (copia rota, y el «file changed as
+      we read it» de tar tira el bundle) y los modelos de Ollama (decenas de GB
+      re-descargables) en cada bundle nocturno. ``clamav`` queda fuera por lo
+      mismo: firmas de virus que `freshclam` recupera solo.
+    * ``WORKERS_BACKUP_PROJECTS_ROOT`` — los bare repos, que viajan como su
+      propio artefacto verificado (``projects_tar``, task_prod_04_05).
+    * ``WORKERS_BACKUP_REDIS_DIR`` — Redis, que NO va como bind: tiene artefacto
+      propio precedido de un ``BGREWRITEAOF`` completado, porque copiar un
+      ``appendonlydir`` mientras el servidor le escribe es la captura en caliente
+      que task_prod_04_06 quita.
+    * ``WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS`` — el árbol de Vault, cuya captura
+      se verifica estable (huella antes/después). No MinIO: se escribe todo el
+      rato por diseño y exigirle estabilidad sería un fallo nocturno garantizado.
+    """
+    data_root = cfg.storage.data_root.rstrip("/")
+    vault_dir = f"{data_root}/vault"
+    return {
+        "WORKERS_BACKUP_ROOT": f"{data_root}/backups",
+        "WORKERS_BACKUP_DATABASE_URL": (
+            f"postgresql://migrations_user:{secrets_.migrations_user_password}"
+            f"@postgres:5432/agentic_platform"
+        ),
+        "WORKERS_BACKUP_VOLUMES": json.dumps([]),
+        "WORKERS_BACKUP_BIND_PATHS": json.dumps([f"{data_root}/minio", vault_dir]),
+        "WORKERS_BACKUP_PROJECTS_ROOT": f"{data_root}/projects",
+        "WORKERS_BACKUP_REDIS_DIR": f"{data_root}/redis",
+        "WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS": json.dumps([vault_dir]),
+    }
+
+
 def build_env_vars(
     cfg: InstallerConfig,
     secrets_: GeneratedSecrets,
@@ -258,7 +312,9 @@ def build_env_vars(
         "WORKERS_ENVIRONMENT": runtime_env,
         "WORKERS_DATABASE_URL": db_urls["ADMIN_DATABASE_URL"],
         "WORKERS_DATA_ROOT": cfg.storage.data_root,
-        "WORKERS_BACKUP_ROOT": f"{cfg.storage.data_root}/backups",
+        # Backup: el QUÉ se respalda depende del layout que genera el instalador,
+        # así que se emite aquí y no se hereda del default de dev (prod-04).
+        **_backup_env(cfg, secrets_),
         # --- orchestrator (ORCHESTRATOR_ prefixed) ---
         "ORCHESTRATOR_ENVIRONMENT": runtime_env,
         "ORCHESTRATOR_DATABASE_URL": db_urls["DATABASE_URL"],

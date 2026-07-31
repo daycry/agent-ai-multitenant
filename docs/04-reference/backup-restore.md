@@ -34,7 +34,10 @@ Cada corrida del motor (`workers.backup.run_full_backup`) escribe un
 ```
 <backup_id>/
 ├── postgres/            # pg_dump LÓGICO, formato directorio (--format=directory)
-├── <volumen>.tar.gz     # uno por volumen Docker (minio_data, redis_data, vault_data)
+├── <volumen>.tar.gz     # uno por volumen Docker, si el stack usa named volumes
+├── bind-<slug>.tar.gz   # uno por bind path (MinIO, file backend de Vault)
+├── redis.tar.gz         # data dir de Redis tras un BGREWRITEAOF completado
+├── projects.tar.gz      # bare repos de todos los proyectos (sin worktrees/)
 └── manifest.json        # version, backup_id, created_at, status, encrypted,
                          #   artifacts[] (name/kind/path/size_bytes/sha256/source),
                          #   total_size_bytes; la URL de la BD va SANEADA (sin password)
@@ -46,7 +49,11 @@ Cuando el cifrado está activado, el directorio contiene en su lugar un único
 | Propiedad             | Valor                                                                                   |
 | --------------------- | --------------------------------------------------------------------------------------- |
 | Captura de PostgreSQL | `pg_dump --format=directory` (LÓGICO; permite `pg_restore --list` + restore por tenant) |
-| Captura de volúmenes  | `tar + gzip` por volumen (`WORKERS_BACKUP_VOLUMES`)                                     |
+| Captura de volúmenes  | `tar + gzip` por volumen (`WORKERS_BACKUP_VOLUMES`) — vacío en un stack del instalador  |
+| Captura de binds      | `tar + gzip` por ruta (`WORKERS_BACKUP_BIND_PATHS`): MinIO y el file backend de Vault   |
+| Captura de Redis      | `BGREWRITEAOF` completado + `tar` del data dir (`WORKERS_BACKUP_REDIS_DIR`)             |
+| Captura de repos      | `tar + gzip` de los bare repos (`WORKERS_BACKUP_PROJECTS_ROOT`), sin `worktrees/`       |
+| Coherencia            | huella antes/después en `WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS`; skew residual: ADR 0149 |
 | Integridad            | checksums SHA-256 por artefacto en el manifest                                          |
 | Fail-closed           | cualquier sub-fallo borra el bundle parcial y eleva `BackupError`                       |
 | Retención local       | poda los bundles más antiguos que `WORKERS_BACKUP_RETENTION_DAYS` (default 7)           |
@@ -175,6 +182,10 @@ detalle de defaults en `apps/workers/src/workers/config.py`.
 | `WORKERS_BACKUP_DATABASE_URL`                                                      | URL libpq de `pg_dump`/`pg_restore` (rol BYPASSRLS)         |
 | `WORKERS_BACKUP_RETENTION_DAYS`                                                    | retención local (default 7)                                 |
 | `WORKERS_BACKUP_VOLUMES` / `_VOLUMES_MOUNT_ROOT`                                   | volúmenes capturados + su mount root                        |
+| `WORKERS_BACKUP_BIND_PATHS` / `_PROJECTS_ROOT`                                     | rutas del host capturadas + raíz de los bare repos          |
+| `WORKERS_BACKUP_REDIS_DIR` / `_REDIS_URL`                                          | data dir de Redis + conexión para el `BGREWRITEAOF`         |
+| `WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS` / `_SNAPSHOT_RETRIES`                       | capturas con coherencia verificada (Vault) + reintentos     |
+| `WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT`                                           | huella de la clave depositada offsite (fail-closed)         |
 | `WORKERS_BACKUP_CRON` + setting `backup_enabled`                                   | cadencia diaria (`0 3 * * *`) + palanca live (System Admin) |
 | `WORKERS_BACKUP_METRICS_TEXTFILE_PATH`                                             | fichero `.prom` de salud del backup                         |
 | `WORKERS_BACKUP_ENCRYPTION_ENABLED` / `_ENCRYPTION_VAULT_KEY`                      | cifrado AES-256 opcional + nombre de la clave del Vault     |

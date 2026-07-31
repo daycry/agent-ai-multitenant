@@ -31,8 +31,21 @@ Fase A (`scripts/backup.sh` → `workers.backup.run_full_backup`).
   - `WORKERS_BACKUP_ROOT` — dónde se escriben los bundles.
   - `WORKERS_BACKUP_DATABASE_URL` — URL libpq que usa `pg_dump`.
   - `WORKERS_BACKUP_RETENTION_DAYS` — retención local (por defecto 7).
-  - `WORKERS_BACKUP_VOLUMES` — lista JSON de volúmenes Docker.
+  - `WORKERS_BACKUP_VOLUMES` — lista JSON de volúmenes Docker. En un stack
+    generado por el instalador es `[]` **a propósito**: no hay named volumes, los
+    stores son binds bajo `{data_root}` (prod-04 task_prod_04_09).
   - `WORKERS_BACKUP_VOLUMES_MOUNT_ROOT` — dir host con esos volúmenes.
+  - `WORKERS_BACKUP_BIND_PATHS` — lista JSON de rutas del host que se tarean
+    (MinIO y el file backend de Vault). **Tienen que ser visibles dentro del
+    contenedor de la lane `privileged` en su MISMA ruta**, o `tar` no las
+    encuentra (o peor: las encuentra vacías en el rootfs efímero y el bundle sale
+    «correcto» y vacío).
+  - `WORKERS_BACKUP_REDIS_DIR` — data dir de Redis. Va aparte de los binds porque
+    su captura pide un `BGREWRITEAOF` completado antes del `tar`.
+  - `WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS` — rutas cuya captura se verifica
+    estable (el árbol de Vault). **No pongas MinIO aquí**: se escribe por diseño y
+    el backup fallaría todas las noches.
+  - `WORKERS_BACKUP_PROJECTS_ROOT` — raíz de los bare repos.
 - Si el cifrado está activado, el **valor** de la clave en el entorno
   (`WORKERS_BACKUP_ENCRYPTION_KEY`) y su huella declarada en
   `WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT`. **La clave NO se resuelve de Vault**
@@ -43,6 +56,38 @@ Fase A (`scripts/backup.sh` → `workers.backup.run_full_backup`).
   actualizar la custodia y los bundles nuevos no los podría abrir nadie.
 - Para empujar a remoto: la entrada de `backup_destinations` configurada
   y sus credenciales en Vault/entorno (ver UI de destinos, `task_12_09`).
+
+## Activar el cifrado en reposo: opt-in en DOS pasos
+
+Un stack recién instalado sale con **`WORKERS_BACKUP_ENCRYPTION_ENABLED=false`**,
+y no por descuido. El motor es fail-closed: con el cifrado encendido y sin huella
+de custodia declarada, el backup **falla antes de empezar** — y con razón, porque
+un bundle cifrado cuya clave no está custodiada es irrecuperable si el host
+muere. Un instalador no puede depositar una clave en un sobre sellado, así que
+encenderlo de fábrica solo produciría un stack cuyo backup falla cada noche.
+
+El orden importa, y es este:
+
+1. **Genera la clave y deposítala offsite.** 32 bytes de un CSPRNG, en el gestor
+   corporativo o un sobre sellado, **junto a las unseal keys pero en un registro
+   diferenciado** — no son lo mismo y las unseal keys NO descifran AES-GCM:
+
+   ```bash
+   python -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+   ```
+
+   Anota en el registro de custodia: quién la depositó, dónde, y la fecha.
+
+2. **Cablea las tres variables y enciéndelo.** En `docker/.env`:
+   `WORKERS_BACKUP_ENCRYPTION_KEY` (el valor),
+   `WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT` (su huella SHA-256, que sale del log
+   del primer backup o del campo `key_fingerprint` del manifest) y
+   `WORKERS_BACKUP_ENCRYPTION_ENABLED=true`. Reinicia la lane `privileged` y lanza
+   un backup manual para comprobar que la huella coincide.
+
+Si el paso 1 no se ha hecho, **deja el cifrado apagado**: un bundle en claro en un
+disco que controlas es peor que un bundle cifrado que puedes abrir, y muy mejor
+que un backup que no existe porque falla cada noche.
 
 ## Pasos
 
@@ -59,7 +104,11 @@ número de artefactos y los bundles podados por retención. El bundle queda
 en `WORKERS_BACKUP_ROOT/<backup_id>/` con:
 
 - `postgres/` — dump lógico en formato directorio.
-- `<volumen>.tar.gz` — uno por volumen configurado.
+- `<volumen>.tar.gz` — uno por volumen configurado (ninguno en un stack del
+  instalador, que usa binds).
+- `bind-<slug>.tar.gz` — uno por bind path (MinIO, el árbol de Vault).
+- `redis.tar.gz` — el data dir de Redis tras un `BGREWRITEAOF` completado.
+- `projects.tar.gz` — los bare repos de todos los proyectos.
 - `manifest.json` — artefactos, tamaños y checksums SHA-256.
 
 (El servicio de Celery se llama `workers`, no `worker`; y el backup diario ya lo

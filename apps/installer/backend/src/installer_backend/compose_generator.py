@@ -51,7 +51,6 @@ references. Nothing here is logged.
 from __future__ import annotations
 
 import copy
-import json
 from typing import Any
 
 import yaml
@@ -730,13 +729,33 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # prereq load docker/apparmor/agent-runtime.profile).
             "WORKERS_SECCOMP_PROFILE_PATH": "/etc/agentic/seccomp/agent-runtime.json",
             "WORKERS_APPARMOR_PROFILE": "agent-runtime",
-            # Backup wiring (workers-6 / prod-04). The NAMES are pinned here so
-            # the .env contract holds; the correct VALUES (a dedicated pg_dump
-            # DSN, the bind-mount capture path) are prod-04's job — TODO(prod-04).
-            # Default the backup DSN to the migrations-role DSN the workers
-            # already carry (pg_dump needs broad read).
-            "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_DATABASE_URL", None, prod=prod),
-            "WORKERS_BACKUP_ENCRYPTION_ENABLED": "true",
+            # Backup wiring (workers-6 / prod-04 task_prod_04_09). Los VALORES
+            # los pone `config_generators._backup_env`, que es quien conoce el
+            # layout de binds de ESTE compose; aquí solo se referencian. Antes se
+            # copiaba `WORKERS_DATABASE_URL` (una URL de SQLAlchemy que `pg_dump`
+            # no entiende) y se dejaba que `WORKERS_BACKUP_VOLUMES` heredase los
+            # named volumes del stack de manuales, que aquí no existen: el backup
+            # diario de una instalación por el instalador fallaba cada noche.
+            "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_BACKUP_DATABASE_URL", None, prod=prod),
+            "WORKERS_BACKUP_BIND_PATHS": _env_ref("WORKERS_BACKUP_BIND_PATHS", None, prod=prod),
+            "WORKERS_BACKUP_PROJECTS_ROOT": _env_ref(
+                "WORKERS_BACKUP_PROJECTS_ROOT", None, prod=prod
+            ),
+            # task_prod_04_06: Redis con artefacto propio (BGREWRITEAOF + tar del
+            # appendonlydir) y el árbol de Vault con captura verificada estable.
+            "WORKERS_BACKUP_REDIS_DIR": _env_ref("WORKERS_BACKUP_REDIS_DIR", None, prod=prod),
+            "WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS": _env_ref(
+                "WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS", None, prod=prod
+            ),
+            # Cifrado en reposo: OFF de fábrica, y no por descuido. El motor es
+            # fail-closed (task_prod_04_07): con el cifrado encendido y sin huella
+            # de custodia declarada, el backup falla ANTES del dump — y con razón,
+            # porque un bundle cifrado cuya clave no está custodiada es
+            # irrecuperable. Un instalador no puede depositar una clave en un sobre
+            # sellado, así que encenderlo aquí solo producía un stack cuyo backup
+            # fallaba todas las noches. El opt-in en dos pasos (generar clave →
+            # custodiarla → encender) está en docs/06-runbooks/dr-manual-backup.md.
+            "WORKERS_BACKUP_ENCRYPTION_ENABLED": "false",
             "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY": "agentic-platform/backups/encryption-key",
             # --- las DOS variables con prefijo AJENO que el worker necesita ---
             # El worker mintea el token del sandbox (`AGENTIC_INTERNAL_TOKEN`)
@@ -806,15 +825,15 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     return svc
 
 
-#: Los named volumes que el backup taréa (prod-01 A9 / prod-04). El worker corre
-#: `tar` sobre sus _data (owned uid 999/100, modo 0700) → necesita root + el mount
-#: de /var/lib/docker/volumes. Los nombres llevan el prefijo del proyecto compose.
-_BACKUP_VOLUME_NAMES = (
-    "agentic-platform_minio_data",
-    "agentic-platform_redis_data",
-    "agentic-platform_vault_data",
-    "agentic-platform-agent-data",
-)
+#: prod-04 task_prod_04_09: este compose NO declara named volumes — cada store es
+#: un bind bajo `{data_root}` (`{data_root}/minio:/data`, …). Aquí había una lista
+#: de nombres copiada del stack de manuales (`agentic-platform_minio_data`, …) que
+#: en este layout eran FANTASMA: `tar` sobre
+#: `/var/lib/docker/volumes/<fantasma>/_data` devuelve rc≠0 y el contrato
+#: clean-failure del motor borraba el bundle entero, incluido el `pg_dump` bueno.
+#: Lo que se captura ahora son bind paths que emite `config_generators._backup_env`,
+#: que es quien conoce el layout. El worker sigue necesitando root para leerlos
+#: (uid 999 de redis, uid 100 de vault, modo 0700).
 
 
 def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
@@ -832,9 +851,10 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     env = _workers_env(cfg, prod=prod)
     env.update(
         {
-            # Backup como root: leer los volume _data a 0700 (prod-01 A9 / prod-04).
+            # Backup como root: leer los `_data`/binds de los stores a 0700
+            # (prod-01 A9 / prod-04).
             "WORKERS_RUN_AS_ROOT": "1",
-            "WORKERS_BACKUP_VOLUMES": json.dumps(list(_BACKUP_VOLUME_NAMES)),
+            "WORKERS_BACKUP_VOLUMES": _env_ref("WORKERS_BACKUP_VOLUMES", None, prod=prod),
         }
     )
     volumes = [*_workers_volumes(cfg), "/var/lib/docker/volumes:/var/lib/docker/volumes"]
