@@ -13,7 +13,7 @@ docs_language: es
 > es el QUÉ y el POR QUÉ; el plan de implementación (fichero aparte, mismo
 > directorio) es el CÓMO y el CUÁNDO. La decisión arquitectónica central —la
 > entidad de despliegue y el reparto de la configuración en tres capas— se
-> formaliza como **ADR 0139** en la fase 0 del plan, siguiendo la regla de la
+> formaliza como **ADR 0142** en la fase 0 del plan, siguiendo la regla de la
 > casa («lo gated va por ADR primero»).
 
 ## 1. El problema, medido en el código
@@ -227,7 +227,7 @@ entorno que lo tenga).
 
 ## 10. Fases previstas (detalle en el plan)
 
-0. **ADR 0139** (despliegue + tres capas) — formalizar esta decisión.
+0. **ADR 0142** (despliegue + tres capas) — formalizar esta decisión.
 1. **Esquema y servicio de despliegue** con la cadena de integración en verde
    (sin UI): la fase que convierte «comprar» en «recibir».
 2. **Las tres puertas de UI** (wizard, ficha, pestañas).
