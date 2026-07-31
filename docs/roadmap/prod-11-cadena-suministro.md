@@ -167,7 +167,7 @@ integridad de las imágenes en build).
 
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
-- [ ] **Título**: Dependabot con 4 ecosistemas y agrupación de PRs
+- [x] **Título**: Dependabot con 4 ecosistemas y agrupación de PRs
 - **Descripción**: Crear `.github/dependabot.yml` con: `pip` apuntando a los 11
   directorios con `pyproject.toml` (`apps/api-server`, `apps/watchdog`,
   `apps/orchestrator`, `apps/workers`, `apps/notification-dispatcher`,
@@ -190,7 +190,7 @@ integridad de las imágenes en build).
 
 #### `task_actions_sha_03` — Pinear las GitHub Actions por SHA de commit
 
-- [ ] **Título**: Sustituir `@vN` por `@<sha40> # vN` en los 17 usos de actions
+- [x] **Título**: Sustituir `@vN` por `@<sha40> # vN` en los 17 usos de actions
 - **Descripción**: En `ci.yml`, `build-runtime-templates.yml` y
   `eval-on-prompt-change.yml`, reemplazar `actions/checkout@v5`,
   `actions/setup-python@v6`, `actions/setup-node@v5`,
@@ -212,7 +212,7 @@ integridad de las imágenes en build).
 
 #### `task_composer_checksum_04` — Verificar el instalador de Composer en las imágenes PHP
 
-- [ ] **Título**: Eliminar el `curl | php` sin checksum de php-phpunit y php-pest
+- [x] **Título**: Eliminar el `curl | php` sin checksum de php-phpunit y php-pest
 - **Descripción**: En `docker/agent-runtimes/php-phpunit/Dockerfile:21` y
   `docker/agent-runtimes/php-pest/Dockerfile:23`, sustituir el pipe directo por
   `COPY --from=composer:2@sha256:<digest> /usr/bin/composer /usr/local/bin/composer`
@@ -234,7 +234,7 @@ integridad de las imágenes en build).
 
 #### `task_pip_audit_05` — Job pip-audit sobre el árbol Python
 
-- [ ] **Título**: pip-audit en CI tras los editable installs
+- [x] **Título**: pip-audit en CI tras los editable installs
 - **Descripción**: Añadir al nuevo job `security-scan` de
   `.github/workflows/ci.yml` un paso que reproduzca los mismos
   `pip install -e` que `test-unit` (ci.yml:160-193) y ejecute
@@ -323,7 +323,7 @@ integridad de las imágenes en build).
 
 #### `task_uv_lock_09` — ADR de toolchain + generar lockfile del monorepo
 
-- [ ] **Título**: ADR uv-vs-pip-tools + `uv.lock`/`constraints.txt` versionados
+- [x] **Título**: ADR uv-vs-pip-tools + `uv.lock`/`constraints.txt` versionados
 - **Descripción**: Redactar el ADR propuesto (ver Decisiones clave) y, una vez
   aprobado, configurar el workspace `uv` que cubra las 11 distribuciones
   Python (`apps/*` + `packages/*` + `docker/agent-runtimes/agent-runtime`),

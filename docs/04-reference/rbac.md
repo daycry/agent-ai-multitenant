@@ -493,6 +493,25 @@ catálogo oficial) corre sobre el engine BYPASSRLS.
 | `/marketplace/shares/{id}`           | DELETE | `tenant_admin` |
 | `/admin/marketplace/*`               | GET    | `system_admin` |
 
+### `marketplace_deployments.py` (ADR 0142, plan marketplace-v2-despliegue)
+
+El despliegue de una instalación en un proyecto concreto —la entidad que el
+[ADR 0142](../05-architecture-decisions/0142-marketplace-despliegue-tres-capas.md)
+introduce— vive en su propio router porque `marketplace.py` ya sostiene toda la
+superficie del plan 09. Mismo reparto de siempre: **mutaciones `tenant_admin`,
+lecturas `tenant_member`**.
+
+Un id de otro tenant devuelve **404**, no 403: la RLS de
+`marketplace_deployments` (ENABLE + FORCE + `tenant_isolation`) lo esconde, y un
+403 confirmaría que existe.
+
+| Endpoint                                      | Método | Rol mínimo     |
+| --------------------------------------------- | ------ | -------------- |
+| `/marketplace/installations/{id}/deployments` | POST   | `tenant_admin` |
+| `/marketplace/installations/{id}/deployments` | GET    | `tenant_user`  |
+| `/marketplace/deployments/{id}/retire`        | POST   | `tenant_admin` |
+| `/projects/{id}/marketplace/available`        | GET    | `tenant_user`  |
+
 ### `auth/api-tokens`, SSO, MFA, SCIM (Plan 08 / Plan 13 / ADR 0047)
 
 Contratos completos en [auth-sso.md](./auth-sso.md) (SSO/MFA/SCIM) y

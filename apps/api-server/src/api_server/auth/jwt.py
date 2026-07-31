@@ -39,6 +39,7 @@ both are load-bearing here:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -77,25 +78,68 @@ def sign_claims(claims: dict[str, Any], *, secret: str, algorithm: str) -> str:
     return signed
 
 
-def verify_claims(token: str, *, secret: str, algorithm: str) -> dict[str, Any]:
-    """Verify signature + `exp`/`iat`/`nbf` and return the claims.
+def verify_claims_any(token: str, *, secrets: Sequence[str], algorithm: str) -> dict[str, Any]:
+    """Verify against a RING of secrets: any one may have signed the token.
 
-    Raises :class:`InvalidTokenError` for EVERY failure mode, including the ones
-    joserfc reports as plain `ValueError`/`TypeError` (see the module docstring):
-    the callers turn this one exception into a 401, so anything that escapes it
-    becomes a 500 on a merely invalid token.
+    This is what makes a signing-key rotation survivable (prod-05 task_prod05_04,
+    gap2-7). Rotating a single-secret verifier is a flag day: every session and
+    every ``AGENTIC_INTERNAL_TOKEN`` already injected into a running
+    agent-runtime 401s the instant the new value is deployed, which kills plan
+    executions mid-flight. With a ring, the new key is added at the head (it
+    signs) while the previous one stays in the tail (it still verifies) until the
+    maximum token TTL has passed.
+
+    THE SIGNATURE — not the claims — SELECTS THE KEY, and that distinction is
+    load-bearing. Once ``jwt.decode`` succeeds for a secret we stop: that secret
+    signed this token, so a claim failure (expired, no ``exp``, non-object
+    payload) is FINAL and must surface as itself. Retrying the remaining secrets
+    after a claim failure would turn "your session expired" into "bad signature"
+    — the same 401, but a wrong diagnosis in the logs — and worse, it would let a
+    later key mask an expiry the earlier one had already proven.
+
+    Raises:
+        InvalidTokenError: no secret in the ring validated the signature, or the
+            secret that did rejected the claims. Every failure mode funnels here
+            (including joserfc's bare ``ValueError``/``TypeError``, see the module
+            docstring) because the callers turn this one exception into a 401 and
+            anything that escapes becomes a 500 on a merely invalid token.
     """
-    try:
-        decoded = jwt.decode(token, OctKey.import_key(secret), algorithms=[algorithm])
-        claims = decoded.claims
-        if not isinstance(claims, dict):
-            raise InvalidTokenError("token payload is not a JSON object")
-        _CLAIMS.validate(claims)
-        return dict(claims)
-    except JoseError as exc:
-        raise InvalidTokenError(str(exc)) from exc
-    except (TypeError, ValueError) as exc:
-        raise InvalidTokenError(str(exc)) from exc
+    if not secrets:
+        # Defensive: an empty ring means "verify against nothing". Accepting the
+        # token would be catastrophic; reaching joserfc with no key would be a
+        # confusing 500. Reject explicitly.
+        raise InvalidTokenError("no signing secret is configured")
+
+    last_signature_error: Exception | None = None
+    for secret in secrets:
+        try:
+            decoded = jwt.decode(token, OctKey.import_key(secret), algorithms=[algorithm])
+        except (JoseError, TypeError, ValueError) as exc:
+            last_signature_error = exc
+            continue
+        # This secret signed the token. Claim validation errors are final.
+        try:
+            claims = decoded.claims
+            if not isinstance(claims, dict):
+                raise InvalidTokenError("token payload is not a JSON object")
+            _CLAIMS.validate(claims)
+            return dict(claims)
+        except JoseError as exc:
+            raise InvalidTokenError(str(exc)) from exc
+        except (TypeError, ValueError) as exc:
+            raise InvalidTokenError(str(exc)) from exc
+
+    raise InvalidTokenError(str(last_signature_error))
+
+
+def verify_claims(token: str, *, secret: str, algorithm: str) -> dict[str, Any]:
+    """Verify signature + `exp`/`iat`/`nbf` against ONE secret and return the claims.
+
+    Kept as the single-secret front door for callers that legitimately have
+    exactly one key (and for the tests that pin the JOSE behaviour). It is a
+    one-element :func:`verify_claims_any`, so the two cannot drift.
+    """
+    return verify_claims_any(token, secrets=(secret,), algorithm=algorithm)
 
 
 def encode_jwt(
@@ -142,7 +186,11 @@ def encode_jwt(
         claims.update(extra_claims)
     return sign_claims(
         claims,
-        secret=settings.jwt_secret.get_secret_value(),
+        # HEAD of the ring (prod-05 task_prod05_04). With the list unset this is
+        # `jwt_secret` verbatim; during a rotation it is the NEW key, so every
+        # token minted from the deploy onwards is already on the key that will
+        # survive when the old one is dropped.
+        secret=settings.jwt_secret_ring[0],
         algorithm=settings.jwt_algorithm,
     )
 
@@ -150,15 +198,20 @@ def encode_jwt(
 def decode_jwt(token: str) -> dict[str, Any]:
     """Return the decoded claims or raise InvalidTokenError.
 
-    Enforces, in this order: the HS256 signature, then `exp` (present and in the
-    future) plus `iat`/`nbf` when present. Every failure mode — bad signature,
-    expired, malformed, wrong algorithm, payload that is not a JSON object —
-    surfaces as :class:`InvalidTokenError` so the callers' 401 path covers all of
-    them.
+    Enforces, in this order: the HS256 signature against EVERY secret in
+    ``API_SERVER_JWT_SECRET(S)``, then `exp` (present and in the future) plus
+    `iat`/`nbf` when present. Every failure mode — no secret validates the
+    signature, expired, malformed, wrong algorithm, payload that is not a JSON
+    object — surfaces as :class:`InvalidTokenError` so the callers' 401 path
+    covers all of them.
+
+    Verifying against the whole ring is what lets a JWT rotation keep live
+    sessions alive (gap2-7): a token signed with yesterday's key still validates
+    while that key remains in the tail.
     """
     settings = get_settings()
-    return verify_claims(
+    return verify_claims_any(
         token,
-        secret=settings.jwt_secret.get_secret_value(),
+        secrets=settings.jwt_secret_ring,
         algorithm=settings.jwt_algorithm,
     )

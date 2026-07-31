@@ -161,11 +161,28 @@ class BackupConfig:
     # worktrees de los agentes) no lo cubría ningún backup y un engine-restart
     # de Docker Desktop lo arrasó perdiendo el trabajo comiteado de 8 tareas.
     bind_paths: tuple[str, ...] = ()
+    # prod-04 task_prod_04_05 — the bare repos of every project (the platform's
+    # PRODUCT: principios rectores 4 y 5). A dedicated, verified, RESTORED
+    # artifact instead of riding along inside the data-root bind tar. Empty
+    # string = do not capture them (a deliberate operator choice).
+    projects_root: str = ""
+    # Directory NAMES excluded from the projects tar + the bind tars because they
+    # are regenerable (`worktrees`, `dep-cache`). Also avoids tar's rc≠0 "file
+    # changed as we read it" over a worktree an agent is writing.
+    transient_excludes: tuple[str, ...] = ()
     # Optional at-rest encryption (task_12_02). When True the engine expects an
     # injected BackupEncryptor; the Vault key NAME (not value) is here so the
     # engine can build a default encryptor from settings.
     encryption_enabled: bool = False
     encryption_vault_key: str = "backup_encryption_key"
+    # prod-04 task_prod_04_07 — offsite custody of the AES key. The fingerprint of
+    # the key an operator DECLARES to have deposited offsite; the engine refuses
+    # to produce an encrypted bundle whose key does not match it.
+    key_custody_fingerprint: str = ""
+    # Whether an ABSENT custody fingerprint is fatal. True outside dev: an
+    # encrypted bundle whose key is not in custody is unrecoverable if the host
+    # dies, which is the exact scenario a backup exists for.
+    require_key_custody: bool = False
     # Wall-clock caps for the two heavy commands. Generous; a hung pg_dump or
     # tar is a problem, but a legitimate multi-GB dump must not be killed.
     pg_dump_timeout_s: int = 3600
@@ -175,13 +192,22 @@ class BackupConfig:
     def from_settings(cls, settings: Settings) -> BackupConfig:
         return cls(
             backup_root=Path(settings.backup_root),
-            database_url=settings.backup_database_url,
+            # Normalizado a libpq: el instalador emite la URL de SQLAlchemy
+            # (`postgresql+asyncpg://`) y pg_dump no la entiende (task_prod_04_09).
+            database_url=libpq_url(settings.backup_database_url),
             volumes=tuple(settings.backup_volumes),
             volumes_mount_root=Path(settings.backup_volumes_mount_root),
             retention_days=int(settings.backup_retention_days),
             bind_paths=tuple(settings.backup_bind_paths),
+            projects_root=str(settings.backup_projects_root),
+            transient_excludes=tuple(settings.backup_transient_excludes),
             encryption_enabled=bool(settings.backup_encryption_enabled),
             encryption_vault_key=str(settings.backup_encryption_vault_key),
+            key_custody_fingerprint=str(settings.backup_key_custody_fingerprint).strip().lower(),
+            # Mismo criterio que el guard de secretos-dev de este Settings: en dev
+            # se avisa, fuera de dev se falla. Un bundle cifrado sin clave en
+            # custodia es irrecuperable, y enterarse en el DR es demasiado tarde.
+            require_key_custody=settings.environment != "dev",
         )
 
 
@@ -190,7 +216,7 @@ class ArtifactRecord:
     """One captured artifact in the manifest."""
 
     name: str
-    kind: str  # "pg_dump" | "volume_tar" | "bind_tar"
+    kind: str  # "pg_dump" | "volume_tar" | "projects_tar" | "bind_tar" | "encrypted_bundle"
     path: str  # relative to the bundle directory
     size_bytes: int
     sha256: str
@@ -212,6 +238,12 @@ class BackupManifest:
     database_url_sanitized: str
     encrypted: bool
     artifacts: list[ArtifactRecord] = field(default_factory=list)
+    # prod-04 task_prod_04_07 — huella SHA-256 (con separación de dominio) de la
+    # clave con la que se cifró este bundle. NO es la clave ni permite derivarla:
+    # sirve para que quien vaya a restaurar pueda comprobar, ANTES de intentarlo,
+    # que la clave que ha sacado de la custodia offsite es la correcta. `None` en
+    # un bundle en claro.
+    key_fingerprint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -221,6 +253,7 @@ class BackupManifest:
             "status": self.status,
             "database": {"url": self.database_url_sanitized},
             "encrypted": self.encrypted,
+            "key_fingerprint": self.key_fingerprint,
             "artifacts": [a.to_dict() for a in self.artifacts],
             "total_size_bytes": sum(a.size_bytes for a in self.artifacts),
         }
@@ -251,6 +284,36 @@ def _sanitize_db_url(url: str) -> str:
         user, _, _ = creds.partition(":")
         creds = f"{user}:***"
     return f"{scheme}://{creds}@{hostpart}"
+
+
+def libpq_url(url: str) -> str:
+    """Normalizar un DSN al dialecto que hablan `pg_dump` / `pg_restore` / `psql`.
+
+    prod-04 (task_prod_04_09, hallazgo deploy-4). El instalador emite
+    ``WORKERS_BACKUP_DATABASE_URL`` copiando ``WORKERS_DATABASE_URL``, que es una
+    URL **de SQLAlchemy** (``postgresql+asyncpg://...``). libpq no entiende el
+    sufijo ``+driver``: el backup diario de una instalación de producción moría en
+    el primer `pg_dump` con un error de URI que no dice nada. El docstring de
+    `Settings.backup_database_url` ya avisaba («NOT the SQLAlchemy +asyncpg
+    form»), pero un aviso en una descripción no es una comprobación.
+
+    Aquí se corrige en el motor, que es donde importa, en vez de confiar en que
+    todos los generadores de `.env` presentes y futuros se acuerden:
+
+        postgresql+asyncpg://u:p@h/db  →  postgresql://u:p@h/db
+        postgres+psycopg://u:p@h/db    →  postgres://u:p@h/db
+        postgresql://u:p@h/db          →  (sin cambios)
+
+    Un DSN sin esquema reconocible se devuelve tal cual: puede ser una conninfo
+    de libpq (``host=... dbname=...``), que es igualmente válida.
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep or "+" not in scheme:
+        return url
+    base = scheme.split("+", 1)[0]
+    if base not in ("postgresql", "postgres"):
+        return url
+    return f"{base}://{rest}"
 
 
 def _checksum_file(path: Path) -> str:
@@ -285,21 +348,35 @@ def _dir_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
-def _bind_tar_excludes(bind_path: str, backup_root: Path) -> list[str]:
-    """``--exclude`` args para el tar de un bind (prod-04 A7).
+def _bind_tar_excludes(bind_path: str, nested: Path) -> list[str]:
+    """``--exclude`` args para sacar ``nested`` del tar de ``bind_path`` (prod-04 A7).
 
-    Si ``backup_root`` está DENTRO de ``bind_path``, devuelve un exclude anclado
-    a la raíz archivada (``./<rel>``) para que el bundle no se auto-incluya
-    recursivamente. Fuera del bind → lista vacía (sin exclusión espuria).
-    Determinista y puro; tolerante a rutas no relativas."""
+    Si ``nested`` está DENTRO de ``bind_path``, devuelve un exclude anclado a la
+    raíz archivada (``./<rel>``). Fuera del bind → lista vacía (sin exclusión
+    espuria). Determinista y puro; tolerante a rutas no relativas.
+
+    Dos usos, la misma forma: el ``backup_root`` (para que el bundle no se
+    auto-incluya recursivamente) y el ``projects_root`` (que ya viaja como su
+    propio artefacto `projects_tar` y no debe duplicarse)."""
     try:
-        rel = Path(backup_root).resolve().relative_to(Path(bind_path).resolve())
+        rel = Path(nested).resolve().relative_to(Path(bind_path).resolve())
     except (ValueError, OSError):
         return []
     rel_posix = rel.as_posix()
     if not rel_posix or rel_posix == ".":
         return []
     return [f"--exclude=./{rel_posix}"]
+
+
+def _transient_excludes(names: Sequence[str]) -> list[str]:
+    """``--exclude`` args para los directorios regenerables (prod-04 task_prod_04_05).
+
+    Sin ``--anchored`` (el default de GNU tar) el patrón casa cualquier sufijo de
+    componente, así que ``--exclude=worktrees`` corta el directorio a cualquier
+    profundidad — que es exactamente lo que hace falta con el layout
+    ``projects/<tenant>/<project>/worktrees/<task_id>/``. Verificado con tar 1.35.
+    """
+    return [f"--exclude={name}" for name in names if name]
 
 
 class BackupEngine:
@@ -340,6 +417,11 @@ class BackupEngine:
         if bundle_dir.exists():
             raise BackupError(f"backup bundle {bundle_dir} already exists")
 
+        # Custodia de la clave ANTES de gastar una hora en pg_dump + tar: si el
+        # bundle va a salir cifrado con una clave que nadie puede recuperar, no
+        # merece la pena producirlo (task_prod_04_07).
+        key_fingerprint = self._assert_key_custody()
+
         bundle_dir.mkdir(parents=True, exist_ok=False)
         _log.info("backup.start", backup_id=backup_id, bundle_dir=str(bundle_dir))
 
@@ -348,13 +430,22 @@ class BackupEngine:
             artifacts.append(self._dump_database(bundle_dir))
             for volume in self._config.volumes:
                 artifacts.append(self._tar_volume(bundle_dir, volume))
+            projects = self._tar_projects(bundle_dir)
+            if projects is not None:
+                artifacts.append(projects)
             for bind_path in self._config.bind_paths:
                 artifacts.append(self._tar_bind_path(bundle_dir, bind_path))
             encrypted = False
             if self._config.encryption_enabled:
                 artifacts = self._encrypt_bundle(bundle_dir, artifacts)
                 encrypted = True
-            manifest = self._write_manifest(bundle_dir, backup_id, artifacts, encrypted=encrypted)
+            manifest = self._write_manifest(
+                bundle_dir,
+                backup_id,
+                artifacts,
+                encrypted=encrypted,
+                key_fingerprint=key_fingerprint,
+            )
         except BackupError:
             # Remove the partial bundle so a failed run leaves nothing
             # that could be mistaken for a good backup.
@@ -381,6 +472,60 @@ class BackupEngine:
         )
 
     # -- steps --------------------------------------------------------------
+
+    def _assert_key_custody(self) -> str | None:
+        """Comprobar la custodia offsite de la clave de cifrado (task_prod_04_07).
+
+        Devuelve la huella de la clave activa (para el manifest) o ``None`` si el
+        bundle va en claro. Eleva :class:`BackupError` con un mensaje accionable
+        cuando la clave activa no es la declarada en custodia.
+
+        Por qué esto no es burocracia: la clave que descifra el bundle vive en el
+        entorno de la máquina respaldada y el Vault viaja DENTRO del blob cifrado.
+        Ante pérdida total del host, sin la clave en custodia el backup es
+        matemáticamente irrecuperable — y las unseal keys NO descifran AES-GCM.
+        El único momento en que un control automático puede evitarlo es ANTES de
+        producir el bundle.
+        """
+        if not self._config.encryption_enabled:
+            return None
+        encryptor = self._encryptor
+        if encryptor is None:
+            raise BackupError(
+                "encryption is enabled but no BackupEncryptor was provided "
+                "(the Vault key could not be wired)"
+            )
+        try:
+            active = encryptor.key_fingerprint()
+        except Exception as exc:  # clave ausente/vacía → mensaje limpio, sin valor
+            raise BackupError(f"no se pudo resolver la clave de cifrado del backup: {exc}") from exc
+
+        declared = self._config.key_custody_fingerprint
+        if not declared:
+            message = (
+                "la clave de cifrado del backup NO está declarada en custodia offsite. "
+                "Sin custodia, ante la pérdida del host el bundle es irrecuperable: la "
+                "clave vive en el entorno de ESTA máquina y el Vault viaja dentro del "
+                "propio blob cifrado (las unseal keys no descifran AES-GCM). "
+                f"Deposita el VALOR de la clave en el gestor corporativo / sobre sellado "
+                f"y registra su huella en WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT: {active}"
+            )
+            if self._config.require_key_custody:
+                raise BackupError(message)
+            _log.warning("backup.key_custody.undeclared", fingerprint=active, hint=message)
+            return active
+
+        if declared != active:
+            raise BackupError(
+                "la clave de cifrado ACTIVA no es la que está declarada en custodia "
+                f"offsite (custodia: {declared[:16]}…, activa: {active[:16]}…). Alguien "
+                "rotó WORKERS_BACKUP_ENCRYPTION_KEY sin actualizar la custodia: los "
+                "bundles que se produjeran ahora no los podría abrir nadie. Deposita la "
+                "clave nueva y actualiza WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT, o "
+                "restaura la clave anterior."
+            )
+        _log.info("backup.key_custody.verified", fingerprint=active)
+        return active
 
     def _dump_database(self, bundle_dir: Path) -> ArtifactRecord:
         """Run pg_dump in LOGICAL directory format into the bundle.
@@ -453,6 +598,65 @@ class BackupEngine:
             source=volume,
         )
 
+    def _tar_projects(self, bundle_dir: Path) -> ArtifactRecord | None:
+        """tar + gzip los bare repos de todos los proyectos (task_prod_04_05).
+
+        `{data_root}/projects/<tenant>/<project>/repos/<repo>.git` es EL PRODUCTO
+        de la plataforma: cada plan materializa su rama `plan/<id>-<slug>` ahí
+        (principios rectores 4 y 5). Antes de prod-04 solo entraba de rebote en el
+        tar del bind del data-root — con los worktrees dentro y sin que el restore
+        lo extrajese jamás. Ahora es un artefacto propio (`projects_tar`),
+        verificado por `backup_verification` y restaurado por `restore.py`.
+
+        Devuelve ``None`` (con log) cuando no hay raíz configurada o todavía no
+        existe en disco: una instalación recién parida no tiene proyectos, y
+        fallar el backup entero por eso convertiría el primer backup en un fallo.
+        Si la raíz existe y tar falla, el run entero falla (contrato clean-failure).
+        """
+        root = self._config.projects_root
+        if not root:
+            _log.info("backup.projects.skipped", reason="no projects_root configured")
+            return None
+        source_dir = Path(root)
+        if not source_dir.is_dir():
+            _log.warning("backup.projects.skipped", reason="not on disk", path=str(source_dir))
+            return None
+
+        archive_name = "projects.tar.gz"
+        archive_path = bundle_dir / archive_name
+        args = [
+            "tar",
+            "--create",
+            "--gzip",
+            f"--directory={source_dir}",
+            f"--file={archive_path}",
+            # worktrees + dep-cache son regenerables desde el bare repo; además
+            # están en escritura activa y harían fallar a tar con rc≠0.
+            *_transient_excludes(self._config.transient_excludes),
+            # El backup_root NUNCA debería estar bajo projects/, pero si un
+            # operador lo configurase así el bundle se auto-incluiría.
+            *_bind_tar_excludes(str(source_dir), self._config.backup_root),
+            ".",
+        ]
+        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+        if result.returncode != 0:
+            raise BackupError(
+                f"tar of projects root {root!r} failed (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        if not archive_path.exists():
+            raise BackupError(
+                f"tar of projects root {root!r} reported success but produced no archive"
+            )
+        return ArtifactRecord(
+            name=archive_name,
+            kind="projects_tar",
+            path=archive_name,
+            size_bytes=archive_path.stat().st_size,
+            sha256=_checksum_file(archive_path),
+            source=str(source_dir),
+        )
+
     def _tar_bind_path(self, bundle_dir: Path, bind_path: str) -> ArtifactRecord:
         """tar + gzip un bind mount (ruta absoluta del host) dentro del bundle.
 
@@ -480,6 +684,21 @@ class BackupEngine:
             # archivado. GNU tar ya excluye su propio --file por inode, pero NO el
             # resto del árbol de backups.
             *_bind_tar_excludes(bind_path, self._config.backup_root),
+            # …y el árbol de proyectos si ya viaja como `projects_tar` (que es el
+            # caso por defecto: projects_root = {data_root}/projects ⊂ el bind).
+            # Sin esto los bare repos entrarían DOS veces en cada bundle y el
+            # restore los extraería dos veces, la segunda por encima de la
+            # primera. Mismo contenido, el doble de tamaño.
+            *(
+                _bind_tar_excludes(bind_path, Path(self._config.projects_root))
+                if self._config.projects_root
+                else []
+            ),
+            # prod-04 task_prod_04_05: worktrees + dep-cache fuera también del bind.
+            # Son regenerables (el worktree se recrea del bare, la cache se
+            # re-descarga) y están en escritura activa mientras corren agentes —
+            # el «file changed as we read it» de tar daba rc≠0 y tiraba el backup.
+            *_transient_excludes(self._config.transient_excludes),
             ".",
         ]
         result = self._runner.run(args, timeout=self._config.tar_timeout_s)
@@ -579,6 +798,7 @@ class BackupEngine:
         artifacts: list[ArtifactRecord],
         *,
         encrypted: bool,
+        key_fingerprint: str | None = None,
     ) -> Path:
         manifest = BackupManifest(
             version=MANIFEST_VERSION,
@@ -588,6 +808,7 @@ class BackupEngine:
             database_url_sanitized=_sanitize_db_url(self._config.database_url),
             encrypted=encrypted,
             artifacts=artifacts,
+            key_fingerprint=key_fingerprint,
         )
         manifest_path = bundle_dir / MANIFEST_FILENAME
         manifest_path.write_text(

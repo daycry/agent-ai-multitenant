@@ -5,6 +5,15 @@
 # runs Vault in dev mode with a known root token — non-persistent,
 # convenient for local experimentation.
 #
+# EVERY published port is bound to 127.0.0.1 (prod-10 task_prod10_06,
+# finding secrets-7). Docker's default is 0.0.0.0, which on a corporate
+# laptop means the whole office LAN: the postgres with real data, the
+# MinIO with the attachments, Vault, and a Redis holding server-side
+# SESSIONS and the Celery broker. Reaching them needed no exploit, just
+# `redis-cli -h <laptop-ip>`. Loopback keeps every local tool working and
+# nothing else. If you deliberately need LAN access (testing from a phone,
+# a second machine), add your own overlay — don't widen this one.
+#
 # Usage:
 #   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 
@@ -15,16 +24,16 @@ services:
     # PostgreSQL.app, system service, ...). Override with POSTGRES_PORT
     # if you want the standard port.
     ports:
-      - "${POSTGRES_PORT:-15432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
 
   redis:
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
 
   minio:
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
 
   vault:
     # Dev mode: in-memory storage, auto-unsealed, well-known root token.
@@ -39,7 +48,7 @@ services:
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-dev-root-token}
     ports:
-      - "${VAULT_PORT:-8200}:8200"
+      - "127.0.0.1:${VAULT_PORT:-8200}:8200"
     # IMPORTANT: in -dev mode Vault opens its own listener on
     # 0.0.0.0:8200. The base compose mounts vault/config.hcl which
     # ALSO declares a tcp listener on the same port; both bind ->
@@ -55,7 +64,7 @@ services:
 
   clamav:
     ports:
-      - "${CLAMAV_PORT:-3310}:3310"
+      - "127.0.0.1:${CLAMAV_PORT:-3310}:3310"
 
   # docling-serve sólo se expone al host en dev — útil para probar
   # /v1/convert con curl y para que el probe del dashboard
@@ -63,7 +72,7 @@ services:
   # fuera de docker.
   docling-serve:
     ports:
-      - "${DOCLING_SERVE_PORT:-5001}:5001"
+      - "127.0.0.1:${DOCLING_SERVE_PORT:-5001}:5001"
 
   # egress-proxy normalmente sólo vive en `agentic-net` /
   # `agentic-agents` (no se mapea a host en prod — la api-server vive
@@ -72,7 +81,7 @@ services:
   # alcanzarlo desde un api-server local.
   egress-proxy:
     ports:
-      - "${EGRESS_PROXY_PORT:-8888}:8888"
+      - "127.0.0.1:${EGRESS_PROXY_PORT:-8888}:8888"
 
   # Ollama is exposed to the host in dev so an api-server running OUTSIDE
   # docker (the usual dev setup) reaches it at localhost:11434 — the
@@ -80,4 +89,4 @@ services:
   # http://ollama:11434.
   ollama:
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"

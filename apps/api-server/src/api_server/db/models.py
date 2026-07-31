@@ -78,8 +78,10 @@ from api_server.db.llm_usage import LLMUsageEvent
 # — without it, importing db.models in isolation raised NoReferencedTableError.
 from api_server.db.marketplace import (
     MarketplaceAuditEntry,
+    MarketplaceDeployment,
     MarketplaceInstallation,
     MarketplaceListing,
+    MarketplaceListingVersion,
     MarketplaceShare,
     MarketplaceSource,
 )
@@ -1161,8 +1163,10 @@ __all__ = [
     "AssistantConversation",
     "LLMUsageEvent",
     "MarketplaceAuditEntry",
+    "MarketplaceDeployment",
     "MarketplaceInstallation",
     "MarketplaceListing",
+    "MarketplaceListingVersion",
     "MarketplaceShare",
     "MarketplaceSource",
     "AssistantTurn",

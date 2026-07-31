@@ -19,6 +19,36 @@ se duplican aquí.
 > cifrado/verificación. Para producir o subir un bundle (incluido el backup
 > pre-upgrade), ver [dr-manual-backup.md](./dr-manual-backup.md).
 
+## Garantías declaradas: RPO y RTO
+
+Un plan de recuperación sin cifras no es un plan, es una intención. Estas son
+las garantías que la plataforma declara hoy (prod-04 task_prod_04_12). **Están
+pendientes de validación por dirección** y el RTO se confirma midiéndolo en el
+simulacro ([dr-drill.md](./dr-drill.md)), no estimándolo.
+
+| Métrica                                | Objetivo declarado | De dónde sale                                                                                 |
+| -------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------- |
+| **RPO** (datos que se pueden perder)   | **≤ 24 h**         | Cadencia diaria a las 03:00 (`WORKERS_BACKUP_CRON`) + subida al destino remoto tras verificar |
+| **RTO** (tiempo hasta volver a operar) | **≤ 4 h**          | Objetivo; el valor REAL se mide en cada simulacro y se anota en el acta                       |
+| Retención local                        | 7 días             | `WORKERS_BACKUP_RETENTION_DAYS`                                                               |
+
+Qué significa el RPO en la práctica: si el host muere a las 02:55, se pierde
+**casi un día entero** de trabajo — planes, ejecuciones, documentos subidos y
+commits de los agentes desde las 03:00 del día anterior. No hay PITR: no se
+archivan WAL. Si dirección necesita un RPO menor, hace falta WAL archiving
+(`archive_mode` + wal-g/pgbackrest hacia el destino remoto), que es un **ADR
+propuesto**, no algo que exista hoy.
+
+Qué NO cubre el RPO: lo que no entra en el bundle. Hoy entran el dump lógico de
+PostgreSQL, los volúmenes de MinIO/Redis/Vault, los **bare repos de los
+proyectos** (`projects_tar`) y los bind paths declarados. Los worktrees por
+tarea y la cache de dependencias quedan fuera **a propósito**: son regenerables
+desde el bare repo.
+
+Señal de que el RPO se está incumpliendo: la alerta `BackupTooOld` (último
+backup correcto > 24 h) y `BackupLastRunFailed`. Su enrutado a humanos es
+prod-08; aquí solo se garantiza que la señal se emite.
+
 ## Cuándo y qué camino elegir
 
 | Situación                                                                  | Camino                                                                                                   |
@@ -53,10 +83,8 @@ usa el corruption check de Fase 12 descrito en
 [dr-manual-backup.md](./dr-manual-backup.md) (sección «Verifica el bundle»):
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  exec -T worker \
-  python -c '
+# Desde el HOST (el cliente de PostgreSQL tiene que estar instalado ahí).
+python -c '
 from workers.backup_verification import verify_bundle
 print("verify:", verify_bundle("<backup_id>"))
 '
@@ -65,29 +93,46 @@ print("verify:", verify_bundle("<backup_id>"))
 Nunca restaures desde un bundle que no verifica: usa uno anterior o recupera
 una copia íntegra del destino remoto.
 
-### 2. Descifrado con la clave de Vault
+### 2. Descifrado: la clave NO está en Vault (corregido en prod-04)
 
-Si el bundle está **cifrado** (sufijo `.enc`), Vault debe estar accesible y
-**desellado**, y contener la clave de cifrado
-(`WORKERS_BACKUP_ENCRYPTION_VAULT_KEY`). Ambos motores resuelven la clave por
-el **mismo seam** que usó el backup para cifrar; no hay que descifrar el
-bundle a mano. Sin Vault desellado o sin la clave, el restore de un bundle
-cifrado es **imposible**: escala al responsable de seguridad que custodia las
-unseal keys (ver [05-key-rotation.md](./05-key-rotation.md)).
+Si el bundle está **cifrado** (sufijo `.enc`), hace falta el **valor** de
+`WORKERS_BACKUP_ENCRYPTION_KEY`. Y hay que decirlo sin rodeos porque este
+runbook afirmó lo contrario durante meses:
 
-En un DR sobre máquina virgen, Vault arranca **sellado**; deséllalo antes del
-restore si el bundle está cifrado (ver §«Desellar Vault tras un restore» más
-abajo).
+> **Vault NO resuelve la clave del backup, y las unseal keys NO descifran el
+> bundle.** El proveedor de secretos del backup (`EnvSecretsProvider`) lee la
+> clave de `os.environ`, no de Vault. Y el backend de Vault viaja **dentro** del
+> blob cifrado: aunque tuvieras las unseal keys, primero habría que descifrar el
+> bundle para llegar a Vault. Creer lo contrario convierte el primer DR real en
+> una pérdida total.
 
-### 3. Disponibilidad física del bundle (gap conocido)
+Por eso el valor de la clave se **custodia offsite** (gestor corporativo o sobre
+sellado), junto a las unseal keys pero como un elemento **distinto y etiquetado
+como tal**. El backup registra la huella SHA-256 de la clave activa en el
+`manifest.json` (`key_fingerprint`) y **falla** si no coincide con
+`WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT`: así una rotación de clave sin
+actualizar la custodia se detecta esa misma noche, y no meses después con un
+bundle que nadie puede abrir.
 
-El motor de backup de Fase 12 **NO sube** el bundle a los destinos remotos
-(S3/B2/SFTP/rclone) automáticamente — el cableado «backup → subida» está
-pendiente (ver [dr-manual-backup.md](./dr-manual-backup.md)). Para un DR real,
-asegúrate de que el bundle a restaurar está **físicamente** en la máquina
-destino, bajo `WORKERS_BACKUP_ROOT`. Si solo está en remoto, descárgalo antes
-con la herramienta nativa del destino (`aws s3 cp --recursive`, `b2`, `sftp`,
-`rclone copy`).
+Las unseal keys siguen siendo imprescindibles para **desellar Vault** tras el
+restore (ver §«Desellar Vault tras un restore»). Son dos cosas distintas, en el
+mismo sobre, con etiquetas distintas.
+
+### 3. Disponibilidad física del bundle
+
+Tras cada backup **verificado**, el bundle se sube automáticamente a los
+destinos remotos configurados (S3/B2/SFTP/rclone) y el resultado aparece en el
+resumen de la tarea (`uploaded` / `upload_failures`) y en la métrica
+`agentic_backup_offsite_uploaded`. La subida es best-effort **por diseño**: un
+destino caído no invalida el backup local, pero deja de haber copia fuera de la
+máquina — por eso existe la alerta de «offsite obsoleto».
+
+Un bundle que NO verifica no se sube nunca: una copia remota corrupta es peor
+que no tener copia, porque da confianza.
+
+Para un DR sobre máquina limpia, descarga el bundle del remoto a
+`WORKERS_BACKUP_ROOT` con la herramienta nativa del destino
+(`aws s3 cp --recursive`, `b2`, `sftp`, `rclone copy`).
 
 ### 4. dblink (solo para el restore selectivo por tenant)
 
@@ -122,14 +167,26 @@ Resumen del flujo (el detalle, comandos y rollback están en ese runbook):
 1. Identifica el `<backup_id>` bueno bajo `WORKERS_BACKUP_ROOT` (inspecciona
    su `manifest.json`).
 2. Arranca la infraestructura mínima (`docker compose up -d postgres`).
-3. Lanza el restore completo con **doble confirmación**
-   (`confirm="<backup_id>"`): localiza, descifra (clave de Vault) y
-   **verifica** el bundle; `pg_restore --clean`; detiene los servicios dueños
-   de los volúmenes; re-extrae cada `<volumen>.tar.gz`.
-4. Arranca el stack completo (`docker compose up -d`) y **desella Vault**.
+3. Lanza `./scripts/restore.sh <backup_id>` **desde el host** con la **doble
+   confirmación**: localiza, descifra, **verifica** (fail-closed), comprueba en
+   preflight que todos los servicios a parar existen en el compose, para la
+   aplicación, `pg_restore --clean --exit-on-error`, re-concede los GRANTs de
+   `app_user`, y re-extrae volúmenes, repos de proyectos y binds.
+4. **Desella Vault** y reconcilia (`python -m workers.restore_reconcile`).
+
+> El restore se lanza **desde el host, nunca con `docker compose exec`**: para
+> el stack, y `workers` está entre los servicios que para. Un restore que corre
+> dentro de un contenedor se mata a sí mismo a mitad de una operación
+> destructiva.
+
+> **Fail-stopped**: si un paso de la fase destructiva falla, el stack queda
+> **PARADO** (solo PostgreSQL sigue alcanzable, porque nunca se para) y el error
+> dice hasta dónde se llegó. No lo arranques: corrige y re-ejecuta el restore
+> completo, que es idempotente.
 
 Este es el test humano `human_12_02` del Plan 12 («Restore completo en máquina
-virgen»).
+virgen»), y el simulacro completo con máquina limpia y custodia offsite está en
+**[dr-drill.md](./dr-drill.md)** (`human_prod_04_01`).
 
 ## Restore selectivo por tenant
 
@@ -180,10 +237,35 @@ Tras cualquiera de los dos restores:
    `docker compose ps` todos `Up (healthy)`, `GET /healthz` → 200,
    `GET /admin/system-health` → `status: ok` con `postgres: ok` (y `vault: ok`
    si estaba en el bundle).
-2. **Login y datos** — un usuario del tenant restaurado hace login con sus
+
+2. **Permisos y RLS** (solo restore completo) — el dump se hace con
+   `--no-owner --no-privileges`, así que el restore recrea los objetos sin ACLs
+   y `app_user` (el rol NOBYPASSRLS del que depende TODO el stack con FORCE RLS)
+   se queda sin GRANTs. El motor los re-concede al terminar el `pg_restore`;
+   compruébalo con los ojos, porque el síntoma de que falló es «la aplicación
+   arranca y falla en la primera consulta»:
+
+   ```bash
+   psql "$APP_DATABASE_URL" -c "SET app.tenant_id = '<tenant>';" \
+                            -c "SELECT count(*) FROM projects;"
+   alembic upgrade head    # como migrations_user
+   ```
+
+3. **Reconciliación de los cuatro almacenes** (solo restore completo) — un
+   bundle son fotos tomadas en instantes ligeramente distintos; el restore no se
+   da por bueno hasta que la base de datos, MinIO, Vault y los repos git cuentan
+   la misma historia:
+
+   ```bash
+   python -m workers.restore_reconcile
+   ```
+
+   Sale con código ≠ 0 si hay divergencias críticas.
+
+4. **Login y datos** — un usuario del tenant restaurado hace login con sus
    credenciales previas y ve sus proyectos / planes / conversaciones intactos
    al punto del backup elegido.
-3. **Smoke tests post-deploy** (`task_15_26`) — ejercitan los caminos
+5. **Smoke tests post-deploy** (`task_15_26`) — ejercitan los caminos
    críticos de extremo a extremo sobre el stack recuperado:
 
    ```bash
@@ -194,9 +276,14 @@ Tras cualquiera de los dos restores:
    quedan en verde; contra el stack recuperado **sí** corren y validan la
    recuperación.
 
-4. **Aislamiento (solo restore selectivo)** — confirma que un usuario de
+6. **Aislamiento (solo restore selectivo)** — confirma que un usuario de
    **otro** tenant sigue viendo sus datos actuales **sin cambios**, y que el
    audit log refleja quién hizo el restore y sobre qué tenant.
+
+7. **Ejecutar un plan de punta a punta** — el paso que descubre lo que ningún
+   otro descubre (credenciales de proveedor que no sobrevivieron, imágenes de
+   runtime ausentes, un worktree que no se puede crear sobre el bare restaurado).
+   Obligatorio en el simulacro; muy recomendable tras un DR real.
 
 ## Rollback / aborto
 
@@ -206,9 +293,11 @@ Tras cualquiera de los dos restores:
   correcto.
 - **Bundle que no verifica**: el restore aborta antes de cualquier escritura;
   usa un bundle anterior o recupera una copia íntegra del remoto.
-- **Fallo a mitad — restore completo**: el stack queda inconsistente; mantenlo
-  **parado**, no sirvas datos parciales, y repite el restore (es idempotente)
-  desde el mismo bundle o uno anterior. Detalle en
+- **Fallo a mitad — restore completo**: el motor deja el stack **PARADO** por sí
+  solo (`RestorePartialError`, fail-stopped desde prod-04; antes lo arrancaba
+  incondicionalmente, contradiciendo a este mismo runbook). No lo arranques: el
+  error indica el `stage` alcanzado. Corrige la causa y repite el restore
+  completo, que es idempotente. Detalle en
   [dr-full-restore.md](./dr-full-restore.md).
 - **Fallo a mitad — restore selectivo**: la transacción única hace **ROLLBACK**
   y la base viva queda como estaba; corrige la causa (típicamente `dblink` no
@@ -217,8 +306,11 @@ Tras cualquiera de los dos restores:
 ## A quién avisar
 
 - **System Admin**: aprobador de cualquier restore (acción sensible y
-  destructiva) y quien programa la ventana; custodia las unseal keys
-  necesarias para descifrar el bundle y desellar Vault.
+  destructiva) y quien programa la ventana.
+- **Responsable de seguridad**: custodia DOS elementos distintos —el **valor de
+  la clave de cifrado del backup** (la que descifra el bundle) y las **unseal
+  keys de Vault** (las que desellan Vault tras restaurarlo)—. No son
+  intercambiables: sin la primera no hay bundle que abrir.
 - **Responsable del tenant** afectado (restore selectivo): confirma el punto
   de restauración deseado y valida los datos recuperados.
 - **Responsable de seguridad**: si el bundle está cifrado y la clave de Vault
@@ -229,6 +321,7 @@ Tras cualquiera de los dos restores:
 
 ## Enlaces
 
+- Simulacro completo (máquina limpia + custodia offsite): [dr-drill.md](./dr-drill.md).
 - Detalle del restore completo: [dr-full-restore.md](./dr-full-restore.md).
 - Detalle del restore selectivo por tenant: [dr-tenant-restore.md](./dr-tenant-restore.md).
 - Producir / verificar / subir un bundle: [dr-manual-backup.md](./dr-manual-backup.md).
@@ -236,5 +329,3 @@ Tras cualquiera de los dos restores:
 - Desellar y rotar claves de Vault: [05-key-rotation.md](./05-key-rotation.md).
 - Rollback de un upgrade fallido: [03-system-upgrade.md](./03-system-upgrade.md#rollback).
 - Salud del stack: [health-check.md](./health-check.md).
-  </content>
-  </invoke>

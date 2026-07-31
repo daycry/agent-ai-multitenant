@@ -66,7 +66,9 @@ import yaml
 
 from api_server.marketplace._format_common import (
     is_valid_semver,
+    parse_config_schema,
     parse_permissions_block,
+    parse_targets,
     requested_permission_descriptors,
 )
 
@@ -133,6 +135,12 @@ class SkillManifest:
     # the key carries (list[str] for domains/paths, a NetworkPolicy member
     # value for network_policy).
     permissions: dict[str, Any] = field(default_factory=dict)
+    # ADR 0142, ambos OPCIONALES: ``targets`` son los roles de agente que el
+    # manifest SUGIERE (quien despliega confirma o ajusta) y ``config_schema``
+    # el descriptor del formulario guiado por proyecto. Un SKILL.md sin ellos
+    # sigue siendo válido — retro-compatibilidad con todo lo publicado.
+    targets: tuple[str, ...] = ()
+    config_schema: dict[str, Any] = field(default_factory=dict)
 
     @property
     def requested_permissions(self) -> list[dict[str, Any]]:
@@ -152,7 +160,7 @@ class SkillManifest:
         permissions, which live in their own ``requested_permissions``
         column) so the install flow can persist it verbatim.
         """
-        return {
+        out: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "version": self.version,
@@ -162,6 +170,13 @@ class SkillManifest:
                 for ex in self.examples
             ],
         }
+        # Solo se emiten cuando se declararon (ver la nota gemela en
+        # ``tool_format.ToolManifest.to_manifest_dict``).
+        if self.targets:
+            out["targets"] = list(self.targets)
+        if self.config_schema:
+            out["config_schema"] = dict(self.config_schema)
+        return out
 
 
 def _require_str(data: dict[str, Any], key: str) -> str:
@@ -290,6 +305,8 @@ def parse_skill_md(text: str) -> SkillManifest:
     dependencies = _parse_dependencies(data.get("dependencies"))
     examples = _parse_examples(data.get("examples"))
     permissions = _parse_permissions(data.get("permissions"))
+    targets = parse_targets(data.get("targets"), _skill_err)
+    config_schema = parse_config_schema(data.get("config_schema"), _skill_err)
 
     return SkillManifest(
         name=name,
@@ -299,6 +316,8 @@ def parse_skill_md(text: str) -> SkillManifest:
         dependencies=dependencies,
         examples=examples,
         permissions=permissions,
+        targets=targets,
+        config_schema=config_schema,
     )
 
 

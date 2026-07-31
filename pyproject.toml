@@ -4,6 +4,69 @@ version = "0.0.0"
 description = "Multi-tenant agentic AI platform — see CLAUDE.md and docs/roadmap/."
 requires-python = ">=3.12"
 
+# ---------------------------------------------------------------------------
+# Toolchain de desarrollo. Espejo EXACTO de requirements-dev.txt, que sigue
+# siendo lo que instalan scripts/dev/bootstrap.{ps1,sh}: aquí entra en la
+# resolución del lockfile (prod-11 task_uv_lock_09) para que el linter/mypy/
+# pytest con los que se valida un commit sean versiones reproducibles y no
+# "lo que resolviera pip ese día".
+#
+# La guarda `test_root_dev_group_mirrors_requirements_dev`
+# (tests/unit/test_supply_chain_config.py) pone en rojo cualquier desincronía
+# entre las dos listas.
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+  "pre-commit>=3.7,<4",
+  "black>=24.4,<25",
+  "ruff>=0.5,<1",
+  "mypy>=1.10,<2",
+  "pytest>=8.2,<9",
+  "pytest-asyncio>=0.23,<1",
+  "pytest-timeout>=2.3,<3",
+  "pyyaml>=6.0,<7",
+]
+
+# ---------------------------------------------------------------------------
+# Workspace uv (ADR 0147, prod-11 task_uv_lock_09 / task_ci_lock_10).
+#
+# Las 13 distribuciones Python del monorepo se resuelven JUNTAS en un único
+# `uv.lock`, del que sale `constraints.txt` (`uv export`). Ese fichero es lo
+# que consume el `pip install -e … -c constraints.txt` de CI y del
+# agent-runtime: los rangos de cada pyproject.toml siguen siendo la
+# restricción de compatibilidad, el lock es la verdad reproducible.
+#
+# Los miembros van ENUMERADOS y no por glob `apps/*`: apps/admin-panel y
+# apps/installer son paquetes npm sin pyproject.toml y un glob los arrastraría.
+# ---------------------------------------------------------------------------
+[tool.uv.workspace]
+members = [
+  "apps/api-server",
+  "apps/installer/backend",
+  "apps/notification-dispatcher",
+  "apps/orchestrator",
+  "apps/watchdog",
+  "apps/workers",
+  "packages/sdk-python",
+  "packages/shared-domain",
+  "packages/shared-guardrails",
+  "packages/shared-llm",
+  "packages/shared-mcp",
+  "packages/shared-test-runtimes",
+  "docker/agent-runtimes/agent-runtime",
+]
+
+# agent-runtime declara `shared-llm`, `shared-mcp`, `shared-domain` y
+# `shared-guardrails` por NOMBRE (y shared-guardrails[content-safety] declara
+# shared-llm). Sin estas fuentes uv los buscaría en PyPI, donde no existen.
+# Declaradas en la RAÍZ del workspace, las heredan todos los miembros.
+[tool.uv.sources]
+shared-llm = { workspace = true }
+shared-mcp = { workspace = true }
+shared-domain = { workspace = true }
+shared-guardrails = { workspace = true }
+shared-test-runtimes = { workspace = true }
+
 [tool.black]
 line-length = 100
 target-version = ["py312"]

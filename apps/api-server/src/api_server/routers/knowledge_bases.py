@@ -18,7 +18,6 @@ returns 201 immediately.
 
 from __future__ import annotations
 
-import contextlib
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -702,20 +701,31 @@ async def delete_document(
     document_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
-    storage: ObjectStorage = Depends(get_object_storage),
     redis: Redis = Depends(get_redis),
 ) -> None:
-    """Soft-delete the metadata row + drop the MinIO blob. We do the
-    blob deletion best-effort — a 503 from the storage backend
-    shouldn't block the audit-trail update on the DB row."""
+    """Soft-delete the metadata row. El blob de MinIO lo reclama el GC.
+
+    ORDEN (prod-04 task_prod_04_11, hallazgo db-3). Antes esto borraba el blob
+    ANTES del `soft_delete`, y el commit ocurre al cerrar el request: si ese
+    commit fallaba, quedaba un documento **vivo** en la base de datos cuyo
+    binario ya no existía. La UI seguía ofreciéndolo, el reindex era imposible y
+    la fuente estaba perdida sin vuelta atrás — un borrado «reversible» que
+    destruía el dato antes de asegurarse de que la reversión era posible.
+
+    Además contradecía la promesa de `db/knowledge.py` («soft-deletable so a
+    destructive UI action can be reverted before the cleanup job kicks in»):
+    revertir un soft-delete cuyo blob ya no está no revierte nada.
+
+    Ahora el binario sobrevive a la ventana de gracia y lo hard-borra
+    `workers.collect_knowledge_garbage` (G-03) cuando
+    `deleted_at < now - knowledge_gc_retention_days`, junto con los chunks y la
+    fila. Ese barrido ya existía; lo único que hacía falta era dejar de
+    adelantarse a él.
+    """
     require_tenant_id(principal)
     doc = await _load_document(session, document_id)
     if doc.kb_id != kb_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not in this kb")
-    # Best-effort blob drop — metadata is the source of truth. A
-    # storage hiccup leaves an orphan that the GC job sweeps later.
-    with contextlib.suppress(ObjectStorageError):
-        await storage.delete_object(key=doc.source_storage_key)
     await soft_delete(session, doc)
     # Drop the ingestion stream too so no orphan progress events linger in Redis.
     await delete_document_stream(redis, str(doc.id))

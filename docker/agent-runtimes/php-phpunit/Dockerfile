@@ -1,7 +1,23 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-php-phpunit:v1 — test-runtime template for PHP + PHPUnit (Plan 06 task_06_02).
 
-FROM php:8.3-cli AS runtime
+# ---- composer: binario verificado, NO `curl | php` ------------------
+# prod-11 task_composer_checksum_04 (hallazgo gap5-5). Hasta 2026-07-31 esta
+# imagen hacía `curl -sS https://getcomposer.org/installer | php`: ejecución
+# remota de código SIN verificar dentro del build de una imagen que después
+# ejecuta código NO confiable (Principio Rector 2). Un getcomposer.org
+# comprometido —o un MITM sobre el build— entraba directo al sandbox.
+#
+# La imagen oficial pineada por digest da la misma garantía que un checksum y
+# encima es una etapa `FROM`, así que Dependabot (ecosistema docker) la refresca
+# sola; un `COPY --from=composer:2@sha256:…` en línea NO lo parsea.
+FROM composer:2@sha256:629d4ef35e75349d452851637d37a40ac33a09d6ac010139020603d79713d9bf AS composer-bin
+
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM php:8.3-cli@sha256:db99254edaf6de1644b16afa38b150b8b89f05ec4091a631b59a954dd1330058 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-php-phpunit" \
       org.opencontainers.image.version="v1" \
@@ -30,8 +46,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && docker-php-ext-install -j$(nproc) zip pdo pdo_pgsql pdo_mysql mbstring intl soap \
  && pecl install pcov \
- && docker-php-ext-enable pcov \
- && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+ && docker-php-ext-enable pcov
+
+COPY --from=composer-bin /usr/bin/composer /usr/local/bin/composer
 
 WORKDIR /workspace
 

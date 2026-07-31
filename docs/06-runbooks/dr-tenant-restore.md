@@ -82,10 +82,9 @@ restaurarían, sin tocar la base de datos viva. Es lo que la UI de restore
 (`task_12_12`) muestra para la segunda confirmación del operador.
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  exec -T worker \
-  python -c '
+# Desde el HOST: el servicio se llama `workers`, no `worker`, y el motor no
+# debe correr dentro de un contenedor que la propia operación puede parar.
+python -c '
 from workers.restore_per_tenant import run_per_tenant_restore, confirmation_token
 preview = run_per_tenant_restore(
     "<backup_id>",
@@ -107,10 +106,9 @@ El token de confirmación es `f"{tenant_id}@{backup_id}"`
 la operación antes de cualquier trabajo.
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  exec -T worker \
-  python -c '
+# Desde el HOST: el servicio se llama `workers`, no `worker`, y el motor no
+# debe correr dentro de un contenedor que la propia operación puede parar.
+python -c '
 from workers.restore_per_tenant import run_per_tenant_restore, confirmation_token
 res = run_per_tenant_restore(
     "<backup_id>",
@@ -138,9 +136,25 @@ tenants no se tocan.
   otro tenant sigue viendo sus datos actuales sin cambios.
 - El audit log refleja la operación con quién la hizo y sobre qué tenant
   (test humano `human_12_03`).
+- **Los objetos del tenant se leen por API S3**, no mirando el filesystem
+  (test humano `human_prod_04_03`): lista y descarga un objeto del tenant
+  con `mc` o el SDK, y abre un documento suyo desde la UI. Que el fichero
+  esté en el `_data` NO significa que MinIO lo sirva.
 - Ejecuta [health-check.md](./health-check.md) para confirmar que el
-  stack sigue sano (no debería haberse degradado: la operación no detiene
-  servicios).
+  stack sigue sano.
+
+> **MinIO se para durante la extracción** (prod-04 task_prod_04_10). Escribir
+> el `_data` de MinIO por debajo mientras corre no está soportado: el formato
+> xl guarda metadatos por objeto y el servidor cachea, así que una extracción
+> en caliente deja objetos que el filesystem tiene y la API no ve. El motor
+> para el servicio `minio` alrededor de la extracción de la rebanada y lo
+> vuelve a arrancar SIEMPRE, incluso si la extracción falla — dejarlo caído
+> por el restore de un tenant dejaría sin object storage a todos los demás.
+> Cuenta con unos segundos de indisponibilidad del object storage.
+>
+> El vaciado de la rebanada es un **error duro**: antes era best-effort
+> (`ignore_errors=True`) y un borrado a medias dejaba al tenant con una mezcla
+> de dos momentos distintos que nadie detectaba.
 
 ## Rollback / aborto
 

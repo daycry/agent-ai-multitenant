@@ -5,7 +5,11 @@
 # multiple stacks, or any non-canonical setup. No language toolchain
 # beyond what alpine ships.
 
-FROM alpine:3.20 AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-generic-shell" \
       org.opencontainers.image.version="v1" \

@@ -16,7 +16,11 @@
 #                -t agent-runtime:v1 .
 
 # ---- builder: install the agent_runtime package into an isolated venv ----
-FROM python:3.12-slim AS builder
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -31,6 +35,13 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Resolución REPRODUCIBLE (prod-11 task_ci_lock_10 b, ADR 0147). Sin `-c`, cada
+# build de esta imagen resuelve las transitivas por su cuenta y dos builds del
+# MISMO commit dan dos imágenes distintas — justo en el contenedor donde corre
+# el bucle del agente. constraints.txt se genera desde uv.lock; el contexto de
+# build de esta imagen es la RAÍZ del repo (ver cabecera), así que está a mano.
+COPY constraints.txt /constraints.txt
+
 # shared-llm is a path dependency of agent-runtime (ADR 0021); install
 # it first so the next `pip install .` resolves the `shared-llm` name
 # from the already-installed local wheel instead of asking PyPI.
@@ -43,9 +54,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 ARG WITH_CLAUDE=0
 COPY packages/shared-llm/ /src/shared-llm/
 RUN if [ "$WITH_CLAUDE" = "1" ]; then \
-        pip install --no-cache-dir "/src/shared-llm[claude]"; \
+        pip install --no-cache-dir -c /constraints.txt "/src/shared-llm[claude]"; \
     else \
-        pip install --no-cache-dir /src/shared-llm; \
+        pip install --no-cache-dir -c /constraints.txt /src/shared-llm; \
     fi
 
 # shared-mcp is a path dependency of agent-runtime since Plan 05
@@ -54,30 +65,30 @@ RUN if [ "$WITH_CLAUDE" = "1" ]; then \
 # against the already-installed package rather than failing because
 # it doesn't exist on PyPI.
 COPY packages/shared-mcp/ /src/shared-mcp/
-RUN pip install --no-cache-dir /src/shared-mcp
+RUN pip install --no-cache-dir -c /constraints.txt /src/shared-mcp
 
 # shared-domain is a path dependency of agent-runtime since Plan 06.18
 # (ADR 0048: canonical tool-name source of truth used by the approval gate).
 # Same trick as shared-llm/shared-mcp: install from the local wheel before
 # agent-runtime so its name resolves locally rather than failing on PyPI.
 COPY packages/shared-domain/ /src/shared-domain/
-RUN pip install --no-cache-dir /src/shared-domain
+RUN pip install --no-cache-dir -c /constraints.txt /src/shared-domain
 
 # shared-guardrails is a path dependency of agent-runtime since ADR 0102 (g1):
 # the runtime runs the guardrail pipeline (post_tool prompt-injection defense)
 # over tool outputs before they re-enter the model context. Same local-wheel
 # trick so its name resolves locally rather than failing on PyPI.
 COPY packages/shared-guardrails/ /src/shared-guardrails/
-RUN pip install --no-cache-dir /src/shared-guardrails
+RUN pip install --no-cache-dir -c /constraints.txt /src/shared-guardrails
 
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build
 COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./
 COPY docker/agent-runtimes/agent-runtime/agent_runtime/ ./agent_runtime/
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir -c /constraints.txt .
 
 # ---- runtime: slim image, non-root, no build tools ----------------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime" \
       org.opencontainers.image.version="v1" \

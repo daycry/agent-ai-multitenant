@@ -55,13 +55,13 @@ jobs:
           - generic-shell
           - generic-http
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: docker/agent-runtimes/${{ matrix.template }}
           file: docker/agent-runtimes/${{ matrix.template }}/Dockerfile
@@ -72,6 +72,28 @@ jobs:
           # layers under a key derived from the matrix value.
           cache-from: type=gha,scope=runtime-${{ matrix.template }}
           cache-to: type=gha,mode=max,scope=runtime-${{ matrix.template }}
+
+      # Trivy sobre CADA template de la matriz (prod-11 task_trivy_07, gap5-1).
+      #
+      # Estas son las imágenes donde el Principio Rector 2 deposita el
+      # aislamiento del código NO confiable: es donde una CVE de la base importa
+      # más y donde hasta ahora la ÚNICA verificación era el smoke de WORKDIR de
+      # abajo (que se conserva, pero deja de ser el único gate).
+      #
+      # `ignore-unfixed: true`: las bases `-slim`/`alpine` acumulan CVEs sin fix
+      # upstream; sin esto el gate bloquearía PRs ajenos al problema (riesgo 2).
+      # Las excepciones CON fix van a `.trivyignore`, con justificación y fecha
+      # de revisión obligatorias.
+      - name: Trivy — ${{ matrix.template }} (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agent-runtime-${{ matrix.template }}:v1
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
 
       - name: Image smoke (the catalog claims WORKDIR=/workspace)
         run: |

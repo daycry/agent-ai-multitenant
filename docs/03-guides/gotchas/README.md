@@ -127,6 +127,10 @@ el problema ya esté documentado.
 - [black-vs-ruff-format-chained-call-comment.md](./black-vs-ruff-format-chained-call-comment.md)
   — los dos formateadores se pelean en bucle por un comentario DENTRO de una
   llamada encadenada; sacarlo fuera del paréntesis los hace converger.
+- [node-modules-a-medio-instalar-finge-regresion.md](./node-modules-a-medio-instalar-finge-regresion.md)
+  — un `npm install` interrumpido finge una regresión de versión: 4 tests rojos
+  «por el bump» que pasaban tras reinstalar del todo. Si comparas dos versiones,
+  las dos ramas necesitan instalación COMPLETA.
 - [prettier-hook-version-vs-npx.md](./prettier-hook-version-vs-npx.md)
   — el hook usa `mirrors-prettier` **v4.0.0-alpha.8** pineado y `npx prettier` baja
   la última v3: formatear a mano no arregla el hook y el commit falla en bucle.

@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-dotnet-test:v1 — test-runtime template for .NET (Plan 06 task_06_02).
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM mcr.microsoft.com/dotnet/sdk:8.0@sha256:3c0edbfe1549dd93fb789dc96299a40df865ad7bffefcaf38e8c05940686d641 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-dotnet-test" \
       org.opencontainers.image.version="v1" \

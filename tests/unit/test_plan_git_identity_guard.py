@@ -43,7 +43,14 @@ _CANONICAL = "plan_git.py"
 #: conjunto de ramas vivas desde filas (plan_id, slug) de BD y no tiene el
 #: `project_slug` que `plan_git_identity` pide. Usa el mismo generador de nombres,
 #: así que no puede divergir.
-_BRANCH_NAME_ALLOWLIST = frozenset({_CANONICAL, "cleanup.py"})
+#: Quién puede llamar al generador de la rama. La lista existe para que la
+#: identidad de la rama tenga UNA fuente, no para prohibir el uso de la función
+#: canónica: un llamante que la usa (en vez de formatear `plan/...` a mano) está
+#: del lado correcto de la invariante y solo necesita quedar declarado aquí.
+#: `restore_reconcile.py` la usa en SOLO LECTURA — deriva el nombre esperado para
+#: comprobar si la rama existe en el bare tras una restauración, que es
+#: exactamente la comparación DB↔git que ese reconciliador hace.
+_BRANCH_NAME_ALLOWLIST = frozenset({_CANONICAL, "cleanup.py", "restore_reconcile.py"})
 
 #: Señales de que un nombre de bare se está derivando de algo que NO es el slug
 #: persistido — la forma exacta del defecto P2 (`_slugify(project.name)`,

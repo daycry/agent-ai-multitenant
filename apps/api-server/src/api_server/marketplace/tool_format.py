@@ -68,7 +68,9 @@ import yaml
 from api_server.db.marketplace import MarketplaceListingKind
 from api_server.marketplace._format_common import (
     is_valid_semver,
+    parse_config_schema,
     parse_permissions_block,
+    parse_targets,
     requested_permission_descriptors,
 )
 
@@ -162,6 +164,12 @@ class ToolManifest:
     # the key carries (list[str] for domains/paths, a NetworkPolicy value
     # for network_policy).
     permissions: dict[str, Any] = field(default_factory=dict)
+    # ADR 0142, both OPTIONAL and both retro-compatible (a manifest without
+    # them stays valid): ``targets`` are the agent roles the manifest SUGGESTS
+    # (whoever deploys confirms or adjusts — decisión D5) and ``config_schema``
+    # is the descriptor of the per-project guided form.
+    targets: tuple[str, ...] = ()
+    config_schema: dict[str, Any] = field(default_factory=dict)
 
     @property
     def requested_permissions(self) -> list[dict[str, Any]]:
@@ -182,7 +190,7 @@ class ToolManifest:
         live in their own ``requested_permissions`` column) so the install
         flow can persist it verbatim.
         """
-        return {
+        out: dict[str, Any] = {
             "name": self.name,
             "version": self.version,
             "description": self.description,
@@ -193,6 +201,14 @@ class ToolManifest:
             "input_schema": dict(self.input_schema),
             "output_schema": dict(self.output_schema),
         }
+        # Solo se emiten cuando se declararon: un `targets: []` o un
+        # `config_schema: {}` sintéticos en el manifest de todo lo ya publicado
+        # cambiarían el JSONB de listings que no han cambiado de nada.
+        if self.targets:
+            out["targets"] = list(self.targets)
+        if self.config_schema:
+            out["config_schema"] = dict(self.config_schema)
+        return out
 
 
 def _require_str(data: dict[str, Any], key: str) -> str:
@@ -325,6 +341,8 @@ def parse_tool_manifest(text: str) -> ToolManifest:
     input_schema = _parse_schema("input_schema", data.get("input_schema"))
     output_schema = _parse_schema("output_schema", data.get("output_schema"))
     permissions = parse_permissions_block(data.get("permissions"), _tool_err)
+    targets = parse_targets(data.get("targets"), _tool_err)
+    config_schema = parse_config_schema(data.get("config_schema"), _tool_err)
 
     return ToolManifest(
         name=name,
@@ -337,6 +355,8 @@ def parse_tool_manifest(text: str) -> ToolManifest:
         input_schema=input_schema,
         output_schema=output_schema,
         permissions=permissions,
+        targets=targets,
+        config_schema=config_schema,
     )
 
 

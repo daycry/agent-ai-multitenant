@@ -163,7 +163,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_01` — Builders MultiFernet con lista de claves
 
-- [ ] **Título**: Migrar los 4 builders `Fernet(...)` a `MultiFernet`
+- [x] **Título**: Migrar los 4 builders `Fernet(...)` a `MultiFernet`
 - **Descripción**: En `apps/api-server/src/api_server/auth/sso/secrets.py:51-55`,
   `apps/api-server/src/api_server/webhooks/secrets.py:44-48`,
   `apps/api-server/src/api_server/notifications/secrets.py:37-39` y
@@ -190,7 +190,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_02` — Comando de re-cifrado masivo por tabla
 
-- [ ] **Título**: CLI `python -m api_server.cli reencrypt-secrets` con dry-run
+- [x] **Título**: CLI `python -m api_server.cli reencrypt-secrets` con dry-run
 - **Descripción**: Nuevo comando administrativo (plataforma-global, ejecutado
   por un System Admin dentro del contenedor api-server) que recorre
   `sso_configurations.client_secret_encrypted` (+ clave SAML SP),
@@ -212,7 +212,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_03` — ADR clave TOTP propia + break-glass MFA
 
-- [ ] **Título**: ADR «clave de cifrado MFA: propia vs acoplada a SSO» +
+- [x] **Título**: ADR «clave de cifrado MFA: propia vs acoplada a SSO» +
       procedimiento break-glass documentado
 - **Descripción**: Redactar ADR en `docs/05-architecture-decisions/` con las
   opciones A (separar `API_SERVER_MFA_ENCRYPTION_KEY`, recomendada) y B
@@ -236,7 +236,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_04` — `API_SERVER_JWT_SECRETS`: firmar con una, verificar contra todas
 
-- [ ] **Título**: Lista ordenada de secretos JWT en api-server y workers
+- [x] **Título**: Lista ordenada de secretos JWT en api-server y workers
 - **Descripción**: Nueva setting lista `API_SERVER_JWT_SECRETS` (coma-separada,
   fallback a `API_SERVER_JWT_SECRET` actual). `encode_jwt`
   (`auth/jwt.py:62-67`) firma siempre con la primera;
@@ -264,7 +264,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_05` — Adaptador hvac real + ciclo SKIPPED ruidoso sin Vault
 
-- [ ] **Título**: `HvacVaultRotationClient` y fin del `SUCCEEDED` contra el fake
+- [x] **Título**: `HvacVaultRotationClient` y fin del `SUCCEEDED` contra el fake
 - **Descripción**: Implementar el adaptador `hvac` real del Protocol
   `VaultRotationClient` (`apps/workers/src/workers/credential_rotation.py:505-559`)
   siguiendo el patrón ya probado de `HvacLLMProviderVaultStore`
@@ -335,7 +335,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_08` — Key-id en el header de bundle + anillo de claves en restore
 
-- [ ] **Título**: Formato v2 `[MAGIC|v2|key_id|nonce|ct+tag]` y
+- [x] **Título**: Formato v2 `[MAGIC|v2|key_id|nonce|ct+tag]` y
       `WORKERS_BACKUP_ENCRYPTION_KEYS`
 - **Descripción**: En `apps/workers/src/workers/backup_encryption.py`:
   (1) bump `_FORMAT_VERSION` a 2 añadiendo al header un key-id de 8 bytes
@@ -362,7 +362,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_09` — Reescribir `docs/06-runbooks/05-key-rotation.md` clave-por-clave
 
-- [ ] **Título**: Tabla exhaustiva de las 8 claves con procedimiento ejecutable
+- [x] **Título**: Tabla exhaustiva de las 8 claves con procedimiento ejecutable
       y rollback
 - **Descripción**: Reescritura completa con una tabla por clave — JWT, MinIO,
   `API_SERVER_SSO_ENCRYPTION_KEY(S)` (SSO+MFA+SAML),

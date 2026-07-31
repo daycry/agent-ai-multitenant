@@ -93,6 +93,33 @@ Redis trae 16 DBs (0-15); la 0 es la de desarrollo y la 15 el default de los
 tests, así que reparte entre la 1 y la 14. Si el choque fuese entre tests del
 mismo fichero, que cada uno mintee su sesión **después** del flush, no antes.
 
+## Y el tercer caso: `test_migrations.py` no puede ir en un lote
+
+`tests/integration/test_migrations.py` hace **downgrade hasta base** sobre la BD
+compartida de la sesión. Si en ese lote hay otros ficheros que ya crearon filas,
+la cadena de bajada revienta a media altura:
+
+```
+FAILED test_migrations.py::test_downgrade_base_drops_all_tables
+FAILED test_migrations.py::test_upgrade_downgrade_upgrade_is_idempotent
+FAILED test_migrations.py::test_fk_cleanup_migration_is_reversible
+```
+
+Y en solitario pasa. **No es una migración rota: es la invocación.** Corre ese
+fichero SIEMPRE en su propia sesión:
+
+```bash
+# el lote de lo que has tocado, SIN test_migrations
+TEST_PG_DB_NAME=..._lote  TEST_REDIS_URL=...  pytest tests/integration/test_a.py test_b.py -q -p no:randomly
+# y las migraciones aparte
+TEST_PG_DB_NAME=..._migr  TEST_REDIS_URL=...  pytest tests/integration/test_migrations.py -q -p no:randomly
+```
+
+El aviso ya estaba en el docstring de la fixture `test_database_url` («some tests
+depend on execution order, e.g. `test_migrations.py`»), y aun así se cayó en la
+trampa al armar un lote ordenado alfabéticamente. De ahí que quede escrito aquí,
+donde se busca cuando algo falla, y no solo donde se explica el diseño.
+
 ## Cómo verificar el fix
 
 Dos sesiones simultáneas con nombres distintos terminan las dos en verde:

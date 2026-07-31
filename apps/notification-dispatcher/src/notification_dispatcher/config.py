@@ -15,6 +15,8 @@ from functools import lru_cache
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from notification_dispatcher.crypto_keys import parse_key_ring
+
 # Substrings flagging a known dev-only default — forbidden in staging/prod
 # (Plan 06.14 task_06_14_03 / secrets-config-5). Mirrors workers/config.py.
 _DEV_SECRET_MARKERS = ("changeme", "dev-only")
@@ -372,6 +374,27 @@ class Settings(BaseSettings):
         "(Vault-backed) in production — the model_validator below rejects "
         "the dev default in staging/prod.",
     )
+    # prod-05 task_prod05_01: the ROTATABLE form of the key above. Comma-separated,
+    # head key encrypts, every key decrypts. MUST be kept equal to the api-server's
+    # ``API_SERVER_NOTIFICATION_ENCRYPTION_KEYS`` — the api-server writes the
+    # ciphertext this service reads, so the two rings are one contract deployed in
+    # two containers. Empty (the default) = use the singular key alone, i.e. the
+    # pre-prod-05 behaviour verbatim.
+    notification_encryption_keys: SecretStr = Field(
+        default=SecretStr(""),
+        description="Comma-separated channel-secret keys; head encrypts, all "
+        "decrypt. MUST equal API_SERVER_NOTIFICATION_ENCRYPTION_KEYS. Empty = "
+        "use NOTIFY_NOTIFICATION_ENCRYPTION_KEY alone.",
+    )
+
+    @property
+    def notification_encryption_key_ring(self) -> tuple[str, ...]:
+        """Ordered channel-secret keys: [0] encrypts, all decrypt."""
+        return parse_key_ring(
+            plural=self.notification_encryption_keys.get_secret_value(),
+            singular=self.notification_encryption_key.get_secret_value(),
+            name="NOTIFY_NOTIFICATION_ENCRYPTION_KEY(S)",
+        )
 
     # ----- Misc -----
     environment: str = Field(
@@ -421,12 +444,19 @@ class Settings(BaseSettings):
                 f"environment={self.environment!r} but NOTIFY_DATABASE_URL still uses "
                 "dev-default credentials. Set it to a real secret (Vault-backed in production)."
             )
-        key = self.notification_encryption_key.get_secret_value().lower()
-        if any(marker in key for marker in _DEV_SECRET_MARKERS):
+        # prod-05: over the whole RING, not just the singular var. A dev key kept
+        # in the tail "only to decrypt the old rows" is still a publicly known key
+        # that decrypts production channel secrets.
+        offending = sorted(
+            f"NOTIFY_NOTIFICATION_ENCRYPTION_KEY(S)[{position}]"
+            for position, value in enumerate(self.notification_encryption_key_ring)
+            if any(marker in value.lower() for marker in _DEV_SECRET_MARKERS)
+        )
+        if offending:
             raise ValueError(
-                f"environment={self.environment!r} but NOTIFY_NOTIFICATION_ENCRYPTION_KEY "
-                "still uses a dev-default value. Set it to a real secret "
-                "(Vault-backed in production)."
+                f"environment={self.environment!r} but these notification keys still "
+                f"use dev-default values: {', '.join(offending)}. Set them to real "
+                "secrets (Vault-backed in production)."
             )
         return self
 

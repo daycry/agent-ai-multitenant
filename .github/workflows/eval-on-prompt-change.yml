@@ -43,9 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
@@ -55,8 +55,8 @@ jobs:
           python -m pip install --upgrade pip
           # shared-llm is a path dep (ADR 0021); install it first so the
           # api-server editable install resolves the local wheel.
-          python -m pip install -e "packages/shared-llm[dev]"
-          python -m pip install -e "apps/api-server[dev]"
+          python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
+          python -m pip install -e "apps/api-server[dev]" -c constraints.txt
 
       # Decide once whether a real LLM provider secret is present. CI has none
       # by default, so the live harness is gated on this; without it we still

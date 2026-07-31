@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-rust-cargo:v1 — test-runtime template for Rust (Plan 06 task_06_02).
 
-FROM rust:1.79-slim AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM rust:1.79-slim@sha256:073c8e7ae12d2637d1d541cb0f3f9d92bfa22c97e2e45db87a9fc6a90c9a7f22 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-rust-cargo" \
       org.opencontainers.image.version="v1" \

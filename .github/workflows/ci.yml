@@ -23,50 +23,72 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
 
+      # prod-10 task_prod10_03 (secrets-1 / quality-3). Antes de instalar nada:
+      # si el checkout trae artefactos de secretos (vault-init-output/, un
+      # service token de Vault pegado en un fichero), el job para AQUÍ. Va
+      # primero a propósito — el job `docker` construye los agent-runtimes con
+      # la RAÍZ DEL REPO como contexto, así que un secreto en el árbol acabaría
+      # legible en una capa de imagen. `.dockerignore` es la segunda red; este
+      # paso es la primera. No necesita dependencias: solo la stdlib.
+      - name: No secret artefacts in the tree
+        run: python scripts/check_no_secret_artifacts.py --root .
+
       - name: Install the project (editable) so mypy resolves api_server / watchdog
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e "apps/api-server[dev]"
-          python -m pip install -e "apps/watchdog[dev]"
-          python -m pip install -e "apps/orchestrator[dev]"
-          python -m pip install -e "apps/workers[dev]"
+          python -m pip install -e "apps/api-server[dev]" -c constraints.txt
+          python -m pip install -e "apps/watchdog[dev]" -c constraints.txt
+          python -m pip install -e "apps/orchestrator[dev]" -c constraints.txt
+          python -m pip install -e "apps/workers[dev]" -c constraints.txt
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
-          python -m pip install -e "apps/notification-dispatcher[dev]"
+          python -m pip install -e "apps/notification-dispatcher[dev]" -c constraints.txt
           # installer bootstrap backend (Plan 15) — its tests live in tests/
           # (test_installer_prereq.py / test_installer_backend.py) so it must
           # be importable in pytest + the mypy hook.
-          python -m pip install -e "apps/installer/backend[dev]"
+          python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
-          python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
           # shared-domain: canonical tool-name source of truth (ADR 0048,
           # Plan 06.18). Dependency-free; imported by api-server / orchestrator
           # / agent-runtime so the catalog, chat-modes, runtime and approval
           # all speak one tool namespace.
-          python -m pip install -e "packages/shared-domain[dev]"
-          python -m pip install -e "packages/shared-mcp[dev]"
+          python -m pip install -e "packages/shared-domain[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-mcp[dev]" -c constraints.txt
           # shared-test-runtimes lands with Plan 06 task_06_01 — install
           # editable so the runtime template catalog imports resolve in
           # both pytest and pre-commit's mypy hook.
-          python -m pip install -e "packages/shared-test-runtimes[dev]"
+          python -m pip install -e "packages/shared-test-runtimes[dev]" -c constraints.txt
           # shared-guardrails: declarative guardrails engine (Plan 11
           # task_11_01). Reusable library; install editable so its imports
           # resolve in both pytest and pre-commit's mypy hook.
-          python -m pip install -e "packages/shared-guardrails[dev]"
-          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
+          python -m pip install -e "packages/shared-guardrails[dev]" -c constraints.txt
+          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]" -c constraints.txt
           python -m pip install pre-commit
 
       - name: Run pre-commit on all files
         run: pre-commit run --all-files --show-diff-on-failure
+
+      # Drift del lockfile (prod-11 task_ci_lock_10 c). `uv lock --check` falla
+      # si algún pyproject.toml del workspace cambió sus rangos sin regenerar
+      # uv.lock. Sin esto, constraints.txt describiría un árbol que ya no es el
+      # que declaran los paquetes: un lock que miente es peor que no tenerlo.
+      # Va en lint-python (job BLOQUEANTE) y no en security-scan a propósito:
+      # esto es higiene de repo, no un hallazgo de vulnerabilidad, así que no
+      # debe heredar el modo informe del gate SCA.
+      - name: uv lock --check (drift entre pyproject.toml y uv.lock)
+        run: |
+          python -m pip install uv
+          uv lock --check
 
   # ---------------------------------------------------------------------------
   # Markdown lint (Plan 07 task_07_03): structural / hygiene linting of the
@@ -80,9 +102,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: "20"
 
@@ -97,7 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Detect Node workspace
         id: detect
@@ -109,7 +131,7 @@ jobs:
             echo "No apps/admin-panel/package.json yet — skipping TS lint."
           fi
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: steps.detect.outputs.has_node == 'true'
         with:
           node-version: "20"
@@ -131,9 +153,18 @@ jobs:
         working-directory: apps/admin-panel
         run: npm run lint
 
+      # NEXT_PUBLIC_API_URL es OBLIGATORIA en un build de producción desde
+      # prod-09 (hallazgo frontend-8): `next.config.js` → `assertPublicApiUrl`
+      # revienta el build si falta, para que nadie publique un panel que apunta
+      # al localhost de cada usuario. El paso no la ponía, así que este `npm run
+      # build` fallaba SIEMPRE — invisible mientras CI estuvo caído.
+      # `/api` es el prefijo de mismo origen tras Caddy (ADR 0061), el mismo que
+      # hornea release-images.yml.
       - name: next build (smoke)
         if: steps.detect.outputs.has_node == 'true'
         working-directory: apps/admin-panel
+        env:
+          NEXT_PUBLIC_API_URL: /api
         run: npm run build
 
       # Frontend unit/component tests (Plan prod-02 task_09, finding frontend-7):
@@ -153,9 +184,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
@@ -174,36 +205,36 @@ jobs:
         if: steps.detect.outputs.has_tests == 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e "apps/api-server[dev]"
-          python -m pip install -e "apps/watchdog[dev]"
-          python -m pip install -e "apps/orchestrator[dev]"
-          python -m pip install -e "apps/workers[dev]"
+          python -m pip install -e "apps/api-server[dev]" -c constraints.txt
+          python -m pip install -e "apps/watchdog[dev]" -c constraints.txt
+          python -m pip install -e "apps/orchestrator[dev]" -c constraints.txt
+          python -m pip install -e "apps/workers[dev]" -c constraints.txt
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
-          python -m pip install -e "apps/notification-dispatcher[dev]"
+          python -m pip install -e "apps/notification-dispatcher[dev]" -c constraints.txt
           # installer bootstrap backend (Plan 15) — its tests live in tests/
           # (test_installer_prereq.py / test_installer_backend.py) so it must
           # be importable in pytest + the mypy hook.
-          python -m pip install -e "apps/installer/backend[dev]"
+          python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
-          python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
           # shared-domain: canonical tool-name source of truth (ADR 0048,
           # Plan 06.18). Dependency-free; imported by api-server / orchestrator
           # / agent-runtime so the catalog, chat-modes, runtime and approval
           # all speak one tool namespace.
-          python -m pip install -e "packages/shared-domain[dev]"
-          python -m pip install -e "packages/shared-mcp[dev]"
+          python -m pip install -e "packages/shared-domain[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-mcp[dev]" -c constraints.txt
           # shared-test-runtimes lands with Plan 06 task_06_01 — install
           # editable so the runtime template catalog imports resolve in
           # both pytest and pre-commit's mypy hook.
-          python -m pip install -e "packages/shared-test-runtimes[dev]"
+          python -m pip install -e "packages/shared-test-runtimes[dev]" -c constraints.txt
           # shared-guardrails: declarative guardrails engine (Plan 11
           # task_11_01). Reusable library; install editable so its imports
           # resolve in both pytest and pre-commit's mypy hook.
-          python -m pip install -e "packages/shared-guardrails[dev]"
-          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
+          python -m pip install -e "packages/shared-guardrails[dev]" -c constraints.txt
+          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]" -c constraints.txt
 
       - name: pytest tests/unit (+ coverage ratchet gate)
         if: steps.detect.outputs.has_tests == 'true'
@@ -260,6 +291,107 @@ jobs:
         run: pytest tests/docs -v
 
   # ---------------------------------------------------------------------------
+  # SCA — análisis de composición de software (plan prod-11, hallazgo gap5-1).
+  #
+  # Hasta 2026-07-31 la cobertura SCA era CERO en las cuatro superficies del
+  # repo: pip sin pip-audit, npm sin npm audit, imágenes sin escáner y ningún
+  # dependabot.yml. Este job cubre las dos primeras; las imágenes las escanea
+  # Trivy en `build-images`, en build-runtime-templates.yml y en
+  # release-images.yml (donde bloquea la publicación).
+  #
+  # ── MODO INFORME ────────────────────────────────────────────────────────
+  # `continue-on-error: true` es DELIBERADO y temporal (task_sca_gate_08): el
+  # gate arranca informando durante la semana de triage para no bloquear el
+  # día 1 todos los PRs con el backlog de CVEs heredado. Para convertirlo en
+  # gate hacen falta dos cosas, y las dos son de un humano:
+  #
+  #   1. Vaciar o justificar el backlog (docs/06-runbooks/triage-vulnerabilidades.md).
+  #      A 2026-07-31 el bloqueante conocido es `next`: ni siquiera en 14.2.35
+  #      —el último parche de la línea— sale limpio de `npm audit --audit-level=high`,
+  #      porque el rango de los avisos abarca TODO 14.x y el único fix es
+  #      next 16 (major, rotura). Eso pide su propio plan/ADR.
+  #   2. Quitar este `continue-on-error` y añadir "SCA (pip-audit + npm audit)"
+  #      a los checks obligatorios de branch protection (los administra
+  #      prod-02-ci-en-verde; este plan extiende esa lista, no la redefine).
+  # ---------------------------------------------------------------------------
+  security-scan:
+    name: SCA (pip-audit + npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # MISMO conjunto de editable installs que `test-unit`, a propósito: así
+      # pip-audit audita el árbol que CI ejecuta DE VERDAD, transitivas
+      # incluidas, y no una lista de rangos declarados. La guarda
+      # `test_pip_audit_audits_the_same_tree_the_unit_job_installs` pone en
+      # rojo cualquier divergencia entre los dos jobs.
+      - name: Install project (editable, desde el lock)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/api-server[dev]" -c constraints.txt
+          python -m pip install -e "apps/watchdog[dev]" -c constraints.txt
+          python -m pip install -e "apps/orchestrator[dev]" -c constraints.txt
+          python -m pip install -e "apps/workers[dev]" -c constraints.txt
+          python -m pip install -e "apps/notification-dispatcher[dev]" -c constraints.txt
+          python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-domain[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-mcp[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-test-runtimes[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-guardrails[dev]" -c constraints.txt
+          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]" -c constraints.txt
+
+      # `--skip-editable` deja fuera las 13 distribuciones locales (api-server,
+      # shared-*, agent-runtime…): no existen en PyPI, así que con `--strict`
+      # las contaría como "no auditables" y el paso moriría siempre por una
+      # razón que no es una vulnerabilidad. Sus dependencias SÍ se auditan:
+      # están instaladas en el entorno como distribuciones normales.
+      - name: pip-audit (entorno instalado, transitivas incluidas)
+        run: |
+          set -euo pipefail
+          python -m pip install pip-audit
+          # Excepciones versionadas con justificación + fecha de revisión
+          # obligatorias (.pip-audit-ignore). El formato lo verifica
+          # tests/unit/test_supply_chain_config.py.
+          ignores=()
+          while IFS= read -r line; do
+            line="${line%%#*}"
+            line="$(printf '%s' "$line" | tr -d '[:space:]')"
+            [ -n "$line" ] && ignores+=(--ignore-vuln "$line")
+          done < .pip-audit-ignore
+          echo "Excepciones aplicadas: ${#ignores[@]}"
+          pip-audit --strict --skip-editable "${ignores[@]}"
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "20"
+
+      # `--omit=dev`: la toolchain de build (eslint, playwright, vitest…) no se
+      # despliega, y su ruido mataría el gate. `--audit-level=high`: sin umbral
+      # el comando falla con cualquier `low`.
+      - name: npm audit (admin-panel)
+        working-directory: apps/admin-panel
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+
+      # El frontend del installer NO entra en el lint de CI (eso es alcance de
+      # prod-02-ci-en-verde), pero SÍ es superficie SCA: se sirve al operador
+      # durante el bootstrap. Su `npm audit` entra aquí.
+      - name: npm audit (installer)
+        working-directory: apps/installer
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+
+  # ---------------------------------------------------------------------------
   # Integration tests against docker-compose. Brings up the stack and
   # runs the tenant/auth/admin/tracing tests against real Postgres + Redis.
   # ---------------------------------------------------------------------------
@@ -270,8 +402,21 @@ jobs:
     # cross-tenant gate push the whole job near 30; a slow runner tipped it over
     # and cancelled mid-suite (Plan prod-01 CI). Revisit when the suite is split.
     timeout-minutes: 45
+    # prod-10 task_prod10_05/06: the canonical compose no longer falls back to
+    # `changeme-dev-only` — every credential is `${VAR:?…}` and a missing one
+    # aborts `docker compose config`. On a developer machine these come from
+    # `docker/.env` (gitignored); CI has no such file, so they are declared here.
+    # The values are the SAME public dev-only strings that used to be inlined in
+    # the compose: this is a throwaway stack that lives for one job.
+    env:
+      POSTGRES_PASSWORD: changeme-dev-only
+      MIGRATIONS_USER_PASSWORD: changeme-migrations-dev-only
+      APP_USER_PASSWORD: changeme-app-dev-only
+      REDIS_PASSWORD: changeme-redis-dev-only
+      MINIO_ROOT_PASSWORD: changeme-dev-only
+      SEARXNG_SECRET: changeme-searxng-dev-only
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Detect compose file
         id: detect
@@ -283,7 +428,7 @@ jobs:
             echo "No docker/docker-compose.yml yet — skipping."
           fi
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: steps.detect.outputs.has_compose == 'true'
         with:
           python-version: "3.12"
@@ -319,55 +464,55 @@ jobs:
         if: steps.detect.outputs.has_compose == 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e "apps/api-server[dev]"
-          python -m pip install -e "apps/watchdog[dev]"
-          python -m pip install -e "apps/orchestrator[dev]"
-          python -m pip install -e "apps/workers[dev]"
+          python -m pip install -e "apps/api-server[dev]" -c constraints.txt
+          python -m pip install -e "apps/watchdog[dev]" -c constraints.txt
+          python -m pip install -e "apps/orchestrator[dev]" -c constraints.txt
+          python -m pip install -e "apps/workers[dev]" -c constraints.txt
           # notification-dispatcher Celery service (Plan 10 task_10_02) —
           # install editable so its imports resolve in mypy + pytest.
-          python -m pip install -e "apps/notification-dispatcher[dev]"
+          python -m pip install -e "apps/notification-dispatcher[dev]" -c constraints.txt
           # installer bootstrap backend (Plan 15) — its tests live in tests/
           # (test_installer_prereq.py / test_installer_backend.py) so it must
           # be importable in pytest + the mypy hook.
-          python -m pip install -e "apps/installer/backend[dev]"
+          python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
           # shared-llm is a path dep of agent-runtime (ADR 0021); install
           # it first so the next line resolves the name from the local
           # editable wheel instead of asking PyPI.
-          python -m pip install -e "packages/shared-llm[dev]"
+          python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
           # shared-domain: canonical tool-name source of truth (ADR 0048,
           # Plan 06.18). Dependency-free; imported by api-server / orchestrator
           # / agent-runtime so the catalog, chat-modes, runtime and approval
           # all speak one tool namespace.
-          python -m pip install -e "packages/shared-domain[dev]"
-          python -m pip install -e "packages/shared-mcp[dev]"
+          python -m pip install -e "packages/shared-domain[dev]" -c constraints.txt
+          python -m pip install -e "packages/shared-mcp[dev]" -c constraints.txt
           # shared-test-runtimes lands with Plan 06 task_06_01 — install
           # editable so the runtime template catalog imports resolve in
           # both pytest and pre-commit's mypy hook.
-          python -m pip install -e "packages/shared-test-runtimes[dev]"
+          python -m pip install -e "packages/shared-test-runtimes[dev]" -c constraints.txt
           # shared-guardrails: declarative guardrails engine (Plan 11
           # task_11_01). Reusable library; install editable so its imports
           # resolve in both pytest and pre-commit's mypy hook.
-          python -m pip install -e "packages/shared-guardrails[dev]"
-          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]"
+          python -m pip install -e "packages/shared-guardrails[dev]" -c constraints.txt
+          python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]" -c constraints.txt
           # Generated Python SDK (Plan 13 task_13_13). Landed after CI went
           # dark on 2026-05-29, so the integration job never installed it and
           # tests/integration/test_sdk_python.py failed with ModuleNotFoundError
           # (finding prod-01 CI). The package ships the committed generated code
           # under src/agentic_platform_sdk; an editable install exposes it for
           # import without a regeneration step.
-          python -m pip install -e "packages/sdk-python"
+          python -m pip install -e "packages/sdk-python" -c constraints.txt
 
       # Build agent-runtime:v1 so the e2e agent-pipeline smoke (and the other
       # Docker-backed integration tests) actually RUN instead of skipping —
       # finding tests-6. Context is the repo ROOT (the Dockerfile COPYs in
       # packages/shared-llm, ADR 0021). buildx + gha cache so it does not
       # rebuild from scratch every run.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         if: steps.detect.outputs.has_compose == 'true'
 
       - name: Build agent-runtime:v1 (e2e pipeline image)
         if: steps.detect.outputs.has_compose == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: docker/agent-runtimes/agent-runtime/Dockerfile
@@ -382,7 +527,7 @@ jobs:
       # raíz (el Dockerfile COPYa docker/agent-runtimes/browser-runtime/browser_runtime).
       - name: Build browser-runtime:v1 (cortex browser image, ADR 0080)
         if: steps.detect.outputs.has_compose == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: docker/agent-runtimes/browser-runtime/Dockerfile
@@ -403,7 +548,7 @@ jobs:
         if: steps.detect.outputs.has_compose == 'true'
         env:
           TEST_PG_PORT: "15432"
-          TEST_REDIS_URL: redis://localhost:6379/15
+          TEST_REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/15
         run: pytest tests/integration -m cross_tenant -v
 
       - name: pytest tests/integration
@@ -412,7 +557,7 @@ jobs:
           # In GH Actions there is no Laragon — bind the docker container
           # to the standard port for ergonomic conftest defaults.
           TEST_PG_PORT: "15432"
-          TEST_REDIS_URL: redis://localhost:6379/15
+          TEST_REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/15
         run: |
           if find tests/integration -type f -name "test_*.py" | grep -q .; then
             pytest tests/integration -v
@@ -429,7 +574,7 @@ jobs:
         if: steps.detect.outputs.has_compose == 'true'
         env:
           TEST_PG_PORT: "15432"
-          TEST_REDIS_URL: redis://localhost:6379/15
+          TEST_REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/15
         run: |
           if find tests/migrations -type f -name "test_*.py" | grep -q .; then
             pytest tests/migrations -v
@@ -453,7 +598,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Detect Dockerfiles
         id: detect
@@ -467,7 +612,7 @@ jobs:
             echo "No Dockerfiles yet — skipping."
           fi
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         if: steps.detect.outputs.has_dockerfiles == 'true'
 
       - name: Build each app
@@ -567,6 +712,84 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Trivy sobre las imágenes que NADIE MÁS escanea (prod-11 task_trivy_07,
+      # hallazgo gap5-1).
+      #
+      # El reparto de cobertura entre los tres workflows, para que no quede
+      # ninguna imagen del repo sin escanear ni se escane dos veces por inercia:
+      #
+      #   * build-runtime-templates.yml — los 14 runtime templates de la matriz
+      #     (un Trivy por template, junto a su build).
+      #   * release-images.yml — las 5 imágenes publicables (api-server,
+      #     workers, orchestrator, notification-dispatcher, admin-panel);
+      #     ahí el escaneo bloquea la release.
+      #   * AQUÍ — lo que no cae en ninguno de los dos: `api-server` (la base
+      #     pesada de la que heredan tres backends vía BASE_IMAGE, escaneada en
+      #     cada push y no solo en release), `agent-runtime` y `browser-runtime`
+      #     (que NO están en la matriz de templates y son justo los contenedores
+      #     donde corre el código no confiable, Principio Rector 2), y las dos
+      #     del installer.
+      #
+      # `ignore-unfixed: true` + `.trivyignore` versionado evitan el riesgo 2
+      # del plan (CVEs sin fix en las bases `-slim` bloqueando PRs ajenos).
+      - name: Trivy — api-server (imagen base, HIGH/CRITICAL)
+        if: steps.detect.outputs.has_dockerfiles == 'true'
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agentic-platform/api-server:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      - name: Trivy — installer (wizard de bootstrap)
+        if: steps.detect.outputs.has_dockerfiles == 'true'
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agentic-platform/installer:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      - name: Trivy — installer backend
+        if: steps.detect.outputs.has_dockerfiles == 'true'
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agentic-platform/backend:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      - name: Trivy — agent-runtime (sandbox del bucle del agente)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agent-runtime:v1
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      - name: Trivy — browser-runtime (ADR 0080)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: browser-runtime:v1
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
   # ---------------------------------------------------------------------------
   # Frontend e2e (Plan prod-02 task_10, finding frontend-7): the 99 Playwright
   # specs never ran in CI. This job runs the SELF-CONTAINED subset — the specs
@@ -585,7 +808,7 @@ jobs:
     # this to ~10-15min; deferred to keep this task on the verified-green path.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Detect Node workspace
         id: detect
@@ -597,7 +820,7 @@ jobs:
             echo "No apps/admin-panel/package.json yet — skipping e2e."
           fi
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: steps.detect.outputs.has_node == 'true'
         with:
           node-version: "20"
@@ -618,9 +841,15 @@ jobs:
       # (E2E_WEBSERVER_CMD below). Under `next dev` Next compiles each route on
       # first hit and that latency made the mocked subset time out on the runner
       # (Plan prod-01). Pre-building eliminates it.
+      # Mismo motivo que en lint-typescript: sin NEXT_PUBLIC_API_URL el build de
+      # producción aborta (assertPublicApiUrl, frontend-8). Aquí va el default
+      # histórico http://localhost:8001 porque es contra el que están escritos
+      # los mocks `page.route` del subconjunto autocontenido.
       - name: next build (for e2e)
         if: steps.detect.outputs.has_node == 'true'
         working-directory: apps/admin-panel
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8001
         run: npm run build
 
       - name: Playwright e2e (mocked subset — no live backend)

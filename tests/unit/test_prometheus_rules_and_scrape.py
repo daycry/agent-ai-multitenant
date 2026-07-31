@@ -71,6 +71,11 @@ _PROMQL_KEYWORDS = {
 }
 
 
+def _is_emitter(source: str) -> bool:
+    """¿Este módulo publica métricas por alguna de las dos vías del stack?"""
+    return "prometheus_client" in source or ".prom" in source
+
+
 def _emitted_metric_names() -> set[str]:
     """Inventario de métricas que la plataforma emite DE VERDAD.
 
@@ -80,22 +85,43 @@ def _emitted_metric_names() -> set[str]:
     """
     names: set[str] = set()
 
-    # 1) Las que publica el sampler por textfile-collector (node-exporter las
-    #    re-exporta) y las del backup.
-    for module in ("queue_metrics.py", "backup_metrics.py"):
-        source = (_ROOT / "apps" / "workers" / "src" / "workers" / module).read_text(
-            encoding="utf-8"
+    # Se descubren los MÓDULOS EMISORES en vez de listarlos: un módulo emite si
+    # importa `prometheus_client`. La versión anterior leía tres rutas escritas a
+    # mano y esa lista envejeció exactamente igual que la lista de métricas que su
+    # propio docstring dice evitar — el día que `vault_client.py` empezó a
+    # publicar `agentic_vault_sealed`, la guarda acusó a su alerta de referenciar
+    # una métrica que nadie emitía. La lista estaba un nivel más arriba, pero era
+    # una lista a mano igual.
+    #
+    # Hay DOS vías de emitir en esta plataforma y la señal cubre las dos, porque
+    # con una sola el descubrimiento salía incompleto: importar
+    # `prometheus_client` (el exporter HTTP del api-server) o escribir un fichero
+    # `.prom` para el textfile-collector de node-exporter (los samplers de
+    # workers, que NO usan la librería). Los `agentic_*` de docstrings de módulos
+    # que no emiten por ninguna de las dos quedan fuera, y eso es lo que mantiene
+    # la guarda con dientes.
+    emitters = [
+        path
+        for root in (
+            _ROOT / "apps" / "api-server" / "src" / "api_server",
+            _ROOT / "apps" / "workers" / "src" / "workers",
         )
-        names.update(re.findall(r'"(agentic_[a-z0-9_]+)"', source))
-
-    # 2) Las que expone el exporter HTTP del api-server, con los sufijos que
-    #    Prometheus deriva de un histograma.
-    api_metrics = (_ROOT / "apps" / "api-server" / "src" / "api_server" / "metrics.py").read_text(
-        encoding="utf-8"
+        for path in root.rglob("*.py")
+        if _is_emitter(path.read_text(encoding="utf-8"))
+    ]
+    assert len(emitters) >= 4, (
+        f"la guarda dejó de encontrar módulos emisores (vio {len(emitters)}): "
+        "si el descubrimiento se rompe, este test pasaría vacuamente"
     )
-    for base in re.findall(r'"(agentic_[a-z0-9_]+)"', api_metrics):
-        names.add(base)
-        names.update({f"{base}_bucket", f"{base}_count", f"{base}_sum"})
+
+    for path in emitters:
+        source = path.read_text(encoding="utf-8")
+        for base in re.findall(r'"(agentic_[a-z0-9_]+)"', source):
+            names.add(base)
+            # Los sufijos que Prometheus deriva de un histograma. Se añaden para
+            # todas: sobran para un gauge y no hacen daño (una regla que use
+            # `agentic_x_bucket` de un gauge falla en Prometheus, no aquí).
+            names.update({f"{base}_bucket", f"{base}_count", f"{base}_sum"})
 
     return names
 

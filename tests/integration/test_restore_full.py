@@ -43,6 +43,7 @@ from workers.restore import (
     RestoreConfig,
     RestoreEngine,
     RestoreError,
+    RestorePartialError,
     RestoreVerificationError,
     run_full_restore,
 )
@@ -147,6 +148,8 @@ class RestoreRunner:
     fail_pg_restore: bool = False
     fail_compose_stop: bool = False
     fail_verify: bool = False
+    fail_grants: bool = False
+    fail_volume_extract: bool = False
     decrypt_tar: bool = False
     calls: list[list[str]] = field(default_factory=list)
 
@@ -171,7 +174,15 @@ class RestoreRunner:
             return self._compose(argv)
         if argv[0] == "pg_restore":
             return self._pg_restore(argv)
+        if argv[0] == "psql":
+            return self._psql(argv)
         raise AssertionError(f"unexpected restore command: {argv!r}")
+
+    def _psql(self, argv: list[str]) -> CommandResult:
+        """prod-04 task_prod_04_08: la re-concesión de GRANTs post-restore."""
+        if self.fail_grants:
+            return CommandResult(returncode=1, stderr='ERROR: role "app_user" does not exist')
+        return CommandResult(returncode=0)
 
     # -- verifier probes (verify-before-restore) ---------------------------
 
@@ -190,6 +201,8 @@ class RestoreRunner:
     def _extract(self, argv: list[str]) -> CommandResult:
         directory = Path(_arg_value(argv, "--directory="))
         if "--gzip" in argv:
+            if self.fail_volume_extract:
+                return CommandResult(returncode=2, stderr="tar: write error: No space left")
             # A volume tar extracted into its _data tree.
             directory.mkdir(parents=True, exist_ok=True)
             (directory / "restored-marker").write_text("x", encoding="utf-8")
@@ -245,16 +258,52 @@ def _backup_config(tmp_path: Path, *, encryption_enabled: bool = False) -> Backu
     )
 
 
-def _restore_config(tmp_path: Path, *, encryption_enabled: bool = False) -> RestoreConfig:
+#: Los servicios que los tests paran. El preflight de prod-04 exige que estén
+#: DECLARADOS en el compose al que apunta la config, así que los tests escriben
+#: su propio compose en tmp en vez de apuntar al versionado (que a propósito no
+#: declara los servicios de aplicación — por eso el preflight existe).
+_APP_SERVICES = ("api-server", "workers")
+_VOLUME_SERVICES = ("minio", "redis")
+
+
+def _write_compose(tmp_path: Path, services: Sequence[str]) -> Path:
+    path = tmp_path / "docker-compose.yml"
+    body = "name: agentic-platform\nservices:\n" + "".join(
+        f"  {name}:\n    image: example/{name}:test\n" for name in services
+    )
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _restore_config(
+    tmp_path: Path,
+    *,
+    encryption_enabled: bool = False,
+    compose_file: Path | None = None,
+    autostart_on_failure: bool = False,
+    projects_root: str = "",
+    bind_paths: tuple[str, ...] = (),
+    required_db_role: str = "migrations_user",
+    grant_app_role: str = "app_user",
+) -> RestoreConfig:
     return RestoreConfig(
         backup_root=tmp_path / "backups",
         database_url=_DB_URL,
         volumes=("minio_data", "redis_data"),
         volumes_mount_root=tmp_path / "restore-volumes",
         compose_project="agentic-platform",
-        compose_file=Path("docker/docker-compose.yml"),
-        app_services=("api-server", "workers"),
-        volume_services=("minio", "redis"),
+        compose_file=(
+            compose_file
+            if compose_file is not None
+            else _write_compose(tmp_path, (*_APP_SERVICES, *_VOLUME_SERVICES, "postgres"))
+        ),
+        app_services=_APP_SERVICES,
+        volume_services=_VOLUME_SERVICES,
+        projects_root=projects_root,
+        bind_paths=bind_paths,
+        autostart_on_failure=autostart_on_failure,
+        required_db_role=required_db_role,
+        grant_app_role=grant_app_role,
         encryption_enabled=encryption_enabled,
         encryption_vault_key=_VAULT_KEY_NAME,
     )
@@ -352,7 +401,7 @@ def test_compose_ops_target_configured_project_and_file(tmp_path: Path) -> None:
         bundle, confirm=bundle.name
     )
 
-    compose_file = str(Path("docker/docker-compose.yml"))  # OS-native separators
+    compose_file = str(tmp_path / "docker-compose.yml")  # OS-native separators
     compose_calls = [c for c in runner.calls if c[0] == "docker"]
     assert compose_calls  # at least stop(app), stop(volumes), up
     for c in compose_calls:
@@ -457,18 +506,80 @@ def test_missing_bundle_raises(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_failed_pg_restore_raises_and_restarts_stack(tmp_path: Path) -> None:
+def test_failed_pg_restore_leaves_the_stack_stopped(tmp_path: Path) -> None:
+    """FAIL-STOPPED (prod-04 task_prod_04_04) — el contrato INVERSO al anterior.
+
+    Hasta prod-04 el motor tenía un `finally: docker compose up -d` y este mismo
+    test afirmaba «even on failure the stack is brought back up». Eso contradecía
+    a los dos runbooks de DR («mantén el stack parado para no servir datos
+    parciales») y era el peor de los dos mundos: la aplicación arrancaba sobre una
+    base de datos a medio hacer `--clean`, o sea con tablas borradas y sin
+    restaurar. El test se cambió porque el COMPORTAMIENTO estaba mal, no porque
+    estorbase.
+    """
     bundle = _build_plaintext_bundle(tmp_path)
     runner = RestoreRunner(fail_pg_restore=True)
     engine = RestoreEngine(_restore_config(tmp_path), runner=runner)
 
-    with pytest.raises(RestoreError, match="pg_restore failed"):
+    with pytest.raises(RestorePartialError) as exc_info:
         engine.run_full_restore(bundle, confirm=bundle.name)
 
-    # Even on failure the stack is brought back up (the finally clause).
-    assert any(c[0] == "docker" and "up" in c for c in runner.calls)
+    err = exc_info.value
+    assert err.stage == "app_stack_stopped"
+    assert err.stack_running is False
+    # El mensaje lleva estado + siguiente paso (es lo que necesita un operador).
+    assert "sigue PARADO" in str(err)
+    assert "RE-EJECUTA" in str(err)
+
+    # Y lo que importa: NADIE arrancó el stack.
+    assert not any(
+        c[0] == "docker" and "up" in c for c in runner.calls
+    ), "el restore arrancó la aplicación sobre una base de datos a medio restaurar"
     # No volume extract ran — pg_restore failed before the volume step.
     assert not any(c[0] == "tar" and "--extract" in c for c in runner.calls)
+
+
+def test_failed_volume_extract_also_leaves_the_stack_stopped(tmp_path: Path) -> None:
+    """Un fallo MÁS TARDE (ya con la BD restaurada) tampoco arranca nada, y el
+    `stage` dice hasta dónde se llegó."""
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner(fail_volume_extract=True)
+    engine = RestoreEngine(_restore_config(tmp_path), runner=runner)
+
+    with pytest.raises(RestorePartialError) as exc_info:
+        engine.run_full_restore(bundle, confirm=bundle.name)
+
+    assert exc_info.value.stage == "grants_reapplied"
+    assert not any(c[0] == "docker" and "up" in c for c in runner.calls)
+
+
+def test_autostart_on_failure_is_opt_in(tmp_path: Path) -> None:
+    """El arranque tras un fallo existe, pero solo si el operador lo pide.
+
+    Sin este test el default podría cambiarse sin que nada se quejara.
+    """
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner(fail_pg_restore=True)
+    engine = RestoreEngine(_restore_config(tmp_path, autostart_on_failure=True), runner=runner)
+
+    with pytest.raises(RestorePartialError) as exc_info:
+        engine.run_full_restore(bundle, confirm=bundle.name)
+
+    assert exc_info.value.stack_running is True
+    assert "se ha ARRANCADO" in str(exc_info.value)
+    assert any(c[0] == "docker" and "up" in c for c in runner.calls)
+
+
+def test_pg_restore_does_not_mask_sql_errors(tmp_path: Path) -> None:
+    """`--exit-on-error`: sin él pg_restore continúa tras un error y sale con 0
+    «con warnings», y una tabla que no se restauró pasaba por un restore bueno."""
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner()
+    RestoreEngine(_restore_config(tmp_path), runner=runner).run_full_restore(
+        bundle, confirm=bundle.name
+    )
+    argv = next(c for c in runner.calls if c[0] == "pg_restore" and "--list" not in c)
+    assert "--exit-on-error" in argv, f"pg_restore enmascararía errores de SQL: {argv}"
 
 
 def test_failed_compose_stop_raises(tmp_path: Path) -> None:
@@ -559,10 +670,14 @@ def test_run_full_restore_entrypoint_builds_engine_from_settings(tmp_path: Path)
         backup_database_url=_DB_URL,
         backup_volumes=["minio_data", "redis_data"],
         backup_volumes_mount_root=str(tmp_path / "restore-volumes"),
+        backup_projects_root="",
+        backup_bind_paths=[],
         restore_compose_project="agentic-platform",
-        restore_compose_file="docker/docker-compose.yml",
-        restore_app_services=["api-server", "workers"],
-        restore_volume_services=["minio", "redis"],
+        restore_compose_file=str(
+            _write_compose(tmp_path, (*_APP_SERVICES, *_VOLUME_SERVICES, "postgres"))
+        ),
+        restore_app_services=list(_APP_SERVICES),
+        restore_volume_services=list(_VOLUME_SERVICES),
     )
     runner = RestoreRunner()
 
@@ -578,6 +693,184 @@ def test_run_full_restore_entrypoint_builds_engine_from_settings(tmp_path: Path)
 # full restore accidentally being scoped to (and thus silently dropping) a
 # subset of tenants.
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+# prod-04 task_prod_04_03 — preflight de servicios: un fantasma en la lista
+# abortaba el restore en el primer paso destructivo (ADR 0117 c).
+# --------------------------------------------------------------------------- #
+
+
+def test_a_service_missing_from_the_compose_aborts_before_anything_destructive(
+    tmp_path: Path,
+) -> None:
+    compose = _write_compose(tmp_path, ("api-server", "minio", "redis", "postgres"))
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner()
+    # `workers` NO está declarado → `docker compose stop workers` daría != 0.
+    engine = RestoreEngine(_restore_config(tmp_path, compose_file=compose), runner=runner)
+
+    with pytest.raises(RestoreError, match="NO están declarados"):
+        engine.run_full_restore(bundle, confirm=bundle.name)
+
+    assert not any(
+        c[0] == "docker" for c in runner.calls
+    ), "el preflight tiene que abortar ANTES de tocar el stack"
+    assert not any(c[0] == "pg_restore" and "--list" not in c for c in runner.calls)
+
+
+def test_the_preflight_message_names_the_phantom(tmp_path: Path) -> None:
+    compose = _write_compose(tmp_path, ("api-server", "minio", "redis"))
+    bundle = _build_plaintext_bundle(tmp_path)
+    engine = RestoreEngine(_restore_config(tmp_path, compose_file=compose), runner=RestoreRunner())
+
+    with pytest.raises(RestoreError) as exc_info:
+        engine.run_full_restore(bundle, confirm=bundle.name)
+    assert "'workers'" in str(exc_info.value)
+
+
+def test_the_preflight_does_not_block_when_the_compose_is_unreachable(tmp_path: Path) -> None:
+    """No verificable ≠ inválido: un compose ausente no puede parar un DR.
+
+    Es el único punto donde el guard cede, y a propósito: el guard estático
+    (`tests/unit/test_restore_services_exist.py`) cubre el repositorio, y
+    `_stop_app_stack` da un mensaje accionable si compose rechaza un nombre.
+    """
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner()
+    engine = RestoreEngine(
+        _restore_config(tmp_path, compose_file=tmp_path / "no-existe.yml"), runner=runner
+    )
+    result = engine.run_full_restore(bundle, confirm=bundle.name)
+    assert result.restored_volumes == ("minio_data", "redis_data")
+
+
+# --------------------------------------------------------------------------- #
+# prod-04 task_prod_04_08 — GRANTs y rol de conexión.
+# --------------------------------------------------------------------------- #
+
+
+def test_grants_are_reapplied_to_the_runtime_role_after_pg_restore(tmp_path: Path) -> None:
+    """`--no-owner --no-privileges` tira las ACLs: sin re-conceder, la aplicación
+    arranca y falla con «permission denied for table»."""
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner()
+    RestoreEngine(_restore_config(tmp_path), runner=runner).run_full_restore(
+        bundle, confirm=bundle.name
+    )
+
+    psql = [c for c in runner.calls if c[0] == "psql"]
+    assert len(psql) == 1, "no se re-concedieron los permisos tras el pg_restore"
+    argv = psql[0]
+    joined = " ".join(argv)
+    assert "--set=ON_ERROR_STOP=1" in argv, "psql enmascararía un GRANT fallido"
+    assert f"--dbname={_DB_URL}" in argv
+    assert "GRANT USAGE ON SCHEMA public TO app_user" in joined
+    assert "ON ALL TABLES IN SCHEMA public TO app_user" in joined
+    assert "ON ALL SEQUENCES IN SCHEMA public TO app_user" in joined
+    assert "ALTER DEFAULT PRIVILEGES" in joined
+    # Y va DESPUÉS del pg_restore (antes no habría tablas que conceder).
+    order = [c[0] for c in runner.calls]
+    assert order.index("pg_restore") < order.index("psql")
+
+
+def test_a_failed_grant_step_is_fail_stopped_too(tmp_path: Path) -> None:
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner(fail_grants=True)
+    engine = RestoreEngine(_restore_config(tmp_path), runner=runner)
+
+    with pytest.raises(RestorePartialError) as exc_info:
+        engine.run_full_restore(bundle, confirm=bundle.name)
+    assert exc_info.value.stage == "database_restored"
+    assert not any(c[0] == "docker" and "up" in c for c in runner.calls)
+
+
+def test_restoring_as_the_wrong_role_is_refused_before_pg_restore(tmp_path: Path) -> None:
+    """`pg_restore --clean` deja el ownership en el rol que conecta: hacerlo como
+    `app_user` deja el esquema inservible para las migraciones."""
+    bundle = _build_plaintext_bundle(tmp_path)
+    runner = RestoreRunner()
+    cfg = _restore_config(tmp_path)
+    bad = RestoreConfig(
+        **{
+            **{f.name: getattr(cfg, f.name) for f in cfg.__dataclass_fields__.values()},
+            "database_url": "postgresql://app_user:x@db:5432/agentic_platform",
+        }
+    )
+    engine = RestoreEngine(bad, runner=runner)
+
+    with pytest.raises(RestorePartialError) as exc_info:
+        engine.run_full_restore(bundle, confirm=bundle.name)
+    assert "app_user" in str(exc_info.value) and "migrations_user" in str(exc_info.value)
+    assert not any(c[0] == "pg_restore" and "--list" not in c for c in runner.calls)
+
+
+def test_the_role_guard_can_be_disabled_but_is_on_by_default(tmp_path: Path) -> None:
+    from workers.config import Settings
+
+    assert Settings().restore_required_db_role == "migrations_user"
+    assert Settings().restore_grant_app_role == "app_user"
+    assert Settings().restore_autostart_on_failure is False
+
+
+# --------------------------------------------------------------------------- #
+# prod-04 task_prod_04_05 — los repos de proyectos y los binds SÍ se restauran.
+# --------------------------------------------------------------------------- #
+
+
+def _bundle_with_projects_and_bind(tmp_path: Path, bind: Path) -> Path:
+    """Un bundle que además trae `projects_tar` y `bind_tar`."""
+    projects = bind / "projects"
+    projects.mkdir(parents=True)
+    (projects / "t1").mkdir()
+    runner = BuildRunner()
+    cfg = BackupConfig(
+        backup_root=tmp_path / "backups",
+        database_url=_DB_URL,
+        volumes=("minio_data", "redis_data"),
+        volumes_mount_root=tmp_path / "volumes",
+        retention_days=7,
+        bind_paths=(str(bind),),
+        projects_root=str(projects),
+        transient_excludes=("worktrees",),
+    )
+    return BackupEngine(cfg, runner=runner, now=_NOW).run_full_backup().bundle_dir
+
+
+def test_project_repos_and_declared_binds_are_re_extracted(tmp_path: Path) -> None:
+    """La regresión de fondo: `bind_tar` se respaldaba, se verificaba… y el
+    restore lo ignoraba (filtraba `kind == "volume_tar"`). El código de los
+    proyectos no volvía de un DR."""
+    bind = tmp_path / "agent-platform"
+    bundle = _bundle_with_projects_and_bind(tmp_path, bind)
+    projects_root = str(tmp_path / "restored" / "projects")
+    runner = RestoreRunner()
+    cfg = _restore_config(tmp_path, projects_root=projects_root, bind_paths=(str(bind),))
+    result = RestoreEngine(cfg, runner=runner).run_full_restore(bundle, confirm=bundle.name)
+
+    extracts = [c for c in runner.calls if c[0] == "tar" and "--extract" in c]
+    targets = [_arg_value(c, "--directory=") for c in extracts]
+    assert projects_root in targets, f"los bare repos no se restauraron: {targets}"
+    assert str(bind) in targets, f"el bind declarado no se restauró: {targets}"
+    assert set(result.restored_paths) == {projects_root, str(bind)}
+
+
+def test_a_bind_whose_source_is_not_declared_is_skipped_not_extracted(tmp_path: Path) -> None:
+    """Extraer en una ruta absoluta que solo aparece en un fichero del bundle no
+    es una potestad que el motor deba tener."""
+    bind = tmp_path / "agent-platform"
+    bundle = _bundle_with_projects_and_bind(tmp_path, bind)
+    runner = RestoreRunner()
+    cfg = _restore_config(
+        tmp_path,
+        projects_root=str(tmp_path / "restored" / "projects"),
+        bind_paths=(str(tmp_path / "otro-sitio"),),  # NO coincide con el manifest
+    )
+    result = RestoreEngine(cfg, runner=runner).run_full_restore(bundle, confirm=bundle.name)
+
+    targets = [_arg_value(c, "--directory=") for c in runner.calls if "--extract" in c]
+    assert str(bind) not in targets
+    assert str(bind) not in result.restored_paths
 
 
 @pytest.mark.cross_tenant

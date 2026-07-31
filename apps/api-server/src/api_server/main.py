@@ -84,6 +84,12 @@ from api_server.routers.knowledge_bases import (
 from api_server.routers.llm_providers import admin_router as llm_providers_admin_router
 from api_server.routers.marketplace import admin_router as marketplace_admin_router
 from api_server.routers.marketplace import router as marketplace_router
+from api_server.routers.marketplace_deployments import (
+    project_router as marketplace_project_router,
+)
+from api_server.routers.marketplace_deployments import (
+    router as marketplace_deployments_router,
+)
 from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
 from api_server.routers.mcp_oauth import router as mcp_oauth_router
@@ -292,6 +298,10 @@ def _register_routers(app: FastAPI) -> None:
         project_kb_router,
         marketplace_router,
         marketplace_admin_router,
+        # ADR 0142: el despliegue en proyectos. Router aparte (el de marketplace
+        # ya tiene ~1.500 líneas) + su lado proyecto.
+        marketplace_deployments_router,
+        marketplace_project_router,
         model_prices_router,
         model_prices_admin_router,
         llm_providers_admin_router,

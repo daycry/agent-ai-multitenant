@@ -72,42 +72,51 @@ docker compose \
   up -d postgres
 ```
 
-### 3. Lanza el restore completo
-
-El restore exige un **token de confirmación** igual al `backup_id` del
-bundle (doble confirmación: evita restaurar el bundle equivocado).
+### 3. Lanza el restore completo DESDE EL HOST
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  exec -T worker \
-  python -c '
-from workers.restore import run_full_restore
-res = run_full_restore("<backup_id>", confirm="<backup_id>")
-print("restore ok:", res)
-'
+./scripts/restore.sh --list        # los bundles disponibles
+./scripts/restore.sh <backup_id>   # pide el token de doble confirmación
 ```
 
-(Sustituye `<backup_id>` por el identificador del paso 1. Si tu
-despliegue expone un `scripts/restore.sh`, úsalo; delega en este mismo
-`run_full_restore`.)
+El script pide un **token de confirmación** igual al `backup_id` (doble
+confirmación: evita restaurar el bundle equivocado).
 
-El motor, en orden: localiza y (si procede) descifra y **verifica** el
-bundle; hace `pg_restore --clean` del dump lógico; **detiene** los
-servicios dueños de los volúmenes; vacía y re-extrae cada
-`<volumen>.tar.gz` en su `_data`; y vuelve a dejar el stack listo para
-arrancar.
+> **Nunca `docker compose exec`.** Este runbook mandó durante meses
+> `exec -T worker python -c ...`, y no funcionaba por dos razones
+> independientes: (a) el servicio se llama `workers`, no `worker`, así que el
+> comando fallaba antes de empezar; (b) aunque existiera, el restore PARA la
+> aplicación y `workers` está entre los servicios que para — el proceso se
+> mataría a sí mismo a mitad de una operación destructiva. Por eso el motor
+> corre en el host, con acceso al socket de Docker y a los volúmenes. El plano
+> que ejecuta el restore nunca puede estar en la lista de servicios a parar.
 
-### 4. Arranca el stack completo
+Requisitos del host: `docker`, `pg_restore` y `psql` en el `PATH`. El script los
+comprueba antes de tocar nada.
+
+El motor, en orden: localiza el bundle → lo descifra si procede → lo
+**verifica** (fail-closed: un bundle corrupto aborta sin escribir un byte) →
+**preflight de servicios** (todos los que va a parar tienen que estar declarados
+en el compose) → para la aplicación → `pg_restore --clean --exit-on-error` →
+**re-concede los GRANTs** de `app_user` → para los servicios de los volúmenes y
+re-extrae volúmenes, **repos de proyectos** y binds declarados → arranca el
+stack.
+
+### 4. Desella Vault y reconcilia
+
+Si `vault_data` estaba en el bundle, Vault arranca **sellado**:
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  up -d
+docker compose --file /data/agent-platform/docker-compose.yml \
+  exec vault vault operator unseal   # repite hasta el threshold
 ```
 
-En dev, además, levanta api-server + admin-panel con
-[restart-services.md](./restart-services.md) (`scripts/dev/up`).
+Y antes de dar el restore por bueno, comprueba que los cuatro almacenes cuentan
+la misma historia:
+
+```bash
+python -m workers.restore_reconcile
+```
 
 ## Verificación
 

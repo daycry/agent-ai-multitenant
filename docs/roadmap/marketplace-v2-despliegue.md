@@ -1,9 +1,9 @@
 ---
 plan_id: marketplace-v2-despliegue
 title: Marketplace v2 — despliegue en proyectos, publicación con revisión y versiones
-status: pending_approval
+status: in_progress
 blocking_plan: []
-started_at: null
+started_at: 2026-07-31
 completed_at: null
 estimated_duration_calendar: 3-4 semanas
 estimated_effort_person_days: 14
@@ -62,7 +62,7 @@ docs_language: es
 
 #### `task_mkt2_00` — ADR 0142: el despliegue como entidad y la config en tres capas
 
-- [ ] **Título**: Redactar `docs/05-architecture-decisions/0142-marketplace-despliegue-tres-capas.md`, `status: accepted`
+- [x] **Título**: Redactar `docs/05-architecture-decisions/0142-marketplace-despliegue-tres-capas.md`, `status: accepted`
 - **Tiempo**: 3 h · **Complejidad**: s
 - Nace `accepted` (no `proposed`): registra una decisión que el operador YA tomó
   el 2026-07-31 — escribirlo como pendiente sería el pecado documental de la
@@ -82,7 +82,7 @@ docs_language: es
 
 #### `task_mkt2_01` — Migración: `marketplace_deployments` + `marketplace_listing_versions`
 
-- [ ] **Título**: Migración reversible (dos tablas, RLS FORCE, backfill de versiones) + modelos ORM
+- [x] **Título**: Migración reversible (dos tablas, RLS FORCE, backfill de versiones) + modelos ORM
 - **Tiempo**: 6 h · **Complejidad**: m
 - Una sola migración encadenada a la cabeza real. `marketplace_deployments`:
   columnas del §4 del diseño (`installation_id` FK CASCADE, `project_id` FK
@@ -116,7 +116,7 @@ docs_language: es
 
 #### `task_mkt2_02` — Validador de config contra `config_schema`
 
-- [ ] **Título**: `marketplace/config_schema.py`: validar los VALORES de un despliegue contra el esquema del manifest
+- [x] **Título**: `marketplace/config_schema.py`: validar los VALORES de un despliegue contra el esquema del manifest
 - **Tiempo**: 4 h · **Complejidad**: s
 - Función pura `validate_deployment_config(schema: dict, values: dict) ->
 list[str]` (lista de errores legibles, vacía = válido): tipos, requeridos,
@@ -142,7 +142,7 @@ tuple[values, list[str]]` para la Fase 4 (campos nuevos → default, retirados �
 
 #### `task_mkt2_03` — El servicio de despliegue (el corazón del plan)
 
-- [ ] **Título**: `marketplace/deploy.py`: `deploy_installation` / `retire_deployment`, materialización por tipo con provenance
+- [x] **Título**: `marketplace/deploy.py`: `deploy_installation` / `retire_deployment`, materialización por tipo con provenance
 - **Tiempo**: 10 h · **Complejidad**: l
 - `async def deploy_installation(session, *, installation_id, project_id,
 config, role_map, actor) -> DeploymentResult` y `async def
@@ -173,7 +173,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_04` — Router `marketplace_deployments.py` + disponibilidad por proyecto
 
-- [ ] **Título**: Endpoints de despliegue (fichero nuevo) + `GET /projects/{id}/marketplace/available`
+- [x] **Título**: Endpoints de despliegue (fichero nuevo) + `GET /projects/{id}/marketplace/available`
 - **Tiempo**: 5 h · **Complejidad**: m
 - `routers/marketplace_deployments.py` (aviso 4): `POST
 /marketplace/installations/{id}/deployments` (body: project_id, config,
@@ -193,7 +193,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_05` — La cadena entera, de publicar a usar
 
-- [ ] **Título**: Test de integración de la cadena completa (el criterio de éxito §9 del diseño)
+- [x] **Título**: Test de integración de la cadena completa (el criterio de éxito §9 del diseño)
 - **Tiempo**: 4 h · **Complejidad**: m
 - `tests/integration/test_marketplace_v2_chain.py`: seed de un listing
   `mcp_server` con `targets: [backend_dev]` y `config_schema` con `base_url` →

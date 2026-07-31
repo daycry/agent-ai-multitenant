@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-node-jest:v1 — test-runtime template for Node + Jest (Plan 06 task_06_02).
 
-FROM node:20-slim AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-node-jest" \
       org.opencontainers.image.version="v1" \

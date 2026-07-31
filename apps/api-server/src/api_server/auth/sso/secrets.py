@@ -18,15 +18,21 @@ path (task_08_03) uses so a secret never reaches the DB in clear text.
 The Fernet key is derived from the configured secret via SHA-256 →
 urlsafe-base64, so any non-empty configuration string is a valid key
 (Fernet itself requires an exactly-32-byte urlsafe-base64 value).
+
+ROTATION (prod-05 task_prod05_01). The cipher is a ``MultiFernet`` over the
+``API_SERVER_SSO_ENCRYPTION_KEY(S)`` ring: the head key encrypts, every key
+decrypts. Rotation is therefore three steps — add the new key at the head and
+deploy, run ``python -m api_server.cli reencrypt-secrets``, drop the old key —
+with no window where a stored secret is unreadable. See
+:mod:`api_server.auth.crypto_keys` and
+``docs/06-runbooks/05-key-rotation.md``.
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
+from cryptography.fernet import InvalidToken, MultiFernet
 
-from cryptography.fernet import Fernet, InvalidToken
-
+from api_server.auth.crypto_keys import build_multifernet
 from api_server.config import get_settings
 
 # The key inside a Vault KV entry that holds the OIDC client secret.
@@ -48,11 +54,17 @@ class SSOSecretError(Exception):
     """
 
 
-def _fernet() -> Fernet:
-    """Build the Fernet cipher from the configured SSO encryption key."""
-    raw = get_settings().sso_encryption_key.get_secret_value().encode("utf-8")
-    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
-    return Fernet(key)
+def _fernet() -> MultiFernet:
+    """Build the cipher over the configured SSO key RING (prod-05 task_prod05_01).
+
+    A :class:`MultiFernet`, not a single :class:`~cryptography.fernet.Fernet`:
+    the ring's FIRST key encrypts and EVERY key decrypts, which is what makes
+    rotating ``API_SERVER_SSO_ENCRYPTION_KEY`` an operation instead of a data
+    loss. With one key configured (the default) the behaviour and the key
+    material are byte-for-byte what they were before, so no stored ciphertext
+    changes meaning.
+    """
+    return build_multifernet(get_settings().sso_encryption_key_ring)
 
 
 def encrypt_client_secret(plaintext: str) -> str:

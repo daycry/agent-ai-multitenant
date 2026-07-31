@@ -254,17 +254,33 @@ def test_the_hvac_client_is_built_with_an_explicit_timeout(monkeypatch) -> None:
 
     fake_hvac.Client = _Client  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "hvac", fake_hvac)
+    # Las DOS variables, y explícitas: el store no construye cliente si no hay
+    # URL, así que fijando solo el token el test dependía de que el entorno
+    # ambiente trajera `API_SERVER_VAULT_URL`. En aislamiento lo traía y pasaba;
+    # dentro de `pytest tests/unit/` otro test dejaba ese estado distinto, el
+    # store salía sin cliente y la aserción se quedaba en cero llamadas — o sea
+    # el test fallaba diciendo «no probé nada», que era literalmente verdad.
+    # Un test que necesita estado ambiente no es un test, es una corazonada.
+    monkeypatch.setenv("API_SERVER_VAULT_URL", "http://vault.test:8200")
     monkeypatch.setenv("API_SERVER_VAULT_TOKEN", "s.testtoken")
 
     from api_server.config import get_settings
     from api_server.routers import llm_providers as router_mod
+    from api_server.vault_client import reset_vault_client_cache
 
+    # TRES cachés, no dos. `build_vault_client` (prod-10 task_07) tiene su propia
+    # caché de módulo, y sin resetearla este test devolvía el cliente que dejó
+    # cacheado cualquier test anterior: construía CERO clientes y fallaba diciendo
+    # «no probé nada» — verdad literal. En aislamiento pasaba porque la caché
+    # nacía vacía. Al añadir una caché nueva hay que enseñársela a quien la resetea.
     get_settings.cache_clear()
+    reset_vault_client_cache()
     router_mod.reset_provider_vault_store_cache()
     try:
         store = router_mod.get_provider_vault_store()
     finally:
         router_mod.reset_provider_vault_store_cache()
+        reset_vault_client_cache()
         get_settings.cache_clear()
 
     assert store is not None

@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-go-test:v1 — test-runtime template for Go (Plan 06 task_06_02).
 
-FROM golang:1.22-bookworm AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM golang:1.22-bookworm@sha256:3d699e4d15d0f8f13c9195c0632a16702b8cbdece2955af1c23b37ae5d55a253 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-go-test" \
       org.opencontainers.image.version="v1" \

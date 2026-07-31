@@ -102,12 +102,12 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-dev-only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
       POSTGRES_DB: ${POSTGRES_DB:-agentic_platform}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
       # Consumed by docker/postgres/init/02-roles.sh on first start.
-      MIGRATIONS_USER_PASSWORD: ${MIGRATIONS_USER_PASSWORD:-changeme-migrations-dev-only}
-      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-changeme-app-dev-only}
+      MIGRATIONS_USER_PASSWORD: ${MIGRATIONS_USER_PASSWORD:?set MIGRATIONS_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:?set APP_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -135,6 +135,13 @@ services:
     image: redis:7-alpine
     command:
       - redis-server
+      # prod-10 task_prod10_06 (secrets-7). Redis NO es una caché de resultados:
+      # aloja las SESIONES de servidor, el broker de Celery (o sea, la capacidad
+      # de encolar trabajo para los workers) y los contadores de rate limit.
+      # Corría sin autenticación. Obligatoria y sin default: un despliegue que
+      # olvide la variable debe abortar, no quedarse abierto.
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
       - --appendonly
       - "yes"
       - --appendfsync
@@ -145,10 +152,17 @@ services:
       - ${REDIS_MAX_MEM:-512mb}
       - --maxmemory-policy
       - allkeys-lru
+    environment:
+      # Sólo para que el healthcheck de abajo pueda autenticarse dentro del
+      # contenedor. redis-server no lee REDIS_PASSWORD del entorno.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Con `requirepass`, un `redis-cli ping` pelado responde NOAUTH y sale != 0:
+      # el contenedor se quedaría unhealthy para siempre y cualquier
+      # `depends_on: service_healthy` bloquearía el stack entero.
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 10s
       timeout: 3s
       retries: 5
@@ -170,7 +184,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-dev-only}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - minio_data:/data
     healthcheck:
@@ -459,7 +473,7 @@ services:
       SEARXNG_BASE_URL: http://searxng:8080/
       # Clave para firmar las URLs de imagen/respuesta; en dev un default, en
       # prod el instalador la inyecta desde Vault/env.
-      SEARXNG_SECRET: ${SEARXNG_SECRET:-changeme-searxng-dev-only}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       # Config con `search.formats: [html, json]` para que el córtex reciba JSON.
       - ./searxng:/etc/searxng:ro

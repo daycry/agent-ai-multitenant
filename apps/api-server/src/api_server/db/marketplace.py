@@ -58,6 +58,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     String,
@@ -149,6 +150,28 @@ class InstallationStatus(enum.StrEnum):
     REVOKED = "revoked"
 
 
+class DeploymentStatus(enum.StrEnum):
+    """Lifecycle of a :class:`MarketplaceDeployment` (ADR 0142).
+
+    - ``active``:   deployed and materialised in the target project.
+    - ``disabled``: the deployment exists but is turned off (reversible;
+                    Fase 4 parks a deployment here when a version update
+                    breaks its config schema).
+    - ``retired``:  torn down. The row is KEPT for audit — retiring undoes
+                    exactly what ``created_refs`` says the deployment created
+                    and nothing else (ADR 0142 §5).
+
+    Only ``active`` participates in the partial-unique
+    ``uq_marketplace_deployments_active`` index, so re-deploying over a
+    retired pair is allowed while a second live deployment of the same
+    (installation, project) is not.
+    """
+
+    ACTIVE = "active"
+    DISABLED = "disabled"
+    RETIRED = "retired"
+
+
 class MarketplaceAuditAction(enum.StrEnum):
     """Append-only marketplace audit actions.
 
@@ -164,6 +187,11 @@ class MarketplaceAuditAction(enum.StrEnum):
     DISABLE = "disable"
     UPDATE = "update"
     SHARE = "share"
+    # ADR 0142: the deployment lifecycle. ``deploy`` records that an
+    # installation was materialised into a concrete project (with the config
+    # + role_map that produced it); ``retire`` records the exact teardown.
+    DEPLOY = "deploy"
+    RETIRE = "retire"
 
 
 # =============================================================================
@@ -377,6 +405,25 @@ class MarketplaceInstallation(
     # The resolved semver actually installed (a listing may be re-pointed
     # to a newer version on update — task_09_12).
     version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # ADR 0142: the version row this installation CONSENTED to. The update
+    # flow (Fase 4) diffs this snapshot against the listing's current version
+    # and re-asks consent for the delta only; a rollback re-pins an older row.
+    #
+    # NULLABLE by deliberate deviation from the plan's "NOT NULL tras el
+    # backfill": the backfill DOES leave zero NULLs (asserted by
+    # ``tests/integration/test_marketplace_v2_migration.py``), but the writer
+    # that keeps it populated on *publish* is Fase 3/4 of this same plan
+    # (task_mkt2_09 / task_mkt2_11) and lives in ``routers/marketplace.py``.
+    # A NOT NULL column whose only writer arrives two phases later turns every
+    # fresh private-listing install into a 500. Instead,
+    # ``marketplace.deploy.ensure_listing_version`` get-or-creates the row and
+    # pins it on first deploy, so the pin is never missing where it matters.
+    pinned_version_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listing_versions.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'enabled'")
     )
@@ -416,6 +463,218 @@ class MarketplaceInstallation(
         return (
             f"MarketplaceInstallation(id={self.id!r}, "
             f"listing_id={self.listing_id!r}, status={self.status!r})"
+        )
+
+
+# =============================================================================
+# marketplace_listing_versions (one row per published version — ADR 0142)
+# =============================================================================
+class MarketplaceListingVersion(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """One published version of a listing: the snapshot an install pins.
+
+    ADR 0142 splits "what the thing IS" (this row) from "what a tenant
+    consented to" (the installation) and "the values a project uses" (the
+    deployment). A version row freezes the manifest, the declared
+    permissions and the ``config_schema`` **as published**, so:
+
+      - the update flow can diff the version an installation PINNED against
+        the version now current and re-ask consent for the delta only;
+      - a rollback is "re-pin an older row", not "hope the manifest is still
+        around";
+      - a deployment records which version it has applied.
+
+    Tenancy decision: **hybrid, mirroring the listing**. ``tenant_id`` is
+    NULLABLE and always carries the OWNER listing's ``tenant_id`` — NULL for a
+    global catalog listing (visible to every tenant), the owner tenant for a
+    private one. The migration installs the same three policies
+    ``marketplace_listings`` has (own-tenant FOR ALL, global read, shared
+    read), so a version is exactly as visible as the listing it belongs to and
+    never more.
+
+    Append-only in spirit: rows are inserted on publish and never rewritten
+    (the review transition of Fase 3 stamps ``reviewed_by``/``reviewed_at``
+    once). No soft delete — deleting the listing cascades.
+    """
+
+    __tablename__ = "marketplace_listing_versions"
+    __table_args__ = (
+        # One row per (listing, semver). The publish flow is therefore
+        # idempotent by construction and a re-publish of the same version is
+        # a conflict, not a silent second history entry.
+        UniqueConstraint(
+            "listing_id",
+            "version",
+            name="uq_marketplace_listing_versions_listing_version",
+        ),
+        Index("ix_marketplace_listing_versions_listing", "listing_id"),
+        Index(
+            "ix_marketplace_listing_versions_tenant",
+            "tenant_id",
+            postgresql_where=text("tenant_id IS NOT NULL"),
+        ),
+    )
+
+    listing_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_listings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Mirrors the listing's tenancy: NULL => global catalog version.
+    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # The manifest AS PUBLISHED (including the optional ``targets`` and
+    # ``config_schema`` keys the v2 manifest gained). Frozen: the listing's
+    # own ``manifest`` column may move on, this one is the historical record.
+    manifest: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    requested_permissions: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    # Broken out of the manifest so the deployment form can be discovered
+    # without walking the whole manifest. NULL => this version declares no
+    # per-project configuration (the deployment shows no form).
+    config_schema: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    published_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Stamped by the review transition (Fase 3, task_mkt2_09). NULL => not
+    # reviewed yet; the backfilled rows of already-published listings are NULL
+    # on purpose (nobody reviewed them — pretending otherwise would be a lie
+    # in the audit trail).
+    reviewed_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"MarketplaceListingVersion(id={self.id!r}, listing_id={self.listing_id!r}, "
+            f"version={self.version!r})"
+        )
+
+
+# =============================================================================
+# marketplace_deployments (tenant-owned — the ADR 0142 entity)
+# =============================================================================
+class MarketplaceDeployment(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
+    """An installation materialised into ONE concrete project (ADR 0142).
+
+    This is the row that turns "comprar" into "recibir". Installing adds a
+    capability to the tenant's pool; **deploying** writes the concrete rows
+    that make an agent able to use it:
+
+      - ``kind=mcp_server`` → an entry in ``projects.mcp_servers`` plus the
+        role→tool policy in ``projects.mcp_tool_roles`` (ADR 0128 — the
+        deployment FILLS the existing policy, it does not invent a parallel
+        one);
+      - ``kind∈{tool,skill}`` → ``agent_tools`` / ``agent_skills`` rows for the
+        agents of the project's team whose role appears in ``role_map``.
+
+    Every row written that way is recorded in :attr:`created_refs`, and that
+    is the whole contract of an exact teardown: retiring removes EXACTLY those
+    references and nothing else, so a tool the operator granted by hand to the
+    same agent survives the retirement (ADR 0142 §5).
+
+    Tenancy decision: **tenant-owned** — ``tenant_id NOT NULL`` (via
+    :class:`TenantScopedMixin`) + RLS with FORCE. An installation of tenant A
+    can neither be deployed into a project of tenant B nor be seen from it.
+    """
+
+    __tablename__ = "marketplace_deployments"
+    __table_args__ = (
+        # Closed vocabulary at the DB level, not just in the enum: a bad
+        # ``status`` written by a migration/script must not be possible.
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'retired')",
+            name="ck_marketplace_deployments_status",
+        ),
+        # The latch that makes re-deploying idempotent: at most ONE active
+        # deployment per (installation, project). ``disabled`` and ``retired``
+        # rows stay out of the index so history accumulates freely and a
+        # re-deploy after a retirement is allowed.
+        Index(
+            "uq_marketplace_deployments_active",
+            "installation_id",
+            "project_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+        # "What is deployed in this project?" — the project-side read of the
+        # UI, restricted to what is live.
+        Index(
+            "ix_marketplace_deployments_project_active",
+            "project_id",
+            postgresql_where=text("status = 'active'"),
+        ),
+        # "Where is this installation deployed?" — the installation-side read
+        # (includes retired rows: the ficha shows history).
+        Index("ix_marketplace_deployments_installation", "installation_id"),
+    )
+
+    installation_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("marketplace_installations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # The VALUES for this project, validated against the deployed version's
+    # ``config_schema``. Secrets NEVER live here: a field declared
+    # ``secret: true`` only accepts a ``vault:`` pointer (ADR 0142 §3).
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    # ``{capability_name: [agent_role, ...]}`` — which roles of the project's
+    # team receive what. Derived from the manifest's ``targets`` plus whatever
+    # the deployer adjusted.
+    role_map: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    # The listing version this deployment has APPLIED (semver string, same
+    # shape as ``MarketplaceInstallation.version``). Fase 4 compares it with
+    # the installation's pinned version to decide whether a refresh is due.
+    deployed_version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'active'"))
+
+    # The rows this deployment created, by kind. The contract of the exact
+    # teardown; see :class:`api_server.marketplace.deploy.CreatedRefs` for the
+    # canonical shape.
+    created_refs: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+    deployed_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    retired_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return (
+            f"MarketplaceDeployment(id={self.id!r}, installation_id={self.installation_id!r}, "
+            f"project_id={self.project_id!r}, status={self.status!r})"
         )
 
 
@@ -578,12 +837,15 @@ class MarketplaceAuditEntry(Base, UUIDPrimaryKeyMixin):
 
 
 __all__ = [
+    "DeploymentStatus",
     "InstallationStatus",
     "MarketplaceAuditAction",
     "MarketplaceAuditEntry",
+    "MarketplaceDeployment",
     "MarketplaceInstallation",
     "MarketplaceListing",
     "MarketplaceListingKind",
+    "MarketplaceListingVersion",
     "MarketplaceShare",
     "MarketplaceSource",
     "MarketplaceSourceType",

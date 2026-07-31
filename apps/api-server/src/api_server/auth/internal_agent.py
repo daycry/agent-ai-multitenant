@@ -47,7 +47,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import _parse_bearer
-from api_server.auth.jwt import InvalidTokenError, sign_claims, verify_claims
+from api_server.auth.jwt import InvalidTokenError, sign_claims, verify_claims_any
 from api_server.config import get_settings
 from api_server.db.domain import Agent, Project
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
@@ -120,8 +120,10 @@ def mint_agent_token(
         claims["task"] = str(task_id)
     return sign_claims(
         claims,
-        # DEDICATED key, never `jwt_secret` (task_prod09_03 / secrets-9).
-        secret=settings.internal_token_secret.get_secret_value(),
+        # DEDICATED key, never `jwt_secret` (task_prod09_03 / secrets-9), and the
+        # HEAD of its ring (prod-05 task_prod05_04) so a token minted after the
+        # rotation deploy is already on the key that outlives it.
+        secret=settings.internal_token_secret_ring[0],
         algorithm=settings.jwt_algorithm,
     )
 
@@ -146,13 +148,23 @@ def decode_agent_token(token: str) -> AgentPrincipal:
     signed with ``jwt_secret`` and verified here against
     ``internal_token_secret``, so it fails at the SIGNATURE. The ``kind`` check
     stays as defence in depth (and to keep the error message honest).
+
+    prod-05 task_prod05_04: verification runs over the WHOLE
+    ``API_SERVER_INTERNAL_TOKEN_SECRET(S)`` ring. This is the half of the dual
+    accept that protects work in progress rather than sessions: an
+    ``AGENTIC_INTERNAL_TOKEN`` is injected into an agent-runtime container ONCE at
+    launch (``workers/execution.py``) and cannot be refreshed, so a single-secret
+    verifier turned every rotation into "every plan executing right now starts
+    getting 401s from ``/internal/agent/*``". The rings stay disjoint from the
+    session ring — the config guard rejects any overlap — so widening the accept
+    here does not widen what a compromised worker can forge.
     """
     settings = get_settings()
     try:
-        claims = verify_claims(
+        claims = verify_claims_any(
             token,
-            # DEDICATED key, never `jwt_secret` (task_prod09_03 / secrets-9).
-            secret=settings.internal_token_secret.get_secret_value(),
+            # DEDICATED ring, never `jwt_secret` (task_prod09_03 / secrets-9).
+            secrets=settings.internal_token_secret_ring,
             algorithm=settings.jwt_algorithm,
         )
     except InvalidTokenError as exc:

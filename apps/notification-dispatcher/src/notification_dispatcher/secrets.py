@@ -25,13 +25,12 @@ works without Vault.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 from typing import Any
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken, MultiFernet
 
 from notification_dispatcher.config import Settings
+from notification_dispatcher.crypto_keys import build_multifernet
 
 
 class ChannelSecretError(Exception):
@@ -42,11 +41,15 @@ class ChannelSecretError(Exception):
     """
 
 
-def _fernet(settings: Settings) -> Fernet:
-    """Build the Fernet cipher from the configured notification key."""
-    raw = settings.notification_encryption_key.get_secret_value().encode("utf-8")
-    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
-    return Fernet(key)
+def _fernet(settings: Settings) -> MultiFernet:
+    """Build the cipher over the notification key RING (prod-05 task_prod05_01).
+
+    Head key encrypts, EVERY key decrypts — and on this READ side the "every key
+    decrypts" half is the whole point: during a rotation the api-server may still
+    hold rows encrypted with the previous key, and a send that fails with
+    ``InvalidToken`` is a notification silently lost.
+    """
+    return build_multifernet(settings.notification_encryption_key_ring)
 
 
 def encrypt_secret(plaintext: str, settings: Settings) -> str:

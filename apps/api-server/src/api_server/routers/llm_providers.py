@@ -110,28 +110,24 @@ def get_provider_vault_store() -> LLMProviderVaultStore | None:
         assert cached is None or isinstance(cached, LLMProviderVaultStore)
         return cached
 
-    from api_server.config import get_settings
+    # prod-10 task_prod10_07 (secrets-4): el cliente lo construye AHORA la
+    # fábrica compartida `api_server.vault_client`, que además arranca la
+    # renovación del token en segundo plano. Antes se construía aquí un
+    # `hvac.Client` con el token estático y se cacheaba para siempre: sin un solo
+    # `renew_self` en el repo, el token caducaba (~32 días) y TODAS las
+    # credenciales de proveedor LLM dejaban de resolverse a la vez.
+    #
+    # El contrato observable no cambia: `None` sigue significando «Vault no
+    # cableado» (sin `API_SERVER_VAULT_TOKEN` o sin `hvac`), y los caminos de
+    # escritura siguen devolviendo 503 en vez de persistir un proveedor sin sitio
+    # donde guardar su credencial. El timeout de 5 s (hallazgo perf-7) vive ahora
+    # en la fábrica.
+    from api_server.vault_client import build_vault_client
 
-    settings = get_settings()
-    if settings.vault_token is None:
+    client = build_vault_client()
+    if client is None:
         _StoreCache.value = None
         return None
-    try:
-        import hvac
-    except ImportError:
-        _StoreCache.value = None
-        return None
-
-    # `hvac` va sobre `requests`, que SIN `timeout` espera indefinidamente. Un
-    # Vault caído o inalcanzable dejaba la lectura del secreto colgada dentro de
-    # un handler async → el bucle de eventos del api-server congelado, y con él
-    # todas las requests y WebSockets (hallazgo perf-7). Con el timeout el fallo
-    # es acotado: la request devuelve error en segundos y la API sigue viva.
-    client = hvac.Client(
-        url=settings.vault_url,
-        token=settings.vault_token.get_secret_value(),
-        timeout=_VAULT_TIMEOUT_SECONDS,
-    )
     store: LLMProviderVaultStore = HvacLLMProviderVaultStore(client=client)
     _StoreCache.value = store
     return store

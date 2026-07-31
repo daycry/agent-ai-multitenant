@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-ruby-rspec:v1 — test-runtime template for Ruby + RSpec (Plan 06 task_06_02).
 
-FROM ruby:3.3-slim AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM ruby:3.3-slim@sha256:005ed5a2d39180f571c1a6041513803651b68269ee1e735ae7f2f29d983f87b0 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-ruby-rspec" \
       org.opencontainers.image.version="v1" \

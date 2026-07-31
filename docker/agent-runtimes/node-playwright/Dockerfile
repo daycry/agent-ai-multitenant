@@ -5,7 +5,11 @@
 # pre-installed with their system deps — re-installing them at task start
 # would add several minutes per run.
 
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM mcr.microsoft.com/playwright:v1.48.0-jammy@sha256:7dbbf924428aad5c87a5a3a5bc38f23e110cb1f5427fbbc7dbc3231014a4b0db AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-node-playwright" \
       org.opencontainers.image.version="v1" \

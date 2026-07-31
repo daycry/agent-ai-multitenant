@@ -95,7 +95,7 @@ Este plan **contiene primero** (retirar los secretos del working tree, revocar e
 
 #### `task_prod10_02` — `init-vault.sh` sin persistencia en claro
 
-- [ ] **Título**: El script de init cifra (age/gpg) o imprime una sola vez; nunca deja `*.txt` en claro
+- [x] **Título**: El script de init cifra (age/gpg) o imprime una sola vez; nunca deja `*.txt` en claro
 - **Descripción**: Reescribir el bloque de persistencia de `scripts/init-vault.sh:59-90`: por defecto, cifrar `init-response.json` a una clave pública del operador (`age -r` o `gpg -e`, recipient por env `VAULT_INIT_RECIPIENT`, fail-fast si falta) y NO escribir `unseal-keys.txt`/`root-token.txt` en claro; modo alternativo `--print-once` que emite las claves solo por stdout. El unseal (líneas 95-104) pasa a leer del JSON descifrado en memoria/pipe, no de fichero en claro. Mantener idempotencia y el flujo `docker compose exec`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Dependencias**: ninguna (paralelo a `task_prod10_01`)
@@ -108,7 +108,7 @@ Este plan **contiene primero** (retirar los secretos del working tree, revocar e
 
 #### `task_prod10_03` — Guard de CI/pre-commit + `.dockerignore` ampliado
 
-- [ ] **Título**: CI falla si `vault-init-output/` existe con contenido; `.dockerignore` excluye secretos del contexto de build
+- [x] **Título**: CI falla si `vault-init-output/` existe con contenido; `.dockerignore` excluye secretos del contexto de build
 - **Descripción**: (1) Añadir a `.dockerignore` (hoy 39 líneas, sin mención a secretos): `vault-init-output/`, `.env`, `.env.*`, `*.log` — crítico porque `.github/workflows/ci.yml:373` construye los agent-runtimes con la raíz del repo como contexto. (2) Step de CI + hook pre-commit (`scripts/check_no_secret_artifacts.py`) que falle si `vault-init-output/` existe con ficheros, o si aparece un fichero que matchee `hvs\.[A-Za-z0-9]+` fuera de tests. Coordinación: prod-11 (cadena de suministro) reutiliza este step.
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Dependencias**: `task_prod10_01` (el working tree debe estar limpio antes de activar el gate)
@@ -138,7 +138,7 @@ Este plan **contiene primero** (retirar los secretos del working tree, revocar e
 
 #### `task_prod10_05` — Compose base sin fallbacks a contraseñas conocidas
 
-- [ ] **Título**: `${VAR:?msg}` para toda credencial en `docker-compose.yml` y `docker-compose.monitoring.yml`
+- [x] **Título**: `${VAR:?msg}` para toda credencial en `docker-compose.yml` y `docker-compose.monitoring.yml`
 - **Descripción**: Aplicar al compose canónico la misma disciplina que ya implementa `_env_ref` del installer (`compose_generator.py:190-201`): `POSTGRES_PASSWORD` (docker-compose.yml:74), `MIGRATIONS_USER_PASSWORD`/`APP_USER_PASSWORD` (78-79), `MINIO_ROOT_PASSWORD` (137) y `GRAFANA_ADMIN_PASSWORD` (monitoring.yml:193) pasan a `${VAR:?set in .env}` sin fallback. Los defaults dev se mueven a `docker-compose.dev.yml` (overlay), y `docker/.env.example` documenta cada variable obligatoria. Verificar que `scripts/dev/up.ps1` sigue funcionando con el overlay.
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Tests automáticos**:

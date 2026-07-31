@@ -89,26 +89,25 @@ def get_vault_resolver() -> VaultResolver | None:
 
     from shared_mcp import HvacVaultResolver
 
-    from api_server.config import get_settings
+    # prod-10 task_prod10_07 (secrets-4): una sola fábrica para el cliente de
+    # Vault, que además mantiene vivo el token (`renew_self` en segundo plano).
+    # Antes se construía aquí un `hvac.Client` con el token estático y se cacheaba
+    # para siempre; el día que caducase, toda resolución de `auth_ref` de MCP
+    # empezaría a devolver AUTH_ERROR sin que nada hubiera cambiado.
+    #
+    # Además hereda el timeout de 5 s que a ESTE cliente le faltaba: sin él,
+    # `requests` espera indefinidamente y un Vault sellado congelaba el bucle de
+    # eventos (hallazgo perf-7, arreglado en llm_providers y no aquí).
+    #
+    # `None` sigue significando lo mismo que antes: sin token o sin hvac, el
+    # api-server arranca y el `auth_ref` degrada a AUTH_ERROR tipado.
+    from api_server.vault_client import build_vault_client
 
-    settings = get_settings()
-    if settings.vault_token is None:
+    client = build_vault_client()
+    if client is None:
         _ResolverCache.value = None
         return None
 
-    try:
-        import hvac
-    except ImportError:
-        # hvac not installed — same as no token. Surface AUTH_ERROR
-        # rather than crash; the operator can either pip-install or
-        # unset the token to acknowledge they don't want Vault.
-        _ResolverCache.value = None
-        return None
-
-    client = hvac.Client(
-        url=settings.vault_url,
-        token=settings.vault_token.get_secret_value(),
-    )
     resolver: VaultResolver = HvacVaultResolver(client=client)
     _ResolverCache.value = resolver
     return resolver

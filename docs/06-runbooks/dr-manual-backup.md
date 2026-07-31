@@ -33,8 +33,14 @@ Fase A (`scripts/backup.sh` → `workers.backup.run_full_backup`).
   - `WORKERS_BACKUP_RETENTION_DAYS` — retención local (por defecto 7).
   - `WORKERS_BACKUP_VOLUMES` — lista JSON de volúmenes Docker.
   - `WORKERS_BACKUP_VOLUMES_MOUNT_ROOT` — dir host con esos volúmenes.
-- Si el cifrado está activado, Vault accesible con la clave
-  (`WORKERS_BACKUP_ENCRYPTION_VAULT_KEY`).
+- Si el cifrado está activado, el **valor** de la clave en el entorno
+  (`WORKERS_BACKUP_ENCRYPTION_KEY`) y su huella declarada en
+  `WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT`. **La clave NO se resuelve de Vault**
+  —`EnvSecretsProvider` lee `os.environ`— y **las unseal keys NO descifran el
+  bundle**: son cosas distintas y ambas se custodian offsite por separado (ver
+  [dr-drill.md](./dr-drill.md)). Si la huella no coincide con la de la clave
+  activa, el backup FALLA a propósito: significa que alguien rotó la clave sin
+  actualizar la custodia y los bundles nuevos no los podría abrir nadie.
 - Para empujar a remoto: la entrada de `backup_destinations` configurada
   y sus credenciales en Vault/entorno (ver UI de destinos, `task_12_09`).
 
@@ -56,8 +62,9 @@ en `WORKERS_BACKUP_ROOT/<backup_id>/` con:
 - `<volumen>.tar.gz` — uno por volumen configurado.
 - `manifest.json` — artefactos, tamaños y checksums SHA-256.
 
-(En un worker dentro del stack: `docker compose -f docker/docker-compose.yml
-exec -T worker ./scripts/backup.sh`.)
+(El servicio de Celery se llama `workers`, no `worker`; y el backup diario ya lo
+lanza el beat por sí solo. Este script es para el backup MANUAL desde el host,
+p. ej. antes de un upgrade.)
 
 ### 2. Verifica el bundle (corruption check)
 
@@ -67,10 +74,9 @@ comprueba la estructura (`pg_restore --list`, `tar -tf`). El motor ya la
 ejecuta tras el backup; para reverificar un bundle existente a mano:
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  exec -T worker \
-  python -c '
+# Desde el HOST: el servicio se llama `workers`, no `worker`, y el motor no
+# debe correr dentro de un contenedor que la propia operación puede parar.
+python -c '
 from workers.backup_verification import verify_bundle
 report = verify_bundle("<backup_id>")
 print("verify:", report)
@@ -81,18 +87,20 @@ Un bundle que no verifica NO debe usarse para restaurar: repite el backup.
 
 ### 3. Empuja el bundle al destino remoto
 
-> **Importante (gap conocido):** en esta fase el motor de backup
-> (`run_full_backup`) **NO sube** el bundle a los destinos remotos
-> automáticamente. Los adaptadores existen y están probados
-> (`workers.backup_destinations`: S3, B2, SFTP, rclone), pero el cableado
-> «backup → subida» todavía no está integrado en el flujo. La subida es,
-> hoy, un paso **manual** invocando el adaptador.
+> **Ya no hace falta hacerlo a mano** (prod-04 task_prod_04_12). El backup
+> diario sube el bundle **automáticamente**, y solo después de verificarlo, a
+> todos los destinos habilitados; el resultado aparece en el resumen de la tarea
+> (`uploaded` / `upload_failures`) y en la métrica
+> `agentic_backup_offsite_uploaded`. Un bundle que NO verifica no se sube nunca:
+> una copia remota corrupta es peor que ninguna, porque da confianza.
+>
+> El comando de abajo sigue siendo útil para **re-empujar** un bundle concreto
+> (p. ej. tras arreglar un destino que estaba caído).
 
 ```bash
-docker compose \
-  -f docker/docker-compose.yml \
-  exec -T worker \
-  python -c '
+# Desde el HOST: el servicio se llama `workers`, no `worker`, y el motor no
+# debe correr dentro de un contenedor que la propia operación puede parar.
+python -c '
 from pathlib import Path
 from workers.backup_destinations import build_destination
 from workers.backup_encryption import EnvSecretsProvider
@@ -152,7 +160,9 @@ herramienta nativa del destino (`aws s3 cp --recursive`, `b2`, `sftp`,
 
 ## Notas y limitaciones conocidas
 
-- **Subida a destino remoto no auto-cableada (gap).** Hoy hay que invocar
-  el adaptador a mano (paso 3). El cableado del flujo «backup → subida
-  automática a los destinos configurados» queda pendiente; debería
-  cerrarse en un plan posterior para que el cron diario sincronice solo.
+- **Subida a destino remoto: automática desde prod-04.** El backup diario sube
+  el bundle verificado a los destinos habilitados sin intervención. Es
+  best-effort **por diseño**: un destino caído no invalida el backup local, pero
+  deja de haber copia fuera de la máquina — vigila `upload_failures` y la
+  métrica `agentic_backup_offsite_uploaded`. El paso 3 queda como re-empuje
+  manual.

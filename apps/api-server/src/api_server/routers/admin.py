@@ -547,7 +547,7 @@ async def _check_redis(redis: Redis) -> ServiceHealth:
 
 async def _check_http_ok(name: str, url: str) -> ServiceHealth:
     """Probe an HTTP endpoint. 200 -> ok; other status -> degraded; no
-    response -> down. Used for vault (/v1/sys/health) and minio
+    response -> down. Used for minio
     (/minio/health/live)."""
     try:
         async with httpx.AsyncClient(timeout=_PROBE_TIMEOUT_S) as client:
@@ -559,6 +559,22 @@ async def _check_http_ok(name: str, url: str) -> ServiceHealth:
         return ServiceHealth(name=name, status="degraded", detail=f"HTTP {r.status_code}")
     except Exception as exc:
         return ServiceHealth(name=name, status="down", detail=_safe_detail(name, exc))
+
+
+async def _check_vault(vault_url: str) -> ServiceHealth:
+    """Sonda de Vault que distingue SELLADO de sano (prod-10 task_prod10_09).
+
+    Antes se preguntaba a `/v1/sys/health`, que devuelve 503 cuando Vault está
+    sellado — lo que aquí salía como un genérico «degraded / HTTP 503», sin
+    decir la palabra que el operador necesita ni distinguirlo de un 503 de
+    proxy. Ahora se consulta `/v1/sys/seal-status` (`api_server.vault_client`),
+    que además publica el gauge `agentic_vault_sealed` sobre el que cuelga la
+    alerta de prod-08.
+    """
+    from api_server.vault_client import probe_vault_seal
+
+    probe = await probe_vault_seal(vault_url, timeout=_PROBE_TIMEOUT_S)
+    return ServiceHealth(name="vault", status=probe.status, detail=probe.detail)
 
 
 async def _check_tcp(name: str, host: str, port: int) -> ServiceHealth:
@@ -598,7 +614,7 @@ async def system_health(
     ) = await asyncio.gather(
         _check_postgres(session),
         _check_redis(redis),
-        _check_http_ok("vault", f"{settings.vault_url}/v1/sys/health"),
+        _check_vault(settings.vault_url),
         _check_http_ok("minio", f"{settings.minio_url}/minio/health/live"),
         _check_tcp("clamav", settings.clamav_host, settings.clamav_port),
         # docling-serve expone /health (200 cuando el parser está listo).
@@ -609,7 +625,17 @@ async def system_health(
         # que el daemon acepta conexiones — mismo patrón que clamav.
         _check_tcp("egress-proxy", settings.egress_proxy_host, settings.egress_proxy_port),
     )
-    overall = "ok" if postgres.status == "ok" else "down"
+    # postgres manda sobre `down` (sin él la API no funciona). Vault sellado NO
+    # tumba la plataforma —los caminos que necesitan secretos devuelven 503— pero
+    # sí la degrada, y hasta prod-10 el agregado decía `ok` mientras ningún
+    # secreto se podía resolver: el operador tenía que abrir la lista de
+    # servicios para enterarse (hallazgo secrets-5).
+    if postgres.status != "ok":
+        overall = "down"
+    elif vault_h.status == "degraded":
+        overall = "degraded"
+    else:
+        overall = "ok"
     return SystemHealthResponse(
         status=overall,
         services=[
