@@ -1,6 +1,6 @@
 ---
 title: "ADR 0151: Retención de las tablas append-only — borrar, archivar o particionar"
-status: proposed
+status: accepted
 date: 2026-08-01
 deciders: [dirección, operador]
 relates_to: [0028, 0116, 0126, 0149]
@@ -11,12 +11,12 @@ docs_language: es
 
 # ADR 0151: Retención de las tablas append-only
 
-> **Nace `proposed` y tiene que seguir así hasta que un humano elija.** No es una
-> decisión técnica disfrazada: cuánto tiempo se guarda una auditoría es una
-> política de cumplimiento, y borrar `audit_log` a los N meses puede ser
-> exactamente lo que un contrato prohíbe. Quien escribe el código no tiene esa
-> información. Lo que sí se podía implementar sin la decisión ya está en el árbol
-> (§ «Lo que ya no depende de esta decisión»).
+> **Estado: `accepted` (firmado el 2026-08-01).** **Opción C**: particionado
+> nativo por rango en las **cinco** tablas. No se borra nada, así que no hay que
+> acertar ningún plazo. La firma se aparta de la recomendación de este documento
+> (que proponía un híbrido A+C) y lo hace habiendo visto el coste: la PK de
+> `executions` pasa a ser compuesta y hay que revisar todas sus FK. Detalle en
+> § «Decisión del operador».
 
 ## Contexto: seis tablas que solo crecen
 
@@ -77,7 +77,7 @@ Tres consecuencias ya visibles, ninguna teórica:
    Guardar para siempre suena conservador hasta que la tabla es tan grande que
    una consulta de auditoría no termina.
 
-## Decisión que hay que tomar
+## La decisión, tal como se planteó
 
 **¿Cuánto se retiene cada familia append-only, y qué se hace con lo que sale de
 la ventana?** Tres opciones, con su coste real.
@@ -135,7 +135,11 @@ mover a otro tablespace, y las consultas recientes solo tocan una o dos.
   runs/día.
 - **Cuándo NO vale la pena**: a 20 runs/día es sobreingeniería cara.
 
-## Recomendación (argumentada, no vinculante)
+## Recomendación de este documento (NO es lo que se firmó)
+
+> El operador eligió la **opción C para las cinco tablas**, apartándose de esta
+> recomendación con el coste a la vista. Se conserva porque el razonamiento de
+> abajo sigue siendo el mejor argumento para reabrir el asunto si C se atasca.
 
 **Un híbrido A + C por familia, escalonado en el tiempo. Ahora: A para todo
 menos `audit_log`; `audit_log` sin tocar hasta que exista un requisito escrito.**
@@ -203,9 +207,49 @@ restauración de emergencia empeora mes a mes sin que nadie lo mida. El día que
 duela, la migración a C será sobre una tabla mucho más grande que hoy — o sea,
 más cara y con más riesgo que ahora.
 
-## Qué hace falta para cerrar este ADR
+## Decisión del operador (2026-08-01)
 
-1. El plazo de `audit_log`, o la confirmación escrita de que no existe requisito.
-2. Aceptar (o corregir) los cinco plazos propuestos del punto 1.
-3. Confirmar que compactar `steps_log` conservando la fila es aceptable para el
-   soporte de nivel 2, que es quien lee esas trazas.
+**Opción C — particionado nativo por rango, en las CINCO tablas. No se borra
+nada.** El ADR pasa a `accepted`.
+
+La firma se aparta de la recomendación de este documento, que proponía un
+híbrido A+C por familia, y lo hace a sabiendas del coste: se le presentó
+explícitamente la alternativa de particionar solo `executions` y `audit_log`
+—reduciendo a la mitad el riesgo de migración— y eligió las cinco.
+
+### Qué se compra y qué se paga
+
+Se compra la única opción que **no obliga a acertar un plazo**. Un borrado, aun
+escalonado por familia, exige decidir hoy cuánto vale un dato dentro de dos años,
+y esa apuesta se pierde en silencio: nadie se entera de que el plazo era corto
+hasta que alguien pide lo que ya no está. Con particionado, la pregunta «¿cuánto
+guardamos?» deja de ser irreversible — una partición antigua se puede `DETACH` y
+mover, y si hace falta se vuelve a enganchar.
+
+Se paga en migración, y conviene que esté escrito antes de empezar:
+
+1. **La PK compuesta es lo caro, no el particionado.** PostgreSQL exige que la
+   clave primaria de una tabla particionada incluya la clave de partición, así
+   que `executions.id` pasa a `(id, created_at)` y **toda FK que apunte a
+   `executions` hay que revisarla una por una**. Ése es el trabajo real.
+2. **Convertir una tabla existente no es un `ALTER`**: tabla nueva particionada,
+   copia, intercambio. Con downgrade que se prueba de verdad, no que se escribe.
+3. **Hace falta el job que cree la partición del mes siguiente.** Sin él, la
+   primera inserción del mes que viene falla. Es el modo de fallo que convierte
+   esta decisión en un incidente, y tiene que llevar su propia alerta: si la
+   partición de M+1 no existe a mitad de mes, alguien debe enterarse.
+4. La RLS y los índices se declaran por partición; el modelo mental del operador
+   se complica y el runbook tiene que recogerlo.
+
+### Cómo se ejecuta
+
+Como plan propio, tabla a tabla y en orden de riesgo creciente
+—`guardrail_events`, `notification_logs`, `llm_usage_events`, `audit_log` y
+`executions` la última, que es la de las FK—, con la suite verde entre cada una.
+No en una sola migración: cinco conversiones en un solo paso son cinco maneras
+de quedarse a medias.
+
+Los plazos que este ADR proponía para la opción A quedan sin efecto: no hay
+plazo, no se borra. Y la compactación de `steps_log` deja de ser necesaria como
+mecanismo de retención — si algún día se hace, será por rendimiento y con su
+propia justificación.

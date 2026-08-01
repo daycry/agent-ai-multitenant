@@ -1,6 +1,6 @@
 ---
 title: "ADR 0148: Distribución de las imágenes de runtime — registry y referencia inmutable"
-status: proposed
+status: accepted
 date: 2026-07-31
 deciders: [operador]
 relates_to: [0012, 0051, 0094, 0129, 0147]
@@ -11,12 +11,11 @@ docs_language: es
 
 # ADR 0148: Distribución de las imágenes de runtime — registry y referencia inmutable
 
-> **Estado `proposed`. NADA se ha cambiado.** A diferencia del
-> [ADR 0147](./0147-lockfile-python-uv-vs-pip-tools.md) —toolchain puro, que
-> nació `accepted` porque solo cambia con qué versiones se construye—, esto
-> decide **dónde viven las imágenes del producto, quién las publica y qué tiene
-> que poder alcanzar el host de un tenant para instalar**. Es decisión de
-> producto y de operación. La escribe un agente; la firma un humano.
+> **Estado: `accepted` (firmado el 2026-08-01).** **Opción (a)**: GHCR con tag
+> versionado y resolución por digest. La (b) —registry self-hosted como mirror—
+> queda **documentada pero NO construida** hasta que exista una instalación
+> air-gapped real; ahí esta firma se aparta de la recomendación del documento, y
+> el motivo está escrito. Detalle en § «Decisión del operador».
 
 ## El statu quo, en tres líneas de código
 
@@ -134,7 +133,32 @@ Dos condiciones para que (a) no empeore nada:
    local con el mismo tag: eso reintroduciría el problema disfrazado de
    resiliencia.
 
-## Consecuencias si se firma
+## Decisión del operador (2026-08-01)
+
+**Opción (a) — GHCR con tag versionado y resolución por digest.** El ADR pasa a
+`accepted`.
+
+El argumento que decide no es el rendimiento de la instalación: es que hoy el
+sistema **no puede responder «¿qué imagen exacta ejecutó el código de este
+tenant?»**, y sin esa respuesta el Principio Rector 2 —aislamiento por
+contenedor— es una afirmación que nadie puede auditar. Un `.trivyignore` que se
+refiere a una imagen distinta de la que corre en el host no es una excepción de
+seguridad: es una ficción.
+
+**La (b) queda documentada, NO construida.** Ésta es la parte donde esta firma se
+aparta de la recomendación del ADR, que proponía (b) como mirror opcional desde
+el principio. El motivo: no existe todavía ninguna instalación air-gapped real.
+Montar un `registry:2` en el compose para un caso hipotético sería exactamente el
+patrón que esta base repite —mecanismo entregado, cero llamantes— y añadiría un
+servicio que operar, respaldar y asegurar para nadie.
+
+Lo que sí entra en el alcance es **escribir cómo se haría**: la referencia de
+instalación documenta el procedimiento de importación para un host sin salida a
+internet (`docker save` / `docker load` por digest, o un mirror levantado a mano),
+de modo que el día que aparezca ese cliente el camino esté trazado y no haya que
+rediseñarlo con prisa. Cuando exista, se construye.
+
+## Consecuencias (firmado)
 
 - `_IMAGE_TAG = "v1"` desaparece del catálogo, sustituido por versión + digest
   por template. **Hasta entonces no se toca**: añadir hoy un campo `digest` que

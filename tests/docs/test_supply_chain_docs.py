@@ -280,22 +280,32 @@ def registry_adr() -> tuple[dict[str, object], str]:
     return _split_frontmatter(REGISTRY_ADR.read_text(encoding="utf-8"))
 
 
-def test_registry_adr_is_proposed_and_points_at_the_plan(
+def test_registry_adr_is_signed_and_points_at_the_plan(
     registry_adr: tuple[dict[str, object], str],
 ) -> None:
-    """Nace `proposed`: es decisión de PRODUCTO, no de toolchain.
+    """Firmado por un humano el 2026-08-01, y con la opción elegida escrita.
 
-    Dónde vive el registry, quién publica y si el host de un tenant puede tirar
-    de internet son decisiones con impacto en la distribución del producto. El
-    ADR 0147 (lockfile) sí nació `accepted` porque solo cambia con qué versiones
-    se construye. Este no: lo firma un humano.
+    Este test nació afirmando `proposed`, y esa afirmación era correcta mientras
+    lo fue: dónde vive el registry, quién publica y si el host de un tenant
+    puede tirar de internet son decisiones de PRODUCTO, no de toolchain, y un
+    agente no las firma (el ADR 0147, lockfile, sí nació `accepted` porque solo
+    cambia con qué versiones se construye).
+
+    Firmado el asunto, la guarda no se retira: se **invierte**. Lo que ahora
+    vigila es que nadie devuelva el ADR a `proposed` —que sería borrar una
+    decisión humana— y que la elección conste en el cuerpo, no solo en el
+    frontmatter. Un `status: accepted` sin decisión escrita es exactamente el
+    pecado documental que este repo persigue.
     """
-    frontmatter, _ = registry_adr
-    assert frontmatter.get("status") == "proposed", (
-        "el ADR de registry debe seguir `proposed` hasta que un humano elija: es "
-        f"decisión de producto (status actual: {frontmatter.get('status')!r})"
+    frontmatter, body = registry_adr
+    assert frontmatter.get("status") == "accepted", (
+        "el ADR de registry lo firmó un humano el 2026-08-01; devolverlo a "
+        f"`proposed` borraría esa decisión (status actual: {frontmatter.get('status')!r})"
     )
     assert frontmatter.get("plan_referenced") == "prod-11-cadena-suministro"
+    assert (
+        "Decisión del operador" in body
+    ), "el cuerpo debe recoger la decisión firmada, no solo el frontmatter"
 
 
 def test_registry_adr_offers_the_three_options_with_a_recommendation(

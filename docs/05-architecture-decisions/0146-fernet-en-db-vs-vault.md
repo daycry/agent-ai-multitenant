@@ -1,6 +1,6 @@
 ---
 title: "ADR 0146: Cifrado Fernet en Postgres vs Vault para SSO, notificaciones y webhooks"
-status: proposed
+status: accepted
 date: 2026-07-31
 deciders: [operador]
 relates_to: [0021, 0028, 0145]
@@ -11,10 +11,14 @@ docs_language: es
 
 # ADR 0146: Fernet-en-DB vs Vault para SSO, notificaciones y webhooks
 
-> **Estado `proposed`. NADA se ha migrado.** Esta decisión contradice —o
-> confirma— un principio rector del `CLAUDE.md`, y su radio de explosión es todo
-> el material cifrado en Postgres de tres familias de secretos. La escribe un
-> agente; la firma un humano. `task_prod10_11` implementa lo que se firme.
+> **Estado: `accepted` (firmado el 2026-08-01).** **Opción B**: la excepción al
+> principio «Vault es la única vía» se bendice, se **acota** a los secretos que un
+> tenant configura para integrarse con terceros, y se blinda con una salvaguarda
+> de backups que NO es opcional. Nada se ha migrado, y ésa es la decisión: no se
+> migra. La razón de fondo es el desellado manual del
+> [ADR 0145](0145-vault-operable-tokens-y-unseal.md) — con Vault sellado tras cada
+> reinicio, migrar a Vault dejaría el login SSO inaccesible. **La decisión caduca
+> sola** si algún día se adopta auto-unseal. Detalle en § «Decisión del operador».
 
 ## El conflicto, en una frase
 
@@ -113,11 +117,65 @@ Lo que sí está claro y no depende de la decisión:
    quede un solo secreto cifrado en columnas — o sea, hasta que A esté migrada y
    verificada. No es trabajo exclusivo de B.
 
+## Decisión del operador (2026-08-01)
+
+**Opción B — la excepción se bendice, se acota y se blinda.** Estas tres
+familias de secretos (SSO, notificaciones, webhooks entrantes) viven cifradas en
+Postgres **por diseño**, y así queda escrito en el `CLAUDE.md`.
+
+### Por qué B y no A, dicho sin adornos
+
+La pregunta que se hizo al firmar fue «¿qué mantiene la estructura más limpia?»,
+y la respuesta intuitiva es A: una regla sin excepciones. Pero A y el
+[ADR 0145](0145-vault-operable-tokens-y-unseal.md), firmado el mismo día, se
+combinan mal. El 0145 decidió **desellado manual**. Encadenando las dos: se
+reinicia el host → Vault arranca sellado → nadie entra por SSO hasta que un
+humano aparezca con su fragmento de Shamir.
+
+Una regla sin excepciones que esconde esa trampa no es más limpia que una
+excepción escrita con su frontera y su motivo: es la misma complejidad, movida
+de la documentación al peor momento posible. La limpieza estructural se mide por
+si alguien que llega en seis meses entiende el sistema, no por si el documento
+tiene menos casos.
+
+**Esta decisión caduca sola.** Si algún día se adopta auto-unseal (opciones A o B
+de la decisión 2 del 0145), la objeción de disponibilidad desaparece y este ADR
+debe reabrirse hacia A. Está anotado también en el 0145 para que se lea desde
+los dos lados.
+
+### La frontera, que es lo que hace que la excepción no crezca
+
+Vive cifrado en columna **solo** el secreto que un TENANT configura para
+integrarse con un tercero: client secrets de OIDC, certificados de SAML,
+credenciales de canal de notificación, secretos de firma de webhooks entrantes.
+
+Todo lo demás —credenciales de la PLATAFORMA: claves de proveedores LLM,
+contraseñas de base de datos, tokens de servicio, claves de MinIO— sigue en
+Vault sin excepción, y la regla del `CLAUDE.md` se mantiene íntegra para ellas.
+El criterio es nítido: si la plataforma no arranca sin ese secreto, va a Vault;
+si lo que se rompe es la integración de un tenant concreto, puede ir en columna.
+
+### La salvaguarda NO es opcional
+
+Se firma B **con** su condición, no B a secas. Hoy un dump de Postgres lleva el
+ciphertext, así que quien tenga el backup **y** la variable de entorno tiene los
+secretos — y el backup viaja a MinIO y a destinos externos. Entra en el alcance:
+
+1. Esas columnas se excluyen del bundle de backup, o se cifran con una clave
+   distinta de la del resto, de forma que un dump robado no baste.
+2. La clave de columna se rota por el mecanismo que `prod-05` ya entregó, en vez
+   de duplicarlo.
+3. El `CLAUDE.md` recoge la excepción CON su frontera y CON su fecha de
+   caducidad (el auto-unseal), no como una nota suelta.
+
+Sin (1) esta decisión sería peor que el statu quo, porque habría bendecido el
+riesgo sin quitarlo.
+
 ## Qué NO se ha hecho
 
 - No se ha migrado ni un secreto.
 - No se ha tocado ningún read-path.
-- No se ha modificado el `CLAUDE.md`.
+- No se ha modificado el `CLAUDE.md` **en el momento de escribir el ADR**; la
+  redacción de la excepción es parte de la implementación de esta decisión.
 
-`task_prod10_11` queda bloqueada hasta que este ADR pase a `accepted` con una
-opción elegida.
+`task_prod10_11` queda **desbloqueada** por esta firma, con el alcance de B.

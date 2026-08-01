@@ -1,6 +1,6 @@
 ---
 title: "ADR 0149: Consistencia del bundle de backup — quiesce, snapshot de FS o skew aceptado"
-status: proposed
+status: accepted
 date: 2026-07-31
 deciders: [dirección, operador]
 relates_to: [0129, 0145, 0146]
@@ -11,11 +11,11 @@ docs_language: es
 
 # ADR 0149: Consistencia del bundle de backup
 
-> **Nace `proposed` y tiene que seguir así hasta que un humano elija.** Las tres
-> opciones tienen coste de disponibilidad o coste de requisitos del host, y
-> ninguna de las dos cosas la puede decidir quien escribe el código. Lo que sí
-> era implementable sin esa decisión ya está en el árbol y se describe abajo
-> (§ «Lo que ya no depende de esta decisión»).
+> **Estado: `accepted` (firmado el 2026-08-01).** **Opción A** (quiesce corto de
+> escritores) **con un timeout duro que degrada a C**: si los escritores no paran
+> a tiempo, el backup sigue adelante aceptando el skew y lo registra, en vez de
+> convertir la ventana nocturna en una caída. Ese matiz no estaba en ninguna de
+> las tres opciones y se añade al firmar. Detalle en § «Decisión del operador».
 
 ## Contexto: el bundle es internamente inconsistente, y eso no es un detalle
 
@@ -87,7 +87,49 @@ Con esto, el skew residual queda **acotado y descrito**, que es la condición
 previa para que la decisión de abajo sea informada. Está documentado en
 [`docs/06-runbooks/04-disaster-recovery.md`](../06-runbooks/04-disaster-recovery.md).
 
-## Decisión pendiente: las tres opciones
+## Decisión del operador (2026-08-01)
+
+**Opción A — quiesce corto de escritores — con un timeout duro que degrada a C.**
+El ADR pasa a `accepted`.
+
+A limpio elimina la clase (2) de incoherencia y reduce la (1) a lo que escriba la
+propia infraestructura, sin imponer ningún requisito al host — que es lo que
+descarta B: exigir LVM o ZFS convierte un detalle de despliegue en bloqueante, y
+el instalador no lo verifica hoy, así que el backup «funcionaría» sin snapshot y
+volveríamos al punto de partida sin enterarnos.
+
+### El matiz que ninguna de las tres opciones contemplaba
+
+Tal como está descrita, la opción A tiene un modo de fallo que el ADR no nombra:
+**un quiesce que no termina convierte el backup nocturno en una caída.** Si un
+worker no atiende la señal de parada —un run largo, un contenedor colgado, un
+`docker compose stop` que espera su timeout— la ventana de 1-3 minutos se
+estira, y a las 03:00 no hay nadie mirando.
+
+Así que A se implementa con una **guarda temporal explícita**:
+
+1. Se pide la parada de los escritores y se espera un máximo configurable
+   (`BACKUP_QUIESCE_TIMEOUT_SECONDS`, por defecto 180 s).
+2. Si todos paran a tiempo → captura coherente, y el acta lo registra como tal.
+3. Si el plazo vence → **el backup sigue adelante igualmente**, con los
+   escritores que queden en pie, y el acta registra `quiesce: partial` con la
+   lista de quién no paró.
+4. Los servicios se rearrancan SIEMPRE, pase lo que pase, incluso si la captura
+   falla — un `finally`, no una rama feliz.
+
+Es decir: cuando A no se puede cumplir, se degrada a C **a sabiendas y dejando
+constancia**, en vez de bloquear. Un backup con skew registrado es mucho mejor
+que un backup que no existe, y muchísimo mejor que un stack parado a las 03:00
+esperando a un worker que no va a responder.
+
+De ahí que el refuerzo de `restore_reconcile` que la opción C exigía **entre
+igualmente en el alcance**: es la red que atrapa los días en que el quiesce
+degrada. No es trabajo exclusivo de C.
+
+## Las tres opciones que se evaluaron
+
+> Se conservan íntegras: un ADR sin las alternativas descartadas no deja auditar
+> la decisión, solo obedecerla. La elegida es la A — ver § «Decisión del operador».
 
 ### Opción A — Quiesce corto de escritores en la ventana del backup
 
@@ -135,7 +177,7 @@ código ≠ 0 antes de dar el restore por bueno.
   cuatro parejas con umbrales acordados, y que el acta del drill registre las
   divergencias como resultado esperado y no como incidencia.
 
-## Decisión ligada: ¿Redis es crítico?
+## Decisión ligada: ¿Redis es crítico? (sigue abierta)
 
 Independiente de A/B/C y también para un humano. Redis aloja **sesiones de
 servidor, el broker de Celery y los contadores de rate limit**. Declararlo _no

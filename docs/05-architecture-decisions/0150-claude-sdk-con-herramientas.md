@@ -1,7 +1,7 @@
 ---
 adr: "0150"
 title: "claude_sdk con herramientas: el cableado ya existe — ¿se mantiene o se bloquea la combinación?"
-status: proposed
+status: accepted
 date: 2026-08-01
 deciders: [operador]
 phase: prod-07-fiabilidad-llm-costes
@@ -13,10 +13,11 @@ docs_language: es
 
 # ADR 0150 — `claude_sdk` con herramientas asignadas
 
-> **Estado: `proposed`.** Este ADR existe porque `task_prod07_09` de prod-07 pedía
-> exactamente esto, y porque la decisión **cambió de signo**: la premisa sobre la
-> que se escribió la tarea ya no es cierta. Se pide al operador que confirme la
-> opción A (que es la que está en producción) para poder cerrar la casilla.
+> **Estado: `accepted` (firmado el 2026-08-01).** **Opción A**: se mantiene el
+> cableado. Este ADR existe porque `task_prod07_09` pedía lo contrario y la
+> premisa de aquella tarea dejó de ser cierta; implementar el bloqueo hoy habría
+> roto el proveedor principal de la plataforma. No hay cambio de código: el
+> documento registra lo que ya corre.
 
 ## Por qué este ADR se escribe al revés de como se planificó
 
@@ -91,7 +92,18 @@ bloquea?» sino, si acaso, si merece la pena invertir en compeler una tool en el
 camino SDK — y eso ya tiene su propia respuesta en los ADR 0086/0087 (no se
 puede con el SDK; el contrato de salida se resuelve por prosa + tag).
 
-## Consecuencias si se acepta A
+## Decisión del operador (2026-08-01)
+
+**Opción A — se mantiene el cableado.** El ADR pasa a `accepted`.
+
+La tarea original del plan pedía B (bloquear la combinación en validación), y
+ejecutarla habría sido el modo de fallo que `verificar-antes-de-implementar.md`
+documenta: implementar una casilla escrita cuando el mundo ya no es el que era
+al escribirla. La premisa de aquella tarea —«claude_sdk no sabe usar
+herramientas»— dejó de ser cierta cuando el cableado se entregó y se verificó.
+Bloquearlo ahora no arreglaría nada: destruiría una capacidad que funciona.
+
+## Consecuencias (opción A, firmada)
 
 - `task_prod07_09` se cierra con (c) + (d); (a) y (b) se retiran del plan por
   obsoletas, anotando el porqué en la casilla (igual que hizo el ADR 0117 (b)

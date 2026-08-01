@@ -1,6 +1,6 @@
 ---
 title: "ADR 0139: Loki como agregador de logs — ya está desplegado; lo que faltaba era que los logs fueran consultables"
-status: proposed
+status: accepted
 date: 2026-07-31
 deciders: [operador]
 relates_to: [0140, 0141]
@@ -11,10 +11,10 @@ docs_language: es
 
 # ADR 0139: Loki como agregador de logs
 
-> **Estado: `proposed`.** La parte técnica está cerrada y entregada (§Decisión);
-> lo que queda abierto es de producto: **la retención** y **el coste en RAM/disco
-> de una máquina única**. Eso compromete recursos del operador, así que no lo
-> firma un agente.
+> **Estado: `accepted` (firmado el 2026-08-01).** Se mantiene Loki (opción A),
+> confirmando lo que la parte técnica ya había entregado. La migración a Grafana
+> Alloy (opción C) queda **aplazada explícitamente**, no descartada. Detalle en
+> § «Firma del operador».
 >
 > **Aviso de recon**: el plan prod-08 planteaba este ADR como «desplegar Loki
 > (opción A) vs retirarlo del stack declarado (opción B)». **Esa pregunta ya no
@@ -108,6 +108,17 @@ sucesor.
 - **Coste**: ≈ 0,5 persona-días. No aporta ninguna capacidad nueva a este caso
   de uso.
 - **Recomendación**: aplazar. Es deuda técnica conocida, no un problema abierto.
+
+## Firma del operador (2026-08-01)
+
+**Opción A — mantener Loki.** El operador confirma lo que la parte técnica ya
+había ejecutado, y con ello el ADR pasa a `accepted`: el estado `proposed` decía
+que quedaba algo por decidir cuando lo único que quedaba era ratificarlo.
+
+La opción C (migrar Promtail → Alloy) queda **aplazada explícitamente**, no
+descartada: es deuda técnica conocida con coste ≈0,5 días y ninguna capacidad
+nueva para este caso de uso. Se retoma cuando Promtail deje de recibir
+mantenimiento upstream, no antes.
 
 ## Decisión (parte técnica, cerrada y entregada)
 

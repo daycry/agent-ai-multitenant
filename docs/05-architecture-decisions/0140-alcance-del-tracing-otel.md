@@ -1,6 +1,6 @@
 ---
 title: "ADR 0140: Alcance del tracing OpenTelemetry — recorte explícito, y la correlación por request_id como sustituto"
-status: proposed
+status: accepted
 date: 2026-07-31
 deciders: [operador]
 relates_to: [0139, 0141]
@@ -11,10 +11,11 @@ docs_language: es
 
 # ADR 0140: Alcance del tracing OpenTelemetry
 
-> **Estado: `proposed`.** La limpieza de lo que era falso está hecha
-> (§Decisión). Lo que queda abierto es de producto: **adoptar o no un backend
-> de trazas** (opción B) cuesta ≈ 5 persona-días no presupuestados y añade dos
-> servicios a un host que ya corre el stack entero. Eso lo firma el operador.
+> **Estado: `accepted` (firmado el 2026-08-01).** Recorte explícito (opción A):
+> el sistema deja de decir que instrumenta más de lo que instrumenta. La opción B
+> (OTLP + Tempo + instrumentación de Celery, ≈5 persona-días) se retoma cuando
+> aparezca un incidente que `request_id` y los logs no basten para diagnosticar.
+> Detalle en § «Firma del operador».
 
 ## Contexto
 
@@ -67,6 +68,18 @@ frontera Celery— y es buscable en Loki (ADR 0139).
 - **Cuándo tendría sentido**: cuando haya un problema de latencia concreto que
   `request_id` + los logs no basten para diagnosticar. Hoy ese problema no está
   documentado en ningún sitio.
+
+## Firma del operador (2026-08-01)
+
+**Opción A — recorte explícito.** Confirmada la parte técnica ya ejecutada; el
+ADR pasa a `accepted`.
+
+Lo que se compra con esto es honestidad: el sistema decía instrumentar más de lo
+que instrumenta, y un tracing que se cree completo es peor que uno que se sabe
+parcial, porque nadie busca fuera de él. La opción B (OTLP + Tempo +
+instrumentación de Celery) se retoma cuando aparezca un caso real en el que
+`request_id` y los logs no basten para diagnosticar — y ese día el disparador
+será un incidente concreto, que es mejor especificación que una intuición de hoy.
 
 ## Decisión (parte técnica, cerrada y entregada)
 

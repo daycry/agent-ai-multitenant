@@ -1,6 +1,6 @@
 ---
 title: "ADR 0145: Vault operable — tokens periódicos renovables y estrategia de desellado"
-status: proposed
+status: accepted
 date: 2026-07-31
 deciders: [operador]
 relates_to: [0021, 0061]
@@ -11,13 +11,12 @@ docs_language: es
 
 # ADR 0145: Vault operable — tokens y desellado
 
-> **Estado `proposed`.** Las dos decisiones tienen un camino recomendado que YA
-> está implementado, porque en ambos casos la recomendación es el mínimo
-> reversible: no añade componentes, no cambia el modelo de despliegue y se puede
-> deshacer borrando código. Lo que necesita firma humana es lo contrario:
-> **elegir A o B**, que sí compromete infraestructura y presupuesto. Mientras
-> nadie firme, el sistema queda en la opción implementada, que es mejor que el
-> estado anterior en los dos ejes.
+> **Estado: `accepted` (firmado el 2026-08-01).** Las dos decisiones quedan
+> ratificadas tal como estaban implementadas: **A** (tokens periódicos
+> renovables) y **C** (desellado manual con healthcheck honesto y alerta).
+> AppRole y el auto-unseal quedan registrados como evolución, con su disparador
+> escrito. Detalle en § «Firma del operador» — que además explica por qué el
+> desellado manual es la razón de la decisión del ADR 0146.
 
 ## Contexto
 
@@ -59,6 +58,20 @@ reiniciaría Vault en bucle antes de que nadie pudiera desellarlo. El error es q
 no hubiera ninguna otra señal.
 
 ---
+
+## Firma del operador (2026-08-01)
+
+Las dos decisiones de abajo quedan **ratificadas tal como están implementadas**:
+**A** (tokens periódicos renovables) y **C** (desellado manual con healthcheck
+honesto y alerta). El ADR pasa a `accepted`.
+
+Una consecuencia que conviene dejar escrita aquí, porque se decidió el mismo día
+y las dos piezas se leen juntas: **el desellado manual es la razón por la que el
+[ADR 0146](0146-fernet-en-db-vs-vault.md) NO migra los secretos de SSO a Vault.**
+Con desellado manual, un Vault sellado tras cada reinicio del host dejaría el
+login federado inaccesible hasta que apareciese un humano. Si algún día se
+adopta auto-unseal (opción A o B de la decisión 2), esa objeción desaparece y el
+0146 debería reabrirse.
 
 ## Decisión 1 — Autenticación de servicios: tokens periódicos, no AppRole
 
