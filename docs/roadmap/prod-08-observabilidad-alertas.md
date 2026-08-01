@@ -151,6 +151,12 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   falla en cada envío (degradación deliberada: Alertmanager arranca igual). Cierra
   con el aporte de prod-10 (custodia) + un volumen en `_alertmanager_service`.
   Además, su docstring sigue diciendo «no SMTP/Slack secrets here», ya falso.
+  - **Re-verificado el 2026-08-01** (`alertmanager.yml:55/68/104-106` y
+    `compose_generator.py:1215-1233`): sigue siendo exacto. Lo que falta
+    **no es código**: es decidir dónde se custodia el webhook de Slack y quién
+    lo provisiona — una decisión humana (presupuesto/claves), que es
+    precisamente lo que prod-10 resuelve. La parte que sí es código
+    (`apps/installer/**`) queda fuera del carril `observabilidad`.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_02_a

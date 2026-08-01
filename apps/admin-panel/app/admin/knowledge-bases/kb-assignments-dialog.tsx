@@ -31,7 +31,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface ProjectGrantRow {
   project_id: string;
@@ -60,6 +62,8 @@ export function KbAssignmentsDialog({
   open,
   onOpenChange,
 }: KbAssignmentsDialogProps) {
+  const t = useT("knowledgeBases");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -86,7 +90,7 @@ export function KbAssignmentsDialog({
       setActionError(null);
       void queryClient.invalidateQueries({ queryKey: ["kb-assignments", kbId] });
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setActionError(errorText(err)),
   });
 
   const revokeAgent = useMutation({
@@ -98,7 +102,7 @@ export function KbAssignmentsDialog({
       setActionError(null);
       void queryClient.invalidateQueries({ queryKey: ["kb-assignments", kbId] });
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setActionError(errorText(err)),
   });
 
   const isLoading = projectsQuery.isLoading || agentsQuery.isLoading;
@@ -133,7 +137,7 @@ export function KbAssignmentsDialog({
       setNewProjectId("");
       void queryClient.invalidateQueries({ queryKey: ["kb-assignments", kbId] });
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setActionError(errorText(err)),
   });
   const grantAgent = useMutation({
     mutationFn: (agentId: string) =>
@@ -146,7 +150,7 @@ export function KbAssignmentsDialog({
       setNewAgentId("");
       void queryClient.invalidateQueries({ queryKey: ["kb-assignments", kbId] });
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setActionError(errorText(err)),
   });
   const grantedProjectIds = new Set(projects.map((p) => p.project_id));
   const grantedAgentIds = new Set(agents.map((a) => a.agent_id));
@@ -159,7 +163,7 @@ export function KbAssignmentsDialog({
     <Dialog open={open} onOpenChange={onOpenChange} size="lg">
       <DialogContent data-testid="kb-assignments-dialog">
         <DialogHeader>
-          <DialogTitle>Asignaciones — {kbName}</DialogTitle>
+          <DialogTitle>{t("assignmentsDialogTitle", { name: kbName })}</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-6">
           {isLoading && (
@@ -172,8 +176,7 @@ export function KbAssignmentsDialog({
 
           {isEmpty && (
             <p className="text-muted-foreground text-sm" data-testid="kb-assignments-empty">
-              Esta KB no está granteada a ningún proyecto ni agente todavía. Añade un grant aquí
-              debajo.
+              {t("assignmentsEmpty")}
             </p>
           )}
 
@@ -181,7 +184,7 @@ export function KbAssignmentsDialog({
           {!isLoading && projects.length > 0 && (
             <section data-testid="kb-assignments-projects">
               <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-                <FolderKanban className="h-3.5 w-3.5" /> Proyectos
+                <FolderKanban className="h-3.5 w-3.5" /> {t("assignmentsProjects")}
               </h3>
               <ul className="mt-2 space-y-2">
                 {projects.map((row) => (
@@ -210,7 +213,7 @@ export function KbAssignmentsDialog({
           {!isLoading && agents.length > 0 && (
             <section data-testid="kb-assignments-agents">
               <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
-                <Bot className="h-3.5 w-3.5" /> Agentes
+                <Bot className="h-3.5 w-3.5" /> {t("assignmentsAgents")}
               </h3>
               <ul className="mt-2 space-y-2">
                 {agents.map((row) => (
@@ -241,7 +244,9 @@ export function KbAssignmentsDialog({
           {/* --- Q4: añadir grant a proyecto (el caso común) --- */}
           {!isLoading && (
             <section className="space-y-2" data-testid="kb-add-project-grant">
-              <h3 className="text-sm font-semibold uppercase tracking-wide">Conceder a proyecto</h3>
+              <h3 className="text-sm font-semibold uppercase tracking-wide">
+                {t("grantToProject")}
+              </h3>
               <div className="flex gap-2">
                 <select
                   className="border-input bg-background w-full rounded-md border px-2 py-1.5 text-sm"
@@ -249,7 +254,7 @@ export function KbAssignmentsDialog({
                   onChange={(e) => setNewProjectId(e.target.value)}
                   data-testid="kb-grant-project-select"
                 >
-                  <option value="">Elige un proyecto…</option>
+                  <option value="">{t("chooseProject")}</option>
                   {grantableProjects.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -262,14 +267,14 @@ export function KbAssignmentsDialog({
                   onClick={() => grantProject.mutate(newProjectId)}
                   data-testid="kb-grant-project-submit"
                 >
-                  Conceder
+                  {t("grantAction")}
                 </Button>
               </div>
 
               {/* --- Q4: grants de agente plegados bajo «Avanzado» --- */}
               <details data-testid="kb-add-agent-grant">
                 <summary className="text-muted-foreground cursor-pointer text-xs">
-                  Avanzado: conceder a un agente concreto
+                  {t("advancedAgentGrant")}
                 </summary>
                 <div className="mt-2 flex gap-2">
                   <select
@@ -278,7 +283,7 @@ export function KbAssignmentsDialog({
                     onChange={(e) => setNewAgentId(e.target.value)}
                     data-testid="kb-grant-agent-select"
                   >
-                    <option value="">Elige un agente…</option>
+                    <option value="">{t("chooseAgent")}</option>
                     {grantableAgents.map((a) => (
                       <option key={a.id} value={a.id}>
                         {a.name}
@@ -293,7 +298,7 @@ export function KbAssignmentsDialog({
                     onClick={() => grantAgent.mutate(newAgentId)}
                     data-testid="kb-grant-agent-submit"
                   >
-                    Conceder
+                    {t("grantAction")}
                   </Button>
                 </div>
               </details>
@@ -302,7 +307,7 @@ export function KbAssignmentsDialog({
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cerrar
+            {t("close")}
           </Button>
         </DialogFooter>
       </DialogContent>

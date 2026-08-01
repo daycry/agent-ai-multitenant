@@ -117,10 +117,11 @@ forzado: no se puede obligar al modelo a llamar una tool concreta, y por eso
 `_advertises_submit_result` y `_forces_verdict_choice` están a `False` y el
 contrato de salida del review viaja como prosa + tag (ADR 0086/0087).
 
-El ADR **0150** (`proposed`) recoge esta corrección y pide al operador que
-confirme el estado actual (opción A, mantener el cableado) para poder retirar del
-plan las mitades (a) y (b) de `task_prod07_09`, que hoy destruirían una capacidad
-entregada.
+El ADR **0150** está `accepted` (firmado el 2026-08-01) con la **opción A**: se
+mantiene el cableado. Con eso, las mitades (a) y (b) de `task_prod07_09` —
+bloquear en validación la combinación `tools + claude_sdk` y anunciar la
+limitación en la UI— quedan **retiradas por obsoletas**: implementarlas hoy
+destruiría una capacidad entregada y en producción.
 
 La tabla de credenciales es **dato en un solo sitio**:
 `packages/shared-llm/src/shared_llm/credential_fields.py`
@@ -191,33 +192,55 @@ Lo que SÍ está:
   precios unitarios vigentes y un `cost_usd` calculado, y un precio ausente se
   registra como _unknown_ tipado (`available=False`), **nunca** como un cero falso.
 
-Lo que NO está, y por eso los costes de Ollama/Copilot/Azure pueden seguir
-sumando 0 en `executions.total_cost_usd`:
+- y desde el **2026-08-01** (`task_prod07_13`), `executions.total_cost_usd`
+  **deja de ser el 0 del runtime**. La precedencia la fija
+  `_billable_cost_usd` (`api_server/db/execution_repo.py`), y tiene tres
+  escalones, en este orden y no en otro:
 
-- **`task_prod07_13`** — persistir la suma de los snapshots cuando el runtime
-  reporta 0, y que `budgets/consumption` consuma esa fuente. Requiere decidir
-  entre columna nueva `cost_estimated_usd` (recomendada: conserva la trazabilidad
-  runtime-reportado vs estimado) u override de `total_cost_usd`, y una migración
-  Alembic si se elige la columna.
-- **`task_prod07_14`** — el test e2e que asserta coste > 0 consumido por budgets.
+  | #   | Fuente                                           | Cuándo se usa                                                        |
+  | --- | ------------------------------------------------ | -------------------------------------------------------------------- |
+  | 1   | lo que **reportó el runtime** (`usage.cost_usd`) | siempre que sea > 0 — es lo que el proveedor facturó de verdad       |
+  | 2   | la **suma de los `price_snapshot` preciados**    | el runtime reportó 0 y el catálogo supo preciar al menos una llamada |
+  | 3   | **0**                                            | el catálogo no supo preciar ninguna llamada                          |
 
-`claude_sdk` es hoy el único kind que reporta coste real, así que cualquier cambio
-en `finalize_execution` necesita el test de no-regresión de ese camino.
+  Se aplica en las **dos** vías de escritura, `finalize_execution` (la del
+  worker) y `record_execution` (la de un paso); arreglar sólo una dejaba la otra
+  facturando $0.
+
+`claude_sdk` es hoy el único kind que reporta coste real, así que el escalón 1
+existe sobre todo por él: pisarlo con una estimación sería una regresión, y hay
+un test de no-regresión explícito
+(`test_execution_cost_finalize.py::test_a_cost_reported_by_the_runtime_is_never_overwritten`).
+
+**Dónde se lee la procedencia de la cifra.** No hay columna
+`cost_estimated_usd` — se descartó a propósito (ver `task_prod07_13`): la
+distinción «reportado» vs «estimado» ya vive **por llamada** en `steps_log`,
+donde el `cost_usd` crudo del runtime sigue visible al lado de un
+`price_snapshot` que nombra su `source` y su `price_id`. Una columna lo
+duplicaría y obligaría a cada lector de la cifra facturable a aprender a hacer
+coalesce. Por lo mismo, `budgets/consumption.py` no cambió: sigue sumando
+`total_cost_usd`, que ahora es exacto.
+
+**Lo que un `available=False` significa, y lo que no.** Un precio ausente NO se
+convierte en 0 facturable por la puerta de atrás: si ninguna llamada del run se
+pudo preciar, el coste se queda en 0 y el run queda marcado como no preciado en
+sus snapshots. Es el mismo criterio de integridad del catálogo — «no lo sé»
+nunca se transforma en una factura.
 
 ## 8. Lo que queda de prod-07 (para no dar por hecho lo que no está)
 
 Actualizado el **2026-08-01**. Lo cerrado desde la revisión anterior:
 `task_prod07_05` (la dependencia del asistente es async generator y cierra el
-provider en su `finally`; el WS de voz cierra el suyo) y `task_prod07_12` (el
+provider en su `finally`; el WS de voz cierra el suyo), `task_prod07_12` (el
 casado kind→familia del catálogo tiene por fin test:
-`test_execution_capture.py -k snapshot_provider`).
+`test_execution_capture.py -k snapshot_provider`), **`task_prod07_09`** (el ADR
+0150 se firmó `accepted` con la opción A) y **`task_prod07_13` + `14`** (la
+contabilidad de costes de §7, con su e2e hasta budgets).
 
-| Tarea                   | Estado                                                                                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `task_prod07_09`        | (c) timeout del SDK y (d) ADR 0150 **hechos**; (a)/(b) el bloqueo tools+claude_sdk **no se implementa**: la premisa caducó (ver §4). Espera la decisión del operador en el ADR |
-| `task_prod07_10`        | la credencial sigue viajando dentro de `AGENT_TASK_SPEC` (env del contenedor), no en un mount tmpfs read-only                                                                  |
-| `task_prod07_13` / `14` | ver §7 — el bloqueo real es elegir entre columna nueva (exige migración) u override de `total_cost_usd`                                                                        |
-| `task_prod07_15`        | el Memorizer resuelve por `provider_id` (ADR 0082) pero `_default_llm_factory` sigue cayendo a `OllamaProvider` desde env, y no hay contador de fallos de destilación          |
+| Tarea            | Estado                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_prod07_10` | la credencial sigue viajando dentro de `AGENT_TASK_SPEC` (env del contenedor), no en un mount tmpfs read-only                                                         |
+| `task_prod07_15` | el Memorizer resuelve por `provider_id` (ADR 0082) pero `_default_llm_factory` sigue cayendo a `OllamaProvider` desde env, y no hay contador de fallos de destilación |
 
 ## Relacionado
 

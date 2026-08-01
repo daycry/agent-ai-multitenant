@@ -264,12 +264,19 @@ def test_pipeline_config_roundtrips_via_to_dict() -> None:
 
 
 def test_check_crash_fail_open_by_default() -> None:
-    # D5: un check que revienta NO tumba el pipeline — por defecto (warn) el
-    # error se registra como outcome no disparado con detalle.
+    # D5: un check que revienta NO tumba el pipeline ni bloquea la llamada — por
+    # defecto (warn, para un guardrail no-locked) el error sale como outcome con
+    # acción `warn`, que es advisory: `decision.allowed` sigue siendo True.
+    #
+    # prod-03 task_prod03_09: hasta el 2026-08-01 el outcome salía SIN disparar,
+    # y como `record_pipeline_decision` solo persiste los disparados, un check
+    # roto no dejaba rastro en ningún sitio. Fail-open sí; invisible no. El
+    # criterio de aceptación del propio ADR 0102 lo decía así («uno no-locked
+    # produce warn») y el plan también.
     from shared_guardrails.config import parse_config
     from shared_guardrails.pipeline import GuardrailPipeline
     from shared_guardrails.registry import GuardrailRegistry
-    from shared_guardrails.types import GuardrailContext
+    from shared_guardrails.types import Action, GuardrailContext
 
     registry = GuardrailRegistry()
 
@@ -280,8 +287,8 @@ def test_check_crash_fail_open_by_default() -> None:
     registry.register("boom", lambda config: _Boom())
     pipeline = GuardrailPipeline(parse_config({"pre_tool": [{"type": "boom"}]}), registry=registry)
     decision = pipeline.run(GuardrailContext(hook="pre_tool", tool_name="x"))
-    assert decision.triggered is False
-    assert decision.outcomes[0].triggered is False
+    assert decision.allowed is True
+    assert decision.action == Action.WARN
     assert "modelo caído" in str(decision.outcomes[0].detail)
 
 

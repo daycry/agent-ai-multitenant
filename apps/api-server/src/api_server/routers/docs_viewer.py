@@ -39,11 +39,9 @@ derives it from ``settings.data_root`` via
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +73,8 @@ from api_server.docs_viewer.service import (
     search_docs,
     semantic_search_docs,
 )
-from api_server.ingestion.embeddings import Embedder, OllamaEmbedder
+from api_server.ingestion.embed_client import shared_ollama_embedder
+from api_server.ingestion.embeddings import Embedder
 from api_server.routers._helpers import require_tenant_id
 
 router = APIRouter(prefix="/projects/{project_id}/docs", tags=["docs-viewer"])
@@ -124,36 +123,6 @@ def get_docs_repo_resolver() -> DocsRepoResolver:
     return _resolve
 
 
-@lru_cache(maxsize=1)
-def get_shared_embed_client() -> httpx.AsyncClient:
-    """El cliente httpx COMPARTIDO de proceso contra Ollama (perf-9).
-
-    Mismo patrón que :func:`api_server.auth.deps.get_redis`: singleton perezoso
-    cacheado, reseteable en tests. Antes, cada request de búsqueda construía un
-    ``OllamaEmbedder()`` nuevo y con él un ``httpx.AsyncClient`` nuevo — un
-    handshake TCP (y TLS, si Ollama está detrás de proxy) por búsqueda, y un
-    pool de conexiones que nacía y moría sin reutilizar nada. Con un cliente
-    único el keep-alive hacia Ollama sobrevive entre requests.
-
-    El timeout es el mismo que el default de ``OllamaEmbedder`` (60 s): embeber
-    un lote grande es lento y el que manda aquí es el modelo, no la red.
-    """
-    return httpx.AsyncClient(
-        timeout=60.0,
-        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-    )
-
-
-def reset_shared_embed_client_cache() -> None:
-    """Test hook: olvida el cliente cacheado (espejo de ``reset_redis_cache``).
-
-    NO lo cierra: cerrarlo pide un `await` y este hook se llama desde el
-    `finally` síncrono de las fixtures. El cliente huérfano lo recoge el GC junto
-    con su bucle de eventos.
-    """
-    get_shared_embed_client.cache_clear()
-
-
 async def get_query_embedder() -> AsyncIterator[Embedder]:
     """Provide the query embedder for semantic search (overridable in tests).
 
@@ -168,7 +137,7 @@ async def get_query_embedder() -> AsyncIterator[Embedder]:
     :class:`~api_server.ingestion.embeddings.HashEmbedder` so no network /
     running Ollama is required (it is down in CI).
     """
-    yield OllamaEmbedder(client=get_shared_embed_client())
+    yield shared_ollama_embedder()
 
 
 async def _require_visible_project(session: AsyncSession, project_id: UUID) -> None:

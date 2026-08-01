@@ -54,6 +54,7 @@ text / draft in — so the dependency arrow points inward.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -79,6 +80,14 @@ from api_server.guardrails.events import (
 # row supports exactly this — see api_server.db.guardrail_event).
 AGENT_LABEL_CHAT = "planning_chat"
 AGENT_LABEL_GENERATION = "plan_generation"
+
+# prod-03 task_prod03_10 (guardrails-10): tope del texto que se escanea en un
+# hook. El detector genérico de `secret_leakage` es lineal-cuadrático en el peor
+# caso, y aquí el texto lo escribe un humano en un chat: nada impide pegar un
+# fichero entero. Mismo criterio y mismo tamaño que el truncado D6 del runtime
+# (`agent_runtime.guardrails._HOOK_INPUT_MAX`), para que el mismo texto se trate
+# igual a los dos lados de la plataforma.
+MAX_SCANNED_CHARS = 50_000
 
 # The default planning topics the conversation must touch — the "topic
 # adherence" baseline. Cues are deliberately broad (es + en) so on-topic
@@ -239,6 +248,31 @@ def build_plan_structure_pipeline(
     )
 
 
+def _bounded_input(text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Acota el texto que verá el motor y ANOTA si se recortó.
+
+    La anotación no es cosmética: un escaneo parcial que se presenta como
+    completo es peor que no escanear, porque el evento resultante («no se
+    encontró ningún secreto») se lee como una garantía que no se dio. La marca
+    viaja en el `metadata` del contexto y, por tanto, al evento persistido.
+    """
+    if len(text) <= MAX_SCANNED_CHARS:
+        return text, metadata
+    return text[:MAX_SCANNED_CHARS], {**metadata, "truncated": True}
+
+
+async def _run_off_loop(pipeline: GuardrailPipeline, context: GuardrailContext) -> PipelineDecision:
+    """Corre el motor (síncrono y CPU-bound) FUERA del hilo del event loop.
+
+    task_prod03_10 / guardrails-10. `GuardrailPipeline.run` hace regex, entropía
+    y `ast.parse`; ejecutarlo aquí dentro congelaría todas las conexiones del
+    api-server —cada WebSocket, cada request en vuelo— mientras dura el escaneo.
+    El motor es puro (sin I/O, sin sesión de BD), así que sacarlo a un hilo es
+    seguro por construcción: no toca nada compartido.
+    """
+    return await asyncio.to_thread(pipeline.run, context)
+
+
 async def run_planning_chat_guardrails(
     session: AsyncSession,
     *,
@@ -264,13 +298,16 @@ async def run_planning_chat_guardrails(
         if pipeline is not None
         else build_planning_chat_pipeline(allowed_topics=allowed_topics)
     )
+    scanned, metadata = _bounded_input(
+        text, {"tenant_id": str(tenant_id), "source": AGENT_LABEL_CHAT}
+    )
     context = GuardrailContext(
         hook=hook,
-        prompt=text if hook == "pre_llm" else None,
-        response=text if hook == "post_llm" else None,
-        metadata={"tenant_id": str(tenant_id), "source": AGENT_LABEL_CHAT},
+        prompt=scanned if hook == "pre_llm" else None,
+        response=scanned if hook == "post_llm" else None,
+        metadata=metadata,
     )
-    decision = pipe.run(context)
+    decision = await _run_off_loop(pipe, context)
     await record_pipeline_decision(
         session,
         decision,
@@ -333,12 +370,12 @@ async def gate_generate_plan(
     it — no bespoke structural code here.
     """
     pipe = pipeline if pipeline is not None else build_plan_structure_pipeline(schema=schema)
-    context = GuardrailContext(
-        hook="post_llm",
-        response=json.dumps(draft, ensure_ascii=False, default=str),
-        metadata={"tenant_id": str(tenant_id), "source": AGENT_LABEL_GENERATION},
+    scanned, metadata = _bounded_input(
+        json.dumps(draft, ensure_ascii=False, default=str),
+        {"tenant_id": str(tenant_id), "source": AGENT_LABEL_GENERATION},
     )
-    decision = pipe.run(context)
+    context = GuardrailContext(hook="post_llm", response=scanned, metadata=metadata)
+    decision = await _run_off_loop(pipe, context)
     await record_pipeline_decision(
         session,
         decision,

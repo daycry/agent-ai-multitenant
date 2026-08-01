@@ -19,6 +19,7 @@ Lo que se fija:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -51,6 +52,49 @@ def _now() -> datetime:
 
 
 _NOW = datetime(2026, 7, 29, 12, 0, 0, tzinfo=UTC)
+
+#: Los platform settings que este fichero escribe. Ver `_fresh_setting_cache`.
+_CACHED_SETTING_KEYS: tuple[str, ...] = (
+    "approval_expiry_enabled",
+    "approval.timeout_hours",
+)
+
+
+@pytest.fixture(autouse=True)
+def _redis_client_bound_to_this_loop() -> Iterator[None]:
+    """Rebindea el cliente Redis al event loop de ESTE test.
+
+    `api_server.auth.deps.get_redis` es `lru_cache`, así que devuelve un cliente
+    cuyo pool quedó atado al loop del test ANTERIOR — que `pytest-asyncio` ya
+    cerró. La primera operación Redis del test nuevo revienta con
+    `RuntimeError: Event loop is closed`… y `invalidate_platform_setting_cache`
+    se la traga, porque es best-effort por diseño (un Redis caído no puede
+    tumbar una lectura de settings). Resultado: la purga de caché fallaba EN
+    SILENCIO justo la primera vez, que es la que importaba, y el sweep del test
+    siguiente leía el `approval_expiry_enabled=False` del kill-switch.
+    `reset_redis_cache()` es la palanca que la app expone para esto.
+    """
+    from api_server.auth.deps import reset_redis_cache
+
+    reset_redis_cache()
+    yield
+    reset_redis_cache()
+
+
+async def _forget_setting_cache(*keys: str) -> None:
+    """Purga la caché Redis de los settings que este fichero escribe o trunca.
+
+    `get_platform_setting` sirve de una caché con TTL 30 s desde prod-13
+    (task_prod13_21). El `TRUNCATE platform_settings` del seed borra la fila
+    pero NO la caché, así que sin esto el valor de un test se filtra al
+    siguiente: el `approval_expiry_enabled=False` del kill-switch sobrevivía al
+    truncado y el sweep siguiente se saltaba la pasada entera con
+    `reason=disabled`. Dos rojos a distancia, en tests que no tocan ese setting.
+    """
+    from api_server.db.platform_settings import invalidate_platform_setting_cache
+
+    for key in keys or _CACHED_SETTING_KEYS:
+        await invalidate_platform_setting_cache(key)
 
 
 @pytest.fixture()
@@ -90,6 +134,10 @@ async def _seed_tenant(
         "execution": uuid4(),
         "request": uuid4(),
     }
+    if truncate:
+        # La caché tiene que quedar vacía cuando la tabla lo esté: el TRUNCATE
+        # borra las filas de `platform_settings` pero no las claves de Redis.
+        await _forget_setting_cache()
     async with sm() as s, s.begin():
         if truncate:
             await s.execute(
@@ -147,8 +195,15 @@ async def _seed_tenant(
 
 
 async def _set_setting(sm: async_sessionmaker, key: str, value: Any) -> None:
+    """Escribe el platform setting **y purga su caché**, como hace producción.
+
+    El escritor real (`set_platform_setting`) invalida la caché dos veces —antes
+    del flush y tras el commit—; este helper escribía la fila a pelo y se saltaba
+    las dos.
+    """
     async with sm() as s, s.begin():
         s.add(PlatformSetting(key=key, value=value))
+    await _forget_setting_cache(key)
 
 
 @pytest.mark.asyncio
@@ -330,6 +385,7 @@ async def test_a_nonsense_timeout_setting_falls_back_instead_of_expiring_everyth
                 text("UPDATE platform_settings SET value = '\"gato\"'::jsonb WHERE key = :k"),
                 {"k": "approval.timeout_hours"},
             )
+        await _forget_setting_cache("approval.timeout_hours")
 
         async with sm() as s:
             # Un valor no numérico cae al default documentado, no explota.

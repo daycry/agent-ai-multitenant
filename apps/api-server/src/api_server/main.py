@@ -63,6 +63,7 @@ from api_server.routers.eval_quality import router as eval_quality_router
 from api_server.routers.evals import router as evals_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.guardrail_alerts import router as guardrail_alerts_router
+from api_server.routers.guardrail_configs import router as guardrail_configs_router
 from api_server.routers.guardrail_events import router as guardrail_events_router
 from api_server.routers.health import router as health_router
 from api_server.routers.human_agents import router as human_agents_router
@@ -117,6 +118,7 @@ from api_server.routers.tenant_stats import router as tenant_stats_router
 from api_server.routers.tools import router as tools_router
 from api_server.routers.tools_diagnostic import router as tools_diagnostic_router
 from api_server.routers.ws import router as ws_router
+from api_server.routing_introspection import route_paths
 from api_server.telemetry import configure_tracing, instrument_fastapi
 from api_server.telemetry.setup import add_console_exporter
 
@@ -224,7 +226,12 @@ def _is_admin_surface(router: APIRouter) -> bool:
     it would leave the admin routes open. It raises at import time — loudly, at
     startup — instead of silently picking either failure.
     """
-    paths = [str(getattr(route, "path", "")) for route in router.routes]
+    # `route_paths`, no `router.routes` a pelo: desde FastAPI 0.141 un router
+    # compuesto de sub-routers presenta `_IncludedRouter` sin `.path`, así que
+    # el idioma directo vería la lista vacía, devolvería False y montaría el
+    # router administrativo SIN esta guarda. En silencio. Ver
+    # `routing_introspection` para el detalle.
+    paths = sorted(route_paths(router))
     admin = [p for p in paths if p == _ADMIN_PREFIX or p.startswith(f"{_ADMIN_PREFIX}/")]
     if not admin:
         return False
@@ -321,6 +328,7 @@ def _register_routers(app: FastAPI) -> None:
         notifications_router,
         guardrail_events_router,
         guardrail_alerts_router,
+        guardrail_configs_router,
         incoming_webhooks_router,
         incoming_webhook_configs_router,
         assistant_router,

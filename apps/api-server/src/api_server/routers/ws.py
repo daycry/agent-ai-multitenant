@@ -67,11 +67,11 @@ from api_server.db.conversation import Conversation
 from api_server.db.domain import Execution, Project
 from api_server.db.knowledge import Document
 from api_server.events import (
-    EVENTS_STREAM,
     PLANS_STREAM,
     conversation_stream_key,
     document_stream_key,
     execution_stream_key,
+    project_task_events_stream,
 )
 
 _log = structlog.get_logger("api_server.ws")
@@ -461,9 +461,15 @@ async def kanban_stream(
 ) -> None:
     """Stream a project's task transitions — only to a member of its tenant.
 
-    The kanban stream is the single global EVENTS_STREAM, so it is scoped
-    both by `project_id` and by the caller's `tenant_id` (defence in depth;
-    project ids are globally-unique UUIDs already).
+    Lee el stream POR PROYECTO (`events:tasks:{project_id}`, task_prod13_19) y
+    ya no el global: antes cada socket del tablero recibía por la red los
+    eventos de todos los proyectos de la plataforma para descartar en Python los
+    que no eran suyos, de modo que el tráfico de un tablero crecía con la
+    actividad ajena (perf-5).
+
+    El filtro por `tenant_id` se mantiene aunque el stream ya sea de un solo
+    proyecto: es defensa en profundidad barata sobre la ÚNICA propiedad que
+    importa aquí, y sobrevive a que alguien publique en la clave equivocada.
     """
     await ws.accept()
     authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
@@ -477,8 +483,8 @@ async def kanban_stream(
     await _pump(
         ws,
         redis,
-        EVENTS_STREAM,
-        project_filter=project_id,
+        project_task_events_stream(project_id),
+        project_filter=None,
         sessions=sessions,
         principal=principal,
         token=token,

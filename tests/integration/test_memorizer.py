@@ -391,3 +391,106 @@ async def test_duplicate_content_across_runs_is_deduped(
     finally:
         await conn.close()
     assert n == 1
+
+
+# ---------------------------------------------------------------------------
+# prod-07 task_prod07_15 (llm-10) — el fallback del destilador SALE DEL CATÁLOGO
+# ---------------------------------------------------------------------------
+# El hallazgo: `_default_llm_factory` construía `OllamaProvider` directamente
+# desde `WORKERS_MEMORIZER_LLM_BASE_URL` (default `http://localhost:11434/v1`),
+# incumpliendo la precedencia «fila de BD > env» que el resto de la plataforma
+# respeta. Con ollama-local desactivado (el estado operativo real desde el ADR
+# 0056) esa URL no responde y la memorización muere en silencio: el run termina
+# `ok`, no se persiste nada y nadie se entera.
+#
+# El camino PRIMARIO (el provider del agente por `provider_id`, ADR 0082) ya
+# estaba; lo que no estaba era el fallback. Estos tests fijan las dos mitades de
+# la precedencia — con fila activa gana la fila, sin fila gana el env.
+_CATALOG_BASE_URL = "http://catalog-ollama.internal:11434/v1"
+_ENV_BASE_URL = "http://localhost:11434/v1"
+
+
+async def _insert_ollama_provider(dsn: str, *, base_url: str, is_active: bool) -> None:
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute("DELETE FROM llm_providers WHERE kind = 'ollama'")
+        await conn.execute(
+            "INSERT INTO llm_providers (id, kind, slug, display_name, base_url, config,"
+            " is_active) VALUES ($1, 'ollama', $2, 'Ollama del catálogo', $3, '{}'::jsonb, $4)",
+            uuid4(),
+            f"ollama-{uuid4().hex[:8]}",
+            base_url,
+            is_active,
+        )
+    finally:
+        await conn.close()
+
+
+def _env_only_factory(settings: Any) -> Any:
+    """El `_default_llm_factory` de siempre: env y nada más."""
+    from shared_llm.providers.ollama import OllamaProvider
+
+    return OllamaProvider(base_url=_ENV_BASE_URL, default_model=settings.memorizer_llm_model)
+
+
+async def _pick_distiller_base_url(app_database_url: str) -> str:
+    """El `base_url` del provider que `_select_distiller` elige como fallback."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from workers.config import get_settings
+    from workers.memorizer import _select_distiller
+
+    settings = get_settings()
+    engine = create_async_engine(app_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        provider, _model = await _select_distiller(
+            sm,
+            # Un agente SIN modelo pineado y sin proyecto: la cadena del ADR
+            # 0082 no resuelve, así que se cae al fallback — que es lo que este
+            # test mide.
+            {"id": uuid4(), "model_config": {}},
+            settings=settings,
+            llm_factory=_env_only_factory,
+            project=None,
+        )
+        try:
+            return str(getattr(provider, "base_url", ""))
+        finally:
+            await provider.aclose()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_resolution_prefers_the_active_catalog_row(
+    schema_at_head, migrations_pg_dsn: str, app_database_url: str
+) -> None:
+    """Con una fila `ollama` ACTIVA, el destilador habla con ella, no con el env."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    await _insert_ollama_provider(migrations_pg_dsn, base_url=_CATALOG_BASE_URL, is_active=True)
+
+    base_url = await _pick_distiller_base_url(app_database_url)
+
+    assert _CATALOG_BASE_URL in base_url, (
+        "el destilador siguió yendo al Ollama del env: con ollama-local apagado "
+        "la memorización muere en silencio (llm-10)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_resolution_falls_back_to_env_without_an_active_row(
+    schema_at_head, migrations_pg_dsn: str, app_database_url: str
+) -> None:
+    """Sin fila activa, el env sigue mandando: la precedencia es «fila > env»,
+    no «catálogo o nada». Una fila DESACTIVADA no cuenta — si contara, apagar
+    un proveedor no lo apagaría."""
+    from tests.integration.conftest import _grant_app_user_existing_tables
+
+    await _grant_app_user_existing_tables()
+    await _insert_ollama_provider(migrations_pg_dsn, base_url=_CATALOG_BASE_URL, is_active=False)
+
+    base_url = await _pick_distiller_base_url(app_database_url)
+
+    assert _ENV_BASE_URL in base_url

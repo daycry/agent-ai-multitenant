@@ -8,6 +8,11 @@
  * categorías (crear, editar, borrar) vive en
  * `/admin/knowledge-bases/categories`. Desde Crear/Editar hay un atajo
  * "+ Nueva" que abre un mini-dialog inline sin salir del flujo.
+ *
+ * prod-16 `task_prod16_04` + `task_prod16_08`: la pantalla está migrada al
+ * diccionario (`useT("knowledgeBases")`) y sus piezas viven en secciones
+ * colocadas — `kb-row`, `kb-form-dialogs`, `kb-danger-dialogs`,
+ * `kb-category-select` — en vez de en un `kb-sections.tsx` de 782 líneas.
  */
 
 import { useMemo, useState } from "react";
@@ -20,13 +25,19 @@ import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { KbAssignmentsDialog } from "./kb-assignments-dialog";
-import { KbCreateDialog, KbDeleteDialog, KbEditDialog, KbGrantDialog, KbRow } from "./kb-sections";
+import { KbDeleteDialog, KbGrantDialog } from "./kb-danger-dialogs";
+import { KbCreateDialog, KbEditDialog } from "./kb-form-dialogs";
+import { KbRow } from "./kb-row";
 import { groupByCategory, type KbCategory, type KnowledgeBase } from "./kb-types";
 
 export default function KnowledgeBasesPage() {
+  const t = useT("knowledgeBases");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<KnowledgeBase | null>(null);
@@ -56,32 +67,36 @@ export default function KnowledgeBasesPage() {
     void queryClient.invalidateQueries({ queryKey: ["kb-categories"] });
   }
 
-  const grouped = useMemo(() => groupByCategory(kbs, categories), [kbs, categories]);
+  const uncategorized = t("uncategorized");
+  const grouped = useMemo(
+    () => groupByCategory(kbs, categories, uncategorized),
+    [kbs, categories, uncategorized],
+  );
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8" data-testid="kbs-page">
       <Breadcrumb
         items={[
-          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
-          { label: "Knowledge Bases" },
+          { label: t("home"), href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
+          { label: t("title") },
         ]}
       />
       <PageHeader
         icon={<Library className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Knowledge Bases"
-        description="Bases de conocimiento del tenant. Cada KB agrupa documentos indexados y se asigna (grant) a uno o más proyectos."
+        title={t("title")}
+        description={t("description")}
         actions={
           <RoleGuard min="tenant_admin">
             <div className="flex flex-row items-center gap-2">
               <Button asChild variant="outline" data-testid="kbs-categories-link">
                 <Link href="/admin/knowledge-bases/categories">
                   <Tag className="mr-1 h-4 w-4" />
-                  Categorías
+                  {t("categoriesLink")}
                 </Link>
               </Button>
               <Button onClick={() => setCreateOpen(true)} data-testid="kbs-create-button">
                 <Plus className="mr-1 h-4 w-4" />
-                Crear KB
+                {t("createButton")}
               </Button>
             </div>
           </RoleGuard>
@@ -90,15 +105,18 @@ export default function KnowledgeBasesPage() {
 
       <div className="mt-6">
         {kbsQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm">Cargando KBs…</p>
+          <p className="text-muted-foreground text-sm">{t("loading")}</p>
         ) : kbsQuery.isError ? (
           <Card>
             <CardHeader>
-              <CardTitle>Error</CardTitle>
+              <CardTitle>{t("errorTitle")}</CardTitle>
             </CardHeader>
             <CardContent>
+              {/* prod-16 `task_prod16_05`: `errorText` humaniza el `detail` del
+                  backend. Antes esto pintaba `error.body` CRUDO, así que un 502
+                  de nginx o un traceback acababan en pantalla. */}
               <p className="text-destructive text-sm" data-testid="kbs-error">
-                {kbsQuery.error instanceof ApiError ? kbsQuery.error.body : String(kbsQuery.error)}
+                {errorText(kbsQuery.error)}
               </p>
             </CardContent>
           </Card>
@@ -106,7 +124,7 @@ export default function KnowledgeBasesPage() {
           <Card>
             <CardContent className="py-10 text-center">
               <p className="text-muted-foreground text-sm" data-testid="kbs-empty">
-                Aún no hay KBs en este tenant. Crea la primera para empezar a indexar documentos.
+                {t("empty")}
               </p>
             </CardContent>
           </Card>
@@ -114,7 +132,7 @@ export default function KnowledgeBasesPage() {
           <div className="space-y-6" data-testid="kbs-list">
             {grouped.map((group) => (
               <section key={group.key} data-testid={`kb-group-${group.key}`}>
-                <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                <h2 className="text-muted-foreground mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
                   {group.category && (
                     <span
                       className="inline-block h-2.5 w-2.5 rounded-full"

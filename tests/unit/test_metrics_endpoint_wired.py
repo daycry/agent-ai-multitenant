@@ -13,6 +13,7 @@ scrape de Prometheus seguiría un redirect en cada pasada.
 from __future__ import annotations
 
 import pytest
+from api_server.routing_introspection import route_paths
 
 pytestmark = pytest.mark.unit
 
@@ -25,7 +26,7 @@ def real_app():
 
 
 def test_metrics_route_is_registered_on_the_real_app(real_app) -> None:
-    paths = {getattr(route, "path", None) for route in real_app.routes}
+    paths = route_paths(real_app)
 
     assert "/metrics" in paths, (
         "create_app() no registró /metrics: Prometheus no tendrá target para el "
@@ -35,7 +36,7 @@ def test_metrics_route_is_registered_on_the_real_app(real_app) -> None:
 
 def test_metrics_does_not_shadow_the_authenticated_inbox_metrics(real_app) -> None:
     """El ``/inbox/metrics`` JSON autenticado es OTRO endpoint y debe seguir vivo."""
-    paths = {getattr(route, "path", None) for route in real_app.routes}
+    paths = route_paths(real_app)
 
     assert "/inbox/metrics" in paths
 

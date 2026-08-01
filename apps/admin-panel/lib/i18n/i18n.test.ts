@@ -131,6 +131,30 @@ describe("dictionary — invariantes", () => {
       "modelPrices.fieldInput",
       "modelPrices.fieldOutput",
       "modelPrices.fieldContextWindow",
+      // prod-16 `task_prod16_04` — knowledge-bases. Cuatro familias, todas
+      // deliberadas: el nombre del módulo ("Knowledge Bases", que el panel ya
+      // escribía en inglés en castellano y que `nav.knowledgeBases` tiene por la
+      // misma razón), la jerga del dominio que el backend y los logs usan sin
+      // traducir ("Grant", "Built-in", "Tenant", "Slug", "KB:"), "Error" y
+      // "Color", que se escriben igual, e "irreversible", también.
+      "knowledgeBases.title",
+      "knowledgeBases.errorTitle",
+      "knowledgeBases.builtinBadge",
+      "knowledgeBases.grant",
+      "knowledgeBases.categoryGroupBuiltin",
+      "knowledgeBases.categoryGroupTenant",
+      "knowledgeBases.slugLabel",
+      "knowledgeBases.colorLabel",
+      "knowledgeBases.deleteDescriptionStrong",
+      "knowledgeBases.grantKbPrefix",
+      "knowledgeBases.docStatusFailed",
+      "kbCategories.kbsCrumb",
+      "kbCategories.errorTitle",
+      "kbCategories.builtinSection",
+      "kbCategories.tenantSection",
+      "kbCategories.builtinBadge",
+      "kbCategories.slugLabel",
+      "kbCategories.colorLabel",
     ]);
 
     const identical = new Set(

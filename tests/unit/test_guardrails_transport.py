@@ -9,7 +9,6 @@ configuradas no se emite la clave (el runtime cae a su baseline LOG).
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -41,60 +40,25 @@ def test_agent_spec_omits_empty_guardrails() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolver_merges_platform_and_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    platform_cfg = {
-        "guardrails": {
-            "post_tool": [{"type": "prompt_injection", "action": "block", "locked": True}]
-        }
-    }
-
-    async def _platform(session: Any) -> dict[str, Any]:
-        return platform_cfg
-
-    monkeypatch.setattr("api_server.db.platform_settings.get_guardrails_config", _platform)
-
-    class _Project:
-        def __init__(self) -> None:
-            self.guardrails_config = {
-                "guardrails": {"pre_tool": [{"type": "keyword", "action": "warn"}]}
-            }
-
-    resolved = await _resolve_effective_guardrails(object(), _Project())
-    assert resolved is not None
-    hooks = resolved["guardrails"]
-    # Ambas capas presentes en el resultado fusionado.
-    assert hooks["post_tool"][0]["type"] == "prompt_injection"
-    assert hooks["post_tool"][0]["locked"] is True
-    assert hooks["pre_tool"][0]["type"] == "keyword"
-
-
-@pytest.mark.asyncio
-async def test_resolver_locked_platform_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _platform(session: Any) -> dict[str, Any]:
-        return {
-            "guardrails": {
-                "post_tool": [{"type": "prompt_injection", "action": "block", "locked": True}]
-            }
-        }
-
-    monkeypatch.setattr("api_server.db.platform_settings.get_guardrails_config", _platform)
-
-    class _Project:
-        # El proyecto intenta RELAJAR el check locked de plataforma → ignorado.
-        def __init__(self) -> None:
-            self.guardrails_config = {
-                "guardrails": {"post_tool": [{"type": "prompt_injection", "action": "warn"}]}
-            }
-
-    resolved = await _resolve_effective_guardrails(object(), _Project())
-    assert resolved is not None
-    assert resolved["guardrails"]["post_tool"][0]["action"] == "block"
-
-
-@pytest.mark.asyncio
-async def test_resolver_none_when_no_layers(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _platform(session: Any) -> dict[str, Any]:
-        return {}
-
-    monkeypatch.setattr("api_server.db.platform_settings.get_guardrails_config", _platform)
+async def test_resolver_none_when_there_is_no_project() -> None:
+    """Sin proyecto no hay capas que resolver: el runtime cae a su baseline."""
     assert await _resolve_effective_guardrails(object(), None) is None
+
+
+@pytest.mark.asyncio
+async def test_resolver_degrades_to_the_baseline_instead_of_breaking_the_dispatch() -> None:
+    """Contrato best-effort: un fallo resolviendo NUNCA tumba un run.
+
+    Se le pasa un proyecto de mentira sobre una sesión que no lo es; el
+    resolvedor tiene que devolver ``None`` (baseline del runtime) en vez de
+    propagar. Es la mitad del contrato que se puede fijar sin base de datos: la
+    fusión de las TRES capas se prueba contra PostgreSQL en
+    `tests/integration/test_dispatch_guardrail_config.py`, que es donde de
+    verdad se lee la tabla `guardrail_configs` (la capa TENANT no es
+    observable con un monkeypatch de la capa de plataforma).
+    """
+
+    class _NotAProject:
+        pass
+
+    assert await _resolve_effective_guardrails(object(), _NotAProject()) is None

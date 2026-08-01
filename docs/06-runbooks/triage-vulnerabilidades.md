@@ -2,7 +2,7 @@
 title: Triage de vulnerabilidades y política de excepciones
 docs_language: es
 audience: operador, tech lead, desarrollador
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 # Triage de vulnerabilidades y política de excepciones
@@ -219,6 +219,14 @@ el backlog heredado. Para flipearlo hacen falta **dos pasos, ambos humanos**:
    divulgación no autenticada de Server Functions) **está cerrada**; quedan 2
    avisos `high` sin fix dentro de 14.x. `npm audit fix --force` propondría
    `next@16`: no se ejecuta a ciegas.
+
+   **Re-medido el 2026-08-01: resultado idéntico**, con npm nombrando ya la
+   versión concreta (`next@16.2.12`, «which is a breaking change»). Es la tercera
+   medición con el mismo resultado, así que **no vuelvas a medirla**: la
+   condición de salida está escrita en
+   [cadena-suministro.md §4](../04-reference/cadena-suministro.md) y es
+   `--audit-level=high` en exit 0 en las dos superficies. Un parche nuevo de
+   14.2.x **no la cumple** — el rango vulnerable abarca toda la línea 14.
 
 2. **Quitar el `continue-on-error`** del job en `.github/workflows/ci.yml` y
    añadir `SCA (pip-audit + npm audit)` a los **checks requeridos de branch

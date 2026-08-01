@@ -35,6 +35,7 @@ Scope mapping for AI agents:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -217,6 +218,83 @@ async def _build_agent_llm(
     return provider, str(model)
 
 
+async def _catalog_fallback_llm(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    settings: Settings,
+) -> tuple[LLMProvider, str] | None:
+    """El fallback resuelto por el CATÁLOGO `llm_providers` (prod-07, llm-10).
+
+    La precedencia de la plataforma es **fila de BD > env** (ver
+    ``factory_resolver``), y el Memorizer era la excepción: su fallback
+    construía ``OllamaProvider`` directamente desde
+    ``WORKERS_MEMORIZER_LLM_BASE_URL`` (default ``http://localhost:11434/v1``).
+    Con ollama-local desactivado —el estado operativo real desde el ADR 0056—
+    esa URL no responde, la destilación falla y **la memorización muere en
+    silencio**: el run termina `ok` y no se persiste nada.
+
+    Resuelve la fila ACTIVA más nueva de kind ``ollama`` (la misma regla que el
+    dispatch) con su credencial de Vault. Devuelve ``None`` —y el caller cae al
+    env— cuando no hay fila activa, cuando el kind no se puede construir o ante
+    cualquier fallo: nunca propaga, porque un Vault con hipo no puede dejar sin
+    memoria a la plataforma cuando existe un Ollama local que sí responde.
+    """
+    try:
+        from api_server.llm_providers.factory import build_provider_from_kind
+        from api_server.llm_providers.factory_resolver import resolve_provider_config
+
+        from workers.execution import _default_vault_store
+
+        async with sessionmaker() as session:
+            resolved = await resolve_provider_config(
+                session, "ollama", vault=_default_vault_store()
+            )
+        if resolved is None:
+            return None
+        model = settings.memorizer_llm_model
+        provider = build_provider_from_kind(
+            "ollama",
+            base_url=resolved.base_url,
+            secret=resolved.secret,
+            model=model,
+        )
+    except Exception as exc:
+        _log.warning("memorizer.catalog_fallback_unavailable", error=str(exc))
+        return None
+    if provider is None:
+        return None
+    _log.info("memorizer.distill_fallback", reason="catalog_row", source="llm_providers")
+    return provider, model
+
+
+async def _record_distill_streak(settings: Settings, *, cause: str | None) -> None:
+    """Anota en Redis si esta destilación falló, para la métrica de la racha.
+
+    Abre y cierra su propio cliente: el Memorizer corre una vez por ejecución,
+    no en bucle, y arrastrar un cliente por toda la tarea para un `INCR` sería
+    peor negocio. Todo el camino es best-effort — un Redis caído no puede
+    convertir en fallo un run que memorizó bien.
+    """
+    from workers.memorizer_metrics import is_distillation_failure, record_distillation_outcome
+
+    failed = is_distillation_failure(cause)
+    if failed:
+        _log.error("memorizer.distillation_failed", cause=cause)
+    try:
+        from redis.asyncio import Redis
+
+        redis = Redis.from_url(settings.broker_url)
+        try:
+            streak = await record_distillation_outcome(redis, ok=not failed)
+        finally:
+            with contextlib.suppress(Exception):
+                await redis.aclose()
+    except Exception as exc:  # — observabilidad, nunca el trabajo
+        _log.warning("memorizer.metrics_unavailable", error=str(exc))
+        return
+    if failed and streak:
+        _log.error("memorizer.distillation_failure_streak", consecutive=streak)
+
+
 async def _select_distiller(
     sessionmaker: async_sessionmaker[AsyncSession],
     agent: Mapping[str, Any],
@@ -225,12 +303,21 @@ async def _select_distiller(
     llm_factory: LLMFactory,
     project: Mapping[str, Any] | None = None,
 ) -> tuple[LLMProvider, str]:
-    """El (provider, etiqueta-de-modelo) con el que destilar (F2.1): el del
-    agente si está habilitado y disponible; si no, el fallback local."""
+    """El (provider, etiqueta-de-modelo) con el que destilar (F2.1).
+
+    Tres escalones, en este orden: el provider del AGENTE de la execution
+    (``provider_id``, ADR 0082) → la fila ACTIVA del catálogo para ``ollama``
+    (prod-07 llm-10) → el env del worker. El escalón del medio es el que
+    faltaba, y su ausencia hacía que apagar ollama-local matase la memoria sin
+    ruido.
+    """
     if settings.memorizer_use_agent_provider:
         built = await _build_agent_llm(sessionmaker, agent, project=project)
         if built is not None:
             return built
+    from_catalog = await _catalog_fallback_llm(sessionmaker, settings)
+    if from_catalog is not None:
+        return from_catalog
     return llm_factory(settings), settings.memorizer_llm_model
 
 
@@ -352,6 +439,12 @@ async def _memorize_execution_async(  # noqa: PLR0911
         finally:
             await llm.aclose()
         candidates = distillation.candidates
+
+        # prod-07 llm-10: la racha de fallos del destilador, VISIBLE. Esta tarea
+        # se traga sus excepciones para no tumbar el pipeline, así que sin este
+        # contador un proveedor caído se manifiesta como «nadie aprende nada» y
+        # nada más. Best-effort: nunca altera el resultado de la memorización.
+        await _record_distill_streak(settings, cause=distillation.cause)
 
         if not candidates:
             # F2.3: persistir la CAUSA real (llm_error / llm_unparseable /

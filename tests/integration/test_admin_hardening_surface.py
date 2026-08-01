@@ -39,6 +39,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from api_server.routing_introspection import iter_routes
 from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, APIWebSocketRoute
@@ -98,7 +99,7 @@ def _dependency_names(dependant: Dependant) -> set[str]:
 def _admin_routes(app: FastAPI) -> list[tuple[str, Dependant]]:
     """Every mounted route under ``/admin`` as ``(label, dependant)``."""
     found: list[tuple[str, Dependant]] = []
-    for route in app.routes:
+    for route in iter_routes(app):
         path = str(getattr(route, "path", ""))
         if path != _ADMIN_PREFIX and not path.startswith(f"{_ADMIN_PREFIX}/"):
             continue

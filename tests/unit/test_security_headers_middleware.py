@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 from api_server.middleware.security_headers import SecurityHeadersMiddleware
+from api_server.routing_introspection import route_paths
 from starlette.requests import Request
 
 pytestmark = pytest.mark.unit
@@ -246,12 +247,12 @@ def test_the_app_does_not_mount_docs_or_openapi_outside_dev(
     from api_server.config import Settings
 
     monkeypatch.setattr(main_mod, "get_settings", lambda: _settings(environment="prod"))
-    prod_paths = {str(getattr(r, "path", "")) for r in main_mod.create_app().routes}
+    prod_paths = route_paths(main_mod.create_app())
     assert "/docs" not in prod_paths
     assert "/openapi.json" not in prod_paths
 
     monkeypatch.setattr(main_mod, "get_settings", lambda: Settings(environment="dev"))
-    dev_paths = {str(getattr(r, "path", "")) for r in main_mod.create_app().routes}
+    dev_paths = route_paths(main_mod.create_app())
     assert "/docs" in dev_paths
     assert "/openapi.json" in dev_paths
 
@@ -268,6 +269,6 @@ def test_the_public_api_v1_contract_stays_published_in_prod(
     import api_server.main as main_mod
 
     monkeypatch.setattr(main_mod, "get_settings", lambda: _settings(environment="prod"))
-    paths = {str(getattr(r, "path", "")) for r in main_mod.create_app().routes}
+    paths = route_paths(main_mod.create_app())
     v1_docs = {p for p in paths if p.startswith("/api/v1") and "openapi" in p}
     assert v1_docs, f"the public v1 OpenAPI document disappeared; /api/v1 paths: {paths}"

@@ -132,7 +132,7 @@ dependa de la disciplina de código en cada query futura:
 
 #### `task_prod14_01` — Migración: tenant_id + RLS en las 4 junctions
 
-- [ ] **Título**: Nueva migración (down_revision `0083_llm_provider_slug`) que
+- [x] **Título**: Nueva migración (down_revision `0083_llm_provider_slug`) que
       añade `tenant_id UUID` a `agent_skills`, `agent_tools`, `team_members` y
       `task_dependencies`; backfill desde el padre (`agents.tenant_id`,
       `teams.tenant_id`, `tasks.tenant_id`); `NOT NULL` + índice; y por tabla
@@ -141,7 +141,28 @@ dependa de la disciplina de código en cada query futura:
       migración debe **fallar ruidosamente** si detecta una fila junction cuyo
       padre e hijo pertenecen a tenants distintos (pre-check con SELECT antes del
       backfill). Downgrade real (drop policy + columna).
-  - ⏳ **Pendiente (2026-07-31):** la migración `0124_junction_tenant_rls` está entregada y `tests/integration/test_junction_tenant_rls.py` pasa 13/13, pero el test que este plan cita —`test_migrations_v2.py -k junction`— sigue siendo `test_junctions_do_not_have_rls`, que afirma lo CONTRARIO y está EN ROJO desde la 0124.
+  - ✅ **Cerrada (2026-08-01):** el bloqueante que describía la anotación del
+    2026-07-31 ya no existe. El test rezagado se corrigió en `a1091c5b`: hoy es
+    `test_migrations_v2.py::test_junctions_do_have_rls_since_migration_0124`, y
+    `auto_prod14_01_a` —el test que esta tarea declara— pasa **1 passed** contra
+    una BD levantada desde cero con `alembic upgrade head`.
+    Los seis requisitos del enunciado están verificados, no supuestos:
+    `tenant_id` en las cuatro junctions con backfill desde el padre
+    (`test_backfill_populated_tenant_id_from_parents`), `NOT NULL` + índice
+    (`ix_{tabla}_tenant_id`, migración :268), `ENABLE`+`FORCE`+policy
+    `{tabla}_tenant_isolation` (`test_rls_enabled_forced_and_policied`), el abort
+    ruidoso ante filas cuyo padre e hijo son de tenants distintos
+    (`test_upgrade_aborts_on_genuinely_cross_tenant_rows`, que además comprueba
+    que el abort **no deja la columna a medias**) y el downgrade real.
+    No es una guarda que pueda pasar en vacío: los tests son **de
+    comportamiento** y llevan su control positivo en la misma aserción —«tenant B
+    no ve sus propias filas» falla si el fixture no sembró nada—, más el caso
+    contrario que casi nadie escribe: las filas de junction del tenant
+    plataforma **siguen siendo legibles cross-tenant**
+    (`test_builtin_junction_rows_stay_readable_cross_tenant`), porque una RLS que
+    también tapa los builtins rompe el producto en silencio.
+    Ejecutado: `tests/integration/test_junction_tenant_rls.py` +
+    `test_rls_invariant.py` → **20 passed**.
 - **Tiempo**: 6 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -213,6 +234,27 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
     que se salta la RLS de todos los tenants. **Falta**, fuera de este carril,
     declarar `SERVICE_USER_PASSWORD` en `docker/.env.example` y pasarla al
     servicio `postgres` del compose.
+  - ⏳ **Re-verificado el 2026-08-01: el hueco sigue donde decía, y ahora está
+    medido.** `SERVICE_USER_PASSWORD` aparece en **cuatro** ficheros de
+    `docker/postgres/` (init `05-service-role-password.sh`, `04-service-role.sql`,
+    upgrade `20260730-service-user.sh` y su README) y en **cero** sitios de
+    `docker/.env.example` y `docker/docker-compose.yml`. El compose sí pasa
+    `MIGRATIONS_USER_PASSWORD` y `APP_USER_PASSWORD` al servicio `postgres`, ambas
+    con la forma `${VAR:?set VAR in docker/.env}` —el patrón exacto que falta
+    replicar—, así que hoy el init cae **siempre** al literal
+    `changeme-service-dev-only`. Un arranque limpio crea el rol BYPASSRLS con la
+    contraseña que está escrita en el repositorio, y nada avisa: el script lo
+    imprime por `stderr` del contenedor de Postgres, donde nadie mira.
+    Los tests del rol **sí pasan** (`test_db_roles_service_user.py`, dentro de los
+    26 passed de los tres ficheros de este plan ejecutados hoy), y eso es lo que
+    hace peligrosa a esta casilla: el contrato roto está entre el init y el
+    compose, no dentro de la BD, así que ningún test del plan lo ve.
+    **NO lo arreglo**: `docker/**` está fuera de la propiedad de este carril y hay
+    otros agentes escribiendo en paralelo. Son dos líneas y están dictadas:
+    `SERVICE_USER_PASSWORD=changeme-service-dev-only` en `docker/.env.example`
+    junto a las otras dos, y
+    `SERVICE_USER_PASSWORD: ${SERVICE_USER_PASSWORD:?set SERVICE_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}`
+    en el `environment:` del servicio `postgres`.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -234,6 +276,25 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
       (`migrations/env.py`). Anotar en el plan **prod-01** que el
       `compose_generator` del installer debe emitir la nueva variable.
   - ⏳ **Pendiente (2026-07-31):** los defaults de `database_url` de los 4 servicios ya apuntan a `service_user` (verificado en los cuatro `config.py`), pero faltan `SERVICE_USER_PASSWORD` en `docker/.env.example` y el compose, la nota en **prod-01** sobre el `compose_generator`, y el test que cita este bloque (`tests/integration/test_execution_persistence.py`) no existe.
+  - ⏳ **Re-verificado el 2026-08-01: los tres huecos siguen ahí, ninguno es
+    implementación pendiente de este carril.**
+    1. **Defaults: hechos.** `service_user` es el default en
+       `workers/config.py:46`, `orchestrator/config.py:60`,
+       `notification_dispatcher/config.py:64` y el `admin_database_url` de la
+       api-server, los cuatro con la descripción «BYPASSRLS but NO DDL» que la
+       tarea pedía.
+    2. **Compose y `.env.example`: el mismo hueco que `task_prod14_04`**, medido
+       arriba. `docker/**` está fuera de la propiedad de este carril.
+    3. **`auto_prod14_05_a` cita un fichero que no existe**:
+       `tests/integration/test_execution_persistence.py` no está en el repo (sí
+       `test_admin_rbac.py`). El comando declarado, tal cual, **no puede salir en
+       verde** — falla en la recolección, que es el peor rojo posible porque no
+       distingue «la feature está rota» de «el arnés apuntaba a la nada». Es la
+       misma clase de defecto que bloqueó `task_prod14_01` hasta hoy: el test que
+       el plan nombra dejó de coincidir con el que existe. Corregirlo pide decidir
+       **qué** cubre el hueco (¿un test de que los 4 servicios conectan como
+       `service_user` y siguen escribiendo?), y ese test vive contra el stack, no
+       contra la api-server.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Depende de**: `task_prod14_04`
 - **Tests automáticos**:
@@ -327,6 +388,25 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       login/SCIM/SSO pre-tenant, coste de migración de queries) y recomendación.
       La decisión la toma un humano; la implementación es follow-up.
   - ⏳ **Pendiente (2026-07-31):** el documento existe y es completo (`docs/05-architecture-decisions/0137-users-global-rls.md`, con inventario, opciones y recomendación), pero nació `status: accepted` decidiendo por su cuenta cuando este plan lo pedía `proposed`: falta la ratificación del operador, que es el gate declarado de esta tarea.
+  - ⏳ **Confirmado el 2026-08-01, con el dato que faltaba: `deciders: [claude-code]`.**
+    El frontmatter del 0137 dice `status: accepted` y `date: 2026-07-30`, y el
+    campo `deciders` nombra al agente, no a una persona. La tanda de firmas del
+    2026-08-01 (`95fc7fbc`, «los ocho ADR pendientes, firmados») **no lo incluyó**,
+    precisamente porque ya figuraba como `accepted` y por tanto no aparecía en
+    ninguna lista de pendientes: la etiqueta equivocada lo hizo invisible al
+    proceso que lo habría firmado.
+    Por eso la casilla sigue abierta y **no se cierra en negativo**: el entregable
+    del enunciado (redactar el ADR con opciones, trade-offs y recomendación) está
+    hecho, pero el gate que la propia tarea declara —«la revisión humana del ADR es
+    el gate»— no se ha producido, y marcarla sería dar por firmada una decisión de
+    arquitectura sobre dónde vive el aislamiento del directorio de personas.
+    **Lo que necesita el operador es una firma, no trabajo**; y conviene que sepa
+    qué está ratificando: un ADR que dice `accepted` desde el 2026-07-30 sin que
+    él lo haya visto. **No le cambio el status a `proposed`** por mi cuenta —sería
+    repetir el error en la dirección contraria, y `CONTINUE_HERE.md` ya describe
+    el 0137 como técnico y aceptado.
+    Nota: el criterio de cierre 4 de este plan dice que la revisión del ADR **no
+    bloquea el cierre del plan**. Bloquea esta casilla, no el plan.
 - **Tiempo**: 2 h · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); la revisión humana del ADR es el
   gate.
@@ -361,6 +441,17 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
     decisión clave nº 4. No se puede "arreglar" con una migración nueva sin
     inventarse qué filas fueron víctimas de aquélla: es una decisión del
     operador (aceptar la desviación o restaurar a mano en los entornos vivos).
+  - ⏳ **Re-ejecutado el 2026-08-01: `auto_prod14_10_a` sigue verde** (dentro de
+    los 26 passed de `test_db_roles_service_user.py` +
+    `test_tenant_name_uniqueness.py` + `test_users_directory_isolation.py`). Lo
+    que queda abierto no es código: es qué hacer con los datos que la 0126 ya
+    soft-borró en los entornos vivos, y eso solo lo puede decidir quien pueda
+    mirarlos. Concretando la decisión para que sea barata de tomar: (a) aceptar la
+    desviación y corregir la decisión clave nº 4 de este plan para que diga
+    soft-delete —lo que la migración hace de verdad—, o (b) inventariar en cada
+    entorno vivo las filas soft-borradas por la 0126 y restaurarlas con el sufijo
+    `-dup-{n}`. La (a) cuesta una edición de este fichero; la (b), una ventana de
+    mantenimiento por entorno.
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

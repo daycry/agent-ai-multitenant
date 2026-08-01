@@ -56,23 +56,40 @@ datos de tenant. No colisiona con el `/inbox/metrics` autenticado (otro path).
 
 ## Workers (textfile-collector, cada 30 s)
 
-| Métrica                                      | Tipo    | Labels            | Qué mide                                          |
-| -------------------------------------------- | ------- | ----------------- | ------------------------------------------------- |
-| `agentic_celery_queue_depth`                 | gauge   | `queue`           | Mensajes esperando (Redis `LLEN`).                |
-| `agentic_celery_tasks_total`                 | counter | `queue`, `status` | Tareas **terminadas**, por resultado.             |
-| `agentic_celery_task_duration_seconds_total` | counter | `queue`           | Segundos de ejecución acumulados.                 |
-| `agentic_dlq_depth`                          | gauge   | `stream`          | Entradas dead-lettered (Redis `XLEN`).            |
-| `agentic_tasks_by_status`                    | gauge   | `status`          | Tareas por estado del ciclo de vida.              |
-| `agentic_executions_24h`                     | gauge   | `status`          | Ejecuciones por estado, ventana de 24 h.          |
-| `agentic_human_approvals_pending`            | gauge   | —                 | Aprobaciones humanas esperando respuesta.         |
-| `agentic_human_approvals_oldest_age_seconds` | gauge   | —                 | Edad de la más antigua sin responder.             |
-| `agentic_sampler_last_run_timestamp_seconds` | gauge   | —                 | Heartbeat del sampler.                            |
-| `agentic_sampler_collector_up`               | gauge   | `collector`       | 1/0 por colector en la última pasada.             |
-| `agentic_llm_tokens_24h`                     | gauge   | `provider`        | Tokens FUERA de runs (asistente/córtex/planning). |
-| `agentic_llm_cost_usd_24h`                   | gauge   | `provider`        | Gasto USD fuera de runs.                          |
-| `agentic_run_tokens_24h`                     | gauge   | —                 | Tokens del pipeline de runs.                      |
-| `agentic_run_cost_usd_24h`                   | gauge   | —                 | Gasto USD del pipeline de runs.                   |
-| `agentic_backup_*`                           | varios  | —                 | Última copia con éxito, tamaño, copia offsite.    |
+| Métrica                                          | Tipo    | Labels            | Qué mide                                                      |
+| ------------------------------------------------ | ------- | ----------------- | ------------------------------------------------------------- |
+| `agentic_celery_queue_depth`                     | gauge   | `queue`           | Mensajes esperando (Redis `LLEN`).                            |
+| `agentic_celery_tasks_total`                     | counter | `queue`, `status` | Tareas **terminadas**, por resultado.                         |
+| `agentic_celery_task_duration_seconds_total`     | counter | `queue`           | Segundos de ejecución acumulados.                             |
+| `agentic_dlq_depth`                              | gauge   | `stream`          | Entradas dead-lettered (Redis `XLEN`).                        |
+| `agentic_tasks_by_status`                        | gauge   | `status`          | Tareas por estado del ciclo de vida.                          |
+| `agentic_executions_24h`                         | gauge   | `status`          | Ejecuciones por estado, ventana de 24 h.                      |
+| `agentic_human_approvals_pending`                | gauge   | —                 | Aprobaciones humanas esperando respuesta.                     |
+| `agentic_human_approvals_oldest_age_seconds`     | gauge   | —                 | Edad de la más antigua sin responder.                         |
+| `agentic_sampler_last_run_timestamp_seconds`     | gauge   | —                 | Heartbeat del sampler.                                        |
+| `agentic_sampler_collector_up`                   | gauge   | `collector`       | 1/0 por colector en la última pasada.                         |
+| `agentic_llm_tokens_24h`                         | gauge   | `provider`        | Tokens FUERA de runs (asistente/córtex/planning).             |
+| `agentic_llm_cost_usd_24h`                       | gauge   | `provider`        | Gasto USD fuera de runs.                                      |
+| `agentic_run_tokens_24h`                         | gauge   | —                 | Tokens del pipeline de runs.                                  |
+| `agentic_run_cost_usd_24h`                       | gauge   | —                 | Gasto USD del pipeline de runs.                               |
+| `agentic_memorizer_consecutive_distill_failures` | gauge   | —                 | Destilaciones del Memorizer fallidas **seguidas** (0 = sano). |
+| `agentic_backup_*`                               | varios  | —                 | Última copia con éxito, tamaño, copia offsite.                |
+
+### Por qué la del Memorizer es una racha y no un acumulado
+
+La memorización post-run es **best-effort a propósito**: se traga sus
+excepciones para no tumbar el pipeline de Celery. El precio es que su muerte es
+muda — el run termina `ok`, no se persiste ni una memoria y la plataforma deja
+de aprender sin que nada falle (el caso real: apagar ollama-local, ADR 0056,
+con el fallback del destilador todavía apuntando a `localhost:11434`).
+
+Lo que hay que alertar no es «han fallado 40 destilaciones desde el lunes» sino
+«las últimas 5 seguidas han fallado»: un destilador roto **ahora**. Por eso un
+éxito **borra** el contador, y por eso la alerta se apaga sola al arreglar el
+proveedor en vez de quedarse encendida hasta que alguien la silencie. Cuenta
+`llm_error` y `llm_unparseable`, **no** `llm_empty` — ahí el modelo contestó
+bien y esa ejecución no tenía nada que memorizar; contarlo dispararía la alerta
+en un sistema sano.
 
 ### Por qué hay dos métricas de cola y no una
 

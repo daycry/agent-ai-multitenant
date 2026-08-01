@@ -75,6 +75,12 @@ METRIC_LLM_TOKENS_24H = "agentic_llm_tokens_24h"
 METRIC_LLM_COST_24H = "agentic_llm_cost_usd_24h"
 METRIC_RUN_TOKENS_24H = "agentic_run_tokens_24h"
 METRIC_RUN_COST_24H = "agentic_run_cost_usd_24h"
+# prod-07 task_prod07_15 (llm-10): racha de destilaciones fallidas del
+# Memorizer. La memorización es best-effort por diseño —se traga sus
+# excepciones para no tumbar el pipeline—, así que un destilador caído se
+# manifiesta como «nadie aprende nada» y ninguna otra señal. Consecutivos, no
+# acumulados: lo que importa es si está roto AHORA.
+METRIC_MEMORIZER_FAILURES = "agentic_memorizer_consecutive_distill_failures"
 KNOWN_COLLECTORS: tuple[str, ...] = (
     "queue_depths",
     "tasks_by_status",
@@ -83,6 +89,7 @@ KNOWN_COLLECTORS: tuple[str, ...] = (
     "celery_tasks",
     "approvals",
     "llm_spend",
+    "memorizer",
 )
 
 
@@ -145,6 +152,7 @@ def render_queue_metrics(
     llm_usage: dict[str, tuple[int, float]] | None = None,
     run_tokens: int | None = None,
     run_cost_usd: float | None = None,
+    memorizer_failures: int | None = None,
 ) -> str:
     """Render the Prometheus text-exposition body. Pure (no I/O) so it is
     unit-testable. Keys are emitted in sorted order for a noise-free file diff.
@@ -239,6 +247,15 @@ def render_queue_metrics(
             "gauge",
             [("", _format_float(run_cost_usd))],
         )
+    # `is not None`: cero es el estado SANO y es un dato. Omitirlo dejaría a
+    # Prometheus sin distinguir «el destilador va bien» de «el colector cayó».
+    if memorizer_failures is not None:
+        lines += _family(
+            METRIC_MEMORIZER_FAILURES,
+            "Consecutive failed Memorizer distillations (0 = healthy).",
+            "gauge",
+            [("", memorizer_failures)],
+        )
     if sampled_at is not None:
         failures = collector_failures or frozenset()
         lines += _family(
@@ -272,6 +289,7 @@ def write_queue_metrics(
     llm_usage: dict[str, tuple[int, float]] | None = None,
     run_tokens: int | None = None,
     run_cost_usd: float | None = None,
+    memorizer_failures: int | None = None,
 ) -> bool:
     """Atomically write the queue-metrics file. Returns ``True`` on success,
     ``False`` otherwise — best-effort, never breaks the worker. Delegates the
@@ -293,6 +311,7 @@ def write_queue_metrics(
             llm_usage=llm_usage,
             run_tokens=run_tokens,
             run_cost_usd=run_cost_usd,
+            memorizer_failures=memorizer_failures,
         ),
         event_prefix="queue_metrics",
     )

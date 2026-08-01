@@ -80,7 +80,8 @@ from api_server.db.knowledge import (
     KnowledgeBaseProject,
 )
 from api_server.docs_structure.constants import DOCS_DIRNAME
-from api_server.ingestion.embeddings import Embedder, EmbeddingError, OllamaEmbedder
+from api_server.ingestion.embed_client import shared_ollama_embedder
+from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.seeds.catalog_ingestion import chunk_markdown
 
 logger = structlog.get_logger(__name__)
@@ -219,7 +220,11 @@ async def sync_project_docs(
     Returns a :class:`DocSyncResult` summarising what changed.
     """
     own_embedder = embedder is None
-    active_embedder: Embedder = embedder or OllamaEmbedder()
+    # Sobre el cliente httpx COMPARTIDO del proceso (task_prod13_05, perf-9):
+    # esto corre en cada sincronización de `docs/`, no una vez por arranque.
+    # `aclose()` sobre un cliente inyectado es un no-op, así que el cierre de
+    # más abajo ya no puede llevarse por delante el pool de los demás.
+    active_embedder: Embedder = embedder or shared_ollama_embedder()
     base_dir = _normalise_docs_root(docs_root)
 
     try:
@@ -334,7 +339,11 @@ async def reindex_changed_docs(
     Returns an :class:`IncrementalReindexResult` summarising what changed.
     """
     own_embedder = embedder is None
-    active_embedder: Embedder = embedder or OllamaEmbedder()
+    # Sobre el cliente httpx COMPARTIDO del proceso (task_prod13_05, perf-9):
+    # esto corre en cada sincronización de `docs/`, no una vez por arranque.
+    # `aclose()` sobre un cliente inyectado es un no-op, así que el cierre de
+    # más abajo ya no puede llevarse por delante el pool de los demás.
+    active_embedder: Embedder = embedder or shared_ollama_embedder()
     base_dir = _normalise_docs_root(docs_root)
 
     try:

@@ -325,3 +325,134 @@ def test_gate_override_only_where_the_gate_is_actually_unmet() -> None:
         "fases con `gate_override` cuyo bloqueante YA está completed: retíralo, "
         f"la excepción caducó: {huerfanos}"
     )
+
+
+def test_gate_override_names_a_gate_that_actually_exists() -> None:
+    """Un `gate_override` sobre un plan SIN `blocking_plan` es decoración.
+
+    El agujero que este test tapa, medido el 2026-08-01: la guarda de caducidad
+    de arriba solo mira planes con dependencias (`if deps and not sin_cerrar`),
+    así que un override sobre un `blocking_plan: null` pasaba los once tests de
+    este fichero en silencio. Y `unmet_gates()` tampoco lo ve, porque descarta
+    los planes sin bloqueantes antes de mirar el override.
+
+    Por qué no es hipotético: `blocking_plan` es una lista YAML multilínea en
+    varios planes, y basta vaciarla —o que el frontmatter se reescriba sin
+    ella— para que el gate deje de declararse. El override sobrevive como
+    afirmación de que hubo una excepción sobre un gate que el plan ya no
+    reconoce: el mismo modo de fallo que docsroadmap-6 (dos sitios diciendo
+    cosas distintas, gana el que leas primero), pero sin nadie que lo delate.
+    """
+    sin_gate: list[str] = []
+    for _path, fm in _plans():
+        if not fm.get("gate_override"):
+            continue
+        deps = fm.get("blocking_plan") or []
+        deps = deps if isinstance(deps, list) else [deps]
+        if not [d for d in deps if str(d).strip()]:
+            sin_gate.append(str(fm["plan_id"]))
+    assert not sin_gate, (
+        "fases con `gate_override` y `blocking_plan` vacío: la excepción no se "
+        "refiere a ningún gate declarado. O se declara el bloqueante que se está "
+        f"saltando, o se retira el override: {sin_gate}"
+    )
+
+
+def test_readme_declares_the_real_size_of_the_validation_queue() -> None:
+    """El tamaño de la cola de validación del README sale del frontmatter.
+
+    Encontrado el 2026-08-01: `README.md` decía «35 planes están en
+    `pending_human_validation`» cuando en disco eran **46**. Es el hallazgo
+    docsroadmap-3 reapareciendo por el mismo sitio por el que entró la primera
+    vez —un recuento tecleado a mano en un índice— y es el número que un humano
+    usa para dimensionar la campaña de validación: subestimarlo en 11 planes es
+    subestimar el trabajo en casi un tercio.
+
+    El recuento hermano (`**N planes de construcción**`) ya tenía guarda en
+    `test_docs_governance.py`; éste no la tenía, que es justo por qué derivó.
+    """
+    readme = (_ROADMAP / "README.md").read_text(encoding="utf-8")
+    real = sum(1 for _p, fm in _plans() if fm["status"] == "pending_human_validation")
+    assert real >= 20, f"el descubrimiento de planes falló (vio {real} en validación)"
+
+    declarado = re.search(r"(\d+)\s+planes están en `pending_human_validation`", readme)
+    assert declarado is not None, (
+        "el README ya no declara el tamaño de la cola de validación humana (o "
+        "cambió el formato `N planes están en \\`pending_human_validation\\``)"
+    )
+    assert int(declarado.group(1)) == real, (
+        f"README dice {declarado.group(1)} planes en `pending_human_validation`; "
+        f"el frontmatter dice {real}"
+    )
+
+
+#: Ficheros de `docs/roadmap/` que llevan un `status:` DEL ENUM DE PLANES pero
+#: NO declaran `plan_id`, medidos el 2026-08-01. Son **17**.
+#:
+#: Por qué son deuda y no ruido: `_plans()` exige los dos campos, así que sin
+#: `plan_id` un fichero es invisible para TODOS los guardas de gate de este
+#: módulo — `test_at_most_one_phase_in_progress` incluido. Ocho de los diecisiete
+#: son las fases del córtex, con casillas `- [ ]` y `blocking_plan` propio: son
+#: planes en todo menos en el campo que los haría auditables.
+#:
+#: No entran aquí los ~14 ficheros con vocabulario propio (`published`,
+#: `informe`, `open`, `delivered`, `remediation_implemented`): esos declaran a
+#: gritos que no son planes, y confundirlos con fases fue justo el error que
+#: destapó este agujero (un recuento que daba 46 por fichero y 35 por plan).
+#:
+#: Igual que `_GATE_DEBT_2026_07_29`, NO es una allowlist permanente. Ponerles
+#: `plan_id` los somete de golpe a los guardas de changelog y de gate, que es
+#: trabajo real y de otro carril; lo que este test garantiza mientras tanto es
+#: que **nadie añade el número dieciocho**.
+_STATUS_WITHOUT_PLAN_ID_2026_08_01 = frozenset(
+    {
+        "auditoria-2026-06-memoria-tools-marketplace.md",
+        "auditoria-gestion-proyectos-2026-07-25.md",
+        "auditoria-hallazgos-implementados-2026-07-10.md",
+        "cortex-f1-memoria-cognitiva.md",
+        "cortex-f2-afectivo.md",
+        "cortex-f3-identidad.md",
+        "cortex-f4-autonomia.md",
+        "cortex-f5-voz-avatar.md",
+        "cortex-fases.md",
+        "cortex-identidad-real.md",
+        "cortex-system-owner.md",
+        "fixes-pesados-auditoria.md",
+        "hallazgos-pendientes-2026-07-07.md",
+        "mejoras-2026-06-chat-coste-cortex.md",
+        "plan-unificacion-provider-id.md",
+        "refactor-pipeline-ejecucion-review.md",
+        "refactorizacion-por-partes-2026-07-07.md",
+    }
+)
+
+
+def test_no_new_roadmap_file_escapes_the_guards_by_omitting_plan_id() -> None:
+    """Un estado de fase sin `plan_id` es una fase que ningún guarda ve.
+
+    El agujero, medido el 2026-08-01: `_plans()` exige `plan_id` **y** `status`,
+    así que un fichero con un estado del enum pero sin identificador se salta en
+    silencio la regla de «como mucho una fase `in_progress`», la del gate, la del
+    `gate_override` y la del changelog. No es hipotético: son diecisiete
+    ficheros, y ocho de ellos llevan casillas de tarea.
+
+    Se descubrió por el lado tonto —un recuento de `pending_human_validation` que
+    daba 46 por fichero y 35 por plan—, que es exactamente el síntoma de que dos
+    poblaciones distintas se estaban llamando igual.
+    """
+    ofensores = {
+        p.name
+        for p in _md_files()
+        if _frontmatter(p).get("status") in VALID_STATUS and "plan_id" not in _frontmatter(p)
+    }
+    total_con_estado = sum(1 for p in _md_files() if isinstance(_frontmatter(p).get("status"), str))
+    assert total_con_estado >= 50, f"el descubrimiento falló (vio {total_con_estado})"
+
+    nuevos = sorted(ofensores - _STATUS_WITHOUT_PLAN_ID_2026_08_01)
+    assert not nuevos, (
+        "ficheros de `docs/roadmap/` con un `status:` del enum de planes y SIN "
+        f"`plan_id`, que no estaban en la deuda medida el 2026-08-01: {nuevos}. "
+        "Sin `plan_id` ningún guarda de gate de este módulo los ve: añádeselo, o "
+        "si de verdad no es un plan, dale un `status:` de vocabulario propio "
+        "(`published`, `informe`…) para que no se confunda con una fase."
+    )

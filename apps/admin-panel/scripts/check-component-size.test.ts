@@ -58,9 +58,22 @@ function anAllowlistedScreen(): { rel: string; allowed: number } {
   const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
     encoding: "utf8",
   });
-  const entries = Object.entries(JSON.parse(raw) as Record<string, number>);
+  const parsed = JSON.parse(raw) as { screens: Record<string, number> };
+  const entries = Object.entries(parsed.screens);
   // Si la allowlist se vacía (deuda saldada, enhorabuena), estos tests dejan de
   // tener sujeto: mejor un fallo con este mensaje que un `undefined` opaco.
+  expect(entries.length).toBeGreaterThan(0);
+  const [rel, allowed] = entries[0];
+  return { rel, allowed };
+}
+
+/** Lo mismo para la allowlist de PIEZAS (secciones, diálogos, pestañas…). */
+function aSectionInTheAllowlist(): { rel: string; allowed: number } {
+  const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
+    encoding: "utf8",
+  });
+  const parsed = JSON.parse(raw) as { sections: Record<string, number> };
+  const entries = Object.entries(parsed.sections);
   expect(entries.length).toBeGreaterThan(0);
   const [rel, allowed] = entries[0];
   return { rel, allowed };
@@ -171,6 +184,71 @@ describe("check-component-size no molesta donde no debe", () => {
 
   it("los tests no cuentan: un page.test.tsx enorme no es una pantalla", () => {
     const root = fixture({ "app/admin/nuevo/page.test.tsx": lines(2000) });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+});
+
+/**
+ * El agujero que tenía la guarda, y que premiaba el atajo.
+ *
+ * Sólo medía `page.tsx`. Sacar 700 líneas del `page.tsx` a un
+ * `algo-sections.tsx` bajaba el contador sin partir nada — y eso pasó de
+ * verdad: `mcp-server-sections.tsx` acabó en 1125 líneas y la guarda daba OK,
+ * con el propio comentario del script reconociéndolo ("su tamaño se vigila a
+ * ojo en review"). Vigilar a ojo es no vigilar.
+ *
+ * El techo de las piezas es 500, que es el que el plan fija para las secciones
+ * de `model-prices` ("`page.tsx` < 400 líneas, ninguna sección > 500").
+ */
+describe("check-component-size también mide las piezas del troceado", () => {
+  it("una sección NUEVA por encima de 500 es error", () => {
+    const root = fixture({ "app/admin/nuevo/cosa-section.tsx": lines(501) });
+
+    const { code, output } = run(["--root", root]);
+
+    expect(code).toBe(1);
+    expect(output).toContain("cosa-section.tsx");
+  });
+
+  it("cubre las cuatro formas de nombrar una pieza, no sólo *-section", () => {
+    for (const name of ["a-sections.tsx", "b-dialog.tsx", "c-tab.tsx", "d-panel.tsx"]) {
+      const root = fixture({ [`app/admin/nuevo/${name}`]: lines(600) });
+
+      expect(run(["--root", root]).code, name).toBe(1);
+    }
+  });
+
+  it("una pieza por debajo del techo pasa", () => {
+    const root = fixture({ "app/admin/nuevo/cosa-section.tsx": lines(499) });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("una pieza de la allowlist dentro de su cupo pasa, y por encima falla", () => {
+    const { rel, allowed } = aSectionInTheAllowlist();
+    expect(run(["--root", fixture({ [rel]: lines(allowed) })]).code).toBe(0);
+    expect(run(["--root", fixture({ [rel]: lines(allowed + 50) })]).code).toBe(1);
+  });
+
+  it("--strict tampoco perdona a las piezas de la allowlist", () => {
+    const { rel, allowed } = aSectionInTheAllowlist();
+    const root = fixture({ [rel]: lines(allowed) });
+
+    expect(run(["--root", root]).code).toBe(0);
+    expect(run(["--root", root, "--strict"]).code).toBe(1);
+  });
+
+  it("sobre el árbol real informa de cuántas piezas siguen pasadas de tamaño", () => {
+    const over = Number(/(\d+) pieza\(s\) por encima de/.exec(run([]).output)?.[1] ?? -1);
+
+    // Igual que con las pantallas: si el descubrimiento se rompiera, esto
+    // caería a 0 y la guarda diría que la deuda está saldada.
+    expect(over).toBeGreaterThan(0);
+  });
+
+  it("un test enorme con nombre de sección no cuenta", () => {
+    const root = fixture({ "app/admin/nuevo/cosa-section.test.tsx": lines(2000) });
 
     expect(run(["--root", root]).code).toBe(0);
   });

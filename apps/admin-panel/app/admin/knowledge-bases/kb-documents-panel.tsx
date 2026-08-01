@@ -35,6 +35,7 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
 import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
+import { useT, type MessageKey } from "@/lib/i18n";
 
 type DocumentStatus = "pending" | "processing" | "indexed" | "indexed_empty" | "failed";
 
@@ -65,12 +66,16 @@ const STATUS_VARIANT: Record<DocumentStatus, BadgeVariant> = {
 
 // KB Q6 (propuesta simplificación 2026-07-12): lenguaje de persona, no jerga
 // del pipeline. El estado técnico sigue disponible en data-status/tooltip.
-const STATUS_LABEL: Record<DocumentStatus, string> = {
-  pending: "Procesando…",
-  processing: "Procesando…",
-  indexed: "Listo",
-  indexed_empty: "Sin contenido aprovechable",
-  failed: "Error",
+//
+// prod-16 `task_prod16_04`: el mapa guarda la CLAVE del diccionario, no el
+// texto. Resolverlo aquí exigiría el idioma en un módulo sin React; el llamante
+// ya tiene `useT`, y así el mapa sigue siendo una constante.
+const STATUS_KEY: Record<DocumentStatus, MessageKey<"knowledgeBases">> = {
+  pending: "docStatusPending",
+  processing: "docStatusProcessing",
+  indexed: "docStatusIndexed",
+  indexed_empty: "docStatusIndexedEmpty",
+  failed: "docStatusFailed",
 };
 
 function formatBytes(bytes: number): string {
@@ -80,6 +85,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function KbDocumentsPanel({ kbId }: { kbId: string }) {
+  const t = useT("knowledgeBases");
   const queryClient = useQueryClient();
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -97,7 +103,7 @@ export function KbDocumentsPanel({ kbId }: { kbId: string }) {
     <div className="mt-2" data-testid={`kb-docs-panel-${kbId}`}>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-          Documentos ({docs.length})
+          {t("docsTitle", { n: docs.length })}
         </span>
         <RoleGuard min="tenant_admin">
           <Button
@@ -107,19 +113,19 @@ export function KbDocumentsPanel({ kbId }: { kbId: string }) {
             data-testid={`kb-docs-upload-open-${kbId}`}
           >
             <UploadCloud className="mr-1 h-3.5 w-3.5" />
-            Subir documento
+            {t("docsUpload")}
           </Button>
         </RoleGuard>
       </div>
 
       {docsQuery.isLoading ? (
-        <p className="text-muted-foreground text-sm">Cargando documentos…</p>
+        <p className="text-muted-foreground text-sm">{t("docsLoading")}</p>
       ) : docs.length === 0 ? (
         <p
           className="text-muted-foreground rounded border border-dashed px-3 py-4 text-center text-sm italic"
           data-testid={`kb-docs-empty-${kbId}`}
         >
-          Esta KB aún no tiene documentos. Sube el primero para indexarlo.
+          {t("docsEmpty")}
         </p>
       ) : (
         <ul className="space-y-1.5" data-testid={`kb-docs-list-${kbId}`}>
@@ -148,6 +154,7 @@ function DocumentRow({
   doc: KBDocument;
   onChanged: () => void;
 }) {
+  const t = useT("knowledgeBases");
   const deleteMutation = useMutation({
     mutationFn: () =>
       apiFetch<void>(`/knowledge-bases/${kbId}/documents/${doc.id}`, { method: "DELETE" }),
@@ -175,7 +182,7 @@ function DocumentRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide">
           <Badge variant={STATUS_VARIANT[doc.status]} data-testid={`kb-docs-status-${doc.id}`}>
-            {STATUS_LABEL[doc.status]}
+            {t(STATUS_KEY[doc.status])}
           </Badge>
           <span className="text-muted-foreground">
             {doc.source_mime_type} · {formatBytes(doc.source_size_bytes)}
@@ -191,8 +198,7 @@ function DocumentRow({
             className="text-warning-soft-foreground mt-0.5 text-xs"
             data-testid={`kb-docs-empty-hint-${doc.id}`}
           >
-            Procesado pero sin fragmentos (0 chunks): el agente no puede recuperar nada de este
-            documento. Sube un original con texto seleccionable o reindexa.
+            {t("docEmptyHint")}
           </p>
         ) : null}
       </div>
@@ -202,7 +208,7 @@ function DocumentRow({
           className="text-muted-foreground hover:text-foreground text-xs underline"
           data-testid={`kb-docs-progress-${doc.id}`}
         >
-          Progreso
+          {t("docProgress")}
         </Link>
         <RoleGuard min="tenant_admin">
           {canReindex ? (
@@ -212,7 +218,7 @@ function DocumentRow({
               onClick={() => reindexMutation.mutate()}
               disabled={reindexMutation.isPending}
               data-testid={`kb-docs-reindex-${doc.id}`}
-              title="Reindexar (vuelve a procesar el documento)"
+              title={t("docReindexTitle")}
             >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
@@ -223,7 +229,7 @@ function DocumentRow({
             onClick={() => deleteMutation.mutate()}
             disabled={deleteMutation.isPending}
             data-testid={`kb-docs-delete-${doc.id}`}
-            aria-label="Eliminar"
+            aria-label={t("docDelete")}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -244,6 +250,7 @@ function UploadDialog({
   kbId: string;
   onUploaded: () => void;
 }) {
+  const t = useT("knowledgeBases");
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -290,11 +297,11 @@ function UploadDialog({
     >
       <DialogContent data-testid="kb-docs-upload-dialog">
         <DialogHeader>
-          <DialogTitle>Subir documento a la KB</DialogTitle>
+          <DialogTitle>{t("uploadTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div>
-            <Label htmlFor="kb-docs-upload-file">Archivo</Label>
+            <Label htmlFor="kb-docs-upload-file">{t("uploadFileLabel")}</Label>
             <Input
               id="kb-docs-upload-file"
               data-testid="kb-docs-upload-file"
@@ -304,13 +311,13 @@ function UploadDialog({
             />
           </div>
           <div>
-            <Label htmlFor="kb-docs-upload-title">Título (opcional)</Label>
+            <Label htmlFor="kb-docs-upload-title">{t("uploadTitleLabel")}</Label>
             <Input
               id="kb-docs-upload-title"
               data-testid="kb-docs-upload-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Por defecto: nombre del archivo"
+              placeholder={t("uploadTitlePlaceholder")}
             />
           </div>
           {errorMsg ? (
@@ -325,14 +332,14 @@ function UploadDialog({
             onClick={() => onOpenChange(false)}
             disabled={mutation.isPending}
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => mutation.mutate()}
             disabled={!file || mutation.isPending}
             data-testid="kb-docs-upload-submit"
           >
-            {mutation.isPending ? "Subiendo…" : "Subir"}
+            {mutation.isPending ? t("uploading") : t("uploadSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>

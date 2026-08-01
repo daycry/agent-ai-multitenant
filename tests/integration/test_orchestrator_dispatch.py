@@ -172,10 +172,13 @@ async def test_dispatch_moves_task_to_in_progress_and_assigns_an_agent(
 async def test_dispatch_publishes_in_progress_status_event(
     _migrated: None, admin_database_url: str
 ) -> None:
-    """The board's ``/ws/kanban`` tails ``events:tasks``. The dispatcher is the
-    ONLY place a task goes ``ready`` -> ``in_progress``, so it must publish that
-    transition — otherwise the Kanban shows the task as ready until a manual
-    refresh (the reported symptom)."""
+    """El despachador es el ÚNICO sitio donde una tarea pasa de ``ready`` a
+    ``in_progress``, así que tiene que publicar esa transición o el tablero la
+    muestra en ``ready`` hasta un refresco manual (el síntoma reportado).
+
+    Aserta sobre ``events:tasks`` porque es el stream que consume el
+    orchestrator; desde task_prod13_19 el publicador hace dual-write y el socket
+    del tablero lee el de su proyecto (``events:tasks:{project_id}``)."""
     engine = create_async_engine(admin_database_url)
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     try:

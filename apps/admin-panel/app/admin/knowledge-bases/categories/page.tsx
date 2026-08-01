@@ -34,6 +34,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface KbCategory {
   id: string;
@@ -49,6 +51,8 @@ interface KbCategory {
 const DEFAULT_COLOR = "#64748b";
 
 export default function KbCategoriesPage() {
+  const t = useT("kbCategories");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<KbCategory | null>(null);
@@ -75,47 +79,47 @@ export default function KbCategoriesPage() {
     >
       <Breadcrumb
         items={[
-          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
+          { label: t("home"), href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
           {
-            label: "Knowledge Bases",
+            label: t("kbsCrumb"),
             href: "/admin/knowledge-bases",
             icon: <Library className="h-3.5 w-3.5" />,
           },
-          { label: "Categorías" },
+          { label: t("crumb") },
         ]}
       />
       <PageHeader
         icon={<Tag className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Categorías de KBs"
-        description="Organiza tus knowledge bases en grupos. Las built-in vienen sembradas por la plataforma y son comunes a todos los tenants."
+        title={t("title")}
+        description={t("description")}
         actions={
           <RoleGuard min="tenant_admin">
             <Button onClick={() => setCreateOpen(true)} data-testid="kb-cat-create-button">
               <Plus className="mr-1 h-4 w-4" />
-              Nueva categoría
+              {t("createButton")}
             </Button>
           </RoleGuard>
         }
       />
 
       {catsQuery.isLoading ? (
-        <p className="text-muted-foreground mt-6 text-sm">Cargando categorías…</p>
+        <p className="text-muted-foreground mt-6 text-sm">{t("loading")}</p>
       ) : catsQuery.isError ? (
         <Card className="mt-6">
           <CardHeader>
-            <CardTitle>Error</CardTitle>
+            <CardTitle>{t("errorTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-destructive text-sm">
-              {catsQuery.error instanceof ApiError ? catsQuery.error.body : String(catsQuery.error)}
-            </p>
+            {/* prod-16 task_prod16_05: humanizado. Antes pintaba el body
+                CRUDO del backend (un 502 de nginx, un traceback) en pantalla. */}
+            <p className="text-destructive text-sm">{errorText(catsQuery.error)}</p>
           </CardContent>
         </Card>
       ) : (
         <div className="mt-6 space-y-6">
           <section>
             <h2 className="text-muted-foreground mb-2 text-sm font-semibold uppercase tracking-wide">
-              Built-in ({builtins.length})
+              {t("builtinSection", { n: builtins.length })}
             </h2>
             <ul className="space-y-2">
               {builtins.map((c) => (
@@ -128,14 +132,12 @@ export default function KbCategoriesPage() {
 
           <section>
             <h2 className="text-muted-foreground mb-2 text-sm font-semibold uppercase tracking-wide">
-              Tenant ({custom.length})
+              {t("tenantSection", { n: custom.length })}
             </h2>
             {custom.length === 0 ? (
               <Card>
                 <CardContent className="py-8 text-center">
-                  <p className="text-muted-foreground text-sm">
-                    No has creado categorías propias todavía. Usa las built-in o crea una nueva.
-                  </p>
+                  <p className="text-muted-foreground text-sm">{t("emptyCustom")}</p>
                 </CardContent>
               </Card>
             ) : (
@@ -204,6 +206,8 @@ function CategoryRow({
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
+  const t = useT("kbCategories");
+
   return (
     <Card data-testid={`kb-cat-${category.slug}`}>
       <CardHeader className="flex flex-row items-center justify-between gap-3 py-3">
@@ -218,7 +222,7 @@ function CategoryRow({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {category.is_builtin && <Badge variant="muted">Built-in</Badge>}
+          {category.is_builtin && <Badge variant="muted">{t("builtinBadge")}</Badge>}
           {!readonly && (
             <RoleGuard min="tenant_admin">
               <Button
@@ -226,6 +230,7 @@ function CategoryRow({
                 size="sm"
                 onClick={onEdit}
                 data-testid={`kb-cat-edit-${category.slug}`}
+                aria-label={t("editTitle")}
               >
                 <Pencil className="h-3.5 w-3.5" />
               </Button>
@@ -234,6 +239,7 @@ function CategoryRow({
                 size="sm"
                 onClick={onDelete}
                 data-testid={`kb-cat-delete-${category.slug}`}
+                aria-label={t("deleteTitle")}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -264,6 +270,7 @@ function CategoryCreateDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const t = useT("kbCategories");
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
   const [color, setColor] = useState(DEFAULT_COLOR);
@@ -293,36 +300,33 @@ function CategoryCreateDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Nueva categoría</DialogTitle>
-          <DialogDescription>
-            El slug es el identificador estable que se usa en filtros y URLs (sólo a-z, 0-9, `_`,
-            `-`). El nombre es el texto que se muestra en la UI.
-          </DialogDescription>
+          <DialogTitle>{t("createTitle")}</DialogTitle>
+          <DialogDescription>{t("createDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cat-slug">Slug</Label>
+            <Label htmlFor="cat-slug">{t("slugLabel")}</Label>
             <Input
               id="cat-slug"
               value={slug}
               onChange={(e) => setSlug(e.target.value.toLowerCase())}
-              placeholder="ej. compliance-pci"
+              placeholder={t("slugPlaceholder")}
               pattern="[a-z0-9][a-z0-9_-]*"
               data-testid="kb-cat-slug"
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cat-name">Nombre</Label>
+            <Label htmlFor="cat-name">{t("nameLabel")}</Label>
             <Input
               id="cat-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="ej. Compliance PCI-DSS"
+              placeholder={t("namePlaceholder")}
               data-testid="kb-cat-name"
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cat-color">Color</Label>
+            <Label htmlFor="cat-color">{t("colorLabel")}</Label>
             <div className="flex flex-row items-center gap-2">
               <input
                 id="cat-color"
@@ -345,20 +349,20 @@ function CategoryCreateDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="kb-cat-error"
             >
-              {mutation.error?.message ?? "Error al crear"}
+              {mutation.error?.message ?? t("createError")}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={!slug.trim() || !name.trim() || mutation.isPending}
             onClick={() => mutation.mutate({ slug: slug.trim(), name: name.trim(), color })}
             data-testid="kb-cat-submit"
           >
-            {mutation.isPending ? "Creando…" : "Crear categoría"}
+            {mutation.isPending ? t("creating") : t("createSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -379,6 +383,7 @@ function CategoryEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const t = useT("kbCategories");
   const [name, setName] = useState(category.name);
   const [color, setColor] = useState(category.color ?? DEFAULT_COLOR);
 
@@ -392,20 +397,18 @@ function CategoryEditDialog({
     <Dialog open={true} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Editar categoría</DialogTitle>
-          <DialogDescription>
-            El slug no se puede cambiar — está sembrado en filtros y posibles integraciones.
-          </DialogDescription>
+          <DialogTitle>{t("editTitle")}</DialogTitle>
+          <DialogDescription>{t("editDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label>Slug</Label>
+            <Label>{t("slugLabel")}</Label>
             <p className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 font-mono text-xs">
               {category.slug}
             </p>
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cat-edit-name">Nombre</Label>
+            <Label htmlFor="cat-edit-name">{t("nameLabel")}</Label>
             <Input
               id="cat-edit-name"
               value={name}
@@ -414,7 +417,7 @@ function CategoryEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cat-edit-color">Color</Label>
+            <Label htmlFor="cat-edit-color">{t("colorLabel")}</Label>
             <div className="flex flex-row items-center gap-2">
               <input
                 id="cat-edit-color"
@@ -432,20 +435,20 @@ function CategoryEditDialog({
           </div>
           {mutation.isError && (
             <p className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs">
-              {mutation.error?.message ?? "Error al guardar"}
+              {mutation.error?.message ?? t("saveError")}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={!name.trim() || mutation.isPending}
             onClick={() => mutation.mutate({ name: name.trim(), color })}
             data-testid="kb-cat-edit-submit"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar"}
+            {mutation.isPending ? t("saving") : t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -466,6 +469,7 @@ function CategoryDeleteDialog({
   onOpenChange: (v: boolean) => void;
   onDeleted: () => void;
 }) {
+  const t = useT("kbCategories");
   const mutation = useMutation<void, ApiError, void>({
     mutationFn: async () => {
       await apiFetch(`/kb-categories/${category.id}`, { method: "DELETE" });
@@ -477,25 +481,23 @@ function CategoryDeleteDialog({
     <Dialog open={true} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Borrar categoría</DialogTitle>
-          <DialogDescription>
-            Las KBs que pertenecían a esta categoría quedarán sin categoría (no se borran).
-          </DialogDescription>
+          <DialogTitle>{t("deleteTitle")}</DialogTitle>
+          <DialogDescription>{t("deleteDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <p className="text-sm">
-            ¿Borrar la categoría <strong>{category.name}</strong> (
-            <code className="text-xs">{category.slug}</code>)?
+            {t("deleteConfirmPre")}
+            <strong>{category.name}</strong> (<code className="text-xs">{category.slug}</code>)?
           </p>
           {mutation.isError && (
             <p className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs">
-              {mutation.error?.message ?? "Error al borrar"}
+              {mutation.error?.message ?? t("deleteError")}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -503,7 +505,7 @@ function CategoryDeleteDialog({
             onClick={() => mutation.mutate()}
             data-testid="kb-cat-delete-confirm"
           >
-            {mutation.isPending ? "Borrando…" : "Borrar"}
+            {mutation.isPending ? t("deleting") : t("deleteSubmit")}
           </Button>
         </DialogFooter>
       </DialogContent>

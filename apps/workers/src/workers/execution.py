@@ -217,43 +217,30 @@ def _build_runtime_env(
 async def _resolve_effective_guardrails(
     session: AsyncSession, project: Project | None
 ) -> dict[str, Any] | None:
-    """La config de guardrails EFECTIVA del run (ADR 0102 D3).
+    """La config de guardrails EFECTIVA del run (ADR 0102 D3 + prod-03 task_prod03_11).
 
-    Fusiona la capa PLATAFORMA (platform_settings.guardrails_config) con la
-    capa PROYECTO (projects.guardrails_config) via resolve_config — los checks
-    ``locked`` de plataforma no pueden relajarse. ``None`` cuando no hay capas
-    (el runtime cae a su baseline LOG). Best-effort: un error aqui degrada a
-    None (baseline), jamas rompe el dispatch. Cap 64KB (D3): si el resultado
-    excede, se degrada a la capa plataforma sola con warning."""
+    Delega en ``api_server.db.guardrail_config.get_effective_guardrail_config``,
+    que fusiona las TRES capas —plataforma → tenant → proyecto— con
+    ``resolve_config``: los checks ``locked`` de plataforma no pueden relajarse
+    ni eliminarse abajo. Antes esta función fusionaba solo dos, porque la capa
+    TENANT no existía en ninguna parte hasta la migración 0132.
+
+    ``None`` cuando no hay capas (el runtime cae a su baseline LOG). El
+    resultado lleva una clave ``version`` hermana de ``guardrails`` para
+    invalidación/trazabilidad; el runtime la ignora (``parse_config`` solo mira
+    ``guardrails``).
+
+    Best-effort: un error aquí degrada a ``None`` (baseline), jamás rompe el
+    dispatch. El cap de tamaño y la degradación a plataforma-sola viven en el
+    servicio, que es donde vive la resolución."""
     try:
-        import json as _json
+        from api_server.db.guardrail_config import get_effective_guardrail_config
 
-        from api_server.db import platform_settings
-        from shared_guardrails.layers import LayerConfig, resolve_config
-
-        platform_raw = await platform_settings.get_guardrails_config(session)
-        project_raw = (
-            dict(project.guardrails_config)
-            if project is not None and project.guardrails_config
-            else None
-        )
-        if not platform_raw and not project_raw:
+        if project is None:
             return None
-        resolved = resolve_config(
-            LayerConfig.from_dict("platform", platform_raw or None),
-            None,
-            LayerConfig.from_dict("project", project_raw) if project_raw else None,
+        return await get_effective_guardrail_config(
+            session, tenant_id=project.tenant_id, project_id=project.id
         )
-        if resolved.config.is_empty:
-            return None
-        out = resolved.config.to_dict()
-        if len(_json.dumps(out)) > 64_000:
-            _log.warning("workers.guardrails_config_over_cap", dropped_layer="project")
-            platform_only = resolve_config(LayerConfig.from_dict("platform", platform_raw or None))
-            out = platform_only.config.to_dict()
-            if len(_json.dumps(out)) > 64_000:
-                return None
-        return out
     except Exception as exc:  # baseline del runtime como red de seguridad
         _log.warning("workers.guardrails_resolve_failed", error=str(exc))
         return None

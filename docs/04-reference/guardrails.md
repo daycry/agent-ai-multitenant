@@ -2,7 +2,7 @@
 title: Guardrails declarativos — Referencia del motor, tipos, acciones y observabilidad
 audience: backend-dev, ai-engineer, architect, security
 phase: 11-guardrails-precios
-updated: 2026-05-30
+updated: 2026-08-01
 ---
 
 # Guardrails declarativos — Referencia
@@ -63,6 +63,116 @@ most-specific (`layers.py`):
   bloqueados en la plataforma.
 - Remover un guardrail _no bloqueado_ de una capa superior se hace
   redeclarándolo con `remove: true` en la capa que sobreescribe.
+
+### Dónde vive cada capa (prod-03 task_prod03_07/08)
+
+Hasta el 2026-08-01 las capas no tenían tabla: la de plataforma vivía en
+`platform_settings.guardrails_config` y la de proyecto en
+`projects.guardrails_config` (ADR 0102 D3, migración 0110), y **la capa tenant
+no existía**. La migración **0132** creó `guardrail_configs`, una fila por capa:
+
+| Columna      | Nota                                                                  |
+| ------------ | --------------------------------------------------------------------- |
+| `scope`      | `platform` \| `tenant` \| `project` (CHECK)                           |
+| `tenant_id`  | NULL **solo** en `platform`; lo exige un segundo CHECK                |
+| `project_id` | NOT NULL solo en `project`                                            |
+| `config`     | JSONB `{guardrails: {hook: [...]}}`, validado contra `PipelineConfig` |
+| `version`    | contador de escrituras — invalidación de caché sin releer el JSONB    |
+
+Tres índices únicos parciales garantizan **una fila efectiva por ámbito**: una
+de plataforma, una por tenant, una por proyecto.
+
+**RLS asimétrica, y es a propósito**: `USING (tenant_id IS NULL OR tenant_id =
+app.tenant_id)` deja LEER el baseline de plataforma desde cualquier tenant —es
+la capa que todos heredan y no contiene dato de nadie—, mientras que el
+`WITH CHECK` **no** tiene la rama NULL: desde una sesión de tenant no se puede
+crear ni modificar la fila de plataforma. Lo impide PostgreSQL, no la app.
+
+**Compatibilidad**: la resolución mira primero la tabla nueva y, si esa capa no
+tiene fila, cae a la columna vieja. Mientras nadie escriba en
+`guardrail_configs`, la plataforma se comporta exactamente igual que antes.
+
+### El baseline de plataforma sembrado
+
+`seeds/guardrail_baseline.py` siembra tres guardrails `locked: true`:
+
+| key                         | tipo               | hook        | acción |
+| --------------------------- | ------------------ | ----------- | ------ |
+| `platform_prompt_injection` | `prompt_injection` | `post_tool` | `warn` |
+| `platform_secret_leakage`   | `secret_leakage`   | `post_llm`  | `warn` |
+| `platform_pii`              | `pii`              | `post_llm`  | `warn` |
+
+`prompt_injection` va en `post_tool` porque ahí es donde reentra al contexto lo
+que devuelve una tool (RAG / HTTP / MCP): es el hook que cierra la inyección
+**indirecta**.
+
+Los tres arrancan en `warn` y no en `block` a propósito (mitigación nº1 de
+riesgos de prod-03: calibrar con datos antes de bloquear). **El candado protege
+la EXISTENCIA del check, no su dureza**: un tenant no puede quitarlos ni
+relajarlos, pero la plataforma puede subirlos a `block` sin tocar código. El
+seed es idempotente y **no pisa**: si el operador los subió, un re-arranque no
+se lo revierte.
+
+### CRUD de capas
+
+| Método   | Ruta                                         | Quién        |
+| -------- | -------------------------------------------- | ------------ |
+| `GET`    | `/guardrails/config[?project_id=]`           | miembro      |
+| `GET`    | `/guardrails/config/layers/{scope}`          | miembro      |
+| `PUT`    | `/guardrails/config/layers/tenant`           | tenant_admin |
+| `PUT`    | `/guardrails/config/layers/project/{id}`     | tenant_admin |
+| `DELETE` | `/guardrails/config/layers/{tenant,project}` | tenant_admin |
+
+El `GET` de la config efectiva devuelve además el **recibo de procedencia**: qué
+capa ganó cada check y cuáles están bloqueados, para que la UI pueda explicar
+por qué algo no se puede tocar.
+
+Cada escritura resuelve con `resolve_config(..., strict=True)`, así que un
+intento de sobrescribir, degradar o **eliminar** (`remove: true`) un guardrail
+`locked` responde **422** con `{error: "locked_guardrail_override", hook, key,
+layer, message}`. Antes de prod-03 ese intento se ignoraba en silencio y el
+tenant se quedaba creyendo que había apagado el check.
+
+## Qué pasa cuando un check NO emite veredicto (`on_error`)
+
+Un check puede **reventar** (modelo caído, regex que se atraganta) o declararse
+**indisponible** (`content_safety` sin clasificador, que es su estado por
+defecto). Son el mismo caso: no hay veredicto. La política la fija `on_error`
+por check (ADR 0102 D5, opción c):
+
+| `on_error` | Efecto                                                       |
+| ---------- | ------------------------------------------------------------ |
+| `block`    | fail-closed: cuenta como disparo con acción `block`          |
+| `warn`     | fail-open: dispara con acción `warn` — advisory, **no muda** |
+
+**El default depende de `locked`**: `block` para los guardrails que la
+plataforma bloqueó, `warn` para el resto. Lo que el operador escriba gana
+siempre (un `locked` con `on_error: warn` se queda en warn, que es la vía para
+observar antes de bloquear). Un candado que se abre solo cuando el check
+revienta no es un candado.
+
+Nótese la asimetría que esto crea en el baseline sembrado, y es deliberada: los
+tres `locked` corren en `warn`, así que **un hallazgo solo avisa, pero un check
+ROTO bloquea**.
+
+`warn` no significa silencio: el outcome **dispara**, y como
+`record_pipeline_decision` solo persiste los outcomes disparados, es la
+diferencia entre que el dashboard enseñe «content_safety lleva una semana sin
+clasificador» y que no lo enseñe nunca.
+
+## Coste y concurrencia
+
+El motor es síncrono y CPU-bound (regex, entropía, `ast.parse`; el detector
+genérico de `secret_leakage` es lineal-cuadrático en el peor caso). Por eso:
+
+- los hosts async lo ejecutan **fuera del event loop**, vía `asyncio.to_thread`
+  (`api_server/guardrails/planning.py::_run_off_loop`). El motor es puro, así
+  que sacarlo a un hilo es seguro por construcción;
+- el texto escaneado está **acotado** a 50 000 caracteres a los dos lados de la
+  plataforma (`MAX_SCANNED_CHARS` en el api-server, `_HOOK_INPUT_MAX` en el
+  runtime), y el recorte se **anota** (`metadata.truncated`), que viaja al
+  evento: un escaneo parcial presentado como completo es peor que no escanear,
+  porque su «no se encontró nada» se lee como una garantía que no se dio.
 
 ## Las seis acciones
 
@@ -159,6 +269,32 @@ Cada disparo se persiste como `guardrail_events` tenant-scoped con `agent_label`
 `planning_chat` / `plan_generation` (el chat dispara antes de que exista una
 execution).
 
+### Dónde se invocan de verdad (prod-03 task_prod03_14)
+
+Durante dos meses estas funciones tuvieron **cero llamantes fuera de tests** y
+el roadmap del Plan 11 daba `task_11_22` por cableada (hallazgo guardrails-9).
+Los llamantes reales, desde el 2026-08-01, viven en
+`api_server/guardrails/route_gates.py`:
+
+| Gate                   | Ruta                                | Hook       |
+| ---------------------- | ----------------------------------- | ---------- |
+| `gate_planning_turn`   | `POST /conversations/{id}/messages` | `pre_llm`  |
+| `gate_plan_generation` | `POST /projects/{id}/plans`         | `post_llm` |
+
+Dos detalles que no son obvios:
+
+- el turno se evalúa **antes** de persistir el mensaje y de programar la
+  respuesta del equipo — bloquear después de haber llamado al LLM no bloquea
+  nada;
+- el gate de «Generar Plan» corre **solo sobre el borrador que produjo el
+  chat**, no sobre un `specification` inline. El esquema exige `summary` no
+  vacío y al menos una tarea; aplicarlo al contrato público de la API bloquearía
+  flujos legítimos (incluido crear la carcasa vacía de un plan).
+
+Cuando un gate bloquea, el evento se persiste **en su propia transacción**: el
+422 hace rollback de la sesión de la request, y el único turno que la plataforma
+llegó a DETENER sería justamente el que no aparecería nunca en el dashboard.
+
 ## Notas de seguridad / multi-tenancy
 
 - `guardrail_events` es tenant-scoped + RLS; el aislamiento cross-tenant está
@@ -175,7 +311,8 @@ execution).
 | 11_01–11_09 | ✅ motor + 12 built-in (commiteado)                                                                       |
 | 11_20       | implementado en el working tree (modelo/migración 0052/recorder/endpoints/dashboard); pendiente de commit |
 | 11_21       | ⏳ **alertas configurables NO implementadas** (sin config/endpoint/evaluador de umbral)                   |
-| 11_22       | ✅ guardrails del chat de planning (commiteado)                                                           |
+| 11_22       | ✅ guardrails del chat de planning (commiteado) — **cableados a las rutas en prod-03 task_prod03_14**     |
+| prod-03     | ✅ capas persistidas (0132) + baseline locked + CRUD strict + `on_error` por `locked` + seam async        |
 
 Detalle completo y huecos de alcance en el changelog del plan:
 [`docs/07-changelog/11-guardrails-precios.md`](../07-changelog/11-guardrails-precios.md).

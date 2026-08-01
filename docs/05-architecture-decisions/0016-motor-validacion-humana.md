@@ -95,8 +95,17 @@ Positivas:
 
 Negativas / cuidados:
 
-- La caducidad la dispara `expire_stale_requests`; falta el job
-  periódico (Celery beat) que la invoque — es wiring de despliegue.
+- ~~La caducidad la dispara `expire_stale_requests`; falta el job periódico
+  (Celery beat) que la invoque — es wiring de despliegue.~~ **Cerrado el
+  2026-08-01** (prod-03 `task_prod03_05`): `workers.expire_stale_approvals`,
+  cableada al beat cada 15 min en la cola `default`, con la ventana
+  (`approval.timeout_hours`, default 24 h) y un interruptor vivo
+  (`approval_expiry_enabled`) leídos en cada pasada. Barre tenant a tenant, cada
+  uno en su transacción, y comparte el guard atómico de la resolución humana
+  para no pisar una decisión de un revisor. Este apunte estuvo dos meses aquí
+  sin que nadie lo recogiera: es el patrón dominante de esta base —mecanismo
+  entregado, cero llamantes—. Runbook:
+  [`06-runbooks/aprobaciones-atascadas.md`](../06-runbooks/aprobaciones-atascadas.md).
 - La integración motor ↔ agent loop en ejecución no está cableada:
   Fase F entrega el motor; el agente que lo invoca a mitad de bucle es
   trabajo posterior.

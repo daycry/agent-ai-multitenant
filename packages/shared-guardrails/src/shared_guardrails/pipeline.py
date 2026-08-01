@@ -21,6 +21,7 @@ from shared_guardrails.types import (
     Action,
     GuardrailContext,
     GuardrailOutcome,
+    GuardrailResult,
     HookPoint,
     PipelineDecision,
     Severity,
@@ -97,26 +98,41 @@ class GuardrailPipeline:
         triggered_actions: list[Action] = []
 
         for item in bound:
-            # ADR 0102 D5: un check que REVIENTA nunca tumba el pipeline. Con
-            # on_error="warn" (default) es fail-open: outcome no disparado con
-            # el error como detalle. Con on_error="block" es fail-closed: el
-            # fallo dispara con acción block (checks críticos del operador).
+            # ADR 0102 D5: un check que REVIENTA nunca tumba el pipeline. La
+            # política sale de `effective_on_error`: "warn" es fail-open
+            # (outcome no disparado con el error como detalle) y "block" es
+            # fail-closed (el fallo dispara con acción block). El default
+            # depende de `locked`, no es "warn" para todos.
+            on_error = item.spec.effective_on_error
             try:
                 result = item.guardrail.check(context)
             except Exception as exc:
-                fail_closed = item.spec.on_error == "block"
-                outcomes.append(
-                    GuardrailOutcome(
-                        type=item.spec.type,
-                        triggered=fail_closed,
-                        severity=Severity.HIGH if fail_closed else Severity.LOW,
-                        detail=f"check crashed ({type(exc).__name__}: {exc})",
-                        action=Action.BLOCK if fail_closed else None,
-                        payload={"on_error": item.spec.on_error},
-                    )
+                outcome, action = self._no_verdict(
+                    item,
+                    on_error=on_error,
+                    detail=f"check crashed ({type(exc).__name__}: {exc})",
+                    payload={},
                 )
-                if fail_closed:
-                    triggered_actions.append(Action.BLOCK)
+                outcomes.append(outcome)
+                if action is not None:
+                    triggered_actions.append(action)
+                continue
+            if _is_unavailable(result):
+                # El check corrió pero se declara SIN veredicto (p. ej.
+                # `content_safety` sin clasificador, que es su estado por
+                # defecto). Antes pasaba en silencio: `triggered=False`, ningún
+                # evento persistido, y la plataforma creyendo tener una capa que
+                # no estaba corriendo. Misma política que el crash: no emitir
+                # veredicto es no emitir veredicto.
+                outcome, action = self._no_verdict(
+                    item,
+                    on_error=on_error,
+                    detail=result.detail or "guardrail unavailable",
+                    payload=dict(result.payload),
+                )
+                outcomes.append(outcome)
+                if action is not None:
+                    triggered_actions.append(action)
                 continue
             # Config action overrides the guardrail's own suggestion.
             action = item.spec.action if item.spec.action is not None else result.suggested_action
@@ -141,6 +157,52 @@ class GuardrailPipeline:
             action=decisive,
             outcomes=outcomes,
         )
+
+    @staticmethod
+    def _no_verdict(
+        item: _BoundGuardrail,
+        *,
+        on_error: str,
+        detail: str,
+        payload: dict[str, object],
+    ) -> tuple[GuardrailOutcome, Action | None]:
+        """El outcome de un check que no emitió veredicto (ADR 0102 D5).
+
+        Cubre los dos modos: el check reventó, o se declaró indisponible. Con
+        ``block`` cuenta como disparo (fail-closed); con ``warn`` también
+        DISPARA, pero con acción ``warn``: la diferencia entre fail-open y
+        silencio es que el fail-open deja rastro. ``record_pipeline_decision``
+        solo persiste los outcomes disparados, así que sin esto el operador no
+        podría enterarse nunca de que su capa lleva una semana sin correr.
+
+        Un ``action:`` declarado en la config gana en las dos ramas: si el
+        operador dijo «cuando este check hable, escala», eso vale también cuando
+        lo que dice es «no puedo hablar».
+        """
+        fail_closed = on_error == "block"
+        default_action = Action.BLOCK if fail_closed else Action.WARN
+        action = item.spec.action if item.spec.action is not None else default_action
+        return (
+            GuardrailOutcome(
+                type=item.spec.type,
+                triggered=True,
+                severity=Severity.HIGH if fail_closed else Severity.LOW,
+                detail=detail,
+                action=action,
+                payload={**payload, "on_error": on_error},
+            ),
+            action,
+        )
+
+
+def _is_unavailable(result: GuardrailResult) -> bool:
+    """El check corrió pero se declaró SIN clasificador / sin veredicto.
+
+    El contrato es el que ya usa ``content_safety``: ``triggered=False`` con
+    ``payload["available"] is False`` — nunca finge un veredicto seguro. Un
+    check que dispara no entra por aquí: si tiene veredicto, manda el veredicto.
+    """
+    return not result.triggered and result.payload.get("available") is False
 
 
 __all__ = ["GuardrailPipeline"]

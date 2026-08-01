@@ -50,16 +50,17 @@ entregarse la alerta a sí mismo.
 
 ### Warnings — se miran en horario laboral
 
-| Alerta                     | Qué significa                                                               | Primer paso                                                              |
-| -------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `CeleryQueueGrowing`       | Una cola lleva 15 min con >50 mensajes: nadie la drena o hay backlog.       | ¿Vive el worker de esa cola? ¿Tiene consumidor?                          |
-| `NotificationsDLQNotEmpty` | Notificaciones que agotaron reintentos = trabajo perdido.                   | Revisar credenciales/URL del canal, re-encolar o descartar.              |
-| `ExecutionFailureRateHigh` | >20% de runs fallando (con ≥10 runs, para no gritar con el sistema parado). | Credencial de proveedor LLM caducada, runtime roto o egress-proxy caído. |
-| `HumanApprovalsStale`      | Una aprobación lleva >24 h sin respuesta: su ejecución está DETENIDA.       | Bandeja del inbox humano.                                                |
-| `MetricsSamplerStale`      | El sampler lleva >5 min sin correr: todo lo `agentic_*` está congelado.     | Beat y worker de mantenimiento.                                          |
-| `MetricsCollectorDown`     | Un colector concreto falla (`up=0`).                                        | `maintenance.sample_queue_metrics.error` en los logs del worker.         |
-| `TasksBlockedHigh`         | >10 tareas bloqueadas 30 min.                                               | Inbox humano y visor de runs.                                            |
-| `VaultTokenExpiringSoon`   | Al token de Vault le quedan <24 h: la renovación no funciona.               | `vault.token.renew_failed` en logs; rotar el token de servicio.          |
+| Alerta                         | Qué significa                                                                                    | Primer paso                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| `CeleryQueueGrowing`           | Una cola lleva 15 min con >50 mensajes: nadie la drena o hay backlog.                            | ¿Vive el worker de esa cola? ¿Tiene consumidor?                                        |
+| `NotificationsDLQNotEmpty`     | Notificaciones que agotaron reintentos = trabajo perdido.                                        | Revisar credenciales/URL del canal, re-encolar o descartar.                            |
+| `ExecutionFailureRateHigh`     | >20% de runs fallando (con ≥10 runs, para no gritar con el sistema parado).                      | Credencial de proveedor LLM caducada, runtime roto o egress-proxy caído.               |
+| `HumanApprovalsStale`          | Una aprobación lleva >24 h sin respuesta: su ejecución está DETENIDA.                            | Bandeja del inbox humano.                                                              |
+| `MetricsSamplerStale`          | El sampler lleva >5 min sin correr: todo lo `agentic_*` está congelado.                          | Beat y worker de mantenimiento.                                                        |
+| `MetricsCollectorDown`         | Un colector concreto falla (`up=0`).                                                             | `maintenance.sample_queue_metrics.error` en los logs del worker.                       |
+| `TasksBlockedHigh`             | >10 tareas bloqueadas 30 min.                                                                    | Inbox humano y visor de runs.                                                          |
+| `MemorizerDistillationFailing` | 5 destilaciones seguidas fallidas: la plataforma ha dejado de aprender de sus runs, y sin ruido. | Fila activa de kind `ollama` en `llm_providers`; logs `memorizer.distillation_failed`. |
+| `VaultTokenExpiringSoon`       | Al token de Vault le quedan <24 h: la renovación no funciona.                                    | `vault.token.renew_failed` en logs; rotar el token de servicio.                        |
 
 > **Regla al añadir una alerta**: si cita una métrica que nadie emite, NUNCA
 > dispara — y eso es indistinguible de «todo va bien». La guarda

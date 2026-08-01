@@ -76,6 +76,19 @@ async def _collect_celery_task_counters(
     return parse_task_counters(raw_counts, raw_durations)
 
 
+async def _collect_memorizer_failures(redis: Any) -> int:
+    """Destilaciones del Memorizer fallidas SEGUIDAS (0 = sano).
+
+    La memorización es best-effort y se traga sus excepciones para no tumbar el
+    pipeline; sin este gauge, un destilador caído solo se nota en que nadie
+    aprende nada. Lo escriben los N hijos del prefork en el Redis del broker
+    (`workers/memorizer_metrics.py`).
+    """
+    from workers.memorizer_metrics import read_consecutive_failures
+
+    return await read_consecutive_failures(redis)
+
+
 async def _collect_execution_counts(session: Any) -> dict[str, int]:
     """Ejecuciones por estado en las últimas 24h — la actividad real de runs
     que el dashboard «Plataforma Agéntica» muestra como pulso del sistema."""
@@ -212,6 +225,11 @@ async def _collect_from_redis(
     task_counts, task_durations = await _guarded(
         "celery_tasks", _collect_celery_task_counters(broker), failures, ({}, {})
     )
+    # prod-07 task_prod07_15: la racha de destilaciones fallidas del Memorizer
+    # vive en el MISMO Redis del broker (la escriben los N hijos del prefork).
+    memorizer_failures = await _guarded(
+        "memorizer", _collect_memorizer_failures(broker), failures, None
+    )
 
     # La DLQ vive en OTRO Redis (el de eventos), no en el del broker.
     events_redis = Redis.from_url(settings.events_redis_url)
@@ -228,6 +246,7 @@ async def _collect_from_redis(
         "task_counts": task_counts,
         "task_durations": task_durations,
         "dlq_depths": dlq_depths,
+        "memorizer_failures": memorizer_failures,
     }
 
 
@@ -288,7 +307,7 @@ async def _sample_queue_metrics_async(
     except Exception as exc:  # pragma: no cover — best-effort: never crash beat
         # Fallo de infraestructura fuera de los colectores (p.ej. la sesión DB
         # no abre): los colectores DB no corrieron.
-        failures.update(_DB_COLLECTORS | {"celery_tasks"})
+        failures.update(_DB_COLLECTORS | {"celery_tasks", "memorizer"})
         _log.warning("maintenance.sample_queue_metrics.error", error=str(exc))
     finally:
         await engine.dispose()

@@ -288,11 +288,13 @@ async def test_vault_secret_reads_run_off_the_event_loop() -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_query_embedder_reuses_one_shared_httpx_client() -> None:
-    from api_server.routers.docs_viewer import (
-        get_query_embedder,
+    # El singleton se mudó a `ingestion/embed_client.py` (task_prod13_05): desde
+    # un router no lo podían importar los servicios que también lo necesitan.
+    from api_server.ingestion.embed_client import (
         get_shared_embed_client,
         reset_shared_embed_client_cache,
     )
+    from api_server.routers.docs_viewer import get_query_embedder
 
     reset_shared_embed_client_cache()
     try:

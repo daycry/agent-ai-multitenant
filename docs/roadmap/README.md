@@ -228,20 +228,21 @@ está aplicado: esas 6 fases llevan `gate_override` con justificación escrita e
 
 **Orden recomendado de validación** (primero lo que toca producción directamente):
 
-| Orden | Plan                                                         | Por qué primero                                               |
-| ----- | ------------------------------------------------------------ | ------------------------------------------------------------- |
-| 1     | [12-backup-restore.md](./12-backup-restore.md)               | Sin restore verificado no hay red de seguridad para nada más  |
-| 2     | [15-instalador-produccion.md](./15-instalador-produccion.md) | Es la puerta de entrada a producción (y arrancó con override) |
-| 3     | [08-sso-empresarial.md](./08-sso-empresarial.md)             | Superficie de autenticación expuesta                          |
-| 4     | [09-marketplace.md](./09-marketplace.md)                     | Instala código de terceros en el tenant                       |
+| Orden | Plan                                                         | Por qué primero                                               | Responsable    | Ventana      |
+| ----- | ------------------------------------------------------------ | ------------------------------------------------------------- | -------------- | ------------ |
+| 1     | [12-backup-restore.md](./12-backup-restore.md)               | Sin restore verificado no hay red de seguridad para nada más  | ⬜ por asignar | ⬜ por fijar |
+| 2     | [15-instalador-produccion.md](./15-instalador-produccion.md) | Es la puerta de entrada a producción (y arrancó con override) | ⬜ por asignar | ⬜ por fijar |
+| 3     | [08-sso-empresarial.md](./08-sso-empresarial.md)             | Superficie de autenticación expuesta                          | ⬜ por asignar | ⬜ por fijar |
+| 4     | [09-marketplace.md](./09-marketplace.md)                     | Instala código de terceros en el tenant                       | ⬜ por asignar | ⬜ por fijar |
 
 El resto sigue por prioridad de la serie `prod-*` (P0 → P1 → P2).
 
-**Responsable y ventana siguen sin nombrar, y es a propósito**: el ADR 0138 los deja fuera de su
-alcance por escrito («este ADR no los puede inventar» — comprometen calendario de una persona). Sin
-ellos la cola está priorizada pero no agendada, que es exactamente el riesgo 1 de `prod-15`.
-Rellenar las dos columnas que faltan es la única pieza que le queda a `task_gov_reestado_04`, y la
-firma un humano.
+**Las dos últimas columnas están vacías a propósito, y son lo único que le queda a
+`task_gov_reestado_04`**: el ADR 0138 deja responsable y ventana fuera de su alcance por escrito
+(«este ADR no los puede inventar» — comprometen el calendario de una persona). Están puestas como
+huecos en vez de descritas en prosa porque una cola priorizada pero **no agendada** es exactamente
+el riesgo 1 de `prod-15`, y un hueco visible se rellena; un párrafo que dice que falta algo, no.
+Las firma un humano.
 
 ## MVP Funcional
 

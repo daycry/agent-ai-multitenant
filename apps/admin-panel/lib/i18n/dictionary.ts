@@ -1340,6 +1340,263 @@ export const dictionary = {
   },
 
   /**
+   * `app/admin/knowledge-bases/` — la pantalla y sus cuatro diálogos, más el
+   * panel de documentos que cuelga de cada fila (prod-16 `task_prod16_04`).
+   *
+   * Es el namespace más grande del diccionario por una razón concreta: el guard
+   * `check-i18n.mjs` sólo marcaba **3 atributos** en este módulo, y eso lo hacía
+   * parecer un lote pequeño. Los 3 eran la punta de ~2.100 líneas de castellano
+   * cableado en cinco ficheros. La mitad del texto vive en superficies plegadas
+   * (los diálogos, el panel de documentos), que es justo donde un guard basado
+   * en atributos no llega y donde un `useT()` olvidado no se ve hasta que
+   * alguien despliega una fila en producción.
+   *
+   * "Grant" se queda en inglés en los dos idiomas a propósito: es el término
+   * con el que el backend, la API y el resto del panel nombran la concesión de
+   * acceso (`/knowledge-bases/{id}/projects`), y traducirlo sólo en esta
+   * pantalla rompería la correspondencia con lo que el operador lee en los logs.
+   */
+  knowledgeBases: {
+    home: { es: "Inicio", en: "Home" },
+    title: { es: "Knowledge Bases", en: "Knowledge Bases" },
+    description: {
+      es: "Bases de conocimiento del tenant. Cada KB agrupa documentos indexados y se asigna (grant) a uno o más proyectos.",
+      en: "Knowledge bases for this tenant. Each KB groups indexed documents and is granted to one or more projects.",
+    },
+    categoriesLink: { es: "Categorías", en: "Categories" },
+    createButton: { es: "Crear KB", en: "New KB" },
+    loading: { es: "Cargando KBs…", en: "Loading KBs…" },
+    errorTitle: { es: "Error", en: "Error" },
+    empty: {
+      es: "Aún no hay KBs en este tenant. Crea la primera para empezar a indexar documentos.",
+      en: "No KBs in this tenant yet. Create the first one to start indexing documents.",
+    },
+    uncategorized: { es: "Sin categoría", en: "Uncategorized" },
+
+    // --- fila de KB ------------------------------------------------------
+    builtinBadge: { es: "Built-in", en: "Built-in" },
+    assignments: { es: "Asignaciones", en: "Assignments" },
+    assignmentsTitle: {
+      es: "Ver qué proyectos y agentes tienen grant",
+      en: "See which projects and agents have a grant",
+    },
+    grant: { es: "Grant", en: "Grant" },
+    grantTitle: { es: "Dar acceso a un proyecto", en: "Give a project access" },
+
+    // --- selector de categoría (compartido por alta y edición) ------------
+    noCategoryOption: { es: "— Sin categoría —", en: "— Uncategorized —" },
+    categoryGroupBuiltin: { es: "Built-in", en: "Built-in" },
+    categoryGroupTenant: { es: "Tenant", en: "Tenant" },
+    newCategoryTitle: { es: "Crear categoría nueva", en: "Create a new category" },
+
+    // --- alta ------------------------------------------------------------
+    createTitle: { es: "Crear Knowledge Base", en: "Create knowledge base" },
+    createDescription: {
+      es: "Una KB es un contenedor de documentos indexados. Tras crearla, despliégala en esta misma lista para subir documentos, y dale acceso (grant) a los proyectos o agentes que la consumirán.",
+      en: "A KB is a container of indexed documents. Once created, expand it in this same list to upload documents, and grant access to the projects or agents that will use it.",
+    },
+    nameLabel: { es: "Nombre", en: "Name" },
+    categoryLabel: { es: "Categoría", en: "Category" },
+    categoryHelp: {
+      es: "Las categorías ayudan a organizar el listado. Opcional.",
+      en: "Categories help organize the list. Optional.",
+    },
+    descriptionLabel: { es: "Descripción", en: "Description" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    creating: { es: "Creando…", en: "Creating…" },
+    createSubmit: { es: "Crear KB", en: "Create KB" },
+    createError: { es: "Error al crear", en: "Could not create it" },
+
+    // --- edición ---------------------------------------------------------
+    editTitle: { es: "Editar Knowledge Base", en: "Edit knowledge base" },
+    embeddingLabel: { es: "Modelo de embedding", en: "Embedding model" },
+    embeddingHelp: {
+      es: "El modelo es fijo por KB. Para usar otro, crea una KB nueva y reindexa los documentos.",
+      en: "The model is fixed per KB. To use a different one, create a new KB and reindex the documents.",
+    },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saveError: { es: "Error al guardar", en: "Could not save it" },
+
+    // --- mini-diálogo inline de categoría nueva ---------------------------
+    inlineCatTitle: { es: "Nueva categoría", en: "New category" },
+    inlineCatDescription: {
+      es: "Crea una categoría para organizar tus KBs. El slug es el identificador estable que se usa en filtros y URLs.",
+      en: "Create a category to organize your KBs. The slug is the stable identifier used in filters and URLs.",
+    },
+    slugLabel: { es: "Slug", en: "Slug" },
+    slugPlaceholder: { es: "ej. compliance-pci", en: "e.g. compliance-pci" },
+    catNamePlaceholder: { es: "ej. Compliance PCI-DSS", en: "e.g. Compliance PCI-DSS" },
+    colorLabel: { es: "Color", en: "Color" },
+    inlineCatSubmit: { es: "Crear", en: "Create" },
+    inlineCatError: { es: "Error al crear la categoría", en: "Could not create the category" },
+
+    // --- borrado con confirmación por nombre ------------------------------
+    deleteTitle: { es: "Borrar Knowledge Base", en: "Delete knowledge base" },
+    deleteDescriptionPre: {
+      es: "Borra la KB, todos sus documentos indexados y los grants a proyectos. La acción es ",
+      en: "Deletes the KB, all its indexed documents and its project grants. The action is ",
+    },
+    deleteDescriptionStrong: { es: "irreversible", en: "irreversible" },
+    deleteDescriptionPost: {
+      es: ". Los documentos en MinIO no se tocan.",
+      en: ". The documents in MinIO are left untouched.",
+    },
+    deleteConfirmPrompt: {
+      es: "Para confirmar, teclea el nombre de la KB:",
+      en: "To confirm, type the KB name:",
+    },
+    deleting: { es: "Borrando…", en: "Deleting…" },
+    deleteSubmit: { es: "Borrar definitivamente", en: "Delete permanently" },
+    deleteError: { es: "Error al borrar", en: "Could not delete it" },
+
+    // --- grant a proyecto -------------------------------------------------
+    grantDialogTitle: { es: "Dar acceso a un proyecto", en: "Give a project access" },
+    grantDescription: {
+      es: 'Después del grant, el proyecto verá esta KB en su sub-sección "Knowledge Bases" y podrá subir documentos. Puedes hacer grant a varios proyectos repitiendo esta acción.',
+      en: 'After the grant, the project will see this KB in its "Knowledge Bases" sub-section and will be able to upload documents. You can grant several projects by repeating this action.',
+    },
+    grantKbPrefix: { es: "KB:", en: "KB:" },
+    grantProjectLabel: { es: "Proyecto destino", en: "Target project" },
+    grantSuccessNamed: {
+      es: 'Acceso otorgado a "{name}".',
+      en: 'Access granted to "{name}".',
+    },
+    grantSuccess: {
+      es: "Acceso otorgado al proyecto.",
+      en: "Access granted to the project.",
+    },
+    grantError: { es: "Error al otorgar acceso", en: "Could not grant access" },
+    granting: { es: "Otorgando…", en: "Granting…" },
+    grantSubmit: { es: "Otorgar acceso", en: "Grant access" },
+    close: { es: "Cerrar", en: "Close" },
+
+    // --- panel de documentos ---------------------------------------------
+    docsTitle: { es: "Documentos ({n})", en: "Documents ({n})" },
+    docsUpload: { es: "Subir documento", en: "Upload document" },
+    docsLoading: { es: "Cargando documentos…", en: "Loading documents…" },
+    docsEmpty: {
+      es: "Esta KB aún no tiene documentos. Sube el primero para indexarlo.",
+      en: "This KB has no documents yet. Upload the first one to index it.",
+    },
+    // Lenguaje de persona, no jerga del pipeline (KB Q6): el estado técnico
+    // sigue en `data-status`, que es lo que consultan los e2e.
+    docStatusPending: { es: "Procesando…", en: "Processing…" },
+    docStatusProcessing: { es: "Procesando…", en: "Processing…" },
+    docStatusIndexed: { es: "Listo", en: "Ready" },
+    docStatusIndexedEmpty: { es: "Sin contenido aprovechable", en: "No usable content" },
+    docStatusFailed: { es: "Error", en: "Error" },
+    docEmptyHint: {
+      es: "Procesado pero sin fragmentos (0 chunks): el agente no puede recuperar nada de este documento. Sube un original con texto seleccionable o reindexa.",
+      en: "Processed but with no fragments (0 chunks): the agent cannot retrieve anything from this document. Upload an original with selectable text, or reindex it.",
+    },
+    docProgress: { es: "Progreso", en: "Progress" },
+    docReindexTitle: {
+      es: "Reindexar (vuelve a procesar el documento)",
+      en: "Reindex (processes the document again)",
+    },
+    docDelete: { es: "Eliminar", en: "Delete" },
+    uploadTitle: { es: "Subir documento a la KB", en: "Upload a document to the KB" },
+    uploadFileLabel: { es: "Archivo", en: "File" },
+    uploadTitleLabel: { es: "Título (opcional)", en: "Title (optional)" },
+    uploadTitlePlaceholder: {
+      es: "Por defecto: nombre del archivo",
+      en: "Defaults to the file name",
+    },
+    uploading: { es: "Subiendo…", en: "Uploading…" },
+    uploadSubmit: { es: "Subir", en: "Upload" },
+
+    // --- diálogo de asignaciones -----------------------------------------
+    assignmentsDialogTitle: { es: "Asignaciones — {name}", en: "Assignments — {name}" },
+    assignmentsEmpty: {
+      es: "Esta KB no está granteada a ningún proyecto ni agente todavía. Añade un grant aquí debajo.",
+      en: "This KB is not granted to any project or agent yet. Add a grant below.",
+    },
+    assignmentsProjects: { es: "Proyectos", en: "Projects" },
+    assignmentsAgents: { es: "Agentes", en: "Agents" },
+    grantToProject: { es: "Conceder a proyecto", en: "Grant to a project" },
+    chooseProject: { es: "Elige un proyecto…", en: "Choose a project…" },
+    grantAction: { es: "Conceder", en: "Grant" },
+    advancedAgentGrant: {
+      es: "Avanzado: conceder a un agente concreto",
+      en: "Advanced: grant to a specific agent",
+    },
+    chooseAgent: { es: "Elige un agente…", en: "Choose an agent…" },
+  },
+
+  /**
+   * `app/admin/knowledge-bases/categories/` — las categorías con que se agrupan
+   * las KBs (prod-16 `task_prod16_04`).
+   *
+   * Namespace propio y no claves dentro de `knowledgeBases` porque es una
+   * pantalla distinta con su propio CRUD; compartir namespace obligaría a
+   * prefijar cada clave (`catCreateTitle`, `catDeleteTitle`…) para no chocar con
+   * las de la KB, que es la señal de que son dos cosas.
+   */
+  kbCategories: {
+    home: { es: "Inicio", en: "Home" },
+    kbsCrumb: { es: "Knowledge Bases", en: "Knowledge Bases" },
+    crumb: { es: "Categorías", en: "Categories" },
+    title: { es: "Categorías de KBs", en: "KB categories" },
+    description: {
+      es: "Organiza tus knowledge bases en grupos. Las built-in vienen sembradas por la plataforma y son comunes a todos los tenants.",
+      en: "Organize your knowledge bases into groups. The built-in ones are seeded by the platform and shared by every tenant.",
+    },
+    createButton: { es: "Nueva categoría", en: "New category" },
+    loading: { es: "Cargando categorías…", en: "Loading categories…" },
+    errorTitle: { es: "Error", en: "Error" },
+    builtinSection: { es: "Built-in ({n})", en: "Built-in ({n})" },
+    tenantSection: { es: "Tenant ({n})", en: "Tenant ({n})" },
+    builtinBadge: { es: "Built-in", en: "Built-in" },
+    emptyCustom: {
+      es: "No has creado categorías propias todavía. Usa las built-in o crea una nueva.",
+      en: "You have not created any categories of your own yet. Use the built-in ones or create a new one.",
+    },
+
+    // --- alta -------------------------------------------------------------
+    createTitle: { es: "Nueva categoría", en: "New category" },
+    createDescription: {
+      es: "El slug es el identificador estable que se usa en filtros y URLs (sólo a-z, 0-9, `_`, `-`). El nombre es el texto que se muestra en la UI.",
+      en: "The slug is the stable identifier used in filters and URLs (only a-z, 0-9, `_`, `-`). The name is the text shown in the UI.",
+    },
+    slugLabel: { es: "Slug", en: "Slug" },
+    slugPlaceholder: { es: "ej. compliance-pci", en: "e.g. compliance-pci" },
+    nameLabel: { es: "Nombre", en: "Name" },
+    namePlaceholder: { es: "ej. Compliance PCI-DSS", en: "e.g. Compliance PCI-DSS" },
+    colorLabel: { es: "Color", en: "Color" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    creating: { es: "Creando…", en: "Creating…" },
+    createSubmit: { es: "Crear categoría", en: "Create category" },
+    createError: { es: "Error al crear", en: "Could not create it" },
+
+    // --- edición ----------------------------------------------------------
+    editTitle: { es: "Editar categoría", en: "Edit category" },
+    editDescription: {
+      es: "El slug no se puede cambiar — está sembrado en filtros y posibles integraciones.",
+      en: "The slug cannot be changed — it is baked into filters and possible integrations.",
+    },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saveError: { es: "Error al guardar", en: "Could not save it" },
+
+    // --- borrado ----------------------------------------------------------
+    deleteTitle: { es: "Borrar categoría", en: "Delete category" },
+    deleteDescription: {
+      es: "Las KBs que pertenecían a esta categoría quedarán sin categoría (no se borran).",
+      en: "The KBs that belonged to this category will be left without a category (they are not deleted).",
+    },
+    // El nombre va en <strong> y el slug en <code>, así que la frase se parte
+    // en vez de interpolarse: una traducción no puede llevar marcado dentro.
+    deleteConfirmPre: {
+      es: "¿Borrar la categoría ",
+      en: "Delete the category ",
+    },
+    deleting: { es: "Borrando…", en: "Deleting…" },
+    deleteSubmit: { es: "Borrar", en: "Delete" },
+    deleteError: { es: "Error al borrar", en: "Could not delete it" },
+  },
+
+  /**
    * `lib/memory/honesty.ts` — los textos de "no disponible aún" del subsistema
    * de memoria (Plan 06.17 `task_06_17_06`).
    *

@@ -216,7 +216,8 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
       en vez del `"auto"` hardcodeado; actualizar los 4 seeds. Cubre
       guardrails-3 (fail-open sin política) y el fail-open de guardrails-2.
       Depende de `task_prod03_01`.
-  - ⏳ **Pendiente (2026-07-31):** la mitad (a) está cerrada desde el **ADR 0104** (`accepted`, decidido por el operador el 2026-07-07): `_resolve_effective_approval_policy` hereda el preset `development` y `tests/unit/test_default_approval_policy.py` lo cubre; falta solo la clave `unlisted_category`, que sigue sin decidir —`requires_human_approval` mantiene el `"auto"` hardcodeado y el ADR 0135 (`proposed`) la difiere expresamente al ADR de política de fallo del motor.
+  - ⏳ **ABIERTA A PROPÓSITO (2026-08-01) — decisión del operador.** La mitad (a) está cerrada desde el **ADR 0104** (`accepted`): `_resolve_effective_approval_policy` hereda el preset `development` y `tests/unit/test_default_approval_policy.py` lo cubre. La mitad (b), la clave `unlisted_category`, **no la decido yo**: cambia cuántas acciones para la plataforma y en qué dirección falla, y las dos direcciones tienen coste operativo real. Queda escrita en el **[ADR 0153](../05-architecture-decisions/0153-categoria-no-listada-en-la-politica-de-aprobacion.md)** (`proposed`), con cuatro opciones, su coste y una recomendación argumentada.
+    **Lo que el ADR aporta y no se sabía**: el argumento con el que el ADR 0104 descartó esta clave —«todos los presets construyen sus `decisions` sobre `_all(CATEGORIES, …)`»— es cierto para `seeds/builtin_approval_policies.py` y **falso para lo que acaba en `projects.human_approval_policy`**. Los proyectos nacidos de plantilla copian `_POLICY_DEV_SKELETON` (`seeds/builtin_project_templates.py:62-70`), que lista CUATRO claves —y una de ellas, `external_http`, ni siquiera es canónica, así que no gatea nada—. Medido: **10 de las 13 categorías quedan en `auto` por omisión** en las siete plantillas que usan el esqueleto, incluidas `external_http_post`, `data_export_pii` y `user_management`; y las dos plantillas que la UI presenta como «Producción» heredan los mismos diez huecos. El ADR 0135 difirió esta decisión «al ADR de política de fallo del motor», que es el 0102 D5 — y ese ADR trata el fallo de un CHECK del motor, no el vocabulario de la política de aprobación. La decisión llevaba apuntada en un sitio que no la contenía.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -252,7 +253,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_05` — Job beat de expiración de aprobaciones
 
-- [ ] **Título**: Crear task Celery `workers.expire_stale_approvals` que
+- [x] **Título**: Crear task Celery `workers.expire_stale_approvals` que
       invoque `expire_stale_requests`
       (`apps/api-server/src/api_server/db/approval_repo.py:160-197` — lógica
       a exponer vía servicio compartido o réplica en workers, según el patrón
@@ -263,7 +264,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       evento de timeout para el dispatcher de notificaciones (el enrutado de
       alertas queda en prod-08). Cubre guardrails-5. Depende de
       `task_prod03_04`.
-  - ⏳ **Pendiente (2026-07-31):** la task `workers.expire_stale_approvals`, la constante `APPROVAL_EXPIRY_BEAT_ENTRY`, su entrada de beat cada 15 min en `default` y el registro en `celery_app(imports=…)` están entregados, pero `tests/integration/test_approval_expiry_job.py` da **2 rojos de 7**: la caché Redis de platform settings que introdujo prod-13 sirve valores rancios porque el helper del test escribe la fila sin invalidarla.
+  - ✅ **Hecho (2026-08-01)**: la task, la constante `APPROVAL_EXPIRY_BEAT_ENTRY`, la entrada de beat cada 15 min en `default` y el registro en `celery_app(imports=…)` ya estaban; lo que faltaba era el arnés. **`tests/integration/test_approval_expiry_job.py` 7/7 + `tests/unit/test_approval_expiry_beat.py` 5/5 en verde.** La causa del rojo tenía DOS capas y solo la primera estaba diagnosticada: (1) el helper escribía el platform setting sin invalidar la caché Redis de prod-13, así que el `approval_expiry_enabled=False` del kill-switch sobrevivía al `TRUNCATE` del test siguiente; (2) **y la invalidación que se añadió para arreglarlo fallaba en silencio**, porque `api_server.auth.deps.get_redis` es `lru_cache` y su pool queda atado al event loop del test anterior — la primera operación Redis de cada test revienta con `RuntimeError: Event loop is closed` e `invalidate_platform_setting_cache` se la traga por ser best-effort. Fix: fixture autouse con `reset_redis_cache()` + purga explícita en `_set_setting` y antes del `TRUNCATE`. Rojo verificado quitando el `reset_redis_cache()` (3 rojos) y restaurándolo (7 verdes).
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -305,7 +306,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_07` — Tabla `guardrail_configs` + migración + RLS
 
-- [ ] **Título**: Nueva migración Alembic (reversible) con tabla
+- [x] **Título**: Nueva migración Alembic (reversible) con tabla
       `guardrail_configs` (scope `platform|tenant|project`, `tenant_id`
       nullable solo para scope platform, `project_id` nullable, config JSONB
       validada contra `PipelineConfig`, versión, timestamps) con RLS por
@@ -313,7 +314,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       migraciones guardrail son `20260530_0052_guardrail_events` y
       `20260530_0053_guardrail_alert_rules` — no existe persistencia de
       configs. Cubre guardrails-4 (persistencia).
-  - ⏳ **Pendiente (2026-07-31):** sigue sin existir la tabla `guardrail_configs` ni su migración; la única persistencia de config hoy son `platform_settings.guardrails_config` y `projects.guardrails_config` (migración 0110, ADR 0102 D3), o sea dos capas sueltas y sin scope `tenant`.
+  - ✅ **Hecho (2026-08-01)**: migración **0132** (`20260801_0132_guardrail_configs.py`) con `guardrail_configs` — scope cerrado por CHECK, un segundo CHECK que exige a cada scope SUS columnas (un `platform` con `tenant_id` es una contradicción y la rechaza la BD), tres índices únicos parciales (una fila de plataforma, una por tenant, una por proyecto) y modelo ORM en `api_server/db/guardrail_config.py`. **RLS con una asimetría deliberada**: `USING (tenant_id IS NULL OR tenant_id = app.tenant_id)` deja LEER el baseline de plataforma desde cualquier tenant —es la capa que todos heredan, no contiene dato de nadie, y hoy vive en `platform_settings`, una tabla directamente sin RLS— mientras que el `WITH CHECK` **no** tiene la rama NULL, así que desde una sesión de tenant no se puede crear ni tocar la fila de plataforma. Lo verifica PostgreSQL, no la capa de aplicación. `tests/integration/test_guardrail_configs_table.py` **13/13** (forma, unicidad, catálogo, dos tests cross-tenant, el fail-closed sin `app.tenant_id`, y el **round-trip de reversibilidad ejecutado de verdad**: downgrade → la tabla no existe → upgrade → vuelve con RLS). `test_rls_invariant.py` 7/7 y `test_migrations.py` 11/11 siguen verdes con la tabla nueva dentro.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -325,7 +326,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_08` — Baseline de plataforma locked + CRUD strict
 
-- [ ] **Título**: Seed del baseline de plataforma con `pii`,
+- [x] **Título**: Seed del baseline de plataforma con `pii`,
       `secret_leakage` y `prompt_injection` en `locked: true` (como promete
       `packages/shared-guardrails/src/shared_guardrails/layers.py:8-9`),
       endpoints CRUD tenant/proyecto que resuelven con
@@ -336,7 +337,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       consumirán el dispatch (`task_prod03_11`) y el chat
       (`task_prod03_14`). Cubre guardrails-4 (baseline + candados). Depende
       de `task_prod03_07`.
-  - ⏳ **Pendiente (2026-07-31):** sin la tabla de `task_prod03_07` no hay baseline de plataforma con `locked: true` sembrado, ni CRUD con `resolve_config(..., strict=True)`, ni servicio `get_effective_guardrail_config`; `LockedFieldOverrideError` sigue sin usarse fuera de tests.
+  - ✅ **Hecho (2026-08-01)**: `seeds/guardrail_baseline.py` siembra los tres `locked` (`platform_prompt_injection` en `post_tool` —es el hook que cierra la inyección INDIRECTA, porque ahí es donde reentra lo que devuelve una tool—, `platform_secret_leakage` y `platform_pii` en `post_llm`), cableado como paso `guardrail_baseline` del seed CLI y **idempotente sin pisar**: si el operador subió los tres a `block`, un re-arranque no se lo revierte. Router `routers/guardrail_configs.py` con GET de config efectiva **+ el recibo de procedencia** (qué capa ganó cada check y cuáles están bloqueados, que es lo que permite a la UI explicar por qué algo no se puede tocar), PUT/DELETE de las capas tenant y proyecto bajo `require_tenant_admin`, y `resolve_config(..., strict=True)` en cada escritura → **422 con nombre** (`{"error": "locked_guardrail_override", hook, key, layer, message}`). Servicio `get_effective_guardrail_config` cacheado en Redis con invalidación por alcance (tocar la plataforma purga todo; un tenant, sus proyectos; un proyecto, solo él). **Tres decisiones que conviene leer antes de tocar esto**: (1) los tres van en **`warn`, no en `block`** — es la mitigación nº1 de riesgos de este mismo plan, y el candado protege la EXISTENCIA del check, no su dureza; (2) al ser `locked`, su `on_error` efectivo SÍ es `block` (task_prod03_09), o sea que un hallazgo avisa pero un check ROTO bloquea; (3) la resolución mira primero la tabla nueva y cae a las columnas viejas (`platform_settings.guardrails_config`, `projects.guardrails_config`) si esa capa no tiene fila — mientras nadie escriba, la plataforma se comporta igual que antes, que es la dirección segura. Tests: `test_guardrail_configs_crud.py` **7/7** y `test_guardrail_locked_override_422.py` **5/5**, los dos por la ruta HTTP; el segundo cubre las TRES formas de saltarse un candado (sobrescribir, degradar la acción y `remove: true`, que es la que más fácil se cuela) más la guarda de la guarda (un override permitido SÍ persiste). Rojo verificado poniendo `strict=False`: 4 rojos.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -350,7 +351,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_09` — Política de fallo por check (`on_error`)
 
-- [ ] **Título**: Tras aprobar el ADR de la decisión clave 1: añadir
+- [x] **Título**: Tras aprobar el ADR de la decisión clave 1: añadir
       `on_error: block|warn` a la config declarativa
       (`shared_guardrails/config.py`), envolver cada check en try/except en
       `GuardrailPipeline.run`
@@ -361,7 +362,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       (`packages/shared-guardrails/src/shared_guardrails/checks/content_safety.py:394-404`)
       con la misma política en vez de pasar silenciosamente
       (`types.py:181` solo mira `action`). Cubre guardrails-8.
-  - ⏳ **Pendiente (2026-07-31):** `on_error: block|warn` YA existe, está validado en `config.py` y aplicado en `pipeline.run` desde el **ADR 0102 D5**, con cobertura en `tests/unit/test_guardrails_engine.py`; falta lo otro: el default sigue siendo `warn` para todos (el plan pide `block` para los `locked`) y el `available: False` de `content_safety` continúa pasando en silencio.
+  - ✅ **Hecho (2026-08-01)**. El ADR de la decisión clave 1 **existe y está `accepted`**: es el [ADR 0102 D5](../05-architecture-decisions/0102-cableado-motor-guardrails-runtime.md), que eligió la opción (c) — `on_error` por check con «default `block` (fail-closed) para los guardrails `locked` de plataforma». No hacía falta escribir uno nuevo; hacía falta implementar lo que decía. Entregado: `GuardrailSpec.on_error` pasa de `str = "warn"` a `str | None = None` (guardar la AUSENCIA es lo que permite derivar el default) + `effective_on_error` = `block` si `locked`, `warn` si no, y lo escrito por el operador gana siempre; `to_dict` solo serializa el `on_error` explícito, porque `locked` ya viaja y el receptor recalcula el mismo default (ADR 0102 D3). Y `available: False` deja de pasar en silencio: `_is_unavailable` lo trata con la MISMA política que un crash, porque son el mismo caso —el check no emitió veredicto—. **`tests/unit/test_pipeline_on_error_policy.py` (12) + `tests/unit/test_guardrails_engine.py` (13) en verde**; los 54 tests unit con `-k guardrail` y los 24 del runtime, también. **Un cambio de comportamiento con nombre**: un check que revienta bajo `warn` ahora sale `triggered=True` con acción `warn` en vez de `triggered=False`. Es lo que pide el enunciado de esta tarea al pie de la letra («convirtiendo la excepción en un `GuardrailOutcome` **triggered** con esa acción») y el criterio de aceptación del propio ADR 0102 («uno no-locked produce warn»). No cambia el enforcement —`decision.allowed` sigue True con `warn`—, pero sí la visibilidad: `record_pipeline_decision` solo persiste los outcomes disparados, así que hasta hoy un check roto no dejaba rastro en ninguna parte. Fail-open sí; invisible no. `tests/unit/test_guardrails_engine.py::test_check_crash_fail_open_by_default` se actualizó para fijar la conducta nueva.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -372,7 +373,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_10` — Seam async y límites de tamaño de input
 
-- [ ] **Título**: Ejecutar `pipeline.run` vía `asyncio.to_thread` (o
+- [x] **Título**: Ejecutar `pipeline.run` vía `asyncio.to_thread` (o
       `anyio.to_thread.run_sync`) en los hosts async
       (`apps/api-server/src/api_server/guardrails/planning.py:273` y `:341`,
       y los nuevos hosts de la Fase D), y añadir un límite de tamaño de
@@ -382,7 +383,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       caso. Cubre guardrails-10; coordinación: prod-13 trata el event loop en
       global, este seam se cierra aquí para no cablear (Fase D) un motor
       bloqueante.
-  - ⏳ **Pendiente (2026-07-31):** el límite de tamaño de input sí está (el truncado D6 de `run_hook` en el runtime, con test), pero el seam async NO: no hay ni un `to_thread` en `api_server/guardrails/planning.py`, así que `pipeline.run` sigue corriendo dentro del event loop en los dos hosts.
+  - ✅ **Hecho (2026-08-01)**: `_run_off_loop` (`asyncio.to_thread`) en los dos hosts de `api_server/guardrails/planning.py` — el motor es puro, así que sacarlo a un hilo es seguro por construcción. Y el tope de input, que en el runtime ya existía (D6) pero en el api-server no: `_bounded_input` recorta a `MAX_SCANNED_CHARS = 50_000` —el mismo número que `_HOOK_INPUT_MAX` del runtime, para que el mismo texto se trate igual a los dos lados— y **anota `truncated: True` en el metadata del contexto**, que viaja al evento persistido: un escaneo parcial presentado como completo es peor que no escanear, porque su «no se encontró nada» se lee como una garantía que no se dio. `tests/unit/test_pipeline_async_seam.py` (6) en verde, comparando `threading.get_ident()` dentro y fuera del hook.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -395,14 +396,14 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_11` — El dispatch resuelve y transporta la config efectiva
 
-- [ ] **Título**: En el dispatch del worker
+- [x] **Título**: En el dispatch del worker
       (`apps/workers/src/workers/execution.py` — hoy CERO referencias a
       guardrails), resolver la config efectiva por (tenant, proyecto) vía el
       servicio de `task_prod03_08` e incluirla serializada en el task spec
       que recibe el runtime (mismo canal que `approval_policy`,
       `__main__.py:248`), con límite de tamaño y versión para invalidación.
       Cubre guardrails-1 (transporte). Depende de `task_prod03_08`.
-  - ⏳ **Pendiente (2026-07-31):** la premisa «hoy CERO referencias a guardrails» ya es falsa — `_resolve_effective_guardrails` fusiona plataforma+proyecto vía `resolve_config`, con tope de tamaño, y viaja en `spec["guardrails"]` (ADR 0102 D3); falta la capa TENANT y la versión para invalidación, ambas dependientes de la tabla de `task_prod03_07`.
+  - ✅ **Hecho (2026-08-01)**: la premisa «hoy CERO referencias a guardrails» era falsa desde el ADR 0102 D3; lo que faltaba de verdad eran las dos cosas del final del enunciado, las dos dependientes de la tabla de `task_prod03_07`. Ahora `_resolve_effective_guardrails` **delega en `get_effective_guardrail_config`**, que fusiona las TRES capas, y el resultado lleva `version` (`p<v>.t<v>.j<v>`, con `-` para la capa ausente) **hermana** de `guardrails`, no dentro: `parse_config` solo mira la clave `guardrails`, así que el runtime la ignora sin enterarse y el worker puede comparar sin re-derivar. Se eligió el contador de escrituras y no un hash del contenido a propósito: cambia en cada escritura aunque el JSON quede igual, y dice QUÉ capa se movió. `tests/integration/test_dispatch_guardrail_config.py` **4/4**, contra PostgreSQL con las tres capas escritas — incluido el caso que el CRUD no puede cubrir: una fila de tenant que **se saltó el 422** (un seed, una restauración, un `psql`) intentando `remove: true` sobre el check locked, y el candado sigue ganando en la resolución no-estricta del dispatch. **Coste anotado**: los dos tests unitarios que fusionaban capas en `tests/unit/test_guardrails_transport.py` se sustituyeron —monkeypatcheaban la capa de plataforma, así que por construcción no podían ver ni la tabla ni la capa tenant—; la cobertura de fusión se mudó al fichero de integración y en el unitario queda lo que sí es unitario: el hilo por `_agent_spec` y el contrato best-effort (un fallo resolviendo devuelve `None`, nunca tumba un run).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -467,7 +468,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_14` — Cablear el chat de planning y «Generar Plan» por la RUTA
 
-- [ ] **Título**: Invocar `run_planning_chat_guardrails`
+- [x] **Título**: Invocar `run_planning_chat_guardrails`
       (`apps/api-server/src/api_server/guardrails/planning.py:242`) desde el
       router/grafo real del chat de planning
       (`routers/conversations.py` no importa nada de `api_server.guardrails`)
@@ -479,7 +480,11 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       cableado real lo entrega este plan (coordinar con prod-15, que audita
       el roadmap completo). Cubre guardrails-9 y parte de guardrails-1.
       Depende de `task_prod03_08`, `task_prod03_10`.
-  - ⏳ **Pendiente (2026-07-31):** `run_planning_chat_guardrails` y `gate_generate_plan` siguen con CERO llamantes fuera de su propio módulo —ni `routers/conversations.py` ni `routers/plans.py` importan nada de `api_server.guardrails`—, así que el chat de planning entra al modelo sin pasar por el motor.
+  - ✅ **Hecho (2026-08-01)**: `api_server/guardrails/route_gates.py` con los dos gates, y sus llamantes en las rutas reales: `gate_planning_turn` en `routers/conversations.py::post_message` (`pre_llm`, **antes** de persistir el mensaje y de programar la respuesta del equipo — bloquear después de haber llamado al LLM no bloquea nada) y `gate_plan_generation` en `routers/plans.py::create_plan`. `tests/integration/test_planning_guardrails_route.py` **7/7**, todo por HTTP. Rojo verificado desactivando el gate del chat: 2 rojos.
+    **Dos decisiones de alcance, las dos medidas y no adivinadas:**
+    1. **El gate de «Generar Plan» corre SOLO sobre el borrador del chat**, no sobre un `specification` inline. Cablearlo en los dos sitios rompió **14 tests de flujos legítimos** (`test_plan_approval.py`, `test_plan_comments.py`) que crean planes con tareas y `summary` vacío: el `PLAN_DRAFT_SCHEMA` exige `summary` no vacío, y aplicarlo al contrato público de la API convertía el gate en un bloqueo de la creación de planes. El gate existe para que un borrador mal formado del EQUIPO no se materialice. Los 14 vuelven a estar en verde, y hay un test nuevo que fija la exclusión para que nadie la «arregle» sin querer.
+    2. **El evento del turno BLOQUEADO se persiste en su propia transacción.** `run_planning_chat_guardrails` escribe sus eventos en la sesión de la request, y un `block` termina en `HTTPException` → la dependencia hace rollback → se perdería justo el evento del único turno que la plataforma llegó a DETENER, que es el que el dashboard necesita enseñar. Está cubierto por su test.
+       Queda **sin hacer** lo que la tarea pedía de papel: sincerar `task_11_22` en `docs/roadmap/11-guardrails-precios.md` — ese fichero es de otro carril de esta ola y no se toca desde aquí (el criterio de cierre 4 sigue abierto).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -492,14 +497,14 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_15` — E2E integral: «Cliente Externo» detiene la primera tool sensible
 
-- [ ] **Título**: Test e2e que ejecuta una tarea real con el preset
+- [x] **Título**: Test e2e que ejecuta una tarea real con el preset
       `customer-external`: la primera tool sensible (`http_post` o
       `shell_exec`) se aparca con `awaiting_human_approval`, el rechazo
       aborta, la aprobación continúa SIN re-aparcar la misma acción, y una
       solicitud no atendida expira por el job. Es el test de regresión del
       titular de la auditoría («ni siquiera Cliente Externo detiene una sola
       tool»). Depende de Fases A, B y D completas.
-  - ⏳ **Pendiente (2026-07-31):** `tests/e2e/test_customer_external_preset_gates.py` no existe, y su tramo central («aprobar continúa SIN re-aparcar la misma acción») no se puede escribir todavía porque `task_prod03_06` no está implementada.
+  - ✅ **Hecho (2026-08-01)**: `tests/integration/test_customer_external_preset_gates.py` **7/7**, con los cuatro tramos del enunciado —se aparca, el rechazo deja la acción sin autorizar y aborta la ejecución, aprobar deja pasar la MISMA acción **exactamente una vez** (T1 del ADR 0135) y una acción distinta de la misma categoría se vuelve a aparcar, y lo no atendido caduca a `timed_out` + ejecución `aborted` + tarea `blocked`. Tres cosas deliberadas: (1) el preset se **lee de `BUILTIN_POLICIES`**, no se copia en el test — una copia seguiría verde mientras el preset real se relaja; (2) hay un **control** con `sandbox` sobre la misma llamada, porque sin él un gate roto en «siempre aparca» pasaría el test y no gatearía nada; (3) hay un test del **vocabulario** (las 13 canónicas), que es donde estuvo el agujero g6 y lo que nadie miró. La solicitud se crea por `request_approval_if_needed`, el camino real del worker, no con un INSERT. Ubicación: en `tests/integration/` y no en `tests/e2e/` como nombra el plan, por lo mismo que el fichero de `task_prod03_14` — `tests/e2e/` exige runner Docker y CI no lo corre; un test que no se ejecuta no vigila.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -510,7 +515,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 
 #### `task_prod03_16` — Documentación y ADRs
 
-- [ ] **Título**: `docs/04-reference/guardrails.md` (capas, candados,
+- [x] **Título**: `docs/04-reference/guardrails.md` (capas, candados,
       `on_error`, hooks cableados, tabla tool→categoría) y
       `docs/04-reference/validacion-humana.md` (13 categorías, presets,
       ciclo aprobación/expiración/`approved_actions`);
@@ -518,7 +523,8 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
       fallo (decisión 1+3) y extensión del ADR 0020 (decisión 2) con estado
       según apruebe el humano; actualizar el estado «falta el job» del ADR
       0016 (`0016-motor-validacion-humana.md:98`).
-  - ⏳ **Pendiente (2026-07-31):** faltan `docs/04-reference/validacion-humana.md`, `docs/06-runbooks/aprobaciones-atascadas.md`, la tabla tool→categoría dentro de `docs/04-reference/guardrails.md` (que sí existe, pero sin ella) y el ADR de política de fallo; el ADR 0135, que cubriría la decisión 2, sigue `proposed`.
+  - ✅ **Hecho (2026-08-01)**, con una excepción anotada abajo. Entregado: **`docs/04-reference/validacion-humana.md`** (nuevo — 13 categorías, mapa tool→categoría con el porqué de las dos decisiones que no hay que deshacer, tools MCP y las dos reglas del merge, 4 presets, ciclo de vida, qué autoriza exactamente una aprobación, resolución atómica y caducidad); **`docs/06-runbooks/aprobaciones-atascadas.md`** (nuevo — las cuatro causas en orden de descarte, con las consultas, la trampa del beat sin importar y la de la caché Redis de 30 s que hace que un `UPDATE` a pelo del setting no surta efecto); y `docs/04-reference/guardrails.md` ampliado con las capas persistidas, el baseline sembrado, el CRUD, `on_error`, el seam async y **dónde se invocan de verdad** los gates. `docs/07-changelog/prod-03-guardrails-validacion-humana.md` NO se escribe aquí: es el criterio de cierre 5 y depende de tareas que siguen abiertas. El **ADR 0016** queda sinceramiento: su «falta el job periódico» llevaba dos meses siendo falso desde hoy y está tachado con la referencia. Los ADR de las decisiones 1 y 2 **ya existían** y están `accepted` (0102 D5 y 0135) — no hacía falta escribirlos, hacía falta implementarlos. El de la decisión 3 se escribe nuevo y en `proposed`: **[ADR 0153](../05-architecture-decisions/0153-categoria-no-listada-en-la-politica-de-aprobacion.md)**. `tests/docs/` 286/286.
+    **Excepción**: la tabla tool→categoría se documenta en `validacion-humana.md`, no dentro de `guardrails.md` como pide el enunciado. Son dos cosas distintas —el motor de guardrails y la validación humana— y meter el mapa de aprobación en la referencia del motor invita a confundirlas, que es precisamente lo que ya pasó con el vocabulario en el hallazgo g6.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Tests automáticos**: revisión humana de docs (sin test automático; el
   linter de Markdown de CI debe pasar).

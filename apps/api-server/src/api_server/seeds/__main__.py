@@ -60,6 +60,7 @@ from api_server.seeds.ci4_team import (
     seed_ci4_project_template,
     seed_ci4_team,
 )
+from api_server.seeds.guardrail_baseline import seed_platform_guardrail_baseline
 from api_server.seeds.human_agent_templates import seed_human_agent_templates
 from api_server.seeds.platform import ensure_platform_tenant
 from api_server.seeds.qa_e2e_automator import seed_qa_e2e_automator
@@ -163,6 +164,13 @@ SEED_STEPS: tuple[SeedStep, ...] = (
     # default_kb_grants reference the CI4 built-in KB slugs).
     SeedStep("ci4_project_template", seed_ci4_project_template),
     SeedStep("approval_policies", seed_builtin_approval_policies),
+    # prod-03 task_prod03_08: el baseline de guardrails de plataforma, con los
+    # tres checks `locked` que ninguna capa inferior puede relajar. Va aquí,
+    # junto a las políticas de aprobación, porque es la otra mitad de la
+    # postura de seguridad por defecto de la plataforma. Sin FKs: solo depende
+    # de que exista la tabla. Idempotente y NO pisa lo que el operador haya
+    # editado (ver el docstring del módulo).
+    SeedStep("guardrail_baseline", seed_platform_guardrail_baseline),
     # Plan 09.1 task_09_1_01: fill the official marketplace catalog so it is
     # not empty on a fresh install. Publishes the VERIFIED + GLOBAL listings
     # under the ``official-catalog`` source — the flagship Playwright tool

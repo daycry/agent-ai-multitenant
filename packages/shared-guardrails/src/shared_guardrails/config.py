@@ -70,15 +70,33 @@ class GuardrailSpec:
     # Optional stable id so layered merge / observability can address a
     # specific guardrail entry; defaults to the type when absent.
     id: str | None = None
-    # ADR 0102 D5: qué hacer si el CHECK revienta (no si dispara). "warn"
-    # (default) = fail-open, el error se registra sin disparar; "block" =
-    # fail-closed, el fallo del check dispara con acción block (para checks
-    # que el operador marque críticos, p. ej. el de inyección locked).
-    on_error: str = "warn"
+    # ADR 0102 D5: qué hacer cuando el check NO emite veredicto — porque
+    # revienta, o porque se declara indisponible (`available: False`). "warn" =
+    # fail-open, se registra sin bloquear; "block" = fail-closed, cuenta como
+    # disparo con acción block.
+    #
+    # `None` significa «el operador no lo escribió», y NO es lo mismo que
+    # `"warn"`: el default se deriva de `locked` (ver `effective_on_error`).
+    # Guardar la ausencia es lo que permite que un `locked` herede fail-closed
+    # sin quitarle al operador la opción de bajarlo a warn a propósito.
+    on_error: str | None = None
 
     @property
     def key(self) -> str:
         return self.id or self.type
+
+    @property
+    def effective_on_error(self) -> str:
+        """La política de fallo que aplica de verdad (ADR 0102 D5, opción c).
+
+        Default `block` para los guardrails que la plataforma marcó `locked` y
+        `warn` para el resto; lo que el operador escriba gana siempre. Un
+        candado que se abre solo cuando el check revienta no es un candado —
+        ése era el fail-open que la opción (c) del ADR se eligió para cerrar.
+        """
+        if self.on_error is not None:
+            return self.on_error
+        return "block" if self.locked else "warn"
 
     def to_dict(self) -> dict[str, Any]:
         """Inverso serializable de :func:`_parse_spec` (ADR 0102 D3) — el
@@ -92,7 +110,10 @@ class GuardrailSpec:
             out["locked"] = True
         if self.id is not None:
             out["id"] = self.id
-        if self.on_error != "warn":
+        # Solo viaja lo que el operador escribió: `locked` viaja igualmente, así
+        # que el receptor recalcula el MISMO default. Serializar el default
+        # calculado congelaría la política del emisor en el receptor.
+        if self.on_error is not None:
             out["on_error"] = self.on_error
         return out
 
@@ -150,8 +171,9 @@ def _parse_spec(raw: Any, *, hook: HookPoint, index: int) -> GuardrailSpec:
     spec_id = raw.get("id")
     if spec_id is not None and not isinstance(spec_id, str):
         raise GuardrailConfigError(f"Guardrail {gtype!r} at hook {hook!r}: 'id' must be a string.")
-    on_error = str(raw.get("on_error", "warn") or "warn").lower()
-    if on_error not in ("warn", "block"):
+    raw_on_error = raw.get("on_error")
+    on_error = None if raw_on_error is None else str(raw_on_error).lower()
+    if on_error is not None and on_error not in ("warn", "block"):
         raise GuardrailConfigError(
             f"Guardrail {gtype!r} at hook {hook!r}: 'on_error' must be 'warn' or 'block'."
         )

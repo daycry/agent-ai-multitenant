@@ -148,6 +148,65 @@ async def snapshot_execution_prices(
     return enriched, rollup
 
 
+def _catalog_cost_total(steps: list[dict[str, Any]]) -> Decimal | None:
+    """Sum of the frozen catalog cost of every PRICED `model_call` step.
+
+    ``None`` when not a single call could be priced — which is *not* the same
+    as ``Decimal(0)``: "the catalog does not know this model" must never become
+    a bill. Only snapshots with ``available=True`` count; an unknown price is
+    recorded as ``available=False`` with ``cost_usd=None`` (see
+    ``price_snapshot``), and a free call (a real 0) still sums as 0.
+    """
+    total = Decimal(0)
+    priced = False
+    for step in steps:
+        snapshot = step.get("price_snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("available") is not True:
+            continue
+        raw = snapshot.get("cost_usd")
+        if raw is None:
+            continue
+        try:
+            total += Decimal(str(raw))
+        except (ArithmeticError, ValueError):  # pragma: no cover - defensive
+            continue
+        priced = True
+    return total if priced else None
+
+
+def _billable_cost_usd(usage: dict[str, Any], steps: list[dict[str, Any]]) -> Decimal:
+    """The cost that lands on ``executions.total_cost_usd`` (prod-07 llm-1).
+
+    Precedence, in this order and no other:
+
+    1. **What the runtime reported.** ``claude_sdk`` is the only kind that
+       reports a real per-call cost today; that figure is what the provider
+       actually charged and an estimate must never overwrite it.
+    2. **The sum of the per-call catalog snapshots**, when the runtime reported
+       0. The three OpenAI-compatible kinds (ollama, copilot, azure_foundry)
+       never populate ``usage.cost`` — `_openai_compat` can only pass through
+       what the endpoint sends — so that 0 was being persisted verbatim and the
+       budgets summed $0 for three of the four providers of the closed catalog.
+    3. **0**, when the catalog could not price a single call. An unknown price
+       stays unknown.
+
+    Why an override and not a new ``cost_estimated_usd`` column: the
+    provenance the column would have carried is already per call in
+    ``steps_log`` — the runtime's raw ``cost_usd`` stays beside a
+    ``price_snapshot`` that names its ``source`` and ``price_id``. A column
+    would duplicate that at the price of a schema migration, and every reader
+    of the billable figure (budgets, dashboards, the plan cost breakdown)
+    would have to learn to coalesce or keep under-counting.
+    """
+    reported = Decimal(str(usage.get("cost_usd", 0) or 0))
+    if reported > 0:
+        return reported
+    estimated = _catalog_cost_total(steps)
+    if estimated is None or estimated <= 0:
+        return reported
+    return estimated
+
+
 def _apply_price_snapshot(execution: Execution, rollup: PriceSnapshot | None) -> None:
     """Write the representative snapshot onto the execution's columns."""
     if rollup is None:
@@ -188,7 +247,7 @@ async def record_execution(
         steps_log=steps,
         iterations=result.iterations,
         total_tokens=int(usage.get("total_tokens", 0)),
-        total_cost_usd=Decimal(str(usage.get("cost_usd", 0))),
+        total_cost_usd=_billable_cost_usd(usage, steps),
         tool_call_count=int(usage.get("tool_calls", 0)),
         model_call_count=int(usage.get("model_calls", 0)),
         started_at=started_at,
@@ -535,7 +594,7 @@ async def finalize_execution(
     _apply_price_snapshot(execution, rollup)
     execution.iterations = result.iterations
     execution.total_tokens = int(usage.get("total_tokens", 0))
-    execution.total_cost_usd = Decimal(str(usage.get("cost_usd", 0)))
+    execution.total_cost_usd = _billable_cost_usd(usage, steps)
     execution.tool_call_count = int(usage.get("tool_calls", 0))
     execution.model_call_count = int(usage.get("model_calls", 0))
     # Only a terminal status completes the run — a run parked in

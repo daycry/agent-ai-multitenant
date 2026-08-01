@@ -67,6 +67,30 @@ if TYPE_CHECKING:  # pragma: no cover — typing only, never imported at runtime
 
 _log = structlog.get_logger("workers.backup_destinations")
 
+# Plazo de CONEXIÓN de los tres backends remotos (prod-13 task_prod13_02,
+# hallazgo api-3). Es el único plazo que se puede poner AQUÍ y el único que
+# arregla el problema de verdad.
+#
+# Por qué hace falta aunque el api-server ya envuelva estas llamadas en
+# `to_thread` con su propio plazo (`routers/backup.py::REMOTE_PROBE_TIMEOUT_S`):
+# aquel acota la RESPUESTA, no el HILO. Python no puede matar un hilo, así que
+# una sonda contra una IP que DROPea paquetes —firewall que descarta en vez de
+# mandar RST— seguía ocupando un hilo del executor por defecto (`min(32, cpu+4)`)
+# hasta que el SO se rindiera, que son minutos. Con bastantes destinos
+# inalcanzables el executor se agota y `to_thread` deja de ser una salida: se
+# hace cola, y el bloqueo que se quería evitar vuelve por la puerta de atrás.
+#
+# Diez segundos porque un TCP connect que no abre en diez no va a abrir. Lo que
+# NO se acorta es el plazo de LECTURA: una subida multiparte de varios GB por un
+# enlace lento hace lecturas legítimamente largas y un `read_timeout` corto la
+# mataría a mitad. El connect no tiene ese problema.
+REMOTE_CONNECT_TIMEOUT_S = 10
+
+# Intentos TOTALES de botocore por operación. Su default (modo `legacy`, 5) hay
+# que multiplicarlo por el plazo de arriba para saber lo que ocupa una sonda
+# contra un host muerto: 50 s por sonda convierten el plazo en decorativo.
+_S3_MAX_ATTEMPTS = 2
+
 
 class DestinationError(RuntimeError):
     """Raised when a remote destination operation fails.
@@ -396,9 +420,22 @@ class S3Destination:
 
 def _default_boto3_factory(**kwargs: Any) -> Any:
     """Build a real boto3 S3 client. Imported lazily so boto3 is only required
-    in production / when no test factory is injected."""
-    import boto3
+    in production / when no test factory is injected.
 
+    Le inyecta un ``botocore.config.Config`` con plazo de conexión corto y
+    reintentos acotados (task_prod13_02): sin él, boto3 va con
+    ``connect_timeout=60`` y hasta 5 intentos, o sea ~5 minutos de hilo ocupado
+    por cada sonda contra un endpoint muerto. Un ``config`` explícito del
+    llamante GANA — el nuestro es un default, no una imposición.
+    """
+    import boto3
+    from botocore.config import Config as BotocoreConfig
+
+    if "config" not in kwargs:
+        kwargs["config"] = BotocoreConfig(
+            connect_timeout=REMOTE_CONNECT_TIMEOUT_S,
+            retries={"max_attempts": _S3_MAX_ATTEMPTS, "mode": "standard"},
+        )
     return boto3.client(**kwargs)
 
 
@@ -895,6 +932,12 @@ def _default_paramiko_transport(
         pkey = paramiko.RSAKey.from_private_key(
             io.StringIO(private_key), password=private_key_passphrase or None
         )
+    # Los TRES plazos, y hacen falta los tres (task_prod13_02): `timeout` acota
+    # el TCP connect (sin él paramiko hereda el del SO, que contra un firewall
+    # que DROPea son minutos), `banner_timeout` el host que abre el socket y no
+    # se identifica, y `auth_timeout` el que acepta la conexión y no contesta al
+    # auth. Los dos últimos ocurren con el connect YA resuelto, así que `timeout`
+    # a solas dejaría el hilo colgado igual — solo que un poco más tarde.
     client.connect(
         hostname=host,
         port=port,
@@ -903,6 +946,9 @@ def _default_paramiko_transport(
         pkey=pkey,
         look_for_keys=False,
         allow_agent=False,
+        timeout=REMOTE_CONNECT_TIMEOUT_S,
+        banner_timeout=REMOTE_CONNECT_TIMEOUT_S,
+        auth_timeout=REMOTE_CONNECT_TIMEOUT_S,
     )
     sftp = client.open_sftp()
     return sftp
@@ -1101,9 +1147,20 @@ class RcloneDestination:
         ``--config <path>`` points rclone at the temp file (creds in the FILE,
         never argv); ``--quiet`` keeps stdout to the structured output we parse.
         The credential blob is in the FILE, so the argv we build + log is safe.
+
+        ``--contimeout`` (task_prod13_02) va en TODAS las invocaciones, no solo
+        en la sonda, porque acota únicamente la fase de CONEXIÓN: una copia de
+        varios GB no se ve afectada, y una copia contra un host muerto deja de
+        esperar el minuto que rclone trae por defecto. Las globales tienen que
+        ir delante del subcomando.
         """
         runner = self.runner or SubprocessRunner()
-        argv = ["rclone", f"--config={conf_path}", *args]
+        argv = [
+            "rclone",
+            f"--config={conf_path}",
+            f"--contimeout={REMOTE_CONNECT_TIMEOUT_S}s",
+            *args,
+        ]
         return runner.run(argv, timeout=self.timeout_s)
 
     # -- BackupDestination ---------------------------------------------------

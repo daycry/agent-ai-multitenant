@@ -52,6 +52,7 @@ from api_server.events import (
     delete_conversation_stream,
     publish_conversation_event,
 )
+from api_server.guardrails.route_gates import gate_planning_turn
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._guards import verify_project_visible
 from api_server.routers._helpers import (
@@ -365,6 +366,22 @@ async def post_message(
     ).scalar_one_or_none()
     if project is not None:
         require_project_active(project)
+
+    # prod-03 task_prod03_14 (guardrails-9): el motor corre AQUÍ, en la ruta.
+    # `run_planning_chat_guardrails` existía desde el Plan 11 con test propio y
+    # cero llamantes: el texto del humano entraba al modelo sin pasar por
+    # ningún guardrail. Se ejecuta antes de persistir el mensaje y antes de
+    # programar la respuesta del equipo — bloquear después de haber llamado al
+    # LLM no bloquea nada. `warn` es advisory (queda como evento y sigue);
+    # `block` corta con 422 (ver `gate_planning_turn`).
+    if payload.author_kind == MessageAuthorKind.USER:
+        await gate_planning_turn(
+            session,
+            hook="pre_llm",
+            text=payload.content,
+            tenant_id=tenant_id,
+            project_id=conv.project_id,
+        )
 
     # Resolve author_user_id from the principal when the caller is a
     # human user and didn't pass it explicitly.

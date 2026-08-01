@@ -142,6 +142,33 @@ groups:
             detenida. Revisa la bandeja del inbox humano
             (docs/06-runbooks/observabilidad.md).
 
+      # prod-07 task_prod07_15 (hallazgo llm-10). El Memorizer destila las
+      # lecciones de cada run con un LLM, y esa tarea es best-effort A PROPÓSITO:
+      # se traga sus excepciones para no tumbar el pipeline de Celery. El precio
+      # de esa decisión es que su muerte es MUDA — el run termina `ok`, no se
+      # persiste ni una memoria, y la plataforma deja de aprender sin que nada
+      # falle. El caso real fue apagar ollama-local (ADR 0056) mientras el
+      # fallback del destilador seguía apuntando a `localhost:11434`.
+      #
+      # Se alerta sobre la racha CONSECUTIVA, no sobre un acumulado: lo que
+      # importa es si el destilador está roto AHORA. Un éxito borra el contador,
+      # así que la alerta se apaga sola al arreglar el proveedor. El umbral es 5
+      # porque un fallo suelto (un timeout, un modelo que devolvió basura) no es
+      # una avería, y una alerta que salta por eso se silencia.
+      - alert: MemorizerDistillationFailing
+        expr: agentic_memorizer_consecutive_distill_failures >= 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El Memorizer lleva {{ $value }} destilaciones fallidas seguidas"
+          description: >-
+            Ninguno de los últimos runs ha dejado memorias: el LLM del
+            destilador no responde o devuelve algo inservible. Revisa la fila
+            activa de kind `ollama` en el catálogo `llm_providers` y los logs
+            `memorizer.distillation_failed` del worker
+            (docs/04-reference/llm-providers.md §7).
+
       # Muchas tareas bloqueadas sostenidas = el pipeline autónomo está parado
       # esperando humanos (o un bug de convergencia).
       - alert: TasksBlockedHigh

@@ -10,6 +10,15 @@
  * (`teams/[team_id]`, `cortex/mind`, `projects/[id]/chat`) cruzaron el límite
  * DESPUÉS de escribirse el plan. Sin trinquete, partir hoy sólo compra tiempo.
  *
+ * Son DOS medidas con la misma mecánica, cada una con su techo y su allowlist:
+ *
+ *   1. **Pantallas** (`page.tsx`), techo 800 — lo que pide el plan.
+ *   2. **Piezas** del troceado (`*-section`, `*-dialog`, `*-tab`, `*-panel`,
+ *      `*-table`), techo 500 (`SECTION_MAX_LINES`). Sin esta segunda medida la
+ *      guarda **premia el atajo**: mudar 700 líneas del `page.tsx` a un solo
+ *      `algo-sections.tsx` bajaba el contador sin haber partido nada, y eso pasó
+ *      —`mcp-server-sections.tsx` acabó en 1125 líneas dando OK.
+ *
  * Mecánica idéntica a `check-i18n.mjs`, a propósito (una sola forma de guarda
  * que aprender):
  *
@@ -53,30 +62,70 @@ const DEFAULT_MAX_LINES = 800;
  * MENGUAR**: cada partición debe bajar el número o borrar la línea.
  *
  * Los que el plan nombraba y ya se partieron (`model-prices`, `mcp-servers`,
- * `plans/[planId]`, `knowledge-bases`, `tenant-stats`, `llm-providers`) NO
- * están aquí: están por debajo del límite y el trinquete los mantiene así.
+ * `plans/[planId]`, `knowledge-bases`, `tenant-stats`, `llm-providers`,
+ * `agents/[id]`, `notifications`) NO están aquí: están por debajo del límite y
+ * el trinquete los mantiene así.
  */
 const ALLOWLIST = {
   "app/admin/cortex/mind/page.tsx": 914,
-  "app/admin/notifications/page.tsx": 831,
   "app/admin/projects/[id]/chat/page.tsx": 926,
   "app/admin/settings/sso/page.tsx": 915,
   "app/admin/settings/sso/saml/page.tsx": 943,
   "app/admin/teams/[team_id]/page.tsx": 914,
 };
 
+/** Techo de una pieza del troceado. Lo fija `task_prod16_06`. */
+const SECTION_MAX_LINES = 500;
+
 /**
- * Qué cuenta como "pantalla".
+ * Deuda de PIEZAS conocida el 2026-08-01. **Sólo puede MENGUAR.**
  *
- * Sólo `page.tsx`, que es lo que pide el plan y lo que ve el usuario. Las
- * secciones colocadas (`*-section.tsx`, `*-sections.tsx`) quedan fuera a
- * propósito: son el DESTINO del troceado, y medirlas con la misma vara
- * penalizaría justo el movimiento que la guarda quiere premiar. Su tamaño se
- * vigila a ojo en review — que `mcp-server-sections.tsx` acabara en 1125 líneas
- * es la prueba de que mover el bulto no es partir.
+ * Son exactamente dos, y las dos son el mismo caso: el tramo de modularización
+ * #9 sacó el bulto del `page.tsx` sin repartirlo. Todas las demás piezas del
+ * panel están por debajo de 500 y el trinquete las mantiene ahí.
+ */
+const SECTION_ALLOWLIST = {
+  "app/admin/agents/[id]/agent-tools-section.tsx": 691,
+  "app/admin/projects/[id]/mcp-servers/mcp-server-sections.tsx": 1125,
+};
+
+/**
+ * Qué cuenta como "pantalla": sólo `page.tsx`, que es lo que pide el plan y lo
+ * que ve el usuario.
  */
 function isScreen(rel) {
   return rel.endsWith("/page.tsx") || rel === "page.tsx";
+}
+
+/**
+ * Qué cuenta como "pieza": el DESTINO del troceado.
+ *
+ * Durante un tiempo estas quedaron fuera a propósito, con el argumento de que
+ * medirlas con la misma vara penalizaría el movimiento que la guarda quiere
+ * premiar. El argumento era malo y el propio script lo admitía en una nota: "su
+ * tamaño se vigila a ojo en review — que `mcp-server-sections.tsx` acabara en
+ * 1125 líneas es la prueba de que mover el bulto no es partir". Vigilar a ojo es
+ * no vigilar, y una guarda que sólo mira `page.tsx` **premia el atajo**: sacar
+ * 700 líneas a un `algo-sections.tsx` baja el contador sin haber partido nada.
+ *
+ * La vara no es la misma: las piezas tienen su propio techo, más bajo
+ * (`SECTION_MAX_LINES`), que es el que el plan fija en `task_prod16_06`
+ * ("`page.tsx` < 400 líneas, ninguna sección > 500"). Partir sigue premiado;
+ * lo que deja de estarlo es mudar el monolito de fichero.
+ */
+const SECTION_SUFFIXES = [
+  "-section.tsx",
+  "-sections.tsx",
+  "-dialog.tsx",
+  "-dialogs.tsx",
+  "-tab.tsx",
+  "-tabs.tsx",
+  "-panel.tsx",
+  "-table.tsx",
+];
+
+function isSection(rel) {
+  return SECTION_SUFFIXES.some((suffix) => rel.endsWith(suffix));
 }
 
 /** Mínimo de ficheros que el recorrido DEBE ver para creerse a sí mismo. */
@@ -147,7 +196,7 @@ function main() {
   // acoplamiento que castiga el trabajo bien hecho hay que hacerlo explícito o
   // quitarlo; esto es quitarlo.
   if (printAllowlist) {
-    process.stdout.write(JSON.stringify(ALLOWLIST));
+    process.stdout.write(JSON.stringify({ screens: ALLOWLIST, sections: SECTION_ALLOWLIST }));
     return;
   }
 
@@ -155,15 +204,17 @@ function main() {
   const isFixture = root !== APP_ROOT;
 
   const sizes = new Map();
+  const sectionSizes = new Map();
   for (const rel of files) {
-    if (!isScreen(rel)) continue;
     if (/\.test\.tsx?$/.test(rel)) continue;
-    sizes.set(rel, countLines(join(root, rel)));
+    if (isScreen(rel)) sizes.set(rel, countLines(join(root, rel)));
+    else if (isSection(rel)) sectionSizes.set(rel, countLines(join(root, rel)));
   }
 
   const errors = [];
   const notes = [];
   let over = 0;
+  let sectionsOver = 0;
 
   for (const [rel, count] of sizes) {
     if (count <= maxLines) {
@@ -191,6 +242,36 @@ function main() {
     }
   }
 
+  // Las piezas del troceado, con su propio techo. Sin esto la guarda premia el
+  // atajo: mudar el monolito a un `*-sections.tsx` baja el contador de pantallas
+  // sin haber partido nada.
+  for (const [rel, count] of sectionSizes) {
+    if (count <= SECTION_MAX_LINES) {
+      if (!strict && SECTION_ALLOWLIST[rel] !== undefined) {
+        notes.push(
+          `${rel}: ${count} líneas, ya por debajo de ${SECTION_MAX_LINES} — ` +
+            "bórralo de SECTION_ALLOWLIST.",
+        );
+      }
+      continue;
+    }
+
+    sectionsOver += 1;
+    const allowed = strict ? 0 : (SECTION_ALLOWLIST[rel] ?? 0);
+    if (allowed === 0) {
+      errors.push(
+        `${rel}: ${count} líneas (techo de pieza ${SECTION_MAX_LINES}). Repártela: ` +
+          "sacar el bulto del page.tsx a un solo fichero no es partirlo.",
+      );
+    } else if (count > allowed) {
+      errors.push(
+        `${rel}: ${count} líneas, SECTION_ALLOWLIST anota ${allowed}. La deuda no puede crecer.`,
+      );
+    } else if (count < allowed) {
+      notes.push(`${rel}: ${count} < ${allowed} anotadas — baja el número en SECTION_ALLOWLIST.`);
+    }
+  }
+
   // --- autocomprobaciones: una guarda que no puede fallar no es una guarda ---
   if (!isFixture) {
     if (files.length < MIN_FILES_SCANNED) {
@@ -205,11 +286,20 @@ function main() {
           "funcionar (¿cambió la convención de rutas de Next?).",
       );
     }
+    if (sectionSizes.size === 0) {
+      errors.push(
+        "no se encontró NINGUNA pieza (*-section/-dialog/-tab/-panel/-table): " +
+          "SECTION_SUFFIXES dejó de casar con cómo se nombran, y el techo de las " +
+          "piezas estaría pasando en vacío.",
+      );
+    }
   }
 
   console.log(
     `check-component-size: ${files.length} ficheros, ${sizes.size} pantalla(s), ` +
-      `${over} por encima de ${maxLines} línea(s)${strict ? " [strict]" : ""}`,
+      `${over} por encima de ${maxLines} línea(s); ${sectionSizes.size} pieza(s), ` +
+      `${sectionsOver} pieza(s) por encima de ${SECTION_MAX_LINES}` +
+      `${strict ? " [strict]" : ""}`,
   );
   for (const note of notes) console.log(`  aviso: ${note}`);
 

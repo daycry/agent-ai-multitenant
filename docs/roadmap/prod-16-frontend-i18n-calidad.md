@@ -158,6 +158,22 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       ternarios inline de los 12 ficheros que ya "traducen" a mano,
       moviéndolos a claves del diccionario.
   - ⏳ **Pendiente (2026-08-01):** login, `select-tenant`, `no-access`, header y shell YA usan `useT()`, y los ternarios inline bajaron de **77 en 18 ficheros a 44 en 11** (siete módulos de `lib/` migrados: `capability/hub`, `memory/honesty`, `tools/taxonomy`, `runtime-templates`, `cortex-curiosity`, `cortex-identity`, `persona/persona`). Lo que falta para cerrar: los 44 restantes, todos en `components/capability/*` (25), `agents/*` (10), `tools/page.tsx` (4), `agent-tools-diagnostic` (3) y `cortex/mind` (1) — y el spec `e2e/lang-toggle.spec.ts` que el plan exige, que sigue sin existir y es Playwright (no ejecutable sin stack levantado). El equivalente en vitest SÍ existe ya para login (`app/login/i18n.test.tsx`).
+  - ⏳ **Re-verificada (2026-08-01), y sigue abierta con razón:** la **primera**
+    mitad del enunciado está hecha y comprobada fichero a fichero —
+    `app/login/page.tsx` no tiene ni un literal (todo `t(...)`, incluidos los
+    tres errores de credenciales/rate-limit/red), y `select-tenant`, `no-access`,
+    `admin-header` y `admin-shell` importan `useT`. `app/layout.tsx:29` ya declara
+    `lang="es"`, no el `lang="en"` fijo que denunciaba el hallazgo. Los 6 tests de
+    `app/login/i18n.test.tsx` cubren las dos caras y que en EN no queda castellano.
+    La **segunda** mitad («eliminar los 63 ternarios inline») no: quedan **34 en 8
+    ficheros**, y ninguno está en este carril — `components/capability/*` (25),
+    `app/admin/tools/page.tsx` (4), `projects/[id]/agent-tools-diagnostic` (3),
+    `cortex/mind` (1) y `components/teams/adopt-team-dialog.tsx` (1).
+    Además el test que el plan nombra (`e2e/lang-toggle.spec.ts`) no existe con ese
+    nombre; **sí existe `e2e/lang-switcher.spec.ts`**, que cubre lo mismo (presencia
+    del selector, default ES, cambio a EN, persistencia tras recarga) y es Playwright,
+    así que no se puede ejecutar sin stack levantado. La casilla no se marca: no la
+    cierra este carril.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
   ```yaml
@@ -208,6 +224,10 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     **Un cambio de comportamiento, deliberado y con test**: `promptIn` (tarjeta del catálogo de agentes) pasó de un ternario a `pickLang`, que cae al otro idioma cuando el pedido viene **vacío**, no sólo cuando falta. Un agente con `system_prompts.en: ""` pintaba una tarjeta sin prompt teniéndolo en castellano.
     Siguen sin migrar: marketplace, guardrails, knowledge-bases, ollama, notifications, docs, assistant, tools, memories.
     **Por qué knowledge-bases no entró aunque el guard sólo le marque 3 atributos**: esos 3 son la punta de ~2100 líneas de castellano cableado repartidas en 5 ficheros. Traducir sólo los atributos deja la pantalla mitad en inglés y mitad en castellano, que es exactamente el fallo que este plan cierra (mismo razonamiento que ya obligó a parar en `settings/`).
+  - ⏳ **Pendiente (2026-08-01, segunda pasada):** **`knowledge-bases` entra ENTERO**, que era lo que la pasada anterior dejó explícitamente aparcado. Los cinco ficheros migrados a dos namespaces nuevos (`knowledgeBases`, `kbCategories`, 130 claves): `page.tsx`, `kb-row.tsx`, `kb-category-select.tsx`, `kb-form-dialogs.tsx`, `kb-danger-dialogs.tsx`, `kb-documents-panel.tsx`, `kb-assignments-dialog.tsx` y `categories/page.tsx`. Test: `app/admin/knowledge-bases/i18n.test.tsx` (17 casos) rinde la pantalla en los DOS idiomas incluidos **los cuatro diálogos y el panel de documentos plegado**, que es donde vive la mitad del texto y donde un `useT()` olvidado no se ve hasta que alguien despliega una fila.
+    Contadores: **34 ternarios en 8 ficheros** (sin cambio: los 34 restantes están todos fuera de este carril, en `components/capability/*`, `agents/*`, `tools/` y `cortex/mind`) y **113 → 110 atributos, 61 → 58 ficheros**.
+    **Lo que enseñó medir esto**: el guard marcaba 3 atributos en un módulo con ~2.100 líneas sin traducir. Se comprobó a mano por qué — reintroducir `title="Dar acceso a un proyecto"` en un fichero ya migrado **NO hace fallar al guard**, porque la frase no lleva ni una tilde; con `title="Crear categoría nueva"` sí falla (exit 1). El patrón sólo ve atributos con carácter exclusivo del castellano: mide la deuda detectable, no la deuda. Anotado en el propio `check-i18n.mjs`.
+    Siguen sin migrar: marketplace, guardrails, ollama, notifications, docs, assistant, tools, memories.
 - **Tiempo**: 3 días · **Complejidad**: l · **Depende de**: `task_prod16_03`
 - **Tests automáticos**:
   ```yaml
@@ -231,6 +251,21 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     `mutation.error.body` **crudo** en pantalla, que es justo lo que esta tarea
     prohíbe. Sustituido por `useErrorText()`. La casilla estaba marcada `[x]`
     con el defecto vivo: el conteo "13 copias" del enunciado se quedó corto.
+  - 🔎 **Y seis fugas más, en el mismo módulo (2026-08-01, segunda pasada):**
+    `knowledge-bases` pintaba `error.body` crudo en **seis** sitios —
+    `page.tsx` y `categories/page.tsx` (el error de la query) y los **cuatro**
+    `onError` de `kb-assignments-dialog.tsx` (revocar/conceder × proyecto/agente).
+    Todos a `useErrorText()`. Las 14 copias que el enunciado contaba eran las
+    que se llamaban `errorText`; estas seis hacían lo mismo escrito en línea
+    (`err instanceof ApiError ? err.body : String(err)`), que es la forma que no
+    sale al buscar por el nombre de la función.
+  - 🔎 **Y la copia nº 15, con otro nombre (2026-08-01):** `notifications`
+    tenía la misma función llamada `apiErrorBody`, usada en **seis** puntos
+    (error de plataforma, guardar plataforma, listar canales, guardar canal,
+    listar preferencias, guardar preferencia). Todos a `useErrorText()` al
+    trocear la pantalla. **Lección**: buscar por el NOMBRE de la función no
+    encuentra la deuda; buscar por lo que hace (`ApiError ? .body`) sí. El
+    conteo del enunciado ("13 copias") era un censo de nombres.
 - **Tiempo**: 0,5 días · **Complejidad**: s · **Depende de**: `task_prod16_01`
 - **Coordinación**: prod-09 añade manejo global de 401 en `apiFetch`; si se
   ejecuta antes, rebasar sobre su versión de `lib/api.ts`.
@@ -318,6 +353,45 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     ya está por debajo, y `projects/[id]/chat`, `teams/[team_id]` y
     `cortex/mind` cruzaron el límite DESPUÉS de escribirse el plan. Es
     exactamente el crecimiento que el guard viene a frenar.
+  - ⏳ **Pendiente (2026-08-01, tercera pasada):** cae **`notifications` 831 → 95**,
+    la última de las que el enunciado nombra por su nombre. Partida en
+    `channels-tab.tsx` (418), `preferences-tab.tsx` (162), `platform-tab.tsx` (112)
+    y `notification-types.ts` (119).
+    **La red se escribió antes de mover una línea y se comprobó que muerde**:
+    `app/admin/notifications/page.test.tsx`, 13 casos de caracterización (pestañas
+    por rol, alta con el config ya parseado, JSON inválido que NO llega al backend,
+    edición sin selector de ámbito, borrado con confirmación, matriz evento ×
+    transporte, default ON, guardar transportes de plataforma). Verde ANTES del
+    corte; luego se rompió el código a propósito (`scope: "user"` → `"tenant"` en
+    el upsert) y **el test se puso rojo**; restaurado, verde otra vez; y después
+    del troceo sigue verde sin tocar ni una aserción.
+    De paso, `kb-sections.tsx` (782, el «mover el bulto» del tramo #9) se partió
+    en `kb-row.tsx` (122), `kb-category-select.tsx` (196), `kb-form-dialogs.tsx`
+    (287) y `kb-danger-dialogs.tsx` (206), con `page.tsx` de knowledge-bases en 209.
+    Quedan **cinco** por encima de 800: sso/saml 943, projects/[id]/chat 926,
+    sso 915, teams/[team_id] 914 y cortex/mind 914 — **ninguna de este carril**.
+    **Hallazgo que NO se arregló, a propósito**: `preferences-tab.tsx` pinta
+    `label_es` del catálogo de eventos sin mirar el idioma, así que con el toggle
+    en EN las filas de la matriz siguen en castellano teniendo `label_en` al lado.
+    Es un caso de libro de `pickLang` (texto bilingüe que llega en DATOS). Se deja
+    abierto porque arreglarlo suelto dejaría la pantalla mitad y mitad: entra con
+    la migración de `notifications` al diccionario, en `task_prod16_04`.
+  - ⏳ **El guard tenía un agujero que premiaba el atajo, y se ha tapado
+    (2026-08-01):** sólo medía `page.tsx`, así que **mudar** 700 líneas del
+    monolito a un solo `algo-sections.tsx` bajaba el contador sin haber partido
+    nada. No era hipotético: el propio script lo admitía en un comentario
+    (`mcp-server-sections.tsx`, 1125 líneas, daba OK) y lo dejaba «a ojo en
+    review», que es no vigilar. `check-component-size.mjs` mide ahora **dos**
+    cosas con la misma mecánica: pantallas (techo 800) y **piezas** del troceado
+    —`*-section`, `*-sections`, `*-dialog(s)`, `*-tab(s)`, `*-panel`, `*-table`—
+    con techo **500**, que es el que fija `task_prod16_06` («ninguna sección >
+    500»). Su `SECTION_ALLOWLIST` nace con **exactamente dos** entradas
+    (`mcp-server-sections.tsx` 1125 y `agent-tools-section.tsx` 691): las otras
+    51 piezas del panel ya están por debajo, así que el trinquete pasa verde hoy
+    y sólo puede menguar. **+7 tests** en `scripts/check-component-size.test.ts`
+    (37 en total), escritos en rojo antes de la implementación, más una
+    autocomprobación nueva en el script: si `SECTION_SUFFIXES` dejara de casar
+    con cómo se nombran las piezas, falla en vez de pasar en vacío.
 - **Tiempo**: 2,5 días · **Complejidad**: l · **Depende de**: `task_prod16_07`
 - **Tests automáticos**:
   ```yaml

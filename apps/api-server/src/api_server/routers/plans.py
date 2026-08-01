@@ -90,6 +90,7 @@ from api_server.db.review_session_repo import (
     list_review_sessions_for_plan,
 )
 from api_server.events import publish_task_status_changed
+from api_server.guardrails.route_gates import gate_plan_generation
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.plan_preflight import run_plan_preflight
 from api_server.plan_progress import TaskSnapshot, compute_plan_progress
@@ -365,6 +366,34 @@ async def create_plan(
     # Spec sources: inline body wins; else lift the planning chat's draft attachment
     # (chat→plan materialisation, task_03_14); else an empty draft.
     draft_title, spec_dict = await _resolve_initial_spec(session, payload)
+
+    # prod-03 task_prod03_14 (guardrails-9): el gate estructural delante de
+    # «Generar Plan». `gate_generate_plan` existía desde el Plan 11 con test
+    # propio y CERO llamantes — `routers/plans.py` no importaba nada de
+    # `api_server.guardrails`—, así que el roadmap del Plan 11 daba por cableado
+    # algo que ninguna ruta invocaba.
+    #
+    # Solo sobre el borrador que produjo el CHAT, que es literalmente la acción
+    # «Generar Plan». Dos exclusiones deliberadas, y la segunda costó medirla:
+    #
+    #  * un plan vacío es un estado legítimo del producto (se crea la carcasa y
+    #    se rellena después), y el esquema exige `summary` y al menos una tarea;
+    #  * un `specification` INLINE (API/SDK) no viene de un LLM: ya lo valida
+    #    Pydantic, y pasarlo además por el esquema estructural rompía 14 tests de
+    #    flujos legítimos que crean planes con tareas y `summary` vacío. El gate
+    #    existe para que un borrador MAL FORMADO del equipo no se materialice,
+    #    no para estrechar el contrato público de la API.
+    if (
+        payload.specification is None
+        and payload.conversation_id is not None
+        and spec_dict.get("tasks")
+    ):
+        await gate_plan_generation(
+            session,
+            draft=spec_dict,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
 
     plan_title = payload.title or draft_title or "Borrador del plan"
     plan = Plan(

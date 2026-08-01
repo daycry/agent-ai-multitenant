@@ -321,18 +321,25 @@ def test_ws_execution_allows_owner(ws_client, migrations_pg_dsn: str, test_redis
 def test_ws_kanban_allows_owner_and_filters_other_tenant(
     ws_client, migrations_pg_dsn: str, test_redis_url: str
 ) -> None:
+    from api_server.events import project_task_events_stream
+
     ids = asyncio.run(_seed(migrations_pg_dsn))
     token_a = _mint(ids["user_a"], ids["tenant_a"])
+    # Desde task_prod13_19 el socket del kanban lee el stream POR PROYECTO, no
+    # el global: sembrar `events:tasks` dejaría este test COLGADO esperando un
+    # evento que ya nadie le entrega. El filtro por tenant que comprueba sigue
+    # siendo el mismo y sigue haciendo falta (defensa en profundidad).
+    stream = project_task_events_stream(str(ids["project_a"]))
 
     async def _seed_stream() -> None:
         from redis.asyncio import Redis
 
         redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
         try:
-            await redis.delete("events:tasks")
+            await redis.delete(stream)
             # right project + right tenant -> delivered
             await redis.xadd(
-                "events:tasks",
+                stream,
                 {
                     "type": "task.status_changed",
                     "tenant_id": str(ids["tenant_a"]),
@@ -343,7 +350,7 @@ def test_ws_kanban_allows_owner_and_filters_other_tenant(
             )
             # SAME project id but a foreign tenant_id -> must be filtered out
             await redis.xadd(
-                "events:tasks",
+                stream,
                 {
                     "type": "task.status_changed",
                     "tenant_id": str(uuid4()),
@@ -354,7 +361,7 @@ def test_ws_kanban_allows_owner_and_filters_other_tenant(
             )
             # right project + right tenant again -> delivered
             await redis.xadd(
-                "events:tasks",
+                stream,
                 {
                     "type": "task.status_changed",
                     "tenant_id": str(ids["tenant_a"]),

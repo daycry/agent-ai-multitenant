@@ -193,6 +193,19 @@ integridad de las imágenes en build).
   `docs/04-reference/cadena-suministro.md` §4 y el comentario de cabecera del
   job `security-scan` en `ci.yml`.
 
+- **Re-medido el 2026-08-01, resultado idéntico** (tercera medición): `critical`
+  exit 0 y `high` exit 1 en las **dos** superficies, con npm proponiendo
+  `next@16.2.12` («which is a breaking change»). Sigue abierta y **no por falta de
+  trabajo**: la parte accionable dentro de 14.2.x está entregada, y lo que resta
+  es un salto de major.
+  Lo que se ha hecho hoy, ya que la medición no aportaba nada nuevo, es que la
+  próxima pasada no tenga que repetirla: `docs/04-reference/cadena-suministro.md`
+  §4 lleva ahora la **condición de salida escrita** —`npm audit --omit=dev
+--audit-level=high` en exit 0 en las dos superficies— y el aviso de que un
+  parche nuevo de 14.2.x **no la cumple**, porque el rango vulnerable de los dos
+  avisos abarca toda la línea 14. Sin esa frase, el patrón observado es que cada
+  ola vuelve a medir lo mismo y concluye lo mismo.
+
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
 - [x] **Título**: Dependabot con 4 ecosistemas y agrupación de PRs
@@ -476,9 +489,53 @@ integridad de las imágenes en build).
     `webauthn`, que declara `cbor2>=5.6.5`, así que 5.9.0 está soportado por la
     librería que lo consume.
 
-  Es decir: bajo por inspección, pero **no verificado**. Con CI en pie, la
-  casilla se cierra corriendo `auto_prod11_10_b` en un entorno instalado con
-  `-c constraints.txt`.
+  Es decir: bajo por inspección, pero **no verificado**.
+
+- 🔴 **`auto_prod11_10_b` EJECUTADO el 2026-08-01, y sale ROJO. El riesgo 4 era
+  real y la inspección de ayer lo había dado por bajo.** No hizo falta CI: se
+  construyó a mano el entorno que CI construye — `uv venv --seed --python 3.12` +
+  los **mismos 12 editable installs del job `test-unit`**, todos con
+  `-c constraints.txt` (148 paquetes, exit 0) — y se corrió la suite.
+
+  | Entorno                                  | Resultado                 |
+  | ---------------------------------------- | ------------------------- |
+  | `.venv` del repo (3.13, desde rangos)    | verde                     |
+  | venv limpio (3.12, `-c constraints.txt`) | **4094 passed, 2 failed** |
+
+  Los dos que caen son
+  `test_security_headers_middleware.py::test_the_public_api_v1_contract_stays_published_in_prod`
+  y `test_metrics_endpoint_wired.py::test_metrics_does_not_shadow_the_authenticated_inbox_metrics`.
+
+  **No es el árbol en movimiento** (había otros cuatro carriles escribiendo): los
+  cuatro ficheros implicados se corrieron en los DOS entornos en el mismo minuto —
+  39 passed en el del repo, 2 failed en el del lock. **Ni es la versión de
+  Python**: bajando sólo `fastapi`/`starlette` a las del repo dentro del **mismo**
+  venv 3.12, los dos pasan.
+
+  **Causa raíz**: el lock pina `fastapi==0.141.1` / `starlette==1.3.1`; el `.venv`
+  del repo tiene `0.136.1` / `1.0.0`. FastAPI 0.141 dejó de aplanar en
+  `app.routes` las rutas que entran por `include_router()`: ahora aparecen
+  envueltas en objetos `_IncludedRouter` sin `.path`. Los dos tests recorren
+  `app.routes` leyendo `.path`, así que pasan de ver ~300 rutas a ver cuatro y
+  concluyen que «desapareció el contrato público de la API».
+  **La aplicación está intacta** —las rutas se sirven igual—; lo que cambió es la
+  introspección. El fallo se disfraza de regresión de producto y no lo es.
+
+  **Por qué esto vale más que un rojo**: `fastapi` era uno de los «72 paquetes que
+  el lock sube» que el análisis de ayer descartó por inspección. Con CI caído
+  **nadie estaba ejecutando la resolución del lock**, así que el día que CI vuelva
+  estos dos salen rojos en `master` y parecerán rotos por el commit que pase por
+  allí. Documentado en
+  [`gotchas/venv-local-por-detras-del-lock.md`](../03-guides/gotchas/venv-local-por-detras-del-lock.md),
+  con la receta para reproducir el entorno de CI en local.
+
+- **Por qué la casilla NO se marca**: porque su test está en rojo, y ahora se sabe
+  exactamente por qué. El arreglo es de los dos tests, no del lock ni de la app
+  (leer `app.openapi()["paths"]`, o recorrer `route.routes` recursivamente), y
+  vive en `tests/unit/test_metrics_endpoint_wired.py` y
+  `test_security_headers_middleware.py` — ficheros de materia ajena a este carril
+  y que otros carriles están tocando en esta misma pasada. Se deja **diagnosticado
+  y no parcheado** a propósito.
 
 ### Fase D — Pin por digest e imágenes inmutables
 
@@ -538,6 +595,20 @@ integridad de las imágenes en build).
   un test, sin datos persistentes ni exposición de red fuera del bridge
   per-tarea).
   Sin esa decisión no se puede cerrar la casilla honestamente.
+- **Revisado el 2026-08-01 a la luz del ADR 0148 (ya `accepted` e implementado):
+  no cierra esta casilla, pero desarma su argumento principal.** El ADR 0148 va de
+  las 14 imágenes que este proyecto **produce**; esta casilla va de dos imágenes
+  que **consume**, así que ni el manifiesto ni el pull-por-digest del worker las
+  tocan. Lo que sí cambia es la premisa que bloqueaba la decisión: se afirmaba que
+  «un digest en Python no tiene vehículo de refresco», y el job `refresh-digests`
+  de `build-runtime-templates.yml` es precisamente un vehículo de refresco de
+  digests **que no es Dependabot** y que escribe en un artefacto que consume
+  código Python. O sea: la opción (b) ya no es la única salida del lado Python,
+  y aparece una cuarta —reutilizar ese patrón—, con el matiz de que resolver
+  digests de imágenes ajenas en un job propio es un diseño distinto del que el
+  0148 firmó. Anotado en `docs/04-reference/cadena-suministro.md` §3.
+  **Sigue siendo decisión, no implementación**, y además el cambio vive en
+  `apps/workers/src/workers/test_runtime.py`, fuera del carril de este agente.
 
 #### `task_registry_adr_12` — ADR: registry y tags inmutables para los runtimes
 

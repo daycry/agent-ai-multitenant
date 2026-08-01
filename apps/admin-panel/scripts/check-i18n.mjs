@@ -116,10 +116,18 @@ const SPANISH_CHARS = "áéíóúüñÁÉÍÓÚÜÑ¿¡";
 const ATTR_PATTERN = new RegExp(`(?:${UI_ATTRS.join("|")})="[^"]*[${SPANISH_CHARS}][^"]*"`, "g");
 
 /**
- * Deuda de atributos conocida el 2026-07-30. **Sólo puede MENGUAR.**
+ * Deuda de atributos conocida el 2026-08-01. **Sólo puede MENGUAR.**
  *
- * Los ficheros migrados (login, shell, sidebar, select-tenant, no-access, users)
+ * Los ficheros migrados (login, shell, sidebar, select-tenant, no-access, users,
+ * backup, tenant-stats, llm-providers, model-prices, agents, knowledge-bases)
  * NO están aquí: están a cero y el trinquete los mantiene así.
+ *
+ * `knowledge-bases` es el aviso de para qué NO sirve este mapa. Tenía **3
+ * entradas** —una por fichero— y eso lo hacía parecer un lote de diez minutos.
+ * Detrás había ~2.100 líneas de castellano cableado en cinco ficheros: el
+ * patrón sólo ve atributos con tilde, así que un módulo entero escrito sin
+ * acentos en los `<Button>` sale a 0 estando sin traducir. El contador mide la
+ * deuda que se puede detectar sola, no la deuda.
  */
 const ATTR_ALLOWLIST = {
   "app/admin/approval-policy/page.tsx": 2,
@@ -142,9 +150,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/inbox/history-tab.tsx": 2,
   "app/admin/inbox/page.tsx": 2,
   "app/admin/inbox/submit-dialog.tsx": 1,
-  "app/admin/knowledge-bases/categories/page.tsx": 1,
-  "app/admin/knowledge-bases/kb-sections.tsx": 1,
-  "app/admin/knowledge-bases/page.tsx": 1,
   "app/admin/marketplace/installations/[id]/permissions/page.tsx": 1,
   "app/admin/marketplace/page.tsx": 1,
   "app/admin/memories/page.tsx": 1,

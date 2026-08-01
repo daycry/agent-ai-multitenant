@@ -148,6 +148,14 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     puertas ya corren fuera del bucle (verificado en
     `tests/unit/test_no_blocking_calls_in_event_loop.py`); falta la task Celery en
     cola dedicada y el endpoint que devuelve 202 + recurso de estado consultable.
+  - ⏳ **Re-verificado (2026-08-01):** sigue igual —`marketplace/install.py:655,687`
+    son `asyncio.to_thread` y no hay task Celery ni 202 en ninguna parte. **No se
+    aborda desde este carril a propósito**: `marketplace/` lo está reescribiendo
+    [`marketplace-v2-despliegue`](./marketplace-v2-despliegue.md) (ADR 0142), y
+    meter aquí un endpoint asíncrono nuevo sobre el flujo de instalación es
+    pedirle un conflicto a quien está cambiando ese mismo flujo. El sitio natural
+    de esta tarea es ese plan, que ya tiene el concepto de despliegue como
+    entidad con estado consultable — justo el recurso que el 202 necesita.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -161,14 +169,13 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_02` — Backup: boto3/paramiko/rclone con `to_thread` y timeouts
 
-- [ ] **Título**: Envolver `destination.test_connectivity()` (`routers/backup.py:230`)
+- [x] **Título**: Envolver `destination.test_connectivity()` (`routers/backup.py:230`)
       y `destination.list_remote()` (`backup.py:361`, bucle de `_list_remote_backups`)
       en `asyncio.to_thread`, con timeouts de conexión explícitos y cortos en los
       adaptadores de `workers/backup_destinations.py` cuando se invocan desde el
       api-server. **Coordinación**: prod-04 reescribe el backup y api-9 (frontera
       apps) puede mover esto a Celery — este task garantiza solo el no-bloqueo.
-  - ⏳ **Pendiente (2026-08-01) — el plazo está puesto donde se podía; el timeout
-    de socket sigue faltando:** además del `to_thread` que ya estaba, las dos
+  - ✅ **El plazo del lado api-server (2026-08-01):** además del `to_thread` que ya estaba, las dos
     llamadas van ahora con **plazo explícito** (`run_remote_probe`,
     `REMOTE_PROBE_TIMEOUT_S = 15 s` en `routers/backup.py`): la sonda de
     conectividad devuelve `ok=False` con motivo en vez de colgarse, y el listado
@@ -176,17 +183,36 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     motivo de fondo, que el plan no escribía: `to_thread` usa el executor por
     defecto (`min(32, cpu+4)` hilos), así que suficientes sondas colgadas lo
     agotan y `to_thread` vuelve a hacer cola — el bloqueo entra por detrás.
-    **Sigue faltando** el timeout de conexión dentro de los adaptadores
-    (`workers/backup_destinations.py`, solo hay `timeout_s=3600` en rclone): el
-    plazo de arriba acota la RESPUESTA, no el hilo, porque Python no puede matar
-    un hilo. Sin el timeout de socket, cada sonda contra una IP que DROPea
-    paquetes sigue quemando un hilo del executor hasta que el SO se rinda.
+    Y lo que ese plazo NO puede hacer, que es la mitad de abajo: acota la
+    RESPUESTA, no el HILO, porque Python no puede matar un hilo.
+  - ✅ **Cerrada (2026-08-01) — el timeout de socket ya está en los tres
+    adaptadores** (`REMOTE_CONNECT_TIMEOUT_S = 10 s` en
+    `workers/backup_destinations.py`, 5/5 en
+    `tests/unit/test_backup_destination_connect_timeouts.py`). Uno por backend,
+    porque cada uno se cuelga a su manera: **boto3** llevaba
+    `connect_timeout=60` **y hasta 5 intentos** —o sea ~5 min de hilo por sonda
+    contra un endpoint muerto—, así que va con `botocore.Config` de 10 s y 2
+    intentos; **paramiko** necesita los TRES plazos y no solo `timeout`, porque
+    `banner_timeout` y `auth_timeout` cubren al host que ABRE el socket y luego
+    no se identifica o no contesta al auth (el connect ya está resuelto, el hilo
+    sigue colgado); **rclone** lleva `--contimeout=10s` en todas las
+    invocaciones, delante del subcomando.
+    Lo que NO se toca, y conviene que esté escrito: el plazo de LECTURA. Una
+    subida multiparte de varios GB por un enlace lento hace lecturas
+    legítimamente largas y un `read_timeout` corto la mataría a mitad; el
+    connect no tiene ese problema. Y el `config` explícito de un llamante gana
+    sobre el nuestro — es un default, no una imposición (con test).
+    Verificado en rojo quitando los tres usos y dejando la constante: 3 de 5.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod13_02_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_backup_endpoints_nonblocking.py -v"
+    # El nombre que el plan escribió (`tests/integration/test_backup_endpoints_nonblocking.py`)
+    # nunca existió: los tests viven en unit porque lo que hay que fijar son
+    # constantes y argv, no un endpoint. Se corrige aquí para que el comando
+    # ejecute algo en vez de fallar con «file not found».
+    command: "pytest tests/unit/test_backup_remote_probe_deadline.py tests/unit/test_backup_destination_connect_timeouts.py -v"
   ```
 
 #### `task_prod13_03` — Vault: timeout explícito, `to_thread` y caché del secreto
@@ -237,6 +263,19 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     Límite residual documentado en `_uploads.py`: con un parámetro `UploadFile`,
     Starlette ya ha parseado el multipart al `SpooledTemporaryFile` antes de que
     el handler corra; cortar antes pide un middleware ASGI, que es otra tarea.
+  - ⏳ **Re-verificado (2026-08-01) — la premisa sigue en pie y ahora se sabe
+    cuánto duele:** en `routers/knowledge_bases.py` no hay ni una comprobación de
+    `content_type` ni de extensión, y en todo el repo sigue sin existir una lista
+    canónica de formatos de Docling. Lo que sí se ha comprobado esta vez es **qué
+    pasa hoy sin ella**: un formato que Docling no sabe parsear levanta
+    `DoclingParseError` en el pipeline y el documento acaba en `failed` con el
+    motivo (`ingestion/pipeline.py:151`). O sea, el hueco es de **UX** —el
+    usuario se entera tarde y después de subir 50 MiB—, no de robustez: nada se
+    cuelga y nada queda a medias. Eso rebaja la urgencia y **sube el coste del
+    error**: una lista inventada rechazaría en la puerta subidas que hoy se
+    aceptan y funcionan, y el fallo sería silencioso en el sentido contrario.
+    **Sigue necesitando la lista canónica (o un ADR)** antes de tocarse; no es
+    trabajo de código, es una decisión de producto.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -247,21 +286,32 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_05` — Cliente httpx/embedder compartido en los hot paths internos
 
-- [ ] **Título**: Sustituir el `OllamaEmbedder()` nuevo por request
+- [x] **Título**: Sustituir el `OllamaEmbedder()` nuevo por request
       (`docs_viewer.py:125-138`, `internal_agent.py:198,295`,
       `ingestion/embeddings.py:86-89`) por un `httpx.AsyncClient` singleton de
       proceso (mismo patrón `lru_cache` que `get_redis`), con keep-alive hacia Ollama.
-  - ⏳ **Pendiente (2026-08-01) — dos llamantes reales, y uno que la nota anterior
-    contaba de más:** solo `docs_viewer.py` usa el cliente compartido
-    (`get_shared_embed_client`, verificado). Siguen construyendo un
-    `OllamaEmbedder()` por llamada `chat/responder.py:976` y
-    `docs_structure/kb_sync.py:222,337`, que son los que importan.
-    `seeds/catalog_ingestion.py` **no es uno de ellos**: crea el embedder una vez
-    por PASADA del seed (`embedder or OllamaEmbedder()` fuera del bucle) y lo
-    cierra al terminar, así que no hay churn por request — el hallazgo perf-9 es
-    sobre hot paths y un seed no lo es. Verificado al implementar
-    task_prod13_09: la variante por documento reutiliza el mismo embedder para
-    los seis corpus a propósito, y eso queda escrito en su docstring.
+  - ✅ **Cerrada (2026-08-01):** los dos llamantes que faltaban
+    (`chat/responder.py`, `docs_structure/kb_sync.py` ×2) van ya sobre el cliente
+    compartido. Lo que lo desbloqueó fue **mudar el singleton de sitio**: vivía
+    en `routers/docs_viewer.py` —su primer usuario— y desde un router ningún
+    servicio lo podía importar sin invertir la dependencia, así que la vía
+    cómoda era seguir construyendo uno propio. Ahora vive en
+    `ingestion/embed_client.py` con el helper `shared_ollama_embedder()`, y NO
+    se re-exporta desde el router: dos nombres serían dos `lru_cache`, o sea dos
+    clientes, y el singleton dejaría de serlo justo cuando alguien crea que lo
+    tiene. Un test lo fija buscando la definición por todo el árbol.
+    Detalle que hace segura la mudanza: como el cliente se INYECTA,
+    `_owns_client` es `False` y `aclose()` es un no-op — sin eso, el
+    `if own_embedder: await …aclose()` que `kb_sync` ya tenía habría matado el
+    pool de todos los demás en la primera sincronización, un fallo peor que el
+    churn que se venía a arreglar. Hay test de eso.
+    `seeds/catalog_ingestion.py` **queda fuera a propósito** y con el motivo
+    escrito en la guarda: crea el embedder una vez por PASADA del seed y lo
+    cierra al terminar, así que no hay churn por request.
+    La guarda de código fuente (AST) enumera los módulos de camino caliente y
+    falla si alguno vuelve a `OllamaEmbedder()` a pelo; sobre el árbol anterior
+    señalaba las tres líneas exactas (`responder.py:976`,
+    `kb_sync.py:222,337`), que es su verificación en rojo.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -313,6 +363,15 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
   - ⏳ **Pendiente (2026-07-31):** sin empezar — la sesión de
     `open_tenant_session` sigue viva durante `run_assistant_turn` y las tools no
     reciben ningún session-factory tenant-aware en `tool_ctx`.
+  - ⏳ **Re-verificado (2026-08-01), sigue sin empezar y sigue siendo la tarea
+    más cara del plan:** `routers/assistant.py:550,753` awaitan
+    `run_assistant_turn` con la sesión del request abierta. Es 2,5 días, cambia
+    el contrato de `tool_ctx.session` para TODAS las tools del asistente y su
+    riesgo nº 1 está escrito en este mismo plan: si el session-factory no replica
+    el `set_config` de tenant en cada sesión corta, se abre un agujero de RLS.
+    No es trabajo de una tanda paralela con la propiedad repartida — pide su
+    rama, la suite de integración del asistente entera antes y después, y quien
+    la haga tiene que poder tocar `auth/deps.py`, que aquí es de otro carril.
 - **Tiempo**: 2,5 días · **Complejidad**: l
 - **Depende de**: `task_prod13_06`
 - **Tests automáticos**:
@@ -411,14 +470,13 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
 
 #### `task_prod13_12` — Recall vectorial multi-tenant: iterative scan + test de recall
 
-- [ ] **Título**: Mitigar el post-filtrado HNSW (db-6): activar
+- [x] **Título**: Mitigar el post-filtrado HNSW (db-6): activar
       `SET hnsw.iterative_scan = relaxed_order` y `hnsw.ef_search` configurable en
       la sesión de `vector_chunks` (`rag/search.py:142-149`), y añadir test de
       recall con dos tenants desbalanceados (corpus 95/5) que falle si el tenant
       pequeño recibe 0 resultados. Redactar ADR propuesto para índices parciales/
       particionado por tenant (decisión futura, no se implementa).
-  - ⏳ **Pendiente (2026-08-01) — mitigación puesta y cableada; faltan el test de
-    recall y el ADR:** `api_server/rag/hnsw.py` fija `hnsw.iterative_scan =
+  - ✅ **La mitigación (2026-08-01):** `api_server/rag/hnsw.py` fija `hnsw.iterative_scan =
 relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     `vector_chunks`. Dos decisiones que conviene tener escritas: **`SET LOCAL`** y
     no `SET`, porque las conexiones del pool se reutilizan entre tenants y un
@@ -427,7 +485,8 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     la transacción entera — sin el savepoint, arrancar contra una pgvector
     antigua no degradaría el recall: tumbaría la búsqueda.
     `tests/integration/test_vector_recall_multitenant.py` fija el CABLEADO (2/2;
-    quitando la llamada de `vector_chunks` se pone rojo, comprobado). - ✅ **El test de recall SÍ existe (2026-08-01):**
+    quitando la llamada de `vector_chunks` se pone rojo, comprobado).
+  - ✅ **El test de recall (2026-08-01):**
     `tests/integration/test_vector_recall_desbalanceado.py`. La nota anterior
     daba el caso por irreproducible a escala de test —«PostgreSQL no elige el
     índice HNSW con mil filas, el control devolvía 10 donde debía devolver
@@ -445,9 +504,24 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     `ef_search` más alto. El test lleva su CONTROL dentro (el arco sin
     mitigación tiene que dar cero, o su mitad verde no demuestra nada) y se
     verificó en rojo desactivando `iterative_scan`.
-    **Sigue faltando el ADR** de índices parciales / particionado por tenant
-    (decisión clave 5). No lo escribe este carril: el reparto de propiedad de
-    esta tanda le asignó un único ADR, el de retención (0151).
+  - ✅ **Cerrada del todo (2026-08-01):** faltaba el ADR de la decisión clave 5 y
+    ya está escrito —
+    [ADR 0152](../05-architecture-decisions/0152-recall-vectorial-multitenant-hnsw.md),
+    en `proposed`, que es lo que esta tarea pedía («redactar ADR propuesto …
+    decisión futura, no se implementa»). Lleva las tres opciones costeadas
+    (statu quo · índices HNSW parciales por tenant 3-5 d · particionar `chunks`
+    por `tenant_id` 5-8 d) y la medición de arriba como evidencia.
+    Dos cosas que salieron al escribirlo y no estaban en el plan: **(1)** la
+    mitigación no es gratis a largo plazo — `iterative_scan` paga el
+    desequilibrio en LATENCIA, y esa curva crece con el corpus del tenant MÁS
+    GRANDE, sobre el que el tenant pequeño no tiene ni control ni visibilidad;
+    **(2)** se recomienda **A ahora, C con un disparador medible escrito** (el
+    tenant mayor por encima del 60 % del corpus Y más de ~200.000 chunks), y se
+    desaconseja B pese a ser más barata, porque mete DDL en el alta de tenant y
+    rompe la propiedad «esquema compartido + RLS» del ADR 0028. El ADR nombra
+    además **el único trabajo que pide hacer ya**: sin una métrica del reparto
+    del corpus por tenant, el disparador no es comprobable y la decisión no se
+    puede tomar nunca.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -523,26 +597,36 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
 
 #### `task_prod13_15` — Retención de tablas append-only (steps_log, audit_log, guardrail_events)
 
-- [ ] **Título**: Redactar el ADR de retención (decisión clave 3) y, una vez
+- [x] **Título**: Redactar el ADR de retención (decisión clave 3) y, una vez
       decidido por humano, implementar la task beat de retención: compactar/
       archivar `executions.steps_log` (`db/domain.py:1060`) de runs antiguos y
       aplicar la retención decidida a `audit_log`, `guardrail_events` y
       `notifications`. La task entra detrás del flag/setting que el ADR defina.
-  - ⏳ **Pendiente (2026-08-01) — el ADR ya está escrito; falta la firma humana:**
-    [`0151-retencion-de-tablas-append-only.md`](../05-architecture-decisions/0151-retencion-de-tablas-append-only.md),
-    en `proposed` y **tiene que seguir así**: cuánto se retiene `audit_log` es
-    política de cumplimiento, no una decisión técnica disfrazada. Lleva las tres
-    opciones con su coste (borrado puro ~1 d · archivado a MinIO ~2,5 d +
-    entrar en el ciclo de backup y cifrado · particionado por rango ~5-8 d con
-    el problema de que la PK de una tabla particionada debe incluir la clave de
-    partición), una tabla de plazos propuestos por familia para que el operador
-    tenga algo concreto que corregir, y **la medición que da la escala**: sobre
-    la instancia de desarrollo, `steps_log` es el **76 %** de la tabla
-    `executions` (1.672 KiB de 2.208), 9,5 KiB de media por run y 64 KiB de
-    máximo. La conclusión que sale de ahí y conviene no perder: hoy el problema
-    no es el disco, es el **tiempo de restauración** — el bundle crece con la
-    historia, no con el estado. La task de retención NO se implementa hasta que
-    el ADR esté decidido; el ADR dice qué queda ya desbloqueado sin él.
+  - ✅ **Cerrada EN NEGATIVO (2026-08-01) — el ADR se firmó y descartó la task
+    que esta casilla pedía.** El
+    [ADR 0151](../05-architecture-decisions/0151-retencion-de-tablas-append-only.md)
+    pasó a `accepted` el 2026-08-01 con la **opción C: particionado nativo por
+    rango en las cinco tablas, sin borrar nada**. La firma se apartó de la
+    recomendación del propio ADR (un híbrido A+C) a sabiendas del coste, y con
+    ella **deja de existir el objeto de esta tarea**: no hay «retención decidida»
+    que aplicar ni plazo que acertar, porque lo que se compró es justamente la
+    opción que no obliga a fijar ninguno. Una task beat que borre filas por
+    antigüedad hoy contradiría la decisión firmada.
+    La mitad que SÍ sigue viva —dejar de arrastrar la historia— es el
+    particionado, y tiene plan propio:
+    [`part-01-particionado-append-only`](./part-01-particionado-append-only.md)
+    (8 días-persona, fase 1 ya entregada con la migración 0131 de
+    `guardrail_events`). Lo entregado por esta casilla es **el ADR**, que era su
+    primera mitad literal («redactar el ADR de retención»), con la medición que
+    dio la escala: `steps_log` es el **76 %** de la tabla `executions` (1.672 KiB
+    de 2.208), 9,5 KiB de media por run. La conclusión que conviene no perder:
+    hoy el problema no es el disco, es el **tiempo de restauración** — el bundle
+    de backup crece con la historia, no con el estado.
+  - ℹ️ **Nota histórica**: entre el momento de redactarlo y la firma, esta
+    casilla estuvo bloqueada a propósito — cuánto se retiene `audit_log` es
+    política de cumplimiento, no una decisión técnica disfrazada, y el ADR se
+    dejó en `proposed` con sus tres opciones costeadas hasta que un humano
+    eligiera. Firmó opción C.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: `task_prod13_14` (comparte infraestructura de purga)
 - **Tests automáticos**:
@@ -626,6 +710,15 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     Hasta entonces `_last_model_expr` y `_token_split` siguen expandiendo
     `steps_log` con `jsonb_array_elements` — pero eso lo recorre PostgreSQL y
     devuelve un `text`, que es una factura muy distinta.
+  - ⏳ **Sigue abierta (2026-08-01), y el ADR 0151 no la desbloquea:** el
+    particionado que el operador firmó reparte `executions` por rango de
+    `created_at`; las columnas denormalizadas siguen siendo columnas nuevas, o
+    sea una migración. Este carril tiene prohibido crearlas (la propiedad de las
+    migraciones es de otro), así que la mitad que falta se queda pendiente **a
+    propósito y no por olvido**. Ojo al orden cuando se retome: con `executions`
+    ya particionada, añadir columnas y backfillear es más caro que hacerlo antes
+    — conviene coordinarlo con
+    [`part-01`](./part-01-particionado-append-only.md), no después.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -636,15 +729,34 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
 
 #### `task_prod13_19` — `/ws/kanban` por canal de proyecto, sin replay global
 
-- [ ] **Título**: Publicar los eventos de tareas también en un stream por proyecto
+- [x] **Título**: Publicar los eventos de tareas también en un stream por proyecto
       (`events:tasks:{project_id}`, dual-write transitorio desde `events.py:28-35`)
       y que `/ws/kanban` (`routers/ws.py:153,211-234`) consuma ese stream
       arrancando en `$` (solo eventos nuevos; el backlog lo da la carga REST
       inicial del tablero), eliminando el filtrado por tenant/proyecto en Python
       y el replay de 10k entradas por socket.
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `events.py` solo publica en el
-    stream global `EVENTS_STREAM = "events:tasks"` y `/ws/kanban` lo sigue
-    consumiendo con filtrado por tenant/proyecto en Python.
+  - ✅ **Cerrada (2026-08-01):** `events.project_task_events_stream` +
+    dual-write en el MISMO pipeline de `_publish`, y `/ws/kanban` leyendo ya el
+    stream de su proyecto. El dual-write **no es transitorio y no debe
+    retirarse**: el stream global lo consume el orchestrator con un grupo de
+    consumidores, así que es el bus de despacho, no un residuo de la migración.
+    Los seis publicadores (routers, `dag_promotion`, `task_lifecycle`,
+    reconciler, `run_cycle` y el propio orchestrator) pasan todos por
+    `api_server.events`, así que el dual-write los cubre sin tocarlos.
+    Cuatro decisiones que el plan no fijaba: **(1)** se conserva la ventana de
+    re-reproducción de 15 s en vez del `$` que pedía el plan — arrancar en `$`
+    pierde los eventos del hueco entre el fetch REST y el handshake, que es
+    justo lo que esa ventana se puso a cubrir el 2026-07-03. **(2)** El filtro
+    por `tenant_id` se mantiene aunque el stream ya sea de un proyecto:
+    defensa en profundidad barata sobre la única propiedad que importa.
+    **(3)** `maxlen` del stream por proyecto = 500 y no 10.000: su único lector
+    mira los últimos 15 s. **(4)** TTL de 24 h deslizante, por lo mismo que el
+    stream de ejecución — `maxlen` acota lo que pesa cada stream, no cuántos
+    hay, y sin caducidad quedaría una clave por proyecto borrado para siempre.
+    El test que manda es el del cruce, y lleva un **señuelo en el stream
+    global**: sin él la regresión no falla, se CUELGA (el `receive_json` de
+    `TestClient` no tiene plazo) y una suite colgada no se lee como un rojo.
+    Verificado en rojo devolviendo el pump al stream global.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -698,16 +810,29 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
 
 #### `task_prod13_22` — `FOR UPDATE` en transiciones de estado críticas
 
-- [ ] **Título**: Añadir `for_update=True` a `get_writable_or_404`
+- [x] **Título**: Añadir `for_update=True` a `get_writable_or_404`
       (`routers/_helpers.py:77`) y usarlo en `approve_plan`/`apply_human_action`
       (`plans.py:471,495`) y `task_lifecycle.py:140`, cerrando la carrera de doble
       firma simultánea (api-10). Test de concurrencia con dos firmas en paralelo.
-  - ⏳ **Pendiente (2026-07-31):** el `for_update=True` está implementado y
-    verificado (`tests/unit/test_row_lock_and_pagination.py` compila el SELECT y
-    exige `FOR UPDATE` + filtro de tenant, y las tres transiciones que firman lo
-    piden); falta el test de concurrencia con dos firmas en paralelo, que es lo
-    único que demuestra que el lock serializa DENTRO de la transacción del
-    request y no se suelta al instante.
+  - ✅ **Cerrada (2026-08-01):** el `for_update=True` ya estaba; faltaba lo único
+    que demuestra que sirve, y son **dos tests distintos** porque prueban cosas
+    distintas (`tests/integration/test_state_transitions_row_lock.py`, 3/3).
+    El que manda es el de **sesiones**: dos transacciones vivas, interleave
+    controlado a mano, y comprueba las dos mitades de la propiedad — que el
+    segundo `SELECT … FOR UPDATE` **se queda esperando** mientras el primero no
+    commitea, y que al desbloquearse lee la fila **actualizada** (READ COMMITTED
+    re-evalúa la versión viva), o sea que decide sobre el estado real y no sobre
+    el que vio el primero. Lleva su CONTROL dentro: el mismo guion sin candado
+    devuelve al instante el estado RANCIO, que es literalmente la carrera de la
+    doble firma. Verificado en rojo neutralizando el `if for_update:` del helper.
+    El segundo test son las **dos firmas en paralelo por HTTP** que pedía el
+    plan, y su límite queda escrito en su propio docstring: el interleave no
+    está forzado, así que puede pasar por casualidad con el candado quitado —
+    comprueba el cableado de punta a punta, no la serialización.
+    De paso, una trampa cazada en caliente: con el umbral de doble firma por
+    debajo del coste del plan el endpoint aprueba a la PRIMERA firma y la
+    segunda recibe un 409 correcto; el test lo asegura comprobando el coste
+    contra el umbral antes de firmar, o sería verde por el motivo equivocado.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml

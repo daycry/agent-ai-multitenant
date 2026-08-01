@@ -42,11 +42,23 @@ interface KbGroup {
   kbs: KnowledgeBase[];
 }
 
-export function groupByCategory(kbs: KnowledgeBase[], categories: KbCategory[]): KbGroup[] {
+/**
+ * Agrupa las KBs por categoría.
+ *
+ * `uncategorizedLabel` llega por parámetro y no se resuelve aquí dentro (prod-16
+ * `task_prod16_04`): era el único texto de UI de este módulo, y hacer que la
+ * función pura dependiera del idioma la habría acoplado al diccionario sólo por
+ * una cadena. El llamante ya tiene `useT("knowledgeBases")` a mano.
+ */
+export function groupByCategory(
+  kbs: KnowledgeBase[],
+  categories: KbCategory[],
+  uncategorizedLabel: string,
+): KbGroup[] {
   const byId = new Map<string, KbGroup>();
   const sinCat: KbGroup = {
     key: NO_CATEGORY_KEY,
-    label: "Sin categoría",
+    label: uncategorizedLabel,
     category: null,
     kbs: [],
   };

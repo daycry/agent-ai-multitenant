@@ -90,6 +90,16 @@ del installer.
   Si no se hace, `uv lock --check` pone `lint-python` en rojo. **Dependabot no
   regenera el lock**: es el fallo más frecuente de sus PRs (ver runbook §7).
 
+> ⚠️ **El `.venv` del repo NO es lo que instala CI, y la diferencia ya esconde dos
+> rojos.** El venv local se resolvió desde los rangos, antes de que existiera el
+> lock; medido el 2026-08-01, **74 de ~170 paquetes divergen y 72 son el venv
+> retrasado**. Entre ellos `fastapi` (0.136.1 local vs **0.141.1** en el lock),
+> cuya 0.141 dejó de aplanar en `app.routes` las rutas de `include_router()`: dos
+> guardas de `tests/unit/` pasan en local y **fallan con la resolución que CI
+> instala**. Con CI caído nadie corría esa resolución, así que el rojo lleva
+> semanas invisible. Cómo reproducir el entorno de CI en local, y el fix:
+> [gotchas/venv-local-por-detras-del-lock.md](../03-guides/gotchas/venv-local-por-detras-del-lock.md).
+
 ---
 
 ## 3. Inmutabilidad: nada mutable entra en el build
@@ -126,6 +136,18 @@ Lo que **no** está pineado por digest, a propósito o por decidir:
   (`apps/workers/src/workers/test_runtime.py`): un digest en una constante de
   Python no lo refresca ningún ecosistema de Dependabot, así que pinearlo ahí
   chocaría con la regla dura del propio plan. Pendiente de decisión.
+
+  > **Lo que cambió el 2026-08-01 y afecta a esa decisión**: la premisa de arriba
+  > —«en Python no hay vía de refresco»— dejó de ser cierta en general. El ADR
+  > 0148 entregó exactamente eso para las 14 imágenes de runtime: un manifiesto
+  > generado (`runtime_images.json`) que **no refresca Dependabot sino un job de
+  > CI** (`refresh-digests`), que resuelve los digests contra el registry y abre
+  > un PR. O sea: el vehículo de refresco no tiene por qué ser Dependabot, y la
+  > opción (b) del plan («pinear en Python + revisión manual mensual») ya no es la
+  > única salida del lado Python. Sigue siendo una decisión, no una
+  > implementación: estas dos imágenes **no las publica este proyecto**, así que
+  > reutilizar el mecanismo del 0148 significaría resolver digests de imágenes
+  > ajenas en un job propio, que es un diseño distinto y hay que quererlo.
 
 ### 3.1 Las 14 imágenes de runtime (ADR 0148)
 
@@ -197,7 +219,7 @@ los cumpla.
 vulnerabilidad npm que no se puede arreglar **no se suprime**: se registra en un
 plan o ADR y el gate npm no puede volverse obligatorio hasta resolverla.
 
-### Backlog conocido a 2026-07-31
+### Backlog conocido (re-medido el 2026-08-01)
 
 `next` está en **14.2.35**, el último parche de la línea 14.2.x: eso cerró la
 crítica `GHSA-955p-x3mx-jcvp` (divulgación no autenticada de Server Functions) y
@@ -206,6 +228,22 @@ crítica `GHSA-955p-x3mx-jcvp` (divulgación no autenticada de Server Functions)
 **todo 14.x** (más un `postcss` empotrado) y el único fix disponible es
 **`next` 16**, un salto de major con roturas. Eso necesita su propio plan; hasta
 entonces el gate npm no puede ser obligatorio sin mentir.
+
+Medición del 2026-08-01, **idéntica** a la del 2026-07-31 (npm propone
+`next@16.2.12`, «which is a breaking change»):
+
+| Comando                                       | admin-panel | installer  |
+| --------------------------------------------- | ----------- | ---------- |
+| `npm audit --omit=dev --audit-level=critical` | exit **0**  | exit **0** |
+| `npm audit --omit=dev --audit-level=high`     | exit **1**  | exit **1** |
+
+**Condición de salida, para no volver a medir esto a ciegas**: este backlog se
+cierra cuando `npm audit --omit=dev --audit-level=high` salga en **exit 0** en las
+dos superficies. Hoy eso solo puede venir de migrar a `next` 16 en el admin-panel
+y en el frontend del installer; un parche nuevo de 14.2.x **no basta**, porque el
+rango vulnerable de los dos avisos abarca toda la línea 14. Mientras eso siga así,
+`task_next_update_01` y `task_sca_gate_08` de `prod-11` permanecen abiertas por
+esta razón y no por falta de trabajo.
 
 ---
 
