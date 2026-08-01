@@ -32,6 +32,7 @@
  *   node scripts/check-i18n.mjs
  *   node scripts/check-i18n.mjs --strict
  *   node scripts/check-i18n.mjs --root <dir>     # para los tests
+ *   node scripts/check-i18n.mjs --print-allowlist  # sólo para los tests, ver main()
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -74,9 +75,6 @@ const EXEMPT_PREFIXES = ["lib/i18n/"];
  * lo mantiene a cero.
  */
 const ALLOWLIST = {
-  "app/admin/agents/[id]/agent-tools-section.tsx": 6,
-  "app/admin/agents/[id]/page.tsx": 1,
-  "app/admin/agents/page.tsx": 3,
   "app/admin/cortex/mind/page.tsx": 1,
   "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 3,
   "app/admin/tools/page.tsx": 4,
@@ -124,9 +122,6 @@ const ATTR_PATTERN = new RegExp(`(?:${UI_ATTRS.join("|")})="[^"]*[${SPANISH_CHAR
  * NO están aquí: están a cero y el trinquete los mantiene así.
  */
 const ATTR_ALLOWLIST = {
-  "app/admin/agents/[id]/agent-skills-section.tsx": 2,
-  "app/admin/agents/[id]/agent-tools-section.tsx": 3,
-  "app/admin/agents/page.tsx": 1,
   "app/admin/approval-policy/page.tsx": 2,
   "app/admin/approvals/page.tsx": 1,
   "app/admin/assistant/page.tsx": 2,
@@ -150,13 +145,10 @@ const ATTR_ALLOWLIST = {
   "app/admin/knowledge-bases/categories/page.tsx": 1,
   "app/admin/knowledge-bases/kb-sections.tsx": 1,
   "app/admin/knowledge-bases/page.tsx": 1,
-  "app/admin/llm-providers/page.tsx": 2,
   "app/admin/marketplace/installations/[id]/permissions/page.tsx": 1,
   "app/admin/marketplace/listings/[id]/playwright-config/page.tsx": 2,
   "app/admin/marketplace/page.tsx": 1,
   "app/admin/memories/page.tsx": 1,
-  "app/admin/model-prices/model-price-dialogs.tsx": 1,
-  "app/admin/model-prices/page.tsx": 3,
   "app/admin/notifications/inbox/page.tsx": 2,
   "app/admin/notifications/page.tsx": 1,
   "app/admin/office/page.tsx": 3,
@@ -198,9 +190,10 @@ const ATTR_ALLOWLIST = {
 const MIN_FILES_SCANNED = 50;
 
 function parseArgs(argv) {
-  const args = { root: APP_ROOT, strict: false };
+  const args = { root: APP_ROOT, strict: false, printAllowlist: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--strict") args.strict = true;
+    else if (argv[i] === "--print-allowlist") args.printAllowlist = true;
     else if (argv[i] === "--root") {
       args.root = resolve(argv[i + 1] ?? ".");
       i += 1;
@@ -236,7 +229,18 @@ function collectFiles(root) {
 }
 
 function main() {
-  const { root, strict } = parseArgs(process.argv.slice(2));
+  const { root, strict, printAllowlist } = parseArgs(process.argv.slice(2));
+
+  // Su ÚNICO consumidor es `check-i18n.test.ts`. Sus fixtures necesitan un
+  // fichero que las allowlists conozcan, y clavar el nombre a mano convierte
+  // cada migración exitosa en cuatro tests rojos: le pasó al guard hermano el
+  // 2026-08-01, cuando `llm-providers` se partió de verdad. Leerlo de aquí hace
+  // que el test siga a la deuda en vez de a un nombre.
+  if (printAllowlist) {
+    process.stdout.write(JSON.stringify({ ternaries: ALLOWLIST, attrs: ATTR_ALLOWLIST }));
+    return;
+  }
+
   const files = collectFiles(root);
   const isFixture = root !== APP_ROOT;
 

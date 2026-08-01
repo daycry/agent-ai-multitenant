@@ -52,13 +52,36 @@ def get_engine() -> AsyncEngine:
     )
 
 
+def _install_pool_metrics_once() -> None:
+    """Registra el colector de saturación del pool en el registro del proceso.
+
+    Vive aquí y no en ``main.install_metrics`` para que la métrica exista en
+    CUALQUIER proceso que abra sesiones (api-server, CLI, seeds), no solo en el
+    que monta la app FastAPI. Es idempotente y se llama desde los sessionmakers,
+    que son ``lru_cache``: en la práctica corre una vez por proceso.
+
+    Nunca levanta: quedarse sin métrica es un incordio; que un import de
+    ``prometheus_client`` tumbe la creación de sesiones, no.
+    """
+    try:
+        from prometheus_client import REGISTRY
+
+        from api_server.db.pool_metrics import install_pool_metrics
+
+        install_pool_metrics(REGISTRY)
+    except Exception:  # pragma: no cover - observabilidad best-effort
+        pass
+
+
 @lru_cache(maxsize=1)
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(
+    maker = async_sessionmaker(
         bind=get_engine(),
         class_=AsyncSession,
         expire_on_commit=False,
     )
+    _install_pool_metrics_once()
+    return maker
 
 
 @lru_cache(maxsize=1)
@@ -75,11 +98,13 @@ def get_admin_engine() -> AsyncEngine:
 
 @lru_cache(maxsize=1)
 def get_admin_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(
+    maker = async_sessionmaker(
         bind=get_admin_engine(),
         class_=AsyncSession,
         expire_on_commit=False,
     )
+    _install_pool_metrics_once()
+    return maker
 
 
 def reset_engine_cache() -> None:

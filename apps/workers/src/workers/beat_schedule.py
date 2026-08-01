@@ -40,6 +40,10 @@ _STRICT_ENVIRONMENTS = frozenset({"staging", "prod"})
 # divergir (los demás constantes se declaran abajo y sí podrían).
 APPROVAL_EXPIRY_BEAT_ENTRY = "expire-stale-approvals-every-15m"
 
+# prod-13 task_prod13_14: el nombre de la entrada de la purga de filas
+# soft-borradas. Misma disciplina y mismo motivo que la de arriba.
+PURGE_SOFT_DELETED_BEAT_ENTRY = "purge-soft-deleted-daily"
+
 # Each schedule entry is the standard Celery shape:
 # `{task: <name>, schedule: <celery.schedules.*>, options: {queue: <name>}}`.
 #
@@ -217,6 +221,18 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "collect-knowledge-garbage-daily": {
         "task": "workers.collect_knowledge_garbage",
         "schedule": crontab(hour="4", minute="0"),
+        "options": {"queue": "ingestion"},
+    },
+    # prod-13 task_prod13_14 (hallazgo db-4): purga FÍSICA de las filas
+    # soft-borradas vencidas — KBs (con su cascada a documents/chunks y los
+    # blobs) y proyectos (plans/tasks/executions). Diario 04:30, media hora
+    # después del GC de conocimiento para que no compitan por la misma cola.
+    # Arranca en DRY-RUN: cuenta y no borra hasta que el operador ponga
+    # `purge.soft_deleted_enabled` (riesgo 3 del plan: el borrado es
+    # irreversible). Pinned a `ingestion`, donde vive el cliente de MinIO.
+    PURGE_SOFT_DELETED_BEAT_ENTRY: {
+        "task": "workers.purge_soft_deleted",
+        "schedule": crontab(hour="4", minute="30"),
         "options": {"queue": "ingestion"},
     },
     # `task_wf_52b`: latido de shadow evals. `record_shadow_eval` existia desde

@@ -167,10 +167,20 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       adaptadores de `workers/backup_destinations.py` cuando se invocan desde el
       api-server. **Coordinación**: prod-04 reescribe el backup y api-9 (frontera
       apps) puede mover esto a Celery — este task garantiza solo el no-bloqueo.
-  - ⏳ **Pendiente (2026-07-31):** el `to_thread` de las dos llamadas está y se
-    verifica (`tests/unit/test_no_blocking_calls_in_event_loop.py`); faltan los
-    timeouts de conexión explícitos y cortos en los adaptadores de
-    `workers/backup_destinations.py` (solo hay `timeout_s=3600` en rclone).
+  - ⏳ **Pendiente (2026-08-01) — el plazo está puesto donde se podía; el timeout
+    de socket sigue faltando:** además del `to_thread` que ya estaba, las dos
+    llamadas van ahora con **plazo explícito** (`run_remote_probe`,
+    `REMOTE_PROBE_TIMEOUT_S = 15 s` en `routers/backup.py`): la sonda de
+    conectividad devuelve `ok=False` con motivo en vez de colgarse, y el listado
+    remoto se salta el destino que no contesta en vez de esperar por él. El
+    motivo de fondo, que el plan no escribía: `to_thread` usa el executor por
+    defecto (`min(32, cpu+4)` hilos), así que suficientes sondas colgadas lo
+    agotan y `to_thread` vuelve a hacer cola — el bloqueo entra por detrás.
+    **Sigue faltando** el timeout de conexión dentro de los adaptadores
+    (`workers/backup_destinations.py`, solo hay `timeout_s=3600` en rclone): el
+    plazo de arriba acota la RESPUESTA, no el hilo, porque Python no puede matar
+    un hilo. Sin el timeout de socket, cada sonda contra una IP que DROPea
+    paquetes sigue quemando un hilo del executor hasta que el SO se rinda.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -241,10 +251,17 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       (`docs_viewer.py:125-138`, `internal_agent.py:198,295`,
       `ingestion/embeddings.py:86-89`) por un `httpx.AsyncClient` singleton de
       proceso (mismo patrón `lru_cache` que `get_redis`), con keep-alive hacia Ollama.
-  - ⏳ **Pendiente (2026-07-31):** solo `docs_viewer.py` usa el cliente
-    compartido (`get_shared_embed_client`, verificado); siguen construyendo un
-    `OllamaEmbedder()` por llamada `chat/responder.py:976`,
-    `docs_structure/kb_sync.py:222,337` y `seeds/catalog_ingestion.py:185`.
+  - ⏳ **Pendiente (2026-08-01) — dos llamantes reales, y uno que la nota anterior
+    contaba de más:** solo `docs_viewer.py` usa el cliente compartido
+    (`get_shared_embed_client`, verificado). Siguen construyendo un
+    `OllamaEmbedder()` por llamada `chat/responder.py:976` y
+    `docs_structure/kb_sync.py:222,337`, que son los que importan.
+    `seeds/catalog_ingestion.py` **no es uno de ellos**: crea el embedder una vez
+    por PASADA del seed (`embedder or OllamaEmbedder()` fuera del bucle) y lo
+    cierra al terminar, así que no hay churn por request — el hallazgo perf-9 es
+    sobre hot paths y un seed no lo es. Verificado al implementar
+    task_prod13_09: la variante por documento reutiliza el mismo embedder para
+    los seis corpus a propósito, y eso queda escrito en su docstring.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -257,14 +274,25 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_06` — Tuning explícito del pool async como settings
 
-- [ ] **Título**: Exponer `pool_size`/`max_overflow`/`pool_timeout`/`pool_recycle`
+- [x] **Título**: Exponer `pool_size`/`max_overflow`/`pool_timeout`/`pool_recycle`
       como settings de entorno y aplicarlos en `get_engine` y `get_admin_engine`
       (`db/session.py:21-58`), con los defaults de la decisión clave 4 y métrica
       de saturación del pool expuesta (coordinación con prod-08 para la alerta).
-  - ⏳ **Pendiente (2026-07-31):** los cuatro settings existen con los defaults
-    de la decisión clave 4 y llegan a los DOS engines (verificado en
-    `tests/unit/test_engine_pool_settings.py`); falta exponer la métrica de
-    saturación del pool — el api-server no publica métricas todavía.
+  - ✅ **Cerrada (2026-08-01):** los cuatro settings ya estaban; faltaba la
+    métrica, y la premisa que la bloqueaba dejó de ser cierta — **el api-server
+    sí publica métricas** desde prod-08 Fase B (`api_server/metrics.py`, la nota
+    anterior es del día antes). El colector vive en `db/pool_metrics.py` y
+    publica `agentic_db_pool_connections{engine,state}` +
+    `agentic_db_pool_capacity{engine}` para los DOS engines (app y admin).
+    Tres decisiones que conviene tener escritas: se mide **en el scrape**
+    leyendo el pool vivo de SQLAlchemy, no instrumentando el checkout, así que
+    en régimen normal cuesta cero; se publica `capacity` = `pool_size +
+max_overflow` porque sin denominador la alerta de saturación de prod-08 no
+    es escribible; y se registra desde los **sessionmakers** en vez de desde
+    `install_metrics`, para que la serie exista en cualquier proceso que abra
+    sesiones (CLI, seeds), no solo en el que monta FastAPI. El test que manda es
+    el del cableado: quitando la llamada de `get_sessionmaker` se pone rojo — un
+    colector que nadie registra publica exactamente nada.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -312,12 +340,21 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_09` — Seed runner: una transacción por seed
 
-- [ ] **Título**: Trocear `python -m api_server.seeds` (`seeds/__main__.py:46-112`)
+- [x] **Título**: Trocear `python -m api_server.seeds` (`seeds/__main__.py:46-112`)
       en una transacción por seed, separando `seed_catalog_ingestion`
       (`catalog_ingestion.py:55`, embeds por red) a su propia transacción/lote por
       documento. La idempotencia existente (uuid5, hash de corpus) hace el cambio seguro.
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `seeds/__main__.py:52` sigue
-    envolviendo TODOS los seeds en un único `session.begin()`.
+  - ✅ **Cerrada (2026-08-01):** los ~20 seeds son ahora una tabla `SEED_STEPS` y
+    `run_seeds` abre **una transacción por paso**; el catálogo va aparte con
+    `seed_catalog_ingestion_per_document`, que commitea **por documento** (es el
+    único seed que habla por red). Lo que se gana no es rendimiento sino que un
+    arranque con Ollama caído deje de tirar los 17 seeds anteriores: antes, un
+    fallo en la ingesta del corpus —la parte prescindible— dejaba la instalación
+    sin agentes, sin equipos y sin tools. El test que muerde es ése: con una
+    transacción global, `organizations` y `agents` quedan a 0 tras el fallo
+    (comprobado en rojo). Y hay un tercer test que fija el ORDEN de los pasos
+    contra las FKs, que es lo que un refactor así rompe sin que nada más se
+    entere hasta el siguiente arranque en limpio.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -390,14 +427,27 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     la transacción entera — sin el savepoint, arrancar contra una pgvector
     antigua no degradaría el recall: tumbaría la búsqueda.
     `tests/integration/test_vector_recall_multitenant.py` fija el CABLEADO (2/2;
-    quitando la llamada de `vector_chunks` se pone rojo, comprobado).
-    **Falta el test de recall con corpus 95/5**: se escribió y se retiró porque
-    con las mil filas que un test puede sembrar PostgreSQL no elige el índice
-    HNSW, así que el caso malo no se reproduce — su «control» sin mitigación
-    devolvía 10 resultados donde debía devolver 0, o sea el test habría quedado
-    verde sin medir nada. Reproducirlo pide cientos de miles de vectores: banco
-    de pruebas, no test de integración. **Falta también el ADR** de índices
-    parciales/particionado por tenant.
+    quitando la llamada de `vector_chunks` se pone rojo, comprobado). - ✅ **El test de recall SÍ existe (2026-08-01):**
+    `tests/integration/test_vector_recall_desbalanceado.py`. La nota anterior
+    daba el caso por irreproducible a escala de test —«PostgreSQL no elige el
+    índice HNSW con mil filas, el control devolvía 10 donde debía devolver
+    0»—. **El diagnóstico era correcto y la conclusión no**: faltaba una
+    línea, `SET LOCAL enable_seqscan = off`. Quitándole al planificador la
+    alternativa que el tamaño de juguete le regalaba, el defecto se reproduce
+    con **2.030 filas** de 768 dimensiones y el test tarda un minuto. Forzarlo
+    no es hacer trampa: en producción, con corpus real, el planificador elige
+    el índice por su cuenta — que es justo el escenario de db-6.
+    Medido antes de escribir el test (pgvector 0.8.2, 2.000 chunks del tenant
+    grande contra 30 del pequeño, todos más cerca del query los del grande):
+    `ef_search=40` sin iterative → **0** · `ef_search=100` sin iterative →
+    **0** · `ef_search=100` con iterative → **10**. La fila del medio es la
+    que da sentido al test: descarta que lo que arregla el recall sea el
+    `ef_search` más alto. El test lleva su CONTROL dentro (el arco sin
+    mitigación tiene que dar cero, o su mitad verde no demuestra nada) y se
+    verificó en rojo desactivando `iterative_scan`.
+    **Sigue faltando el ADR** de índices parciales / particionado por tenant
+    (decisión clave 5). No lo escribe este carril: el reparto de propiedad de
+    esta tanda le asignó un único ADR, el de retención (0151).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -431,15 +481,38 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
 
 #### `task_prod13_14` — Job beat de purga de filas soft-deleted
 
-- [ ] **Título**: Nueva task en `workers/maintenance.py` + entrada en
+- [x] **Título**: Nueva task en `workers/maintenance.py` + entrada en
       `beat_schedule.py`: purga física de filas con `deleted_at` anterior a la
       ventana de gracia (platform setting, default 30 días), cascada vía las FKs
       `ON DELETE` existentes (KBs→documents→chunks con embeddings, proyectos→
       plans/tasks/executions), con modo dry-run y log de recuento por tabla.
       **Coordinación**: prod-06 corrige antes el orden blob/commit (db-3) — la
       purga es quien borra los blobs de MinIO de documentos soft-deleted.
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — no existe ninguna task de purga
-    en `workers/maintenance/` ni entrada en `beat_schedule.py`.
+  - ✅ **Cerrada (2026-08-01):** `workers/maintenance/purge.py` +
+    `PURGE_SOFT_DELETED_BEAT_ENTRY` (diario 04:30, cola `ingestion`) + export en
+    el façade `workers.maintenance` —los tres, porque una task sin el tercero es
+    la trampa de `gotchas/beat-entry-whose-task-nobody-imports.md`: beat la
+    encola y el worker la rechaza con `NotRegistered`, en silencio.
+    Cuatro decisiones que el plan no fijaba y valen más que el código:
+    **(1) Arranca en DRY-RUN y ese es el default de la función**, no solo de la
+    configuración. El riesgo 3 del plan es irreversible; encender el borrado real
+    es del operador (`purge.soft_deleted_enabled`, o
+    `celery call workers.purge_soft_deleted --kwargs '{"dry_run": false}'` para
+    una primera pasada vigilada).
+    **(2) El alcance es una allowlist de DOS raíces, no un barrido.** Hay 35
+    tablas con `deleted_at`; purgar por tener la columna habría incluido
+    `organizations` (dar de baja un tenant) y `users` (global desde el ADR 0137).
+    Las 33 exclusiones llevan **el motivo escrito**, y un test exige que
+    allowlist ∪ exclusiones cubran el universo: una tabla nueva con `deleted_at`
+    obliga a decidir en vez de colarse en cualquiera de los dos sentidos.
+    **(3) Las claves de los blobs se leen ANTES del DELETE.** Después de la
+    cascada las filas `documents` ya no existen y no habría forma de saber qué
+    borrar en MinIO — es el mismo orden que el hallazgo db-3 arregla en el
+    borrado interactivo.
+    **(4) Cota de 500 raíces por pasada**, para que la primera ejecución sobre
+    un histórico grande no monopolice la cola.
+    El test que manda es el de la ventana de gracia, escrito primero: ignorando
+    el corte, se pone rojo (comprobado).
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -455,9 +528,21 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
       archivar `executions.steps_log` (`db/domain.py:1060`) de runs antiguos y
       aplicar la retención decidida a `audit_log`, `guardrail_events` y
       `notifications`. La task entra detrás del flag/setting que el ADR defina.
-  - ⏳ **Pendiente (2026-07-31):** bloqueada por decisión de producto — el ADR de
-    retención (decisión clave 3) no está escrito y borrar auditoría lo decide el
-    operador; no hay task ni entrada de beat.
+  - ⏳ **Pendiente (2026-08-01) — el ADR ya está escrito; falta la firma humana:**
+    [`0151-retencion-de-tablas-append-only.md`](../05-architecture-decisions/0151-retencion-de-tablas-append-only.md),
+    en `proposed` y **tiene que seguir así**: cuánto se retiene `audit_log` es
+    política de cumplimiento, no una decisión técnica disfrazada. Lleva las tres
+    opciones con su coste (borrado puro ~1 d · archivado a MinIO ~2,5 d +
+    entrar en el ciclo de backup y cifrado · particionado por rango ~5-8 d con
+    el problema de que la PK de una tabla particionada debe incluir la clave de
+    partición), una tabla de plazos propuestos por familia para que el operador
+    tenga algo concreto que corregir, y **la medición que da la escala**: sobre
+    la instancia de desarrollo, `steps_log` es el **76 %** de la tabla
+    `executions` (1.672 KiB de 2.208), 9,5 KiB de media por run y 64 KiB de
+    máximo. La conclusión que sale de ahí y conviene no perder: hoy el problema
+    no es el disco, es el **tiempo de restauración** — el bundle crece con la
+    historia, no con el estado. La task de retención NO se implementa hasta que
+    el ADR esté decidido; el ADR dice qué queda ya desbloqueado sin él.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: `task_prod13_14` (comparte infraestructura de purga)
 - **Tests automáticos**:
@@ -522,9 +607,25 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
       y materializar `last_model`/`tokens_in`/`tokens_out` como columnas
       denormalizadas al cerrar el run (patrón ya existente con
       `total_tokens`/`total_cost_usd`), con migración + backfill.
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `routers/tenant_stats.py` sigue
-    expandiendo `steps_log` con `jsonb_array_elements` en el listado y el export,
-    y no hay columnas denormalizadas de `last_model`/`tokens_in`/`tokens_out`.
+  - ⏳ **Pendiente (2026-08-01) — hecha la mitad que NO pide migración, y es la
+    que quemaba memoria:** `runs_select` (antes `_fetch_runs`) selecciona ahora
+    **columnas escalares explícitas** en vez de la entidad `Execution` entera, así
+    que el listado y el export dejaron de materializar `steps_log` en el proceso
+    del api-server. La escala, medida el 2026-08-01: `steps_log` es el **76 %** de
+    la tabla `executions`, 9,5 KiB de media por run; con `MAX_EXPORT_ROWS = 5000`
+    eso eran del orden de **50 MiB de JSONB** cruzando la red y materializándose en
+    Python para producir un CSV que no publica ni un byte de esa traza. Los 20
+    tests de integración de stats (export, toggle de divisa, dashboard) siguen
+    verdes: son la red contra el desplazamiento-de-uno que este refactor invita.
+    **De regalo, la paginación por keyset**: `?cursor=` opaco + cabecera
+    `X-Next-Cursor`, sobre `(created_at, id)` con comparación de FILA para que no
+    se salte ni repita filas del mismo instante. El `offset` sigue funcionando —
+    quitarlo rompería a los clientes de hoy.
+    **Falta** lo que exige migración y este carril no puede crear: las columnas
+    denormalizadas `last_model` / `tokens_in` / `tokens_out` con su backfill.
+    Hasta entonces `_last_model_expr` y `_token_split` siguen expandiendo
+    `steps_log` con `jsonb_array_elements` — pero eso lo recorre PostgreSQL y
+    devuelve un `text`, que es una factura muy distinta.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

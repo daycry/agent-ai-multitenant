@@ -43,6 +43,8 @@ never fabricated.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, cast
@@ -52,11 +54,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import (
     BigInteger,
     ColumnElement,
+    Select,
     case,
     column,
     func,
     literal,
     select,
+    tuple_,
 )
 from sqlalchemy import (
     cast as sa_cast,
@@ -405,6 +409,7 @@ async def query_execution_runs(
     model: str | None = None,
     min_cost: Decimal | None = None,
     display_currency: str | None = None,
+    cursor: str | None = None,
 ) -> list[ExecutionRunRow]:
     """This tenant's executions, newest first, paginated + filtered + currency-applied.
 
@@ -428,7 +433,7 @@ async def query_execution_runs(
     target_currency = await _resolve_display_currency(
         session, tenant_id=tenant_id, override=display_currency
     )
-    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
+    rows = await _fetch_runs(session, filters, limit=limit, offset=offset, cursor=cursor)
     return await _apply_display_currency(session, rows, target_currency)
 
 
@@ -437,10 +442,20 @@ async def query_execution_runs(
 # ===========================================================================
 @router.get("/runs", response_model=list[ExecutionRunRow])
 async def list_execution_runs(
+    response: Response,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     limit: int = limit_query(),
     offset: int = offset_query(),
+    cursor: str | None = Query(
+        default=None,
+        max_length=256,
+        description=(
+            "Keyset pagination token from a previous page's X-Next-Cursor header. "
+            "When present it takes precedence over `offset` (mixing both would "
+            "skip rows). Prefer it over `offset` for deep pagination."
+        ),
+    ),
     window_days: int = _window_days(),
     agent_id: UUID | None = Query(default=None, description="Narrow to one agent."),
     role: str | None = Query(default=None, max_length=32, description="Narrow to one agent role."),
@@ -478,7 +493,7 @@ async def list_execution_runs(
     with the FX rate of that run's OWN date. The stored USD is never changed.
     """
     tenant_id = require_tenant_id(principal)
-    return await query_execution_runs(
+    rows = await query_execution_runs(
         session,
         tenant_id=tenant_id,
         limit=limit,
@@ -492,7 +507,14 @@ async def list_execution_runs(
         model=model,
         min_cost=min_cost,
         display_currency=display_currency,
+        cursor=cursor,
     )
+    # El cursor viaja en cabecera y no en el cuerpo: la respuesta es una LISTA
+    # y meterlo dentro obligaría a envolverla, rompiendo a todos los clientes.
+    next_cursor = next_runs_cursor(rows, limit=limit)
+    if next_cursor is not None:
+        response.headers["X-Next-Cursor"] = next_cursor
+    return rows
 
 
 # ===========================================================================
@@ -599,32 +621,102 @@ async def export_execution_runs(
     )
 
 
-async def _fetch_runs(
-    session: AsyncSession,
+# ---------------------------------------------------------------------------
+# Paginación por keyset del explorador (prod-13)
+# ---------------------------------------------------------------------------
+# `OFFSET n` obliga a PostgreSQL a producir y descartar las n primeras filas: la
+# página 500 cuesta 500 páginas de trabajo, y con el histórico de runs creciendo
+# eso degrada sin que nadie cambie nada. El keyset usa el índice
+# `(tenant_id, created_at)` de la migración 0126 para saltar directo.
+#
+# El `offset` NO se retira: los clientes de hoy paginan con él. Cuando llega un
+# `cursor`, manda el cursor (sumar los dos saltaría filas).
+_CURSOR_SEPARATOR = "|"
+
+
+def encode_runs_cursor(created_at: datetime, execution_id: UUID) -> str:
+    """Token opaco que apunta a la ÚLTIMA fila de una página.
+
+    Opaco (base64url) a propósito: un cursor que parece una fecha invita a que
+    el cliente lo fabrique, y el día que la clave de orden cambie —añadir un
+    tercer desempate, por ejemplo— esos clientes se rompen en silencio.
+    """
+    raw = f"{created_at.isoformat()}{_CURSOR_SEPARATOR}{execution_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_runs_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Descodifica un cursor. Un token corrupto es un **400**, no un 500.
+
+    Lo manda el cliente, así que un cursor roto es un error suyo; devolver 500
+    lo convertiría en una alerta de servidor y en ruido de guardia.
+    """
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        moment_text, _, id_text = raw.partition(_CURSOR_SEPARATOR)
+        return datetime.fromisoformat(moment_text), UUID(id_text)
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cursor is not a valid pagination token",
+        ) from exc
+
+
+def next_runs_cursor(rows: list[ExecutionRunRow], *, limit: int) -> str | None:
+    """Cursor de la página siguiente, o ``None`` si esta ya era la última.
+
+    Una página incompleta (``len(rows) < limit``) significa que no queda nada
+    detrás; devolver cursor igualmente obligaría al cliente a una petición de
+    más para descubrir el vacío.
+    """
+    if not rows or len(rows) < limit:
+        return None
+    last = rows[-1]
+    return encode_runs_cursor(last.created_at, last.id)
+
+
+def runs_select(
     filters: list[ColumnElement[bool]],
     *,
     limit: int,
-    offset: int,
-) -> list[ExecutionRunRow]:
-    """Load the runs-explorer rows for ``filters`` (newest first, paginated).
+    offset: int = 0,
+    cursor: str | None = None,
+) -> Select[Any]:
+    """El SELECT del explorador de runs — **columnas escalares explícitas**.
 
-    The single query behind both the JSON ``/runs`` endpoint and the export
-    surface (task_14_14) so the two never drift. ``filters`` already carries the
-    tenant scope + the time window + the optional narrowing predicates.
+    Antes era ``select(Execution, …)``, que trae la entidad ENTERA y con ella
+    ``steps_log`` (hallazgo perf-6). Medido el 2026-08-01 sobre la instancia de
+    desarrollo: ``steps_log`` es el 76 % de la tabla ``executions``, 9,5 KiB de
+    media por run y hasta 64 KiB. El export llega a ``MAX_EXPORT_ROWS`` = 5.000
+    filas — del orden de 50 MiB de JSONB materializados en el proceso para
+    producir un CSV que no publica ni un byte de esa traza.
+
+    ``steps_log`` sigue apareciendo DENTRO de la subconsulta correlacionada que
+    resuelve el modelo del último paso (:func:`_last_model_expr`): quitarlo de
+    ahí pide una columna denormalizada y su migración, que es la otra mitad de
+    task_prod13_18. La diferencia importa: ahí lo recorre PostgreSQL y devuelve
+    un ``text``; aquí lo cruzaba entero la red y se materializaba en Python.
     """
-    dur = _duration_ms()
-    model_expr = _last_model_expr()
     stmt = (
         select(
-            Execution,
+            Execution.id,
+            Execution.created_at,
+            Execution.task_id,
+            Execution.agent_id,
+            Execution.status,
+            Execution.finish_status,
+            Execution.total_tokens,
+            Execution.total_cost_usd,
+            Execution.started_at,
+            Execution.completed_at,
             Task.title,
             Task.plan_id,
             Task.retry_count,
             Plan.title,
             Agent.name,
             Agent.role,
-            model_expr,
-            dur,
+            _last_model_expr(),
+            _duration_ms(),
         )
         .select_from(Execution)
         .outerjoin(Task, Task.id == Execution.task_id)
@@ -633,32 +725,68 @@ async def _fetch_runs(
         .where(*filters)
         .order_by(Execution.created_at.desc(), Execution.id.desc())
     )
-    stmt = apply_pagination(stmt, limit=limit, offset=offset)
-    rows = (await session.execute(stmt)).all()
+    if cursor is not None:
+        moment, last_id = decode_runs_cursor(cursor)
+        # Comparación de FILA y no dos predicados sueltos: con
+        # `created_at < :m AND id < :i` se perderían las filas del mismo
+        # instante con id mayor, y con `created_at <= :m` se repetirían.
+        stmt = stmt.where(
+            tuple_(Execution.created_at, Execution.id) < tuple_(literal(moment), literal(last_id))
+        )
+        return stmt.limit(limit)
+    return apply_pagination(stmt, limit=limit, offset=offset)
+
+
+async def _fetch_runs(
+    session: AsyncSession,
+    filters: list[ColumnElement[bool]],
+    *,
+    limit: int,
+    offset: int,
+    cursor: str | None = None,
+) -> list[ExecutionRunRow]:
+    """Load the runs-explorer rows for ``filters`` (newest first, paginated).
+
+    The single query behind both the JSON ``/runs`` endpoint and the export
+    surface (task_14_14) so the two never drift. ``filters`` already carries the
+    tenant scope + the time window + the optional narrowing predicates.
+    """
+    rows = (
+        await session.execute(runs_select(filters, limit=limit, offset=offset, cursor=cursor))
+    ).all()
     return [
         ExecutionRunRow(
-            id=ex.id,
-            created_at=ex.created_at,
-            task_id=ex.task_id,
+            id=execution_id,
+            created_at=created_at,
+            task_id=task_id,
             task_title=task_title,
             plan_id=plan_id,
             plan_title=plan_title,
-            agent_id=ex.agent_id,
+            agent_id=agent_id,
             agent_name=agent_name,
             agent_role=agent_role,
             model=model_name,
-            verdict=ex.status,
-            succeeded=ex.status == _DONE,
-            finish_status=ex.finish_status,
+            verdict=exec_status,
+            succeeded=exec_status == _DONE,
+            finish_status=finish_status,
             retry_count=int(retry_count) if retry_count is not None else 0,
             duration_ms=int(duration) if duration is not None else None,
-            total_tokens=ex.total_tokens,
-            total_cost_usd=ex.total_cost_usd,
-            started_at=ex.started_at,
-            completed_at=ex.completed_at,
+            total_tokens=total_tokens,
+            total_cost_usd=total_cost_usd,
+            started_at=started_at,
+            completed_at=completed_at,
         )
         for (
-            ex,
+            execution_id,
+            created_at,
+            task_id,
+            agent_id,
+            exec_status,
+            finish_status,
+            total_tokens,
+            total_cost_usd,
+            started_at,
+            completed_at,
             task_title,
             plan_id,
             retry_count,

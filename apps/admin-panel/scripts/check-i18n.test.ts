@@ -65,6 +65,28 @@ describe("check-i18n sobre el árbol real", () => {
   });
 });
 
+/**
+ * Una entrada REAL de cada allowlist de la guarda, con su cupo anotado.
+ *
+ * Los fixtures de abajo necesitan ficheros que las allowlists conozcan. Clavar
+ * el nombre a mano hace que cada migración exitosa ponga rojos estos tests: le
+ * pasó al guard hermano el 2026-08-01 al partir `llm-providers`, y el fallo se
+ * leía como "la guarda está rota" en vez de "actualiza el fixture". Se leen de
+ * la propia guarda para que el test siga a la deuda, no a un nombre.
+ */
+function anAllowlisted(kind: "ternaries" | "attrs"): { rel: string; allowed: number } {
+  const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
+    encoding: "utf8",
+  });
+  const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
+  const entries = Object.entries(parsed[kind]);
+  // Si la allowlist se vacía (migración terminada, enhorabuena), estos tests se
+  // quedan sin sujeto: mejor este mensaje que un `undefined` opaco.
+  expect(entries.length).toBeGreaterThan(0);
+  const [rel, allowed] = entries[0];
+  return { rel, allowed };
+}
+
 describe("check-i18n sabe fallar", () => {
   it("un fichero NUEVO con ternario es error", () => {
     const root = fixture({ "app/admin/nuevo/page.tsx": TERNARY });
@@ -77,13 +99,13 @@ describe("check-i18n sabe fallar", () => {
   });
 
   it("un fichero de la allowlist con MÁS ternarios de los anotados es error", () => {
-    // La allowlist permite 15 en este fichero; le ponemos 16.
-    const root = fixture({ "components/capability/persona-section.tsx": TERNARY.repeat(16) });
+    const { rel, allowed } = anAllowlisted("ternaries");
+    const root = fixture({ [rel]: TERNARY.repeat(allowed + 1) });
 
     const { code, output } = run(["--root", root]);
 
     expect(code).toBe(1);
-    expect(output).toContain("la allowlist permite 15");
+    expect(output).toContain(`la allowlist permite ${allowed}`);
     expect(output).toContain("La deuda no puede crecer");
   });
 
@@ -108,13 +130,18 @@ describe("check-i18n no molesta donde no debe", () => {
   });
 
   it("un fichero de la allowlist DENTRO de su cupo pasa", () => {
-    const root = fixture({ "components/capability/persona-section.tsx": TERNARY.repeat(15) });
+    const { rel, allowed } = anAllowlisted("ternaries");
+    const root = fixture({ [rel]: TERNARY.repeat(allowed) });
 
     expect(run(["--root", root]).code).toBe(0);
   });
 
   it("avisa (sin fallar) cuando un fichero baja de su cupo", () => {
-    const root = fixture({ "components/capability/persona-section.tsx": TERNARY });
+    const { rel, allowed } = anAllowlisted("ternaries");
+    // Sólo tiene sentido si el cupo anotado es > 1; los de cupo 1 no pueden bajar
+    // sin salir del mapa, y ese caso lo cubre el aviso de "bórralo".
+    if (allowed <= 1) return;
+    const root = fixture({ [rel]: TERNARY });
 
     const { code, output } = run(["--root", root]);
 
@@ -171,8 +198,9 @@ describe("check-i18n — literales castellanos en atributos de UI", () => {
   });
 
   it("un fichero de la allowlist dentro de su cupo pasa, y por encima falla", () => {
-    // `app/admin/tools/page.tsx` arrastra deuda anotada; con MUCHOS más debe fallar.
-    const root = fixture({ "app/admin/tools/page.tsx": SPANISH_ATTR.repeat(60) });
+    // Arrastra deuda anotada; con MUCHOS más debe fallar.
+    const { rel, allowed } = anAllowlisted("attrs");
+    const root = fixture({ [rel]: SPANISH_ATTR.repeat(allowed + 50) });
 
     const { code, output } = run(["--root", root]);
 
@@ -189,7 +217,8 @@ describe("check-i18n — literales castellanos en atributos de UI", () => {
   });
 
   it("--strict no perdona tampoco los atributos de la allowlist", () => {
-    const root = fixture({ "app/admin/tools/page.tsx": SPANISH_ATTR });
+    const { rel } = anAllowlisted("attrs");
+    const root = fixture({ [rel]: SPANISH_ATTR });
 
     expect(run(["--root", root]).code).toBe(0);
     expect(run(["--root", root, "--strict"]).code).toBe(1);

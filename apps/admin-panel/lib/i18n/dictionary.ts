@@ -751,6 +751,595 @@ export const dictionary = {
   },
 
   /**
+   * `app/admin/agents/*` — catálogo de agentes y hub del agente.
+   *
+   * Los `role` (`backend_dev`, `qa`…) y los `scope` crudos NO se traducen: son
+   * los identificadores del backend y lo que aparece en la API y en los logs.
+   * Lo que se traduce es la ETIQUETA de cada scope (`scope*`), que es lo que se
+   * pinta en el badge de la tarjeta.
+   *
+   * `emptyLocal` es la única clave de este namespace cuya cara castellana está
+   * clavada por un test que no se ejecuta aquí: `e2e/agents-catalog.spec.ts:60`
+   * la afirma con un regex. Cambiar ese texto rompe un spec de Playwright que
+   * sólo corre con el stack levantado — es decir, rompe en sitio y en momento
+   * en que nadie lo va a atribuir a este cambio.
+   */
+  agents: {
+    home: { es: "Inicio", en: "Home" },
+    agents: { es: "Agentes", en: "Agents" },
+    agentFallback: { es: "Agente", en: "Agent" },
+
+    // --- catálogo ---
+    catalogTitle: { es: "Catálogo de agentes", en: "Agent catalogue" },
+    catalogDescription: {
+      es: "Built-ins de la plataforma, plantillas de tu tenant y agentes locales de proyecto.",
+      en: "Platform built-ins, your tenant's templates and project-local agents.",
+    },
+    newAgent: { es: "Nuevo agente", en: "New agent" },
+    loading: { es: "Cargando agentes…", en: "Loading agents…" },
+    loadError: { es: "No se pudieron cargar los agentes", en: "Could not load agents" },
+
+    filterMembership: { es: "Pertenencia", en: "Membership" },
+    filterAll: { es: "Todos", en: "All" },
+    filterInTeam: { es: "En equipo", en: "In a team" },
+    filterNoTeam: { es: "Sin equipo", en: "No team" },
+    filterTeam: { es: "Equipo", en: "Team" },
+    filterAllTeams: { es: "Todos los equipos", en: "All teams" },
+
+    scopeBuiltin: { es: "Built-in", en: "Built-in" },
+    scopeTenantTemplate: { es: "Plantilla del tenant", en: "Tenant template" },
+    scopeProjectLocal: { es: "Local del proyecto", en: "Project-local" },
+    tabTemplates: { es: "Plantillas del Tenant", en: "Tenant templates" },
+    tabLocal: { es: "Locales del Proyecto", en: "Project-local" },
+
+    emptyTitle: { es: "Sin agentes", en: "No agents" },
+    emptyBuiltins: {
+      es: "No hay built-ins seedeados. Corre python -m api_server.seeds.",
+      en: "No built-ins seeded. Run python -m api_server.seeds.",
+    },
+    emptyTemplates: {
+      es: "Tu tenant aún no tiene plantillas de agente propias.",
+      en: "Your tenant does not have its own agent templates yet.",
+    },
+    // Ojo: la cara ES la afirma `e2e/agents-catalog.spec.ts` (ver cabecera).
+    emptyLocal: {
+      es: "No hay agentes locales de proyecto. Forkea uno desde un built-in o plantilla.",
+      en: "No project-local agents yet. Fork one from a built-in or a template.",
+    },
+
+    cardRole: { es: "Rol:", en: "Role:" },
+    systemPrompt: { es: "System prompt", en: "System prompt" },
+    forkedFrom: { es: "Copia de otro agente", en: "Forked from another agent" },
+
+    // --- diálogo de alta ---
+    newDescription: {
+      es: "Crea una plantilla del tenant (reutilizable en todos los proyectos) o un agente local de un proyecto específico.",
+      en: "Create a tenant template (reusable across every project) or an agent local to one specific project.",
+    },
+    fieldName: { es: "Nombre", en: "Name" },
+    fieldRole: { es: "Rol", en: "Role" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    promptEsLabel: { es: "System prompt (ES)", en: "System prompt (ES)" },
+    promptEnLabel: { es: "System prompt (EN)", en: "System prompt (EN)" },
+    personaModelLegend: { es: "Persona (modelo)", en: "Persona (model)" },
+    personaFullLegend: { es: "Persona (modelo y prompt)", en: "Persona (model and prompt)" },
+    scopeLegend: { es: "Ámbito", en: "Scope" },
+    scopeTemplateOption: {
+      es: "Plantilla del tenant (reutilizable)",
+      en: "Tenant template (reusable)",
+    },
+    scopeLocalOption: {
+      es: "Local de un proyecto (requiere project_id)",
+      en: "Local to one project (requires project_id)",
+    },
+    fieldProject: { es: "Proyecto", en: "Project" },
+    projectHint: {
+      es: "Sólo tus proyectos del tenant — escribe para buscar entre ellos.",
+      en: "Only your tenant's projects — type to search among them.",
+    },
+    createError: { es: "Error al crear", en: "Could not create the agent" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    creating: { es: "Creando…", en: "Creating…" },
+    create: { es: "Crear", en: "Create" },
+
+    // --- hub del agente ---
+    fork: { es: "Personalizar (crear copia)", en: "Customize (make a copy)" },
+    edit: { es: "Editar", en: "Edit" },
+    remove: { es: "Borrar", en: "Delete" },
+    readOnlyBadge: { es: "read-only (built-in)", en: "read-only (built-in)" },
+    loadFailed: {
+      es: "No se pudo cargar el agente: {detail}.",
+      en: "Could not load the agent: {detail}.",
+    },
+    unknownError: { es: "error desconocido", en: "unknown error" },
+    backToCatalog: { es: "Volver al catálogo", en: "Back to the catalogue" },
+    canReview: { es: "puede revisar", en: "can review" },
+    isTemplate: { es: "plantilla", en: "template" },
+    memoryScope: { es: "Memory scope", en: "Memory scope" },
+    maxConcurrent: { es: "Max concurrent tasks", en: "Max concurrent tasks" },
+
+    // --- diálogo de edición ---
+    editTitle: { es: "Editar agente", en: "Edit agent" },
+    editDescription: {
+      es: 'Los campos de scope (project_id, forked_from_agent_id) son set-once. Para crear una copia de un agente, usa la acción "Hacer copia" (fork).',
+      en: 'Scope fields (project_id, forked_from_agent_id) are set-once. To create a copy of an agent, use the "Make a copy" (fork) action.',
+    },
+    governedByOneTeam: {
+      es: "Se gestiona desde el equipo «{team}»",
+      en: "Managed from the «{team}» team",
+    },
+    governedByTeams: {
+      es: "Se gestiona desde los equipos: {teams}",
+      en: "Managed from these teams: {teams}",
+    },
+    canReviewTasks: { es: "Puede revisar tareas", en: "Can review tasks" },
+    saveError: { es: "Error al guardar", en: "Could not save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    save: { es: "Guardar", en: "Save" },
+
+    // --- diálogo de borrado ---
+    deleteTitle: { es: "Borrar agente", en: "Delete agent" },
+    deleteWarningLead: { es: "Esta acción es", en: "This action is" },
+    deleteWarningStrong: { es: "irreversible", en: "irreversible" },
+    deleteWarningTail: {
+      es: ". Si el agente está asignado a tareas activas, el backend rechazará el borrado con 409.",
+      en: ". If the agent is assigned to active tasks, the backend rejects the deletion with a 409.",
+    },
+    deleteConfirmPrompt: {
+      es: "Teclea el nombre del agente para confirmar:",
+      en: "Type the agent's name to confirm:",
+    },
+    deleteError: { es: "Error al borrar", en: "Could not delete" },
+    deleting: { es: "Borrando…", en: "Deleting…" },
+    deleteConfirm: { es: "Borrar definitivamente", en: "Delete permanently" },
+
+    // --- diálogo de fork ---
+    forkDescriptionLead: { es: "Crea una copia editable de", en: "Creates an editable copy of" },
+    forkDescriptionMid: {
+      es: "en uno de tus proyectos. La copia",
+      en: "in one of your projects. It",
+    },
+    forkDescriptionStrong: { es: "hereda", en: "inherits" },
+    forkDescriptionTail: {
+      es: "el conocimiento, las tools y las skills del original y es independiente: editarla no afecta al agente de origen.",
+      en: "the original's knowledge, tools and skills, and it is independent: editing it does not affect the source agent.",
+    },
+    forkNameLabel: { es: "Nombre de la copia", en: "Name of the copy" },
+    forkCopySuffix: { es: "{name} (copia)", en: "{name} (copy)" },
+    forkProjectLabel: { es: "Proyecto destino", en: "Target project" },
+    forkPickProject: { es: "— Selecciona —", en: "— Select —" },
+    forkNoProjects: {
+      es: "No tienes proyectos creados. Crea uno primero para poder personalizar.",
+      en: "You have no projects yet. Create one first so you can customize.",
+    },
+    forkError: { es: "Error al crear la copia", en: "Could not create the copy" },
+    forkSubmit: { es: "Crear copia", en: "Create copy" },
+
+    // --- sección "Tools del agente" (`agent-tools-section.tsx`) ---
+    //
+    // Los labels de categoría, nivel de seguridad y tipo de implementación NO
+    // están aquí: los resuelve `lib/tools/taxonomy` en formato `{labelEs,
+    // labelEn}` porque el catálogo lo alimenta el backend. Esta sección los
+    // elige con `pickLang`, que es la otra mitad del i18n.
+    toolsTitle: { es: "Tools del agente", en: "Agent tools" },
+    toolsHelp: {
+      es: "Marca las tools que este agente puede usar. Sin ninguna marcada, conserva el comportamiento por defecto (sin restricción por agente).",
+      en: "Tick the tools this agent may use. With none ticked it keeps the default behaviour (no per-agent restriction).",
+    },
+    toolsSelectedCount: { es: "{n} seleccionadas.", en: "{n} selected." },
+    toolsDiagnosticTitle: {
+      es: "Verificación read-only: qué tools ve cada agente del proyecto.",
+      en: "Read-only check: which tools each agent of the project sees.",
+    },
+    toolsDiagnostic: { es: "Diagnóstico", en: "Diagnostics" },
+    discard: { es: "Descartar", en: "Discard" },
+    saved: { es: "Guardado", en: "Saved" },
+    toolsLoadError: {
+      es: "No se pudieron cargar las tools: {detail}.",
+      en: "The tools could not be loaded: {detail}.",
+    },
+    toolsSearchPlaceholder: {
+      es: "Buscar tool por nombre, descripción o categoría…",
+      en: "Search tools by name, description or category…",
+    },
+    toolsSearchLabel: {
+      es: "Buscar tool por nombre, descripción o categoría",
+      en: "Search tools by name, description or category",
+    },
+    toolsTabBasic: { es: "Básicas", en: "Basic" },
+    toolsTabAdvanced: { es: "Avanzadas", en: "Advanced" },
+    toolsEmptyBasicSearch: {
+      es: "Ninguna tool básica coincide con la búsqueda.",
+      en: "No basic tool matches your search.",
+    },
+    toolsEmptyBasic: {
+      es: "No hay tools básicas (de plataforma) en el catálogo.",
+      en: "There are no basic (platform) tools in the catalogue.",
+    },
+    toolsMcpNoteLead: {
+      es: "Las tools MCP se configuran a nivel de proyecto (ADR 0128) — usa la",
+      en: "MCP tools are configured at project level (ADR 0128) — use the",
+    },
+    toolsMcpNoteStrong: { es: "sección MCP del proyecto", en: "project's MCP section" },
+    toolsMcpNoteTail: {
+      es: ". Aquí solo se asignan tools custom (HTTP · Python · contenedor).",
+      en: ". Only custom tools (HTTP · Python · container) are assigned here.",
+    },
+    toolsEmptyAdvancedSearch: {
+      es: "Ninguna tool avanzada coincide con la búsqueda.",
+      en: "No advanced tool matches your search.",
+    },
+    toolsEmptyAdvancedLead: {
+      es: "No hay tools custom. Créalas en el",
+      en: "No custom tools. Create them in the",
+    },
+    toolsCatalogLink: { es: "catálogo de tools", en: "tool catalogue" },
+    toolsEmptyAdvancedTail: {
+      es: ". (Las tools MCP se configuran en el proyecto.)",
+      en: ". (MCP tools are configured in the project.)",
+    },
+    toolsSelectAll: { es: "Seleccionar todas", en: "Select all" },
+    toolsUnselectAll: { es: "Quitar todas", en: "Unselect all" },
+    toolsSelectAllAria: {
+      es: "Seleccionar todas las tools de {category}",
+      en: "Select every {category} tool",
+    },
+    toolsUnselectAllAria: {
+      es: "Quitar todas las tools de {category}",
+      en: "Unselect every {category} tool",
+    },
+    toolSecurityAria: { es: "Seguridad: {label}. {help}", en: "Security: {label}. {help}" },
+    toolImplAria: {
+      es: "Implementación: {label}. {help}",
+      en: "Implementation: {label}. {help}",
+    },
+    toolNotWiredTooltip: {
+      es: "El runtime aún no puede ejecutar esta tool: el agente la vería pero fallaría al invocarla.",
+      en: "The runtime cannot execute this tool yet: the agent would see it but every call would fail.",
+    },
+    toolNotWiredAria: { es: "No ejecutable en runtime", en: "Not runtime-wired" },
+    toolNotWiredBadge: { es: "No ejecutable", en: "Not wired" },
+
+    // --- sección "Skills del agente" (`agent-skills-section.tsx`) ---
+    skillsSearchPlaceholder: {
+      es: "Buscar skill por nombre, descripción o categoría…",
+      en: "Search skills by name, description or category…",
+    },
+    skillsSearchLabel: {
+      es: "Buscar skill por nombre, descripción o categoría",
+      en: "Search skills by name, description or category",
+    },
+  },
+
+  /**
+   * `app/admin/llm-providers/*` — catálogo global de proveedores LLM (ADR 0021/0028).
+   *
+   * Los `kind` (Claude Agent SDK, GitHub Copilot, Azure AI Foundry, Ollama) NO
+   * están aquí: son nombres de producto y viven en el `KIND_LABEL` de
+   * `llm-provider-types.ts`. Tampoco los `status` que devuelve el backend
+   * (`ok`, `auth_error`…): esos son identificadores, y lo que se traduce es la
+   * etiqueta que se pinta por cada uno (`status*`).
+   *
+   * Cuidado con los secretos: ninguna clave de aquí debe llegar a contener un
+   * valor de credencial. `secretConfigured` es el placeholder de un input
+   * write-only — el valor real no sale nunca de Vault (ADR 0028).
+   */
+  llmProviders: {
+    title: { es: "Proveedores LLM", en: "LLM providers" },
+    description: {
+      es: "Catálogo global de proveedores LLM (ADR 0021/0028). Configuración platform-global, solo System Admin. Las credenciales se guardan únicamente en Vault.",
+      en: "Global catalogue of LLM providers (ADR 0021/0028). Platform-global configuration, System Admin only. Credentials are stored in Vault and nowhere else.",
+    },
+    forbidden: {
+      es: "Esta sección es exclusiva del System Admin de la plataforma.",
+      en: "This section is reserved for the platform System Admin.",
+    },
+    create: { es: "Nuevo proveedor", en: "New provider" },
+    loading: { es: "Cargando proveedores…", en: "Loading providers…" },
+    empty: {
+      es: "No hay proveedores configurados. Crea el primero con «Nuevo proveedor».",
+      en: "No providers configured. Create the first one with «New provider».",
+    },
+
+    colKind: { es: "Tipo", en: "Type" },
+    colSlug: { es: "Slug", en: "Slug" },
+    colName: { es: "Nombre", en: "Name" },
+    endpoint: { es: "Endpoint", en: "Endpoint" },
+    colCredential: { es: "Credencial", en: "Credential" },
+    colStatus: { es: "Estado", en: "Status" },
+    colConnection: { es: "Conexión", en: "Connection" },
+    colActions: { es: "Acciones", en: "Actions" },
+
+    credentialSet: { es: "configurada", en: "configured" },
+    credentialUnset: { es: "sin credencial", en: "no credential" },
+    active: { es: "activo", en: "active" },
+    inactive: { es: "inactivo", en: "inactive" },
+    activateProvider: { es: "Activar proveedor", en: "Activate provider" },
+    deactivateProvider: { es: "Desactivar proveedor", en: "Deactivate provider" },
+
+    testing: { es: "probando…", en: "testing…" },
+    testConnection: { es: "Probar conexión", en: "Test connection" },
+    syncModels: { es: "Sincronizar modelos", en: "Sync models" },
+    syncModelsTitle: {
+      es: "Sincronizar modelos (descubre /v1/models)",
+      en: "Sync models (discovers /v1/models)",
+    },
+    syncedCount: { es: "{n} modelos sincronizados", en: "{n} models synced" },
+    authorizeDeviceFlow: {
+      es: "Autorizar con GitHub (Device Flow)",
+      en: "Authorize with GitHub (Device Flow)",
+    },
+    edit: { es: "Editar", en: "Edit" },
+    delete: { es: "Eliminar", en: "Delete" },
+
+    // Etiqueta legible de cada `status` clasificado por el backend.
+    statusOk: { es: "conexión OK", en: "connection OK" },
+    statusAuthError: { es: "error de autenticación", en: "authentication error" },
+    statusConnectionError: { es: "error de conexión", en: "connection error" },
+    statusConfigError: { es: "configuración incompleta", en: "incomplete configuration" },
+    statusUpstreamError: { es: "error del proveedor", en: "provider error" },
+
+    // --- diálogo de alta / edición ---
+    formCreateTitle: { es: "Nuevo proveedor", en: "New provider" },
+    formEditTitle: { es: "Editar proveedor", en: "Edit provider" },
+    fieldSlug: { es: "Slug (único)", en: "Slug (unique)" },
+    slugHintLead: {
+      es: "Handle único para distinguir proveedores del mismo tipo (p. ej.",
+      en: "Unique handle to tell apart providers of the same kind (e.g.",
+    },
+    slugHintTail: {
+      es: "). Minúsculas, números y guiones.",
+      en: "). Lowercase letters, digits and hyphens.",
+    },
+    endpointApim: { es: "Endpoint APIM (gateway)", en: "APIM endpoint (gateway)" },
+    endpointOllama: { es: "Endpoint Ollama", en: "Ollama endpoint" },
+    claudeAuthMode: { es: "Modo de autenticación", en: "Authentication mode" },
+    claudeApiKeyOption: { es: "API key (Anthropic)", en: "API key (Anthropic)" },
+    claudeSubscriptionOption: {
+      es: "Suscripción Pro/Max (claude setup-token)",
+      en: "Pro/Max subscription (claude setup-token)",
+    },
+    claudeApiKeyLabel: { es: "API key (sk-ant-…)", en: "API key (sk-ant-…)" },
+    claudeSubscriptionLabel: {
+      es: "Token de suscripción (de «claude setup-token»)",
+      en: "Subscription token (from «claude setup-token»)",
+    },
+    copilotTokenLabel: {
+      es: "Token OAuth (o usa el Device Flow desde la lista)",
+      en: "OAuth token (or use the Device Flow from the list)",
+    },
+    azureApiKeyLabel: {
+      es: "API key (subscription APIM)",
+      en: "API key (subscription APIM)",
+    },
+    ollamaBearerLabel: {
+      es: "Bearer token (Ollama Cloud, opcional)",
+      en: "Bearer token (Ollama Cloud, optional)",
+    },
+    secretConfigured: { es: "•••••••• (configurado)", en: "•••••••• (configured)" },
+    credentialHintKeep: {
+      es: "Hay una credencial configurada. Déjalo vacío para conservarla; escribe un valor para rotarla.",
+      en: "A credential is configured. Leave it empty to keep it; type a value to rotate it.",
+    },
+    credentialHintNone: {
+      es: "No hay credencial configurada. Escribe un valor para guardarla en Vault.",
+      en: "No credential configured. Type a value to store it in Vault.",
+    },
+    credentialHintCreate: {
+      es: "Se guardará únicamente en Vault (nunca en la base de datos ni en respuestas de la API).",
+      en: "It will be stored in Vault only (never in the database nor in API responses).",
+    },
+    fieldActive: { es: "Proveedor activo", en: "Provider active" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    submitCreate: { es: "Crear", en: "Create" },
+
+    // --- diálogo del Device Flow de Copilot ---
+    deviceFlowTitle: {
+      es: "Autorizar GitHub Copilot — {name}",
+      en: "Authorize GitHub Copilot — {name}",
+    },
+    deviceFlowIntro: {
+      es: "Inicia el Device Flow de GitHub: te mostraremos un código y un enlace. Tras autorizar en GitHub, el token se acuña y se guarda únicamente en Vault — nunca aparece aquí.",
+      en: "Start GitHub's Device Flow: we will show you a code and a link. Once you authorize on GitHub the token is minted and stored in Vault only — it never appears here.",
+    },
+    deviceFlowStart: { es: "Iniciar Device Flow", en: "Start Device Flow" },
+    deviceFlowStarting: { es: "Iniciando…", en: "Starting…" },
+    deviceFlowUserCode: { es: "Código de usuario", en: "User code" },
+    deviceFlowOpen: { es: "Abrir {uri}", en: "Open {uri}" },
+    deviceFlowWaiting: {
+      es: "Esperando autorización en GitHub…",
+      en: "Waiting for authorization on GitHub…",
+    },
+    deviceFlowSlowDown: {
+      es: "(GitHub pidió esperar más)",
+      en: "(GitHub asked us to wait longer)",
+    },
+    deviceFlowAuthorized: {
+      es: "Autorizado. El token de Copilot se guardó en Vault para este proveedor.",
+      en: "Authorized. The Copilot token was stored in Vault for this provider.",
+    },
+    deviceFlowExpired: {
+      es: "El código expiró. Vuelve a iniciar el Device Flow.",
+      en: "The code expired. Start the Device Flow again.",
+    },
+    deviceFlowDenied: {
+      es: "La autorización fue denegada en GitHub.",
+      en: "Authorization was denied on GitHub.",
+    },
+    deviceFlowDone: { es: "Hecho", en: "Done" },
+    deviceFlowRetry: { es: "Reintentar", en: "Retry" },
+  },
+
+  /**
+   * `app/admin/model-prices/*` — catálogo global de precios (USD canónico).
+   *
+   * Los `source` (`manual`, `litellm`…) y las `modality` NO se traducen: son
+   * los valores del enum del backend y lo que se guarda. Sí se traducen la
+   * UNIDAD (`unit*`) y el estado del diff del sync (`diffStatus*`), que son
+   * etiquetas de presentación.
+   *
+   * "Provider" aparece con dos sentidos distintos y a propósito con dos claves:
+   * `colFamily` es la FAMILIA del feed de LiteLLM (`anthropic`) y `colProvider`
+   * es el proveedor LLM de plataforma configurado (ADR 0028). Confundirlos fue
+   * lo que hizo falta aclarar en la propia UI con "(provider)" y "(plataforma)".
+   */
+  modelPrices: {
+    title: { es: "Modelos & Precios", en: "Models & Prices" },
+    description: {
+      es: "Catálogo global de precios de modelos (USD canónico, con soporte de prompt caching). Lectura abierta; edición solo System Admin.",
+      en: "Global model price catalogue (canonical USD, with prompt-caching support). Anyone may read it; only a System Admin may edit it.",
+    },
+    syncOpen: { es: "Sincronizar precios", en: "Sync prices" },
+    create: { es: "Nuevo precio", en: "New price" },
+
+    // --- aviso de alcance del sync (task_psa_02) ---
+    scopeLead: { es: "Sincronizando solo:", en: "Syncing only:" },
+    scopeTail: {
+      es: "(familias de los proveedores LLM activos — ADR 0028). El resto del feed se omite.",
+      en: "(families of the active LLM providers — ADR 0028). The rest of the feed is skipped.",
+    },
+    scopeEmptyLead: {
+      es: "No hay proveedores LLM activos; nada que sincronizar. Activa al menos un proveedor en",
+      en: "There are no active LLM providers; nothing to sync. Enable at least one provider in",
+    },
+    scopeEmptyTail: {
+      es: "para que el sync de precios traiga sus familias.",
+      en: "so the price sync brings in its families.",
+    },
+
+    // --- filtros ---
+    filterFamily: { es: "Familia (provider)", en: "Family (provider)" },
+    filterModel: { es: "Modelo", en: "Model" },
+    filterModality: { es: "Modalidad", en: "Modality" },
+    filterAllModalities: { es: "Todas", en: "All" },
+    filterProvider: { es: "Proveedor (plataforma)", en: "Provider (platform)" },
+    filterAllProviders: { es: "Todos", en: "All" },
+    filterCurrentOnly: { es: "Solo vigentes", en: "Current only" },
+    filterApply: { es: "Filtrar", en: "Filter" },
+    filterReset: { es: "Limpiar", en: "Clear" },
+
+    // --- tabla ---
+    loading: { es: "Cargando catálogo…", en: "Loading the catalogue…" },
+    loadError: { es: "No se pudo cargar el catálogo", en: "The catalogue could not be loaded" },
+    emptyTitle: { es: "Catálogo vacío", en: "Empty catalogue" },
+    emptyDescription: {
+      es: "El catálogo está vacío para estos filtros.",
+      en: "The catalogue is empty for these filters.",
+    },
+    colFamily: { es: "Familia", en: "Family" },
+    colModel: { es: "Modelo", en: "Model" },
+    colModality: { es: "Modalidad", en: "Modality" },
+    colProvider: { es: "Proveedor", en: "Provider" },
+    colInput: { es: "Input", en: "Input" },
+    colOutput: { es: "Output", en: "Output" },
+    colCache: { es: "Cache", en: "Cache" },
+    colUnit: { es: "Unidad", en: "Unit" },
+    colSource: { es: "Fuente", en: "Source" },
+    colValidity: { es: "Vigencia", en: "Validity" },
+    colActions: { es: "Acciones", en: "Actions" },
+    unlinked: { es: "sin asociar", en: "unlinked" },
+    current: { es: "vigente", en: "current" },
+    history: { es: "Histórico", en: "History" },
+    edit: { es: "Editar", en: "Edit" },
+    supersede: { es: "Superseder", en: "Supersede" },
+
+    // --- diálogo de alta / edición ---
+    formCreateTitle: { es: "Nuevo precio", en: "New price" },
+    formEditTitle: { es: "Editar precio", en: "Edit price" },
+    formUsdNote: {
+      es: "Precios en USD canónico, {unit}. El precio de caché (prompt caching) es opcional; si se omite, el sistema usa ~10% del input.",
+      en: "Prices in canonical USD, {unit}. The cache price (prompt caching) is optional; when omitted the system uses ~10% of the input price.",
+    },
+    fieldProvider: { es: "Provider", en: "Provider" },
+    fieldInput: { es: "Input (USD)", en: "Input (USD)" },
+    fieldOutput: { es: "Output (USD)", en: "Output (USD)" },
+    fieldCached: { es: "Cache input (USD, opcional)", en: "Cache input (USD, optional)" },
+    fieldContextWindow: { es: "Context window", en: "Context window" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    save: { es: "Guardar", en: "Save" },
+    submitCreate: { es: "Crear", en: "Create" },
+
+    // --- diálogo del sync ---
+    syncTitle: { es: "Sincronizar precios (LiteLLM)", en: "Sync prices (LiteLLM)" },
+    syncFeedNote: {
+      es: "Lee el JSON público de precios de LiteLLM como fuente de datos (no como runtime — ADR 0021). Esta es una previsualización: nada se escribe hasta que confirmes. Una subida de precio >10% exige confirmación explícita.",
+      en: "Reads LiteLLM's public price JSON as a data feed (never as a runtime — ADR 0021). This is a preview: nothing is written until you confirm. A price rise above 10% requires an explicit confirmation.",
+    },
+    syncDialogScopeTail: {
+      es: "(familias de los proveedores LLM activos). El resto del feed se omite.",
+      en: "(families of the active LLM providers). The rest of the feed is skipped.",
+    },
+    syncDialogScopeEmpty: {
+      es: "No hay proveedores LLM activos; el sync no traerá nada.",
+      en: "There are no active LLM providers; the sync will bring in nothing.",
+    },
+    syncCalculating: { es: "Calculando diff…", en: "Computing the diff…" },
+    syncAdded: { es: "{n} nuevos", en: "{n} new" },
+    syncUpdated: { es: "{n} actualizados", en: "{n} updated" },
+    syncIncreased: { es: "{n} subidas >10%", en: "{n} rises >10%" },
+    syncRemoved: { es: "{n} descontinuados", en: "{n} discontinued" },
+    syncUnchanged: { es: "{n} sin cambios", en: "{n} unchanged" },
+    syncSkippedFamily: {
+      es: "{n} fuera de familias activas",
+      en: "{n} outside the active families",
+    },
+    syncColModel: { es: "Modelo", en: "Model" },
+    syncColStatus: { es: "Estado", en: "Status" },
+    syncColInput: { es: "Input (ant. → nuevo)", en: "Input (old → new)" },
+    syncColOutput: { es: "Output (ant. → nuevo)", en: "Output (old → new)" },
+    syncManualSkipped: { es: "(manual, no se pisa)", en: "(manual, not overwritten)" },
+    syncNoChanges: {
+      es: "El catálogo ya está al día — nada que aplicar.",
+      en: "The catalogue is already up to date — nothing to apply.",
+    },
+    syncConfirmWarning: {
+      es: "Hay {n} subida(s) de precio superior(es) al 10%. Revisa los cambios y confirma explícitamente para aplicarlos.",
+      en: "There are {n} price rise(s) above 10%. Review the changes and confirm explicitly to apply them.",
+    },
+    syncConfirmCheckbox: {
+      es: "Confirmo que he revisado las subidas >10% y deseo aplicarlas.",
+      en: "I confirm I have reviewed the rises above 10% and want to apply them.",
+    },
+    syncApplying: { es: "Aplicando…", en: "Applying…" },
+    syncApply: { es: "Aplicar cambios", en: "Apply changes" },
+
+    // Etiqueta de cada `status` del diff (el status en sí es del backend).
+    diffStatusAdded: { es: "nuevo", en: "new" },
+    diffStatusUpdated: { es: "actualizado", en: "updated" },
+    diffStatusIncreased: { es: "subida >10%", en: "rise >10%" },
+    diffStatusRemoved: { es: "descontinuado", en: "discontinued" },
+    diffStatusUnchanged: { es: "sin cambios", en: "unchanged" },
+
+    // Etiqueta de cada `unit` (el valor en sí es del backend).
+    unitPer1mTokens: { es: "por 1M tokens", en: "per 1M tokens" },
+    unitPer1kTokens: { es: "por 1K tokens", en: "per 1K tokens" },
+    unitPerRequest: { es: "por petición", en: "per request" },
+    unitPerImage: { es: "por imagen", en: "per image" },
+    unitPerSecond: { es: "por segundo", en: "per second" },
+    unitPerMinute: { es: "por minuto", en: "per minute" },
+
+    // --- diálogo del histórico ---
+    historyTitle: { es: "Histórico de precios", en: "Price history" },
+    historyEmpty: {
+      es: "Sin historial de precios para esta clave.",
+      en: "No price history for this key.",
+    },
+    historyFrom: { es: "Desde", en: "From" },
+    historyTo: { es: "Hasta", en: "To" },
+    historyChartNote: {
+      es: "(USD, precio-en-el-tiempo)",
+      en: "(USD, price over time)",
+    },
+    historyChartLabel: {
+      es: "Gráfica de precio en el tiempo",
+      en: "Price-over-time chart",
+    },
+  },
+
+  /**
    * `lib/memory/honesty.ts` — los textos de "no disponible aún" del subsistema
    * de memoria (Plan 06.17 `task_06_17_06`).
    *
@@ -831,6 +1420,154 @@ export const dictionary = {
       es: "La temperatura debe estar entre {min} y {max}.",
       en: "Temperature must be between {min} and {max}.",
     },
+  },
+
+  /**
+   * Despliegue del marketplace en proyectos (ADR 0142, fase 2 del plan
+   * `marketplace-v2-despliegue`).
+   *
+   * Un solo namespace para las TRES puertas —ficha de la instalación, wizard de
+   * proyecto y pestañas del proyecto— porque las tres enseñan el mismo estado
+   * leyendo la misma entidad (decisión D4): tener un namespace por pantalla
+   * sería la primera forma de que sus textos empiecen a divergir.
+   *
+   * Lo que NO entra aquí: `kind` y `trust_level` de un listing, que se pintan
+   * crudos como ya hace el catálogo (son vocabulario del backend, no texto de
+   * UI), y los avisos del despliegue, que los redacta el servicio y llegan en
+   * castellano dentro de la respuesta.
+   */
+  marketplaceDeploy: {
+    // --- el formulario del `config_schema` -------------------------------
+    configTitle: { es: "Configuración", en: "Configuration" },
+    configHelp: {
+      es: "Estos valores son de ESTE proyecto: la misma capacidad puede desplegarse en otro con otros.",
+      en: "These values belong to THIS project: the same capability can be deployed elsewhere with different ones.",
+    },
+    noConfigNeeded: {
+      es: "Esta capacidad no pide configuración.",
+      en: "This capability needs no configuration.",
+    },
+    secretHelp: {
+      es: "Sólo un puntero a Vault ({prefix}…). El secreto no se guarda en la configuración del despliegue.",
+      en: "A Vault pointer only ({prefix}…). The secret is never stored in the deployment configuration.",
+    },
+    rolesTitle: { es: "Roles que la reciben", en: "Roles that receive it" },
+    rolesHelp: {
+      es: "El manifest sugiere y tú confirmas o ajustas. Los roles vienen pre-marcados desde sus «targets».",
+      en: "The manifest suggests and you confirm or adjust. Roles come pre-checked from its «targets».",
+    },
+    rolesEmptyWarning: {
+      es: "Sin ningún rol marcado no se asigna a ningún agente: el despliegue queda registrado y se puede repetir con roles.",
+      en: "With no role checked nothing is assigned to any agent: the deployment is recorded and can be repeated with roles.",
+    },
+
+    // --- errores de validación (códigos de `deployment-types.ts`) --------
+    errRequired: { es: "«{field}»: campo requerido.", en: "«{field}»: required field." },
+    errType: { es: "«{field}»: se esperaba {detail}.", en: "«{field}»: expected {detail}." },
+    errEnum: { es: "«{field}»: admitidos {detail}.", en: "«{field}»: allowed {detail}." },
+    errItemEnum: {
+      es: "«{field}»: alguna entrada no está entre {detail}.",
+      en: "«{field}»: some entry is not among {detail}.",
+    },
+    errMinItems: {
+      es: "«{field}»: elige al menos {detail}.",
+      en: "«{field}»: choose at least {detail}.",
+    },
+    errMin: { es: "«{field}»: debe ser >= {detail}.", en: "«{field}»: must be >= {detail}." },
+    errMax: { es: "«{field}»: debe ser <= {detail}.", en: "«{field}»: must be <= {detail}." },
+    errSecretNotVaultPointer: {
+      es: "«{field}»: debe ser un puntero a Vault; un secreto en claro no se guarda.",
+      en: "«{field}»: must be a Vault pointer; a plaintext secret is not stored.",
+    },
+    errSecretPointerEmpty: {
+      es: "«{field}»: el puntero a Vault está vacío.",
+      en: "«{field}»: the Vault pointer is empty.",
+    },
+    errUnknown: {
+      es: "«{field}»: no existe en el esquema de esta versión.",
+      en: "«{field}»: not declared by this version's schema.",
+    },
+
+    // --- ficha de la instalación ----------------------------------------
+    installationTitle: { es: "Instalación del marketplace", en: "Marketplace installation" },
+    installationDescription: {
+      es: "Instalar añade la capacidad al fondo del tenant; desplegar es lo que se la entrega a un proyecto.",
+      en: "Installing adds the capability to the tenant's pool; deploying is what hands it to a project.",
+    },
+    permissionsLink: { es: "Permisos y consentimiento", en: "Permissions and consent" },
+    notFound: {
+      es: "No se encontró esa instalación en este tenant.",
+      en: "That installation was not found in this tenant.",
+    },
+    deploymentsTitle: { es: "Despliegues", en: "Deployments" },
+    deployedInCount: {
+      es: "Desplegado en {n} proyecto(s)",
+      en: "Deployed to {n} project(s)",
+    },
+    deployedNone: {
+      es: "Todavía no está desplegado en ningún proyecto.",
+      en: "Not deployed to any project yet.",
+    },
+    deployTo: { es: "Desplegar a…", en: "Deploy to…" },
+    pickProjects: { es: "Elige los proyectos destino", en: "Pick the target projects" },
+    noProjects: { es: "Este tenant no tiene proyectos.", en: "This tenant has no projects." },
+    alreadyDeployedHere: { es: "ya desplegado", en: "already deployed" },
+    retire: { es: "Retirar", en: "Retire" },
+    retireConfirm: {
+      es: "¿Retirar este despliegue? Se deshace exactamente lo que creó; lo que hayas asignado a mano no se toca.",
+      en: "Retire this deployment? Exactly what it created is undone; anything you assigned by hand is left alone.",
+    },
+    statusActive: { es: "activo", en: "active" },
+    statusDisabled: { es: "deshabilitado", en: "disabled" },
+    statusRetired: { es: "retirado", en: "retired" },
+
+    // --- resultado de desplegar -----------------------------------------
+    submitDeploy: { es: "Desplegar", en: "Deploy" },
+    deploying: { es: "Desplegando…", en: "Deploying…" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    resultOk: { es: "Desplegado en «{project}».", en: "Deployed to «{project}»." },
+    resultAlready: {
+      es: "«{project}» ya lo tenía desplegado: no se ha cambiado nada.",
+      en: "«{project}» already had it deployed: nothing was changed.",
+    },
+    resultFailed: { es: "«{project}»: no se pudo desplegar.", en: "«{project}»: deploy failed." },
+    warningsTitle: { es: "Avisos del despliegue", en: "Deployment warnings" },
+    oauthPending: {
+      es: "El servidor declara OAuth: la entrada nace sin conexión. Complétala con «Conectar» en la pestaña MCP del proyecto.",
+      en: "The server declares OAuth: the entry starts unconnected. Finish it with «Connect» on the project's MCP tab.",
+    },
+
+    // --- pestañas del proyecto (activación local) ------------------------
+    availableTitle: { es: "Disponibles en tu tenant", en: "Available in your tenant" },
+    availableHelp: {
+      es: "Instaladas en el tenant y todavía no activadas en este proyecto.",
+      en: "Installed in the tenant and not yet enabled on this project.",
+    },
+    availableEmpty: {
+      es: "No queda nada instalado por activar en este proyecto.",
+      en: "Nothing installed is left to enable on this project.",
+    },
+    activate: { es: "Activar", en: "Enable" },
+    deployedHereTitle: {
+      es: "Del marketplace, ya en este proyecto",
+      en: "From the marketplace, already here",
+    },
+    openInstallation: { es: "Ver la instalación", en: "Open the installation" },
+
+    // --- paso «Capacidades» del wizard de proyecto -----------------------
+    wizardStepTitle: { es: "Capacidades", en: "Capabilities" },
+    wizardStepHelp: {
+      es: "Marca lo que este proyecto debe recibir. Se despliega justo después de crearlo, y un fallo no impide que el proyecto nazca.",
+      en: "Check what this project should receive. It is deployed right after creating it, and a failure does not stop the project from being created.",
+    },
+    wizardNothingInstalled: {
+      es: "Tu tenant no tiene nada instalado del marketplace. Podrás desplegar capacidades más tarde desde la ficha del proyecto.",
+      en: "Your tenant has nothing installed from the marketplace. You will be able to deploy capabilities later from the project page.",
+    },
+    wizardResultsTitle: { es: "Resultado del despliegue", en: "Deployment result" },
+    wizardGoToProject: { es: "Ir al proyecto", en: "Go to the project" },
+    back: { es: "Atrás", en: "Back" },
+    next: { es: "Siguiente", en: "Next" },
   },
 } as const satisfies Dictionary;
 

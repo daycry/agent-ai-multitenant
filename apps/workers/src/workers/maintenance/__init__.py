@@ -13,6 +13,7 @@ imports every submodule so all ``@app.task`` registrations fire. The submodules:
   * :mod:`~workers.maintenance.stale_sweeper`     — ``workers.sweep_stale_executions`` (5 min)
   * :mod:`~workers.maintenance.budget_sweep`      — ``workers.refresh_budgets`` (5 min)
   * :mod:`~workers.maintenance.queue_sampler`     — ``workers.sample_queue_metrics`` (30s)
+  * :mod:`~workers.maintenance.purge`             — ``workers.purge_soft_deleted`` (diario 04:30)
   * :mod:`~workers.maintenance.reconciler`        — ``workers.reconcile_pipeline_state`` (90s)
   * :mod:`~workers.maintenance.worktree_backfill` — pass (d) of the reconciler (M4)
 
@@ -43,6 +44,12 @@ from workers.maintenance.memory_backfill import (
     backfill_memory_embeddings,
 )
 from workers.maintenance.orphan_reaper import _reap_orphans_async, reap_orphans
+from workers.maintenance.purge import (
+    EXCLUDED_SOFT_DELETE_TABLES,
+    PURGABLE_ROOTS,
+    purge_soft_deleted,
+    purge_soft_deleted_task,
+)
 from workers.maintenance.queue_sampler import _sample_queue_metrics_async, sample_queue_metrics
 from workers.maintenance.reconciler import (
     _RECONCILE_REVIEW_MAX_STUCK,
@@ -87,6 +94,10 @@ __all__ = [
     "run_shadow_evals",
     "prune_worktrees",
     "purge_dep_cache",
+    "purge_soft_deleted",
+    "purge_soft_deleted_task",
+    "EXCLUDED_SOFT_DELETE_TABLES",
+    "PURGABLE_ROOTS",
     "reconcile_pipeline_state",
     "refresh_budgets",
     "sample_queue_metrics",

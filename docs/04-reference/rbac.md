@@ -493,6 +493,33 @@ catálogo oficial) corre sobre el engine BYPASSRLS.
 | `/marketplace/shares/{id}`           | DELETE | `tenant_admin` |
 | `/admin/marketplace/*`               | GET    | `system_admin` |
 
+**Visibilidad del catálogo (ADR 0142 D6).** `GET /marketplace/listings` y
+`GET /marketplace/listings/{id}` aplican, **encima de la RLS**, el filtro de
+revisión: solo se ve lo `published`, más lo propio del tenant en cualquier
+estado (el autor necesita leer el motivo de su rechazo). Un listing en
+`pending_review` ajeno es un **404**, no un 403 — un 403 confirmaría que existe.
+
+#### Cola de revisión — System Admin (ADR 0142 D6)
+
+Sobre la sesión BYPASSRLS, porque revisar es por definición mirar lo de otro
+tenant: un `pending_review` es invisible para cualquier sesión que no sea la de
+su autor, así que la cola no se puede servir desde una sesión de tenant.
+
+| Endpoint                                    | Método | Rol mínimo     |
+| ------------------------------------------- | ------ | -------------- |
+| `/admin/marketplace/review-queue`           | GET    | `system_admin` |
+| `/admin/marketplace/listings/{id}/versions` | GET    | `system_admin` |
+| `/admin/marketplace/listings/{id}/approve`  | POST   | `system_admin` |
+| `/admin/marketplace/listings/{id}/reject`   | POST   | `system_admin` |
+| `/admin/marketplace/listings/{id}/promote`  | POST   | `system_admin` |
+
+Un rechazo **sin motivo escrito es un 422** (`ListingRejectRequest.reason`
+tiene `min_length=1` y `review.reject_listing` lo vuelve a comprobar tras el
+`strip()`): un rechazo mudo es indistinguible de un borrado y no se puede
+recurrir. `promote` exige que el listing esté ya `published`, y admite **bajar**
+además de subir — degradar un `verified` estropeado sin despublicarlo, porque
+despublicar rompería las instalaciones vivas.
+
 ### `marketplace_deployments.py` (ADR 0142, plan marketplace-v2-despliegue)
 
 El despliegue de una instalación en un proyecto concreto —la entidad que el

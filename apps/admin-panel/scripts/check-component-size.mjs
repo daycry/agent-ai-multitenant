@@ -30,6 +30,7 @@
  *   node scripts/check-component-size.mjs --max-lines 800
  *   node scripts/check-component-size.mjs --strict
  *   node scripts/check-component-size.mjs --root <dir>   # para los tests
+ *   node scripts/check-component-size.mjs --print-allowlist  # sólo para los tests, ver main()
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -51,14 +52,12 @@ const DEFAULT_MAX_LINES = 800;
  * Deuda conocida el 2026-08-01, fichero → líneas. **Este mapa sólo puede
  * MENGUAR**: cada partición debe bajar el número o borrar la línea.
  *
- * Los cuatro que el plan nombraba y ya se partieron (`model-prices`,
- * `mcp-servers`, `plans/[planId]`, `knowledge-bases`) NO están aquí: están por
- * debajo del límite y el trinquete los mantiene así.
+ * Los que el plan nombraba y ya se partieron (`model-prices`, `mcp-servers`,
+ * `plans/[planId]`, `knowledge-bases`, `tenant-stats`, `llm-providers`) NO
+ * están aquí: están por debajo del límite y el trinquete los mantiene así.
  */
 const ALLOWLIST = {
-  "app/admin/agents/[id]/page.tsx": 824,
   "app/admin/cortex/mind/page.tsx": 914,
-  "app/admin/llm-providers/page.tsx": 996,
   "app/admin/notifications/page.tsx": 831,
   "app/admin/projects/[id]/chat/page.tsx": 926,
   "app/admin/settings/sso/page.tsx": 915,
@@ -84,9 +83,15 @@ function isScreen(rel) {
 const MIN_FILES_SCANNED = 100;
 
 function parseArgs(argv) {
-  const args = { root: APP_ROOT, strict: false, maxLines: DEFAULT_MAX_LINES };
+  const args = {
+    root: APP_ROOT,
+    strict: false,
+    maxLines: DEFAULT_MAX_LINES,
+    printAllowlist: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--strict") args.strict = true;
+    else if (argv[i] === "--print-allowlist") args.printAllowlist = true;
     else if (argv[i] === "--root") {
       args.root = resolve(argv[i + 1] ?? ".");
       i += 1;
@@ -133,7 +138,19 @@ function countLines(abs) {
 }
 
 function main() {
-  const { root, strict, maxLines } = parseArgs(process.argv.slice(2));
+  const { root, strict, maxLines, printAllowlist } = parseArgs(process.argv.slice(2));
+
+  // Su ÚNICO consumidor es `check-component-size.test.ts`, y existe para que ese
+  // test no clave un nombre de fichero de la allowlist en sus fixtures. Lo hacía,
+  // y el día que `llm-providers` se partió de verdad —justo lo que la guarda
+  // quiere premiar— cuatro tests suyos se pusieron rojos por el éxito. Un
+  // acoplamiento que castiga el trabajo bien hecho hay que hacerlo explícito o
+  // quitarlo; esto es quitarlo.
+  if (printAllowlist) {
+    process.stdout.write(JSON.stringify(ALLOWLIST));
+    return;
+  }
+
   const files = collectFiles(root);
   const isFixture = root !== APP_ROOT;
 

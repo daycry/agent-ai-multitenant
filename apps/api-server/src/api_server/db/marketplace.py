@@ -128,6 +128,33 @@ class MarketplaceTrustLevel(enum.StrEnum):
     EXPERIMENTAL = "experimental"
 
 
+class ListingReviewStatus(enum.StrEnum):
+    """Where a listing sits in the publication pipeline (ADR 0142 D6).
+
+    ``draft → pending_review → published | rejected``. Nothing reaches the
+    catalog without a system admin looking at it: **the catalog browse filters
+    on ``published``**, and a listing in any other state exists only for its
+    author tenant (who needs to read the rejection reason) — see
+    :func:`api_server.marketplace.review.is_visible_in_catalog`.
+
+    - ``draft``:          authored, not submitted. Never seen by anyone else.
+    - ``pending_review``: waiting in the admin queue.
+    - ``published``:      approved and in the catalog.
+    - ``rejected``:       turned down with a written reason; the author fixes
+                          it and re-submits (rejected → pending_review is a
+                          legal edge — a rejection is not a death sentence).
+
+    NOT a trust level. ``trust_level`` (verified / community / experimental)
+    grades the guardrails and is promoted separately by the same admin; a
+    listing can be ``published`` + ``community`` forever.
+    """
+
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+
+
 class InstallationStatus(enum.StrEnum):
     """Lifecycle of an installation.
 
@@ -192,6 +219,18 @@ class MarketplaceAuditAction(enum.StrEnum):
     # + role_map that produced it); ``retire`` records the exact teardown.
     DEPLOY = "deploy"
     RETIRE = "retire"
+    # ADR 0142 D6: la revisión de la publicación. Cada transición de
+    # ``review_status`` deja su fila, con el motivo cuando es un rechazo.
+    SUBMIT_REVIEW = "submit_review"
+    APPROVE = "approve"
+    REJECT = "reject"
+    PROMOTE = "promote"
+    # ADR 0142 D7: los despliegues re-encajados tras un cambio de versión.
+    # Acción PROPIA y no un segundo ``update``: la instalación se mueve de
+    # versión una vez, y contar dos filas ``update`` por una sola actualización
+    # deja el rastro ambiguo ("¿se actualizó dos veces?"). Lo detectó un test
+    # del plan 09 que cuenta exactamente eso.
+    REFRESH = "refresh"
 
 
 # =============================================================================
@@ -299,6 +338,20 @@ class MarketplaceListing(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMi
             "kind",
             postgresql_where=text("tenant_id IS NULL AND deleted_at IS NULL"),
         ),
+        # ADR 0142 D6. Closed vocabulary at the DB level so a script or a
+        # migration cannot invent a fifth state the review code never handles.
+        CheckConstraint(
+            "review_status IN ('draft', 'pending_review', 'published', 'rejected')",
+            name="ck_marketplace_listings_review_status",
+        ),
+        # The admin review queue: everything NOT published, which is the small
+        # side of the table. A partial index keeps the queue read cheap without
+        # paying for the catalog rows.
+        Index(
+            "ix_marketplace_listings_review_queue",
+            "review_status",
+            postgresql_where=text("review_status <> 'published' AND deleted_at IS NULL"),
+        ),
     )
 
     source_id: Mapped[UUID] = mapped_column(
@@ -321,6 +374,36 @@ class MarketplaceListing(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMi
     trust_level: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'experimental'")
     )
+
+    # -- ADR 0142 D6: the review pipeline -----------------------------------
+    # ``server_default='published'`` is a DELIBERATE asymmetry, and the reason
+    # is worth writing down because the opposite default looks safer and is
+    # not: the ONLY untrusted publisher is the tenant-facing
+    # ``POST /marketplace/private/listings``, and that path sets
+    # ``pending_review`` **explicitly** (asserted by
+    # ``test_publishing_leaves_the_listing_pending_review``). Everything else
+    # that writes this table is platform-curated — the official catalog seed
+    # (:mod:`api_server.marketplace.seed`) and the 0129 backfill. Defaulting
+    # those to ``draft`` would empty the live catalog on deploy and on every
+    # re-seed, which is a louder outage than the failure the strict default
+    # guards against.
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'published'")
+    )
+    # The system admin who approved / rejected / promoted it, and when. NULL on
+    # the rows the 0129 backfill published: nobody reviewed them, and stamping
+    # a reviewer there would be a lie in the audit trail.
+    reviewed_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Mandatory on a rejection (enforced in
+    # :func:`api_server.marketplace.review.reject_listing`, not by a CHECK: the
+    # column is also NULL for every non-rejected row). Cleared on re-submit so
+    # a stale accusation never outlives the verdict it belonged to.
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # The SKILL.md / tool-manifest metadata (frontmatter, dependencies,
     # requested permissions, …). JSONB so the shape evolves migration-free.
@@ -651,6 +734,13 @@ class MarketplaceDeployment(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timest
     deployed_version: Mapped[str] = mapped_column(String(64), nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'active'"))
+    # Why it is ``disabled`` (ADR 0142 D7, migration 0130). Set when a version
+    # update cannot be applied — typically the new ``config_schema`` added a
+    # required field with no default, and applying half of it would leave the
+    # project with a half-configured capability, which is worse than not having
+    # it. Without this column ``disabled`` is a mute state: the operator sees a
+    # switched-off capability and nowhere to read what is missing.
+    disabled_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # The rows this deployment created, by kind. The contract of the exact
     # teardown; see :class:`api_server.marketplace.deploy.CreatedRefs` for the
@@ -839,6 +929,7 @@ class MarketplaceAuditEntry(Base, UUIDPrimaryKeyMixin):
 __all__ = [
     "DeploymentStatus",
     "InstallationStatus",
+    "ListingReviewStatus",
     "MarketplaceAuditAction",
     "MarketplaceAuditEntry",
     "MarketplaceDeployment",

@@ -97,6 +97,40 @@ describe("dictionary — invariantes", () => {
       "tenantStats.colPlan",
       "tenantStats.colTokens",
       "tenantStats.colVerdict",
+      // prod-16 `task_prod16_04` — llm-providers. Vocabulario que no se traduce:
+      // "Slug" y "Endpoint" son los términos que la UI castellana ya usaba en
+      // inglés, y los tres "API key (…)" nombran el credencial tal y como lo
+      // llama cada proveedor (Anthropic, APIM) — traducirlos alejaría la
+      // etiqueta del nombre que el operador ve en la consola del proveedor.
+      "llmProviders.colSlug",
+      "llmProviders.endpoint",
+      "llmProviders.claudeApiKeyOption",
+      "llmProviders.claudeApiKeyLabel",
+      "llmProviders.azureApiKeyLabel",
+      // prod-16 `task_prod16_03` — agents. Tres familias, todas legítimas:
+      // jerga que la UI castellana ya escribía en inglés ("Built-in", "System
+      // prompt", "Memory scope", "Max concurrent tasks", "read-only"), los
+      // sufijos (ES)/(EN) de los prompts bilingües —que nombran el idioma, no
+      // se traducen— y "irreversible", que se escribe igual en los dos.
+      "agents.scopeBuiltin",
+      "agents.systemPrompt",
+      "agents.promptEsLabel",
+      "agents.promptEnLabel",
+      "agents.readOnlyBadge",
+      "agents.memoryScope",
+      "agents.maxConcurrent",
+      "agents.deleteWarningStrong",
+      // prod-16 `task_prod16_04` — model-prices. "Input", "Output", "Cache",
+      // "Provider" y "Context window" son la jerga con que los proveedores LLM
+      // nombran sus propios campos de facturación: traducirlos alejaría la
+      // columna del nombre que el operador ve en la factura del proveedor.
+      "modelPrices.colInput",
+      "modelPrices.colOutput",
+      "modelPrices.colCache",
+      "modelPrices.fieldProvider",
+      "modelPrices.fieldInput",
+      "modelPrices.fieldOutput",
+      "modelPrices.fieldContextWindow",
     ]);
 
     const identical = new Set(

@@ -44,6 +44,28 @@ function fixture(files: Record<string, string>): string {
   return root;
 }
 
+/**
+ * Una entrada REAL de la allowlist de la guarda, con su tamaño anotado.
+ *
+ * Los fixtures de abajo necesitan un fichero que la allowlist conozca, y antes
+ * ese nombre estaba clavado a mano (`llm-providers`). El día que se partió de
+ * verdad —el movimiento que la guarda existe para premiar— cuatro tests de este
+ * fichero se pusieron rojos por el éxito, y el fallo no se leía como "actualiza
+ * el fixture" sino como "la guarda está rota". Se lee de la propia guarda para
+ * que no vuelva a pasar.
+ */
+function anAllowlistedScreen(): { rel: string; allowed: number } {
+  const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
+    encoding: "utf8",
+  });
+  const entries = Object.entries(JSON.parse(raw) as Record<string, number>);
+  // Si la allowlist se vacía (deuda saldada, enhorabuena), estos tests dejan de
+  // tener sujeto: mejor un fallo con este mensaje que un `undefined` opaco.
+  expect(entries.length).toBeGreaterThan(0);
+  const [rel, allowed] = entries[0];
+  return { rel, allowed };
+}
+
 function run(args: string[]): { code: number; output: string } {
   try {
     const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
@@ -92,8 +114,9 @@ describe("check-component-size sabe fallar", () => {
   });
 
   it("un fichero de la allowlist que CRECE es error", () => {
-    // `llm-providers` está anotado con su tamaño actual; con 200 líneas más debe saltar.
-    const root = fixture({ "app/admin/llm-providers/page.tsx": lines(1200) });
+    // Anotado con su tamaño actual; con 200 líneas más debe saltar.
+    const { rel, allowed } = anAllowlistedScreen();
+    const root = fixture({ [rel]: lines(allowed + 200) });
 
     const { code, output } = run(["--root", root]);
 
@@ -109,7 +132,9 @@ describe("check-component-size sabe fallar", () => {
   });
 
   it("--strict no perdona ni a los de la allowlist", () => {
-    const root = fixture({ "app/admin/llm-providers/page.tsx": lines(900) });
+    // Por encima del límite pero dentro de lo anotado: sin --strict pasa.
+    const { rel, allowed } = anAllowlistedScreen();
+    const root = fixture({ [rel]: lines(allowed) });
 
     expect(run(["--root", root]).code).toBe(0);
     expect(run(["--root", root, "--strict"]).code).toBe(1);
@@ -124,7 +149,9 @@ describe("check-component-size no molesta donde no debe", () => {
   });
 
   it("un fichero de la allowlist que MENGUA pasa, y avisa para bajar el número", () => {
-    const root = fixture({ "app/admin/llm-providers/page.tsx": lines(850) });
+    // Menos de lo anotado pero aún por encima del límite de 800.
+    const { rel, allowed } = anAllowlistedScreen();
+    const root = fixture({ [rel]: lines(Math.max(801, allowed - 20)) });
 
     const { code, output } = run(["--root", root]);
 
@@ -133,7 +160,8 @@ describe("check-component-size no molesta donde no debe", () => {
   });
 
   it("un fichero de la allowlist que baja del límite pasa y pide borrarlo", () => {
-    const root = fixture({ "app/admin/llm-providers/page.tsx": lines(300) });
+    const { rel } = anAllowlistedScreen();
+    const root = fixture({ [rel]: lines(300) });
 
     const { code, output } = run(["--root", root]);
 

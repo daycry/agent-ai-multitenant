@@ -31,6 +31,7 @@ import { Bot, Eye, Plug, Wrench } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
+import { AvailableCapabilitiesSection } from "@/components/marketplace/available-capabilities-section";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -160,6 +161,11 @@ export default function AgentToolsDiagnosticPage() {
           <AgentsSection agents={agents} effectiveByAgent={effectiveByAgent} lang={lang} />
         </div>
       )}
+
+      {/* ADR 0142 (D4): la ÚNICA parte de esta pantalla que escribe. Va debajo
+          del diagnóstico y con su propia cabecera para que no se confunda con
+          él; el banner de arriba acota su «solo lectura» a lo diagnóstico. */}
+      <AvailableCapabilitiesSection projectId={projectId} kinds={["tool", "skill"]} />
     </div>
   );
 }
@@ -176,9 +182,10 @@ function ReadOnlyBanner() {
     >
       <Eye aria-hidden="true" className="h-4 w-4 shrink-0" />
       <span>
-        <span className="font-medium">Solo lectura — verificación.</span> Esta vista refleja lo que
-        el runtime ejecuta de verdad; para cambiar asignaciones edita las tools en la ficha del
-        agente.
+        <span className="font-medium">Solo lectura — verificación.</span> El diagnóstico refleja lo
+        que el runtime ejecuta de verdad; para cambiar asignaciones edita las tools en la ficha del
+        agente. (La sección del marketplace, al final de la página, sí activa capacidades en este
+        proyecto.)
       </span>
     </div>
   );

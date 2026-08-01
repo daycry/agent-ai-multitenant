@@ -484,6 +484,21 @@ class InstallOrchestrator:
             actor=actor,
             listing=target_listing,
             abort_action=MarketplaceAuditAction.UPDATE,
+            # MISMA semántica que `analyze_for_install`: un artefacto AUSENTE en
+            # disco es un skip honesto, no un aborto.
+            #
+            # Sin esto la asimetría era letal y silenciosa: el install fresco
+            # instala igual cuando no hay artefacto (decisión deliberada del
+            # ADR 0081 / regresión H4 — bloquear ahí cerraría en falso TODO el
+            # catálogo pre-registry), pero el update abortaba con 422. O sea:
+            # **toda instalación creada por el camino tolerante era imposible de
+            # actualizar**, que es justo la que existe hoy. Lo descubrió el flujo
+            # de la fase 4 del ADR 0142 (`test_marketplace_update_flow.py`), que
+            # sin este arreglo no podía pasar de la primera versión.
+            #
+            # Lo que NO se relaja: si el artefacto SÍ está, sus gates corren
+            # enteros y un fallo aborta como siempre.
+            tolerate_missing_artifact=True,
         )
         gate_report = ctx.gate_report
         gate_report["update"] = {"from_version": from_version, "to_version": to_version}
@@ -538,6 +553,7 @@ class InstallOrchestrator:
         actor: str,
         listing: MarketplaceListing,
         abort_action: MarketplaceAuditAction = MarketplaceAuditAction.INSTALL,
+        tolerate_missing_artifact: bool = False,
     ) -> _GateContext:
         """Run gates 1-5 (fetch → parse → signature → analysis → sandbox).
 
@@ -548,6 +564,13 @@ class InstallOrchestrator:
         row / version change survives). Returns the populated context (its
         ``gate_report`` carries the trail the caller folds into the install /
         update audit detail).
+
+        ``tolerate_missing_artifact`` reproduces the honest skip that
+        :meth:`analyze_for_install` already documents: with NO artifact on disk
+        there is nothing to fetch, parse, verify or scan, so the gates record
+        ``skipped_reason=no_artifact`` and the caller goes on. It is opt-in and
+        applies ONLY to the artifact being *absent* — an artifact that IS there
+        runs every gate its trust policy demands, and a failure aborts.
         """
         policy = trust_policy(listing.trust_level)
         ctx = _GateContext(
@@ -558,7 +581,22 @@ class InstallOrchestrator:
             gate_report={"trust_level": str(policy.level)},
             abort_action=abort_action,
         )
-        artifact = await self._gate_fetch(ctx)
+        if tolerate_missing_artifact:
+            try:
+                artifact = self._fetcher.fetch(listing)
+            except Exception as exc:
+                _log.warning(
+                    "marketplace.install.gates_skipped_no_artifact",
+                    listing_id=str(listing.id),
+                    action=abort_action.value,
+                    error=str(exc),
+                )
+                ctx.gate_report["skipped_reason"] = "no_artifact"
+                ctx.gate_report["detail"] = str(exc)
+                return ctx
+            ctx.gate_report["fetched"] = True
+        else:
+            artifact = await self._gate_fetch(ctx)
         await self._gate_parse(ctx, artifact)
         if policy.signature_required:
             await self._gate_signature(ctx, artifact)

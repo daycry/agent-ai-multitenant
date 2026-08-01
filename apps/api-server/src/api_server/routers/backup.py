@@ -30,6 +30,8 @@ write. Each successful write is audited (``backup.schedule_updated``).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
+from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +68,8 @@ from api_server.schemas.backup import (
 )
 
 router = APIRouter(prefix="/admin/backup", tags=["admin", "backup"])
+
+_T = TypeVar("_T")
 
 _AUDIT_SCHEDULE_UPDATED = "backup.schedule_updated"
 _AUDIT_DESTINATIONS_UPDATED = "backup.destinations_updated"
@@ -206,6 +210,40 @@ async def update_backup_destinations(
     )
 
 
+# ---------------------------------------------------------------------------
+# Plazo de las sondas remotas (prod-13 task_prod13_02)
+# ---------------------------------------------------------------------------
+# `to_thread` saca las llamadas de red del bucle de eventos, pero no les pone
+# plazo. Contra una IP que DROPea paquetes (firewall silencioso) el `connect` de
+# paramiko hereda el timeout del SO — minutos — y pasan dos cosas: la petición no
+# termina nunca, y el executor por defecto de asyncio (`min(32, cpu+4)` hilos) se
+# va llenando de sondas colgadas hasta que `to_thread` deja de ser una salida y
+# vuelve a hacer cola. O sea, el bloqueo que se quería evitar entra por detrás.
+#
+# 15 s: una sonda de alcanzabilidad que no ha contestado en quince segundos ya
+# dijo lo que tenía que decir.
+REMOTE_PROBE_TIMEOUT_S = 15.0
+
+
+async def run_remote_probe(coro: Awaitable[_T], *, timeout_s: float, on_timeout: _T) -> _T:
+    """Espera a ``coro`` como mucho ``timeout_s``; al vencer devuelve ``on_timeout``.
+
+    **Lo que esto NO hace, y conviene tenerlo escrito**: el hilo del executor
+    sigue colgado. Python no puede matar un hilo, así que `wait_for` solo cancela
+    la espera. Acota la RESPUESTA, no el recurso. El arreglo completo es un
+    timeout de socket dentro de los adaptadores (`workers/backup_destinations.py`),
+    que vive en otro paquete.
+
+    Un fallo real del adaptador se deja subir: convertirlo en ``on_timeout``
+    diría «se colgó» donde hubo un error con causa, y el operador perdería justo
+    el mensaje que necesita para arreglarlo.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_s)
+    except TimeoutError:
+        return on_timeout
+
+
 @router.post("/destinations/{name}/test", response_model=BackupConnectivityResult)
 async def test_backup_destination(
     name: str,
@@ -245,14 +283,25 @@ async def test_backup_destination(
         # queda esperando el timeout del socket, y ejecutado en el bucle de
         # eventos congela TODAS las requests y WebSockets del api-server
         # (hallazgo api-3). `to_thread` lo saca a un hilo del executor: la
-        # petición sigue esperando, el resto de la plataforma no.
-        result = await asyncio.to_thread(destination.test_connectivity)
+        # petición sigue esperando, el resto de la plataforma no. Y con plazo,
+        # porque `to_thread` no pone ninguno (ver `run_remote_probe`).
+        result = await run_remote_probe(
+            asyncio.to_thread(destination.test_connectivity),
+            timeout_s=REMOTE_PROBE_TIMEOUT_S,
+            on_timeout=None,
+        )
     except DestinationError as exc:
         # A config the factory rejects (shouldn't happen post-validation) maps to
         # a clean not-ok result rather than a 500 — the UI renders FAIL + detail.
         result_ok, result_detail = False, str(exc)
     else:
-        result_ok, result_detail = result.ok, result.detail
+        if result is None:
+            # Se agotó el plazo. Es un FALLO de la sonda, con su motivo, no un
+            # 504: la UI renderiza FAIL + detalle igual que con cualquier otro.
+            result_ok = False
+            result_detail = f"connectivity probe did not answer in {REMOTE_PROBE_TIMEOUT_S:.0f}s"
+        else:
+            result_ok, result_detail = result.ok, result.detail
 
     await write_audit_log(
         session,
@@ -395,7 +444,17 @@ async def _list_remote_backups(session: AsyncSession) -> list[tuple[str, str]]:
     for item in items:
         if not item.get("enabled", True):
             continue
-        out.extend(await asyncio.to_thread(_list_one, item))
+        # Con plazo POR DESTINO: sin él, N destinos configurados y uno colgado
+        # hacen que el listado entero tarde lo que tarde ese uno. Un destino que
+        # no contesta se salta, que es el mismo trato que ya recibe uno que
+        # falla — «best-effort» tiene que incluir «no contesta».
+        out.extend(
+            await run_remote_probe(
+                asyncio.to_thread(_list_one, item),
+                timeout_s=REMOTE_PROBE_TIMEOUT_S,
+                on_timeout=[],
+            )
+        )
     return out
 
 

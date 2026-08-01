@@ -214,7 +214,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_06` — Ficha de instalación: desplegado-en + «Desplegar a…» + retirar
 
-- [ ] **Título**: `app/admin/marketplace/installations/[id]/deployments-section.tsx` + formulario de despliegue
+- [x] **Título**: `app/admin/marketplace/installations/[id]/deployments-section.tsx` + formulario de despliegue
 - **Tiempo**: 6 h · **Complejidad**: m
 - Sección «Desplegado en N proyectos» (lista con estado y versión), botón
   «Desplegar a…» (multi-select de proyectos → por proyecto, el formulario del
@@ -235,7 +235,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_07` — Wizard de proyecto: paso «Capacidades»
 
-- [ ] **Título**: Paso nuevo en `app/admin/projects/new` que ofrece lo instalado y despliega al crear
+- [x] **Título**: Paso nuevo en `app/admin/projects/new` que ofrece lo instalado y despliega al crear
 - **Tiempo**: 5 h · **Complejidad**: m
 - Tras el paso de equipo (necesita los roles para pre-marcar): lista de
   instalaciones del tenant con checkbox; lo marcado abre su
@@ -255,7 +255,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_08` — Pestañas del proyecto: «disponibles del tenant»
 
-- [ ] **Título**: Sección de activación local en las pestañas MCP y Tools del proyecto
+- [x] **Título**: Sección de activación local en las pestañas MCP y Tools del proyecto
 - **Tiempo**: 4 h · **Complejidad**: s
 - Lee `GET /projects/{id}/marketplace/available`, pinta las disponibles con su
   badge de confianza, «Activar» abre el MISMO `deployment-config-form`. Lo ya
@@ -275,7 +275,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_09` — Máquina de estados del listing + migración
 
-- [ ] **Título**: `draft → pending_review → published | rejected` (+ promoción a verified), con migración y transiciones auditadas
+- [x] **Título**: `draft → pending_review → published | rejected` (+ promoción a verified), con migración y transiciones auditadas
 - **Tiempo**: 5 h · **Complejidad**: m
 - Migración (cabeza real del momento): `listings.review_status` CHECK +
   `reviewed_by`/`reviewed_at`/`rejection_reason`; backfill: lo publicado hoy →
@@ -296,7 +296,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_10` — Cola de revisión del admin + publicar desde la UI
 
-- [ ] **Título**: `app/admin/marketplace/review/page.tsx` (cola) + el flujo publicar deja el listing en `pending_review`
+- [x] **Título**: `app/admin/marketplace/review/page.tsx` (cola) + el flujo publicar deja el listing en `pending_review`
 - **Tiempo**: 5 h · **Complejidad**: m
 - Cola con diff del manifest cuando es versión nueva de algo publicado
   (reutiliza el helper de diff de la Fase 4 si ya existe; si no, muestra el
@@ -315,7 +315,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_11` — Publicar versión nueva = fila de versión + revisión
 
-- [ ] **Título**: Re-publicar crea `marketplace_listing_versions` nueva en `pending_review`; el diff de permisos es un helper puro
+- [x] **Título**: Re-publicar crea `marketplace_listing_versions` nueva en `pending_review`; el diff de permisos es un helper puro
 - **Tiempo**: 4 h · **Complejidad**: m
 - `marketplace/versions.py`: `permission_diff(old_manifest, new_manifest) ->
 {added: [...], removed: [...]}` (puro, con test propio) y el alta de versión
@@ -330,7 +330,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_12` — Actualizar instalación: re-consentir SOLO el delta + refrescar despliegues
 
-- [ ] **Título**: `POST /marketplace/installations/{id}/update` con re-consentimiento del delta y refresco de despliegues; rollback por el mismo mecanismo
+- [x] **Título**: `POST /marketplace/installations/{id}/update` con re-consentimiento del delta y refresco de despliegues; rollback por el mismo mecanismo
 - **Tiempo**: 8 h · **Complejidad**: l
 - El endpoint compara la versión pinada con la vigente: permisos nuevos → exige
   el consentimiento de ESOS (los ya concedidos no se re-preguntan; los

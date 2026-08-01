@@ -17,8 +17,18 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { runtimeLabel, useRuntimeTemplates } from "@/lib/runtime-templates";
+import type { DeploymentDraft } from "@/components/marketplace/deployment-types";
+
+import {
+  CapabilitiesStep,
+  capabilitiesBlocked,
+  deployCapabilities,
+  useTenantCapabilities,
+  type CapabilityDeployResult,
+} from "./capabilities-step";
 
 interface Project {
   id: string;
@@ -51,11 +61,13 @@ export default function NewProjectWizardPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { lang } = useLang();
+  const tDeploy = useT("marketplaceDeploy");
 
-  // Step 1: pick a template (or start blank). Step 2: customize + create.
+  // Step 1: pick a template (or start blank). Step 2: customize. Step 3
+  // (ADR 0142, sólo si el tenant tiene algo instalado): «Capacidades».
   // `selected === null` while in step 2 means a blank project ("proyecto en
   // blanco") — no template_id is sent and nothing is auto-granted.
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selected, setSelected] = useState<Project | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -73,6 +85,14 @@ export default function NewProjectWizardPage() {
   // no default (the run_* tools fall back to per-tool defaults).
   const [runtime, setRuntime] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // ADR 0142 (D3): lo que el proyecto recibe al nacer. `drafts` va por
+  // `installation_id` y sólo tiene entrada para lo MARCADO.
+  const capabilities = useTenantCapabilities();
+  const [drafts, setDrafts] = useState<Record<string, DeploymentDraft>>({});
+  const [deployResults, setDeployResults] = useState<CapabilityDeployResult[] | null>(null);
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
+  const totalSteps = capabilities.length > 0 ? 3 : 2;
 
   const templatesQuery = useQuery({
     queryKey: ["projects", "templates"],
@@ -136,9 +156,18 @@ export default function NewProjectWizardPage() {
       }
       return apiFetch<Project>("/projects", { method: "POST", body });
     },
-    onSuccess: (created) => {
+    onSuccess: async (created) => {
       queryClient.invalidateQueries({ queryKey: ["projects", "tenant"] });
-      router.push(`/admin/projects?created=${created.id}`);
+      if (Object.keys(drafts).length === 0) {
+        router.push(`/admin/projects?created=${created.id}`);
+        return;
+      }
+      // El proyecto YA existe: los despliegues se encadenan aquí y lo que no
+      // entre se enseña. Redirigir sin mirar convertiría un despliegue fallido
+      // en un éxito silencioso, que es el modo de fallo que este plan cierra.
+      setCreatedProjectId(created.id);
+      const results = await deployCapabilities(created.id, capabilities, drafts);
+      setDeployResults(results);
     },
     onError: (err: unknown) => {
       setSubmitError(err instanceof ApiError ? err.body : String(err));
@@ -151,10 +180,14 @@ export default function NewProjectWizardPage() {
         icon={<Sparkles className="h-6 w-6 sm:h-7 sm:w-7" />}
         title={
           <span data-testid="wizard-title">
-            {step === 1 ? "Crear proyecto — elige plantilla" : "Crear proyecto — personaliza"}
+            {step === 1
+              ? "Crear proyecto — elige plantilla"
+              : step === 2
+                ? "Crear proyecto — personaliza"
+                : `Crear proyecto — ${tDeploy("wizardStepTitle")}`}
           </span>
         }
-        description={`Paso ${step} de 2.`}
+        description={`Paso ${step} de ${totalSteps}.`}
         actions={
           <Button variant="outline" asChild>
             <Link href="/admin/projects">
@@ -368,14 +401,22 @@ export default function NewProjectWizardPage() {
                 <Button variant="outline" onClick={() => setStep(1)} data-testid="wizard-back">
                   ← {selected ? "Cambiar plantilla" : "Volver"}
                 </Button>
-                <Button
-                  onClick={() => createProject.mutate()}
-                  disabled={!name || createProject.isPending}
-                  data-testid="wizard-submit"
-                >
-                  {createProject.isPending && <Spinner className="mr-2 h-4 w-4" />}
-                  {createProject.isPending ? "Creando…" : "Crear proyecto"}
-                </Button>
+                {/* Con capacidades instaladas el wizard gana un paso (ADR 0142
+                    D3); sin ellas se crea desde aquí, como antes. */}
+                {totalSteps === 3 ? (
+                  <Button onClick={() => setStep(3)} disabled={!name} data-testid="wizard-next">
+                    {tDeploy("next")} <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => createProject.mutate()}
+                    disabled={!name || createProject.isPending}
+                    data-testid="wizard-submit"
+                  >
+                    {createProject.isPending && <Spinner className="mr-2 h-4 w-4" />}
+                    {createProject.isPending ? "Creando…" : "Crear proyecto"}
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -432,6 +473,100 @@ export default function NewProjectWizardPage() {
               )}
             </CardContent>
           </Card>
+        </section>
+      )}
+
+      {/* ============ Step 3: Capacidades (ADR 0142, D3) ============ */}
+      {step === 3 && (
+        <section data-testid="wizard-step-3" className="space-y-4">
+          <CapabilitiesStep
+            capabilities={capabilities}
+            drafts={drafts}
+            onDraftsChange={setDrafts}
+          />
+
+          {submitError && (
+            <p
+              className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
+              data-testid="wizard-error"
+            >
+              {submitError}
+            </p>
+          )}
+
+          {/* Resultado del encadenado: el proyecto YA existe, así que lo que
+              importa es qué entró y qué no — no un redirect optimista. */}
+          {deployResults ? (
+            <Card data-testid="wizard-deploy-results">
+              <CardHeader>
+                <CardTitle className="text-base">{tDeploy("wizardResultsTitle")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-xs">
+                {deployResults.map((result) => (
+                  <div key={result.installationId} className="space-y-1">
+                    <p
+                      data-testid={`wizard-deploy-result-${result.installationId}`}
+                      data-outcome={result.outcome}
+                      className={result.outcome === "failed" ? "text-destructive" : ""}
+                    >
+                      {result.outcome === "ok"
+                        ? tDeploy("resultOk", { project: result.name })
+                        : result.outcome === "already"
+                          ? tDeploy("resultAlready", { project: result.name })
+                          : `${tDeploy("resultFailed", { project: result.name })} ${result.error ?? ""}`}
+                    </p>
+                    {result.warnings.length > 0 ? (
+                      <ul
+                        className="text-warning-soft-foreground space-y-0.5 pl-4"
+                        data-testid={`wizard-deploy-warnings-${result.installationId}`}
+                      >
+                        {result.warnings.map((warning, index) => (
+                          <li key={index}>• {warning}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {result.oauthPending ? (
+                      <p
+                        className="text-warning-soft-foreground pl-4"
+                        data-testid={`wizard-deploy-oauth-${result.installationId}`}
+                      >
+                        {tDeploy("oauthPending")}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <div className="flex items-center justify-between">
+            <Button
+              variant="outline"
+              onClick={() => setStep(2)}
+              disabled={createProject.isPending || deployResults !== null}
+              data-testid="wizard-capabilities-back"
+            >
+              ← {tDeploy("back")}
+            </Button>
+            {deployResults && createdProjectId ? (
+              <Button asChild data-testid="wizard-goto-project">
+                <Link href={`/admin/projects/${createdProjectId}`}>
+                  {tDeploy("wizardGoToProject")}
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                onClick={() => createProject.mutate()}
+                disabled={
+                  !name || createProject.isPending || capabilitiesBlocked(capabilities, drafts)
+                }
+                data-testid="wizard-submit"
+              >
+                {createProject.isPending && <Spinner className="mr-2 h-4 w-4" />}
+                {createProject.isPending ? "Creando…" : "Crear proyecto"}
+              </Button>
+            )}
+          </div>
         </section>
       )}
     </div>

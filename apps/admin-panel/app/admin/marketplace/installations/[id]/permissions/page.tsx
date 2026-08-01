@@ -26,9 +26,10 @@
  */
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ShieldCheck, X } from "lucide-react";
+import { Check, Rocket, ShieldCheck, X } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -36,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.marketplace (consent)
@@ -102,6 +104,7 @@ export default function InstallationPermissionsPage() {
   const params = useParams<{ id: string }>();
   const installationId = params.id;
   const queryClient = useQueryClient();
+  const t = useT("marketplaceDeploy");
 
   const permsQuery = useQuery({
     queryKey: ["installation-permissions", installationId],
@@ -159,14 +162,24 @@ export default function InstallationPermissionsPage() {
         description="Aprueba o deniega cada permiso que esta tool/skill solicita. La instalación no se habilita hasta que todos los permisos requeridos estén concedidos."
         data-testid="consent-header"
         actions={
-          data ? (
-            <Badge
-              variant={STATUS_BADGE[data.status]?.variant ?? "muted"}
-              data-testid="consent-install-status"
-            >
-              {STATUS_BADGE[data.status]?.label ?? data.status}
-            </Badge>
-          ) : null
+          <>
+            {data ? (
+              <Badge
+                variant={STATUS_BADGE[data.status]?.variant ?? "muted"}
+                data-testid="consent-install-status"
+              >
+                {STATUS_BADGE[data.status]?.label ?? data.status}
+              </Badge>
+            ) : null}
+            {/* ADR 0142: consentir es la mitad; la otra —dónde está desplegada—
+                vive en la ficha, y sin este enlace no se llega a ella. */}
+            <Button asChild variant="outline" size="sm" data-testid="consent-deployments-link">
+              <Link href={`/admin/marketplace/installations/${installationId}`}>
+                <Rocket className="mr-1 h-3.5 w-3.5" />
+                {t("deploymentsTitle")}
+              </Link>
+            </Button>
+          </>
         }
       />
 

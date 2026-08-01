@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -60,11 +61,13 @@ from api_server.auth.deps import (
 )
 from api_server.db.marketplace import (
     InstallationStatus,
+    ListingReviewStatus,
     MarketplaceAuditAction,
     MarketplaceAuditEntry,
     MarketplaceInstallation,
     MarketplaceListing,
     MarketplaceListingKind,
+    MarketplaceListingVersion,
     MarketplaceShare,
     MarketplaceSource,
     MarketplaceSourceType,
@@ -76,12 +79,28 @@ from api_server.marketplace.consent import (
     consent_required_for,
     summarize,
 )
+from api_server.marketplace.deploy import ensure_listing_version
+from api_server.marketplace.deployment_refresh import refresh_installation_deployments
 from api_server.marketplace.install import InstallError, InstallOrchestrator, LocalArtifactFetcher
 from api_server.marketplace.install import default_artifact_root as _default_artifact_root
+from api_server.marketplace.listing_versions import (
+    permission_diff,
+    pinned_version,
+    snapshot_version,
+)
 from api_server.marketplace.private_listing import (
     PrivateListingFormatError,
     parse_private_listing,
 )
+from api_server.marketplace.review import (
+    ReviewTransitionError,
+    approve_listing,
+    catalog_visibility_clause,
+    promote_listing,
+    reject_listing,
+    submit_for_review,
+)
+from api_server.marketplace.update_consent import apply_update_consent
 from api_server.marketplace.versioning import (
     VersioningError,
     is_major_bump,
@@ -101,6 +120,10 @@ from api_server.schemas.marketplace import (
     InstallationUpdateCheckResponse,
     InstallationUpdateRequest,
     InstallationUpdateResponse,
+    ListingApproveRequest,
+    ListingPromoteRequest,
+    ListingRejectRequest,
+    ListingVersionResponse,
     MarketplaceInstallationResponse,
     MarketplaceListingResponse,
     MarketplaceShareResponse,
@@ -112,6 +135,7 @@ from api_server.schemas.marketplace import (
     to_permissions_response,
     to_share_response,
     to_update_check_response,
+    to_version_response,
 )
 
 router = APIRouter(prefix="/marketplace", tags=["marketplace"])
@@ -366,7 +390,7 @@ async def list_listings(
     ),
     limit: int = limit_query(),
     offset: int = offset_query(),
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[MarketplaceListingResponse]:
     """Browse the marketplace catalog.
@@ -375,8 +399,18 @@ async def list_listings(
     caller's own private listings; another tenant's private listings are
     never returned. Deterministic ordering (``created_at, id``) so
     ``offset`` paging is stable.
+
+    On top of RLS, ADR 0142 D6 filters by review state: only ``published``
+    listings are catalog entries. A listing still in the queue (or rejected) is
+    visible ONLY to the tenant that authored it.
     """
-    stmt = select(MarketplaceListing).where(MarketplaceListing.deleted_at.is_(None))
+    stmt = select(MarketplaceListing).where(
+        MarketplaceListing.deleted_at.is_(None),
+        # ADR 0142 D6: la RLS ya decidió qué filas EXISTEN para esta sesión;
+        # esto quita de ahí lo que todavía no ha pasado revisión. Lo propio se
+        # sigue viendo en cualquier estado (el autor necesita leer su rechazo).
+        catalog_visibility_clause(principal.tenant_id),
+    )
     if kind is not None:
         stmt = stmt.where(MarketplaceListing.kind == kind.value)
     if trust_level is not None:
@@ -393,18 +427,21 @@ async def list_listings(
 @router.get("/listings/{listing_id}", response_model=MarketplaceListingResponse)
 async def get_listing(
     listing_id: UUID,
-    _: AuthPrincipal = Depends(require_tenant_member),
+    principal: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> MarketplaceListingResponse:
     """Fetch a single listing (global or the caller's own private one).
 
     Another tenant's private listing surfaces as 404 (RLS filters it
-    out) so we never leak that its id exists.
+    out) so we never leak that its id exists. A listing that has not been
+    approved yet (ADR 0142 D6) is a 404 too for anyone but its author — same
+    reasoning: a 403 would confirm that the id exists.
     """
     result = await session.execute(
         select(MarketplaceListing).where(
             MarketplaceListing.id == listing_id,
             MarketplaceListing.deleted_at.is_(None),
+            catalog_visibility_clause(principal.tenant_id),
         )
     )
     listing = result.scalar_one_or_none()
@@ -471,6 +508,11 @@ async def publish_private_listing(
         # A tenant's own internal listing is community-trust (not
         # platform-verified); never honour a wire-supplied trust level.
         trust_level=MarketplaceTrustLevel.COMMUNITY.value,
+        # ADR 0142 D6 — el punto entero de la fase 3: publicar NO publica, deja
+        # el listing en la cola del system admin. Explícito y no heredado del
+        # `server_default` de la columna, que vale `'published'` para que el
+        # catálogo curado por la plataforma no se vacíe (ver migración 0129).
+        review_status=ListingReviewStatus.PENDING_REVIEW.value,
         manifest=parsed.manifest,
         requested_permissions=parsed.requested_permissions,
         # Private listings are unsigned — signing is the platform team's
@@ -490,6 +532,15 @@ async def publish_private_listing(
             ),
         ) from exc
 
+    # ADR 0142 D7: el histórico nace con la publicación, no con el primer
+    # despliegue. Es lo que hace que un rollback tenga a dónde volver.
+    await snapshot_version(
+        session,
+        listing=listing,
+        changelog=payload.changelog,
+        published_by=principal.user_id,
+    )
+
     # Append-only audit: who published which private listing.
     session.add(
         MarketplaceAuditEntry(
@@ -503,6 +554,7 @@ async def publish_private_listing(
                 "kind": parsed.kind.value,
                 "name": parsed.name,
                 "version": parsed.version,
+                "review_status": listing.review_status,
             },
         )
     )
@@ -553,6 +605,29 @@ async def update_private_listing(
     listing.manifest = parsed.manifest
     listing.requested_permissions = parsed.requested_permissions
 
+    # ADR 0142 D6: re-publicar devuelve el listing a la cola. Una versión nueva
+    # de algo ya aprobado NO hereda la aprobación de la anterior — si la
+    # heredase, el primer listing aprobado sería un pase permanente para
+    # publicar cualquier cosa después.
+    #
+    # La excepción es quedarse quieto: un listing que YA está en la cola sigue
+    # en la cola (`pending_review → pending_review` no es una arista del grafo,
+    # y tratar la corrección de un borrador como una transición sería inventar
+    # una que no existe). El autor puede corregir mientras espera.
+    if listing.review_status != ListingReviewStatus.PENDING_REVIEW.value:
+        submit_for_review(
+            session,
+            listing=listing,
+            actor=_actor(principal),
+            actor_user_id=principal.user_id,
+        )
+    await snapshot_version(
+        session,
+        listing=listing,
+        changelog=payload.changelog,
+        published_by=principal.user_id,
+    )
+
     session.add(
         MarketplaceAuditEntry(
             tenant_id=tenant_id,
@@ -565,6 +640,7 @@ async def update_private_listing(
                 "kind": parsed.kind.value,
                 "name": parsed.name,
                 "version": parsed.version,
+                "review_status": listing.review_status,
             },
         )
     )
@@ -838,6 +914,190 @@ async def admin_list_all_shares(
     stmt = apply_pagination(stmt, limit=limit, offset=offset)
     result = await session.execute(stmt)
     return [to_share_response(s) for s in result.scalars().all()]
+
+
+# ===========================================================================
+# La cola de revisión — System Admin (ADR 0142 D6, task_mkt2_09/10)
+# ===========================================================================
+async def _load_listing_for_review(session: AsyncSession, listing_id: UUID) -> MarketplaceListing:
+    """El listing por id **sin filtro de visibilidad**: es lo que se revisa.
+
+    Corre en la sesión BYPASSRLS del admin, así que ve los listings privados de
+    cualquier tenant. Es exactamente el privilegio que la revisión necesita y la
+    razón de que estas rutas estén gated a `require_system_admin`.
+    """
+    listing = (
+        await session.execute(
+            select(MarketplaceListing).where(
+                MarketplaceListing.id == listing_id,
+                MarketplaceListing.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if listing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="listing not found")
+    return listing
+
+
+@admin_router.get("/review-queue", response_model=list[MarketplaceListingResponse])
+async def admin_review_queue(
+    review_status: ListingReviewStatus | None = Query(
+        default=ListingReviewStatus.PENDING_REVIEW,
+        description=(
+            "Estado a listar. Por defecto `pending_review` (la cola de trabajo). "
+            "Pasa otro valor para auditar lo rechazado o lo ya publicado."
+        ),
+    ),
+    limit: int = limit_query(),
+    offset: int = offset_query(),
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[MarketplaceListingResponse]:
+    """La cola de revisión: todo lo que espera ojos, de todos los tenants.
+
+    Sobre la sesión BYPASSRLS porque revisar es, por definición, mirar lo de
+    otro: un listing en `pending_review` es invisible para cualquier sesión de
+    tenant que no sea la de su autor (esa es la mitad de D6 que vive en
+    `catalog_visibility_clause`).
+    """
+    stmt = select(MarketplaceListing).where(MarketplaceListing.deleted_at.is_(None))
+    if review_status is not None:
+        stmt = stmt.where(MarketplaceListing.review_status == review_status.value)
+    # Más viejo primero: una cola que se ordena por lo más reciente es una cola
+    # en la que lo de abajo no se revisa nunca.
+    stmt = stmt.order_by(MarketplaceListing.created_at, MarketplaceListing.id)
+    stmt = apply_pagination(stmt, limit=limit, offset=offset)
+    result = await session.execute(stmt)
+    return [to_listing_response(listing) for listing in result.scalars().all()]
+
+
+@admin_router.get("/listings/{listing_id}/versions", response_model=list[ListingVersionResponse])
+async def admin_listing_versions(
+    listing_id: UUID,
+    _: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> list[ListingVersionResponse]:
+    """El histórico de versiones de un listing — lo que el revisor compara.
+
+    Sin él la cola enseña el manifest de la versión candidata y nada con qué
+    contrastarlo, que es revisar a ciegas.
+    """
+    await _load_listing_for_review(session, listing_id)
+    rows = (
+        (
+            await session.execute(
+                select(MarketplaceListingVersion)
+                .where(MarketplaceListingVersion.listing_id == listing_id)
+                .order_by(
+                    MarketplaceListingVersion.created_at.desc(),
+                    MarketplaceListingVersion.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [to_version_response(row) for row in rows]
+
+
+@admin_router.post("/listings/{listing_id}/approve", response_model=MarketplaceListingResponse)
+async def admin_approve_listing(
+    listing_id: UUID,
+    payload: ListingApproveRequest,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarketplaceListingResponse:
+    """Aprueba un listing en revisión y lo mete en el catálogo."""
+    listing = await _load_listing_for_review(session, listing_id)
+    try:
+        approve_listing(
+            session,
+            listing=listing,
+            actor=_actor(principal),
+            actor_user_id=principal.user_id,
+            promote=payload.promote,
+        )
+    except ReviewTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    # El sello de la revisión viaja también a la fila de versión: quien mire el
+    # histórico dentro de un año quiere saber quién aprobó ESA versión, no solo
+    # el estado en que quedó el listing.
+    await _stamp_reviewed_version(session, listing=listing, reviewer=principal.user_id)
+    await session.flush()
+    await session.refresh(listing)
+    return to_listing_response(listing)
+
+
+@admin_router.post("/listings/{listing_id}/reject", response_model=MarketplaceListingResponse)
+async def admin_reject_listing(
+    listing_id: UUID,
+    payload: ListingRejectRequest,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarketplaceListingResponse:
+    """Rechaza con motivo escrito. Sin motivo, 422 en la frontera."""
+    listing = await _load_listing_for_review(session, listing_id)
+    try:
+        reject_listing(
+            session,
+            listing=listing,
+            actor=_actor(principal),
+            actor_user_id=principal.user_id,
+            reason=payload.reason,
+        )
+    except ReviewTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await _stamp_reviewed_version(session, listing=listing, reviewer=principal.user_id)
+    await session.flush()
+    await session.refresh(listing)
+    return to_listing_response(listing)
+
+
+@admin_router.post("/listings/{listing_id}/promote", response_model=MarketplaceListingResponse)
+async def admin_promote_listing(
+    listing_id: UUID,
+    payload: ListingPromoteRequest,
+    principal: AuthPrincipal = Depends(require_system_admin),
+    session: AsyncSession = Depends(get_admin_session),
+) -> MarketplaceListingResponse:
+    """Sube (o baja) el nivel de confianza de un listing ya publicado."""
+    listing = await _load_listing_for_review(session, listing_id)
+    try:
+        promote_listing(
+            session,
+            listing=listing,
+            actor=_actor(principal),
+            actor_user_id=principal.user_id,
+            trust_level=payload.trust_level,
+        )
+    except ReviewTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    await session.flush()
+    await session.refresh(listing)
+    return to_listing_response(listing)
+
+
+async def _stamp_reviewed_version(
+    session: AsyncSession, *, listing: MarketplaceListing, reviewer: UUID | None
+) -> None:
+    """Marca la fila de versión vigente como revisada por `reviewer`.
+
+    Silenciosa si no hay fila (un listing anterior al histórico): el veredicto
+    ya quedó en el listing y en la auditoría, y fabricar aquí una fila de
+    versión inventaría un histórico que nadie publicó.
+    """
+    row = (
+        await session.execute(
+            select(MarketplaceListingVersion).where(
+                MarketplaceListingVersion.listing_id == listing.id,
+                MarketplaceListingVersion.version == listing.version,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return
+    row.reviewed_by = reviewer
+    row.reviewed_at = listing.reviewed_at
 
 
 # ===========================================================================
@@ -1224,9 +1484,122 @@ async def check_installation_update(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"listing has an invalid version: {exc}",
         ) from exc
+
+    # ADR 0142 D7: el delta de permisos contra la versión que se propone. Es lo
+    # que el banner de la ficha pinta en claro ANTES de que nadie pulse nada —
+    # enterarse de que una actualización pide más permisos DESPUÉS de aplicarla
+    # es enterarse tarde.
+    delta_payload: dict[str, Any] | None = None
+    if assessment.target_version:
+        target = next((s for s in siblings if s.version == assessment.target_version), None)
+        if target is not None:
+            delta_payload = await _delta_against_pin(
+                session, installation=installation, target_listing=target
+            )
+
     return to_update_check_response(
-        installation=installation, name=listing.name, assessment=assessment
+        installation=installation,
+        name=listing.name,
+        assessment=assessment,
+        permission_delta=delta_payload,
     )
+
+
+async def _delta_against_pin(
+    session: AsyncSession,
+    *,
+    installation: MarketplaceInstallation,
+    target_listing: MarketplaceListing,
+) -> dict[str, Any]:
+    """El delta de permisos entre lo que se consintió y lo que pide `target_listing`.
+
+    La base de comparación es, por este orden:
+
+    1. la **fila de versión pinada** — el registro de lo que se consintió, que
+       es lo correcto porque el manifest del listing puede haberse movido;
+    2. si no hay pin (instalación anterior al histórico, o listing global sin
+       fila), los `granted_permissions` de la propia instalación.
+
+    El segundo camino es una degradación honesta y no un atajo: sin snapshot no
+    se puede saber qué pedía la versión vieja, pero sí qué se concedió — y para
+    decidir «¿esto pide algo que no concediste?» eso basta.
+    """
+    pinned = await pinned_version(session, pinned_version_id=installation.pinned_version_id)
+    baseline: Any
+    if pinned is not None:
+        baseline = list(pinned.requested_permissions or [])
+    else:
+        baseline = list(installation.granted_permissions or [])
+    return permission_diff(baseline, list(target_listing.requested_permissions or [])).as_dict()
+
+
+def _resolve_update_target(
+    *,
+    installed_version: str,
+    by_version: dict[str, MarketplaceListing],
+    payload: InstallationUpdateRequest,
+    assessment: Any,
+) -> str:
+    """La versión concreta a la que se actualiza — o el 4xx que lo explica.
+
+    Dos caminos: un `target_version` pineado por quien llama (que hay que
+    validar) o el que `select_update_target` eligió solo. Vive fuera del
+    endpoint porque juntos pasaban del límite de ramas de `ruff`, y el límite
+    tenía razón: la selección de versión y el consentimiento del delta son dos
+    decisiones distintas que se leen mejor por separado.
+    """
+    if payload.target_version is None:
+        target_version = assessment.target_version or ""
+        if target_version:
+            return target_version
+        # O ya está al día, o las únicas versiones nuevas son saltos de major
+        # a los que quien llama no se ha apuntado.
+        if assessment.outdated:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "a newer version exists but crosses a major boundary; "
+                    "set allow_major=true to opt in"
+                ),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="installation is already up to date",
+        )
+
+    target_version = payload.target_version
+    if target_version not in by_version:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no listing version {target_version!r} available for this install",
+        )
+    try:
+        newer = is_outdated(installed_version, target_version)
+    except VersioningError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    # ADR 0142 D7: el rollback usa ESTE endpoint, apuntando a una versión
+    # anterior del histórico. La guarda de «no es más nueva» sigue siendo
+    # correcta para una actualización accidental, pero sería el obstáculo
+    # equivocado para una vuelta atrás deliberada; de ahí el opt-in.
+    if not newer and not payload.allow_rollback:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"target version {target_version!r} is not newer than the "
+                f"installed version {installed_version!r}"
+                " (set allow_rollback=true to go back on purpose)"
+            ),
+        )
+    # Un pin a otro major sigue necesitando el opt-in explícito: una
+    # actualización nunca cruza una frontera de major sin él.
+    if newer and not payload.allow_major and is_major_bump(installed_version, target_version):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="target crosses a major version; set allow_major=true to opt in",
+        )
+    return target_version
 
 
 # ===========================================================================
@@ -1276,56 +1649,33 @@ async def perform_installation_update(
             detail=f"listing has an invalid version: {exc}",
         ) from exc
 
-    # Resolve the concrete target: a pinned version (validated for
-    # newer-ness + compatibility) or the auto-selected highest eligible one.
-    if payload.target_version is not None:
-        target_version = payload.target_version
-        if target_version not in by_version:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"no listing version {target_version!r} available for this install",
-            )
-        try:
-            newer = is_outdated(installation.version, target_version)
-        except VersioningError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
-            ) from exc
-        if not newer:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"target version {target_version!r} is not newer than the "
-                    f"installed version {installation.version!r}"
-                ),
-            )
-        # A major-version pin still needs the explicit opt-in — an update
-        # never crosses a major boundary without it (semver compatibility).
-        if not payload.allow_major and is_major_bump(installation.version, target_version):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="target crosses a major version; set allow_major=true to opt in",
-            )
-    else:
-        target_version = assessment.target_version or ""
-        if not target_version:
-            # Either already up to date, or the only newer versions are major
-            # bumps the caller did not opt into.
-            if assessment.outdated:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "a newer version exists but crosses a major boundary; "
-                        "set allow_major=true to opt in"
-                    ),
-                )
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="installation is already up to date",
-            )
-
+    target_version = _resolve_update_target(
+        installed_version=installation.version,
+        by_version=by_version,
+        payload=payload,
+        assessment=assessment,
+    )
     target_listing = by_version[target_version]
     from_version = installation.version
+
+    # ADR 0142 D7 — el re-consentimiento del DELTA, antes de tocar nada. La
+    # decisión vive en `marketplace/update_consent.py`, no aquí: este router ya
+    # pasa de 1.700 líneas y el propio plan lo prohíbe expresamente.
+    delta_payload = await _delta_against_pin(
+        session, installation=installation, target_listing=target_listing
+    )
+    apply_update_consent(
+        session,
+        installation=installation,
+        target_listing=target_listing,
+        delta_payload=delta_payload,
+        decisions=dict(payload.consent or {}),
+        tenant_id=tenant_id,
+        actor=_actor(principal),
+        from_version=from_version,
+        to_version=target_version,
+    )
+
     try:
         await orchestrator.update(
             session=session,
@@ -1343,11 +1693,50 @@ async def perform_installation_update(
             detail=f"update blocked by install gate: {exc}",
         ) from exc
 
+    # ---------------------------------------------------------------------
+    # Re-pinar + refrescar los despliegues
+    # ---------------------------------------------------------------------
+    target_row = await ensure_listing_version(
+        session, listing=target_listing, version=target_version
+    )
+    if target_row is not None:
+        installation.pinned_version_id = target_row.id
+    new_schema = target_row.config_schema if target_row is not None else None
+    if new_schema is None:
+        raw = (target_listing.manifest or {}).get("config_schema")
+        new_schema = dict(raw) if isinstance(raw, dict) else None
+
+    report = await refresh_installation_deployments(
+        session,
+        installation_id=installation.id,
+        new_version=target_version,
+        new_schema=new_schema,
+    )
+    session.add(
+        MarketplaceAuditEntry(
+            tenant_id=tenant_id,
+            actor=_actor(principal),
+            action=MarketplaceAuditAction.REFRESH.value,
+            listing_id=target_listing.id,
+            installation_id=installation.id,
+            detail={
+                "event": "deployments_refreshed",
+                "from_version": from_version,
+                "to_version": target_version,
+                "rollback": not is_outdated(from_version, target_version),
+                **report.as_dict(),
+            },
+        )
+    )
+    await session.flush()
+
     await session.refresh(installation)
     return InstallationUpdateResponse(
         installation=to_installation_response(installation),
         from_version=from_version,
         to_version=target_version,
+        deployments=report.as_dict(),
+        permission_delta=delta_payload,
     )
 
 

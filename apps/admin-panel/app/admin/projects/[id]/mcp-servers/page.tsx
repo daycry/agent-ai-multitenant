@@ -27,6 +27,7 @@ import { Plug, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
+import { AvailableCapabilitiesSection } from "@/components/marketplace/available-capabilities-section";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -223,6 +224,11 @@ export default function ProjectMcpServersPage() {
       {!projectQuery.isLoading && !projectQuery.isError ? (
         <McpToolRolePolicySection projectId={projectId} />
       ) : null}
+
+      {/* ADR 0142 (D4): activar aquí lo que el tenant ya tiene instalado. Es la
+          MISMA entidad que escribe la ficha de la instalación, así que las dos
+          vías no pueden enseñar estados distintos. */}
+      <AvailableCapabilitiesSection projectId={projectId} kinds={["mcp_server"]} />
 
       {editing ? (
         <McpServerDialog

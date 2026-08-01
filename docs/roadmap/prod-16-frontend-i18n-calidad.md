@@ -204,7 +204,10 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       notifications, docs, assistant, tools, memories…) en lotes, vaciar la
       allowlist de `check-i18n.mjs` y hacer barrido final: con el toggle en
       EN no debe quedar ninguna cadena de UI en castellano (y viceversa).
-  - ⏳ **Pendiente (2026-08-01):** `node scripts/check-i18n.mjs --strict` sigue saliendo 1, pero el contador bajó: de **77 ternarios en 18 ficheros a 44 en 11**, y de **136 atributos en 73 ficheros a 127 en 68**. Ninguno de los módulos grandes que enumera esta tarea (marketplace, guardrails, knowledge-bases, llm-providers, model-prices, ollama, notifications, docs, assistant, tools, memories) está migrado todavía.
+  - ⏳ **Pendiente (2026-08-01):** `node scripts/check-i18n.mjs --strict` sigue saliendo 1, pero el contador bajó otra vez: de **44 ternarios en 11 ficheros a 34 en 8**, y de **127 atributos en 68 ficheros a 115 en 62**. Migrados **al completo** dos de los módulos que enumera esta tarea: `llm-providers` (namespace `llmProviders`, con la tabla, el diálogo de alta/edición y el Device Flow de Copilot) y `model-prices` (namespace `modelPrices`, con la tabla, los filtros y los tres diálogos), más el módulo `agents` entero (catálogo, hub, sección de tools y el buscador de skills). Tests en `app/admin/llm-providers/i18n.test.tsx`, `app/admin/agents/i18n.test.tsx` y `app/admin/model-prices/i18n.test.tsx`: cada uno rinde su pantalla en los DOS idiomas y afirma que en EN no queda castellano por debajo.
+    **Un cambio de comportamiento, deliberado y con test**: `promptIn` (tarjeta del catálogo de agentes) pasó de un ternario a `pickLang`, que cae al otro idioma cuando el pedido viene **vacío**, no sólo cuando falta. Un agente con `system_prompts.en: ""` pintaba una tarjeta sin prompt teniéndolo en castellano.
+    Siguen sin migrar: marketplace, guardrails, knowledge-bases, ollama, notifications, docs, assistant, tools, memories.
+    **Por qué knowledge-bases no entró aunque el guard sólo le marque 3 atributos**: esos 3 son la punta de ~2100 líneas de castellano cableado repartidas en 5 ficheros. Traducir sólo los atributos deja la pantalla mitad en inglés y mitad en castellano, que es exactamente el fallo que este plan cierra (mismo razonamiento que ya obligó a parar en `settings/`).
 - **Tiempo**: 3 días · **Complejidad**: l · **Depende de**: `task_prod16_03`
 - **Tests automáticos**:
   ```yaml
@@ -240,11 +243,23 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 
 #### `task_prod16_06` — Partir `model-prices/page.tsx` (1311 líneas)
 
-- [ ] **Título**: Trocear `app/admin/model-prices/page.tsx` en secciones
+- [x] **Título**: Trocear `app/admin/model-prices/page.tsx` en secciones
       colocadas (tabla, diálogos de edición, sync, filtros) siguiendo el
       patrón existente de `app/admin/agents/[id]/*-section.tsx`. Objetivo:
       `page.tsx` < 400 líneas, ninguna sección > 500.
-  - ⏳ **Pendiente (2026-07-31):** partida a medias por el tramo de modularización #9 (`679b4237`, 2026-07-10), no por prod-16 — `page.tsx` bajó a 512 líneas (el objetivo es < 400) y `model-price-dialogs.tsx` tiene 686 (el objetivo es ≤ 500); además el test que exige es Playwright.
+  - ✅ **Cerrada (2026-08-01)**: los dos objetivos numéricos, cumplidos.
+    `page.tsx` **514 → 253** y la sección mayor **686 → 289**. El módulo pasó de
+    3 ficheros a 7: `price-filters.tsx` (162), `price-table.tsx` (202),
+    `sync-diff-dialog.tsx` (289), `price-form-dialog.tsx` (264),
+    `price-history-dialog.tsx` (197) y `model-price-types.ts` (173).
+    El tramo #9 (`679b4237`) había sacado los tres diálogos del monolito pero
+    los dejó juntos en un solo fichero de 686 líneas: mover el bulto no es
+    partir, y por eso la casilla seguía abierta con razón.
+    **El troceo fue mecánico y con red**: `page.test.tsx` (5 tests de
+    caracterización de la tabla, el histórico, el gate >10% del sync y el
+    formulario) estaba verde antes de mover una línea y siguió verde después,
+    sin tocar ni una aserción. El test que el plan pedía es Playwright y no se
+    puede ejecutar sin stack; esta es la verificación que sí se pudo correr.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_05`
 - **Tests automáticos**:
   ```yaml
@@ -276,6 +291,20 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       agents/[id] (813) y notifications (810). Añadir a `check-i18n.mjs` (o
       script hermano `check-component-size.mjs`) un guard que falle si algún
       `page.tsx` supera 800 líneas, para que la deuda no vuelva a crecer.
+  - ⏳ **Pendiente (2026-08-01, segunda pasada):** de las ocho que quedaban por
+    encima de 800 caen **dos más**, las dos partidas de verdad y con test:
+    · **llm-providers 996 → 89**, en `providers-table.tsx` (361),
+    `provider-form-dialog.tsx` (333), `copilot-device-flow-dialog.tsx` (210) y
+    `llm-provider-types.ts` (97).
+    · **agents/[id] 824 → 312**, en `agent-edit-dialog.tsx` (266),
+    `agent-fork-dialog.tsx` (152), `agent-delete-dialog.tsx` (105) y
+    `agent-detail-types.ts` (87).
+    Las dos se migraron al diccionario en el mismo movimiento, así que sus tests
+    (`i18n.test.tsx` de cada módulo) verifican a la vez la traducción y que
+    ninguna pieza se quedó sin montar tras el corte — un diálogo que deje de
+    abrirse salta ahí y no en producción.
+    Quedan **seis** por encima de 800: sso/saml 943, projects/[id]/chat 926,
+    sso 915, teams/[team_id] 914, cortex/mind 914 y notifications 831.
   - ⏳ **Pendiente (2026-08-01):** el guard **ya existe**:
     `scripts/check-component-size.mjs` + `npm run check:size`, con 11 tests en
     `scripts/check-component-size.test.ts` (mismo trinquete que `check-i18n`:
