@@ -180,24 +180,29 @@ estaban **rechazadas** por un ADR posterior.
 > que documentó las trampas de aquel despliegue). Si añades un paso de test a CI,
 > **añádelo también aquí**.
 
-Cifras verificadas el **2026-07-30**:
+Cifras verificadas el **2026-08-01**:
 
 ```bash
 # Los 6 pasos de pytest que corre CI, en el mismo orden
-.venv/Scripts/python.exe -m pytest tests/unit/ -q          # 3130
+.venv/Scripts/python.exe -m pytest tests/unit/ -q          # 3200
 .venv/Scripts/python.exe -m pytest tests/security/ -q      # 73
-.venv/Scripts/python.exe -m pytest tests/docs/ -q          # 261
-.venv/Scripts/python.exe -m pytest packages/shared-llm/tests -q   # 115 (+1 skip sin claude_agent_sdk)
-cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m pytest tests/ -q   # 472
+.venv/Scripts/python.exe -m pytest tests/docs/ -q          # 264
+.venv/Scripts/python.exe -m pytest packages/shared-llm/tests -q   # 191 (+1 skip sin claude_agent_sdk)
+cd docker/agent-runtimes/agent-runtime && ../../../.venv/Scripts/python.exe -m pytest tests/ -q   # 495
 # El browser-runtime NO se instala en el venv: necesita el PYTHONPATH que le pone CI,
 # o muere en la recolección con `ModuleNotFoundError: No module named 'browser_runtime'`
 PYTHONPATH=docker/agent-runtimes/browser-runtime \
   .venv/Scripts/python.exe -m pytest docker/agent-runtimes/browser-runtime/tests -q   # 19
 
 # Y lo que no es pytest
-.venv/Scripts/python.exe -m mypy apps/ packages/           # 588 ficheros, limpio
-cd apps/admin-panel && npx vitest run                      # 653 en 83 ficheros
+.venv/Scripts/python.exe -m mypy apps/ packages/           # 623 ficheros, limpio
+cd apps/admin-panel && npx vitest run                      # 808 en 98 ficheros
+cd apps/admin-panel && npx tsc --noEmit && node scripts/check-i18n.mjs
 ```
+
+> Los tres primeros pasos juntos (`tests/unit/ tests/security/ tests/docs/`) son
+> **4273 tests en ~4 min**; correrlos en un solo `pytest` es lo más barato que
+> hay y es lo que conviene hacer antes de cada commit.
 
 > **Usa el intérprete del venv, no `python` a secas.** Los paquetes de
 > `packages/` están en editable sólo en `.venv/`; con el Python global la suite
@@ -210,6 +215,15 @@ cd apps/admin-panel && npx vitest run                      # 653 en 83 ficheros
 >
 > Integración: necesita el Postgres de compose arriba; se corre por bloques
 > (`python -m pytest tests/integration/test_X.py -q -p no:randomly`).
+>
+> **Y ahí es donde se esconden los rojos.** Son **517 ficheros** que CI no corre
+> y nadie corre enteros, así que un test rezagado sobrevive commits. El
+> 2026-08-01 aparecieron **nueve** afirmando el contrato viejo del login SSO
+> (`200 + JSON` en vez del `303 + Set-Cookie` del ADR 0133): el commit que cambió
+> el contrato actualizó el fichero que tenía delante y dejó los otros tres.
+> Cuando cambies lo que devuelve una ruta, **busca por la ruta, no por el
+> fichero** — `grep -rln "auth/sso/oidc/callback" tests/` — y corre ese lote.
+> Detalle: [gotchas/cambio-de-contrato-deja-tests-rezagados.md](docs/03-guides/gotchas/cambio-de-contrato-deja-tests-rezagados.md).
 >
 > **Y un solo pytest de integración a la vez.** El conftest crea su BD con
 > `DROP DATABASE` + `CREATE DATABASE` sobre un nombre único para todo el repo, y

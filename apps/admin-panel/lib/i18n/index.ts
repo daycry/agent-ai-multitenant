@@ -10,7 +10,7 @@
 
 export { dictionary } from "./dictionary";
 export type { DictionaryShape, MessageKey, NamespaceName } from "./dictionary";
-export { interpolate, translate } from "./translate";
+export { interpolate, pickLang, translate } from "./translate";
 export type { Translator } from "./translate";
 export { LANGS } from "./types";
 export type { Dictionary, Lang, Namespace, Translation, TranslationVars } from "./types";

@@ -25,19 +25,21 @@ los reflejan.
 
 ## Subsistemas
 
-| Documento                                      | Cubre                                                                                                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [guardrails.md](./guardrails.md)               | Motor de guardrails declarativos por capas, tipos de acción, eventos y observabilidad.                                                                                    |
-| [pricing.md](./pricing.md)                     | Catálogo de precios de modelos, sincronización LiteLLM (limitada a proveedores activos), snapshot por llamada, FX y RBAC.                                                 |
-| [llm-providers.md](./llm-providers.md)         | Capa `shared-llm`: política de reintentos, contrato de streaming, capacidades y credenciales por kind, `vault_unavailable` y el estado real de la contabilidad de costes. |
-| [marketplace.md](./marketplace.md)             | Listings (skill/tool/mcp_server), niveles de confianza, instalación, publicación oficial vs privada.                                                                      |
-| [mcp-servers.md](./mcp-servers.md)             | Catálogo de MCP servers verificados.                                                                                                                                      |
-| [auth-sso.md](./auth-sso.md)                   | SSO empresarial (OIDC/SAML), MFA (TOTP + WebAuthn) y endpoints de autenticación.                                                                                          |
-| [public-api.md](./public-api.md)               | API pública v1, tokens por scope y webhooks entrantes/salientes.                                                                                                          |
-| [notifications.md](./notifications.md)         | Notificaciones multicanal y asistente personal.                                                                                                                           |
-| [evals-stats.md](./evals-stats.md)             | Evals de calidad y dashboard de estadísticas por tenant / cross-tenant.                                                                                                   |
-| [backup-restore.md](./backup-restore.md)       | Bundle de backup, destinos, modos de restore, monitorización y knobs.                                                                                                     |
-| [cadena-suministro.md](./cadena-suministro.md) | Qué se escanea (pip-audit / npm audit / Trivy), dónde y con qué umbral; lockfile y `constraints.txt`; digests y SHAs; política de excepciones.                            |
+| Documento                                      | Cubre                                                                                                                                                                       |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [guardrails.md](./guardrails.md)               | Motor de guardrails declarativos por capas, tipos de acción, eventos y observabilidad.                                                                                      |
+| [pricing.md](./pricing.md)                     | Catálogo de precios de modelos, sincronización LiteLLM (limitada a proveedores activos), snapshot por llamada, FX y RBAC.                                                   |
+| [llm-providers.md](./llm-providers.md)         | Capa `shared-llm`: política de reintentos, contrato de streaming, capacidades y credenciales por kind, `vault_unavailable` y el estado real de la contabilidad de costes.   |
+| [marketplace.md](./marketplace.md)             | Listings (skill/tool/mcp_server), niveles de confianza, instalación, publicación oficial vs privada.                                                                        |
+| [mcp-servers.md](./mcp-servers.md)             | Catálogo de MCP servers verificados.                                                                                                                                        |
+| [auth-sso.md](./auth-sso.md)                   | SSO empresarial (OIDC/SAML), MFA (TOTP + WebAuthn) y endpoints de autenticación.                                                                                            |
+| [sesiones.md](./sesiones.md)                   | Ciclo de vida de la sesión: cookie httpOnly + doble-submit CSRF (ADR 0133), handoff SSO, gate de `Origin` en WS, superficie `/admin/*` endurecida y separación de secretos. |
+| [public-api.md](./public-api.md)               | API pública v1, tokens por scope y webhooks entrantes/salientes.                                                                                                            |
+| [notifications.md](./notifications.md)         | Notificaciones multicanal y asistente personal.                                                                                                                             |
+| [evals-stats.md](./evals-stats.md)             | Evals de calidad y dashboard de estadísticas por tenant / cross-tenant.                                                                                                     |
+| [backup-restore.md](./backup-restore.md)       | Bundle de backup, destinos, modos de restore, monitorización y knobs.                                                                                                       |
+| [metricas.md](./metricas.md)                   | Métricas expuestas a Prometheus, sus labels y el catálogo cerrado de cardinalidad; los dos caminos de salida (HTTP vs textfile-collector).                                  |
+| [cadena-suministro.md](./cadena-suministro.md) | Qué se escanea (pip-audit / npm audit / Trivy), dónde y con qué umbral; lockfile y `constraints.txt`; digests y SHAs; política de excepciones.                              |
 
 ## Instalación y portal
 

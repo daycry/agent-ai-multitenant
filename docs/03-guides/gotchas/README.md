@@ -50,6 +50,10 @@ el problema ya esté documentado.
 - [minio-dev-volume-xl-meta-version.md](./minio-dev-volume-xl-meta-version.md)
   — `decodeXLHeaders: Unknown xl meta version N`: el volumen dev lo
   escribió una build más nueva; recrear el volumen o subir el pin.
+- [minio-delete-service-account-no-es-idempotente.md](./minio-delete-service-account-no-es-idempotente.md)
+  — `404 XMinioInvalidIAMCredentials`: borrar dos veces una service account
+  revienta, así que el paso 4 de la rotación no se podía reintentar. Ningún
+  doble lo reproducía.
 
 - [image-build-recipes-that-bite.md](./image-build-recipes-that-bite.md)
   — las seis recetas que muerden en un sitio: **tres** imágenes cuelgan de

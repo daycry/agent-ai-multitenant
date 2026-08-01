@@ -94,6 +94,7 @@ from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.plan_preflight import run_plan_preflight
 from api_server.plan_progress import TaskSnapshot, compute_plan_progress
 from api_server.preview_launch import build_preview_request
+from api_server.routers._guards import verify_project_visible
 from api_server.routers._helpers import (
     get_writable_or_404,
     move_plan,
@@ -137,14 +138,6 @@ plans_router = APIRouter(prefix="/plans", tags=["plans"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Project:
-    result = await session.execute(
-        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-    return project
 
 
 # PROY2-02: estados de tarea NO terminales — un plan con alguno de estos no
@@ -335,7 +328,7 @@ async def create_plan(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     tenant_id = require_tenant_id(principal)
-    project = await _verify_project_visible(session, project_id)
+    project = await verify_project_visible(session, project_id)
     # P1-01: un proyecto pausado/archivado no acepta planes nuevos.
     require_project_active(project)
 
@@ -414,7 +407,7 @@ async def list_plans(
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[PlanResponse]:
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     stmt = select(Plan).where(Plan.project_id == project_id, Plan.deleted_at.is_(None))
     if status_ is not None:
         stmt = stmt.where(Plan.status == status_)
@@ -448,7 +441,7 @@ async def get_plan_code_diff(
     # FileNotFoundError NO capturado → 500 SIEMPRE. El worker posee el data_root
     # real + corre como owner de los bares; la api-server delega y relaya.
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     plan = await _load_plan(session, plan_id)
     if plan.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="plan not found")
@@ -1584,7 +1577,7 @@ async def start_plan_execution(
         session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
     # P1-01: un proyecto pausado/archivado no arranca ejecuciones.
-    require_project_active(await _verify_project_visible(session, plan.project_id))
+    require_project_active(await verify_project_visible(session, plan.project_id))
     await _start_approved_plan(session, redis, plan, principal)
     return to_plan_response(plan)
 
@@ -1678,7 +1671,7 @@ async def approve_and_start_plan(
         )
 
     # Precondiciones del ARRANQUE, antes de firmar (ver el docstring).
-    require_project_active(await _verify_project_visible(session, plan.project_id))
+    require_project_active(await verify_project_visible(session, plan.project_id))
     if not await _plan_has_any_tasks(session, plan):
         raise _plan_has_no_tasks_error()
 
@@ -1761,7 +1754,7 @@ async def generate_plan_corrections(
             already_generated=True,
         )
 
-    project = await _verify_project_visible(session, plan.project_id)
+    project = await verify_project_visible(session, plan.project_id)
     effective = await resolve_chat_model_config(session, project)
     provider, _kind, api_model = await _resolve_chat_provider(session, effective, vault)
     if provider is None:

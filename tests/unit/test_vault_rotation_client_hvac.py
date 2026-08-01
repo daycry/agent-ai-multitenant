@@ -424,3 +424,74 @@ def test_a_configured_db_role_round_trips_through_the_adapter() -> None:
     read_back = client.read_db_role("platform-app", mount="database")
 
     assert read_back == role
+
+
+# ---------------------------------------------------------------------------
+# 8. `revoke()` es idempotente — descubierto contra MinIO REAL
+# ---------------------------------------------------------------------------
+# El Protocol `MinioCredentialRotator.revoke` promete idempotencia y
+# `MinioServiceAccountRotator` no la cumplía: MinIO responde
+# `404 XMinioInvalidIAMCredentials` al borrar una service account que ya no
+# existe, y eso salía como `CredentialRotationError`. Ningún doble lo reprodujo
+# —todos aceptaban el segundo borrado— así que la trampa solo apareció al correr
+# `tests/integration/test_minio_rotation_applies_to_service.py` contra el MinIO
+# del compose. Estos tests la fijan SIN necesitar MinIO, para que la guarda viva
+# también en CI.
+_MINIO_404_BODY = (
+    "admin request failed; Status: 404, "
+    '{"Code":"XMinioInvalidIAMCredentials",'
+    '"Message":"The specified service account is not found"}'
+)
+
+
+class _AdminDouble:
+    """Sustituye a `MinioAdmin`: el seam es `MinioServiceAccountRotator._admin`."""
+
+    def __init__(self, error: Exception | None) -> None:
+        self.error = error
+        self.deleted: list[str] = []
+
+    def delete_service_account(self, access_key: str) -> None:
+        self.deleted.append(access_key)
+        if self.error is not None:
+            raise self.error
+
+
+def _rotator_with(error: Exception | None) -> tuple[Any, _AdminDouble]:
+    from workers.credential_rotation_hvac import MinioServiceAccountRotator
+
+    rotator = MinioServiceAccountRotator(
+        endpoint="http://minio:9000", root_user="root", root_password="pw"
+    )
+    admin = _AdminDouble(error)
+    rotator._admin = lambda: admin  # type: ignore[method-assign]
+    return rotator, admin
+
+
+def test_revoking_an_already_revoked_credential_is_a_no_op() -> None:
+    """El paso 4 se reintenta a mano tras una propagación a medias. Si el
+    reintento explota, `pending_apply` se queda en `true` para siempre sobre una
+    credencial que YA no existe."""
+    rotator, admin = _rotator_with(RuntimeError(_MINIO_404_BODY))
+
+    rotator.revoke("GONEACCESSKEY0000001")  # no debe lanzar
+
+    assert admin.deleted == ["GONEACCESSKEY0000001"]
+
+
+def test_a_permission_error_on_revoke_still_fails_loudly() -> None:
+    """La tolerancia es SOLO al 404. Un 403 (root equivocado) o un fallo de red
+    tienen que seguir siendo ruidosos: tragárselos convierte «no pude hablar con
+    MinIO» en «ya estaba revocada», que es como una credencial sobrevive a su
+    propia rotación."""
+    rotator, _ = _rotator_with(RuntimeError("admin request failed; Status: 403, access denied"))
+
+    with pytest.raises(CredentialRotationError):
+        rotator.revoke("LIVEACCESSKEY0000001")
+
+
+def test_a_transport_failure_on_revoke_still_fails_loudly() -> None:
+    rotator, _ = _rotator_with(OSError("connection refused"))
+
+    with pytest.raises(CredentialRotationError):
+        rotator.revoke("LIVEACCESSKEY0000002")

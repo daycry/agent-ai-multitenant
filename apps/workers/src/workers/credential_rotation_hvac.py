@@ -184,9 +184,29 @@ class MinioServiceAccountRotator:
         return access_key, secret_key
 
     def revoke(self, access_key: str) -> None:
+        """Delete the service account. **Idempotent**, as the Protocol promises.
+
+        MinIO does NOT treat deleting an absent service account as a no-op: it
+        answers ``404 XMinioInvalidIAMCredentials``. Letting that surface would
+        break the one caller that matters — ``revoke_previous_minio_credential``
+        is step 4 of add-then-remove, retried by hand after a propagation that
+        failed halfway, and a retry that raises leaves ``pending_apply`` stuck at
+        ``true`` forever while the credential it names is already gone. "Already
+        revoked" IS the desired post-state.
+
+        Discovered by running this against a real MinIO
+        (``tests/integration/test_minio_rotation_applies_to_service.py``): every
+        double we had answered the second delete happily.
+        """
         try:
             self._admin().delete_service_account(access_key)
         except Exception as exc:
+            if _is_minio_not_found(exc):
+                _log.info(
+                    "credential_rotation.minio.service_account_already_revoked",
+                    access_key=access_key,
+                )
+                return
             raise CredentialRotationError(
                 f"MinIO admin API refused to delete service account "
                 f"{access_key!r}: {type(exc).__name__}"
@@ -400,6 +420,26 @@ def revoke_previous_minio_credential(
     cleaned[KV_FIELD_PENDING_APPLY] = "false"
     client._write_kv(path=path, mount=mount, secret=cleaned)
     return previous
+
+
+#: MinIO's error code for "that service account does not exist". Matched as a
+#: STRING because `minio.MinioAdminException` carries no typed code — it stringifies
+#: the raw admin-API body — and because importing the client here would undo the
+#: lazy import that keeps a non-rotating worker free of the dependency.
+_MINIO_MISSING_CREDENTIAL_CODE = "XMinioInvalidIAMCredentials"
+
+
+def _is_minio_not_found(exc: Exception) -> bool:
+    """True when MinIO said "no such service account" (a 404), not something else.
+
+    Deliberately narrow: a 403 (wrong root credential) or a connection error must
+    still be a loud failure. Swallowing those would turn "I could not reach MinIO"
+    into "already revoked", which is how a credential outlives its rotation.
+    """
+    text = str(exc)
+    if _MINIO_MISSING_CREDENTIAL_CODE in text:
+        return True
+    return "404" in text and "not found" in text.lower()
 
 
 def _is_invalid_path(exc: Exception) -> bool:

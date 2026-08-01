@@ -200,7 +200,19 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
       (o equivalente documentado en runbook) idempotente para BD existentes.
       Password vía env `SERVICE_USER_PASSWORD` con placeholder solo-dev
       (la eliminación de defaults conocidos es de **prod-10**).
-  - ⏳ **Pendiente (2026-07-31):** el rol, sus grants y el script de upgrade están entregados y verdes (`docker/postgres/init/04-service-role.sql` + `docker/postgres/upgrade/20260730-service-user.sh`, 13/13 en `test_db_roles_service_user.py`), pero la contraseña es un literal DENTRO del `.sql`: un arranque limpio no honra `SERVICE_USER_PASSWORD`, y ni el compose ni `docker/.env.example` la declaran.
+  - ⏳ **Pendiente (2026-08-01) — arranque limpio arreglado; falta declararla en
+    el compose:** el arranque limpio ya honra `SERVICE_USER_PASSWORD` vía
+    `docker/postgres/init/05-service-role-password.sh` (14/14 en
+    `test_db_roles_service_user.py`). Va en un `.sh` APARTE y no dentro del
+    `04-service-role.sql` porque ese fichero tiene que seguir siendo SQL plano:
+    es el mismo artefacto que aplica el script de upgrade a una BD viva y el que
+    LEE el test, y el SQL plano no puede leer variables de entorno. El test fija
+    además el orden alfabético (`05-` después de `04-`), que es el contrato del
+    entrypoint de la imagen de PostgreSQL. Por qué importa: el literal de dev
+    está en el repositorio, y es la contraseña de un rol **BYPASSRLS** — la llave
+    que se salta la RLS de todos los tenants. **Falta**, fuera de este carril,
+    declarar `SERVICE_USER_PASSWORD` en `docker/.env.example` y pasarla al
+    servicio `postgres` del compose.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -277,7 +289,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
 
 #### `task_prod14_08` — Auditoría dirigida + test de no-fuga del directorio
 
-- [ ] **Título**: Inventariar todos los `select(User...)` del api-server y
+- [x] **Título**: Inventariar todos los `select(User...)` del api-server y
       clasificarlos: anclados por membership (patrón correcto de
       `assistant/tools.py:225`), gated por `require_system_admin`
       (`routers/admin.py:248`) o flujos pre-tenant (auth/scim/sso). Corregir
@@ -286,7 +298,18 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       contexto tenant devuelve usuarios sin membership activa en el tenant del
       caller (mínimo: lookups del asistente, `human_agents`, listados de
       miembros).
-  - ⏳ **Pendiente (2026-07-31):** el inventario de los `select(User…)` sí está hecho y clasificado (tabla del ADR 0137), pero `tests/integration/test_users_directory_isolation.py` NO existe: no hay ninguna guarda `@cross_tenant` que impida la fuga del directorio.
+  - ✅ **Cerrada (2026-08-01):** `tests/integration/test_users_directory_isolation.py`
+    existe y pasa 3/3 marcado `@cross_tenant`. Cubre las dos superficies de
+    contexto-tenant que devuelven personas —`GET /human-agents/assignable-users`
+    y la resolución de usuario del asistente (`_resolve_tenant_user`)— y cada una
+    desde dos ángulos, porque uno solo no basta: (a) el listado de A no contiene
+    a nadie de B, y (b) **la búsqueda por el email EXACTO de alguien de B no lo
+    encuentra**. Lo segundo es lo que de verdad importa: un listado puede estar
+    bien filtrado y aun así el lookup dirigido delatar que una cuenta existe, que
+    es enumeración del directorio de la organización. Se afirma sobre el EMAIL en
+    el cuerpo, no solo sobre el id — un id filtrado es feo, un correo filtrado es
+    un incidente de protección de datos. Los dos tests llevan su control de
+    no-pasar-en-vacío (el propio miembro del tenant SÍ aparece / SÍ resuelve).
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -323,7 +346,21 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       `domain.py:855`). Los endpoints de creación/edición deben mapear la
       violación de unicidad a 409 con mensaje claro (la resolución por nombre en
       la UI de asignación es prioridad declarada del operador).
-  - ⏳ **Pendiente (2026-07-31):** los índices únicos parciales, `Document.source_size_bytes → BIGINT` y `Plan.created_by: UUID | None` están (migración 0126, verde en `test_perf_indexes_and_uniqueness.py`), pero el dedup **soft-borra** los perdedores en vez de renombrarlos `-dup-{n}` —lo contrario de la decisión clave nº 4, que reservaba esa alternativa a una decisión humana— y ni `agents.py`, ni `teams.py`, ni `skills.py` llaman a `integrity_conflict`, así que un nombre duplicado sale como 500 y no como 409.
+  - ⏳ **Pendiente (2026-08-01) — el 409 ya está; el dedup sigue desviado:** los
+    tres routers usan `flush_or_conflict` (`routers/_integrity.py`) en creación
+    Y edición, así que un nombre duplicado devuelve **409 con código de dominio**
+    (`duplicate_team_name` / `duplicate_skill_name` / `duplicate_agent_name`) en
+    vez del 500 que salía. Verificado 9/9 en el fichero que este bloque cita,
+    `tests/integration/test_tenant_name_uniqueness.py`, escrito para esto: RED
+    con 3 fallos (los tres 500), GREEN tras el cambio. Cubre además los dos
+    contornos que un test ingenuo se dejaría: el mismo nombre en OTRO tenant se
+    acepta, y el nombre de una fila soft-borrada se puede reutilizar (el índice
+    es parcial sobre `deleted_at IS NULL`) — un 409 de más ahí sería una
+    regresión funcional silenciosa. **Sigue abierto** el dedup: la 0126 ya
+    soft-borró a los perdedores en vez de renombrarlos `-dup-{n}`, contra la
+    decisión clave nº 4. No se puede "arreglar" con una migración nueva sin
+    inventarse qué filas fueron víctimas de aquélla: es una decisión del
+    operador (aceptar la desviación o restaurar a mano en los entornos vivos).
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -334,7 +371,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
 
 #### `task_prod14_11` — Extraer \_verify_project_visible a módulo común
 
-- [ ] **Título**: Crear `apps/api-server/src/api_server/routers/_guards.py` con
+- [x] **Título**: Crear `apps/api-server/src/api_server/routers/_guards.py` con
       `verify_project_visible(session, project_id) -> Project` (docstring del
       original de `tasks.py:57`: "convierte 0 filas bajo RLS en 404 explícito",
       filtro `deleted_at IS NULL` incluido) y sustituir las 4 copias en
@@ -343,7 +380,16 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       (`"project not found"`). Si **prod-06/prod-13** añaden el filtro
       `deleted_at` al dispatch del orchestrator, este helper es la referencia
       canónica del predicado.
-  - ⏳ **Pendiente (2026-07-31):** `routers/_guards.py` existe con `verify_project_visible` y su variante `_id`, pero las CUATRO copias siguen intactas en `tasks.py:76`, `plans.py:140`, `conversations.py:95` e `incoming_webhook_configs.py:88`: el módulo tiene cero llamantes de producción (solo lo importa `tests/unit/test_project_visibility_guard.py`).
+  - ✅ **Cerrada (2026-08-01):** las cuatro copias retiradas y sus **17 llamadas**
+    apuntando ya al módulo canónico (`tasks.py` 6, `plans.py` 6,
+    `conversations.py` 3, `incoming_webhook_configs.py` 2 — esta última a la
+    variante `_id`). Lo que faltaba de verdad no era el módulo, era que alguien
+    lo llamara: el patrón «mecanismo entregado, cero llamantes» del apartado 5 de
+    `verificar-antes-de-implementar.md`. Para que no vuelva, la guarda estática
+    de `tests/unit/test_project_visibility_guard.py` recorre los 69 routers con
+    AST y suspende si CUALQUIERA redefine `*verify_project_visible` — y lleva
+    `assert len(sources) >= 20` para no pasar en vacío el día que el
+    descubrimiento deje de encontrar ficheros.
 - **Tiempo**: 2 h · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml

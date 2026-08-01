@@ -33,7 +33,13 @@ from alembic import command
 pytestmark = [pytest.mark.integration, pytest.mark.cross_tenant]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-SERVICE_ROLE_SQL = _REPO_ROOT / "docker" / "postgres" / "init" / "04-service-role.sql"
+_PG_INIT_DIR = _REPO_ROOT / "docker" / "postgres" / "init"
+SERVICE_ROLE_SQL = _PG_INIT_DIR / "04-service-role.sql"
+#: El script que fija la contraseña del rol desde el entorno en un arranque
+#: LIMPIO. Va separado del `.sql` a propósito: ese fichero tiene que seguir
+#: siendo SQL plano para poder ejecutarse también sobre una BD viva y desde este
+#: test, y el SQL plano no puede leer variables de entorno.
+SERVICE_ROLE_PASSWORD_SH = _PG_INIT_DIR / "05-service-role-password.sh"
 
 SERVICE_USER = "service_user"
 SERVICE_PASSWORD = "changeme-service-dev-only"
@@ -122,6 +128,47 @@ def test_service_role_sql_declares_the_intended_posture() -> None:
     assert "nosuperuser" in statements and statements.count("superuser") == statements.count(
         "nosuperuser"
     ), "04-service-role.sql menciona SUPERUSER sin negarlo"
+
+
+# ===========================================================================
+# 1 bis. Un arranque LIMPIO honra `SERVICE_USER_PASSWORD`.
+#
+# Sin esto, `04-service-role.sql` deja la contraseña del rol clavada en el
+# literal de dev — y ese literal está en el repositorio. Un despliegue nuevo
+# tendría un rol BYPASSRLS con contraseña pública: no es «un default flojo»,
+# es la llave que se salta la RLS de todos los tenants publicada en GitHub.
+# El script de upgrade ya acepta la variable; lo que faltaba era el arranque
+# limpio, que es justo el caso de una instalación nueva.
+# ===========================================================================
+def test_a_clean_start_honours_service_user_password_from_the_environment() -> None:
+    assert SERVICE_ROLE_PASSWORD_SH.exists(), (
+        "falta el script de init que fija la contraseña de `service_user` desde el"
+        f" entorno ({SERVICE_ROLE_PASSWORD_SH.name}): un arranque limpio se queda con"
+        " el literal de dev que está en el repositorio"
+    )
+    script = SERVICE_ROLE_PASSWORD_SH.read_text(encoding="utf-8")
+
+    assert "SERVICE_USER_PASSWORD" in script, (
+        "el script de init no lee `SERVICE_USER_PASSWORD`, así que no hay forma de"
+        " darle una contraseña propia a un despliegue nuevo"
+    )
+    assert (
+        "ALTER ROLE service_user" in script
+    ), "el script no aplica la contraseña al rol; solo la lee"
+    # El orden alfabético del entrypoint de la imagen de PostgreSQL es el
+    # contrato: este script tiene que correr DESPUÉS del 04 que crea el rol.
+    assert SERVICE_ROLE_PASSWORD_SH.name > SERVICE_ROLE_SQL.name, (
+        "el script de contraseña ordena ANTES que el que crea el rol; el entrypoint"
+        " de postgres ejecuta `init/` por orden alfabético, así que se aplicaría"
+        " sobre un rol que todavía no existe"
+    )
+    # Y tiene que seguir habiendo un default, o un `docker compose up` de dev sin
+    # `.env` dejaría el rol sin contraseña utilizable.
+    assert SERVICE_PASSWORD in script, (
+        "el script perdió el default de desarrollo: un arranque sin"
+        f" SERVICE_USER_PASSWORD dejaría de casar con {SERVICE_PASSWORD!r}, que es lo"
+        " que usan el compose de dev y esta suite"
+    )
 
 
 # ===========================================================================

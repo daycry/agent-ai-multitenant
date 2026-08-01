@@ -26,6 +26,7 @@ rather than fabricating answers.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -281,9 +282,10 @@ def _claude_sdk_available() -> bool:
 # ---------------------------------------------------------------------------
 # Model injection seam (overridden in tests with a ScriptedAssistantModel)
 # ---------------------------------------------------------------------------
-async def get_assistant_model(
-    principal: AuthPrincipal = Depends(require_assistant_access),
-    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+async def build_assistant_model(
+    *,
+    principal: AuthPrincipal,
+    vault: LLMProviderVaultStore | None,
 ) -> AssistantModelClient:
     """Resolve + build the LLM-backed assistant model for the tenant (ADR 0053).
 
@@ -296,7 +298,15 @@ async def get_assistant_model(
     than fabricating an answer) when nothing is configured or the provider's
     optional SDK / credential is unavailable.
 
-    Tests override this dependency with a ``ScriptedAssistantModel`` (the
+    This is the **plain builder**: it returns a model whose provider is OPEN.
+    Whoever calls it owns the close (see :func:`aclose_assistant_model`). HTTP
+    routes must not call it directly — they depend on
+    :func:`get_assistant_model`, which closes in its ``finally``. It stays
+    public for the voice WebSocket (``routers/assistant_voice.py``), which owns
+    a long-lived model for the whole socket and therefore cannot express its
+    lifetime as a request-scoped dependency with ``yield``.
+
+    Tests override the *dependency* with a ``ScriptedAssistantModel`` (the
     established chat-test pattern), so the integration suite never contacts a
     real provider.
     """
@@ -340,6 +350,48 @@ async def get_assistant_model(
     # ADR 0070: traduce el reasoning_effort resuelto al kwarg nativo del proveedor.
     extra = reasoning_call_kwargs(resolved.provider_kind, resolved.reasoning_effort)
     return LLMAssistantModel(provider=provider, model=api_model, extra_call_kwargs=extra)
+
+
+async def aclose_assistant_model(model: AssistantModelClient) -> None:
+    """Close the provider behind *model*, if it has one and it can be closed.
+
+    ``AssistantModelClient`` is the graph's seam (only ``decide``), so the
+    provider is reached duck-typed: a scripted double in a test has neither
+    attribute and this is a no-op. Closing must never mask the response the
+    request already produced, so any failure is swallowed — the same discipline
+    as ``llm_providers.factory.list_provider_models``.
+    """
+    provider = getattr(model, "provider", None)
+    aclose = getattr(provider, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception as exc:  # pragma: no cover - defensive
+        _logger.warning("assistant.provider_close_failed", error=str(exc))
+
+
+async def get_assistant_model(
+    principal: AuthPrincipal = Depends(require_assistant_access),
+    vault: LLMProviderVaultStore | None = Depends(get_provider_vault_store),
+) -> AsyncIterator[AssistantModelClient]:
+    """Request-scoped assistant model — built here, **closed here** (llm-8).
+
+    An async-generator dependency, not a plain ``return``: every provider owns
+    an ``httpx.AsyncClient`` with a keep-alive pool, and a request that only
+    returned it left the pool to the garbage collector. FastAPI runs the code
+    after ``yield`` once the response has been sent, so the close happens on the
+    success path AND on the error path — which is the one that leaked most,
+    because no ``except`` branch closed anything.
+
+    Tests override this dependency wholesale, so the ``finally`` is exercised
+    only by the real path (``tests/integration/test_assistant_provider_teardown.py``).
+    """
+    model = await build_assistant_model(principal=principal, vault=vault)
+    try:
+        yield model
+    finally:
+        await aclose_assistant_model(model)
 
 
 # ---------------------------------------------------------------------------
@@ -988,4 +1040,10 @@ async def put_default_model(
     )
 
 
-__all__ = ["get_assistant_model", "require_assistant_access", "router"]
+__all__ = [
+    "aclose_assistant_model",
+    "build_assistant_model",
+    "get_assistant_model",
+    "require_assistant_access",
+    "router",
+]

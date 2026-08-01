@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import enum
 import hmac
+import time
 from dataclasses import dataclass
 from hashlib import sha256
 
@@ -186,11 +187,138 @@ def verify_incoming_signature(
     return SignatureVerificationResult(ok=True, reason="ok")
 
 
+# ---------------------------------------------------------------------------
+# Anti-replay (authz-5) — ventana de frescura + clave de dedup determinista
+# ---------------------------------------------------------------------------
+# Cabecera con la marca de tiempo del emisor, por origen. `None` = ese origen
+# no la manda y no hay nada que comprobar. Hoy solo la declara el esquema
+# `generic`, porque es el único cuya convención es NUESTRA: es la misma
+# cabecera que estampa el firmado SALIENTE
+# (`notification_dispatcher.webhook_signing.TIMESTAMP_HEADER`), de modo que un
+# emisor construido con nuestro propio firmador encaja sin traducción. Los
+# demás orígenes se añaden aquí el día que se verifique qué mandan de verdad;
+# inventarles una cabecera sería peor que no comprobar nada.
+_TIMESTAMP_HEADER_BY_ORIGIN: dict[IncomingWebhookOrigin, str | None] = {
+    IncomingWebhookOrigin.GITHUB: None,
+    IncomingWebhookOrigin.GITLAB: None,
+    IncomingWebhookOrigin.JIRA: None,
+    IncomingWebhookOrigin.SENTRY: None,
+    IncomingWebhookOrigin.LINEAR: None,
+    IncomingWebhookOrigin.GENERIC: "X-Agentic-Timestamp",
+}
+
+# Prefijo de la clave de dedup derivada, para que se distinga de un id de
+# entrega real del emisor a simple vista en la tabla y en un `SELECT`.
+_DERIVED_DELIVERY_PREFIX = "body-sha256:"
+# `incoming_webhook_events.delivery_id` es `VARCHAR(255)`. Una cabecera más
+# larga no cabe: escribirla tal cual reventaría el INSERT con un DataError
+# (500) en un endpoint público, así que se sustituye por su hash — que
+# conserva exactamente la propiedad que importa, ser determinista.
+_MAX_DELIVERY_ID_CHARS = 255
+
+
+@dataclass(frozen=True, slots=True)
+class FreshnessResult:
+    """Resultado de :func:`verify_incoming_freshness` — `ok` + motivo.
+
+    `reason` es `"ok"` / `"no_timestamp"` / `"malformed_timestamp"` /
+    `"stale_timestamp"`, para que quien llame ramifique sin comparar textos.
+    """
+
+    ok: bool
+    reason: str
+
+
+def timestamp_header_for(origin: IncomingWebhookOrigin) -> str | None:
+    """Cabecera de marca de tiempo que declara `origin`, o None si no declara."""
+    return _TIMESTAMP_HEADER_BY_ORIGIN[origin]
+
+
+def verify_incoming_freshness(
+    *,
+    origin: IncomingWebhookOrigin,
+    timestamp_header: str | None,
+    max_skew_seconds: int,
+    now: int | None = None,
+) -> FreshnessResult:
+    """Comprueba que la marca de tiempo declarada cae dentro de la ventana.
+
+    Mismo criterio que el verificador saliente
+    (`notification_dispatcher.webhook_signing.verify_webhook`): el timestamp
+    es epoch en segundos y se acepta si `|now - ts| <= max_skew_seconds` — la
+    comparación es en valor absoluto para rechazar también un futuro
+    imposible, que es como se cuela un mensaje «que nunca caduca».
+
+    **Qué NO es esto, dicho aquí para que nadie se confíe**: en el esquema
+    entrante la firma cubre EXCLUSIVAMENTE el cuerpo, así que esta cabecera no
+    está autenticada y quien capture una entrega válida puede reescribirla. La
+    frescura sirve contra reintentos rancios de un emisor legítimo (una cola
+    que se drena seis horas tarde) y como defensa en profundidad; **el control
+    real anti-replay es la clave de dedup** de :func:`derive_delivery_id`, que
+    sí se deriva de material autenticado (el cuerpo firmado).
+
+    Ausencia de cabecera → `no_timestamp` con `ok=True`: el origen puede no
+    mandarla y no hay nada que verificar. Exigirla rompería a todos los
+    emisores existentes sin ganar seguridad, precisamente porque no está
+    firmada.
+    """
+    header = _TIMESTAMP_HEADER_BY_ORIGIN[origin]
+    if header is None or not timestamp_header:
+        return FreshnessResult(ok=True, reason="no_timestamp")
+
+    try:
+        ts = int(timestamp_header.strip())
+    except (TypeError, ValueError):
+        return FreshnessResult(ok=False, reason="malformed_timestamp")
+
+    moment = int(time.time()) if now is None else now
+    if abs(moment - ts) > max_skew_seconds:
+        return FreshnessResult(ok=False, reason="stale_timestamp")
+
+    return FreshnessResult(ok=True, reason="ok")
+
+
+def derive_delivery_id(*, delivery_header: str | None, body: bytes) -> str:
+    """Clave de dedup de una entrega. NUNCA devuelve None (authz-5).
+
+    El índice único parcial de `incoming_webhook_events` es
+    `(config_id, delivery_id) WHERE delivery_id IS NOT NULL`, así que una
+    entrega sin cabecera de delivery —el caso normal del origen `generic`—
+    guardaba `NULL`, esquivaba el índice y podía reproducirse infinitas veces:
+    cada replay creaba un evento nuevo y volvía a ejecutar su acción (una
+    tarea creada, un comentario, un escalado). Ese era el agujero.
+
+    Cuando el emisor manda su id de entrega, ese id manda: es su semántica de
+    reintento y dos entregas DISTINTAS con el mismo cuerpo (un `ping`
+    repetido) tienen que poder entrar las dos. Cuando no lo manda, la clave se
+    deriva del **cuerpo**, que es justo el material que la firma cubre: un
+    atacante no puede cambiarlo sin invalidar el MAC, así que no puede
+    fabricar una clave nueva para el mismo mensaje.
+
+    El precio, explícito: para un emisor sin id de entrega, dos cuerpos
+    idénticos son indistinguibles de un replay y el segundo se responde como
+    `duplicate`. Es la consecuencia de no traer id, no un defecto — quien
+    necesite mandar el mismo cuerpo dos veces tiene que identificar la
+    entrega, que es exactamente lo que se le pide a un webhook.
+    """
+    if delivery_header:
+        if len(delivery_header) <= _MAX_DELIVERY_ID_CHARS:
+            return delivery_header
+        # Demasiado larga para la columna: se sustituye por su hash, que sigue
+        # siendo determinista (el mismo reintento vuelve a colisionar).
+        return _DERIVED_DELIVERY_PREFIX + sha256(delivery_header.encode("utf-8")).hexdigest()
+    return _DERIVED_DELIVERY_PREFIX + sha256(body).hexdigest()
+
+
 __all__ = [
+    "FreshnessResult",
     "IncomingWebhookOrigin",
     "SignatureVerificationResult",
     "compute_incoming_signature",
+    "derive_delivery_id",
     "signature_header_for",
     "signature_scheme_for",
+    "timestamp_header_for",
+    "verify_incoming_freshness",
     "verify_incoming_signature",
 ]

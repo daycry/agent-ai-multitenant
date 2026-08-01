@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
@@ -54,6 +54,7 @@ from api_server.routers._pagination import (
     limit_query,
     offset_query,
 )
+from api_server.routers._uploads import declared_content_length, read_capped_upload
 from api_server.routers.docs_viewer import get_query_embedder
 from api_server.schemas.knowledge import (
     ChunkSearchHit,
@@ -588,6 +589,7 @@ async def list_kbs_for_project(
 )
 async def upload_document(
     kb_id: UUID,
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     principal: AuthPrincipal = Depends(require_tenant_admin),
@@ -599,16 +601,20 @@ async def upload_document(
     tenant_id = require_tenant_id(principal)
     kb = await _load_kb(session, kb_id)
 
-    # Read the upload up-front so we can size-check before we touch MinIO.
-    payload = await file.read()
+    # Read the upload in CHUNKS, stopping the moment it exceeds the cap (prod-13
+    # task_prod13_04 / api-2): `await file.read()` used to pull the whole body
+    # into the heap and size-check afterwards, so a 2 GB upload was 2 GB of RSS
+    # in the process that serves every request and every WebSocket. The declared
+    # `Content-Length` gives a free early reject; the chunked read is what makes
+    # the cap true, because that header is written by the client.
+    payload = await read_capped_upload(
+        file,
+        max_bytes=MAX_UPLOAD_BYTES,
+        declared_content_length=declared_content_length(request.headers),
+    )
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty upload"
-        )
-    if len(payload) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"upload exceeds {MAX_UPLOAD_BYTES} bytes",
         )
 
     document_id = uuid4()

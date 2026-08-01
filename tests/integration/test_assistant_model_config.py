@@ -361,23 +361,40 @@ async def test_platform_default_set_and_inherited_by_tenant(
 
 
 @pytest.mark.asyncio
-async def test_agents_model_options_includes_reasoning_by_kind(
+async def test_agents_provider_options_expose_the_reasoning_ladder_per_provider(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """GET /agents/model-options expone reasoning_by_kind por proveedor activo
-    (ADR 0070). El proveedor sembrado es ollama → niveles off/low/medium/high."""
+    """Los niveles de razonamiento del ADR 0070 llegan a la UI de agentes.
+
+    **Reescrito el 2026-08-01.** Este test pedía `GET /agents/model-options`, una
+    ruta que ya NO existe: se retiró a propósito (agregaba por kind y dejaba
+    elegir el proveedor equivocado; el razonamiento está en
+    `verificar-antes-de-implementar.md` §7). Como `/agents/{agent_id}` la
+    sombreaba, la petición caía en el path param y devolvía **422 uuid_parsing** —
+    un rojo que decía «UUID inválido» sobre una ruta borrada, y que llevaba
+    invisible desde entonces porque la suite de integración no está en la lista de
+    verificación local.
+
+    Su sucesora es `GET /agents/provider-options`, que lista CADA fila activa (no
+    una por kind) con su escalera de razonamiento. El proveedor sembrado es
+    ollama → off/low/medium/high."""
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint(seeded["admin_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
 
     async with _client(configured_app) as client:
-        resp = await client.get("/agents/model-options", headers=headers)
+        gone = await client.get("/agents/model-options", headers=headers)
+        resp = await client.get("/agents/provider-options", headers=headers)
+
+    # La ruta retirada NO puede volver por la puerta de atrás.
+    assert gone.status_code != 200, "«/agents/model-options» volvió: se retiró a propósito"
+
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert "ollama" in body["by_kind"]
-    assert body["reasoning_by_kind"]["ollama"] == ["off", "low", "medium", "high"]
-    # reasoning_by_kind solo para proveedores activos (mismas keys que by_kind).
-    assert set(body["reasoning_by_kind"]) == set(body["by_kind"])
+    providers = resp.json()["providers"]
+    assert providers, "sin proveedores activos el test no probaría nada"
+    ollama = [p for p in providers if p["kind"] == "ollama"]
+    assert len(ollama) == 1, f"se sembró UN ollama activo, llegaron {len(ollama)}"
+    assert ollama[0]["reasoning_options"] == ["off", "low", "medium", "high"]
 
 
 @pytest.mark.asyncio
@@ -573,17 +590,30 @@ async def test_chat_provider_auth_error_is_502_not_500(
 ) -> None:
     """A provider auth failure must surface as a handled 502 (which carries
     CORS headers and a helpful message) — NOT an unhandled 500 (which the
-    browser sees as an opaque 'Failed to fetch')."""
+    browser sees as an opaque 'Failed to fetch').
+
+    **Aserción actualizada el 2026-08-01.** Pedía `"auth" in detail`, es decir el
+    texto CRUDO del proveedor. prod-13 (hallazgo api-5) lo sustituyó por un
+    mensaje estable por clase de error precisamente porque el texto del proveedor
+    es ajeno y sin auditar: puede traer la URL interna, un trozo del prompt y —con
+    proveedores que ecoan la request— la propia credencial. El test se quedó
+    afirmando el comportamiento retirado y llevaba en rojo desde entonces. Ahora
+    fija el contrato de verdad: 502, mensaje accionable, y **nada** del texto
+    original."""
     from shared_llm.exceptions import AuthError
 
+    raw = "ollama: auth failed (401) unauthorized at http://ollama:11434/v1"
     seeded = await _seed(migrations_pg_dsn)
-    _install_raising_model(configured_app, AuthError("ollama: auth failed (401) unauthorized"))
+    _install_raising_model(configured_app, AuthError(raw))
     token = await _mint(seeded["admin_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
     async with _client(configured_app) as client:
         resp = await client.post("/assistant/chat", json={"message": "hola"}, headers=headers)
     assert resp.status_code == 502, resp.text
-    assert "auth" in resp.json()["detail"].lower()
+    detail = resp.json()["detail"]
+    assert "credenciales" in detail.lower(), detail
+    assert "ollama" not in detail.lower(), f"el detalle ecoa el texto del proveedor: {detail}"
+    assert "11434" not in detail, f"el detalle filtra el endpoint interno: {detail}"
 
 
 @pytest.mark.asyncio

@@ -40,6 +40,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [apparmor-profiles.md](./apparmor-profiles.md)                       | Cargar y verificar los perfiles AppArmor de confinamiento de contenedores                                                    |
 | [sso-global-auth.md](./sso-global-auth.md)                           | Configurar SSO platform-global, login por provider, acceso por membership (ADR 0047)                                         |
 | [triage-vulnerabilidades.md](./triage-vulnerabilidades.md)           | Leer un fallo de `security-scan` (pip-audit/npm audit/Trivy), decidir actualizar vs suprimir y revisar los PRs de Dependabot |
+| [recuperacion-lockout-admin.md](./recuperacion-lockout-admin.md)     | Recuperar el acceso a `/admin/*` cuando la allowlist de IP, la MFA obligatoria o la sesión de 15 min dejan fuera al operador |
 
 ## Convención
 

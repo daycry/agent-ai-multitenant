@@ -290,6 +290,16 @@ verificaciones el código realmente cumple.
 
 - [ ] **Título**: ADR «Vault runtime vs regenerar env + reinicio» y script
       `scripts/rotate-platform-secret.sh`
+  - ⏳ **Pendiente (2026-08-01):** el ADR **está** (`0144`, `accepted`, opción B) y
+    el marcador `pending_apply` que exigía también. Falta **sólo el automatismo**:
+    `scripts/rotate-platform-secret.sh` no existe —el propio ADR 0144 lo dice en
+    su sección «Lo que este ADR NO entrega»— ni
+    `tests/integration/test_rotation_propagation_cycle.py`. Hoy la propagación es
+    el procedimiento manual del runbook `05-key-rotation.md` §8, paso por paso y
+    copiable. El script tiene que: leer el valor rotado de KV, ANTEPONER la clave
+    nueva a `API_SERVER_JWT_SECRETS` (conservando la vieja, `task_prod05_04`),
+    reescribir el `.env` y reiniciar api-server + workers en la misma ventana, y
+    sólo después llamar a `revoke_previous_minio_credential`.
 - **Descripción**: Redactar el ADR (opciones A/B de «Decisiones clave») y,
   asumida la opción B (Docker Compose, una máquina), implementar el script que
   cierra el ciclo de gap2-2: lee el valor rotado de `secret/platform/jwt` /
@@ -312,8 +322,21 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_07` — Rotación MinIO real en el servicio
 
-- [ ] **Título**: `rotate_static_secret('minio')` cambia la credencial en MinIO,
+- [x] **Título**: `rotate_static_secret('minio')` cambia la credencial en MinIO,
       no solo en KV
+  - ✅ **Cerrada (2026-08-01):** el cableado ya existía (`MinioServiceAccountRotator`
+    - `_rotate_minio` + `revoke_previous_minio_credential`); lo que faltaba era el
+      test que el plan pedía, y **contra MinIO de verdad**, no contra un doble:
+      `tests/integration/test_minio_rotation_applies_to_service.py` (7 tests, verdes
+      contra el MinIO del compose en `localhost:9000`). Assertan lo que un doble no
+      puede: que la credencial acuñada **autentica**, que la revocada **deja de
+      autenticar** y que entre el paso 2 y el 4 conviven las dos. Encontró un defecto
+      real: `revoke()` prometía idempotencia en el Protocol y no la tenía — MinIO
+      responde `404 XMinioInvalidIAMCredentials` al borrar una service account
+      ausente, así que un reintento del paso 4 tras una propagación a medias
+      explotaba y dejaba `pending_apply=true` para siempre. Arreglado en
+      `credential_rotation_hvac._is_minio_not_found` + 3 tests unitarios que corren
+      sin MinIO.
 - **Descripción**: Hoy el Protocol solo escribe un valor nuevo en KV v2
   (gap2-2): MinIO sigue aceptando la credencial vieja y los servicios usan la
   vieja de su env. Extender el paso MinIO del ciclo para invocar la API de
@@ -388,7 +411,19 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_10` — Drill de rotación e2e en entorno dev
 
-- [ ] **Título**: Suite de drill que rota cada clave y verifica supervivencia
+- [x] **Título**: Suite de drill que rota cada clave y verifica supervivencia
+  - ✅ **Cerrada (2026-08-01):** vive en `tests/integration/test_key_rotation_drill.py`
+    (no en `tests/e2e/`: necesita el Postgres de compose y las fixtures de
+    integración, no el stack entero). **12 tests verdes**, ejecutados. Cubre las
+    cuatro fases que la tarea pedía: (a) JWT en dos fases con sesión y agent token
+    en vuelo, (b) las cuatro familias Fernet con `reencrypt-secrets` en medio y la
+    clave vieja RETIRADA al verificar, (c) restauración de un bundle escrito bajo
+    la clave retirada —incluido un blob v1 sin key-id—, y (d) el job sin Vault →
+    `SKIPPED` + alerta, con Vault → `SUCCEEDED` + `pending_apply` → revocación
+    sólo en el paso explícito. El propio fichero declara lo que NO prueba (no
+    reinicia contenedores, no habla con Vault ni MinIO reales), que es lo que
+    queda para los tests humanos; el lado MinIO real lo cubre ahora
+    `task_prod05_07`.
 - **Descripción**: Test de integración (compose dev) que ejecuta el ciclo
   completo: (a) rotar JWT en dos fases y verificar que una sesión emitida
   antes sigue válida y un agent token en vuelo valida contra

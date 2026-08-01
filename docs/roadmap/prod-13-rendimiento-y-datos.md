@@ -212,9 +212,21 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       `file.read()` completo), y validar content-type/extensión contra la lista
       de formatos soportados por Docling. Reutilizar el patrón ya existente en
       `incoming_webhooks.py:160-171`.
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `knowledge_bases.py:604` sigue
-    haciendo `payload = await file.read()` y comprobando el tamaño DESPUÉS, sin
-    rechazo por `Content-Length` ni lectura por chunks.
+  - ⏳ **Pendiente (2026-08-01) — hecha la mitad de memoria, falta la de formatos:**
+    la lectura ya es por trozos y para en `max_bytes + 1`
+    (`routers/_uploads.py::read_capped_upload`, 7/7 en
+    `tests/unit/test_capped_upload_read.py`), con rechazo temprano por
+    `Content-Length` **con margen de multipart** — sin ese margen el tope real
+    habría quedado silenciosamente por debajo del anunciado, porque el header
+    mide el request entero y no el fichero. El header no se cree a ciegas: la
+    lectura vuelve a comprobar el tamaño, y hay test de que un `Content-Length`
+    mentiroso no cuela nada. **Falta** la validación de content-type/extensión
+    contra los formatos de Docling: en el repo NO existe esa lista, e inventarla
+    sería una restricción de producto que puede rechazar subidas legítimas hoy
+    aceptadas. Necesita la lista canónica (o un ADR) antes de tocarse.
+    Límite residual documentado en `_uploads.py`: con un parámetro `UploadFile`,
+    Starlette ya ha parseado el multipart al `SpooledTemporaryFile` antes de que
+    el handler corra; cortar antes pide un middleware ASGI, que es otra tarea.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -337,16 +349,21 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_11` — Índice `(tenant_id, created_at)` en executions + predicado sargable
 
-- [ ] **Título**: Migración con índice compuesto `(tenant_id, created_at)` sobre
+- [x] **Título**: Migración con índice compuesto `(tenant_id, created_at)` sobre
       executions y reescritura de `_spend_usd_in_window`
       (`budgets/consumption.py:216-224`) como rango sargable sobre TIMESTAMPTZ
       (sin `func.date()`), definiendo la zona horaria del corte. **Coordinación**:
       prod-06 cablea el sweep de presupuestos (db-1) que depende de este índice.
-  - ⏳ **Pendiente (2026-07-31):** el índice `ix_executions_tenant_created_at`
-    está (migración 0126, verificado con su orden de columnas en
-    `tests/integration/test_perf_indexes_and_uniqueness.py`); falta la mitad del
-    código — `budgets/consumption.py:216` sigue con `func.date(...)`, o sea no
-    sargable, así que el índice todavía no lo usa nadie.
+  - ✅ **Cerrada (2026-08-01):** el índice ya estaba (0126); ahora lo usa alguien.
+    `spend_in_window_stmt` construye el rango semiabierto sobre TIMESTAMPTZ y el
+    corte se fija **en UTC explícito**, que era la parte no escrita: `date()` se
+    evalúa en la zona horaria de la SESIÓN, así que en un PostgreSQL que no
+    estuviera en UTC un gasto de las 02:00 del día 1 se contabilizaba en el
+    período anterior. El test lo demuestra poniendo la sesión en
+    `America/New_York` — con el código viejo se pierden 7,00 USD; con el nuevo,
+    no. El `EXPLAIN` lleva su propio CONTROL: explica también la forma con
+    `date()` y exige que ESA no llegue al `Index Cond`, porque si no, la
+    aserción de que la nueva sí llega no estaría midiendo nada.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -363,9 +380,24 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
       recall con dos tenants desbalanceados (corpus 95/5) que falle si el tenant
       pequeño recibe 0 resultados. Redactar ADR propuesto para índices parciales/
       particionado por tenant (decisión futura, no se implementa).
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `rag/search.py` no contiene ni
-    `hnsw.iterative_scan` ni `ef_search`, no hay test de recall con tenants
-    desbalanceados y el ADR de índices parciales/particionado no está escrito.
+  - ⏳ **Pendiente (2026-08-01) — mitigación puesta y cableada; faltan el test de
+    recall y el ADR:** `api_server/rag/hnsw.py` fija `hnsw.iterative_scan =
+relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
+    `vector_chunks`. Dos decisiones que conviene tener escritas: **`SET LOCAL`** y
+    no `SET`, porque las conexiones del pool se reutilizan entre tenants y un
+    `SET` a secas dejaría el parámetro pegado a la conexión; y un **SAVEPOINT**
+    alrededor, porque con pgvector < 0.8 ese GUC no existe y el error abortaría
+    la transacción entera — sin el savepoint, arrancar contra una pgvector
+    antigua no degradaría el recall: tumbaría la búsqueda.
+    `tests/integration/test_vector_recall_multitenant.py` fija el CABLEADO (2/2;
+    quitando la llamada de `vector_chunks` se pone rojo, comprobado).
+    **Falta el test de recall con corpus 95/5**: se escribió y se retiró porque
+    con las mil filas que un test puede sembrar PostgreSQL no elige el índice
+    HNSW, así que el caso malo no se reproduce — su «control» sin mitigación
+    devolvía 10 resultados donde debía devolver 0, o sea el test habría quedado
+    verde sin medir nada. Reproducirlo pide cientos de miles de vectores: banco
+    de pruebas, no test de integración. **Falta también el ADR** de índices
+    parciales/particionado por tenant.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

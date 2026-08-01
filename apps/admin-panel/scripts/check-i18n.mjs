@@ -53,8 +53,25 @@ const SKIP_DIRS = new Set(["node_modules", ".next", "out", "test-results", "vend
 const EXEMPT_PREFIXES = ["lib/i18n/"];
 
 /**
- * Deuda conocida el 2026-07-30, fichero → nº de ternarios. **Este mapa sólo
+ * Deuda conocida el 2026-08-01, fichero → nº de ternarios. **Este mapa sólo
  * puede MENGUAR.** Cada lote de migración de prod-16 debe borrar líneas de aquí.
+ *
+ * El ternario `lang === "es" ? … : …` tapa DOS cosas distintas, y las dos tienen
+ * ya su sustituto en `lib/i18n/`:
+ *
+ *   1. **Texto de UI escrito a mano** — se conoce al compilar, así que va al
+ *      diccionario: `translate(lang, "ns", "clave")` desde un módulo puro, o
+ *      `useT("ns")` desde un componente. Así lo cubren los invariantes de
+ *      `i18n.test.ts` (las dos caras presentes, no vacías, sin copia-pega).
+ *   2. **Texto bilingüe que llega en DATOS** — una nota `note_es`/`note_en` del
+ *      córtex, el label de un runtime template, un aviso del backend. No hay
+ *      clave posible: se resuelve con `pickLang(lang, { es, en })`, que además
+ *      cae al otro idioma si el pedido viene vacío.
+ *
+ * Lo que quedó fuera de este mapa el 2026-08-01 (`hub.ts`, `honesty.ts`,
+ * `taxonomy.ts`, `runtime-templates.ts`, `cortex-curiosity.ts`,
+ * `cortex-identity.ts`, `persona.ts`) usa ya una de las dos vías y el trinquete
+ * lo mantiene a cero.
  */
 const ALLOWLIST = {
   "app/admin/agents/[id]/agent-tools-section.tsx": 6,
@@ -68,13 +85,6 @@ const ALLOWLIST = {
   "components/capability/persona-section.tsx": 15,
   "components/capability/provider-model-selects.tsx": 1,
   "components/teams/adopt-team-dialog.tsx": 1,
-  "lib/capability/hub.ts": 13,
-  "lib/cortex-curiosity.ts": 4,
-  "lib/cortex-identity.ts": 5,
-  "lib/memory/honesty.ts": 3,
-  "lib/persona/persona.ts": 5,
-  "lib/runtime-templates.ts": 1,
-  "lib/tools/taxonomy.ts": 2,
 };
 
 const PATTERN = /lang === "es"/g;
@@ -121,9 +131,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/approvals/page.tsx": 1,
   "app/admin/assistant/page.tsx": 2,
   "app/admin/assistant/settings/page.tsx": 1,
-  "app/admin/backup/destinations/page.tsx": 1,
-  "app/admin/backup/page.tsx": 2,
-  "app/admin/backup/restore/page.tsx": 1,
   "app/admin/cortex/identity/page.tsx": 6,
   "app/admin/cortex/mind/page.tsx": 3,
   "app/admin/cortex/page.tsx": 7,
@@ -165,13 +172,11 @@ const ATTR_ALLOWLIST = {
   "app/admin/projects/[id]/memories/page.tsx": 1,
   "app/admin/projects/[id]/plans/[planId]/plan-spec-sections.tsx": 2,
   "app/admin/projects/[id]/tasks/page.tsx": 1,
-  "app/admin/settings/hourly-rate/page.tsx": 1,
   "app/admin/settings/memories/page.tsx": 1,
   "app/admin/settings/page.tsx": 1,
   "app/admin/settings/platform-defaults/page.tsx": 1,
   "app/admin/settings/sso/page.tsx": 2,
   "app/admin/settings/sso/saml/page.tsx": 4,
-  "app/admin/tenant-stats/page.tsx": 4,
   "app/admin/tools/page.tsx": 7,
   "app/developers/api-reference/page.tsx": 3,
   "app/developers/sdks/page.tsx": 1,

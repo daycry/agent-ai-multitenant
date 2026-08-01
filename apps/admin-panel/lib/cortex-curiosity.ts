@@ -15,6 +15,8 @@
  * comportamiento programado con topes de coste, NO curiosidad consciente.
  */
 
+import { pickLang, translate } from "@/lib/i18n";
+
 /** Los dos idiomas soportados (CLAUDE.md §12). */
 export type CortexLang = "es" | "en";
 
@@ -106,14 +108,10 @@ export function budgetUsageLabel(used: number, cap: number, lang: CortexLang = "
   const u = nonNegativeInt(used);
   const c = nonNegativeInt(cap);
   if (c <= 0) {
-    return lang === "es"
-      ? `${u} búsquedas hoy · sin cupo configurado`
-      : `${u} searches today · no cap configured`;
+    return translate(lang, "cortexCuriosity", "budgetNoCap", { used: u });
   }
   const pct = Math.round(budgetUsageRatio(u, c) * 100);
-  return lang === "es"
-    ? `${u} de ${c} búsquedas hoy (${pct} %)`
-    : `${u} of ${c} searches today (${pct}%)`;
+  return translate(lang, "cortexCuriosity", "budgetUsage", { used: u, cap: c, pct });
 }
 
 // ---------------------------------------------------------------------------
@@ -133,8 +131,5 @@ export function honestNote(
   note: { note_es?: string | null; note_en?: string | null },
   lang: CortexLang,
 ): string {
-  const preferred = (lang === "es" ? note.note_es : note.note_en)?.trim();
-  if (preferred) return preferred;
-  const fallback = (lang === "es" ? note.note_en : note.note_es)?.trim();
-  return fallback ?? "";
+  return pickLang(lang, { es: note.note_es ?? "", en: note.note_en ?? "" }).trim();
 }

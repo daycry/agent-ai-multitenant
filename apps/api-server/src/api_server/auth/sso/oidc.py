@@ -41,6 +41,17 @@ _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 # baseline mandatory algorithm; we explicitly allow-list it (and the
 # common ES/RS family) and reject anything else — notably `none`.
 _ALLOWED_ID_TOKEN_ALGS = ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"]
+# `joserfc.jwt.decode` verifies ONLY the signature: claim validation is an
+# opt-in second step and nothing warns you that you skipped it (see
+# docs/03-guides/gotchas/joserfc-decode-no-valida-exp.md — the same trap was
+# already paid for in `auth/jwt.py`). Without this registry an expired ID token
+# was accepted forever. `exp` is `essential` so "no exp" is rejected like
+# "exp passed" — OIDC Core §2 makes it mandatory, and a token with no expiry is
+# worse than an expired one. `iat`/`nbf` validate when present. `leeway` stays
+# at its 0 default on purpose: a silent clock margin is a security policy taken
+# by accident. An IdP with real clock drift is a config problem to fix, not to
+# paper over here.
+_ID_TOKEN_CLAIMS = joserfc_jwt.JWTClaimsRegistry(exp={"essential": True})
 
 
 class OIDCError(Exception):
@@ -225,10 +236,11 @@ class OIDCFlow:
         id_token: str,
         expected_nonce: str,
     ) -> dict[str, object]:
-        """Verify signature (against JWKS) + iss/aud/nonce.
+        """Verify signature (against JWKS) + ``exp``/``iat`` + iss/aud/nonce.
 
-        Raises :class:`OIDCError` on a bad signature, a wrong issuer or
-        audience, or a nonce mismatch (replay)."""
+        Raises :class:`OIDCError` on a bad signature, an expired (or
+        never-expiring) token, a wrong issuer or audience, or a nonce mismatch
+        (replay)."""
         discovery = await self.discover(config.issuer)
         try:
             jwks_resp = await self._http.get(discovery.jwks_uri)
@@ -243,6 +255,12 @@ class OIDCFlow:
             raise OIDCError("ID token signature verification failed") from exc
 
         claims = dict(decoded.claims)
+        # Signature verified ≠ token still valid. This is the step joserfc does
+        # NOT do for you; skipping it made every ID token immortal.
+        try:
+            _ID_TOKEN_CLAIMS.validate(claims)
+        except (JoseError, ValueError) as exc:
+            raise OIDCError(f"ID token claim validation failed: {exc}") from exc
         if claims.get("iss") != discovery.issuer:
             raise OIDCError("ID token issuer mismatch")
         aud = claims.get("aud")

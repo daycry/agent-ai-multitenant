@@ -74,6 +74,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import flush_or_conflict
 from api_server.routers._pagination import (
     apply_pagination,
     limit_query,
@@ -302,7 +303,7 @@ async def create_agent(
         project_id=payload.project_id,
     )
     session.add(agent)
-    await session.flush()
+    await flush_or_conflict(session, context="agent.create")
     await session.refresh(agent)
     return to_agent_response(agent)
 
@@ -329,7 +330,7 @@ async def update_agent(
         rename={"llm_config": "model_config"},
     )
 
-    await session.flush()
+    await flush_or_conflict(session, context="agent.update")
     await session.refresh(agent)
     return to_agent_response(agent)
 

@@ -223,8 +223,8 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 
 #### `task_prod09_05` — `/auth/register` con rate limit y login constant-time
 
-- [ ] **Título**: Rate limit por IP en register + verificación Argon2 dummy + setting de auto-registro (authz-6, authz-7)
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `register` no inyecta el `RateLimiter`, no hay hash Argon2 dummy en `login` ni setting `allow_self_registration` (y su default lo decide el **ADR 0134, `proposed`**); tampoco existen los dos ficheros de test.
+- [x] **Título**: Rate limit por IP en register + verificación Argon2 dummy + setting de auto-registro (authz-6, authz-7)
+  - ✅ **Hecho (2026-08-01):** (1) `register` inyecta el `RateLimiter` con ventana por IP (`API_SERVER_REGISTER_RATE_LIMIT_COUNT`, 10 / `..._WINDOW_SECONDS`, 3600), evaluada **antes** de tocar la BD y **sin excepción para la puerta de arranque** — desde el ADR 0134 el alta exige token de invitación, así que este endpoint anónimo era el único sitio donde probar un secreto en bucle gratis. (2) `login` gasta argon2 SIEMPRE: `_verify_login_password` centraliza la decisión y las tres ramas sin hash contra el que comparar (email desconocido, inactivo, identidad SSO) llaman a `burn_password_verification`, que deriva su hash del hasher VIVO — si alguien sube el `memory_cost`, el relleno sube con él. (3) El tercer punto **quedó superado**: el `allow_self_registration` que pedía el plan era la opción A del ADR 0134, y el operador firmó la **opción C (registro por invitación)**, ya implementada con su 403 genérico idéntico para email conocido y desconocido. `auto_prod09_05_a` ejecutado verbatim: **11 passed** (3 integración + 8 unitarios). Ciclo rojo-verde comprobado en los dos: los 3 de integración en rojo antes del limitador; quitando el `burn` de la rama de relleno, 3 de los unitarios se ponen rojos.
 - **Tiempo**: 6 h · **Complejidad**: s
 - (1) Inyectar el `RateLimiter` existente (patrón de `routers/auth.py:217-255`)
   en `register` (`auth.py:169-211`) con ventana por IP. (2) En `login`
@@ -427,8 +427,8 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
 
 #### `task_prod09_16` — Anti-replay en webhooks entrantes
 
-- [ ] **Título**: Ventana de frescura + clave de dedup obligatoria para entregas sin `delivery_id` (authz-5)
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `webhooks/signatures.py` no verifica ventana de timestamp y un origen `generic` sin cabecera de delivery sigue con `delivery_id=NULL` (replay infinito); falta el test de integración.
+- [x] **Título**: Ventana de frescura + clave de dedup obligatoria para entregas sin `delivery_id` (authz-5)
+  - ✅ **Hecho (2026-08-01):** `webhooks/signatures.py` gana `derive_delivery_id()` y `verify_incoming_freshness()`, y el router las cablea. **El `delivery_id` que se persiste ya nunca es NULL**: sin cabecera de entrega se deriva del cuerpo como `body-sha256:<hex>`, de modo que el índice único parcial vuelve a aplicar y el replay literal responde `duplicate` sin re-ejecutar la acción. La derivación usa **solo material autenticado** (el cuerpo que la firma cubre) — es la decisión clave: la variante `hash(body)+timestamp` que sugería el plan habría dejado la clave a merced del atacante, porque en el esquema entrante el timestamp NO va firmado. Por eso la ventana de frescura (`API_SERVER_INCOMING_WEBHOOK_MAX_SKEW_SECONDS`, 300) se documenta como **higiene contra reintentos rancios, no como el control anti-replay**, y se evalúa **detrás** del MAC para no regalar un oráculo. Cabecera de entrega >255 caracteres: se sustituye por su hash (antes reventaba el INSERT con un 500 en un endpoint público). `auto_prod09_16_a` ejecutado: **8 passed**; con las suites vecinas (`test_webhook_signature.py`, `test_webhook_replay.py`), **23 passed**. Ciclo rojo-verde por mutación: revirtiendo el `derive_delivery_id` y desactivando el gate de frescura, **4 failed**.
 - **Tiempo**: 8 h · **Complejidad**: m
 - En `webhooks/signatures.py:148-186` y `routers/incoming_webhooks.py:229-281`:
   (1) verificar timestamp dentro de una ventana cuando el origen lo soporte,
@@ -465,8 +465,10 @@ nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy` y (cuando prod-01 provea
 
 #### `task_prod09_18` — Documentación de sesión y autorización
 
-- [ ] **Título**: Actualizar `docs/04-reference/` (auth/sesiones, matriz admin endurecida, tickets WS) y runbook de lockout admin
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — no hay referencia de sesiones/tickets WS en `docs/04-reference/` ni runbook de recuperación de lockout admin en `docs/06-runbooks/` (y el gate es revisión humana).
+- [x] **Título**: Actualizar `docs/04-reference/` (auth/sesiones, matriz admin endurecida, tickets WS) y runbook de lockout admin
+  - ✅ **Hecho (2026-08-01):** `docs/04-reference/sesiones.md` (9 secciones: anatomía sesión Redis+JWT, cookie httpOnly + doble-submit CSRF con la tabla de cuándo se exige, handoff SSO 303 con las cuatro formas de open-redirect que rechaza, superficie `/admin/*` endurecida y cómo se cablea sola en el montaje, WebSockets, separación `jwt_secret` / `internal_token_secret`, alta por invitación, **tabla completa de variables de entorno** para el inventario de prod-10 y el compose de prod-01, y anti-replay del webhook entrante) + `docs/06-runbooks/recuperacion-lockout-admin.md` (síntomas exactos por control, diagnóstico, tres vías de recuperación de menos a más invasiva, prevención y verificación de vuelta al estado bueno). Ambos indexados en el README de su carpeta y enlazados en los dos sentidos.
+  - **Sobre los «tickets WS» que pedía el título**: no se documentan porque **no existen y no deben existir** — el ADR 0133 los dejó sin objeto (ver `task_prod09_12`). La referencia documenta lo que sí hay: el handshake por cookie y el gate de `Origin` que la cookie obliga a añadir.
+  - **Sobre el gate**: el plan declara «revisión humana del docs PR (no aplica runtime)», y esa revisión sigue siendo del PR. Lo que se ha añadido para que la doc no envejezca en silencio es `tests/docs/test_session_docs.py`, **10 guardas de descubrimiento** ejecutadas en verde: los nombres de cookie salen de `auth/cookies.py`, los knobs de `/admin/*` se derivan de los `settings.<campo>` que lee `admin_hardening.py` (no de un prefijo: `admin_database_url` no es un knob de acceso), y los mensajes del runbook se extraen de los `detail=` que levanta `require_hardened_system_admin`. Renombrar una cookie, añadir un cuarto control o reescribir un mensaje pone la doc en rojo.
 - **Tiempo**: 6 h · **Complejidad**: s
 - Documentar: flujo de sesión por cookie + CSRF, handoff SSO, ciclo de vida del
   ticket WS, separación de secretos (`jwt_secret` vs `internal_token_secret`,

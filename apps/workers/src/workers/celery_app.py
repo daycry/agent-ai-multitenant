@@ -33,6 +33,7 @@ from celery import Celery
 from kombu import Queue
 
 from workers.config import Settings, get_settings
+from workers.task_metrics import install_task_metrics
 
 # prod-08 Fase C (observability-3 / observability-7). Hasta 2026-07-31 los
 # workers NUNCA configuraban el logging: sus líneas salían con el formato por
@@ -51,6 +52,16 @@ from workers.config import Settings, get_settings
 # este paquete ya importa `api_server` en ~50 sitios más (db, memorizer,
 # cortex, ingestion). Ver ADR 0141.
 install_celery_logging(service="workers")
+
+# prod-08 task_prod08_metrics_workers_05. `agentic_celery_queue_depth` dice
+# cuántos mensajes ESPERAN; no dice cuántas tareas terminaron ni cuántas
+# fallaron. Un worker que drena la cola fallando el 100% de lo que saca presenta
+# la misma profundidad (cero) que uno sano. Estas señales acumulan el resultado
+# en Redis y el sampler de beat lo publica por el textfile-collector — el
+# exporter HTTP por proceso que el plan proponía no funciona con el pool prefork
+# (ADR 0141). Se conecta al importar, por el mismo motivo que el logging: es lo
+# que hace el CLI antes de arrancar nada.
+install_task_metrics()
 
 # Canonical queue names. Order is informational only. ``heavy``/``gpu`` removed
 # by ADR 0083 (prod-06 colas_02): dead lanes with no producer/consumer on a

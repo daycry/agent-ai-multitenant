@@ -13,6 +13,7 @@
  */
 
 import { cortexFetch } from "@/lib/cortex";
+import { translate } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Contrato de endpoints (routers/cortex_mind.py + schemas/cortex_identity.py)
@@ -180,7 +181,7 @@ export type CortexLang = "es" | "en";
 
 /** Etiqueta de versión, sin depender del locale del navegador. */
 export function identityVersionLabel(version: number, lang: CortexLang = "es"): string {
-  return lang === "es" ? `versión ${version}` : `version ${version}`;
+  return translate(lang, "cortexIdentity", "versionLabel", { n: version });
 }
 
 /**
@@ -234,7 +235,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function shortValue(value: unknown, lang: CortexLang): string {
   if (value === null || value === undefined || value === "") {
-    return lang === "es" ? "sin definir" : "unset";
+    return translate(lang, "cortexIdentity", "unset");
   }
   const text = String(value);
   return text.length > 40 ? `${text.slice(0, 39)}…` : text;
@@ -256,15 +257,15 @@ function describeField(
   // Objetos numéricos (rasgos, baseline): cuántas dimensiones se movieron.
   if (isPlainObject(before) || isPlainObject(after)) {
     const count = changedKeyCount(before, after);
-    if (lang === "es") {
-      return `${label}: ${count} ${count === 1 ? "ajuste" : "ajustes"}`;
-    }
-    return `${label}: ${count} ${count === 1 ? "change" : "changes"}`;
+    return translate(lang, "cortexIdentity", count === 1 ? "changesOne" : "changesMany", {
+      label,
+      n: count,
+    });
   }
   // Texto largo: no se vuelca en el timeline, se dice que se reescribió.
   const asText = typeof after === "string" ? after : "";
   if (field === "narrative" || asText.length > 40) {
-    return lang === "es" ? `${label} reescrita` : `${label} rewritten`;
+    return translate(lang, "cortexIdentity", "rewritten", { label });
   }
   return `${label}: ${shortValue(before, lang)} → ${shortValue(after, lang)}`;
 }
@@ -298,7 +299,7 @@ export function identityDiffSummary(diff: IdentityDiff, lang: CortexLang = "es")
     }
     parts.push(describeField(field, change, lang));
   }
-  if (parts.length === 0) return lang === "es" ? "sin cambios" : "no changes";
+  if (parts.length === 0) return translate(lang, "cortexIdentity", "noChanges");
   return parts.join(" · ");
 }
 

@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 interface BackupSchedule {
@@ -46,6 +47,7 @@ const DEFAULT_SCHEDULE: BackupSchedule = {
 };
 
 export default function BackupSchedulePage() {
+  const t = useT("backup");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
 
@@ -105,19 +107,19 @@ export default function BackupSchedulePage() {
     >
       <PageHeader
         icon={<DatabaseBackup className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Programación de backups"
-        description="Cadencia (cron), ventana horaria y retención local del backup diario. Lectura abierta; edición solo System Admin."
+        title={t("title")}
+        description={t("description")}
         data-testid="backup-schedule-header"
       />
 
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Configuración</CardTitle>
+          <CardTitle>{t("cardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {scheduleQuery.isLoading ? (
             <p className="text-muted-foreground text-sm" data-testid="backup-schedule-loading">
-              Cargando…
+              {t("loading")}
             </p>
           ) : scheduleQuery.isError ? (
             <p className="text-destructive text-sm" data-testid="backup-schedule-error">
@@ -147,11 +149,11 @@ export default function BackupSchedulePage() {
                     onChange={(e) => setEnabled(e.target.checked)}
                     data-testid="backup-enabled-input"
                   />
-                  <Label htmlFor="backup-enabled">Backup diario activado</Label>
+                  <Label htmlFor="backup-enabled">{t("enabledLabel")}</Label>
                 </div>
 
                 <div className="space-y-1">
-                  <Label htmlFor="backup-cron-input">Cron (ventana horaria)</Label>
+                  <Label htmlFor="backup-cron-input">{t("cronLabel")}</Label>
                   <Input
                     id="backup-cron-input"
                     data-testid="backup-cron-input"
@@ -160,14 +162,11 @@ export default function BackupSchedulePage() {
                     onChange={(e) => setCron(e.target.value)}
                     placeholder="0 3 * * *"
                   />
-                  <p className="text-muted-foreground text-xs">
-                    5 campos: minuto hora día-del-mes mes día-de-la-semana. Por defecto las 03:00
-                    cada día (&quot;0 3 * * *&quot;).
-                  </p>
+                  <p className="text-muted-foreground text-xs">{t("cronHelp")}</p>
                 </div>
 
                 <div className="space-y-1">
-                  <Label htmlFor="backup-retention-input">Retención local (días)</Label>
+                  <Label htmlFor="backup-retention-input">{t("retentionLabel")}</Label>
                   <Input
                     id="backup-retention-input"
                     data-testid="backup-retention-input"
@@ -179,10 +178,7 @@ export default function BackupSchedulePage() {
                     onChange={(e) => setRetentionDays(e.target.value)}
                     placeholder="7"
                   />
-                  <p className="text-muted-foreground text-xs">
-                    Los bundles más antiguos que esta ventana se eliminan tras un backup correcto
-                    (entre 1 y 3650 días).
-                  </p>
+                  <p className="text-muted-foreground text-xs">{t("retentionHelp")}</p>
                 </div>
 
                 {mutation.isError ? (
@@ -191,7 +187,7 @@ export default function BackupSchedulePage() {
                   </p>
                 ) : mutation.isSuccess && !isDirty ? (
                   <p className="text-xs text-emerald-600" data-testid="backup-schedule-saved">
-                    Guardado.
+                    {t("saved")}
                   </p>
                 ) : null}
 
@@ -201,7 +197,7 @@ export default function BackupSchedulePage() {
                     disabled={!isDirty || !canSave || mutation.isPending}
                     data-testid="backup-schedule-submit"
                   >
-                    {mutation.isPending ? "Guardando…" : "Guardar"}
+                    {mutation.isPending ? t("saving") : t("save")}
                   </Button>
                 </div>
               </form>
@@ -226,21 +222,22 @@ function ReadOnlySchedule({
   cron: string;
   retentionDays: string;
 }) {
+  const t = useT("backup");
   return (
     <dl className="space-y-2 text-sm" data-testid="backup-schedule-readonly">
       <div className="flex justify-between">
-        <dt className="text-muted-foreground">Estado</dt>
-        <dd data-testid="backup-readonly-enabled">{enabled ? "Activado" : "Desactivado"}</dd>
+        <dt className="text-muted-foreground">{t("roStatus")}</dt>
+        <dd data-testid="backup-readonly-enabled">{enabled ? t("roEnabled") : t("roDisabled")}</dd>
       </div>
       <div className="flex justify-between">
-        <dt className="text-muted-foreground">Cron</dt>
+        <dt className="text-muted-foreground">{t("roCron")}</dt>
         <dd className="font-mono text-xs" data-testid="backup-readonly-cron">
           {cron}
         </dd>
       </div>
       <div className="flex justify-between">
-        <dt className="text-muted-foreground">Retención</dt>
-        <dd data-testid="backup-readonly-retention">{retentionDays} días</dd>
+        <dt className="text-muted-foreground">{t("roRetention")}</dt>
+        <dd data-testid="backup-readonly-retention">{t("roDays", { n: retentionDays })}</dd>
       </div>
     </dl>
   );

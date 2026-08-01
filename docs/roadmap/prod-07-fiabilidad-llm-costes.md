@@ -217,8 +217,16 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_05` — Cierre de providers en `/assistant/chat`
 
-- [ ] **Título**: `get_assistant_model` como dependencia async-generator con `aclose()`
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — `routers/assistant.py::get_assistant_model` sigue haciendo `return` del provider (sin `yield`/`finally: await provider.aclose()`) y falta `tests/integration/test_assistant_provider_teardown.py`.
+- [x] **Título**: `get_assistant_model` como dependencia async-generator con `aclose()`
+  - ✅ **Cerrada (2026-08-01):** `get_assistant_model` es ahora async generator
+    (`yield` + `finally: await aclose_assistant_model(model)`). El cuerpo se extrajo
+    a `build_assistant_model`, el builder plano, porque `routers/assistant_voice.py`
+    lo llamaba directamente y un WebSocket no tiene ciclo de vida de request: ese
+    socket cierra su provider en su propio `finally` (antes fugaba uno por sesión de
+    voz). `tests/integration/test_assistant_provider_teardown.py` — **5 tests
+    verdes**: la forma de la dependencia, un cierre por request, el cierre en el
+    camino de ERROR (el que más fugaba: ningún `except` cerraba nada) y dos requests
+    → dos cierres. RED previo: los 5 en rojo con `closes == 0`.
 - **Descripción**: convertir `get_assistant_model`
   (`apps/api-server/src/api_server/routers/assistant.py:150`) en async generator
   de FastAPI (`yield` + `finally: await provider.aclose()`), siguiendo el patrón
@@ -301,7 +309,18 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_09` — Capacidades `claude_sdk` honestas
 
 - [ ] **Título**: Bloqueo/aviso explícito de tools+claude_sdk, timeout del SDK y ADR
-  - ⏳ **Pendiente (2026-07-31):** solo está (c), el `asyncio.wait_for` del SDK (7 tests verdes); faltan (a) la validación que rechaza tools+claude_sdk — `pytest tests/integration/test_model_config_validation.py -k claude_sdk` no selecciona NINGÚN test —, (b) la nota de limitación en el catálogo y (d) el ADR con las opciones A/B.
+  - ⏳ **Pendiente (2026-08-01) — y la mitad ha quedado OBSOLETA, no sin hacer.**
+    Entregado: (c) el `asyncio.wait_for` del SDK (7 tests verdes) y (d) el ADR
+    **0150** (`proposed`). (a) y (b) **no se implementan y no deben implementarse
+    tal cual**: la premisa de la tarea es falsa desde los ADR 0086/0087/0092/0097
+    — `ClaudeAgentProvider.complete()` **sí** honra `tools` (las anuncia como
+    servidor MCP in-process y captura la llamada con `can_use_tool`, test
+    `test_complete_emits_tool_calls_when_model_requests_a_tool`) y
+    `ClaudeSDKModelClient` hereda `decide()` de la base, así que alcanza ACT como
+    los OpenAI-compat. Bloquear la combinación hoy rompería el proveedor principal
+    de la plataforma: el «riesgo 5» del propio plan pasó de riesgo a certeza. El
+    ADR 0150 pide al operador que confirme la opción A para poder retirar (a) y (b)
+    del plan. **Casilla abierta a propósito: es una decisión de producto.**
 - **Descripción**: hoy `ClaudeAgentProvider.complete()` ignora tools/max_tokens/
   temperature (`claude_agent.py:152-154`) y `ClaudeSDKModelClient.decide()` siempre
   devuelve FINISH (`agent_runtime/providers.py:343-347`): un agente claude_sdk con
@@ -376,8 +395,18 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_12` — `provider` y clave de catálogo en los pasos `model_call`
 
-- [ ] **Título**: El runtime registra provider/kind y model id casable con el catálogo
-  - ⏳ **Pendiente (2026-07-31):** el `provider` del step `model_call` ya se registra (venía de AUD16-15, no de este plan) y `execution_repo` lo lee, pero el test que el plan exige no existe: `pytest tests/integration/test_execution_capture.py -k snapshot_provider` no selecciona NINGÚN test, así que la clave de catálogo del model id sigue sin acreditar.
+- [x] **Título**: El runtime registra provider/kind y model id casable con el catálogo
+  - ✅ **Cerrada (2026-08-01):** el mecanismo ya estaba (el `provider` del step lo
+    puso AUD16-15; el casado kind→familia LiteLLM vive en
+    `price_snapshot._CATALOG_PROVIDER_ALIASES` y prueba también la clave prefijada
+    `'<familia>/<modelo>'`). Lo que faltaba era la acreditación, y ahora existe:
+    `pytest tests/integration/test_execution_capture.py -k snapshot_provider` →
+    **2 tests verdes**. Uno siembra precios con la clave del CATÁLOGO y consulta con
+    la clave NATIVA del runtime para los cuatro kinds (ollama, copilot,
+    azure_foundry, claude_sdk) y exige `available=True` + el coste exacto; el otro es
+    el control negativo — con el mismo `model_id` en dos familias y **sin** `provider`
+    en el step, el lookup se niega a adivinar y sale `available=False`. RED
+    verificado: ambos caen si `steps.model_call_step` deja de emitir `provider`.
 - **Descripción**: `model_call_step`
   (`docker/agent-runtimes/agent-runtime/agent_runtime/steps.py:52-72`) no registra
   `provider`, así que `snapshot_execution_prices` busca con `provider=""`
@@ -398,7 +427,16 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_13` — `total_cost_usd` real desde los snapshots de precio
 
 - [ ] **Título**: Cuando el runtime reporta 0, persistir la suma de snapshots y que budgets la consuma
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — no existe `tests/integration/test_execution_cost_finalize.py` ni la columna/override de coste estimado que la decisión clave pedía elegir aquí.
+  - ⏳ **Pendiente (2026-08-01):** sin empezar — no existe
+    `tests/integration/test_execution_cost_finalize.py` ni la columna/override de
+    coste estimado. **Bloqueo real, no falta de trabajo**: la decisión clave del
+    plan ofrece (a) columna nueva `cost_estimated_usd` —lo que exige una **migración
+    Alembic**, y sólo el carril `datos` puede crearlas— o (b) sobrescribir
+    `total_cost_usd`, que pierde la distinción runtime-reportado vs
+    estimado-por-catálogo. Con `task_prod07_12` ya acreditada, el dato de entrada
+    (el snapshot con `cost_usd`) está garantizado; lo que falta es elegir dónde
+    aterriza. Ficheros: `db/execution_repo.finalize_execution` y
+    `budgets/consumption.py`.
 - **Descripción**: `_openai_compat.py:99` solo rellena `usage.cost_usd` si el
   endpoint añade `cost` (Ollama/Copilot nunca; APIM solo con policy), y ese 0 se
   persiste en `finalize_execution` (`execution_repo.py:254`) y lo suman los
@@ -420,7 +458,11 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_14` — Test de integración e2e: coste > 0 y budgets consumiendo
 
 - [ ] **Título**: Pipeline completo con modelo del catálogo asserta coste real
-  - ⏳ **Pendiente (2026-07-31):** sin empezar — no existe `tests/integration/test_execution_cost_e2e.py`, y depende de task_prod07_12 y task_prod07_13, ambas abiertas.
+  - ⏳ **Pendiente (2026-08-01):** sin empezar — no existe
+    `tests/integration/test_execution_cost_e2e.py`. `task_prod07_12` **ya está
+    cerrada** (el snapshot casa con el catálogo y hay test), así que el único
+    bloqueo que queda es `task_prod07_13`: hasta que no se decida dónde aterriza el
+    coste estimado, no hay cifra que assertar de punta a punta.
 - **Descripción**: test de integración que ejecuta el pipeline con un fake
   provider OpenAI-compat (sin campo `cost` en usage, como Ollama/Copilot reales)
   y un modelo presente en el catálogo de precios, y asserta:
@@ -466,7 +508,14 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 #### `task_prod07_16` — Documentación de referencia de la capa LLM
 
 - [ ] **Título**: Referencia: retry, streaming, capacidades por kind, costes, Vault
-  - ⏳ **Pendiente (2026-07-31):** `docs/04-reference/llm-providers.md` existe pero la tarea documenta lo implementado y depende del resto de fases, con 8 de 16 tareas aún abiertas (costes enteros incluidos); falta además la entrada de changelog del plan.
+  - ⏳ **Pendiente (2026-08-01):** `docs/04-reference/llm-providers.md` existe y el
+    2026-08-01 se le corrigió **un error de hecho** que llevaba meses: la matriz de
+    capacidades decía que `claude_sdk` NO soporta herramientas y remataba con «no
+    asignes herramientas a un agente cuyo kind sea claude_sdk» — justo al revés de
+    lo que hace el código (ver ADR 0150). También se puso al día su §8 «lo que
+    queda». Sigue abierta porque la tarea documenta **lo implementado** y quedan 6
+    de 16 tareas, la contabilidad de costes entera incluida; falta además la entrada
+    de changelog del plan.
 - **Descripción**: crear/ampliar `docs/04-reference/llm-providers.md` con: la
   política de retry (qué se reintenta y qué no), el contrato de streaming
   (chunk final con usage/tool_calls), la matriz de capacidades por kind (incluida

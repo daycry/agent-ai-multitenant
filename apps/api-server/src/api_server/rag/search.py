@@ -39,6 +39,9 @@ from api_server.memorizer.recall import (
     fuse_rankings,
 )
 
+# Ajuste de sesión para el índice HNSW (prod-13 task_prod13_12 / db-6).
+from api_server.rag.hnsw import tune_hnsw_session
+
 # Configuración FTS única para TODAS las rutas de búsqueda sobre chunks (P0-4):
 # spanish + unaccent (migración 0079). Debe coincidir con la expresión del
 # índice ix_chunks_content_fts (migración 0107) — divergir = seq scan.
@@ -142,9 +145,16 @@ async def vector_chunks(
     limit: int = VECTOR_K_DEFAULT,
 ) -> list[UUID]:
     """Top-`limit` chunk ids by cosine similarity. Empty list if no
-    query embedding (an embedder is required for the vector path)."""
+    query embedding (an embedder is required for the vector path).
+
+    Ajusta antes los GUC de HNSW (`api_server.rag.hnsw`): el índice es global y
+    los filtros —RLS + KBs visibles— se aplican DESPUÉS, así que sin escaneo
+    iterativo un tenant pequeño dentro de un corpus desbalanceado recibe cero
+    resultados para consultas que sí tienen respuesta en su corpus (db-6).
+    """
     if query_embedding is None:
         return []
+    await tune_hnsw_session(session)
     sql = (
         "SELECT chunks.id"
         " FROM chunks"

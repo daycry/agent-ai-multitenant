@@ -570,6 +570,364 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Trabajo humano y fiabilidad de los runs",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Aprobaciones humanas pendientes",
+      "description": "Peticiones de aprobación esperando respuesta. Cada una tiene una ejecución DETENIDA detrás. El número solo no basta: mira también la edad de la más antigua — es sobre eso que alerta HumanApprovalsStale (>24 h).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_human_approvals_pending",
+          "legendFormat": "pendientes",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Espera de la aprobación más antigua",
+      "description": "Edad de la petición de aprobación más vieja sin responder. HumanApprovalsStale dispara a las 24 h.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 43200
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_human_approvals_oldest_age_seconds",
+          "legendFormat": "espera",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Tareas Celery terminadas por cola y resultado",
+      "description": "Ritmo de tareas terminadas, separando éxito de fallo. La profundidad de cola NO distingue un worker sano de uno que drena la cola fallando todo: en ambos casos vale cero. Los acumulan las señales de Celery (workers/task_metrics.py).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (queue, status) (rate(agentic_celery_tasks_total[15m]))",
+          "legendFormat": "{{queue}} · {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Tasa de fallo de ejecuciones (24 h)",
+      "description": "Fracción de ejecuciones fallidas sobre el total de la ventana. ExecutionFailureRateHigh dispara por encima de 0,2 sostenido 30 min, con un suelo de 10 runs para no gritar con el sistema parado.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(agentic_executions_24h{status=\"failed\"}) / clamp_min(sum(agentic_executions_24h), 1)",
+          "legendFormat": "tasa de fallo",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Duración media de tarea Celery por cola",
+      "description": "Segundos acumulados / tareas terminadas, por cola. Un salto sin cambio de volumen suele ser un runtime más lento o un proveedor LLM degradado.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (queue) (rate(agentic_celery_task_duration_seconds_total[30m])) / clamp_min(sum by (queue) (rate(agentic_celery_tasks_total[30m])), 0.0001)",
+          "legendFormat": "{{queue}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Gasto LLM (24 h)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Coste de los runs (USD, 24 h)",
+      "description": "Gasto del pipeline de agentes. SIN desglose por proveedor a propósito: executions no guarda con qué proveedor corrió (el modelo se resuelve por agente en tiempo de ejecución). Es la mayor parte del gasto.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_run_cost_usd_24h",
+          "legendFormat": "runs",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "bargauge",
+      "title": "Coste fuera de runs por proveedor (USD, 24 h)",
+      "description": "Asistente, córtex y planning — el único gasto con dimensión de proveedor (llm_usage_events.provider_kind). NO incluye los runs: mirar el panel de al lado para el total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_llm_cost_usd_24h",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Tokens consumidos (24 h)",
+      "description": "Runs (sin proveedor) frente al consumo fuera de runs, por proveedor.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_run_tokens_24h",
+          "legendFormat": "runs",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_llm_tokens_24h",
+          "legendFormat": "{{provider}}",
+          "refId": "B"
+        }
+      ]
     }
   ]
 }

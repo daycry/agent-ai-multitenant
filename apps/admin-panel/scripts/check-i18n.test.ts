@@ -77,13 +77,13 @@ describe("check-i18n sabe fallar", () => {
   });
 
   it("un fichero de la allowlist con MÁS ternarios de los anotados es error", () => {
-    // La allowlist permite 2 en este fichero; le ponemos 3.
-    const root = fixture({ "lib/tools/taxonomy.ts": TERNARY.repeat(3) });
+    // La allowlist permite 15 en este fichero; le ponemos 16.
+    const root = fixture({ "components/capability/persona-section.tsx": TERNARY.repeat(16) });
 
     const { code, output } = run(["--root", root]);
 
     expect(code).toBe(1);
-    expect(output).toContain("la allowlist permite 2");
+    expect(output).toContain("la allowlist permite 15");
     expect(output).toContain("La deuda no puede crecer");
   });
 
@@ -108,13 +108,13 @@ describe("check-i18n no molesta donde no debe", () => {
   });
 
   it("un fichero de la allowlist DENTRO de su cupo pasa", () => {
-    const root = fixture({ "lib/tools/taxonomy.ts": TERNARY.repeat(2) });
+    const root = fixture({ "components/capability/persona-section.tsx": TERNARY.repeat(15) });
 
     expect(run(["--root", root]).code).toBe(0);
   });
 
   it("avisa (sin fallar) cuando un fichero baja de su cupo", () => {
-    const root = fixture({ "lib/tools/taxonomy.ts": TERNARY });
+    const root = fixture({ "components/capability/persona-section.tsx": TERNARY });
 
     const { code, output } = run(["--root", root]);
 
@@ -207,7 +207,7 @@ describe("check-i18n — literales castellanos en atributos de UI", () => {
 
 describe("check-i18n --strict", () => {
   it("no perdona ni lo que la allowlist permitía", () => {
-    const root = fixture({ "lib/tools/taxonomy.ts": TERNARY.repeat(2) });
+    const root = fixture({ "components/capability/persona-section.tsx": TERNARY.repeat(2) });
 
     expect(run(["--root", root]).code).toBe(0);
     expect(run(["--root", root, "--strict"]).code).toBe(1);

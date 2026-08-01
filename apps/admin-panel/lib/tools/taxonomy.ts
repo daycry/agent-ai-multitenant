@@ -29,6 +29,7 @@
  */
 
 import type { BadgeVariant } from "@/components/ui/badge";
+import { pickLang } from "@/lib/i18n";
 import type { Lang } from "@/lib/lang-context";
 
 // ---------------------------------------------------------------------------
@@ -251,7 +252,7 @@ function resolve(term: BilingualTerm | undefined, value: string, lang: Lang): Ta
       labelEs: term.labelEs,
       labelEn: term.labelEn,
       variant: term.variant,
-      help: lang === "es" ? term.helpEs : term.helpEn,
+      help: pickLang(lang, { es: term.helpEs, en: term.helpEn }),
     };
   }
   // Unknown slug: humanise both labels (never the raw enum) and stay neutral.
@@ -282,5 +283,5 @@ export function resolveCategory(value: string, lang: Lang): TaxonomyDescriptor {
 
 /** The bilingual label for a descriptor in the active language. */
 export function label(descriptor: TaxonomyDescriptor, lang: Lang): string {
-  return lang === "es" ? descriptor.labelEs : descriptor.labelEn;
+  return pickLang(lang, { es: descriptor.labelEs, en: descriptor.labelEn });
 }

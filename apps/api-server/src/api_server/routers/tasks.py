@@ -40,10 +40,11 @@ from api_server.chat.dag_enforcement import (
 )
 from api_server.chat.planning_llm import _clean_acceptance_criteria
 from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
-from api_server.db.domain import Plan, Project, Task, TaskDependency, TaskStatus
+from api_server.db.domain import Plan, Task, TaskDependency, TaskStatus
 from api_server.db.execution_repo import cancel_running_executions_for_task
 from api_server.events import publish_task_created, publish_task_status_changed
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.routers._guards import verify_project_visible
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -73,16 +74,6 @@ router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Project:
-    """RLS already hides cross-tenant projects. This turns "0 rows" into
-    an explicit 404 instead of letting downstream FK errors surface."""
-    result = await session.execute(
-        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-    return project
 
 
 async def _plan_sibling_context(session: AsyncSession, task: Task) -> str:
@@ -212,7 +203,7 @@ async def list_tasks(
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[TaskResponse]:
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
 
     stmt = select(Task).where(Task.project_id == project_id)
     if status_ is not None:
@@ -254,7 +245,7 @@ async def get_task(
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     result = await session.execute(
         select(Task).where(Task.id == task_id, Task.project_id == project_id)
     )
@@ -284,7 +275,7 @@ async def generate_acceptance_criteria(
     refines rather than ignores them. Does NOT persist: the operator reviews
     (and confirms against a comparison when the task already had criteria)
     before saving via PUT."""
-    project = await _verify_project_visible(session, project_id)
+    project = await verify_project_visible(session, project_id)
     result = await session.execute(
         select(Task).where(Task.id == task_id, Task.project_id == project_id)
     )
@@ -329,7 +320,7 @@ async def create_task(
 ) -> TaskResponse:
     tenant_id = require_tenant_id(principal)
     # P1-01: un proyecto pausado/archivado no acepta tareas nuevas.
-    require_project_active(await _verify_project_visible(session, project_id))
+    require_project_active(await verify_project_visible(session, project_id))
 
     # PROY2-03: una tarea solo puede NACER backlog o ready (no in_progress/done/
     # in_review/blocked, que saltarían el DAG y su máquina de estados).
@@ -427,7 +418,7 @@ async def update_task(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> TaskResponse:
     require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
 
     task = await get_writable_or_404(
         session,
@@ -560,7 +551,7 @@ async def delete_task(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> None:
     require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     task = await get_writable_or_404(
         session,
         Task,

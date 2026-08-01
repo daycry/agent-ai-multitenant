@@ -89,6 +89,59 @@ groups:
             reportando fallo (up=0). Revisa los logs del worker de
             mantenimiento (maintenance.sample_queue_metrics.error).
 
+      # prod-08 Fase B. `agentic_celery_queue_depth` dice cuántos mensajes
+      # ESPERAN, no cuántas tareas fallaron: un worker que drena la cola y falla
+      # el 100% de lo que saca presenta exactamente la misma profundidad (cero)
+      # que uno sano. Esta es la mitad que faltaba, y consume los contadores que
+      # las señales de Celery acumulan (`workers/task_metrics.py`).
+      #
+      # El suelo de volumen (`>= 10`) no es cosmético: sin él, 1 fallo de 2 runs
+      # es un 50% y la alerta grita de madrugada con el sistema prácticamente
+      # parado. Una alerta que grita cuando no pasa nada se silencia, y una
+      # alerta silenciada no existe.
+      #
+      # `clamp_min(..., 1)` evita la división por cero cuando no hay ninguna
+      # ejecución en la ventana (la expresión daría NaN y la regla no evaluaría).
+      - alert: ExecutionFailureRateHigh
+        expr: >-
+          (
+            sum(agentic_executions_24h{status="failed"})
+            / clamp_min(sum(agentic_executions_24h), 1) > 0.2
+          )
+          and sum(agentic_executions_24h) >= 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Más del 20% de las ejecuciones de las últimas 24h están fallando"
+          description: >-
+            La tasa de fallo de ejecuciones lleva 30 minutos por encima del 20%
+            con volumen suficiente para ser significativa. Revisa el visor de
+            runs y los logs del worker: suele ser credencial de proveedor LLM
+            caducada, imagen de runtime rota o el egress-proxy caído.
+
+      # prod-08 Fase B. Cuando un agente pide aprobación humana su ejecución se
+      # DETIENE. Una petición olvidada no genera error, ni log de fallo, ni cola
+      # creciendo: el plan simplemente no avanza y nadie se entera. Es el modo de
+      # fallo más silencioso del pipeline autónomo.
+      #
+      # Se alerta sobre la EDAD de la más vieja, no sobre el contador: tres
+      # aprobaciones recién pedidas son el funcionamiento normal, una de hace
+      # tres días es trabajo parado. Una alerta sobre el contador dispararía con
+      # el sistema sano y acabaría silenciada.
+      - alert: HumanApprovalsStale
+        expr: agentic_human_approvals_oldest_age_seconds > 86400
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hay una aprobación humana esperando desde hace más de 24 h"
+          description: >-
+            La petición de aprobación más antigua lleva {{ $value |
+            humanizeDuration }} sin respuesta, así que su ejecución está
+            detenida. Revisa la bandeja del inbox humano
+            (docs/06-runbooks/observabilidad.md).
+
       # Muchas tareas bloqueadas sostenidas = el pipeline autónomo está parado
       # esperando humanos (o un bug de convergencia).
       - alert: TasksBlockedHigh

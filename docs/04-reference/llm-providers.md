@@ -2,7 +2,7 @@
 title: Capa LLM — reintentos, streaming, capacidades por kind, costes y Vault
 audience: backend-dev, devops, architect
 phase: prod-07-fiabilidad-llm-costes
-updated: 2026-07-30
+updated: 2026-08-01
 ---
 
 # Capa LLM — Referencia
@@ -94,20 +94,33 @@ fijada en `packages/shared-llm/tests/test_stream_usage_parity.py`.
 
 ## 4. Capacidades por kind
 
-| kind            | Endpoint                       | Credencial (campo en Vault)                          | tools                  | streaming | Coste reportado por el proveedor |
-| --------------- | ------------------------------ | ---------------------------------------------------- | ---------------------- | --------- | -------------------------------- |
-| `claude_sdk`    | — (CLI/suscripción)            | `api_key` o `oauth_token`                            | **no** en `complete()` | sí        | **sí**                           |
-| `copilot`       | fijo (`api.githubcopilot.com`) | `oauth_token` (JWT corto minteado por el provider)   | sí                     | sí        | no                               |
-| `azure_foundry` | APIM (`apim_base_url`)         | `api_key` → `subscription_key`, **o** `bearer_token` | sí                     | sí        | solo con policy en APIM          |
-| `ollama`        | `base_url` (local o cloud)     | `bearer_token` → `api_key` (local: ninguna)          | sí                     | sí        | no                               |
+| kind            | Endpoint                       | Credencial (campo en Vault)                          | tools             | streaming | Coste reportado por el proveedor |
+| --------------- | ------------------------------ | ---------------------------------------------------- | ----------------- | --------- | -------------------------------- |
+| `claude_sdk`    | — (CLI/suscripción)            | `api_key` o `oauth_token`                            | sí (no forzables) | sí        | **sí**                           |
+| `copilot`       | fijo (`api.githubcopilot.com`) | `oauth_token` (JWT corto minteado por el provider)   | sí                | sí        | no                               |
+| `azure_foundry` | APIM (`apim_base_url`)         | `api_key` → `subscription_key`, **o** `bearer_token` | sí                | sí        | solo con policy en APIM          |
+| `ollama`        | `base_url` (local o cloud)     | `bearer_token` → `api_key` (local: ninguna)          | sí                | sí        | no                               |
 
-Limitación de `claude_sdk` que hay que conocer: `ClaudeAgentProvider.complete()`
-ignora `tools`/`max_tokens`/`temperature`, y en el runtime
-`ClaudeSDKModelClient.decide()` devuelve FINISH. Un agente `claude_sdk` con
-herramientas asignadas puede "terminar" la tarea sin actuar. El cableado de
-`run_agent()` con tools es **decisión de producto** y sigue pendiente
-(`task_prod07_09`); mientras no esté, no asignes herramientas a un agente cuyo
-kind sea `claude_sdk`.
+> **Corregido el 2026-08-01.** Este párrafo decía que `claude_sdk` **no** soporta
+> herramientas («`complete()` ignora `tools`», «`decide()` devuelve FINISH», «no
+> asignes herramientas a un agente `claude_sdk`»). Era cierto cuando se escribió
+> el hallazgo llm-4, en junio de 2026, y llevaba meses sin serlo.
+
+Limitación de `claude_sdk` que hay que conocer, la de verdad: sus herramientas
+**se median, no se compelen**. `ClaudeAgentProvider.complete()` anuncia los
+schemas del host como un servidor **MCP in-process** e intercepta cada llamada
+con `can_use_tool` (deny + interrupt), devolviéndola en
+`CompletionResponse.tool_calls` para que la ejecute el host; el runtime
+(`ClaudeSDKModelClient`) hereda `decide()` de la base y alcanza ACT igual que los
+providers OpenAI-compat. Lo que **no** existe en el SDK es un `tool_choice`
+forzado: no se puede obligar al modelo a llamar una tool concreta, y por eso
+`_advertises_submit_result` y `_forces_verdict_choice` están a `False` y el
+contrato de salida del review viaja como prosa + tag (ADR 0086/0087).
+
+El ADR **0150** (`proposed`) recoge esta corrección y pide al operador que
+confirme el estado actual (opción A, mantener el cableado) para poder retirar del
+plan las mitades (a) y (b) de `task_prod07_09`, que hoy destruirían una capacidad
+entregada.
 
 La tabla de credenciales es **dato en un solo sitio**:
 `packages/shared-llm/src/shared_llm/credential_fields.py`
@@ -193,12 +206,18 @@ en `finalize_execution` necesita el test de no-regresión de ese camino.
 
 ## 8. Lo que queda de prod-07 (para no dar por hecho lo que no está)
 
-| Tarea                   | Estado                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `task_prod07_05`        | `get_assistant_model` sigue devolviendo el provider sin `finally: aclose()` → cada chat fuga un `AsyncClient` |
-| `task_prod07_09`        | claude_sdk + tools: falta el bloqueo/aviso en validación y el ADR de decisión                                 |
-| `task_prod07_10`        | la credencial sigue viajando dentro de `AGENT_TASK_SPEC` (env del contenedor), no en un mount tmpfs read-only |
-| `task_prod07_13` / `14` | ver §7                                                                                                        |
+Actualizado el **2026-08-01**. Lo cerrado desde la revisión anterior:
+`task_prod07_05` (la dependencia del asistente es async generator y cierra el
+provider en su `finally`; el WS de voz cierra el suyo) y `task_prod07_12` (el
+casado kind→familia del catálogo tiene por fin test:
+`test_execution_capture.py -k snapshot_provider`).
+
+| Tarea                   | Estado                                                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task_prod07_09`        | (c) timeout del SDK y (d) ADR 0150 **hechos**; (a)/(b) el bloqueo tools+claude_sdk **no se implementa**: la premisa caducó (ver §4). Espera la decisión del operador en el ADR |
+| `task_prod07_10`        | la credencial sigue viajando dentro de `AGENT_TASK_SPEC` (env del contenedor), no en un mount tmpfs read-only                                                                  |
+| `task_prod07_13` / `14` | ver §7 — el bloqueo real es elegir entre columna nueva (exige migración) u override de `total_cost_usd`                                                                        |
+| `task_prod07_15`        | el Memorizer resuelve por `provider_id` (ADR 0082) pero `_default_llm_factory` sigue cayendo a `OllamaProvider` desde env, y no hay contador de fallos de destilación          |
 
 ## Relacionado
 

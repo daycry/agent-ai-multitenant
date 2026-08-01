@@ -436,6 +436,402 @@ export const dictionary = {
       en: "There is already a pending invitation for that email in that workspace.",
     },
   },
+
+  /** `app/admin/backup/page.tsx` — cadencia, ventana y retención del backup diario. */
+  backup: {
+    title: { es: "Programación de backups", en: "Backup schedule" },
+    description: {
+      es: "Cadencia (cron), ventana horaria y retención local del backup diario. Lectura abierta; edición solo System Admin.",
+      en: "Cadence (cron), time window and local retention of the daily backup. Anyone may read it; only a System Admin may edit it.",
+    },
+    cardTitle: { es: "Configuración", en: "Configuration" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    enabledLabel: { es: "Backup diario activado", en: "Daily backup enabled" },
+    cronLabel: { es: "Cron (ventana horaria)", en: "Cron (time window)" },
+    cronHelp: {
+      es: '5 campos: minuto hora día-del-mes mes día-de-la-semana. Por defecto las 03:00 cada día ("0 3 * * *").',
+      en: '5 fields: minute hour day-of-month month day-of-week. Defaults to 03:00 every day ("0 3 * * *").',
+    },
+    retentionLabel: { es: "Retención local (días)", en: "Local retention (days)" },
+    retentionHelp: {
+      es: "Los bundles más antiguos que esta ventana se eliminan tras un backup correcto (entre 1 y 3650 días).",
+      en: "Bundles older than this window are deleted after a successful backup (between 1 and 3650 days).",
+    },
+    saved: { es: "Guardado.", en: "Saved." },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    roStatus: { es: "Estado", en: "Status" },
+    roCron: { es: "Cron", en: "Cron" },
+    roRetention: { es: "Retención", en: "Retention" },
+    roEnabled: { es: "Activado", en: "Enabled" },
+    roDisabled: { es: "Desactivado", en: "Disabled" },
+    roDays: { es: "{n} días", en: "{n} days" },
+  },
+
+  /**
+   * `app/admin/backup/destinations/page.tsx`.
+   *
+   * Los `field*` son los labels de la config NO secreta por tipo de destino
+   * (`TYPE_FIELDS`). Varios coinciden en los dos idiomas porque son términos
+   * técnicos que nadie traduce (Bucket, Host, Path…): están en la allowlist de
+   * coincidencias legítimas de `i18n.test.ts`.
+   */
+  backupDestinations: {
+    title: { es: "Destinos remotos de backup", en: "Remote backup destinations" },
+    description: {
+      es: "Sube cada backup correcto a destinos remotos (S3, B2, SFTP/NAS, rclone). Las credenciales viven en el secret seam de los workers — nunca aquí. Edición solo System Admin.",
+      en: "Uploads every successful backup to remote destinations (S3, B2, SFTP/NAS, rclone). Credentials live in the workers' secret seam — never here. Editing is System Admin only.",
+    },
+    cardTitle: { es: "Destinos", en: "Destinations" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    empty: { es: "No hay destinos configurados.", en: "No destinations configured." },
+    add: { es: "Añadir destino", en: "Add destination" },
+    saved: { es: "Guardado.", en: "Saved." },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    typeLabel: { es: "Tipo", en: "Type" },
+    nameLabel: { es: "Nombre", en: "Name" },
+    enabledLabel: { es: "Habilitado", en: "Enabled" },
+    disabledLabel: { es: "Deshabilitado", en: "Disabled" },
+    remove: { es: "Eliminar destino", en: "Remove destination" },
+    credentialsNote: {
+      es: "Las credenciales no se introducen aquí: se resuelven desde el secret seam (Vault/env) en el momento de subir o probar la conexión.",
+      en: "Credentials are not entered here: they are resolved from the secret seam (Vault/env) when uploading or testing the connection.",
+    },
+    test: { es: "Probar conexión", en: "Test connection" },
+    testing: { es: "Probando…", en: "Testing…" },
+    testOk: { es: "OK", en: "OK" },
+    testFail: { es: "Error", en: "Error" },
+    typeS3: { es: "S3 (o compatible)", en: "S3 (or compatible)" },
+    typeB2: { es: "Backblaze B2", en: "Backblaze B2" },
+    typeSftp: { es: "SFTP / NAS", en: "SFTP / NAS" },
+    typeRclone: { es: "rclone (genérico)", en: "rclone (generic)" },
+    fieldBucket: { es: "Bucket", en: "Bucket" },
+    fieldPrefix: { es: "Prefijo", en: "Prefix" },
+    fieldEndpointUrl: { es: "Endpoint URL", en: "Endpoint URL" },
+    fieldRegion: { es: "Región", en: "Region" },
+    fieldRegionB2: { es: "Región (p. ej. us-west-002)", en: "Region (e.g. us-west-002)" },
+    fieldHost: { es: "Host", en: "Host" },
+    fieldUsername: { es: "Usuario", en: "Username" },
+    fieldPort: { es: "Puerto", en: "Port" },
+    fieldRemotePath: { es: "Ruta remota", en: "Remote path" },
+    fieldHostKeyPolicy: {
+      es: "Política host-key (reject/auto_add/warn)",
+      en: "Host-key policy (reject/auto_add/warn)",
+    },
+    fieldRemote: {
+      es: "Remote (nombre [sección] del rclone.conf)",
+      en: "Remote (section name in rclone.conf)",
+    },
+    fieldPath: { es: "Path", en: "Path" },
+  },
+
+  /** `app/admin/backup/restore/page.tsx` — restore completo o por tenant. */
+  backupRestore: {
+    title: { es: "Restaurar desde backup", en: "Restore from backup" },
+    description: {
+      es: "Restaura el stack completo o un único tenant desde un backup. Operación larga y destructiva: corre como job en segundo plano y exige doble confirmación. Solo System Admin.",
+      en: "Restores the whole stack or a single tenant from a backup. Long and destructive: it runs as a background job and requires double confirmation. System Admin only.",
+    },
+    forbidden: {
+      es: "Solo un System Admin puede restaurar desde un backup.",
+      en: "Only a System Admin can restore from a backup.",
+    },
+    listTitle: { es: "Backups disponibles", en: "Available backups" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    listEmpty: { es: "No hay backups disponibles.", en: "No backups available." },
+    encrypted: { es: "cifrado", en: "encrypted" },
+    previewTitle: { es: "Preview del backup", en: "Backup preview" },
+    previewLoading: { es: "Cargando preview…", en: "Loading preview…" },
+    previewBackup: { es: "Backup", en: "Backup" },
+    previewEncrypted: { es: "Cifrado", en: "Encrypted" },
+    previewCreated: { es: "Creado", en: "Created" },
+    previewTotalSize: { es: "Tamaño total", en: "Total size" },
+    yes: { es: "Sí", en: "Yes" },
+    no: { es: "No", en: "No" },
+    artifacts: { es: "Artefactos", en: "Artifacts" },
+    kindLegend: { es: "Tipo de restore", en: "Restore type" },
+    kindFull: {
+      es: "Restore completo (detiene el stack y restaura todo)",
+      en: "Full restore (stops the stack and restores everything)",
+    },
+    kindPerTenant: {
+      es: "Restore selectivo por tenant (solo sus datos)",
+      en: "Selective per-tenant restore (only its data)",
+    },
+    tenantIdLabel: { es: "Tenant ID (UUID)", en: "Tenant ID (UUID)" },
+    tenantTables: {
+      es: "Tablas afectadas (solo las filas de este tenant):",
+      en: "Affected tables (only this tenant's rows):",
+    },
+    openConfirm: { es: "Restaurar…", en: "Restore…" },
+    progressTitle: { es: "Progreso del restore", en: "Restore progress" },
+    jobState: { es: "Estado:", en: "Status:" },
+    jobSuccess: { es: "Restore completado.", en: "Restore completed." },
+    jobFailure: { es: "El restore falló.", en: "The restore failed." },
+    confirmTitle: { es: "Confirmar restore destructivo", en: "Confirm destructive restore" },
+    confirmBodyPerTenant: {
+      es: "Vas a sobrescribir SOLO los datos de este tenant con los del backup. El resto de tenants no se ven afectados.",
+      en: "You are about to overwrite ONLY this tenant's data with the backup's. Other tenants are not affected.",
+    },
+    confirmBodyFull: {
+      es: "Vas a DETENER el stack y reemplazar la base de datos y los volúmenes con los del backup. Esta acción es destructiva.",
+      en: "You are about to STOP the stack and replace the database and volumes with the backup's. This action is destructive.",
+    },
+    confirmPrompt: { es: "Para confirmar, teclea exactamente:", en: "To confirm, type exactly:" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    confirmSubmit: { es: "Confirmar y restaurar", en: "Confirm and restore" },
+    enqueuing: { es: "Encolando…", en: "Enqueuing…" },
+  },
+
+  /** `app/admin/settings/security/page.tsx` — alta y baja del segundo factor TOTP. */
+  settingsSecurity: {
+    title: { es: "Seguridad", en: "Security" },
+    description: {
+      es: "Verificación en dos pasos para tu cuenta (TOTP — Google Authenticator, 1Password, Authy…).",
+      en: "Two-step verification for your account (TOTP — Google Authenticator, 1Password, Authy…).",
+    },
+    cardTitle: { es: "Verificación en dos pasos", en: "Two-step verification" },
+    on: {
+      es: "Activada. Te pediremos un código al iniciar sesión.",
+      en: "Enabled. We will ask you for a code when you sign in.",
+    },
+    recoveryLeft: {
+      es: "Códigos de recuperación sin usar: {n}",
+      en: "Unused recovery codes: {n}",
+    },
+    disable: { es: "Desactivar", en: "Turn off" },
+    off: {
+      es: "No activada. Con la plataforma expuesta a internet, actívala: protege tu cuenta aunque la contraseña se filtre.",
+      en: "Not enabled. With the platform exposed to the internet, turn it on: it protects your account even if your password leaks.",
+    },
+    enroll: { es: "Activar verificación en dos pasos", en: "Turn on two-step verification" },
+    step1: {
+      es: "1 · Escanea el QR con tu app de autenticación",
+      en: "1 · Scan the QR code with your authenticator app",
+    },
+    manualKey: {
+      es: "¿No puedes escanear? Introduce la clave a mano:",
+      en: "Cannot scan? Enter the key by hand:",
+    },
+    step2: {
+      es: "2 · Guarda los códigos de recuperación (solo se muestran esta vez)",
+      en: "2 · Save the recovery codes (they are shown only this once)",
+    },
+    step3: { es: "3 · Confirma con el código de la app", en: "3 · Confirm with the app's code" },
+    codeLabel: { es: "Código", en: "Code" },
+    confirm: { es: "Confirmar", en: "Confirm" },
+    confirmError: {
+      es: "Código incorrecto — comprueba la app e inténtalo de nuevo.",
+      en: "Wrong code — check the app and try again.",
+    },
+  },
+
+  /** `app/admin/settings/hourly-rate/page.tsx` — tarifa del cálculo de coste humano. */
+  settingsHourlyRate: {
+    title: { es: "Tarifa horaria del tenant", en: "Tenant hourly rate" },
+    description: {
+      es: "Multiplicador que el cálculo de coste humano (planes) usa por defecto. Si lo dejas vacío, se aplica el valor por defecto de plataforma (50 EUR/h).",
+      en: "Multiplier the human-cost calculation (plans) uses by default. Leave it empty and the platform default applies (50 EUR/h).",
+    },
+    cardTitle: { es: "Configuración", en: "Configuration" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    rateLabel: { es: "Tarifa por hora", en: "Rate per hour" },
+    currencyLabel: { es: "Moneda", en: "Currency" },
+    saved: { es: "Guardado.", en: "Saved." },
+    save: { es: "Guardar", en: "Save" },
+  },
+
+  /**
+   * `app/admin/tenant-stats/*` — dashboard de estadísticas + explorador de runs.
+   *
+   * Un namespace para las cinco piezas en que `task_prod16_08` partió la
+   * pantalla (cabecera, cuerpo, segmentación de coste, explorador y visuales):
+   * son una sola vista para el usuario y trocear también el diccionario sólo
+   * repartiría las mismas claves por más ficheros.
+   */
+  tenantStats: {
+    title: { es: "Estadísticas", en: "Statistics" },
+    description: {
+      es: "Cómo rinden tus agentes y qué consume tu tenant: tasa de éxito, tiempo y coste medios, agentes top/bottom, tendencia temporal, resumen de consumo y explorador de runs. Sólo tu tenant; costes en USD.",
+      en: "How your agents perform and what your tenant consumes: success rate, mean time and cost, top/bottom agents, trend over time, consumption summary and runs explorer. Your tenant only; costs in USD.",
+    },
+    forbidden: {
+      es: "Necesitas el rol tenant_admin para ver las estadísticas del tenant.",
+      en: "You need the tenant_admin role to see the tenant statistics.",
+    },
+    dashboardError: {
+      es: "No se pudo cargar el dashboard: {detail}",
+      en: "Could not load the dashboard: {detail}",
+    },
+
+    windowLabel: { es: "Ventana:", en: "Window:" },
+    currencyLabel: { es: "Moneda:", en: "Currency:" },
+
+    runs: { es: "Runs", en: "Runs" },
+    successRateWindow: { es: "Tasa de éxito ({days}d)", en: "Success rate ({days}d)" },
+    meanDuration: { es: "Tiempo medio", en: "Mean time" },
+    meanCost: { es: "Coste medio", en: "Mean cost" },
+    totalCost: { es: "Coste total", en: "Total cost" },
+
+    trendTitle: {
+      es: "Tendencia de tasa de éxito (diaria)",
+      en: "Success-rate trend (daily)",
+    },
+    sparklineLabel: { es: "Tasa de éxito por día", en: "Success rate per day" },
+    sparklineEmptyLabel: { es: "Sin runs en la ventana", en: "No runs in the window" },
+
+    consumptionTitle: { es: "Resumen de consumo", en: "Consumption summary" },
+    tokensBreakdown: { es: "Tokens (in/out/cached)", en: "Tokens (in/out/cached)" },
+    costliestTitle: { es: "Run más costoso", en: "Costliest run" },
+    tokensSuffix: { es: "tokens", en: "tokens" },
+
+    segTitle: {
+      es: "Segmentación de coste: IA vs Humano",
+      en: "Cost breakdown: AI vs human",
+    },
+    segBarLabel: {
+      es: "Coste IA {ai}%, coste humano {human}%",
+      en: "AI cost {ai}%, human cost {human}%",
+    },
+    segAi: { es: "Coste IA", en: "AI cost" },
+    segHuman: { es: "Coste humano", en: "Human cost" },
+    segHours: { es: "{hours} h registradas", en: "{hours} h logged" },
+    segNote: {
+      es: "El coste IA proviene de las executions; el coste humano es tarifa × horas de las sesiones de trabajo (human_work_sessions), convertido a USD. Ambos en USD canónico.",
+      en: "AI cost comes from executions; human cost is rate × hours from the work sessions (human_work_sessions), converted to USD. Both in canonical USD.",
+    },
+
+    topAgents: { es: "Agentes top (tasa de éxito)", en: "Top agents (success rate)" },
+    bottomAgents: { es: "Agentes bottom (tasa de éxito)", en: "Bottom agents (success rate)" },
+    noRuns: { es: "Sin runs.", en: "No runs." },
+    deletedAgent: { es: "(agente eliminado)", en: "(deleted agent)" },
+
+    byAgentTitle: { es: "Por agente", en: "By agent" },
+    colAgent: { es: "Agente", en: "Agent" },
+    colRole: { es: "Rol", en: "Role" },
+    colSuccess: { es: "Éxito", en: "Success" },
+
+    explorerTitle: { es: "Explorador de runs", en: "Runs explorer" },
+    filterRole: { es: "Rol (ej. backend)", en: "Role (e.g. backend)" },
+    filterVerdict: { es: "Verdict (ej. done)", en: "Verdict (e.g. done)" },
+    filterModel: { es: "Modelo", en: "Model" },
+    filterMinCost: { es: "Coste mínimo USD", en: "Min cost USD" },
+    runsError: {
+      es: "No se pudo cargar el explorador: {detail}",
+      en: "Could not load the explorer: {detail}",
+    },
+    runsEmpty: { es: "Sin runs para estos filtros.", en: "No runs for these filters." },
+    colTimestamp: { es: "Timestamp", en: "Timestamp" },
+    colPlan: { es: "Plan", en: "Plan" },
+    colTask: { es: "Tarea", en: "Task" },
+    colModel: { es: "Modelo", en: "Model" },
+    colDuration: { es: "Duración", en: "Duration" },
+    colTokens: { es: "Tokens", en: "Tokens" },
+    colCostUsd: { es: "Coste USD", en: "Cost USD" },
+    colCostConverted: { es: "Coste {currency}", en: "Cost {currency}" },
+    colVerdict: { es: "Verdict", en: "Verdict" },
+    colRetries: { es: "Reintentos", en: "Retries" },
+    convertedTitle: {
+      es: "Convertido a {currency} con la tasa del {date} (1 USD = {rate} {currency})",
+      en: "Converted to {currency} at the {date} rate (1 USD = {rate} {currency})",
+    },
+    noRateTitle: {
+      es: "Sin tasa de cambio para la fecha de este run",
+      en: "No exchange rate for this run's date",
+    },
+    prev: { es: "Anterior", en: "Previous" },
+    next: { es: "Siguiente", en: "Next" },
+    pageN: { es: "Página {n}", en: "Page {n}" },
+
+    currencyNote: {
+      es: "Costes almacenados en {currency} canónico. El selector de moneda convierte cada run a la tasa de cambio de su propia fecha (solo visualización; el coste USD no cambia). Los tokens cacheados se muestran como 0 hasta que el runtime capture el recuento por llamada.",
+      en: "Costs are stored in canonical {currency}. The currency selector converts each run at the exchange rate of its own date (display only; the USD cost does not change). Cached tokens show as 0 until the runtime captures the per-call count.",
+    },
+  },
+
+  /**
+   * `lib/memory/honesty.ts` — los textos de "no disponible aún" del subsistema
+   * de memoria (Plan 06.17 `task_06_17_06`).
+   *
+   * Vive en el diccionario aunque su llamante NO sea un componente: `translate`
+   * es una función pura que recibe el idioma, así que un módulo de lógica sin
+   * React puede usarla igual. Eso es lo que permitió retirar de aquí los
+   * ternarios sin cambiar la firma pública de `memoryDetectorState(…, lang)`.
+   */
+  memoryHonesty: {
+    unavailable: { es: "No disponible aún", en: "Not available yet" },
+    detectorNote: {
+      es: "Ninguna memoria tiene aún embedding (el back-fill no ha corrido o el embebedor está caído), así que la similitud y el umbral no operan todavía.",
+      en: "No memory has an embedding yet (the back-fill has not run or the embedder is down), so similarity and the threshold do not operate yet.",
+    },
+    privateScopeWarning: {
+      es: "Con scope «privada», el agente IA no memoriza nada entre ejecuciones: el Memorizer omite estos runs (skip_private). Elige otro scope si quieres que recuerde.",
+      en: "With «private» scope, the AI agent does not memorize anything across runs: the Memorizer skips these runs (skip_private). Pick another scope if you want it to remember.",
+    },
+    placeholderField: {
+      es: "Campo placeholder: no está cableado todavía y no tiene efecto.",
+      en: "Placeholder field: not wired yet, no effect.",
+    },
+  },
+
+  /**
+   * `lib/capability/hub.ts` — los badges de estado de las cuatro secciones del
+   * Hub de capacidades (Saber / Recordar / Ser / Hacer, ADR 0054/0055).
+   *
+   * Las formas con `{n}` llevan clave singular y plural separadas: el castellano
+   * y el inglés no pluralizan igual ("2 KBs asignadas" vs "2 KBs assigned") y
+   * derivarlo con una regla común acabaría en "1 memorias".
+   */
+  capabilityHub: {
+    saberEmpty: { es: "Sin conocimiento asignado", en: "No knowledge assigned" },
+    saberOne: { es: "{n} KB asignada", en: "{n} KB assigned" },
+    saberMany: { es: "{n} KBs asignadas", en: "{n} KBs assigned" },
+    recordarPrivate: { es: "Privada: no memoriza", en: "Private: not remembering" },
+    recordarEmpty: { es: "Sin memoria todavía", en: "No memory yet" },
+    recordarNoProject: { es: "{n} en memoria · sin proyecto", en: "{n} in memory · no project" },
+    recordarOne: { es: "{n} memoria", en: "{n} memory" },
+    recordarMany: { es: "{n} memorias", en: "{n} memories" },
+    serNotApplicable: { es: "No aplica", en: "Not applicable" },
+    serUnconfigured: { es: "Modelo no configurado", en: "Model not configured" },
+    serConfigured: { es: "Modelo configurado", en: "Model configured" },
+    hacerUnrestricted: { es: "Sin restricción por agente", en: "No per-agent restriction" },
+    hacerEmpty: { es: "Sin acciones efectivas", en: "No effective actions" },
+    hacerOne: { es: "{n} acción efectiva", en: "{n} effective action" },
+    hacerMany: { es: "{n} acciones efectivas", en: "{n} effective actions" },
+  },
+
+  /** `lib/cortex-curiosity.ts` — budget diario de búsquedas del córtex. */
+  cortexCuriosity: {
+    budgetNoCap: {
+      es: "{used} búsquedas hoy · sin cupo configurado",
+      en: "{used} searches today · no cap configured",
+    },
+    budgetUsage: {
+      es: "{used} de {cap} búsquedas hoy ({pct} %)",
+      en: "{used} of {cap} searches today ({pct}%)",
+    },
+  },
+
+  /** `lib/cortex-identity.ts` — resumen legible del diff de identidad. */
+  cortexIdentity: {
+    versionLabel: { es: "versión {n}", en: "version {n}" },
+    unset: { es: "sin definir", en: "unset" },
+    changesOne: { es: "{label}: {n} ajuste", en: "{label}: {n} change" },
+    changesMany: { es: "{label}: {n} ajustes", en: "{label}: {n} changes" },
+    rewritten: { es: "{label} reescrita", en: "{label} rewritten" },
+    noChanges: { es: "sin cambios", en: "no changes" },
+  },
+
+  /** `lib/persona/persona.ts` — validación de cliente del `model_config`. */
+  persona: {
+    errorProvider: { es: "Selecciona un proveedor.", en: "Select a provider." },
+    errorModelEmpty: { es: "El modelo no puede estar vacío.", en: "Model cannot be empty." },
+    errorTemperature: {
+      es: "La temperatura debe estar entre {min} y {max}.",
+      en: "Temperature must be between {min} and {max}.",
+    },
+  },
 } as const satisfies Dictionary;
 
 /** La forma exacta del diccionario, para derivar las claves válidas. */

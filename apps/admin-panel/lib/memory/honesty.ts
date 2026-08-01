@@ -22,12 +22,20 @@
  * y se testea aislado (`memory-honesty.test.ts`).
  */
 
+import { translate } from "@/lib/i18n";
 import type { Lang } from "@/lib/lang-context";
 
-/** Etiqueta canónica "No disponible aún" / "Not available yet" (ES + EN). */
+/**
+ * Etiqueta canónica "No disponible aún" / "Not available yet" (ES + EN).
+ *
+ * Se deriva del diccionario (`memoryHonesty.unavailable`) en vez de repetir los
+ * literales: `translate` es puro y recibe el idioma, así que este módulo sin
+ * React puede usarlo igual que un componente. Los llamantes que indexaban el
+ * `Record` siguen funcionando.
+ */
 export const UNAVAILABLE_LABEL: Record<Lang, string> = {
-  es: "No disponible aún",
-  en: "Not available yet",
+  es: translate("es", "memoryHonesty", "unavailable"),
+  en: translate("en", "memoryHonesty", "unavailable"),
 };
 
 /**
@@ -54,10 +62,7 @@ export function memoryDetectorState(hasAnyEmbedding: boolean, lang: Lang): Memor
   return {
     available: false,
     label: UNAVAILABLE_LABEL[lang],
-    note:
-      lang === "es"
-        ? "Ninguna memoria tiene aún embedding (el back-fill no ha corrido o el embebedor está caído), así que la similitud y el umbral no operan todavía."
-        : "No memory has an embedding yet (the back-fill has not run or the embedder is down), so similarity and the threshold do not operate yet.",
+    note: translate(lang, "memoryHonesty", "detectorNote"),
   };
 }
 
@@ -70,9 +75,7 @@ export function memoryDetectorState(hasAnyEmbedding: boolean, lang: Lang): Memor
  */
 export function privateScopeMemoryWarning(memoryScope: string, lang: Lang): string | null {
   if (memoryScope !== "private") return null;
-  return lang === "es"
-    ? "Con scope «privada», el agente IA no memoriza nada entre ejecuciones: el Memorizer omite estos runs (skip_private). Elige otro scope si quieres que recuerde."
-    : "With «private» scope, the AI agent does not memorize anything across runs: the Memorizer skips these runs (skip_private). Pick another scope if you want it to remember.";
+  return translate(lang, "memoryHonesty", "privateScopeWarning");
 }
 
 /**
@@ -81,9 +84,7 @@ export function privateScopeMemoryWarning(memoryScope: string, lang: Lang): stri
  * "placeholder" para no prometer una capacidad inexistente.
  */
 export function placeholderFieldNote(lang: Lang): string {
-  return lang === "es"
-    ? "Campo placeholder: no está cableado todavía y no tiene efecto."
-    : "Placeholder field: not wired yet, no effect.";
+  return translate(lang, "memoryHonesty", "placeholderField");
 }
 
 /**

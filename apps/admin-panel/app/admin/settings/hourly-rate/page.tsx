@@ -21,7 +21,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface HourlyRateResponse {
   hourly_rate: string | null;
@@ -29,6 +31,8 @@ interface HourlyRateResponse {
 }
 
 export default function HourlyRatePage() {
+  const t = useT("settingsHourlyRate");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [rate, setRate] = useState("");
   const [currency, setCurrency] = useState("EUR");
@@ -72,18 +76,18 @@ export default function HourlyRatePage() {
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Coins className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Tarifa horaria del tenant"
-        description="Multiplicador que el cálculo de coste humano (planes) usa por defecto. Si lo dejas vacío, se aplica el valor por defecto de plataforma (50 EUR/h)."
+        title={t("title")}
+        description={t("description")}
         data-testid="hourly-rate-header"
       />
 
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Configuración</CardTitle>
+          <CardTitle>{t("cardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {settingsQuery.isLoading ? (
-            <p className="text-muted-foreground text-sm">Cargando…</p>
+            <p className="text-muted-foreground text-sm">{t("loading")}</p>
           ) : (
             <form
               className="space-y-4"
@@ -94,7 +98,7 @@ export default function HourlyRatePage() {
               }}
             >
               <div>
-                <Label htmlFor="hourly-rate-input">Tarifa por hora</Label>
+                <Label htmlFor="hourly-rate-input">{t("rateLabel")}</Label>
                 <Input
                   id="hourly-rate-input"
                   data-testid="hourly-rate-input"
@@ -108,7 +112,7 @@ export default function HourlyRatePage() {
                 />
               </div>
               <div>
-                <Label htmlFor="hourly-rate-currency-input">Moneda</Label>
+                <Label htmlFor="hourly-rate-currency-input">{t("currencyLabel")}</Label>
                 <Input
                   id="hourly-rate-currency-input"
                   data-testid="hourly-rate-currency-input"
@@ -121,13 +125,11 @@ export default function HourlyRatePage() {
               </div>
               {mutation.isError ? (
                 <p className="text-destructive text-xs" data-testid="hourly-rate-error">
-                  {mutation.error instanceof ApiError
-                    ? mutation.error.body
-                    : String(mutation.error)}
+                  {errorText(mutation.error)}
                 </p>
               ) : mutation.isSuccess ? (
                 <p className="text-emerald-600 text-xs" data-testid="hourly-rate-saved">
-                  Guardado.
+                  {t("saved")}
                 </p>
               ) : null}
               <div className="flex justify-end">
@@ -136,7 +138,7 @@ export default function HourlyRatePage() {
                   disabled={!isDirty || mutation.isPending}
                   data-testid="hourly-rate-submit"
                 >
-                  Guardar
+                  {t("save")}
                 </Button>
               </div>
             </form>

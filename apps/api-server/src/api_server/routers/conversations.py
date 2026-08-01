@@ -53,6 +53,7 @@ from api_server.events import (
     publish_conversation_event,
 )
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.routers._guards import verify_project_visible
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -92,16 +93,6 @@ project_planning_roles_router = APIRouter(prefix="/projects/{project_id}", tags=
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Project:
-    """RLS hides cross-tenant projects; this turns a silent 0-row SELECT
-    into an explicit 404 instead of a downstream FK error."""
-    result = await session.execute(
-        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-    return project
 
 
 async def _load_conversation(session: AsyncSession, conversation_id: UUID) -> Conversation:
@@ -154,7 +145,7 @@ async def create_conversation(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ConversationResponse:
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
 
     conv = Conversation(
         tenant_id=tenant_id,
@@ -190,7 +181,7 @@ async def list_conversations(
     hilos creados en el mismo instante pueden salir en las DOS páginas o en
     ninguna, que es el fallo clásico de paginar por OFFSET sin orden total.
     """
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     stmt = (
         select(Conversation)
         .where(
@@ -535,7 +526,7 @@ async def list_project_planning_roles(
     Siempre incluye `project_manager`: es el único rol obligatorio y el que
     conduce cada turno de planificación.
     """
-    project = await _verify_project_visible(session, project_id)
+    project = await verify_project_visible(session, project_id)
     roles = await team_planning_roles(session, project)
     return PlanningRolesResponse(roles=sorted(r.value for r in roles))
 

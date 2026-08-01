@@ -139,6 +139,18 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   del instalador (custodia coordinada con prod-10). Documentar que cubre el caso "api-server
   caído".
 - **Tiempo**: 0,5 días · **Complejidad**: s · **Dependencias**: ninguna (paralelizable con 01)
+- ⏳ **Pendiente (2026-08-01)**: la CONFIG está hecha y guardada por
+  `tests/unit/test_alertmanager_routing.py` — `alertmanager.yml` tiene el receiver
+  `critical-fallback` y el `continue: true` sin el cual el árbol de rutas se
+  detiene en la primera coincidencia y el respaldo habría SUSTITUIDO a la
+  notificación por plataforma en vez de duplicarla. El instalador monta ese mismo
+  fichero (`compose_generator.py:_alertmanager_service`), así que no hay plantilla
+  que duplicar. **Lo que falta es la CREDENCIAL**: el receiver lee el webhook de
+  Slack de `/etc/alertmanager/secrets/slack_api_url` y el instalador no provisiona
+  ni monta ese fichero, así que en un despliegue generado el canal de respaldo
+  falla en cada envío (degradación deliberada: Alertmanager arranca igual). Cierra
+  con el aporte de prod-10 (custodia) + un volumen en `_alertmanager_service`.
+  Además, su docstring sigue diciendo «no SMTP/Slack secrets here», ya falso.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_02_a
@@ -148,7 +160,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_alert_e2e_03` — Test e2e de alerta sintética
 
-- [ ] **Título**: Alerta sintética → notificación visible para el System Admin
+- [x] **Título**: Alerta sintética → notificación visible para el System Admin
 - **Descripción**: test de integración que hace POST de un payload webhook v4 real (fixture) a
   `/internal/alerts/ingest` y verifica que se crea la notificación en BD y que el dispatcher la
   encola. Smoke manual vía `amtool alert add` documentado en el runbook (Fase F).
@@ -164,7 +176,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_metrics_api_04` — `/metrics` en api-server
 
-- [ ] **Título**: Exporter Prometheus en api-server con métricas HTTP y de negocio
+- [x] **Título**: Exporter Prometheus en api-server con métricas HTTP y de negocio
 - **Descripción**: añadir `prometheus_client` a `apps/api-server/pyproject.toml` y montar
   `make_asgi_app()` en `/metrics` (sin auth, alcanzable solo desde `agentic-net`; NO colisiona
   con el `/metrics` JSON autenticado de `human_inbox.py:255`, que es otro path). Métricas:
@@ -172,6 +184,18 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   `llm_tokens_total{provider}`, `llm_cost_eur_total{provider}` (contadores alimentados por la
   contabilidad de prod-07) y gauge `human_approvals_pending`.
 - **Tiempo**: 2 días · **Complejidad**: m
+- ✅ **Cerrada (2026-08-01)** con una divergencia: las métricas de NEGOCIO no se
+  declaran en el api-server. Un contador in-process de ejecuciones/tokens/coste
+  allí valdría siempre 0 (eso pasa en los workers) y sería la «configuración
+  muerta» que prohíbe el criterio de cierre 4. Se emiten desde el sampler de
+  workers, que consulta la BD y ve el sistema entero: `agentic_executions_24h`,
+  `agentic_human_approvals_pending` + `_oldest_age_seconds`,
+  `agentic_llm_tokens_24h{provider}` / `agentic_llm_cost_usd_24h{provider}` y
+  `agentic_run_tokens_24h` / `agentic_run_cost_usd_24h`. Coste en DOS familias a
+  propósito: `llm_usage_events` tiene proveedor pero solo cubre
+  asistente/córtex/planning, y `executions.total_cost_usd` (la mayor parte del
+  gasto) no tiene columna de proveedor — fundirlas repartiría el gasto de los runs
+  entre proveedores inventados. El api-server expone lo suyo: HTTP + proceso/GC.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_04_a
@@ -181,7 +205,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_metrics_workers_05` — `/metrics` en workers + PoolMetrics
 
-- [ ] **Título**: Exporter Prometheus en workers conectado a PoolMetrics y señales Celery
+- [x] **Título**: Exporter Prometheus en workers conectado a PoolMetrics y señales Celery
 - **Descripción**: añadir `prometheus_client` a `apps/workers/pyproject.toml`; en
   `apps/workers/src/workers/celery_app.py` arrancar `start_http_server(9540)` en
   `worker_process_init`. Conectar el `PoolMetrics` huérfano de `runtime_pool.py:125` (su
@@ -189,6 +213,16 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   `celery_tasks_total{queue,status}` y duración por cola; gauge `celery_queue_depth{queue}` y
   tamaño de DLQ muestreados con un beat ligero contra Redis.
 - **Tiempo**: 2 días · **Complejidad**: m
+- ✅ **Cerrada (2026-08-01)** según el **ADR 0141**, que ya había descartado las
+  dos premisas de esta tarea: `runtime_pool.py` (y con él `PoolMetrics`) se borró
+  en `7959cdcb`, y `start_http_server(9540)` en `worker_process_init` no funciona
+  con el pool prefork (se dispara en cada hijo). Pero el ADR resolvió el
+  TRANSPORTE y dejó la métrica sin hacer: **nadie contaba los resultados de las
+  tareas**. Añadido `workers/task_metrics.py` — las señales `task_prerun` /
+  `postrun` / `failure` acumulan en Redis (compartido por los N hijos) y el
+  sampler publica `agentic_celery_tasks_total{queue,status}` y
+  `agentic_celery_task_duration_seconds_total{queue}`. Sin esto, un worker sano y
+  uno que drena la cola fallando el 100% presentan la misma profundidad: cero.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_05_a
@@ -198,7 +232,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_scrape_rules_06` — Scrape configs + reglas de alerta de servicio
 
-- [ ] **Título**: Jobs de scrape de apps y reglas `up==0`, cola creciendo y DLQ no vacía
+- [x] **Título**: Jobs de scrape de apps y reglas `up==0`, cola creciendo y DLQ no vacía
 - **Descripción**: en `docker/monitoring/prometheus/prometheus.yml:35` añadir jobs `api-server`
   (`api-server:8000/metrics`) y `workers` (`workers:9540`), más el resto de apps cuando prod-01
   las declare. Nuevo `docker/monitoring/prometheus/rules/app_alerts.yml`: `ServiceDown` (`up==0`
@@ -215,7 +249,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_dashboards_07` — Dashboards Grafana de aplicación
 
-- [ ] **Título**: Dashboard "Plataforma" junto al host-overview existente
+- [x] **Título**: Dashboard "Plataforma" junto al host-overview existente
 - **Descripción**: añadir `docker/monitoring/grafana/dashboards/platform-overview.json`
   (provisionado por el `dashboards.yml` ya existente): ejecuciones por estado/h, tokens y coste
   LLM por proveedor, profundidad de colas + DLQ, tasa 5xx y latencia p95 del api-server,
@@ -232,12 +266,21 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_shared_logging_08` — Paquete `packages/shared-logging`
 
-- [ ] **Título**: Extraer `api_server.logging` (setup, pii, context) a un paquete compartido
+- [x] **Título**: Extraer `api_server.logging` (setup, pii, context) a un paquete compartido
 - **Descripción**: mover `apps/api-server/src/api_server/logging/{setup,pii,context}.py` a
   `packages/shared-logging/` — hoy orchestrator (`__main__.py:23`) y watchdog (`__main__.py:65`)
   importan `api_server.logging` cruzando apps, un anti-patrón. Mantener shims de re-export en
   api-server. Ampliar el catálogo PII con prefijos de API keys (`sk-`, `ghu_`, `hvs.`).
 - **Tiempo**: 1,5 días · **Complejidad**: m
+- ✅ **Cerrada (2026-08-01)** con la decisión del **ADR 0141** (`accepted`): NO se
+  extrae `packages/shared-logging`. Los tres consumidores construyen sobre la
+  imagen del api-server (`ARG BASE_IMAGE`) y `workers` ya importa `api_server` en
+  ~50 sitios más, así que mover tres ficheros no elimina el acoplamiento: lo
+  disfraza. El valor se entregó vía `api_server/logging/celery_pipeline.py`. Lo
+  que SÍ quedaba de esta tarea era el catálogo PII, y está hecho: claves de API
+  por prefijo (`sk-`, `gh[pousr]_`, `hvs.`) enmascaradas conservando el prefijo
+  — saber si la que se filtró era de Vault o de un proveedor LLM es medio
+  diagnóstico. Con cuerpo mínimo para no comerse `sk-1` de un nombre de rama.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_08_a
@@ -283,7 +326,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_adr_loki_otel_11` — ADRs: Loki (desplegar/retirar) y OTEL (OTLP/recorte)
 
-- [ ] **Título**: Redactar dos ADR en `docs/05-architecture-decisions/` con opciones, coste y
+- [x] **Título**: Redactar dos ADR en `docs/05-architecture-decisions/` con opciones, coste y
       recomendación; aprobación humana requerida
 - **Descripción**: ADR-Loki y ADR-OTEL según las opciones descritas en «Decisiones clave».
   Ambos quedan `proposed` hasta decisión humana; este plan presupuesta las opciones recomendadas
@@ -294,7 +337,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_loki_deploy_12` — Implementar la opción aprobada del ADR-Loki
 
-- [ ] **Título**: Desplegar Loki + Alloy en el overlay de monitoring (opción A) o retirar Loki
+- [x] **Título**: Desplegar Loki + Alloy en el overlay de monitoring (opción A) o retirar Loki
       del stack declarado (opción B)
 - **Descripción**: si A: servicios `loki` y `alloy` en `docker/docker-compose.monitoring.yml`
   (Alloy leyendo `/var/lib/docker/containers`), retención 30 días, datasource Loki en
@@ -303,6 +346,17 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   instalador. Si B: la edición de CLAUDE.md/docs se ejecuta vía prod-15-gobernanza. Estimación
   presupuestada para la opción A.
 - **Tiempo**: 2 días · **Complejidad**: l · **Dependencias**: tasks 11 (ADR aprobado) y 09 (los
+- ✅ **Cerrada (2026-08-01)**: la premisa del plan («Loki no existe en ningún
+  compose») era FALSA — ver el aviso de recon del ADR 0139. Loki y **Promtail**
+  (no Alloy) llevan desplegados y `healthy` desde `e3b2e243`, con datasource
+  provisionado y retención de 168 h. Lo que faltaba era la guarda, y ese era el
+  riesgo real: casi todas las formas de romper esto son mudas. Añadido
+  `tests/unit/test_monitoring_compose_loki.py`, que cierra las cuatro —
+  Promtail sin el bind de `/var/lib/docker/containers` (arranca sano y no envía
+  nada), `retention_period` sin `retention_enabled` (parece que borra y no borra),
+  `loki_data` sin volumen nombrado, y la URL del datasource separada del nombre
+  del servicio. La retención definitiva sigue siendo decisión del operador (ADR
+  0139 `proposed`).
   logs deben ser JSON para que la búsqueda sirva)
 - **Tests automáticos**:
   ```yaml
@@ -313,7 +367,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_otel_cleanup_13` — Implementar la opción aprobada del ADR-OTEL
 
-- [ ] **Título**: Recorte explícito de OTEL (opción A): retirar dependencia muerta y docstring
+- [x] **Título**: Recorte explícito de OTEL (opción A): retirar dependencia muerta y docstring
       engañoso
 - **Descripción**: eliminar `opentelemetry-instrumentation-sqlalchemy` de
   `apps/api-server/pyproject.toml:73` (`SQLAlchemyInstrumentor` jamás se invoca), reescribir el
@@ -344,6 +398,16 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   `/internal/alerts/ingest` (payload Alertmanager sintético) con fallback a log. Si el humano
   decide retirarlo, la tarea se convierte en eliminación del paquete + docs (mismo presupuesto).
 - **Tiempo**: 1,5 días · **Complejidad**: m · **Dependencias**: task_prod08_alert_ingest_01
+- ⏳ **Pendiente (2026-08-01)**: sin empezar y **verificado que sigue haciendo
+  falta**. `grep -n watchdog docker/docker-compose*.yml compose_generator.py` da
+  una sola coincidencia, y es un COMENTARIO. `apps/watchdog/` existe con su
+  `pyproject.toml` y su `service_monitor.py`, no está en `_BUILDERS` del
+  instalador, y al agotar reintentos su única salida sigue siendo
+  `_logger.error("watchdog.alert", ...)` — una línea de log local. El destino al
+  que debe POSTear (`/internal/alerts/ingest`) YA existe y funciona de punta a
+  punta (ver task 03), así que esta tarea es solo el emisor. Fuera del carril
+  `observabilidad`: toca `docker/docker-compose.yml`, `apps/watchdog/**` y
+  `compose_generator.py`.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_14_a
@@ -361,6 +425,17 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   ser honesto para que `ServiceDown`/watchdog actúen. La verificación con `docker inspect`
   (tinyproxy parado → `unhealthy`) queda en el test humano.
 - **Tiempo**: 0,25 días · **Complejidad**: s
+- ⏳ **Pendiente (2026-08-01)**: hecho a MEDIAS. El compose canónico ya es honesto
+  (`docker/docker-compose.yml:411` y `:445` terminan en `|| exit 1`, para
+  egress-proxy y registry-proxy). El generador del instalador NO: sigue con
+  `|| true` en `compose_generator.py:458` (egress-proxy) y `:482`
+  (registry-proxy), así que **en producción un tinyproxy muerto sigue saliendo
+  `healthy`** — justo el despliegue donde más duele. El cambio es literal: en esas
+  dos líneas, `... | grep -q tinyproxy || true` → `... | grep -q tinyproxy ||
+exit 1`. Fuera del carril `observabilidad` (`apps/installer/**`). Ojo: el test
+  que cita el plan (`apps/installer/backend/tests/test_compose_generator.py`) no
+  existe; el real es `tests/unit/test_compose_generator.py` y hoy no cubre el
+  healthcheck de los proxies.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_15_a
@@ -372,7 +447,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_runbook_16` — Runbook de observabilidad
 
-- [ ] **Título**: `docs/06-runbooks/observabilidad.md` + referencia de métricas en
+- [x] **Título**: `docs/06-runbooks/observabilidad.md` + referencia de métricas en
       `docs/04-reference/`
 - **Descripción**: catálogo de alertas (qué significa cada una y qué hacer), cómo buscar logs por
   `execution_id`/`tenant_id`/`request_id` (Loki o json-file según ADR), cómo probar la cadena con

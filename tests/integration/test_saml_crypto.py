@@ -543,11 +543,13 @@ async def test_correctly_signed_assertion_accepted(configured_app, migrations_pg
         resp = await client.post(
             "/auth/sso/saml/acs",
             data={"SAMLResponse": saml_response},
+            follow_redirects=False,
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["token_type"] == "bearer"
-        token = body["access_token"]
+        # 303 + Set-Cookie desde el ADR 0133 (ver la nota en test_saml.py). Lo
+        # que este test afirma es la firma; el estado solo dice «entró».
+        assert resp.status_code == 303, resp.text
+        token = client.cookies.get("agentic_session")
+        assert token
         me = await client.get("/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200, me.text
         assert me.json()["email"] == "signer@acme.test"

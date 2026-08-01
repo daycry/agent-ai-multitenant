@@ -212,7 +212,9 @@ Informes previos a un plan: exploran el problema y proponen opciones. No llevan 
 35 planes están en `pending_human_validation`: **código mergeado en `master` sin sign-off humano**.
 Eso no es un detalle burocrático — es la razón de que casi ningún `blocking_plan` esté `completed` y,
 en cascada, de que 6 fases se empezaran con el gate incumplido (hallazgo docsroadmap-2; inventario
-exacto y opciones en el **ADR 0138**, `proposed`, pendiente de decisión humana).
+exacto en el **ADR 0138**, `accepted` desde el 2026-07-31 — opción C, híbrida). El mecanismo ya
+está aplicado: esas 6 fases llevan `gate_override` con justificación escrita en su frontmatter, y
+`tests/unit/test_roadmap_frontmatter.py` lo verifica en cada suite.
 
 **Orden recomendado de validación** (primero lo que toca producción directamente):
 
@@ -223,8 +225,13 @@ exacto y opciones en el **ADR 0138**, `proposed`, pendiente de decisión humana)
 | 3     | [08-sso-empresarial.md](./08-sso-empresarial.md)             | Superficie de autenticación expuesta                          |
 | 4     | [09-marketplace.md](./09-marketplace.md)                     | Instala código de terceros en el tenant                       |
 
-El resto sigue por prioridad de la serie `prod-*` (P0 → P1 → P2). Responsable y ventana de cada
-validación los fija el ADR 0138 al aprobarse; este índice no los inventa.
+El resto sigue por prioridad de la serie `prod-*` (P0 → P1 → P2).
+
+**Responsable y ventana siguen sin nombrar, y es a propósito**: el ADR 0138 los deja fuera de su
+alcance por escrito («este ADR no los puede inventar» — comprometen calendario de una persona). Sin
+ellos la cola está priorizada pero no agendada, que es exactamente el riesgo 1 de `prod-15`.
+Rellenar las dos columnas que faltan es la única pieza que le queda a `task_gov_reestado_04`, y la
+firma un humano.
 
 ## MVP Funcional
 

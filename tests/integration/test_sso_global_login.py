@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -74,6 +75,12 @@ _SIGNING_KEY = RSAKey.generate_key(2048, parameters={"kid": _KID}, private=True)
 
 
 def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID) -> str:
+    # `exp`/`iat` de verdad: el IdP falso acuñaba tokens SIN caducidad, y el
+    # verificador tampoco la miraba (gotcha joserfc-decode-no-valida-exp). Al
+    # cerrar ese hueco en `auth/sso/oidc.py` estos dobles tenían que dejar de
+    # emitir tokens inmortales: un fake que no puede caducar no ejercita el
+    # camino real.
+    now = int(time.time())
     header = {"alg": "RS256", "kid": _KID}
     claims = {
         "iss": _ISSUER,
@@ -82,6 +89,8 @@ def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID
         "nonce": nonce,
         "email": "Worker@Acme.test",  # mixed case -> flow lowercases it
         "name": "Worker Person",
+        "iat": now,
+        "exp": now + 3600,
     }
     return joserfc_jwt.encode(header, claims, _SIGNING_KEY)
 

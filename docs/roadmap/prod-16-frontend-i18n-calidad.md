@@ -157,7 +157,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `components/layout/admin-header.tsx` y la sidebar; eliminar los 63
       ternarios inline de los 12 ficheros que ya "traducen" a mano,
       moviéndolos a claves del diccionario.
-  - ⏳ **Pendiente (2026-07-31):** login, `select-tenant`, `no-access`, header y shell YA usan `useT()`, pero el spec `e2e/lang-toggle.spec.ts` que el plan exige no existe (y es Playwright, no ejecutable en esta pasada) y los ternarios inline no están eliminados: `check-i18n.mjs` cuenta 77 en 18 ficheros.
+  - ⏳ **Pendiente (2026-08-01):** login, `select-tenant`, `no-access`, header y shell YA usan `useT()`, y los ternarios inline bajaron de **77 en 18 ficheros a 44 en 11** (siete módulos de `lib/` migrados: `capability/hub`, `memory/honesty`, `tools/taxonomy`, `runtime-templates`, `cortex-curiosity`, `cortex-identity`, `persona/persona`). Lo que falta para cerrar: los 44 restantes, todos en `components/capability/*` (25), `agents/*` (10), `tools/page.tsx` (4), `agent-tools-diagnostic` (3) y `cortex/mind` (1) — y el spec `e2e/lang-toggle.spec.ts` que el plan exige, que sigue sin existir y es Playwright (no ejecutable sin stack levantado). El equivalente en vitest SÍ existe ya para login (`app/login/i18n.test.tsx`).
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
   ```yaml
@@ -172,7 +172,23 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `tenants`, `tenant-stats`, `backup/*` (3 páginas), `settings/*`,
       `projects/*` y `agents/*` (las dos últimas con sus secciones). Reducir
       la allowlist de `check-i18n.mjs` en cada lote.
-  - ⏳ **Pendiente (2026-07-31):** solo `users` está migrada; `tenants`, `tenant-stats`, `backup/*`, `settings/*`, `projects/*` y `agents/*` siguen en la `ATTR_ALLOWLIST` de `check-i18n.mjs`, y su test (`e2e/lang-toggle-core.spec.ts`) es Playwright y no existe.
+  - ⏳ **Pendiente (2026-08-01):** migradas **al completo** `users`, `backup/*` (las 3 páginas), `tenant-stats` y dos de `settings/`
+    (`security`, `hourly-rate`), con tests de render en los dos idiomas
+    (`app/admin/backup/i18n.test.tsx`, `app/admin/settings/i18n.test.tsx`,
+    `app/admin/tenant-stats/i18n.test.tsx`) y fuera ya de la `ATTR_ALLOWLIST`.
+    Faltan `projects/*` y `agents/*`.
+    **Dos correcciones al enunciado del plan**, verificadas contra el código:
+    (a) `tenants` NO existe como pantalla — no hay ningún `app/admin/tenants/`,
+    la gestión de tenants vive dentro de `users` (diálogo de memberships), así
+    que esa casilla del enunciado no tiene destino;
+    (b) `settings/page.tsx` y `settings/memories/page.tsx` **NO se pueden
+    migrar sólo en el frontend**: sus títulos y descripciones los sirve el
+    backend en `label_es`/`description_es`
+    (`apps/api-server/src/api_server/settings_registry.py`) y no existe el par
+    `_en`. Traducir sólo el marco dejaría la pantalla mitad en inglés y mitad
+    en castellano, que es justo el fallo que este plan cierra. Requiere añadir
+    `label_en`/`description_en` al registry (Python) antes de tocar el panel.
+    Su test (`e2e/lang-toggle-core.spec.ts`) sigue siendo Playwright y no existe.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
@@ -188,7 +204,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       notifications, docs, assistant, tools, memories…) en lotes, vaciar la
       allowlist de `check-i18n.mjs` y hacer barrido final: con el toggle en
       EN no debe quedar ninguna cadena de UI en castellano (y viceversa).
-  - ⏳ **Pendiente (2026-07-31):** `node scripts/check-i18n.mjs --strict` sale 1 — quedan 77 ternarios en 18 ficheros y 136 atributos de UI en castellano en 73 ficheros; las dos allowlists están lejos de vaciarse.
+  - ⏳ **Pendiente (2026-08-01):** `node scripts/check-i18n.mjs --strict` sigue saliendo 1, pero el contador bajó: de **77 ternarios en 18 ficheros a 44 en 11**, y de **136 atributos en 73 ficheros a 127 en 68**. Ninguno de los módulos grandes que enumera esta tarea (marketplace, guardrails, knowledge-bases, llm-providers, model-prices, ollama, notifications, docs, assistant, tools, memories) está migrado todavía.
 - **Tiempo**: 3 días · **Complejidad**: l · **Depende de**: `task_prod16_03`
 - **Tests automáticos**:
   ```yaml
@@ -207,6 +223,11 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       `lib/api.ts`. La versión común parsea el body JSON, extrae el `detail`
       Pydantic legible y nunca pinta el cuerpo crudo; las claves de error van
       al diccionario i18n. Borrar las 13 copias.
+  - 🔎 **Fuga encontrada y tapada (2026-08-01):** quedaba una 14ª copia sin
+    migrar. `app/admin/settings/hourly-rate/page.tsx` seguía pintando
+    `mutation.error.body` **crudo** en pantalla, que es justo lo que esta tarea
+    prohíbe. Sustituido por `useErrorText()`. La casilla estaba marcada `[x]`
+    con el defecto vivo: el conteo "13 copias" del enunciado se quedó corto.
 - **Tiempo**: 0,5 días · **Complejidad**: s · **Depende de**: `task_prod16_01`
 - **Coordinación**: prod-09 añade manejo global de 401 en `apiFetch`; si se
   ejecuta antes, rebasar sobre su versión de `lib/api.ts`.
@@ -255,7 +276,19 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       agents/[id] (813) y notifications (810). Añadir a `check-i18n.mjs` (o
       script hermano `check-component-size.mjs`) un guard que falle si algún
       `page.tsx` supera 800 líneas, para que la deuda no vuelva a crecer.
-  - ⏳ **Pendiente (2026-07-31):** `scripts/check-component-size.mjs` no existe y siguen sobre 800 líneas nueve `page.tsx`: llm-providers 996, sso/saml 943, projects/[id]/chat 926, sso 915, teams/[team_id] 914, cortex/mind 914, tenant-stats 861, notifications 831 y agents/[id] 824.
+  - ⏳ **Pendiente (2026-08-01):** el guard **ya existe**:
+    `scripts/check-component-size.mjs` + `npm run check:size`, con 11 tests en
+    `scripts/check-component-size.test.ts` (mismo trinquete que `check-i18n`:
+    allowlist que sólo mengua, fichero nuevo obeso = error, fichero de la
+    allowlist que CRECE = error, `--strict`, y autocomprobación contra el paso
+    en vacío). Partida **tenant-stats**: 861 → `page.tsx` 69 + 6 secciones
+    colocadas (mayor 284). Siguen **ocho** por encima de 800: llm-providers 996,
+    sso/saml 943, projects/[id]/chat 926, sso 915, teams/[team_id] 914,
+    cortex/mind 914, notifications 831 y agents/[id] 824.
+    **Nota de alcance**: la lista del enunciado envejeció — `knowledge-bases`
+    ya está por debajo, y `projects/[id]/chat`, `teams/[team_id]` y
+    `cortex/mind` cruzaron el límite DESPUÉS de escribirse el plan. Es
+    exactamente el crecimiento que el guard viene a frenar.
 - **Tiempo**: 2,5 días · **Complejidad**: l · **Depende de**: `task_prod16_07`
 - **Tests automáticos**:
   ```yaml
@@ -273,7 +306,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       de `llm-providers/page.tsx` (6 interfaces) y `model-prices`. Si D3=B:
       eliminar el script y la dev-dep `openapi-typescript` de
       `apps/admin-panel/package.json`.
-  - ⏳ **Pendiente (2026-07-31):** D3 sin decidir y ninguna de las dos ramas ejecutada — no existe `apps/admin-panel/types/`, y `generate:api-types` + la dev-dep `openapi-typescript` siguen en `package.json`.
+  - ⏳ **Pendiente (2026-08-01):** D3 sigue **sin decidir** y ninguna de las dos ramas ejecutada — no existe `apps/admin-panel/types/`, y `generate:api-types` + la dev-dep `openapi-typescript` siguen en `package.json`. **No la toma este carril**: las dos ramas son decisión de producto con coste fuera del frontend. La rama A obliga a levantar el api-server para regenerar y añade un job de drift al CI (coordinación con prod-02, que no está mergeado); la rama B borra una capacidad que alguien pudo dar por hecha. Elegir una u otra cambia el flujo de build, así que la decide un humano al aprobar el plan.
 - **Tiempo**: 1,5 días · **Complejidad**: m · **Depende de**: `task_prod16_08`
 - **Tests automáticos**:
   ```yaml

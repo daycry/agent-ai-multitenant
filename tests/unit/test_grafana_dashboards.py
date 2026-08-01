@@ -167,3 +167,22 @@ def test_the_platform_dashboard_shows_api_server_health() -> None:
     assert (
         "agentic_http_request_duration_seconds_bucket" in all_exprs
     ), "falta la latencia (p95) del api-server"
+
+
+def test_the_platform_dashboard_shows_what_the_new_alerts_watch() -> None:
+    """Cada alerta de aplicación necesita un panel donde mirar qué pasó.
+
+    Un operador al que le llega `HumanApprovalsStale` o `ExecutionFailureRateHigh`
+    a las 3 de la mañana necesita ver la serie, no solo el texto de la alerta;
+    si no, el aviso es un callejón sin salida y acaba ignorándose.
+    """
+    dashboard = next(d for name, d in _dashboards() if "agentic-platform" in name)
+    all_exprs = " ".join(expr for _title, expr in _exprs(dashboard))
+
+    assert (
+        "agentic_human_approvals_pending" in all_exprs
+    ), "sin panel de aprobaciones pendientes: HumanApprovalsStale no tiene dónde mirarse"
+    assert "agentic_celery_tasks_total" in all_exprs, (
+        "sin panel de resultado de tareas Celery: la profundidad de cola no "
+        "distingue un worker sano de uno que falla el 100% de lo que saca"
+    )

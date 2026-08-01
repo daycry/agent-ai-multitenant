@@ -43,7 +43,11 @@ from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.routers._helpers import require_tenant_id
-from api_server.routers.assistant import get_assistant_model, require_assistant_access
+from api_server.routers.assistant import (
+    aclose_assistant_model,
+    build_assistant_model,
+    require_assistant_access,
+)
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.routers.ws import _authenticate_socket
 
@@ -303,7 +307,11 @@ async def assistant_voice(
     try:
         async with open_tenant_session(principal) as gate_session:
             await require_assistant_access(principal, gate_session)
-        model = await get_assistant_model(principal=principal, vault=vault)
+        # `build_assistant_model`, no la dependencia: `get_assistant_model` es un
+        # async generator (prod-07 task_prod07_05) y este socket no es una request
+        # con ciclo de vida de FastAPI. El cierre del provider lo hacemos aquí, en
+        # el `finally` del bucle — sin él, cada socket de voz fugaba su pool.
+        model = await build_assistant_model(principal=principal, vault=vault)
     except HTTPException as exc:
         await _reject(ws, str(exc.detail))
         return
@@ -325,6 +333,8 @@ async def assistant_voice(
         _log.warning("assistant_voice.socket_error", error=str(exc))
         with contextlib.suppress(Exception):
             await ws.close(code=1011)
+    finally:
+        await aclose_assistant_model(model)
 
 
 __all__ = ["router"]

@@ -39,8 +39,8 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
 )
-from api_server.db.domain import Project
 from api_server.db.models import IncomingWebhookConfig, IncomingWebhookEvent
+from api_server.routers._guards import verify_project_visible_id
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
@@ -85,20 +85,6 @@ def _to_response(config: IncomingWebhookConfig) -> IncomingWebhookConfigResponse
     )
 
 
-async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> None:
-    """Resolve the path project under RLS, or 404.
-
-    RLS already scopes to the caller's tenant; this lookup turns a cross-tenant
-    / missing / soft-deleted project into an explicit 404 (never leaking whether
-    a project id exists elsewhere) before we create or list its configs.
-    """
-    result = await session.execute(
-        select(Project.id).where(Project.id == project_id, Project.deleted_at.is_(None))
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-
-
 async def _get_config_or_404(
     session: AsyncSession,
     *,
@@ -134,7 +120,7 @@ async def list_incoming_webhook_configs(
     path project. Soft-deleted configs are excluded.
     """
     require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible_id(session, project_id)
     result = await session.execute(
         select(IncomingWebhookConfig)
         .where(
@@ -165,7 +151,7 @@ async def create_incoming_webhook_config(
     provider so it stamps a signature we can verify.
     """
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible_id(session, project_id)
 
     secret = generate_signing_secret()
     config = IncomingWebhookConfig(

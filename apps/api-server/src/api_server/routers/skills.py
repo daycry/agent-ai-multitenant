@@ -28,6 +28,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import flush_or_conflict
 from api_server.routers._pagination import (
     apply_pagination,
     limit_query,
@@ -131,7 +132,7 @@ async def create_skill(
         is_builtin=False,
     )
     session.add(skill)
-    await session.flush()
+    await flush_or_conflict(session, context="skill.create")
     await session.refresh(skill)
     return to_skill_response(skill)
 
@@ -161,7 +162,7 @@ async def update_skill(
         transform={"required_tools": _str_uuid_list, "category": str},
     )
 
-    await session.flush()
+    await flush_or_conflict(session, context="skill.update")
     await session.refresh(skill)
     return to_skill_response(skill)
 

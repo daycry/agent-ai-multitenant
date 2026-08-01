@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { dictionary } from "./dictionary";
-import { interpolate, translate } from "./translate";
+import { interpolate, pickLang, translate } from "./translate";
 import { LANGS, type Lang } from "./types";
 
 /** Pares (namespace, clave) del diccionario, para recorrerlo entero. */
@@ -73,6 +73,30 @@ describe("dictionary — invariantes", () => {
       "invitations.roleTenantAdmin",
       "invitations.roleTenantUser",
       "invitations.roleSystemOperator",
+      // prod-16 `task_prod16_03` — módulo backup. Vocabulario técnico que no se
+      // traduce (nombres de campo de S3/SFTP/rclone, marcas y siglas), más el
+      // "No" que se escribe igual en los dos idiomas.
+      "backup.roCron",
+      "backupDestinations.testOk",
+      "backupDestinations.testFail",
+      "backupDestinations.typeB2",
+      "backupDestinations.typeSftp",
+      "backupDestinations.fieldBucket",
+      "backupDestinations.fieldEndpointUrl",
+      "backupDestinations.fieldHost",
+      "backupDestinations.fieldPath",
+      "backupRestore.previewBackup",
+      "backupRestore.no",
+      "backupRestore.tenantIdLabel",
+      // prod-16 `task_prod16_03` — tenant-stats. Jerga de la plataforma que la
+      // UI castellana ya usaba en inglés (run, token, verdict, timestamp, plan).
+      "tenantStats.runs",
+      "tenantStats.tokensBreakdown",
+      "tenantStats.tokensSuffix",
+      "tenantStats.colTimestamp",
+      "tenantStats.colPlan",
+      "tenantStats.colTokens",
+      "tenantStats.colVerdict",
     ]);
 
     const identical = new Set(
@@ -119,5 +143,43 @@ describe("translate", () => {
 
   it("no reinterpola el valor sustituido (una variable con {otra} dentro no se expande)", () => {
     expect(interpolate("{a}", { a: "{b}", b: "boom" })).toBe("{b}");
+  });
+});
+
+/**
+ * `pickLang` es la OTRA mitad del i18n, y la que el diccionario no puede cubrir:
+ * texto bilingüe que llega en DATOS (una nota `note_es`/`note_en` del córtex, el
+ * label de un runtime template, un aviso del backend). No hay clave que valga
+ * porque el contenido no se conoce al compilar.
+ *
+ * Antes cada llamante lo resolvía con su propio `lang === "es" ? a : b` — 77
+ * repartidos por el panel. Centralizarlo no es cosmética: es el único punto
+ * donde arreglar el día que el catálogo de idiomas cambie.
+ */
+describe("pickLang", () => {
+  it("devuelve el valor del idioma pedido", () => {
+    expect(pickLang("es", { es: "Hola", en: "Hi" })).toBe("Hola");
+    expect(pickLang("en", { es: "Hola", en: "Hi" })).toBe("Hi");
+  });
+
+  it("acepta un objeto con campos de más (el aviso del backend trae `code`)", () => {
+    // Sin la variable intermedia TS rechazaría el literal por propiedad
+    // excedente; el llamante real (`warningText`) le pasa un `CapabilityWarning`
+    // ya tipado, que es justo este caso.
+    const backendWarning = { code: "x", es: "Hola", en: "Hi" };
+
+    expect(pickLang("en", backendWarning)).toBe("Hi");
+  });
+
+  it("cae al otro idioma cuando el pedido viene vacío, en vez de pintar nada", () => {
+    // El backend puede traer sólo una de las dos caras (una nota redactada en
+    // castellano y sin traducir aún). Un hueco en blanco sería peor que el texto
+    // en el otro idioma: el operador no vería NADA y lo leería como "sin datos".
+    expect(pickLang("en", { es: "Sólo en castellano", en: "" })).toBe("Sólo en castellano");
+    expect(pickLang("es", { es: "   ", en: "Only English" })).toBe("Only English");
+  });
+
+  it("devuelve cadena vacía si no hay ninguna de las dos", () => {
+    expect(pickLang("es", { es: "", en: "" })).toBe("");
   });
 });

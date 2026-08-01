@@ -529,6 +529,18 @@ class Settings(BaseSettings):
     login_rate_limit_window_seconds: int = Field(
         default=15 * 60, description="Sliding window for login rate limiting."
     )
+    # `/auth/register` por IP (authz-6). Desde el ADR 0134 (opción C) el alta
+    # exige un token de invitación, así que este endpoint anónimo es el único
+    # sitio donde se puede probar un secreto en bucle: sin ventana era un
+    # oráculo de adivinación gratis. El presupuesto es más holgado que el de
+    # login porque una IP compartida (NAT de oficina) puede dar de alta a
+    # varias personas legítimas seguidas.
+    register_rate_limit_count: int = Field(
+        default=10, description="Max /auth/register attempts per IP and window."
+    )
+    register_rate_limit_window_seconds: int = Field(
+        default=60 * 60, description="Sliding window for /auth/register rate limiting."
+    )
     # Public-API per-token rate limit (Plan 13). Default budget a freshly
     # minted ApiToken gets when the Tenant Admin does not override it; the
     # per-token `rate_limit` column wins when set. Enforced by the
@@ -571,6 +583,15 @@ class Settings(BaseSettings):
     incoming_webhook_max_body_bytes: int = Field(
         default=1_048_576,
         description="Max accepted incoming-webhook request body size in bytes (413 if exceeded).",
+    )
+    # Ventana de frescura para la marca de tiempo que declara el emisor
+    # (authz-5). Mismo orden de magnitud que el verificador saliente: 5 min
+    # absorbe el desfase de reloj razonable de un emisor y descarta el
+    # reintento rancio de una cola que se drena horas tarde. Solo se aplica a
+    # los orígenes que declaran cabecera de timestamp.
+    incoming_webhook_max_skew_seconds: int = Field(
+        default=300,
+        description="Accepted clock skew (seconds) for an incoming webhook's declared timestamp.",
     )
     # Per-config sliding-window request budget for the PUBLIC incoming-webhook
     # endpoint, counted over `incoming_webhook_rate_limit_window_seconds`. Keyed

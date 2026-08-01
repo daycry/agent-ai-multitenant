@@ -25,6 +25,7 @@
  *     resolución para que lista y detalle muestren EXACTAMENTE lo mismo.
  */
 
+import { pickLang, translate } from "@/lib/i18n";
 import type { Lang } from "@/lib/lang-context";
 
 // ---------------------------------------------------------------------------
@@ -138,13 +139,13 @@ export function validateDraft(draft: ModelConfigDraft, lang: Lang): ModelConfigE
   if (!draft.provider_id.trim()) {
     errors.push({
       field: "provider",
-      message: lang === "es" ? "Selecciona un proveedor." : "Select a provider.",
+      message: translate(lang, "persona", "errorProvider"),
     });
   }
   if (!draft.model.trim()) {
     errors.push({
       field: "model",
-      message: lang === "es" ? "El modelo no puede estar vacío." : "Model cannot be empty.",
+      message: translate(lang, "persona", "errorModelEmpty"),
     });
   }
   if (
@@ -154,10 +155,10 @@ export function validateDraft(draft: ModelConfigDraft, lang: Lang): ModelConfigE
   ) {
     errors.push({
       field: "temperature",
-      message:
-        lang === "es"
-          ? `La temperatura debe estar entre ${TEMPERATURE_MIN} y ${TEMPERATURE_MAX}.`
-          : `Temperature must be between ${TEMPERATURE_MIN} and ${TEMPERATURE_MAX}.`,
+      message: translate(lang, "persona", "errorTemperature", {
+        min: TEMPERATURE_MIN,
+        max: TEMPERATURE_MAX,
+      }),
     });
   }
   return errors;
@@ -212,10 +213,10 @@ export function resolvePromptSource(
 ): ResolvedPrompt {
   const prompts = cfg?.system_prompts;
   if (prompts) {
-    const primary = prompts[lang];
-    if (primary && primary.trim()) return { text: primary, origin: "bilingual" };
-    const other = prompts[lang === "es" ? "en" : "es"];
-    if (other && other.trim()) return { text: other, origin: "bilingual" };
+    // `pickLang` es exactamente esto: el idioma pedido, y si viene vacío el
+    // otro. Antes estaba escrito a mano aquí y en otros trece sitios.
+    const text = pickLang(lang, { es: prompts.es ?? "", en: prompts.en ?? "" });
+    if (text.trim()) return { text, origin: "bilingual" };
   }
   if (flatPrompt && flatPrompt.trim()) return { text: flatPrompt, origin: "flat" };
   return { text: "", origin: "none" };
@@ -235,7 +236,7 @@ export interface ChatModeOption {
 }
 
 export function chatModeLabel(mode: ChatModeOption, lang: Lang): string {
-  return lang === "es" ? mode.label_es : mode.label_en;
+  return pickLang(lang, { es: mode.label_es, en: mode.label_en });
 }
 
 // ---------------------------------------------------------------------------

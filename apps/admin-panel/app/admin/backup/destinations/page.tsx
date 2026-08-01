@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { useT, type MessageKey, type Translator } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 type DestinationType = "s3" | "b2" | "sftp" | "rclone";
@@ -55,37 +56,48 @@ interface ConnectivityResult {
   detail: string;
 }
 
-/** Campos NO secretos por tipo (los que la UI edita). Nunca credenciales. */
-const TYPE_FIELDS: Record<DestinationType, { key: string; label: string; required: boolean }[]> = {
+/**
+ * Campos NO secretos por tipo (los que la UI edita). Nunca credenciales.
+ *
+ * El label NO es un literal: es la clave del diccionario (`labelKey`). Antes
+ * estaba cableado en castellano y con el toggle en EN seguía diciendo "Prefijo"
+ * o "Ruta remota" — el hallazgo frontend-9 en un sitio donde no se ve a simple
+ * vista, porque la tabla vive fuera del JSX.
+ */
+const TYPE_FIELDS: Record<
+  DestinationType,
+  { key: string; labelKey: MessageKey<"backupDestinations">; required: boolean }[]
+> = {
   s3: [
-    { key: "bucket", label: "Bucket", required: true },
-    { key: "prefix", label: "Prefijo", required: false },
-    { key: "endpoint_url", label: "Endpoint URL", required: false },
-    { key: "region", label: "Región", required: false },
+    { key: "bucket", labelKey: "fieldBucket", required: true },
+    { key: "prefix", labelKey: "fieldPrefix", required: false },
+    { key: "endpoint_url", labelKey: "fieldEndpointUrl", required: false },
+    { key: "region", labelKey: "fieldRegion", required: false },
   ],
   b2: [
-    { key: "bucket", label: "Bucket", required: true },
-    { key: "region", label: "Región (p. ej. us-west-002)", required: true },
-    { key: "prefix", label: "Prefijo", required: false },
+    { key: "bucket", labelKey: "fieldBucket", required: true },
+    { key: "region", labelKey: "fieldRegionB2", required: true },
+    { key: "prefix", labelKey: "fieldPrefix", required: false },
   ],
   sftp: [
-    { key: "host", label: "Host", required: true },
-    { key: "username", label: "Usuario", required: true },
-    { key: "port", label: "Puerto", required: false },
-    { key: "remote_path", label: "Ruta remota", required: false },
-    { key: "host_key_policy", label: "Política host-key (reject/auto_add/warn)", required: false },
+    { key: "host", labelKey: "fieldHost", required: true },
+    { key: "username", labelKey: "fieldUsername", required: true },
+    { key: "port", labelKey: "fieldPort", required: false },
+    { key: "remote_path", labelKey: "fieldRemotePath", required: false },
+    { key: "host_key_policy", labelKey: "fieldHostKeyPolicy", required: false },
   ],
   rclone: [
-    { key: "remote", label: "Remote (nombre [sección] del rclone.conf)", required: true },
-    { key: "path", label: "Path", required: false },
+    { key: "remote", labelKey: "fieldRemote", required: true },
+    { key: "path", labelKey: "fieldPath", required: false },
   ],
 };
 
-const TYPE_LABELS: Record<DestinationType, string> = {
-  s3: "S3 (o compatible)",
-  b2: "Backblaze B2",
-  sftp: "SFTP / NAS",
-  rclone: "rclone (genérico)",
+/** Orden estable del desplegable de tipo, con su clave de traducción. */
+const TYPE_KEYS: Record<DestinationType, MessageKey<"backupDestinations">> = {
+  s3: "typeS3",
+  b2: "typeB2",
+  sftp: "typeSftp",
+  rclone: "typeRclone",
 };
 
 function emptyDestination(): Destination {
@@ -101,6 +113,7 @@ function isComplete(dest: Destination): boolean {
 }
 
 export default function BackupDestinationsPage() {
+  const t = useT("backupDestinations");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [destinations, setDestinations] = useState<Destination[]>([]);
@@ -173,19 +186,19 @@ export default function BackupDestinationsPage() {
     >
       <PageHeader
         icon={<DatabaseBackup className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Destinos remotos de backup"
-        description="Sube cada backup correcto a destinos remotos (S3, B2, SFTP/NAS, rclone). Las credenciales viven en el secret seam de los workers — nunca aquí. Edición solo System Admin."
+        title={t("title")}
+        description={t("description")}
         data-testid="backup-destinations-header"
       />
 
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Destinos</CardTitle>
+          <CardTitle>{t("cardTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {query.isLoading ? (
             <p className="text-muted-foreground text-sm" data-testid="backup-destinations-loading">
-              Cargando…
+              {t("loading")}
             </p>
           ) : query.isError ? (
             <p className="text-destructive text-sm" data-testid="backup-destinations-error">
@@ -202,12 +215,13 @@ export default function BackupDestinationsPage() {
                     className="text-muted-foreground text-sm"
                     data-testid="backup-destinations-empty"
                   >
-                    No hay destinos configurados.
+                    {t("empty")}
                   </p>
                 ) : (
                   destinations.map((dest, idx) => (
                     <DestinationCard
                       key={idx}
+                      t={t}
                       dest={dest}
                       index={idx}
                       testResult={testResults[dest.name]}
@@ -227,7 +241,7 @@ export default function BackupDestinationsPage() {
                     onClick={() => setDestinations((prev) => [...prev, emptyDestination()])}
                   >
                     <Plus className="mr-1 h-4 w-4" />
-                    Añadir destino
+                    {t("add")}
                   </Button>
 
                   <div className="flex items-center gap-3">
@@ -243,7 +257,7 @@ export default function BackupDestinationsPage() {
                         className="text-xs text-emerald-600"
                         data-testid="backup-destinations-saved"
                       >
-                        Guardado.
+                        {t("saved")}
                       </p>
                     ) : null}
                     <Button
@@ -252,7 +266,7 @@ export default function BackupDestinationsPage() {
                       disabled={!allComplete || saveMutation.isPending}
                       onClick={() => saveMutation.mutate()}
                     >
-                      {saveMutation.isPending ? "Guardando…" : "Guardar"}
+                      {saveMutation.isPending ? t("saving") : t("save")}
                     </Button>
                   </div>
                 </div>
@@ -266,6 +280,7 @@ export default function BackupDestinationsPage() {
 }
 
 function DestinationCard({
+  t,
   dest,
   index,
   testResult,
@@ -274,6 +289,7 @@ function DestinationCard({
   onRemove,
   onTest,
 }: {
+  t: Translator<"backupDestinations">;
   dest: Destination;
   index: number;
   testResult: ConnectivityResult | "pending" | undefined;
@@ -290,7 +306,7 @@ function DestinationCard({
     >
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
-          <Label htmlFor={`dest-type-${index}`}>Tipo</Label>
+          <Label htmlFor={`dest-type-${index}`}>{t("typeLabel")}</Label>
           <select
             id={`dest-type-${index}`}
             data-testid={`backup-destination-type-${index}`}
@@ -298,16 +314,16 @@ function DestinationCard({
             value={dest.type}
             onChange={(e) => onChange({ type: e.target.value as DestinationType, config: {} })}
           >
-            {(Object.keys(TYPE_LABELS) as DestinationType[]).map((t) => (
-              <option key={t} value={t}>
-                {TYPE_LABELS[t]}
+            {(Object.keys(TYPE_KEYS) as DestinationType[]).map((type) => (
+              <option key={type} value={type}>
+                {t(TYPE_KEYS[type])}
               </option>
             ))}
           </select>
         </div>
 
         <div className="flex-1 space-y-1">
-          <Label htmlFor={`dest-name-${index}`}>Nombre</Label>
+          <Label htmlFor={`dest-name-${index}`}>{t("nameLabel")}</Label>
           <Input
             id={`dest-name-${index}`}
             data-testid={`backup-destination-name-${index}`}
@@ -327,14 +343,14 @@ function DestinationCard({
             onChange={(e) => onChange({ enabled: e.target.checked })}
             data-testid={`backup-destination-enabled-${index}`}
           />
-          <Label htmlFor={`dest-enabled-${index}`}>Habilitado</Label>
+          <Label htmlFor={`dest-enabled-${index}`}>{t("enabledLabel")}</Label>
         </div>
 
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          aria-label="Eliminar destino"
+          aria-label={t("remove")}
           data-testid={`backup-destination-remove-${index}`}
           onClick={onRemove}
         >
@@ -346,7 +362,7 @@ function DestinationCard({
         {fields.map((f) => (
           <div key={f.key} className="space-y-1">
             <Label htmlFor={`dest-${index}-${f.key}`}>
-              {f.label}
+              {t(f.labelKey)}
               {f.required ? " *" : ""}
             </Label>
             <Input
@@ -360,10 +376,7 @@ function DestinationCard({
         ))}
       </div>
 
-      <p className="text-muted-foreground text-xs">
-        Las credenciales no se introducen aquí: se resuelven desde el secret seam (Vault/env) en el
-        momento de subir o probar la conexión.
-      </p>
+      <p className="text-muted-foreground text-xs">{t("credentialsNote")}</p>
 
       <div className="flex items-center gap-3">
         <Button
@@ -373,21 +386,21 @@ function DestinationCard({
           data-testid={`backup-destination-test-${index}`}
           onClick={onTest}
         >
-          Probar conexión
+          {t("test")}
         </Button>
         {testResult === "pending" ? (
           <span
             className="text-muted-foreground text-xs"
             data-testid={`backup-destination-test-pending-${index}`}
           >
-            Probando…
+            {t("testing")}
           </span>
         ) : testResult ? (
           <span
             className={testResult.ok ? "text-xs text-emerald-600" : "text-destructive text-xs"}
             data-testid={`backup-destination-test-result-${index}`}
           >
-            {testResult.ok ? "OK" : "Error"}: {testResult.detail}
+            {testResult.ok ? t("testOk") : t("testFail")}: {testResult.detail}
           </span>
         ) : null}
       </div>
@@ -397,10 +410,11 @@ function DestinationCard({
 
 /** Vista de solo lectura para un miembro no System Admin. */
 function ReadOnlyDestinations({ destinations }: { destinations: Destination[] }) {
+  const t = useT("backupDestinations");
   if (destinations.length === 0) {
     return (
       <p className="text-muted-foreground text-sm" data-testid="backup-destinations-readonly-empty">
-        No hay destinos configurados.
+        {t("empty")}
       </p>
     );
   }
@@ -410,10 +424,10 @@ function ReadOnlyDestinations({ destinations }: { destinations: Destination[] })
         <li key={i} className="flex justify-between rounded-md border px-3 py-2">
           <span>
             <span className="font-medium">{d.name}</span>{" "}
-            <span className="text-muted-foreground">({TYPE_LABELS[d.type]})</span>
+            <span className="text-muted-foreground">({t(TYPE_KEYS[d.type])})</span>
           </span>
           <span className="text-muted-foreground">
-            {d.enabled ? "Habilitado" : "Deshabilitado"}
+            {d.enabled ? t("enabledLabel") : t("disabledLabel")}
           </span>
         </li>
       ))}

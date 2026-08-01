@@ -185,7 +185,9 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_reestado_04` — Aplicar la decisión: re-estado honesto + cola de validación
 
 - [ ] **Título**: Frontmatter de las ~26 fases coherente con la decisión del ADR
-  - ⏳ **Pendiente (2026-07-31):** el ADR 0138 sigue `proposed` (nadie ha firmado A/B/C), así que no hay `gate_override` en ningún frontmatter, `CLAUDE.md` no reconoce el override y `test_started_phase_declares_its_gate` sigue en `xfail(strict=True)` documentando las 6 fases en deuda.
+  - ⏳ **La anotación de 2026-07-31 está OBSOLETA; medido de nuevo el 2026-08-01:** el ADR 0138 está **`accepted`** (opción C) y sus tres primeras consecuencias están **aplicadas**: las **6** fases en deuda (`06.10-kb-categories`, `06.17-capacitacion-agentes`, `11.1-budgets-fx`, `15-instalador-produccion`, `16-human-agents`, `prod-17-bucle-ai-reviewer`) llevan `gate_override` con `reason` escrito, `CLAUDE.md` tiene la sección «La excepción al gate», el `xfail` ya no está y `auto_gov_04_a` (`pytest tests/unit/test_roadmap_frontmatter.py`) da **11 passed** — incluidos `test_started_phase_declares_its_gate` y `test_gate_override_carries_a_written_justification`.
+  - **Lo corregido hoy**: el `README.md` del roadmap seguía diciendo que el ADR estaba `proposed` y «pendiente de decisión humana». Ya no.
+  - **Por qué la casilla NO se marca**: falta el tercer bullet de la tarea — la cola de validación tiene el **orden** publicado, pero no **responsable ni ventana**. Y eso no es trabajo pendiente, es una decisión que un agente no puede tomar: el propio ADR 0138 la deja fuera de su alcance por escrito («`prod-15` exige nombrarlos; este ADR no los puede inventar») porque compromete el calendario de una persona. **Firma humana pendiente**, sin nada que implementar antes.
 - **Descripción**: Tras aprobación humana del ADR (task 03): añadir `gate_override` (o el
   mecanismo decidido) al frontmatter de cada fase empezada con gate saltado; actualizar la
   sección "Reglas Duras del Protocolo" de CLAUDE.md para reconocer el override explícito;
@@ -298,7 +300,10 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_higiene_10` — Higiene de raíz y reordenación de scripts/
 
 - [ ] **Título**: Borrar restos locales y mover demos de fase a `scripts/demos/`
-  - ⏳ **Pendiente (2026-07-31):** nada hecho — `scripts/__pycache__/` sigue ahí, los ~27 `demo_human_*`/`setup_demo_*` siguen en la raíz de `scripts/` (no existe `scripts/demos/`) y `tests/unit/test_scripts_layout.py` no está escrito.
+  - ⏳ **Sigue pendiente, y el 2026-08-01 se midió su radio de explosión antes de tocar nada:** confirmado que no hay `scripts/demos/`, que quedan **14 `demo_human_*` + 7 `setup_demo_*`** (de 26 `.py` en la raíz de `scripts/`; el plan decía «~27» contando el resto de tooling), que `scripts/__pycache__/check_commit_trailers.cpython-313.pyc` sigue ahí —bytecode huérfano, aunque no el `setup_webscorpo` que citaba la tarea— y que `tests/unit/test_scripts_layout.py` no existe.
+  - **Dos correcciones a la descripción de la tarea, que la subestima:** (1) dice que «nada de esto está trackeado en git» — **es falso**, los 21 demos y `_demo_common.py` están todos en `git ls-files`, así que esto no es higiene local sino un rename de ficheros versionados; (2) `_demo_common.py` **tiene que moverse con ellos**: **11 scripts** hacen `from _demo_common import …`, que solo resuelve porque el directorio del script está en `sys.path` — si se quedara en `scripts/` los once dejarían de arrancar.
+  - **Blast radius medido: 74 ficheros** mencionan `demo_human_*` / `setup_demo_*` / `_demo_common` / `.demo_state`, repartidos en `docs/03-guides/human-tests/` (24), `docs/03-guides/gotchas/`, `docs/05-architecture-decisions/`, `docs/07-changelog/`, `scripts/dev/*.ps1`, `.gitignore`, `pyproject.toml`, `apps/api-server/.../seeds/builtin_kbs.py` y `tests/docs/test_human_test_guides.py` (una guarda que se pondría roja a mitad del movimiento).
+  - **NO ejecutado a propósito**: es un rename mecánico de 74 ficheros, casi todos fuera del carril de este agente, en una sesión con otros 4 agentes escribiendo en paralelo sobre el mismo árbol. Es exactamente el cambio que hay que hacer **solo**, en una pasada dedicada y sin nadie más tocando el repo. Bajo riesgo técnico, alto riesgo de conflicto.
 - **Descripción**: Según quality-11 (nada de esto está trackeado en git; es higiene local +
   reorganización): (1) borrar `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` (bytecode
   huérfano de un script eliminado) y los logs locales de la raíz (`admin-panel-dev.log`,
@@ -320,7 +325,16 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_app_boundary_11` — Restaurar la frontera apps: backup sin importar workers
 
 - [ ] **Título**: `routers/backup.py` deja de hacer `from workers...` (api-9, D5)
-  - ⏳ **Pendiente (2026-07-31):** `routers/backup.py:234` y `:369` siguen importando `workers.backup_destinations`/`workers.backup_encryption` (y hay 5 ficheros más de `api_server` que importan `workers`); no existen ni `tests/unit/test_app_boundaries.py` ni `tests/integration/test_backup_destination_endpoints.py`.
+  - ⏳ **Pendiente. Re-medido el 2026-08-01 con el inventario exacto**, que es el dato que faltaba para dimensionarla: `from workers` aparece en **6 ficheros** de `api_server`, no en uno —
+    `routers/backup.py:234,235,369,370` (`backup_destinations`, `backup_encryption`),
+    `backup_restore.py:164` (`restore_per_tenant`),
+    `code_diff.py:91,92` (`git_repos`, `plan_git`),
+    `docs_structure/kb_sync.py:736` (`git_repos`),
+    `docs_viewer/service.py:655` (`git_repos`) y
+    `routers/review.py:44` (`review_runtime`, y este es un import **de módulo**, no diferido dentro de la función).
+  - **Por qué eso cambia el alcance**: `auto_gov_11_a` es
+    `test_app_boundaries.py::test_api_server_never_imports_workers`, una guarda sobre **todo** `api_server`. Arreglar solo `backup.py` la deja igual de roja, así que la casilla **no puede cerrarse** con el alcance que la tarea describe. O se amplía la tarea a los 6, o la guarda nace con una allowlist declarada de excepciones — y esa es una decisión de diseño, no de implementación.
+  - **NO abordado en esta pasada**: los cinco ficheros restantes son operaciones de git/datos que el memorándum del proyecto manda ejecutar **en el worker**, así que moverlas es un rediseño, no un rename; y crear las dos tareas Celery de `backup.test_destination` / `backup.list_remote` toca `apps/workers/**` y cambia el contrato de dos endpoints que consume el `admin-panel`, ambos fuera del carril de este agente. Sigue vigente la coordinación con prod-04/prod-13 que la propia tarea declara.
 - **Descripción**: `celery_client.py:6` declara "we never import the workers package", pero
   `routers/backup.py:222` y `:351` importan `workers.backup_destinations` y
   `workers.backup_encryption` para test de conectividad y listado remoto, ejecutando

@@ -17,10 +17,13 @@ tests de integración; aquí se fija que un 0-filas se traduce SIEMPRE en 404.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from api_server.routers import _guards
 from api_server.routers._guards import (
     PROJECT_NOT_FOUND_DETAIL,
     verify_project_visible,
@@ -29,6 +32,13 @@ from api_server.routers._guards import (
 from fastapi import HTTPException
 
 pytestmark = pytest.mark.unit
+
+_ROUTERS_DIR = Path(_guards.__file__).parent
+
+# Los cuatro routers de los que salió la guarda (prod-14 task_prod14_11). Si
+# alguno deja de importarla, ha vuelto a tener su propia copia y el predicado
+# puede divergir sin que se vea en el diff de los otros tres.
+_CALLERS = ("tasks", "plans", "conversations", "incoming_webhook_configs")
 
 
 class _Result:
@@ -91,3 +101,59 @@ async def test_query_filters_soft_deleted_projects(guard: Any) -> None:
         f" aceptar hijos nuevos. SQL emitido: {sql}"
     )
     assert "projects.id = " in sql
+
+
+# ---------------------------------------------------------------------------
+# La otra mitad: que el módulo TENGA llamantes.
+#
+# Un helper canónico que nadie importa no unifica nada — es el patrón «mecanismo
+# entregado, cero llamantes» del apartado 5 de `verificar-antes-de-implementar.md`.
+# Estos dos tests son la guarda estática de que las cuatro copias no vuelven.
+# ---------------------------------------------------------------------------
+def _router_sources() -> list[tuple[str, str]]:
+    return [
+        (path.stem, path.read_text(encoding="utf-8"))
+        for path in sorted(_ROUTERS_DIR.glob("*.py"))
+        if path.stem != "_guards"
+    ]
+
+
+def test_the_four_routers_call_the_canonical_guard() -> None:
+    sources = dict(_router_sources())
+    missing = [name for name in _CALLERS if name not in sources]
+    assert not missing, f"el descubrimiento dejó de encontrar routers: {missing}"
+
+    offenders = [
+        name
+        for name in _CALLERS
+        if "from api_server.routers._guards import" not in sources[name]
+        and "from ._guards import" not in sources[name]
+    ]
+    assert not offenders, (
+        "estos routers ya no importan la guarda canónica de `_guards.py`, así que"
+        f" volvieron a tener copia propia: {offenders}"
+    )
+
+
+def test_no_router_redefines_the_project_visibility_guard() -> None:
+    sources = _router_sources()
+    assert len(sources) >= 20, (
+        f"el descubrimiento de routers dejó de encontrar ficheros (vio {len(sources)}):"
+        " esta guarda estaría pasando vacíamente"
+    )
+
+    offenders: list[str] = []
+    for name, source in sources:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name.endswith(
+                "verify_project_visible"
+            ):
+                offenders.append(f"{name}.py:{node.lineno}:{node.name}")
+
+    assert not offenders, (
+        "la guarda de visibilidad de proyecto volvió a estar duplicada fuera de"
+        f" `routers/_guards.py`: {offenders}. Cada copia puede perder el filtro"
+        " `deleted_at` o cambiar el `detail` por su cuenta, y eso es un hueco de"
+        " tenancy que no se ve en el diff de las otras."
+    )

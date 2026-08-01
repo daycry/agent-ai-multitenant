@@ -85,9 +85,18 @@ los tests siguen valiendo con `python-jose` fuera del árbol.
 
 ## Relacionado
 
-- El mismo hueco sigue abierto en `auth/sso/oidc.py`: `_verify_id_token` valida
-  firma + `iss`/`aud`/`nonce` y **no** valida `exp` del ID token. El `nonce` de
-  un solo uso lo mitiga, pero es la misma trampa y el fix es el mismo.
+- El mismo hueco estaba abierto en `auth/sso/oidc.py` — `verify_id_token` validaba
+  firma + `iss`/`aud`/`nonce` y **no** `exp` del ID token — y **se cerró el
+  2026-08-01** con el mismo fix: `_ID_TOKEN_CLAIMS = JWTClaimsRegistry(exp={"essential": True})`
+  validado justo tras `decode`. Verificar con
+  `pytest tests/unit/test_oidc_id_token_claims.py -q` (6 tests; borrar la línea
+  `_ID_TOKEN_CLAIMS.validate(claims)` deja 4 rojos).
+  **La cola de la trampa**: los tres IdP falsos de integración
+  (`test_sso_global_login`, `test_jit_provisioning`,
+  `test_post_login_membership_resolution`) acuñaban ID tokens **sin `exp`**, así
+  que el defecto era invisible desde los tests además de desde el código. Hubo
+  que darles `iat`/`exp` de verdad: un doble que no puede caducar no ejercita el
+  camino real.
 - `pyproject.toml`: al retirar `python-jose[cryptography]` hay que declarar
   `cryptography` por su cuenta — Fernet (secreto OIDC, secreto TOTP) lo importa
   directamente y llegaba como extra de la dependencia retirada.

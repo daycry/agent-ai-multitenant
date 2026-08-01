@@ -35,7 +35,7 @@ from api_server.auth.invitations import hash_invitation_token, verify_invitation
 from api_server.auth.jwt import encode_jwt
 from api_server.auth.mfa.challenge_store import MfaChallenge, MfaChallengeStore, new_challenge_token
 from api_server.auth.mfa.store import user_mfa_methods
-from api_server.auth.passwords import hash_password, verify_password
+from api_server.auth.passwords import burn_password_verification, hash_password, verify_password
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
 from api_server.config import get_settings
@@ -78,6 +78,26 @@ async def _fetch_user_by_email(session: AsyncSession, email: str) -> User | None
     """Look up a user by email. RLS is NOT involved (users is un-RLSed)."""
     result = await session.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
+
+
+def _verify_login_password(user: User | None, plain: str) -> bool:
+    """Único punto de decisión del primer factor — y gasta argon2 SIEMPRE (authz-7).
+
+    Las tres formas de «este login no puede prosperar» (email desconocido,
+    usuario inactivo, identidad aprovisionada por SSO) no tienen contra qué
+    comparar, y devolver False sin más dejaba la respuesta decenas de
+    milisegundos por delante de un intento con contraseña incorrecta: eso es
+    un oráculo de enumeración de usuarios medible desde fuera. La rama de
+    relleno quema el mismo trabajo.
+
+    El caso SSO además NO puede pasar por `verify_password`: su
+    `password_hash` es un centinela que no es una codificación argon2 válida
+    y levantaría `ValueError` (500 en vez de 401).
+    """
+    if user is None or not user.is_active or user.is_sso_provisioned:
+        burn_password_verification(plain)
+        return False
+    return verify_password(plain, user.password_hash)
 
 
 async def _load_active_memberships(user_id: UUID) -> list[ResolvedMembership]:
@@ -242,7 +262,11 @@ async def _resolve_invitation(
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def register(payload: RegisterRequest) -> UserResponse:
+async def register(
+    payload: RegisterRequest,
+    request: Request,
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
+) -> UserResponse:
     """Alta de un usuario. El registro está CERRADO al público (ADR 0134).
 
     Dos —y solo dos— formas de pasar por aquí:
@@ -268,6 +292,25 @@ async def register(payload: RegisterRequest) -> UserResponse:
     ``_REGISTRATION_CLOSED_DETAIL``). Un invitado NUNCA sale system admin ni
     system owner: esos dos bits son exclusivos del arranque.
     """
+    settings = get_settings()
+    # Ventana deslizante por IP ANTES de tocar la base de datos (authz-6). Sin
+    # ella, `invitation_token` es un secreto que se puede probar en bucle
+    # gratis, y cada intento cuesta al servidor una consulta y —cuando el token
+    # cuela— un argon2 de 64 MiB. El presupuesto se gasta pase lo que pase con
+    # el intento: si solo contásemos los fallos, quien acierta reinicia el
+    # reloj. La puerta de arranque (tabla `users` vacía) NO es excepción.
+    allowed, _ = await rate_limiter.check(
+        f"rl:register:ip:{get_client_ip(request)}",
+        limit=settings.register_rate_limit_count,
+        window_seconds=settings.register_rate_limit_window_seconds,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many registration attempts; retry later",
+            headers={"Retry-After": str(settings.register_rate_limit_window_seconds)},
+        )
+
     email = payload.email.lower()
     # Sesión BYPASSRLS: hay que leer/escribir `user_invitations` y
     # `user_org_memberships` (ambas con RLS) sin tenant activo — la petición es
@@ -433,18 +476,13 @@ async def login(
         user = await _fetch_user_by_email(db, email)
 
         # Generic 401 — never leak whether the email exists, whether it's
-        # inactive, or whether it is an SSO-only identity. An
-        # SSO-provisioned user (Plan 08 task_08_07) has no usable local
-        # password: its `password_hash` is a sentinel that is not a valid
-        # argon2 encoding, so we MUST short-circuit here rather than feed
-        # it to verify_password (which would raise on the bad hash). The
-        # user logs in through their IdP instead.
-        if not user or not user.is_active or user.is_sso_provisioned:
+        # inactive, or whether it is an SSO-only identity. `_verify_login_password`
+        # spends the same argon2 work on every one of those branches, so the
+        # response time does not leak it either (authz-7).
+        password_ok = _verify_login_password(user, payload.password)
+        if user is None or not password_ok:
             login_failed = True
             failed_user_id = user.id if user else None
-        elif not verify_password(payload.password, user.password_hash):
-            login_failed = True
-            failed_user_id = user.id
         else:
             user_id = user.id
             is_system_admin = user.is_system_admin

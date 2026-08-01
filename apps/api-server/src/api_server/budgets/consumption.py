@@ -35,7 +35,7 @@ live broker. Auto-pause at 100% is task_11_1_06 (this task only ALERTS).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 from uuid import UUID
@@ -44,6 +44,7 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import Select
 
 from api_server.budgets.human_cost import compute_human_cost_usd
 from api_server.budgets.period import BudgetPeriodWindow, current_budget_period
@@ -199,6 +200,52 @@ def _status(percent_used: Decimal | None, thresholds: list[int]) -> str:
 # =============================================================================
 # Consumption computation (tenant-scoped)
 # =============================================================================
+def _utc_midnight(day: date) -> datetime:
+    """El instante UTC en que empieza ``day``.
+
+    El corte del período se define en UTC EXPLÍCITAMENTE, y no se deja al azar de
+    la zona horaria de la sesión de PostgreSQL. Antes el predicado era
+    ``date(executions.created_at)``, y `date(timestamptz)` se evalúa en la zona
+    de la sesión: en un despliegue cuyo PostgreSQL no estuviese en UTC, un gasto
+    de las 02:00 UTC del día 1 se contabilizaba en el período ANTERIOR. UTC es la
+    zona en la que ya están definidos el resto de instantes de la plataforma.
+    """
+    return datetime.combine(day, time.min, tzinfo=UTC)
+
+
+def spend_in_window_stmt(
+    *,
+    tenant_id: UUID,
+    window: BudgetPeriodWindow,
+    project_id: UUID | None,
+) -> Select[tuple[Decimal]]:
+    """El SELECT de gasto del scope en ``[start, end)``, sin ejecutarlo.
+
+    Se expone separado del ``await`` para que un test pueda hacerle ``EXPLAIN``:
+    lo que se afirma de esta consulta —que el rango de ``created_at`` llega al
+    *Index Cond* de ``ix_executions_tenant_created_at`` y no a un *Filter*— no se
+    puede comprobar mirando el resultado, solo el plan.
+
+    El predicado es un RANGO sobre la columna, no `date(columna)`: envolver la
+    columna en una función la vuelve no-sargable y PostgreSQL no puede usar el
+    índice para acotar (no existe índice sobre esa expresión). Con el índice
+    `(tenant_id, created_at)` que creó la migración 0126, la igualdad de tenant
+    y el rango de fecha se resuelven ambos dentro del índice.
+    """
+    stmt = (
+        select(func.coalesce(func.sum(Execution.total_cost_usd), 0))
+        .select_from(Execution)
+        .where(
+            Execution.tenant_id == tenant_id,
+            Execution.created_at >= _utc_midnight(window.start),
+            Execution.created_at < _utc_midnight(window.end),
+        )
+    )
+    if project_id is not None:
+        stmt = stmt.join(Task, Task.id == Execution.task_id).where(Task.project_id == project_id)
+    return stmt
+
+
 async def _spend_usd_in_window(
     session: AsyncSession,
     *,
@@ -209,22 +256,11 @@ async def _spend_usd_in_window(
     """Sum the canonical-USD cost of the scope's executions in ``[start, end)``.
 
     Tenant-scoped (RLS) + a defence-in-depth ``tenant_id ==`` predicate. The
-    window is matched on ``executions.created_at`` cast to a calendar date (the
-    period helper works in dates). For a project scope the executions are
-    joined through their task's ``project_id``.
+    window is a half-open TIMESTAMPTZ range in UTC (see
+    :func:`spend_in_window_stmt`). For a project scope the executions are joined
+    through their task's ``project_id``.
     """
-    exec_date = func.date(Execution.created_at)
-    stmt = (
-        select(func.coalesce(func.sum(Execution.total_cost_usd), 0))
-        .select_from(Execution)
-        .where(
-            Execution.tenant_id == tenant_id,
-            exec_date >= window.start,
-            exec_date < window.end,
-        )
-    )
-    if project_id is not None:
-        stmt = stmt.join(Task, Task.id == Execution.task_id).where(Task.project_id == project_id)
+    stmt = spend_in_window_stmt(tenant_id=tenant_id, window=window, project_id=project_id)
     total = (await session.execute(stmt)).scalar_one()
     return Decimal(str(total))
 

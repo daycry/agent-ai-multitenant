@@ -45,6 +45,7 @@ from typing import Final
 import structlog
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = structlog.get_logger(__name__)
 
@@ -153,4 +154,25 @@ def integrity_conflict(exc: IntegrityError, *, context: str) -> HTTPException:
     )
 
 
-__all__ = ["constraint_name", "integrity_conflict"]
+async def flush_or_conflict(session: AsyncSession, *, context: str) -> None:
+    """`session.flush()` que traduce la `IntegrityError` a un 409 de dominio.
+
+    El caso que la motivó: los índices únicos parciales `(tenant_id, name)` que
+    la migración 0126 puso sobre `teams`, `skills` y `agents` (prod-13
+    task_prod13_13). Antes de ellos, un nombre repetido se colaba; con ellos, y
+    sin nadie que atrapara la excepción, se convertía en un **500** — que para
+    quien usa la UI es indistinguible de «la plataforma se ha roto», cuando lo
+    que ha pasado es que ese nombre ya está cogido.
+
+    Hace `rollback()` antes de levantar: tras una `IntegrityError` la sesión
+    queda en estado abortado y cualquier consulta posterior fallaría con un
+    error distinto que ya no dice nada del problema real.
+    """
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise integrity_conflict(exc, context=context) from exc
+
+
+__all__ = ["constraint_name", "flush_or_conflict", "integrity_conflict"]

@@ -54,6 +54,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import flush_or_conflict
 from api_server.routers.agents import _clone_agent_capabilities
 from api_server.schemas.teams import (
     TeamAdoptRequest,
@@ -168,7 +169,7 @@ async def create_team(
         memory_scope=payload.memory_scope.value if payload.memory_scope else None,
     )
     session.add(team)
-    await session.flush()
+    await flush_or_conflict(session, context="team.create")
     await session.refresh(team)
     return to_team_response(team, [])
 
@@ -357,7 +358,7 @@ async def update_team(
         enum_fields=("memory_scope",),
     )
 
-    await session.flush()
+    await flush_or_conflict(session, context="team.update")
     await session.refresh(team)
     members = await _load_members(session, team_id)
     return to_team_response(team, members)
