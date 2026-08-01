@@ -1,0 +1,7 @@
+{
+  "_generated_by": ".github/workflows/build-runtime-templates.yml (job `refresh-digests`) vía `python -m shared_test_runtimes.release`. NO EDITAR A MANO: un digest escrito por una persona no tiene vía de refresco y congela sus CVEs para siempre (ADR 0148, condición 1).",
+  "_state": "Sin release publicada todavía: `digests` vacío ⇒ el catálogo compone el nombre local `agent-runtime-<slug>:v1` que construye scripts/dev/build-runtime-templates.sh, igual que antes del ADR 0148. La primera publicación en GHCR rellena `registry` y las 14 entradas de `digests`, y a partir de ahí el worker resuelve por digest o aborta.",
+  "registry": "",
+  "version": "v1",
+  "digests": {}
+}

@@ -56,10 +56,20 @@ prod-08; aquí solo se garantiza que la señal se emite.
 Esto es lo que hay que saber ANTES de un DR, porque cambia lo que se considera un
 restore correcto. El bundle se ensambla con el stack **vivo**, así que cada
 artefacto retrata un instante distinto (prod-04 task_prod_04_06, hallazgo gap3-3).
-La decisión de si eso se acepta, se elimina con un quiesce corto de escritores o
-con un snapshot de filesystem está **pendiente de dirección** en el
-[ADR 0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md).
-Mientras no se decida, esto es el estado real:
+
+> **Decidido el 2026-08-01** en el
+> [ADR 0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md):
+> **opción A, quiesce corto de escritores, con un plazo que degrada**. El backup
+> para `api-server`, `orchestrator`, `workers`, `cortex-beat`,
+> `notification-dispatcher` y `admin-panel` mientras dura la captura, espera un
+> máximo de `WORKERS_BACKUP_QUIESCE_TIMEOUT_SECONDS` (180 s) y **sigue adelante
+> pase lo que pase**. Los detalles operativos están en §«El quiesce» más abajo.
+
+Con el quiesce en `full` la tabla siguiente ya no aplica: todos los artefactos
+retratan un stack sin escritores. **Aplica tal cual cuando el quiesce degrada a
+`partial`** (y cuando el operador lo desactiva vaciando
+`WORKERS_BACKUP_QUIESCE_SERVICES`), que es el escenario para el que hay que
+saberla:
 
 | Artefacto           | Instante | Coherencia interna                                      |
 | ------------------- | -------- | ------------------------------------------------------- |
@@ -94,6 +104,93 @@ converge, aborta el run), y un `BGREWRITEAOF` que termina con estado ≠ `ok`.
 > destino: un `appendonlydir` residual con una secuencia más alta que la capturada
 > le ganaría al restaurado, porque Redis lee el manifest que encuentra.
 > Verificación post-restore obligatoria: `redis-cli DBSIZE` > 0.
+
+## El quiesce: qué pasa a las 03:00, y qué pasa cuando no pasa
+
+El backup **para los escritores** durante la captura (ADR 0149, opción A). Lo que
+un operador necesita saber:
+
+| Qué                             | Valor                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Servicios que se paran          | `WORKERS_BACKUP_QUIESCE_SERVICES` — api-server, orchestrator, workers, cortex-beat, notification-dispatcher, admin-panel |
+| Servicios que NUNCA se paran    | `WORKERS_BACKUP_QUIESCE_NEVER_STOP` — `workers-privileged`, **la lane que ejecuta el propio backup**                     |
+| Lo que sigue en pie a propósito | PostgreSQL, MinIO, Redis y Vault: son los que se leen                                                                    |
+| Plazo de espera                 | `WORKERS_BACKUP_QUIESCE_TIMEOUT_SECONDS`, 180 s                                                                          |
+| Corte de servicio esperado      | 1-3 min diarios en la ventana del backup                                                                                 |
+| Desactivarlo                    | `WORKERS_BACKUP_QUIESCE_SERVICES=[]` — vuelve el skew de la tabla de arriba                                              |
+| A qué stack le habla            | `WORKERS_RESTORE_COMPOSE_PROJECT` + `WORKERS_RESTORE_COMPOSE_FILE` (las mismas del restore: es el mismo stack)           |
+
+> **Comprueba esto al desplegar.** El instalador **no emite**
+> `WORKERS_RESTORE_COMPOSE_FILE`, y su default (`/data/agent-platform/docker-compose.yml`)
+> sólo acierta si instalaste con el `data_root` por defecto. Con otro data root el
+> quiesce no encuentra el compose y degrada a `partial` **todas las noches**; el
+> log lo dice con `backup.quiesce.no_compose_file` y nombra la variable. Nótese
+> que ese mismo puntero es el que usa el restore completo, así que arreglarlo
+> tampoco es opcional para el DR.
+
+**Lo que hace cuando algo no para.** Un `docker compose stop` que se cuelga —un
+run largo, un contenedor que no atiende SIGTERM— NO tumba el backup: vencido el
+plazo, el motor **sigue capturando** con lo que quede en pie y lo registra. Un
+backup con skew registrado es mejor que un backup que no existe, y muchísimo
+mejor que un stack parado a las 03:00 esperando a un worker que no va a responder.
+
+Los servicios **rearrancan siempre**, aunque la captura falle (`start`, y si el
+contenedor ya no existe, `up --detach`). Si ni eso funciona, el log lo dice con
+`backup.quiesce.resume_failed` y la acción es `docker compose up -d` a mano.
+
+**Dónde se ve.** En el `manifest.json` del bundle:
+
+```json
+"quiesce": { "mode": "partial", "requested": ["api-server", "workers"],
+             "still_running": ["workers"], "duration_s": 181.4, "resumed": true }
+```
+
+Y en Prometheus: `agentic_backup_quiesce_seconds` (el corte real, para saber si
+los 1-3 min estimados son ciertos) y `agentic_backup_quiesce_degraded` (1 esa
+noche). Un `degraded` suelto no es una incidencia — el ADR lo prevé; varias
+noches seguidas dicen que algo dejó de atender la señal de parada.
+
+**Y esto es lo que cambia en un DR:** si el bundle que vas a restaurar tiene
+`"mode": "partial"`, las divergencias que reporte `restore_reconcile` sobre los
+almacenes de filesystem son el **comportamiento acordado**, no un fallo del
+restore. Con `"mode": "full"` no deberían aparecer, y si aparecen, investígalas.
+
+## Lo que NO viaja en el bundle a propósito: los secretos de integración
+
+**Antes de dar un DR por terminado, lee esto.** Por el
+[ADR 0146](../05-architecture-decisions/0146-fernet-en-db-vs-vault.md) los
+secretos que un tenant configura para integrarse con terceros viven cifrados en
+columnas de Postgres, y **sus filas se excluyen del `pg_dump`**: con el
+ciphertext dentro, quien robase el bundle y conociera
+`API_SERVER_*_ENCRYPTION_KEY` tendría los secretos — y el bundle viaja a MinIO y
+a destinos externos.
+
+Tras un restore completo vuelven **vacías** estas tres tablas (la definición sí
+viaja: la aplicación arranca con normalidad):
+
+| Tabla                      | Qué hay que rehacer tras el DR                                                                                                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sso_configurations`       | Volver a dar de alta cada IdP (OIDC/SAML) con su client secret. **Entra con la cuenta local de admin: el botón de SSO no estará en la pantalla de login.** |
+| `notification_channels`    | Volver a crear los canales (Slack/Teams/email/webhook) con sus credenciales                                                                                |
+| `incoming_webhook_configs` | Volver a crear cada webhook entrante y **re-entregar su signing secret al emisor**                                                                         |
+
+El bundle lo declara, así que no hay que fiarse de la memoria:
+
+```bash
+python -c "import json;print(json.load(open('<bundle>/manifest.json'))['column_secrets'])"
+# {'excluded_tables': ['sso_configurations', 'notification_channels',
+#  'incoming_webhook_configs'], 'adr': '0146', 'runbook': '06-runbooks/04-disaster-recovery.md'}
+```
+
+Si `excluded_tables` sale **vacía**, ese bundle SÍ lleva el ciphertext (alguien
+vació `WORKERS_BACKUP_COLUMN_SECRET_TABLES`): trátalo como material sensible y
+no lo dejes en un destino remoto sin cifrar.
+
+> **Por qué no se hizo al revés** (cifrar esas columnas con una segunda clave en
+> vez de excluirlas): el instalador emite `WORKERS_BACKUP_ENCRYPTION_ENABLED=false`,
+> así que en un stack recién instalado el segundo sobre no existiría y el
+> ciphertext viajaría igual. Y hacer que el backup FALLE sin cifrado convertiría la
+> ventana nocturna en una caída — justo lo que el ADR 0149 acaba de descartar.
 
 ## Cuándo y qué camino elegir
 

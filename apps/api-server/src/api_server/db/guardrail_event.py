@@ -127,6 +127,14 @@ class GuardrailEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
             "severity",
             "created_at",
         ),
+        # part-01 / ADR 0151: monthly RANGE partitioning on ``created_at``.
+        # Declared on the model (not only in the migration) for two reasons:
+        # the ORM's own DDL stays truthful about the table's shape, and the
+        # guard in ``tests/unit/test_partition_planner.py`` DISCOVERS the
+        # partitioned tables from here to demand the maintenance job knows
+        # about them — a table converted in a migration but not registered in
+        # ``PARTITIONED_TABLES`` would silently have no partition next month.
+        {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
     # --- what fired ----------------------------------------------------------
@@ -166,8 +174,18 @@ class GuardrailEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     )
 
     # --- when ----------------------------------------------------------------
+    # PART OF THE PRIMARY KEY since part-01 (ADR 0151). Not a modelling
+    # preference: PostgreSQL **requires** the primary key of a partitioned
+    # table to include the partition key, so the PK is ``(id, created_at)``.
+    # Nothing depended on ``id`` alone being unique here — this table has no
+    # incoming foreign key and no endpoint looks a row up by id (the router
+    # filters by tenant + time window), which is exactly why the ADR sends
+    # this table FIRST: the same change on ``executions`` drags four FKs.
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+        TIMESTAMP(timezone=True),
+        primary_key=True,
+        nullable=False,
+        server_default=text("now()"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid

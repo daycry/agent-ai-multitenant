@@ -173,6 +173,16 @@ fases.
 | [registry-egress-followups.md](./registry-egress-followups.md)                                 | Seguimientos del `registry-proxy` y del egress allowlisted (ADR 0094).                                                                                                                                                                                          |
 | [runs-visor-trabajo.md](./runs-visor-trabajo.md)                                               | Visor del trabajo de un run (lo que el agente hizo, no solo su log).                                                                                                                                                                                            |
 
+### Planes de infraestructura de datos (no entran en el gate de fases)
+
+Planes con `plan_id` descriptivo que ejecutan una **decisión de arquitectura ya
+firmada** sobre el esquema o el almacenamiento. No bloquean ni son bloqueados por
+las fases; su origen es un ADR, no una auditoría.
+
+| Plan                                                                         | Qué ejecuta                                                                                                                                                                                |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [part-01-particionado-append-only.md](./part-01-particionado-append-only.md) | ADR 0151 (opción C): particionado nativo por rango mensual de las cinco tablas append-only, una por ola, con el job que crea la partición del mes siguiente y su alerta. No se borra nada. |
+
 ### Auditorías (no entran en el gate de fases)
 
 Informes de auditoría del sistema construido (código + sistema vivo). Producen hallazgos verificados y, cuando

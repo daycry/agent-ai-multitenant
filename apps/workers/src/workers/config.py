@@ -673,6 +673,71 @@ class Settings(BaseSettings):
         "Una escritura suelta no debe tirar el backup; un árbol que no se queda "
         "quieto sí, porque la copia no sería coherente.",
     )
+    # ----- Salvaguarda de secretos de columna (ADR 0146) -----
+    # El ADR 0146 bendice que tres familias de secretos vivan cifradas con Fernet
+    # en columnas de Postgres en vez de en Vault, PERO con una condición que
+    # llama no opcional: un dump robado no puede bastar. Hoy quien tiene el
+    # bundle y la variable `API_SERVER_*_ENCRYPTION_KEY` tiene los secretos, y el
+    # bundle viaja a MinIO y a destinos externos. Se excluyen los DATOS de esas
+    # tablas del dump (su DEFINICIÓN sí viaja: el restore las recrea vacías).
+    # El precio, documentado en 06-runbooks/04-disaster-recovery.md: tras un DR
+    # hay que reconfigurar SSO, canales de notificación y webhooks entrantes.
+    backup_column_secret_tables: list[str] = Field(
+        default_factory=lambda: [
+            "sso_configurations",
+            "notification_channels",
+            "incoming_webhook_configs",
+        ],
+        description="Tablas cuyos DATOS quedan fuera del `pg_dump` porque llevan "
+        "secretos que un TENANT configura para terceros, cifrados con Fernet y una "
+        "clave que vive en una variable de entorno (ADR 0146). Vacía = viajan, o "
+        "sea el comportamiento anterior al ADR: sólo tiene sentido si el bundle se "
+        "cifra con una clave que NO es la de esas columnas y está en custodia. La "
+        "frontera del ADR es estricta: aquí sólo entra el secreto tenant→tercero; "
+        "las credenciales de PLATAFORMA siguen en Vault sin excepción.",
+    )
+    # ----- Quiesce de escritores durante la captura (ADR 0149, opción A) -----
+    # El ADR se firmó el 2026-08-01: se paran los escritores mientras dura la
+    # captura, PERO con un plazo que degrada. Si no paran a tiempo el backup
+    # sigue adelante con los que queden en pie y el acta lo registra
+    # (`quiesce: partial`), porque un quiesce que se cuelga convierte el backup
+    # nocturno en una caída y a las 03:00 no hay nadie mirando.
+    backup_quiesce_services: list[str] = Field(
+        # Los mismos escritores de PostgreSQL que para el restore
+        # (`restore_app_services`, vetada en task_prod_04_03), MENOS la lane que
+        # corre el propio backup — que además queda bloqueada por
+        # `backup_quiesce_never_stop`, porque una lista de servicios la escribe
+        # un operador y la guarda no puede ser «no lo pongas».
+        default_factory=lambda: [
+            "api-server",
+            "orchestrator",
+            "workers",
+            "cortex-beat",
+            "notification-dispatcher",
+            "admin-panel",
+        ],
+        description="Servicios de aplicación que se PARAN mientras dura la captura "
+        "del bundle (ADR 0149, opción A), para que ningún artefacto retrate un "
+        "fichero a medio escribir. PostgreSQL, MinIO, Redis y Vault NO se paran: "
+        "son los que se leen. Vacía = no parar nada (el comportamiento anterior al "
+        "ADR, o sea aceptar el skew de la opción C). Cada nombre tiene que estar "
+        "declarado en `restore_compose_file`.",
+    )
+    backup_quiesce_never_stop: list[str] = Field(
+        default_factory=lambda: ["workers-privileged"],
+        description="Servicios que NUNCA se paran aunque estén en "
+        "`backup_quiesce_services`: la lane `workers-privileged` drena la cola "
+        "`privileged`, o sea que ahí corre ESTE backup. Pararla lo mata a mitad de "
+        "la captura y deja el resto del stack parado hasta que alguien lo note.",
+    )
+    backup_quiesce_timeout_seconds: int = Field(
+        default=180,
+        description="Plazo máximo (segundos) que el backup espera a que los "
+        "escritores paren (ADR 0149, punto 1). Vencido, el backup SIGUE ADELANTE "
+        "con los que queden en pie y el manifest registra `quiesce: partial` con "
+        "quién no paró. Un backup con skew registrado es mucho mejor que un backup "
+        "que no existe.",
+    )
     backup_cron: str = Field(
         default="0 3 * * *",
         description="Cron (minute hour day-of-month month day-of-week) for the "

@@ -440,3 +440,45 @@ def test_the_emitted_lists_are_json_the_settings_can_parse() -> None:
     for key in ("WORKERS_BACKUP_VOLUMES", "WORKERS_BACKUP_BIND_PATHS"):
         parsed = json.loads(env[key])
         assert isinstance(parsed, list), f"{key} no es una lista JSON: {env[key]!r}"
+
+
+# --- quiesce: los servicios que se paran tienen que existir (ADR 0149) --------
+
+
+def test_every_quiesced_service_is_declared_in_the_generated_compose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un servicio fantasma en la lista de quiesce degrada el backup cada noche.
+
+    Es el mismo modo de fallo que el ADR 0117 (c) cazó en `restore_app_services`
+    (`web-app`, que no existe en ningún compose), con una diferencia que lo hace
+    MÁS insidioso: el restore abortaba con rc≠0 y se veía; el quiesce del ADR
+    0149 **degrada a propósito** y sigue adelante, así que un nombre mal escrito
+    no rompe nada — solo deja de parar a ese escritor y anota `partial` en un
+    acta que nadie lee hasta el día del desastre.
+    """
+    compose, dotenv = _generated_stack()
+    env = _service_env(compose, dotenv, _BACKUP_SERVICE)
+    settings = _effective_settings(env, monkeypatch)
+    declared = set(compose["services"])
+
+    missing = [s for s in settings.backup_quiesce_services if s not in declared]
+    assert not missing, (
+        f"estos servicios de `backup_quiesce_services` NO están en el compose "
+        f"generado: {missing}. El quiesce no los parará y el bundle se capturará "
+        f"con esos escritores en pie, registrando `partial` cada noche."
+    )
+
+
+def test_the_backup_lane_is_never_in_the_effective_quiesce_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`workers-privileged` corre el backup: pararlo lo mata a mitad de la captura."""
+    compose, dotenv = _generated_stack()
+    env = _service_env(compose, dotenv, _BACKUP_SERVICE)
+    settings = _effective_settings(env, monkeypatch)
+
+    assert _BACKUP_SERVICE in settings.backup_quiesce_never_stop, (
+        f"{_BACKUP_SERVICE} tiene que estar en `backup_quiesce_never_stop`: es la "
+        f"lane que ejecuta este backup y pararla lo mata a mitad de la captura"
+    )

@@ -37,10 +37,33 @@ Lo que sí se valida sin concesiones:
   (el mismo contrato que `MCPServerConfigModel.auth_ref` ya exige) y **el
   mensaje de error NUNCA ecoa el valor**: un error de validación que imprime el
   secreto lo copia al log, que es donde no debe estar.
+
+## La válvula tipada: `x-typed-validator`
+
+Hay reglas que el dialecto no puede expresar porque solo las conoce quien
+escribió la capacidad: que una `base_url` de espacios no es una URL, que dos
+campos son incompatibles entre sí. Meterlas aquí convertiría este módulo en una
+lista de casos especiales por listing.
+
+En su lugar, el `config_schema` **nombra** su validador
+(`"x-typed-validator": "playwright"`) y esta función lo invoca tras validar la
+estructura. El módulo dueño de la capacidad lo registra al importarse
+(`marketplace/playwright.py`, importado por `marketplace/__init__.py`, así que
+importar este módulo basta para tenerlo puesto).
+
+Dos decisiones que no son de estilo:
+
+* **fail-closed**: un validador declarado y no registrado es un ERROR, no un
+  «pues no valido». Un despliegue que se cree validado y no lo está es peor que
+  uno que se niega a escribirse.
+* **corre después, y solo si la estructura casa**: el validador tipado asume
+  valores bien formados. Correrlo sobre un `timeout_ms: "mucho"` daría dos
+  mensajes distintos para el mismo defecto.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 #: Los tipos del dialecto. Mapeados a los tipos Python que los satisfacen.
@@ -62,6 +85,57 @@ SECRET_MUST_BE_VAULT_POINTER = (
     "debe ser un puntero a Vault (empezar por 'vault:'); "
     "un secreto en claro no se guarda en la configuración del despliegue"
 )
+
+
+#: Clave del `config_schema` que NOMBRA al validador tipado de la capacidad.
+#: Prefijo `x-` por la convención de JSON Schema para extensiones, y porque
+#: `parse_config_schema` valida `properties`/`required` sin tocar el resto.
+TYPED_VALIDATOR_KEY = "x-typed-validator"
+
+#: Un validador tipado: valores ya estructuralmente válidos → errores legibles.
+TypedValidator = Callable[[dict[str, Any]], list[str]]
+
+_TYPED_VALIDATORS: dict[str, TypedValidator] = {}
+
+
+def register_typed_validator(name: str, validator: TypedValidator) -> None:
+    """Registra el validador tipado que un `config_schema` puede nombrar.
+
+    Lo llama el módulo dueño de la capacidad al importarse. Re-registrar el
+    mismo nombre es un error: dos módulos peleándose por un nombre significa que
+    uno de los dos validadores no corre nunca, y eso hay que verlo al arrancar,
+    no en producción.
+    """
+    existing = _TYPED_VALIDATORS.get(name)
+    if existing is not None and existing is not validator:
+        raise ValueError(f"ya hay un validador tipado registrado bajo {name!r}")
+    _TYPED_VALIDATORS[name] = validator
+
+
+def typed_validator(name: str) -> TypedValidator | None:
+    """El validador registrado bajo `name`, o ``None`` si no hay ninguno."""
+    return _TYPED_VALIDATORS.get(name)
+
+
+def _typed_validator_name(schema: Any) -> str | None:
+    if not isinstance(schema, dict):
+        return None
+    raw = schema.get(TYPED_VALIDATOR_KEY)
+    return raw if isinstance(raw, str) and raw.strip() else None
+
+
+def _run_typed_validator(schema: Any, values: dict[str, Any]) -> list[str]:
+    """Ejecuta el validador que el esquema nombra. Sin nombre => nada que hacer."""
+    name = _typed_validator_name(schema)
+    if name is None:
+        return []
+    validator = _TYPED_VALIDATORS.get(name)
+    if validator is None:
+        return [
+            f"el `config_schema` declara el validador tipado {name!r}, que no está "
+            "registrado: la configuración no se puede dar por válida"
+        ]
+    return list(validator(values))
 
 
 def _properties(schema: Any) -> dict[str, dict[str, Any]]:
@@ -189,7 +263,7 @@ def validate_deployment_config(
                 "esta capacidad no declara `config_schema`, así que no admite "
                 f"configuración; llegaron: {', '.join(sorted(map(str, values)))}"
             ]
-        return []
+        return _run_typed_validator(schema, values)
 
     errors: list[str] = []
 
@@ -219,7 +293,11 @@ def validate_deployment_config(
             continue
         errors.extend(_check_type(name, spec, value))
 
-    return errors
+    if errors:
+        # El validador tipado asume estructura correcta: correrlo ahora solo
+        # añadiría una segunda redacción del mismo defecto.
+        return errors
+    return _run_typed_validator(schema, values)
 
 
 def apply_defaults(
@@ -309,9 +387,13 @@ def dropped_fields(
 
 __all__ = [
     "SECRET_MUST_BE_VAULT_POINTER",
+    "TYPED_VALIDATOR_KEY",
     "VAULT_POINTER_PREFIX",
+    "TypedValidator",
     "apply_defaults",
     "apply_schema_migration",
     "dropped_fields",
+    "register_typed_validator",
+    "typed_validator",
     "validate_deployment_config",
 ]

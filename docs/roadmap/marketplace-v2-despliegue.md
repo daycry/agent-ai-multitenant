@@ -341,6 +341,17 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   visible y NO se aplica a medias. Rollback = el mismo endpoint apuntando a una
   versión anterior del histórico. UI: banner «v X.Y disponible» en ficha y
   catálogo con el diff de permisos en claro.
+- ⚠️ **Esta casilla se marcó antes de tiempo (2026-08-01) y se corrigió el mismo
+  día.** El backend quedó entero y con 18 tests verdes, y con eso se dio por
+  cerrada; pero la línea de arriba pide también la UI, y el panel no tenía **ni
+  una sola llamada** a `update-check` ni a `/update`. O sea: el mecanismo
+  existía y era invisible — nadie iba a enterarse de que su instalación se había
+  quedado atrás. Es exactamente «falla el cableado del último tramo, no el
+  diseño», que es el hallazgo con el que se abrió la auditoría de esta base.
+  Entregado ya el banner (`installations/[id]/update-banner.tsx`, 11 tests) con
+  las tres reglas que lo hacen honesto: el delta se enseña ANTES del botón, un
+  salto de major pide opt-in explícito en vez de ofrecerse como un clic más, y
+  el botón dice «Revisar permisos y actualizar» cuando va a haber que decidir.
 - **Tests automáticos**:
   ```yaml
   - id: auto_mkt2_12_a
@@ -355,7 +366,34 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_13` — La config guiada de Playwright se muda al despliegue
 
-- [ ] **Título**: El install de Playwright deja de pedir config; su `config_schema` se rinde en el despliegue; migración de datos si hay config previa
+- [x] **Título**: El install de Playwright deja de pedir config; su `config_schema` se rinde en el despliegue; migración de datos si hay config previa
+- ✅ **Cerrada (2026-08-01)**. Tres piezas, y una que **no hizo falta**:
+  - **UI del install fuera**: borrada
+    `apps/admin-panel/app/admin/marketplace/listings/[id]/playwright-config/`
+    (la pantalla entera) y el botón «Configurar» del catálogo
+    (`app/admin/marketplace/page.tsx`). El e2e que la ejercía
+    (`e2e/playwright-tool-config.spec.ts`) se retira y el del catálogo
+    (`e2e/marketplace-admin.spec.ts`) pasa a afirmar la AUSENCIA del botón —
+    la aserción que se pondría roja si alguien reintrodujera el formulario.
+  - **`PlaywrightToolConfig` pervive como validación**: el `config_schema()`
+    declara `x-typed-validator: playwright` y
+    `config_schema.py::validate_deployment_config` lo invoca (registro
+    `register_typed_validator`, **fail-closed** si el validador declarado no
+    está registrado). `marketplace/playwright.py::validate_playwright_config`.
+  - **Migración de datos: NO hace falta, y está comprobado.**
+    `marketplace_installations` **nunca tuvo columna de config** (el test
+    afirma sobre `information_schema` que no hay ninguna columna con «config»
+    en el nombre), así que no hay valores previos que migrar. El caso esperado
+    era el vacío y es el vacío.
+  - **Hallazgo de regalo, arreglado**: el listing destacado **no se podía
+    instalar**. `POST /marketplace/installations` daba 422 («listing manifest
+    has no materialisable implementation_type ('')») porque la puerta de
+    materialización del ADR 0100 llegó DESPUÉS de `task_09_13` y el manifest
+    de Playwright no declara `implementation_type`. Se estampa
+    `docker_command` en `playwright_listing_manifest()` — que es la verdad: un
+    navegador real en el runtime `node-playwright`—, así que la instalación
+    entra **diferida honesta** (ADR 0081 Fase B/C) y el despliegue avisa de
+    que no asigna la tool a ningún agente en vez de fingirlo.
 - **Tiempo**: 5 h · **Complejidad**: m
 - Quitar el formulario del flujo de instalación (UI) y el almacenamiento de
   valores en la instalación (data migration: si alguna instalación lleva config,
@@ -375,7 +413,30 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 #### `task_mkt2_14` — Referencia, changelog y guía humana
 
-- [ ] **Título**: `docs/04-reference/marketplace.md` reescrito al modelo v2 + changelog + guía de tests humanos
+- [x] **Título**: `docs/04-reference/marketplace.md` reescrito al modelo v2 + changelog + guía de tests humanos
+- ✅ **Cerrada (2026-08-01)**. Tres documentos, todos verificados contra el
+  código antes de escribirlos:
+  - `docs/04-reference/marketplace.md` — reescrito: las tres capas y su
+    dialecto (incluida la válvula `x-typed-validator`), el despliegue con sus
+    cuatro endpoints y las tres puertas de UI, la revisión de la publicación,
+    las versiones con el delta de permisos y el refresco, y la sección de
+    Playwright al día. `updated: 2026-08-01`.
+  - `docs/07-changelog/marketplace-v2-despliegue.md` — nuevo, con §Migraciones
+    (`0128`/`0129`/`0130`), el defecto encontrado de camino y una §Deuda
+    conocida.
+  - `docs/03-guides/human-tests/marketplace-v2-despliegue.md` — nueva, con el
+    triple (precondiciones/pasos/resultado esperado) por cada uno de los tres
+    `human_mkt2_*`, más su fila en el README del índice.
+  - **Y dos correcciones a documentación que ya mentía**: la guía humana del
+    plan 09 y el spec del manual 06 describían la pantalla de config guiada de
+    Playwright, que `task_mkt2_13` borró.
+- ⚠️ **Hallazgo al documentar**: `task_mkt2_12` prometía un **banner de
+  actualización** («v X.Y disponible» con el diff de permisos) en la ficha y el
+  catálogo, y **no existe**: no hay ni una llamada a `update-check` ni a
+  `installations/{id}/update` en todo `apps/admin-panel` (grep del 2026-08-01;
+  el backend sí está entero). Queda anotado en la §Deuda conocida del changelog
+  y `human_mkt2_02` se conduce por API mientras tanto. **Su casilla sigue `[x]`
+  porque no es mía**: quien la cerró debe decidir si la reabre.
 - **Tiempo**: 4 h · **Complejidad**: s
 - La referencia cuenta las tres capas y las tres puertas con capturas de flujo;
   `docs/07-changelog/marketplace-v2-despliegue.md` al cierre;

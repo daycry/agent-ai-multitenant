@@ -68,7 +68,10 @@ def test_project_runtime_wins() -> None:
         tool_default_runtime="python-pytest",  # run_pytest's implementation_ref
     )
     assert template.id == "php-phpunit"
-    assert template.docker_image == "agent-runtime-php-phpunit:v1"
+    # Sin fijar la referencia literal: desde el ADR 0148 la compone el manifiesto
+    # de release (registry + versión + digest tras publicar). Lo que este test
+    # afirma es que resolvió la imagen de PHP y no la de Python.
+    assert "agent-runtime-php-phpunit" in template.docker_image
 
 
 def test_no_project_field_falls_back_to_tool_default() -> None:

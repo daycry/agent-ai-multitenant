@@ -137,14 +137,37 @@ def test_upgrade_head_enables_rls_on_tenant_scoped(alembic_config, admin_pg_dsn:
     assert not missing, f"RLS not enabled on: {missing}"
 
 
-def test_junctions_do_not_have_rls(alembic_config, admin_pg_dsn: str) -> None:
-    """Junctions rely on parent visibility via ON DELETE CASCADE. Adding
-    RLS on a junction would either be redundant (same tenant_id check
-    via a join) or wrong (junction has no tenant_id column)."""
+def test_junctions_do_have_rls_since_migration_0124(alembic_config, admin_pg_dsn: str) -> None:
+    """Las cuatro junctions SÍ llevan RLS. Este test afirmaba lo contrario.
+
+    Se llamaba ``test_junctions_do_not_have_rls`` y su docstring razonaba que
+    «una junction no tiene columna tenant_id, así que ponerle RLS sería
+    redundante o incorrecto». Ese razonamiento fue correcto hasta que la
+    migración **0124** (plan prod-14, hallazgo tenancy-1, 2026-07-30) les puso
+    `tenant_id`, un trigger que lo DERIVA del padre, y RLS `ENABLE`+`FORCE` con
+    su policy de aislamiento.
+
+    No fue un descuido, fue el objetivo: sin RLS, cualquiera con una sesión de
+    tenant podía **leer** las asignaciones de otro —incluido
+    `agent_tools.config_override`— e **insertar** una fila apuntando a un padre
+    ajeno, porque las comprobaciones de clave ajena se ejecutan como el
+    propietario de la tabla e IGNORAN la RLS. Que no hubiera fuga explotable
+    dependía de que cada router hiciera su chequeo antes de escribir; la 0124
+    convirtió esa disciplina en un invariante de la base de datos.
+
+    Así que el test se **invierte**, no se retira: pasa a ser la guarda de que
+    nadie deshaga la 0124. Quedó rojo desde el 2026-07-30 —contradiciendo a
+    ``test_rls_invariant.py::test_junction_tables_need_no_exception``, que
+    afirmaba lo correcto y pasaba— y no se vio porque `tests/integration/` son
+    517 ficheros que nadie corre enteros.
+    """
     command.upgrade(alembic_config, "head")
     enabled = _rls_enabled_tables(admin_pg_dsn)
-    rls_on_junctions = NEW_JUNCTION_TABLES & enabled
-    assert not rls_on_junctions, f"RLS unexpectedly enabled on junction tables: {rls_on_junctions}"
+    sin_rls = NEW_JUNCTION_TABLES - enabled
+    assert not sin_rls, (
+        f"junctions sin RLS: {sin_rls}. La migración 0124 se la puso a propósito; "
+        "quitarla reabre la lectura y la inserción cruzada entre tenants"
+    )
 
 
 def test_upgrade_head_creates_expected_policies(alembic_config, admin_pg_dsn: str) -> None:

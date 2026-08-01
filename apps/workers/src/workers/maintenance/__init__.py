@@ -14,6 +14,7 @@ imports every submodule so all ``@app.task`` registrations fire. The submodules:
   * :mod:`~workers.maintenance.budget_sweep`      — ``workers.refresh_budgets`` (5 min)
   * :mod:`~workers.maintenance.queue_sampler`     — ``workers.sample_queue_metrics`` (30s)
   * :mod:`~workers.maintenance.purge`             — ``workers.purge_soft_deleted`` (diario 04:30)
+  * :mod:`~workers.maintenance.partitions`        — ``workers.ensure_partitions`` (diario 03:40)
   * :mod:`~workers.maintenance.reconciler`        — ``workers.reconcile_pipeline_state`` (90s)
   * :mod:`~workers.maintenance.worktree_backfill` — pass (d) of the reconciler (M4)
 
@@ -44,6 +45,13 @@ from workers.maintenance.memory_backfill import (
     backfill_memory_embeddings,
 )
 from workers.maintenance.orphan_reaper import _reap_orphans_async, reap_orphans
+from workers.maintenance.partitions import (
+    PARTITION_HEADROOM_MONTHS,
+    PARTITIONED_TABLES,
+    PartitionSpec,
+    ensure_partitions,
+    ensure_partitions_task,
+)
 from workers.maintenance.purge import (
     EXCLUDED_SOFT_DELETE_TABLES,
     PURGABLE_ROOTS,
@@ -84,6 +92,11 @@ from workers.maintenance.worktree_backfill import (
 
 __all__ = [
     "EmbedderFactory",
+    "PARTITIONED_TABLES",
+    "PARTITION_HEADROOM_MONTHS",
+    "PartitionSpec",
+    "ensure_partitions",
+    "ensure_partitions_task",
     "reap_orphans",
     "_reap_orphans_async",
     "backfill_memory_embeddings",

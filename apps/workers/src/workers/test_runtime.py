@@ -47,6 +47,7 @@ from typing import Any
 
 import structlog
 from shared_test_runtimes.catalog import get as get_template
+from shared_test_runtimes.images import pinned_pull_reference
 from shared_test_runtimes.types import RuntimeTemplate
 
 import docker
@@ -88,6 +89,70 @@ _GIT_HTTPS_ENV: dict[str, str] = {
 # always indicate a hung process, not legitimate work; the project can
 # override per task via ``acceptance_criteria[*].timeout_s``.
 DEFAULT_TIMEOUT_S = 600
+
+
+# ---------------------------------------------------------------------------
+# ADR 0148 — procedencia de la imagen de runtime
+# ---------------------------------------------------------------------------
+
+
+class RuntimeImageUnavailableError(RuntimeError):
+    """No se pudo obtener la imagen fijada por digest, y NO hay plan B.
+
+    Existe para que el fallo sea explícito. La alternativa —seguir adelante con
+    lo que hubiera en el daemon local bajo ese nombre— produce un run verde
+    ejecutado sobre una imagen que nadie puede identificar, que es exactamente
+    el problema que el ADR 0148 vino a cerrar. Ver su condición 2.
+    """
+
+
+def ensure_runtime_image(client: Any, image_reference: str) -> str:
+    """Garantizar la procedencia de la imagen y devolver con qué lanzarla.
+
+    * Referencia **con digest** (el catálogo tras una release): se descarga por
+      digest y se devuelve la forma canónica ``repo@sha256:…``, que es la que se
+      pasa a ``containers.run``. Si el pull falla, se ABORTA.
+    * Referencia **sin digest** (el catálogo mientras no haya release publicada,
+      o la imagen propia de un proyecto del ADR 0129, construida en el host): se
+      devuelve tal cual. No hay procedencia que verificar y exigir un pull la
+      rompería.
+
+    El atajo de «ya está en local» solo aplica al caso fijado por digest, y es
+    seguro justo por eso: un digest es direccionable por contenido, así que una
+    imagen presente bajo ese digest **es** la imagen correcta. Sin él cada
+    lanzamiento pagaría una ida al registry.
+    """
+    pull_reference = pinned_pull_reference(image_reference)
+    if pull_reference is None:
+        return image_reference
+
+    try:
+        client.images.get(pull_reference)
+    except Exception:  # no está en local (o el daemon protesta): manda el pull
+        pass
+    else:
+        return pull_reference
+
+    try:
+        client.images.pull(pull_reference)
+    except Exception as exc:
+        _log.error(
+            "runtime_image_pull_failed",
+            image=image_reference,
+            pull_reference=pull_reference,
+            error=str(exc),
+        )
+        raise RuntimeImageUnavailableError(
+            f"no se pudo obtener la imagen de runtime fijada por digest "
+            f"{image_reference!r}: {exc}. La tarea se ABORTA: caer a una imagen "
+            f"local con el mismo tag ejecutaría código no confiable en una imagen "
+            f"que nadie puede identificar (ADR 0148, condición 2). Comprueba el "
+            f"acceso del host al registry, o apunta RUNTIME_IMAGE_REGISTRY a un "
+            f"mirror que sirva ese digest."
+        ) from exc
+    _log.info("runtime_image_pulled", pull_reference=pull_reference)
+    return pull_reference
+
 
 # ---------------------------------------------------------------------------
 # task_06_04 — Grouping
@@ -690,7 +755,10 @@ class TestRuntimeRunner:
         template = spec.plan.template
         run_kwargs = self._build_test_kwargs(spec, network_name, egress=egress)
         assert_no_docker_socket(run_kwargs)
-        return self.client.containers.run(template.docker_image, **run_kwargs)
+        # ADR 0148: se lanza la MISMA referencia que se acaba de resolver por
+        # digest, no el tag del catálogo — o el daemon podría elegir otra cosa.
+        image = ensure_runtime_image(self.client, template.docker_image)
+        return self.client.containers.run(image, **run_kwargs)
 
     def _run_pre_install(
         self,

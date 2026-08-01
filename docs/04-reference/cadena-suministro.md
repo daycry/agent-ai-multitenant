@@ -2,7 +2,7 @@
 title: Cadena de suministro — qué se escanea, dónde y con qué umbral
 docs_language: es
 audience: security, devops, backend-dev, tech-lead
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 # Cadena de suministro
@@ -94,11 +94,12 @@ del installer.
 
 ## 3. Inmutabilidad: nada mutable entra en el build
 
-| Qué                 | Cómo se referencia                                | Cuántos (2026-07-31)                                |
-| ------------------- | ------------------------------------------------- | --------------------------------------------------- |
-| Bases de imagen     | `FROM python:3.12-slim@sha256:… ` (tag + digest)  | 22 `FROM` externos en 19 Dockerfiles bajo `docker/` |
-| GitHub Actions      | `uses: owner/repo@<sha40> # vN`                   | 46 usos en 4 workflows                              |
-| Composer en las PHP | etapa `FROM composer:2@sha256:…` + `COPY --from=` | 2 imágenes (`php-phpunit`, `php-pest`)              |
+| Qué                       | Cómo se referencia                                                 | Cuántos (2026-08-01)                                |
+| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------- |
+| Bases de imagen           | `FROM python:3.12-slim@sha256:… ` (tag + digest)                   | 22 `FROM` externos en 19 Dockerfiles bajo `docker/` |
+| GitHub Actions            | `uses: owner/repo@<sha40> # vN`                                    | 46 usos en 4 workflows                              |
+| Composer en las PHP       | etapa `FROM composer:2@sha256:…` + `COPY --from=`                  | 2 imágenes (`php-phpunit`, `php-pest`)              |
+| Imágenes de runtime (×14) | `ghcr.io/agentic-platform/agent-runtime-<slug>:<versión>@sha256:…` | manifiesto de release (ADR 0148)                    |
 
 El tag va **dentro** de la referencia además del digest (`python:3.12-slim@sha256:…`,
 no `python@sha256:…`): sin él nadie sabe qué versión corre y Dependabot no puede
@@ -125,10 +126,60 @@ Lo que **no** está pineado por digest, a propósito o por decidir:
   (`apps/workers/src/workers/test_runtime.py`): un digest en una constante de
   Python no lo refresca ningún ecosistema de Dependabot, así que pinearlo ahí
   chocaría con la regla dura del propio plan. Pendiente de decisión.
-- La referencia de las imágenes de runtime en el catálogo
-  (`agent-runtime-<slug>:v1`, tag mutable, build local por host): es el objeto
-  del [ADR 0148](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md),
-  todavía `proposed`.
+
+### 3.1 Las 14 imágenes de runtime (ADR 0148)
+
+Es donde el Principio Rector 2 deposita el aislamiento del **código NO
+confiable**, y hasta el 2026-08-01 era el eslabón más flojo de esta tabla: el
+catálogo componía `agent-runtime-<slug>:v1` y el workflow construía con
+`push: false`, así que **cada host se fabricaba su propia variante**. Dos
+instalaciones del mismo commit ejecutaban cosas distintas y el sistema no podía
+responder _«¿qué imagen exacta ejecutó el código de este tenant?»_. Sin esa
+respuesta, un `.trivyignore` que habla de la imagen de CI y no de la del host no
+es una excepción de seguridad: es una ficción.
+
+Cómo funciona ahora:
+
+| Pieza                                              | Qué hace                                                                                                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build-runtime-templates.yml`                      | En `master` publica las 14 en `ghcr.io/agentic-platform/agent-runtime-<slug>:<versión>` (+ tag del commit). En PR y ramas `plan/**` no publica |
+| `shared_test_runtimes/runtime_images.json`         | Manifiesto de release: `registry` + `version` + los 14 digests. **Lo escribe el pipeline**                                                     |
+| `shared_test_runtimes/catalog.py`                  | Compone la referencia desde el manifiesto. Cero digests escritos a mano (lo vigila un test)                                                    |
+| `workers/test_runtime.py` → `ensure_runtime_image` | Descarga por digest antes de lanzar. Si el pull falla, **aborta**                                                                              |
+| `python -m shared_test_runtimes.release`           | La única mano que reescribe el manifiesto; valida cada digest antes de tocarlo                                                                 |
+
+Las dos condiciones que el ADR pone para que esto no empeore nada, y dónde vive
+cada una:
+
+1. **Nada de digest sin vía de refresco.** El job `refresh-digests` resuelve los
+   digests contra el registry cuando los 14 builds han pasado Trivy y abre un PR
+   con el manifiesto. Un digest tecleado a mano no lo refrescaría nadie
+   —Dependabot parsea Dockerfiles y compose, no fuentes Python— y sería la
+   congelación de CVEs del riesgo 3.
+2. **Fallback explícito, no silencioso.** Si el `pull` por digest falla, la tarea
+   muere con un error legible. Caer a la imagen local con el mismo tag sería
+   reintroducir el problema disfrazado de resiliencia, y encima en verde.
+
+**Estado a 2026-08-01**: el mecanismo está entregado y el manifiesto **vacío** —
+no hay release publicada todavía, así que el catálogo sigue componiendo el nombre
+local que construye `scripts/dev/build-runtime-templates.sh` y el worker lo
+ejecuta como siempre. El salto lo da el primer `master` que publique. Que el
+estado esté escrito en el propio fichero, y no deducido de una constante, es
+deliberado.
+
+> **Lo que cambia el día que se publique**, y conviene saberlo antes: en cuanto
+> el manifiesto traiga digests, `scripts/dev/build-runtime-templates.sh` deja de
+> alimentar al worker. Sus imágenes se siguen llamando `agent-runtime-<slug>:v1`
+> y el catálogo pasará a pedir `ghcr.io/agentic-platform/…@sha256:…`, que es otra
+> cosa: la máquina de desarrollo empezará a **descargar** en vez de usar lo que
+> construyó. Es lo que se quiere (el sandbox del desarrollador y el del cliente
+> ejecutan lo mismo), pero un `docker build` local que «no se aplica» desconcierta
+> si nadie lo avisó. Para volver temporalmente a lo local: `RUNTIME_IMAGE_REGISTRY`
+> no sirve —el digest sigue exigiéndose—; hay que revertir el manifiesto.
+
+**Host sin salida a internet**: `RUNTIME_IMAGE_REGISTRY` reapunta el repositorio
+a un mirror conservando el digest. Procedimiento completo en
+[installation.md](./installation.md#imágenes-de-runtime-y-hosts-sin-salida-a-internet).
 
 ---
 
@@ -175,6 +226,6 @@ uv lock --check
 
 - [Runbook: triage de vulnerabilidades](../06-runbooks/triage-vulnerabilidades.md) — qué hacer con un rojo.
 - [ADR 0147 — lockfile Python: uv workspace, no pip-tools](../05-architecture-decisions/0147-lockfile-python-uv-vs-pip-tools.md).
-- [ADR 0148 — distribución de las imágenes runtime](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md) (`proposed`).
+- [ADR 0148 — distribución de las imágenes runtime](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md) (`accepted`, opción (a); implementado el 2026-08-01).
 - [ADR 0012 — aislamiento por contenedor del agent-runtime](../05-architecture-decisions/0012-aislamiento-contenedores-agent-runtime.md).
 - [Plan prod-11 — cadena de suministro](../roadmap/prod-11-cadena-suministro.md).

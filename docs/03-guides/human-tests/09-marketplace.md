@@ -36,7 +36,6 @@ La gestión del marketplace se hace desde el admin-panel (Tenant Admin):
 http://localhost:3000/admin/marketplace                                  # catálogo + instaladas + compartir
 http://localhost:3000/admin/marketplace/private                          # publicar skills/tools privadas
 http://localhost:3000/admin/marketplace/installations/{id}/permissions   # consentimiento granular por permiso
-http://localhost:3000/admin/marketplace/listings/{id}/playwright-config  # config guiada de Playwright
 ```
 
 ## Pre-requisitos
@@ -164,10 +163,14 @@ persistidos como outputs de la tarea.
 **Pasos**:
 
 1. Crea un proyecto e instala **Playwright** desde `/admin/marketplace`.
-2. Abre la configuración guiada
-   `/admin/marketplace/listings/{id}/playwright-config`: elige browsers
-   (chromium/firefox/webkit), headless, modo de screenshots y traces.
-   Guarda → los **browsers quedan descargados**.
+2. **Despliega** Playwright en ese proyecto y rellena ahí su formulario
+   guiado: browsers (chromium/firefox/webkit), headless, modo de
+   screenshots y traces, `base_url`. Desde el ADR 0142 la configuración es
+   del DESPLIEGUE, no de la instalación: la pantalla
+   `/admin/marketplace/listings/{id}/playwright-config` ya no existe (la
+   retiró `task_mkt2_13`) y el formulario se abre desde la ficha de la
+   instalación, el paso «Capacidades» del wizard o la pestaña del proyecto.
+   Al desplegar, los **browsers quedan descargados**.
 3. Asigna el agente plantilla **QA E2E Automator** a una tarea del
    proyecto que ejecute un spec Playwright (p.ej. un flujo de login).
 4. Lanza la tarea: el agente usa la tool Playwright y **produce

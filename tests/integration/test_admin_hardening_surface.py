@@ -291,6 +291,16 @@ async def test_dev_does_not_over_enforce_the_widened_surface(
     gate is a pass-through, so widening it to nine more routers does not force
     MFA on local development. The request gets past the gate and dies later (on
     the DB the handler needs), which is exactly the proof we want: NOT a 401/403.
+
+    ``raise_app_exceptions=False`` is load-bearing, not a convenience. Getting
+    past the gate means reaching a handler that WILL blow up here (the app role
+    has no grant on ``platform_settings``, and these tests deliberately run with
+    no usable DB). Starlette's ``ServerErrorMiddleware`` renders its 500 and then
+    RE-RAISES so the server logs the fault, and httpx's default re-raises it at
+    the caller — so with the default the test could never read a status code at
+    all: it errored with ``ProgrammingError`` instead of asserting anything. With
+    the flag off we read the real status line, and a gate that started enforcing
+    in ``dev`` would still show up as the 401/403 this asserts against.
     """
     import time
 
@@ -311,7 +321,8 @@ async def test_dev_does_not_over_enforce_the_widened_surface(
 
     monkeypatch.setattr(admin_hardening, "user_mfa_methods", _no_mfa)
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
             "/admin/backup/schedule", headers={"X-Forwarded-For": "203.0.113.9"}
         )

@@ -143,9 +143,20 @@ test("tras re-autenticarse, el usuario vuelve a la ruta que pedía", async ({ pa
   );
   await stubPublicProviders(page);
   await page.route(onApiPath("/me"), (route) => route.fulfill(json(CURRENT_USER)));
-  await page.route(onApiPath("/auth/login"), (route) =>
-    route.fulfill(json({ access_token: "irrelevante", token_type: "bearer", expires_in: 900 })),
-  );
+  // El login REAL contesta con `Set-Cookie: agentic_session=…` (ADR 0133), y de
+  // esa cookie depende el siguiente salto: `middleware.ts` gatea `/admin/*` en
+  // el edge, así que sin ella `router.push('/admin/agents')` rebota a
+  // `/login?next=/admin/agents` — indistinguible de "el `?next=` no se honra".
+  // Un `route.fulfill` con cabecera `set-cookie` no serviría: la respuesta es
+  // cross-origin (`:8001` → `:3000`) y el navegador la descartaría sin CORS
+  // creditado. Sembrarla en el contexto es la emulación fiel de lo que el
+  // backend hace en ESTA respuesta.
+  await page.route(onApiPath("/auth/login"), async (route) => {
+    await seedSession(page);
+    await route.fulfill(
+      json({ access_token: "irrelevante", token_type: "bearer", expires_in: 900 }),
+    );
+  });
   // Un System Admin sin membership: estado "admin" → entra en el panel.
   await page.route(onApiPath("/auth/session/resolve"), (route) =>
     route.fulfill(

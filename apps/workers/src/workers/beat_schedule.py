@@ -44,6 +44,10 @@ APPROVAL_EXPIRY_BEAT_ENTRY = "expire-stale-approvals-every-15m"
 # soft-borradas. Misma disciplina y mismo motivo que la de arriba.
 PURGE_SOFT_DELETED_BEAT_ENTRY = "purge-soft-deleted-daily"
 
+# part-01 task_part01_02 (ADR 0151): el nombre de la entrada del job que crea la
+# partición del mes siguiente de las tablas append-only. Misma disciplina.
+ENSURE_PARTITIONS_BEAT_ENTRY = "ensure-partitions-daily"
+
 # Each schedule entry is the standard Celery shape:
 # `{task: <name>, schedule: <celery.schedules.*>, options: {queue: <name>}}`.
 #
@@ -245,6 +249,18 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "workers.run_shadow_evals",
         "schedule": crontab(minute="17"),
         "options": {"queue": "default"},
+    },
+    # part-01 task_part01_02 (ADR 0151): crea la partición del mes siguiente de
+    # cada tabla append-only convertida, con 3 meses de colchón, y alerta si M+1
+    # sigue faltando al terminar. Sin esto, la PRIMERA inserción del mes que viene
+    # falla («no partition of relation found for row»). Diario a las 03:40 — antes
+    # del backup (04:00 el GC, 04:30 la purga) para que el dump del día ya vea el
+    # esquema del mes nuevo. Cola `privileged`: es DDL con el DSN admin, y ese
+    # pool (`workers-backup`) es el único que lo tiene configurado.
+    ENSURE_PARTITIONS_BEAT_ENTRY: {
+        "task": "workers.ensure_partitions",
+        "schedule": crontab(hour="3", minute="40"),
+        "options": {"queue": "privileged"},
     },
 }
 

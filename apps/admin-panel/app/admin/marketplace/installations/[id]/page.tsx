@@ -33,6 +33,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ShieldCheck, Store } from "lucide-react";
 
 import { DeploymentsSection } from "./deployments-section";
+import { UpdateBanner } from "./update-banner";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { capabilityFromManifest } from "@/components/marketplace/deployment-types";
@@ -130,6 +131,11 @@ export default function InstallationDetailPage() {
       {listing?.description ? (
         <p className="text-muted-foreground mt-2 text-sm">{listing.description}</p>
       ) : null}
+
+      {/* Antes de los despliegues: si hay versión nueva, se ve al entrar. Un
+          aviso de actualización debajo de una lista larga es un aviso que nadie
+          lee (`task_mkt2_12`). */}
+      {installQuery.data ? <UpdateBanner installationId={installationId} /> : null}
 
       {installQuery.data ? (
         <DeploymentsSection installationId={installationId} capability={capability} />

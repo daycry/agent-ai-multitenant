@@ -1437,6 +1437,35 @@ export const dictionary = {
    * castellano dentro de la respuesta.
    */
   marketplaceDeploy: {
+    // --- el banner de actualización (task_mkt2_12) ------------------------
+    updateAvailable: {
+      es: "Versión {version} disponible (tienes la {installed}).",
+      en: "Version {version} available (you have {installed}).",
+    },
+    updateMajor: { es: "cambio de versión mayor", en: "major version change" },
+    updateAsksMore: {
+      es: "Esta versión pide MÁS permisos que la que tienes instalada:",
+      en: "This version asks for MORE permissions than the one you have installed:",
+    },
+    updateAsksLess: {
+      es: "Esta versión pide menos permisos que la instalada; no hay nada que decidir.",
+      en: "This version asks for fewer permissions than the installed one; nothing to decide.",
+    },
+    updateDeltaAdded: { es: "nuevo: {type}", en: "new: {type}" },
+    updateDeltaChanged: {
+      es: "{type}: de {from} a {to}",
+      en: "{type}: from {from} to {to}",
+    },
+    updateApply: { es: "Actualizar", en: "Update" },
+    updateReviewAndApply: {
+      es: "Revisar permisos y actualizar",
+      en: "Review permissions and update",
+    },
+    updateAllowMajor: {
+      es: "Ver el salto de versión mayor",
+      en: "Show the major version jump",
+    },
+    updateOutdatedShort: { es: "actualizable", en: "update available" },
     // --- el formulario del `config_schema` -------------------------------
     configTitle: { es: "Configuración", en: "Configuration" },
     configHelp: {

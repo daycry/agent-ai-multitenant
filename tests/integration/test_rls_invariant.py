@@ -161,11 +161,20 @@ async def _introspect(dsn: str) -> dict[str, dict[str, object]]:
         ):
             tenant_cols.setdefault(row["table_name"], []).append(row["column_name"])
 
+        # `relkind IN ('r', 'p')`: 'r' son las tablas normales y 'p' las
+        # PARTICIONADAS (part-01 / ADR 0151). Con solo 'r', el PADRE de una tabla
+        # particionada entraba por `information_schema.tables` —donde sí aparece—
+        # y salía de aquí sin fila, o sea con `(False, False)`: el invariante nº 1
+        # lo denunciaba por «sin ENABLE ROW LEVEL SECURITY» teniéndola. Un falso
+        # positivo, y de los caros: el arreglo obvio ante ese mensaje es añadir la
+        # tabla a una allowlist, que es exactamente eximir de la RLS a la tabla
+        # que sí la tiene. Las particiones son 'r' y entran por el camino normal,
+        # que es lo que se quiere: cada una lleva su propia policy.
         flags = {
             r["relname"]: (r["relrowsecurity"], r["relforcerowsecurity"])
             for r in await conn.fetch(
                 "SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class"
-                " WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'"
+                " WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')"
             )
         }
         policies: dict[str, list[tuple[str, str]]] = {t: [] for t in tables}

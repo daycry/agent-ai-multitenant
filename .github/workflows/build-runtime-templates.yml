@@ -1,12 +1,21 @@
 name: Build runtime templates
 
-# Plan 06 task_06_03 — build the fourteen curated test-runtime images
-# in a matrix on every change to their Dockerfiles or to the catalog
-# package. Push to a registry is deferred (we tag locally only) — the
-# CI signal here is "does the Dockerfile build at all on a fresh
-# Ubuntu runner". When the platform later picks a registry, replace
-# the docker/build-push-action step's ``push: false`` and add a login
-# step; nothing else needs to change.
+# Plan 06 task_06_03 — construir las catorce imágenes de test-runtime.
+#
+# ADR 0148 (firmado el 2026-08-01) — este workflow dejó de tirar a la basura lo
+# que construye. Antes usaba `push: false` + `load: true`: CI demostraba que el
+# Dockerfile compila y **cada host se construía su propia variante** de las 14
+# imágenes donde el Principio Rector 2 deposita el aislamiento del código NO
+# confiable. Dos instalaciones del mismo commit ejecutaban cosas distintas y el
+# sistema no podía responder «¿qué imagen exacta ejecutó el código de este
+# tenant?».
+#
+# Ahora, en `master` (y en `workflow_dispatch`), las catorce se PUBLICAN en
+# ghcr.io/agentic-platform/agent-runtime-<slug>:<version> y un job final resuelve
+# sus digests y abre un PR contra el manifiesto que lee el catálogo
+# (`packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json`).
+# En pull_request y en ramas `plan/**` nada se publica: se construye en local y
+# se escanea, que es el gate de siempre.
 
 on:
   push:
@@ -14,12 +23,20 @@ on:
     paths:
       - "docker/agent-runtimes/**"
       - "packages/shared-test-runtimes/**"
+      # …menos el manifiesto que este mismo workflow escribe. Sin esta
+      # exclusión, mergear su PR de digests dispara otra publicación, que
+      # resuelve digests, que abre otro PR: un bucle que se alimenta solo.
+      - "!packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json"
       - ".github/workflows/build-runtime-templates.yml"
   pull_request:
     branches: [master]
     paths:
       - "docker/agent-runtimes/**"
       - "packages/shared-test-runtimes/**"
+      # …menos el manifiesto que este mismo workflow escribe. Sin esta
+      # exclusión, mergear su PR de digests dispara otra publicación, que
+      # resuelve digests, que abre otro PR: un bucle que se alimenta solo.
+      - "!packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json"
       - ".github/workflows/build-runtime-templates.yml"
   workflow_dispatch:
 
@@ -27,9 +44,45 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/agentic-platform
+
 jobs:
+  # ¿Esta ejecución publica? Se resuelve UNA vez y los demás jobs la heredan:
+  # repetir la condición en cada `if:` es como se acaba publicando desde una
+  # rama de trabajo sin que nadie lo note.
+  prep:
+    name: Resolve publish mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.mode.outputs.publish }}
+      version: ${{ steps.mode.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             || { [ "${{ github.ref }}" != "refs/heads/master" ] \
+                  && [ "${{ github.event_name }}" != "workflow_dispatch" ]; }; then
+            publish=false
+          else
+            publish=true
+          fi
+          # La versión sale del propio manifiesto: el tag que se publica y el que
+          # el catálogo compone son EL MISMO por construcción, no por disciplina.
+          version=$(python3 -c "import json;print(json.load(open('packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json'))['version'])")
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish version=$version"
+
   build:
     name: Build ${{ matrix.template }}
+    needs: prep
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -54,20 +107,39 @@ jobs:
           - dotnet-test
           - generic-shell
           - generic-http
+    env:
+      # Referencia con la que trabajan Trivy y el smoke: la publicada cuando esta
+      # ejecución publica, la local cuando no. Una sola variable para que los dos
+      # pasos no puedan mirar imágenes distintas.
+      IMAGE_REF: ${{ needs.prep.outputs.publish == 'true' && format('{0}/agent-runtime-{1}:{2}', 'ghcr.io/agentic-platform', matrix.template, needs.prep.outputs.version) || format('agent-runtime-{0}:{1}', matrix.template, needs.prep.outputs.version) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
+      - name: Log in to GHCR
+        if: needs.prep.outputs.publish == 'true'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: docker/agent-runtimes/${{ matrix.template }}
           file: docker/agent-runtimes/${{ matrix.template }}/Dockerfile
-          push: false
-          load: true
-          tags: agent-runtime-${{ matrix.template }}:v1
+          # Publicar y cargar en el daemon local son exportadores distintos: se
+          # elige uno según el modo, y los pasos de abajo usan `IMAGE_REF`, que
+          # apunta a la que exista.
+          push: ${{ needs.prep.outputs.publish == 'true' }}
+          load: ${{ needs.prep.outputs.publish != 'true' }}
+          # Al publicar van dos tags: el versionado (legible, y el que Dependabot
+          # sabe leer) y el del commit (inmutable de verdad). Quien resuelve, en
+          # cualquier caso, es el digest que este workflow escribe en el catálogo.
+          tags: ${{ needs.prep.outputs.publish == 'true' && format('{0},{1}/agent-runtime-{2}:{3}', env.IMAGE_REF, env.REGISTRY, matrix.template, github.sha) || env.IMAGE_REF }}
           # GitHub Actions cache backend: each template caches its own
           # layers under a key derived from the matrix value.
           cache-from: type=gha,scope=runtime-${{ matrix.template }}
@@ -84,11 +156,17 @@ jobs:
       # upstream; sin esto el gate bloquearía PRs ajenos al problema (riesgo 2).
       # Las excepciones CON fix van a `.trivyignore`, con justificación y fecha
       # de revisión obligatorias.
+      #
+      # TRADE-OFF declarado, igual que en `release-images.yml`: cuando se publica,
+      # el escaneo va DESPUÉS del push. Lo que sí garantiza este orden es lo que
+      # de verdad importa: `refresh-digests` depende de que los catorce jobs
+      # terminen en verde, así que **una imagen con una CVE HIGH/CRITICAL nunca
+      # llega al catálogo**, por mucho que su blob esté en el registry.
       - name: Trivy — ${{ matrix.template }} (HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           scan-type: image
-          image-ref: agent-runtime-${{ matrix.template }}:v1
+          image-ref: ${{ env.IMAGE_REF }}
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
@@ -97,9 +175,77 @@ jobs:
 
       - name: Image smoke (the catalog claims WORKDIR=/workspace)
         run: |
-          docker run --rm --entrypoint pwd agent-runtime-${{ matrix.template }}:v1 \
-            | tee /tmp/pwd.txt
+          docker run --rm --entrypoint pwd "${IMAGE_REF}" | tee /tmp/pwd.txt
           test "$(cat /tmp/pwd.txt)" = "/workspace"
+
+  # ADR 0148, condición 1: «nada de digest sin vía de refresco». ESTE job es la
+  # vía. El digest del catálogo no lo teclea nadie: se resuelve contra el
+  # registry después de que las catorce hayan pasado Trivy, y llega al repo por
+  # PR — revisable, y sin permiso de escritura directa sobre `master`.
+  refresh-digests:
+    name: Refresh catalog digests
+    needs: [prep, build]
+    if: ${{ needs.prep.outputs.publish == 'true' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve the published digests
+        id: digests
+        env:
+          VERSION: ${{ needs.prep.outputs.version }}
+          # El paquete no tiene dependencias: basta el PYTHONPATH. Un `pip
+          # install` aquí chocaría con el entorno gestionado del runner (PEP 668)
+          # por nada.
+          PYTHONPATH: packages/shared-test-runtimes/src
+        run: |
+          set -euo pipefail
+          # La lista de plantillas sale del CATÁLOGO, no de una copia en este
+          # fichero: una plantilla nueva entra en el manifiesto sin que nadie se
+          # acuerde de tocar el workflow.
+          templates=$(python3 -c "from shared_test_runtimes.catalog import list_ids; print('\n'.join(list_ids()))")
+          args=()
+          for t in $templates; do
+            ref="${REGISTRY}/agent-runtime-${t}:${VERSION}"
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            echo "$t -> $digest"
+            args+=(--digest "${t}=${digest}")
+          done
+          python3 -m shared_test_runtimes.release \
+            --registry "${REGISTRY}" --version "${VERSION}" "${args[@]}"
+
+      - name: Open a PR when the manifest moved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prep.outputs.version }}
+        run: |
+          set -euo pipefail
+          manifest=packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json
+          if git diff --quiet -- "$manifest"; then
+            echo "El manifiesto no ha cambiado: nada que proponer."
+            exit 0
+          fi
+          branch="chore/runtime-digests-${GITHUB_SHA::12}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add "$manifest"
+          git commit -m "chore(runtimes): refresca los digests publicados (${VERSION})" \
+                     -m "Generado por build-runtime-templates.yml sobre ${GITHUB_SHA}. ADR 0148."
+          git push origin "$branch"
+          gh pr create --base master --head "$branch" \
+            --title "chore(runtimes): digests de las imágenes de runtime (${VERSION})" \
+            --body "Digests resueltos contra \`${REGISTRY}\` tras publicar las 14 imágenes y pasar Trivy. Los escribe el pipeline: editarlos a mano congelaría sus CVEs (ADR 0148, condición 1)."
 
   # Final aggregator job so branch protection can require a single
   # check ("Build runtime templates / summary") instead of fourteen.

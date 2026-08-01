@@ -339,24 +339,38 @@ def test_registry_adr_names_the_status_quo_it_replaces(
         assert anchor in body, f"el ADR no ancla el statu quo en `{anchor}`"
 
 
-def test_registry_adr_does_not_claim_implementation() -> None:
-    """El ADR NO puede haber tocado el catálogo: la decisión no está tomada.
+def test_registry_adr_is_wired_into_the_catalog_and_the_workflow() -> None:
+    """Firmado el ADR, la guarda se invierte: ahora exige la implementación.
 
-    Añadir hoy un campo `digest` opcional que nadie puebla sería exactamente el
-    patrón dominante de esta base —mecanismo entregado, cero llamantes— y encima
-    prejuzgaría la opción. El campo entra cuando el ADR se firme.
+    Este test nació al revés —«el ADR NO puede haber tocado el catálogo»— y era
+    correcto mientras la decisión estaba abierta: un campo `digest` que nadie
+    puebla es el patrón dominante de esta base (mecanismo entregado, cero
+    llamantes) y habría prejuzgado la opción.
+
+    Firmada la opción (a) el 2026-08-01, lo que hay que vigilar es lo contrario:
+    que el catálogo no vuelva al tag mutable y que el workflow no vuelva a tirar
+    a la basura lo que construye. Son las dos líneas que el propio ADR nombra
+    como statu quo, y volver a cualquiera de las dos reabre la pregunta sin
+    respuesta —«¿qué imagen ejecutó el código de este tenant?»— sin que nadie se
+    entere.
     """
-    catalog = (
-        REPO_ROOT
-        / "packages"
-        / "shared-test-runtimes"
-        / "src"
-        / "shared_test_runtimes"
-        / "catalog.py"
+    package = REPO_ROOT / "packages" / "shared-test-runtimes" / "src" / "shared_test_runtimes"
+    catalog = (package / "catalog.py").read_text(encoding="utf-8")
+    workflow = (WORKFLOWS_DIR / "build-runtime-templates.yml").read_text(encoding="utf-8")
+
+    assert (package / "runtime_images.json").is_file(), (
+        "falta el manifiesto de release que pobla el pipeline: sin él el catálogo "
+        "no tiene de dónde sacar los digests (ADR 0148)"
     )
-    text = catalog.read_text(encoding="utf-8")
-    assert '_IMAGE_TAG = "v1"' in text, (
-        "la guarda dejó de encontrar el statu quo del catálogo: si `_IMAGE_TAG` ya "
-        "no está, la decisión del ADR 0148 se tomó y este test hay que reescribirlo "
-        "junto al ADR (que pasaría a `accepted`)"
+    assert "load_manifest" in catalog, (
+        "el catálogo ya no compone su referencia desde el manifiesto de release: "
+        "si ha vuelto a una constante, las imágenes vuelven a ser irreproducibles"
+    )
+    assert "push: ${{" in workflow, (
+        "`build-runtime-templates.yml` volvió a `push: false` fijo: construir y "
+        "tirar lo construido es el statu quo que el ADR 0148 cierra"
+    )
+    assert "shared_test_runtimes.release" in workflow, (
+        "el workflow ya no refresca los digests del catálogo: un digest sin vía de "
+        "refresco es la congelación de CVEs que prohíbe la condición 1 del ADR 0148"
     )

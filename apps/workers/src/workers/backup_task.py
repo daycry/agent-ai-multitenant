@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.backup import BackupConfig, BackupError, run_full_backup
 from workers.backup_metrics import write_backup_metrics
+from workers.backup_quiesce import QuiesceRecord
 from workers.backup_verification import verify_bundle
 from workers.celery_app import app
 from workers.config import Settings, get_settings
@@ -129,8 +130,15 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
     # The metric reflects the bundle both wrote AND verified. A
     # produced-but-invalid bundle is a failed backup for alerting purposes — it
     # must not advance the success clock. AUD16-19: emitted AFTER the upload so
-    # the offsite count/clock of THIS run travels in the same sample.
-    _emit_backup_metric(run_settings, success=valid, offsite_uploaded=len(uploaded))
+    # the offsite count/clock of THIS run travels in the same sample. ADR 0149:
+    # la duración del quiesce viaja en la misma muestra, que es el corte de
+    # servicio diario que el operador aceptó y nadie medía.
+    _emit_backup_metric(
+        run_settings,
+        success=valid,
+        offsite_uploaded=len(uploaded),
+        quiesce=result.quiesce,
+    )
 
     return {
         "enabled": True,
@@ -144,6 +152,10 @@ async def _run_daily_backup(settings: Settings) -> dict[str, Any]:
         "pruned": len(result.pruned),
         "uploaded": uploaded,
         "upload_failures": upload_failures,
+        # ADR 0149: cómo se capturó. `partial` NO es un fallo del backup —el ADR
+        # lo prevé— pero sí es lo que hay que mirar cuando el reconciliador de un
+        # restore reporte divergencias sobre este bundle.
+        "quiesce": result.quiesce.to_dict(),
     }
 
 
@@ -250,7 +262,13 @@ def _verify_after_backup(settings: Settings, bundle_dir: Any) -> bool:
     return report.valid
 
 
-def _emit_backup_metric(settings: Settings, *, success: bool, offsite_uploaded: int = 0) -> None:
+def _emit_backup_metric(
+    settings: Settings,
+    *,
+    success: bool,
+    offsite_uploaded: int = 0,
+    quiesce: QuiesceRecord | None = None,
+) -> None:
     """Write the node-exporter textfile metric for this run (task_12_14).
 
     Best-effort wrapper around :func:`workers.backup_metrics.write_backup_metrics`
@@ -259,11 +277,14 @@ def _emit_backup_metric(settings: Settings, *, success: bool, offsite_uploaded: 
     monitoring overlay is not up, permission error, ...) must never affect the
     backup outcome.
     """
+    record = quiesce or QuiesceRecord.disabled()
     try:
         write_backup_metrics(
             settings.backup_metrics_textfile_path,
             success=success,
             offsite_uploaded=offsite_uploaded,
+            quiesce_seconds=record.duration_s,
+            quiesce_degraded=record.degraded,
         )
     except Exception as exc:  # pragma: no cover — defensive: beat must not die
         _log.warning("backup.metrics.error", error=str(exc))

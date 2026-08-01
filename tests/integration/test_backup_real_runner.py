@@ -137,6 +137,11 @@ def _settings(tmp_path: Path, **overrides: object) -> Settings:
         "backup_volumes_mount_root": str(volumes_root),
         "backup_bind_paths": [str(bind)],
         "backup_retention_days": 7,
+        # ADR 0149: sin esto el motor le pediría a `docker compose` que parase el
+        # stack de esta MÁQUINA de desarrollo mientras corre la suite. El sujeto
+        # de este fichero es tar/gzip/AES de verdad, no el quiesce (que tiene su
+        # propio fichero, `tests/unit/test_backup_quiesce.py`).
+        "backup_quiesce_services": [],
     }
     base.update(overrides)
     return Settings(**base)  # type: ignore[arg-type]

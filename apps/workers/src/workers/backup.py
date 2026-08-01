@@ -65,6 +65,8 @@ from workers.backup_consistency import (
     tree_fingerprint,
 )
 from workers.backup_encryption import ENCRYPTED_SUFFIX, BackupEncryptor
+from workers.backup_quiesce import ComposeQuiescer, QuiesceRecord
+from workers.backup_secrets import exclude_table_data_args
 from workers.config import Settings, get_settings
 
 _log = structlog.get_logger("workers.backup")
@@ -213,6 +215,30 @@ class BackupConfig:
     # dev: mejor abortar con un mensaje que diga qué variable falta que producir un
     # fallo de conexión cada noche a las 03:00.
     require_production_dsn: bool = False
+    # ----- Quiesce de escritores (ADR 0149, opción A) -----
+    # Los servicios de aplicación que se paran MIENTRAS dura la captura, para que
+    # ningún artefacto retrate un fichero a medio escribir. Vacía = no parar nada
+    # (el comportamiento anterior al ADR). Ver `workers.backup_quiesce` para el
+    # contrato completo, incluida la degradación cuando alguno no para a tiempo.
+    quiesce_services: tuple[str, ...] = ()
+    # Nunca se paran, aunque el operador los liste: la lane que corre ESTE backup
+    # se mataría a sí misma a mitad de la captura.
+    quiesce_never_stop: tuple[str, ...] = ()
+    # El plazo del punto 1 del ADR. Vencido, el backup SIGUE con skew registrado.
+    quiesce_timeout_s: int = 180
+    # A qué stack de compose se le pide la parada. Se toman de la configuración
+    # del RESTORE a propósito (`WORKERS_RESTORE_COMPOSE_*`): es el mismo stack, y
+    # un segundo par de variables sería un segundo sitio que mantener en sincronía
+    # cuyo modo de fallo —parar el proyecto equivocado— es peor que el acoplamiento.
+    compose_project: str = ""
+    compose_file: str = ""
+    # ----- Salvaguarda de secretos de columna (ADR 0146) -----
+    # Tablas cuyos DATOS se dejan fuera del dump porque llevan secretos que un
+    # tenant configura para terceros, cifrados con Fernet + una variable de
+    # entorno. Sin esto, quien tenga el bundle y esa variable tiene los secretos.
+    # Vacía = viajan (la palanca del operador para volver atrás; el default del
+    # `Settings` es el seguro). Ver `workers.backup_secrets`.
+    column_secret_tables: tuple[str, ...] = ()
     # Wall-clock caps for the two heavy commands. Generous; a hung pg_dump or
     # tar is a problem, but a legitimate multi-GB dump must not be killed.
     pg_dump_timeout_s: int = 3600
@@ -238,6 +264,12 @@ class BackupConfig:
             redis_url=str(settings.backup_redis_url or settings.broker_url),
             stable_snapshot_paths=tuple(settings.backup_stable_snapshot_paths),
             snapshot_retries=int(settings.backup_snapshot_retries),
+            quiesce_services=tuple(settings.backup_quiesce_services),
+            quiesce_never_stop=tuple(settings.backup_quiesce_never_stop),
+            quiesce_timeout_s=int(settings.backup_quiesce_timeout_seconds),
+            compose_project=str(settings.restore_compose_project),
+            compose_file=str(settings.restore_compose_file),
+            column_secret_tables=tuple(settings.backup_column_secret_tables),
             encryption_enabled=bool(settings.backup_encryption_enabled),
             encryption_vault_key=str(settings.backup_encryption_vault_key),
             key_custody_fingerprint=str(settings.backup_key_custody_fingerprint).strip().lower(),
@@ -286,6 +318,16 @@ class BackupManifest:
     # que la clave que ha sacado de la custodia offsite es la correcta. `None` en
     # un bundle en claro.
     key_fingerprint: str | None = None
+    # ADR 0149 — el acta del quiesce. Es lo que permite juzgar, meses después,
+    # si las divergencias que reporte `restore_reconcile` sobre ESTE bundle son
+    # el comportamiento acordado (`partial`: se capturó con escritores en pie) o
+    # una incidencia. Un skew que no consta en ningún sitio no se puede juzgar.
+    quiesce: QuiesceRecord = field(default_factory=QuiesceRecord.disabled)
+    # ADR 0146 — qué NO viaja en este bundle a propósito. Un backup al que le
+    # falta algo por diseño tiene que decirlo en el acta: es lo único que separa
+    # una decisión de arquitectura de una pérdida de datos silenciosa para quien
+    # abra el bundle dentro de seis meses.
+    excluded_secret_tables: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -296,6 +338,16 @@ class BackupManifest:
             "database": {"url": self.database_url_sanitized},
             "encrypted": self.encrypted,
             "key_fingerprint": self.key_fingerprint,
+            "quiesce": self.quiesce.to_dict(),
+            # Datos, no prosa: la explicación vive en el runbook y en
+            # `workers.backup_secrets`. Una nota larga aquí, además de duplicar
+            # documentación, hizo saltar la guarda que comprueba que ninguna
+            # credencial se filtra al manifest (la palabra estaba dentro).
+            "column_secrets": {
+                "excluded_tables": list(self.excluded_secret_tables),
+                "adr": "0146",
+                "runbook": "06-runbooks/04-disaster-recovery.md",
+            },
             "artifacts": [a.to_dict() for a in self.artifacts],
             "total_size_bytes": sum(a.size_bytes for a in self.artifacts),
         }
@@ -310,6 +362,9 @@ class BackupResult:
     manifest_path: Path
     artifacts: tuple[ArtifactRecord, ...]
     pruned: tuple[str, ...]
+    # ADR 0149 — cómo se capturó: con los escritores parados (`full`), con
+    # alguno en pie (`partial`) o sin intentarlo (`disabled`).
+    quiesce: QuiesceRecord = field(default_factory=QuiesceRecord.disabled)
 
 
 def _sanitize_db_url(url: str) -> str:
@@ -431,10 +486,15 @@ class BackupEngine:
         runner: CommandRunner | None = None,
         encryptor: BackupEncryptor | None = None,
         redis_flusher: PersistenceFlusher | None = None,
+        quiescer: ComposeQuiescer | None = None,
         now: datetime | None = None,
     ) -> None:
         self._config = config
         self._runner: CommandRunner = runner or SubprocessRunner()
+        # El que para los escritores durante la captura (ADR 0149). Se construye
+        # aquí y no en la factoría porque necesita el MISMO runner que el motor:
+        # así el doble de los tests ve también los argv de compose.
+        self._quiescer = quiescer or self._build_quiescer()
         # El seam que le pide a Redis un AOF fresco antes de tarearlo
         # (task_prod_04_06). No cabe en el CommandRunner: es una conversación por
         # red, no un subproceso. Producción lo construye en run_full_backup().
@@ -449,6 +509,20 @@ class BackupEngine:
     @property
     def config(self) -> BackupConfig:
         return self._config
+
+    def _build_quiescer(self) -> ComposeQuiescer | None:
+        """El quiescer de producción, o ``None`` si no hay nada que parar."""
+        cfg = self._config
+        if not cfg.quiesce_services:
+            return None
+        return ComposeQuiescer(
+            runner=self._runner,
+            project=cfg.compose_project,
+            compose_file=Path(cfg.compose_file),
+            services=cfg.quiesce_services,
+            timeout_s=cfg.quiesce_timeout_s,
+            never_stop=cfg.quiesce_never_stop,
+        )
 
     # -- public API ---------------------------------------------------------
 
@@ -474,19 +548,20 @@ class BackupEngine:
         bundle_dir.mkdir(parents=True, exist_ok=False)
         _log.info("backup.start", backup_id=backup_id, bundle_dir=str(bundle_dir))
 
+        quiesce = QuiesceRecord.disabled()
         try:
-            artifacts: list[ArtifactRecord] = []
-            artifacts.append(self._dump_database(bundle_dir))
-            for volume in self._config.volumes:
-                artifacts.append(self._tar_volume(bundle_dir, volume))
-            projects = self._tar_projects(bundle_dir)
-            if projects is not None:
-                artifacts.append(projects)
-            redis_art = self._tar_redis(bundle_dir)
-            if redis_art is not None:
-                artifacts.append(redis_art)
-            for bind_path in self._config.bind_paths:
-                artifacts.append(self._tar_bind_path(bundle_dir, bind_path))
+            # ADR 0149: los escritores paran ALREDEDOR de la captura, y vuelven
+            # SIEMPRE — el `finally` de abajo, no una rama feliz. Si no paran a
+            # tiempo el backup sigue igualmente con el skew registrado: un stack
+            # detenido a las 03:00 esperando a un worker que no responde es peor
+            # que un bundle con constancia de su propia incoherencia.
+            try:
+                if self._quiescer is not None:
+                    quiesce = self._quiescer.quiesce()
+                artifacts = self._capture(bundle_dir)
+            finally:
+                if self._quiescer is not None:
+                    quiesce = self._quiescer.resume(quiesce)
             encrypted = False
             if self._config.encryption_enabled:
                 artifacts = self._encrypt_bundle(bundle_dir, artifacts)
@@ -497,6 +572,7 @@ class BackupEngine:
                 artifacts,
                 encrypted=encrypted,
                 key_fingerprint=key_fingerprint,
+                quiesce=quiesce,
             )
         except BackupError:
             # Remove the partial bundle so a failed run leaves nothing
@@ -521,9 +597,31 @@ class BackupEngine:
             manifest_path=manifest,
             artifacts=tuple(artifacts),
             pruned=tuple(pruned),
+            quiesce=quiesce,
         )
 
     # -- steps --------------------------------------------------------------
+
+    def _capture(self, bundle_dir: Path) -> list[ArtifactRecord]:
+        """Las capturas propiamente dichas — lo que el quiesce envuelve.
+
+        Extraído de :meth:`run_full_backup` para que la ventana de parada tenga
+        un principio y un final visibles: todo lo que está aquí dentro se ejecuta
+        con los escritores detenidos, y el cifrado (que solo toca ficheros ya
+        escritos) queda fuera para no alargarla sin motivo.
+        """
+        artifacts: list[ArtifactRecord] = [self._dump_database(bundle_dir)]
+        for volume in self._config.volumes:
+            artifacts.append(self._tar_volume(bundle_dir, volume))
+        projects = self._tar_projects(bundle_dir)
+        if projects is not None:
+            artifacts.append(projects)
+        redis_art = self._tar_redis(bundle_dir)
+        if redis_art is not None:
+            artifacts.append(redis_art)
+        for bind_path in self._config.bind_paths:
+            artifacts.append(self._tar_bind_path(bundle_dir, bind_path))
+        return artifacts
 
     def _assert_production_dsn(self) -> None:
         """Rechazar el DSN de DEV del backup fuera de dev (task_prod_04_09).
@@ -625,6 +723,10 @@ class BackupEngine:
             "--format=directory",
             "--no-owner",
             "--no-privileges",
+            # ADR 0146: los DATOS de las tablas con secretos de tenant→tercero se
+            # quedan fuera (la DEFINICIÓN sí viaja, o el restore dejaría la base
+            # sin esas tablas). Un dump robado deja de llevar el ciphertext.
+            *exclude_table_data_args(self._config.column_secret_tables),
             f"--file={out_dir}",
             f"--dbname={self._config.database_url}",
         ]
@@ -1008,6 +1110,7 @@ class BackupEngine:
         *,
         encrypted: bool,
         key_fingerprint: str | None = None,
+        quiesce: QuiesceRecord | None = None,
     ) -> Path:
         manifest = BackupManifest(
             version=MANIFEST_VERSION,
@@ -1018,6 +1121,8 @@ class BackupEngine:
             encrypted=encrypted,
             artifacts=artifacts,
             key_fingerprint=key_fingerprint,
+            quiesce=quiesce or QuiesceRecord.disabled(),
+            excluded_secret_tables=self._config.column_secret_tables,
         )
         manifest_path = bundle_dir / MANIFEST_FILENAME
         manifest_path.write_text(

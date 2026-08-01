@@ -146,7 +146,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/knowledge-bases/kb-sections.tsx": 1,
   "app/admin/knowledge-bases/page.tsx": 1,
   "app/admin/marketplace/installations/[id]/permissions/page.tsx": 1,
-  "app/admin/marketplace/listings/[id]/playwright-config/page.tsx": 2,
   "app/admin/marketplace/page.tsx": 1,
   "app/admin/memories/page.tsx": 1,
   "app/admin/notifications/inbox/page.tsx": 2,

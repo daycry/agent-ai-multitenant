@@ -9,10 +9,11 @@
  * formulario es exactamente el modo en que las dos superficies de UI empiezan a
  * divergir, que es lo que el ADR 0142 existe para impedir.
  *
- * Generaliza lo que hoy sólo sabe hacer la pantalla de Playwright
- * (`marketplace/listings/[id]/playwright-config`): aquella pinta a mano los seis
- * campos de su `config_schema`; ésta los deriva del esquema, así que cualquier
- * listing que declare uno tiene formulario sin escribir una línea.
+ * Generaliza lo que hasta `task_mkt2_13` sólo sabía hacer la pantalla de
+ * Playwright (`marketplace/listings/[id]/playwright-config`, ya BORRADA):
+ * aquella pintaba a mano los seis campos de su `config_schema` y los pedía al
+ * instalar; ésta los deriva del esquema y los pide al desplegar, así que
+ * cualquier listing que declare uno tiene formulario sin escribir una línea.
  *
  * **Controlado del todo**: no guarda estado. El borrador (`values` + `roles`) lo
  * lleva el padre como dato plano, porque el wizard maneja N capacidades a la vez

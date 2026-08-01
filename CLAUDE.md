@@ -285,10 +285,55 @@ tengan `status: completed`.
 - ❌ Hacer `docker compose up -d --build` sin antes verificar que las migraciones Alembic son reversibles.
 - ❌ Pushear directamente a la rama por defecto del repo del propio sistema, que
   es `master` y no `main`. Todo va por PR.
-- ❌ Comitear secretos. Vault es la única vía de credenciales.
+- ❌ Comitear secretos. Vault es la única vía de credenciales de **plataforma**, con la única excepción escrita más abajo (§«Dónde vive un secreto»).
 - ❌ Crear features nuevas no documentadas en el .docx sin pasar antes por ADR.
 - ❌ Asumir Kubernetes / multi-máquina. El alcance actual es Docker Compose en una sola máquina.
 - ❌ Confundir scopes de memoria: private (usuario humano — un agente IA ni la escribe ni la lee), team_shared (equipo), project_shared (proyecto), global (organización).
+
+## Dónde vive un secreto (y la única excepción a Vault)
+
+La regla sigue siendo **Vault**. La excepción está escrita aquí porque el
+[ADR 0146](docs/05-architecture-decisions/0146-fernet-en-db-vs-vault.md) la firmó
+el 2026-08-01, y una excepción que no consta en el sitio donde se busca no es una
+excepción: es una discrepancia entre el principio y el código, que deja a quien
+lea esto sin saber dónde buscar un secreto y a quien audite sin saber qué esperar.
+
+**El criterio, en una línea: si la plataforma no arranca sin ese secreto, va a
+Vault; si lo que se rompe es la integración de un tenant concreto, puede ir en
+columna.**
+
+| Familia                                                                                                                                                                             | Dónde vive                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Credenciales de **PLATAFORMA**: proveedores LLM, contraseñas de BD, claves de MinIO, tokens de servicio                                                                             | **Vault**, sin excepción. La BD guarda sólo el puntero (`secret_vault_path`)     |
+| Secretos que un **TENANT** configura para un **TERCERO**: client secrets OIDC, claves privadas SAML, credenciales de canal de notificación, secretos de firma de webhooks entrantes | Columna cifrada con Fernet (`API_SERVER_*_ENCRYPTION_KEY(S)`) — **la excepción** |
+
+**Por qué la excepción existe.** El [ADR 0145](docs/05-architecture-decisions/0145-vault-operable-tokens-y-unseal.md)
+decidió **desellado manual** de Vault. Encadenando: se reinicia el host → Vault
+arranca sellado → si el SSO leyera su client secret de Vault, nadie entraría por
+SSO hasta que un humano apareciese con su fragmento de Shamir. Una regla sin
+excepciones que esconde esa trampa no es más limpia: es la misma complejidad
+movida al peor momento posible.
+
+**Tres cosas que van con la excepción y no son negociables:**
+
+1. **La frontera no crece.** Añadir una familia a la lista de la derecha exige un
+   ADR nuevo que argumente por qué no es una credencial de plataforma. Un secreto
+   sin el cual la plataforma no arranca NO cabe aquí por definición.
+2. **No viajan en el backup.** Los datos de `sso_configurations`,
+   `notification_channels` e `incoming_webhook_configs` se excluyen del `pg_dump`
+   (`WORKERS_BACKUP_COLUMN_SECRET_TABLES`, `workers/backup_secrets.py`): con el
+   ciphertext dentro, quien robase el bundle **y** conociera la variable de
+   entorno tendría los secretos, y el bundle viaja a MinIO y a destinos externos.
+   El precio —reconfigurar esas integraciones tras un DR— está en
+   [06-runbooks/04-disaster-recovery.md](docs/06-runbooks/04-disaster-recovery.md).
+3. **La rotación es la de prod-05**, no una propia: anillos `*_ENCRYPTION_KEYS`
+   (cabeza + cola) y `api_server.cli.reencrypt_secrets`.
+
+**Y caduca sola.** El día que se adopte **auto-unseal** de Vault (opciones A o B
+de la decisión 2 del ADR 0145) desaparece la objeción de disponibilidad que la
+justifica, y el ADR 0146 debe reabrirse hacia la migración a Vault. Está anotado
+en los dos ADR para que se lea desde ambos lados: si estás leyendo esto en un
+stack con auto-unseal, esta sección está vencida.
 
 ## Contexto Adicional
 

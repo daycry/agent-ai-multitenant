@@ -24,9 +24,12 @@ from typing import Any
 import pytest
 from api_server.marketplace.config_schema import (
     SECRET_MUST_BE_VAULT_POINTER,
+    TYPED_VALIDATOR_KEY,
     apply_defaults,
     apply_schema_migration,
     dropped_fields,
+    register_typed_validator,
+    typed_validator,
     validate_deployment_config,
 )
 from api_server.marketplace.playwright import PLAYWRIGHT_TOOL_YAML, config_schema
@@ -376,3 +379,123 @@ def test_playwright_config_schema_validates_against_its_own_validator() -> None:
     assert validate_deployment_config(schema, defaults) == [], defaults
     # Y un navegador inventado NO pasa.
     assert validate_deployment_config(schema, {**defaults, "browsers": ["netscape"]}) != []
+
+
+# ===========================================================================
+# (c) El validador TIPADO que el esquema declara (`task_mkt2_13`)
+# ===========================================================================
+# El dialecto de arriba cubre tipos, enums y rangos, pero no reglas que solo
+# conoce quien escribió la capacidad (que una `base_url` de espacios no es una
+# URL, por ejemplo). En vez de meter esas reglas aquí —donde acabarían siendo
+# una lista de casos especiales por listing— el esquema NOMBRA su validador y
+# `validate_deployment_config` lo invoca. Es lo que mantiene viva a
+# `PlaywrightToolConfig` después de que la fase 5 le quitara el formulario del
+# install: la clase pasa de guardar la config a validarla.
+
+
+@pytest.fixture()
+def clean_registry() -> Any:
+    """Aísla el registro: un validador de prueba no sobrevive a su test.
+
+    Toca el privado `_TYPED_VALIDATORS` a propósito: no hay —ni debe haber— un
+    `unregister` público, porque desregistrar un validador en producción es
+    exactamente el fallo silencioso contra el que el fail-closed protege.
+
+    Y se importa el símbolo, no el módulo: `from api_server.marketplace import
+    config_schema` devuelve la FUNCIÓN homónima que reexporta el `__init__` del
+    paquete, no el submódulo.
+    """
+    from api_server.marketplace.config_schema import _TYPED_VALIDATORS
+
+    before = dict(_TYPED_VALIDATORS)
+    yield
+    _TYPED_VALIDATORS.clear()
+    _TYPED_VALIDATORS.update(before)
+
+
+def test_a_registered_typed_validator_runs_and_its_errors_surface(clean_registry: None) -> None:
+    register_typed_validator("prueba", lambda values: ["lo que sea que falle"])
+    schema = {
+        "type": "object",
+        "properties": {"base_url": {"type": "string"}},
+        TYPED_VALIDATOR_KEY: "prueba",
+    }
+    errors = validate_deployment_config(schema, {"base_url": "https://a.test"})
+    assert errors == ["lo que sea que falle"]
+
+
+def test_a_typed_validator_that_finds_nothing_leaves_the_config_valid(clean_registry: None) -> None:
+    register_typed_validator("prueba-ok", lambda values: [])
+    schema = {
+        "type": "object",
+        "properties": {"base_url": {"type": "string"}},
+        TYPED_VALIDATOR_KEY: "prueba-ok",
+    }
+    assert validate_deployment_config(schema, {"base_url": "https://a.test"}) == []
+
+
+def test_an_unregistered_typed_validator_fails_closed() -> None:
+    """Si el módulo que registra el validador no se importó, NO se pasa de largo.
+
+    Un validador declarado que no corre es peor que no declararlo: el despliegue
+    se escribe creyéndose validado. Fail-closed.
+    """
+    schema = {
+        "type": "object",
+        "properties": {"base_url": {"type": "string"}},
+        TYPED_VALIDATOR_KEY: "no-registrado-jamas",
+    }
+    errors = validate_deployment_config(schema, {"base_url": "https://a.test"})
+    assert len(errors) == 1
+    assert "no-registrado-jamas" in errors[0]
+
+
+def test_the_typed_validator_does_not_run_over_structurally_broken_values(
+    clean_registry: None,
+) -> None:
+    """Primero la estructura; el validador tipado asume que ya casa.
+
+    Si corriera igual, un `timeout_ms: "mucho"` daría dos errores (el del
+    dialecto y el de la clase tipada) diciendo lo mismo con dos redacciones.
+    """
+    llamado: list[bool] = []
+
+    def _spy(values: dict[str, Any]) -> list[str]:
+        llamado.append(True)
+        return []
+
+    register_typed_validator("prueba-spy", _spy)
+    schema = {
+        "type": "object",
+        "properties": {"timeout_ms": {"type": "integer"}},
+        TYPED_VALIDATOR_KEY: "prueba-spy",
+    }
+    assert validate_deployment_config(schema, {"timeout_ms": "mucho"}) != []
+    assert not llamado, "el validador tipado corrió sobre valores que no casan el dialecto"
+
+
+def test_playwright_declares_its_typed_validator_and_lo_tiene_registrado() -> None:
+    """El `config_schema` de Playwright nombra un validador que SÍ está puesto."""
+    from api_server.marketplace.playwright import PLAYWRIGHT_TYPED_VALIDATOR
+
+    assert config_schema()[TYPED_VALIDATOR_KEY] == PLAYWRIGHT_TYPED_VALIDATOR
+    assert typed_validator(PLAYWRIGHT_TYPED_VALIDATOR) is not None
+
+
+def test_the_playwright_typed_validator_catches_what_the_dialect_cannot() -> None:
+    """Una `base_url` de solo espacios casa `type: string` y NO es una URL.
+
+    Es la prueba de que la clase tipada aporta algo: sin ella, esto se
+    escribiría en el despliegue tal cual.
+    """
+    schema = config_schema()
+    values = apply_defaults(schema, {"base_url": "   "})
+    errors = validate_deployment_config(schema, values)
+    assert errors, "el validador tipado de Playwright no llegó a correr"
+    assert any("base_url" in e for e in errors), errors
+
+
+def test_the_playwright_defaults_still_deploy_clean() -> None:
+    """Y el camino feliz sigue siéndolo: los defaults son un despliegue válido."""
+    schema = config_schema()
+    assert validate_deployment_config(schema, apply_defaults(schema, {})) == []

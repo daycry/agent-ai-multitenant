@@ -254,6 +254,10 @@ el problema ya esté documentado.
 - [integration-tests-share-one-database.md](./integration-tests-share-one-database.md)
   — dos pytest de integración a la vez se dropean la BD mutuamente (una sola
   `agentic_platform_test` para todo el repo); `TEST_PG_DB_NAME` distinto por proceso.
+- [partitioned-table-introspection.md](./partitioned-table-introspection.md)
+  — una tabla particionada es `relkind = 'p'`: la introspección que filtra por
+  `'r'` la declara SIN RLS teniéndola (falso positivo que invita a eximirla), y
+  asyncpg devuelve `relkind` como `bytes`.
 - [beat-entry-whose-task-nobody-imports.md](./beat-entry-whose-task-nobody-imports.md)
   — una entrada de beat cuyo módulo no está en `celery_app(imports=...)` se encola
   y muere con `NotRegistered` **sin ruido**: seis features «desplegadas» que nunca

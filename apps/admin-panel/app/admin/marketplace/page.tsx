@@ -7,9 +7,17 @@
  * marketplace de su tenant. Reúne, sin duplicar, las superficies de las
  * tareas anteriores de Plan 09 en cuatro pestañas:
  *
- *   - Catálogo   — explora el catálogo (global público + privados propios);
- *                  enlaza a la config guiada de Playwright (09_13) y a la
- *                  pantalla de consentimiento de una instalación (09_07).
+ *   - Catálogo   — explora el catálogo (global público + privados propios) y
+ *                  enlaza a la pantalla de consentimiento de una instalación
+ *                  (09_07). NO configura nada: desde el ADR 0142 la
+ *                  configuración se rinde AL DESPLEGAR en un proyecto (el
+ *                  formulario vive en components/marketplace/
+ *                  deployment-config-form.tsx y lo abren las tres puertas de
+ *                  despliegue). El enlace a la config guiada de Playwright que
+ *                  había aquí (09_13) se retiró con `task_mkt2_13`: pedía al
+ *                  instalar unos valores —la base_url del sitio bajo prueba—
+ *                  que son del proyecto, y los proyectos aún no existen cuando
+ *                  se instala.
  *   - Instaladas — lista lo instalado por el tenant, enlaza al
  *                  consentimiento granular (09_07), revoca y desinstala.
  *   - Privadas   — enlaza al marketplace privado del tenant (09_16).
@@ -44,7 +52,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, ExternalLink, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
+import { Ban, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -231,7 +239,6 @@ function CatalogTab() {
       <PublishCallout />
       <ul className="space-y-3" data-testid="catalog-list">
         {listings.map((listing) => {
-          const isPlaywright = listing.name === "playwright" && listing.kind === "tool";
           return (
             <li key={listing.id}>
               <Card data-testid={`catalog-listing-${listing.id}`}>
@@ -265,19 +272,6 @@ function CatalogTab() {
                       </p>
                     ) : null}
                   </div>
-                  {isPlaywright ? (
-                    <Button
-                      asChild
-                      variant="outline"
-                      size="sm"
-                      data-testid={`catalog-playwright-config-${listing.id}`}
-                    >
-                      <Link href={`/admin/marketplace/listings/${listing.id}/playwright-config`}>
-                        <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                        Configurar
-                      </Link>
-                    </Button>
-                  ) : null}
                 </CardHeader>
               </Card>
             </li>
