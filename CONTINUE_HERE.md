@@ -198,11 +198,24 @@ PYTHONPATH=docker/agent-runtimes/browser-runtime \
 .venv/Scripts/python.exe -m mypy apps/ packages/           # 623 ficheros, limpio
 cd apps/admin-panel && npx vitest run                      # 808 en 98 ficheros
 cd apps/admin-panel && npx tsc --noEmit && node scripts/check-i18n.mjs
+# Y el que NINGUNO de los de arriba cubre: construir de verdad.
+NEXT_PUBLIC_API_URL=/api npx next build       # en apps/admin-panel
 ```
 
 > Los tres primeros pasos juntos (`tests/unit/ tests/security/ tests/docs/`) son
 > **4273 tests en ~4 min**; correrlos en un solo `pytest` es lo más barato que
 > hay y es lo que conviene hacer antes de cada commit.
+
+> **`next build` no es redundante con vitest ni con `tsc`, y costó un despliegue
+> a medias.** El 2026-08-10, con el stack ya parcialmente actualizado, la imagen
+> del panel no construía: `useSearchParams()` en `/login` y `/accept-invite` —que
+> entraron con el 401 centralizado (ADR 0133) y el registro por invitación (ADR
+> 0134)— obliga a Next a salirse del renderizado estático, y sin un `<Suspense>`
+> que acote ese bail-out, el prerender aborta la página.
+>
+> Vitest monta el componente en jsdom con su router falso, y `tsc` no ejecuta
+> nada: los dos daban verde. **El prerender solo corre al construir.** Si tocas
+> una pantalla que lee la URL, construye antes de dar por bueno el cambio.
 
 > **Usa el intérprete del venv, no `python` a secas.** Los paquetes de
 > `packages/` están en editable sólo en `.venv/`; con el Python global la suite

@@ -23,7 +23,7 @@
  */
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { Suspense, type FormEvent, useState } from "react";
 import { CheckCircle2, Sparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ interface RegisteredUser {
   email: string;
 }
 
-export default function AcceptInvitePage() {
+function AcceptInviteForm() {
   const t = useT("acceptInvite");
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -183,5 +183,30 @@ export default function AcceptInvitePage() {
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+/**
+ * `useSearchParams()` obliga a una frontera de Suspense en el App Router.
+ *
+ * Esta pantalla lee `?next=` porque el 401 centralizado (ADR 0133) manda aquí
+ * conservando la ruta que el usuario pedía. En cuanto se añadió esa lectura, el
+ * PRERENDER de producción empezó a fallar — `useSearchParams` obliga a Next a
+ * salirse del renderizado estático, y sin un `<Suspense>` que delimite hasta
+ * dónde llega ese bail-out, `next build` aborta la página entera.
+ *
+ * No lo vio nadie porque **ni vitest ni `tsc` construyen**: jsdom monta el
+ * componente con su propio router falso y el compilador de tipos no ejecuta el
+ * prerender. Solo aparece al construir la imagen, o sea en el despliegue —
+ * descubierto así el 2026-08-10, con el stack a medio actualizar.
+ *
+ * Por eso `npx next build` está ahora en la lista de verificación local de
+ * CONTINUE_HERE: es la única de las comprobaciones que ejecuta este camino.
+ */
+export default function AcceptInvitePage() {
+  return (
+    <Suspense fallback={null}>
+      <AcceptInviteForm />
+    </Suspense>
   );
 }
