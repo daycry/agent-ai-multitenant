@@ -77,9 +77,25 @@ def test_the_two_tinyproxy_proxies_are_covered_and_fail_loudly() -> None:
     for name in ("egress-proxy", "registry-proxy"):
         assert name in checks, f"{name} perdió su healthcheck"
         test = checks[name]
-        assert "tinyproxy" in test, f"el healthcheck de {name} ya no comprueba tinyproxy"
         assert "|| true" not in test
         assert "|| exit 1" in test, (
             f"el healthcheck de {name} debe terminar en `|| exit 1` para que un "
             "proxy muerto se reporte unhealthy"
+        )
+        # `-Y off`, no `--no-proxy`: la imagen lleva el wget de BusyBox, que NO
+        # reconoce esa opción. Con ella, el comando salía por el mensaje de uso
+        # y el healthcheck no podía pasar NUNCA — invisible mientras hubo un
+        # `|| true` delante. Al retirarlo, los dos proxies salieron `unhealthy`
+        # en el primer despliegue (2026-08-10) y lo roto era la comprobación.
+        assert "--no-proxy" not in test, (
+            f"el healthcheck de {name} usa `--no-proxy`, que el wget de BusyBox "
+            "no reconoce: saldría por usage y nunca podría pasar. Usa `-Y off`"
+        )
+        # Se afirma el 403 y no la palabra «tinyproxy»: el cuerpo de la página de
+        # error no viaja con `-q`, pero la línea de estado sí. Un 403 a una
+        # petición DIRECTA prueba que el demonio escucha y aplica su política;
+        # caído, wget diría «Connection refused».
+        assert "403" in test, (
+            f"el healthcheck de {name} debe afirmar el 403 que tinyproxy da a "
+            "una petición directa: es la señal de que está vivo y filtrando"
         )

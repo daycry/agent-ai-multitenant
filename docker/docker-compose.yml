@@ -412,11 +412,23 @@ services:
     # causa. `|| exit 1` hace que el estado sea honesto y que `ServiceDown` /
     # el watchdog puedan actuar. Guardado por
     # tests/unit/test_compose_healthchecks_honest.py.
+    # `-Y off` y no `-Y off`: la imagen lleva el wget de BusyBox, que NO
+    # reconoce esa opción — salía por usage con rc≠0, así que este healthcheck
+    # **nunca fue válido**. Con el `|| true` que llevaba delante daba igual: el
+    # check siempre pasaba. Al retirarlo (task_prod08_egress_health_15, «un
+    # healthcheck que no puede fallar no vigila nada») los dos proxies salieron
+    # `unhealthy` en el primer despliegue, y lo que estaba roto era la
+    # comprobación, no el proxy.
+    #
+    # Se afirma el **403**: tinyproxy contesta «Access denied» a una petición
+    # DIRECTA porque solo sirve peticiones proxificadas. O sea que un 403 es la
+    # señal de que el demonio escucha y aplica su política; si estuviera caído,
+    # wget diría «Connection refused» y no habría 403 que encontrar.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || exit 1",
+          "wget -q -O- -Y off http://127.0.0.1:8888/ 2>&1 | grep -q '403 Access denied' || exit 1",
         ]
       interval: 30s
       timeout: 5s
@@ -446,11 +458,23 @@ services:
     # tinyproxy, mismo copy-paste). Aquí un proxy muerto se manifiesta como
     # builds/instalaciones de dependencias que fallan dentro de los
     # runtime-templates sin causa aparente.
+    # `-Y off` y no `-Y off`: la imagen lleva el wget de BusyBox, que NO
+    # reconoce esa opción — salía por usage con rc≠0, así que este healthcheck
+    # **nunca fue válido**. Con el `|| true` que llevaba delante daba igual: el
+    # check siempre pasaba. Al retirarlo (task_prod08_egress_health_15, «un
+    # healthcheck que no puede fallar no vigila nada») los dos proxies salieron
+    # `unhealthy` en el primer despliegue, y lo que estaba roto era la
+    # comprobación, no el proxy.
+    #
+    # Se afirma el **403**: tinyproxy contesta «Access denied» a una petición
+    # DIRECTA porque solo sirve peticiones proxificadas. O sea que un 403 es la
+    # señal de que el demonio escucha y aplica su política; si estuviera caído,
+    # wget diría «Connection refused» y no habría 403 que encontrar.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || exit 1",
+          "wget -q -O- -Y off http://127.0.0.1:8888/ 2>&1 | grep -q '403 Access denied' || exit 1",
         ]
       interval: 30s
       timeout: 5s
