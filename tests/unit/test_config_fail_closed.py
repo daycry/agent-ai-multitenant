@@ -28,6 +28,7 @@ are independent of the developer's environment.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import pytest
@@ -37,16 +38,29 @@ from pydantic import ValidationError
 pytestmark = pytest.mark.unit
 
 
+def _fake_secret(seed: str) -> str:
+    """48 caracteres deterministas y de ALTA ENTROPÍA.
+
+    Antes esto era `"j" * 48`, que no lleva marcador de dev y medía de sobra —
+    y por eso arrancaba producción. Desde prod-10 `task_prod10_04` el config
+    tiene además un suelo de variedad (≥8 caracteres distintos, ≥2 bits/carácter),
+    así que un relleno de un solo carácter ya no es un secreto «realista»: es
+    justo el caso que el guard rechaza. El hex de SHA-256 da 16 símbolos y ~4
+    bits/carácter, y sigue siendo determinista, que es lo que un test necesita.
+    """
+    return hashlib.sha256(seed.encode()).hexdigest()[:48]
+
+
 # Real-looking secrets: none carries a dev marker, all long enough.
 def _real(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
-        "jwt_secret": "j" * 48,
-        "internal_token_secret": "k" * 48,
-        "review_url_signing_secret": "r" * 48,
-        "sso_encryption_key": "s" * 48,
-        "notification_encryption_key": "n" * 48,
-        "incoming_webhook_encryption_key": "i" * 48,
-        "minio_secret_key": "m" * 48,
+        "jwt_secret": _fake_secret("jwt"),
+        "internal_token_secret": _fake_secret("internal"),
+        "review_url_signing_secret": _fake_secret("review"),
+        "sso_encryption_key": _fake_secret("sso"),
+        "notification_encryption_key": _fake_secret("notify"),
+        "incoming_webhook_encryption_key": _fake_secret("webhook"),
+        "minio_secret_key": _fake_secret("minio"),
         "minio_access_key": "prod-access-key",
         "database_url": "postgresql+asyncpg://app_user:S3cr3tA@db/agentic",
         "admin_database_url": "postgresql+asyncpg://migrations_user:S3cr3tM@db/agentic",
@@ -165,7 +179,10 @@ def test_short_internal_token_secret_is_rejected_outside_dev(env: str) -> None:
 def test_exactly_32_chars_is_accepted() -> None:
     """The floor is inclusive — pin the boundary so a later ``>`` / ``>=`` slip
     is caught rather than quietly rejecting valid installer output."""
-    assert Settings(environment="prod", **_real(jwt_secret="a" * 32)).environment == "prod"
+    assert (
+        Settings(environment="prod", **_real(jwt_secret=_fake_secret("boundary")[:32])).environment
+        == "prod"
+    )
 
 
 def test_short_secrets_are_fine_in_dev() -> None:
@@ -181,7 +198,7 @@ def test_short_secrets_are_fine_in_dev() -> None:
 def test_internal_secret_equal_to_jwt_secret_is_rejected(env: str) -> None:
     """Setting both to the same value satisfies every other check while
     restoring exactly the blast radius task_prod09_03 removes."""
-    same = "z" * 48
+    same = _fake_secret("same")
     with pytest.raises(ValidationError) as excinfo:
         Settings(environment=env, **_real(jwt_secret=same, internal_token_secret=same))
     assert "INTERNAL_TOKEN_SECRET" in str(excinfo.value)

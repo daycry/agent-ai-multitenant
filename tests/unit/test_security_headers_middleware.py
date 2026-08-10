@@ -17,6 +17,7 @@ middleware and the real ``create_app``; nothing is mocked but the environment.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import pytest
@@ -25,6 +26,19 @@ from api_server.routing_introspection import route_paths
 from starlette.requests import Request
 
 pytestmark = pytest.mark.unit
+
+
+def _fake_secret(seed: str) -> str:
+    """48 caracteres deterministas y de ALTA ENTROPÍA.
+
+    Antes esto era `"j" * 48`, que no lleva marcador de dev y medía de sobra —
+    y por eso arrancaba producción. Desde prod-10 `task_prod10_04` el config
+    tiene además un suelo de variedad (≥8 caracteres distintos, ≥2 bits/carácter),
+    así que un relleno de un solo carácter ya no es un secreto «realista»: es
+    justo el caso que el guard rechaza. El hex de SHA-256 da 16 símbolos y ~4
+    bits/carácter, y sigue siendo determinista, que es lo que un test necesita.
+    """
+    return hashlib.sha256(seed.encode()).hexdigest()[:48]
 
 
 def _request(path: str = "/healthz", *, scheme: str = "http", **headers: str) -> Request:
@@ -199,13 +213,13 @@ def _settings(**overrides: Any) -> Any:
 
     base: dict[str, Any] = {
         "environment": "prod",
-        "jwt_secret": "d" * 48,
-        "internal_token_secret": "e" * 48,
-        "review_url_signing_secret": "f" * 48,
-        "sso_encryption_key": "g" * 48,
-        "notification_encryption_key": "h" * 48,
-        "incoming_webhook_encryption_key": "i" * 48,
-        "minio_secret_key": "j" * 48,
+        "jwt_secret": _fake_secret("jwt"),
+        "internal_token_secret": _fake_secret("internal"),
+        "review_url_signing_secret": _fake_secret("review"),
+        "sso_encryption_key": _fake_secret("sso"),
+        "notification_encryption_key": _fake_secret("notify"),
+        "incoming_webhook_encryption_key": _fake_secret("webhook"),
+        "minio_secret_key": _fake_secret("minio"),
         "minio_access_key": "prod-access",
         "database_url": "postgresql+asyncpg://app_user:realpw@db/agentic",
         "admin_database_url": "postgresql+asyncpg://migrations_user:realpw@db/agentic",

@@ -370,6 +370,13 @@ class NotificationLog(Base, UUIDPrimaryKeyMixin):
             "created_at",
             postgresql_where=text("status IN ('retrying', 'dead_letter', 'failed')"),
         ),
+        # part-01 / ADR 0151: monthly RANGE partitioning on ``created_at``
+        # (migration 0134). Declared on the model — not only in the migration —
+        # because ``tests/unit/test_partition_planner.py`` DISCOVERS the
+        # partitioned tables from here and demands the maintenance job knows
+        # about them: a table converted in a migration but missing from
+        # ``PARTITIONED_TABLES`` would silently have no partition next month.
+        {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
     # The channel this attempt went over. SET NULL on channel delete so the
@@ -405,8 +412,17 @@ class NotificationLog(Base, UUIDPrimaryKeyMixin):
     # When the channel API accepted the send (status sent/delivered).
     sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
+    # PART OF THE PRIMARY KEY since part-01 (ADR 0151, migration 0134). Not a
+    # modelling preference: PostgreSQL **requires** the primary key of a
+    # partitioned table to include the partition key, so the PK is
+    # ``(id, created_at)``. The one thing that depended on ``id`` alone being
+    # unique — the ``notification_log_reads.log_id`` foreign key — was retired
+    # by ADR 0154; the column stays as a loose reference.
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+        TIMESTAMP(timezone=True),
+        primary_key=True,
+        nullable=False,
+        server_default=text("now()"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
@@ -531,11 +547,15 @@ class NotificationLogRead(Base, UUIDPrimaryKeyMixin):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    log_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("notification_logs.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # NO foreign key since part-01 / ADR 0154 (migration 0134): ``notification_logs``
+    # is partitioned by month, so its primary key is ``(id, created_at)`` and a FK
+    # cannot reference it without carrying both columns. The ``ON DELETE CASCADE``
+    # it used to have existed "so a (hypothetical) log purge takes its receipts
+    # with it" (migration 0048) — and ADR 0151 decided that purge never happens:
+    # nothing is ever deleted. A loose reference is what remains; an orphan receipt
+    # would only make the inbox's LEFT JOIN miss, never leak across tenants (the
+    # receipt carries its own ``tenant_id`` with its own RLS).
+    log_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     read_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

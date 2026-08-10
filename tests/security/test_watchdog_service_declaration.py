@@ -138,3 +138,75 @@ def test_the_ingest_token_is_not_inlined(watchdog: dict[str, Any]) -> None:
     """Debe venir del `.env`, nunca escrito en el fichero versionado."""
     value = _env(watchdog)["WATCHDOG_ALERTS_INGEST_TOKEN"]
     assert value.startswith("${"), f"token en claro en el compose: {value!r}"
+
+
+# ---------------------------------------------------------------------------
+# El fallo mudo que las tres primeras pasadas no vieron (2026-08-10): el
+# watchdog hablaba con `docker-socket-proxy:2375` estando en OTRA red.
+#
+# El proxy del ADR 0060 vive —en el overlay de dev y en el compose que genera
+# el instalador— en `agentic-docker`, una red `internal: true` DEDICADA al
+# tráfico contra el daemon. El watchdog se declaró solo en `agentic-net`, así
+# que el nombre DNS `docker-socket-proxy` no resuelve para él: levantarlo daba
+# un vigilante que no ve NINGÚN contenedor. Y esa es la peor forma de fallar
+# aquí, porque un watchdog que no encuentra nada se parece mucho a un stack
+# sano — no reinicia nada porque cree que no hace falta.
+#
+# La guarda deriva la red del sitio donde el proxy está declarado de verdad, en
+# vez de fijar el literal: si mañana se renombra, exige la nueva.
+# ---------------------------------------------------------------------------
+
+MANUALS_COMPOSE = REPO_ROOT / "docker" / "docker-compose.manuals.yml"
+SOCKET_PROXY = "docker-socket-proxy"
+
+
+def _socket_proxy_networks() -> set[str]:
+    raw = yaml.safe_load(MANUALS_COMPOSE.read_text(encoding="utf-8")) or {}
+    services = dict(raw.get("services") or {})
+    assert SOCKET_PROXY in services, (
+        f"{MANUALS_COMPOSE.name} dejó de declarar `{SOCKET_PROXY}`: esta guarda "
+        "deriva de ahí la red del daemon y se quedaría sin referencia"
+    )
+    return set(services[SOCKET_PROXY].get("networks") or [])
+
+
+def _docker_host_target(spec: dict[str, Any]) -> str:
+    """El HOST de `DOCKER_HOST`, sin esquema ni puerto ni interpolación."""
+    raw = str((spec.get("environment") or {}).get("DOCKER_HOST", ""))
+    # `${WATCHDOG_DOCKER_HOST:-tcp://docker-socket-proxy:2375}` → el default
+    if ":-" in raw:
+        raw = raw.split(":-", 1)[1].rstrip("}")
+    return raw.split("//", 1)[-1].split(":", 1)[0]
+
+
+def test_the_watchdog_can_actually_reach_the_socket_proxy(watchdog: dict[str, Any]) -> None:
+    """Estar en la misma red no es un detalle: es lo que hace resoluble el nombre."""
+    target = _docker_host_target(watchdog)
+    assert target == SOCKET_PROXY, (
+        f"el watchdog apunta su DOCKER_HOST a `{target}`, que no es el proxy del "
+        "ADR 0060; si es a propósito, actualiza esta guarda"
+    )
+
+    proxy_networks = _socket_proxy_networks()
+    assert proxy_networks, "el proxy no declara redes: la guarda pasaría en vacío"
+
+    own = set(watchdog.get("networks") or [])
+    assert own & proxy_networks, (
+        f"el watchdog está en {sorted(own)} y el `{SOCKET_PROXY}` en "
+        f"{sorted(proxy_networks)}: no comparten ninguna, así que el nombre DNS "
+        "no resuelve. El watchdog arranca, no ve NINGÚN contenedor y se calla — "
+        "que es indistinguible de un stack sano."
+    )
+
+
+def test_the_watchdog_also_stays_on_the_platform_network(watchdog: dict[str, Any]) -> None:
+    """Y no puede mudarse SOLO a la red del daemon.
+
+    `agentic-docker` es `internal: true`; desde ahí no alcanza al api-server y
+    la alerta terminal —la razón de ser de la tarea— volvería al log local.
+    """
+    own = set(watchdog.get("networks") or [])
+    assert "agentic-net" in own, (
+        f"el watchdog salió de `agentic-net` ({sorted(own)}): sin ella no puede "
+        "POSTear a /internal/alerts/ingest y su alerta vuelve a ser una línea de log"
+    )

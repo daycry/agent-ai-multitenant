@@ -506,7 +506,13 @@ async def test_login_returns_501_when_saml_unavailable(
     await _truncate_all(migrations_pg_dsn)
     provider_id = await _seed_global_saml(migrations_pg_dsn)
 
-    import api_server.routers.sso as sso_router
+    # `routers.sso.saml`, no `routers.sso`: al partir el router en paquete
+    # (prod-16 `task_prod16_10`) el guard de disponibilidad se fue al módulo
+    # SAML, y `monkeypatch.setattr` sobre el paquete no alcanza al global del
+    # submódulo — pondría el atributo en `__init__` y el código seguiría leyendo
+    # el suyo. Es la ÚNICA línea que el troceo obligó a tocar en los tests SSO,
+    # y es la diana del parche, no una aserción.
+    import api_server.routers.sso.saml as sso_router
 
     monkeypatch.setattr(sso_router, "saml_available", lambda: False)
 

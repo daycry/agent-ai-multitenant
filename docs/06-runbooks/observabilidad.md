@@ -202,7 +202,16 @@ Lo que **ya está hecho** y no hay que rehacer:
   **sustituiría** a la notificación por plataforma en vez de duplicarla;
 - el instalador monta ese mismo fichero (`compose_generator._alertmanager_service`),
   así que no hay una segunda plantilla que mantener;
-- `tests/unit/test_alertmanager_routing.py` lo guarda.
+- **el buzón de la credencial existe y está montado en el stack canónico**
+  (2026-08-10): `docker/monitoring/alertmanager/secrets/` va read-only a
+  `/etc/alertmanager/secrets` en `docker-compose.monitoring.yml`. Antes, el paso 3
+  de la lista de abajo era **imposible** sin editar el compose: la ruta que el
+  receiver lee no existía dentro del contenedor. El directorio está versionado
+  con su propio `.gitignore` (`*` salvo él mismo) para que Docker no lo invente
+  como `root` — el contenedor corre como `nobody` y no podría leerlo;
+- `tests/unit/test_alertmanager_routing.py` guarda el enrutado y
+  `tests/unit/test_alertmanager_secret_mount.py` guarda el buzón (por
+  descubrimiento: cualquier `*_file` nuevo en la config exige su montaje).
 
 Lo que **falta**, en orden:
 
@@ -212,18 +221,30 @@ Lo que **falta**, en orden:
 2. **Crear el webhook entrante en Slack** y anotar su URL
    (`https://hooks.slack.com/services/...`) en el canal de guardia que
    corresponda.
-3. **Provisionarlo como fichero**: el receiver lo lee de
-   `/etc/alertmanager/secrets/slack_api_url`, no de una variable de entorno
-   (Alertmanager no interpola env en su config).
-4. **Montarlo** en el servicio `alertmanager` que genera el instalador
-   (`_alertmanager_service`) — hoy no declara ese volumen, así que el fichero no
-   existe dentro del contenedor.
+3. **Dejarlo en el buzón**, una sola línea y sin salto final:
+
+   ```bash
+   printf '%s' 'https://hooks.slack.com/services/…' \
+     > docker/monitoring/alertmanager/secrets/slack_api_url
+   docker compose -f docker/docker-compose.monitoring.yml up -d alertmanager
+   ```
+
+   El receiver lo lee de `/etc/alertmanager/secrets/slack_api_url`, no de una
+   variable de entorno (Alertmanager no interpola env en su config). El
+   `.gitignore` del propio directorio impide comitearlo.
+
+4. **Replicar el montaje en el instalador**: el servicio `alertmanager` que
+   genera `compose_generator._alertmanager_service` **no** declara ese volumen,
+   así que en un despliegue generado el fichero sigue sin existir dentro del
+   contenedor. Es la misma línea que ya está en el compose canónico:
+   `- ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`.
 5. **Probarlo** con la alerta sintética del paso 1 de la sección anterior y
    comprobar que llega a Slack, no solo a la bandeja de la plataforma.
 
-Mientras 1–4 no se hagan, Alertmanager **arranca igual** y falla en cada envío al
-respaldo: degradación deliberada, no un arranque roto. El efecto neto es que
-`severity=critical` con el api-server caído no llega a ningún humano.
+Mientras 1–3 no se hagan (y 4 en despliegues generados), Alertmanager **arranca
+igual** y falla en cada envío al respaldo: degradación deliberada, no un arranque
+roto. El efecto neto es que `severity=critical` con el api-server caído no llega a
+ningún humano.
 
 ## Añadir una métrica sin romper nada
 

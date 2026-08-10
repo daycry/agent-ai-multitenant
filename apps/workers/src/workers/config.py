@@ -339,6 +339,17 @@ class Settings(BaseSettings):
         "point WORKERS_SECCOMP_PROFILE at its in-container path to pin it. The "
         "worker forwards the file CONTENT to the daemon (isolation.py).",
     )
+    model_credential_file: bool = Field(
+        default=True,
+        description="prod-07 task_prod07_10: entregar la credencial del proveedor "
+        "LLM en un fichero read-only bajo /run/secrets en vez de dentro de "
+        "AGENT_TASK_SPEC (donde la ve cualquier `docker inspect`). El env sólo "
+        "lleva el puntero. VÁLVULA DE ESCAPE: ponlo a false si el stack corre una "
+        "imagen agent-runtime ANTERIOR a este cambio — esa imagen ignora el "
+        "puntero y el run arranca sin credencial (401 dentro del sandbox). El "
+        "orden de despliegue seguro es imagen primero, worker después: la imagen "
+        "nueva entiende los DOS formatos.",
+    )
     apparmor_profile: str = Field(
         default="",
         description="AppArmor profile NAME to pin for the untrusted agent/test "

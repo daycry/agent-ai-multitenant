@@ -220,6 +220,33 @@ integridad de las imágenes en build).
   Sigue abierta porque su test declarado (`npm audit … --audit-level=high`) no
   puede salir en verde hasta que se ejecute (a) o se registre (b).
 
+- 🔴 **2026-08-10 — re-medido A PROPÓSITO (cuarta vez) y esta vez SÍ había dato
+  nuevo: el backlog ha EMPEORADO.** La nota de arriba decía «no volver a medir»;
+  se midió igualmente porque los avisos de npm cambian aunque el código no, y esa
+  es justo la variable que ninguna de las tres mediciones anteriores podía fijar.
+  Resultado (`next` sigue en 14.2.35 instalado en las dos superficies):
+
+  | Medición                                     | 2026-07-31 / 08-01 | 2026-08-10        |
+  | -------------------------------------------- | ------------------ | ----------------- |
+  | `--audit-level=critical` (ambas superficies) | exit 0             | exit **0**        |
+  | `--audit-level=high` (ambas superficies)     | exit 1             | exit **1**        |
+  | Avisos `high`                                | 2                  | **3**             |
+  | Versión que npm propone como fix             | `next@16.2.12`     | **`next@16.3.0`** |
+
+  Y el dato que más pesa para decidir: el rango vulnerable que reporta npm es
+  ahora **`next 9.3.4-canary.0 – 16.3.0-preview.10`** — o sea que **ninguna
+  versión de las líneas 14 ni 15 lo cierra**, y tampoco lo haría una 16 anterior
+  a la 16.3.0. Ocho advisories de `next` (bypass de middleware con i18n, DoS en
+  Server Actions, dos SSRF, dos confusiones de caché, payload sin cota en Edge y
+  la divulgación de endpoints de Server Functions) más cuatro de `postcss`
+  empotrado (XSS por `</style>` sin escapar y tres lecturas de fichero arbitrario
+  vía `sourceMappingURL`).
+  **Lo que esto cambia**: la salida **(b)** —«declarar los avisos como excepción
+  razonada»— ya no cubre 2 entradas sino 3, y una de ellas es una cadena
+  `postcss` que no es de `next` pero llega por él. La salida (a), la migración a
+  next 16, se ha vuelto más urgente y no más cara: el destino es 16.3.0, que ya
+  existe. **Sigue siendo decisión de alcance, no trabajo de esta tarea.**
+
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
 - [x] **Título**: Dependabot con 4 ecosistemas y agrupación de PRs
@@ -445,6 +472,16 @@ integridad de las imágenes en build).
      No la marco: los pasos 2–4 exigen permisos de administración del repositorio y
      el 1 es una decisión de alcance. Marcarla sería declarar obligatorio un gate que
      nadie puede exigir todavía.
+- ⏳ **2026-08-10 — sigue gated en un humano y NO he vuelto a razonarlo; solo
+  comprobé que la checklist no ha caducado.** `continue-on-error: true` sigue en
+  `.github/workflows/ci.yml:321` (la línea que cita el paso 2 del runbook **sigue
+  siendo exacta**) y el `name:` del job sigue siendo `SCA (pip-audit + npm audit)`
+  (el del paso 3). Lo único corregido: el paso 1(b) hablaba de «los 2 avisos
+  `high`» y hoy son **3** — ver la medición nueva en `task_next_update_01`. Un
+  número obsoleto en una checklist que alguien va a ejecutar es precisamente lo
+  que hace que se ejecute mal.
+  **Sigue haciendo falta**: permisos de administración del repositorio (pasos 2–4)
+  y elegir (a) o (b) en el paso 1. Nada de eso es código.
 
 ### Fase C — Lockfile Python y builds reproducibles
 
@@ -469,7 +506,7 @@ integridad de las imágenes en build).
 
 #### `task_ci_lock_10` — CI y Dockerfile del agent-runtime instalan desde el lock
 
-- [ ] **Título**: `pip install -e … -c constraints.txt` en CI y en agent-runtime
+- [x] **Título**: `pip install -e … -c constraints.txt` en CI y en agent-runtime
 - **Descripción**: (a) Cambiar los `pip install -e` de los jobs de CI
   (ci.yml:160-193 y equivalentes) a `pip install -e <app> -c constraints.txt`.
   (b) En `docker/agent-runtimes/agent-runtime/Dockerfile` (instalaciones de
@@ -595,6 +632,43 @@ integridad de las imágenes en build).
   quieto, o del primer CI verde cuando se arregle la facturación. El bloqueante
   conocido, eso sí, ya no está.
 
+- ✅ **Cerrada (2026-08-10): `auto_prod11_10_b` EJECUTADO, y el riesgo 4 queda
+  refutado con una medida más fuerte que «verde».** El entorno de CI se
+  reconstruyó a mano —`uv venv .venv-lock --seed --python 3.12` + los **12
+  editable installs del job `test-unit`**, todos con `-c constraints.txt`, exit 0,
+  `fastapi 0.141.1` / `starlette 1.3.1`— y se corrió `tests/unit` **en paralelo**
+  en los dos entornos, para que el árbol en movimiento afectara a ambos por igual:
+
+  | Entorno                                   | Resultado                                   |
+  | ----------------------------------------- | ------------------------------------------- |
+  | `.venv` del repo (3.13, desde rangos)     | 4 failed, 4322 passed, 1 skipped (3 min 12) |
+  | `.venv-lock` (3.12, `-c constraints.txt`) | 4 failed, 4322 passed, 1 skipped (2 min 46) |
+
+  **Delta: CERO.** No «parecido»: los mismos 4 tests, comparados por id con
+  `comm` — `comm -13` y `comm -23` salen ambos vacíos. Que es exactamente lo que
+  el riesgo 4 pide comprobar («la resolución congelada rompe algo que los rangos
+  abiertos ocultaban»): si el lock rompiera algo, aparecería en la columna del
+  lock y no en la del repo.
+
+  **Los 4 rojos NO son del lock ni de esta tarea**, y se acredita por tres vías:
+  (1) fallan igual con rangos abiertos; (2) son de otro carril, que está
+  escribiendo esos mismos ficheros ahora mismo —`git status` los da como
+  modificados: `test_multifernet_builders.py`, `test_jwt_dual_secrets.py`,
+  `test_config_fail_closed.py` y `config.py`—; y (3) son **transitorios**: al
+  reejecutar uno de ellos suelto minutos después ya pasaba, porque el otro carril
+  lo había arreglado entre medias.
+
+  **Y esto cierra el rojo del 2026-08-01 sin parchearlo**: la causa era el
+  cambio de introspección de FastAPI 0.141, que otro carril resolvió extrayendo
+  `api_server/routing_introspection.py`. Comprobado de la única forma que vale:
+  corriendo la suite entera con esa versión instalada.
+
+  Lo que queda en pie de la nota anterior es el aviso operativo, no un
+  bloqueante: **el `.venv` del repo va por detrás del lock** (fastapi 0.136 vs
+  0.141) y esa diferencia sigue pudiendo disfrazar una regresión de producto.
+  Receta para reproducir el entorno de CI, en
+  [`gotchas/venv-local-por-detras-del-lock.md`](../03-guides/gotchas/venv-local-por-detras-del-lock.md).
+
 ### Fase D — Pin por digest e imágenes inmutables
 
 #### `task_digest_pin_11` — Pinear por `@sha256` los 17 FROM y las imágenes auxiliares
@@ -667,6 +741,38 @@ integridad de las imágenes en build).
   0148 firmó. Anotado en `docs/04-reference/cadena-suministro.md` §3.
   **Sigue siendo decisión, no implementación**, y además el cambio vive en
   `apps/workers/src/workers/test_runtime.py`, fuera del carril de este agente.
+- ⏳ **2026-08-10 — la mitad de `docker/` re-verificada por medición, no por
+  lectura; la otra mitad sigue siendo una decisión de una persona.**
+  - **Medido**: `grep '^FROM ' docker/ -r` da **22 bases externas y las 22 llevan
+    `@sha256:`**; el conjunto de las que NO lo llevan está **vacío**. Es decir, el
+    criterio de cierre 5 («cero `FROM` sin `@sha256` bajo `docker/`») se cumple
+    hoy, y lo guardan `test_docker_bases_pinned_by_digest` y
+    `test_digest_pinned_bases_keep_their_tag_readable`.
+  - **Lo que falta y por qué no lo hago**: `postgres:16-alpine` y `redis:7-alpine`
+    siguen por tag en `apps/workers/src/workers/test_runtime.py` — hoy en las
+    líneas **391 y 405**. Es la **tercera** numeración distinta que registra esta
+    casilla (306/320 → 326/340 → 391/405) en tres semanas, y eso ya es un dato:
+    citar coordenadas de un fichero ajeno envejece más rápido que la propia
+    tarea. El fichero está fuera de este carril.
+  - **La decisión, reducida a una pregunta**: ¿por dónde se refresca un digest
+    que vive en código Python? Las cuatro salidas siguen siendo (a) moverlas a un
+    fichero que Dependabot parsee, (b) pinear y aceptar revisión manual mensual
+    anotada en el runbook, (c) declararlas excepción razonada (son sidecars
+    efímeros de un test, sin datos persistentes ni red fuera del bridge
+    per-tarea), y (d) —la que abrió el ADR 0148— un job propio tipo
+    `refresh-digests`. Sobre (d), verificado hoy: ese job **existe y funciona
+    así** (`build-runtime-templates.yml:185`), resuelve digests contra el registry
+    tras pasar Trivy y los trae **por PR**, sin escritura directa sobre `master`.
+    Pero resuelve digests de imágenes que este proyecto **produce**; hacerlo con
+    imágenes ajenas (`postgres`, `redis`) es un diseño distinto del que el 0148
+    firmó, y merece decirse antes de copiarlo.
+  - **Recomendación para quien decida**, ya que la casilla lleva tres pasadas sin
+    elegir: **(c)**. Son dos imágenes que el worker levanta durante un test, sin
+    volumen ni puerto publicado, en una red per-tarea; el coste de (a) es un
+    fichero nuevo que existe solo para que un bot lo lea, y el de (b) es una
+    revisión manual que nadie hará. Si se elige (c), el trabajo son tres líneas de
+    runbook y la casilla cierra; si se elige otra, hay que tocar
+    `apps/workers/**`.
 
 #### `task_registry_adr_12` — ADR: registry y tags inmutables para los runtimes
 

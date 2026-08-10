@@ -376,6 +376,11 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
     __table_args__ = (
         Index("ix_audit_log_tenant_created", "tenant_id", "created_at"),
         Index("ix_audit_log_action_created", "action", "created_at"),
+        # part-01 / ADR 0151: monthly RANGE partitioning on ``created_at``
+        # (migration 0136). Declared on the model too because the guard in
+        # ``tests/unit/test_partition_planner.py`` discovers the partitioned
+        # tables from here and demands the maintenance job knows about them.
+        {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
     tenant_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
@@ -393,8 +398,13 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
     ip_address: Mapped[str | None] = mapped_column(INET, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # PART OF THE PRIMARY KEY since part-01 (ADR 0151, migration 0136):
+    # PostgreSQL requires the primary key of a partitioned table to include the
+    # partition key, so the PK is ``(id, created_at)``. No foreign key points at
+    # ``audit_log.id``, so nothing depended on ``id`` alone being unique.
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
+        primary_key=True,
         nullable=False,
         server_default=text("now()"),
     )

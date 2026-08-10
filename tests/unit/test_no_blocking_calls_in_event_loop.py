@@ -321,3 +321,80 @@ async def test_query_embedder_reuses_one_shared_httpx_client() -> None:
         client = get_shared_embed_client()
         reset_shared_embed_client_cache()
         await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# api-2 / task_prod13_04 — la subida de documentos no materializa el fichero
+# ---------------------------------------------------------------------------
+# El bloqueo de esta ruta no es CPU: es MEMORIA. `await file.read()` devuelve el
+# cuerpo entero en el proceso del api-server, y con `MAX_UPLOAD_BYTES` de 50 MiB
+# bastan unas pocas subidas concurrentes para que el contenedor muera por OOM —
+# y el proceso muerto se lleva por delante todos los WebSockets, igual que un
+# bucle bloqueado. Por eso vive en este fichero.
+#
+# La lectura por trozos ya está (task_prod13_04, mitad hecha). Esta guarda
+# existe para que no VUELVA: el `file.read()` sin argumento es una línea más
+# corta y más legible, y por eso es exactamente lo que un refactor bienintencionado
+# reintroduce.
+def test_the_kb_upload_never_reads_the_whole_file_at_once() -> None:
+    from pathlib import Path
+
+    import api_server.routers.knowledge_bases as kb_router
+
+    source = Path(kb_router.__file__).read_text(encoding="utf-8")
+
+    assert "read_capped_upload(" in source, (
+        "la guarda dejó de encontrar la lectura acotada: el fichero cambió de"
+        " forma y esta comprobación ya no vigila nada (§4 de"
+        " verificar-antes-de-implementar)"
+    )
+    # Sólo CÓDIGO: el comentario que explica por qué se retiró el `file.read()`
+    # cita literalmente la llamada, y una guarda que no distinga las dos cosas se
+    # pone roja por su propia documentación. (Cazado escribiendo este test.)
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    for unbounded in ("await file.read()", "await upload.read()"):
+        assert unbounded not in code, (
+            f"vuelve a haber un {unbounded} en la subida de KB: el cuerpo entero"
+            " se materializa en memoria del api-server (api-2)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_capped_read_stops_at_the_cap_instead_of_draining() -> None:
+    """La propiedad medible, no la forma del código: con un fichero MAYOR que el
+    tope, la lectura para en cuanto lo supera en vez de drenarlo entero.
+
+    Se cuenta cuántos bytes se pidieron. La cota honesta es `tope + UN trozo`, no
+    el tope exacto: la lectura descubre que se pasó DESPUÉS de traer el trozo que
+    la pasa, y pedir menos exigiría un `read()` por byte. Lo que la guarda
+    prohíbe es lo otro — drenar los 10 MiB para luego rechazar."""
+    from api_server.routers._uploads import DEFAULT_CHUNK_SIZE, read_capped_upload
+    from fastapi import HTTPException
+
+    class _HugeUpload:
+        """Un fichero de 10 MiB que lleva la cuenta de lo que le han pedido."""
+
+        def __init__(self) -> None:
+            self.remaining = 10 * 1024 * 1024
+            self.served = 0
+
+        async def read(self, size: int = -1) -> bytes:
+            take = self.remaining if size < 0 else min(size, self.remaining)
+            self.remaining -= take
+            self.served += take
+            return b"x" * take
+
+    upload = _HugeUpload()
+    cap = 1024
+    with pytest.raises(HTTPException) as exc:
+        await read_capped_upload(upload, max_bytes=cap)  # type: ignore[arg-type]
+
+    assert exc.value.status_code == 413
+    assert upload.served <= cap + DEFAULT_CHUNK_SIZE, (
+        f"se leyeron {upload.served} bytes para rechazar un fichero con tope de"
+        f" {cap}: la lectura drena el cuerpo antes de decidir (api-2)"
+    )
+    assert upload.remaining > 0, (
+        "el fichero se agotó: la lectura llegó al final en vez de parar al"
+        " superar el tope, que es justo lo que api-2 prohíbe"
+    )

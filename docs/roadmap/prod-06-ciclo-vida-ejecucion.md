@@ -166,12 +166,35 @@ converja a un estado terminal visible.
 
 #### `task_prod06_dag_03` — Cablear el reviewer bridge al flujo post-ejecución
 
-- [ ] **Título**: Dar caller productivo a `apply_reviewer_verdict`
-      (apps/api-server/src/api_server/reviewer_bridge.py:95, hoy 0 callers fuera de tests):
-      cuando una tarea entra en `in_review`, el flujo post-test-runtime invoca
-      `parse_reviewer_output` + `apply_reviewer_verdict` y la tarea avanza a `done` o vuelve
-      con feedback según el veredicto, conforme al bucle descrito en ADR 0027:106-118.
-      Emitir métrica de profundidad por cola/estado para prod-08. > **PARTE B (métrica) HECHA** (commit dag_03 parte B): beat `workers.sample_queue_metrics` > emite `agentic_celery_queue_depth{queue}` + `agentic_tasks_by_status{status}` vía > textfile de node-exporter. prod-08 añade scrape/alerta/dashboard. > **PARTE A (cablear el AI reviewer): NO depende de ADR 0063** (era una conflación con el > review-runtime de preview humano). Decisión del operador 2026-06-26 → **ADR 0084 `accepted`, Opción B: DIFERIDA a un plan dedicado** (el bucle completo test-runtime → reviewer → veredicto se diseña aparte). `reviewer_bridge` queda como biblioteca lista sin caller. Fuera del alcance de prod-06; la métrica de la parte B lo deja observable.
+- [x] **Título**: Dar caller productivo a `apply_reviewer_verdict`
+  - ✅ **Cerrada (2026-08-10) — la premisa dejó de ser cierta y ahora hay test que
+    lo demuestra POR EL CAMINO DE VERDAD.** El caller llegó con prod-17
+    (`apps/workers/src/workers/execution.py:382 _apply_review_verdict`, invocado
+    desde `_finalize_and_transition` en la rama `if request.review:`), así que
+    «0 callers productivos» es falso desde entonces.
+  - **Pero los dos tests que existían no lo probaban.**
+    `tests/integration/test_reviewer_bridge_wiring.py` llama a
+    `apply_reviewer_verdict` a mano y
+    `tests/integration/test_review_execution_applies_verdict.py` llama a
+    `_apply_review_verdict` a mano: **los dos pasarían íntegros con el mecanismo
+    desconectado del despacho**, que es exactamente el defecto que esta casilla
+    nombraba. Un test que llama a la función a mano no puede descubrir que no
+    está montada.
+  - **Lo nuevo:** `tests/integration/test_reviewer_verdict_via_dispatch.py` (3
+    tests) entra por `conduct_execution` —el mismo punto de entrada del worker en
+    producción— con `review=True` y un doble del runner que emite la línea
+    `execution.finished` del reviewer. Ninguna aserción menciona
+    `apply_reviewer_verdict`: cubre los tres brazos del bucle (approve→`done`,
+    reject→`backlog` con `retry_count++`, reject en el tope→`blocked`).
+    **Rojo verificado**: sustituir la llamada del despacho por `task_event = None`
+    pone los tres en rojo; restaurada, verdes.
+  - Sin Docker a propósito (el doble sustituye al runner): atarlo al build de
+    `agent-runtime:v1` lo convertiría en un test que se salta solo.
+    (apps/api-server/src/api_server/reviewer_bridge.py:95, hoy 0 callers fuera de tests):
+    cuando una tarea entra en `in_review`, el flujo post-test-runtime invoca
+    `parse_reviewer_output` + `apply_reviewer_verdict` y la tarea avanza a `done` o vuelve
+    con feedback según el veredicto, conforme al bucle descrito en ADR 0027:106-118.
+    Emitir métrica de profundidad por cola/estado para prod-08. > **PARTE B (métrica) HECHA** (commit dag_03 parte B): beat `workers.sample_queue_metrics` > emite `agentic_celery_queue_depth{queue}` + `agentic_tasks_by_status{status}` vía > textfile de node-exporter. prod-08 añade scrape/alerta/dashboard. > **PARTE A (cablear el AI reviewer): NO depende de ADR 0063** (era una conflación con el > review-runtime de preview humano). Decisión del operador 2026-06-26 → **ADR 0084 `accepted`, Opción B: DIFERIDA a un plan dedicado** (el bucle completo test-runtime → reviewer → veredicto se diseña aparte). `reviewer_bridge` queda como biblioteca lista sin caller. Fuera del alcance de prod-06; la métrica de la parte B lo deja observable.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: task_prod06_dag_01, task_prod06_dag_02
 - **Tests automáticos**:

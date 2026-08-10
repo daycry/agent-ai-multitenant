@@ -80,9 +80,15 @@ def _build_vault_client(settings: Settings) -> VaultRotationClient | None:
         )
         return None
 
-    try:
-        import hvac
-    except ImportError:  # pragma: no cover - hvac is a declared dependency
+    # prod-10 task_prod10_07: el cliente sale de la fábrica compartida del
+    # worker, que además arranca la renovación del token en segundo plano. Antes
+    # se construía aquí un `hvac.Client` con el token estático: el job semanal
+    # habría dejado de rotar nada el día que el token caducase, que es
+    # exactamente la avería que este job existe para evitar.
+    from workers.vault_client import build_worker_vault_client
+
+    hvac_client = build_worker_vault_client(settings)
+    if hvac_client is None:  # pragma: no cover - hvac is a declared dependency
         _log.warning("credential_rotation.vault_client.hvac_missing")
         return None
 
@@ -107,10 +113,7 @@ def _build_vault_client(settings: Settings) -> VaultRotationClient | None:
         db_mount=settings.cred_rotation_db_mount,
         minio_wired=minio_rotator is not None,
     )
-    return HvacVaultRotationClient(
-        hvac.Client(url=settings.vault_url, token=settings.vault_token),
-        minio_rotator=minio_rotator,
-    )
+    return HvacVaultRotationClient(hvac_client, minio_rotator=minio_rotator)
 
 
 def _skipped_summary(notifier: RotationNotifier | None, reason: str) -> dict[str, Any]:

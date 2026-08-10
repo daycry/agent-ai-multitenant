@@ -524,7 +524,21 @@ async def list_execution_runs(
 # bounded (not streamed): an export is a synchronous build of one response
 # body, so we bound it instead of letting a tenant ask for an unbounded report.
 # A named constant, not a magic number — a platform invariant of the export
-# contract. A tenant that needs more pages the explorer (with its offset).
+# contract.
+#
+# prod-13 task_prod13_18: el tope ya no es un callejón. El export acepta el MISMO
+# `cursor` opaco que el explorador y devuelve `X-Next-Cursor` cuando llenó la
+# página, así que un tenant con 20.000 runs los baja en cuatro ficheros en vez de
+# perder los 15.000 últimos en silencio. Se resuelve con keyset y NO con `offset`
+# a propósito: el offset que necesitaría la cuarta página son 15.000 filas que
+# PostgreSQL produce y tira, y es justo el crecimiento que degrada solo.
+#
+# Lo que este cambio NO hace, dicho aquí para que nadie lo dé por hecho: el
+# export sigue MATERIALIZANDO su página entera en memoria antes de serializar
+# (`build_runs_export` devuelve bytes). Trocear la consulta en lotes internos no
+# arreglaría eso —el cuerpo se construye igual— y saldría más caro: N consultas
+# donde hoy hay una. Bajar el pico de memoria pide streaming del cuerpo, que es
+# otro contrato y otra tarea.
 MAX_EXPORT_ROWS = 5000
 
 
@@ -548,6 +562,15 @@ async def export_execution_runs(
     model: str | None = Query(default=None, max_length=120, description="Narrow to one model."),
     min_cost: Decimal | None = Query(
         default=None, ge=0, description="Minimum total cost USD threshold."
+    ),
+    cursor: str | None = Query(
+        default=None,
+        max_length=256,
+        description=(
+            "Keyset pagination token from a previous export's X-Next-Cursor "
+            "header. Lets a tenant with more than MAX_EXPORT_ROWS runs download "
+            "them in consecutive files instead of losing everything past the cap."
+        ),
     ),
 ) -> Response:
     """Export this tenant's runs explorer to CSV / XLSX / PDF. tenant_admin.
@@ -580,7 +603,7 @@ async def export_execution_runs(
         model=model,
         min_cost=min_cost,
     )
-    rows = await _fetch_runs(session, filters, limit=MAX_EXPORT_ROWS, offset=0)
+    rows = await _fetch_runs(session, filters, limit=MAX_EXPORT_ROWS, offset=0, cursor=cursor)
 
     # The PDF/HTML report embeds a consumption summary; CSV/XLSX are raw rows.
     consumption = (
@@ -610,15 +633,16 @@ async def export_execution_runs(
             detail="xlsx export is not configured in this runtime; use format=csv",
         ) from exc
 
-    return Response(
-        content=content,
-        media_type=media_type_for(fmt),
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename_for(fmt, stem="tenant-runs")}"'
-            )
-        },
-    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename_for(fmt, stem="tenant-runs")}"'
+    }
+    # Sólo cuando la página se llenó: un cursor en la última página obligaría al
+    # cliente a pedir un fichero vacío para descubrir que ya no hay nada.
+    next_cursor = next_runs_cursor(rows, limit=MAX_EXPORT_ROWS)
+    if next_cursor is not None:
+        headers["X-Next-Cursor"] = next_cursor
+
+    return Response(content=content, media_type=media_type_for(fmt), headers=headers)
 
 
 # ---------------------------------------------------------------------------

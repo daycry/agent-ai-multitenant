@@ -581,3 +581,91 @@ async def test_cross_tenant_isolation(
         pdf_body = pdf_resp.content.decode("utf-8")
         assert "B-secret-task" not in pdf_body
         assert str(ex_b) not in pdf_body
+
+
+# ---------------------------------------------------------------------------
+# prod-13 task_prod13_18 — el export pagina por KEYSET, no por offset
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_export_resumes_past_the_row_cap_with_the_keyset_cursor(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un tenant con más runs que el tope se los baja en ficheros consecutivos.
+
+    Antes, todo lo que pasase de ``MAX_EXPORT_ROWS`` se perdía **en silencio**:
+    el export devolvía las N primeras filas y nada decía que hubiera más. Ahora
+    la respuesta lleva ``X-Next-Cursor`` cuando llenó la página y el mismo token
+    reanuda el export justo después de la última fila entregada.
+
+    El tope se baja a 2 con monkeypatch en vez de sembrar 5.001 ejecuciones: lo
+    que se prueba es el CONTRATO de reanudación, y sembrar cinco mil filas para
+    eso cambiaría un test de segundos por uno de minutos sin probar nada más.
+
+    Y se comprueba lo que un cursor mal hecho rompe: que la segunda página no
+    repite ni se salta filas — la razón por la que el keyset compara la FILA
+    ``(created_at, id)`` y no dos predicados sueltos.
+    """
+    import api_server.routers.tenant_stats as stats_router
+
+    await _truncate_all(migrations_pg_dsn)
+    tenant = await _seed_tenant(migrations_pg_dsn, slug="keyset")
+    jwt = await _admin(migrations_pg_dsn, test_redis_url, tenant=tenant, slug="keyset")
+    project = await _seed_project(migrations_pg_dsn, tenant=tenant, name="P")
+    task = await _seed_task(
+        migrations_pg_dsn, tenant=tenant, project_id=project, plan_id=None, title="T"
+    )
+    base = datetime.now(tz=UTC) - timedelta(hours=1)
+    seeded = [
+        await _seed_execution(
+            migrations_pg_dsn,
+            tenant=tenant,
+            task_id=task,
+            agent_id=None,
+            created_at=base + timedelta(minutes=i),
+        )
+        for i in range(5)
+    ]
+
+    monkeypatch.setattr(stats_router, "MAX_EXPORT_ROWS", 2)
+
+    def _ids(body: bytes) -> list[str]:
+        reader = list(csv.reader(io.StringIO(body.decode("utf-8-sig"))))
+        column = reader[0].index("execution_id")
+        return [row[column] for row in reader[1:]]
+
+    collected: list[str] = []
+    async with _client(configured_app) as client:
+        url = "/tenant-stats/runs/export?format=csv"
+        for _page in range(4):
+            resp = await client.get(url, headers=_auth(jwt))
+            assert resp.status_code == 200, resp.text
+            collected.extend(_ids(resp.content))
+            cursor = resp.headers.get("X-Next-Cursor")
+            if cursor is None:
+                break
+            url = f"/tenant-stats/runs/export?format=csv&cursor={cursor}"
+        else:  # pragma: no cover - sólo si el cursor no termina nunca
+            raise AssertionError("el export nunca dejó de ofrecer X-Next-Cursor")
+
+    # Las cinco, una sola vez cada una y en orden descendente por created_at.
+    assert collected == [
+        str(x) for x in reversed(seeded)
+    ], "la paginación del export repite o se salta filas"
+    assert len(set(collected)) == len(collected)
+
+
+@pytest.mark.asyncio
+async def test_a_corrupt_export_cursor_is_a_400_not_a_500(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """El cursor lo manda el cliente: uno roto es un error suyo. Un 500 lo
+    convertiría en una alerta de servidor y en ruido de guardia."""
+    await _truncate_all(migrations_pg_dsn)
+    tenant = await _seed_tenant(migrations_pg_dsn, slug="badcur")
+    jwt = await _admin(migrations_pg_dsn, test_redis_url, tenant=tenant, slug="badcur")
+
+    async with _client(configured_app) as client:
+        resp = await client.get(
+            "/tenant-stats/runs/export?format=csv&cursor=not-a-real-cursor", headers=_auth(jwt)
+        )
+    assert resp.status_code == 400

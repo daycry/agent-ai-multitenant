@@ -219,7 +219,20 @@ los cumpla.
 vulnerabilidad npm que no se puede arreglar **no se suprime**: se registra en un
 plan o ADR y el gate npm no puede volverse obligatorio hasta resolverla.
 
-### Backlog conocido (re-medido el 2026-08-01)
+### Backlog conocido (re-medido el 2026-08-10)
+
+> **Actualización del 2026-08-10 — el backlog EMPEORÓ sin que cambiara una línea
+> de código.** `next` sigue en 14.2.35 y `critical` sigue limpio, pero los avisos
+> `high` han pasado de **2 a 3**, uno de ellos por el `postcss` empotrado. Y lo
+> que más importa para decidir: el rango vulnerable que reporta npm es ahora
+> **`next 9.3.4-canary.0 – 16.3.0-preview.10`**, así que **ni la línea 14 ni la 15
+> lo cierran** y el destino de la migración es **`next@16.3.0`** (antes 16.2.12).
+> La condición de salida de más abajo no cambia; el coste de no elegir, sí. Ocho
+> advisories de `next` (bypass de middleware con i18n, DoS en Server Actions, dos
+> SSRF, dos confusiones de caché, payload sin cota en Edge y la divulgación de
+> endpoints de Server Functions) más cuatro de `postcss`.
+
+### Backlog medido el 2026-08-01
 
 `next` está en **14.2.35**, el último parche de la línea 14.2.x: eso cerró la
 crítica `GHSA-955p-x3mx-jcvp` (divulgación no autenticada de Server Functions) y

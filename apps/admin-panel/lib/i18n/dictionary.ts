@@ -1647,6 +1647,123 @@ export const dictionary = {
     hacerMany: { es: "{n} acciones efectivas", en: "{n} effective actions" },
   },
 
+  /**
+   * Los COMPONENTES de `components/capability/*` (plan prod-16,
+   * `task_prod16_04`): el hub SABER/RECORDAR/SER/HACER, la sección Persona, el
+   * selector proveedor/modelo/temperatura y la tarjeta del modelo de chat.
+   *
+   * Namespace aparte de `capabilityHub` a propósito: aquél traduce los RESÚMENES
+   * que calcula `lib/capability/hub.ts` (lógica pura, testeable sin React); éste,
+   * el chrome de los componentes. Mezclarlos obligaría al módulo puro a arrastrar
+   * claves que no usa.
+   *
+   * Los cuatro ficheros comparten los mismos cuatro campos de modelo
+   * (`fieldProvider`, `fieldModel`, `fieldTemperature`, `fieldReasoning`) porque
+   * son literalmente el mismo campo pintado en tres sitios. Antes de migrar
+   * estaban escritos tres veces: `provider-model-selects.tsx` y
+   * `chat-model-section.tsx` con un `const t = (es, en) => …` local —un
+   * diccionario privado por fichero, que es el patrón que este plan retira— y
+   * `capability-hub.tsx` con ternarios sueltos.
+   */
+  capability: {
+    // --- campos de modelo, compartidos por los tres controles ---------------
+    fieldProvider: { es: "Proveedor", en: "Provider" },
+    fieldModel: { es: "Modelo", en: "Model" },
+    fieldTemperature: { es: "Temperatura", en: "Temperature" },
+    fieldReasoning: { es: "Razonamiento", en: "Reasoning" },
+    fieldSelectPlaceholder: { es: "— Selecciona —", en: "— Select —" },
+    fieldModelNamePlaceholder: { es: "nombre del modelo", en: "model name" },
+    reasoningOff: { es: "Desactivado", en: "Off" },
+    temperatureNotApplicable: {
+      es: "No aplica a Claude (el SDK no la expone)",
+      en: "Not applicable to Claude (the SDK does not expose it)",
+    },
+
+    // --- hub ----------------------------------------------------------------
+    hubDescription: {
+      es: "Las cuatro vías de capacidad y su estado real. Asigna desde cada sección.",
+      en: "The four capability paths and their real state. Assign from each section.",
+    },
+    hubLoadError: {
+      es: "No se pudo cargar la capacidad",
+      en: "Could not load capability",
+    },
+    serModelOrigin: { es: "Origen del modelo", en: "Model origin" },
+    hacerUnrestrictedDetail: {
+      es: "Este nivel no restringe tools por agente; el set efectivo lo fija cada agente.",
+      en: "This level does not restrict tools per agent; the effective set is set by each agent.",
+    },
+    checklistTitle: { es: "Pasos para capacitar", en: "Steps to enable" },
+
+    // --- tarjeta del modelo de chat ----------------------------------------
+    chatModelTitle: { es: "Modelo del chat", en: "Chat model" },
+    chatModelDescription: {
+      es:
+        "El proveedor y modelo con el que el equipo RESPONDE en el chat de " +
+        "planificación. Vacío = usa el modelo de ejecución. Un proveedor no-agéntico " +
+        "(Ollama/Azure) hace el chat más rápido que claude_sdk.",
+      en:
+        "The provider + model the team REPLIES with in the planning chat. Empty = use " +
+        "the execution model. A non-agentic provider (Ollama/Azure) makes the chat " +
+        "faster than claude_sdk.",
+    },
+    chatModelInheritsReadonly: {
+      es: "Hereda el modelo de ejecución.",
+      en: "Inherits the execution model.",
+    },
+    chatModelInherit: {
+      es: "Heredar el modelo de ejecución",
+      en: "Inherit the execution model",
+    },
+    saving: { es: "Guardando…", en: "Saving…" },
+    /** El título de la tarjeta hace de etiqueta del botón para que no diverjan. */
+    saveTitled: { es: "Guardar {title}", en: "Save {title}" },
+
+    // --- sección Persona (SER) ---------------------------------------------
+    personaTitle: { es: "SER · Persona", en: "BE · Persona" },
+    personaDescription: {
+      es: "Quién es el agente: proveedor, modelo, temperatura y el prompt efectivo (rol + modo).",
+      en: "Who the agent is: provider, model, temperature and the effective prompt (role + mode).",
+    },
+    personaNotConfigured: { es: "No configurado", en: "Not configured" },
+    personaCombineWithMode: { es: "Combinar con el modo", en: "Combine with mode" },
+    personaRoleOnly: { es: "Solo el rol", en: "Role only" },
+    personaRoleLabel: { es: "Rol", en: "Role" },
+    personaCustomUnavailable: {
+      es: 'El modo personalizado está "{label}".',
+      en: 'The custom mode is "{label}".',
+    },
+    personaNoPrompt: {
+      es: "Sin system prompt definido. Edita la persona para añadir uno (es/en).",
+      en: "No system prompt defined. Edit the persona to add one (es/en).",
+    },
+    personaPromptOriginFlat: {
+      es: "Prompt heredado del campo plano legacy; edita la persona para migrarlo a es/en.",
+      en: "Prompt inherited from the legacy flat field; edit the persona to migrate it to es/en.",
+    },
+    personaPromptsHelp: {
+      es:
+        "System prompt por idioma (ES + EN). Es la fuente única que muestran la " +
+        "tarjeta y el prompt efectivo.",
+      en:
+        "System prompt per language (ES + EN). Single source shown by the card and " +
+        "the effective prompt.",
+    },
+    /**
+     * Los dos tooltips NO se traducen: nombran una ruta del JSON que se guarda
+     * (`model_config.system_prompts.es`), y un identificador traducido deja de
+     * poder buscarse. Sólo cambia el verbo que lo introduce.
+     */
+    personaPromptStoredEs: {
+      es: "Se guarda en model_config.system_prompts.es",
+      en: "Stored in model_config.system_prompts.es",
+    },
+    personaPromptStoredEn: {
+      es: "Se guarda en model_config.system_prompts.en",
+      en: "Stored in model_config.system_prompts.en",
+    },
+  },
+
   /** `lib/cortex-curiosity.ts` — budget diario de búsquedas del córtex. */
   cortexCuriosity: {
     budgetNoCap: {

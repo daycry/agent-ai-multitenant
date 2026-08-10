@@ -100,6 +100,34 @@ class ContainerResult:
         }
 
 
+# prod-07 task_prod07_10: `config_env` es una copia del entorno del contenedor
+# que sobrevive al contenedor — viaja en el `ContainerResult`, y de ahí a los
+# asertos de aislamiento y a cualquier volcado de diagnóstico. La credencial del
+# proveedor ya no está en el env, pero el token interno del agente SÍ, y el día
+# que alguien añada otra variable sensible este filtro es lo que decide si acaba
+# en un log. Regla por SUFIJO del nombre y no lista cerrada: una lista cerrada
+# protege lo que ya existe, y el problema son las variables que aún no existen.
+_SENSITIVE_ENV_SUFFIXES = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "CREDENTIALS")
+_REDACTED = "***"
+
+
+def _scrub_env(env: tuple[str, ...]) -> tuple[str, ...]:
+    """El env capturado con los valores sensibles redactados.
+
+    Se conserva el NOMBRE (saber que la variable estaba puesta es justo lo que se
+    diagnostica con esto) y se tira el valor. Una entrada sin ``=`` se deja tal
+    cual: no es un par, y adivinar sería peor.
+    """
+    scrubbed: list[str] = []
+    for entry in env:
+        name, sep, _value = entry.partition("=")
+        if sep and name.upper().endswith(_SENSITIVE_ENV_SUFFIXES):
+            scrubbed.append(f"{name}={_REDACTED}")
+        else:
+            scrubbed.append(entry)
+    return tuple(scrubbed)
+
+
 def _image_digest(attrs: dict[str, Any]) -> str | None:
     """El digest de la imagen que este contenedor corrió DE VERDAD (`task_wf_62`).
 
@@ -434,7 +462,7 @@ class AgentContainerRunner:
             logs=logs,
             timed_out=timed_out,
             host_config=dict(attrs.get("HostConfig") or {}),
-            config_env=tuple(config.get("Env") or ()),
+            config_env=_scrub_env(tuple(config.get("Env") or ())),
             networks=tuple(net.keys()),
             image_digest=_image_digest(attrs),
         )

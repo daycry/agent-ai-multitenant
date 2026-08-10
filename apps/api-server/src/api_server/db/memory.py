@@ -156,9 +156,14 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
     # Back-link to the Execution this memory was distilled from. NULL
     # when the entry came from `memory_store` (human-curated) or from a
     # human work session (see source_human_work_session_id).
+    # NO foreign key since part-01 / ADR 0154 (migration 0137): ``executions`` is
+    # partitioned by month, so its PK is ``(id, created_at)`` and a FK cannot
+    # reference it without carrying both columns. The column stays as a loose
+    # reference — it was already nullable and nothing assumes the run still
+    # exists, which is the same shape ``guardrail_events.execution_id`` has had
+    # on purpose since Plan 11.
     source_execution_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("executions.id", ondelete="SET NULL"),
         nullable=True,
     )
 

@@ -249,11 +249,12 @@ esto lo puede hacer un agente: el paso 1 es una decisión de alcance y los pasos
       **(a)** abrir un plan/ADR de migración a **next 16** en el `admin-panel` y
       en el frontend del `installer` (salto de major con roturas; no cabe en una
       tarea suelta), o
-      **(b)** declarar los 2 avisos `high` como excepción razonada en la
+      **(b)** declarar los avisos `high` como excepción razonada en la
       ignore-list de npm con `# review: YYYY-MM-DD`, igual que las de
       `.trivyignore` / `.pip-audit-ignore` (§5), asumiendo por escrito el riesgo
       residual hasta que exista (a).
-      Sin (a) o (b), el gate npm nace en rojo permanente y bloquea todos los PRs.
+      Sin (a) o (b), el gate npm nace en rojo permanente y bloquea todos los PRs. > **Medido de nuevo el 2026-08-10, y va a peor: son 3 avisos `high`, no 2.** > El rango vulnerable que reporta npm es `next 9.3.4-canary.0 –
+  > 16.3.0-preview.10`, así que **ninguna versión de las líneas 14 ni 15 lo > cierra** y el destino de (a) es **`next@16.3.0`** (antes 16.2.12). Uno de > los tres llega por el `postcss`empotrado en`next`, no por `next` mismo: > si se elige (b), la excepción tiene que cubrirlo explícitamente. La > conclusión operativa no cambia —hay que elegir—, pero el coste de **no** > elegir sube en cada medición.
 - [ ] **2. Quitar el modo informe.** Borrar la línea `continue-on-error: true`
       del job `security-scan` en `.github/workflows/ci.yml` (hoy en la **línea
       321**, justo bajo `timeout-minutes: 30`). Es un cambio de una línea:

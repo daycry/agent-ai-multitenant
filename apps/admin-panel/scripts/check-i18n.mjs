@@ -78,10 +78,6 @@ const ALLOWLIST = {
   "app/admin/cortex/mind/page.tsx": 1,
   "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 3,
   "app/admin/tools/page.tsx": 4,
-  "components/capability/capability-hub.tsx": 8,
-  "components/capability/chat-model-section.tsx": 1,
-  "components/capability/persona-section.tsx": 15,
-  "components/capability/provider-model-selects.tsx": 1,
   "components/teams/adopt-team-dialog.tsx": 1,
 };
 
@@ -359,12 +355,20 @@ const ATTR_ALLOWLIST = {
   "app/admin/ollama/page.tsx": 3,
   "app/admin/plans/[id]/escalated/page.tsx": 2,
   "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 2,
-  "app/admin/projects/[id]/chat/page.tsx": 5,
+  // El troceo de la pantalla (prod-16 `task_prod16_08`) repartió esta deuda
+  // entre el `page.tsx` y la pieza que se llevó el `placeholder` del textarea.
+  // 5 = 4 + 1: no crece, cambia de fichero.
+  "app/admin/projects/[id]/chat/chat-composer.tsx": 1,
+  "app/admin/projects/[id]/chat/page.tsx": 4,
   "app/admin/projects/[id]/commands/page.tsx": 1,
   "app/admin/projects/[id]/dep-cache/page.tsx": 1,
   "app/admin/projects/[id]/incoming-webhooks/page.tsx": 7,
   "app/admin/projects/[id]/knowledge-bases/page.tsx": 5,
-  "app/admin/projects/[id]/mcp-servers/mcp-server-sections.tsx": 3,
+  // El troceo de prod-16 `task_prod16_08` repartió `mcp-server-sections.tsx`
+  // (1125 líneas) en cuatro piezas. La deuda de atributos se reparte con él:
+  // 3 = 2 + 1, mismo total, dos ficheros.
+  "app/admin/projects/[id]/mcp-servers/mcp-server-card.tsx": 2,
+  "app/admin/projects/[id]/mcp-servers/mcp-server-dialog.tsx": 1,
   "app/admin/projects/[id]/mcp-servers/page.tsx": 2,
   "app/admin/projects/[id]/memories/page.tsx": 2,
   "app/admin/projects/[id]/page.tsx": 1,

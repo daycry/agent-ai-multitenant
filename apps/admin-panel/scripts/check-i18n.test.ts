@@ -347,7 +347,13 @@ describe("check-i18n — castellano sin tildes en atributos", () => {
 
 describe("check-i18n --strict", () => {
   it("no perdona ni lo que la allowlist permitía", () => {
-    const root = fixture({ "components/capability/persona-section.tsx": TERNARY.repeat(2) });
+    // El fichero sale de la allowlist REAL (`anAllowlisted`), no clavado a mano.
+    // Estaba clavado a `components/capability/persona-section.tsx` y se puso
+    // rojo el día que ese módulo se migró de verdad — el mismo modo de fallo que
+    // ya se corrigió dos veces en `check-component-size.test.ts`: un test que se
+    // rompe POR EL ÉXITO enseña a desconfiar de la guarda, no del cambio.
+    const { rel, allowed } = anAllowlisted("ternaries");
+    const root = fixture({ [rel]: TERNARY.repeat(allowed) });
 
     expect(run(["--root", root]).code).toBe(0);
     expect(run(["--root", root, "--strict"]).code).toBe(1);

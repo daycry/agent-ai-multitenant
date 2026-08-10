@@ -106,7 +106,13 @@ PARTITION_HEADROOM_MONTHS = 3
 #: compara esta tupla con lo que declara el modelo ORM, así que una conversión
 #: que se olvide de registrarse aquí rompe la suite en vez de romper el mes que
 #: viene en producción.
-PARTITIONED_TABLES: tuple[str, ...] = ("guardrail_events",)
+PARTITIONED_TABLES: tuple[str, ...] = (
+    "guardrail_events",  # migración 0131 (ola 1)
+    "notification_logs",  # migración 0134 (ola 2)
+    "llm_usage_events",  # migración 0135 (ola 3)
+    "audit_log",  # migración 0136 (ola 4)
+    "executions",  # migración 0137 (ola 5) — las CINCO del ADR 0151
+)
 
 #: `event_type` REUTILIZADO: `infra_alert` ya está registrado en el dispatcher
 #: (`event_mapping.py`), es platform-scoped, va por la lane PRIORITY y sale por

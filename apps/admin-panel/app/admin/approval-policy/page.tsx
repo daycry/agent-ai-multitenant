@@ -15,7 +15,7 @@
  * preset bundles before adopting one.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldCheck } from "lucide-react";
 
@@ -153,8 +153,24 @@ export default function ApprovalPolicyPage() {
     }
   }, [policies, selectedPolicyId]);
 
-  // Reset overrides when the preset changes.
+  // Limpia los cambios sin guardar SOLO al cambiar de preset de verdad.
+  //
+  // Antes corría también en la asignación INICIAL (`null` → primer preset, que
+  // hace el efecto de arriba en cuanto responde la consulta de políticas). Eso
+  // no era cosmético: la pantalla lanza DOS consultas independientes, así que
+  // hay una ventana en la que ya se pinta la tabla y todavía queda estado por
+  // asentarse — y un clic dentro de esa ventana se descartaba **en silencio**,
+  // sin que nada avisara al operador de que su cambio no había cuajado.
+  //
+  // Se manifestó como un test intermitente: verde en aislamiento, rojo a veces
+  // en la suite completa, donde 120 ficheros compiten y el orden cambia. La
+  // salida cómoda era envolver la aserción en un `waitFor` y llamarlo flaky;
+  // eso habría tapado un defecto de la interfaz con un parche en el test.
+  const previousPolicyId = useRef<string | null>(null);
   useEffect(() => {
+    const previous = previousPolicyId.current;
+    previousPolicyId.current = selectedPolicyId;
+    if (previous === null || previous === selectedPolicyId) return;
     setOverrides({});
     setUnlistedOverride(null);
     setSubmitOk(false);

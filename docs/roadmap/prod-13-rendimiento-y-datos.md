@@ -156,6 +156,18 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     pedirle un conflicto a quien está cambiando ese mismo flujo. El sitio natural
     de esta tarea es ese plan, que ya tiene el concepto de despliegue como
     entidad con estado consultable — justo el recurso que el 202 necesita.
+  - ⏳ **Re-verificado (2026-08-10): la mitad del BUCLE está hecha y protegida; lo
+    que queda NO es un problema de event loop.** `_run_static_analysis` corre
+    fuera del bucle (`marketplace/install.py:656`, `asyncio.to_thread`) y
+    `tests/unit/test_no_blocking_calls_in_event_loop.py` lo mide **por hilo**
+    (compara `threading.get_ident()` dentro del analizador con el del bucle), no
+    leyendo el código: no puede pasar en vacío. Lo que falta —Celery + 202— es un
+    problema de **latencia de request**, no de congelación: 4 minutos de análisis
+    no pertenecen a un HTTP aunque no bloqueen a nadie (timeouts de proxy,
+    reintentos del cliente). Sigue sin abordarse desde aquí por la razón ya
+    escrita: `marketplace/` lo está reescribiendo marketplace-v2, y meterle un
+    endpoint asíncrono nuevo al flujo de instalación es pedirle un conflicto a
+    quien está cambiando ese mismo flujo.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -276,6 +288,24 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     aceptan y funcionan, y el fallo sería silencioso en el sentido contrario.
     **Sigue necesitando la lista canónica (o un ADR)** antes de tocarse; no es
     trabajo de código, es una decisión de producto.
+  - ⏳ **Re-verificado (2026-08-10) — la lista NO se puede sacar del código, y
+    ahora se sabe por qué:** Docling **no es una dependencia Python** de este
+    repo. El api-server habla con `docling-serve` por HTTP
+    (`ingestion/docling.py`), así que no existe ningún `InputFormat` importable
+    del que derivar la lista sin inventarla. Las dos salidas posibles, para que
+    el humano elija: (a) fijar la lista a mano en un ADR —barato, pero rechaza en
+    la puerta formatos que hoy se aceptan y funcionan—; (b) preguntarle sus
+    formatos a `docling-serve` y cachearlos —sin invención, pero mete una
+    dependencia de red en la ruta de subida y hay que decidir qué se hace cuando
+    no contesta—. **Lo que SÍ se ha hecho hoy es blindar la mitad terminada**:
+    `tests/unit/test_no_blocking_calls_in_event_loop.py` gana dos guardas —una
+    estática, que el `await file.read()` sin tope no vuelva a
+    `knowledge_bases.py`, y otra **medida**, que contando bytes servidos
+    comprueba que un fichero de 10 MiB con tope de 1 KiB se rechaza tras leer un
+    solo trozo en vez de drenarse entero. Las dos verificadas en rojo. (La
+    estática nació con un falso positivo propio: el comentario que explica por
+    qué se retiró el `file.read()` lo cita literalmente, y la guarda se ponía roja
+    por su propia documentación. Ahora ignora las líneas de comentario.)
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -372,6 +402,29 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
     No es trabajo de una tanda paralela con la propiedad repartida — pide su
     rama, la suite de integración del asistente entera antes y después, y quien
     la haga tiene que poder tocar `auth/deps.py`, que aquí es de otro carril.
+  - ⏳ **Sigue abierta (2026-08-10), pero con el diseño ya derivado y con una
+    corrección: NO hace falta tocar `auth/deps.py`.** Verificado leyendo el
+    código: la costura del despacho de tools es ÚNICA —
+    `assistant/tools.py::run_assistant_tool`, por donde pasa toda llamada— y
+    `ctx.session` sólo se usa en 11 sitios, todos dentro de `tools.py`. El diseño
+    que cierra el riesgo nº 1 sin escribir una sola línea de RLS nueva: el
+    session-factory es `lambda: open_tenant_session(principal)` **tal cual**, o
+    sea el mismo código que ya hace los dos `set_config` de `app.user_id` /
+    `app.tenant_id`; al no haber una segunda implementación, no hay una segunda
+    que se olvide del `set_config`. `run_assistant_tool` abre la sesión corta y
+    entrega al tool un ctx con ella ya enlazada, así que los 11 sitios no cambian.
+    Los endpoints quedan en tres fases: sesión corta para resolver (identidad,
+    memorias, conversación, historial, rate limit) → `run_assistant_turn` **sin
+    conexión retenida** → sesión corta para persistir.
+    **Por qué no se ha implementado hoy y no por falta de tiempo:** es la única
+    tarea del carril cuyo fallo se manifiesta como fuga entre tenants, la suite
+    que la protege son 7 ficheros de integración del asistente, y durante esta
+    tanda hay cuatro carriles más escribiendo en el árbol — de hecho uno rompió
+    `routers/sso` a mitad de sesión y dejó el api-server sin importar durante
+    minutos. Entregar un refactor de RLS que no he podido correr entero contra un
+    árbol estable es exactamente lo que este plan no puede permitirse. Pide su
+    rama, como ya decía la nota anterior; lo que cambia es que **ya no pide la
+    propiedad de `auth/deps.py`**.
 - **Tiempo**: 2,5 días · **Complejidad**: l
 - **Depende de**: `task_prod13_06`
 - **Tests automáticos**:
@@ -719,6 +772,25 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     ya particionada, añadir columnas y backfillear es más caro que hacerlo antes
     — conviene coordinarlo con
     [`part-01`](./part-01-particionado-append-only.md), no después.
+  - ✅ **La paginación por keyset queda COMPLETA (2026-08-10): faltaba el export.**
+    El explorador ya la tenía; el export no, y ahí el agujero no era de
+    rendimiento sino de **pérdida silenciosa de datos**: todo lo que pasara de
+    `MAX_EXPORT_ROWS` (5.000) se quedaba fuera sin que la respuesta lo dijera, y
+    el docstring mandaba al usuario a «paginar con el explorador (con su
+    offset)». Ahora `GET /tenant-stats/runs/export` acepta el MISMO `cursor`
+    opaco y devuelve `X-Next-Cursor` cuando llenó la página, así que 20.000 runs
+    se bajan en cuatro ficheros. Test:
+    `tests/integration/test_stats_export.py::test_export_resumes_past_the_row_cap_with_the_keyset_cursor`
+    —que además comprueba que la segunda página **ni repite ni se salta** filas,
+    que es lo que rompe un keyset mal hecho— y
+    `::test_a_corrupt_export_cursor_is_a_400_not_a_500`. Rojo verificado quitando
+    el `cursor=` del `_fetch_runs` del export; los 9 del fichero, verdes.
+    **Lo que deliberadamente NO se hizo, para que nadie lo pida como olvido:**
+    trocear el export en lotes internos. No bajaría el pico de memoria
+    —`build_runs_export` construye el cuerpo entero igual— y cambiaría una
+    consulta por N. Bajar ese pico pide streaming del cuerpo, que es otro
+    contrato y otra tarea. Y en `runs_select` el `offset` NO degrada nada en el
+    export: siempre vale 0.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

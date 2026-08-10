@@ -177,6 +177,23 @@ services:
       ALERTMANAGER_NOTIFIER_WEBHOOK_URL: ${ALERTMANAGER_NOTIFIER_WEBHOOK_URL:-}
     volumes:
       - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Buzón de credenciales del receiver de RESPALDO (prod-08
+      # task_prod08_alert_fallback_02). `alertmanager.yml` declara
+      # `api_url_file: /etc/alertmanager/secrets/slack_api_url`, y sin este
+      # montaje esa ruta NO EXISTE dentro del contenedor: el operador que
+      # consiga el webhook de Slack no tiene dónde dejarlo sin editar el
+      # compose, que es justo lo que el runbook le pide no hacer.
+      #
+      # El fallo era del tipo caro: Alertmanager arranca igual (el fichero se
+      # lee al notificar, no al cargar la config), así que el stack sale
+      # `healthy` y el canal de último recurso falla en cada envío en silencio
+      # — en el único escenario para el que existe, el api-server caído.
+      #
+      # Read-only: Alertmanager solo lee. El directorio está versionado (con su
+      # propio `.gitignore`) para que Docker no lo invente como root: el
+      # contenedor corre como `nobody` y no podría leerlo.
+      # Guardado por tests/unit/test_alertmanager_secret_mount.py.
+      - ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro
       - alertmanager_data:/alertmanager
     # TRUSTED service hardening (revised): no-new-privileges + Docker's DEFAULT
     # seccomp (NOT overridden) + apparmor. The hand-rolled default-deny seccomp

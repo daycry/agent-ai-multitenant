@@ -115,3 +115,65 @@ def test_ensure_network_creates_the_dedicated_internal_network() -> None:
 def test_ensure_network_is_idempotent() -> None:
     runner = _runner()
     assert runner.ensure_network() == runner.ensure_network() == "agentic-agents"
+
+
+# ---------------------------------------------------------------------------
+# prod-07 task_prod07_10 — la credencial llega por un mount read-only,
+# nunca por el entorno.
+# ---------------------------------------------------------------------------
+_SECRET_MARKER = "OPAQUE-CREDENTIAL-MARKER-9f2c"
+
+
+def test_secret_mount_delivers_the_credential_and_keeps_it_out_of_the_env(
+    tmp_path: object,
+) -> None:
+    """El contrato completo, contra un daemon de verdad.
+
+    Los tests unitarios prueban las dos mitades por separado (el worker parte el
+    spec, el runtime lo hidrata). Esta comprueba la única cosa que ninguno de los
+    dos puede: que **Docker** entrega el fichero dentro del contenedor, read-only,
+    y que el env del contenedor no lleva el valor. Si el bind no resolviese —el
+    modo de fallo real de un contenedor hermano cuya ruta origen se resuelve en
+    el host— aquí se vería y en un unit test no.
+    """
+    from workers.model_secret import (
+        MODEL_CREDENTIALS_PATH,
+        split_model_credentials,
+        stage_model_credentials,
+    )
+
+    public, secrets = split_model_credentials(
+        {"kind": "claude_sdk", "model": "claude-opus-4", "oauth_token": _SECRET_MARKER}
+    )
+    assert secrets, "el split no movió nada: el resto del test no probaría nada"
+    staged = stage_model_credentials(secrets, base_dir=str(tmp_path))
+    try:
+        result = _runner().run(
+            ContainerSpec(
+                image=BASE_IMAGE,
+                command=[
+                    "python",
+                    "-c",
+                    # Lee el fichero montado, e intenta escribirlo: read-only de
+                    # verdad, no read-only "por convención de nombres".
+                    "import json,os;"
+                    f"p={MODEL_CREDENTIALS_PATH!r};"
+                    "print(json.load(open(p))['oauth_token']);"
+                    "\nfor _ in [0]:\n"
+                    "    try:\n"
+                    "        open(p,'w').write('x'); print('WRITABLE')\n"
+                    "    except OSError: print('READONLY')\n",
+                ],
+                # `public` es lo que el worker mete en AGENT_TASK_SPEC.
+                env={"AGENT_TASK_SPEC": json.dumps({"model": public})},
+                extra_mounts=tuple(staged.mounts),
+            )
+        )
+    finally:
+        staged.cleanup()
+
+    assert result.exit_code == 0, result.logs
+    assert _SECRET_MARKER in result.logs, "el agente NO puede leer su credencial"
+    assert "READONLY" in result.logs, "el mount de la credencial es escribible"
+    # Y lo que motiva la tarea: el env del contenedor no lleva el valor.
+    assert _SECRET_MARKER not in " ".join(result.config_env)

@@ -83,6 +83,33 @@ docker compose -f docker/docker-compose.yml pull
 Si tu despliegue usa overlays (monitoring, GPU), inclúyelos en el `pull`
 con sus `-f` correspondientes para no dejar una imagen atrás.
 
+> **⚠ Este upgrade en concreto: la imagen `agent-runtime` va PRIMERO.**
+>
+> A partir de prod-07 `task_prod07_10`, el worker deja de meter la credencial
+> del proveedor LLM dentro de `AGENT_TASK_SPEC` y la entrega por un mount
+> read-only en `/run/secrets`; en el env sólo viaja el puntero. La imagen nueva
+> entiende **los dos** formatos; una imagen **anterior** ignora el puntero y
+> arranca sin credencial, y el run muere con un 401 dentro del sandbox — un
+> error que misatribuye por completo la causa.
+>
+> Por eso el orden importa y no es simétrico:
+>
+> 1. **Reconstruye y publica `agent-runtime` ANTES de tocar el worker.** El
+>    `docker compose pull` de arriba NO la cubre si la construyes en local:
+>    `agent_runtime_image` es una imagen que se construye, no se descarga.
+> 2. Sólo después, levanta el worker con el código nuevo.
+>
+> **Si te ves obligado a desplegar el worker antes** (o si un run empieza a
+> fallar con 401 justo tras el upgrade), la válvula de escape es una variable
+> del `.env`, sin tocar el compose:
+>
+> ```bash
+> WORKERS_MODEL_CREDENTIAL_FILE=false   # vuelve al formato antiguo (credencial en el env)
+> ```
+>
+> Retírala en cuanto la imagen esté reconstruida: con ella puesta, la credencial
+> vuelve a ser visible en un `docker inspect` del contenedor del agente.
+
 ### 3. Para el stack (ventana de mantenimiento)
 
 Detén los servicios **sin** borrar volúmenes. Nunca `down -v`, que

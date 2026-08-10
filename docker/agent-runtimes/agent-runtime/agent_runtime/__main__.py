@@ -88,13 +88,24 @@ def _emit(event: dict[str, Any]) -> None:
 
 
 def _load_spec() -> dict[str, Any] | None:
-    """The task spec from AGENT_TASK_SPEC, or the workspace file, or None."""
+    """The task spec from AGENT_TASK_SPEC, or the workspace file, or None.
+
+    prod-07 task_prod07_10: the provider credential no longer travels inside the
+    spec — the worker stages it in a read-only mount and the spec carries only a
+    pointer. Hydrating HERE, at the single door every spec comes through, is what
+    keeps the change invisible downstream: `model_from_spec`,
+    `build_provider_client` and the four adapters keep seeing the same dict.
+    A spec WITHOUT the pointer is returned untouched, so this image still runs
+    against an older worker that inlines the credential.
+    """
+    from agent_runtime.spec_secrets import hydrate_model_credentials
+
     raw = os.environ.get("AGENT_TASK_SPEC")
     if raw and raw.strip():
-        return json.loads(raw)  # type: ignore[no-any-return]
+        return hydrate_model_credentials(json.loads(raw))
     path = Path(_TASK_SPEC_FILE)
     if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+        return hydrate_model_credentials(json.loads(path.read_text(encoding="utf-8")))
     return None
 
 

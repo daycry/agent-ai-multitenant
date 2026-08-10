@@ -257,9 +257,12 @@ class EvalDatasetItem(
         ForeignKey("tasks.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # NO foreign key since part-01 / ADR 0154 (migration 0137): ``executions``
+    # is partitioned by month, so its PK is ``(id, created_at)`` and a FK cannot
+    # reference it without carrying both columns. Loose reference: the column was
+    # already nullable and no reader assumes the run still exists.
     source_execution_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("executions.id", ondelete="SET NULL"),
         nullable=True,
     )
 
@@ -532,9 +535,12 @@ class EvalShadowRecord(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMi
         ForeignKey("tasks.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # NO foreign key since part-01 / ADR 0154 (migration 0137): ``executions``
+    # is partitioned by month, so its PK is ``(id, created_at)`` and a FK cannot
+    # reference it without carrying both columns. Loose reference: the column was
+    # already nullable and no reader assumes the run still exists.
     source_execution_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("executions.id", ondelete="SET NULL"),
         nullable=True,
     )
 

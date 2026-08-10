@@ -199,6 +199,20 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
   - 🔧 **Agujero encontrado y cerrado (2): 17 ficheros del roadmap llevan un `status:` del enum de fases y NO llevan `plan_id`, así que ningún guarda de gate los ve.** `_plans()` exige los dos campos; sin `plan_id`, un fichero se salta `test_at_most_one_phase_in_progress`, el gate, el `gate_override` y el changelog. Ocho de los diecisiete son las fases del córtex, **con casillas `- [ ]` y `blocking_plan` propio**: planes en todo menos en el campo que los haría auditables. Se destapó por un recuento que daba 46 por fichero y 35 por plan. Cerrado con `test_no_new_roadmap_file_escapes_the_guards_by_omitting_plan_id`, con la deuda acotada e inventariada al estilo de `_GATE_DEBT_2026_07_29`: **no arregla los 17** —darles `plan_id` los somete de golpe al guarda de changelog, que es trabajo de otro carril— pero impide que aparezca el número dieciocho. Mutación verificada: un `.md` nuevo con `status: in_progress` y sin `plan_id` lo pone rojo.
   - ➕ **De paso, la tercera guarda que faltaba**: el recuento de la cola de validación del `README.md` («35 planes están en `pending_human_validation`») no lo vigilaba nadie, a diferencia del recuento hermano de planes de construcción. Ahora sí (`test_readme_declares_the_real_size_of_the_validation_queue`, mutado a 34 → rojo). Y conviene dejar dicho, porque casi me lleva a «corregir» un número correcto: **35 son los planes; los 46 que cuenta `CONTINUE_HERE.md` incluyen 11 ficheros sin `plan_id`**. Son las dos poblaciones del agujero (2).
   - Suite tras los tres tests nuevos: `tests/unit/test_roadmap_frontmatter.py` **14 passed**.
+  - ⏳ **2026-08-10 — la parte de frontmatter sigue coherente, medida y no
+    supuesta; lo que falta sigue siendo una firma de calendario.** - Ejecutado: `pytest tests/unit/test_roadmap_frontmatter.py
+tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_progress`** (`marketplace-v2-despliegue`), que es lo que
+    exige la regla dura del protocolo — comprobado además a mano con
+    `grep -l '^status: in_progress' docs/roadmap/*.md`, porque el test y el grep
+    pueden discrepar y el que manda es el fichero. - Recuento por estado hoy: 46 `pending_human_validation`, 25 `completed`,
+    14 `pending_approval`, 1 `in_progress`, 1 `blocked`, más los ficheros del
+    roadmap que llevan `status:` de otro enum (`published`, `informe`, `open`,
+    `delivered`, `archived`, `approved`, `remediation_implemented`) y que son
+    justamente la población del **agujero (2)** de arriba. - **Por qué sigue sin marcarse, sin cambios**: falta el tercer bullet de la
+    tarea — la cola de validación tiene **orden** publicado pero no
+    **responsable ni ventana**. Eso compromete el calendario de una persona, el
+    ADR 0138 lo deja fuera de su alcance por escrito, y no hay nada que
+    implementar antes. Es una firma, no trabajo.
 - **Descripción**: Tras aprobación humana del ADR (task 03): añadir `gate_override` (o el
   mecanismo decidido) al frontmatter de cada fase empezada con gate saltado; actualizar la
   sección "Reglas Duras del Protocolo" de CLAUDE.md para reconocer el override explícito;
@@ -316,6 +330,61 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
   - **Blast radius medido: 74 ficheros** mencionan `demo_human_*` / `setup_demo_*` / `_demo_common` / `.demo_state`, repartidos en `docs/03-guides/human-tests/` (24), `docs/03-guides/gotchas/`, `docs/05-architecture-decisions/`, `docs/07-changelog/`, `scripts/dev/*.ps1`, `.gitignore`, `pyproject.toml`, `apps/api-server/.../seeds/builtin_kbs.py` y `tests/docs/test_human_test_guides.py` (una guarda que se pondría roja a mitad del movimiento).
   - **NO ejecutado a propósito**: es un rename mecánico de 74 ficheros, casi todos fuera del carril de este agente, en una sesión con otros 4 agentes escribiendo en paralelo sobre el mismo árbol. Es exactamente el cambio que hay que hacer **solo**, en una pasada dedicada y sin nadie más tocando el repo. Bajo riesgo técnico, alto riesgo de conflicto.
   - ⏳ **Re-medido el 2026-08-01: idéntico.** 26 `.py` en la raíz de `scripts/`, de los cuales **14 `demo_human_*` + 7 `setup_demo_*`**; `scripts/demos/` no existe; `tests/unit/test_scripts_layout.py` no existe. Nada ha cambiado, y la razón para no hacerlo tampoco: esta pasada vuelve a ser concurrente con otros cuatro carriles. **Sigue siendo la casilla más barata del plan y la que más caro sale hacer mal**: no necesita decisión humana, necesita el repo para ella sola.
+  - ✅ **2026-08-10 — el sub-punto (1) se cierra en NEGATIVO: no queda nada que
+    borrar.** Verificado fichero a fichero, y la descripción de la tarea está
+    desfasada en los tres ítems:
+    · `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` **no existe** (el
+    script que lo generaba se eliminó hace tiempo). Lo que hay son
+    `check_commit_trailers.cpython-31{2,3}.pyc`, bytecode de un script **vivo** y
+    en un directorio **no trackeado** (`git ls-files scripts/__pycache__` → vacío):
+    borrarlo no es higiene, es ruido que Python regenera al siguiente import.
+    · `admin-panel-dev.log` y `.e2e-api-server.log` **no existen** en la raíz.
+    · `.gitignore` ya cubre los seis patrones de `.demo_state*` — sub-punto (3),
+    verificado.
+    Lo único que queda de esta casilla es el sub-punto (2), el movimiento.
+  - ⏳ **2026-08-10 — el movimiento: medido por CUARTA vez y NO ejecutado, con la
+    razón concreta y una receta para que la próxima no vuelva a medir.** El dato
+    que faltaba en las tres anotaciones anteriores es _cuántos ficheros ajenos_
+    hay que editar, y es el que decide: **48**, de los cuales 31 son guías de
+    `docs/03-guides/human-tests/`. El detalle:
+    | Qué | Cuánto | Quién lo toca |
+    | -------------------------------------------------- | -----: | ------------- |
+    | Scripts a mover (`demo_human_*`, `setup_demo_*`, `_demo_common.py`) | 22 | el rename |
+    | Guías de tests humanos que citan rutas | 31 | otro carril |
+    | `pyproject.toml` (carve-outs de ruff, 2 líneas) | 1 | otro carril |
+    | `.gitignore` (6 patrones `scripts/.demo_state*`) | 1 | otro carril |
+    | `apps/api-server/.../seeds/builtin_kbs.py` | 1 | otro carril |
+    | `tests/docs/test_human_test_guides.py` | 1 | otro carril |
+    | Gotchas / ADR / changelogs (relato histórico) | 11 | — |
+    **Y una trampa que ninguna anotación anterior nombró**:
+    `tests/docs/test_human_test_guides.py` resuelve la existencia de cada script
+    recomendado contra `_SCRIPTS = repo/scripts`. En cuanto se mueve el primer
+    fichero y antes de tocar esa constante, **la guarda se pone roja** — y su
+    mensaje dirá «la guía recomienda un script que no existe», que es
+    indistinguible de un error de documentación real. El movimiento no tiene
+    estado intermedio verde.
+    **Receta para la pasada dedicada** (con el repo para ella sola), en este orden
+    y en un solo commit:
+    1. `git mv scripts/{demo_human_*,setup_demo_*,_demo_common}.py scripts/demos/`
+       — `_demo_common.py` va con ellos **obligatoriamente**: 11 scripts hacen
+       `from _demo_common import …`, que solo resuelve porque el directorio del
+       script entra en `sys.path`.
+    2. `pyproject.toml`: `scripts/demo_*.py` → `scripts/demos/demo_*.py` y
+       `scripts/setup_demo_*.py` → `scripts/demos/setup_demo_*.py`.
+    3. `tests/docs/test_human_test_guides.py`: `_SCRIPTS` pasa a `scripts/demos`.
+    4. `sed` sobre las 31 guías + `builtin_kbs.py`: `scripts/demo_human_` →
+       `scripts/demos/demo_human_`, `scripts/setup_demo_` →
+       `scripts/demos/setup_demo_`.
+    5. `.gitignore`: los seis `scripts/.demo_state*` → `scripts/demos/.demo_state*`
+       (los scripts escriben el estado **junto a sí mismos**).
+    6. Escribir `tests/unit/test_scripts_layout.py` (`auto_gov_10_a`, que **no
+       existe**): la raíz de `scripts/` solo contiene tooling, los demos compilan
+       con `py_compile`, y ninguna guía cita la ruta vieja.
+       **Por qué sigo sin hacerlo**: 48 ficheros, 35 de ellos fuera de la propiedad
+       de este carril, en una pasada con otros cuatro agentes escribiendo el mismo
+       árbol, y sin estado intermedio verde. El riesgo técnico es bajo; el de
+       conflicto, alto; y el coste de hacerlo mal —guías de test humano apuntando a
+       scripts que no arrancan— lo paga un humano en mitad de una validación.
 - **Descripción**: Según quality-11 (nada de esto está trackeado en git; es higiene local +
   reorganización): (1) borrar `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` (bytecode
   huérfano de un script eliminado) y los logs locales de la raíz (`admin-panel-dev.log`,
@@ -348,6 +417,42 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
     `test_app_boundaries.py::test_api_server_never_imports_workers`, una guarda sobre **todo** `api_server`. Arreglar solo `backup.py` la deja igual de roja, así que la casilla **no puede cerrarse** con el alcance que la tarea describe. O se amplía la tarea a los 6, o la guarda nace con una allowlist declarada de excepciones — y esa es una decisión de diseño, no de implementación.
   - **NO abordado en esta pasada**: los cinco ficheros restantes son operaciones de git/datos que el memorándum del proyecto manda ejecutar **en el worker**, así que moverlas es un rediseño, no un rename; y crear las dos tareas Celery de `backup.test_destination` / `backup.list_remote` toca `apps/workers/**` y cambia el contrato de dos endpoints que consume el `admin-panel`, ambos fuera del carril de este agente. Sigue vigente la coordinación con prod-04/prod-13 que la propia tarea declara.
   - ⏳ **Re-medido el 2026-08-01: el inventario no se ha movido.** Siguen siendo **6 ficheros y 10 imports** (`backup.py` ×4, `backup_restore.py`, `code_diff.py` ×2, `docs_structure/kb_sync.py`, `docs_viewer/service.py`, `routers/review.py`). La decisión de diseño que la casilla necesita —ampliar la tarea a los 6, o que `auto_gov_11_a` nazca con una allowlist de excepciones declarada— **sigue sin tomarse**, y es lo único que la bloquea. Apunte para quien la tome: los 5 ficheros que no son `backup.py` importan **funciones puras** (`_run_git`, `worktree_coordinates`, `sign_review_url`, `DEFAULT_TENANT_SCOPED_TABLES`), no ejecutan I/O de worker por el hecho de importarlas; el que de verdad rompe la frontera en espíritu —boto3/paramiko dentro del event loop del api-server— es `backup.py`. Una allowlist que distinga «importa un helper» de «ejecuta trabajo de worker» sería honesta; una que liste los 6 sin distinguir, no.
+  - 🔧 **2026-08-10 — la guarda ya existe (era el hueco más caro), y la casilla
+    sigue abierta a propósito.** Lo que se descubrió al ir a ejecutar el test
+    declarado: **`tests/unit/test_app_boundaries.py` no existía**. O sea que
+    `auto_gov_11_a` —«la guardia permanente» según la propia tarea— llevaba
+    tres pasadas nombrando un fichero inexistente: tal cual, falla en la
+    recolección, y ese rojo no distingue «la frontera está rota» de «el arnés
+    apunta a la nada». Nadie vigilaba la frontera **en absoluto**.
+    - **Entregado**: `tests/unit/test_app_boundaries.py` (6 tests, verde).
+      Descubrimiento por **AST**, no por grep — este repositorio está lleno de
+      comentarios que explican por qué NO se importa `workers`, y un grep los
+      cuenta como violaciones. Congela el inventario de los 6 módulos con la
+      clasificación que la anotación de arriba pedía: cinco `helper` (función
+      pura; la salida es moverla a `packages/`) y **uno solo `worker-work`**,
+      `routers/backup.py`, que es el hallazgo api-9 de verdad y el que cierra la
+      decisión D5. Hay un test dedicado a que ese conjunto siga teniendo un solo
+      elemento: si aparece un segundo, el problema dejó de ser un caso aislado
+      con decisión pendiente y pasó a ser un patrón.
+    - **Rojo verificado en las dos direcciones** (no solo «falla si crece»):
+      añadido un `from workers.git_repos import _run_git` a `routers/_guards.py`
+      → rojo nombrando el módulo; renombrada una entrada del inventario a un
+      fichero inexistente → rojo por entrada muerta, que es lo que impide que la
+      allowlist envejezca afirmando una deuda ya pagada. Restaurado: 6 passed.
+    - **Nota de rumbo que la tarea no tenía**: `backup.py` **ya no bloquea el
+      bucle de eventos** — sus dos llamadas van por `to_thread`, así que la
+      coordinación con api-3/prod-13 que la tarea declara está resuelta por otro
+      camino. Lo que queda es estrictamente el acoplamiento de import.
+    - **Por qué NO se marca**: el enunciado es «`routers/backup.py` deja de hacer
+      `from workers…`», y sigue haciéndolo. Cerrarlo exige crear
+      `backup.test_destination` y `backup.list_remote` en `apps/workers/**` y
+      cambiar el contrato de dos endpoints que consume el `admin-panel`: dos
+      superficies fuera de este carril. La guarda es el suelo que impide que la
+      deuda crezca mientras esa decisión espera, no el arreglo.
+    - **Arnés corregido**: `auto_gov_11_a` ya apunta a un fichero que existe.
+      `auto_gov_11_b` (`tests/integration/test_backup_destination_endpoints.py`)
+      **sigue sin existir** y no puede existir todavía: cubre «el nuevo flujo
+      encolado», que es justo lo que falta por diseñar.
 - **Descripción**: `celery_client.py:6` declara "we never import the workers package", pero
   `routers/backup.py:222` y `:351` importan `workers.backup_destinations` y
   `workers.backup_encryption` para test de conectividad y listado remoto, ejecutando
@@ -363,13 +468,22 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
   ```yaml
   - id: auto_gov_11_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_app_boundaries.py::test_api_server_never_imports_workers -v"
+    command: "pytest tests/unit/test_app_boundaries.py -v"
   - id: auto_gov_11_b
     runtime: python-pytest
     command: "pytest tests/integration/test_backup_destination_endpoints.py -v"
   ```
-  (el primero es la guardia permanente: AST/grep de imports `workers` en todo `api_server`;
+  (el primero es la guardia permanente: AST de imports `workers` en todo `api_server`;
   el segundo cubre el nuevo flujo encolado de test/list con worker simulado)
+
+> **`auto_gov_11_a` cambió de selector el 2026-08-10, a propósito.** Nombraba
+> `::test_api_server_never_imports_workers`, un test que **no puede estar en verde
+> hoy**: el api-server sí importa `workers` en seis módulos. Un comando que solo
+> puede salir rojo no es un gate, es ruido que se aprende a ignorar — y encima el
+> fichero entero no existía, así que fallaba en la recolección. El fichero sí es
+> ejecutable y verde, y contiene el invariante que hoy se puede exigir de verdad:
+> la deuda está inventariada, clasificada y **no crece**. El día que se implemente
+> la decisión D5, el inventario se queda vacío solo y el test literal es trivial.
 
 ## Hallazgos de auditoría cubiertos
 

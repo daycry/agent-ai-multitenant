@@ -46,7 +46,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from api_server.db.base import (
     Base,
@@ -1237,6 +1237,13 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         CheckConstraint("iterations >= 0", name="ck_executions_iterations_non_negative"),
         CheckConstraint("total_tokens >= 0", name="ck_executions_total_tokens_non_negative"),
         CheckConstraint("total_cost_usd >= 0", name="ck_executions_total_cost_non_negative"),
+        # part-01 / ADR 0151: monthly RANGE partitioning on ``created_at``
+        # (migration 0137, the last of the five). Declared on the model too
+        # because the guard in ``tests/unit/test_partition_planner.py`` discovers
+        # the partitioned tables from here and demands the maintenance job knows
+        # about them — a table converted in a migration but missing from
+        # ``PARTITIONED_TABLES`` would silently have no partition next month.
+        {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
     task_id: Mapped[UUID] = mapped_column(
@@ -1361,6 +1368,46 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         Numeric(precision=14, scale=6), nullable=True
     )
 
+    # PART OF THE PRIMARY KEY since part-01 (ADR 0151, migration 0137), which
+    # forces the redeclaration here over ``TimestampMixin``'s: PostgreSQL requires
+    # the primary key of a partitioned table to include the partition key, so the
+    # PK is ``(id, created_at)``. This is the change that dragged four foreign
+    # keys — a FK cannot reference a composite PK without carrying both columns —
+    # and ADR 0154 retired all four rather than widening the children.
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        primary_key=True,
+        nullable=False,
+        server_default=text("now()"),
+    )
+
+    @declared_attr.directive
+    def __mapper_args__(cls) -> dict[str, Any]:  # noqa: N805
+        """The MAPPER keeps ``id`` alone as the identity key. The TABLE does not.
+
+        Two different notions of "primary key" that part-01 pulled apart, and the
+        distinction is the whole point:
+
+        * The **table** has ``PRIMARY KEY (id, created_at)`` because PostgreSQL
+          requires a partitioned table's PK to include the partition key. That is
+          what the DDL and the migration emit, and what
+          ``test_partition_executions.py`` asserts against the catalogue.
+        * The **mapper** is told to keep using ``id`` as the ORM identity, because
+          ``id`` is still unique in fact: it is an application-generated UUIDv7.
+          Without this, every ``session.get(Execution, some_uuid)`` in the codebase
+          — two in ``approval_repo`` and ~35 across the integration suite — would
+          raise ``InvalidRequestError: Incorrect number of values in identifier``.
+
+        What this buys and what it does not: it makes the conversion a non-event
+        for every caller that looks a run up by id, at **no** extra query cost (a
+        lookup by id with no time filter has to consult every partition either
+        way — with or without this override). What it does NOT buy is a database
+        guarantee that ``id`` is unique: the only unique index is now the composite
+        one. The guarantee is UUIDv7, the same one every ``session.get`` already
+        relied on before this migration.
+        """
+        return {"primary_key": [cls.__table__.c.id]}
+
 
 # =============================================================================
 # ApprovalRequest (a human_approval_policy decision an agent is waiting on)
@@ -1381,11 +1428,15 @@ class ApprovalRequest(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMix
         Index("ix_approval_requests_execution_id", "execution_id"),
     )
 
-    execution_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("executions.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # NO foreign key since part-01 / ADR 0154 (migration 0137): ``executions`` is
+    # partitioned by month, so its primary key is ``(id, created_at)`` and a FK
+    # cannot reference it without carrying both columns. The ``ON DELETE CASCADE``
+    # it used to have was redundant — the only event that deletes an execution is
+    # deleting its task, and ``task_id`` below cascades on that same event. That
+    # is the condition this decision rests on, and
+    # ``test_partition_executions.py::test_deleting_a_task_still_removes_its_approval_requests``
+    # is what will go red the day it stops holding.
+    execution_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     task_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("tasks.id", ondelete="CASCADE"),

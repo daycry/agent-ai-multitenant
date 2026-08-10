@@ -246,7 +246,24 @@ async def test_execution_time_limits_default_override_and_clamp(
         EXECUTION_HARD_TIME_LIMIT_KEY,
         EXECUTION_SOFT_TIME_LIMIT_KEY,
         get_execution_time_limits,
+        invalidate_platform_setting_cache,
     )
+
+    async def _escrito_por_fuera() -> None:
+        """Invalida como haría la escritura de verdad.
+
+        Este test añade las filas con `session.add(PlatformSetting(...))`, o sea
+        POR DEBAJO de `set_platform_setting`, que es quien invalida la caché en
+        producción. Mientras la caché estuvo rota —el cliente Redis quedaba atado
+        al event loop anterior y toda lectura caía a la BD— el atajo no se notaba;
+        al arreglarla (2026-08-10), la segunda lectura empezó a devolver los
+        DEFAULTS que había cacheado la primera aserción de este mismo test.
+
+        Se invalida en vez de desactivar la caché a propósito: así el test sigue
+        recorriendo el mismo camino de lectura que producción, cache incluida.
+        """
+        for key in (EXECUTION_SOFT_TIME_LIMIT_KEY, EXECUTION_HARD_TIME_LIMIT_KEY):
+            await invalidate_platform_setting_cache(key)
 
     engine = create_async_engine(admin_database_url)
     try:
@@ -254,6 +271,7 @@ async def test_execution_time_limits_default_override_and_clamp(
 
         async with sm() as s, s.begin():
             await s.execute(text("TRUNCATE platform_settings"))
+        await _escrito_por_fuera()
         async with sm() as s:
             # Defaults (prod-06 A3: > mayor budget de contenedor, < visibility).
             assert await get_execution_time_limits(s) == (
@@ -264,6 +282,7 @@ async def test_execution_time_limits_default_override_and_clamp(
         async with sm() as s, s.begin():
             s.add(PlatformSetting(key=EXECUTION_SOFT_TIME_LIMIT_KEY, value=600))
             s.add(PlatformSetting(key=EXECUTION_HARD_TIME_LIMIT_KEY, value=900))
+        await _escrito_por_fuera()
         async with sm() as s:
             assert await get_execution_time_limits(s) == (600, 900)  # operator override
 
@@ -271,6 +290,7 @@ async def test_execution_time_limits_default_override_and_clamp(
             await s.execute(text("TRUNCATE platform_settings"))
             s.add(PlatformSetting(key=EXECUTION_SOFT_TIME_LIMIT_KEY, value=900))
             s.add(PlatformSetting(key=EXECUTION_HARD_TIME_LIMIT_KEY, value=500))
+        await _escrito_por_fuera()
         async with sm() as s:
             assert await get_execution_time_limits(s) == (900, 1200)  # hard<=soft → bumped
     finally:

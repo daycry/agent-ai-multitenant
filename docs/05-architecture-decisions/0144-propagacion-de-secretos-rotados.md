@@ -90,10 +90,30 @@ línea.
   toda la plataforma.
 - La afirmación «sin reinicio» del runbook anterior **se retira**: era falsa.
 
-## Lo que este ADR NO entrega
+## Lo que este ADR NO entregaba — cerrado el 2026-08-10
 
-`scripts/rotate-platform-secret.sh`, el automatismo que `task_prod05_06` pide,
-**no está escrito**. La decisión de diseño está tomada y el procedimiento
-manual equivalente está en el runbook, paso por paso y copiable; el script es
-azúcar sobre él. Se deja explícito para que nadie lo dé por hecho: hoy la
-propagación es un procedimiento humano documentado, no un comando.
+> Esta sección decía que `scripts/rotate-platform-secret.sh` **no estaba
+> escrito** y que la propagación era «un procedimiento humano documentado, no un
+> comando». Ya no: el script existe.
+
+`scripts/rotate-platform-secret.sh <jwt|minio>` implementa la opción B de este
+ADR de punta a punta: lee el valor de `secret/platform/<nombre>`, reescribe el
+`.env` —**anteponiendo** la clave JWT nueva y conservando el anillo anterior, o
+escribiendo las dos mitades de la credencial MinIO—, reinicia los servicios
+afectados en la misma ventana y, **sólo para MinIO y sólo después del
+reinicio**, revoca la anterior vía `python -m workers.rotation_apply
+--revoke-previous-minio`.
+
+Ese orden es la razón de ser del script y está pineado por
+`tests/unit/test_rotate_platform_secret_script.py`
+(`test_minio_revocation_happens_only_after_the_restart`): el fallo que se
+pretende hacer imposible no es teclear mal, es **invertir los pasos 2 y 3 bajo
+presión**, que deja a la plataforma entera sin object storage.
+
+Lo que sigue siendo manual **a propósito**: la retirada de la clave JWT antigua
+del anillo (paso 3 de §1 del runbook). Depende de un reloj —el TTL máximo de
+token en vuelo— y automatizarla convertiría una decisión en un efecto secundario.
+
+Sigue sin entregarse: el reinicio del **stack de dev/manuales** no se beneficia
+del script, porque ese compose lleva los secretos incrustados en línea en vez de
+leerlos del `.env`.

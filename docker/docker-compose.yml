@@ -600,7 +600,18 @@ services:
       # peor que no tenerlo, porque nadie mira. Guardado por
       # tests/unit/test_compose_no_default_credentials.py.
       WATCHDOG_ALERTS_INGEST_TOKEN: ${API_SERVER_ALERTS_INGEST_TOKEN:?set API_SERVER_ALERTS_INGEST_TOKEN in docker/.env (cp docker/.env.example docker/.env)}
-    networks: [agentic-net]
+    # DOS redes, y las dos hacen falta:
+    #   · agentic-net    → para POSTear la alerta al api-server. Sin ella, la
+    #                      alerta terminal vuelve a ser una línea de log local,
+    #                      que es el defecto que esta tarea vino a cerrar.
+    #   · agentic-docker → para RESOLVER `docker-socket-proxy`. Es la red
+    #                      `internal` dedicada al tráfico contra el daemon
+    #                      (ADR 0060), la misma en la que están los workers.
+    # Declarado solo en `agentic-net`, el watchdog arrancaba sano, no resolvía
+    # el proxy y **no veía ningún contenedor** — que se parece muchísimo a un
+    # stack sano: no reinicia nada porque cree que no hace falta. Guardado por
+    # tests/security/test_watchdog_service_declaration.py.
+    networks: [agentic-net, agentic-docker]
     <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
 volumes:
@@ -629,3 +640,16 @@ networks:
     internal: true
     driver_opts:
       com.docker.network.bridge.enable_icc: "true"
+  # Red INTERNA dedicada al tráfico contra el daemon Docker vía
+  # `docker-socket-proxy` (ADR 0060). El proxy en sí lo declara quien trae las
+  # apps —el overlay `docker-compose.manuals.yml` en dev, el compose que genera
+  # el instalador en producción—, porque este fichero es la capa de
+  # infraestructura y no construye imágenes de aplicación. Se declara aquí
+  # porque el servicio `watchdog` (perfil `watchdog`) la necesita para resolver
+  # el proxy, y una red referenciada y no declarada rompe `docker compose up`.
+  # Definición IDÉNTICA a la de los otros dos ficheros para que el merge de
+  # `-f` sea consistente.
+  agentic-docker:
+    name: agentic-docker
+    driver: bridge
+    internal: true

@@ -38,8 +38,8 @@
  *   node scripts/check-component-size.mjs
  *   node scripts/check-component-size.mjs --max-lines 800
  *   node scripts/check-component-size.mjs --strict
- *   node scripts/check-component-size.mjs --root <dir>   # para los tests
- *   node scripts/check-component-size.mjs --print-allowlist  # sólo para los tests, ver main()
+ *   node scripts/check-component-size.mjs --root <dir>        # para los tests
+ *   node scripts/check-component-size.mjs --allowlist <json>  # ídem, ver main()
  */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -58,32 +58,51 @@ const SKIP_DIRS = new Set(["node_modules", ".next", "out", "test-results", "vend
 const DEFAULT_MAX_LINES = 800;
 
 /**
- * Deuda conocida el 2026-08-01, fichero → líneas. **Este mapa sólo puede
+ * Deuda conocida de PANTALLAS, fichero → líneas. **Este mapa sólo puede
  * MENGUAR**: cada partición debe bajar el número o borrar la línea.
+ *
+ * **Vacío desde el 2026-08-10**, y eso es el hito de `task_prod16_08`: ninguna
+ * de las 81 pantallas del panel pasa de 800 líneas. Las últimas dos en caer
+ * fueron `cortex/mind` (914 → 327) y `projects/[id]/chat` (926 → 462). Con el
+ * mapa vacío, `check-component-size.mjs` y `--strict` dicen lo mismo para las
+ * pantallas: la deuda está saldada y el trinquete pasa a ser sólo prevención.
  *
  * Los que el plan nombraba y ya se partieron (`model-prices`, `mcp-servers`,
  * `plans/[planId]`, `knowledge-bases`, `tenant-stats`, `llm-providers`,
- * `agents/[id]`, `notifications`) NO están aquí: están por debajo del límite y
- * el trinquete los mantiene así.
+ * `agents/[id]`, `notifications`, `settings/sso`, `settings/sso/saml`,
+ * `teams/[team_id]`) tampoco están aquí, por lo mismo.
  */
-const ALLOWLIST = {
-  "app/admin/cortex/mind/page.tsx": 914,
-  "app/admin/projects/[id]/chat/page.tsx": 926,
-};
+const ALLOWLIST = {};
 
 /** Techo de una pieza del troceado. Lo fija `task_prod16_06`. */
 const SECTION_MAX_LINES = 500;
 
 /**
- * Deuda de PIEZAS conocida el 2026-08-01. **Sólo puede MENGUAR.**
+ * Deuda de PIEZAS. **Sólo puede MENGUAR.**
  *
- * Son exactamente dos, y las dos son el mismo caso: el tramo de modularización
- * #9 sacó el bulto del `page.tsx` sin repartirlo. Todas las demás piezas del
- * panel están por debajo de 500 y el trinquete las mantiene ahí.
+ * Siguen siendo dos entradas, pero ya no son el mismo caso que el 2026-08-01:
+ *
+ * · `mcp-server-sections.tsx` (1125) **ya no existe**. Era el ejemplar del
+ *   problema —el tramo de modularización #9 sacó el bulto del `page.tsx` sin
+ *   repartirlo— y el 2026-08-10 se repartió de verdad en cuatro piezas:
+ *   `mcp-server-card` (~85), `mcp-test-result-panel` (~130),
+ *   `mcp-tool-roles-section` (~235) y `mcp-server-dialog`, que hereda el resto.
+ *   Los 15 tests del módulo siguen verdes sin tocar una aserción.
+ *
+ * · `mcp-server-dialog.tsx` queda por encima del techo **a propósito, y está
+ *   argumentado en su docstring**: es UN formulario con una decena de `useState`
+ *   entrelazados, y partirlo pide decidir cómo viaja ese estado (prop-drilling o
+ *   contexto local). Eso no es un movimiento mecánico, es un rediseño con riesgo
+ *   de regresión. Anotarlo aquí con su tamaño real es deuda medida y decreciente;
+ *   partirlo a lo bruto para que el número baje sería el atajo que esta guarda
+ *   existe para castigar.
+ *
+ * · `agent-tools-section.tsx` (691) sigue igual: el mismo caso del tramo #9,
+ *   pendiente de una pasada propia.
  */
 const SECTION_ALLOWLIST = {
   "app/admin/agents/[id]/agent-tools-section.tsx": 691,
-  "app/admin/projects/[id]/mcp-servers/mcp-server-sections.tsx": 1125,
+  "app/admin/projects/[id]/mcp-servers/mcp-server-dialog.tsx": 665,
 };
 
 /**
@@ -133,12 +152,14 @@ function parseArgs(argv) {
     root: APP_ROOT,
     strict: false,
     maxLines: DEFAULT_MAX_LINES,
-    printAllowlist: false,
+    allowlistPath: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--strict") args.strict = true;
-    else if (argv[i] === "--print-allowlist") args.printAllowlist = true;
-    else if (argv[i] === "--root") {
+    else if (argv[i] === "--allowlist") {
+      args.allowlistPath = resolve(argv[i + 1] ?? ".");
+      i += 1;
+    } else if (argv[i] === "--root") {
       args.root = resolve(argv[i + 1] ?? ".");
       i += 1;
     } else if (argv[i] === "--max-lines") {
@@ -184,17 +205,27 @@ function countLines(abs) {
 }
 
 function main() {
-  const { root, strict, maxLines, printAllowlist } = parseArgs(process.argv.slice(2));
+  const { root, strict, maxLines, allowlistPath } = parseArgs(process.argv.slice(2));
 
-  // Su ÚNICO consumidor es `check-component-size.test.ts`, y existe para que ese
-  // test no clave un nombre de fichero de la allowlist en sus fixtures. Lo hacía,
-  // y el día que `llm-providers` se partió de verdad —justo lo que la guarda
-  // quiere premiar— cuatro tests suyos se pusieron rojos por el éxito. Un
-  // acoplamiento que castiga el trabajo bien hecho hay que hacerlo explícito o
-  // quitarlo; esto es quitarlo.
-  if (printAllowlist) {
-    process.stdout.write(JSON.stringify({ screens: ALLOWLIST, sections: SECTION_ALLOWLIST }));
-    return;
+  // Allowlists EFECTIVAS. Por defecto las reales; `--allowlist <json>` las
+  // sustituye por unas de fixture y su único consumidor es
+  // `check-component-size.test.ts`.
+  //
+  // Existe porque la mecánica del trinquete —"la deuda no puede crecer", "con
+  // --strict no se perdona a nadie"— no puede depender de que HAYA deuda. Antes
+  // el test leía la allowlist real: primero clavando un nombre a mano, luego con
+  // `--print-allowlist`. Las dos versiones se pusieron rojas **por el éxito**, la
+  // segunda el día que la allowlist de pantallas se vació (2026-08-10). Un test
+  // que sólo puede probar el trinquete mientras exista deuda deja de probarlo
+  // justo cuando el trinquete es lo único que la mantiene en cero.
+  const screenAllowlist = { ...ALLOWLIST };
+  const sectionAllowlist = { ...SECTION_ALLOWLIST };
+  if (allowlistPath) {
+    const injected = JSON.parse(readFileSync(allowlistPath, "utf8"));
+    for (const key of Object.keys(screenAllowlist)) delete screenAllowlist[key];
+    for (const key of Object.keys(sectionAllowlist)) delete sectionAllowlist[key];
+    Object.assign(screenAllowlist, injected.screens ?? {});
+    Object.assign(sectionAllowlist, injected.sections ?? {});
   }
 
   const files = collectFiles(root);
@@ -215,7 +246,7 @@ function main() {
 
   for (const [rel, count] of sizes) {
     if (count <= maxLines) {
-      if (!strict && ALLOWLIST[rel] !== undefined) {
+      if (!strict && screenAllowlist[rel] !== undefined) {
         notes.push(
           `${rel}: ${count} líneas, ya por debajo de ${maxLines} — bórralo de la allowlist.`,
         );
@@ -224,7 +255,7 @@ function main() {
     }
 
     over += 1;
-    const allowed = strict ? 0 : (ALLOWLIST[rel] ?? 0);
+    const allowed = strict ? 0 : (screenAllowlist[rel] ?? 0);
     if (allowed === 0) {
       errors.push(
         `${rel}: ${count} líneas (límite ${maxLines}). Trocéalo en secciones colocadas ` +
@@ -244,7 +275,7 @@ function main() {
   // sin haber partido nada.
   for (const [rel, count] of sectionSizes) {
     if (count <= SECTION_MAX_LINES) {
-      if (!strict && SECTION_ALLOWLIST[rel] !== undefined) {
+      if (!strict && sectionAllowlist[rel] !== undefined) {
         notes.push(
           `${rel}: ${count} líneas, ya por debajo de ${SECTION_MAX_LINES} — ` +
             "bórralo de SECTION_ALLOWLIST.",
@@ -254,7 +285,7 @@ function main() {
     }
 
     sectionsOver += 1;
-    const allowed = strict ? 0 : (SECTION_ALLOWLIST[rel] ?? 0);
+    const allowed = strict ? 0 : (sectionAllowlist[rel] ?? 0);
     if (allowed === 0) {
       errors.push(
         `${rel}: ${count} líneas (techo de pieza ${SECTION_MAX_LINES}). Repártela: ` +

@@ -219,7 +219,7 @@ Informes previos a un plan: exploran el problema y proponen opciones. No llevan 
 
 ## Cola de validación humana
 
-35 planes están en `pending_human_validation`: **código mergeado en `master` sin sign-off humano**.
+36 planes están en `pending_human_validation`: **código mergeado en `master` sin sign-off humano**.
 Eso no es un detalle burocrático — es la razón de que casi ningún `blocking_plan` esté `completed` y,
 en cascada, de que 6 fases se empezaran con el gate incumplido (hallazgo docsroadmap-2; inventario
 exacto en el **ADR 0138**, `accepted` desde el 2026-07-31 — opción C, híbrida). El mecanismo ya

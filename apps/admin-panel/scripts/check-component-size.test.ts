@@ -45,38 +45,35 @@ function fixture(files: Record<string, string>): string {
 }
 
 /**
- * Una entrada REAL de la allowlist de la guarda, con su tamaño anotado.
+ * La allowlist de PANTALLAS que usan los fixtures de mecánica, SINTÉTICA.
  *
- * Los fixtures de abajo necesitan un fichero que la allowlist conozca, y antes
- * ese nombre estaba clavado a mano (`llm-providers`). El día que se partió de
- * verdad —el movimiento que la guarda existe para premiar— cuatro tests de este
- * fichero se pusieron rojos por el éxito, y el fallo no se leía como "actualiza
- * el fixture" sino como "la guarda está rota". Se lee de la propia guarda para
- * que no vuelva a pasar.
+ * Historia de dos correcciones, porque la segunda sólo se entiende con la
+ * primera. Al principio estos tests clavaban a mano un nombre de la allowlist
+ * real (`llm-providers`); el día que se partió de verdad —el movimiento que la
+ * guarda existe para premiar— cuatro tests se pusieron rojos **por el éxito**.
+ * Se cambió a leer la allowlist real con `--print-allowlist`, con una nota que
+ * ya avisaba: "si la allowlist se vacía, estos tests dejan de tener sujeto".
+ *
+ * El 2026-08-10 se vació: cero pantallas por encima de 800. Y los mismos cuatro
+ * tests volvieron a ponerse rojos por el éxito, un escalón más arriba. La
+ * lección es que **la mecánica del trinquete no puede depender de que exista
+ * deuda**: si "la deuda no puede crecer" sólo se puede probar mientras haya
+ * deuda, deja de estar probado justo cuando el trinquete pasa a ser lo único
+ * que la mantiene en cero. De ahí `--allowlist`: la mecánica se demuestra sobre
+ * una allowlist inventada, en un árbol inventado, y sigue verde con la deuda
+ * real saldada o no.
  */
-function anAllowlistedScreen(): { rel: string; allowed: number } {
-  const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
-    encoding: "utf8",
-  });
-  const parsed = JSON.parse(raw) as { screens: Record<string, number> };
-  const entries = Object.entries(parsed.screens);
-  // Si la allowlist se vacía (deuda saldada, enhorabuena), estos tests dejan de
-  // tener sujeto: mejor un fallo con este mensaje que un `undefined` opaco.
-  expect(entries.length).toBeGreaterThan(0);
-  const [rel, allowed] = entries[0];
-  return { rel, allowed };
-}
+const SYNTHETIC_SCREEN = { rel: "app/admin/deuda/page.tsx", allowed: 900 };
+const SYNTHETIC_SECTION = { rel: "app/admin/deuda/deuda-section.tsx", allowed: 600 };
 
-/** Lo mismo para la allowlist de PIEZAS (secciones, diálogos, pestañas…). */
-function aSectionInTheAllowlist(): { rel: string; allowed: number } {
-  const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
-    encoding: "utf8",
-  });
-  const parsed = JSON.parse(raw) as { sections: Record<string, number> };
-  const entries = Object.entries(parsed.sections);
-  expect(entries.length).toBeGreaterThan(0);
-  const [rel, allowed] = entries[0];
-  return { rel, allowed };
+/** Escribe la allowlist sintética a un JSON y devuelve los args para pasarla. */
+function withAllowlist(
+  screens: Record<string, number>,
+  sections: Record<string, number> = {},
+): string[] {
+  const path = join(mkdtempSync(join(tmpdir(), "size-allowlist-")), "allowlist.json");
+  writeFileSync(path, JSON.stringify({ screens, sections }), "utf8");
+  return ["--allowlist", path];
 }
 
 function run(args: string[]): { code: number; output: string } {
@@ -106,12 +103,22 @@ describe("check-component-size sobre el árbol real", () => {
     expect(scanned).toBeGreaterThan(100);
   });
 
-  it("informa de cuántos siguen por encima del límite (no puede ser cero hoy)", () => {
+  it("la deuda de PANTALLAS está a cero, y ese es el hito de task_prod16_08", () => {
     const over = Number(/(\d+) por encima de/.exec(run([]).output)?.[1] ?? -1);
 
-    // Guarda contra el paso en vacío: si el descubrimiento se rompiera, este
-    // número caería a 0 y la guarda diría que la deuda está saldada.
-    expect(over).toBeGreaterThan(0);
+    // Este test decía "no puede ser cero hoy" como guarda contra el paso en
+    // vacío. Dejó de ser cierto el 2026-08-10: ninguna de las 81 pantallas pasa
+    // de 800 líneas. La afirmación se invierte —el trinquete la mantiene ahí—
+    // pero la protección contra el paso en vacío NO se pierde: se muda al test
+    // de abajo, que exige que el recorrido siga VIENDO pantallas. Sin eso, un
+    // descubrimiento roto y una deuda saldada dan exactamente la misma salida.
+    expect(over).toBe(0);
+  });
+
+  it("cero por encima significa cero DE VERDAD: sigue viendo las pantallas", () => {
+    const screens = Number(/(\d+) pantalla\(s\)/.exec(run([]).output)?.[1] ?? 0);
+
+    expect(screens).toBeGreaterThan(50);
   });
 });
 
@@ -128,10 +135,10 @@ describe("check-component-size sabe fallar", () => {
 
   it("un fichero de la allowlist que CRECE es error", () => {
     // Anotado con su tamaño actual; con 200 líneas más debe saltar.
-    const { rel, allowed } = anAllowlistedScreen();
+    const { rel, allowed } = SYNTHETIC_SCREEN;
     const root = fixture({ [rel]: lines(allowed + 200) });
 
-    const { code, output } = run(["--root", root]);
+    const { code, output } = run(["--root", root, ...withAllowlist({ [rel]: allowed })]);
 
     expect(code).toBe(1);
     expect(output).toContain("La deuda no puede crecer");
@@ -146,11 +153,12 @@ describe("check-component-size sabe fallar", () => {
 
   it("--strict no perdona ni a los de la allowlist", () => {
     // Por encima del límite pero dentro de lo anotado: sin --strict pasa.
-    const { rel, allowed } = anAllowlistedScreen();
+    const { rel, allowed } = SYNTHETIC_SCREEN;
     const root = fixture({ [rel]: lines(allowed) });
+    const list = withAllowlist({ [rel]: allowed });
 
-    expect(run(["--root", root]).code).toBe(0);
-    expect(run(["--root", root, "--strict"]).code).toBe(1);
+    expect(run(["--root", root, ...list]).code).toBe(0);
+    expect(run(["--root", root, ...list, "--strict"]).code).toBe(1);
   });
 });
 
@@ -163,20 +171,20 @@ describe("check-component-size no molesta donde no debe", () => {
 
   it("un fichero de la allowlist que MENGUA pasa, y avisa para bajar el número", () => {
     // Menos de lo anotado pero aún por encima del límite de 800.
-    const { rel, allowed } = anAllowlistedScreen();
+    const { rel, allowed } = SYNTHETIC_SCREEN;
     const root = fixture({ [rel]: lines(Math.max(801, allowed - 20)) });
 
-    const { code, output } = run(["--root", root]);
+    const { code, output } = run(["--root", root, ...withAllowlist({ [rel]: allowed })]);
 
     expect(code).toBe(0);
     expect(output).toContain("baja el número en la allowlist");
   });
 
   it("un fichero de la allowlist que baja del límite pasa y pide borrarlo", () => {
-    const { rel } = anAllowlistedScreen();
+    const { rel, allowed } = SYNTHETIC_SCREEN;
     const root = fixture({ [rel]: lines(300) });
 
-    const { code, output } = run(["--root", root]);
+    const { code, output } = run(["--root", root, ...withAllowlist({ [rel]: allowed })]);
 
     expect(code).toBe(0);
     expect(output).toContain("bórralo de la allowlist");
@@ -226,17 +234,19 @@ describe("check-component-size también mide las piezas del troceado", () => {
   });
 
   it("una pieza de la allowlist dentro de su cupo pasa, y por encima falla", () => {
-    const { rel, allowed } = aSectionInTheAllowlist();
-    expect(run(["--root", fixture({ [rel]: lines(allowed) })]).code).toBe(0);
-    expect(run(["--root", fixture({ [rel]: lines(allowed + 50) })]).code).toBe(1);
+    const { rel, allowed } = SYNTHETIC_SECTION;
+    const list = withAllowlist({}, { [rel]: allowed });
+    expect(run(["--root", fixture({ [rel]: lines(allowed) }), ...list]).code).toBe(0);
+    expect(run(["--root", fixture({ [rel]: lines(allowed + 50) }), ...list]).code).toBe(1);
   });
 
   it("--strict tampoco perdona a las piezas de la allowlist", () => {
-    const { rel, allowed } = aSectionInTheAllowlist();
+    const { rel, allowed } = SYNTHETIC_SECTION;
     const root = fixture({ [rel]: lines(allowed) });
+    const list = withAllowlist({}, { [rel]: allowed });
 
-    expect(run(["--root", root]).code).toBe(0);
-    expect(run(["--root", root, "--strict"]).code).toBe(1);
+    expect(run(["--root", root, ...list]).code).toBe(0);
+    expect(run(["--root", root, ...list, "--strict"]).code).toBe(1);
   });
 
   it("sobre el árbol real informa de cuántas piezas siguen pasadas de tamaño", () => {

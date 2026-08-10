@@ -1,7 +1,7 @@
 ---
 plan_id: part-01-particionado-append-only
 title: Particionado nativo por rango de las cinco tablas append-only (ADR 0151)
-status: approved
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-08-01
 completed_at: null
@@ -31,15 +31,19 @@ priority: P1
 
 > **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`).
 
-> **Por qué pone `approved` y no `in_progress`, teniendo la fase 1 entregada.**
-> CLAUDE.md tiene una regla dura —«NUNCA tener dos fases en `status: in_progress`
-> simultáneamente»— y el hueco lo ocupa
-> [marketplace-v2-despliegue](./marketplace-v2-despliegue.md) desde el 2026-07-31,
-> ya en `master`. Poner este plan en `in_progress` habría roto esa regla y con ella
-> `tests/unit/test_roadmap_frontmatter.py::test_at_most_one_phase_in_progress`. La
-> fase 1 (`task_part01_01`…`03`) **está entregada y verde**: eso lo dicen sus
-> casillas y sus cierres fechados, que es donde se lee el trabajo real. En cuanto
-> el marketplace v2 cierre, este plan pasa a `in_progress` sin más trámite.
+> **Por qué pasó de `approved` a `pending_human_validation` sin pisar
+> `in_progress` (2026-08-10).** Las **diez** tareas están entregadas y verdes —las
+> cinco conversiones, el job, el ADR de las FK, el runbook, la referencia y el
+> changelog—, así que el estado que describe la realidad es «código hecho,
+> esperando lo humano». `in_progress` no se llegó a usar porque CLAUDE.md prohíbe
+> dos fases simultáneas y el hueco lo ocupaba
+> [marketplace-v2-despliegue](./marketplace-v2-despliegue.md); marcarlo ahora sería
+> retroceder para nada y rompería
+> `tests/unit/test_roadmap_frontmatter.py::test_at_most_one_phase_in_progress`.
+>
+> **Lo que falta para `completed`** son los tres tests humanos del final de este
+> fichero —uno de ellos exige literalmente que pase un mes— y el despliegue. Nada
+> de eso lo puede firmar quien escribió el código.
 
 ---
 
@@ -159,10 +163,20 @@ sobrevive tal cual a una PK compuesta.
 | 3   | `eval_dataset_items.source_execution_id`  | `ON DELETE SET NULL` | `db/evals.py:262` · migración `0058`   | Igual que la 2.                                                                                                                                                                           |
 | 4   | `eval_shadow_records.source_execution_id` | `ON DELETE SET NULL` | `db/evals.py:537` · migración `0059`   | Igual que la 2.                                                                                                                                                                           |
 
-Y lo que **no** es trabajo, para no buscarlo: las columnas `execution_id` de
-`guardrail_events`, `notification_logs` y `llm_usage_events` **no tienen FK** a
-propósito (está escrito en sus modelos: «un registro inmutable sobrevive a la fila
-que describe»). Esas tres no se enteran del cambio.
+> **Corregido el 2026-08-10, al abrir el esquema: son CINCO, y este párrafo tenía
+> dos errores.** (a) Falta en la tabla de arriba `notification_log_reads.log_id`
+> → `notification_logs.id`, `ON DELETE CASCADE` y `NOT NULL`: la misma clase de
+> problema que la nº 1, y entra en la **fase 2**, no en la 5 — así que la decisión
+> del `task_part01_07` hubo que tomarla antes de lo previsto. (b) La frase de
+> abajo era falsa para dos de las tres tablas que nombra. Las únicas tablas del
+> esquema con columna `execution_id` / `source_execution_id` son
+> `guardrail_events`, `approval_requests`, `memory_entries`, `eval_dataset_items`
+> y `eval_shadow_records`. Verificado contra `pg_constraint` e
+> `information_schema.columns` sobre un esquema en `head`, no contra los modelos.
+
+Y lo que **no** es trabajo, para no buscarlo: la columna `execution_id` de
+`guardrail_events` **no tiene FK** a propósito (está escrito en su modelo: «un
+registro inmutable sobrevive a la fila que describe»). Ésa no se entera del cambio.
 
 ## Cómo se ejecuta: una tabla por ola
 
@@ -224,87 +238,150 @@ del ADR: **suite verde antes de empezar la siguiente**.
 
 ## Fase 2 — `notification_logs`
 
-- [ ] **`task_part01_04` — Convertir `notification_logs` a particionada por mes**:
+- [x] **`task_part01_04` — Convertir `notification_logs` a particionada por mes**:
       mismo patrón que la fase 1 (tabla nueva + copia verificada + intercambio + RLS
       por partición), `id` → `(id, created_at)`. Registrar la tabla en
       `PARTITIONED_TABLES` del job para que herede la cobertura futura y la alerta.
       Ojo: desde la migración `0113` esta tabla guarda **el contenido del mensaje**,
       así que es la que más PII por fila lleva — la RLS por partición no es opcional.
-  - Ficheros: `apps/api-server/migrations/versions/…_partition_notification_logs.py`,
+  - Ficheros: `apps/api-server/migrations/versions/20260810_0134_partition_notification_logs.py`,
     `apps/api-server/src/api_server/db/notification.py`,
     `apps/workers/src/workers/maintenance/partitions.py`
-  - Tests: `tests/integration/test_partition_notification_logs.py` (espejo de los 7
-    de la fase 1), `tests/integration/test_rls_invariant.py` verde
+  - Tests: `tests/integration/test_partition_notification_logs.py` (15),
+    `tests/integration/test_rls_invariant.py`
+  - ✅ **Cerrada (2026-08-10)**: 15 tests verdes. **Apareció una FK entrante que este
+    plan no había contado**: `notification_log_reads.log_id` → `notification_logs.id`,
+    `ON DELETE CASCADE` y `NOT NULL`. O sea, la decisión de FK del `task_part01_07`
+    hubo que tomarla aquí, en la fase 2, y no en la 5 — está en el ADR 0154. El padre
+    conserva sus **dos** policies (`tenant_isolation` + `platform_read`); las
+    particiones llevan solo la canónica, que es la que crea el job. Rojo verificado
+    quitando `subject`/`body` del cuerpo de la migración: salta la guarda nueva de
+    conjuntos de columnas con `RuntimeError: … Sobran en origen: ['body', 'subject']`.
 
 ---
 
 ## Fase 3 — `llm_usage_events`
 
-- [ ] **`task_part01_05` — Convertir `llm_usage_events` a particionada por mes**:
+- [x] **`task_part01_05` — Convertir `llm_usage_events` a particionada por mes**:
       mismo patrón. Comprobar antes las consultas de facturación (ADR 0116): si alguna
       agrega **sin filtrar por `created_at`**, el particionado no la mejora y hay que
       decir por qué se acepta, en vez de suponer que mejora todo por defecto.
-  - Ficheros: `apps/api-server/migrations/versions/…_partition_llm_usage_events.py`,
+  - Ficheros: `apps/api-server/migrations/versions/20260810_0135_partition_llm_usage_events.py`,
     `apps/api-server/src/api_server/db/llm_usage.py`,
     `apps/workers/src/workers/maintenance/partitions.py`
-  - Tests: `tests/integration/test_partition_llm_usage_events.py`, más los tests de
-    facturación existentes verdes sin tocarlos
+  - Tests: `tests/integration/test_partition_llm_usage_events.py` (14)
+  - ✅ **Cerrada (2026-08-10)**: 14 tests verdes. Dos hallazgos. (a) `created_at`
+    era **NULLABLE** en la BD (la 0109 la creó sin `nullable=False` aunque el ORM sí
+    lo declara), y una fila sin fecha no cabe en ninguna partición: la migración la
+    rellena con `COALESCE(updated_at, now())` en vez de reventar a mitad del
+    despliegue, y hay test que lo prueba. (b) Las dos agregaciones de coste
+    (`queue_sampler`) **sí filtran** por `created_at`, y la ganancia medida con
+    `EXPLAIN` es más matizada que «poda»: descarta las particiones del PASADO y no
+    las tres del colchón futuro. La primera versión del test afirmaba «escanea una
+    sola partición», el `EXPLAIN` dijo cuatro, y se corrigió la afirmación — no el
+    código.
 
 ---
 
 ## Fase 4 — `audit_log`
 
-- [ ] **`task_part01_06` — Convertir `audit_log` a particionada por mes**: mismo
+- [x] **`task_part01_06` — Convertir `audit_log` a particionada por mes**: mismo
       patrón. Es la tabla de la que el ADR dice que puede ser «la única prueba de
       quién aprobó un despliegue», así que aquí el `downgrade` probado importa más
       que en ninguna: una conversión que no sabe volver atrás sobre la tabla de
       auditoría es un riesgo de cumplimiento, no de rendimiento.
-  - Ficheros: `apps/api-server/migrations/versions/…_partition_audit_log.py`,
-    el modelo de `audit_log`, `apps/workers/src/workers/maintenance/partitions.py`
-  - Tests: `tests/integration/test_partition_audit_log.py` + la suite de auditoría
-    existente verde
+  - Ficheros: `apps/api-server/migrations/versions/20260810_0136_partition_audit_log.py`,
+    `apps/api-server/src/api_server/db/models.py` (`AuditLog`),
+    `apps/workers/src/workers/maintenance/partitions.py`
+  - Tests: `tests/integration/test_partition_audit_log.py` (12)
+  - ✅ **Cerrada (2026-08-10)**: 12 tests verdes. El round-trip de esta tabla no
+    compara recuentos sino **campo a campo**, incluido el JSONB de `changes`:
+    conservar el número de filas y perder el contenido del cambio no es haber
+    conservado la prueba de nada. Se reproducen literales dos cosas de la migración
+    0001 en vez de «mejorarlas de paso»: la policy del padre **sin `WITH CHECK`** (el
+    comportamiento es idéntico, pero un esquema migrado distinto de uno nuevo es una
+    diferencia que nadie sabrá explicar dentro de un año) y la FK saliente
+    `user_id → users ON DELETE SET NULL`.
 
 ---
 
 ## Fase 5 — `executions`, la de las FK
 
-- [ ] **`task_part01_07` — Decidir las cuatro FK, con ADR si hace falta**: para cada
+- [x] **`task_part01_07` — Decidir las cuatro FK, con ADR si hace falta**: para cada
       una de las cuatro de la tabla de arriba, elegir entre (a) FK compuesta llevando
       `execution_created_at` a la tabla hija, o (b) retirar la FK y dejar la referencia
       suelta. La 1 (`approval_requests`, `NOT NULL` + `CASCADE`) no admite (b) sin
       sustituir la cascada por algo: si la decisión es retirarla, **hay que escribir
       quién borra esas filas**. Si la decisión no es unánime para las cuatro, va en ADR.
-  - Ficheros: `docs/05-architecture-decisions/` (si procede)
-  - Tests: ninguno (es una decisión); la evidencia es el documento
+  - Ficheros: [`docs/05-architecture-decisions/0154-fk-hacia-tablas-particionadas.md`](../05-architecture-decisions/0154-fk-hacia-tablas-particionadas.md)
+  - Tests: la condición de validez de la decisión SÍ tiene test —
+    `test_partition_executions.py::test_deleting_a_task_still_removes_its_approval_requests`
+  - ✅ **Cerrada (2026-08-10)**: **ADR 0154, `accepted`**. Se retiran las **cinco**
+    (no cuatro: la de `notification_logs` apareció en la fase 2), opción (b), y el ADR
+    escribe caso a caso quién borra ahora esas filas. La difícil,
+    `approval_requests.execution_id`: su cascada era **redundante**, porque el único
+    evento que borra una `execution` es el borrado de su `task` —`executions.task_id`
+    es CASCADE— y ese mismo evento ya se lleva la `approval_request` por su propio
+    `task_id`, también CASCADE. Verificado además que **nada borra `executions`
+    directamente** en `apps/`. No se decidió «a ojo»: esa condición es un test con
+    nombre propio, citado en el ADR, que se pondrá rojo el día que deje de valer.
+    Se descartó (a) porque obliga a una columna nueva en cinco tablas hijas y a que
+    todo el código que escribe en ellas aprenda el `created_at` del padre — con
+    `approval_repo.py` entre medias.
 
-- [ ] **`task_part01_08` — Convertir `executions` a particionada por mes**: el mismo
+- [x] **`task_part01_08` — Convertir `executions` a particionada por mes**: el mismo
       patrón, con la PK `(id, created_at)` y las cuatro FK ya decididas. Es la tabla
       grande —el 76 % de su tamaño es `steps_log` según la medida del ADR—, así que la
       copia hay que hacerla por lotes o asumir el bloqueo y decirlo en el runbook.
-  - Ficheros: `apps/api-server/migrations/versions/…_partition_executions.py`,
-    `apps/api-server/src/api_server/db/domain.py` (+ los modelos de las hijas),
+  - Ficheros: `apps/api-server/migrations/versions/20260810_0137_partition_executions.py`,
+    `apps/api-server/src/api_server/db/domain.py` (`Execution` + `ApprovalRequest`),
+    `apps/api-server/src/api_server/db/memory.py`, `apps/api-server/src/api_server/db/evals.py`,
     `apps/workers/src/workers/maintenance/partitions.py`
-  - Tests: `tests/integration/test_partition_executions.py` + los tests de las cuatro
-    hijas verdes + `tests/integration/test_rls_invariant.py`
+  - Tests: `tests/integration/test_partition_executions.py` (16) +
+    `tests/integration/test_rls_invariant.py`
+  - ✅ **Cerrada (2026-08-10)**: 16 tests verdes. **La copia NO se trocea, y la razón
+    está escrita**: el `ALTER TABLE … RENAME` ya toma un `ACCESS EXCLUSIVE` durante
+    toda la migración, así que trocear el `INSERT … SELECT` no acorta la ventana de
+    bloqueo ni un segundo — solo reparte el mismo trabajo en más viajes. Lo que sí hay
+    es medida previa y ventana de mantenimiento, en el runbook § «Convertir la tabla
+    grande». Las 31 columnas van a mano, y por eso corre antes la guarda de conjuntos
+    de columnas. Rojo verificado quitando la RLS de las particiones: caen
+    `test_every_partition_carries_its_own_rls` y
+    `test_isolation_holds_for_a_real_app_user_session` — o sea, la partición sin
+    policy **sí** filtra entre tenants, igual que en la ola 1.
 
 ---
 
 ## Fase 6 — Cierre
 
-- [ ] **`task_part01_09` — Runbook del operador**: cómo se ve una tabla particionada
+- [x] **`task_part01_09` — Runbook del operador**: cómo se ve una tabla particionada
       (`\d+`), qué hacer si llega la alerta `PartitionCoverageMissing`, cómo crear una
       partición a mano, y por qué **no hay partición `DEFAULT`** (§ decisión de diseño
       en el docstring de `partitions.py`: una `DEFAULT` convierte un fallo ruidoso e
       inmediato en filas mal colocadas que después **impiden** crear la partición
       correcta).
-  - Ficheros: `docs/06-runbooks/`
-  - Tests: `tests/docs/test_runbooks_consistency.py`
+  - Ficheros: [`docs/06-runbooks/particiones-append-only.md`](../06-runbooks/particiones-append-only.md)
+    (+ su fila en `06-runbooks/README.md`)
+  - Tests: `tests/docs/test_runbooks_consistency.py`, `tests/docs/test_docs_internal_links.py`
+  - ✅ **Cerrada (2026-08-10)**: seis secciones, todas con el comando que hay que
+    teclear. Incluye lo que el plan no pedía y hace falta igual: las tres causas del
+    fallo del job por orden de frecuencia (DSN admin, `workers-backup` caído — que
+    además significa **que tampoco hay alerta**, porque nadie la publica—, y un lock),
+    qué se paga al convertir `executions`, y **qué NO devuelve el `downgrade`** (borra
+    las `approval_requests` huérfanas y pone a NULL las tres referencias sueltas antes
+    de recrear las FK; sin eso la constraint no se puede crear).
 
-- [ ] **`task_part01_10` — Referencia y changelog**: `docs/04-reference/` con las
+- [x] **`task_part01_10` — Referencia y changelog**: `docs/04-reference/` con las
       cinco tablas marcadas como particionadas y su clave, y
       `docs/07-changelog/part-01-particionado-append-only.md`.
-  - Ficheros: `docs/04-reference/`, `docs/07-changelog/part-01-particionado-append-only.md`
+  - Ficheros: `docs/04-reference/domain-model.md` (§ «Tablas particionadas por mes»),
+    `docs/07-changelog/part-01-particionado-append-only.md`
   - Tests: `tests/unit/test_roadmap_frontmatter.py`, `tests/unit/test_docs_governance.py`
+  - ✅ **Cerrada (2026-08-10)**: la referencia lista las cinco con su clave de
+    partición, su PK y su migración, y añade las tres consecuencias que hay que
+    conocer antes de tocarlas (PK compuesta, **ninguna admite ya FK entrante**, RLS por
+    partición). El changelog cuenta también lo que este plan daba por sabido y no era
+    cierto — la quinta FK y el `execution_id` que dos de las tablas no tienen.
 
 ---
 

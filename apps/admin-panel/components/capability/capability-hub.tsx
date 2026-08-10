@@ -43,6 +43,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { resolveCategory } from "@/lib/tools/taxonomy";
 import {
@@ -78,6 +79,7 @@ interface CapabilityHubProps {
 
 export function CapabilityHub({ entityType, entityId }: CapabilityHubProps) {
   const { lang } = useLang();
+  const t = useT("capability");
 
   const { data, isLoading, isError, error } = useQuery<CapabilitiesResponse, ApiError>({
     queryKey: ["capabilities", entityType, entityId],
@@ -98,11 +100,7 @@ export function CapabilityHub({ entityType, entityId }: CapabilityHubProps) {
             <Sparkles className="h-4 w-4" /> {hubTitle(entityType, lang)}
           </span>
         </CardTitle>
-        <p className="text-muted-foreground text-xs">
-          {lang === "es"
-            ? "Las cuatro vías de capacidad y su estado real. Asigna desde cada sección."
-            : "The four capability paths and their real state. Assign from each section."}
-        </p>
+        <p className="text-muted-foreground text-xs">{t("hubDescription")}</p>
       </CardHeader>
 
       <CardContent className="space-y-4">
@@ -114,9 +112,7 @@ export function CapabilityHub({ entityType, entityId }: CapabilityHubProps) {
           skeletonRows={4}
           loadingTestId="capability-hub-loading"
           errorTestId="capability-hub-error"
-          errorTitle={
-            lang === "es" ? "No se pudo cargar la capacidad" : "Could not load capability"
-          }
+          errorTitle={t("hubLoadError")}
         >
           {data && (
             <>
@@ -132,7 +128,7 @@ export function CapabilityHub({ entityType, entityId }: CapabilityHubProps) {
               )}
 
               {/* Checklist de onboarding: Persona → Saber → Hacer → Recordar. */}
-              <ChecklistBlock steps={checklist} lang={lang} />
+              <ChecklistBlock steps={checklist} />
 
               {/* Las 4 secciones del modelo mental único. */}
               <div
@@ -271,37 +267,32 @@ function RecordarBody({ caps, lang }: { caps: CapabilitiesResponse; lang: "es" |
 }
 
 function SerBody({ caps, lang }: { caps: CapabilitiesResponse; lang: "es" | "en" }) {
+  const t = useT("capability");
   const ser = caps.ser;
   if (ser === null || !ser.model_configured) return null;
   return (
     <dl className="mt-2 space-y-1 text-sm" data-testid="capability-ser-detail">
       {ser.provider && (
         <div className="flex items-center justify-between gap-2">
-          <dt className="text-muted-foreground text-xs">
-            {lang === "es" ? "Proveedor" : "Provider"}
-          </dt>
+          <dt className="text-muted-foreground text-xs">{t("fieldProvider")}</dt>
           <dd className="font-medium">{ser.provider}</dd>
         </div>
       )}
       {ser.model && (
         <div className="flex items-center justify-between gap-2">
-          <dt className="text-muted-foreground text-xs">{lang === "es" ? "Modelo" : "Model"}</dt>
+          <dt className="text-muted-foreground text-xs">{t("fieldModel")}</dt>
           <dd className="font-medium">{ser.model}</dd>
         </div>
       )}
       {ser.temperature !== null && (
         <div className="flex items-center justify-between gap-2">
-          <dt className="text-muted-foreground text-xs">
-            {lang === "es" ? "Temperatura" : "Temperature"}
-          </dt>
+          <dt className="text-muted-foreground text-xs">{t("fieldTemperature")}</dt>
           <dd className="font-medium tabular-nums">{ser.temperature}</dd>
         </div>
       )}
       {ser.model_origin && (
         <div className="flex items-center justify-between gap-2">
-          <dt className="text-muted-foreground text-xs">
-            {lang === "es" ? "Origen del modelo" : "Model origin"}
-          </dt>
+          <dt className="text-muted-foreground text-xs">{t("serModelOrigin")}</dt>
           <dd className="font-medium">
             {MODEL_ORIGIN_LABEL[ser.model_origin]?.[lang] ?? ser.model_origin}
           </dd>
@@ -326,13 +317,12 @@ const MODEL_ORIGIN_LABEL: Record<string, { es: string; en: string }> = {
  * `shell_exec` se destaca por ser privilegiada.
  */
 function HacerBody({ caps, lang }: { caps: CapabilitiesResponse; lang: "es" | "en" }) {
+  const t = useT("capability");
   const { effective, unrestricted, shell_exec_effective } = caps.hacer;
   if (unrestricted) {
     return (
       <p className="text-muted-foreground mt-2 text-xs" data-testid="capability-hacer-unrestricted">
-        {lang === "es"
-          ? "Este nivel no restringe tools por agente; el set efectivo lo fija cada agente."
-          : "This level does not restrict tools per agent; the effective set is set by each agent."}
+        {t("hacerUnrestrictedDetail")}
       </p>
     );
   }
@@ -385,19 +375,14 @@ function toolCategoryGuess(name: string): string {
 // Checklist de onboarding
 // ---------------------------------------------------------------------------
 
-function ChecklistBlock({
-  steps,
-  lang,
-}: {
-  steps: ReturnType<typeof buildChecklist>;
-  lang: "es" | "en";
-}) {
+function ChecklistBlock({ steps }: { steps: ReturnType<typeof buildChecklist> }) {
+  const t = useT("capability");
   if (steps.length === 0) return null;
   return (
     <div className="bg-muted/30 rounded-lg p-3" data-testid="capability-hub-checklist">
       <h4 className="text-muted-foreground mb-2 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide">
         <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
-        {lang === "es" ? "Pasos para capacitar" : "Steps to enable"}
+        {t("checklistTitle")}
       </h4>
       <ol className="space-y-1.5">
         {steps.map((step) => (

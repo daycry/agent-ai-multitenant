@@ -13,6 +13,8 @@ explicit values here makes the tests independent of any ambient env / .env.
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from api_server.config import Settings as ApiSettings
 from orchestrator.config import Settings as OrchSettings
@@ -21,21 +23,35 @@ from workers.config import Settings as WorkerSettings
 
 pytestmark = pytest.mark.unit
 
+
+def _fake_secret(seed: str) -> str:
+    """48 caracteres deterministas y de ALTA ENTROPÍA.
+
+    Antes esto era `"j" * 48`, que no lleva marcador de dev y medía de sobra —
+    y por eso arrancaba producción. Desde prod-10 `task_prod10_04` el config
+    tiene además un suelo de variedad (≥8 caracteres distintos, ≥2 bits/carácter),
+    así que un relleno de un solo carácter ya no es un secreto «realista»: es
+    justo el caso que el guard rechaza. El hex de SHA-256 da 16 símbolos y ~4
+    bits/carácter, y sigue siendo determinista, que es lo que un test necesita.
+    """
+    return hashlib.sha256(seed.encode()).hexdigest()[:48]
+
+
 # Real-looking api-server secrets — none contains a dev marker.
 _API_REAL = {
-    "jwt_secret": "x" * 48,
+    "jwt_secret": _fake_secret("jwt"),
     # Dedicated worker->api signing secret (prod-09 task_prod09_03 / secrets-9).
     # Guarded like the rest AND required to differ from `jwt_secret`, so the
     # "real secrets" baseline has to carry its own distinct value.
-    "internal_token_secret": "q" * 48,
-    "review_url_signing_secret": "y" * 48,
+    "internal_token_secret": _fake_secret("internal"),
+    "review_url_signing_secret": _fake_secret("review"),
     # SSO client-secret encryption key (Plan 08 task_08_01) — also guarded.
-    "sso_encryption_key": "w" * 48,
+    "sso_encryption_key": _fake_secret("sso"),
     # Notification (Plan 10) + incoming-webhook (Plan 13) payload encryption
     # keys — both guarded against dev defaults in staging/prod.
-    "notification_encryption_key": "n" * 48,
-    "incoming_webhook_encryption_key": "i" * 48,
-    "minio_secret_key": "z" * 48,
+    "notification_encryption_key": _fake_secret("notify"),
+    "incoming_webhook_encryption_key": _fake_secret("webhook"),
+    "minio_secret_key": _fake_secret("minio"),
     "minio_access_key": "prod-access-key",
     "database_url": "postgresql+asyncpg://app_user:S3cr3tP@db/agentic",
     "admin_database_url": "postgresql+asyncpg://migrations_user:S3cr3tM@db/agentic",

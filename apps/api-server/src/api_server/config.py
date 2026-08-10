@@ -8,7 +8,9 @@ the environment.
 
 from __future__ import annotations
 
+from collections import Counter
 from functools import lru_cache
+from math import log2
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -47,6 +49,106 @@ _DEV_ENVIRONMENT = "dev"
 # (`jwt_secret`, `internal_token_secret`); prod-10 (secrets-3) generalises the
 # length floor to the rest of the secret families.
 _MIN_HMAC_SECRET_LEN = 32
+
+# --- Suelo de longitud y entropía (prod-10 task_prod10_04, secrets-3) --------
+#
+# El marcador-substring de arriba sólo reconoce los defaults que ESTE repo
+# publica. `"x" * 48` no lleva ninguno, mide más que el suelo HMAC y arrancaba
+# producción tan campante: firma sesiones y cifra secretos exactamente igual de
+# bien que la cadena del instalador, y se adivina en un intento. El plan pedía
+# complementar el marcador «con un mínimo de 24 caracteres y rechazo de valores
+# de entropía trivial».
+#
+# Dos criterios, porque cada uno tapa el agujero del otro:
+#   * longitud: aleatorio pero corto sigue siendo adivinable;
+#   * variedad: `"x" * 48` es largo y no tiene ninguna. Se exige un mínimo de
+#     caracteres distintos Y un mínimo de entropía de Shannon, porque «distintos»
+#     a secas lo esquiva `"a"*40 + "bcdefghi"` (9 distintos, trivial igual).
+#
+# Los umbrales son deliberadamente BAJOS. `secrets.token_urlsafe(36)` —lo que
+# genera el instalador— da ~30 caracteres distintos y ~5,3 bits/carácter: pasa
+# con seis veces de margen. Lo que se persigue es el relleno de plantilla, no la
+# contraseña mediocre de un operador con prisa; un falso positivo aquí no es un
+# aviso, es un servicio que no arranca (riesgo 2 del plan).
+_MIN_SECRET_LEN = 24
+_MIN_DISTINCT_CHARS = 8
+_MIN_SHANNON_BITS_PER_CHAR = 2.0
+
+
+def _shannon_bits_per_char(value: str) -> float:
+    """Entropía de Shannon del valor, en bits por carácter.
+
+    Es una medida de la DISTRIBUCIÓN de caracteres, no de la aleatoriedad real
+    (nada distingue aquí una cadena de `/dev/urandom` de una barajada a mano), y
+    eso basta: lo único que tiene que detectar es el relleno.
+    """
+    if not value:
+        return 0.0
+    total = len(value)
+    counts = Counter(value)
+    return -sum((n / total) * log2(n / total) for n in counts.values())
+
+
+def _trivial_secret_reason(value: str) -> str | None:
+    """``None`` si el secreto supera el suelo; si no, POR QUÉ no lo supera.
+
+    Devolver la razón —y no un booleano— es lo que permite que el error de
+    arranque le diga al operador qué arreglar. Un «secreto inválido» a secas le
+    deja probando cadenas.
+    """
+    if len(value) < _MIN_SECRET_LEN:
+        return f"only {len(value)} chars, minimum is {_MIN_SECRET_LEN}"
+    distinct = len(set(value))
+    if distinct < _MIN_DISTINCT_CHARS:
+        return f"only {distinct} distinct characters, minimum is {_MIN_DISTINCT_CHARS}"
+    bits = _shannon_bits_per_char(value)
+    if bits < _MIN_SHANNON_BITS_PER_CHAR:
+        return (
+            f"entropy is {bits:.2f} bits/char, minimum is "
+            f"{_MIN_SHANNON_BITS_PER_CHAR:.1f} (the value looks like filler)"
+        )
+    return None
+
+
+#: Familias sujetas al suelo: campo -> (variable de entorno, atributo a leer).
+#:
+#: Una sola fuente de verdad, a propósito. `Settings._weak_secrets` la recorre y
+#: `entropy_checked_secret_fields()` la publica, así que el test de descubrimiento
+#: mira exactamente lo mismo que el guard aplica: añadir aquí una familia nueva y
+#: olvidarse de probarla pone en rojo `test_secret_entropy_guard.py`, en vez de
+#: dejar la parametrización pasando en vacío sobre las de siempre.
+#:
+#: El atributo es un anillo (`tuple[str, ...]`) donde la familia tiene lista de
+#: claves, y un `SecretStr` donde el valor es único; `_weak_secrets` distingue por
+#: tipo en vez de por una tabla de flags que habría que mantener sincronizada.
+_ENTROPY_CHECKED_FIELDS: dict[str, tuple[str, str]] = {
+    "jwt_secret": ("API_SERVER_JWT_SECRET(S)", "jwt_secret_ring"),
+    "internal_token_secret": (
+        "API_SERVER_INTERNAL_TOKEN_SECRET(S)",
+        "internal_token_secret_ring",
+    ),
+    "review_url_signing_secret": (
+        "API_SERVER_REVIEW_URL_SIGNING_SECRET",
+        "review_url_signing_secret",
+    ),
+    "sso_encryption_key": ("API_SERVER_SSO_ENCRYPTION_KEY(S)", "sso_encryption_key_ring"),
+    "notification_encryption_key": (
+        "API_SERVER_NOTIFICATION_ENCRYPTION_KEY(S)",
+        "notification_encryption_key_ring",
+    ),
+    "incoming_webhook_encryption_key": (
+        "API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY(S)",
+        "incoming_webhook_encryption_key_ring",
+    ),
+    "minio_secret_key": ("API_SERVER_MINIO_SECRET_KEY", "minio_secret_key"),
+    "mfa_encryption_key": ("API_SERVER_MFA_ENCRYPTION_KEY(S)", "mfa_encryption_key_ring"),
+}
+
+
+def entropy_checked_secret_fields() -> tuple[str, ...]:
+    """Las familias de secretos con suelo de longitud/entropía en staging/prod."""
+    return tuple(_ENTROPY_CHECKED_FIELDS)
+
 
 # Hosts que delatan un despliegue local. Se usan para decidir si un
 # `environment` que NO se declaró explícitamente puede seguir contando como
@@ -864,6 +966,32 @@ class Settings(BaseSettings):
             )
         return normalised
 
+    def _weak_secrets(self) -> list[str]:
+        """Las entradas de secreto que no superan el suelo, con su porqué.
+
+        Se recorre el ANILLO entero de cada familia, no sólo la clave de cabeza:
+        una clave retirada que sigue en la cola ya no cifra nada nuevo, pero
+        **descifra** — y una que se adivina descifra igual de bien que la buena.
+        Mismo razonamiento que el guard de marcadores.
+
+        La familia de MFA sólo entra cuando es DEDICADA. Si hereda el anillo de
+        SSO, nombrar ``API_SERVER_MFA_ENCRYPTION_KEY`` en un error mandaría al
+        operador a cambiar una variable que nunca puso.
+        """
+        weak: list[str] = []
+        for field_name, (ring_name, attribute) in _ENTROPY_CHECKED_FIELDS.items():
+            if field_name == "mfa_encryption_key" and not self.mfa_key_is_dedicated:
+                continue
+            raw = getattr(self, attribute)
+            ring = (raw.get_secret_value(),) if isinstance(raw, SecretStr) else tuple(raw)
+            for position, value in enumerate(ring):
+                reason = _trivial_secret_reason(value)
+                if reason is None:
+                    continue
+                label = ring_name if len(ring) == 1 else f"{ring_name}[{position}]"
+                weak.append(f"{label} ({reason})")
+        return sorted(weak)
+
     @model_validator(mode="after")
     def _forbid_dev_secrets_outside_dev(self) -> Settings:
         """Fail fast when a non-dev deployment still carries a dev-only default
@@ -954,16 +1082,6 @@ class Settings(BaseSettings):
                 f"(Vault-backed in production).{implicit_hint}"
             )
 
-        # NOTA prod-10 task_prod10_04 (secrets-3), segunda mitad NO entregada: al
-        # marcador-substring le falta un suelo de longitud/entropía. `"a" * 48` no
-        # lleva marcador, supera el suelo de 32 de los anillos de bearer y las
-        # cinco familias Fernet/MinIO no tienen suelo ninguno. El criterio está
-        # escrito y probado (tests/unit/test_secret_entropy_guard.py documenta la
-        # forma), pero cablearlo aquí pone en rojo 22 tests de 5 ficheros cuyos
-        # helpers fingen secretos con `"x" * 48` — dos de esos ficheros los estaba
-        # escribiendo el carril de claves en la misma sesión. Se reporta en vez de
-        # romperlos a medias: ver el resumen de prod-10.
-
         # Length floor for the secrets that sign BEARER TOKENS (task_prod09_02
         # point 3). "Not a dev default" is not the same as "strong": `x` passes
         # the marker check and mints valid sessions. Kept separate from the
@@ -987,6 +1105,31 @@ class Settings(BaseSettings):
                 f"environment={self.environment!r} requires HMAC signing secrets of at "
                 f"least {_MIN_HMAC_SECRET_LEN} characters; too short: "
                 f"{', '.join(too_short)}."
+            )
+
+        # prod-10 task_prod10_04 (secrets-3), SEGUNDA MITAD (2026-08-10). Al
+        # marcador-substring le faltaba un suelo de longitud/entropía: `"x" * 48`
+        # no lleva marcador, supera el suelo de 32 de los anillos de bearer y las
+        # cinco familias Fernet/MinIO no tenían suelo ninguno. Criterio en
+        # `_trivial_secret_reason`.
+        #
+        # Va DESPUÉS del suelo HMAC a propósito: para un secreto de firma corto,
+        # «tiene que medir 32» es un diagnóstico más útil que «parece relleno», y
+        # el primer error que lanza el validador es el único que el operador lee.
+        #
+        # Se aplica SÓLO con `environment` declarado explícitamente a
+        # staging/prod, que es el ámbito que pide el plan. El camino de «dev
+        # implícito + BD remota» sigue rechazando únicamente lo inequívoco (un
+        # marcador de dev): endurecerlo ahí convertiría un olvido de variable en
+        # una caída de arranque por un secreto que quizá sea perfectamente válido,
+        # y ese es justo el falso positivo que el riesgo 2 del plan prohíbe.
+        weak = self._weak_secrets() if self.environment != _DEV_ENVIRONMENT else []
+        if weak:
+            raise ValueError(
+                f"environment={self.environment!r} rejects trivially weak secrets. "
+                "A value with no dev marker is not automatically a strong value: "
+                f"{', '.join(weak)}. Generate them with "
+                '`python -c "import secrets; print(secrets.token_urlsafe(36))"`.'
             )
 
         # The whole point of task_prod09_03 is that the two signing domains are

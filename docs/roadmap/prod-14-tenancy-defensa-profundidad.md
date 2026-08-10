@@ -288,7 +288,7 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
 
 #### `task_prod14_05` — Migrar los 4 servicios a service_user
 
-- [ ] **Título**: Cambiar los defaults de `database_url` en
+- [x] **Título**: Cambiar los defaults de `database_url` en
       `apps/workers/src/workers/config.py:35`,
       `apps/orchestrator/src/orchestrator/config.py:51`,
       `apps/notification-dispatcher/src/notification_dispatcher/config.py:52` y
@@ -334,13 +334,52 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
     `docs/roadmap/prod-01-*.md` y `apps/installer/**` son de otro carril y hay
     cuatro escribiendo en paralelo. El requisito queda registrado aquí y en
     `docs/04-reference/mandatory-env-vars.md` para que no se pierda.
+  - ✅ **Cerrada (2026-08-10): lo que faltaba era la guarda, no el cambio.** Los
+    cuatro defaults llevan desde el 2026-07-31 apuntando a `service_user`
+    (`workers/config.py:46`, `orchestrator/config.py:60`,
+    `notification_dispatcher/config.py:64`, `api_server/config.py:84`), el compose
+    y `.env.example` se cerraron en `task_prod14_04`, y `migrations_user` ya solo
+    aparece en `migrations/env.py` y en **dos** campos que necesitan al dueño del
+    esquema de verdad: `backup_database_url` (`pg_dump` de la copia completa) y
+    `restore_required_db_role` (`pg_restore --clean` deja el ownership en el rol
+    que conecta). No son restos: sin rol admin el volcado sale incompleto y el
+    restore deja el esquema inservible.
+    - **La guarda que faltaba**: `tests/security/test_service_role_is_the_runtime_default.py`
+      (10 tests, en verde). Cubre exactamente la costura que ningún test veía:
+      `test_db_roles_service_user.py` comprueba los privilegios del rol DENTRO de
+      PostgreSQL y **pasa igual de verde** si mañana alguien revierte un
+      `config.py` a `migrations_user` — lo que se degrada entonces no es la base
+      de datos, es quién se conecta a ella. La guarda lee el `default=` por AST
+      (no la prosa: las descripciones nombran `migrations_user` a propósito para
+      contar de dónde se viene) y exige que cada superviviente esté en una lista
+      corta y **explique en su descripción por qué necesita DDL**. Lleva su
+      contrapunto: si `migrations_user` desapareciera del `env.py` de Alembic,
+      también sale rojo — o las migraciones dejaron de correr como el dueño, o
+      alguien "limpió" el rol creyéndolo un resto.
+    - **Rojo verificado por mutación**: revertido el default de
+      `workers/config.py:46` a `migrations_user` → 2 rojos nombrando el servicio;
+      restaurado → 10 passed.
+    - **Arnés corregido**: `auto_prod14_05_a` citaba
+      `tests/integration/test_execution_persistence.py`, un fichero **que no
+      existe** — tal cual fallaba en la recolección, que es el peor rojo posible
+      porque no distingue «la feature está rota» de «el arnés apuntaba a la
+      nada». El comando de abajo es el que se ha ejecutado.
+    - **Residuo declarado, y no es código**: falta la nota de coordinación en
+      `docs/roadmap/prod-01-despliegue-ejecutable.md` — el `compose_generator` del
+      instalador debe emitir `SERVICE_USER_PASSWORD` en el servicio `postgres`
+      que genera, o un despliegue de producción **nuevo** repetirá el defecto que
+      el compose canónico ya cerró: crear el rol BYPASSRLS con el literal que
+      está en este repositorio. No se escribe aquí porque `prod-01` es de otro
+      carril; el requisito está registrado en este bloque y en
+      `docs/04-reference/mandatory-env-vars.md`, que es el catálogo que lee quien
+      genera compose.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Depende de**: `task_prod14_04`
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod14_05_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_execution_persistence.py tests/integration/test_admin_rbac.py -v"
+    command: "pytest tests/security/test_service_role_is_the_runtime_default.py tests/security/test_service_user_password_is_wired.py -v"
   ```
 
 #### `task_prod14_06` — Test de privilegios: service_user no puede tocar DDL ni RLS
@@ -420,7 +459,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
 
 #### `task_prod14_09` — ADR: endurecimiento estructural de la tabla users
 
-- [ ] **Título**: Redactar `docs/05-architecture-decisions/00XX-users-global-rls.md`
+- [x] **Título**: Redactar `docs/05-architecture-decisions/00XX-users-global-rls.md`
       (status: proposed) con las opciones 2 (vista `tenant_users` + RLS como
       único camino de lectura tenant) y 3 (política RLS `EXISTS` sobre
       `user_org_memberships` + excepción `app.user_id`), trade-offs (impacto en
@@ -456,6 +495,45 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
     `proposed` y decirlo — pero no lo bajo yo por mi cuenta: sería repetir el
     error del 2026-07-30 en la dirección contraria, y `CONTINUE_HERE.md` ya
     describe el 0137 como técnico y aceptado.
+  - ✅ **Cerrada en NEGATIVO (2026-08-10): la premisa de la tarea es falsa — aquí
+    no hay decisión de producto que firmar.** Leído el ADR entero, no una
+    recomendación entre tres alternativas viables: las opciones 2 y 3 se descartan
+    por una **imposibilidad**, y está bien argumentada en una línea —
+    > «La tabla de identidades tiene que ser legible ANTES de que haya identidad.
+    > Una RLS que dependa de quién eres no puede gobernar la consulta que averigua
+    > quién eres.»
+    > El login arranca con `SELECT … FROM users WHERE email = $1`, sin
+    > `app.tenant_id` (el tenant se resuelve después, con las membresías) y sin
+    > `app.user_id` (que es lo que esa consulta va a averiguar). La «excepción para
+    > el propio `app.user_id`» de la opción 3 no salva el caso porque en el paso
+    > donde hace falta ese GUC aún no existe; y la opción 2 (vista) solo sería
+    > invariante con `REVOKE SELECT ON users`, que rompe el login. El propio ADR lo
+    > remata con el dato que lo convierte en verificable y no en opinión: la opción
+    > 3 **empeora la postura de seguridad real** —empuja más superficie del router
+    > de autenticación al engine BYPASSRLS— mientras mejora la métrica «tablas con
+    > RLS».
+    - **Por eso NO lo bajo a `proposed`**: `proposed` significa «hay una elección
+      abierta», y no la hay. Es una decisión técnica del mismo tipo que el ADR
+      0147, que nació `accepted` por ser toolchain puro. Lo que pedía este carril
+      era bajarlo **si pedía decisión de producto**; no la pide.
+    - **Lo que sí queda para el operador es cosmético y de una línea**: el
+      frontmatter dice `deciders: [claude-code]`. Si está de acuerdo, sustituir
+      por su nombre y poner la fecha. Es trazabilidad, no una decisión — y por eso
+      no bloquea esta casilla, coherente con el **criterio de cierre 4** de este
+      mismo plan, que dice literalmente que la revisión del ADR no bloquea.
+    - **El seguimiento real que el ADR deja escrito, y que NO es paperwork**: la
+      **guarda estática sobre `select(User…)`** — un test que recorra el AST del
+      api-server y exija que cada consulta esté (a) unida a
+      `UserOrganizationMembership`, (b) filtrada por `User.id`, o (c) en una
+      allowlist de módulos pre-tenant/admin (`auth`, `scim`, `sso`, `admin`,
+      `seeds`, `mfa`), con aserción de «vio al menos N consultas» para que no
+      envejezca en vacío. Sin ella, la conclusión del ADR («hoy no hay
+      desviación») se sostiene sobre **un inventario con fecha**: el del
+      2026-07-30. No se implementa aquí porque el ADR la declara follow-up y
+      porque recorre `api_server` entero, con otros carriles escribiendo dentro.
+      Complementa —no sustituye— al test de endpoint de `task_prod14_08`, que ya
+      está y pasa: aquél mira lo que sale por la API, éste miraría lo que se
+      escribe en el código.
 - **Tiempo**: 2 h · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); la revisión humana del ADR es el
   gate.
@@ -518,6 +596,35 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
     hace de verdad. **No la ejecuto yo**: la orden permanente de no tocar entornos
     vivos sin verificación previa del operador está por encima de cerrar una
     casilla.
+  - ⏳ **2026-08-10 — dos cosas: NO queda migración por escribir, y la decisión
+    (a) es casi con seguridad gratis.**
+    - **No hay migración pendiente.** Este carril venía con el encargo de
+      «describir con precisión la migración que replica el patrón 0077 para que la
+      escriba el dueño de migraciones». Verificado: **ya está escrita y aplicada**,
+      es la `20260730_0126_perf_indexes_uniqueness.py`, y hace las tres cosas del
+      enunciado — los índices únicos parciales
+      (`uq_teams_tenant_name_live`, `uq_skills_tenant_name_live`,
+      `uq_agents_tenant_name_global_live` **+**
+      `uq_agents_tenant_project_name_live`), el `ALTER TYPE` de
+      `documents.source_size_bytes` a `BIGINT` (verificado en
+      `db/knowledge.py:154`) y `Plan.created_by: Mapped[UUID | None]`
+      (`db/domain.py:1056`). **Nada que encargar al carril de migraciones.**
+    - **Y con una mejora sobre lo que pedía el plan que conviene no deshacer**: en
+      `agents` no puso un `(tenant_id, name)` a secas sino **dos índices con
+      predicados disjuntos**, separando los agentes globales de los
+      `project_local`. El plan pedía el índice simple, y la migración explica por
+      qué habría sido un error: habría exigido soft-borrar la mitad de las filas
+      del `global_tenant_template` y **roto el fork de agentes** desde ese momento.
+    - **La decisión (a)/(b) sigue siendo del operador, pero el precio está
+      medido**: el docstring de la propia 0126 dice que con el par de índices los
+      duplicados reales de `agents` bajan «de 10 grupos a **0** (medido), así que
+      el dedup previo **no toca ninguna fila en la práctica** y queda como red de
+      seguridad para datos sucios». O sea: la desviación respecto de la decisión
+      clave nº 4 (soft-delete en vez de renombrar `-dup-{n}`) es real **en el
+      código** y probablemente **inocua en los datos**. Falta confirmarlo en
+      `teams` y `skills` con la consulta de solo-lectura de arriba. Si sale vacío,
+      **(a) es gratis**: una edición de la decisión clave nº 4 de este fichero para
+      que diga lo que la migración hace de verdad.
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

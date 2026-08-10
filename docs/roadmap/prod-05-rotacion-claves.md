@@ -288,18 +288,35 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_06` — ADR modelo de consumo + propagación ejecutable con reinicio coordinado
 
-- [ ] **Título**: ADR «Vault runtime vs regenerar env + reinicio» y script
+- [x] **Título**: ADR «Vault runtime vs regenerar env + reinicio» y script
       `scripts/rotate-platform-secret.sh`
-  - ⏳ **Pendiente (2026-08-01):** el ADR **está** (`0144`, `accepted`, opción B) y
-    el marcador `pending_apply` que exigía también. Falta **sólo el automatismo**:
-    `scripts/rotate-platform-secret.sh` no existe —el propio ADR 0144 lo dice en
-    su sección «Lo que este ADR NO entrega»— ni
-    `tests/integration/test_rotation_propagation_cycle.py`. Hoy la propagación es
-    el procedimiento manual del runbook `05-key-rotation.md` §8, paso por paso y
-    copiable. El script tiene que: leer el valor rotado de KV, ANTEPONER la clave
-    nueva a `API_SERVER_JWT_SECRETS` (conservando la vieja, `task_prod05_04`),
-    reescribir el `.env` y reiniciar api-server + workers en la misma ventana, y
-    sólo después llamar a `revoke_previous_minio_credential`.
+  - ✅ **Cerrada (2026-08-10):** el ADR ya estaba (`0144`, `accepted`, opción B);
+    lo que faltaba era el automatismo, y ahora existe:
+    **`scripts/rotate-platform-secret.sh`** (`jwt` | `minio`) hace las cuatro
+    cosas que la tarea pedía —leer el valor de `secret/platform/<n>`, **anteponer**
+    la clave nueva a `API_SERVER_JWT_SECRETS` conservando la anterior, reescribir
+    el `.env` de forma atómica y reiniciar en la misma ventana— y **sólo después**
+    del reinicio revoca lo anterior, vía el llamante que también faltaba:
+    **`apps/workers/src/workers/rotation_apply.py`**
+    (`python -m workers.rotation_apply --revoke-previous-minio`, síncrono).
+    `revoke_previous_minio_credential` existía desde `task_prod05_07` **sin una
+    sola forma de invocarla**, y el runbook la nombraba como si fuese ejecutable.
+  - **Tests**: `tests/unit/test_rotate_platform_secret_script.py` (11, verdes) con
+    un shim de `docker` en el PATH — pinea los dos invariantes caros: que la clave
+    se **antepone** (sustituirla corta todas las sesiones en vuelo) y que la
+    revocación de MinIO ocurre **después** del reinicio (invertirlo deja la
+    plataforma sin object storage, riesgo 4). Más
+    `tests/unit/test_rotation_apply_cli.py` (3, verdes): sin Vault o sin credencial
+    admin de MinIO el comando **falla** en vez de fingir que cerró la ventana.
+  - **Desviación del plan**: el test se llamaba
+    `tests/integration/test_rotation_propagation_cycle.py`. Vive en `tests/unit/`
+    porque no necesita Postgres ni Redis: lo que verifica es el ORDEN de las
+    operaciones y el `.env` resultante, con `docker` doblado. Un test de
+    integración de verdad tendría que reiniciar contenedores, y eso es
+    `human_prod05_01`.
+  - **Sigue manual a propósito**: la retirada de la clave JWT vieja (paso 3 del
+    runbook §1) depende del TTL máximo de token en vuelo. Es una decisión con
+    reloj, no un efecto secundario.
 - **Descripción**: Redactar el ADR (opciones A/B de «Decisiones clave») y,
   asumida la opción B (Docker Compose, una máquina), implementar el script que
   cierra el ciclo de gap2-2: lee el valor rotado de `secret/platform/jwt` /

@@ -173,6 +173,36 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   código. Marcar esta casilla sería declarar operativa una vía de aviso que falla
   en cada envío, y precisamente en el escenario para el que existe (api-server
   caído).
+- 🔧 **2026-08-10 — el cableado que faltaba SÍ era mío, y estaba sin hacer: el
+  buzón de la credencial no existía.** Las tres anotaciones anteriores concluyeron
+  «solo falta la credencial» y ninguna comprobó dónde iba a ponerse. El servicio
+  `alertmanager` de `docker/docker-compose.monitoring.yml` montaba exactamente dos
+  cosas —su `alertmanager.yml` y su volumen de datos— y **nada en
+  `/etc/alertmanager/secrets/`**, que es la ruta que el receiver lee. Es decir: el
+  paso 3 del runbook («provisionarlo como fichero en
+  `/etc/alertmanager/secrets/slack_api_url`») era **imposible de ejecutar** sin
+  editar el compose. El operador habría hecho su parte —conseguir el webhook, que
+  es lo caro— y el canal habría seguido sin funcionar, con el stack `healthy`.
+  - **Puesto**: `./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro` en
+    el compose canónico, y el directorio versionado con su propio `.gitignore`
+    (`*` salvo él mismo). Versionarlo no es cosmético: si el lado host no existe,
+    Docker lo crea como `root` y el contenedor, que corre como `nobody` (65534),
+    no puede leerlo — otro fallo mudo. Y el `.gitignore` dentro impide que el día
+    que alguien deje ahí el webhook se comitee.
+  - **Guarda**: `tests/unit/test_alertmanager_secret_mount.py` (5 tests, verde).
+    Por **descubrimiento**: recorre la config buscando cualquier clave `*_file`
+    con ruta absoluta y exige un bind-mount detrás, así que un
+    `auth_password_file` futuro en un receiver de email lo pide solo. Rojo
+    verificado por mutación en las tres invariantes: sin montaje (2 rojos),
+    sin `:ro` (1), sin el directorio en el repo (2).
+  - **Runbook actualizado**: el paso 3 pasa a ser un `printf … > …/slack_api_url`
+    ejecutable, y el paso 4 queda acotado a lo único que falta de código —
+    replicar esa línea en `compose_generator._alertmanager_service`, que sigue sin
+    declarar el volumen y por tanto un despliegue **generado** conserva el hueco.
+  - **Sigue SIN marcar, y ahora el motivo es más limpio**: lo que falta es (a) la
+    credencial de Slack y su decisión de custodia —humano, prod-10— y (b) la línea
+    en el generador del instalador, que es `apps/installer/**`, fuera de este
+    carril. Ya no falta nada del stack canónico.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_02_a
@@ -483,6 +513,40 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
     alcanzable y el `_BUILDERS` de la imagen). `apps/installer/**` es de otro
     carril. Lo que hace falta ahí está dictado: replicar el bloque `watchdog:` del
     compose canónico y añadir `watchdog` a `_BUILDERS`.
+- 🔴 **2026-08-10 — el servicio declarado el 08-02 NO PODÍA FUNCIONAR: estaba en
+  la red equivocada.** Es el hallazgo de esta pasada y es exactamente la clase de
+  fallo que este plan persigue.
+  - **Qué pasaba**: el bloque `watchdog:` toma el daemon por
+    `DOCKER_HOST=tcp://docker-socket-proxy:2375` (correcto, ADR 0060) pero se
+    declaró con `networks: [agentic-net]`. El `docker-socket-proxy` vive —en el
+    overlay de dev (`docker-compose.manuals.yml`) y en el compose que genera el
+    instalador (`compose_generator.py:537`, `_WORKER_NETWORKS`)— en
+    **`agentic-docker`**, una red `internal: true` DEDICADA al tráfico contra el
+    daemon. Sin red común, el nombre DNS no resuelve.
+  - **Por qué es caro y no ruidoso**: un watchdog que no alcanza el daemon **no
+    ve ningún contenedor**. No reinicia nada porque cree que no hace falta, y un
+    vigilante que no encuentra nada roto se parece muchísimo a un stack sano. Se
+    habría descubierto el día que hiciera falta, que es el peor día.
+  - **Cómo se cazó**: no por leer el bloque —las tres pasadas anteriores lo
+    habían leído y dado por bueno— sino por buscar el servicio al que apunta.
+    `grep '^  docker-socket-proxy:' docker/docker-compose.yml` → **cero
+    coincidencias**.
+  - **Arreglado**: `networks: [agentic-net, agentic-docker]` (las dos hacen
+    falta: `agentic-docker` es `internal`, así que desde ella sola no alcanzaría
+    al api-server para POSTear la alerta) y la red `agentic-docker` declarada en
+    el compose canónico con definición idéntica a la de los otros dos ficheros,
+    para que el merge de `-f` sea consistente. Una red referenciada y no
+    declarada rompe `docker compose up`.
+  - **Guarda**: dos tests nuevos en `tests/security/test_watchdog_service_declaration.py`
+    (8 passed). El primero **deriva** la red del sitio donde el proxy está
+    declarado de verdad en vez de fijar el literal —si se renombra, exige la
+    nueva—; el segundo impide la sobrecorrección de mudar el watchdog SOLO a la
+    red del daemon, que le quitaría el camino a la alerta. Rojo verificado antes
+    del arreglo, con el mensaje nombrando las dos redes disjuntas.
+  - **Sigue SIN marcar por lo mismo que el 08-02**: falta el servicio en
+    `compose_generator.py` (`apps/installer/**`, otro carril). Y ahora ese trabajo
+    tiene un requisito más, que conviene no perder: el bloque generado debe
+    llevar **las dos redes**, no solo `agentic-net`.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_14_a
@@ -523,6 +587,12 @@ exit 1`. Fuera del carril `observabilidad` (`apps/installer/**`). Ojo: el test
   recuperación automática que se acaba de entregar queda desactivada justo en el
   entorno donde importa. El cambio son dos caracteres en dos líneas
   (`compose_generator.py:458` y `:482`).
+- ⏳ **2026-08-10 — comprobado una vez, en una línea, y sin volver a razonarlo**:
+  `compose_generator.py:458` y `:482` siguen terminando en `|| true`; el compose
+  canónico sigue honesto y con su guarda en verde
+  (`tests/unit/test_compose_healthchecks_honest.py`). Nada nuevo que añadir: la
+  mitad que falta es `apps/installer/**`, fuera de este carril, y ya está dictada
+  arriba carácter a carácter.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_15_a

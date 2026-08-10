@@ -122,6 +122,13 @@ es _esperar_.
 1. `API_SERVER_JWT_SECRETS=<NUEVA>,<ACTUAL>` en el `.env` de **api-server**;
    `docker compose up -d api-server`. Desde ese instante se firma con la nueva y
    se verifican ambas.
+   - Si la clave nueva la escribió el **job de rotación** (está en
+     `secret/platform/jwt` con `pending_apply=true`), este paso es un comando:
+     `./scripts/rotate-platform-secret.sh jwt`. Lee el valor del KV, lo
+     **antepone** conservando el anillo anterior, reescribe el `.env` y reinicia
+     — sin imprimir el secreto y sin dejar copias del `.env` por el camino. El
+     paso 3 sigue siendo manual **a propósito**: retirarla es una decisión con
+     reloj, no un automatismo.
 2. **Espera el TTL máximo de sesión + margen** (24 h + 1 h con el default). No hay
    nada que ejecutar: es el tiempo que tardan en morir las sesiones firmadas con
    la clave vieja.
@@ -253,6 +260,23 @@ deliberado, ver «Queda fuera» del plan prod-05):
    (`revoke_previous_minio_credential`), que borra la service account vieja y pone
    `pending_apply=false`.
 
+**Los pasos 2 y 3, en un comando** (y en ese orden, que es lo que importa):
+
+```bash
+./scripts/rotate-platform-secret.sh minio          # --dry-run para verlo antes
+```
+
+Escribe las **dos** mitades de la credencial en el `.env`, reinicia api-server y
+los tres workers, y **sólo después** llama a la revocación
+(`python -m workers.rotation_apply --revoke-previous-minio`, síncrono: si falla,
+el operador se entera antes de dar la ventana por cerrada). Si prefieres hacerlo
+a mano, el orden de arriba no es negociable — invertir 2 y 3 borra la credencial
+que los servicios siguen usando.
+
+> **En el stack de dev/manuales el script no tiene nada que reescribir**: ese
+> compose lleva los valores incrustados en línea en vez de leerlos del `.env`. El
+> script es para un despliegue cuyo compose referencia `${VARS}`.
+
 Entre 1 y 3 **ambas credenciales funcionan**, así que no hay ventana de corte.
 Invertir 2 y 3 deja sin object storage a toda la plataforma.
 
@@ -274,11 +298,41 @@ sirve. Verificación: una URL nueva abre; una anterior a la rotación da 403.
 
 ## 10. Token de servicio de Vault
 
-`API_SERVER_VAULT_TOKEN` / `WORKERS_VAULT_TOKEN`. Emite uno nuevo por política
-desde Vault, cámbialo en el `.env` correspondiente y reinicia ese servicio. El
-root token **nunca** se usa como token de servicio
-([`scripts/init-vault.sh`](../../scripts/init-vault.sh)). Verificación: una
-resolución de credencial git de proyecto sigue funcionando.
+`API_SERVER_VAULT_TOKEN`, `WORKERS_VAULT_TOKEN`, `ORCHESTRATOR_VAULT_TOKEN` y
+`NOTIFY_VAULT_TOKEN` — uno por servicio, contra la política homónima que escribe
+el bootstrap del instalador. El root token **nunca** se usa como token de
+servicio ([`scripts/init-vault.sh`](../../scripts/init-vault.sh)).
+
+**Procedimiento** (un comando):
+
+```bash
+VAULT_TOKEN=<root-o-admin> ./scripts/vault-mint-service-tokens.sh >> docker/.env
+docker compose -f docker/docker-compose.yml up -d   # + tus overlays
+```
+
+Acuña un token **periódico** (`-period 72h`, cambiable con `VAULT_PERIOD`) y
+**huérfano** por política, y los emite como líneas `.env` por stdout. Sin
+`--write` no toca el disco.
+
+- **Periódico** porque no caduca mientras se renueve dentro de su período, y eso
+  lo hace solo `VaultTokenManager` en segundo plano: en el api-server
+  (`api_server.vault_client`) y en los workers (`workers.vault_client`). Un token
+  de TTL fijo habría que re-acuñarlo por calendario — la carga operativa que
+  produjo la bomba de relojería de 32 días que este mecanismo desactiva.
+- **Huérfano** porque revocar el root token **no puede** llevarse la plataforma
+  por delante. Ese orden es la razón de que el paso 2 vaya antes del 3 en
+  [dr-vault-unseal-rotation.md](./dr-vault-unseal-rotation.md) §«Incidente
+  abierto».
+
+**Verificación (que el código cumple)**: en los logs del api-server, al arrancar,
+un evento `vault.token.lookup` con el TTL y las políticas del token; y el gauge
+`agentic_vault_token_ttl_seconds` decreciendo entre renovaciones (evento
+`vault.token.renewed`). Si aparece `vault.token.renew_failed` a nivel **error**,
+el token dejará de valer al final de su período: es lo que hay que mirar.
+
+**Rollback**: el token anterior sigue vivo hasta que lo revoques
+(`vault token revoke`), así que volver atrás es reponer el valor viejo en el
+`.env` y reiniciar.
 
 ## 11. Claves de terceros
 

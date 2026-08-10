@@ -371,12 +371,17 @@ class _ClientCache:
     manager: VaultTokenManager | None = None
 
 
-class _HvacTokenAdapter:
+class HvacTokenAdapter:
     """Mapea la superficie de :class:`VaultTokenClient` sobre un ``hvac.Client``.
 
     Existe para que :class:`VaultTokenManager` no conozca la forma anidada
     ``client.auth.token.*`` de hvac — la misma razón por la que el instalador
     envuelve hvac en su propio Protocol.
+
+    Público (era ``_HvacTokenAdapter``) porque ``workers.vault_client`` lo
+    reutiliza: el worker tiene su propio token y su propia configuración, pero el
+    mapeo sobre hvac es el mismo y duplicarlo garantizaría que uno de los dos se
+    quedase atrás.
     """
 
     def __init__(self, client: Any) -> None:
@@ -426,7 +431,7 @@ def build_vault_client() -> Any | None:
         token=settings.vault_token.get_secret_value(),
         timeout=VAULT_TIMEOUT_SECONDS,
     )
-    manager = VaultTokenManager(_HvacTokenAdapter(client))
+    manager = VaultTokenManager(HvacTokenAdapter(client))
     manager.start()
     _ClientCache.client = client
     _ClientCache.manager = manager

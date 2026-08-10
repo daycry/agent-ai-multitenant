@@ -35,12 +35,29 @@ Se pesan a propósito los dos lados: los tres primeros tests son RECHAZOS (un
 guard vale lo que se niega a aceptar) y los tres siguientes son CONTRAPESOS (un
 falso positivo aquí no es un aviso, es un servicio que no arranca).
 
-## Lo que este fichero NO cubre todavía
+## La segunda mitad: el suelo de longitud y entropía (2026-08-10)
 
-El suelo de **longitud/entropía** que el plan pide en el mismo punto (`"a" * 48`
-no lleva marcador y hoy pasa). Cablearlo pone en rojo 22 tests de 5 ficheros
-cuyos helpers fingen secretos con `"x" * 48`; dos de esos ficheros los estaba
-escribiendo otro carril en la misma sesión. Queda reportado, no fingido.
+El marcador-substring sólo sabe reconocer los defaults que este repo publica.
+`"a" * 48` no lleva ninguno, así que pasaba — y firma sesiones igual de bien que
+la cadena que genera el instalador. El plan pedía complementarlo con «un mínimo
+de 24 caracteres y rechazo de valores de entropía trivial».
+
+Se aplica **sólo con `environment` declarado explícitamente a `staging`/`prod`**,
+que es el ámbito que pide el plan y el que acota el riesgo 2: un falso positivo
+aquí no es un aviso, es un servicio que no arranca. El camino de «dev implícito +
+BD remota» sigue rechazando únicamente lo inequívoco (marcador de dev).
+
+Dos criterios, porque uno solo se esquiva sin querer:
+
+* **longitud ≥ 24** — un secreto corto es adivinable aunque sea aleatorio;
+* **variedad**: al menos 8 caracteres DISTINTOS y una entropía de Shannon ≥ 2
+  bits por carácter. Lo primero tumba `"x" * 48`; lo segundo tumba
+  `"a"*40 + "bcdefghi"`, que tiene 9 distintos y sigue siendo trivial.
+
+Los umbrales están deliberadamente bajos: `secrets.token_urlsafe(36)` (lo que
+genera el instalador) da ~30 caracteres distintos y ~5,3 bits/carácter, o sea
+pasa con seis veces de margen. Lo que se persigue es el relleno de plantilla, no
+la contraseña mediocre de un operador.
 """
 
 from __future__ import annotations
@@ -186,3 +203,105 @@ def test_explicit_staging_and_prod_are_unaffected() -> None:
         assert Settings(environment=env, **_real()).environment == env
         with pytest.raises(ValidationError):
             Settings(environment=env, **_real(jwt_secret=_DEV_JWT))
+
+
+# ---------------------------------------------------------------------------
+# Suelo de longitud y entropía (segunda mitad de task_prod10_04)
+# ---------------------------------------------------------------------------
+#: Las familias que el suelo cubre, con un valor trivial que HOY pasaba el
+#: marcador-substring. Se parametriza para que añadir una familia al config sin
+#: añadirla aquí se note (el test de descubrimiento de abajo lo comprueba).
+_TRIVIAL_BY_FAMILY = {
+    "jwt_secret": "x" * 48,
+    "internal_token_secret": "q" * 48,
+    "review_url_signing_secret": "y" * 48,
+    "sso_encryption_key": "w" * 48,
+    "notification_encryption_key": "n" * 48,
+    "incoming_webhook_encryption_key": "i" * 48,
+    "minio_secret_key": "z" * 48,
+    # Sólo cuenta cuando es DEDICADA: si hereda el anillo de SSO, ese anillo ya
+    # lo cubre la entrada de arriba.
+    "mfa_encryption_key": "m" * 48,
+}
+
+
+@pytest.mark.parametrize("field", sorted(_TRIVIAL_BY_FAMILY))
+@pytest.mark.parametrize("env", ["staging", "prod"])
+def test_a_single_repeated_character_is_rejected(env: str, field: str) -> None:
+    """`"x" * 48` no lleva marcador de dev, mide 48 caracteres y hoy arrancaba
+    producción. Firma sesiones y cifra secretos exactamente igual de bien que la
+    cadena del instalador — y se adivina en un intento."""
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(environment=env, **_real(**{field: _TRIVIAL_BY_FAMILY[field]}))
+
+    rendered = str(excinfo.value)
+    assert field.upper() in rendered.upper(), (
+        f"el error no nombra la variable ofensora; el operador no sabrá cuál "
+        f"cambiar:\n{rendered}"
+    )
+
+
+@pytest.mark.parametrize("env", ["staging", "prod"])
+def test_a_short_secret_is_rejected_even_if_random(env: str) -> None:
+    """Aleatorio pero corto sigue siendo adivinable. 24 es el suelo que pide el
+    plan; el instalador genera 48."""
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(environment=env, **_real(sso_encryption_key=secrets.token_urlsafe(8)[:12]))
+
+    assert "SSO_ENCRYPTION_KEY" in str(excinfo.value).upper()
+
+
+@pytest.mark.parametrize("env", ["staging", "prod"])
+def test_a_long_value_with_almost_no_variety_is_rejected(env: str) -> None:
+    """El contraejemplo del criterio de «caracteres distintos» a secas:
+    `"a"*40 + "bcdefghi"` tiene 9 distintos y sigue siendo relleno. Lo caza la
+    entropía de Shannon."""
+    with pytest.raises(ValidationError):
+        Settings(environment=env, **_real(notification_encryption_key="a" * 40 + "bcdefghi"))
+
+
+# --- contrapesos: lo que NO puede romper -----------------------------------
+@pytest.mark.parametrize("env", ["staging", "prod"])
+def test_installer_grade_secrets_pass_with_margin(env: str) -> None:
+    """El caso que importa no romper: lo que genera el instalador
+    (`secrets.token_urlsafe(36)`) pasa con seis veces de margen."""
+    assert Settings(environment=env, **_real()).environment == env
+
+
+@pytest.mark.parametrize("env", ["staging", "prod"])
+def test_a_human_chosen_passphrase_still_passes(env: str) -> None:
+    """Umbral deliberadamente bajo: se persigue el relleno de plantilla, no la
+    contraseña mediocre de un operador con prisa. Romper el arranque de un stack
+    real por severidad de más es el riesgo 2 del plan."""
+    passphrase = "correct-horse-battery-staple-2026"
+    assert Settings(environment=env, **_real(sso_encryption_key=passphrase)).environment == env
+
+
+def test_dev_is_untouched_by_the_entropy_floor() -> None:
+    """En dev NADA de esto aplica: los defaults del repo son literalmente
+    `dev-only-…` y media suite construye `Settings()` a pelo."""
+    assert Settings().environment == "dev"
+    assert Settings(environment="dev", jwt_secret="x" * 48).environment == "dev"
+
+
+def test_implicit_dev_with_a_remote_dsn_does_not_apply_the_entropy_floor() -> None:
+    """Acotación deliberada del radio: sin `environment` declarado se sigue
+    rechazando SÓLO lo inequívoco (un marcador de dev). Un stack del instalador
+    que olvidó la variable y lleva un secreto flojo arranca — y se queja el
+    catálogo de variables, no el arranque."""
+    assert Settings(**_real(jwt_secret="x" * 48, database_url=_REMOTE_DSN)).environment == "dev"
+
+
+def test_the_guard_covers_every_family_the_config_declares() -> None:
+    """Guarda de descubrimiento (§4): si mañana se añade una familia de secretos
+    al config y no entra en el suelo, este test lo dice — en vez de dejar la
+    parametrización de arriba pasando en vacío sobre las de siempre."""
+    from api_server.config import entropy_checked_secret_fields
+
+    declared = set(entropy_checked_secret_fields())
+    assert declared, "la lista de familias con suelo de entropía está vacía"
+    missing = declared - set(_TRIVIAL_BY_FAMILY)
+    assert not missing, (
+        f"estas familias tienen suelo de entropía en el config pero no se prueban "
+        f"aquí: {sorted(missing)}"
+    )

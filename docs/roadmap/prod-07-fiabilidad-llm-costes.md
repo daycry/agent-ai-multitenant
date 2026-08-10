@@ -356,8 +356,48 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_10` — Credencial fuera del env del contenedor
 
-- [ ] **Título**: Mount tmpfs read-only para el secreto; env solo con puntero
-  - ⏳ **Pendiente (2026-08-01) — re-verificado, sigue haciendo falta.** La
+- [x] **Título**: Mount tmpfs read-only para el secreto; env solo con puntero
+  - ✅ **Cerrada (2026-08-10).** La credencial ya no viaja en el env. El worker
+    parte el spec resuelto en (público, credenciales) con
+    `workers/model_secret.py::split_model_credentials`, escribe las credenciales
+    en un fichero 0444 bajo `{data_root}/run-secrets/` y lo bind-montea
+    **read-only** en `/run/secrets` reutilizando `workers/secrets.py::stage_secrets`
+    — que llevaba desde el Plan 02 escrito y con CERO llamantes productivos, el
+    modo de fallo nº 1 de esta base. En `AGENT_TASK_SPEC` sólo queda el puntero
+    `model.credentials_file`. El runtime lo hidrata en `_load_spec`
+    (`agent_runtime/spec_secrets.py`), la única puerta por la que entra un spec,
+    así que ni una firma cambia aguas abajo. Y `container.py::_scrub_env` redacta
+    los valores sensibles del `config_env` capturado.
+  - **Lo que se midió y por qué NO es un `tmpfs` de Docker, pese al título:** un
+    `--tmpfs` nace VACÍO — no hay forma de pre-cargarlo, así que no puede
+    entregar un valor. Y el worker lanza contenedores HERMANOS: el daemon
+    resuelve el origen de un bind en el HOST, de modo que escribir en el
+    `/dev/shm` del worker (que sí es tmpfs) no le serviría. El staging vive bajo
+    `data_root` porque es la única ruta que el compose garantiza idéntica en host
+    y worker (`WORKERS_DATA_ROOT=/var/lib/docker/volumes/agentic-platform-agent-data/_data`),
+    la misma razón por la que el worktree se monta desde ahí y funciona. Residuo
+    escrito en el módulo: el fichero toca el disco del host mientras dura el run,
+    acotado por directorio aleatorio por lanzamiento + 0444 + borrado en un
+    `finally`.
+  - **Tests (los dos que el plan nombra), verificados en ROJO antes de darlos por
+    buenos:** `tests/unit/test_model_credential_not_in_env.py` (9), que asserta
+    que el valor del secreto no aparece en NINGUNA variable del env serializado —
+    y trae su contraste, un test que comprueba que SIN el split sí aparecía;
+    `docker/agent-runtimes/agent-runtime/tests/test_spec_secret_file.py` (6), que
+    incluye el arranque real por `_load_spec`; `tests/unit/test_container_env_scrubbing.py`
+    (3); y `tests/integration/test_worker_launches_container.py -k secret_mount`,
+    que lo prueba **contra un daemon Docker de verdad**: el contenedor lee su
+    credencial del mount, no puede escribirla, y el env no la lleva.
+  - ⚠ **LO QUE FALTA Y ES DE UN HUMANO — el ORDEN de despliegue.** La imagen
+    `agent-runtime` **no se ha reconstruido**. Una imagen antigua ignora el
+    puntero y arranca sin credencial (401 dentro del sandbox). La imagen nueva
+    entiende los DOS formatos, así que **el orden seguro es: reconstruir la
+    imagen PRIMERO, desplegar el worker DESPUÉS**. Válvula de escape si hay que
+    desplegar el worker antes: `WORKERS_MODEL_CREDENTIAL_FILE=false` en el `.env`,
+    sin tocar el compose. Y queda sin ejercitar el camino con un run real: lo que
+    se ha probado con Docker es el mount (con `python:3.12-slim`), no un run
+    completo del reviewer/implementador bajo la imagen nueva.
+  - ⏳ ~~**Pendiente (2026-08-01) — re-verificado, sigue haciendo falta.**~~ La
     credencial se superpone al model spec (`workers/model_resolver.py:177`,
     `overlay_credentials`) y el spec entero viaja en el env como
     `AGENT_TASK_SPEC` (`workers/execution.py:184`). El seam existe

@@ -23,6 +23,7 @@ import contextlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
@@ -52,6 +53,11 @@ from workers.model_resolver import (
     resolve_model_spec,
     safe_spec_summary,
 )
+from workers.model_secret import (
+    STAGING_SUBDIR,
+    split_model_credentials,
+    stage_model_credentials,
+)
 from workers.review_diff import compute_task_review_diff
 from workers.run_contract import (
     CrossTenantExecutionError,
@@ -70,6 +76,7 @@ from workers.run_spec import (
     _agent_spec,
     _resolve_tool_spec_images,
 )
+from workers.secrets import StagedSecrets
 
 # Re-exports EXPLÍCITOS: la casa histórica de estos símbolos es este módulo —
 # tasks/maintenance/tests siguen importando de workers.execution. `__all__`
@@ -299,10 +306,17 @@ def _default_vault_store() -> Any:
     settings = get_settings()
     if not settings.vault_token:
         return None
-    import hvac
     from api_server.llm_providers.vault import HvacLLMProviderVaultStore
 
-    client = hvac.Client(url=settings.vault_url, token=settings.vault_token)
+    # prod-10 task_prod10_07: por la fábrica compartida, que mantiene vivo el
+    # token del worker. Con el `hvac.Client` construido aquí a mano, el día que
+    # el token caducase TODA ejecución volvería a correr con
+    # `has_credential=False` — sin un cambio de configuración que lo explicase.
+    from workers.vault_client import build_worker_vault_client
+
+    client = build_worker_vault_client(settings)
+    if client is None:
+        return None
     return HvacLLMProviderVaultStore(client=client)
 
 
@@ -1242,6 +1256,47 @@ async def _provision_workspace(
     return ws
 
 
+def _stage_model_credentials(
+    resolved_model: dict[str, Any] | None,
+    *,
+    settings: Settings,
+) -> tuple[dict[str, Any] | None, StagedSecrets | None]:
+    """Saca la credencial del spec y la deja en un mount read-only (prod-07 task_prod07_10).
+
+    Devuelve ``(spec público, staging)``. El staging es ``None`` —y no hay mount—
+    en los tres casos en que no hay nada que esconder: el flag apagado, un modelo
+    sin credencial (ollama local, kind ``scripted``) y un ``resolved_model``
+    vacío. Quien lo reciba **debe** llamar a ``cleanup()`` en un ``finally``.
+
+    Falla en abierto a propósito: si el staging no se puede escribir —disco
+    lleno, permisos, ``data_root`` no montado— se vuelve al formato en línea con
+    un aviso en vez de tumbar el run. La alternativa (abortar) convertiría un
+    problema de disco del worker en «ninguna tarea del tenant se ejecuta», que es
+    un fallo mucho peor que el que esta tarea previene.
+    """
+    if not settings.model_credential_file:
+        return resolved_model, None
+    public_model, secrets = split_model_credentials(resolved_model)
+    if not secrets:
+        return resolved_model, None
+    staging_root = Path(settings.data_root) / STAGING_SUBDIR
+    try:
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staged = stage_model_credentials(secrets, base_dir=str(staging_root))
+    except OSError as exc:
+        _log.warning(
+            "workers.model_credential_staging_failed",
+            error=str(exc),
+            staging_root=str(staging_root),
+            detail=(
+                "no se pudo escribir el fichero de credencial del modelo; el run "
+                "sigue con el formato antiguo (credencial en AGENT_TASK_SPEC)"
+            ),
+        )
+        return resolved_model, None
+    return public_model, staged
+
+
 async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll de cancelación
     request: ExecutionRequest,
     *,
@@ -1311,6 +1366,13 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
     container_timeout = settings.container_timeout_with_grace_for_kind(
         resolved_kind, is_review=request.review
     )
+    # prod-07 task_prod07_10: la credencial sale del env y entra por un mount
+    # read-only; `public_model` es el mismo spec con el PUNTERO en su lugar. Sin
+    # credencial que mover (ollama local, kind scripted) no se monta nada y el
+    # spec sale idéntico — no se paga por lo que no se usa.
+    public_model, staged_credentials = _stage_model_credentials(
+        prepared.resolved_model, settings=settings
+    )
     container_spec = ContainerSpec(
         image=settings.agent_runtime_image,
         env=_build_runtime_env(
@@ -1318,7 +1380,7 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             prepared.approval_policy,
             agent_internal_api_url=settings.agent_internal_api_url,
             # El spec RESUELTO (kind + endpoint + credencial) — ADR 0057 F1.
-            model_spec=prepared.resolved_model,
+            model_spec=public_model,
             # La definición de "hecho" de la tarea → al prompt de decisión,
             # para que el comportamiento (leer/escribir/test) lo dicte la tarea.
             acceptance_criteria=prepared.task_acceptance_criteria,
@@ -1353,6 +1415,7 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
         labels={"com.agentic-platform.execution-id": exec_id},
         workspace_host_path=workspace.host_path,
         workspace_read_only=workspace.read_only,
+        extra_mounts=tuple(staged_credentials.mounts) if staged_credentials else (),
     )
     active_runner = runner or AgentContainerRunner(settings)
     cancel_seen = False
@@ -1390,6 +1453,12 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
+        # El staging del secreto se borra SIEMPRE — timeout, cancelación,
+        # excepción del daemon. Un `finally` y no el camino feliz porque el
+        # camino feliz es justo el que no deja ficheros olvidados; los deja el
+        # otro (prod-07 task_prod07_10).
+        if staged_credentials is not None:
+            staged_credentials.cleanup()
     await queue.put(None)
     await drainer
 

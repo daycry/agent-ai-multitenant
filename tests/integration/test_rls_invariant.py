@@ -62,6 +62,18 @@ pytestmark = [pytest.mark.integration, pytest.mark.cross_tenant]
 # ---------------------------------------------------------------------------
 GLOBAL_TABLES_ALLOWLIST: dict[str, str] = {
     "alembic_version": "Contabilidad interna de Alembic (una fila con el revision id).",
+    "approval_policy_backfill_0133": (
+        "Respaldo interno de la migración 0133: guarda la política previa de cada"
+        " proyecto para que su `downgrade` pueda restaurarla. La escribe el"
+        " `upgrade` y la lee el `downgrade`, ambos como `migrations_user`; la"
+        " APLICACIÓN no la toca. No lleva `tenant_id` porque no se le da acceso:"
+        " la migración 0138 le revoca todo permiso a `app_user` y `service_user`,"
+        " y `test_the_backfill_table_is_unreachable_from_the_app` lo comprueba —"
+        " esta entrada NO es una promesa sobre el papel. Nació legible por"
+        " descuido (los default privileges de 02-roles.sh alcanzan a toda tabla"
+        " que Alembic cree), y así cualquier tenant podía leer la configuración"
+        " de aprobación de los proyectos de los demás."
+    ),
     "organizations": (
         "ES el tenant. Su aislamiento no es `tenant_id = app.tenant_id` sino"
         " `id = app.tenant_id` (policy `org_self_only`, migración 0001)."
@@ -268,6 +280,62 @@ def test_every_tenant_scoped_table_has_complete_rls(schema) -> None:
         " WITH CHECK (...);\n"
         "…o, si la tabla es global a propósito, documéntala en la allowlist de"
         f" este fichero.\nOfensores: {offenders}"
+    )
+
+
+def test_the_backfill_table_is_unreachable_from_the_app(
+    alembic_config: object, migrations_pg_dsn: str
+) -> None:
+    """La tabla de respaldo de la 0133 no la puede leer la aplicación.
+
+    Su entrada en `GLOBAL_TABLES_ALLOWLIST` dice que no lleva `tenant_id` porque
+    la aplicación no tiene acceso. Este test es lo que convierte esa frase en una
+    afirmación: sin él, la justificación sería exactamente el tipo de promesa que
+    esta suite existe para no creerse.
+
+    Se comprueba con `has_table_privilege` y no leyendo la tabla: un `SELECT` que
+    no devuelve filas se parece demasiado a un `SELECT` prohibido, y esa
+    ambigüedad es la que dejaría pasar el fallo.
+
+    Sobre `migrations_user` NO se afirma nada: es quien la escribe al subir y
+    quien la lee al bajar. Quitarle el acceso rompería el `downgrade` de la 0133,
+    o sea la reversibilidad que la tabla existe para dar.
+    """
+    command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
+
+    async def _privileges() -> dict[str, list[str]]:
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            out: dict[str, list[str]] = {}
+            for role in ("app_user", "service_user"):
+                existe = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", role)
+                if not existe:
+                    continue
+                concedidos = []
+                for priv in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    tiene = await conn.fetchval(
+                        "SELECT has_table_privilege($1, 'approval_policy_backfill_0133', $2)",
+                        role,
+                        priv,
+                    )
+                    if tiene:
+                        concedidos.append(priv)
+                out[role] = concedidos
+            return out
+
+        finally:
+            await conn.close()
+
+    por_rol = asyncio.run(_privileges())
+    # Control positivo: si el descubrimiento no encuentra ningún rol, este test
+    # pasaría en vacío afirmando nada.
+    assert por_rol, "no se encontró ni app_user ni service_user: el test pasaría en vacío"
+    con_acceso = {rol: privs for rol, privs in por_rol.items() if privs}
+    assert not con_acceso, (
+        "la tabla de respaldo de la 0133 es accesible desde la aplicación: "
+        f"{con_acceso}. Sin `tenant_id` ni RLS, eso deja a cualquier tenant leer "
+        "la configuración de aprobación de los proyectos de los demás (lo arregla "
+        "la migración 0138)"
     )
 
 

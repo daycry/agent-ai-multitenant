@@ -31,10 +31,15 @@ def _vault_store(settings: Settings) -> Any | None:
     if not url or not token:
         return None
     try:
-        import hvac
         from api_server.llm_providers.vault import HvacLLMProviderVaultStore
 
-        return HvacLLMProviderVaultStore(hvac.Client(url=url, token=token))
+        # prod-10 task_prod10_07: fábrica compartida del worker (renueva el token).
+        from workers.vault_client import build_worker_vault_client
+
+        client = build_worker_vault_client(settings)
+        if client is None:
+            return None
+        return HvacLLMProviderVaultStore(client)
     except Exception as exc:  # pragma: no cover - binding de install
         _log.warning("repo_clone.vault_unavailable", error=str(exc))
         return None

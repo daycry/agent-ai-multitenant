@@ -19,7 +19,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
-import { McpToolRolePolicySection } from "@/app/admin/projects/[id]/mcp-servers/mcp-server-sections";
+// El troceo de prod-16 `task_prod16_08` movió el componente a su propio
+// fichero. Sólo cambia de dónde se importa: ni una aserción se ha tocado.
+import { McpToolRolePolicySection } from "@/app/admin/projects/[id]/mcp-servers/mcp-tool-roles-section";
 
 const MCP_TOOLS = [
   {

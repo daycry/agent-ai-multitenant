@@ -32,7 +32,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 
-import { McpServerCard, McpServerDialog, McpToolRolePolicySection } from "./mcp-server-sections";
+import { McpServerCard } from "./mcp-server-card";
+import { McpServerDialog } from "./mcp-server-dialog";
+import { McpToolRolePolicySection } from "./mcp-tool-roles-section";
 import {
   authKindByUrl,
   emptyServer,
