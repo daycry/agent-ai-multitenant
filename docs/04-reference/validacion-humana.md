@@ -103,12 +103,51 @@ Un proyecto **sin** política explícita hereda el preset por defecto de
 plataforma (`default_approval_policy_preset`, default `development`) — ADR 0104.
 No se queda sin gate.
 
-> ⚠️ **Hueco abierto y documentado**: los proyectos creados desde una **plantilla
-> de proyecto** no copian un preset, copian `_POLICY_DEV_SKELETON`, que lista
-> cuatro claves. Diez de las trece categorías les quedan en `auto` por omisión.
-> La decisión de qué hacer con una categoría no listada está en el
-> [ADR 0153](../05-architecture-decisions/0153-categoria-no-listada-en-la-politica-de-aprobacion.md),
-> **`proposed`, pendiente del operador**.
+## Qué pasa con una categoría que la política NO lista
+
+Hasta el [ADR 0153](../05-architecture-decisions/0153-categoria-no-listada-en-la-politica-de-aprobacion.md)
+esto era **fail-open**: lo que la política no nombraba corría sin humano. Y lo
+que acaba en `projects.human_approval_policy` no siempre nombra las 13 — los
+proyectos creados desde una plantilla copian su esqueleto, no un preset.
+
+Ahora lo decide la política, con esta clave **hermana** de `categories`:
+
+```json
+{
+  "preset": "production",
+  "categories": { "code_changes": "auto", "...": "..." },
+  "unlisted_category": "human_required"
+}
+```
+
+Orden de resolución, idéntico en el api-server (`db/approval_repo.py`) y en el
+gate del sandbox (`agent_runtime/approval.py`) — son **dos implementaciones
+espejo** que no se importan entre sí, y `tests/unit/test_unlisted_approval_category.py`
+las compara caso a caso:
+
+1. la categoría está en `categories` → manda esa decisión;
+2. hay `unlisted_category` (`auto` \| `human_required`) → manda esa;
+3. no la hay → se deriva del `preset`: `auto` en `sandbox`/`development`,
+   `human_required` en `production`/`customer-external`;
+4. no hay preset reconocible, o el valor de la clave no se entiende →
+   **`human_required` (fail-closed)**.
+
+El punto 4 es deliberado: ante una política que no se sabe interpretar, parar y
+preguntar es recuperable; dejar correr una acción sensible, no. La solicitud que
+nace así lleva un campo `gate_reason` con el motivo en castellano —«la política
+no lista esta categoría y su preset es X»—, visible en la pantalla de
+aprobaciones. Sin él, quien recibe la aprobación no puede deducir por qué paró y
+la aprueba sin leer.
+
+La clave se ve y se edita en **/admin/approval-policy**, como una fila más de la
+tabla de categorías, y se escribe siempre al aplicar la política a un proyecto.
+La API rechaza (422) un valor que no sea `auto` o `human_required`, y rechaza
+colarla DENTRO de `categories` — ahí sería una categoría fantasma que ningún
+`review()` consulta, que es exactamente lo que le pasaba a `external_http`.
+
+> Un proyecto **sin** política (`NULL` / `{}`) no entra aquí: lo cubre el ADR
+> 0104 heredando el preset de plataforma. Fallar cerrado ahí gatearía todo run
+> de un proyecto recién creado antes de que ese preset llegue a aplicarse.
 
 ## Ciclo de vida de una solicitud
 

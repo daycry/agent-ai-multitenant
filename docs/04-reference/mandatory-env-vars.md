@@ -46,15 +46,41 @@ desarrollo viven en `.env.example` y no en el overlay.
 
 ## Catálogo
 
-| Variable                   | Fichero que la exige        | Qué protege                                                                                   |
-| -------------------------- | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `POSTGRES_PASSWORD`        | `docker-compose.yml`        | Superusuario de PostgreSQL.                                                                   |
-| `MIGRATIONS_USER_PASSWORD` | `docker-compose.yml`        | Rol dueño del esquema (DDL de Alembic).                                                       |
-| `APP_USER_PASSWORD`        | `docker-compose.yml`        | Rol de aplicación (NOBYPASSRLS) con el que corren los servicios.                              |
-| `REDIS_PASSWORD`           | `docker-compose.yml`        | Sesiones de servidor + broker de Celery + contadores de rate limit. Ver nota abajo.           |
-| `MINIO_ROOT_PASSWORD`      | `docker-compose.yml`        | Object storage: adjuntos, documentos de KB y **bundles de backup**.                           |
-| `SEARXNG_SECRET`           | `docker-compose.yml`        | Firma de formularios/cookies del buscador del córtex.                                         |
-| `GRAFANA_ADMIN_PASSWORD`   | `docker-compose.monitoring` | Panel con acceso a todas las métricas del stack. Sólo si apilas el overlay de observabilidad. |
+| Variable                         | Fichero que la exige        | Qué protege                                                                                   |
+| -------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD`              | `docker-compose.yml`        | Superusuario de PostgreSQL.                                                                   |
+| `MIGRATIONS_USER_PASSWORD`       | `docker-compose.yml`        | Rol dueño del esquema (DDL de Alembic).                                                       |
+| `APP_USER_PASSWORD`              | `docker-compose.yml`        | Rol de aplicación (NOBYPASSRLS) con el que corren los servicios.                              |
+| `SERVICE_USER_PASSWORD`          | `docker-compose.yml`        | Rol **BYPASSRLS sin DDL** de workers/orchestrator/dispatcher. Ver nota abajo.                 |
+| `REDIS_PASSWORD`                 | `docker-compose.yml`        | Sesiones de servidor + broker de Celery + contadores de rate limit. Ver nota abajo.           |
+| `MINIO_ROOT_PASSWORD`            | `docker-compose.yml`        | Object storage: adjuntos, documentos de KB y **bundles de backup**.                           |
+| `SEARXNG_SECRET`                 | `docker-compose.yml`        | Firma de formularios/cookies del buscador del córtex.                                         |
+| `GRAFANA_ADMIN_PASSWORD`         | `docker-compose.monitoring` | Panel con acceso a todas las métricas del stack. Sólo si apilas el overlay de observabilidad. |
+| `API_SERVER_ALERTS_INGEST_TOKEN` | `docker-compose.yml`        | Secreto compartido de `POST /internal/alerts/ingest`. Ver nota abajo.                         |
+
+### `SERVICE_USER_PASSWORD` — la llave que se salta la RLS
+
+`service_user` es el rol con el que corren los workers, el orchestrator y el
+notification-dispatcher: **BYPASSRLS y sin DDL**. Es decir, una credencial que ve
+los datos de todos los tenants a la vez — el reverso exacto del principio rector
+
+1.
+
+El contrato estaba roto en la costura entre dos ficheros, que es donde no mira
+ninguna suite: `docker/postgres/init/05-service-role-password.sh` honraba la
+variable, y el compose **nunca se la pasaba**, así que un arranque limpio creaba
+el rol con el literal `changeme-service-dev-only` que está escrito en este
+repositorio. La única señal era una línea en el `stderr` del contenedor de
+postgres. Desde prod-14 `task_prod14_04` la variable es obligatoria y
+`tests/security/test_service_user_password_is_wired.py` vigila las dos puntas.
+
+### `API_SERVER_ALERTS_INGEST_TOKEN` — quien no lo presenta, no avisa
+
+Autentica la ingesta de alertas: lo presentan **Alertmanager** y el **watchdog**,
+y lo valida el api-server. Sin él, el endpoint responde 503 (fail-closed) y los
+emisores se comen un 401 en cada alerta. Por eso no lleva default: un emisor que
+cree avisar y no avisa es peor que no tener la cadena montada, porque nadie
+vuelve a mirar.
 
 ### `REDIS_PASSWORD` — los clientes también
 

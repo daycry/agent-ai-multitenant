@@ -206,6 +206,20 @@ integridad de las imágenes en build).
   avisos abarca toda la línea 14. Sin esa frase, el patrón observado es que cada
   ola vuelve a medir lo mismo y concluye lo mismo.
 
+- **2026-08-02 — NO se ha vuelto a medir, a propósito.** Tres mediciones idénticas
+  bastan; una cuarta sería exactamente el trabajo-teatro contra el que avisa la
+  nota de arriba. Lo que faltaba y ya está: **la decisión escrita COMO decisión**,
+  con sus dos salidas y su coste, en el §6 de
+  [`triage-vulnerabilidades.md`](../06-runbooks/triage-vulnerabilidades.md)
+  («Checklist del operador»). O **(a)** se abre un plan/ADR de migración a
+  **next 16** para el `admin-panel` y el frontend del `installer`, o **(b)** se
+  declaran los dos avisos `high` como excepción razonada con
+  `# review: YYYY-MM-DD`, asumiendo por escrito el riesgo residual hasta que
+  exista (a). Cualquiera de las dos desbloquea `task_sca_gate_08`; **no elegir es
+  lo único que no lo desbloquea**, y ahí lleva atascado desde el 2026-07-31.
+  Sigue abierta porque su test declarado (`npm audit … --audit-level=high`) no
+  puede salir en verde hasta que se ejecute (a) o se registre (b).
+
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
 - [x] **Título**: Dependabot con 4 ecosistemas y agrupación de PRs
@@ -412,6 +426,25 @@ integridad de las imágenes en build).
      los dos ficheros, en verde). El modo del job es explícito, no un olvido
      (`test_security_scan_declares_its_gate_mode`), así que flipearlo es un cambio
      de una línea. El procedimiento completo, en el runbook §6.
+- **2026-08-02 — sigue GATED EN UN HUMANO; lo que se ha hecho es quitarle toda la
+  fricción.** Re-verificado que `continue-on-error: true` sigue en el job
+  (`.github/workflows/ci.yml:321`). El runbook §6 lleva ahora una **«Checklist del
+  operador»** con los cinco pasos en orden y el detalle que se olvida:
+  1. elegir (a) plan de migración a next 16 o (b) excepción razonada — es el único
+     bloqueante técnico;
+  2. borrar la línea `continue-on-error: true` (hoy la **321**, justo bajo
+     `timeout-minutes: 30`);
+  3. Settings → Branches → `master` → añadir el check con su **nombre exacto**,
+     `SCA (pip-audit + npm audit)` — es el `name:` del job, no el id
+     `security-scan`; con el id, el check nunca casa y la protección queda de
+     adorno **sin avisar de nada**;
+  4. arreglar antes la facturación de la cuenta: un check requerido que nunca
+     corre **bloquea todos los merges**, así que hacer el paso 3 con CI caído deja
+     el repo sin poder integrar;
+  5. verificar con el test humano `human_prod11_01`.
+     No la marco: los pasos 2–4 exigen permisos de administración del repositorio y
+     el 1 es una decisión de alcance. Marcarla sería declarar obligatorio un gate que
+     nadie puede exigir todavía.
 
 ### Fase C — Lockfile Python y builds reproducibles
 
@@ -536,6 +569,31 @@ integridad de las imágenes en build).
   `test_security_headers_middleware.py` — ficheros de materia ajena a este carril
   y que otros carriles están tocando en esta misma pasada. Se deja **diagnosticado
   y no parcheado** a propósito.
+
+- ✅ **2026-08-02: la causa del rojo YA ESTÁ ARREGLADA — por otro carril, y mejor
+  de lo que se había propuesto.** El commit `d8fbacff` no parcheó los dos tests:
+  extrajo el idioma a `apps/api-server/src/api_server/routing_introspection.py`
+  (`route_paths`), que lee las rutas con independencia de si FastAPI aplana
+  `include_router()` o las envuelve en `_IncludedRouter`. Verificado hoy: ninguno
+  de los dos ficheros recorre ya `app.routes` leyendo `.path`.
+  Y el módulo documenta algo que este plan no había visto: el idioma roto no solo
+  ponía dos tests en rojo, sino que **`main._is_admin_surface` decide con esa
+  misma introspección si un router lleva `require_hardened_system_admin`**. Con
+  0.141, un router administrativo compuesto de sub-routers se habría montado
+  **sin la guarda** — el modo de fallo por el que esa función existe. O sea que el
+  rojo del lock estaba tapando una trampa de seguridad armada, no un capricho de
+  versión.
+- **Por qué la casilla sigue SIN marcar**: `auto_prod11_10_b` es «la suite
+  completa sigue verde **instalada desde el lock**», y eso **no se ha ejecutado
+  hoy**. Se intentó reconstruir el entorno de CI (`uv venv --seed --python 3.12` +
+  los 12 editable installs con `-c constraints.txt`) y **el build superó el
+  presupuesto de tiempo de esta pasada**. Aunque hubiera terminado, el resultado
+  no habría sido atribuible: hay cuatro carriles escribiendo en el árbol y la
+  colecta de `tests/unit` ya falla por un fichero ajeno a medias
+  (`test_unlisted_approval_category.py` importando un símbolo que aún no existe).
+  **No se marca sobre una suposición**: queda pendiente de una ejecución en árbol
+  quieto, o del primer CI verde cuando se arregle la facturación. El bloqueante
+  conocido, eso sí, ya no está.
 
 ### Fase D — Pin por digest e imágenes inmutables
 

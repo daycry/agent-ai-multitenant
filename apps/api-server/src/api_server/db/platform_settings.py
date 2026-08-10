@@ -10,7 +10,9 @@ helpers fall back to the platform default.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import weakref
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -56,16 +58,59 @@ def _cache_key(key: str) -> str:
     return f"{_CACHE_PREFIX}{key}"
 
 
-async def _cached_read(key: str) -> tuple[bool, Any]:
-    """`(hit, valor)`. Un fallo de Redis es `(False, None)`: se cae a la BD.
+# ---------------------------------------------------------------------------
+# El cliente Redis y el event loop
+# ---------------------------------------------------------------------------
+# `auth.deps.get_redis` es un `lru_cache(maxsize=1)`: un singleton de PROCESO. En
+# el api-server eso es correcto —un único loop para toda la vida del proceso—,
+# pero en los WORKERS cada tarea Celery abre su propio `asyncio.run(...)`, que
+# crea un loop y lo cierra al terminar. El cliente cacheado conserva conexiones
+# atadas al loop de la primera tarea, así que desde la segunda en adelante la
+# primera llamada levanta («Future attached to a different loop») y la captura de
+# abajo la traduce a "cache miss".
+#
+# Efecto medido: en los workers la caché NUNCA acertaba y toda lectura iba a
+# PostgreSQL, incluidas las del camino caliente de cada run — sin un solo error
+# en los logs, porque degradar en silencio es justo lo que debe hacer una caché.
+# No era incorrección, y por eso sobrevivió: el código "tenía caché".
+#
+# El arreglo es reconstruir el cliente cuando cambia el loop, no callar el error.
+# Se guarda una referencia DÉBIL al loop: una fuerte mantendría vivo un loop
+# cerrado para siempre, y comparar por `id()` sería peor —los ids se reciclan,
+# así que un loop nuevo podría hacerse pasar por el viejo.
+# Dict de un solo hueco en vez de un `global`: el estado es de módulo igual, pero
+# se muta sin la sentencia que ruff (PLW0603) desaconseja con razón.
+_REDIS_BINDING: dict[str, weakref.ref[asyncio.AbstractEventLoop] | None] = {"loop": None}
+
+
+def reset_platform_setting_cache_binding() -> None:
+    """Olvida a qué loop está atado el cliente. Para tests; nunca en producción."""
+    _REDIS_BINDING["loop"] = None
+
+
+def _redis_for_this_loop() -> Any:
+    """El cliente Redis, reconstruido si el event loop ha cambiado.
 
     Import perezoso de `auth.deps` a propósito: `auth.deps` importa `db.session`
     y `db.models`, así que un import de módulo aquí cerraría el ciclo.
     """
-    try:
-        from api_server.auth.deps import get_redis
+    from api_server.auth.deps import get_redis, reset_redis_cache
 
-        raw = await get_redis().get(_cache_key(key))
+    loop = asyncio.get_running_loop()
+    previous = _REDIS_BINDING["loop"]
+    if previous is not None and previous() is not loop:
+        # Loop distinto (o ya recolectado): el cliente cacheado arrastra
+        # conexiones muertas. Se descarta para que `get_redis()` lo reconstruya
+        # atado al loop actual.
+        reset_redis_cache()
+    _REDIS_BINDING["loop"] = weakref.ref(loop)
+    return get_redis()
+
+
+async def _cached_read(key: str) -> tuple[bool, Any]:
+    """`(hit, valor)`. Un fallo de Redis es `(False, None)`: se cae a la BD."""
+    try:
+        raw = await _redis_for_this_loop().get(_cache_key(key))
     except Exception:  # Redis caído / no configurado: la BD sigue siendo la verdad
         return (False, None)
     if raw is None:
@@ -81,20 +126,21 @@ async def _cached_read(key: str) -> tuple[bool, Any]:
 
 async def _cache_write(key: str, value: Any, *, found: bool) -> None:
     try:
-        from api_server.auth.deps import get_redis
-
         payload = {"v": value} if found else _MISSING
-        await get_redis().setex(_cache_key(key), _CACHE_TTL_SECONDS, json.dumps(payload))
+        await _redis_for_this_loop().setex(_cache_key(key), _CACHE_TTL_SECONDS, json.dumps(payload))
     except Exception:  # el cacheo es best-effort; nunca rompe la lectura
         return
 
 
 async def invalidate_platform_setting_cache(key: str) -> None:
-    """Borra la entrada de caché de `key`. Best-effort, idempotente."""
-    try:
-        from api_server.auth.deps import get_redis
+    """Borra la entrada de caché de `key`. Best-effort, idempotente.
 
-        await get_redis().delete(_cache_key(key))
+    También pasa por `_redis_for_this_loop`, y no es cosmético: si la
+    invalidación fallase por el loop cerrado, un valor cambiado desde un worker
+    seguiría servido desde la caché hasta que expire el TTL — y entre estas
+    claves hay límites de seguridad (`max_review_retries`, budgets)."""
+    try:
+        await _redis_for_this_loop().delete(_cache_key(key))
     except Exception:
         return
 

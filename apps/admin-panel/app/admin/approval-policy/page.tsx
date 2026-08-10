@@ -38,7 +38,37 @@ interface ApprovalPolicy {
   name: string;
   description: string | null;
   is_builtin: boolean;
-  categories: { categories: Record<string, Decision> };
+  categories: {
+    /** Slug del preset sembrado (`sandbox`, `production`, …), si lo trae. */
+    preset?: string;
+    categories: Record<string, Decision>;
+    /** ADR 0153: qué hace el gate con una categoría que la tabla no lista. */
+    unlisted_category?: Decision;
+  };
+}
+
+/**
+ * ADR 0153 — espejo del default que aplican `api_server.db.approval_repo` y
+ * `agent_runtime.approval` cuando la política no trae `unlisted_category`.
+ * Se pinta para que el operador VEA qué está decidiendo antes de guardar: una
+ * política que falla cerrado sin que se vea dónde se configura eso es un ticket
+ * de soporte por proyecto.
+ */
+const UNLISTED_DEFAULT_BY_PRESET: Record<string, Decision> = {
+  sandbox: "auto",
+  development: "auto",
+  production: "human_required",
+  "customer-external": "human_required",
+};
+
+/** Sin clave y sin preset reconocible se para: fail-closed, igual que el motor. */
+const UNLISTED_FALLBACK: Decision = "human_required";
+
+function baselineUnlisted(policy: ApprovalPolicy | null): Decision {
+  const explicit = policy?.categories.unlisted_category;
+  if (explicit === "auto" || explicit === "human_required") return explicit;
+  const preset = policy?.categories.preset;
+  return (preset && UNLISTED_DEFAULT_BY_PRESET[preset]) || UNLISTED_FALLBACK;
 }
 
 interface Project {
@@ -111,6 +141,8 @@ export default function ApprovalPolicyPage() {
   const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [overrides, setOverrides] = useState<Record<string, Decision>>({});
+  // ADR 0153: override de `unlisted_category`. `null` = el valor del preset.
+  const [unlistedOverride, setUnlistedOverride] = useState<Decision | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitOk, setSubmitOk] = useState(false);
 
@@ -124,6 +156,7 @@ export default function ApprovalPolicyPage() {
   // Reset overrides when the preset changes.
   useEffect(() => {
     setOverrides({});
+    setUnlistedOverride(null);
     setSubmitOk(false);
   }, [selectedPolicyId]);
 
@@ -135,6 +168,8 @@ export default function ApprovalPolicyPage() {
     ...baseDecisions,
     ...overrides,
   };
+  const baseUnlisted = baselineUnlisted(activePolicy);
+  const effectiveUnlisted: Decision = unlistedOverride ?? baseUnlisted;
 
   function toggle(category: string) {
     const current = effectiveDecisions[category] ?? "auto";
@@ -152,13 +187,28 @@ export default function ApprovalPolicyPage() {
     setSubmitOk(false);
   }
 
-  const dirty = Object.keys(overrides).length > 0;
+  function toggleUnlisted() {
+    const next: Decision = effectiveUnlisted === "auto" ? "human_required" : "auto";
+    setUnlistedOverride(next === baseUnlisted ? null : next);
+    setSubmitOk(false);
+  }
+
+  const dirty = Object.keys(overrides).length > 0 || unlistedOverride !== null;
 
   const save = useMutation({
     mutationFn: async () => {
       if (!selectedProjectId) throw new Error("Selecciona un proyecto.");
       const payload = {
-        human_approval_policy: { categories: effectiveDecisions },
+        human_approval_policy: {
+          // El slug viaja si el preset lo trae: es la segunda fuente de la que
+          // el motor deriva `unlisted_category` si algún día falta la clave.
+          ...(activePolicy?.categories.preset ? { preset: activePolicy.categories.preset } : {}),
+          categories: effectiveDecisions,
+          // Se escribe SIEMPRE, incluso valiendo lo mismo que el preset: una
+          // política que no la lleva deja su comportamiento en manos de un
+          // default del código, que es lo que el ADR 0153 vino a cerrar.
+          unlisted_category: effectiveUnlisted,
+        },
       };
       return apiFetch<Project>(`/projects/${selectedProjectId}`, {
         method: "PUT",
@@ -170,6 +220,7 @@ export default function ApprovalPolicyPage() {
       setSubmitError(null);
       setSubmitOk(true);
       setOverrides({});
+      setUnlistedOverride(null);
     },
     onError: (err: unknown) => {
       setSubmitOk(false);
@@ -303,6 +354,47 @@ export default function ApprovalPolicyPage() {
                   );
                 })}
               </ul>
+              {/* ADR 0153 — la 14.ª fila, que no es una categoría sino la regla
+                  para las que no están en la lista. Va DENTRO de la misma tabla
+                  a propósito: separada en otra tarjeta se lee como un ajuste
+                  avanzado y nadie la mira, y es la que decide qué pasa con lo
+                  que la política no nombra. */}
+              <div
+                data-testid="unlisted-category-row"
+                data-decision={effectiveUnlisted}
+                data-override={unlistedOverride !== null ? "true" : "false"}
+                className="bg-muted/40 flex items-center justify-between gap-3 border-t px-5 py-3"
+              >
+                <div>
+                  <p className="text-sm font-medium">Categoría no listada</p>
+                  <p className="text-muted-foreground text-xs">
+                    Qué hacer con una acción sensible cuya categoría no aparece arriba (una tool
+                    nueva, o una política escrita a mano e incompleta). <strong>Humano</strong> es
+                    la opción segura: para y pregunta.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {unlistedOverride !== null && (
+                    <Badge variant="info" data-testid="override-unlisted-category">
+                      Override
+                    </Badge>
+                  )}
+                  <button
+                    type="button"
+                    onClick={toggleUnlisted}
+                    data-testid="toggle-unlisted-category"
+                    className={cn(
+                      "rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                      effectiveUnlisted === "auto"
+                        ? "bg-success-soft text-success-soft-foreground hover:bg-success-soft/80"
+                        : "bg-warning-soft text-warning-soft-foreground hover:bg-warning-soft/80",
+                    )}
+                    aria-label={`Cambiar categoria no listada (actual: ${DECISION_BADGE[effectiveUnlisted].label})`}
+                  >
+                    {DECISION_BADGE[effectiveUnlisted].label}
+                  </button>
+                </div>
+              </div>
             </CardContent>
           </Card>
 

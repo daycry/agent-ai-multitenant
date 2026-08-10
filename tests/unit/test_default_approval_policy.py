@@ -23,9 +23,16 @@ def test_preset_decisions_development_gates_the_dangerous_categories() -> None:
     # El bucle de coding sigue en auto (no rompe la convergencia).
     assert dev["code_changes"] == "auto"
     assert dev["external_http_get"] == "auto"
-    # Lo peligroso queda gateado.
+    # Y las integraciones también: `external_http_post` cubre TODAS las tools MCP
+    # del proyecto, así que gatearla haría que cada integración pidiese
+    # aprobación desde el primer día (decisión del operador, 2026-08-02 — el
+    # porqué completo está en
+    # test_seeded_approval_policies_contract.py, en el test
+    # `test_development_leaves_external_http_post_in_auto_on_purpose`).
+    assert dev["external_http_post"] == "auto"
+    # Lo que sale del proyecto SÍ queda gateado, que es el contrapeso.
     assert dev["external_communication"] == "human_required"
-    assert dev["external_http_post"] == "human_required"
+    assert dev["data_migration"] == "human_required"
 
 
 def test_preset_decisions_unknown_slug_falls_back_not_fail_open() -> None:

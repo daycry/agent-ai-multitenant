@@ -157,6 +157,22 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
     lo provisiona — una decisión humana (presupuesto/claves), que es
     precisamente lo que prod-10 resuelve. La parte que sí es código
     (`apps/installer/**`) queda fuera del carril `observabilidad`.
+- ⏳ **2026-08-02 — sigue GATED EN UN HUMANO, y ya no hace falta volver a
+  investigarlo.** Lo confirmado hoy no cambia: la config está y la credencial no.
+  Lo que sí cambia es que **el procedimiento completo está escrito** en
+  [`docs/06-runbooks/observabilidad.md` §«Lo que falta para que el Slack de
+  respaldo funcione»](../06-runbooks/observabilidad.md): los cinco pasos en orden
+  (decidir custodia → crear el webhook en Slack → provisionarlo como fichero en
+  `/etc/alertmanager/secrets/slack_api_url` → montar el volumen en
+  `_alertmanager_service` → probar con `amtool`), qué está ya hecho y no hay que
+  rehacer, y por qué Alertmanager arranca igual aunque falle en cada envío.
+  También se corrigió el runbook donde afirmaba que la alerta llega «además al
+  Slack de respaldo»: hoy no llega, y decirlo era la peor clase de documentación
+  — la que se lee y se cree.
+  **Lo que necesita el operador es una credencial y una decisión de custodia**, no
+  código. Marcar esta casilla sería declarar operativa una vía de aviso que falla
+  en cada envío, y precisamente en el escenario para el que existe (api-server
+  caído).
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_02_a
@@ -414,6 +430,59 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   punta (ver task 03), así que esta tarea es solo el emisor. Fuera del carril
   `observabilidad`: toca `docker/docker-compose.yml`, `apps/watchdog/**` y
   `compose_generator.py`.
+- ⏳ **2026-08-02 — (1) y (2) y (3) HECHOS; falta el generador del instalador.**
+  El paquete ha dejado de ser código muerto:
+  - **(3) el emisor**, que era el corazón de la tarea:
+    `apps/watchdog/src/watchdog/alerting.py` — `AlertSink` construye el webhook v4
+    **sintético de Alertmanager** (el endpoint lo valida con ese schema; un
+    payload propio se habría comido un 422 y volveríamos al silencio), lo POSTea
+    con `Authorization: Bearer` y **degrada a log** ante cualquier fallo. Se
+    entrega **una sola vez por episodio** (el bucle tickea cada 30 s: sin esa
+    guarda, un postgres muerto son 120 notificaciones/hora) pero **se reintenta
+    mientras no confirme**, porque un api-server que arranca después del watchdog
+    no debe costar la única notificación. `AttemptRecord.alert_delivered` separa
+    «lo escribí en el log» de «llegó a un humano»: confundir esas dos cosas era el
+    defecto original. Transporte por `urllib` de la stdlib e inyectable — el
+    watchdog declara dos dependencias y no necesita una tercera para un POST de
+    400 bytes.
+  - **(2) la lista vigilada** incluye ya `egress-proxy` y `registry-proxy`… y
+    **hacer eso destapó una trampa**: los dos declaran `container_name:` explícito
+    en el compose, así que la convención `{proyecto}-{servicio}-1` con la que
+    `_build_monitors` resolvía **no los encuentra**. Añadirlos sin más habría dado
+    un watchdog que dice vigilarlos y no vigila ninguno — un `container_missing`
+    en el arranque, silencio después, cobertura aparente. La resolución pasa a ser
+    por **etiquetas de Compose** (`resolve_container`), con el nombre como
+    fallback para stacks levantados a mano.
+  - **(1) el servicio** está declarado en `docker/docker-compose.yml`, con dos
+    desviaciones deliberadas respecto al enunciado:
+    · **NO monta el socket Docker.** La tarea lo pedía; el principio rector 2 y
+    `tests/security/test_pentest_findings.py::test_no_prod_service_mounts_docker_socket`
+    lo prohíben, y con razón. Usa `DOCKER_HOST` contra el `docker-socket-proxy`
+    del **ADR 0060**, que es el patrón que los workers ya seguían y al que le
+    basta `CONTAINERS=1` + `POST=1`. El riesgo 4 del plan («socket Docker en
+    watchdog vs principio rector 2») queda así **disuelto, no mitigado**.
+    · Va bajo `profiles: [watchdog]`, porque este compose es la capa de
+    infraestructura y no construye imágenes de aplicación: sin el perfil,
+    `docker compose up` se comporta exactamente como antes.
+    Con `Dockerfile` propio (`apps/watchdog/Dockerfile`, basado en la imagen de la
+    api-server como el notification-dispatcher, para heredar el logging JSON con
+    enmascarado de PII).
+  - **Tests ejecutados, todos en verde**: `tests/unit/test_watchdog_alert_delivery.py`
+    (11), `tests/unit/test_watchdog_container_resolution.py` (8),
+    `tests/security/test_watchdog_service_declaration.py` (6), más los 24 que ya
+    había (`test_service_monitor.py` + `test_backoff.py`) sin tocar. Rojo
+    verificado por mutación en tres invariantes (dedup de entrega, umbral de
+    `severity`, chequeo del código HTTP).
+  - **Desviación de la ruta declarada, a propósito**: el plan nombra
+    `apps/watchdog/tests/test_alert_delivery.py`, y ese directorio **no está en
+    `testpaths` ni lo corre CI** — habría sido un test que nadie ejecuta. Los
+    tests del watchdog ya vivían en `tests/unit/` (`test_service_monitor.py`,
+    `test_backoff.py`) y ahí van los nuevos.
+  - **Por qué NO se marca**: falta la mitad que de verdad llega a producción —
+    declarar el servicio en `compose_generator.py` (con su `docker-socket-proxy`
+    alcanzable y el `_BUILDERS` de la imagen). `apps/installer/**` es de otro
+    carril. Lo que hace falta ahí está dictado: replicar el bloque `watchdog:` del
+    compose canónico y añadir `watchdog` a `_BUILDERS`.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_14_a
@@ -442,6 +511,18 @@ exit 1`. Fuera del carril `observabilidad` (`apps/installer/**`). Ojo: el test
   que cita el plan (`apps/installer/backend/tests/test_compose_generator.py`) no
   existe; el real es `tests/unit/test_compose_generator.py` y hoy no cubre el
   healthcheck de los proxies.
+- ⏳ **Re-verificado el 2026-08-02: idéntico, y la mitad que falta sigue fuera de
+  este carril.** El compose canónico es honesto (`docker/docker-compose.yml`,
+  egress-proxy y registry-proxy terminan en `|| exit 1`, con
+  `tests/unit/test_compose_healthchecks_honest.py` guardándolo); el generador del
+  instalador sigue con `|| true`. Cambio de contexto que aumenta lo que cuesta
+  dejarlo así: desde hoy el **watchdog vigila los dos proxies**
+  (`task_prod08_watchdog_14`), y el watchdog decide por el estado de salud que
+  reporta Docker. Con `|| true` en el despliegue generado, un tinyproxy muerto
+  sale `healthy`, **el watchdog no lo reinicia y nadie recibe la alerta**: la
+  recuperación automática que se acaba de entregar queda desactivada justo en el
+  entorno donde importa. El cambio son dos caracteres en dos líneas
+  (`compose_generator.py:458` y `:482`).
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_15_a

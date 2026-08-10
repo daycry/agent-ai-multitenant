@@ -5,7 +5,7 @@ status: accepted
 date: 2026-07-07
 deciders: operador (jmano) — decisión tomada 2026-07-07
 phase: auditoria-plataforma-2026-07-03
-related: ["0020", "0035", "0102"]
+related: ["0020", "0035", "0102", "0153"]
 docs_language: es
 ---
 
@@ -56,6 +56,35 @@ autónomo: la convergencia de runs no se degrada.
 `decisions` sobre `_all(CATEGORIES, ...)`, así que el mapa cubre las 13 categorías
 canónicas — no hace falta una clave `unlisted_category`. Un slug desconocido cae
 al preset seguro por defecto vía `preset_decisions()`, **nunca** fail-open a auto.
+
+> ### ⚠️ Nota (2026-08-02): este párrafo era cierto para los presets y falso para lo que acaba en la BD
+>
+> El razonamiento de arriba mira `seeds/builtin_approval_policies.py`, y ahí es
+> correcto. Pero un proyecto creado **desde una plantilla del catálogo** no
+> copiaba un preset: copiaba `_POLICY_DEV_SKELETON`
+> (`seeds/builtin_project_templates.py`), un dict escrito a mano con **cuatro**
+> claves — y `human_approval_policy` está en `_TEMPLATE_INHERITED_FIELDS`, así
+> que la adopción heredaba los huecos tal cual. Diez de las trece categorías
+> quedaban implícitas y caían a `auto`, incluso en las dos plantillas que la UI
+> presenta como «Producción». Peor: una de las cuatro claves, `external_http`,
+> **no existe en `APPROVAL_CATEGORIES`**, así que ningún `review()` la consultó
+> jamás. Una intención escrita que nunca llegó a ser una regla.
+>
+> Dicho de otro modo: lo que este ADR dio por cubierto («el mapa cubre las 13»)
+> valía para el catálogo de presets, no para `projects.human_approval_policy`,
+> que es la política que de verdad decide si una acción para.
+>
+> Lo cierra el **[ADR 0153](./0153-categoria-no-listada-en-la-politica-de-aprobacion.md)**
+> (opción D, firmada por el operador el 2026-08-02): los esqueletos de plantilla
+> pasan a DERIVARSE del preset que declaran (`preset_policy()`), la clave
+> `unlisted_category` se siembra explícita, y
+> `tests/unit/test_seeded_approval_policies_contract.py` fija que **toda**
+> política sembrada —preset o esqueleto— liste las 13 canónicas y ninguna más,
+> derivando la lista de `APPROVAL_CATEGORIES` en vez de copiarla.
+>
+> **La decisión de este ADR 0104 no cambia** y sigue `accepted`: un proyecto sin
+> política explícita hereda el preset `development`. Lo que se corrige es la
+> justificación de por qué no hacía falta `unlisted_category`.
 
 ## Implementación
 

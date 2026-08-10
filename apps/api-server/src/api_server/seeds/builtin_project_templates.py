@@ -19,10 +19,12 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid5
 
+from shared_domain.approval_categories import APPROVAL_CATEGORIES
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.seeds import PLATFORM_TENANT_ID
+from api_server.seeds.builtin_approval_policies import preset_policy
 from api_server.seeds.builtin_teams import _team_id as builtin_team_id
 
 PROJECT_TEMPLATE_NAMESPACE: UUID = UUID("00000000-0000-0000-0000-000000000014")
@@ -57,17 +59,64 @@ class BuiltinProjectTemplate:
         return _project_template_id(self.slug)
 
 
-# Default approval policy skeleton -- task_01_14 will replace these
-# inline dicts with references to the proper policy templates.
-_POLICY_DEV_SKELETON: dict[str, Any] = {
-    "preset": "development",
-    "categories": {
-        "code_changes": "auto",
-        "git_push": "human_required",
-        "external_http": "human_required",
-        "secrets_access": "human_required",
-    },
-}
+# ---------------------------------------------------------------------------
+# Esqueletos de política de aprobación (ADR 0153, opción B)
+# ---------------------------------------------------------------------------
+#
+# Lo que hay aquí NO es decorativo: `human_approval_policy` está en
+# `_TEMPLATE_INHERITED_FIELDS` (`routers/projects.py`), así que la adopción de
+# plantilla copia este dict TAL CUAL a `projects.human_approval_policy` — es la
+# política que de verdad decide si una acción para.
+#
+# Estos esqueletos se escribían a mano y listaban CUATRO claves de las trece
+# canónicas; diez categorías caían a `auto` por omisión, incluso en plantillas
+# que la UI presenta como «Producción». Y una de las cuatro, `external_http`, ni
+# siquiera existía en `APPROVAL_CATEGORIES`: ningún `review()` la consultaba
+# jamás. Una intención escrita que nunca llegó a ser una regla.
+#
+# Por eso ya no se escriben a mano: se DERIVAN del preset que la plantilla dice
+# tener, con `preset_policy()`. Un preset cubre las 13 por construcción
+# (`_all(...)`), de modo que "la plantilla declara `production`" y "la plantilla
+# gatea lo que gatea `production`" pasan a ser la misma frase.
+
+
+def _policy_skeleton(preset: str, **overrides: str) -> dict[str, Any]:
+    """La política de `preset`, con `overrides` por categoría CANÓNICA.
+
+    El guard de `overrides` es el que faltaba: una clave no canónica se cuela
+    silenciosamente en el JSONB y no gatea nada. Aquí revienta al importar el
+    módulo, que es lo más cerca posible de donde se escribe el error.
+    """
+    unknown = sorted(set(overrides) - set(APPROVAL_CATEGORIES))
+    if unknown:
+        raise ValueError(
+            f"categorías de aprobación no canónicas en el esqueleto {preset!r}: "
+            f"{unknown} (ninguna review() las consultaría). "
+            f"Canónicas: {sorted(APPROVAL_CATEGORIES)}"
+        )
+    policy = preset_policy(preset)
+    if overrides:
+        policy["categories"] = {**policy["categories"], **overrides}
+    return policy
+
+
+#: Desarrollo activo: el bucle de coding (`code_changes`, `git_commit`,
+#: `external_http_get`) en auto, el resto por humano. Es el MISMO criterio que
+#: hereda un proyecto sin política explícita (ADR 0104), así que un proyecto de
+#: plantilla y uno sin plantilla dejan de comportarse distinto.
+_POLICY_DEV_SKELETON: dict[str, Any] = _policy_skeleton("development")
+
+#: Sandbox: todo en auto, escrito. Antes decía `{"all": "auto"}`, una clave que
+#: no es canónica: el efecto era el mismo (todo en auto por omisión) pero por
+#: accidente, no por decisión.
+_POLICY_SANDBOX_SKELETON: dict[str, Any] = _policy_skeleton("sandbox")
+
+#: Producción: las 13 por humano. Cubre `data_migration`, `production_deploy`,
+#: `infra_provision` y `secret_rotation` —que las dos plantillas de producción
+#: enumeraban a mano encima del esqueleto de DESARROLLO— y además
+#: `external_communication`, `data_export_pii` y `user_management`, que se
+#: quedaban en auto en un proyecto que la UI llama «Producción».
+_POLICY_PROD_SKELETON: dict[str, Any] = _policy_skeleton("production")
 
 
 BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
@@ -142,15 +191,10 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         team_slug="backend-api",
         worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "polyglot", "notes": "legacy + target stacks"},
-        human_approval_policy={
-            **_POLICY_DEV_SKELETON,
-            "preset": "production",
-            "categories": {
-                **_POLICY_DEV_SKELETON["categories"],
-                "data_migration": "human_required",
-                "production_deploy": "human_required",
-            },
-        },
+        # Migrar un sistema legado toca datos y despliegues en vivo: el preset
+        # `production` gatea `data_migration` y `production_deploy` (que esta
+        # plantilla ya enumeraba) y, además, las siete que se le escapaban.
+        human_approval_policy=_POLICY_PROD_SKELETON,
         # Stack polyglot: ofrecemos las dos referencias de stack más
         # comunes en migraciones (Python destino + PHP origen) +
         # principios generales.
@@ -174,7 +218,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         team_slug="research-spec",
         worker_config={"assignment_policy": "skill_match"},
         repository_config=None,
-        human_approval_policy={"preset": "sandbox", "categories": {"all": "auto"}},
+        human_approval_policy=_POLICY_SANDBOX_SKELETON,
     ),
     BuiltinProjectTemplate(
         slug="devops-bootstrap",
@@ -186,15 +230,10 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         team_slug="devops-platform",
         worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "polyglot", "iac": "terraform+ansible"},
-        human_approval_policy={
-            **_POLICY_DEV_SKELETON,
-            "preset": "production",
-            "categories": {
-                **_POLICY_DEV_SKELETON["categories"],
-                "infra_provision": "human_required",
-                "secret_rotation": "human_required",
-            },
-        },
+        # Bootstrap de plataforma: aprovisiona infra y rota secretos, que es
+        # exactamente lo que esta plantilla ya gateaba. El preset `production`
+        # añade lo que faltaba (PII, altas de usuario, comunicación externa).
+        human_approval_policy=_POLICY_PROD_SKELETON,
         allowed_commands=("python", "pip", "pytest", "docker", "terraform", "ansible"),
         default_runtime_template="python-pytest",
         allowed_domains=("pypi.org", "files.pythonhosted.org"),
@@ -225,7 +264,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
         team_slug="research-spec",
         worker_config={"assignment_policy": "skill_match"},
         repository_config={"language": "markdown", "diagrams": "mermaid"},
-        human_approval_policy={"preset": "sandbox", "categories": {"all": "auto"}},
+        human_approval_policy=_POLICY_SANDBOX_SKELETON,
     ),
 )
 

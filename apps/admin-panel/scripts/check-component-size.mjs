@@ -69,9 +69,6 @@ const DEFAULT_MAX_LINES = 800;
 const ALLOWLIST = {
   "app/admin/cortex/mind/page.tsx": 914,
   "app/admin/projects/[id]/chat/page.tsx": 926,
-  "app/admin/settings/sso/page.tsx": 915,
-  "app/admin/settings/sso/saml/page.tsx": 943,
-  "app/admin/teams/[team_id]/page.tsx": 914,
 };
 
 /** Techo de una pieza del troceado. Lo fija `task_prod16_06`. */

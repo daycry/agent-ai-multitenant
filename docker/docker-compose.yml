@@ -108,6 +108,14 @@ services:
       # Consumed by docker/postgres/init/02-roles.sh on first start.
       MIGRATIONS_USER_PASSWORD: ${MIGRATIONS_USER_PASSWORD:?set MIGRATIONS_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
       APP_USER_PASSWORD: ${APP_USER_PASSWORD:?set APP_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
+      # prod-14 task_prod14_04/05: la contraseña de `service_user`, el rol
+      # BYPASSRLS SIN DDL con el que corren workers/orchestrator/dispatcher
+      # (docker/postgres/init/04-service-role.sql + 05-service-role-password.sh).
+      # Faltaba aquí, así que el init caía SIEMPRE al literal de desarrollo que
+      # está escrito en este repositorio — y es la llave que se salta la RLS de
+      # todos los tenants. Lo avisaba por el stderr del contenedor, donde nadie
+      # mira. Guardado por tests/security/test_service_user_password_is_wired.py.
+      SERVICE_USER_PASSWORD: ${SERVICE_USER_PASSWORD:?set SERVICE_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -546,6 +554,54 @@ services:
     # x-seccomp anchor). It was added without it in the Ollama feature (ADR
     # 0056) — tests/security/test_{apparmor,seccomp_profiles}.py flag the gap.
     <<: [*default-logging, *default-seccomp]
+
+  # ---------------------------------------------------------------------------
+  # watchdog — vigila la salud de los servicios de ESTE fichero y los reinicia
+  # con backoff exponencial; al agotarlo, avisa a un humano.
+  # (prod-08 task_prod08_watchdog_14 / observability-6 + deploy-10.)
+  #
+  # Hasta aquí `apps/watchdog` era código escrito, probado y NO DESPLEGADO: no
+  # aparecía en ningún compose ni en el generador del instalador, así que la
+  # "recuperación automática" de la plataforma no existía en ningún entorno.
+  #
+  # Tres decisiones que van juntas y conviene no separar:
+  #
+  #  * **Sin socket Docker.** El plan pedía montarlo; el principio rector 2 y
+  #    `tests/security/test_pentest_findings.py` lo prohíben, y con razón (un
+  #    contenedor con el socket escapa al host de forma trivial). Habla con el
+  #    daemon por `DOCKER_HOST` a través del `docker-socket-proxy` del ADR 0060,
+  #    al que le basta `CONTAINERS=1` + `POST=1`. El proxy lo aporta el stack de
+  #    despliegue (instalador / docker-compose.manuals.yml), no este fichero.
+  #  * **Bajo `profiles:`**, porque este compose es la capa de INFRAESTRUCTURA y
+  #    el watchdog es una app: sin el perfil, `docker compose up` se comporta
+  #    exactamente como antes y no exige una imagen que este fichero no
+  #    construye. Se levanta con `--profile watchdog`.
+  #  * **La alerta terminal sale del contenedor.** `WATCHDOG_ALERTS_INGEST_URL`
+  #    + `WATCHDOG_ALERTS_INGEST_TOKEN` (el mismo `API_SERVER_ALERTS_INGEST_TOKEN`
+  #    que valida el endpoint) llevan el aviso al fan-out del System Admin. Si
+  #    faltan, el watchdog arranca igual y lo dice en el log — degradación
+  #    deliberada, nunca un arranque fallido por una alerta.
+  #
+  # Imagen: `docker build -f apps/watchdog/Dockerfile -t agentic-platform/watchdog:latest .`
+  # (contexto = raíz del repo; se basa en la imagen de la api-server).
+  # ---------------------------------------------------------------------------
+  watchdog:
+    image: ${IMAGE_WATCHDOG:-agentic-platform/watchdog:latest}
+    profiles: [watchdog]
+    environment:
+      # ADR 0060: la pasarela de mínimo privilegio, NUNCA /var/run/docker.sock.
+      DOCKER_HOST: ${WATCHDOG_DOCKER_HOST:-tcp://docker-socket-proxy:2375}
+      WATCHDOG_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-agentic-platform}
+      WATCHDOG_POLL_INTERVAL: ${WATCHDOG_POLL_INTERVAL:-30}
+      WATCHDOG_ALERTS_INGEST_URL: ${WATCHDOG_ALERTS_INGEST_URL:-http://api-server:8000/internal/alerts/ingest}
+      # Obligatoria, sin default: es el MISMO secreto compartido que valida el
+      # endpoint (`API_SERVER_ALERTS_INGEST_TOKEN`). Un default silencioso aquí
+      # sería un watchdog que cree avisar y se come un 401 en cada alerta —
+      # peor que no tenerlo, porque nadie mira. Guardado por
+      # tests/unit/test_compose_no_default_credentials.py.
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${API_SERVER_ALERTS_INGEST_TOKEN:?set API_SERVER_ALERTS_INGEST_TOKEN in docker/.env (cp docker/.env.example docker/.env)}
+    networks: [agentic-net]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
 volumes:
   postgres_data:

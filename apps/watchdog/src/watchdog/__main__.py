@@ -10,19 +10,75 @@ import os
 import signal
 import sys
 import time
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import structlog
 
 import docker
+from watchdog.alerting import AlertSink
 from watchdog.service_monitor import ServiceMonitor
 
-# Default compose project + the five infra services from phase 00.
+# Default compose project + the infra services this watchdog supervises.
 _DEFAULT_PROJECT = "agentic-platform"
-_DEFAULT_SERVICES = ("postgres", "redis", "minio", "vault", "clamav")
+# prod-08 task_prod08_watchdog_14: los cinco servicios de infraestructura de la
+# fase 00 MÁS los dos proxies. El egress-proxy es la única salida de los
+# agent-runtimes hacia los LLM (ADR 0019) y el registry-proxy la única de los
+# runtime-templates hacia los registries de paquetes (ADR 0094): los dos son
+# puntos únicos de fallo cuya caída se manifiesta como "los agentes no funcionan"
+# sin que nada señale la causa. Ahora que su healthcheck es honesto (ya no
+# termina en `|| true`, deploy-9), el watchdog puede actuar sobre ellos.
+_DEFAULT_SERVICES = (
+    "postgres",
+    "redis",
+    "minio",
+    "vault",
+    "clamav",
+    "egress-proxy",
+    "registry-proxy",
+)
 _POLL_INTERVAL_SECONDS = float(os.environ.get("WATCHDOG_POLL_INTERVAL", "30"))
 
+# Etiquetas que Docker Compose pone en TODO contenedor que levanta.
+_PROJECT_LABEL = "com.docker.compose.project"
+_SERVICE_LABEL = "com.docker.compose.service"
+
 _logger = structlog.get_logger(__name__)
+
+
+def resolve_container(
+    client: Any,
+    project: str,
+    service: str,
+    *,
+    not_found: type[BaseException] = docker.errors.NotFound,
+) -> Any | None:
+    """El contenedor del servicio `service` del proyecto `project`, o None.
+
+    **Por etiquetas primero, por nombre después**, y ese orden importa: el
+    `egress-proxy` y el `registry-proxy` declaran `container_name:` explícito en
+    `docker/docker-compose.yml`, así que la convención `{proyecto}-{servicio}-1`
+    NO los encuentra. Resolverlos por nombre habría dado un watchdog que dice
+    vigilarlos y no vigila ninguno — cobertura aparente, que es peor que ninguna.
+
+    El fallback por nombre se conserva para stacks levantados a mano (sin las
+    etiquetas de Compose), y un fallo de la consulta por etiquetas cae a él en vez
+    de dejar al watchdog ciego.
+    """
+    try:
+        matches = client.containers.list(
+            all=True,
+            filters={"label": [f"{_PROJECT_LABEL}={project}", f"{_SERVICE_LABEL}={service}"]},
+        )
+    except Exception as exc:  # daemon viejo / filtro no soportado
+        _logger.warning("watchdog.label_lookup_failed", service=service, error=str(exc))
+        matches = []
+    if matches:
+        return matches[0]
+
+    try:
+        return client.containers.get(f"{project}-{service}-1")
+    except not_found:
+        return None
 
 
 def _build_monitors() -> list[ServiceMonitor]:
@@ -37,15 +93,21 @@ def _build_monitors() -> list[ServiceMonitor]:
     # docker SDK ships incomplete type stubs; both attributes do exist
     # at runtime.
     client = docker.from_env()
+    sink = AlertSink.from_env()
+    if not sink.is_configured:
+        # Sin destino la alerta terminal vuelve a ser una línea de log local, que
+        # es exactamente el defecto que prod-08 vino a arreglar. Se dice alto.
+        _logger.warning(
+            "watchdog.alert_sink_unconfigured",
+            hint="set WATCHDOG_ALERTS_INGEST_URL + WATCHDOG_ALERTS_INGEST_TOKEN",
+        )
     monitors: list[ServiceMonitor] = []
     for svc in services:
-        container_name = f"{project}-{svc}-1"
-        try:
-            container = client.containers.get(container_name)
-        except docker.errors.NotFound:
-            _logger.warning("watchdog.container_missing", container=container_name)
+        container = resolve_container(client, project, svc)
+        if container is None:
+            _logger.warning("watchdog.container_missing", project=project, service=svc)
             continue
-        monitors.append(ServiceMonitor(name=svc, container=container))
+        monitors.append(ServiceMonitor(name=svc, container=container, alert_sink=sink))
     return monitors
 
 

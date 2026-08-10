@@ -98,22 +98,137 @@ async def get_approval_expiry_enabled(session: AsyncSession) -> bool:
 HUMAN_QUESTION_CATEGORY = "human_question"
 
 
+# ---------------------------------------------------------------------------
+# Categoría que la política NO lista — ADR 0153 (C)
+# ---------------------------------------------------------------------------
+# ESPEJO EXACTO de `agent_runtime.approval`. Los dos procesos no se importan
+# entre sí (aquél corre dentro del sandbox, sin BD y sin api-server), así que la
+# única defensa contra la deriva es el test que compara las dos implementaciones
+# caso a caso (`tests/unit/test_unlisted_approval_category.py`). Si tocas una,
+# toca la otra.
+
+#: Clave HERMANA de `categories` que dice qué pasa con una categoría que el mapa
+#: no nombra. Vocabulario: `auto` | `human_required`.
+UNLISTED_CATEGORY_KEY = "unlisted_category"
+
+_AUTO = "auto"
+_HUMAN_REQUIRED = "human_required"
+_DECISIONS = frozenset({_AUTO, _HUMAN_REQUIRED})
+
+#: Default de :data:`UNLISTED_CATEGORY_KEY` cuando la política no la trae, según
+#: su `preset`. Es el MISMO criterio con el que se siembran los cuatro presets:
+#: estricto donde una acción sensible sin revisar cuesta caro, laxo donde gatear
+#: lo no listado pararía los runs autónomos constantemente (y una cola de
+#: aprobaciones que nadie atiende enseña a aprobar sin leer, que es peor que no
+#: tener gate).
+UNLISTED_DEFAULT_BY_PRESET: dict[str, str] = {
+    "sandbox": _AUTO,
+    "development": _AUTO,
+    "production": _HUMAN_REQUIRED,
+    "customer-external": _HUMAN_REQUIRED,
+}
+
+#: Sin clave y sin preset reconocible: se PARA. Ante una política que no se sabe
+#: interpretar, preguntar es recuperable; dejar correr una acción sensible, no.
+UNLISTED_FALLBACK_DECISION = _HUMAN_REQUIRED
+
+
+def _policy_categories(policy: dict[str, Any]) -> dict[str, Any]:
+    """El mapa `categories`, aceptando también la forma «mapa desnudo».
+
+    Un `categories` que no es un mapa no se puede leer: se trata como vacío, o
+    sea que TODA categoría cae al camino de lo no listado (fail-closed si la
+    política tampoco declara preset), en vez de dejar pasar todo en silencio.
+    """
+    categories = policy.get("categories", policy)
+    return categories if isinstance(categories, dict) else {}
+
+
+def _unlisted_decision(policy: dict[str, Any]) -> tuple[str, str]:
+    """``(decisión, por qué)`` para una categoría que la política no lista.
+
+    El «por qué» viaja hasta el humano que recibe la aprobación: una solicitud
+    sin motivo se aprueba sin leer, y esta es justo la que necesita leerse (para
+    de más porque la política está incompleta, no porque la acción sea rara).
+    """
+    raw = policy.get(UNLISTED_CATEGORY_KEY)
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in _DECISIONS:
+            return value, f"su clave `{UNLISTED_CATEGORY_KEY}` dice «{value}»"
+        # Un valor ilegible (un typo de `human_required`, p. ej.) NO se resuelve
+        # cayendo al preset: el autor pedía algo y no sabemos qué. Se para, y el
+        # motivo lo dice para que se corrija.
+        return (
+            UNLISTED_FALLBACK_DECISION,
+            f"su clave `{UNLISTED_CATEGORY_KEY}` tiene un valor que no se "
+            f"entiende («{raw}»), así que se para por seguridad (fail-closed)",
+        )
+    preset = policy.get("preset")
+    if isinstance(preset, str):
+        slug = preset.strip().lower()
+        derived = UNLISTED_DEFAULT_BY_PRESET.get(slug)
+        if derived is not None:
+            return derived, f"su preset es «{slug}»"
+        return (
+            UNLISTED_FALLBACK_DECISION,
+            f"su preset («{preset}») no es reconocible, así que se para por "
+            f"seguridad (fail-closed)",
+        )
+    return (
+        UNLISTED_FALLBACK_DECISION,
+        "no declara preset ni "
+        f"`{UNLISTED_CATEGORY_KEY}`, así que se para por seguridad (fail-closed)",
+    )
+
+
 def requires_human_approval(policy: dict[str, Any] | None, category: str) -> bool:
     """True if `category` needs a human under this project's policy.
 
     The policy JSONB is `{"categories": {<category>: "auto" |
-    "human_required"}}` (a bare `{<category>: ...}` map is also
-    accepted). An unlisted category defaults to `auto`. The ``human_question``
-    category (ADR 0114) is ALWAYS human-required, whatever the policy says.
+    "human_required"}}` (a bare `{<category>: ...}` map is also accepted). The
+    ``human_question`` category (ADR 0114) is ALWAYS human-required, whatever
+    the policy says.
+
+    ADR 0153: una categoría que el mapa NO lista ya no cae a un ``"auto"`` fijo
+    —fail-open—; la decide la política (``unlisted_category``), en su defecto el
+    ``preset``, y si no hay nada legible se falla CERRADO.
+
+    Una política ausente/vacía es otra cosa y NO es de este ADR: la resuelve el
+    ADR 0104 heredando el preset por defecto de plataforma (en el worker,
+    ``_resolve_effective_approval_policy``), así que aquí sigue devolviendo
+    False — fallar cerrado aquí gatearía todo run de un proyecto recién creado
+    antes de que ese preset llegue a aplicarse.
     """
     if category == HUMAN_QUESTION_CATEGORY:
         return True
     if not policy:
         return False
-    categories = policy.get("categories", policy)
-    if not isinstance(categories, dict):
-        return False
-    return str(categories.get(category, "auto")) == "human_required"
+    categories = _policy_categories(policy)
+    if category in categories:
+        return str(categories[category]).strip().lower() == _HUMAN_REQUIRED
+    return _unlisted_decision(policy)[0] == _HUMAN_REQUIRED
+
+
+def unlisted_category_reason(policy: dict[str, Any] | None, category: str) -> str | None:
+    """Por qué el gate paró en una categoría que la política NO lista.
+
+    ``None`` cuando no aplica: la política lista la categoría (se explica sola —
+    la política la nombra y la decide) o no para. La cadena solo aparece en el
+    caso nuevo, el que un humano no puede deducir mirando la solicitud, y se
+    persiste en la ``ApprovalRequest`` como clave hermana ``gate_reason``.
+    """
+    if not policy:
+        return None
+    if category in _policy_categories(policy):
+        return None
+    decision, why = _unlisted_decision(policy)
+    if decision != _HUMAN_REQUIRED:
+        return None
+    return (
+        f"La política del proyecto no lista la categoría «{category}» y {why}: "
+        f"se exige revisión humana (ADR 0153)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +388,19 @@ async def request_approval_if_needed(
     esta misma task, la solicitud se persiste con una clave hermana
     ``prior_approvals`` que lleva la anterior y el delta. Es una ANOTACIÓN para
     el revisor: no toca ``tool`` ni ``args``, que es lo que se hashea.
+
+    ADR 0153 (C): cuando lo que para la acción es que la política NO LISTA su
+    categoría, la solicitud lleva además ``gate_reason`` — la misma clase de
+    anotación hermana. Sin ella el revisor ve una parada que no puede explicar
+    (la política no nombra esa categoría por ningún sitio) y la aprueba sin
+    leer, que es exactamente el hábito que un gate nuevo no debe crear.
     """
     if not requires_human_approval(project.human_approval_policy, category):
         return None
+
+    reason = unlisted_category_reason(project.human_approval_policy, category)
+    if reason is not None:
+        action = {**action, "gate_reason": reason}
 
     if category != HUMAN_QUESTION_CATEGORY:
         tool, args = _tool_and_args(action)

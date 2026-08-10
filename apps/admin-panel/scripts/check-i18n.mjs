@@ -94,11 +94,37 @@ const PATTERN = /lang === "es"/g;
  * 18. El grueso de la deuda de frontend-9 no son ternarios: son literales fijos
  * que con el toggle en EN se quedan en castellano y no se queja nadie.
  *
- * Detectar "esto está en castellano" en general es adivinar. Detectarlo en un
- * atributo con un carácter que SÓLO existe en castellano (tilde, ñ, ¿, ¡) es
- * exacto: cero falsos positivos, a cambio de no ver los literales sin acentuar.
- * Es un suelo, no un techo — el barrido de `task_prod16_04` sigue necesitando
- * ojo humano (test `human_prod16_01`).
+ * ## La medida mentía, y por eso hay dos señales
+ *
+ * La primera versión sólo miraba caracteres que existen SÓLO en castellano
+ * (tilde, ñ, ¿, ¡). Exacto y con cero falsos positivos… y ciego a media deuda:
+ * `title="Dar acceso a un proyecto"` no lleva una sola tilde, así que el guard
+ * daba `exit 0` sobre un fichero sin traducir. **Medía la deuda detectable, no
+ * la deuda**, y su número tranquilizaba más de lo que debía — que en un
+ * trinquete es el peor defecto posible, porque el número es justo lo que se
+ * mira para decidir si queda trabajo.
+ *
+ * Ahora son TRES señales, cualquiera basta:
+ *
+ *   1. **Un carácter exclusivo del castellano** (tilde, ñ, ¿, ¡).
+ *   2. **Una palabra de la lista** — incluidas las de contenido, porque el
+ *      grueso de los botones del panel es de una sola palabra (`title="Guardar"`).
+ *   3. **Un sufijo que no existe como final de palabra inglesa** (`-ciones`,
+ *      `-idad`, `-miento`, `-mente`…). Cubre los cognados largos sin tener que
+ *      enumerarlos: `Notificaciones`, `Seguridad`, `Almacenamiento`.
+ *
+ * Y DOS filtros, que son lo que impide que la guarda se vuelva insoportable —
+ * porque un guard con falsos positivos se desactiva a la tercera y entonces no
+ * mide nada:
+ *
+ *   * **Identificadores, slugs y URLs no son prosa.** `equipo-plataforma` lleva
+ *     «equipo» dentro y es un slug de ejemplo; `vault:secret/data/mcp/…` lleva
+ *     «servicio». Un valor sin espacios y con `-`, `_`, `.`, `:`, `/` o dígitos
+ *     es un identificador y no se juzga.
+ *   * **Las siglas en mayúsculas no son palabras castellanas.** «SE», «UN»,
+ *     «SIN»/«CON» de un enum: en castellano esas palabras van en minúscula.
+ *     Distinguir por caja cuesta una línea y borra una familia entera de falsos
+ *     positivos.
  *
  * Sólo atributos que el usuario LEE: `className`, `data-testid` o `href` con una
  * ñ no son un problema de traducción.
@@ -113,7 +139,173 @@ const UI_ATTRS = [
   "label",
 ];
 const SPANISH_CHARS = "áéíóúüñÁÉÍÓÚÜÑ¿¡";
-const ATTR_PATTERN = new RegExp(`(?:${UI_ATTRS.join("|")})="[^"]*[${SPANISH_CHARS}][^"]*"`, "g");
+
+/**
+ * Palabras que en un atributo de UI sólo pueden ser castellano.
+ *
+ * Criterio de admisión: la palabra NO es también inglesa y NO es un nombre
+ * propio frecuente. De ahí que falten `no`, `son`, `sin`, `con`, `todo`, `plan`,
+ * `local`, `data` y `error`, que colisionan; y `es`, que además es el código de
+ * idioma y aparece en identificadores.
+ */
+const SPANISH_WORDS = [
+  // artículos, preposiciones y conjunciones
+  "el",
+  "la",
+  "los",
+  "las",
+  "un",
+  "una",
+  "unos",
+  "unas",
+  "del",
+  "que",
+  "para",
+  "por",
+  "como",
+  "cuando",
+  "donde",
+  "desde",
+  "hasta",
+  "sobre",
+  "entre",
+  "cada",
+  "pero",
+  "porque",
+  "este",
+  "esta",
+  "estos",
+  "estas",
+  "ese",
+  "esa",
+  "sus",
+  "hay",
+  // verbos de UI — sueltos, porque el grueso de los botones es de una palabra
+  "crear",
+  "editar",
+  "borrar",
+  "eliminar",
+  "guardar",
+  "buscar",
+  "seleccionar",
+  "elegir",
+  "quitar",
+  "activar",
+  "desactivar",
+  "cancelar",
+  "confirmar",
+  "actualizar",
+  "cargar",
+  "mostrar",
+  "ocultar",
+  "enviar",
+  "volver",
+  "aplicar",
+  "cerrar",
+  "abrir",
+  "agregar",
+  "copiar",
+  "descargar",
+  "subir",
+  "exportar",
+  "importar",
+  "reintentar",
+  "detener",
+  "empezar",
+  "continuar",
+  "asignar",
+  // sustantivos de UI
+  "nombre",
+  "usuario",
+  "usuarios",
+  "proyecto",
+  "proyectos",
+  "equipo",
+  "equipos",
+  "tarea",
+  "tareas",
+  "fecha",
+  "ajustes",
+  "ninguno",
+  "ninguna",
+  "todos",
+  "todas",
+  "nuevo",
+  "nueva",
+  "acceso",
+  "clave",
+  "correo",
+  "aviso",
+  "campo",
+  "agente",
+  "agentes",
+  "estado",
+  "cambios",
+  "pendiente",
+  "pendientes",
+  "disponible",
+  "disponibles",
+  "requerido",
+  "obligatorio",
+  "vacio",
+  "vacia",
+];
+const SPANISH_WORD_SET = new Set(SPANISH_WORDS);
+
+/**
+ * Finales que no existen como final de palabra INGLESA.
+ *
+ * Ahorran enumerar los cognados largos, que son justo los que más se cuelan
+ * («Notificaciones», «Almacenamiento», «Seguridad»). Se exige una longitud
+ * mínima para que un `-ado` de «Colorado» o un `-ez` de un apellido no cuenten.
+ */
+const SPANISH_SUFFIXES = [
+  "cion",
+  "ciones",
+  "idad",
+  "idades",
+  "miento",
+  "mientos",
+  "mente",
+  "ando",
+  "iendo",
+  "anza",
+  "encia",
+  "encias",
+  "aje",
+  "ura",
+];
+const MIN_SUFFIX_WORD_LENGTH = 6;
+
+/** Un valor sin espacios y con puntuación de identificador o dígitos no es prosa. */
+const IDENTIFIER_RE = /^[^\s]*[-_.:/@\d][^\s]*$/;
+
+/** Los atributos de UI con su valor, para poder juzgar el valor y no la línea. */
+const ATTR_VALUE_PATTERN = new RegExp(`(?:${UI_ATTRS.join("|")})="([^"]*)"`, "g");
+
+/** ¿El valor de este atributo está en castellano? Ver el bloque de arriba. */
+export function looksSpanish(value) {
+  const text = value.trim();
+  if (!text) return false;
+  // Un identificador, un slug o una URL no son prosa que traducir.
+  if (IDENTIFIER_RE.test(text)) return false;
+  if (new RegExp(`[${SPANISH_CHARS}]`).test(text)) return true;
+
+  for (const raw of text.split(/[^A-Za-zÀ-ÿ]+/)) {
+    if (!raw) continue;
+    // Sigla: en castellano estas palabras van en minúscula, así que un token
+    // todo-mayúsculas es un acrónimo («UN SDK», «SIN / CON» de un enum).
+    if (raw.length > 1 && raw === raw.toUpperCase()) continue;
+    const word = raw.toLowerCase();
+    if (SPANISH_WORD_SET.has(word)) return true;
+    if (word.length >= MIN_SUFFIX_WORD_LENGTH) {
+      for (const suffix of SPANISH_SUFFIXES) {
+        if (word.endsWith(suffix)) return true;
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Deuda de atributos conocida el 2026-08-01. **Sólo puede MENGUAR.**
@@ -130,63 +322,88 @@ const ATTR_PATTERN = new RegExp(`(?:${UI_ATTRS.join("|")})="[^"]*[${SPANISH_CHAR
  * deuda que se puede detectar sola, no la deuda.
  */
 const ATTR_ALLOWLIST = {
+  "app/admin/agents/[id]/agent-kbs-section.tsx": 1,
   "app/admin/approval-policy/page.tsx": 2,
-  "app/admin/approvals/page.tsx": 1,
-  "app/admin/assistant/page.tsx": 2,
-  "app/admin/assistant/settings/page.tsx": 1,
-  "app/admin/cortex/identity/page.tsx": 6,
+  "app/admin/approvals/page.tsx": 3,
+  "app/admin/assistant/page.tsx": 5,
+  "app/admin/assistant/settings/page.tsx": 5,
+  "app/admin/board/page.tsx": 4,
+  "app/admin/cortex/identity/page.tsx": 7,
+  "app/admin/cortex/mind/affect-panel.tsx": 1,
   "app/admin/cortex/mind/page.tsx": 3,
-  "app/admin/cortex/page.tsx": 7,
+  "app/admin/cortex/page.tsx": 9,
+  "app/admin/dashboard/page.tsx": 3,
   "app/admin/docs/doc-diff-view.tsx": 2,
+  "app/admin/docs/docs-bookmarks-view.tsx": 2,
   "app/admin/docs/docs-search-panel.tsx": 1,
   "app/admin/docs/docs-sidebar.tsx": 1,
   "app/admin/docs/page.tsx": 2,
-  "app/admin/documents/[id]/citations/page.tsx": 1,
-  "app/admin/documents/[id]/ingestion/page.tsx": 1,
-  "app/admin/eval-quality/page.tsx": 2,
-  "app/admin/executions/[id]/page.tsx": 2,
-  "app/admin/guardrails/page.tsx": 2,
-  "app/admin/human-agents/page.tsx": 1,
-  "app/admin/inbox/history-tab.tsx": 2,
+  "app/admin/documents/[id]/citations/page.tsx": 2,
+  "app/admin/documents/[id]/ingestion/page.tsx": 2,
+  "app/admin/documents/page.tsx": 2,
+  "app/admin/eval-quality/page.tsx": 4,
+  "app/admin/executions/[id]/page.tsx": 5,
+  "app/admin/guardrails/page.tsx": 3,
+  "app/admin/human-agents/page.tsx": 3,
+  "app/admin/inbox/history-tab.tsx": 3,
   "app/admin/inbox/page.tsx": 2,
-  "app/admin/inbox/submit-dialog.tsx": 1,
-  "app/admin/marketplace/installations/[id]/permissions/page.tsx": 1,
+  "app/admin/inbox/submit-dialog.tsx": 3,
+  "app/admin/marketplace/installations/[id]/permissions/page.tsx": 2,
   "app/admin/marketplace/page.tsx": 1,
-  "app/admin/memories/page.tsx": 1,
-  "app/admin/notifications/inbox/page.tsx": 2,
-  "app/admin/notifications/page.tsx": 1,
-  "app/admin/office/page.tsx": 3,
-  "app/admin/ollama/page.tsx": 1,
-  "app/admin/plans/[id]/escalated/page.tsx": 1,
+  "app/admin/marketplace/private/page.tsx": 2,
+  "app/admin/memories/page.tsx": 4,
+  "app/admin/notifications/channels-tab.tsx": 2,
+  "app/admin/notifications/inbox/page.tsx": 3,
+  "app/admin/notifications/page.tsx": 2,
+  "app/admin/office/page.tsx": 6,
+  "app/admin/ollama/page.tsx": 3,
+  "app/admin/plans/[id]/escalated/page.tsx": 2,
   "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 2,
-  "app/admin/projects/[id]/chat/page.tsx": 3,
+  "app/admin/projects/[id]/chat/page.tsx": 5,
   "app/admin/projects/[id]/commands/page.tsx": 1,
   "app/admin/projects/[id]/dep-cache/page.tsx": 1,
-  "app/admin/projects/[id]/incoming-webhooks/page.tsx": 1,
-  "app/admin/projects/[id]/knowledge-bases/page.tsx": 1,
-  "app/admin/projects/[id]/mcp-servers/page.tsx": 1,
-  "app/admin/projects/[id]/memories/page.tsx": 1,
+  "app/admin/projects/[id]/incoming-webhooks/page.tsx": 7,
+  "app/admin/projects/[id]/knowledge-bases/page.tsx": 5,
+  "app/admin/projects/[id]/mcp-servers/mcp-server-sections.tsx": 3,
+  "app/admin/projects/[id]/mcp-servers/page.tsx": 2,
+  "app/admin/projects/[id]/memories/page.tsx": 2,
+  "app/admin/projects/[id]/page.tsx": 1,
+  "app/admin/projects/[id]/plans/[planId]/page.tsx": 1,
   "app/admin/projects/[id]/plans/[planId]/plan-spec-sections.tsx": 2,
-  "app/admin/projects/[id]/tasks/page.tsx": 1,
+  "app/admin/projects/[id]/plans/[planId]/plan-validation-section.tsx": 1,
+  "app/admin/projects/[id]/plans/page.tsx": 4,
+  "app/admin/projects/[id]/tasks/page.tsx": 4,
+  "app/admin/projects/page.tsx": 3,
   "app/admin/settings/memories/page.tsx": 1,
-  "app/admin/settings/page.tsx": 1,
-  "app/admin/settings/platform-defaults/page.tsx": 1,
-  "app/admin/settings/sso/page.tsx": 2,
-  "app/admin/settings/sso/saml/page.tsx": 4,
-  "app/admin/tools/page.tsx": 7,
+  "app/admin/settings/page.tsx": 2,
+  "app/admin/settings/platform-defaults/page.tsx": 3,
+  "app/admin/settings/sso/callback-url-section.tsx": 2,
+  "app/admin/settings/sso/page.tsx": 1,
+  "app/admin/settings/sso/saml/page.tsx": 1,
+  "app/admin/settings/sso/saml/saml-config-dialog.tsx": 8,
+  "app/admin/settings/sso/saml/saml-config-section.tsx": 2,
+  "app/admin/settings/sso/sso-config-section.tsx": 2,
+  "app/admin/teams/page.tsx": 3,
+  "app/admin/tools/page.tsx": 10,
   "app/developers/api-reference/page.tsx": 3,
   "app/developers/sdks/page.tsx": 1,
-  "app/developers/tutorials/page.tsx": 1,
+  "app/developers/tutorials/page.tsx": 3,
   "app/developers/webhooks/page.tsx": 2,
-  "components/cortex/cortex-voice-call.tsx": 1,
-  "components/executions/replay-bar.tsx": 1,
+  "components/cortex/cortex-voice-call.tsx": 2,
+  "components/evals/launch-eval-run.tsx": 1,
+  "components/executions/execution-guidance.tsx": 1,
+  "components/executions/replay-bar.tsx": 2,
+  "components/layout/tenant-picker.tsx": 1,
   "components/projects/git-config-section.tsx": 2,
   "components/projects/governance-section.tsx": 2,
-  "components/projects/runtime-services-section.tsx": 3,
-  "components/shared/form-section.tsx": 2,
-  "components/tasks/task-detail-sheet.tsx": 2,
-  "components/tasks/task-human-actions.tsx": 5,
+  "components/projects/runtime-services-section.tsx": 6,
+  "components/shared/form-section.tsx": 4,
+  "components/shared/list-toolbar.tsx": 1,
+  "components/tasks/task-detail-sheet.tsx": 3,
+  "components/tasks/task-human-actions.tsx": 7,
   "components/ui/entity-combobox.tsx": 1,
+  "components/ui/markdown-textarea.tsx": 2,
+  "lib/plan-dag.tsx": 1,
   "lib/plan-gantt.tsx": 1,
 };
 
@@ -198,12 +415,44 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--strict") args.strict = true;
     else if (argv[i] === "--print-allowlist") args.printAllowlist = true;
+    else if (argv[i] === "--print-current") args.printCurrent = true;
     else if (argv[i] === "--root") {
       args.root = resolve(argv[i + 1] ?? ".");
       i += 1;
     }
   }
   return args;
+}
+
+/**
+ * La deuda medida: `[ternarios, atributos]`, cada uno `Map<fichero, nº>`.
+ *
+ * Una sola función para los dos consumidores —la comprobación y
+ * `--print-current`— porque si midieran distinto, re-basar el trinquete lo
+ * dejaría desalineado con lo que comprueba, que es peor que no re-basarlo.
+ */
+function measure(files, root) {
+  const counts = new Map();
+  const attrCounts = new Map();
+  for (const rel of files) {
+    if (EXEMPT_PREFIXES.some((prefix) => rel.startsWith(prefix))) continue;
+    const source = readFileSync(join(root, rel), "utf8");
+
+    const hits = (source.match(PATTERN) ?? []).length;
+    if (hits > 0) counts.set(rel, hits);
+
+    // Los tests llevan castellano en sus fixtures a propósito: no es UI.
+    if (/\.test\.tsx?$/.test(rel)) continue;
+    // Se juzga el VALOR del atributo, no la línea: `looksSpanish` necesita ver
+    // el texto suelto para contar palabras sin que el nombre del atributo ni el
+    // JSX de alrededor le sumen coincidencias.
+    let attrHits = 0;
+    for (const match of source.matchAll(ATTR_VALUE_PATTERN)) {
+      if (looksSpanish(match[1])) attrHits += 1;
+    }
+    if (attrHits > 0) attrCounts.set(rel, attrHits);
+  }
+  return [counts, attrCounts];
 }
 
 /** Rutas relativas (con `/`) de todos los .ts/.tsx bajo `root`. */
@@ -233,7 +482,7 @@ function collectFiles(root) {
 }
 
 function main() {
-  const { root, strict, printAllowlist } = parseArgs(process.argv.slice(2));
+  const { root, strict, printAllowlist, printCurrent } = parseArgs(process.argv.slice(2));
 
   // Su ÚNICO consumidor es `check-i18n.test.ts`. Sus fixtures necesitan un
   // fichero que las allowlists conozcan, y clavar el nombre a mano convierte
@@ -245,23 +494,26 @@ function main() {
     return;
   }
 
+  // `--print-current` emite la deuda REAL medida ahora, no la anotada. Es lo que
+  // hace reproducible re-basar el trinquete el día que la medida se afina y
+  // aparece deuda que estaba oculta: sin él, la única salida es editar 90
+  // entradas a mano, que es como se acaba aflojando una allowlist por cansancio.
+  // NO relaja nada: la allowlist sigue siendo la que manda al comprobar.
+  if (printCurrent) {
+    const [ternaries, attrs] = measure(collectFiles(root), root);
+    process.stdout.write(
+      JSON.stringify({
+        ternaries: Object.fromEntries([...ternaries].sort()),
+        attrs: Object.fromEntries([...attrs].sort()),
+      }),
+    );
+    return;
+  }
+
   const files = collectFiles(root);
   const isFixture = root !== APP_ROOT;
 
-  const counts = new Map();
-  const attrCounts = new Map();
-  for (const rel of files) {
-    if (EXEMPT_PREFIXES.some((prefix) => rel.startsWith(prefix))) continue;
-    const source = readFileSync(join(root, rel), "utf8");
-
-    const hits = (source.match(PATTERN) ?? []).length;
-    if (hits > 0) counts.set(rel, hits);
-
-    // Los tests llevan castellano en sus fixtures a propósito: no es UI.
-    if (/\.test\.tsx?$/.test(rel)) continue;
-    const attrHits = (source.match(ATTR_PATTERN) ?? []).length;
-    if (attrHits > 0) attrCounts.set(rel, attrHits);
-  }
+  const [counts, attrCounts] = measure(files, root);
 
   const errors = [];
   const notes = [];
@@ -352,4 +604,9 @@ function main() {
   console.log("check-i18n OK");
 }
 
-main();
+// Sólo se ejecuta al INVOCARLO, no al importarlo. Sin esta guarda, un test que
+// quisiera probar `looksSpanish` a solas disparaba el barrido entero y su
+// `process.exit(1)`: el export existía y era inusable.
+const invokedDirectly =
+  process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) main();

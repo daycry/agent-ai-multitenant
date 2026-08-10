@@ -6,7 +6,9 @@ loop:
   1. Reload the container state.
   2. If healthy -> reset the attempt counter.
   3. If unhealthy:
-     - Exhausted backoff -> emit a single alert log and stop trying.
+     - Exhausted backoff -> emit a single alert log, deliver the alert to
+       the api-server's ingest endpoint (prod-08 task_prod08_watchdog_14)
+       and stop trying to restart.
      - Otherwise wait until the backoff window passes and call
        container.restart().
 
@@ -22,6 +24,7 @@ from typing import Any, Protocol
 
 import structlog
 
+from watchdog.alerting import AlertSink
 from watchdog.backoff import AttemptRecord, BackoffPolicy
 
 _logger = structlog.get_logger(__name__)
@@ -44,6 +47,10 @@ class ServiceMonitor:
     container: _ContainerLike
     policy: BackoffPolicy = field(default_factory=BackoffPolicy)
     record: AttemptRecord = field(default_factory=AttemptRecord)
+    # Opcional a propósito: sin sink el monitor se comporta exactamente como
+    # antes (solo log), que es lo que quieren los tests que ya existían y un
+    # watchdog corriendo en dev sin api-server delante.
+    alert_sink: AlertSink | None = None
 
     # ----- inspection -----
     def status(self) -> str:
@@ -55,6 +62,20 @@ class ServiceMonitor:
 
     def is_healthy(self) -> bool:
         return self.status() in _HEALTHY_STATUSES
+
+    # ----- alerta terminal (prod-08 task_prod08_watchdog_14) -----
+    def _deliver_alert(self) -> None:
+        """Entrega la alerta al api-server como mucho una vez por episodio.
+
+        Se reintenta en cada tick MIENTRAS no haya llegado: el caso que importa
+        es el api-server arrancando después del watchdog, donde una única
+        oportunidad de entrega equivale a no tener aviso."""
+        if self.alert_sink is None or self.record.alert_delivered:
+            return
+        self.record.alert_delivered = self.alert_sink.deliver(
+            service=self.name,
+            attempts=self.record.consecutive_failures,
+        )
 
     # ----- the watchdog tick -----
     def check_and_recover(self, *, now: float | None = None) -> str:
@@ -87,6 +108,7 @@ class ServiceMonitor:
                     attempts=self.record.consecutive_failures,
                 )
                 self.record.alerted = True
+            self._deliver_alert()
             return "exhausted"
 
         if not self.record.ready_for_next_attempt(self.policy, now=now):

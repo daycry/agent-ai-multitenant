@@ -2,7 +2,7 @@
 title: Triage de vulnerabilidades y política de excepciones
 docs_language: es
 audience: operador, tech lead, desarrollador
-updated: 2026-08-01
+updated: 2026-08-02
 ---
 
 # Triage de vulnerabilidades y política de excepciones
@@ -237,6 +237,46 @@ el backlog heredado. Para flipearlo hacen falta **dos pasos, ambos humanos**:
 Verificación de que el gate hace lo que dice (test humano `human_prod11_01`):
 crear una rama que degrade una dependencia a una versión vulnerable conocida y
 comprobar que el PR sale en rojo y que branch protection impide mergearlo.
+
+### Checklist del operador (2026-08-02)
+
+Lo que sigue es **todo** lo que falta, en el orden en que hay que hacerlo. Nada de
+esto lo puede hacer un agente: el paso 1 es una decisión de alcance y los pasos
+3–4 exigen permisos de administración del repositorio.
+
+- [ ] **1. Decidir qué hacer con `next`.** Es el único bloqueante técnico. Dos
+      salidas honestas, y hay que elegir una:
+      **(a)** abrir un plan/ADR de migración a **next 16** en el `admin-panel` y
+      en el frontend del `installer` (salto de major con roturas; no cabe en una
+      tarea suelta), o
+      **(b)** declarar los 2 avisos `high` como excepción razonada en la
+      ignore-list de npm con `# review: YYYY-MM-DD`, igual que las de
+      `.trivyignore` / `.pip-audit-ignore` (§5), asumiendo por escrito el riesgo
+      residual hasta que exista (a).
+      Sin (a) o (b), el gate npm nace en rojo permanente y bloquea todos los PRs.
+- [ ] **2. Quitar el modo informe.** Borrar la línea `continue-on-error: true`
+      del job `security-scan` en `.github/workflows/ci.yml` (hoy en la **línea
+      321**, justo bajo `timeout-minutes: 30`). Es un cambio de una línea:
+      el modo está declarado explícitamente y no es un olvido — lo guarda
+      `test_security_scan_declares_its_gate_mode`, y `auto_prod11_08_a`
+      (`pytest tests/unit/test_supply_chain_config.py -k 'gate and not
+continue_on_error'`) pasa a verde en cuanto se retira.
+- [ ] **3. Añadirlo a branch protection.** GitHub → **Settings → Branches →
+      `master` → Require status checks to pass** → añadir el check con su nombre
+      exacto: **`SCA (pip-audit + npm audit)`** (es el `name:` del job, no el id
+      `security-scan`; si se escribe el id, el check nunca casa y la protección
+      queda de adorno sin avisar).
+- [ ] **4. Arreglar antes la facturación de la cuenta.** CI está caído por
+      «recent account payments have failed» (<https://github.com/settings/billing>).
+      Un check requerido que nunca corre **bloquea todos los merges**: hacer el
+      paso 3 con CI caído deja el repo sin poder integrar nada.
+- [ ] **5. Verificar** con el test humano `human_prod11_01` descrito arriba.
+
+**Lo que ya está listo para ese día** y no hay que preparar: las dos ignore-lists
+existen con justificación y fecha de revisión por entrada
+(`test_sca_ignore_lists_exist_and_document_every_exception`, en verde), los tres
+workflows escanean sus imágenes con Trivy (24 imágenes, 9 pasos) y el lock no ha
+derivado (`uv lock --check` → exit 0).
 
 ---
 

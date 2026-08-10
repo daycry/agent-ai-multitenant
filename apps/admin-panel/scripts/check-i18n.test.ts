@@ -74,12 +74,20 @@ describe("check-i18n sobre el árbol real", () => {
  * leía como "la guarda está rota" en vez de "actualiza el fixture". Se leen de
  * la propia guarda para que el test siga a la deuda, no a un nombre.
  */
-function anAllowlisted(kind: "ternaries" | "attrs"): { rel: string; allowed: number } {
+function anAllowlisted(
+  kind: "ternaries" | "attrs",
+  minAllowed = 1,
+): { rel: string; allowed: number } {
   const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
     encoding: "utf8",
   });
   const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
-  const entries = Object.entries(parsed[kind]);
+  // `minAllowed` en vez de coger la primera entrada a secas: un test que mete N
+  // infractores en un fichero de la allowlist necesita que ese fichero permita
+  // al menos N, o falla por el cupo y no por lo que quería probar. Cogiendo la
+  // primera, cada re-baseo del trinquete podía dejarla en 1 y romper tests que
+  // no tenían nada que ver — le pasó al re-basar tras afinar la detección.
+  const entries = Object.entries(parsed[kind]).filter(([, allowed]) => allowed >= minAllowed);
   // Si la allowlist se vacía (migración terminada, enhorabuena), estos tests se
   // quedan sin sujeto: mejor este mensaje que un `undefined` opaco.
   expect(entries.length).toBeGreaterThan(0);
@@ -217,7 +225,9 @@ describe("check-i18n — literales castellanos en atributos de UI", () => {
   });
 
   it("--strict no perdona tampoco los atributos de la allowlist", () => {
-    const { rel } = anAllowlisted("attrs");
+    // `2` porque el fixture mete DOS infractores: hace falta un fichero cuyo
+    // cupo los admita, o el caso no-estricto fallaría por cupo y no por strict.
+    const { rel } = anAllowlisted("attrs", 2);
     const root = fixture({ [rel]: SPANISH_ATTR });
 
     expect(run(["--root", root]).code).toBe(0);
@@ -228,9 +238,110 @@ describe("check-i18n — literales castellanos en atributos de UI", () => {
     const { output } = run([]);
 
     const pending = Number(/(\d+) atributo\(s\) pendientes/.exec(output)?.[1] ?? -1);
-    // Guarda contra el paso en vacío: hoy quedan ~141. Si el patrón dejara de
+    // Guarda contra el paso en vacío: hoy quedan ~260. Si el patrón dejara de
     // encontrar nada, este número caería a 0 y el aviso sería una mentira.
     expect(pending).toBeGreaterThan(50);
+  });
+});
+
+/**
+ * Tercer bloque: **castellano SIN TILDES** (2026-08-02).
+ *
+ * El detector de arriba sólo veía caracteres exclusivos del castellano, así que
+ * `title="Dar acceso a un proyecto"` pasaba limpio: siete palabras castellanas y
+ * ni una tilde. La guarda medía la deuda DETECTABLE, no la deuda, y su número
+ * tranquilizaba más de lo que debía.
+ *
+ * Estos casos fijan las dos mitades del arreglo, y la segunda importa tanto como
+ * la primera: una guarda con falsos positivos se desactiva, y entonces no mide
+ * nada. Por eso hay tantos casos de "esto NO debe saltar" como de "esto sí".
+ */
+describe("check-i18n — castellano sin tildes en atributos", () => {
+  it("el caso que se le escapaba: siete palabras castellanas, cero tildes", () => {
+    const root = fixture({
+      "app/admin/nuevo/page.tsx": '<Button title="Dar acceso a un proyecto" />\n',
+    });
+
+    const { code, output } = run(["--root", root]);
+
+    expect(code).toBe(1);
+    expect(output).toContain("app/admin/nuevo/page.tsx");
+    expect(output).toContain("atributo");
+  });
+
+  it("una etiqueta de UNA palabra castellana también salta", () => {
+    // El grueso de los botones del panel: `title="Guardar"`, `title="Eliminar"`.
+    // Sin lista de contenido, las palabras sueltas eran invisibles.
+    const root = fixture({ "app/x.tsx": '<Button title="Guardar" />\n' });
+
+    expect(run(["--root", root]).code).toBe(1);
+  });
+
+  it("los cognados largos los pilla el sufijo, no la lista", () => {
+    // `-ciones`, `-idad`, `-miento`… no existen como final de palabra inglesa.
+    const root = fixture({
+      "app/x.tsx": '<nav aria-label="Notificaciones" title="Seguridad" />\n',
+    });
+
+    expect(run(["--root", root]).code).toBe(1);
+  });
+
+  it("inglés real del propio panel NO salta (si saltara, se desactivaría la guarda)", () => {
+    // Valores literales que ya existen hoy en el panel y son inglés legítimo.
+    const root = fixture({
+      "app/x.tsx": [
+        '<Input placeholder="Search by name" aria-label="API Reference" />',
+        '<Spinner loadingLabel="Loading services…" title="Pull request" />',
+        '<Tab label="Settings" description="System prompt (EN)" />',
+        '<Field label="SP Entity ID" title="Golden login" placeholder="openid email profile" />',
+        '<Badge title="Dashboard" label="Breadcrumb" description="Ops bot" />',
+      ].join("\n"),
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("identificadores, imágenes y URLs no son prosa castellana", () => {
+    // `equipo-plataforma` contiene «equipo», pero es un slug de ejemplo: si la
+    // guarda marcase esto, cada placeholder técnico sería un falso positivo.
+    const root = fixture({
+      "app/x.tsx": [
+        '<Input placeholder="qwen2.5-coder:14b" title="event_type" />',
+        '<Input placeholder="equipo-plataforma" aria-label="agentic-platform/agent-runtime-php-phpunit:v1" />',
+        '<Input placeholder="https://tu-dominio.com" label="vault:secret/data/mcp/<servicio>/<proyecto>" />',
+      ].join("\n"),
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("las siglas en mayúsculas no son palabras castellanas", () => {
+    // «SE» (sureste), «UN» (Naciones Unidas), «SIN»/«CON» de un enum: en
+    // castellano esas palabras van en minúscula. Distinguir por caja cuesta una
+    // línea y borra de golpe toda una familia de falsos positivos.
+    const root = fixture({
+      "app/x.tsx": '<Field label="UN SDK" title="SE" description="SIN / CON" />\n',
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("sigue contando ocurrencias, no ficheros", () => {
+    const root = fixture({
+      "app/x.tsx": '<Input placeholder="Buscar un agente" aria-label="Cerrar" />\n',
+    });
+
+    expect(run(["--root", root]).output).toContain("2 atributo(s)");
+  });
+
+  it("una pantalla YA migrada que reintroduce castellano sin tildes salta", () => {
+    // Es el escenario que motivó el arreglo: `users` está migrada y fuera de la
+    // allowlist, pero la guarda vieja la dejaba reintroducir castellano llano.
+    const root = fixture({
+      "app/admin/users/page.tsx": '<Button title="Dar acceso a un proyecto" />\n',
+    });
+
+    expect(run(["--root", root]).code).toBe(1);
   });
 });
 

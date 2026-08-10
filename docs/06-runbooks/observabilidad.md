@@ -1,7 +1,7 @@
 ---
 title: Runbook — Observabilidad: qué avisa, dónde mirar y cómo probarlo
 audience: system-admin
-updated: 2026-08-01
+updated: 2026-08-02
 docs_language: es
 ---
 
@@ -38,15 +38,23 @@ Dos detalles que explican casi todas las sorpresas:
 
 ### Críticas — sacan a alguien de la cama
 
-| Alerta                       | Qué significa                                                                      | Primer paso                                                                                         |
-| ---------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `ServiceDown`                | Un target lleva 2 min sin responder al scrape.                                     | `docker compose ps` y los logs del servicio. Si es api-server, la plataforma está caída para todos. |
-| `VaultSealed`                | Vault sellado: ningún secreto se resuelve.                                         | Desellar es el PRIMER paso post-reinicio → [restart-services](./restart-services.md).               |
-| Alertas de host (disco, OOM) | Ver [`host_alerts.yml`](../../docker/monitoring/prometheus/rules/host_alerts.yml). | Espacio y memoria del host.                                                                         |
+| Alerta                         | Qué significa                                                                      | Primer paso                                                                                                       |
+| ------------------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ServiceDown`                  | Un target lleva 2 min sin responder al scrape.                                     | `docker compose ps` y los logs del servicio. Si es api-server, la plataforma está caída para todos.               |
+| `VaultSealed`                  | Vault sellado: ningún secreto se resuelve.                                         | Desellar es el PRIMER paso post-reinicio → [restart-services](./restart-services.md).                             |
+| Alertas de host (disco, OOM)   | Ver [`host_alerts.yml`](../../docker/monitoring/prometheus/rules/host_alerts.yml). | Espacio y memoria del host.                                                                                       |
+| `WatchdogServiceUnrecoverable` | El watchdog agotó su backoff reiniciando un contenedor y sigue caído.              | Ya no hay recuperación automática posible: ver [«El watchdog»](#el-watchdog-recuperación-automática-y-su-límite). |
 
 Las `critical` salen **por dos caminos**: la notificación por la plataforma y el
 Slack de respaldo. Es deliberado — si el caído es el api-server, no puede
 entregarse la alerta a sí mismo.
+
+> ⚠️ **El segundo camino todavía no entrega, y hace falta una persona para que
+> entregue.** Ver [«Lo que falta para que el Slack de respaldo
+> funcione»](#lo-que-falta-para-que-el-slack-de-respaldo-funcione) al final de
+> este runbook. Hasta entonces, una `critical` con el api-server caído **no
+> llega a nadie**, que es exactamente el escenario para el que se diseñó el
+> respaldo.
 
 ### Warnings — se miran en horario laboral
 
@@ -100,8 +108,10 @@ docker compose exec alertmanager amtool alert add \
 ```
 
 Debe aparecer como notificación en la bandeja de plataforma del System Admin
-(`GET /notifications/platform/logs`) en menos de un minuto, y además en el Slack
-de respaldo.
+(`GET /notifications/platform/logs`) en menos de un minuto. Y **además** en el
+Slack de respaldo, en cuanto alguien complete los cinco pasos de [«Lo que falta
+para que el Slack de respaldo funcione»](#lo-que-falta-para-que-el-slack-de-respaldo-funcione);
+hoy ese segundo camino falla en cada envío.
 
 ### 2. Directamente contra el ingest
 
@@ -125,6 +135,95 @@ evita el spam de cada `repeat_interval`.
 ```bash
 docker compose exec api-server curl -s localhost:8000/metrics | head -20
 ```
+
+## El watchdog: recuperación automática y su límite
+
+El watchdog (`apps/watchdog`) vigila los servicios de infraestructura del compose
+—postgres, redis, minio, vault, clamav, **egress-proxy** y **registry-proxy**— y
+los reinicia con backoff exponencial (5 intentos: 10 s, 30 s, 90 s, 270 s, 810 s).
+Cuando agota los intentos deja de reintentar y **emite
+`WatchdogServiceUnrecoverable`** contra `/internal/alerts/ingest`, que la convierte
+en notificación del System Admin por el camino normal.
+
+Los dos proxies entraron en la lista con prod-08 y no es un detalle: el
+`egress-proxy` es la única salida de los agent-runtimes hacia los LLM (ADR 0019) y
+el `registry-proxy` la única de los runtime-templates hacia los registries
+(ADR 0094). Su caída se manifiesta como «los agentes no funcionan» sin que nada
+señale la causa.
+
+### Levantarlo
+
+Va bajo un **perfil de Compose**, porque `docker/docker-compose.yml` es la capa de
+infraestructura y el watchdog es una aplicación:
+
+```bash
+docker build -f apps/watchdog/Dockerfile \
+  --build-arg BASE_IMAGE=agentic-platform/api-server:latest \
+  -t agentic-platform/watchdog:latest .
+
+docker compose --profile watchdog up -d watchdog
+```
+
+**No monta el socket Docker** (principio rector 2): habla con el daemon por
+`DOCKER_HOST` a través del `docker-socket-proxy` del ADR 0060, al que le basta
+`CONTAINERS=1` + `POST=1`. Si en tu despliegue el proxy no existe, el watchdog
+arranca y no encuentra ningún contenedor — lo dice con
+`watchdog.container_missing` por cada servicio.
+
+### Comprobar que avisa de verdad
+
+```bash
+docker compose stop egress-proxy               # o cualquier vigilado
+docker compose --profile watchdog logs -f watchdog
+```
+
+Secuencia esperada: `watchdog.restart` ×5 espaciados por el backoff → una sola
+línea `watchdog.alert` → `watchdog.alert_delivered`. Si sale
+`watchdog.alert_delivery_rejected status=401`, el token no coincide con el del
+api-server; si sale `watchdog.alert_sink_unconfigured` al arrancar, faltan
+`WATCHDOG_ALERTS_INGEST_URL` / `WATCHDOG_ALERTS_INGEST_TOKEN` y la alerta se queda
+en un log local — que es el defecto que esta pieza vino a cerrar.
+
+La entrega **se reintenta en cada tick mientras no confirme**: un api-server que
+arranca después del watchdog no debe costar la única notificación del episodio.
+Confirmada, no se repite (el bucle tickea cada 30 s).
+
+## Lo que falta para que el Slack de respaldo funcione
+
+**Esto no es trabajo pendiente de código: es una decisión y una credencial, y solo
+las puede aportar una persona.** Se deja escrito aquí para que la siguiente pasada
+no vuelva a medir lo mismo.
+
+Lo que **ya está hecho** y no hay que rehacer:
+
+- `docker/monitoring/alertmanager/alertmanager.yml` tiene el receiver
+  `critical-fallback` en la ruta `severity=critical`, con el `continue: true` sin
+  el cual el árbol de rutas se detiene en la primera coincidencia y el respaldo
+  **sustituiría** a la notificación por plataforma en vez de duplicarla;
+- el instalador monta ese mismo fichero (`compose_generator._alertmanager_service`),
+  así que no hay una segunda plantilla que mantener;
+- `tests/unit/test_alertmanager_routing.py` lo guarda.
+
+Lo que **falta**, en orden:
+
+1. **Decidir dónde se custodia el webhook de Slack.** Es un secreto de
+   despliegue; el sitio coherente con el resto de la plataforma es Vault
+   (prod-10). Alternativa aceptable: un fichero en el host con permisos 0600.
+2. **Crear el webhook entrante en Slack** y anotar su URL
+   (`https://hooks.slack.com/services/...`) en el canal de guardia que
+   corresponda.
+3. **Provisionarlo como fichero**: el receiver lo lee de
+   `/etc/alertmanager/secrets/slack_api_url`, no de una variable de entorno
+   (Alertmanager no interpola env en su config).
+4. **Montarlo** en el servicio `alertmanager` que genera el instalador
+   (`_alertmanager_service`) — hoy no declara ese volumen, así que el fichero no
+   existe dentro del contenedor.
+5. **Probarlo** con la alerta sintética del paso 1 de la sección anterior y
+   comprobar que llega a Slack, no solo a la bandeja de la plataforma.
+
+Mientras 1–4 no se hagan, Alertmanager **arranca igual** y falla en cada envío al
+respaldo: degradación deliberada, no un arranque roto. El efecto neto es que
+`severity=critical` con el api-server caído no llega a ningún humano.
 
 ## Añadir una métrica sin romper nada
 

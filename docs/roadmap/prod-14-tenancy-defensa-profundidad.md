@@ -212,7 +212,7 @@ dependa de la disciplina de código en cada query futura:
 
 #### `task_prod14_04` — Crear service_user en init de PostgreSQL + script de upgrade
 
-- [ ] **Título**: En `docker/postgres/init/02-roles.sh`, crear
+- [x] **Título**: En `docker/postgres/init/02-roles.sh`, crear
       `service_user WITH LOGIN BYPASSRLS NOCREATEDB NOCREATEROLE`; `GRANT
 SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
       `ALTER DEFAULT PRIVILEGES FOR ROLE migrations_user ... TO service_user`;
@@ -255,6 +255,29 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
     junto a las otras dos, y
     `SERVICE_USER_PASSWORD: ${SERVICE_USER_PASSWORD:?set SERVICE_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}`
     en el `environment:` del servicio `postgres`.
+  - ✅ **Cerrada (2026-08-02): las dos líneas están puestas**, exactamente donde
+    las dos pasadas anteriores las dejaron dictadas —`docker/docker-compose.yml`
+    (servicio `postgres`) y `docker/.env.example`—, más su fila en
+    `docs/04-reference/mandatory-env-vars.md`, que era la tercera punta del
+    contrato: si el compose exige una variable y el catálogo no la lista, el
+    `cp .env.example .env` documentado deja el stack sin arrancar.
+    - **Ejecutado**: `pytest tests/integration/test_db_roles_service_user.py`
+      contra el Postgres del stack (`TEST_PG_DB_NAME=agentic_platform_test_supplychain`,
+      `TEST_REDIS_URL=redis://localhost:6379/11`) → **14 passed**.
+    - **Y una guarda nueva para la costura, porque es donde vivía el defecto**:
+      `tests/security/test_service_user_password_is_wired.py` (6 tests). Los tests
+      del rol pasaban con el hueco abierto —el contrato roto estaba ENTRE el init
+      y el compose, no dentro de la base de datos—, así que la guarda mira las dos
+      puntas a la vez: que algún `.sh` del init consuma la variable (no-vacuo),
+      que el compose se la pase, que sea `${VAR:?…}` y no `${VAR:-…}` ni `${VAR}`
+      a secas, que `.env.example` traiga el valor de dev, y que **las tres
+      contraseñas de rol se declaren igual** — la asimetría entre ellas es
+      literalmente cómo se coló este hueco.
+    - **Defecto del arnés, anotado y no silenciado**: el comando declarado en
+      `auto_prod14_04_a` lleva `-k grants` y **no selecciona ni un test**
+      (`14 deselected`, pytest sale con **exit 5**). Un selector que no casa es
+      indistinguible de una suite en verde para quien mire solo el código de
+      salida. El comando bueno es el fichero entero, sin `-k`.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
@@ -295,6 +318,22 @@ SELECT/INSERT/UPDATE/DELETE ON ALL TABLES` + `USAGE/SELECT ON SEQUENCES` +
        **qué** cubre el hueco (¿un test de que los 4 servicios conectan como
        `service_user` y siguen escribiendo?), y ese test vive contra el stack, no
        contra la api-server.
+  - ⏳ **2026-08-02: queda UNA cosa, y no es de este carril.** El hueco 2 (compose
+    y `.env.example`) está **cerrado** — ver `task_prod14_04`, con su guarda nueva
+    y los 14 tests de integración ejecutados. Los defaults de los cuatro
+    `config.py` se re-verificaron hoy uno a uno: los cuatro dicen
+    `postgresql+asyncpg://service_user:…` (`workers/config.py:46`,
+    `orchestrator/config.py:60`, `notification_dispatcher/config.py:64`,
+    `api_server/config.py:84`). `docker-compose.dev.yml` no aplica: ese overlay
+    solo publica puertos, no declara `environment` de postgres.
+    **Lo único pendiente es la nota en el plan `prod-01`**: el `compose_generator`
+    del instalador tiene que emitir `SERVICE_USER_PASSWORD` en el servicio
+    `postgres` que genera, o un despliegue de producción **nuevo** repetirá
+    exactamente el defecto que hoy se cierra en el compose canónico — crear el rol
+    BYPASSRLS con el literal que está en este repositorio. No lo escribo yo porque
+    `docs/roadmap/prod-01-*.md` y `apps/installer/**` son de otro carril y hay
+    cuatro escribiendo en paralelo. El requisito queda registrado aquí y en
+    `docs/04-reference/mandatory-env-vars.md` para que no se pierda.
 - **Tiempo**: 4 h · **Complejidad**: m
 - **Depende de**: `task_prod14_04`
 - **Tests automáticos**:
@@ -407,6 +446,16 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
     el 0137 como técnico y aceptado.
     Nota: el criterio de cierre 4 de este plan dice que la revisión del ADR **no
     bloquea el cierre del plan**. Bloquea esta casilla, no el plan.
+  - ⏳ **Re-verificado el 2026-08-02, sin cambios: `status: accepted`,
+    `date: 2026-07-30`, `deciders: [claude-code]`.** Sigue **abierta y sigue
+    siendo una firma, no trabajo**. Se deja escrito qué se le pide exactamente al
+    operador, para que sea barato: leer
+    `docs/05-architecture-decisions/0137-users-global-rls.md` y, si está de
+    acuerdo con la recomendación, sustituir `claude-code` por su nombre en
+    `deciders` y poner la fecha de hoy. Si NO está de acuerdo, bajarlo a
+    `proposed` y decirlo — pero no lo bajo yo por mi cuenta: sería repetir el
+    error del 2026-07-30 en la dirección contraria, y `CONTINUE_HERE.md` ya
+    describe el 0137 como técnico y aceptado.
 - **Tiempo**: 2 h · **Complejidad**: s
 - **Tests automáticos**: no aplica (documento); la revisión humana del ADR es el
   gate.
@@ -452,6 +501,23 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
     entorno vivo las filas soft-borradas por la 0126 y restaurarlas con el sufijo
     `-dup-{n}`. La (a) cuesta una edición de este fichero; la (b), una ventana de
     mantenimiento por entorno.
+  - ⏳ **2026-08-02: sigue siendo (a) o (b), y sigue siendo del operador.** Se
+    añade el dato que hace la decisión barata: la consulta que dice cuántas filas
+    hay realmente en juego, para que no haya que elegir a ciegas. En cada entorno
+    vivo, contra la BD de la plataforma:
+    ```sql
+    SELECT 'teams' AS tabla, tenant_id, name, COUNT(*)
+      FROM teams  WHERE deleted_at IS NOT NULL GROUP BY 1,2,3 HAVING COUNT(*) > 0
+    UNION ALL SELECT 'skills', tenant_id, name, COUNT(*)
+      FROM skills WHERE deleted_at IS NOT NULL GROUP BY 1,2,3
+    UNION ALL SELECT 'agents', tenant_id, name, COUNT(*)
+      FROM agents WHERE deleted_at IS NOT NULL GROUP BY 1,2,3;
+    ```
+    Si sale vacío o solo con borrados intencionales, **(a) es gratis** y basta con
+    corregir la decisión clave nº 4 de este plan para que diga lo que la migración
+    hace de verdad. **No la ejecuto yo**: la orden permanente de no tocar entornos
+    vivos sin verificación previa del operador está por encima de cerrar una
+    casilla.
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
