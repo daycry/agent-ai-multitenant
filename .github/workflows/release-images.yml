@@ -95,7 +95,14 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        app: [workers, orchestrator, notification-dispatcher]
+        # Toda app cuyo Dockerfile lleva `ARG BASE_IMAGE` va aquí, y una guarda
+        # lo comprueba contra el árbol (tests/unit/test_app_images_are_built_by_ci.py):
+        # `watchdog` entró el 2026-08-02 y esta matriz siguió diciendo tres, así
+        # que su imagen no se publicaba en ningún sitio mientras el compose
+        # canónico ya la pedía por `${IMAGE_WATCHDOG}`. Un servicio declarado sin
+        # imagen publicada no es un servicio: es un `up` que falla en el host de
+        # otro.
+        app: [workers, orchestrator, notification-dispatcher, watchdog]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0

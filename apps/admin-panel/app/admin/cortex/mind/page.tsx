@@ -34,6 +34,7 @@ import { LearningPanel } from "@/components/cortex/learning-panel";
 import { MindPadSpace } from "@/components/cortex/mind-pad-space";
 import { PageHeader } from "@/components/layout/page-header";
 import { honestNote } from "@/lib/cortex-curiosity";
+import { useT } from "@/lib/i18n";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
@@ -285,13 +286,21 @@ function MindHeader() {
  */
 function HonestyBanner({ mind }: { mind: CortexMind | null }) {
   const lang = useLangOptional();
+  const t = useT("cortexCuriosity");
   // La API manda `note_es` + `note_en`: se muestra la del idioma activo (y la
-  // otra si esa viniera vacía — el aviso no puede quedar en blanco).
-  const note =
-    honestNote(mind?.honesty ?? {}, lang) ||
-    (lang === "es"
-      ? "Modelo computacional de afecto, no sentimientos reales."
-      : "Computational model of affect, not real feelings.");
+  // otra si esa viniera vacía — el aviso no puede quedar en blanco). El respaldo
+  // sale del diccionario y NO por un defecto de comportamiento: el ternario que
+  // había aquí ya daba los dos idiomas, porque `useT` resuelve el idioma con el
+  // mismo `useLangOptional()` que leía el ternario. El respaldo que sí fue
+  // monolingüe es el ANTERIOR al ternario, y lo arregló `63e6a135`.
+  // El motivo del cambio es dejar el `ALLOWLIST` de `scripts/check-i18n.mjs` a
+  // cero: mientras quedara un ternario de idioma en el árbol, la guarda tenía
+  // que seguir tolerando excepciones, y una allowlist viva es por donde vuelve
+  // a colarse castellano cableado en pantallas nuevas.
+  // Y por eso este comentario NO escribe el ternario tal cual: `PATTERN` casa
+  // sobre el fuente entero, comentarios incluidos, así que citarlo literalmente
+  // vuelve a poner roja la guarda que este cambio vino a dejar a cero.
+  const note = honestNote(mind?.honesty ?? {}, lang) || t("honestyFallback");
   return (
     <div
       className="border-border bg-muted text-muted-foreground mt-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm"

@@ -1766,6 +1766,19 @@ export const dictionary = {
 
   /** `lib/cortex-curiosity.ts` — budget diario de búsquedas del córtex. */
   cortexCuriosity: {
+    /**
+     * Respaldo del banner de honestidad del córtex (ADR 0075 §6), cuando `/mind`
+     * aún no ha respondido y por tanto no hay `note_es`/`note_en` que enseñar.
+     *
+     * El banner NO es removible: nunca se pintan diales de afecto sin él. Por eso
+     * el respaldo tiene que existir en los dos idiomas — la nota que llega del
+     * backend ya viene bilingüe, así que dejar sólo el respaldo en castellano
+     * hacía que el MISMO aviso cambiara de idioma según hubiera cargado o no.
+     */
+    honestyFallback: {
+      es: "Modelo computacional de afecto, no sentimientos reales.",
+      en: "Computational model of affect, not real feelings.",
+    },
     budgetNoCap: {
       es: "{used} búsquedas hoy · sin cupo configurado",
       en: "{used} searches today · no cap configured",
@@ -1971,6 +1984,487 @@ export const dictionary = {
     wizardGoToProject: { es: "Ir al proyecto", en: "Go to the project" },
     back: { es: "Atrás", en: "Back" },
     next: { es: "Siguiente", en: "Next" },
+  },
+
+  /**
+   * Catálogo de tools — `/admin/tools` (prod-16 `task_prod16_04`).
+   *
+   * Lo que NO está aquí, y es lo importante de esta pantalla: las etiquetas de
+   * las TRES facetas de ADR 0049 (Función / Seguridad / Origen). Esas viven en
+   * `lib/tools/taxonomy.ts` como pares `labelEs`/`labelEn` porque son la fuente
+   * ÚNICA que comparten el catálogo, la asignación y el diagnóstico: duplicarlas
+   * aquí volvería a abrir la divergencia que el ADR 0049 cerró. Se resuelven con
+   * `label()`/`pickLang`, que es la otra mitad del i18n (texto bilingüe en
+   * datos), no con claves.
+   *
+   * Los nombres de las facetas SÍ están (`facetCategory`…): eso es el rótulo del
+   * `<Select>`, texto de UI que se conoce al compilar.
+   */
+  tools: {
+    title: { es: "Catálogo de tools", en: "Tools catalog" },
+    description: {
+      es: "Explora las tools de la plataforma y gestiona las personalizadas de tu tenant. Las built-in son de solo lectura.",
+      en: "Browse the platform tools and manage your tenant's custom ones. Built-ins are read-only.",
+    },
+    newTool: { es: "Nueva tool", en: "New tool" },
+
+    // --- facetas y búsqueda ---
+    searchPlaceholder: {
+      es: "Buscar por nombre o descripción…",
+      en: "Search by name or description…",
+    },
+    searchAriaLabel: {
+      es: "Buscar tool por nombre o descripción",
+      en: "Search tool by name or description",
+    },
+    facetCategory: { es: "Función", en: "Function" },
+    facetSecurity: { es: "Seguridad", en: "Security" },
+    facetImpl: { es: "Origen", en: "Origin" },
+    facetAll: { es: "Todas", en: "All" },
+
+    // --- estados de la lista ---
+    errorTitle: {
+      es: "No se pudo cargar el catálogo de tools",
+      en: "The tools catalog could not be loaded",
+    },
+    emptyFiltered: {
+      es: "Ninguna tool coincide con los filtros",
+      en: "No tool matches the filters",
+    },
+    emptyFilteredHelp: {
+      es: "Ajusta o limpia los filtros para ver más resultados.",
+      en: "Adjust or clear the filters to see more results.",
+    },
+    emptyCatalog: { es: "No hay tools en el catálogo", en: "There are no tools in the catalog" },
+    emptyCatalogHelp: {
+      es: "Crea una tool personalizada para empezar.",
+      en: "Create a custom tool to get started.",
+    },
+    clearFilters: { es: "Limpiar filtros", en: "Clear filters" },
+
+    // --- los dos grupos ---
+    groupBuiltin: { es: "De plataforma (built-in)", en: "Platform (built-in)" },
+    groupBuiltinHint: {
+      es: "Mantenidas por la plataforma · solo lectura",
+      en: "Maintained by the platform · read-only",
+    },
+    groupCustom: { es: "Personalizadas del tenant", en: "Tenant custom tools" },
+    groupCustomHintEditable: { es: "Editables · custom + MCP", en: "Editable · custom + MCP" },
+    groupCustomHint: { es: "Custom + MCP", en: "Custom + MCP" },
+    groupEmpty: {
+      es: "Ninguna tool en este grupo con los filtros actuales.",
+      en: "No tool in this group with the current filters.",
+    },
+
+    // --- la fila ---
+    unwiredBadge: { es: "No disponible aún", en: "Not available yet" },
+    unwiredTooltip: {
+      es: "Sin motor en el runtime todavía: asignarla no la haría ejecutable.",
+      en: "No runtime engine yet: assigning it would not make it executable.",
+    },
+    unwiredAriaLabel: {
+      es: "No disponible aún: sin motor en el runtime.",
+      en: "Not available yet: no runtime engine.",
+    },
+    // El `{label}` lo aporta la taxonomía; el rótulo de la faceta, el
+    // diccionario. Un `aria-label` mitad y mitad es justo lo que prod-16 cierra.
+    badgeCategoryAria: { es: "Función: {label}. {help}", en: "Function: {label}. {help}" },
+    badgeSecurityAria: { es: "Seguridad: {label}. {help}", en: "Security: {label}. {help}" },
+    badgeImplAria: { es: "Origen: {label}. {help}", en: "Origin: {label}. {help}" },
+    readOnlyBadge: { es: "Solo lectura", en: "Read-only" },
+    editAria: { es: "Editar {name}", en: "Edit {name}" },
+    deleteAria: { es: "Borrar {name}", en: "Delete {name}" },
+
+    // --- diálogo de alta / edición ---
+    dialogEditTitle: { es: "Editar tool", en: "Edit tool" },
+    dialogCreateTitle: { es: "Nueva tool personalizada", en: "New custom tool" },
+    dialogDescription: {
+      es: "Las built-in las mantiene la plataforma; aquí gestionas las custom de tu tenant. El nombre se normaliza a slug y debe ser único.",
+      en: "Built-ins are maintained by the platform; here you manage your tenant's custom ones. The name is normalised to a slug and must be unique.",
+    },
+    fieldName: { es: "Nombre", en: "Name" },
+    fieldNamePlaceholder: { es: "p. ej. deploy_preview", en: "e.g. deploy_preview" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    fieldDescriptionPlaceholder: {
+      es: "Qué hace y cuándo usarla",
+      en: "What it does and when to use it",
+    },
+    fieldRef: { es: "Referencia de implementación", en: "Implementation reference" },
+    fieldRefPlaceholder: {
+      es: "URL del endpoint, dotted path de la función, comando…",
+      en: "Endpoint URL, function dotted path, command…",
+    },
+    duplicateError: {
+      es: "Ya existe una tool con ese nombre (o colisiona con una built-in).",
+      en: "A tool with that name already exists (or collides with a built-in).",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saveChanges: { es: "Guardar cambios", en: "Save changes" },
+    createTool: { es: "Crear tool", en: "Create tool" },
+
+    // --- diálogo de borrado ---
+    deleteTitle: { es: "Borrar tool", en: "Delete tool" },
+    deleteDescriptionPrefix: { es: "Se eliminará ", en: "This will remove " },
+    deleteDescriptionSuffix: {
+      es: " del catálogo del tenant. Esta acción no se puede deshacer.",
+      en: " from the tenant catalog. This action cannot be undone.",
+    },
+    deleting: { es: "Borrando…", en: "Deleting…" },
+    delete: { es: "Borrar", en: "Delete" },
+  },
+
+  /**
+   * Diagnóstico de tools por agente — pestaña «Tools por agente» del proyecto
+   * (prod-16 `task_prod16_04`).
+   *
+   * Pantalla de VERIFICACIÓN: quien la abre está comprobando si un agente
+   * ejecuta lo que cree que ejecuta. Dejarla en castellano con el toggle en EN
+   * mete ruido justo donde alguien lee con cuidado.
+   *
+   * Las etiquetas de las tools (Contenedor / Privilegiada / …) NO están aquí:
+   * son la taxonomía de ADR 0049 y se resuelven con `label()`, igual que en el
+   * catálogo y en la asignación.
+   */
+  agentToolsDiagnostic: {
+    crumb: { es: "Tools por agente", en: "Tools by agent" },
+    title: { es: "Diagnóstico de tools por agente", en: "Tool diagnostics by agent" },
+    description: {
+      es: "Lectura read-only de qué tools (builtin, MCP, http_endpoint, python_function, docker_command) ejecuta de verdad cada agente del proyecto.",
+      en: "Read-only view of which tools (builtin, MCP, http_endpoint, python_function, docker_command) each project agent actually runs.",
+    },
+    bannerStrong: { es: "Solo lectura — verificación.", en: "Read-only — verification." },
+    bannerBody: {
+      es: " El diagnóstico refleja lo que el runtime ejecuta de verdad; para cambiar asignaciones edita las tools en la ficha del agente. (La sección del marketplace, al final de la página, sí activa capacidades en este proyecto.)",
+      en: " The diagnostic reflects what the runtime actually runs; to change assignments edit the tools on the agent page. (The marketplace section, at the end of the page, does enable capabilities on this project.)",
+    },
+    mcpTitle: { es: "MCP servers del proyecto", en: "Project MCP servers" },
+    mcpEmpty: {
+      es: "Este proyecto no tiene MCP servers configurados.",
+      en: "This project has no MCP servers configured.",
+    },
+    agentsEmpty: {
+      es: "Este proyecto no tiene agentes project-scoped declarados. Los agentes globales del tenant se pueden usar pero no aparecen aquí.",
+      en: "This project declares no project-scoped agents. The tenant's global agents can still be used but do not show up here.",
+    },
+    // El párrafo se parte porque lleva `<code>agent_tools</code>` en medio: el
+    // nombre de la tabla no se traduce y tiene que seguir siendo `<code>`.
+    noAssignmentsPrefix: {
+      es: "Este agente no tiene tools asignadas vía ",
+      en: "This agent has no tools assigned through ",
+    },
+    noAssignmentsSuffix: {
+      es: ". Sin asignaciones, el agente conserva el comportamiento por defecto del runtime (sin restricción por agente); no significa que ejecute todo el catálogo.",
+      en: ". With no assignments the agent keeps the runtime's default behaviour (no per-agent restriction); it does not mean it runs the whole catalog.",
+    },
+    notWiredBadge: { es: "No disponible aún", en: "Not available yet" },
+  },
+
+  /**
+   * Equipos: lista, detalle, los cuatro diálogos y la adopción de un built-in
+   * (prod-16 `task_prod16_04`).
+   *
+   * Un solo namespace para los siete ficheros porque comparten vocabulario
+   * («Adoptar», «Proyecto destino», «— Selecciona —») y partirlo por fichero es
+   * la primera forma de que esos textos empiecen a divergir entre la lista y el
+   * detalle, que es justo lo que un usuario nota.
+   *
+   * Lo que NO entra: los títulos de `ChatModelSection`, que ya viajan bilingües
+   * como `{es, en}` en sus props (los resuelve `pickLang` dentro del
+   * componente), y las etiquetas de `MEMORY_SCOPE_OPTIONS`, que viven en
+   * `lib/memory/constants.ts` y las comparte la ficha del agente.
+   */
+  teams: {
+    // --- lista ---
+    title: { es: "Equipos", en: "Teams" },
+    description: {
+      es: "Built-ins de la plataforma, plantillas de tu tenant y equipos locales de proyecto.",
+      en: "Platform built-ins, your tenant's templates and project-local teams.",
+    },
+    loadingList: { es: "Cargando equipos…", en: "Loading teams…" },
+    listErrorTitle: { es: "No se pudieron cargar los equipos", en: "Could not load teams" },
+    tabBuiltin: { es: "Built-in", en: "Built-in" },
+    tabTemplate: { es: "Plantillas del Tenant", en: "Tenant templates" },
+    tabLocal: { es: "Locales del Proyecto", en: "Project-local" },
+    emptyBuiltin: {
+      es: "No hay equipos built-in seedeados. Corre python -m api_server.seeds.",
+      en: "No built-in teams seeded. Run python -m api_server.seeds.",
+    },
+    emptyTemplate: {
+      es: "Tu tenant aún no tiene equipos propios. Adopta un built-in para empezar.",
+      en: "Your tenant has no teams of its own yet. Adopt a built-in to get started.",
+    },
+    emptyLocal: {
+      es: "No hay equipos locales de proyecto. Adopta un equipo a un proyecto o créalo desde el wizard de proyecto.",
+      en: "There are no project-local teams. Adopt a team into a project or create it from the project wizard.",
+    },
+    builtinBadge: { es: "Built-in", en: "Built-in" },
+    adoptedBadge: { es: "Adoptado", en: "Adopted" },
+    memberOne: { es: "{n} miembro", en: "{n} member" },
+    memberMany: { es: "{n} miembros", en: "{n} members" },
+    viewDetail: { es: "Ver detalle", en: "View details" },
+    adopt: { es: "Adoptar", en: "Adopt" },
+
+    // --- detalle ---
+    fallbackName: { es: "Equipo", en: "Team" },
+    fallbackDescription: { es: "Detalle del equipo.", en: "Team details." },
+    back: { es: "Volver", en: "Back" },
+    edit: { es: "Editar", en: "Edit" },
+    delete: { es: "Borrar", en: "Delete" },
+    adoptCustomize: { es: "Adoptar / Personalizar", en: "Adopt / Customize" },
+    loadingTeam: { es: "Cargando equipo…", en: "Loading team…" },
+    detailErrorTitle: { es: "No se pudo cargar el equipo:", en: "Could not load team:" },
+    modelAdoptHintPrefix: {
+      es: "Este equipo es una plantilla de la plataforma (solo lectura). Para fijar su modelo, effort o cualquier otra configuración, ",
+      en: "This team is a platform template (read-only). To pin its model, effort or any other setting, ",
+    },
+    modelAdoptHintStrong: { es: "adóptalo", en: "adopt it" },
+    modelAdoptHintSuffix: {
+      es: ": la copia de tu organización es totalmente editable y sus agentes la heredan.",
+      en: ": your organisation's copy is fully editable and its agents inherit from it.",
+    },
+    memoryPolicyLabel: {
+      es: "Política de memoria del equipo",
+      en: "Team memory policy",
+    },
+    memoryPolicyHelp: {
+      es: 'Gobierna la memoria de los agentes del equipo. "Sin política" = cada agente usa su propio scope. Las lecciones (semantic) viajan a este nivel; lo puntual de cada proyecto (episodic) se queda en su proyecto.',
+      en: 'Governs the memory of the team\'s agents. "No policy" = each agent uses its own scope. Lessons (semantic) travel to this level; what is specific to a project (episodic) stays in its project.',
+    },
+    memoryPolicyNone: { es: "Sin política (heredar)", en: "No policy (inherit)" },
+    membersHeading: { es: "Miembros ({n})", en: "Members ({n})" },
+    addMember: { es: "Añadir miembro", en: "Add member" },
+    addMemberDisabled: {
+      es: "Los equipos built-in no son editables. Fórkea para personalizar.",
+      en: "Built-in teams are not editable. Fork it to customize.",
+    },
+    membersEmpty: {
+      es: "El equipo no tiene miembros todavía.",
+      en: "The team has no members yet.",
+    },
+    unknownAgent: { es: "(agente)", en: "(agent)" },
+    forkedBadge: { es: "Forked", en: "Forked" },
+    linkedBadge: { es: "Linked", en: "Linked" },
+    leaderBadge: { es: "Líder", en: "Leader" },
+    priorityBadge: { es: "Prioridad {n}", en: "Priority {n}" },
+
+    // --- alta de miembro ---
+    addMemberTitle: { es: "Añadir miembro al equipo", en: "Add a member to the team" },
+    addMemberDescription: {
+      es: "Elige un agente del catálogo y decide si lo añades por referencia (linked) o como una copia editable (forked).",
+      en: "Pick an agent from the catalog and decide whether to add it by reference (linked) or as an editable copy (forked).",
+    },
+    agentLabel: { es: "Agente", en: "Agent" },
+    selectPlaceholder: { es: "— Selecciona —", en: "— Select —" },
+    modeLegend: { es: "Modo", en: "Mode" },
+    modeLinkedHelp: {
+      es: " — el equipo usa el agente por referencia. Si el origen evoluciona, el equipo lo ve.",
+      en: " — the team uses the agent by reference. If the source evolves, the team sees it.",
+    },
+    modeForkedHelp: {
+      es: " — clona el agente en un proyecto como copia editable. Independiente del original.",
+      en: " — clones the agent into a project as an editable copy. Independent from the original.",
+    },
+    projectLabel: { es: "Proyecto destino", en: "Target project" },
+    addMemberNoProjects: {
+      es: "No tienes proyectos creados. Crea uno primero para poder forkear.",
+      en: "You have no projects. Create one first to be able to fork.",
+    },
+    errSelectAgent: { es: "Selecciona un agente.", en: "Select an agent." },
+    errSelectProject: {
+      es: "Selecciona un proyecto destino para el fork.",
+      en: "Select a target project for the fork.",
+    },
+    adding: { es: "Añadiendo…", en: "Adding…" },
+    add: { es: "Añadir", en: "Add" },
+
+    // --- edición de miembro ---
+    editMemberTitle: { es: "Editar miembro", en: "Edit member" },
+    editMemberDescPrefix: { es: "Metadata de ", en: "Metadata for " },
+    editMemberDescSuffix: {
+      es: " en este equipo: si es líder, su rol y su prioridad de asignación.",
+      en: " in this team: whether it leads it, its role and its assignment priority.",
+    },
+    isLeader: { es: "Líder del equipo", en: "Team leader" },
+    roleInTeam: { es: "Rol en el equipo", en: "Role in the team" },
+    roleInTeamPlaceholder: { es: "p. ej. Tech Lead", en: "e.g. Tech Lead" },
+    priorityLabel: {
+      es: "Prioridad de asignación (0–1000)",
+      en: "Assignment priority (0–1000)",
+    },
+
+    // --- edición y borrado del equipo ---
+    editTeamTitle: { es: "Editar equipo", en: "Edit team" },
+    editTeamDescription: {
+      es: "Cambia el nombre o la descripción. Los miembros se gestionan desde la lista principal.",
+      en: "Change the name or the description. Members are managed from the main list.",
+    },
+    nameLabel: { es: "Nombre", en: "Name" },
+    descriptionLabel: { es: "Descripción", en: "Description" },
+    deleteTitle: { es: "Borrar equipo", en: "Delete team" },
+    deleteDescPrefix: { es: "Esta acción es ", en: "This action is " },
+    deleteDescStrong: { es: "irreversible", en: "irreversible" },
+    deleteDescSuffix: {
+      es: ". Los agentes miembros NO se borran — solo desaparece su pertenencia a este equipo.",
+      en: ". Member agents are NOT deleted — only their membership of this team goes away.",
+    },
+    deleteConfirmPrompt: {
+      es: "Para confirmar, teclea el nombre del equipo:",
+      en: "To confirm, type the team name:",
+    },
+    deleting: { es: "Borrando…", en: "Deleting…" },
+    deleteConfirm: { es: "Borrar definitivamente", en: "Delete permanently" },
+
+    // --- adopción de un built-in ---
+    adoptTitle: { es: "Adoptar / Personalizar equipo", en: "Adopt / Customize team" },
+    adoptDescription: {
+      es: 'Crea una copia editable de "{name}". Sus agentes se forkean (persona + tools + skills) y el equipo original built-in no se toca.',
+      en: 'Creates an editable copy of "{name}". Its agents are forked (persona + tools + skills) and the original built-in team is untouched.',
+    },
+    adoptDefaultName: { es: "{name} (copia)", en: "{name} (copy)" },
+    adoptNameLabel: { es: "Nombre del equipo", en: "Team name" },
+    adoptTargetLegend: { es: "Destino", en: "Target" },
+    adoptTargetTenant: { es: "Catálogo del tenant", en: "Tenant catalog" },
+    adoptTargetTenantHelp: {
+      es: "El equipo y sus agentes viven a nivel de tenant (reutilizable en cualquier proyecto).",
+      en: "The team and its agents live at the tenant level (reusable across projects).",
+    },
+    adoptTargetProject: { es: "Un proyecto", en: "A project" },
+    adoptTargetProjectHelp: {
+      es: "El equipo y sus agentes quedan atados a un proyecto concreto.",
+      en: "The team and its agents are tied to a specific project.",
+    },
+    adoptNoProjects: {
+      es: "No tienes proyectos. Crea uno primero o adopta al catálogo del tenant.",
+      en: "You have no projects. Create one first or adopt into the tenant catalog.",
+    },
+    adoptModelLegend: { es: "Modelo del equipo (opcional)", en: "Team model (optional)" },
+    adoptPinModel: {
+      es: "Fijar un modelo por defecto (si no, hereda de proyecto/plataforma)",
+      en: "Pin a default model (otherwise it inherits from project/platform)",
+    },
+    adoptError: { es: "Error al adoptar el equipo", en: "Failed to adopt the team" },
+    adopting: { es: "Adoptando…", en: "Adopting…" },
+
+    // --- compartidas por varios diálogos ---
+    cancel: { es: "Cancelar", en: "Cancel" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    save: { es: "Guardar", en: "Save" },
+  },
+
+  /**
+   * Dashboard de guardrails del tenant (`/admin/guardrails`, prod-16
+   * `task_prod16_04`).
+   *
+   * Los `guardrail_type` y los `hook_point` NO se traducen: son los slugs del
+   * backend y el operador los busca tal cual en logs y en la configuración. Las
+   * ACCIONES sí, porque el panel ya las mostraba traducidas al castellano y
+   * dejarlas a medias es peor que no traducirlas.
+   */
+  guardrails: {
+    title: { es: "Guardrails", en: "Guardrails" },
+    description: {
+      es: "Eventos de guardrails sobre el trabajo de tu tenant. El detalle está enmascarado: el secreto / PII que disparó el guardrail nunca se almacena.",
+      en: "Guardrail events over your tenant's work. The detail is masked: the secret / PII that fired the guardrail is never stored.",
+    },
+    forbidden: {
+      es: "Necesitas el rol tenant_admin para ver el dashboard de guardrails.",
+      en: "You need the tenant_admin role to see the guardrails dashboard.",
+    },
+    loadError: {
+      es: "No se pudo cargar el dashboard:",
+      en: "The dashboard could not be loaded:",
+    },
+    windowLabel: { es: "Ventana:", en: "Window:" },
+    eventsInWindow: { es: "Eventos ({n}d)", en: "Events ({n}d)" },
+    dailyTrend: { es: "Tendencia diaria", en: "Daily trend" },
+    byType: { es: "Por tipo", en: "By type" },
+    bySeverity: { es: "Por severidad", en: "By severity" },
+    noEvents: { es: "Sin eventos.", en: "No events." },
+    recentEvents: { es: "Eventos recientes", en: "Recent events" },
+    noRecentEvents: { es: "Sin eventos recientes.", en: "No recent events." },
+    colType: { es: "Tipo", en: "Type" },
+    colHook: { es: "Hook", en: "Hook" },
+    colSeverity: { es: "Severidad", en: "Severity" },
+    colAction: { es: "Acción", en: "Action" },
+    colDetail: { es: "Detalle (enmascarado)", en: "Detail (masked)" },
+    colWhen: { es: "Cuándo", en: "When" },
+    sparklineEmptyAria: { es: "Sin eventos en la ventana", en: "No events in the window" },
+    sparklineAria: { es: "Eventos por día", en: "Events per day" },
+    // Acciones de `guardrail_events.action` (el slug crudo es el fallback).
+    actionBlock: { es: "bloquear", en: "block" },
+    actionRedact: { es: "enmascarar", en: "redact" },
+    actionWarn: { es: "avisar", en: "warn" },
+    actionRetryWithFeedback: { es: "reintentar", en: "retry" },
+    actionEscalateToHuman: { es: "escalar", en: "escalate" },
+    actionTransform: { es: "transformar", en: "transform" },
+  },
+
+  /**
+   * Ollama & Embeddings — superficie de System Admin (`/admin/ollama`, ADR 0056;
+   * prod-16 `task_prod16_04`).
+   *
+   * Lo que NO se traduce y es deliberado: los nombres de modelo
+   * (`nomic-embed-text`) y el `detail` que devuelve el backend tras un pull o un
+   * borrado — ese texto lo redacta el api-server, no el panel.
+   */
+  ollama: {
+    title: { es: "Ollama & Embeddings", en: "Ollama & Embeddings" },
+    description: {
+      es: "Gestión del Ollama del stack (ADR 0056): modelo de embeddings activo + descubrimiento, y administración de modelos (listar / pull / borrar). Solo System Admin.",
+      en: "Management of the stack's Ollama (ADR 0056): active embedding model + discovery, and model administration (list / pull / delete). System Admin only.",
+    },
+    forbidden: {
+      es: "Esta sección es exclusiva del System Admin de la plataforma.",
+      en: "This section is for the platform's System Admin only.",
+    },
+    refresh: { es: "Actualizar", en: "Refresh" },
+
+    // --- sección 1: embeddings ---
+    embeddingsHeading: { es: "Embeddings", en: "Embeddings" },
+    loadingEmbeddings: { es: "Cargando embeddings…", en: "Loading embeddings…" },
+    activeModel: { es: "Modelo activo:", en: "Active model:" },
+    requiredDim: { es: "Dim requerida:", en: "Required dim:" },
+    reachable: { es: "Ollama accesible", en: "Ollama reachable" },
+    unreachable: { es: "Ollama no accesible", en: "Ollama not reachable" },
+    colEmbedder: { es: "Embedder instalado", en: "Installed embedder" },
+    colDim: { es: "Dim", en: "Dim" },
+    colCompatible: { es: "Compatible (768)", en: "Compatible (768)" },
+    colActive: { es: "Activo", en: "Active" },
+    yes: { es: "sí", en: "yes" },
+    no: { es: "no", en: "no" },
+    noEmbeddersInstalled: {
+      es: "No hay embedders del catálogo instalados todavía.",
+      en: "No catalog embedders installed yet.",
+    },
+    embeddersUnreachable: {
+      es: "Sin conexión con Ollama: no se pueden listar los embedders instalados.",
+      en: "No connection to Ollama: the installed embedders cannot be listed.",
+    },
+    recommendedHelp: {
+      es: "Recomendados (768 dims, compatibles) — instálalos desde «Modelos Ollama»:",
+      en: "Recommended (768 dims, compatible) — install them from «Ollama models»:",
+    },
+
+    // --- sección 2: modelos ---
+    modelsHeading: { es: "Modelos Ollama", en: "Ollama models" },
+    pullLabel: { es: "Descargar (pull) un modelo", en: "Download (pull) a model" },
+    pullPlaceholder: { es: "p. ej. nomic-embed-text", en: "e.g. nomic-embed-text" },
+    pulling: { es: "Descargando…", en: "Downloading…" },
+    pull: { es: "Pull", en: "Pull" },
+    loadingModels: { es: "Cargando modelos…", en: "Loading models…" },
+    modelsUnreachable: {
+      es: "Sin conexión con Ollama. Comprueba que el servicio del stack está levantado (modo CPU/GPU, ADR 0056).",
+      en: "No connection to Ollama. Check that the stack's service is up (CPU/GPU mode, ADR 0056).",
+    },
+    modelsEmpty: {
+      es: "No hay modelos instalados. Descarga uno con «Pull».",
+      en: "No models installed. Download one with «Pull».",
+    },
+    colModel: { es: "Modelo", en: "Model" },
+    colSize: { es: "Tamaño", en: "Size" },
+    colActions: { es: "Acciones", en: "Actions" },
+    deleteAria: { es: "Borrar {name}", en: "Delete {name}" },
   },
 } as const satisfies Dictionary;
 

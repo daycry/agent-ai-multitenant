@@ -45,6 +45,7 @@ from api_server.db.knowledge import (
 )
 from api_server.events import delete_document_stream
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
+from api_server.ingestion.formats import cached_supported_formats
 from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
 from api_server.routers._helpers import require_tenant_id, soft_delete
@@ -600,6 +601,22 @@ async def upload_document(
     row lands in `documents` with ``status='pending'``."""
     tenant_id = require_tenant_id(principal)
     kb = await _load_kb(session, kb_id)
+
+    # Rechazo por FORMATO antes de leer un byte (prod-13 task_prod13_04 / api-2).
+    # La lista no está escrita aquí: se le pregunta a docling-serve al arrancar y
+    # se cachea, con respaldo fijo si no contesta — ver
+    # `api_server/ingestion/formats.py`. La lectura es de la caché EN PROCESO:
+    # una validación de entrada no puede depender de la red.
+    # Sin esto el rechazo llegaba minutos después, desde el pipeline, tras haber
+    # transferido y almacenado hasta 50 MiB.
+    rejection = cached_supported_formats().rejection_reason(
+        filename=file.filename, content_type=file.content_type
+    )
+    if rejection is not None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=rejection,
+        )
 
     # Read the upload in CHUNKS, stopping the moment it exceeds the cap (prod-13
     # task_prod13_04 / api-2): `await file.read()` used to pull the whole body

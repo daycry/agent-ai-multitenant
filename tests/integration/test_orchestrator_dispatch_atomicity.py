@@ -41,9 +41,9 @@ from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-pytestmark = pytest.mark.integration
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
+pytestmark = pytest.mark.integration
 
 # A one-step scripted model spec carried on the agent (the dispatcher
 # forwards it verbatim — irrelevant here since the enqueue is stubbed).

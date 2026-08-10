@@ -17,6 +17,8 @@ import { afterEach, describe, expect, it } from "vitest";
 const APP_ROOT = resolve(__dirname, "..");
 const SCRIPT = join(APP_ROOT, "scripts", "check-i18n.mjs");
 const TERNARY = 'const label = lang === "es" ? "Hola" : "Hi";\n';
+/** UN atributo en castellano por línea: `.repeat(n)` da exactamente n infractores. */
+const SPANISH_ATTR_LINE = '<Input placeholder="Buscar por número…" />\n';
 
 const fixtures: string[] = [];
 
@@ -63,6 +65,20 @@ describe("check-i18n sobre el árbol real", () => {
 
     expect(scanned).toBeGreaterThan(200);
   });
+
+  it("el trinquete de ternarios está GRADUADO: cero deuda y allowlist vacía", () => {
+    // prod-16 `task_prod16_04`, 2026-08-12: los 63 ternarios de idioma con que
+    // nació el plan llegaron a 0. Cuando eso pasa, la allowlist deja de tener
+    // sentido y el trinquete pasa de saldar deuda a impedirla — igual que le
+    // ocurrió a las pantallas en `check-component-size`.
+    const raw = execFileSync(process.execPath, [SCRIPT, "--print-allowlist"], {
+      encoding: "utf8",
+    });
+    const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
+
+    expect(parsed.ternaries).toEqual({});
+    expect(run([]).output).toContain("0 ternario(s) pendientes en 0 fichero(s)");
+  });
 });
 
 /**
@@ -106,15 +122,17 @@ describe("check-i18n sabe fallar", () => {
     expect(output).toContain("useT()");
   });
 
-  it("un fichero de la allowlist con MÁS ternarios de los anotados es error", () => {
-    const { rel, allowed } = anAllowlisted("ternaries");
-    const root = fixture({ [rel]: TERNARY.repeat(allowed + 1) });
+  it("un fichero que ARRASTRABA deuda de ternarios tampoco puede reintroducirla", () => {
+    // Con el trinquete graduado ya no hay cupos que respetar: el que fue el
+    // mayor bolsón de deuda (`components/capability/`) se juzga como cualquier
+    // otro. Antes este caso comprobaba «no más de los N anotados»; hoy el
+    // umbral es cero y esto es lo que queda por comprobar.
+    const root = fixture({ "components/capability/capability-hub.tsx": TERNARY });
 
     const { code, output } = run(["--root", root]);
 
     expect(code).toBe(1);
-    expect(output).toContain(`la allowlist permite ${allowed}`);
-    expect(output).toContain("La deuda no puede crecer");
+    expect(output).toContain("useT()");
   });
 
   it("cuenta ocurrencias, no ficheros (dos en el mismo fichero cuentan dos)", () => {
@@ -138,18 +156,18 @@ describe("check-i18n no molesta donde no debe", () => {
   });
 
   it("un fichero de la allowlist DENTRO de su cupo pasa", () => {
-    const { rel, allowed } = anAllowlisted("ternaries");
-    const root = fixture({ [rel]: TERNARY.repeat(allowed) });
+    // El sujeto sale ahora de la allowlist de ATRIBUTOS: la de ternarios se
+    // vació al cerrar la migración y este caso se quedaría sin nada que probar.
+    const { rel, allowed } = anAllowlisted("attrs");
+    const root = fixture({ [rel]: SPANISH_ATTR_LINE.repeat(allowed) });
 
     expect(run(["--root", root]).code).toBe(0);
   });
 
   it("avisa (sin fallar) cuando un fichero baja de su cupo", () => {
-    const { rel, allowed } = anAllowlisted("ternaries");
-    // Sólo tiene sentido si el cupo anotado es > 1; los de cupo 1 no pueden bajar
-    // sin salir del mapa, y ese caso lo cubre el aviso de "bórralo".
-    if (allowed <= 1) return;
-    const root = fixture({ [rel]: TERNARY });
+    // Cupo >= 2 para que UN infractor quede por debajo y dispare el aviso.
+    const { rel } = anAllowlisted("attrs", 2);
+    const root = fixture({ [rel]: SPANISH_ATTR_LINE });
 
     const { code, output } = run(["--root", root]);
 
@@ -352,10 +370,20 @@ describe("check-i18n --strict", () => {
     // rojo el día que ese módulo se migró de verdad — el mismo modo de fallo que
     // ya se corrigió dos veces en `check-component-size.test.ts`: un test que se
     // rompe POR EL ÉXITO enseña a desconfiar de la guarda, no del cambio.
-    const { rel, allowed } = anAllowlisted("ternaries");
-    const root = fixture({ [rel]: TERNARY.repeat(allowed) });
+    const { rel, allowed } = anAllowlisted("attrs");
+    const root = fixture({ [rel]: SPANISH_ATTR_LINE.repeat(allowed) });
 
     expect(run(["--root", root]).code).toBe(0);
+    expect(run(["--root", root, "--strict"]).code).toBe(1);
+  });
+
+  it("para los ternarios da lo MISMO que el modo normal: ya no hay cupo que perdonar", () => {
+    // Es la consecuencia observable de graduar el trinquete. Si alguien volviera
+    // a meter una entrada en la allowlist de ternarios, los dos modos dejarían
+    // de coincidir y este caso lo diría.
+    const root = fixture({ "app/admin/lo-que-sea/page.tsx": TERNARY });
+
+    expect(run(["--root", root]).code).toBe(1);
     expect(run(["--root", root, "--strict"]).code).toBe(1);
   });
 

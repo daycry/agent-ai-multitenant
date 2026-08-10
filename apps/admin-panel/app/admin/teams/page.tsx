@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface TeamMember {
   agent_id: string;
@@ -44,6 +45,7 @@ interface AgentScopeRow {
 type TeamScope = "built_in" | "tenant_template" | "project_local";
 
 export default function TeamsListPage() {
+  const t = useT("teams");
   const router = useRouter();
   const queryClient = useQueryClient();
   const [adopting, setAdopting] = useState<Team | null>(null);
@@ -95,10 +97,10 @@ export default function TeamsListPage() {
               <CardTitle className="text-base">{team.name}</CardTitle>
               {team.is_builtin ? (
                 <Badge variant="muted" data-testid="team-builtin-badge">
-                  Built-in
+                  {t("builtinBadge")}
                 </Badge>
               ) : team.forked_from_team_id ? (
-                <Badge variant="info">Adoptado</Badge>
+                <Badge variant="info">{t("adoptedBadge")}</Badge>
               ) : null}
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
@@ -106,13 +108,14 @@ export default function TeamsListPage() {
                 <p className="text-muted-foreground text-sm">{team.description}</p>
               )}
               <p className="text-muted-foreground text-xs">
-                {team.members.length} miembro
-                {team.members.length === 1 ? "" : "s"}
+                {team.members.length === 1
+                  ? t("memberOne", { n: team.members.length })
+                  : t("memberMany", { n: team.members.length })}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" asChild>
                   <Link href={`/admin/teams/${team.id}`}>
-                    Ver detalle <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                    {t("viewDetail")} <ArrowRight className="ml-1 h-3.5 w-3.5" />
                   </Link>
                 </Button>
                 {team.is_builtin && (
@@ -121,7 +124,7 @@ export default function TeamsListPage() {
                     onClick={() => setAdopting(team)}
                     data-testid={`team-adopt-${team.id}`}
                   >
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Adoptar
+                    <Plus className="mr-1 h-3.5 w-3.5" /> {t("adopt")}
                   </Button>
                 )}
               </div>
@@ -136,50 +139,41 @@ export default function TeamsListPage() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Users className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Equipos"
-        description="Built-ins de la plataforma, plantillas de tu tenant y equipos locales de proyecto."
+        title={t("title")}
+        description={t("description")}
       />
 
       <StateBlock
         isLoading={isLoading}
         isError={isError}
         error={error}
-        loadingLabel="Cargando equipos…"
+        loadingLabel={t("loadingList")}
         loadingTestId="teams-loading"
-        errorTitle="Could not load teams"
+        errorTitle={t("listErrorTitle")}
         errorTestId="teams-error"
       >
         {data && (
           <Tabs defaultValue="builtin" data-testid="teams-tabs">
             <TabsList>
               <TabsTrigger value="builtin" data-testid="tab-builtin">
-                Built-in ({builtins.length})
+                {t("tabBuiltin")} ({builtins.length})
               </TabsTrigger>
               <TabsTrigger value="template" data-testid="tab-template">
-                Plantillas del Tenant ({tenantTemplates.length})
+                {t("tabTemplate")} ({tenantTemplates.length})
               </TabsTrigger>
               <TabsTrigger value="local" data-testid="tab-local">
-                Locales del Proyecto ({projectLocal.length})
+                {t("tabLocal")} ({projectLocal.length})
               </TabsTrigger>
             </TabsList>
 
             <TabsContent value="builtin">
-              <TeamGrid
-                items={builtins}
-                emptyText="No hay equipos built-in seedeados. Corre python -m api_server.seeds."
-              />
+              <TeamGrid items={builtins} emptyText={t("emptyBuiltin")} />
             </TabsContent>
             <TabsContent value="template">
-              <TeamGrid
-                items={tenantTemplates}
-                emptyText="Tu tenant aún no tiene equipos propios. Adopta un built-in para empezar."
-              />
+              <TeamGrid items={tenantTemplates} emptyText={t("emptyTemplate")} />
             </TabsContent>
             <TabsContent value="local">
-              <TeamGrid
-                items={projectLocal}
-                emptyText="No hay equipos locales de proyecto. Adopta un equipo a un proyecto o créalo desde el wizard de proyecto."
-              />
+              <TeamGrid items={projectLocal} emptyText={t("emptyLocal")} />
             </TabsContent>
           </Tabs>
         )}

@@ -625,6 +625,31 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
       `teams` y `skills` con la consulta de solo-lectura de arriba. Si sale vacío,
       **(a) es gratis**: una edición de la decisión clave nº 4 de este fichero para
       que diga lo que la migración hace de verdad.
+  - ✅ **Cerrada EN NEGATIVO (2026-08-12) — no queda migración que escribir, y
+    esta vez lo dice el dueño de las migraciones.** Esta tanda llegó con el
+    encargo explícito de «implementar la migración que replica el patrón 0077».
+    No hay nada que implementar: la
+    [`20260730_0126_perf_indexes_uniqueness.py`](../../apps/api-server/migrations/versions/20260730_0126_perf_indexes_uniqueness.py)
+    ya está escrita **y aplicada**, y hace las tres cosas del enunciado —
+    verificado línea a línea contra el árbol de hoy, no contra la nota anterior:
+    - los cuatro índices únicos parciales están en la migración (líneas 101-115)
+      **y declarados en el ORM**: `uq_teams_tenant_name_live`
+      (`db/domain.py:732`), `uq_skills_tenant_name_live` (`:525`),
+      `uq_agents_tenant_project_name_live` (`:425`) y
+      `uq_agents_tenant_name_global_live` (`:433`);
+    - `documents.source_size_bytes` es `BigInteger` (`db/knowledge.py:154`);
+    - `Plan.created_by` es `Mapped[UUID | None]` (`db/domain.py:1056`).
+      El 409 con código de dominio en los tres routers también está, con sus 9
+      tests. **Escribir una migración nueva aquí sería duplicar DDL ya aplicado**,
+      y sobre una base que ya la tiene sería, además, un fallo de arranque.
+  - ⏳ **Lo único que sigue vivo es la decisión (a)/(b), y es del operador.** No
+    es código: es qué hacer con las filas que la 0126 soft-borró en los entornos
+    vivos en vez de renombrarlas `-dup-{n}` como decía la decisión clave nº 4.
+    La consulta de solo lectura que la resuelve está tres bloques más arriba; el
+    docstring de la 0126 ya midió que en `agents` los duplicados reales eran
+    **0**, así que lo probable es que (a) salga gratis. **No la ejecuto yo**: la
+    orden permanente de no tocar entornos vivos sin verificación previa está por
+    encima de cerrar una casilla.
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

@@ -49,10 +49,13 @@ def _sql(**kwargs: object) -> str:
 # ---------------------------------------------------------------------------
 def test_the_outer_select_does_not_carry_steps_log() -> None:
     """La comprobación se hace sobre las columnas SELECCIONADAS, no sobre el
-    texto del SQL: ``steps_log`` aparece legítimamente DENTRO de la subconsulta
-    correlacionada que resuelve el modelo del último paso, y prohibirlo entero
-    obligaría a una migración (columna denormalizada) que este carril no puede
-    hacer. Lo que no puede ocurrir es que la fila lo traiga de vuelta.
+    texto del SQL. Nació así porque ``steps_log`` aparecía legítimamente DENTRO
+    de la subconsulta correlacionada que resolvía el modelo del último paso;
+    desde la **migración 0139** eso es una columna (`last_model`) y el JSONB ya
+    no aparece por ningún lado — la prohibición ENTERA la fija
+    ``tests/integration/test_runs_listing_no_steps_log.py``. Aquí se conserva la
+    comprobación estrecha porque es la que no puede envejecer: lo que nunca
+    puede ocurrir es que la FILA lo traiga de vuelta.
     """
     from api_server.routers.tenant_stats import runs_select
 

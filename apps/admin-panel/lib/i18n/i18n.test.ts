@@ -155,6 +155,35 @@ describe("dictionary — invariantes", () => {
       "kbCategories.builtinBadge",
       "kbCategories.slugLabel",
       "kbCategories.colorLabel",
+      // prod-16 `task_prod16_04` — tools. "Custom + MCP" son los dos términos
+      // con que el propio panel nombra el origen de una tool del tenant: MCP es
+      // una sigla y "custom" es la palabra que la UI castellana ya usaba.
+      "tools.groupCustomHint",
+      // prod-16 `task_prod16_04` — teams. Tres familias: "Built-in", que la UI
+      // castellana ya escribía en inglés (igual que `nav.*` y `agents.*`);
+      // "Forked"/"Linked", que son los NOMBRES de los dos modos de alta de
+      // miembro y se muestran tal cual porque así los llama el propio diálogo al
+      // explicarlos; e "irreversible", que se escribe igual en los dos idiomas.
+      "teams.tabBuiltin",
+      "teams.builtinBadge",
+      "teams.forkedBadge",
+      "teams.linkedBadge",
+      "teams.deleteDescStrong",
+      // prod-16 `task_prod16_04` — guardrails. "Guardrails" es el nombre del
+      // subsistema (igual que `nav.guardrails`) y "Hook" es el término con que
+      // el propio backend nombra la columna `hook_point`.
+      "guardrails.title",
+      "guardrails.colHook",
+      // prod-16 `task_prod16_04` — ollama. Nombre del producto y de la sección
+      // ("Ollama & Embeddings", "Embeddings"), la abreviatura "Dim", el "no" que
+      // se escribe igual, "Pull" —el verbo del CLI de Ollama, no una traducción—
+      // y "Compatible (768)", donde ambas palabras coinciden.
+      "ollama.title",
+      "ollama.embeddingsHeading",
+      "ollama.colDim",
+      "ollama.colCompatible",
+      "ollama.no",
+      "ollama.pull",
     ]);
 
     const identical = new Set(

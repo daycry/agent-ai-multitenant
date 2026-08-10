@@ -21,14 +21,15 @@ máquina** (no Kubernetes).
 
 El stack se compone por **capas** que se suman con `-f`:
 
-| Fichero                                    | Para qué                                                                                   |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `docker/docker-compose.yml`                | **Base** prod-shaped: define todos los servicios; sin puertos al host.                     |
-| `docker/docker-compose.dev.yml`            | **Dev**: expone los puertos al host + Vault en modo dev (token conocido).                  |
-| `docker/docker-compose.monitoring.yml`     | Overlay de **observabilidad**: Prometheus, Alertmanager, cAdvisor, Grafana, node-exporter. |
-| `docker/docker-compose.monitoring.dev.yml` | Expone al host las UIs de monitoring (Grafana/Prometheus/Alertmanager).                    |
-| `docker/docker-compose.gpu.yml`            | Overlay **GPU (CUDA)**: añade la reserva NVIDIA al servicio `ollama` (ADR 0056).           |
-| `docker/docker-compose.windows.yml`        | Override **solo Windows/WSL2**: arranca `node-exporter` (mount `rslave` no soportado).     |
+| Fichero                                     | Para qué                                                                                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `docker/docker-compose.yml`                 | **Base** prod-shaped: define todos los servicios; sin puertos al host.                                                                                 |
+| `docker/docker-compose.dev.yml`             | **Dev**: expone los puertos al host + Vault en modo dev (token conocido).                                                                              |
+| `docker/docker-compose.monitoring.yml`      | Overlay de **observabilidad**: Prometheus, Alertmanager, cAdvisor, Grafana, node-exporter.                                                             |
+| `docker/docker-compose.monitoring.apps.yml` | Lo que monitoriza a las **apps**: override de `workers` con el drop-dir del textfile collector. Solo si la capa de aplicaciones está en el mismo `-f`. |
+| `docker/docker-compose.monitoring.dev.yml`  | Expone al host las UIs de monitoring (Grafana/Prometheus/Alertmanager).                                                                                |
+| `docker/docker-compose.gpu.yml`             | Overlay **GPU (CUDA)**: añade la reserva NVIDIA al servicio `ollama` (ADR 0056).                                                                       |
+| `docker/docker-compose.windows.yml`         | Override **solo Windows/WSL2**: arranca `node-exporter` (mount `rslave` no soportado).                                                                 |
 
 ### Comandos de arranque
 
@@ -49,6 +50,27 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
   -f docker/docker-compose.gpu.yml up -d
 ```
+
+> **Por qué la monitorización son DOS ficheros.** `monitoring.yml` trae la
+> infraestructura observable y se apila sola: los comandos de arriba no levantan
+> las apps en Docker (api-server y admin-panel corren nativos desde el venv con
+> `scripts/dev/up.*`), así que ahí no hay contenedor `workers` que parchear.
+> `monitoring.apps.yml` trae el único override que necesita la capa de
+> aplicaciones, y **solo se añade cuando `docker-compose.manuals.yml` está en el
+> mismo `-f`**:
+>
+> ```bash
+> docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+>   -f docker/docker-compose.manuals.yml \
+>   -f docker/docker-compose.monitoring.yml \
+>   -f docker/docker-compose.monitoring.apps.yml \
+>   -f docker/docker-compose.monitoring.dev.yml up -d
+> ```
+>
+> Añadirlo sin la capa de aplicaciones aborta el proyecto ENTERO —`up`, `ps`,
+> `logs` y `config`— con `service "workers" has neither an image nor a build
+context specified`. Cada combinación escrita aquí la valida
+> `tests/unit/test_compose_stacks_are_launchable.py`.
 
 Comprueba el estado con `docker compose ps` (espera 30-60 s a que estén
 `healthy`).
@@ -91,6 +113,18 @@ Todos viven en la red `agentic-net`. El puerto **host** es el que abre
 | `egress-proxy`     | _build_ `./egress-proxy`                | tinyproxy con **allowlist**: única salida a internet del sandbox de agentes (ADR 0019).              | **8888**                            | http://localhost:8888 (proxy)                                              |
 | `ollama`           | `ollama/ollama:0.31.1`                  | **Embeddings** (KBs + memoria) y LLMs locales opcionales (ADR 0056).                                 | **11434**                           | http://localhost:11434/api/tags                                            |
 | `ollama-bootstrap` | `ollama/ollama:0.31.1`                  | **One-shot**: hace `ollama pull` del modelo de embeddings y **termina** (`Exited (0)` es lo normal). | — (no escucha)                      | Ver logs: `docker logs agentic-platform-ollama-bootstrap-1`                |
+
+> **`docling-serve` decide qué formatos acepta la subida de documentos.** El
+> api-server le pregunta su enum `InputFormat` a `GET /openapi.json` **una vez, al
+> arrancar**, y lo cachea en proceso (`api_server/ingestion/formats.py`, prod-13
+> `task_prod13_04`); con eso, `POST /knowledge-bases/{id}/documents` rechaza con
+> **415** lo que docling no sabe parsear, en la puerta y sin almacenar nada.
+> Si `docling-serve` **no está listo al arrancar** el api-server, se usa una lista
+> fija de respaldo, deliberadamente ANCHA: la degradación tiene que errar
+> aceptando, nunca rechazando subidas legítimas. La única consecuencia es que un
+> formato añadido por un Docling posterior a esa lista se rechace hasta el
+> siguiente arranque con el servicio vivo — **un reinicio del api-server basta**,
+> no hace falta tocar código.
 
 > **`ollama-bootstrap` en `Exited (0)` no es un error** — es un init que descarga
 > el modelo (`nomic-embed-text`) en el volumen `ollama_data` y sale. En el

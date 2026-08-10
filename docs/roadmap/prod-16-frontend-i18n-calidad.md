@@ -38,30 +38,35 @@ de producción de 2026-06-10. Cierra los hallazgos **frontend-9**,
 > observable de este plan, así que sus números viven aquí y no en la prosa de
 > cada tarea:
 >
-> | Métrica                            | Al escribirse el plan | 2026-08-01 | **2026-08-10** |
-> | ---------------------------------- | --------------------: | ---------: | -------------: |
-> | Pantallas `page.tsx` > 800 líneas  |                    10 |          5 |          **0** |
-> | Piezas del troceado > 500 líneas   |                     — |          2 |          **2** |
-> | Ternarios de idioma (`check-i18n`) |                    63 |         34 |          **9** |
-> | Ficheros con ternarios             |                    12 |          8 |          **4** |
-> | Atributos con castellano fijo      |                     — |        232 |        **232** |
+> | Métrica                            | Al escribirse el plan | 2026-08-01 | 2026-08-10 | **2026-08-12** |
+> | ---------------------------------- | --------------------: | ---------: | ---------: | -------------: |
+> | Pantallas `page.tsx` > 800 líneas  |                    10 |          5 |          0 |          **0** |
+> | Piezas del troceado > 500 líneas   |                     — |          2 |          2 |          **2** |
+> | Ternarios de idioma (`check-i18n`) |                    63 |         34 |          9 |          **0** |
+> | Ficheros con ternarios             |                    12 |          8 |          4 |          **0** |
+> | Atributos con castellano fijo      |                     — |        232 |        232 |        **211** |
 >
-> Tres lecturas honestas de esa tabla:
+> Cuatro lecturas honestas de esa tabla:
 >
 > 1. **La columna de pantallas está cerrada** y la `ALLOWLIST` de
 >    `check-component-size.mjs` está vacía, así que el trinquete pasa de saldar
 >    deuda a impedirla.
-> 2. **Los atributos no se han movido.** 232 sigue siendo 232: lo migrado el 10
->    (`components/capability/*`) casi no usaba atributos, y las dos pantallas
->    troceadas sólo repartieron su deuda entre ficheros. Decirlo importa más que
->    el número — un informe que sólo enseña las métricas que bajaron es peor que
->    no tener métricas.
-> 3. **Las dos guardas subestiman la deuda a propósito y hay que leerlas así.**
->    El guard de atributos sólo ve castellano con carácter exclusivo (ya anotado
->    el 08-01), y el de ternarios cuenta UNO por fichero cuando el atajo está
->    bien escrito: dos ficheros de `capability` escondían veinte textos detrás de
->    un `const t = (es, en) => …` local. **Cuanto más ordenado el atajo, menos lo
->    ve la guarda.**
+> 2. **La de ternarios también, desde el 2026-08-12.** `ALLOWLIST` de
+>    `check-i18n.mjs` está **vacía**: el modo normal y `--strict` dicen ya lo
+>    mismo para los ternarios. Volver a añadir una entrada ahí es reabrir la
+>    deuda, y hay un test que lo afirma.
+> 3. **Los atributos apenas se mueven, y decirlo importa más que el número.**
+>    232 → 211 en dos olas. Un informe que sólo enseña las métricas que bajaron
+>    es peor que no tener métricas: **el 91 % de la deuda de atributos sigue en
+>    pie**, repartida en 80 ficheros.
+> 4. **Las dos guardas subestiman la deuda a propósito y hay que leerlas así.**
+>    El guard de atributos sólo ve castellano con carácter exclusivo o con
+>    palabra/sufijo de su lista (ya anotado el 08-01 y afinado el 08-02), y el de
+>    ternarios contaba UNO por fichero cuando el atajo estaba bien escrito: dos
+>    ficheros de `capability` y el `adopt-team-dialog` escondían veinte textos
+>    cada uno detrás de un `const t = (es, en) => …` local. **Cuanto más ordenado
+>    el atajo, menos lo veía la guarda.** Cero ternarios NO significa cero deuda
+>    de i18n: significa que ya no queda la forma de deuda que esa señal sabe ver.
 
 ---
 
@@ -203,6 +208,19 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     del selector, default ES, cambio a EN, persistencia tras recarga) y es Playwright,
     así que no se puede ejecutar sin stack levantado. La casilla no se marca: no la
     cierra este carril.
+  - ⏳ **El CÓDIGO de esta casilla está COMPLETO (2026-08-12); lo que queda es de
+    quien tenga el stack.** La segunda mitad del enunciado —«eliminar los 63
+    ternarios inline»— **está cerrada**: `node scripts/check-i18n.mjs` dice
+    `0 ternario(s) pendientes en 0 fichero(s)` y la `ALLOWLIST` del guard se ha
+    vaciado, así que el trinquete pasa de saldar deuda a impedirla. Los cuatro
+    últimos, todos en esta ola: `app/admin/tools/page.tsx` (4),
+    `projects/[id]/agent-tools-diagnostic/page.tsx` (3),
+    `app/admin/cortex/mind/page.tsx` (1, el respaldo del banner de honestidad) y
+    `components/teams/adopt-team-dialog.tsx` (1 que escondía ~20 textos).
+    **Lo que le falta a un humano para poder marcarla `[x]`:** levantar el stack y
+    correr `npm --prefix apps/admin-panel run e2e -- e2e/lang-switcher.spec.ts`
+    (el nombre real; el del enunciado nunca existió). Es la ÚNICA razón por la que
+    sigue abierta — no queda trabajo de código en ella.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
   ```yaml
@@ -234,6 +252,25 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     en castellano, que es justo el fallo que este plan cierra. Requiere añadir
     `label_en`/`description_en` al registry (Python) antes de tocar el panel.
     Su test (`e2e/lang-toggle-core.spec.ts`) sigue siendo Playwright y no existe.
+  - ⏳ **Pendiente (2026-08-12):** de `projects/*` entra **una** pantalla entera,
+    `projects/[id]/agent-tools-diagnostic` (namespace `agentToolsDiagnostic`), con
+    test en los dos idiomas (`i18n.test.tsx`, 5 casos) y fuera ya de la
+    `ATTR_ALLOWLIST`. Se eligió ésa y no otra por dos razones: llevaba 3 de los 9
+    ternarios que quedaban en el panel, y es una pantalla de **verificación** —
+    quien la abre está comprobando si un agente ejecuta lo que cree, y con el
+    toggle en EN le salía en castellano justo donde uno lee con cuidado.
+    De paso entra el módulo **`teams` COMPLETO** (7 ficheros: lista, detalle y los
+    cinco diálogos), que el enunciado no nombra pero es de la misma familia de
+    «pantallas de mayor uso»: namespace `teams`, test `app/admin/teams/i18n.test.tsx`
+    con 9 casos que abren **los cinco diálogos** en inglés.
+    Sigue faltando el resto de `projects/*` (~25 ficheros) y **todo `agents/*`,
+    que es de otro carril**.
+    **Un hueco conocido que este carril NO puede tapar**: el `<Select>` de política
+    de memoria del equipo pinta `MEMORY_SCOPE_OPTIONS` de `lib/memory/constants.ts`,
+    que sólo tiene etiquetas en castellano y lo comparte la ficha del agente. Con
+    el toggle en EN esas cuatro opciones siguen en castellano. El fichero está fuera
+    de la propiedad de este carril; es el mismo caso que el `label_es` de
+    `preferences-tab` anotado en `task_prod16_08`, y entra con `agents/*`.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
@@ -286,6 +323,48 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     assistant, tools, memories. **Los atributos siguen en 232** (85 ficheros, uno
     más que ayer sólo porque dos pantallas se trocearon y su deuda se repartió):
     este carril no bajó ese contador, y decirlo importa más que el número.
+  - ⏳ **Pendiente (2026-08-12, cuarta pasada). Cae la mitad de «ternarios» del
+    enunciado; la de atributos sigue casi entera.**
+    **Migrados al completo tres de los ocho módulos que esta tarea enumera** —
+    `tools`, `guardrails` y `ollama`— más dos que no nombra pero son de la misma
+    familia: el módulo `teams` entero (7 ficheros) y
+    `projects/[id]/agent-tools-diagnostic`. Cinco namespaces nuevos (`tools`,
+    `agentToolsDiagnostic`, `teams`, `guardrails`, `ollama`) y cinco ficheros de
+    test que rinden cada pantalla en los DOS idiomas y afirman en ambos sentidos:
+    `app/admin/tools/i18n.test.tsx` (7), `app/admin/teams/i18n.test.tsx` (9),
+    `projects/[id]/agent-tools-diagnostic/i18n.test.tsx` (5),
+    `app/admin/guardrails/i18n.test.tsx` (3), `app/admin/ollama/i18n.test.tsx` (3)
+    y `app/admin/cortex/mind/honesty-i18n.test.tsx` (2).
+    **«Vaciar la allowlist» está hecho a MEDIAS, y la mitad que falta es la
+    grande.** La de ternarios está vacía —trinquete graduado, ver la tabla de
+    arriba—; la de atributos baja de **232 a 211** y sigue teniendo **80
+    ficheros**. Eso es un 9 % de la deuda de atributos. `--strict` sigue saliendo 1.
+    **Cuatro cosas que enseñó esta pasada y que valen más que el contador:**
+    1. **El bolsón de ternarios que quedaba estaba mal contado.**
+       `adopt-team-dialog.tsx` figuraba con UNO y tenía un `const t = (es, en) => …`
+       local con veinte textos, igual que los de `capability` de la pasada anterior.
+       El patrón se repite: **el ternario suelto es el síntoma, el diccionario
+       privado por fichero es la enfermedad**, y la guarda sólo ve el síntoma.
+    2. **Se decidió qué NO va al diccionario, y está escrito en el propio
+       diccionario**: las etiquetas de la taxonomía de tools (ADR 0049) son datos
+       bilingües y se resuelven con `label()`/`pickLang` — duplicarlas como claves
+       reabriría la divergencia que ese ADR cerró; los `guardrail_type` y
+       `hook_point` se quedan crudos porque el operador los busca así en los logs;
+       y los nombres de modelo de Ollama son identificadores.
+    3. **Cuatro fugas más de `task_prod16_05`** (`error.body` crudo en pantalla),
+       ninguna llamada `errorText`: el diálogo de alta y el de borrado de
+       `tools/page.tsx`, la carga del diagnóstico de tools, el alta y la edición de
+       miembro de un equipo, y el detalle del equipo. **Van 22 sitios.** La única
+       búsqueda que las encuentra sigue siendo la de lo que hace el código.
+    4. **Troceada `app/admin/tools/page.tsx`**, que al traducirse pasó de 791 a
+       **813 líneas** y disparó `check-component-size`. Repartida en `tool-types.ts`
+       (50), `tool-facet-select.tsx` (71), `tool-catalog-rows.tsx` (215) y
+       `tool-dialogs.tsx` (291), con `page.tsx` en **258**. Los 7 tests siguen verdes
+       sin tocar una aserción. **Dato para las próximas olas: traducir ENGORDA los
+       ficheros** (un literal pasa a `{t("clave")}`), así que un módulo cerca del
+       techo de 800 hay que contar con trocearlo en el mismo movimiento.
+       Siguen sin migrar: marketplace, notifications, docs, assistant, memories, y el
+       grueso de `projects/*`.
 - **Tiempo**: 3 días · **Complejidad**: l · **Depende de**: `task_prod16_03`
 - **Tests automáticos**:
   ```yaml
@@ -647,6 +726,93 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     lo gasta dos veces, en el conflicto y en volver a revisar el resultado.
     **Y sigue sin decidirse D4**, que es lo que gobierna si esta tarea entra o se
     recorta — decisión humana al aprobar el plan, no de un carril.
+  - ✅ **DOS de los cuatro, hechos (2026-08-12): `agents` y `backup_destinations`.**
+    Los dos que NO los toca otro plan en paralelo, que era la objeción de 2026-08-10. - `routers/agents.py` (**1462** al abrirlo, no las 1414 del plan) → paquete
+    `routers/agents/`: `common.py` (205, sin rutas), `crud.py` (261),
+    `forks.py` (294), `knowledge_bases.py` (169), `tools.py` (369),
+    `skills.py` (131), `capabilities.py` (124), `__init__.py` (107). - `workers/backup_destinations.py` (**1449**, no 1392) → paquete
+    `backup_destinations/`: `base.py` (130), `s3.py` (323), `b2.py` (134),
+    `sftp.py` (429), `rclone.py` (346), `factory.py` (138), `__init__.py` (163).
+    Un módulo por tipo de destino, tal cual pedía el enunciado.
+    **La red se escribió ANTES de partir**, como en `task_prod16_10`:
+    `tests/unit/test_agents_router_package.py` (9 tests) captura las **18 rutas**
+    del monolito —camino, métodos, nombre de función, `response_model` y los
+    códigos 201/204— y `tests/unit/test_backup_destinations_package.py` (9)
+    congela el `__all__` de 26 nombres, la herencia `B2Destination ⊂ S3Destination`
+    y el nombre del logger. Los dos **se corrieron contra el monolito antes de
+    tocarlo**: 6/9 y 7/9 en verde, y los rojos eran exactamente «el paquete no
+    existe».
+    **Y se verificó el ROJO rompiendo la implementación a propósito**, cinco veces:
+    invertir el orden de `provider-options` (rojo, solo el test de orden),
+    comentar un `include_router` (rojo, 2 tests), esconder un privado reexportado,
+    renombrar el logger a `…base`, y añadir un import desde un submódulo. Los
+    cinco dieron rojo el test que les tocaba y ninguno más.
+    **La trampa que este router tenía y el de SSO no**: `GET /agents/provider-options`
+    y `GET /agents/{agent_id}` SOLAPAN, y FastAPI casa por orden de registro.
+    Repartirlas entre módulos sin cuidado hace desaparecer `provider-options` en
+    silencio: la sirve `get_agent` y responde **422** al parsear
+    `"provider-options"` como UUID. Ni un import roto, ni una ruta perdida del
+    conjunto, ni un tipo mal — nada lo delata. Se comprobó invirtiendo el orden a
+    propósito: con el orden roto, la resolución real de Starlette devuelve
+    `get_agent`. Por eso las dos viven en el MISMO módulo y hay un test de ORDEN.
+    Y una obligación de FastAPI que salió al partir: `GET`/`POST /agents` tienen
+    ruta vacía, e `include_router` **rechaza** incluir un router con ruta vacía
+    sin prefijo en la llamada (`FastAPIError: Prefix and path cannot be both
+empty`). El prefijo `/agents` lo lleva cada sub-router, no el contenedor.
+  - **La prueba más fuerte de que es refactor puro, y no es un test**: comparando
+    contra `git show HEAD:` el `ast.unparse` de cada definición, las **22
+    funciones** del router y las **21 definiciones top-level** de los destinos son
+    **IDÉNTICAS** al monolito. Cero perdidas, cero alteradas. El único código que
+    sí cambió es el rechazo 403 de `global_builtin`, que estaba TRIPLICADO
+    (`_load_writable_agent_for_{kb,tools,skills}`, mismo cuerpo con distinto
+    mensaje) y ahora es un helper con el mensaje por parámetro; los tres textos se
+    comprobaron byte a byte contra los del monolito.
+  - **Verificación ejecutada (2026-08-12)**: `pytest tests/unit/` → **4441 passed**
+    (los 2 rojos que quedan son de otro carril: el recuento del README del
+    roadmap); `tests/security/ tests/docs/` → 383 passed; `mypy apps/ packages/`
+    → 665 ficheros limpio; `ruff` y `black --check` limpios. Integración con
+    `TEST_PG_DB_NAME`/`TEST_REDIS_URL` propios: los 4 adaptadores de destino
+    (69 passed), `test_dest_ui` + `test_backup_remote_upload` (11 passed — el
+    camino api-server→worker que parchea `build_destination`, o sea el punto de
+    parcheo probado de verdad), el lote de 13 ficheros de `/agents` (**86 passed,
+    7 rojos**) y `test_admin_hardening_surface` (4 passed / 2 rojos), incluidos
+    `test_every_admin_route_carries_the_hardening_gate` y
+    `test_the_guard_actually_found_the_admin_surface`, que son el contrato que un
+    router compuesto podría haber roto.
+    **Ninguno de los 9 rojos es de este troceo**, y están diagnosticados uno a uno: - **4** por `redis.exceptions.AuthenticationError`: `test_agent_skills.py:39`,
+    `test_model_config_validation.py:42` y `test_agent_tools_enforcement.py:54`
+    **hardcodean** `TEST_REDIS_URL = "redis://localhost:6379/15"`, sin la
+    contraseña que `REDIS_PASSWORD` volvió obligatoria (prod-10 / secrets-7).
+    Ignoran la variable de entorno, así que no hay forma de pasárselos. - **2** por el validador de secretos débiles en `environment='prod'`
+    (`config.py:1129`, ya en `master`): los dos tests de MFA/IP-allowlist de
+    `test_admin_hardening_surface` construyen `Settings(environment="prod")` con
+    secretos de dev. Rezagados de otro carril. - **2** que pasan AISLADOS y solo caen en el lote de 13
+    (`test_effective_tools_endpoint::test_shell_exec_excluded_when_no_allowed_commands`,
+    `test_fork_copies_capabilities::test_diff_exposes_capabilities`):
+    contaminación entre ficheros que comparten app y BD. - **1 que es un defecto REAL y anterior, y conviene leerlo antes del
+    redespliegue**: `test_fork_copies_capabilities::test_fork_does_not_leak_other_tenant_capabilities`
+    falla con `IntegrityError: duplicate key value violates unique constraint
+"uq_agents_tenant_project_name_live"` en `POST /agents/{id}/fork`. Ese
+    índice lo crea la **migración 0126** (prod-13) y **ya está aplicada** en el
+    stack: `select version_num from alembic_version` devuelve
+    `0138_revoke_backfill_grants`, no el `0124` que afirma `CONTINUE_HERE.md`.
+    O sea que esto no es un riesgo futuro: está vivo hoy. Forkear un agente
+    al MISMO proyecto sin renombrarlo colisiona, y `fork_agent` hace
+    `session.flush()` pelado —no `flush_or_conflict`, que es lo que usan
+    `create_agent`/`update_agent`—, así que sale **500**, no 409.
+    **No lo he tocado**: elegir entre 409 y auto-desambiguar el nombre es
+    decisión de producto (pide ADR), y el docstring de 0126 muestra que su autor
+    pensó en el fork pero sólo en el eje entre proyectos.
+    **Ninguna aserción de un test existente se tocó**; el único fichero de test
+    ajeno modificado es `tests/unit/test_model_options_deprecation.py`, que leía
+    `routers/agents.py` **como fichero** por su ruta literal: ahora lee los siete
+    módulos del paquete (guarda MÁS fuerte, no más débil — antes un
+    `/model-options` reaparecido en otro módulo se le habría escapado).
+  - ⏳ **Siguen abiertos los otros dos, y por lo mismo que decía la nota del 10**:
+    `routers/marketplace.py` (1854 hoy, no 1380 — ha crecido 474 líneas) lo tocan
+    prod-03/prod-12 y el carril de marketplace v2, y `pricing/litellm_sync.py`
+    (1338). El patrón y la red a escribir están ya demostrados dos veces; lo que
+    falta es que esos dos ficheros no tengan otro carril encima.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_10`
 - **Coordinación**: `backup_destinations.py` lo toca prod-04 y
   `marketplace.py` lo tocan prod-03/prod-12 — ejecutar esta tarea la última

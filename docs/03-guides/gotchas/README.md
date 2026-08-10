@@ -216,6 +216,12 @@ el problema ya esté documentado.
 - [auth-rate-limit-dev-loop.md](./auth-rate-limit-dev-loop.md)
   — el rate limit de `/auth/login` se acumula entre runs del E2E
   y trips 429; limpia `rl:login:*` antes de probar.
+- [redis-con-contrasena-rompe-la-integracion.md](./redis-con-contrasena-rompe-la-integracion.md)
+  — al activar `--requirepass` (endurecimiento de prod-10) los **249 ficheros**
+  de integración mueren dentro de una fixture con `AuthenticationError`, porque
+  el conftest construía su URL de Redis a mano y sin credencial. La aplicación,
+  en cambio, funciona. Al endurecer una credencial, busca quién más la construye
+  a mano.
 - [joserfc-decode-no-valida-exp.md](./joserfc-decode-no-valida-exp.md)
   — `joserfc.jwt.decode` verifica la FIRMA y nada más: acepta tokens caducados
   sin un solo error (la validación de `exp` es una llamada aparte a
@@ -254,6 +260,33 @@ el problema ya esté documentado.
 - [integration-tests-share-one-database.md](./integration-tests-share-one-database.md)
   — dos pytest de integración a la vez se dropean la BD mutuamente (una sola
   `agentic_platform_test` para todo el repo); `TEST_PG_DB_NAME` distinto por proceso.
+- [git-checkout-para-deshacer-una-mutacion-borra-el-trabajo-ajeno.md](./git-checkout-para-deshacer-una-mutacion-borra-el-trabajo-ajeno.md)
+  — `git checkout -- fichero` no deshace TU cambio: restaura el fichero entero
+  desde el índice y se lleva las 149 líneas sin comitear que había encima. Pasó
+  dos veces el mismo día. Revierte la mutación en sentido inverso, y mira
+  `git diff --stat` antes: si el número no es el tuyo, no es tu reversión.
+- [cambio-de-contrato-deja-tests-rezagados.md](./cambio-de-contrato-deja-tests-rezagados.md)
+  — cambiar el contrato de una ruta (un 200 que pasa a 303) deja rojos tests que
+  NO tocaste y que no volviste a correr. Buscar por la RUTA (`grep -rn "/auth/sso"`),
+  no por el fichero que editaste.
+- [arreglar-la-cache-rompe-tests-que-vivian-de-su-fallo.md](./arreglar-la-cache-rompe-tests-que-vivian-de-su-fallo.md)
+  — reparar una caché rota pone ROJOS tests que pasaban precisamente porque no
+  cacheaba. El rojo es la prueba de que el arreglo funciona, no una regresión.
+- [fastapi-0141-include-router-no-aplana.md](./fastapi-0141-include-router-no-aplana.md)
+  — FastAPI 0.141 dejó de aplanar `include_router`: `app.routes` pierde 300 rutas
+  sin dar un error, y las guardas que introspeccionan rutas pasan sobre una lista
+  casi vacía. Descender por `original_router` acumulando el prefijo.
+- [sembrar-filas-retrofechadas-en-tabla-particionada.md](./sembrar-filas-retrofechadas-en-tabla-particionada.md)
+  — un test de ventana temporal siembra a propósito FUERA de la ventana
+  (`now - 100 días`) y muere con `no partition of relation found for row`: las
+  cinco tablas del ADR 0151 no tienen partición `DEFAULT` y detrás del mes en
+  curso no hay nada. Usar `ensure_partition_for`, que reusa el DDL de producción
+  (con RLS); crearla a mano deja una partición SIN aislamiento entre tenants.
+- [pytest-en-segundo-plano-no-avisa-de-que-docker-murio.md](./pytest-en-segundo-plano-no-avisa-de-que-docker-murio.md)
+  — una hora de pytest quemando CPU contra una base que ya no existía: `-q` con
+  stdout redirigido no vuelca los puntos, y las fixtures reintentan la conexión,
+  así que «proceso vivo con CPU» se lee como progreso. Comprobar `docker ps`
+  ANTES de esperar, partir en shards y usar `--timeout`.
 - [partitioned-table-introspection.md](./partitioned-table-introspection.md)
   — una tabla particionada es `relkind = 'p'`: la introspección que filtra por
   `'r'` la declara SIN RLS teniéndola (falso positivo que invita a eximirla), y

@@ -20,6 +20,14 @@
 #   docker compose -f docker/docker-compose.yml \
 #     -f docker/docker-compose.monitoring.yml up -d
 #
+# Este fichero contiene SOLO servicios propios (con su imagen), así que se apila
+# sobre la infraestructura sin necesitar la capa de aplicaciones — que es como
+# lo levantan scripts/dev/up.* , donde api-server y admin-panel corren nativos
+# desde el venv y no hay contenedor `workers` al que parchear. Lo que monitoriza
+# a las apps (el override de `workers` con el drop-dir del textfile collector)
+# vive aparte, en docker-compose.monitoring.apps.yml: apílalo cuando en el mismo
+# `-f` esté también la capa de aplicaciones.
+#
 # All images are pinned to a fixed tag (no :latest) — the 06.14 audit
 # (container-isolation-3/4) requires reproducible, supply-chain-pinned
 # images across the stack. Bump tags deliberately.
@@ -113,25 +121,6 @@ services:
       start_period: 15s
     networks: [agentic-net]
     <<: [*default-restart, *default-logging]
-
-  # ---------------------------------------------------------------------------
-  # workers (override) — FASE 2b monitorización (2026-07-12): monta el drop-dir
-  # del textfile collector RW en el worker que consume la cola `default`, donde
-  # corre workers.sample_queue_metrics (cada 30s). Sin este mount el sampler
-  # escribía en su default /host/textfile/ INEXISTENTE dentro del contenedor y
-  # agentic_celery_queue_depth / agentic_tasks_by_status / agentic_dlq_depth /
-  # agentic_executions_24h jamás llegaban a Prometheus (las reglas de
-  # app_alerts.yml no podían disparar). El default del código ya apunta aquí,
-  # así que no hace falta env; las listas de volumes se FUSIONAN entre ficheros
-  # compose, no se reemplazan. Solo aplica si este overlay está desplegado —
-  # sin monitorización el writer trata el sink ausente como esperado (no-op).
-  # ---------------------------------------------------------------------------
-  workers:
-    volumes:
-      - node_exporter_textfile:/host/textfile
-    depends_on:
-      textfile-init:
-        condition: service_completed_successfully
 
   # ---------------------------------------------------------------------------
   # textfile-init — one-shot: el drop-dir del textfile collector es

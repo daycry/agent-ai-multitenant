@@ -29,6 +29,8 @@ from alembic import command
 from httpx import ASGITransport, AsyncClient
 from uuid6 import uuid7
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 _PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -115,6 +117,11 @@ async def _insert_execution(
     created_at: datetime,
     status: str | None = None,
 ) -> None:
+    # `executions` está particionada por mes y SIN DEFAULT (ADR 0151): el llamante
+    # retrofecha (`now - 5 min`), que cae en el mes anterior si el test corre en los
+    # primeros minutos del mes. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", created_at)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(

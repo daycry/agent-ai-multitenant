@@ -16,6 +16,8 @@ import {
 import { Input } from "@/components/ui/input";
 import type { ApiError } from "@/lib/api";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { Team } from "./team-types";
 
@@ -34,6 +36,8 @@ export function TeamDeleteDialog({
   onOpenChange: (v: boolean) => void;
   onDeleted: () => void;
 }) {
+  const t = useT("teams");
+  const errorText = useErrorText();
   const [typed, setTyped] = useState("");
   const matches = typed === team.name;
 
@@ -54,15 +58,16 @@ export function TeamDeleteDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Borrar equipo</DialogTitle>
+          <DialogTitle>{t("deleteTitle")}</DialogTitle>
           <DialogDescription>
-            Esta acción es <strong>irreversible</strong>. Los agentes miembros NO se borran — solo
-            desaparece su pertenencia a este equipo.
+            {t("deleteDescPrefix")}
+            <strong>{t("deleteDescStrong")}</strong>
+            {t("deleteDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <p className="text-sm">
-            Para confirmar, teclea el nombre del equipo:
+            {t("deleteConfirmPrompt")}
             <br />
             <code className="bg-muted rounded px-1 py-0.5 text-xs">{team.name}</code>
           </p>
@@ -77,13 +82,13 @@ export function TeamDeleteDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="delete-team-error"
             >
-              {mutation.error?.message ?? "Error al borrar"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -91,7 +96,7 @@ export function TeamDeleteDialog({
             onClick={() => mutation.mutate()}
             data-testid="delete-team-confirm"
           >
-            {mutation.isPending ? "Borrando…" : "Borrar definitivamente"}
+            {mutation.isPending ? t("deleting") : t("deleteConfirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

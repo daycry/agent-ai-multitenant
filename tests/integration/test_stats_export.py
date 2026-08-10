@@ -43,7 +43,10 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 from alembic import command
+from api_server.db.execution_repo import steps_rollup
 from httpx import ASGITransport, AsyncClient
+
+from ._partitions import ensure_partition_for
 
 pytestmark = pytest.mark.integration
 
@@ -232,13 +235,24 @@ async def _seed_execution(
     now = created_at or datetime.now(tz=UTC)
     started = now
     completed = now + timedelta(milliseconds=duration_ms) if duration_ms is not None else None
+    # prod-13 task_prod13_18 / migración 0139: ver la nota gemela en
+    # `test_tenant_stats_dashboard.py`. La siembra hace de escritor y deriva la
+    # proyección con la MISMA función que `execution_repo`.
+    rollup = steps_rollup(steps_log or [])
+    # `executions` está particionada por mes y SIN partición DEFAULT (ADR 0151): una
+    # fila retrofechada muere en el propio INSERT si su mes no tiene partición. Aquí
+    # el llamante del CSV siembra `now - 1h`, que cae en el mes anterior durante la
+    # primera hora del mes. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", now)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             "INSERT INTO executions "
             "(id, tenant_id, task_id, agent_id, status, steps_log, total_tokens, "
-            " total_cost_usd, started_at, completed_at, created_at) "
-            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)",
+            " total_cost_usd, started_at, completed_at, created_at,"
+            " last_model, tokens_in, tokens_out) "
+            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14)",
             execution_id,
             tenant,
             task_id,
@@ -250,6 +264,9 @@ async def _seed_execution(
             started,
             completed,
             now,
+            rollup.last_model,
+            rollup.tokens_in,
+            rollup.tokens_out,
         )
     finally:
         await conn.close()

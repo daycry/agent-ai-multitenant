@@ -52,20 +52,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import (
-    BigInteger,
     ColumnElement,
     Select,
     case,
-    column,
     func,
     literal,
     select,
     tuple_,
 )
-from sqlalchemy import (
-    cast as sa_cast,
-)
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
@@ -154,29 +148,29 @@ def _succeeded_flag() -> ColumnElement[int]:
 
 
 def _last_model_expr() -> ColumnElement[str | None]:
-    """The model of the run's LAST ``model_call`` step (NULL when none).
+    """El modelo del ÚLTIMO ``model_call`` del run (NULL si no llamó a ninguno).
 
-    ``steps_log`` is a JSONB array of step dicts; the model-call steps carry a
-    ``model`` field and a monotonically increasing ``index`` (see
-    ``agent_runtime.steps``). We unnest, keep only ``model_call`` steps that
-    name a model, and pick the highest-``index`` one — a correlated scalar
-    subquery so it composes into a SELECT / WHERE without a GROUP BY. Ordering
-    by the step's own ``index`` (not SQL ordinality) keeps the pick
-    deterministic and portable.
+    Desde la migración **0139** (prod-13 task_prod13_18) esto es una COLUMNA y
+    no una subconsulta. Lo que había antes: desenrollar el ``steps_log`` de cada
+    fila con ``jsonb_array_elements``, quedarse con los pasos ``model_call`` que
+    nombran modelo y escoger el de mayor ``index`` — una subconsulta
+    correlacionada que se ejecutaba por fila del listado y, cuando se usaba como
+    PREDICADO (``?model=``), no le dejaba al planificador nada que indexar.
+
+    La columna la escribe `db/execution_repo.py::apply_steps_rollup`, con la
+    misma definición (incluido el NULL, que significa «ningún modelo», no
+    «desconocido»), y el backfill de la 0139 la rellenó para todo el histórico.
+
+    Esa función es PÚBLICA a propósito: hay dos escritores de `steps_log` —el
+    repositorio y `workers/execution.py::_mark_commit_failed`—, así que la
+    proyección no puede depender de que todo el mundo pase por un helper
+    privado de un módulo. Quien asigne `steps_log` la llama.
+
+    Se conserva la FUNCIÓN, y no se sustituye por la columna en los tres
+    llamantes, porque es donde vive esta explicación y el punto único por el que
+    volver atrás si la denormalización resultara equivocada.
     """
-    elem = func.jsonb_array_elements(Execution.steps_log).table_valued(
-        column("value", JSONB), name="sl"
-    )
-    model_txt = elem.c.value["model"].astext
-    index_int = sa_cast(elem.c.value["index"].astext, BigInteger)
-    return (
-        select(model_txt)
-        .select_from(elem)
-        .where(elem.c.value["kind"].astext == "model_call", model_txt.isnot(None))
-        .order_by(index_int.desc())
-        .limit(1)
-        .scalar_subquery()
-    )
+    return cast("ColumnElement[str | None]", Execution.last_model)
 
 
 # ---------------------------------------------------------------------------
@@ -715,11 +709,10 @@ def runs_select(
     filas — del orden de 50 MiB de JSONB materializados en el proceso para
     producir un CSV que no publica ni un byte de esa traza.
 
-    ``steps_log`` sigue apareciendo DENTRO de la subconsulta correlacionada que
-    resuelve el modelo del último paso (:func:`_last_model_expr`): quitarlo de
-    ahí pide una columna denormalizada y su migración, que es la otra mitad de
-    task_prod13_18. La diferencia importa: ahí lo recorre PostgreSQL y devuelve
-    un ``text``; aquí lo cruzaba entero la red y se materializaba en Python.
+    Desde la migración **0139** ``steps_log`` ya NO aparece tampoco dentro de
+    la resolución del modelo del último paso (:func:`_last_model_expr`), que era
+    la mitad que faltaba de task_prod13_18: es una columna denormalizada. Con
+    eso, este SELECT no toca el JSONB por ningún lado.
     """
     stmt = (
         select(
@@ -970,29 +963,26 @@ async def _trend(session: AsyncSession, base: list[ColumnElement[bool]]) -> list
 
 
 async def _token_split(session: AsyncSession, base: list[ColumnElement[bool]]) -> tuple[int, int]:
-    """(sum tokens_in, sum tokens_out) over the windowed runs' model calls."""
-    elem = func.jsonb_array_elements(Execution.steps_log).table_valued(
-        column("value", JSONB), name="sl"
-    )
-    is_call = elem.c.value["kind"].astext == "model_call"
+    """(suma de tokens de entrada, de salida) de los runs de la ventana.
+
+    Desde la 0139 se suman DOS COLUMNAS. Antes esto desenrollaba el `steps_log`
+    de todos los runs del período —el 76 % del peso de la tabla— para sumar dos
+    enteros que ya se conocían al cerrar cada run.
+
+    Un run sin llamadas a modelo aporta 0 y no desaparece del agregado: la forma
+    anterior lo perdía (el `join` lateral con un array vacío no producía fila) y
+    la suma es la misma, pero conviene tenerlo escrito porque es justo el tipo de
+    diferencia que un refactor así introduce sin que nada falle.
+    """
     row = (
         await session.execute(
             select(
-                func.coalesce(
-                    func.sum(sa_cast(elem.c.value["tokens_in"].astext, BigInteger)).filter(is_call),
-                    0,
-                ),
-                func.coalesce(
-                    func.sum(sa_cast(elem.c.value["tokens_out"].astext, BigInteger)).filter(
-                        is_call
-                    ),
-                    0,
-                ),
+                func.coalesce(func.sum(Execution.tokens_in), 0),
+                func.coalesce(func.sum(Execution.tokens_out), 0),
             )
             .select_from(Execution)
             .outerjoin(Agent, Agent.id == Execution.agent_id)
             .outerjoin(Task, Task.id == Execution.task_id)
-            .join(elem, literal(True))
             .where(*base)
         )
     ).one()

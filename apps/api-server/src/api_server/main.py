@@ -356,13 +356,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001 — fi
     handlers eran dos funciones independientes cuyo orden dependía del registro;
     aquí el orden es explícito y legible.
 
-    Las dos son **best-effort por diseño**: ninguna puede impedir que el
-    api-server arranque. Un catálogo builtin incompleto o un barrido de chat que
-    falle son degradaciones, no motivos para dejar la plataforma caída — y si
-    reventaran aquí, el contenedor entraría en bucle de reinicio sin decir por qué.
+    Las tres son **best-effort por diseño**: ninguna puede impedir que el
+    api-server arranque. Un catálogo builtin incompleto, un barrido de chat que
+    falle o un docling-serve que aún no responda son degradaciones, no motivos
+    para dejar la plataforma caída — y si reventaran aquí, el contenedor entraría
+    en bucle de reinicio sin decir por qué.
     """
     await _ensure_builtin_catalog()
     await _resume_chat_replies()
+    await _prime_supported_formats()
     yield
 
 
@@ -397,6 +399,21 @@ async def _resume_chat_replies() -> None:
             _logger.info("chat.resumed_on_startup", count=resumed)
     except Exception:
         _logger.warning("chat.resume_on_startup_failed", exc_info=True)
+
+
+async def _prime_supported_formats() -> None:
+    # prod-13 task_prod13_04: qué formatos acepta la subida de documentos se le
+    # PREGUNTA a docling-serve una vez, al arrancar, y se cachea en proceso. Si
+    # el servicio no está listo todavía se usa la lista fija de respaldo (ancha
+    # a propósito, ver `ingestion/formats.py`) y la única consecuencia es que un
+    # formato añadido por un Docling posterior a esa lista se rechazaría en la
+    # puerta hasta el siguiente arranque con docling-serve vivo.
+    try:
+        from api_server.ingestion.formats import refresh_supported_formats
+
+        await refresh_supported_formats(base_url=get_settings().docling_serve_url)
+    except Exception:  # pragma: no cover — `refresh_…` ya es best-effort
+        _logger.warning("startup.supported_formats_probe_failed", exc_info=True)
 
 
 def create_app() -> FastAPI:

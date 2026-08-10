@@ -77,6 +77,9 @@ IMAGE_GRAFANA = "grafana/grafana:11.2.0"
 IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
 IMAGE_ALERTMANAGER = "prom/alertmanager:v0.27.0"
 IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
+# One-shot que abre el drop-dir del textfile collector (ver TEXTFILE_* abajo).
+# Misma imagen que el `textfile-init` de docker-compose.monitoring.yml.
+IMAGE_BUSYBOX = "busybox:1.36"
 # Read-only Docker API gateway with a per-endpoint ACL (Plan prod-01 task_09,
 # ADR 0060). The workers reach the daemon ONLY through this, never the raw
 # socket (Principio 2).
@@ -133,11 +136,92 @@ CORE_SERVICES: tuple[str, ...] = (
 #: to the platform notifier) and cAdvisor (per-container metrics).
 MONITORING_SERVICES: tuple[str, ...] = (
     "prometheus",
+    "textfile-init",
     "node-exporter",
     "alertmanager",
     "cadvisor",
     "grafana",
 )
+
+# ---------------------------------------------------------------------------
+# Textfile collector de node-exporter — el ÚNICO camino por el que las métricas
+# de APLICACIÓN llegan a Prometheus en este stack (no hay sidecar de
+# instrumentación: un proceso deja un `.prom` en el drop-dir y node-exporter
+# re-exporta sus muestras; ver `workers/textfile_collector.py`).
+#
+# POR QUÉ ESTÁ AQUÍ (2026-08-12): este generador NO cableaba nada de esto —ni el
+# mount, ni el volumen, ni la bandera `--collector.textfile.directory`—, así que
+# en una instalación hecha por el instalador `workers.sample_queue_metrics`
+# escribía cada 30 s en un `/host/textfile/` INEXISTENTE dentro del contenedor.
+# El writer trata un sink ausente como «topología sin monitorización» y calla a
+# propósito (si no, inundaría el log ~2880 veces/día), de modo que la avería era
+# SILENCIOSA: las cuatro series de aplicación
+#
+#     agentic_celery_queue_depth · agentic_tasks_by_status
+#     agentic_dlq_depth          · agentic_executions_24h
+#
+# sencillamente no existían, y las CUATRO reglas de alerta montadas sobre ellas
+# en docker/monitoring/prometheus/rules/app_alerts.yml (CeleryQueueGrowing,
+# NotificationsDLQNotEmpty, ExecutionFailureRateHigh, TasksBlockedHigh) estaban
+# cargadas y armadas sin poder disparar JAMÁS. Un dashboard vacío se nota; una
+# alerta que no puede sonar —`agentic_dlq_depth > 0` es trabajo PERDIDO— parece
+# que no hay nada que sonar. El stack de desarrollo sí lo hacía bien
+# (docker-compose.monitoring.yml + docker-compose.monitoring.apps.yml); esto lo
+# lleva a la instalación generada.
+# ---------------------------------------------------------------------------
+#: Volumen nombrado compartido: lo escriben las lanes de workers, lo lee
+#: node-exporter. Mismo nombre que en docker-compose.monitoring.yml.
+TEXTFILE_COLLECTOR_VOLUME = "node_exporter_textfile"
+
+#: Punto de montaje. Es el default del código del worker
+#: (`workers.config.queue_metrics_textfile_path` / `backup_metrics_textfile_path`
+#: cuelgan de aquí), así que montándolo en esta ruta NO hace falta ninguna
+#: variable de entorno extra.
+TEXTFILE_COLLECTOR_DIR = "/host/textfile"
+
+#: One-shot que deja el drop-dir en 1777 antes de que arranquen sus escritores.
+TEXTFILE_INIT_SERVICE = "textfile-init"
+
+#: Los servicios que ESCRIBEN ficheros `.prom`, y por tanto necesitan el drop-dir
+#: montado en lectura-escritura. `workers` drena la cola `default`
+#: (`sample_queue_metrics` cada 30 s + las métricas de curiosidad del córtex) y
+#: `workers-privileged` la cola `privileged` (backup diario → `agentic_backup_*`,
+#: la fuente de BackupLastRunFailed/BackupTooOld). Montar solo uno dejaría la
+#: mitad de las series sin publicar, que es otra forma de mentir.
+TEXTFILE_WRITER_SERVICES: tuple[str, ...] = ("workers", "workers-privileged")
+
+# ---------------------------------------------------------------------------
+# Buzón de credenciales del receiver de RESPALDO de Alertmanager (prod-08
+# task_prod08_alert_fallback_02).
+#
+# POR QUÉ ESTÁ AQUÍ (2026-08-12): `monitoring/alertmanager/alertmanager.yml` —el
+# MISMO fichero que este generador monta— declara el receiver de último recurso
+# leyendo el webhook de Slack de un fichero
+# (`api_url_file: /etc/alertmanager/secrets/slack_api_url`) en vez de incrustarlo:
+# Alertmanager no expande `${ENV}` en su config y un webhook de Slack es una
+# credencial. Pero declarar la ruta no es tenerla: hasta hoy este generador montaba
+# exactamente dos cosas en el alertmanager —su `alertmanager.yml` y su directorio
+# de estado—, así que en una instalación hecha por el instalador esa ruta NO
+# EXISTÍA dentro del contenedor y el operador no tenía dónde dejar la credencial
+# sin editar a mano un compose generado (justo lo que el runbook le pide no hacer).
+#
+# El fallo es del tipo caro: `api_url_file` se lee al NOTIFICAR, no al cargar la
+# config, de modo que Alertmanager ARRANCA IGUAL, el stack entero sale `healthy` y
+# el canal de respaldo falla en cada envío EN SILENCIO — precisamente en el único
+# escenario para el que existe: el api-server caído, que no puede entregarse a sí
+# mismo la alerta de que está caído. El stack de desarrollo lo cableó el
+# 2026-08-10 (docker/docker-compose.monitoring.yml); esto lo lleva a la
+# instalación generada.
+# ---------------------------------------------------------------------------
+#: Lado HOST, relativo al directorio del compose. Misma convención (y mismo árbol
+#: `monitoring/` copiado junto al compose) que el resto de la configuración de
+#: monitorización que ya se monta así: prometheus.yml, las reglas, alertmanager.yml
+#: y el provisioning de Grafana.
+ALERTMANAGER_SECRETS_HOST_DIR = "./monitoring/alertmanager/secrets"
+
+#: Lado CONTENEDOR. No es una elección libre: es el directorio del que cuelga el
+#: `api_url_file` del receiver `critical-fallback` en `alertmanager.yml`.
+ALERTMANAGER_SECRETS_DIR = "/etc/alertmanager/secrets"
 
 #: The in-stack Ollama service + its model-pull one-shot, added when
 #: ``ollama_mode != "none"`` (ADR 0056). ``GPU_SERVICE`` is kept as a
@@ -1199,12 +1283,19 @@ def _node_exporter_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any
             "--path.sysfs=/host/sys",
             "--path.rootfs=/host/root",
             "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
+            # Textfile collector: sin esta bandera node-exporter NO mira el
+            # drop-dir y las métricas de aplicación que dejan ahí los workers no
+            # se re-exportan — el mount por sí solo no basta.
+            f"--collector.textfile.directory={TEXTFILE_COLLECTOR_DIR}",
         ],
         "pid": "host",
         "volumes": [
             "/proc:/host/proc:ro",
             "/sys:/host/sys:ro",
             "/:/host/root:ro,rslave",
+            # Solo LECTURA: aquí node-exporter consume; quien escribe son las
+            # lanes de workers (TEXTFILE_WRITER_SERVICES), que lo montan RW.
+            f"{TEXTFILE_COLLECTOR_VOLUME}:{TEXTFILE_COLLECTOR_DIR}:ro",
         ],
         "networks": ["agentic-net"],
     }
@@ -1212,14 +1303,51 @@ def _node_exporter_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any
     return svc
 
 
+def _textfile_init_service(
+    cfg: InstallerConfig,  # noqa: ARG001 — firma uniforme de los builders
+    *,
+    prod: bool,  # noqa: ARG001 — firma uniforme de los builders
+) -> dict[str, Any]:
+    """One-shot que abre el drop-dir del textfile collector (espejo del
+    ``textfile-init`` de docker-compose.monitoring.yml).
+
+    El directorio es MULTI-ESCRITOR: ``workers`` escribe como uid 1000 (el
+    entrypoint degrada de root salvo bandera) y ``workers-privileged`` como root
+    (``WORKERS_RUN_AS_ROOT=1``, se lo exige el volume-tar del backup). Un volumen
+    nombrado nace ``root:root 0755``, así que el sampler recibiría EACCES en cada
+    pasada — y en silencio, porque publicar métricas es best-effort. Modo 1777
+    sticky (como ``/tmp``): cualquier escritor deja su ``.prom`` y nadie puede
+    borrar el de otro. Los escritores lo esperan con
+    ``service_completed_successfully`` (ver :func:`generate_compose`).
+
+    Efímero pero corre como root, así que lleva la misma línea base de
+    endurecimiento que el resto: ``chmod`` sobre un directorio cuyo dueño ya es
+    root no necesita ninguna capability (el euid coincide con el propietario, no
+    hace falta CAP_FOWNER), de modo que ``cap_drop: [ALL]`` no le quita nada.
+    """
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_BUSYBOX,
+        "command": ["chmod", "1777", TEXTFILE_COLLECTOR_DIR],
+        "volumes": [f"{TEXTFILE_COLLECTOR_VOLUME}:{TEXTFILE_COLLECTOR_DIR}"],
+        # Sin red: solo toca un volumen local.
+        "network_mode": "none",
+    }
+    svc.update(_hardening(limits_cpus="0.1", limits_memory="64m"))
+    svc["restart"] = "no"  # one-shot: hace el chmod y sale
+    return svc
+
+
 def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
     """Alertmanager — routes Prometheus' firing alerts to the platform notifier.
 
     Mirrors docker/docker-compose.monitoring.yml: the routing/receiver config is
-    the secret-free ``monitoring/alertmanager/alertmanager.yml`` (its default
-    receiver webhooks the api-server's ``/internal/alerts/ingest``, reusing the
-    Plan 10 notifier — no SMTP/Slack secrets here). Without this service the
-    alert RULES Prometheus evaluates would have nowhere to go in production.
+    ``monitoring/alertmanager/alertmanager.yml`` (its default receiver webhooks
+    the api-server's ``/internal/alerts/ingest``, reusing the Plan 10 notifier).
+    The file itself carries NO secret: the ``severity=critical`` backup receiver
+    reads its Slack webhook from a file in the secrets mailbox mounted below.
+    Without this service the alert RULES Prometheus evaluates would have nowhere
+    to go in production.
     """
     svc: dict[str, Any] = {
         "image": IMAGE_ALERTMANAGER,
@@ -1230,6 +1358,18 @@ def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         ],
         "volumes": [
             "./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
+            # Buzón de la credencial del receiver de RESPALDO. El porqué, con el
+            # dato concreto, está en el bloque ``ALERTMANAGER_SECRETS_*`` de
+            # arriba: sin este montaje la ruta que declara ``api_url_file`` no
+            # existe en el contenedor, Alertmanager ARRANCA IGUAL (ese fichero se
+            # lee al notificar, no al cargar la config) y el canal de último
+            # recurso falla en cada envío en silencio, con el stack `healthy` —
+            # en el único escenario para el que existe, el api-server caído.
+            #
+            # Read-only: Alertmanager solo lee. Corre como ``nobody`` (65534), así
+            # que el lado host debe existir con permisos de lectura para él antes
+            # de levantar el stack; si no existe, Docker lo inventa como root.
+            f"{ALERTMANAGER_SECRETS_HOST_DIR}:{ALERTMANAGER_SECRETS_DIR}:ro",
             f"{cfg.storage.data_root}/alertmanager:/alertmanager",
         ],
         "healthcheck": {
@@ -1339,6 +1479,7 @@ _BUILDERS = {
     "stt": _stt_service,
     "tts": _tts_service,
     "prometheus": _prometheus_service,
+    TEXTFILE_INIT_SERVICE: _textfile_init_service,
     "node-exporter": _node_exporter_service,
     "alertmanager": _alertmanager_service,
     "cadvisor": _cadvisor_service,
@@ -1453,6 +1594,38 @@ def _networks_block() -> dict[str, Any]:
     }
 
 
+def _wire_textfile_collector(services: dict[str, Any]) -> None:
+    """Monta el drop-dir del textfile collector en los servicios que publican
+    métricas de aplicación y los hace esperar al ``textfile-init``.
+
+    El POR QUÉ, con el dato concreto, está en el bloque ``TEXTFILE_*`` de arriba:
+    sin este mount las cuatro series de aplicación (``agentic_celery_queue_depth``,
+    ``agentic_tasks_by_status``, ``agentic_dlq_depth``, ``agentic_executions_24h``)
+    no existen en una instalación generada por el instalador, y las cuatro reglas
+    de ``monitoring/prometheus/rules/app_alerts.yml`` que las evalúan quedan
+    armadas sin poder disparar nunca.
+
+    En RW a propósito (node-exporter es quien lo monta ``:ro``), y sin variables
+    de entorno: el punto de montaje ES el default que ya trae el código del
+    worker.
+    """
+
+    mount = f"{TEXTFILE_COLLECTOR_VOLUME}:{TEXTFILE_COLLECTOR_DIR}"
+    for name in TEXTFILE_WRITER_SERVICES:
+        svc = services.get(name)
+        if svc is None:  # pragma: no cover — ambas lanes son servicios core
+            continue
+        volumes = svc.setdefault("volumes", [])
+        assert isinstance(volumes, list)
+        if mount not in volumes:
+            volumes.append(mount)
+        # Arrancar antes del chmod significa que el PRIMER sample muere con
+        # EACCES (y en silencio, porque publicar métricas es best-effort).
+        deps = svc.setdefault("depends_on", {})
+        assert isinstance(deps, dict)
+        deps[TEXTFILE_INIT_SERVICE] = {"condition": "service_completed_successfully"}
+
+
 def generate_compose(
     cfg: InstallerConfig,
     *,
@@ -1509,17 +1682,30 @@ def generate_compose(
             deps["migrations"] = {"condition": "service_completed_successfully"}
         services[name] = svc
 
+    # Métricas de APLICACIÓN: solo con monitorización desplegada. El mount y el
+    # depends_on NO pueden colarse en una instalación sin monitorización — ahí no
+    # existen ni el volumen ni el one-shot, y compose se negaría a levantar el
+    # proyecto entero por un volumen no declarado / un depends_on huérfano.
+    if monitoring:
+        _wire_textfile_collector(services)
+
     compose: dict[str, Any] = {
         "name": PROJECT_NAME,
         "services": services,
         "networks": _networks_block(),
     }
-    # Declare the named volume(s) any generated service references. The only one
-    # is the Whisper model cache for the voice stt service (every other stateful
-    # service uses a {data_root} bind mount). Declared only when voice is on so
-    # the compose carries no dangling volume otherwise.
+    # Declare the named volume(s) any generated service references. Every
+    # stateful service uses a {data_root} bind mount; the exceptions are the
+    # Whisper model cache (voice) and the textfile-collector drop dir
+    # (monitoring), each declared only when its feature is on so the compose
+    # carries no dangling volume otherwise.
+    volumes: dict[str, Any] = {}
     if STT_SERVICE in services:
-        compose["volumes"] = {WHISPER_MODELS_VOLUME: None}
+        volumes[WHISPER_MODELS_VOLUME] = None
+    if TEXTFILE_INIT_SERVICE in services:
+        volumes[TEXTFILE_COLLECTOR_VOLUME] = None
+    if volumes:
+        compose["volumes"] = volumes
     return compose
 
 

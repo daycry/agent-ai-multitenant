@@ -57,9 +57,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
 
-pytestmark = pytest.mark.integration
+from ._partitions import ensure_partition_for
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
+pytestmark = pytest.mark.integration
 
 # A one-step scripted model so the dispatcher has a usable agent to pick.
 _SCRIPTED_FINISH = {
@@ -211,6 +212,11 @@ async def _seed_execution(
     status: str = "done",
 ) -> UUID:
     execution_id = uuid4()
+    # Los llamantes siembran en `_NOW` (mayo de 2026, fijo) y en junio: `executions`
+    # está particionada por mes y SIN DEFAULT (ADR 0151), y esos meses no existen en
+    # una base recién migrada. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", created_at)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
@@ -296,7 +302,9 @@ async def _open_session(app_database_url: str, tenant_id: UUID):
 
 
 def _dispatcher(sm: async_sessionmaker) -> TaskDispatcher:
-    celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
+    celery_app = build_celery_app(
+        WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+    )
     return TaskDispatcher(
         sessionmaker=sm,
         celery_app=celery_app,

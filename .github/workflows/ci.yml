@@ -628,13 +628,28 @@ jobs:
           #
           # Backend apps import the local packages/ (shared-* + api_server), so
           # their build context is the repo ROOT (Plan prod-01 task_01).
-          # api-server is the heavy BASE image the other three reuse via
-          # BASE_IMAGE, so it builds FIRST.
+          # api-server is the heavy BASE image the others reuse via BASE_IMAGE,
+          # so it builds FIRST.
+          #
+          # The list is DERIVED from the Dockerfiles, never hardcoded. It used to
+          # read `for app in workers orchestrator notification-dispatcher`, and
+          # when apps/watchdog/Dockerfile landed (2026-08-02, prod-08
+          # task_prod08_watchdog_14) nobody updated it — so the watchdog fell
+          # through to the self-contained loop below and got built with its own
+          # directory as the context, where `COPY apps/watchdog/pyproject.toml`
+          # cannot resolve. That is a build FAILURE, not a bad image, and it sat
+          # unseen because CI has been down for billing since 2026-07-30.
+          # Guarded by tests/unit/test_app_images_are_built_by_ci.py.
+          mapfile -t derived < <(
+            grep -l 'ARG BASE_IMAGE' apps/*/Dockerfile 2>/dev/null \
+              | xargs -r -n1 dirname | xargs -r -n1 basename | sort
+          )
+          echo "Apps derived from the base image: ${derived[*]:-none}"
           if [ -f apps/api-server/Dockerfile ]; then
             echo "::group::Building api-server (base)"
             docker build -f apps/api-server/Dockerfile -t agentic-platform/api-server:ci .
             echo "::endgroup::"
-            for app in workers orchestrator notification-dispatcher; do
+            for app in "${derived[@]}"; do
               [ -f "apps/$app/Dockerfile" ] || continue
               echo "::group::Building $app"
               docker build -f "apps/$app/Dockerfile" \
@@ -644,12 +659,15 @@ jobs:
             done
           fi
           # Self-contained apps (admin-panel frontend, installer) build with
-          # their own directory as the context.
+          # their own directory as the context. Everything already built above
+          # is skipped from the SAME derived list, so the two branches cannot
+          # drift apart again.
           for f in $(find apps -name Dockerfile); do
             app_dir="$(dirname "$f")"
             app_name="$(basename "$app_dir")"
-            case "$app_name" in
-              api-server|workers|orchestrator|notification-dispatcher) continue ;;
+            if [ "$app_name" = "api-server" ]; then continue; fi
+            case " ${derived[*]:-} " in
+              *" $app_name "*) continue ;;
             esac
             echo "::group::Building $app_name"
             docker build -t "agentic-platform/$app_name:ci" "$app_dir"

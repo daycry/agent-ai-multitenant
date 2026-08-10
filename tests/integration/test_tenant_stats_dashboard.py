@@ -41,7 +41,10 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 from alembic import command
+from api_server.db.execution_repo import steps_rollup
 from httpx import ASGITransport, AsyncClient
+
+from ._partitions import ensure_partition_for
 
 pytestmark = pytest.mark.integration
 
@@ -222,13 +225,25 @@ async def _seed_execution(
     now = created_at or datetime.now(tz=UTC)
     started = now
     completed = now + timedelta(milliseconds=duration_ms) if duration_ms is not None else None
+    # prod-13 task_prod13_18 / migración 0139: el modelo y el reparto de tokens
+    # son COLUMNAS desde que dejaron de resolverse expandiendo el JSONB. Esta
+    # siembra hace de escritor, así que tiene que escribir lo que escribe el
+    # escritor de verdad (`execution_repo.apply_steps_rollup`) — y lo deriva con
+    # la MISMA función, para que un test no pueda pasar por darse la razón a sí
+    # mismo con una copia divergente del cálculo.
+    rollup = steps_rollup(steps_log or [])
+    # `executions` está particionada por mes y sin partición DEFAULT (ADR 0151), y
+    # los tests de ventana siembran a propósito fuera de la ventana (`-100 días`).
+    # Sin esto el INSERT muere con «no partition of relation found for row».
+    await ensure_partition_for(dsn, "executions", now)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
             "INSERT INTO executions "
             "(id, tenant_id, task_id, agent_id, status, steps_log, total_tokens, "
-            " total_cost_usd, started_at, completed_at, created_at) "
-            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11)",
+            " total_cost_usd, started_at, completed_at, created_at,"
+            " last_model, tokens_in, tokens_out) "
+            "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14)",
             execution_id,
             tenant,
             task_id,
@@ -240,6 +255,9 @@ async def _seed_execution(
             started,
             completed,
             now,
+            rollup.last_model,
+            rollup.tokens_in,
+            rollup.tokens_out,
         )
     finally:
         await conn.close()

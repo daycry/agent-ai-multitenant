@@ -213,6 +213,32 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
     **responsable ni ventana**. Eso compromete el calendario de una persona, el
     ADR 0138 lo deja fuera de su alcance por escrito, y no hay nada que
     implementar antes. Es una firma, no trabajo.
+  - 🔧 **2026-08-12 — la incoherencia se movió de sitio, y esta vez es NUEVA.** Los gates
+    y los `gate_override` siguen coherentes (`pytest tests/unit/test_roadmap_frontmatter.py`
+    → **16 passed**, y sólo `marketplace-v2-despliegue` está `in_progress`). Pero la
+    medición de hoy encontró otra cosa que este mismo casillero cubre —«frontmatter
+    coherente»— y que las olas de estas dos semanas han creado:
+    **los CATORCE planes en `pending_approval` tienen casillas marcadas.** El enum de
+    CLAUDE.md define ese estado como «plan definido pero **no empezado**», así que hoy no
+    describe a ninguno de los catorce. De ellos, **seis no tienen NADA abierto**:
+    `cadena-pr-plan`, `prod-03`, `prod-04` (se unió hoy, al cerrarse su última casilla),
+    `prod-05`, `prod-07` y `prod-09`.
+    - **Por qué NO les cambio el estado**: pasar a `pending_human_validation` exige la
+      entrada en `docs/07-changelog/` —lo pide `test_every_started_phase_has_changelog`, y
+      sólo `prod-07` la tiene—, y escribirla es auditar entre 9 y 18 tareas por plan. Y
+      hay un motivo de fondo mejor: cambiarles el estado afirmaría una aprobación que
+      **nadie ha dado**. Que se hayan implementado sin aprobar es precisamente el problema
+      de gobernanza que este plan existe para no tapar.
+    - **Entregado**: el guarda que impide que crezca a espaldas de nadie, con el patrón de
+      inventario congelado de este mismo fichero
+      (`_DELIVERED_BUT_UNSTARTED_2026_08_12` + `test_no_new_plan_is_delivered_while_still_labelled_unstarted`
+      y su hermano de entradas muertas). **Rojo verificado en las dos direcciones**:
+      marcando la única casilla abierta de `prod-14` → rojo nombrándolo; y poniendo
+      `prod-07` en `pending_human_validation` → rojo por entrada caduca. Restaurado: 16 passed.
+    - **Lo que sigue faltando es lo de siempre y sigue siendo humano**: la cola de
+      validación tiene orden publicado pero **no responsable ni ventana**. El ADR 0138 lo
+      deja fuera de su alcance por escrito. **Firma humana pendiente, sin nada que
+      implementar antes.**
 - **Descripción**: Tras aprobación humana del ADR (task 03): añadir `gate_override` (o el
   mecanismo decidido) al frontmatter de cada fase empezada con gate saltado; actualizar la
   sección "Reglas Duras del Protocolo" de CLAUDE.md para reconocer el override explícito;
@@ -385,6 +411,20 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
        árbol, y sin estado intermedio verde. El riesgo técnico es bajo; el de
        conflicto, alto; y el coste de hacerlo mal —guías de test humano apuntando a
        scripts que no arrancan— lo paga un humano en mitad de una validación.
+  - ⏳ **2026-08-12 — sigue sin ejecutarse, y el motivo ya NO es la medición.** Re-verificado
+    en 30 segundos y sin cambios: **14 `demo_human_*` + 7 `setup_demo_*` + `_demo_common.py`**
+    en la raíz de `scripts/`, `scripts/demos/` no existe, `tests/unit/test_scripts_layout.py`
+    tampoco. La receta de arriba sigue siendo correcta al pie de la letra; no hace falta
+    medir una sexta vez.
+    **El bloqueo real, dicho sin rodeos**: de los 48 ficheros que toca, **35 no son de este
+    carril** (`docs/03-guides/human-tests/` ×31, `pyproject.toml`, `.gitignore`,
+    `apps/api-server/.../seeds/builtin_kbs.py`, `tests/docs/test_human_test_guides.py`), y
+    el movimiento **no tiene estado intermedio verde**: en cuanto se mueve el primer
+    fichero, `test_human_test_guides.py` se pone rojo diciendo «la guía recomienda un
+    script que no existe». Hacer sólo la parte propia deja el repo roto para todos los
+    demás. **Esto no necesita una decisión ni más análisis: necesita una pasada con el
+    repo entero asignado a un solo agente, y son ~30 minutos.**
+
 - **Descripción**: Según quality-11 (nada de esto está trackeado en git; es higiene local +
   reorganización): (1) borrar `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` (bytecode
   huérfano de un script eliminado) y los logs locales de la raíz (`admin-panel-dev.log`,
@@ -453,6 +493,35 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
       `auto_gov_11_b` (`tests/integration/test_backup_destination_endpoints.py`)
       **sigue sin existir** y no puede existir todavía: cubre «el nuevo flujo
       encolado», que es justo lo que falta por diseñar.
+  - 🔎 **2026-08-12 — esto ha dejado de ser una deuda estética: el endpoint NO PUEDE
+    funcionar donde está.** Lo que faltaba para decidir D5 era saber si mover la sonda al
+    worker aporta algo más que limpieza. Aporta corrección, y se verifica en un grep:
+    - Los adaptadores resuelven sus credenciales por el _seam_ de secretos, y el que se les
+      pasa desde el router es `EnvSecretsProvider`, que lee **`os.environ` del proceso que
+      lo ejecuta** (`backup_encryption.py:157-164`: `backup_s3_access_key_id` →
+      `WORKERS_BACKUP_S3_ACCESS_KEY_ID`).
+    - El proceso que lo ejecuta es el **api-server**, y en el compose desplegado el servicio
+      `api-server` **no declara ni una sola variable `WORKERS_*`** (verificado sobre
+      `docker/docker-compose.manuals.yml`, servicio `api-server`: 0 coincidencias). Las
+      `WORKERS_BACKUP_*` viven en la lane `workers-backup`, que es donde
+      `04-reference/backup-restore.md` manda ponerlas.
+    - Traducción operativa: en cuanto alguien configure un destino remoto con credencial
+      (S3/B2/SFTP/rclone) siguiendo la documentación, **el botón «probar conectividad» del
+      panel dirá FAIL** con un «faltan credenciales» perfectamente correcto y perfectamente
+      inútil, y el listado remoto devolverá vacío en silencio (es best-effort). Hoy nadie
+      lo ha visto porque **no hay ningún destino configurado** en este stack.
+    - **Lo que esto cambia para D5**: la salida no es «encolar por elegancia», es que la
+      sonda tiene que correr **donde están los secretos**. Y añade una restricción que
+      ninguna anotación anterior tenía: la lane `privileged` es `--concurrency=1` y es la
+      que corre el backup nocturno y los restores, así que encolar ahí una sonda la deja
+      esperando detrás de un backup de media hora. O va a `default` con las
+      `WORKERS_BACKUP_*` replicadas en esa lane, o hace falta una lane propia. **Eso es
+      diseño de despliegue, y sigue fuera de este carril.**
+    - **NO ejecutado**, y la razón de hoy pesa más que la de agosto: tocar el contrato de
+      dos endpoints que consume el `admin-panel` la misma tarde en que se redespliega el
+      stack cambia un fallo latente que nadie ha visto por un fallo nuevo en el camino
+      caliente del despliegue. La guarda de `test_app_boundaries.py` impide que la deuda
+      crezca mientras tanto.
 - **Descripción**: `celery_client.py:6` declara "we never import the workers package", pero
   `routers/backup.py:222` y `:351` importan `workers.backup_destinations` y
   `workers.backup_encryption` para test de conectividad y listado remoto, ejecutando

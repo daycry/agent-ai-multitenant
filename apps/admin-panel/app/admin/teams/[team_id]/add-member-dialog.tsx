@@ -24,7 +24,9 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { Agent, Mode, Project, Team } from "./team-types";
 
@@ -45,6 +47,8 @@ export function AddMemberDialog({
   onOpenChange: (next: boolean) => void;
   onAdded: () => void;
 }) {
+  const t = useT("teams");
+  const errorText = useErrorText();
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [mode, setMode] = useState<Mode>("linked");
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
@@ -60,12 +64,12 @@ export function AddMemberDialog({
   const addMember = useMutation({
     mutationFn: async () => {
       if (!selectedAgentId) {
-        throw new Error("Selecciona un agente.");
+        throw new Error(t("errSelectAgent"));
       }
       let agentId = selectedAgentId;
       if (mode === "forked") {
         if (!selectedProjectId) {
-          throw new Error("Selecciona un proyecto destino para el fork.");
+          throw new Error(t("errSelectProject"));
         }
         const fork = await apiFetch<Agent>(`/agents/${selectedAgentId}/fork`, {
           method: "POST",
@@ -82,8 +86,9 @@ export function AddMemberDialog({
       onAdded();
       resetDialog();
     },
+    // `errorText` (prod-16 `task_prod16_05`): esto pintaba `err.body` CRUDO.
     onError: (err: unknown) => {
-      setSubmitError(err instanceof ApiError ? err.body : String(err));
+      setSubmitError(errorText(err));
     },
   });
 
@@ -97,15 +102,12 @@ export function AddMemberDialog({
     >
       <DialogContent data-testid="add-member-dialog">
         <DialogHeader>
-          <DialogTitle>Añadir miembro al equipo</DialogTitle>
-          <DialogDescription>
-            Elige un agente del catálogo y decide si lo añades por referencia (linked) o como una
-            copia editable (forked).
-          </DialogDescription>
+          <DialogTitle>{t("addMemberTitle")}</DialogTitle>
+          <DialogDescription>{t("addMemberDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="agent">Agente</Label>
+            <Label htmlFor="agent">{t("agentLabel")}</Label>
             <select
               id="agent"
               className="border-input bg-background ring-offset-background focus-visible:ring-ring h-10 rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
@@ -113,7 +115,7 @@ export function AddMemberDialog({
               onChange={(e) => setSelectedAgentId(e.target.value)}
               data-testid="agent-select"
             >
-              <option value="">— Selecciona —</option>
+              <option value="">{t("selectPlaceholder")}</option>
               {agents
                 .filter((a) => !memberIds.includes(a.id))
                 .map((a) => (
@@ -125,7 +127,7 @@ export function AddMemberDialog({
           </div>
 
           <fieldset className="flex flex-col gap-1.5">
-            <legend className="text-sm font-medium">Modo</legend>
+            <legend className="text-sm font-medium">{t("modeLegend")}</legend>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="radio"
@@ -136,8 +138,8 @@ export function AddMemberDialog({
                 data-testid="mode-linked"
               />
               <span>
-                <strong>Linked</strong> — el equipo usa el agente por referencia. Si el origen
-                evoluciona, el equipo lo ve.
+                <strong>Linked</strong>
+                {t("modeLinkedHelp")}
               </span>
             </label>
             <label className="flex items-center gap-2 text-sm">
@@ -150,15 +152,15 @@ export function AddMemberDialog({
                 data-testid="mode-forked"
               />
               <span>
-                <strong>Forked</strong> — clona el agente en un proyecto como copia editable.
-                Independiente del original.
+                <strong>Forked</strong>
+                {t("modeForkedHelp")}
               </span>
             </label>
           </fieldset>
 
           {mode === "forked" && (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="project">Proyecto destino</Label>
+              <Label htmlFor="project">{t("projectLabel")}</Label>
               <select
                 id="project"
                 className="border-input bg-background ring-offset-background focus-visible:ring-ring h-10 rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
@@ -166,7 +168,7 @@ export function AddMemberDialog({
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 data-testid="project-select"
               >
-                <option value="">— Selecciona —</option>
+                <option value="">{t("selectPlaceholder")}</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}
@@ -174,9 +176,7 @@ export function AddMemberDialog({
                 ))}
               </select>
               {projects.length === 0 && (
-                <p className="text-muted-foreground text-xs">
-                  No tienes proyectos creados. Crea uno primero para poder forkear.
-                </p>
+                <p className="text-muted-foreground text-xs">{t("addMemberNoProjects")}</p>
               )}
             </div>
           )}
@@ -196,7 +196,7 @@ export function AddMemberDialog({
             onClick={() => onOpenChange(false)}
             data-testid="add-member-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => addMember.mutate()}
@@ -206,7 +206,7 @@ export function AddMemberDialog({
             data-testid="add-member-submit"
           >
             {addMember.isPending && <Spinner className="mr-2 h-4 w-4" />}
-            {addMember.isPending ? "Añadiendo…" : "Añadir"}
+            {addMember.isPending ? t("adding") : t("add")}
           </Button>
         </DialogFooter>
       </DialogContent>

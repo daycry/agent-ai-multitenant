@@ -27,9 +27,9 @@ from orchestrator.consumer import StreamConsumer
 from orchestrator.events import EVENT_TASK_CREATED, TaskEvent
 from redis.asyncio import Redis
 
-pytestmark = pytest.mark.integration
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
+pytestmark = pytest.mark.integration
 
 
 def _settings(stream: str) -> Settings:

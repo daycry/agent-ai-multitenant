@@ -32,10 +32,10 @@ from workers.config import reset_settings_cache
 import docker
 
 from ._docker_helpers import docker_client, skip_or_fail
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
 AGENT_RUNTIME_IMAGE = "agent-runtime:v1"
 # Overridable por env, como en conftest.
-TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 
 
 def require_agent_runtime_image() -> None:
@@ -74,7 +74,9 @@ async def consume_and_take_job(
             consumer_name="pipe-1",
             block_ms=200,
         )
-        celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
+        celery_app = build_celery_app(
+            WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+        )
         dispatcher = TaskDispatcher(sessionmaker=sm, celery_app=celery_app, settings=settings)
         consumer = StreamConsumer(redis, settings, dispatcher.handle)
         await consumer.ensure_group()

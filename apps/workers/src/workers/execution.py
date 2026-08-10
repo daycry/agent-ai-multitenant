@@ -33,6 +33,7 @@ from api_server.auth.internal_agent import mint_agent_token
 from api_server.db.approval_repo import read_approved_actions, request_approval_if_needed
 from api_server.db.domain import Plan, Project, Task, TaskStatus
 from api_server.db.execution_repo import (
+    apply_steps_rollup,
     create_running_execution,
     finalize_execution,
     get_execution,
@@ -856,6 +857,15 @@ async def _mark_commit_failed(
                 # Anticipo ADR 0099: el contexto estructurado viaja en steps_log
                 # (JSONB ya renderizado por el visor y consultable por SQL).
                 execution.steps_log = [*(execution.steps_log or []), conflict_step]
+                # Este es el SEGUNDO escritor de `steps_log` (el otro es
+                # `db/execution_repo.py`), y las columnas `last_model` /
+                # `tokens_in` / `tokens_out` son una proyección suya: sin esto
+                # describirían un log que ya no existe. Hoy el paso anexado es
+                # `kind: node` y el rollup lo ignora, así que no cambia ningún
+                # número — se llama igual porque la garantía que el diseño invoca
+                # tiene que ser cierta por construcción, no por casualidad del
+                # `kind` que hoy usa `_conflict_note`.
+                apply_steps_rollup(execution, execution.steps_log)
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning(
             "workers.commit_failed_marker_error", execution_id=str(execution_id), error=str(exc)

@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { PersonaModelFields } from "@/components/capability/persona-section";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import {
   buildModelConfig,
@@ -61,7 +62,7 @@ export function AdoptTeamDialog({
   onAdopted: (newId: string) => void;
 }) {
   const { lang } = useLang();
-  const t = (es: string, en: string) => (lang === "es" ? es : en);
+  const t = useT("teams");
 
   const [target, setTarget] = useState<AdoptTarget>("tenant");
   const [projectId, setProjectId] = useState("");
@@ -73,7 +74,7 @@ export function AdoptTeamDialog({
     if (open) {
       setTarget("tenant");
       setProjectId("");
-      setName(t(`${team.name} (copia)`, `${team.name} (copy)`));
+      setName(t("adoptDefaultName", { name: team.name }));
       setPinModel(false);
       setDraft(DEFAULT_MODEL_CONFIG);
     }
@@ -122,17 +123,12 @@ export function AdoptTeamDialog({
     >
       <DialogContent data-testid="adopt-team-dialog">
         <DialogHeader>
-          <DialogTitle>{t("Adoptar / Personalizar equipo", "Adopt / Customize team")}</DialogTitle>
-          <DialogDescription>
-            {t(
-              `Crea una copia editable de "${team.name}". Sus agentes se forkean (persona + tools + skills) y el equipo original built-in no se toca.`,
-              `Creates an editable copy of "${team.name}". Its agents are forked (persona + tools + skills) and the original built-in team is untouched.`,
-            )}
-          </DialogDescription>
+          <DialogTitle>{t("adoptTitle")}</DialogTitle>
+          <DialogDescription>{t("adoptDescription", { name: team.name })}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-4">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="adopt-name">{t("Nombre del equipo", "Team name")}</Label>
+            <Label htmlFor="adopt-name">{t("adoptNameLabel")}</Label>
             <Input
               id="adopt-name"
               value={name}
@@ -142,7 +138,7 @@ export function AdoptTeamDialog({
           </div>
 
           <fieldset className="border-border space-y-2 rounded-md border p-3">
-            <legend className="px-1 text-sm font-medium">{t("Destino", "Target")}</legend>
+            <legend className="px-1 text-sm font-medium">{t("adoptTargetLegend")}</legend>
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="radio"
@@ -152,12 +148,9 @@ export function AdoptTeamDialog({
                 data-testid="adopt-target-tenant"
               />
               <span>
-                {t("Catálogo del tenant", "Tenant catalog")}
+                {t("adoptTargetTenant")}
                 <span className="text-muted-foreground block text-xs">
-                  {t(
-                    "El equipo y sus agentes viven a nivel de tenant (reutilizable en cualquier proyecto).",
-                    "The team and its agents live at the tenant level (reusable across projects).",
-                  )}
+                  {t("adoptTargetTenantHelp")}
                 </span>
               </span>
             </label>
@@ -170,26 +163,23 @@ export function AdoptTeamDialog({
                 data-testid="adopt-target-project"
               />
               <span>
-                {t("Un proyecto", "A project")}
+                {t("adoptTargetProject")}
                 <span className="text-muted-foreground block text-xs">
-                  {t(
-                    "El equipo y sus agentes quedan atados a un proyecto concreto.",
-                    "The team and its agents are tied to a specific project.",
-                  )}
+                  {t("adoptTargetProjectHelp")}
                 </span>
               </span>
             </label>
 
             {target === "project" && (
               <div className="flex flex-col gap-1.5 pt-1">
-                <Label htmlFor="adopt-project">{t("Proyecto destino", "Target project")}</Label>
+                <Label htmlFor="adopt-project">{t("projectLabel")}</Label>
                 <Select
                   id="adopt-project"
                   value={projectId}
                   onChange={(e) => setProjectId(e.target.value)}
                   data-testid="adopt-team-project"
                 >
-                  <option value="">{t("— Selecciona —", "— Select —")}</option>
+                  <option value="">{t("selectPlaceholder")}</option>
                   {projects.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -198,10 +188,7 @@ export function AdoptTeamDialog({
                 </Select>
                 {projectsQuery.isSuccess && projects.length === 0 && (
                   <p className="text-muted-foreground text-xs" data-testid="adopt-team-no-projects">
-                    {t(
-                      "No tienes proyectos. Crea uno primero o adopta al catálogo del tenant.",
-                      "You have no projects. Create one first or adopt to the tenant catalog.",
-                    )}
+                    {t("adoptNoProjects")}
                   </p>
                 )}
               </div>
@@ -209,9 +196,7 @@ export function AdoptTeamDialog({
           </fieldset>
 
           <fieldset className="border-border space-y-2 rounded-md border p-3">
-            <legend className="px-1 text-sm font-medium">
-              {t("Modelo del equipo (opcional)", "Team model (optional)")}
-            </legend>
+            <legend className="px-1 text-sm font-medium">{t("adoptModelLegend")}</legend>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -219,10 +204,7 @@ export function AdoptTeamDialog({
                 onChange={(e) => setPinModel(e.target.checked)}
                 data-testid="adopt-pin-model"
               />
-              {t(
-                "Fijar un modelo por defecto (si no, hereda de proyecto/plataforma)",
-                "Pin a default model (otherwise inherits from project/platform)",
-              )}
+              {t("adoptPinModel")}
             </label>
             {pinModel && (
               <PersonaModelFields draft={draft} onChange={setDraft} idPrefix="adopt-team" />
@@ -234,21 +216,20 @@ export function AdoptTeamDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="adopt-team-error"
             >
-              {mutation.error?.message ??
-                t("Error al adoptar el equipo", "Failed to adopt the team")}
+              {mutation.error?.message ?? t("adoptError")}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("Cancelar", "Cancel")}
+            {t("cancel")}
           </Button>
           <Button
             disabled={!canSubmit}
             onClick={() => mutation.mutate()}
             data-testid="adopt-team-submit"
           >
-            {mutation.isPending ? t("Adoptando…", "Adopting…") : t("Adoptar", "Adopt")}
+            {mutation.isPending ? t("adopting") : t("adopt")}
           </Button>
         </DialogFooter>
       </DialogContent>

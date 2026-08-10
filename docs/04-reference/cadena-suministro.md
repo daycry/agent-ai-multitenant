@@ -132,6 +132,20 @@ Lo que **no** está pineado por digest, a propósito o por decidir:
 - Las imágenes `image:` de los `docker-compose*.yml` (Postgres, Redis, MinIO,
   Vault, ClamAV, Docling…): van por tag y dos por `latest`. Quedan fuera del
   alcance de `prod-11`, que se acota a los `FROM`.
+
+  > **Medido el 2026-08-12, porque «fuera de alcance» sin número se lee como
+  > «pocas»**: son **19 imágenes de terceros** referenciadas por `image:` bajo
+  > `docker/`, y **0 de 19** llevan `@sha256:`. Las dos rodantes son
+  > `fedirz/faster-whisper-server:latest-cpu` (`docker-compose.yml:314`) y el
+  > default de `${IMAGE_SEARXNG:-searxng/searxng:latest}` (`:502`): en esas dos,
+  > un `docker compose pull` puede cambiar la imagen que corre **sin que cambie
+  > una línea del repo**, así que un fallo nuevo tras un `pull` no será
+  > atribuible a ningún commit. A diferencia de las constantes Python del worker,
+  > aquí **sí hay vía de refresco**: el ecosistema `docker` de Dependabot parsea
+  > ficheros compose. O sea que la objeción de la regla dura no aplica y esto es
+  > trabajo pendiente, no una excepción razonada. Pinearlas recrea medio stack en
+  > el siguiente `up -d`, así que quiere su propia ventana.
+
 - `postgres:16-alpine` / `redis:7-alpine` de los servicios auxiliares del worker
   (`apps/workers/src/workers/test_runtime.py`): un digest en una constante de
   Python no lo refresca ningún ecosistema de Dependabot, así que pinearlo ahí

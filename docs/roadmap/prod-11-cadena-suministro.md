@@ -247,6 +247,36 @@ integridad de las imágenes en build).
   next 16, se ha vuelto más urgente y no más cara: el destino es 16.3.0, que ya
   existe. **Sigue siendo decisión de alcance, no trabajo de esta tarea.**
 
+- ✅ **2026-08-12 — la parte de 14.2.x queda VERIFICADA A FONDO (no re-medida), y
+  el veredicto de `npm audit` no cambia.** La medición del 08-10 no se repite como
+  narrativa: se comprobó una vez (`--audit-level=critical` exit **0**,
+  `--audit-level=high` exit **1**, 3 avisos, fix propuesto `next@16.3.0`) y es
+  idéntica. Lo que sí se hizo, porque es lo que arriesga el redespliegue de hoy,
+  es **reinstalar de cero y ejercitar la línea entera**:
+
+  | Comprobación (`apps/admin-panel`)             | Resultado                                      |
+  | --------------------------------------------- | ---------------------------------------------- |
+  | `rm -rf node_modules && npm ci`               | 734 paquetes, exit 0                           |
+  | `next` realmente instalado                    | **14.2.35** (`require('next/package.json')`)   |
+  | `npx tsc --noEmit`                            | **limpio**                                     |
+  | `node scripts/check-i18n.mjs`                 | **OK**                                         |
+  | `NEXT_PUBLIC_API_URL=/api npx next build`     | **exit 0**, 60+ rutas, middleware 26,5 kB      |
+  | `npx vitest run` (suite ENTERA, 121 ficheros) | 1032/1034 — **los 2 rojos son de otro carril** |
+
+  **Los dos rojos no son de `next` ni de la reinstalación**, y se acredita: son
+  `scripts/check-component-size.test.ts`, que falla porque
+  `app/admin/tools/page.tsx` está hoy en **813 líneas** (límite 800) — un fichero
+  que `git status` da como modificado por el carril de marketplace v2 mientras se
+  corría esto. Entre dos ejecuciones consecutivas de la suite el recuento pasó de
+  6 rojos a 3 y a 2, que es la firma de un árbol en movimiento, no de una
+  regresión.
+  **`next build` importa aparte**: es lo único que ejercita el prerender, y es
+  justo lo que rompió la imagen del panel el 2026-08-10 (`useSearchParams` sin
+  `<Suspense>`). Hoy construye.
+  **La casilla sigue abierta por lo mismo del 08-10**: su test declarado
+  (`npm audit … --audit-level=high`) no puede salir verde dentro de 14.x. Hace
+  falta elegir (a) migrar a next 16.3.0 o (b) registrar la excepción razonada.
+
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
 - [x] **Título**: Dependabot con 4 ecosistemas y agrupación de PRs
@@ -773,6 +803,38 @@ integridad de las imágenes en build).
     revisión manual que nadie hará. Si se elige (c), el trabajo son tres líneas de
     runbook y la casilla cierra; si se elige otra, hay que tocar
     `apps/workers/**`.
+- ⚠️ **2026-08-12 — la mitad de `docker/` sigue en 22/22, y aparece un hueco que
+  ninguna pasada había medido: los `image:` del compose.** No se repite el
+  razonamiento de las tres notas anteriores; lo único nuevo es una medición que
+  faltaba, y cambia lo que significa «todas las bases bajo `docker/`».
+  - **Confirmado por medición**: `grep '^FROM ' -r docker/` → **22 bases externas,
+    las 22 con `@sha256:`**; el conjunto de las que no lo llevan sigue **vacío**.
+    Criterio de cierre 5 cumplido.
+  - **Lo nuevo**: los `FROM` no son la única superficie de imagen bajo `docker/`.
+    Los ficheros `docker/docker-compose*.yml` referencian **19 imágenes de
+    terceros por `image:`** —pgvector, caddy, minio, vault, grafana, loki,
+    promtail, prometheus, alertmanager, node-exporter, cadvisor, clamav, busybox,
+    docker-socket-proxy, docling-serve, kokoro, faster-whisper, searxng…— y
+    **ninguna lleva `@sha256:`** (medido: 0 de 19). Son las que el operador
+    ejecuta en su máquina, no las que construye. La mayoría va por tag fijo, que
+    es mejor que nada; **dos van por tag rodante**:
+    `fedirz/faster-whisper-server:latest-cpu` (`docker-compose.yml:314`, cuyo
+    propio comentario ya reconoce que «para pin reproducible en prod, fijar por
+    digest») y el default de `${IMAGE_SEARXNG:-searxng/searxng:latest}` (`:502`).
+    En esas dos, un `docker compose pull` puede traer una imagen distinta sin que
+    cambie una sola línea del repo. `docs/04-reference/cadena-suministro.md` §3 ya
+    las declaraba fuera de alcance; lo que faltaba era **el número medido**, para
+    que «fuera de alcance» no se lea como «pocas».
+  - **Por qué esto no lo cierro yo**: la regla dura de la fase sigue siendo
+    «sin refresco automático, no se pinea», y el ecosistema `docker` de
+    Dependabot **sí** parsea ficheros compose — o sea que aquí, a diferencia de
+    las constantes Python del worker, **el vehículo de refresco existe**. Pero
+    pinear 24 imágenes por digest la tarde de un redespliegue significa que el
+    siguiente `up -d` recrea medio stack; es un cambio que quiere su propia
+    ventana y su propia verificación. Queda **medido y nombrado**, no hecho.
+  - **Lo pendiente sigue siendo lo mismo**: `postgres:16-alpine` y
+    `redis:7-alpine` en `apps/workers/src/workers/test_runtime.py` (fuera de este
+    carril) y la decisión (a)/(b)/(c)/(d) de arriba, con **(c)** recomendada.
 
 #### `task_registry_adr_12` — ADR: registry y tags inmutables para los runtimes
 

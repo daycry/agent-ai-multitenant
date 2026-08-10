@@ -179,9 +179,10 @@ Planes con `plan_id` descriptivo que ejecutan una **decisión de arquitectura ya
 firmada** sobre el esquema o el almacenamiento. No bloquean ni son bloqueados por
 las fases; su origen es un ADR, no una auditoría.
 
-| Plan                                                                         | Qué ejecuta                                                                                                                                                                                |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [part-01-particionado-append-only.md](./part-01-particionado-append-only.md) | ADR 0151 (opción C): particionado nativo por rango mensual de las cinco tablas append-only, una por ola, con el job que crea la partición del mes siguiente y su alerta. No se borra nada. |
+| Plan                                                                             | Qué ejecuta                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [part-01-particionado-append-only.md](./part-01-particionado-append-only.md)     | ADR 0151 (opción C): particionado nativo por rango mensual de las cinco tablas append-only, una por ola, con el job que crea la partición del mes siguiente y su alerta. No se borra nada.                                                    |
+| [gov-01-precedencia-prompts-y-rigor.md](./gov-01-precedencia-prompts-y-rigor.md) | Las seis decisiones del 2026-08-12: precedencia normativa escrita, versionado del prompt del agente, evals que bloquean en producción, rigor por tamaño del cambio y la taxonomía del rechazo. Ordenado por lo que desbloquea, no por tamaño. |
 
 ### Auditorías (no entran en el gate de fases)
 
@@ -209,13 +210,15 @@ procede, planes de remediación propios (listados arriba en «Planes correctivos
 
 Informes previos a un plan: exploran el problema y proponen opciones. No llevan checkboxes ni gate.
 
-| Documento                                                                                                                      | Qué investiga                                                                             |
-| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| [investigacion-inteligencia-agentes-2026-07-11.md](./investigacion-inteligencia-agentes-2026-07-11.md)                         | Por qué los agentes no son más listos de lo que son; plan P0/P1/P2 propuesto.             |
-| [investigacion-cortex-asistente-profesionalidad-2026-07-11.md](./investigacion-cortex-asistente-profesionalidad-2026-07-11.md) | Profesionalidad del córtex/asistente en la conversación con el owner.                     |
-| [marketplace-v2-diseno.md](./marketplace-v2-diseno.md)                                                                         | Diseño aprobado del Marketplace v2: el despliegue como entidad y la config en tres capas. |
-| [analisis-diferidos-2026-07-12.md](./analisis-diferidos-2026-07-12.md)                                                         | Inventario de lo diferido a lo largo del roadmap y qué merece rescatarse.                 |
-| [propuesta-simplificacion-kb-2026-07-12.md](./propuesta-simplificacion-kb-2026-07-12.md)                                       | Propuesta de simplificación del modelo de KBs.                                            |
+| Documento                                                                                                                      | Qué investiga                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [investigacion-inteligencia-agentes-2026-07-11.md](./investigacion-inteligencia-agentes-2026-07-11.md)                         | Por qué los agentes no son más listos de lo que son; plan P0/P1/P2 propuesto.                                                                           |
+| [investigacion-cortex-asistente-profesionalidad-2026-07-11.md](./investigacion-cortex-asistente-profesionalidad-2026-07-11.md) | Profesionalidad del córtex/asistente en la conversación con el owner.                                                                                   |
+| [marketplace-v2-diseno.md](./marketplace-v2-diseno.md)                                                                         | Diseño aprobado del Marketplace v2: el despliegue como entidad y la config en tres capas.                                                               |
+| [analisis-diferidos-2026-07-12.md](./analisis-diferidos-2026-07-12.md)                                                         | Inventario de lo diferido a lo largo del roadmap y qué merece rescatarse.                                                                               |
+| [propuesta-simplificacion-kb-2026-07-12.md](./propuesta-simplificacion-kb-2026-07-12.md)                                       | Propuesta de simplificación del modelo de KBs.                                                                                                          |
+| [2026-08-10-analisis-claude-code-agent-monitor.md](./2026-08-10-analisis-claude-code-agent-monitor.md)                         | Qué ideas de `hoangsonww/Claude-Code-Agent-Monitor` nos faltan: 6 sobreviven, 13 se descartan por tenerlas ya y 7 por no aplicar.                       |
+| [2026-08-12-analisis-agentic-workflow.md](./2026-08-12-analisis-agentic-workflow.md)                                           | Qué ideas de `AgentShekel/agentic-workflow` nos faltan. Su §4 lleva las **seis decisiones del operador** del 2026-08-12, que originan el plan `gov-01`. |
 
 ## Cola de validación humana
 

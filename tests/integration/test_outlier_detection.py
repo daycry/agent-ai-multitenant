@@ -54,6 +54,8 @@ from api_server.stats.outliers import (
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 
@@ -150,6 +152,11 @@ async def _seed_execution(
     now = created_at or datetime.now(tz=UTC)
     started = now
     completed = now + timedelta(milliseconds=duration_ms) if duration_ms is not None else None
+    # `executions` está particionada por mes y SIN DEFAULT (ADR 0151). Hoy ningún
+    # llamante retrofecha, pero el parámetro `created_at` está aquí invitando a
+    # hacerlo — y la ventana de las reglas de outliers se mide en días. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", now)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(

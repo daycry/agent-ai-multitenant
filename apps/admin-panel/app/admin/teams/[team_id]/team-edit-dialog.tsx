@@ -18,6 +18,8 @@ import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import type { ApiError } from "@/lib/api";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { Team, TeamUpdate } from "./team-types";
 
@@ -36,6 +38,8 @@ export function TeamEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const t = useT("teams");
+  const errorText = useErrorText();
   const [name, setName] = useState(team.name);
   const [description, setDescription] = useState(team.description ?? "");
 
@@ -59,14 +63,12 @@ export function TeamEditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Editar equipo</DialogTitle>
-          <DialogDescription>
-            Cambia el nombre o la descripción. Los miembros se gestionan desde la lista principal.
-          </DialogDescription>
+          <DialogTitle>{t("editTeamTitle")}</DialogTitle>
+          <DialogDescription>{t("editTeamDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="te-name">Nombre</Label>
+            <Label htmlFor="te-name">{t("nameLabel")}</Label>
             <Input
               id="te-name"
               value={name}
@@ -76,7 +78,7 @@ export function TeamEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
+            <Label>{t("descriptionLabel")}</Label>
             <MarkdownTextarea
               value={description}
               onChange={setDescription}
@@ -89,13 +91,13 @@ export function TeamEditDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="edit-team-error"
             >
-              {mutation.error?.message ?? "Error al guardar"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={!name.trim() || mutation.isPending}
@@ -107,7 +109,7 @@ export function TeamEditDialog({
             }
             data-testid="edit-team-save"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar"}
+            {mutation.isPending ? t("saving") : t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -17,6 +17,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ApiError } from "@/lib/api";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { MemberUpdate, Team, TeamMember } from "./team-types";
 
@@ -43,6 +45,8 @@ export function MemberEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const t = useT("teams");
+  const errorText = useErrorText();
   const [isLeader, setIsLeader] = useState(member.is_team_leader);
   const [roleInTeam, setRoleInTeam] = useState(member.role_in_team ?? "");
   const [priority, setPriority] = useState(String(member.assignment_priority));
@@ -71,10 +75,11 @@ export function MemberEditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="member-edit-dialog">
         <DialogHeader>
-          <DialogTitle>Editar miembro</DialogTitle>
+          <DialogTitle>{t("editMemberTitle")}</DialogTitle>
           <DialogDescription>
-            Metadata de <strong>{agentName}</strong> en este equipo: si es líder, su rol y su
-            prioridad de asignación.
+            {t("editMemberDescPrefix")}
+            <strong>{agentName}</strong>
+            {t("editMemberDescSuffix")}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
@@ -85,20 +90,20 @@ export function MemberEditDialog({
               onChange={(e) => setIsLeader(e.target.checked)}
               data-testid="member-edit-leader"
             />
-            <span>Líder del equipo</span>
+            <span>{t("isLeader")}</span>
           </label>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="me-role">Rol en el equipo</Label>
+            <Label htmlFor="me-role">{t("roleInTeam")}</Label>
             <Input
               id="me-role"
               value={roleInTeam}
               onChange={(e) => setRoleInTeam(e.target.value)}
-              placeholder="p. ej. Tech Lead"
+              placeholder={t("roleInTeamPlaceholder")}
               data-testid="member-edit-role"
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="me-priority">Prioridad de asignación (0–1000)</Label>
+            <Label htmlFor="me-priority">{t("priorityLabel")}</Label>
             <Input
               id="me-priority"
               type="number"
@@ -114,13 +119,14 @@ export function MemberEditDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="member-edit-error"
             >
-              {mutation.error?.body ?? mutation.error?.message ?? "Error al guardar"}
+              {/* `errorText` (prod-16 `task_prod16_05`): pintaba `error.body` CRUDO. */}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={!priorityValid || mutation.isPending}
@@ -133,7 +139,7 @@ export function MemberEditDialog({
             }
             data-testid="member-edit-save"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar"}
+            {mutation.isPending ? t("saving") : t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

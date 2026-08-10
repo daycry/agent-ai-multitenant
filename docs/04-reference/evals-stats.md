@@ -117,6 +117,20 @@ Agrega los roll-ups `eval_runs` / `eval_results`:
 Agrega la tabla `Execution` (coste/tokens denormalizados + el snapshot de precio
 por step del Plan 11; ver [`pricing.md`](./pricing.md)):
 
+> **Ninguna de estas tres consultas toca `steps_log`** desde la migración
+> `0139_executions_steps_rollup` (prod-13 `task_prod13_18`). El modelo de la
+> última llamada y el reparto de tokens de entrada/salida son **columnas**
+> (`executions.last_model` / `tokens_in` / `tokens_out`), no un
+> `jsonb_array_elements(steps_log)` por fila: ese JSONB es el 76 % del peso de la
+> tabla y se expandía tanto en el listado como en el predicado de `?model=`. Las
+> mantiene honestas la regla de que **todo el que asigna `steps_log` llama acto
+> seguido a `db/execution_repo.py::apply_steps_rollup`** — el repositorio
+> (`record_execution` / `finalize_execution` / `create_running_execution`) y
+> `workers.execution._mark_commit_failed`, que anexa el paso del conflicto de
+> rebase en su propia sesión BYPASSRLS. La definición es la misma que tenían las
+> expresiones SQL (`last_model` NULL = el run no llamó a ningún modelo), y el
+> backfill de la migración las rellenó para todo el histórico.
+
 | Endpoint                        | Para qué                                                                                                                                                                                                          |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /tenant-stats/dashboard`   | Tasa de éxito / tiempo / coste medios, **top/bottom** agentes por tasa de éxito, tendencia diaria. Filtros `agent_id`/`role`/`plan_id`                                                                            |

@@ -40,6 +40,7 @@ from installer_backend.compose_generator import (
     STT_SERVICE,
     TTS_SERVICE,
     VOICE_SERVICES,
+    WHISPER_MODELS_VOLUME,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -523,7 +524,8 @@ def test_hardening_defaults_on_every_service() -> None:
     compose = generate_compose(_config(gpu_enabled=True), monitoring=True)
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
-    one_shots = {"ollama-bootstrap", "migrations"}
+    # `textfile-init` es el tercero: hace `chmod 1777` del drop-dir y sale.
+    one_shots = {"ollama-bootstrap", "migrations", "textfile-init"}
     # prod-12 cadv_01: ya no queda ningún servicio privileged en el compose
     # generado (cAdvisor pasó al hardening estándar).
     privileged: set[str] = set()
@@ -1020,3 +1022,264 @@ def test_privileged_lane_can_run_backups() -> None:
     assert (
         "/var/lib/docker/volumes" in vols
     ), "falta el mount de los volúmenes Docker para el backup"
+
+
+# ---------------------------------------------------------------------------
+# Textfile collector de node-exporter — el camino ÚNICO por el que las métricas
+# de APLICACIÓN llegan a Prometheus en un host sin sidecar de instrumentación.
+#
+# El stack de desarrollo lo cablea bien (docker-compose.monitoring.yml declara el
+# volumen `node_exporter_textfile` + el one-shot `textfile-init`, y
+# docker-compose.monitoring.apps.yml monta el drop-dir en `workers`), pero el
+# compose que GENERA el instalador no lo hacía: ni el mount, ni el volumen, ni la
+# bandera `--collector.textfile.directory` de node-exporter. Consecuencia en una
+# instalación de producción: `workers.sample_queue_metrics` escribía en un
+# `/host/textfile/` INEXISTENTE dentro del contenedor —el writer trata el sink
+# ausente como «topología sin monitorización» y calla (`textfile_collector.py`)—
+# así que agentic_celery_queue_depth / agentic_tasks_by_status / agentic_dlq_depth
+# / agentic_executions_24h no existían, y las CUATRO reglas de
+# docker/monitoring/prometheus/rules/app_alerts.yml montadas sobre ellas no podían
+# disparar jamás. Un dashboard vacío se nota; una alerta que no puede sonar
+# (`agentic_dlq_depth > 0` — trabajo perdido) parece que no hay nada que sonar.
+# ---------------------------------------------------------------------------
+#: Contrato compartido con el stack de dev y con el código del worker (los
+#: defaults de `workers.config`: queue_metrics_textfile_path /
+#: backup_metrics_textfile_path). Se fijan como LITERALES a propósito: si el
+#: generador renombra su constante pero cambia el valor, esto lo caza.
+_TEXTFILE_DIR = "/host/textfile"
+_TEXTFILE_VOLUME = "node_exporter_textfile"
+_TEXTFILE_INIT = "textfile-init"
+
+#: Los servicios del compose generado que ESCRIBEN ficheros .prom. `workers`
+#: drena la cola `default` (sample_queue_metrics cada 30 s + las métricas de
+#: curiosidad del córtex) y `workers-privileged` la cola `privileged` (el backup
+#: diario, `agentic_backup_*`). Si solo montásemos uno, la serie del otro
+#: faltaría — una métrica incompleta es otra forma de mentir.
+_TEXTFILE_WRITERS = ("workers", "workers-privileged")
+
+
+@pytest.mark.parametrize("service_name", _TEXTFILE_WRITERS)
+def test_metric_writing_lanes_mount_the_textfile_drop_dir(service_name: str) -> None:
+    svc = generate_compose(_config(), monitoring=True)["services"][service_name]
+    vols = svc.get("volumes", [])
+    assert f"{_TEXTFILE_VOLUME}:{_TEXTFILE_DIR}" in vols, (
+        f"{service_name} no monta el drop-dir del textfile collector "
+        f"({_TEXTFILE_VOLUME}:{_TEXTFILE_DIR}): sus métricas se escriben en un "
+        f"directorio inexistente y NUNCA llegan a Prometheus; got {vols}"
+    )
+    # RW: quien escribe no puede montarlo :ro (node-exporter sí, ver abajo).
+    assert (
+        f"{_TEXTFILE_VOLUME}:{_TEXTFILE_DIR}:ro" not in vols
+    ), f"{service_name} monta el drop-dir READ-ONLY — el sampler no podría escribir"
+
+
+def test_node_exporter_scrapes_the_textfile_drop_dir() -> None:
+    """Sin `--collector.textfile.directory` node-exporter no re-exporta NADA de
+    lo que dejen los workers: el mount por sí solo no basta."""
+    ne = generate_compose(_config(), monitoring=True)["services"]["node-exporter"]
+    command = ne["command"]
+    flags = command if isinstance(command, list) else [str(command)]
+    assert any(
+        f"--collector.textfile.directory={_TEXTFILE_DIR}" in f for f in flags
+    ), f"node-exporter no activa el textfile collector: {flags}"
+    # Lee, no escribe → :ro (mismo criterio que docker-compose.monitoring.yml).
+    assert f"{_TEXTFILE_VOLUME}:{_TEXTFILE_DIR}:ro" in ne.get(
+        "volumes", []
+    ), "node-exporter debe montar el drop-dir en solo lectura"
+
+
+def test_textfile_drop_dir_volume_is_declared_when_monitoring() -> None:
+    compose = generate_compose(_config(), monitoring=True)
+    assert _TEXTFILE_VOLUME in (
+        compose.get("volumes") or {}
+    ), "el volumen del drop-dir no está declarado: el compose no levantaría"
+    # Convive con el resto de volúmenes nombrados (el cache de Whisper).
+    with_voice = generate_compose(_config(voice_mode="cpu"), monitoring=True)
+    assert {_TEXTFILE_VOLUME, WHISPER_MODELS_VOLUME} <= set(with_voice.get("volumes") or {})
+
+
+def test_textfile_init_opens_the_shared_drop_dir_for_both_writers() -> None:
+    """El drop-dir es MULTI-ESCRITOR: `workers` escribe como uid 1000 (el
+    entrypoint degrada) y `workers-privileged` como root (WORKERS_RUN_AS_ROOT=1,
+    lo exige el volume-tar del backup). Un volumen nombrado nace root:root 0755
+    → EACCES para el sampler. Se resuelve como en dev: un one-shot que lo deja en
+    1777 sticky (como /tmp) ANTES de que arranquen los escritores."""
+    compose = generate_compose(_config(), monitoring=True)
+    services = compose["services"]
+    assert _TEXTFILE_INIT in services, (
+        "falta el one-shot que abre el drop-dir: el volumen nace root:root 0755 y "
+        "el sampler (uid 1000) recibiría EACCES en cada pasada"
+    )
+    init = services[_TEXTFILE_INIT]
+    assert f"{_TEXTFILE_VOLUME}:{_TEXTFILE_DIR}" in init.get("volumes", [])
+    cmd = init["command"]
+    joined = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    assert (
+        "1777" in joined and _TEXTFILE_DIR in joined
+    ), f"el one-shot debe dejar {_TEXTFILE_DIR} en 1777 (sticky, multi-escritor): {joined!r}"
+    assert init["restart"] == "no", "es un one-shot: corre una vez y sale"
+    for name in _TEXTFILE_WRITERS:
+        dep = (services[name].get("depends_on") or {}).get(_TEXTFILE_INIT)
+        assert dep == {"condition": "service_completed_successfully"}, (
+            f"{name} debe esperar a {_TEXTFILE_INIT}: si arranca antes del chmod, "
+            "el primer sample muere con EACCES"
+        )
+
+
+def test_no_textfile_wiring_without_monitoring() -> None:
+    """Sin monitorización NO existe ni el volumen ni node-exporter: un mount
+    colado ahí dejaría el compose sin levantar (volumen no declarado) y un
+    depends_on huérfano lo rompería del todo."""
+    compose = generate_compose(_config(), monitoring=False)
+    services = compose["services"]
+    assert _TEXTFILE_INIT not in services
+    assert _TEXTFILE_VOLUME not in (compose.get("volumes") or {})
+    for name in _TEXTFILE_WRITERS:
+        svc = services[name]
+        assert not [
+            v for v in svc.get("volumes", []) if _TEXTFILE_DIR in v
+        ], f"{name} monta el drop-dir sin monitorización (el volumen no existiría)"
+        assert _TEXTFILE_INIT not in (svc.get("depends_on") or {})
+
+
+# ---------------------------------------------------------------------------
+# Buzón de credenciales del receiver de RESPALDO de Alertmanager.
+#
+# QUÉ COMPOSE CUBRE ESTA SECCIÓN: el compose que GENERA EL INSTALADOR
+# (`generate_compose`). El mismo montaje sobre el compose de DESARROLLO
+# (`docker/docker-compose.monitoring.yml`) lo guarda otro fichero,
+# `tests/unit/test_alertmanager_secret_mount.py` — son dos artefactos distintos y
+# ninguno de los dos ficheros de test cubre el otro.
+#
+# El hueco que cierran estos tests: `alertmanager.yml` —el MISMO fichero que el
+# compose generado monta— declara el receiver de respaldo leyendo el webhook de
+# Slack de `api_url_file: /etc/alertmanager/secrets/slack_api_url`, y el servicio
+# generado no montaba nada en esa ruta, así que dentro del contenedor NO EXISTE.
+# El fallo es del tipo caro: Alertmanager arranca igual (ese fichero se lee al
+# NOTIFICAR, no al cargar la config), el stack sale `healthy`, y el canal de
+# último recurso falla en cada envío en silencio — justo en el escenario para el
+# que existe, el api-server caído, que no puede entregarse a sí mismo la alerta
+# de que está caído. El stack de desarrollo lo cablea bien desde el 2026-08-10;
+# esto lo lleva a la instalación generada.
+# ---------------------------------------------------------------------------
+#: Ruta DENTRO del contenedor. Contrato con `alertmanager.yml`, no una elección
+#: libre: es el directorio del que cuelga el `api_url_file` del receiver. Se fija
+#: como literal a propósito (si el generador renombra su constante pero cambia el
+#: valor, esto lo caza).
+_ALERTMANAGER_SECRETS_DIR = "/etc/alertmanager/secrets"
+
+#: El fichero de configuración que el compose generado monta, y del que estos
+#: tests derivan qué credenciales-en-fichero hay que respaldar.
+_ALERTMANAGER_YML = (
+    Path(__file__).resolve().parents[2]
+    / "docker"
+    / "monitoring"
+    / "alertmanager"
+    / "alertmanager.yml"
+)
+
+
+def _alertmanager_binds(compose: dict) -> list[tuple[str, str, str]]:
+    """`(host, contenedor, modo)` de cada bind-mount del alertmanager generado."""
+    svc = compose["services"]["alertmanager"]
+    binds: list[tuple[str, str, str]] = []
+    for entry in svc.get("volumes") or []:
+        parts = str(entry).split(":")
+        if len(parts) < 2:
+            continue
+        binds.append((parts[0], parts[1], parts[2] if len(parts) > 2 else "rw"))
+    return binds
+
+
+def test_generated_alertmanager_mounts_the_backup_receiver_secret_mailbox() -> None:
+    """Sin el montaje, la ruta que el receiver lee no existe en el contenedor.
+
+    Y el operador que consiga el webhook de Slack —lo caro— no tiene dónde
+    dejarlo sin editar a mano un compose generado, que es justo lo que el runbook
+    le pide no hacer.
+    """
+    compose = generate_compose(_config(), monitoring=True)
+    binds = _alertmanager_binds(compose)
+    targets = [container for _, container, _ in binds]
+
+    assert _ALERTMANAGER_SECRETS_DIR in targets, (
+        f"el alertmanager generado no monta el buzón de credenciales "
+        f"({_ALERTMANAGER_SECRETS_DIR}); monta: {targets}. El `api_url_file` del "
+        "receiver de respaldo apunta a una ruta inexistente y el envío falla en "
+        "silencio (Alertmanager arranca igual)."
+    )
+
+
+def test_generated_alertmanager_secret_mailbox_is_read_only() -> None:
+    """Alertmanager solo LEE esa credencial; montarla RW es superficie regalada."""
+    compose = generate_compose(_config(), monitoring=True)
+    modes = [
+        (host, mode)
+        for host, container, mode in _alertmanager_binds(compose)
+        if container == _ALERTMANAGER_SECRETS_DIR
+    ]
+    assert modes, "no se comprobó ningún montaje de secretos: la guarda pasó en vacío"
+    for host, mode in modes:
+        assert (
+            mode == "ro"
+        ), f"el bind `{host}` → `{_ALERTMANAGER_SECRETS_DIR}` no es `:ro` ({mode})"
+
+
+def test_generated_alertmanager_covers_every_secret_file_its_config_reads() -> None:
+    """Coherencia con el fichero REAL que el compose generado monta.
+
+    Por descubrimiento, como la guarda del compose de dev: recorre
+    `alertmanager.yml` buscando cualquier clave `*_file` con ruta absoluta
+    (`api_url_file`, `auth_password_file`, `bearer_token_file`…) y exige un bind
+    detrás. Si mañana un receiver de email añade su credencial en fichero, este
+    test la pide solo — y si alguien mueve el buzón en la config sin tocar el
+    generador, lo caza.
+    """
+    config = yaml.safe_load(_ALERTMANAGER_YML.read_text(encoding="utf-8"))
+    secrets: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if (
+                    isinstance(key, str)
+                    and key.endswith("_file")
+                    and isinstance(value, str)
+                    and value.startswith("/")
+                ):
+                    secrets.add(value)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(config)
+    assert secrets, (
+        "ningún receiver lee credenciales de fichero: o el respaldo de "
+        "`severity=critical` desapareció, o alguien incrustó el webhook en el YAML"
+    )
+
+    generated = generate_compose(_config(), monitoring=True)
+    targets = [container for _, container, _ in _alertmanager_binds(generated)]
+    for secret in sorted(secrets):
+        assert any(
+            secret == target or secret.startswith(target.rstrip("/") + "/") for target in targets
+        ), (
+            f"`{secret}` no está cubierto por ningún bind del alertmanager "
+            f"GENERADO (monta: {targets})"
+        )
+
+
+def test_no_alertmanager_secret_mount_without_monitoring() -> None:
+    """Sin monitorización no hay alertmanager, y no debe colarse el bind en nadie.
+
+    Un bind a `./monitoring/alertmanager/secrets` en una instalación sin el árbol
+    `monitoring/` copiado apuntaría a una ruta inexistente: Docker la inventaría
+    como directorio propiedad de root, y el servicio que la montase arrancaría
+    con basura montada encima.
+    """
+    compose = generate_compose(_config(), monitoring=False)
+    assert "alertmanager" not in compose["services"]
+    for name, svc in compose["services"].items():
+        stray = [v for v in (svc.get("volumes") or []) if "alertmanager" in str(v)]
+        assert not stray, f"{name} monta rutas de alertmanager sin monitorización: {stray}"

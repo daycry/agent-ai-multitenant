@@ -13,6 +13,7 @@ Env overrides (defaults match docker/.env.example):
   TEST_PG_MIGRATIONS_USER     default: migrations_user
   TEST_PG_MIGRATIONS_PASSWORD default: changeme-migrations-dev-only
   TEST_PG_DB_NAME             default: agentic_platform_test
+  TEST_REDIS_PASSWORD         default: se lee de docker/.env (REDIS_PASSWORD)
 """
 
 from __future__ import annotations
@@ -25,12 +26,18 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+# Redis test DB — DB 15 por defecto, para no pisar la dev (DB 0). La resolución
+# (contraseña incluida) vive en `_redis_url.py`, que es la ÚNICA fuente de verdad
+# del arnés: escribir la URL a mano aquí o en un test es la trampa que documenta
+# `gotchas/redis-con-contrasena-rompe-la-integracion.md`.
+from ._redis_url import TEST_REDIS_URL
+
 PG_HOST = os.environ.get("TEST_PG_HOST", "localhost")
 # Default 15432 matches docker/docker-compose.dev.yml — avoids clashing
 # with any local postgres on the host. Override TEST_PG_PORT for CI.
 PG_PORT = int(os.environ.get("TEST_PG_PORT", "15432"))
-# Redis test DB — uses DB 15 so it cannot clobber the dev DB 0.
-TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
+
+
 PG_ADMIN_USER = os.environ.get("TEST_PG_ADMIN_USER", "postgres")
 PG_ADMIN_PASSWORD = os.environ.get("TEST_PG_ADMIN_PASSWORD", "changeme-dev-only")
 PG_MIG_USER = os.environ.get("TEST_PG_MIGRATIONS_USER", "migrations_user")
@@ -82,9 +89,30 @@ async def _drop_create_db() -> None:
         await target.close()
 
 
+#: Tablas a las que una migración RETIRA el acceso de la aplicación a propósito.
+#:
+#: El retro-grant de abajo es un `ON ALL TABLES` sin excepciones, así que
+#: **deshacía esos revokes** y dejaba el arnés MÁS PERMISIVO QUE PRODUCCIÓN. Lo
+#: destapó `test_the_backfill_table_is_unreachable_from_the_app`, que pasaba en
+#: aislamiento y fallaba en lote: cualquier test anterior que llamase aquí volvía
+#: a conceder lo que la migración 0138 había quitado.
+#:
+#: Ese patrón —guarda que solo pasa sola— es el que acaba con la guarda borrada
+#: por «flaky», y la guarda tenía razón.
+#:
+#: Añadir una entrada exige que exista la migración que la revoca. Hoy:
+#:   · `approval_policy_backfill_0133` → migración 0138 (respaldo interno de la
+#:     0133; la aplicación no lo consulta y no debe poder leerlo).
+_APP_REVOKED_TABLES: tuple[str, ...] = ("approval_policy_backfill_0133",)
+
+
 async def _grant_app_user_existing_tables() -> None:
     """Retro-grant DML on tables that already exist (the default privs
-    above only apply to tables created *after* they are set). Idempotent."""
+    above only apply to tables created *after* they are set). Idempotent.
+
+    Reaplica después los revokes de :data:`_APP_REVOKED_TABLES`, para que el
+    arnés reproduzca los permisos de producción y no unos más laxos.
+    """
     conn = await asyncpg.connect(_admin_dsn(db=PG_TEST_DB))
     try:
         await conn.execute(
@@ -94,6 +122,19 @@ async def _grant_app_user_existing_tables() -> None:
         await conn.execute(
             "GRANT USAGE, SELECT" f' ON ALL SEQUENCES IN SCHEMA public TO "{PG_APP_USER}"'
         )
+        for table in _APP_REVOKED_TABLES:
+            # `to_regclass` porque el retro-grant corre también sobre esquemas a
+            # medio migrar, donde la tabla puede no existir todavía.
+            await conn.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF to_regclass('public.{table}') IS NOT NULL THEN
+                        EXECUTE 'REVOKE ALL ON TABLE public.{table} FROM "{PG_APP_USER}"';
+                    END IF;
+                END $$;
+                """
+            )
     finally:
         await conn.close()
 

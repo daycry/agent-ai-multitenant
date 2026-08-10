@@ -141,6 +141,157 @@ def test_at_most_one_phase_in_progress() -> None:
     assert len(active) <= 1, f"más de una fase in_progress a la vez: {active}"
 
 
+#: Planes ENTREGADOS —todas sus casillas marcadas, ninguna abierta— que siguen
+#: etiquetados `pending_approval`, que en el enum de CLAUDE.md significa «plan
+#: definido pero **no empezado**». Inventario medido el 2026-08-12.
+#:
+#: No es una allowlist: es deuda con una salida escrita. A cada uno de estos
+#: seis sólo le falta su entrada en `docs/07-changelog/` para poder pasar a
+#: `pending_human_validation` — el guarda que la exige es
+#: `test_every_started_phase_has_changelog`, así que cambiar el estado sin
+#: escribirla pone la suite roja, que es exactamente lo que debe pasar.
+#:
+#: **Y ojo con la población, porque el titular es peor que estos seis**: los
+#: CATORCE planes en `pending_approval` tienen casillas marcadas, o sea que
+#: «`pending_approval` == nunca empezado» ya no describe a ninguno. Estos seis
+#: son sólo los que además no tienen NADA abierto, que es lo que los hace
+#: accionables sin emitir un juicio sobre trabajo a medias. El resto exige
+#: decidir si lo hecho vale, y eso no lo cierra un test.
+_DELIVERED_BUT_UNSTARTED_2026_08_12 = frozenset(
+    {
+        "cadena-pr-plan",
+        "prod-03-guardrails-validacion-humana",
+        # Se unió el 2026-08-12, al cerrarse su última casilla
+        # (`task_prod_04_06`, quiesce del ADR 0149). Se anota aquí en vez de
+        # cambiarle el estado porque pasar a `pending_human_validation` exige
+        # su entrada de changelog, y escribirla es auditar catorce tareas.
+        "prod-04-backup-dr-restaurable",
+        "prod-05-rotacion-claves",
+        "prod-07-fiabilidad-llm-costes",
+        "prod-09-sesiones-autorizacion-frontend",
+    }
+)
+
+#: Una casilla de tarea, al principio de línea. Las anotaciones indentadas de
+#: los planes (`  - ⏳ …`) no cuentan: sólo el enunciado de la tarea.
+_TASK_BOX = re.compile(r"^- \[( |x)\] ", re.M)
+
+
+def _delivered_but_labelled_unstarted() -> set[str]:
+    """`{plan_id}` de los planes con TODAS las casillas marcadas y, aun así,
+    `status: pending_approval`."""
+    out: set[str] = set()
+    for path, fm in _plans():
+        if fm["status"] != "pending_approval":
+            continue
+        boxes = _TASK_BOX.findall(path.read_text(encoding="utf-8"))
+        if boxes and " " not in boxes:
+            out.add(str(fm["plan_id"]))
+    return out
+
+
+def test_no_new_plan_is_delivered_while_still_labelled_unstarted() -> None:
+    """Un plan terminado no puede seguir diciendo que no ha empezado.
+
+    El estado es lo primero que se lee al retomar el trabajo, y un plan con
+    16/16 casillas marcadas etiquetado «no empezado» manda a quien lo lea a
+    reimplementar lo que ya existe — el modo de fallo nº1 de
+    `verificar-antes-de-implementar.md`. Este guarda no arregla los seis que
+    ya están así (necesitan changelog); impide que aparezca el séptimo.
+    """
+    new_drift = sorted(_delivered_but_labelled_unstarted() - _DELIVERED_BUT_UNSTARTED_2026_08_12)
+
+    assert not new_drift, (
+        f"planes con todas las casillas marcadas y `status: pending_approval`, "
+        f"que no estaban en el inventario del 2026-08-12: {new_drift}.\n"
+        "Tres salidas, por orden de honestidad: (1) si el trabajo está entregado "
+        "de verdad, el estado es `pending_human_validation` — y entonces hace "
+        "falta su entrada en `docs/07-changelog/`, que exige "
+        "`test_every_started_phase_has_changelog`; (2) si no lo está, desmarca "
+        "las casillas que no lo estén; (3) si acabas de cerrar su última casilla "
+        "en esta misma ola y el cambio de estado no te toca, añádelo a "
+        "`_DELIVERED_BUT_UNSTARTED_2026_08_12` — eso lo deja anotado como deuda "
+        "en vez de invisible, que es lo único que este guarda persigue."
+    )
+
+
+def test_the_delivered_but_unstarted_inventory_has_no_dead_entries() -> None:
+    """El inventario caduca solo.
+
+    Una entrada que ya no se cumple afirma una incoherencia que alguien
+    arregló, y la próxima revisión la busca en vano — el mismo modo de fallo
+    que `test_the_debt_inventory_has_no_dead_entries` evita en la frontera de
+    apps.
+    """
+    stale = sorted(_DELIVERED_BUT_UNSTARTED_2026_08_12 - _delivered_but_labelled_unstarted())
+
+    assert not stale, (
+        f"entradas del inventario que ya no describen la realidad: {stale}. "
+        "Retíralas de `_DELIVERED_BUT_UNSTARTED_2026_08_12`."
+    )
+
+
+#: Cardinales en castellano que puede llevar la prosa del inventario. La ventana
+#: es corta A PROPÓSITO: fuera de ella quedan las cifras que hablan de OTRA
+#: población (los «CATORCE planes en `pending_approval`») y los ordinales («el
+#: séptimo»), que no cuentan entradas de este frozenset y no deben colisionar.
+_CARDINALES_ES = {
+    "cuatro": 4,
+    "cinco": 5,
+    "seis": 6,
+    "siete": 7,
+    "ocho": 8,
+    "nueve": 9,
+    "diez": 10,
+}
+
+
+def _prose_about_the_inventory() -> str:
+    """El texto que describe el inventario: su bloque `#:` y el docstring del
+    guarda que lo usa. Se lee del fuente de ESTE módulo, que es donde vive."""
+    src = Path(__file__).read_text(encoding="utf-8")
+    block = re.search(r"((?:^#:.*\n)+)_DELIVERED_BUT_UNSTARTED_2026_08_12 = frozenset\(", src, re.M)
+    doc = re.search(
+        r"def test_no_new_plan_is_delivered_while_still_labelled_unstarted\(\) -> None:\n"
+        r'    """(.*?)"""',
+        src,
+        re.S,
+    )
+    assert block is not None, "no encuentro el bloque `#:` del inventario"
+    assert doc is not None, "no encuentro el docstring del guarda del inventario"
+    return block.group(1) + doc.group(1)
+
+
+def test_the_delivered_but_unstarted_prose_matches_the_inventory_size() -> None:
+    """La prosa del inventario no puede decir un número distinto del que hay.
+
+    Este fichero nació de un hallazgo —una fila de estado duplicada que se
+    desincronizó en 22 de 51 planes— y reincidió en su propio texto: el
+    frozenset creció a seis entradas y las cuatro menciones en prosa siguieron
+    diciendo «cinco». Una medida que miente cuesta más que ninguna medida, y en
+    un inventario de deuda es peor todavía: quien lo lea contará mal lo que
+    falta por cerrar. Se ata aquí para que la próxima entrada obligue a tocar
+    el texto en el mismo commit.
+    """
+    prose = _prose_about_the_inventory()
+    dichos = {w: n for w, n in _CARDINALES_ES.items() if re.search(rf"\b{w}\b", prose, re.I)}
+
+    # Autocomprobación: si la prosa dejara de decir el número, este guarda
+    # pasaría en vacío para siempre — el §4 de verificar-antes-de-implementar.
+    assert dichos, (
+        "la prosa del inventario ya no menciona su tamaño con un cardinal en "
+        f"castellano ({sorted(_CARDINALES_ES)}), así que nada la ata al frozenset."
+    )
+
+    esperado = len(_DELIVERED_BUT_UNSTARTED_2026_08_12)
+    desajuste = {w: n for w, n in dichos.items() if n != esperado}
+    assert not desajuste, (
+        f"`_DELIVERED_BUT_UNSTARTED_2026_08_12` tiene {esperado} entradas, pero su "
+        f"prosa dice {sorted(desajuste)}. Actualiza el texto del bloque `#:` y el "
+        "docstring de `test_no_new_plan_is_delivered_while_still_labelled_unstarted`."
+    )
+
+
 #: Planes empezados cuyo `blocking_plan` NO está `completed` y que no declaran
 #: ninguna excepción. Inventario medido el 2026-07-29 y volcado al ADR 0138
 #: (decisión D1 de prod-15). NO es una allowlist permanente: es la deuda que el

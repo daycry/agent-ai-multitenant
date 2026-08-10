@@ -248,7 +248,27 @@ def test_arch_overview_mermaid_has_no_phantom_services() -> None:
 # task_gov_indices_06
 # ---------------------------------------------------------------------------
 def _numbered_plans() -> list[Path]:
-    return sorted(p for p in _ROADMAP.glob("*.md") if re.match(r"^\d", p.name))
+    """Los planes de CONSTRUCCIÓN numerados. Un informe fechado no es un plan.
+
+    Contaba «todo fichero que empieza por dígito», y eso incluye a los informes
+    con nombre fechado (`2026-08-12-analisis-…`). Al añadir dos análisis el
+    2026-08-12 el recuento subió de 35 a 37 y el test pidió declarar «37 planes
+    de construcción» — o sea, pidió que el README mintiera para que él pasara.
+
+    El arreglo no es subir el número: es que la medida mida lo que dice medir. Un
+    plan de construcción tiene `plan_id` en su frontmatter; un informe lleva
+    `status: informe` y no lo tiene. Se filtra por eso, que es la propiedad real
+    y no una coincidencia del nombre del fichero.
+    """
+    plans = []
+    for p in sorted(_ROADMAP.glob("*.md")):
+        if not re.match(r"^\d", p.name):
+            continue
+        cabecera = p.read_text(encoding="utf-8")[:600]
+        if re.search(r"^status:\s*informe\s*$", cabecera, re.M):
+            continue
+        plans.append(p)
+    return plans
 
 
 def test_roadmap_readme_count_matches_files() -> None:

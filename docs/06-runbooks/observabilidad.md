@@ -1,7 +1,7 @@
 ---
 title: Runbook — Observabilidad: qué avisa, dónde mirar y cómo probarlo
 audience: system-admin
-updated: 2026-08-02
+updated: 2026-08-12
 docs_language: es
 ---
 
@@ -33,6 +33,28 @@ Dos detalles que explican casi todas las sorpresas:
 - **Si cae node-exporter se van con él TODAS las métricas de aplicación**, porque
   viajan por su textfile-collector. Por eso `ServiceDown` cubre también los
   targets de infraestructura.
+
+> ⚠️ **Instalaciones generadas por el instalador anteriores al 2026-08-12: las
+> métricas de aplicación no existían.** El generador de compose
+> (`apps/installer/backend/src/installer_backend/compose_generator.py`) traía la
+> monitorización de INFRAESTRUCTURA —Prometheus, Grafana, node-exporter,
+> Alertmanager, cAdvisor— pero no cableaba el textfile-collector: ni el mount del
+> drop-dir en los workers, ni el volumen, ni la bandera
+> `--collector.textfile.directory` de node-exporter. El sampler escribía cada 30 s
+> en un `/host/textfile/` inexistente dentro del contenedor y el writer lo trata
+> como «topología sin monitorización» **en silencio** (si no, inundaría el log
+> ~2880 veces/día), así que `agentic_celery_queue_depth`, `agentic_tasks_by_status`,
+> `agentic_dlq_depth` y `agentic_executions_24h` sencillamente no existían — y las
+> cuatro reglas de [`app_alerts.yml`](../../docker/monitoring/prometheus/rules/app_alerts.yml)
+> que las evalúan (`CeleryQueueGrowing`, `NotificationsDLQNotEmpty`,
+> `ExecutionFailureRateHigh`, `TasksBlockedHigh`) estaban cargadas y armadas sin
+> poder disparar jamás. Un dashboard vacío se nota; una alerta que no puede sonar parece
+> que no hay nada que sonar. **Corregido el 2026-08-12** (el compose generado monta
+> el volumen `node_exporter_textfile` en `workers` y `workers-privileged`, declara
+> el one-shot `textfile-init` que lo deja en 1777 y activa el colector en
+> node-exporter; lo fija `tests/unit/test_compose_generator.py`). Si tu instalación
+> es anterior, **regenera el compose** y recrea esos servicios: hasta entonces esas
+> cuatro alertas siguen sin poder sonar en tu stack.
 
 ## Catálogo de alertas
 
@@ -157,12 +179,25 @@ Va bajo un **perfil de Compose**, porque `docker/docker-compose.yml` es la capa 
 infraestructura y el watchdog es una aplicación:
 
 ```bash
+# El contexto es la RAÍZ del repo (el `.` final), no apps/watchdog: el
+# Dockerfile hace `COPY apps/watchdog/…`, que desde su propio directorio no
+# resuelve. Es la misma forma que notification-dispatcher / orchestrator.
 docker build -f apps/watchdog/Dockerfile \
   --build-arg BASE_IMAGE=agentic-platform/api-server:latest \
   -t agentic-platform/watchdog:latest .
 
 docker compose --profile watchdog up -d watchdog
 ```
+
+> **Desde el 2026-08-12 no hace falta construirla a mano en un host de
+> producción**: `release-images.yml` publica `watchdog` junto a workers,
+> orchestrator y notification-dispatcher. No lo hacía —la matriz seguía
+> enumerando tres apps desde antes de que el watchdog existiera—, así que el
+> `${IMAGE_WATCHDOG}` del compose canónico apuntaba a una imagen que no estaba en
+> ningún registry. De paso, `ci.yml` la construía con el contexto equivocado y
+> **rompía el job `build-images`**; ahora las dos listas se derivan del árbol
+> (`grep -l 'ARG BASE_IMAGE' apps/*/Dockerfile`) y lo guarda
+> `tests/unit/test_app_images_are_built_by_ci.py`.
 
 **No monta el socket Docker** (principio rector 2): habla con el daemon por
 `DOCKER_HOST` a través del `docker-socket-proxy` del ADR 0060, al que le basta
@@ -187,6 +222,39 @@ en un log local — que es el defecto que esta pieza vino a cerrar.
 La entrega **se reintenta en cada tick mientras no confirme**: un api-server que
 arranca después del watchdog no debe costar la única notificación del episodio.
 Confirmada, no se repite (el bucle tickea cada 30 s).
+
+### El healthcheck de los dos tinyproxy: trampa para quien toque el instalador
+
+El watchdog decide a quién reiniciar por **el estado de salud que reporta
+Docker**, así que un healthcheck deshonesto lo desactiva sin ruido. Los dos
+proxies llevaban uno que **no podía fallar**:
+
+```
+wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true
+```
+
+Dos defectos superpuestos, y el segundo tapaba al primero:
+
+1. `|| true` hace que el test devuelva 0 **siempre** (hallazgo `deploy-9`).
+2. La imagen lleva el **wget de BusyBox**, que **no reconoce `--no-proxy`**: sale
+   por el mensaje de uso con rc≠0. O sea que el comando nunca pudo pasar.
+
+En el compose canónico ya está arreglado —`-Y off` (la forma de BusyBox) y se
+afirma el **403** con el que tinyproxy contesta a una petición directa, que es la
+señal de que el demonio escucha y aplica su política— y lo guarda
+`tests/unit/test_compose_healthchecks_honest.py`. Verificado sobre el stack vivo
+el 2026-08-12: `agentic-egress-proxy` y `agentic-registry-proxy` en `healthy`,
+`FailingStreak=0`.
+
+> **Aviso para quien arregle `compose_generator.py`** (prod-08
+> `task_prod08_egress_health_15`, mitad pendiente): ahí el healthcheck sigue
+> siendo el de arriba, **con `--no-proxy` y con `|| true`**. El plan lo describe
+> como «dos caracteres, `|| true` → `|| exit 1`», y **ejecutar eso al pie de la
+> letra rompe todos los despliegues generados**: al retirar el `|| true` aflora el
+> `--no-proxy`, el healthcheck pasa a fallar SIEMPRE, los dos proxies quedan
+> permanentemente `unhealthy` y el watchdog —que desde prod-08 los vigila— entra a
+> reiniciarlos en bucle hasta agotar el backoff y disparar una crítica por cada
+> uno. Hay que portar la línea **entera** del compose canónico, no solo el final.
 
 ## Lo que falta para que el Slack de respaldo funcione
 
@@ -213,6 +281,32 @@ Lo que **ya está hecho** y no hay que rehacer:
   `tests/unit/test_alertmanager_secret_mount.py` guarda el buzón (por
   descubrimiento: cualquier `*_file` nuevo en la config exige su montaje).
 
+### Compruébalo tú antes de gastar tiempo en la credencial
+
+Los tests de arriba son estáticos: parsean YAML, no cargan la config con el
+binario que la va a ejecutar. Con el stack arriba, **el propio Alertmanager lo
+confirma en dos comandos**, y conviene hacerlo antes de ir a pedir un webhook:
+
+```bash
+docker exec agentic-platform-alertmanager-1 \
+  amtool check-config /etc/alertmanager/alertmanager.yml
+#  → SUCCESS … 2 receivers
+
+docker exec agentic-platform-alertmanager-1 \
+  amtool config routes test --config.file=/etc/alertmanager/alertmanager.yml severity=critical
+#  → platform-notifier,critical-fallback     ← los DOS: el `continue: true` funciona
+docker exec agentic-platform-alertmanager-1 \
+  amtool config routes test --config.file=/etc/alertmanager/alertmanager.yml severity=warning
+#  → platform-notifier                        ← solo uno: la duplicación está acotada
+```
+
+Ejecutado el **2026-08-12** sobre el stack vivo, con esos resultados exactos. Es
+la prueba de que **falta la credencial y nada más**: la config es válida para
+Alertmanager v0.27.0 —incluido el `api_url_file`, que no todas las versiones
+aceptan— y el árbol de rutas entrega la crítica a los dos receivers. Si el primer
+comando dijera `FAILED`, el problema sería de config y no habría que buscar
+ninguna credencial.
+
 Lo que **falta**, en orden:
 
 1. **Decidir dónde se custodia el webhook de Slack.** Es un secreto de
@@ -226,22 +320,57 @@ Lo que **falta**, en orden:
    ```bash
    printf '%s' 'https://hooks.slack.com/services/…' \
      > docker/monitoring/alertmanager/secrets/slack_api_url
-   docker compose -f docker/docker-compose.monitoring.yml up -d alertmanager
    ```
 
-   El receiver lo lee de `/etc/alertmanager/secrets/slack_api_url`, no de una
-   variable de entorno (Alertmanager no interpola env en su config). El
-   `.gitignore` del propio directorio impide comitearlo.
+   **Y ya está: no hay que reiniciar nada.** `api_url_file` se lee **en el
+   momento de notificar**, no al cargar la config — es la misma propiedad que
+   hace que Alertmanager arranque sin el fichero. El receiver lo busca en
+   `/etc/alertmanager/secrets/slack_api_url`, no en una variable de entorno
+   (Alertmanager no interpola env en su config). El `.gitignore` del propio
+   directorio impide comitearlo.
 
-4. **Replicar el montaje en el instalador**: el servicio `alertmanager` que
-   genera `compose_generator._alertmanager_service` **no** declara ese volumen,
-   así que en un despliegue generado el fichero sigue sin existir dentro del
-   contenedor. Es la misma línea que ya está en el compose canónico:
-   `- ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`.
-5. **Probarlo** con la alerta sintética del paso 1 de la sección anterior y
+   > Este paso llevaba un `docker compose -f docker/docker-compose.monitoring.yml up -d alertmanager`
+   > que era **innecesario y además fallaba**. Innecesario, porque `api_url_file`
+   > se lee al notificar y basta con dejar el fichero en el buzón. Y fallaba
+   > porque el overlay de monitorización declaraba un override del servicio
+   > `workers` (el bind del textfile-collector) que **ningún** fichero suyo
+   > define: compose no ignora un override huérfano, aborta el proyecto entero
+   > —`up`, `ps`, `logs` y `config`— con
+   > `service "workers" has neither an image nor a build context specified`.
+   >
+   > **Eso está corregido desde el 2026-08-12** partiendo el overlay en dos
+   > capas, que es lo que de verdad había:
+   >
+   > | Fichero                              | Qué es                                                                                                                      |
+   > | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+   > | `docker-compose.monitoring.yml`      | La **infraestructura observable**: Prometheus, Alertmanager, Grafana, exporters, Loki. Se apila sola sobre el compose base. |
+   > | `docker-compose.monitoring.apps.yml` | Lo que **monitoriza a las apps**: el override de `workers` con el drop-dir del textfile collector. Exige la capa de apps.   |
+   >
+   > O sea: el overlay de monitorización **sí se levanta suelto** —es justo lo que
+   > hacen `scripts/dev/up.sh --monitoring` y `up.ps1 -Monitoring`, que corren
+   > api-server y admin-panel nativos desde el venv y no tienen contenedor
+   > `workers` al que parchear—, y solo el segundo fichero pide que en el mismo
+   > `-f` esté la capa de aplicaciones (`docker-compose.manuals.yml` en dev; en
+   > producción el instalador genera un compose único que ya trae ambas cosas,
+   > **desde el 2026-08-12** — ver el aviso de abajo).
+   > `tests/unit/test_compose_stacks_are_launchable.py` valida cada combinación de
+   > `-f` que este repo promete por escrito, para que la trampa no vuelva.
+   >
+   > Aun así, para este paso concreto sigue sin hacer falta compose: si necesitas
+   > recrear el contenedor, lo barato y siempre correcto es
+   > `docker restart agentic-platform-alertmanager-1`.
+
+4. **Probarlo** con la alerta sintética del paso 1 de la sección anterior y
    comprobar que llega a Slack, no solo a la bandeja de la plataforma.
 
-Mientras 1–3 no se hagan (y 4 en despliegues generados), Alertmanager **arranca
+> **Ya no hay un paso «replicar el montaje en el instalador».** Lo tenía este
+> runbook porque `compose_generator._alertmanager_service` no declaraba el
+> volumen y un despliegue **generado** conservaba el hueco. Se replicó el
+> 2026-08-12 (`- ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`),
+> así que el compose del instalador trae el buzón igual que el canónico. Lo
+> guarda `tests/unit/test_compose_generator.py -k alertmanager`.
+
+Mientras 1–3 no se hagan, Alertmanager **arranca
 igual** y falla en cada envío al respaldo: degradación deliberada, no un arranque
 roto. El efecto neto es que `severity=critical` con el api-server caído no llega a
 ningún humano.

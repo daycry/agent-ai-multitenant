@@ -33,6 +33,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     ARRAY,
+    BigInteger,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -1307,6 +1308,27 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     steps_log: Mapped[list[Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+
+    # --- proyección de `steps_log` (prod-13 task_prod13_18, migración 0139) ---
+    # Las tres son una PROYECCIÓN del steps_log, no una fuente nueva: el mismo
+    # patrón que `total_tokens` / `total_cost_usd` de aquí abajo. Existen para
+    # que el explorador de runs y el panel de estadísticas dejen de resolver
+    # «¿con qué modelo terminó?» y «¿cuántos tokens de entrada/salida?» con un
+    # `jsonb_array_elements(steps_log)` por fila. Lo que impide que se
+    # desincronicen es que TODO el que asigna `steps_log` llama acto seguido a
+    # `db/execution_repo.py::apply_steps_rollup`. Escritores hoy: ese mismo
+    # repositorio (`record_execution` / `finalize_execution` /
+    # `create_running_execution`) y `workers.execution._mark_commit_failed`, que
+    # anexa el paso del conflicto de rebase en su propia sesión BYPASSRLS. No hay
+    # trigger ni columna generada que lo haga por su cuenta: si un escritor nuevo
+    # se salta el helper, estas columnas mienten sin que nada falle. Lo fija
+    # `tests/unit/test_execution_steps_rollup.py`.
+    #
+    # `last_model` es NULL cuando el run no llamó a ningún modelo (un run
+    # abortado antes del primer turno) — no es «desconocido», es «ninguno».
+    last_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_in: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
+    tokens_out: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
 
     iterations: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

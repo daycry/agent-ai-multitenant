@@ -33,10 +33,11 @@ from alembic import command
 from httpx import ASGITransport, AsyncClient
 from uuid6 import uuid7
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = [pytest.mark.integration, pytest.mark.cross_tenant]
 
 _PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
-TEST_REDIS_URL = "redis://localhost:6379/15"
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +420,9 @@ def _dispatcher(sm):
     from workers.celery_app import build_celery_app
     from workers.config import Settings as WorkerSettings
 
-    celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
+    celery_app = build_celery_app(
+        WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+    )
     return TaskDispatcher(
         sessionmaker=sm,
         celery_app=celery_app,

@@ -35,6 +35,8 @@ from alembic import command
 from httpx import ASGITransport, AsyncClient
 from uuid6 import uuid7
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 
@@ -196,6 +198,10 @@ async def _seed_execution(
     now = created_at or datetime.now(tz=UTC)
     started = now
     completed = now + timedelta(milliseconds=duration_ms) if duration_ms is not None else None
+    # Igual que en `test_tenant_stats_dashboard`: `executions` está particionada por
+    # mes y sin DEFAULT (ADR 0151). Hoy ningún llamante retrofecha, pero el
+    # parámetro `created_at` está aquí invitando a hacerlo.
+    await ensure_partition_for(dsn, "executions", now)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(

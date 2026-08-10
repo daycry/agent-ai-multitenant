@@ -146,11 +146,14 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   notificación por plataforma en vez de duplicarla. El instalador monta ese mismo
   fichero (`compose_generator.py:_alertmanager_service`), así que no hay plantilla
   que duplicar. **Lo que falta es la CREDENCIAL**: el receiver lee el webhook de
-  Slack de `/etc/alertmanager/secrets/slack_api_url` y el instalador no provisiona
-  ni monta ese fichero, así que en un despliegue generado el canal de respaldo
-  falla en cada envío (degradación deliberada: Alertmanager arranca igual). Cierra
-  con el aporte de prod-10 (custodia) + un volumen en `_alertmanager_service`.
-  Además, su docstring sigue diciendo «no SMTP/Slack secrets here», ya falso.
+  Slack de `/etc/alertmanager/secrets/slack_api_url` y el instalador no provisionaba
+  ni montaba ese fichero, así que en un despliegue generado el canal de respaldo
+  fallaba en cada envío (degradación deliberada: Alertmanager arranca igual).
+  **El montaje se puso el 2026-08-12**
+  (`./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`), guardado por
+  `tests/unit/test_compose_generator.py -k alertmanager` con rojo verificado; y el
+  docstring que decía «no SMTP/Slack secrets here», ya falso, quedó corregido.
+  Lo único que sigue faltando es la CREDENCIAL y su custodia (prod-10, humano).
   - **Re-verificado el 2026-08-01** (`alertmanager.yml:55/68/104-106` y
     `compose_generator.py:1215-1233`): sigue siendo exacto. Lo que falta
     **no es código**: es decidir dónde se custodia el webhook de Slack y quién
@@ -197,17 +200,103 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
     sin `:ro` (1), sin el directorio en el repo (2).
   - **Runbook actualizado**: el paso 3 pasa a ser un `printf … > …/slack_api_url`
     ejecutable, y el paso 4 queda acotado a lo único que falta de código —
-    replicar esa línea en `compose_generator._alertmanager_service`, que sigue sin
-    declarar el volumen y por tanto un despliegue **generado** conserva el hueco.
-  - **Sigue SIN marcar, y ahora el motivo es más limpio**: lo que falta es (a) la
-    credencial de Slack y su decisión de custodia —humano, prod-10— y (b) la línea
-    en el generador del instalador, que es `apps/installer/**`, fuera de este
-    carril. Ya no falta nada del stack canónico.
+    replicar esa línea en `compose_generator._alertmanager_service` — **hecho el
+    2026-08-12**, ver la anotación de esa fecha.
+  - **Sigue SIN marcar, y ahora el motivo es el único que queda**: falta la
+    credencial de Slack y su decisión de custodia —humano, prod-10—. No falta
+    nada de código, ni en el stack canónico ni en el generado.
+- ✅ **2026-08-12 — el cableado queda VALIDADO CON EL BINARIO, no con un parser de
+  YAML. Sigue sin marcar por la credencial, y ahora eso está probado.** Las cinco
+  anotaciones anteriores concluían «solo falta la credencial» apoyándose en tests
+  que leen el YAML; ninguno cargaba la config con el Alertmanager que la va a
+  ejecutar, que es donde se descubre que un campo no existe en esa versión. Con el
+  stack del operador arriba:
+
+  | Comprobación (sobre `agentic-platform-alertmanager-1`)   | Resultado                                 |
+  | -------------------------------------------------------- | ----------------------------------------- |
+  | `amtool check-config /etc/alertmanager/alertmanager.yml` | **SUCCESS**, 2 receivers                  |
+  | `amtool config routes test … severity=critical`          | **`platform-notifier,critical-fallback`** |
+  | `amtool config routes test … severity=warning`           | `platform-notifier`                       |
+  | `docker inspect` → montaje `/etc/alertmanager/secrets`   | presente, **ro=true**                     |
+
+  Lo que esto añade y no era deducible de los tests estáticos: **`api_url_file` es
+  un campo válido para `prom/alertmanager:v0.27.0`** (no lo es en versiones
+  anteriores a la 0.24, y el receiver entero habría reventado al cargar), el
+  `continue: true` **lo aplica el router de verdad** —la crítica sale por los DOS
+  receivers— y la duplicación está acotada: un `warning` sale solo por la
+  plataforma, que es el riesgo #5 del plan cerrado por medición.
+
+  Los tres comandos quedan escritos en
+  [`06-runbooks/observabilidad.md` §«Compruébalo tú antes de gastar tiempo en la
+  credencial»](../06-runbooks/observabilidad.md) para que el operador confirme en
+  diez segundos que lo único que falta es suyo.
+
+  **Y se corrigió un paso del runbook que no se podía ejecutar**: el paso 3 remataba
+  con `docker compose -f docker/docker-compose.monitoring.yml up -d alertmanager`,
+  que **abortaba** (`service "workers" has neither an image nor a build context`)
+  porque el overlay de monitorización overrideaba `workers` y ese servicio lo declara
+  la capa de aplicaciones. Además era **innecesario**: `api_url_file` se lee al
+  notificar, no al cargar, así que dejar el fichero en el buzón basta.
+
+  **La causa de fondo se arregló el 2026-08-12**, porque quitar el comando del
+  runbook dejaba el overlay igual de roto para todo lo demás: el override de
+  `workers` se mudó a `docker/docker-compose.monitoring.apps.yml`, de modo que
+  `monitoring.yml` (infraestructura observable) vuelve a ser componible por su
+  cuenta y `monitoring.apps.yml` se apila solo cuando la capa de aplicaciones está
+  presente. Con el override dentro, **todas** las invocaciones escritas en el repo
+  fallaban: `scripts/dev/up.sh --monitoring`, `scripts/dev/up.ps1 -Monitoring`,
+  `02-getting-started/01-installation.md`, `04-reference/stack-services.md`,
+  `04-reference/backup-restore.md` y `06-runbooks/02-troubleshooting.md`.
+
+  Guardado —ahora sí— por `tests/unit/test_compose_stacks_are_launchable.py`: su
+  inventario de combinaciones excluía justo las rotas, así que daba verde mientras
+  el fallo vivía. Al añadir las seis reales se puso rojo con
+  `overridea servicios que ningún fichero suyo declara: ['workers']`, que es la
+  única prueba de que la guarda guarda algo (ver la casilla 15).
+
+  **Sigue SIN marcar**, y ya por un solo motivo: falta la credencial de Slack y su
+  custodia —humano, prod-10—. El volumen en `compose_generator._alertmanager_service`
+  se puso el 2026-08-12 (`./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`),
+  guardado por `tests/unit/test_compose_generator.py -k alertmanager` (4 tests, rojo
+  verificado) y validado con `docker compose config` sobre un compose generado.
+
+- ⚠️ **2026-08-12 — hallazgo mayor y PREEXISTENTE, destapado al poner ese volumen:
+  el instalador no escribe el árbol `monitoring/` junto al compose que genera.**
+  El generador emite CINCO binds relativos de configuración —`./monitoring/prometheus/prometheus.yml`,
+  `./monitoring/prometheus/rules`, `./monitoring/alertmanager/alertmanager.yml`,
+  `./monitoring/grafana/provisioning`, `./monitoring/grafana/dashboards`— y ahora
+  un sexto (el buzón de secrets). Comprobado:
+
+  ```bash
+  grep -rn "prometheus.yml\|alertmanager.yml\|provisioning" \
+    apps/installer/backend/src/installer_backend/{config_generators,real_bindings,real_step_executor}.py
+  # (vacío)
+  ```
+
+  `build_data_tree_plan` sí crea los directorios de ESTADO bajo `data_root`
+  (`prometheus/`, `alertmanager/`, `grafana/`), que es otra cosa: son los
+  volúmenes de datos, no la config. Nadie copia ni genera los ficheros de
+  configuración.
+
+  Consecuencia: en una instalación generada **con monitorización**, Docker crea
+  un DIRECTORIO donde el bind espera un fichero, y Prometheus y Alertmanager no
+  arrancan con su configuración. O sea que la monitorización del producto
+  instalado no funciona de extremo a extremo, y el buzón de secrets que se acaba
+  de añadir hereda el mismo problema.
+
+  No se arregla aquí porque no es una línea: hay que decidir si el instalador
+  **copia** el árbol del repo, lo **genera** (como hace con `.env` y
+  `config/global.yaml`) o lo **empaqueta** en la imagen. Es trabajo de
+  `apps/installer/**` con su propio diseño, y merece su casilla. Queda escrito
+  aquí para que no vuelva a ser invisible: el modo de fallo es de los caros
+  —el `docker compose config` pasa, porque los binds son sintácticamente
+  válidos— y sólo se ve al arrancar.
+
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_02_a
     runtime: python-pytest
-    command: "pytest apps/installer/backend/tests/test_compose_generator.py -k alertmanager -v"
+    command: "pytest tests/unit/test_compose_generator.py -k alertmanager -v"
   ```
 
 #### `task_prod08_alert_e2e_03` — Test e2e de alerta sintética
@@ -547,6 +636,37 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
     `compose_generator.py` (`apps/installer/**`, otro carril). Y ahora ese trabajo
     tiene un requisito más, que conviene no perder: el bloque generado debe
     llevar **las dos redes**, no solo `agentic-net`.
+- 🔴 **2026-08-12 — la imagen del watchdog NO SE CONSTRUÍA BIEN NI SE PUBLICABA EN
+  NINGÚN SITIO. Arreglado; es el tercer «estaba declarado pero no podía funcionar»
+  de esta misma casilla.** Las tres pasadas anteriores revisaron el bloque de
+  compose y el código; ninguna miró quién produce la imagen que ese bloque pide.
+  - **Qué pasaba, en dos sitios a la vez.** `apps/watchdog/Dockerfile` es una app
+    **derivada** (`ARG BASE_IMAGE` + `COPY apps/watchdog/…`), o sea que su contexto
+    de build es la raíz del repo, igual que notification-dispatcher. Pero los dos
+    sitios que reparten apps entre «derivadas» y «autocontenidas» llevaban la lista
+    **escrita a mano y anterior al watchdog**:
+    · `ci.yml:build-images` → `for app in workers orchestrator notification-dispatcher`,
+    así que el watchdog caía al bucle de autocontenidas y se construía con
+    `apps/watchdog` como contexto, donde `COPY apps/watchdog/pyproject.toml` **no
+    resuelve**. Eso no es una imagen mala: es el **job `build-images` en rojo**.
+    · `release-images.yml` → `matrix.app: [workers, orchestrator, notification-dispatcher]`,
+    así que la imagen **no se publicaba**. El compose canónico pide
+    `${IMAGE_WATCHDOG:-agentic-platform/watchdog:latest}`: en cualquier host que no
+    la hubiera construido a mano, `--profile watchdog` no arranca.
+  - **Por qué no se vio**: CI lleva caído por facturación desde el 2026-07-30, así
+    que el rojo de `build-images` nunca se mostró. El Dockerfile entró el
+    2026-08-02; el defecto llevaba **diez días** en `master`.
+  - **Arreglado sin volver a escribir una lista**: las dos se **derivan del árbol**
+    (`grep -l 'ARG BASE_IMAGE' apps/*/Dockerfile`) — en `ci.yml` para las dos ramas
+    del reparto, de modo que no puedan divergir entre sí, y en `release-images.yml`
+    la matriz pasa a cuatro apps con la guarda que la cruza contra el árbol. Añadir
+    una app derivada mañana ya no rompe nada en silencio.
+  - **Guarda**: `tests/unit/test_app_images_are_built_by_ci.py` (10 tests).
+    **Rojo verificado antes del arreglo**, y en los dos defectos por separado:
+    `test_ci_derives_the_backend_app_list_from_the_dockerfiles` y
+    `test_every_derived_app_is_published_by_the_release_workflow[watchdog]`.
+  - **Sigue SIN marcar** por lo mismo de siempre: el servicio en
+    `compose_generator.py` con sus dos redes (`apps/installer/**`, otro carril).
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_14_a
@@ -593,11 +713,46 @@ exit 1`. Fuera del carril `observabilidad` (`apps/installer/**`). Ojo: el test
   (`tests/unit/test_compose_healthchecks_honest.py`). Nada nuevo que añadir: la
   mitad que falta es `apps/installer/**`, fuera de este carril, y ya está dictada
   arriba carácter a carácter.
+- 🔴 **2026-08-12 — LA INSTRUCCIÓN DICTADA ARRIBA ES UNA TRAMPA. No la ejecutes tal
+  cual.** Las tres anotaciones anteriores repiten que el arreglo del generador es
+  «literal, dos caracteres: `|| true` → `|| exit 1`». **Eso rompería todos los
+  despliegues generados**, y conviene entender por qué antes de que alguien lo haga.
+  El comando del generador (`compose_generator.py:458` y `:482`) sigue siendo el
+  original **completo**:
+
+  ```
+  wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true
+  ```
+
+  Lleva **dos** defectos, y el `|| true` tapaba al otro: la imagen usa el **wget de
+  BusyBox**, que **no reconoce `--no-proxy`** y sale por el mensaje de uso con
+  rc≠0. Es exactamente lo que se descubrió en el compose canónico el 2026-08-10
+  (commit `510d07d9`): al retirar el `|| true`, los dos proxies salieron
+  `unhealthy` y **lo roto era la comprobación, no el proxy**.
+  Cambiar solo el final en el generador deja un healthcheck que **falla siempre**:
+  los dos proxies quedan permanentemente `unhealthy` y —desde que el watchdog los
+  vigila (`task_prod08_watchdog_14`)— entra a reiniciarlos en bucle hasta agotar el
+  backoff y emitir una crítica por cada uno. Se cambia de «no vigila nada» a «avisa
+  continuamente en falso», que es peor.
+  **Lo que hay que portar es la línea ENTERA del compose canónico**, con `-Y off`
+  (la forma de BusyBox) y afirmando el `403 Access denied` con el que tinyproxy
+  responde a una petición directa. Escrito en
+  [`06-runbooks/observabilidad.md` §«El healthcheck de los dos tinyproxy: trampa
+  para quien toque el instalador»](../06-runbooks/observabilidad.md).
+
+- ✅ **La mitad canónica queda verificada CONTRA EL STACK VIVO, no contra el
+  fichero** (2026-08-12): `docker inspect` de `agentic-egress-proxy` y
+  `agentic-registry-proxy` → **`healthy`, `FailingStreak=0`**. Es la prueba que
+  faltaba de que el healthcheck nuevo no solo «puede fallar» sino que **pasa cuando
+  el proxy está bien** — un `|| exit 1` con el comando roto habría dado la señal
+  contraria y también habría estado «arreglado» sobre el papel.
+- **Sigue SIN marcar**: la mitad del generador es `apps/installer/**`, fuera de este
+  carril, y ahora tiene un requisito extra que no tenía (portar la línea entera).
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_15_a
     runtime: python-pytest
-    command: "pytest apps/installer/backend/tests/test_compose_generator.py -k egress_healthcheck -v"
+    command: "pytest tests/unit/test_compose_generator.py -k egress_healthcheck -v"
   ```
 
 ### Fase F — Documentación y runbook

@@ -412,7 +412,7 @@ services:
     # causa. `|| exit 1` hace que el estado sea honesto y que `ServiceDown` /
     # el watchdog puedan actuar. Guardado por
     # tests/unit/test_compose_healthchecks_honest.py.
-    # `-Y off` y no `-Y off`: la imagen lleva el wget de BusyBox, que NO
+    # `-Y off` y no `--no-proxy`: la imagen lleva el wget de BusyBox, que NO
     # reconoce esa opción — salía por usage con rc≠0, así que este healthcheck
     # **nunca fue válido**. Con el `|| true` que llevaba delante daba igual: el
     # check siempre pasaba. Al retirarlo (task_prod08_egress_health_15, «un
@@ -458,7 +458,7 @@ services:
     # tinyproxy, mismo copy-paste). Aquí un proxy muerto se manifiesta como
     # builds/instalaciones de dependencias que fallan dentro de los
     # runtime-templates sin causa aparente.
-    # `-Y off` y no `-Y off`: la imagen lleva el wget de BusyBox, que NO
+    # `-Y off` y no `--no-proxy`: la imagen lleva el wget de BusyBox, que NO
     # reconoce esa opción — salía por usage con rc≠0, así que este healthcheck
     # **nunca fue válido**. Con el `|| true` que llevaba delante daba igual: el
     # check siempre pasaba. Al retirarlo (task_prod08_egress_health_15, «un

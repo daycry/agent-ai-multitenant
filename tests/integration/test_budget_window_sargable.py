@@ -45,6 +45,8 @@ from api_server.budgets.period import BudgetPeriodWindow
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 # Mayo de 2026, semiabierto: [2026-05-01, 2026-06-01).
@@ -94,6 +96,11 @@ async def _seed(dsn: str) -> tuple[UUID, UUID]:
 async def _seed_execution(
     dsn: str, *, tenant_id: UUID, task_id: UUID, at: datetime, cost: str
 ) -> None:
+    # Todo este test siembra en mayo de 2026 (fechas literales, a propósito: la
+    # ventana del período es fija). `executions` está particionada por mes y SIN
+    # DEFAULT (ADR 0151), así que ese mes no existe en una base recién migrada. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", at)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(

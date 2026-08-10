@@ -18,6 +18,8 @@ import pytest
 from alembic import command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 _PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -50,6 +52,11 @@ async def _seed(dsn: str) -> UUID:
             tenant,
         )
         yesterday = datetime.now(tz=UTC) - timedelta(days=1)
+        # El run «de ayer» cae en el mes anterior si hoy es día 1, y `executions`
+        # está particionada por mes y SIN DEFAULT (ADR 0151): un día al mes el
+        # INSERT moriría. Ver
+        # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+        await ensure_partition_for(dsn, "executions", yesterday)
         # 2 tareas done AYER + 1 done hoy (fuera de ventana) + 1 bloqueada +
         # 1 in_progress.
         for status, when in (

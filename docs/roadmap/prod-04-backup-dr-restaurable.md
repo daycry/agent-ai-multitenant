@@ -182,7 +182,47 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 > anotar aquí). Implementar una de las tres antes de que dirección elija sería decidir por
 > ella y luego tirarlo. El ADR trae el coste y la estimación de cada opción.
 
-- [ ] **Título**: Eliminar la captura en caliente ingenua y documentar el skew residual aceptado
+> ✅ **CERRADA el 2026-08-12: lo que la bloqueaba ya no existe.** La nota de arriba se
+> escribió cuando el ADR estaba `proposed`; **se firmó el 2026-08-01** (opción A, quiesce
+> corto con plazo que degrada a C) y otra ola lo implementó. Verificado contra el código,
+> no contra la nota:
+>
+> - **El quiesce existe y es el del ADR**: `apps/workers/src/workers/backup_quiesce.py`
+>   (`ComposeQuiescer` / `QuiesceRecord`), llamado desde `backup.py:559-564` con el
+>   `resume` en un `finally` —los servicios rearrancan aunque la captura falle— y con
+>   `quiesce` en el manifest (`backup.py:321-341`), que es el acta que el ADR exige.
+>   Ajustes en `workers/config.py:716-750`: `backup_quiesce_services`,
+>   `backup_quiesce_never_stop` (`workers-privileged`, la lane que corre el propio
+>   backup) y `backup_quiesce_timeout_seconds=180`. La métrica de duración
+>   (`agentic_backup_quiesce_seconds`) y la de degradación
+>   (`agentic_backup_quiesce_degraded`) están en `backup_metrics.py:65-110`.
+> - **El skew residual aceptado está documentado**, que es la otra mitad del título:
+>   [`06-runbooks/04-disaster-recovery.md`](../06-runbooks/04-disaster-recovery.md)
+>   §«Skew residual del bundle» —con la tabla t₀…t₄ marcada como la que **aplica cuando el
+>   quiesce degrada a `partial`**— y §«El quiesce: qué pasa a las 03:00, y qué pasa cuando
+>   no pasa», con la palanca para desactivarlo y qué se pierde al hacerlo.
+> - **La captura en caliente ingenua ya no está**: Redis por `BGREWRITEAOF` verificado,
+>   Vault por huella de contenido antes/después, y `worktrees/`/`dep-cache/` fuera de los tars.
+>
+> **Ejecutado**: `pytest tests/integration/test_backup_consistency.py -q` → **10 passed**
+> (el `auto_prod_04_06_a` declarado; no necesita Postgres, corre sobre `tmp_path`), y
+> `pytest tests/unit/test_backup_quiesce.py -q` → **17 passed**.
+>
+> **Lo que sigue abierto NO es esta casilla**, y por eso no la retiene: las dos decisiones
+> **ligadas** del ADR 0149 —«¿Redis es crítico o recreable?» y «¿`vault_data` viaja dentro
+> del blob cifrado?»— siguen sin firmar. Viven en el ADR, con sus opciones escritas, y son
+> del operador. Ninguna de las dos está en el enunciado ni en la descripción de esta tarea.
+>
+> ⚠️ **Y una consecuencia operativa que hay que leer ANTES del próximo despliegue**: con
+> los defaults, el backup de las 03:00 **para api-server, orchestrator, workers,
+> cortex-beat, notification-dispatcher y admin-panel** durante la captura. Es lo que el
+> operador firmó, pero es un corte de servicio diario que antes no existía. Además, el
+> instalador **no emite `WORKERS_RESTORE_COMPOSE_FILE`** (el puntero al compose que usa el
+> quiesce): con un `data_root` distinto del default, el quiesce no encuentra el compose y
+> degrada a `partial` todas las noches, diciéndolo sólo en el log
+> (`backup.quiesce.no_compose_file`). Está avisado en el runbook.
+
+- [x] **Título**: Eliminar la captura en caliente ingenua y documentar el skew residual aceptado
 - **Descripción**: (1) Redis: antes del tar, lanzar `BGSAVE` y capturar solo el `dump.rdb` resultante (o, si dirección lo decide, declarar Redis como no respaldado por recreable — opción del ADR); dejar de tarear el AOF en escritura activa (`docker-compose.yml:104-107`). (2) Vault: captura coherente del file backend (parar el servicio un instante o copia atómica verificada). (3) Redactar **ADR propuesto** «Consistencia del bundle de backup» con las opciones de la Decisión clave 3 (quiesce corto / snapshot FS / skew aceptado), el orden de captura resultante y el skew residual medido — decisión para humano. Implementar la opción elegida tras aprobación (presupuestado: quiesce corto).
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:

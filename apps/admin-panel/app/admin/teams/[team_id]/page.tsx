@@ -16,7 +16,9 @@ import { CapabilityHub } from "@/components/capability/capability-hub";
 import { ChatModelSection, type ChatModelConfig } from "@/components/capability/chat-model-section";
 import { AdoptTeamDialog } from "@/components/teams/adopt-team-dialog";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { MEMORY_SCOPE_OPTIONS } from "@/lib/memory/constants";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { AddMemberDialog } from "./add-member-dialog";
 import { MemberEditDialog } from "./member-edit-dialog";
@@ -27,6 +29,8 @@ export default function TeamDetailPage() {
   const params = useParams<{ team_id: string }>();
   const teamId = params.team_id;
   const queryClient = useQueryClient();
+  const t = useT("teams");
+  const errorText = useErrorText();
 
   const teamQuery = useQuery({
     queryKey: ["teams", teamId],
@@ -107,13 +111,13 @@ export default function TeamDetailPage() {
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Users className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title={<span data-testid="team-name">{team?.name ?? "Equipo"}</span>}
-        description={team?.description ?? "Detalle del equipo."}
+        title={<span data-testid="team-name">{team?.name ?? t("fallbackName")}</span>}
+        description={team?.description ?? t("fallbackDescription")}
         actions={
           <div className="flex gap-2">
             <Button variant="outline" asChild>
               <Link href="/admin/teams">
-                <ArrowLeft className="mr-1 h-4 w-4" /> Volver
+                <ArrowLeft className="mr-1 h-4 w-4" /> {t("back")}
               </Link>
             </Button>
             {team && !isReadOnly && (
@@ -125,7 +129,7 @@ export default function TeamDetailPage() {
                   data-testid="team-edit-button"
                 >
                   <Pencil className="mr-1 h-4 w-4" />
-                  Editar
+                  {t("edit")}
                 </Button>
                 <Button
                   variant="destructive"
@@ -134,14 +138,14 @@ export default function TeamDetailPage() {
                   data-testid="team-delete-button"
                 >
                   <Trash2 className="mr-1 h-4 w-4" />
-                  Borrar
+                  {t("delete")}
                 </Button>
               </>
             )}
             {team && isReadOnly && (
               <Button size="sm" onClick={() => setAdoptOpen(true)} data-testid="team-adopt-button">
                 <Plus className="mr-1 h-4 w-4" />
-                Adoptar / Personalizar
+                {t("adoptCustomize")}
               </Button>
             )}
           </div>
@@ -183,13 +187,13 @@ export default function TeamDetailPage() {
         />
       )}
 
-      {teamQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando equipo…</p>}
+      {teamQuery.isLoading && <p className="text-muted-foreground text-sm">{t("loadingTeam")}</p>}
 
       {teamQuery.isError && (
         <Card className="border-destructive p-4">
+          {/* `errorText` (prod-16 `task_prod16_05`): esto pintaba `error.body` CRUDO. */}
           <p className="text-destructive text-sm">
-            Could not load team:{" "}
-            {teamQuery.error instanceof ApiError ? teamQuery.error.body : String(teamQuery.error)}
+            {t("detailErrorTitle")} {errorText(teamQuery.error)}
           </p>
         </Card>
       )}
@@ -213,9 +217,9 @@ export default function TeamDetailPage() {
               className="text-muted-foreground mb-3 rounded-md border border-dashed px-3 py-2 text-sm"
               data-testid="team-model-adopt-hint"
             >
-              Este equipo es una plantilla de la plataforma (solo lectura). Para fijar su modelo,
-              effort o cualquier otra configuración, <strong>adóptalo</strong>: la copia de tu
-              organización es totalmente editable y sus agentes la heredan.
+              {t("modelAdoptHintPrefix")}
+              <strong>{t("modelAdoptHintStrong")}</strong>
+              {t("modelAdoptHintSuffix")}
             </p>
           ) : null}
           <div className="mb-6">
@@ -250,13 +254,9 @@ export default function TeamDetailPage() {
           <div className="mb-6">
             <Card className="p-4">
               <Label htmlFor="team-memory-scope" className="text-sm font-medium">
-                Política de memoria del equipo
+                {t("memoryPolicyLabel")}
               </Label>
-              <p className="text-muted-foreground mt-1 text-xs">
-                Gobierna la memoria de los agentes del equipo. &quot;Sin política&quot; = cada
-                agente usa su propio scope. Las lecciones (semantic) viajan a este nivel; lo puntual
-                de cada proyecto (episodic) se queda en su proyecto.
-              </p>
+              <p className="text-muted-foreground mt-1 text-xs">{t("memoryPolicyHelp")}</p>
               <Select
                 id="team-memory-scope"
                 data-testid="team-memory-scope"
@@ -265,7 +265,7 @@ export default function TeamDetailPage() {
                 disabled={isReadOnly || saveMemoryScope.isPending}
                 onChange={(e) => saveMemoryScope.mutate(e.target.value || null)}
               >
-                <option value="">Sin política (heredar)</option>
+                <option value="">{t("memoryPolicyNone")}</option>
                 {MEMORY_SCOPE_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
@@ -281,10 +281,10 @@ export default function TeamDetailPage() {
         <section data-testid="team-detail">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">
-              Miembros ({team.members.length})
+              {t("membersHeading", { n: team.members.length })}
               {isReadOnly && (
                 <Badge variant="muted" className="ml-2">
-                  Built-in
+                  {t("builtinBadge")}
                 </Badge>
               )}
             </h2>
@@ -292,13 +292,9 @@ export default function TeamDetailPage() {
               data-testid="add-member-button"
               onClick={() => setDialogOpen(true)}
               disabled={isReadOnly}
-              title={
-                isReadOnly
-                  ? "Los equipos built-in no son editables. Fórkea para personalizar."
-                  : undefined
-              }
+              title={isReadOnly ? t("addMemberDisabled") : undefined}
             >
-              <Plus className="mr-1 h-4 w-4" /> Añadir miembro
+              <Plus className="mr-1 h-4 w-4" /> {t("addMember")}
             </Button>
           </div>
 
@@ -307,7 +303,7 @@ export default function TeamDetailPage() {
               className="text-muted-foreground py-8 text-center text-sm"
               data-testid="members-empty"
             >
-              El equipo no tiene miembros todavía.
+              {t("membersEmpty")}
             </p>
           ) : (
             <div className="flex flex-col gap-2" data-testid="members-list">
@@ -317,7 +313,7 @@ export default function TeamDetailPage() {
                   <Card key={m.agent_id} data-testid={`member-${m.agent_id}`} className="p-3">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-medium">{agent?.name ?? "(agente)"}</p>
+                        <p className="font-medium">{agent?.name ?? t("unknownAgent")}</p>
                         <p className="text-muted-foreground text-xs">
                           {m.role_in_team ?? agent?.role ?? "—"}
                           {agent &&
@@ -327,7 +323,7 @@ export default function TeamDetailPage() {
                                 className="ml-2"
                                 data-testid={`member-forked-${agent.id}`}
                               >
-                                Forked
+                                {t("forkedBadge")}
                               </Badge>
                             ) : (
                               <Badge
@@ -335,7 +331,7 @@ export default function TeamDetailPage() {
                                 className="ml-2"
                                 data-testid={`member-linked-${agent.id}`}
                               >
-                                Linked
+                                {t("linkedBadge")}
                               </Badge>
                             ))}
                         </p>
@@ -343,11 +339,11 @@ export default function TeamDetailPage() {
                       <div className="flex items-center gap-2">
                         {m.is_team_leader && (
                           <Badge variant="warning" data-testid="leader-badge">
-                            Líder
+                            {t("leaderBadge")}
                           </Badge>
                         )}
                         <Badge variant="muted" data-testid={`member-priority-${m.agent_id}`}>
-                          Prioridad {m.assignment_priority}
+                          {t("priorityBadge", { n: m.assignment_priority })}
                         </Badge>
                         {!isReadOnly && (
                           <Button
@@ -357,7 +353,7 @@ export default function TeamDetailPage() {
                             data-testid={`member-edit-${m.agent_id}`}
                           >
                             <Pencil className="mr-1 h-4 w-4" />
-                            Editar
+                            {t("edit")}
                           </Button>
                         )}
                       </div>
@@ -387,7 +383,7 @@ export default function TeamDetailPage() {
         <MemberEditDialog
           teamId={teamId}
           member={memberEditing}
-          agentName={agentsById.get(memberEditing.agent_id)?.name ?? "(agente)"}
+          agentName={agentsById.get(memberEditing.agent_id)?.name ?? t("unknownAgent")}
           open={memberEditing !== null}
           onOpenChange={(next) => {
             if (!next) setMemberEditing(null);

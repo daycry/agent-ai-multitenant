@@ -54,11 +54,23 @@ const SKIP_DIRS = new Set(["node_modules", ".next", "out", "test-results", "vend
 const EXEMPT_PREFIXES = ["lib/i18n/"];
 
 /**
- * Deuda conocida el 2026-08-01, fichero → nº de ternarios. **Este mapa sólo
- * puede MENGUAR.** Cada lote de migración de prod-16 debe borrar líneas de aquí.
+ * **VACÍA desde el 2026-08-12: el trinquete de ternarios está GRADUADO.**
  *
- * El ternario `lang === "es" ? … : …` tapa DOS cosas distintas, y las dos tienen
- * ya su sustituto en `lib/i18n/`:
+ * El plan prod-16 nació con 63 ternarios de idioma en 12 ficheros; el 08-01
+ * quedaban 34 en 8, el 08-10 nueve en 4, y este lote cerró los cuatro últimos
+ * (`app/admin/tools`, `agent-tools-diagnostic`, el respaldo del banner de
+ * honestidad del córtex y `components/teams/adopt-team-dialog`). Con el mapa
+ * vacío el umbral es cero para todo el mundo, así que **el modo normal y
+ * `--strict` dicen ya lo mismo para los ternarios**: la guarda deja de saldar
+ * deuda y pasa a impedirla. Es el mismo final que tuvo la mitad de «pantallas»
+ * de `check-component-size.mjs`.
+ *
+ * **Volver a añadir una entrada aquí es reabrir la deuda**, y hay un test que
+ * afirma que el mapa está vacío (`el trinquete de ternarios está GRADUADO`):
+ * si alguien la añade, se entera.
+ *
+ * El ternario `lang === "es" ? … : …` tapaba DOS cosas distintas, y las dos
+ * tienen su sustituto en `lib/i18n/`:
  *
  *   1. **Texto de UI escrito a mano** — se conoce al compilar, así que va al
  *      diccionario: `translate(lang, "ns", "clave")` desde un módulo puro, o
@@ -69,19 +81,31 @@ const EXEMPT_PREFIXES = ["lib/i18n/"];
  *      clave posible: se resuelve con `pickLang(lang, { es, en })`, que además
  *      cae al otro idioma si el pedido viene vacío.
  *
- * Lo que quedó fuera de este mapa el 2026-08-01 (`hub.ts`, `honesty.ts`,
- * `taxonomy.ts`, `runtime-templates.ts`, `cortex-curiosity.ts`,
- * `cortex-identity.ts`, `persona.ts`) usa ya una de las dos vías y el trinquete
- * lo mantiene a cero.
+ * Y una advertencia que este mapa se llevó al cerrarse: **contaba UNO por
+ * fichero cuando el atajo estaba bien escrito**. Dos ficheros de `capability`
+ * escondían veinte textos detrás de un `const t = (es, en) => …` local, y el
+ * mapa marcaba 1. Cero ternarios NO significa cero deuda de i18n: significa que
+ * ya no queda la forma de deuda que esta señal sabe ver.
  */
-const ALLOWLIST = {
-  "app/admin/cortex/mind/page.tsx": 1,
-  "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 3,
-  "app/admin/tools/page.tsx": 4,
-  "components/teams/adopt-team-dialog.tsx": 1,
-};
+const ALLOWLIST = {};
 
 const PATTERN = /lang === "es"/g;
+
+/**
+ * Muestra de control del detector de ternarios.
+ *
+ * Con la allowlist vacía se perdió la autocomprobación que decía «no encuentro
+ * ningún ternario y debería»: a cero, no encontrar nada es lo correcto. Sin algo
+ * que la sustituya, `PATTERN` podría pudrirse (un cambio de comillas, un
+ * refactor del literal) y la guarda pasaría en vacío para siempre — el modo de
+ * fallo del §4 de docs/03-guides/verificar-antes-de-implementar.md, que es justo
+ * el que estas guardas existen para no repetir.
+ *
+ * Este literal se busca a sí mismo: si deja de casar exactamente una vez, la
+ * guarda falla en vez de dar OK. Vive en `scripts/`, que NO está en `SCAN_DIRS`,
+ * así que no se cuenta como deuda.
+ */
+const PATTERN_PROBE = 'const x = lang === "es" ? a : b;';
 
 /**
  * Segundo trinquete: castellano CABLEADO en un atributo que ve el usuario.
@@ -339,7 +363,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/documents/page.tsx": 2,
   "app/admin/eval-quality/page.tsx": 4,
   "app/admin/executions/[id]/page.tsx": 5,
-  "app/admin/guardrails/page.tsx": 3,
   "app/admin/human-agents/page.tsx": 3,
   "app/admin/inbox/history-tab.tsx": 3,
   "app/admin/inbox/page.tsx": 2,
@@ -352,9 +375,7 @@ const ATTR_ALLOWLIST = {
   "app/admin/notifications/inbox/page.tsx": 3,
   "app/admin/notifications/page.tsx": 2,
   "app/admin/office/page.tsx": 6,
-  "app/admin/ollama/page.tsx": 3,
   "app/admin/plans/[id]/escalated/page.tsx": 2,
-  "app/admin/projects/[id]/agent-tools-diagnostic/page.tsx": 2,
   // El troceo de la pantalla (prod-16 `task_prod16_08`) repartió esta deuda
   // entre el `page.tsx` y la pieza que se llevó el `placeholder` del textarea.
   // 5 = 4 + 1: no crece, cambia de fichero.
@@ -387,8 +408,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/settings/sso/saml/saml-config-dialog.tsx": 8,
   "app/admin/settings/sso/saml/saml-config-section.tsx": 2,
   "app/admin/settings/sso/sso-config-section.tsx": 2,
-  "app/admin/teams/page.tsx": 3,
-  "app/admin/tools/page.tsx": 10,
   "app/developers/api-reference/page.tsx": 3,
   "app/developers/sdks/page.tsx": 1,
   "app/developers/tutorials/page.tsx": 3,
@@ -571,13 +590,22 @@ function main() {
           "SCAN_DIRS o el cwd están mal, la guarda estaría pasando en vacío.",
       );
     }
-    if (!strict && counts.size === 0) {
+    // Con la allowlist ya vacía (trinquete graduado), no encontrar ternarios es
+    // el resultado CORRECTO, no una señal de que el patrón se rompió. Lo que
+    // sustituye a aquella comprobación es la muestra de control.
+    if (!strict && counts.size === 0 && Object.keys(ALLOWLIST).length > 0) {
       errors.push(
         "no se encontró NINGÚN ternario y la allowlist no está vacía: el patrón " +
           "de búsqueda dejó de funcionar (o la migración terminó y toca --strict).",
       );
     }
-    if (!strict && attrCounts.size === 0) {
+    if ((PATTERN_PROBE.match(PATTERN) ?? []).length !== 1) {
+      errors.push(
+        "el detector de ternarios no reconoce su propia muestra de control: " +
+          "PATTERN dejó de funcionar y la guarda estaría pasando en vacío.",
+      );
+    }
+    if (!strict && attrCounts.size === 0 && Object.keys(ATTR_ALLOWLIST).length > 0) {
       errors.push(
         "no se encontró NINGÚN atributo en castellano y su allowlist no está vacía: " +
           "ATTR_PATTERN dejó de funcionar (o la migración terminó y toca --strict).",

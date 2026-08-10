@@ -9,8 +9,8 @@ overlay conviven dos cosas distintas:
 * **Servicios de verdad**, con su `image` o su `build`. Su endurecimiento tiene
   que estar declarado ahí: no hay de dónde heredarlo.
 * **Fragmentos de override**, que solo parchean un servicio definido en OTRO
-  fichero. `workers:` en `docker-compose.monitoring.yml` solo añade un volumen y
-  un `depends_on`; su `security_opt`, su `cap_drop` y su perfil AppArmor vienen
+  fichero. `workers:` en `docker-compose.monitoring.apps.yml` solo añade un
+  volumen y un `depends_on`; su `security_opt`, su `cap_drop` y su AppArmor vienen
   del fichero que lo define de verdad. Compose ni siquiera aceptaría ese bloque
   como definición autónoma: fallaría con «no image or build context specified».
 

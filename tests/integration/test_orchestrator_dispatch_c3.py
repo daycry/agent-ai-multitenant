@@ -35,9 +35,10 @@ from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = pytest.mark.integration
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
 _SCRIPTED_FINISH = {
     "kind": "scripted",
     "decisions": [{"kind": "finish", "output": "ok"}],

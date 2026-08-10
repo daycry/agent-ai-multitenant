@@ -168,6 +168,22 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     escrita: `marketplace/` lo está reescribiendo marketplace-v2, y meterle un
     endpoint asíncrono nuevo al flujo de instalación es pedirle un conflicto a
     quien está cambiando ese mismo flujo.
+  - ⏳ **Re-verificado (2026-08-12): la premisa sigue en pie, y lo que falta es
+    una DECISIÓN DE PLAN, no código.** Medido contra el árbol de hoy:
+    `marketplace/install.py:655` y `:687` siguen siendo `asyncio.to_thread`, y
+    en todo el repo no hay ninguna task Celery de análisis estático ni ningún
+    202 en la instalación. O sea: **la mitad de event loop está hecha y
+    protegida por test; la mitad de latencia de request no**.
+    Lo que esta tanda añade es el planteamiento explícito para que el operador
+    lo cierre en una línea: la tarea pide «un recurso de estado consultable»
+    detrás de un 202, y **marketplace-v2 ya tiene esa entidad** (el despliegue,
+    ADR 0142, migración 0128). Construir aquí un segundo recurso de estado sobre
+    el flujo de instalación que ese plan está reescribiendo produciría dos
+    máquinas de estado para lo mismo, y luego un conflicto al mezclar.
+    **Recomendación: mover esta media casilla a
+    [`marketplace-v2-despliegue`](./marketplace-v2-despliegue.md)** y cerrar
+    aquí lo que de verdad pertenece a prod-13 (el no-bloqueo del bucle, ya
+    hecho). Es una decisión de reparto de alcance entre planes: no la tomo yo.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -254,7 +270,7 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_04` — Upload de documentos en streaming con rechazo temprano
 
-- [ ] **Título**: En `POST /knowledge-bases/{kb_id}/documents`
+- [x] **Título**: En `POST /knowledge-bases/{kb_id}/documents`
       (`routers/knowledge_bases.py:579-598`): rechazar por header `Content-Length`
       antes de leer, leer en chunks acumulando hasta `MAX_UPLOAD_BYTES+1` (nunca
       `file.read()` completo), y validar content-type/extensión contra la lista
@@ -306,12 +322,60 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     estática nació con un falso positivo propio: el comentario que explica por
     qué se retiró el `file.read()` lo cita literalmente, y la guarda se ponía roja
     por su propia documentación. Ahora ignora las líneas de comentario.)
+  - ✅ **Cerrada del todo (2026-08-12) — la lista se le PREGUNTA a
+    `docling-serve`, con caché y respaldo fijo.** Era la mitad que faltaba, y
+    llevaba dos meses abierta porque las dos salidas del bloque anterior parecían
+    malas: inventar la lista envejece en silencio, y preguntarla en cada petición
+    mete la red dentro de una validación de entrada. La decisión firmada las
+    esquiva: se pregunta **una vez, al arrancar**, y se cachea en proceso.
+    - `api_server/ingestion/formats.py` lee el enum `InputFormat` del
+      `/openapi.json` del propio servicio —el mismo que usa su validador—, lo
+      mapea a extensiones y tipos MIME y lo guarda. El arranque lo primea desde
+      el lifespan (`main.py::_prime_supported_formats`, best-effort: si reventara,
+      el api-server no arrancaría por no poder validar extensiones). El camino de
+      la subida lee **la caché y nunca la red**.
+    - **Qué pasa si docling-serve está caído**: `FALLBACK_INPUT_FORMATS`, que es
+      deliberadamente el listado ANCHO conocido de Docling. Esa asimetría es la
+      decisión de diseño que hace segura la degradación: un respaldo más corto
+      convertiría una caída del servicio en rechazos de subidas legítimas, que es
+      el modo de fallo que esta tarea llevaba dos meses evitando. Hay test de que
+      el respaldo cubre los formatos troncales. La única degradación real es que
+      un formato AÑADIDO por un Docling posterior a esa lista se rechace hasta el
+      siguiente arranque con el servicio vivo.
+    - **La regla de admisión, escrita en el módulo: en la duda, ACEPTA.** Basta
+      con que la extensión O el tipo MIME sean reconocibles, y
+      `application/octet-stream` se trata como «no sé» (es lo que manda el
+      navegador que no reconoce la extensión), así que decide la extensión. `.txt`
+      cuelga de `md` a propósito: el texto plano es markdown válido y es lo que
+      sube la suite de KBs de hoy — un allowlist ingenuo lo habría roto en
+      silencio, y hay un test que lo fija.
+    - **Verificar contra el servicio VIVO destapó el defecto que la tarea temía,
+      y en el sentido malo.** El `docling-serve` del stack declara hoy 17
+      formatos, y tres —`vtt`, `latex`, `xml_xbrl`— no estaban en el mapa
+      formato→extensión, así que un `.vtt` o un `.tex` se habrían rechazado en la
+      puerta **pese a que Docling los parsea**: exactamente el falso negativo que
+      este bloque llevaba dos meses evitando, colado por la puerta de atrás. Ya
+      están mapeados, y hay un test que exige que TODO formato del respaldo tenga
+      al menos una extensión o un MIME, para que ampliar la lista sin ampliar el
+      mapa no vuelva a poder pasar en silencio. El respaldo está copiado del
+      enum vivo, no escrito de memoria — la lección es que un mapa incompleto
+      rechaza igual que una lista corta.
+    - **El rechazo es 415 y llega antes de almacenar nada**: ni blob en MinIO ni
+      fila en `documents` (`tests/integration/test_document_upload_limits.py`,
+      5/5). Rojo verificado neutralizando el `raise` del router: 2 fallos, uno de
+      ellos con el documento ya persistido en la respuesta. En unit,
+      `tests/unit/test_ingestion_supported_formats.py` 24/24, con rojo verificado
+      dos veces (dejando pasar todo: 6 fallos; estrechando el `except` del
+      sondeo: 2).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod13_04_a
     runtime: python-pytest
     command: "pytest tests/integration/test_document_upload_limits.py -v"
+  - id: auto_prod13_04_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_ingestion_supported_formats.py -v"
   ```
 
 #### `task_prod13_05` — Cliente httpx/embedder compartido en los hot paths internos
@@ -425,6 +489,27 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
     árbol estable es exactamente lo que este plan no puede permitirse. Pide su
     rama, como ya decía la nota anterior; lo que cambia es que **ya no pide la
     propiedad de `auth/deps.py`**.
+  - ⏳ **Sigue abierta (2026-08-12), y ahora se sabe qué le falta EXACTAMENTE.**
+    Re-verificado: `routers/assistant.py:717` y `:501` siguen recibiendo
+    `session: AsyncSession = Depends(get_tenant_session)`, y `AssistantToolContext`
+    (`assistant/tools.py:67-76`) sigue llevando una `session` viva.
+    El diseño de la nota anterior se confirma y se le añade el obstáculo que no
+    estaba escrito, que es el que la hace cara: **no basta con no usar la sesión
+    dentro del turno; hay que dejar de PEDIRLA**. `Depends(get_tenant_session)`
+    abre la sesión y su transacción antes de que el handler corra, así que
+    mientras el endpoint la declare como dependencia la conexión sigue retenida
+    durante el turno LLM aunque nadie la toque. Y no es sólo el parámetro del
+    handler: `require_assistant_access` (`:246`) y
+    `enforce_assistant_chat_rate_limit` (`:178`) dependen de ella también, así
+    que la cadena entera tiene que pasar a abrir sesiones cortas con
+    `open_tenant_session(principal)`.
+    **Por qué no se entrega en esta tanda, y no es por tiempo:** es la única
+    tarea del plan cuyo fallo se manifiesta como fuga entre tenants, la protegen
+    7 ficheros de integración del asistente, y esta tanda tiene cuatro carriles
+    más escribiendo en el árbol —con un redespliegue real al final—. Entregar un
+    cambio de la cadena de autenticación del asistente que no se ha podido correr
+    entero contra un árbol estable es exactamente lo que no se puede permitir el
+    día que el operador levanta el stack. **Pide su rama y su tanda.**
 - **Tiempo**: 2,5 días · **Complejidad**: l
 - **Depende de**: `task_prod13_06`
 - **Tests automáticos**:
@@ -738,7 +823,7 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
 
 #### `task_prod13_18` — No materializar `steps_log` en listados/exports de runs
 
-- [ ] **Título**: En `tenant_stats.py` (`_fetch_runs:557-592`, export `:461`,
+- [x] **Título**: En `tenant_stats.py` (`_fetch_runs:557-592`, export `:461`,
       `_last_model_expr`, `_token_split:774-801`): seleccionar solo columnas
       escalares (o `deferred()` en `Execution.steps_log`, `domain.py:1058-1062`)
       y materializar `last_model`/`tokens_in`/`tokens_out` como columnas
@@ -791,6 +876,53 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
     consulta por N. Bajar ese pico pide streaming del cuerpo, que es otro
     contrato y otra tarea. Y en `runs_select` el `offset` NO degrada nada en el
     export: siempre vale 0.
+  - ✅ **Cerrada (2026-08-12): las columnas denormalizadas y su backfill son la
+    migración `0139_executions_steps_rollup`.** Este carril sí es dueño de las
+    migraciones, que era el bloqueo escrito arriba.
+    - `executions` gana `last_model` (TEXT), `tokens_in` y `tokens_out`
+      (BIGINT NOT NULL DEFAULT 0). Con eso, `_last_model_expr()` es **una
+      columna** en vez de una subconsulta correlacionada por fila, y
+      `_token_split()` suma dos columnas en vez de desenrollar el `steps_log` de
+      todos los runs del período — el 76 % del peso de la tabla. La función
+      `_last_model_expr` se conserva **a propósito** aunque ahora devuelva la
+      columna: es el punto único por el que volver atrás, y donde vive la
+      explicación.
+    - **Se escriben donde se escribe `steps_log`** (`db/execution_repo.py`:
+      `record_execution`, `finalize_execution` y la rama de la guarda de
+      idempotencia que refunde un log más rico). Ésa es la única propiedad que
+      impide que la proyección y su fuente se separen; un backfill sin escritor
+      sería correcto para el histórico y mentiroso desde el primer run nuevo, y
+      hay test de eso. En la guarda de idempotencia SÍ se recalculan, y conviene
+      tener escrito por qué no contradice su propósito: esa guarda protege los
+      roll-ups de `usage` (`total_tokens`, `total_cost_usd`), que no se tocan;
+      estas tres son una proyección de la columna que la propia guarda acaba de
+      reemplazar, y dejarlas rancias sería hacerlas mentir sobre lo que resumen.
+    - **El riesgo real no era fallar, era cambiar las cifras en silencio**, así
+      que el test que manda es el de EQUIVALENCIA: el backfill SQL contra
+      `steps_rollup()` en Python, sobre cuatro formas de `steps_log` cuyo
+      resultado no es obvio (índices desordenados, pasos que no son `model_call`
+      con tokens propios, un `model_call` sin modelo detrás del último con
+      modelo, y un run que nunca llamó a un modelo → NULL y ceros, no 0 y "").
+      El SQL se **carga del fichero de la migración**, no se copia al test.
+    - Verificado: `tests/integration/test_runs_listing_no_steps_log.py` 5/5 y
+      `tests/unit/test_execution_steps_rollup.py` 8/8. Rojo comprobado con dos
+      roturas a la vez —invertir el `ORDER BY … DESC` del backfill y quitar el
+      `apply_steps_rollup` de `record_execution`—: 2 fallos, uno por mitad.
+      El test de reversibilidad va **down → siembra → up**, así que prueba el
+      `downgrade` con datos dentro y no sobre una tabla vacía.
+    - **Lo que cuesta aplicarla, dicho aquí y no sólo en el docstring**: el
+      `ADD COLUMN` es de catálogo (PostgreSQL ≥ 11, default constante) y se
+      propaga a las particiones de la 0137; el **backfill es un UPDATE de toda
+      la tabla**, así que reescribe cada tupla con pasos y `executions` puede
+      llegar a ocupar el doble en disco hasta el siguiente `VACUUM`. No bloquea
+      lecturas. Medir antes con
+      `SELECT pg_size_pretty(pg_total_relation_size('executions'));` — en la
+      instancia de desarrollo son ~2 MiB y es instantáneo.
+    - **Queda fuera a propósito, y no es olvido**: el `LEFT JOIN LATERAL` gemelo
+      del leaderboard (`routers/runs.py:143-150`) hace lo mismo con el mismo
+      `steps_log`. Ahora es una sustitución de dos líneas por `e.last_model`,
+      pero `runs.py` es de otro carril y cambiarlo desde aquí es pedirle un
+      conflicto a quien lo esté tocando.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
