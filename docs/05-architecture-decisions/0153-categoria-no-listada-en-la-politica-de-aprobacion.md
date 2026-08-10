@@ -1,6 +1,6 @@
 ---
 title: "ADR 0153: Qué hace el gate con una categoría que la política no lista"
-status: proposed
+status: accepted
 date: 2026-08-01
 deciders: [operador]
 relates_to: [0016, 0020, 0102, 0104, 0135]
@@ -11,11 +11,16 @@ docs_language: es
 
 # ADR 0153: Qué hace el gate con una categoría que la política no lista
 
-> **Estado: `proposed`. Esto lo decide el operador, no yo.** Es una decisión de
-> producto con consecuencias operativas medibles en las dos direcciones: la
-> opción segura para y encola runs, y la opción cómoda deja pasar acciones
-> sensibles sin que nadie las vea. La escribo con las opciones y su coste, y la
-> dejo firmada por quien pueda asumir el resultado.
+> **Estado: `accepted` (firmado el 2026-08-02).** Opción (D): esqueletos completos
+> sobre las 13 canónicas, más la clave `unlisted_category`. Se tocan TODOS los
+> proyectos y solo cambia el comportamiento de los de producción — el detalle
+> está en § «Decisión del operador».
+>
+> Lo que sigue describe el problema tal como se planteó, y las opciones se
+> conservan íntegras: era una decisión de producto con consecuencias operativas
+> medibles en las dos direcciones —la opción segura para y encola runs, la
+> cómoda deja pasar acciones sensibles sin que nadie las vea—, y un ADR sin las
+> alternativas descartadas no deja auditar la decisión, solo obedecerla.
 
 ## El hecho que la motiva, y por qué no es teórico
 
@@ -164,6 +169,49 @@ Y una petición concreta al firmar: **decidir también qué pasa con los proyect
 que ya existen**. Migrar sus políticas cambia el comportamiento de runs en
 marcha; no migrarlas deja los huecos donde están. Ninguna de las dos es
 gratis, y elegir «no decidir» es elegir la segunda.
+
+## Decisión del operador (2026-08-02)
+
+**Opción (D)**: se completan los esqueletos de plantilla sobre las 13 canónicas
+**y** se añade la clave `unlisted_category`. Implementado y desplegado en el
+árbol; este documento llegó tarde a decirlo, que es el pecado que esta casa
+persigue — se corrige el 2026-08-10.
+
+### Sobre los proyectos que ya existen, que es lo que el ADR pedía decidir
+
+La primera propuesta separaba mal dos cosas y **lo corrigió el operador**:
+«completar» una política y «endurecerla» no son lo mismo. Dejar los proyectos de
+desarrollo sin tocar los habría dejado con cuatro categorías escritas, nueve
+implícitas y sin `unlisted_category` — o sea, su comportamiento decidido por un
+default del código en vez de por su política, que es exactamente el estado
+indefinido que este ADR venía a cerrar.
+
+Lo firmado:
+
+- **Se tocan TODOS los proyectos.** Al terminar, ninguna política tiene
+  categorías implícitas.
+- **Solo cambia el comportamiento de `production` y `customer-external`.** En
+  `development` y `sandbox` las categorías ausentes se escriben con `auto`, que
+  es lo que ya hacían de facto: la política pasa de implícita a explícita sin que
+  nada se comporte distinto.
+- La migración **0133** lo aplica con dry-run previo
+  (`api_server.cli audit-approval-policies`), y dos tests lo fijan: que no queda
+  ninguna política incompleta, y que los proyectos de desarrollo deciden
+  EXACTAMENTE lo mismo antes y después.
+
+### Y la decisión que se tomó de más, porque hacía falta
+
+Al revisar qué gatea de verdad cada categoría apareció que **solo 5 de las 13
+tienen alguna herramienta detrás**; las otras ocho no las puede disparar nada
+hoy. Con eso a la vista, el operador decidió además que
+**`external_http_post` pase a `auto` en el preset `development`**: esa categoría
+cubre TODAS las tools MCP del proyecto, que se dan de alta como `sandboxed`, así
+que gatearla haría que cada integración pidiese aprobación desde el primer día.
+
+El contrapeso queda escrito: `external_communication` y `data_migration` —las dos
+que SALEN del proyecto— sí se gatean en desarrollo. Y la tensión con el hallazgo
+g6 está anotada en
+`tests/unit/test_mcp_tool_approval_category.py`, no enterrada.
 
 ## Consecuencias si se acepta
 
