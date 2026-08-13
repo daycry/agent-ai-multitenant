@@ -499,6 +499,17 @@ testpaths = ["tests"]
 # `python -m pytest` worked because -m adds CWD.
 pythonpath = ["."]
 addopts = "-ra --strict-markers --strict-config"
+# pytest-asyncio 1.x avisa en cada corrida si este ámbito no se declara, porque
+# su default cambiará. Se fija a `session` —el comportamiento sobre el que está
+# escrito este arnés, con su BD de sesión— para que la subida no dependa de un
+# default futuro.
+#
+# OJO, para quien venga buscando: esto NO arregla los `duplicate key` de
+# `uq_agents_tenant_name_global_live` en tests/integration. Lo probé creyendo que
+# sí y no cambió nada. Esa rotura es de la migración 0126 (2026-07-30), que añadió
+# el índice único bajo tests que ya sembraban dos filas con el mismo
+# (tenant_id, name); se arregla en el sembrador, no aquí.
+asyncio_default_fixture_loop_scope = "session"
 # Avisos silenciados, uno a uno y con motivo (2026-07-28). La regla que se sigue
 # aquí: **solo se filtra lo que no podemos arreglar**. Un aviso propio se corrige
 # —el `on_event is deprecated` de FastAPI, que salía 33 veces por corrida de
