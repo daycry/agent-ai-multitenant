@@ -140,9 +140,9 @@ def test_claude_md_marks_empty_components_as_reserved(section: str) -> None:
         f"{section}: carpetas SIN código y sin anotar como reservadas "
         f"(el agente creerá que hay código donde solo hay .gitkeep): {lying_empty}"
     )
-    assert (
-        not lying_full
-    ), f"{section}: carpetas CON código anotadas como vacías/reservadas: {lying_full}"
+    assert not lying_full, (
+        f"{section}: carpetas CON código anotadas como vacías/reservadas: {lying_full}"
+    )
 
 
 def test_claude_md_no_main_branch() -> None:
@@ -286,9 +286,9 @@ def test_roadmap_readme_count_matches_files() -> None:
         "el README ya no declara el recuento de planes de construcción "
         "(o cambió el formato `**N planes de construcción**`)"
     )
-    assert (
-        int(declared.group(1)) == real
-    ), f"README dice {declared.group(1)} planes de construcción; en disco hay {real}"
+    assert int(declared.group(1)) == real, (
+        f"README dice {declared.group(1)} planes de construcción; en disco hay {real}"
+    )
 
 
 def test_roadmap_readme_links_every_plan() -> None:
@@ -314,9 +314,9 @@ def test_execution_sequence_is_archived_not_authoritative() -> None:
     path = _ROADMAP / "EXECUTION-SEQUENCE.md"
     text = path.read_text(encoding="utf-8")
     front = text.split("---", 2)[1]
-    assert re.search(
-        r"^status:\s*(obsolete|archived)\s*$", front, re.M
-    ), "EXECUTION-SEQUENCE.md debe declararse obsolete/archived en su frontmatter"
+    assert re.search(r"^status:\s*(obsolete|archived)\s*$", front, re.M), (
+        "EXECUTION-SEQUENCE.md debe declararse obsolete/archived en su frontmatter"
+    )
     assert "se actualiza al cerrar cada ola" not in text, (
         "EXECUTION-SEQUENCE.md sigue prometiendo actualizarse por ola: esa "
         "promesa es la que lo dejó mintiendo 8 fases"

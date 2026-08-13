@@ -148,9 +148,9 @@ def test_no_panel_queries_a_metric_nobody_emits() -> None:
                     continue
                 unknown.setdefault(f"{name}:{panel_title}", set()).add(token)
 
-    assert (
-        not unknown
-    ), f"paneles que consultan métricas que nadie emite (pintarán «No data»): {unknown}"
+    assert not unknown, (
+        f"paneles que consultan métricas que nadie emite (pintarán «No data»): {unknown}"
+    )
 
 
 def test_the_platform_dashboard_shows_api_server_health() -> None:
@@ -164,9 +164,9 @@ def test_the_platform_dashboard_shows_api_server_health() -> None:
         "el dashboard «Plataforma» no pinta las peticiones HTTP del api-server: "
         "el exporter de la Fase B no se ve en ningún sitio"
     )
-    assert (
-        "agentic_http_request_duration_seconds_bucket" in all_exprs
-    ), "falta la latencia (p95) del api-server"
+    assert "agentic_http_request_duration_seconds_bucket" in all_exprs, (
+        "falta la latencia (p95) del api-server"
+    )
 
 
 def test_the_platform_dashboard_shows_what_the_new_alerts_watch() -> None:
@@ -179,9 +179,9 @@ def test_the_platform_dashboard_shows_what_the_new_alerts_watch() -> None:
     dashboard = next(d for name, d in _dashboards() if "agentic-platform" in name)
     all_exprs = " ".join(expr for _title, expr in _exprs(dashboard))
 
-    assert (
-        "agentic_human_approvals_pending" in all_exprs
-    ), "sin panel de aprobaciones pendientes: HumanApprovalsStale no tiene dónde mirarse"
+    assert "agentic_human_approvals_pending" in all_exprs, (
+        "sin panel de aprobaciones pendientes: HumanApprovalsStale no tiene dónde mirarse"
+    )
     assert "agentic_celery_tasks_total" in all_exprs, (
         "sin panel de resultado de tareas Celery: la profundidad de cola no "
         "distingue un worker sano de uno que falla el 100% de lo que saca"

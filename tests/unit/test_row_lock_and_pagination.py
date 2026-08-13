@@ -117,9 +117,9 @@ def test_human_action_locks_the_task_row() -> None:
     source = Path("apps/api-server/src/api_server/routers/task_lifecycle.py").read_text(
         encoding="utf-8"
     )
-    assert (
-        "select(Task).where(Task.id == task_id).with_for_update()" in source
-    ), "apply_human_action volvió a leer la task sin FOR UPDATE (api-10)"
+    assert "select(Task).where(Task.id == task_id).with_for_update()" in source, (
+        "apply_human_action volvió a leer la task sin FOR UPDATE (api-10)"
+    )
     # El plan ya se leía bloqueado desde antes; que siga así.
     assert "with_for_update=True" in source
 
@@ -166,9 +166,9 @@ def test_listing_endpoints_accept_bounded_limit_and_offset(module: str, func_nam
         }
 
     limit_bounds = _bounds(params["limit"].default)
-    assert (
-        limit_bounds.get("le") == MAX_PAGE_SIZE
-    ), f"{func_name}.limit no está acotado por MAX_PAGE_SIZE: {limit_bounds}"
+    assert limit_bounds.get("le") == MAX_PAGE_SIZE, (
+        f"{func_name}.limit no está acotado por MAX_PAGE_SIZE: {limit_bounds}"
+    )
     assert limit_bounds.get("ge") == 1, limit_bounds
     assert _bounds(params["offset"].default).get("ge") == 0
 
@@ -195,9 +195,9 @@ def test_citations_query_does_not_select_the_embedding_vector() -> None:
     source = Path("apps/api-server/src/api_server/routers/knowledge_bases.py").read_text(
         encoding="utf-8"
     )
-    assert (
-        "select(Chunk).where(Chunk.document_id == document_id)" not in source
-    ), "el visor de citas volvió a seleccionar la entidad Chunk completa (perf-8)"
+    assert "select(Chunk).where(Chunk.document_id == document_id)" not in source, (
+        "el visor de citas volvió a seleccionar la entidad Chunk completa (perf-8)"
+    )
 
 
 def test_citations_default_page_is_the_hard_maximum_not_the_soft_one() -> None:

@@ -318,10 +318,10 @@ class DepCacheManager:
 
 
 __all__ = [
-    "CacheEntry",
     "DEFAULT_TTL_SECONDS",
+    "RUNTIME_LOCK_FILES",
+    "CacheEntry",
     "DepCacheManager",
     "LockHashResult",
-    "RUNTIME_LOCK_FILES",
     "compute_lock_hash",
 ]

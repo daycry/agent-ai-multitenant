@@ -91,9 +91,9 @@ def test_the_guard_actually_discovers_something() -> None:
 
     assert len(gates) >= 5, f"la guarda dejó de encontrar las puertas de deps.py (vio {gates})"
     assert len(sources) >= 100, f"la guarda dejó de encontrar el código de app (vio {len(sources)})"
-    assert (
-        sum(usages.values()) >= 50
-    ), f"la guarda dejó de encontrar usos de las puertas (vio {usages})"
+    assert sum(usages.values()) >= 50, (
+        f"la guarda dejó de encontrar usos de las puertas (vio {usages})"
+    )
 
 
 def test_no_authorization_gate_is_without_callers() -> None:

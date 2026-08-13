@@ -196,7 +196,7 @@ def test_the_mfa_break_glass_is_documented_with_the_exact_setting() -> None:
     runbook = _runbook()
     assert "API_SERVER_ADMIN_REQUIRE_MFA=false" in runbook
     assert "API_SERVER_ADMIN_REQUIRE_MFA=true" in runbook, (
-        "the break-glass must also say to turn it back ON — that is the step " "people forget"
+        "the break-glass must also say to turn it back ON — that is the step people forget"
     )
 
 

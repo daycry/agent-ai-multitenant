@@ -189,8 +189,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             (ids["project_b"], ids["tenant_b"], ids["team_b"], "API B1", "api-b1"),
         ):
             await conn.execute(
-                "INSERT INTO projects (id, tenant_id, team_id, name, slug)"
-                " VALUES ($1,$2,$3,$4,$5)",
+                "INSERT INTO projects (id, tenant_id, team_id, name, slug) VALUES ($1,$2,$3,$4,$5)",
                 project,
                 tenant,
                 team,

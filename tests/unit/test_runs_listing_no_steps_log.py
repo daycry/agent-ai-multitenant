@@ -79,9 +79,9 @@ def test_the_select_does_not_load_the_execution_entity() -> None:
     # que construye una expresión SQL en vez de responder sí o no.
     exprs = [desc["expr"] for desc in stmt.column_descriptions]
     loads_entity = any(expr is Execution for expr in exprs)
-    assert (
-        not loads_entity
-    ), "el SELECT carga la entidad Execution entera: vuelve a arrastrar steps_log"
+    assert not loads_entity, (
+        "el SELECT carga la entidad Execution entera: vuelve a arrastrar steps_log"
+    )
 
 
 def test_every_column_the_row_needs_is_selected() -> None:

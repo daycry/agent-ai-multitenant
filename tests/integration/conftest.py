@@ -55,13 +55,11 @@ async def _drop_create_db() -> None:
     conn = await asyncpg.connect(_admin_dsn(db="postgres"))
     try:
         # Disconnect anyone still on the test DB (idempotent).
-        await conn.execute(
-            f"""
+        await conn.execute(f"""
             SELECT pg_terminate_backend(pid)
               FROM pg_stat_activity
              WHERE datname = '{PG_TEST_DB}' AND pid <> pg_backend_pid()
-            """
-        )
+            """)
         await conn.execute(f'DROP DATABASE IF EXISTS "{PG_TEST_DB}"')
         await conn.execute(f'CREATE DATABASE "{PG_TEST_DB}" OWNER "{PG_MIG_USER}"')
     finally:
@@ -120,21 +118,19 @@ async def _grant_app_user_existing_tables() -> None:
             f' ON ALL TABLES IN SCHEMA public TO "{PG_APP_USER}"'
         )
         await conn.execute(
-            "GRANT USAGE, SELECT" f' ON ALL SEQUENCES IN SCHEMA public TO "{PG_APP_USER}"'
+            f'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "{PG_APP_USER}"'
         )
         for table in _APP_REVOKED_TABLES:
             # `to_regclass` porque el retro-grant corre también sobre esquemas a
             # medio migrar, donde la tabla puede no existir todavía.
-            await conn.execute(
-                f"""
+            await conn.execute(f"""
                 DO $$
                 BEGIN
                     IF to_regclass('public.{table}') IS NOT NULL THEN
                         EXECUTE 'REVOKE ALL ON TABLE public.{table} FROM "{PG_APP_USER}"';
                     END IF;
                 END $$;
-                """
-            )
+                """)
     finally:
         await conn.close()
 
@@ -142,13 +138,11 @@ async def _grant_app_user_existing_tables() -> None:
 async def _drop_db() -> None:
     conn = await asyncpg.connect(_admin_dsn(db="postgres"))
     try:
-        await conn.execute(
-            f"""
+        await conn.execute(f"""
             SELECT pg_terminate_backend(pid)
               FROM pg_stat_activity
              WHERE datname = '{PG_TEST_DB}' AND pid <> pg_backend_pid()
-            """
-        )
+            """)
         await conn.execute(f'DROP DATABASE IF EXISTS "{PG_TEST_DB}"')
     finally:
         await conn.close()
@@ -167,9 +161,7 @@ def test_database_url() -> Iterator[str]:
     its own throwaway database (worker-id-suffixed name) before enabling ``-n``.
     """
     asyncio.run(_drop_create_db())
-    url = (
-        f"postgresql+asyncpg://{PG_MIG_USER}:{PG_MIG_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
-    )
+    url = f"postgresql+asyncpg://{PG_MIG_USER}:{PG_MIG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
     try:
         yield url
     finally:
@@ -203,16 +195,14 @@ def admin_pg_dsn() -> str:
 def migrations_pg_dsn() -> str:
     """DSN as migrations_user — has BYPASSRLS, used to seed test data
     bypassing RLS policies."""
-    return f"postgresql://{PG_MIG_USER}:{PG_MIG_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    return f"postgresql://{PG_MIG_USER}:{PG_MIG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
 
 @pytest.fixture()
 def app_database_url() -> str:
     """SQLAlchemy URL as app_user (NOBYPASSRLS). Use this for the
     FastAPI app under test so it goes through RLS like in production."""
-    return (
-        f"postgresql+asyncpg://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
-    )
+    return f"postgresql+asyncpg://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
 
 @pytest.fixture()
@@ -220,9 +210,7 @@ def admin_database_url() -> str:
     """SQLAlchemy URL as migrations_user (BYPASSRLS). Used by /admin/*
     endpoints so System Admin can read across tenants and write
     audit_log rows with tenant_id IS NULL."""
-    return (
-        f"postgresql+asyncpg://{PG_MIG_USER}:{PG_MIG_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
-    )
+    return f"postgresql+asyncpg://{PG_MIG_USER}:{PG_MIG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
 
 @pytest.fixture()

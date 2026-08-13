@@ -96,8 +96,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(
-        "DROP POLICY IF EXISTS approval_policy_templates_builtin_read"
-        " ON approval_policy_templates"
+        "DROP POLICY IF EXISTS approval_policy_templates_builtin_read ON approval_policy_templates"
     )
     op.execute(
         "DROP POLICY IF EXISTS approval_policy_templates_tenant_isolation"

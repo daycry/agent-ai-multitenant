@@ -54,7 +54,7 @@ def partition_name(table: str, first_of_month: date) -> str:
     return f"{table}_{first_of_month.year:04d}_{first_of_month.month:02d}"
 
 
-def run(coro: Awaitable[T]) -> T:
+def run[T](coro: Awaitable[T]) -> T:
     """`asyncio.run` sobre una corrutina ya construida (azúcar para los tests)."""
     return asyncio.run(coro)  # type: ignore[arg-type]
 
@@ -63,7 +63,7 @@ async def connect(dsn: str) -> asyncpg.Connection:
     return await asyncpg.connect(dsn)
 
 
-async def with_connection(dsn: str, body: Callable[[asyncpg.Connection], Awaitable[T]]) -> T:
+async def with_connection[T](dsn: str, body: Callable[[asyncpg.Connection], Awaitable[T]]) -> T:
     conn = await connect(dsn)
     try:
         return await body(conn)

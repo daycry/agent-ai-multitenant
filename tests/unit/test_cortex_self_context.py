@@ -71,10 +71,9 @@ def _excited_affect() -> AffectState:
 # trait_style_guidance — bandas Big-Five → estilo; banda neutra silenciosa
 # ---------------------------------------------------------------------------
 def test_traits_neutros_no_emiten_nada() -> None:
-    neutral = {
-        t: 0.5
-        for t in ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism")
-    }
+    neutral = dict.fromkeys(
+        ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"), 0.5
+    )
     assert trait_style_guidance(neutral) == ()
 
 

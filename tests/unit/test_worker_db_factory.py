@@ -96,9 +96,9 @@ async def test_worker_sessionmaker_yields_bound_factory_and_disposes() -> None:
         assert isinstance(engine.pool, NullPool)
         pool_before = engine.sync_engine.pool
 
-    assert (
-        engine.sync_engine.pool is not pool_before
-    ), "el engine debe quedar dispuesto al salir del `async with`"
+    assert engine.sync_engine.pool is not pool_before, (
+        "el engine debe quedar dispuesto al salir del `async with`"
+    )
 
 
 @pytest.mark.asyncio

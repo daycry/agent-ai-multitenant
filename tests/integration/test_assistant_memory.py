@@ -41,7 +41,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             tenant,
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3), ($4, $5, $6)",
             admin_a,
             "admin-a@mem.test",
             "argon2-placeholder",

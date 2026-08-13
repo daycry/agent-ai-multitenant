@@ -162,8 +162,7 @@ def diff_metrics(
     """
     if pass_rate_regression_threshold < 0:
         raise ValueError(
-            f"pass_rate_regression_threshold must be >= 0, "
-            f"got {pass_rate_regression_threshold!r}"
+            f"pass_rate_regression_threshold must be >= 0, got {pass_rate_regression_threshold!r}"
         )
 
     pass_rate_delta = _delta(base.pass_rate, candidate.pass_rate)

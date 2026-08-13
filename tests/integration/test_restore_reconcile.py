@@ -138,8 +138,7 @@ async def _seed(sm: async_sessionmaker, *, plan_status: str, plan_slug: str) -> 
         )
         await s.execute(
             text(
-                "INSERT INTO projects (id, tenant_id, name, slug)"
-                " VALUES (:p, :t, 'Proyecto', :sl)"
+                "INSERT INTO projects (id, tenant_id, name, slug) VALUES (:p, :t, 'Proyecto', :sl)"
             ),
             {"p": project, "t": tenant, "sl": f"proyecto-{project.hex[:8]}"},
         )
@@ -233,7 +232,7 @@ async def _run(
 async def test_a_consistent_restore_reports_no_divergences(
     _migrated: None, admin_database_url: str, tmp_path: Path
 ) -> None:
-    report, branch = await _run(admin_database_url, tmp_path)
+    report, _branch = await _run(admin_database_url, tmp_path)
     assert report.ok, report.render()
     assert report.divergences == ()
     assert report.exit_code == 0
@@ -252,7 +251,7 @@ async def test_a_consistent_restore_reports_no_divergences(
 async def test_a_document_without_its_blob_is_critical(
     _migrated: None, admin_database_url: str, tmp_path: Path
 ) -> None:
-    report, branch = await _run(admin_database_url, tmp_path, blob_present=False)
+    report, _branch = await _run(admin_database_url, tmp_path, blob_present=False)
     assert not report.ok
     assert report.exit_code == 1
     assert [d.check for d in report.critical] == ["db<->minio"]
@@ -266,7 +265,7 @@ async def test_an_orphan_blob_is_only_a_warning(
 ) -> None:
     """Basura, no pérdida: el GC de conocimiento la barre. Marcarlo como crítico
     haría que un DR perfectamente válido pareciese fallido."""
-    report, branch = await _run(
+    report, _branch = await _run(
         admin_database_url,
         tmp_path,
         extra_blobs=(f"kb/{uuid4()}/{uuid4()}/{uuid4()}/fantasma.pdf",),
@@ -281,7 +280,7 @@ async def test_an_orphan_blob_is_only_a_warning(
 async def test_a_provider_pointing_at_a_missing_vault_secret_is_critical(
     _migrated: None, admin_database_url: str, tmp_path: Path
 ) -> None:
-    report, branch = await _run(admin_database_url, tmp_path, vault_present=False)
+    report, _branch = await _run(admin_database_url, tmp_path, vault_present=False)
     assert not report.ok
     assert [d.check for d in report.critical] == ["db<->vault"]
     assert "primer run" in report.critical[0].detail
@@ -307,7 +306,7 @@ async def test_a_project_without_any_repo_is_critical(
 ) -> None:
     """El fallo que tenía el restore hasta prod-04: `bind_tar` y `projects_tar`
     se respaldaban y NO se extraían, así que el árbol de repos venía vacío."""
-    report, branch = await _run(admin_database_url, tmp_path, repo_present=False)
+    report, _branch = await _run(admin_database_url, tmp_path, repo_present=False)
     assert not report.ok
     assert "ningún bare repo" in report.critical[0].detail
 
@@ -320,7 +319,7 @@ async def test_a_finished_plan_without_a_branch_is_not_a_divergence(
     """Solo se exige rama a los planes ACTIVOS. Un plan completado hace meses
     puede tener su rama mergeada y borrada, y eso es lo normal — reportarlo
     llenaría el informe de ruido y enseñaría a ignorarlo."""
-    report, branch = await _run(
+    report, _branch = await _run(
         admin_database_url, tmp_path, plan_status="completed", branch_present=False
     )
     assert report.ok, report.render()
@@ -358,9 +357,9 @@ async def test_a_missing_probe_is_reported_as_skipped_not_as_ok(
 
     assert set(report.checks_skipped) == {"db<->minio", "db<->vault"}
     assert report.checks_run == ("db<->git",)
-    assert (
-        "omitidas" in report.render()
-    ), "un informe que no dice qué NO comprobó se lee como si lo hubiera comprobado todo"
+    assert "omitidas" in report.render(), (
+        "un informe que no dice qué NO comprobó se lee como si lo hubiera comprobado todo"
+    )
 
 
 # --------------------------------------------------------------------------- #

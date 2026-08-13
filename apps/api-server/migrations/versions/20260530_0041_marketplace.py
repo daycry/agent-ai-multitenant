@@ -86,11 +86,9 @@ _RLS_UP: tuple[str, ...] = (
 )
 
 _RLS_DOWN: tuple[str, ...] = (
-    "DROP POLICY IF EXISTS marketplace_audit_entries_tenant_isolation"
-    " ON marketplace_audit_entries",
+    "DROP POLICY IF EXISTS marketplace_audit_entries_tenant_isolation ON marketplace_audit_entries",
     "ALTER TABLE marketplace_audit_entries DISABLE ROW LEVEL SECURITY",
-    "DROP POLICY IF EXISTS marketplace_installations_tenant_isolation"
-    " ON marketplace_installations",
+    "DROP POLICY IF EXISTS marketplace_installations_tenant_isolation ON marketplace_installations",
     "ALTER TABLE marketplace_installations DISABLE ROW LEVEL SECURITY",
     "DROP POLICY IF EXISTS marketplace_listings_global_read ON marketplace_listings",
     "DROP POLICY IF EXISTS marketplace_listings_tenant_isolation ON marketplace_listings",

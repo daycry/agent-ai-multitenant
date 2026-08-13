@@ -40,11 +40,10 @@ async def _seed(dsn: str) -> dict[str, UUID]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "TRUNCATE projects, user_org_memberships, organizations, users"
-            " RESTART IDENTITY CASCADE"
+            "TRUNCATE projects, user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
             tenant_a,
             "Tenant A",
             "tenant-a",

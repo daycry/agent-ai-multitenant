@@ -64,7 +64,7 @@ class _ResolverCache:
     a `global` keyword) so ruff PLW0603 stays happy and the test reset
     hook reads cleanly."""
 
-    value: VaultResolver | None | object = _UNSET
+    value: VaultResolver | object | None = _UNSET
 
 
 def get_vault_resolver() -> VaultResolver | None:

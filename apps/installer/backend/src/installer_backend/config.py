@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import (
@@ -112,7 +112,7 @@ def _is_valid_host(value: str) -> bool:
 # ---------------------------------------------------------------------------
 # Step 2 — system basics.
 # ---------------------------------------------------------------------------
-class Environment(str, Enum):
+class Environment(StrEnum):
     """Deployment environment profile. Drives defaults + hardening posture."""
 
     DEVELOPMENT = "development"
@@ -306,7 +306,7 @@ class StorageConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # Step 5 — LLM providers (the four ADR-0021 paths).
 # ---------------------------------------------------------------------------
-class LLMProviderKind(str, Enum):
+class LLMProviderKind(StrEnum):
     """The four supported provider paths — closed catalogue (ADR 0021)."""
 
     CLAUDE_SDK = "claude_sdk"

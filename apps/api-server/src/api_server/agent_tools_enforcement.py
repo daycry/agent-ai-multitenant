@@ -551,8 +551,7 @@ def compute_effective_tools(
             continue
         if not _wired(name):
             warnings.append(
-                f"tool '{name}' asignada pero no ejecutable en el runtime "
-                "(sin executor cableado)"
+                f"tool '{name}' asignada pero no ejecutable en el runtime (sin executor cableado)"
             )
             warnings_i18n.append(
                 ToolWarning(

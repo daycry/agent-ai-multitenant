@@ -418,7 +418,7 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         slug="reviewer",
         name="Code Reviewer",
         description=(
-            "Revisa PRs con foco en correctness, multi-tenancy, " "seguridad y mantenibilidad."
+            "Revisa PRs con foco en correctness, multi-tenancy, seguridad y mantenibilidad."
         ),
         role="reviewer",
         memory_scope="project_shared",
@@ -513,8 +513,7 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
 # ---------------------------------------------------------------------------
 # Seed entry point
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO agents (
         id, tenant_id, name, description, agent_type, role,
         system_prompt, model_config, memory_scope, review_capability,
@@ -536,8 +535,7 @@ _UPSERT_SQL = text(
         review_capability = EXCLUDED.review_capability,
         max_concurrent_tasks = EXCLUDED.max_concurrent_tasks,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def seed_builtin_agents(session: AsyncSession) -> int:
@@ -569,21 +567,17 @@ async def seed_builtin_agents(session: AsyncSession) -> int:
 # agent_skills point at agents.id and skills.id. Skill ids are resolved by the
 # same stable uuid5(slug) the skills seed uses, so the link is deterministic
 # and survives a re-seed (idempotent upsert + stale-row cleanup).
-_UPSERT_AGENT_SKILL_SQL = text(
-    """
+_UPSERT_AGENT_SKILL_SQL = text("""
     INSERT INTO agent_skills (agent_id, skill_id)
     VALUES (:agent_id, :skill_id)
     ON CONFLICT (agent_id, skill_id) DO UPDATE SET updated_at = now()
-    """
-)
+    """)
 
-_DELETE_STALE_AGENT_SKILLS_SQL = text(
-    """
+_DELETE_STALE_AGENT_SKILLS_SQL = text("""
     DELETE FROM agent_skills
      WHERE agent_id = :agent_id
        AND skill_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
 async def seed_builtin_agent_skills(session: AsyncSession) -> int:
@@ -609,20 +603,16 @@ async def seed_builtin_agent_skills(session: AsyncSession) -> int:
     return links
 
 
-_UPSERT_AGENT_TOOL_SQL = text(
-    """
+_UPSERT_AGENT_TOOL_SQL = text("""
     INSERT INTO agent_tools (agent_id, tool_id)
     VALUES (:agent_id, :tool_id)
     ON CONFLICT (agent_id, tool_id) DO UPDATE SET updated_at = now()
-    """
-)
-_DELETE_STALE_AGENT_TOOLS_SQL = text(
-    """
+    """)
+_DELETE_STALE_AGENT_TOOLS_SQL = text("""
     DELETE FROM agent_tools
      WHERE agent_id = :agent_id
        AND tool_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
 async def seed_builtin_agent_tools(session: AsyncSession) -> int:

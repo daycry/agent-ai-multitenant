@@ -42,9 +42,7 @@ async def apply_template_kb_grants(
     """
     row = (
         await session.execute(
-            text(
-                "SELECT default_kb_grants FROM projects" " WHERE id = :tid AND is_template = true"
-            ),
+            text("SELECT default_kb_grants FROM projects WHERE id = :tid AND is_template = true"),
             {"tid": str(template_id)},
         )
     ).first()
@@ -57,7 +55,7 @@ async def apply_template_kb_grants(
         # Skip slugs whose KB row doesn't exist in this DB.
         kb_exists = (
             await session.execute(
-                text("SELECT 1 FROM knowledge_bases" " WHERE id = :kid AND deleted_at IS NULL"),
+                text("SELECT 1 FROM knowledge_bases WHERE id = :kid AND deleted_at IS NULL"),
                 {"kid": str(kb_id)},
             )
         ).scalar_one_or_none()

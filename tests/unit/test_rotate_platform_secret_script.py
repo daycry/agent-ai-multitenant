@@ -181,9 +181,9 @@ def test_the_services_are_restarted_after_the_env_is_rewritten(tmp_path: Path) -
 
     assert result.returncode == 0, result.stderr
     lines = log.read_text(encoding="utf-8").splitlines()
-    assert any(
-        "up -d" in line or " up " in line for line in lines
-    ), f"no reinició ningún servicio: {lines}"
+    assert any("up -d" in line or " up " in line for line in lines), (
+        f"no reinició ningún servicio: {lines}"
+    )
 
 
 def test_minio_revocation_happens_only_after_the_restart(tmp_path: Path) -> None:
@@ -240,9 +240,9 @@ def test_an_unknown_secret_name_is_refused(tmp_path: Path) -> None:
     result, _, log = _run(tmp_path, "postgres", "--yes")
 
     assert result.returncode != 0
-    assert " up " not in log.read_text(
-        encoding="utf-8"
-    ), "reinició servicios pese a no saber qué rotar"
+    assert " up " not in log.read_text(encoding="utf-8"), (
+        "reinició servicios pese a no saber qué rotar"
+    )
 
 
 def test_a_missing_env_file_is_refused_before_anything_happens() -> None:
@@ -266,6 +266,6 @@ def test_the_runbook_points_at_the_script() -> None:
     runbook = (_REPO_ROOT / "docs" / "06-runbooks" / "05-key-rotation.md").read_text(
         encoding="utf-8"
     )
-    assert (
-        "rotate-platform-secret.sh" in runbook
-    ), "el runbook de rotación no menciona el script de propagación"
+    assert "rotate-platform-secret.sh" in runbook, (
+        "el runbook de rotación no menciona el script de propagación"
+    )

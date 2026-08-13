@@ -195,7 +195,7 @@ def _files(directory: Path) -> list[str]:
 # (1) El default: cifrado, y NADA en claro
 # ---------------------------------------------------------------------------
 def test_default_mode_encrypts_and_writes_no_plaintext(tmp_path: Path) -> None:
-    result, outdir, log = _run(
+    result, outdir, _log = _run(
         tmp_path, env_extra={"VAULT_INIT_RECIPIENT": "age1fakerecipientfortests"}
     )
 
@@ -342,7 +342,7 @@ def test_script_source_has_no_plaintext_secret_files() -> None:
     body = "\n".join(code)
     for forbidden in ("unseal-keys.txt", "root-token.txt", "init-response.json"):
         assert forbidden not in body, (
-            f"el script vuelve a mencionar {forbidden}: alguna ruta escribe " "secretos en claro"
+            f"el script vuelve a mencionar {forbidden}: alguna ruta escribe secretos en claro"
         )
 
 

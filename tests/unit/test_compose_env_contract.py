@@ -228,9 +228,9 @@ def test_internal_token_secret_differs_from_the_jwt_secret() -> None:
     comprometer el worker volvería a permitir firmar sesiones— sin que nada
     avisara, así que el instalador debe generar material independiente."""
     dotenv = build_env_vars(_prod_config(), generate_secrets(), monitoring=False)
-    assert (
-        dotenv["API_SERVER_INTERNAL_TOKEN_SECRET"] != dotenv["API_SERVER_JWT_SECRET"]
-    ), "el instalador emite el MISMO secreto para sesiones y tokens internos"
+    assert dotenv["API_SERVER_INTERNAL_TOKEN_SECRET"] != dotenv["API_SERVER_JWT_SECRET"], (
+        "el instalador emite el MISMO secreto para sesiones y tokens internos"
+    )
 
 
 @pytest.mark.parametrize("env_profile", list(Environment))

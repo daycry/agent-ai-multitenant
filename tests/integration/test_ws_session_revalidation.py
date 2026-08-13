@@ -115,7 +115,7 @@ def _fast_revalidation(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
     class _S:
         ws_session_revalidate_seconds = seconds
 
-    monkeypatch.setattr(ws_mod, "get_settings", lambda: _S())
+    monkeypatch.setattr(ws_mod, "get_settings", _S)
 
 
 async def _run_pump(ws: _FakeWebSocket, **kwargs: Any) -> None:

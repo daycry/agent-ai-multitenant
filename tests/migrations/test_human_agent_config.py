@@ -321,7 +321,7 @@ def test_assignment_mode_defaults_to_specific_user(
     asyncio.run(
         _execute(
             migrations_pg_dsn,
-            "INSERT INTO human_agent_config (id, tenant_id, agent_id)" " VALUES ($1, $2, $3)",
+            "INSERT INTO human_agent_config (id, tenant_id, agent_id) VALUES ($1, $2, $3)",
             config_id,
             tenant_id,
             agent_id,
@@ -393,7 +393,7 @@ def test_rls_blocks_cross_tenant_insert(alembic_config: object, migrations_pg_ds
         try:
             await conn.execute("SELECT set_config('app.tenant_id', $1, false)", str(tenant_b))
             await conn.execute(
-                "INSERT INTO human_agent_config (id, tenant_id, agent_id)" " VALUES ($1, $2, $3)",
+                "INSERT INTO human_agent_config (id, tenant_id, agent_id) VALUES ($1, $2, $3)",
                 uuid7(),
                 tenant_a,  # tenant A row while pinned to tenant B -> rejected
                 agent_id,

@@ -73,7 +73,7 @@ def test_docling_mcp_block_kept_commented_with_explanation() -> None:
         "readers see it was intentional, not forgotten."
     )
     assert "docling-mcp-no-public-image.md" in raw, (
-        "The commented-out block must reference the gotcha file so the " "reason is one click away."
+        "The commented-out block must reference the gotcha file so the reason is one click away."
     )
 
 

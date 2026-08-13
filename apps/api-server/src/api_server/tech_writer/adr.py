@@ -51,7 +51,7 @@ ADR_FIRST_NUMBER: int = 1
 #: ``0030-catalog-ingestion-build-time-seed.md`` → ``0030``. The number must
 #: be followed by a ``-`` (the slug separator) so a stray ``README.md`` or a
 #: non-conforming name is ignored by :func:`next_adr_number`.
-_ADR_FILENAME_RE = re.compile(r"^(\d{%d,})-.+\.md$" % ADR_NUMBER_WIDTH)
+_ADR_FILENAME_RE = re.compile(rf"^(\d{{{ADR_NUMBER_WIDTH},}})-.+\.md$")
 
 # --- section headings (named, not magic) -----------------------------------
 

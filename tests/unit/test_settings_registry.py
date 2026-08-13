@@ -89,7 +89,7 @@ def test_unknown_category_raises() -> None:
 def test_unknown_key_in_known_category_raises() -> None:
     from api_server.settings_registry import UnknownSettingError, validate_setting_value
 
-    with pytest.raises(UnknownSettingError, match="memories.'not-a-key'"):
+    with pytest.raises(UnknownSettingError, match=r"memories.'not-a-key'"):
         validate_setting_value("memories", "not-a-key", 1)
 
 

@@ -121,6 +121,6 @@ async def test_soft_timeout_with_cancel_flag_is_cancelled_no_dlq(
     was_cancel = await _finalize_soft_timeout(workers_settings, request)  # type: ignore[arg-type]
 
     assert was_cancel is True  # → el caller NO manda al DLQ (fue un cancel)
-    status, abort_code, done = await _status(migrations_pg_dsn, ids["exec"])
+    status, _abort_code, done = await _status(migrations_pg_dsn, ids["exec"])
     assert status == "cancelled"
     assert done is True

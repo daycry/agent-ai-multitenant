@@ -322,10 +322,10 @@ class OIDCFlow:
 
 __all__ = [
     "DEFAULT_GROUPS_CLAIM",
+    "OPENID_SCOPE",
     "OIDCDiscovery",
     "OIDCError",
     "OIDCFlow",
     "OIDCUserInfo",
-    "OPENID_SCOPE",
     "ResolvedOIDCConfig",
 ]

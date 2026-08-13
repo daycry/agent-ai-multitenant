@@ -108,8 +108,7 @@ async def _seed_turn(dsn: str, *, cortex_text: str = "Hola owner.") -> dict[str,
             "h",
         )
         await conn.execute(
-            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id)"
-            " VALUES ($1, $2, $3)",
+            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id) VALUES ($1, $2, $3)",
             conv_id,
             owner_id,
             tenant_id,

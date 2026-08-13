@@ -124,8 +124,7 @@ def _dedup_latest_wins(table: str, group_by: Sequence[str], where: str) -> None:
     """
     partition = ", ".join(group_by)
     op.get_bind().execute(
-        sa.text(
-            f"""
+        sa.text(f"""
             WITH ranked AS (
                 SELECT id,
                        row_number() OVER (
@@ -139,8 +138,7 @@ def _dedup_latest_wins(table: str, group_by: Sequence[str], where: str) -> None:
                SET deleted_at = now()
               FROM ranked r
              WHERE t.id = r.id AND r.rn > 1
-            """
-        )
+            """)
     )
 
 

@@ -203,14 +203,14 @@ def test_cortex_conversations_has_enable_force_and_owner_policy(migrated: str) -
     assert meta["force"] is True, "cortex_conversations sin FORCE ROW LEVEL SECURITY"
 
     policies = {p[0]: (p[1], p[2]) for p in meta["policies"]}  # type: ignore[union-attr]
-    assert (
-        "cortex_conversations_owner_only" in policies
-    ), f"falta la policy owner-only; hay {sorted(policies)}"
+    assert "cortex_conversations_owner_only" in policies, (
+        f"falta la policy owner-only; hay {sorted(policies)}"
+    )
     using, with_check = policies["cortex_conversations_owner_only"]
     assert using and "app.user_id" in using, f"USING no cuelga de app.user_id: {using!r}"
-    assert (
-        with_check and "app.user_id" in with_check
-    ), f"WITH CHECK no cuelga de app.user_id: {with_check!r}"
+    assert with_check and "app.user_id" in with_check, (
+        f"WITH CHECK no cuelga de app.user_id: {with_check!r}"
+    )
     # Y el eje NO es el tenant: si alguien "arregla" esto cambiando el
     # predicado, el hilo del owner se volvería legible para el tenant entero.
     assert "app.tenant_id" not in (using or ""), (
@@ -268,7 +268,7 @@ def test_the_tenant_guc_does_not_open_another_owners_thread(
     app_dsn = _plain_dsn(app_database_url)
     seen = asyncio.run(_titles_as_app_user(app_dsn, user_id=seed.owner_b, tenant_id=seed.tenant_a))
     assert seen == ["hilo del owner B"], (
-        "con el app.tenant_id del hilo ajeno, el owner B vio: " f"{seen}"
+        f"con el app.tenant_id del hilo ajeno, el owner B vio: {seen}"
     )
 
 
@@ -353,9 +353,10 @@ def test_the_real_cortex_path_still_sees_its_whole_history(migrated: str) -> Non
         " owner-only de la 0125 le aplica, y ningún camino del córtex fija"
         " `app.user_id`. Cablea el GUC antes de quitar el BYPASSRLS."
     )
-    assert seen == ["hilo del owner A", "hilo del owner B"], (
-        "la sesión BYPASSRLS del córtex dejó de ver su historial con la RLS" f" activa: {seen}"
-    )
+    assert seen == [
+        "hilo del owner A",
+        "hilo del owner B",
+    ], f"la sesión BYPASSRLS del córtex dejó de ver su historial con la RLS activa: {seen}"
 
 
 # ===========================================================================
@@ -387,9 +388,9 @@ def test_migration_round_trip_restores_and_reapplies(
         ], "el downgrade dejó la policy huérfana"
         for table in ("review_sessions", "task_audit_events", "tenant_settings"):
             assert cat[table]["force"] is False, f"el downgrade dejó FORCE en {table}"
-            assert (
-                cat[table]["rls"] is True
-            ), f"el downgrade apagó la RLS de {table}, que NO era suya"
+            assert cat[table]["rls"] is True, (
+                f"el downgrade apagó la RLS de {table}, que NO era suya"
+            )
     finally:
         command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
 

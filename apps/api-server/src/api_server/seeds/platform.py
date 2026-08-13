@@ -27,13 +27,11 @@ async def ensure_platform_tenant(session: AsyncSession) -> None:
     engine -- a tenant session can't write to `organizations`.
     """
     await session.execute(
-        text(
-            """
+        text("""
             INSERT INTO organizations (id, name, slug, is_active)
             VALUES (:id, :name, :slug, true)
             ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-            """
-        ),
+            """),
         {
             "id": str(PLATFORM_TENANT_ID),
             "name": PLATFORM_TENANT_NAME,

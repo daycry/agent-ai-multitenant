@@ -63,8 +63,7 @@ async def _seed_user(dsn: str, *, email: str, is_system_admin: bool = False) -> 
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash, is_system_admin) "
-            "VALUES ($1, $2, $3, $4)",
+            "INSERT INTO users (id, email, password_hash, is_system_admin) VALUES ($1, $2, $3, $4)",
             user_id,
             email,
             "x",

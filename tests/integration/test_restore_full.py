@@ -532,9 +532,9 @@ def test_failed_pg_restore_leaves_the_stack_stopped(tmp_path: Path) -> None:
     assert "RE-EJECUTA" in str(err)
 
     # Y lo que importa: NADIE arrancó el stack.
-    assert not any(
-        c[0] == "docker" and "up" in c for c in runner.calls
-    ), "el restore arrancó la aplicación sobre una base de datos a medio restaurar"
+    assert not any(c[0] == "docker" and "up" in c for c in runner.calls), (
+        "el restore arrancó la aplicación sobre una base de datos a medio restaurar"
+    )
     # No volume extract ran — pg_restore failed before the volume step.
     assert not any(c[0] == "tar" and "--extract" in c for c in runner.calls)
 
@@ -713,9 +713,9 @@ def test_a_service_missing_from_the_compose_aborts_before_anything_destructive(
     with pytest.raises(RestoreError, match="NO están declarados"):
         engine.run_full_restore(bundle, confirm=bundle.name)
 
-    assert not any(
-        c[0] == "docker" for c in runner.calls
-    ), "el preflight tiene que abortar ANTES de tocar el stack"
+    assert not any(c[0] == "docker" for c in runner.calls), (
+        "el preflight tiene que abortar ANTES de tocar el stack"
+    )
     assert not any(c[0] == "pg_restore" and "--list" not in c for c in runner.calls)
 
 

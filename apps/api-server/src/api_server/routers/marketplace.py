@@ -384,8 +384,7 @@ async def list_listings(
     trust_level: MarketplaceTrustLevel | None = Query(
         default=None,
         description=(
-            "Filter by trust tier (verified / community / experimental). "
-            "422 on an unknown value."
+            "Filter by trust tier (verified / community / experimental). 422 on an unknown value."
         ),
     ),
     limit: int = limit_query(),
@@ -1818,8 +1817,7 @@ async def list_installed(
         default=None,
         alias="status",
         description=(
-            "Filter by installation status (enabled / disabled / revoked). "
-            "422 on an unknown value."
+            "Filter by installation status (enabled / disabled / revoked). 422 on an unknown value."
         ),
     ),
     include_revoked: bool = Query(

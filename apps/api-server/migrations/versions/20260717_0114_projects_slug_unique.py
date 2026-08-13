@@ -26,8 +26,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     # Dedupe de vivos: conserva el más antiguo de cada (tenant_id, slug) y
     # renombra los demás con el sufijo -{id8} (primeros 8 hex de su id).
-    op.execute(
-        """
+    op.execute("""
         UPDATE projects p
         SET slug = p.slug || '-' || substr(replace(p.id::text, '-', ''), 1, 8)
         FROM (
@@ -39,8 +38,7 @@ def upgrade() -> None:
             WHERE deleted_at IS NULL
         ) ranked
         WHERE p.id = ranked.id AND ranked.rn > 1
-        """
-    )
+        """)
     op.create_index(
         "uq_projects_tenant_slug_live",
         "projects",

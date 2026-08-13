@@ -131,7 +131,7 @@ def test_the_scan_actually_reads_the_api_server() -> None:
     abajo pasaría por las razones equivocadas."""
     modules = list(_API_SERVER.rglob("*.py"))
     assert len(modules) >= 300, (
-        f"la guarda solo vio {len(modules)} módulos de api_server: ¿cambió la " "ruta del paquete?"
+        f"la guarda solo vio {len(modules)} módulos de api_server: ¿cambió la ruta del paquete?"
     )
 
 

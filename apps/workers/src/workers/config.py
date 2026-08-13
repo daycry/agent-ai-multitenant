@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     )
     container_pids_limit: int = Field(
         default=256,
-        description="Max process count inside an agent container — caps " "fork bombs.",
+        description="Max process count inside an agent container — caps fork bombs.",
     )
     test_runtime_pids_limit: int = Field(
         default=1024,

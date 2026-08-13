@@ -75,8 +75,7 @@ def upgrade() -> None:
     #    NOTICE reports the per-provider drop count so the operator can
     #    reconcile (ADR 0047). Ordering ties break on created_at then id so
     #    the choice is deterministic.
-    op.execute(
-        """
+    op.execute("""
         DO $$
         DECLARE
             dropped integer;
@@ -105,8 +104,7 @@ def upgrade() -> None:
                     'global; removed % duplicate/soft-deleted row(s)', dropped;
             END IF;
         END $$;
-        """
-    )
+        """)
 
     # 3) Drop RLS + the tenant-isolation policy (platform-global now).
     op.execute("DROP POLICY IF EXISTS tenant_isolation ON sso_configurations")

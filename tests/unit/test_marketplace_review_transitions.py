@@ -78,7 +78,7 @@ def _listing(
 # ---------------------------------------------------------------------------
 def test_transition_graph_only_allows_the_four_documented_edges() -> None:
     """El vocabulario es cerrado: cualquier arista de más es una vía de escape."""
-    assert REVIEW_TRANSITIONS == {
+    assert {
         ListingReviewStatus.DRAFT.value: frozenset({ListingReviewStatus.PENDING_REVIEW.value}),
         ListingReviewStatus.PENDING_REVIEW.value: frozenset(
             {ListingReviewStatus.PUBLISHED.value, ListingReviewStatus.REJECTED.value}
@@ -88,7 +88,7 @@ def test_transition_graph_only_allows_the_four_documented_edges() -> None:
         ListingReviewStatus.PUBLISHED.value: frozenset({ListingReviewStatus.PENDING_REVIEW.value}),
         # Un rechazo no es una condena: se corrige y se vuelve a mandar.
         ListingReviewStatus.REJECTED.value: frozenset({ListingReviewStatus.PENDING_REVIEW.value}),
-    }
+    } == REVIEW_TRANSITIONS
 
 
 @pytest.mark.parametrize(

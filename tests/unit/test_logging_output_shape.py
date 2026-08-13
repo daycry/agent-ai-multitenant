@@ -56,9 +56,9 @@ def test_event_field_is_the_message_not_a_nested_json_blob(capsys) -> None:
     structlog.get_logger("test.shape").info("execution_started")
 
     payload = _last_json_line(capsys)
-    assert (
-        payload["event"] == "execution_started"
-    ), "el campo `event` no es el mensaje: la línea viene doblemente codificada"
+    assert payload["event"] == "execution_started", (
+        "el campo `event` no es el mensaje: la línea viene doblemente codificada"
+    )
 
 
 def test_business_fields_are_top_level_and_queryable(capsys) -> None:

@@ -51,9 +51,9 @@ def test_the_by_kind_endpoint_is_gone() -> None:
 def test_the_replacement_is_still_there() -> None:
     # No vacuo: sin esto, borrar las DOS rutas dejaría el test en verde.
     source = _agents_router_source()
-    assert re.search(
-        r'@router\.get\("/provider-options"', source
-    ), "desapareció `/agents/provider-options`, que es el sustituto"
+    assert re.search(r'@router\.get\("/provider-options"', source), (
+        "desapareció `/agents/provider-options`, que es el sustituto"
+    )
 
 
 def test_the_dead_schema_went_with_it() -> None:

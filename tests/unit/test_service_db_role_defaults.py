@@ -77,9 +77,9 @@ def test_service_connects_as_service_user_not_the_schema_owner(service: str) -> 
     cls, field = _service_settings()[service]
     default = _default_of(cls, field)
 
-    assert (
-        f"{_SERVICE_ROLE}:" in default
-    ), f"{service} ({cls.__name__}.{field}) no se conecta como {_SERVICE_ROLE}: {default!r}"
+    assert f"{_SERVICE_ROLE}:" in default, (
+        f"{service} ({cls.__name__}.{field}) no se conecta como {_SERVICE_ROLE}: {default!r}"
+    )
     assert f"{_DDL_ROLE}:" not in default, (
         f"{service} ({cls.__name__}.{field}) sigue conectando como {_DDL_ROLE}, el "
         "propietario del esquema con GRANT ALL: puede ejecutar ALTER TABLE ... "

@@ -26,9 +26,9 @@ def _load_compose() -> dict[str, Any]:
 
 def test_docling_serve_service_exists() -> None:
     compose = _load_compose()
-    assert (
-        "docling-serve" in compose["services"]
-    ), "docling-serve service missing from docker/docker-compose.yml"
+    assert "docling-serve" in compose["services"], (
+        "docling-serve service missing from docker/docker-compose.yml"
+    )
 
 
 def test_docling_serve_image_is_open_source_docling() -> None:

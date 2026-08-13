@@ -272,8 +272,7 @@ BUILTIN_PROJECT_TEMPLATES: tuple[BuiltinProjectTemplate, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO projects (
         id, tenant_id, name, description, status, team_id,
         mcp_servers, rag_knowledge_bases, worker_config,
@@ -303,8 +302,7 @@ _UPSERT_SQL = text(
         default_runtime_template = EXCLUDED.default_runtime_template,
         allowed_domains = EXCLUDED.allowed_domains,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def upsert_project_template(session: AsyncSession, tpl: BuiltinProjectTemplate) -> None:

@@ -279,9 +279,9 @@ def test_the_projects_tree_is_not_captured_twice(tmp_path: Path) -> None:
         check=False,
     )
     assert listing.returncode == 0, listing.stderr
-    assert (
-        "app.git" not in listing.stdout
-    ), f"los bare repos viajan DOS veces (en projects_tar y en el bind): {listing.stdout}"
+    assert "app.git" not in listing.stdout, (
+        f"los bare repos viajan DOS veces (en projects_tar y en el bind): {listing.stdout}"
+    )
     assert "backups/" not in listing.stdout, "el bundle se auto-incluyó"
     # No vacuo: el bind SÍ captura lo que no es projects/ (aquí, el clon de
     # trabajo que `_seed_project_repo` deja fuera de projects/).

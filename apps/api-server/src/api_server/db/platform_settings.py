@@ -873,8 +873,7 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
             )
     elif provider not in LLM_PROVIDER_KINDS:
         raise InvalidModelConfigError(
-            f"provider {provider!r} is not in the closed catalogue "
-            f"{LLM_PROVIDER_KINDS} (ADR 0021)"
+            f"provider {provider!r} is not in the closed catalogue {LLM_PROVIDER_KINDS} (ADR 0021)"
         )
     model = cfg.get("model")
     if not isinstance(model, str) or not model.strip():
@@ -1388,8 +1387,7 @@ def validate_budget_alert_thresholds(values: list[int]) -> list[int]:
             raise InvalidBudgetThresholdsError(f"threshold {v!r} must be an integer")
         if v < _BUDGET_THRESHOLD_MIN or v > _BUDGET_THRESHOLD_MAX:
             raise InvalidBudgetThresholdsError(
-                f"threshold {v} must be between "
-                f"{_BUDGET_THRESHOLD_MIN} and {_BUDGET_THRESHOLD_MAX}"
+                f"threshold {v} must be between {_BUDGET_THRESHOLD_MIN} and {_BUDGET_THRESHOLD_MAX}"
             )
         cleaned.add(v)
     cleaned.add(_BUDGET_PAUSE_THRESHOLD)  # auto-pause arm always present

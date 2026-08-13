@@ -166,8 +166,7 @@ async def _load_writable_agent_for_kb(
         agent_id,
         principal,
         builtin_detail=(
-            "cannot grant/revoke KBs on a global_builtin agent; "
-            "fork it first and grant on the fork"
+            "cannot grant/revoke KBs on a global_builtin agent; fork it first and grant on the fork"
         ),
     )
 
@@ -183,7 +182,7 @@ async def _load_writable_agent_for_tools(
         agent_id,
         principal,
         builtin_detail=(
-            "cannot assign tools to a global_builtin agent; " "fork it first and assign on the fork"
+            "cannot assign tools to a global_builtin agent; fork it first and assign on the fork"
         ),
     )
 
@@ -199,7 +198,6 @@ async def _load_writable_agent_for_skills(
         agent_id,
         principal,
         builtin_detail=(
-            "cannot assign skills to a global_builtin agent; "
-            "fork it first and assign on the fork"
+            "cannot assign skills to a global_builtin agent; fork it first and assign on the fork"
         ),
     )

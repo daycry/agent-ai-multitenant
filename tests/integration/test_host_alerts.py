@@ -91,9 +91,9 @@ def test_rules_file_is_structurally_valid() -> None:
             # rule), so each must carry `alert` + `expr` (promtool requires it).
             assert "alert" in rule, f"rule missing `alert`: {rule}"
             assert isinstance(rule["alert"], str) and rule["alert"]
-            assert (
-                isinstance(rule.get("expr"), str) and rule["expr"].strip()
-            ), f"alert {rule['alert']} missing a non-empty expr"
+            assert isinstance(rule.get("expr"), str) and rule["expr"].strip(), (
+                f"alert {rule['alert']} missing a non-empty expr"
+            )
             # labels + annotations are mappings when present.
             if "labels" in rule:
                 assert isinstance(rule["labels"], dict)
@@ -217,9 +217,9 @@ def test_alertmanager_routes_to_platform_notifier() -> None:
     assert receiver in names, f"route receiver {receiver!r} not in {names}"
     # The receiver reuses the platform notifier via a webhook (not a divergent
     # SMTP/Slack path) — assert at least one webhook receiver is configured.
-    assert any(
-        "webhook_configs" in r for r in cfg["receivers"]
-    ), "no webhook receiver — task_12_14 requires reusing the platform notifier"
+    assert any("webhook_configs" in r for r in cfg["receivers"]), (
+        "no webhook receiver — task_12_14 requires reusing the platform notifier"
+    )
 
 
 # ---------------------------------------------------------------------------

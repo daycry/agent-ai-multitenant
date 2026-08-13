@@ -665,9 +665,9 @@ async def test_export_resumes_past_the_row_cap_with_the_keyset_cursor(
             raise AssertionError("el export nunca dejó de ofrecer X-Next-Cursor")
 
     # Las cinco, una sola vez cada una y en orden descendente por created_at.
-    assert collected == [
-        str(x) for x in reversed(seeded)
-    ], "la paginación del export repite o se salta filas"
+    assert collected == [str(x) for x in reversed(seeded)], (
+        "la paginación del export repite o se salta filas"
+    )
     assert len(set(collected)) == len(collected)
 
 

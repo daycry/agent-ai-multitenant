@@ -98,8 +98,7 @@ def test_watchdog_talks_to_the_daemon_through_docker_host(watchdog: dict[str, An
         "explícito, docker.from_env() no alcanza al daemon (ADR 0060)"
     )
     assert "tcp://" in env["DOCKER_HOST"], (
-        f"DOCKER_HOST debería apuntar al docker-socket-proxy por TCP, no a "
-        f"{env['DOCKER_HOST']!r}"
+        f"DOCKER_HOST debería apuntar al docker-socket-proxy por TCP, no a {env['DOCKER_HOST']!r}"
     )
 
 

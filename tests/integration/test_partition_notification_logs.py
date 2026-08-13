@@ -327,9 +327,9 @@ def test_upgrade_covers_the_months_of_the_pre_existing_data(
         # Contiguas, incluido el mes SIN filas de en medio: un rango con agujeros
         # rechaza la primera fila del agujero.
         expected = {partition_name(TABLE, add_months(now_month, -n)) for n in range(5)}
-        assert not sorted(
-            expected - names
-        ), f"la migración no cubrió los meses de los datos: {sorted(expected - names)}"
+        assert not sorted(expected - names), (
+            f"la migración no cubrió los meses de los datos: {sorted(expected - names)}"
+        )
         rows = await conn.fetch(
             f"SELECT tableoid::regclass::text AS part FROM {TABLE}"
             " WHERE tenant_id = $1 ORDER BY created_at",

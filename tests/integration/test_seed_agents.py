@@ -108,13 +108,11 @@ def test_seed_populates_bilingual_prompts(alembic_config, migrations_pg_dsn: str
     async def _fetch_rows() -> list[asyncpg.Record]:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            return await conn.fetch(
-                """
+            return await conn.fetch("""
                 SELECT name, system_prompt, model_config
                   FROM agents
                  WHERE scope = 'global_builtin'
-                """
-            )
+                """)
         finally:
             await conn.close()
 
@@ -149,7 +147,7 @@ def test_seeded_builtins_visible_to_tenant_sessions(alembic_config, migrations_p
     )
 
     tenant_id = uuid4()
-    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
     async def _seed_tenant_and_count() -> int:
         # Tenant org goes in via the migrations role first.

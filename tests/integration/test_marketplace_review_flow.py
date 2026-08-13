@@ -539,9 +539,9 @@ def test_rejection_reaches_the_author_and_can_be_fixed(
             )
             assert updated.status_code == 200, updated.text
             assert updated.json()["review_status"] == "pending_review"
-            assert (
-                updated.json()["rejection_reason"] is None
-            ), "una acusación caducada no puede sobrevivir a su corrección"
+            assert updated.json()["rejection_reason"] is None, (
+                "una acusación caducada no puede sobrevivir a su corrección"
+            )
 
     asyncio.run(scenario())
 

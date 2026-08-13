@@ -313,11 +313,11 @@ async def maybe_alert_after_events(
 
 
 __all__ = [
+    "GUARDRAIL_ALERT_EVENT_TYPE",
     "AlertDispatcher",
     "AlertEvaluationResult",
     "AlertFiring",
     "CeleryAlertDispatcher",
-    "GUARDRAIL_ALERT_EVENT_TYPE",
     "evaluate_tenant_alert_rules",
     "maybe_alert_after_events",
 ]

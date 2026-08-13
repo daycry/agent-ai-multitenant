@@ -170,9 +170,9 @@ async def test_revoking_one_session_removes_it_from_the_global_index(store: Any)
     await store.revoke(sid)
 
     assert await store.get(sid) is None
-    assert (
-        await store.revoke_all_user_sessions(user_id) == 0
-    ), "el sid revocado seguía en el índice global y se contó como sesión viva"
+    assert await store.revoke_all_user_sessions(user_id) == 0, (
+        "el sid revocado seguía en el índice global y se contó como sesión viva"
+    )
 
 
 @pytest.mark.asyncio
@@ -184,9 +184,9 @@ async def test_tenant_revocation_clears_the_global_index_too(store: Any) -> None
     await store.create(sid, user_id=user_id, tenant_id=tenant_id, ttl_seconds=600)
 
     assert await store.revoke_user_sessions(user_id, tenant_id) == 1
-    assert (
-        await store.revoke_all_user_sessions(user_id) == 0
-    ), "el índice global quedó con el sid que la revocación per-tenant ya mató"
+    assert await store.revoke_all_user_sessions(user_id) == 0, (
+        "el índice global quedó con el sid que la revocación per-tenant ya mató"
+    )
 
 
 @pytest.mark.asyncio

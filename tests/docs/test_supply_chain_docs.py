@@ -123,16 +123,16 @@ def test_runbook_triage_documents_every_scanner_configured_in_ci(runbook_text: s
     """
     configured = _configured_scanners()
     assert len(configured) >= 4, (
-        "la guarda dejó de encontrar los escáneres de los workflows " f"(vio {sorted(configured)})"
+        f"la guarda dejó de encontrar los escáneres de los workflows (vio {sorted(configured)})"
     )
     lowered = runbook_text.lower()
     missing = sorted(name for name in configured if name.lower() not in lowered)
     # Mensaje a una variable: como concatenación dentro del `assert`, black y
     # ruff-format la parten distinto y se pelean en bucle (gotcha documentado).
     sin_documentar = ", ".join(missing)
-    assert (
-        not missing
-    ), f"escáneres configurados en CI y NO documentados en el runbook: {sin_documentar}"
+    assert not missing, (
+        f"escáneres configurados en CI y NO documentados en el runbook: {sin_documentar}"
+    )
 
 
 def test_runbook_triage_documents_every_versioned_ignore_file(runbook_text: str) -> None:
@@ -260,9 +260,9 @@ def test_reference_records_the_known_residual_backlog(reference_text: str) -> No
     escrito concluirá que el escaneo npm está limpio.
     """
     assert re.search(r"\bnext\b", reference_text), "la referencia no nombra `next`"
-    assert re.search(
-        r"\b16\b", reference_text
-    ), "la referencia debe decir que el fix de los avisos de `next` es la major 16"
+    assert re.search(r"\b16\b", reference_text), (
+        "la referencia debe decir que el fix de los avisos de `next` es la major 16"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -303,9 +303,9 @@ def test_registry_adr_is_signed_and_points_at_the_plan(
         f"`proposed` borraría esa decisión (status actual: {frontmatter.get('status')!r})"
     )
     assert frontmatter.get("plan_referenced") == "prod-11-cadena-suministro"
-    assert (
-        "Decisión del operador" in body
-    ), "el cuerpo debe recoger la decisión firmada, no solo el frontmatter"
+    assert "Decisión del operador" in body, (
+        "el cuerpo debe recoger la decisión firmada, no solo el frontmatter"
+    )
 
 
 def test_registry_adr_offers_the_three_options_with_a_recommendation(

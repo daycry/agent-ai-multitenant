@@ -52,7 +52,7 @@ double-confirmed, exactly like the uninstall.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol, TextIO, runtime_checkable
 
 from installer_backend.compose_generator import PROJECT_NAME
@@ -74,7 +74,7 @@ class ReinstallAbortedError(Exception):
     """
 
 
-class ReinstallMode(str, Enum):
+class ReinstallMode(StrEnum):
     """How a reinstall treats the data already on the machine.
 
     * ``PRESERVE``      — keep data + reuse existing secrets/Vault (the default).

@@ -104,15 +104,15 @@ def test_each_dockerfile_starts_with_syntax_and_has_from(template_id: str) -> No
     dockerfile = DOCKERFILES_DIR / template_id / "Dockerfile"
     content = dockerfile.read_text(encoding="utf-8")
     first_line = content.splitlines()[0] if content else ""
-    assert first_line.startswith(
-        "# syntax=docker/dockerfile:"
-    ), f"{template_id}: first line must be the syntax directive, got {first_line!r}"
+    assert first_line.startswith("# syntax=docker/dockerfile:"), (
+        f"{template_id}: first line must be the syntax directive, got {first_line!r}"
+    )
     assert "\nFROM " in content, f"{template_id}: Dockerfile has no FROM directive"
     # WORKDIR /workspace is the contract with the catalog (every
     # template advertises workspace_mount_path="/workspace").
-    assert (
-        "WORKDIR /workspace" in content
-    ), f"{template_id}: Dockerfile must declare WORKDIR /workspace"
+    assert "WORKDIR /workspace" in content, (
+        f"{template_id}: Dockerfile must declare WORKDIR /workspace"
+    )
 
 
 def test_catalog_get_returns_known_template() -> None:
@@ -156,9 +156,9 @@ def test_every_image_reference_names_its_own_template() -> None:
 
     for tid, template in CATALOG.items():
         repo, _, _ = split_reference(template.docker_image)
-        assert repo.endswith(
-            f"{IMAGE_PREFIX}{tid}"
-        ), f"{tid}: su docker_image apunta a otro repositorio ({template.docker_image!r})"
+        assert repo.endswith(f"{IMAGE_PREFIX}{tid}"), (
+            f"{tid}: su docker_image apunta a otro repositorio ({template.docker_image!r})"
+        )
 
 
 def test_image_references_carry_version_and_digest_once_published() -> None:

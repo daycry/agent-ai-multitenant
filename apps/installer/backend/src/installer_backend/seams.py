@@ -17,11 +17,11 @@ with no Docker.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 
-class PrereqStatus(str, Enum):
+class PrereqStatus(StrEnum):
     """Tri-state outcome of a prerequisite check (task 15_02).
 
     * ``OK``   — the prerequisite is satisfied.

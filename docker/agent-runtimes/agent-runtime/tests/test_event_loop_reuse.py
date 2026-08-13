@@ -62,7 +62,7 @@ class _Handler(BaseHTTPRequestHandler):
     # respuesta sale en dos segmentos TCP y el cliente espera el segundo.
     disable_nagle_algorithm = True
 
-    def do_POST(self) -> None:  # noqa: N802 — nombre que impone BaseHTTPRequestHandler
+    def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         self.rfile.read(length)
         payload = json.dumps(_BODY).encode()

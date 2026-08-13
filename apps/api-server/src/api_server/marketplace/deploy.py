@@ -261,7 +261,7 @@ def normalize_role_map(
     agente — se refleja en el aviso «0 agentes» en vez de en un 422 que impida
     desplegar por un rol que el tenant sí usa.
     """
-    if raw is None or raw == {} or raw == []:
+    if raw is None or raw in ({}, []):
         return {ROLE_MAP_WILDCARD: list(targets)} if targets else {}
     if isinstance(raw, list):
         roles = [str(r).strip() for r in raw if isinstance(r, str) and r.strip()]

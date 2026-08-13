@@ -177,7 +177,7 @@ def upgrade() -> None:
         " WITH (m = 16, ef_construction = 64)"
     )
     op.execute(
-        "CREATE INDEX ix_chunks_content_fts" " ON chunks USING GIN (to_tsvector('simple', content))"
+        "CREATE INDEX ix_chunks_content_fts ON chunks USING GIN (to_tsvector('simple', content))"
     )
     _enable_rls("chunks", "chunks_tenant_isolation")
 

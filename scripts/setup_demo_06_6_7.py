@@ -185,14 +185,12 @@ async def _cleanup_previous(conn: object) -> None:
 async def _insert_plan(conn: object) -> UUID:
     plan_id = uuid4()
     await conn.execute(
-        text(
-            """
+        text("""
             INSERT INTO plans (id, project_id, tenant_id, title, description,
                                status, specification)
             VALUES (cast(:id AS uuid), cast(:pid AS uuid), cast(:tid AS uuid), :title, :desc, 'in_progress',
                     jsonb_build_object('demo_tag', cast(:tag AS text)))
-            """
-        ),
+            """),
         {
             "id": str(plan_id),
             "pid": str(PROJECT_ID),
@@ -209,14 +207,12 @@ async def _insert_plan(conn: object) -> UUID:
 async def _insert_tasks(conn: object, plan_id: UUID) -> None:
     for title, status, priority in TASKS:
         await conn.execute(
-            text(
-                """
+            text("""
                 INSERT INTO tasks (id, tenant_id, project_id, plan_id,
                                    title, description, status, priority)
                 VALUES (cast(:id AS uuid), cast(:tid AS uuid), cast(:pid AS uuid), cast(:plan_id AS uuid),
                         :title, :desc, :status, :priority)
-                """
-            ),
+                """),
             {
                 "id": str(uuid4()),
                 "tid": str(TENANT_ID),

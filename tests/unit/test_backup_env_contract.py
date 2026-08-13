@@ -227,9 +227,9 @@ def test_the_backup_dsn_is_not_the_developers_host(monkeypatch: pytest.MonkeyPat
             "diario apuntaría a la máquina del desarrollador (o con credencial de "
             f"dev). DSN saneado: {re.sub(r':[^:@]*@', ':***@', dsn)}"
         )
-    assert (
-        "@postgres:5432/" in dsn
-    ), f"el DSN de backup no apunta al servicio `postgres` del compose: {dsn!r}"
+    assert "@postgres:5432/" in dsn, (
+        f"el DSN de backup no apunta al servicio `postgres` del compose: {dsn!r}"
+    )
 
 
 def test_the_backup_dsn_is_libpq_not_sqlalchemy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,9 +242,9 @@ def test_the_backup_dsn_is_libpq_not_sqlalchemy(monkeypatch: pytest.MonkeyPatch)
     """
     compose, dotenv = _generated_stack()
     emitted = _service_env(compose, dotenv, _BACKUP_SERVICE)["WORKERS_BACKUP_DATABASE_URL"]
-    assert (
-        "+" not in emitted.split("://", 1)[0]
-    ), f"el instalador emite un DSN de SQLAlchemy para pg_dump: {emitted.split('://')[0]!r}"
+    assert "+" not in emitted.split("://", 1)[0], (
+        f"el instalador emite un DSN de SQLAlchemy para pg_dump: {emitted.split('://')[0]!r}"
+    )
     assert libpq_url(emitted) == emitted
 
 
@@ -259,7 +259,7 @@ def test_no_phantom_named_volume_is_captured(monkeypatch: pytest.MonkeyPatch) ->
     named volume — los stores son binds bajo `{data_root}`. `tar` sobre un
     `_data` inexistente da rc≠0 y el clean-failure borra el bundle completo.
     """
-    compose, dotenv = _generated_stack()
+    compose, _dotenv = _generated_stack()
     cfg, _ = _backup_config(monkeypatch)
     declared = set((compose.get("volumes") or {}).keys())
     # docker prefija los volúmenes con el nombre del proyecto compose; se acepta
@@ -345,9 +345,9 @@ def test_redis_is_captured_coherently_not_as_a_plain_bind(
     redis_bind = next(src for src, _dst in _mounts(compose, "redis") if src.startswith("/"))
 
     assert cfg.redis_dir, "el stack generado no declara WORKERS_BACKUP_REDIS_DIR"
-    assert _is_under(
-        redis_bind, cfg.redis_dir
-    ), f"redis_dir ({cfg.redis_dir}) no cubre el bind de datos de redis ({redis_bind})"
+    assert _is_under(redis_bind, cfg.redis_dir), (
+        f"redis_dir ({cfg.redis_dir}) no cubre el bind de datos de redis ({redis_bind})"
+    )
     swallowed = [p for p in cfg.bind_paths if _is_under(redis_bind, str(p))]
     assert not swallowed, (
         f"el data dir de Redis entra ADEMÁS como bind ({swallowed}): se capturaría dos "

@@ -83,7 +83,7 @@ def parse_permissions_block(raw: Any, err: ErrFactory) -> dict[str, Any]:
     for key, value in raw.items():
         if key not in PERMISSION_KEYS:
             raise err(
-                f"'permissions' has unknown key {key!r}; " f"allowed: {', '.join(PERMISSION_KEYS)}"
+                f"'permissions' has unknown key {key!r}; allowed: {', '.join(PERMISSION_KEYS)}"
             )
         if key in (PERMISSION_ALLOWED_DOMAINS, PERMISSION_ALLOWED_PATHS):
             permissions[key] = parse_str_list(key, value, err)

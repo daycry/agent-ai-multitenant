@@ -413,8 +413,7 @@ _BUILTINS_RAW: dict[tuple[str, str], TemplateSource] = {
     ),
     ("budget_alert", "en"): TemplateSource(
         subject=(
-            "Budget alert ({{ threshold | default('?') }}%): "
-            "{{ plan_name | default('(unnamed)') }}"
+            "Budget alert ({{ threshold | default('?') }}%): {{ plan_name | default('(unnamed)') }}"
         ),
         body=(
             "The "

@@ -674,8 +674,7 @@ class RestoreEngine:
             # Para las tablas que cree una migración POSTERIOR al restore.
             f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
             f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role}",
-            f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
-            f"GRANT USAGE, SELECT ON SEQUENCES TO {role}",
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {role}",
         ]
         args = [
             "psql",

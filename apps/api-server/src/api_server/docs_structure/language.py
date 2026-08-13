@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +45,7 @@ import yaml
 _log = structlog.get_logger("api_server.docs_structure.language")
 
 
-class Language(str, Enum):
+class Language(StrEnum):
     """The languages this validator can decide between.
 
     ``ES`` / ``EN`` are the only *supported* doc languages (CLAUDE.md
@@ -280,7 +280,7 @@ _EN_STOPWORDS: frozenset[str] = frozenset(
 # Ensure the two sets stay disjoint — an overlap would make a token count
 # for both languages and corrupt the ratio. Caught at import time.
 assert not (_ES_STOPWORDS & _EN_STOPWORDS), (
-    "es/en stopword sets must be disjoint: " f"{sorted(_ES_STOPWORDS & _EN_STOPWORDS)}"
+    f"es/en stopword sets must be disjoint: {sorted(_ES_STOPWORDS & _EN_STOPWORDS)}"
 )
 
 

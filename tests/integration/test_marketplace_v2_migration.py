@@ -447,9 +447,9 @@ def test_backfill_creates_a_version_row_per_listing_and_pins_every_install(
                     "SELECT id, pinned_version_id, version FROM marketplace_installations"
                 )
             }
-            assert all(
-                p[0] is not None for p in pins.values()
-            ), f"el backfill dejó pines a NULL: {pins}"
+            assert all(p[0] is not None for p in pins.values()), (
+                f"el backfill dejó pines a NULL: {pins}"
+            )
             assert pins[ids["install_current"]][0] == by_key[(ids["listing_global"], "2.0.0")]["id"]
             assert (
                 pins[ids["install_stale"]][0] == by_key[(ids["listing_private_b"], "0.9.0")]["id"]
@@ -490,8 +490,7 @@ def test_backfill_is_idempotent_across_a_downgrade_upgrade_roundtrip(
         try:
             return int(
                 await conn.fetchval(
-                    "SELECT count(*) FROM marketplace_installations"
-                    " WHERE pinned_version_id IS NULL"
+                    "SELECT count(*) FROM marketplace_installations WHERE pinned_version_id IS NULL"
                 )
             )
         finally:

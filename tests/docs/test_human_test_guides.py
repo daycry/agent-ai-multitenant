@@ -208,9 +208,9 @@ def test_in_scope_plan_has_a_guide(plan: str) -> None:
 
 @pytest.mark.parametrize("plan", _IN_SCOPE)
 def test_in_scope_plan_exists_in_the_roadmap(plan: str) -> None:
-    assert (
-        _ROADMAP / f"{plan}.md"
-    ).is_file(), f"la guía {plan}.md no corresponde a ningún plan de docs/roadmap/"
+    assert (_ROADMAP / f"{plan}.md").is_file(), (
+        f"la guía {plan}.md no corresponde a ningún plan de docs/roadmap/"
+    )
 
 
 def test_every_guide_maps_to_a_real_roadmap_plan() -> None:
@@ -353,6 +353,6 @@ def test_guides_only_recommend_setup_scripts_that_exist() -> None:
     # `assert`, black y ruff-format la parten de formas distintas y se pelean en
     # bucle (docs/03-guides/gotchas/black-vs-ruff-format-chained-call-comment.md).
     detalle = "\n  ".join(offenders)
-    assert (
-        not offenders
-    ), f"guías que recomiendan un setup script que no existe en scripts/:\n  {detalle}"
+    assert not offenders, (
+        f"guías que recomiendan un setup script que no existe en scripts/:\n  {detalle}"
+    )

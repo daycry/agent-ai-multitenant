@@ -152,7 +152,7 @@ async def _seed_user(dsn: str, *, email: str) -> UUID:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash, is_active) " "VALUES ($1, $2, 'x', true)",
+            "INSERT INTO users (id, email, password_hash, is_active) VALUES ($1, $2, 'x', true)",
             user_id,
             email,
         )

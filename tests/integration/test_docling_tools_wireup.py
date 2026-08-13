@@ -83,8 +83,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "team_shared",
         )
         await conn.execute(
-            "INSERT INTO knowledge_bases (id, tenant_id, name)"
-            " VALUES ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO knowledge_bases (id, tenant_id, name) VALUES ($1, $2, $3), ($4, $5, $6)",
             source_kb_id,
             tenant_id,
             "Source KB",

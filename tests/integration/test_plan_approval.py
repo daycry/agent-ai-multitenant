@@ -106,7 +106,7 @@ async def _seed(dsn: str, *, threshold: str = "0") -> dict[str, UUID]:
             " RESTART IDENTITY CASCADE"
         )
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
             tenant_id,
             "Tenant Approval",
             "tenant-approval",

@@ -106,9 +106,7 @@ _VERIFIED_SKILL_MD = (
     "Does nothing dangerous.\n"
 )
 
-_CLEAN_TOOL_PY = (
-    "import json\n" "\n" "def parse(raw: str) -> dict:\n" "    return json.loads(raw)\n"
-)
+_CLEAN_TOOL_PY = "import json\n\ndef parse(raw: str) -> dict:\n    return json.loads(raw)\n"
 
 _INSECURE_TOOL_PY = (
     "import subprocess\n"

@@ -268,7 +268,7 @@ def test_b2_part_size_is_above_the_5mb_floor() -> None:
 def test_upload_maps_client_error_to_destination_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="upload_file")
 
-    with pytest.raises(DestinationError, match="upload to .* failed"):
+    with pytest.raises(DestinationError, match=r"upload to .* failed"):
         dest.upload(_bundle(tmp_path))
 
 
@@ -320,7 +320,7 @@ def test_download_fetches_prefix_joined_key_to_dest(tmp_path: Path) -> None:
 def test_download_maps_client_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="download_file")
 
-    with pytest.raises(DestinationError, match="download of .* failed"):
+    with pytest.raises(DestinationError, match=r"download of .* failed"):
         dest.download("missing.tar.enc", tmp_path)
 
 
@@ -390,7 +390,7 @@ def test_missing_credentials_map_to_destination_error_on_upload(tmp_path: Path) 
         client_factory=lambda **_kw: MockB2Client(build_kwargs={}),
     )
 
-    with pytest.raises(DestinationError, match="missing S3 credentials|no value for S3"):
+    with pytest.raises(DestinationError, match=r"missing S3 credentials|no value for S3"):
         dest.upload(_bundle(tmp_path))
 
 

@@ -238,8 +238,7 @@ class PlaywrightToolConfig:
             except ValueError as exc:
                 allowed = ", ".join(b.value for b in PlaywrightBrowser)
                 raise PlaywrightConfigError(
-                    f"playwright config 'browsers' has unknown browser {item!r}; "
-                    f"allowed: {allowed}"
+                    f"playwright config 'browsers' has unknown browser {item!r}; allowed: {allowed}"
                 ) from exc
             if browser not in seen:  # de-dupe, preserve selection order
                 seen.add(browser)

@@ -199,9 +199,9 @@ def test_no_worker_module_builds_its_own_hvac_client() -> None:
 def test_every_known_consumer_goes_through_the_factory(module: str) -> None:
     path = _WORKERS_ROOT / module
     assert path.exists(), f"el consumidor {module} desapareció; actualiza la lista"
-    assert "build_worker_vault_client" in path.read_text(
-        encoding="utf-8"
-    ), f"{module} ya no usa la fábrica compartida del worker: su token no se renueva"
+    assert "build_worker_vault_client" in path.read_text(encoding="utf-8"), (
+        f"{module} ya no usa la fábrica compartida del worker: su token no se renueva"
+    )
 
 
 def _code_without_docstrings(path: Path) -> str:

@@ -55,7 +55,5 @@ def downgrade() -> None:
     # Truncate first so the column-type shrink never breaks on a value
     # that no longer fits (mirrors migration 0012's approach for
     # executions.status).
-    op.execute(
-        "ALTER TABLE plans ALTER COLUMN status TYPE VARCHAR(16)" " USING substr(status, 1, 16)"
-    )
+    op.execute("ALTER TABLE plans ALTER COLUMN status TYPE VARCHAR(16) USING substr(status, 1, 16)")
     op.drop_column("plans", "specification")

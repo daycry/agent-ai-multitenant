@@ -211,7 +211,7 @@ async def test_seeding_twice_does_not_overwrite_an_operators_edits(
         async with sm() as s, s.begin():
             await s.execute(
                 __import__("sqlalchemy").text(
-                    "UPDATE guardrail_configs SET config = config" " WHERE scope = 'platform'"
+                    "UPDATE guardrail_configs SET config = config WHERE scope = 'platform'"
                 )
             )
         async with sm() as s, s.begin():

@@ -33,8 +33,7 @@ def downgrade() -> None:
     # El constraint global (sin filtro por deleted_at) exige una sola fila por
     # kind: fuera las soft-borradas y, de las vivas, sobrevive la más antigua.
     op.execute("DELETE FROM sso_configurations WHERE deleted_at IS NOT NULL")
-    op.execute(
-        """
+    op.execute("""
         UPDATE sso_configurations s
         SET deleted_at = now()
         FROM (
@@ -44,7 +43,6 @@ def downgrade() -> None:
             FROM sso_configurations
         ) ranked
         WHERE s.id = ranked.id AND ranked.rn > 1
-        """
-    )
+        """)
     op.execute("DELETE FROM sso_configurations WHERE deleted_at IS NOT NULL")
     op.create_unique_constraint("uq_sso_config_provider", "sso_configurations", ["provider"])

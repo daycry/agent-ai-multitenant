@@ -220,11 +220,11 @@ def test_every_builder_returns_a_multifernet(monkeypatch: pytest.MonkeyPatch) ->
         "api_server.webhooks.secrets",
     ):
         module = importlib.import_module(module_path)
-        monkeypatch.setattr(module, "get_settings", lambda: _api_settings())
+        monkeypatch.setattr(module, "get_settings", _api_settings)
         assert isinstance(module._fernet(), MultiFernet), module_path
         seen += 1
 
-    monkeypatch.setattr(notif, "get_settings", lambda: _api_settings())
+    monkeypatch.setattr(notif, "get_settings", _api_settings)
     assert isinstance(notif._fernet(), MultiFernet)
     seen += 1
 

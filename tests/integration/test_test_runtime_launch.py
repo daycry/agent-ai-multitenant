@@ -70,7 +70,7 @@ def _spec_for_python_pytest(**overrides: Any) -> Any:
 def test_launch_creates_private_internal_bridge() -> None:
     from workers.test_runtime import TestRuntimeRunner
 
-    client, started = _fake_client()
+    client, _started = _fake_client()
     runner = TestRuntimeRunner(Settings(), client=client)
     result = runner.launch(_spec_for_python_pytest())
 

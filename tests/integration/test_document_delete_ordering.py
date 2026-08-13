@@ -205,9 +205,9 @@ async def test_deleting_a_document_keeps_the_source_blob_until_the_gc_reclaims_i
     finally:
         await engine.dispose()
 
-    assert (
-        await storage.object_exists(key=storage_key) is False
-    ), "el GC no reclamó el blob del documento vencido: ahora la fuga es al revés"
+    assert await storage.object_exists(key=storage_key) is False, (
+        "el GC no reclamó el blob del documento vencido: ahora la fuga es al revés"
+    )
 
 
 @pytest.mark.asyncio

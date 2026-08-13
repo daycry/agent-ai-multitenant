@@ -179,12 +179,12 @@ def test_seeded_policy_declares_what_happens_with_an_unlisted_category(
         f"{origin}: sin `unlisted_category`, lo no listado lo decide un default "
         f"del código (hoy `auto`, fail-open)"
     )
-    assert (
-        policy["unlisted_category"] in _VALID_DECISIONS
-    ), f"{origin}: `unlisted_category` = {policy['unlisted_category']!r}"
+    assert policy["unlisted_category"] in _VALID_DECISIONS, (
+        f"{origin}: `unlisted_category` = {policy['unlisted_category']!r}"
+    )
     # Y no puede colarse dentro del mapa de categorías, donde nadie la leería.
     assert "unlisted_category" not in policy["categories"], (
-        f"{origin}: `unlisted_category` va como clave HERMANA de `categories`, " f"no dentro"
+        f"{origin}: `unlisted_category` va como clave HERMANA de `categories`, no dentro"
     )
 
 
@@ -202,9 +202,9 @@ def test_production_grade_presets_gate_the_categories_they_advertise() -> None:
             continue
         checked += 1
         for category in strict:
-            assert (
-                policy["categories"][category] == "human_required"
-            ), f"{origin}: preset {policy['preset']!r} deja {category!r} en auto"
+            assert policy["categories"][category] == "human_required", (
+                f"{origin}: preset {policy['preset']!r} deja {category!r} en auto"
+            )
     assert checked >= 2, "no se ha comprobado ninguna plantilla de producción"
 
 

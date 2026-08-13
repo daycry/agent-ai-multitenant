@@ -534,8 +534,8 @@ async def test_the_reader_is_bounded(_migrated: None, admin_database_url: str) -
         approved = await _read(sm, ids)
         assert len(approved) == APPROVED_ACTIONS_MAX
         newest = ApprovalGate(_STRICT_POLICY, approved_actions=approved)
-        assert (
-            newest.review("write_file", {"path": f"f{APPROVED_ACTIONS_MAX + 2}.py"}) is None
-        ), "la más reciente tiene que estar dentro del tope"
+        assert newest.review("write_file", {"path": f"f{APPROVED_ACTIONS_MAX + 2}.py"}) is None, (
+            "la más reciente tiene que estar dentro del tope"
+        )
     finally:
         await engine.dispose()

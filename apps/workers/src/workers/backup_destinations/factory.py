@@ -134,5 +134,5 @@ def build_destination(
             runner=runner,
         )
     raise DestinationError(
-        f"unknown backup destination type {dest_type!r}; " f"must be one of {DESTINATION_TYPES}"
+        f"unknown backup destination type {dest_type!r}; must be one of {DESTINATION_TYPES}"
     )

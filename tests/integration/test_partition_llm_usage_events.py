@@ -140,7 +140,7 @@ def test_isolation_holds_for_a_real_app_user_session(migrated: str, app_database
         await _insert_event(conn, None, source="cortex")
         return mine, theirs, partition_name(TABLE, month_start(await conn.fetchval("SELECT now()")))
 
-    mine, theirs, partition = run(with_connection(migrated, _seed))
+    mine, _theirs, partition = run(with_connection(migrated, _seed))
     dsn = app_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
     async def _read(conn: asyncpg.Connection) -> tuple[list[str], list[str]]:

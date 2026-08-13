@@ -991,8 +991,7 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
                 "CMD",
                 "python",
                 "-c",
-                "import sys; sys.exit(0 if b'beat' in "
-                "open('/proc/1/cmdline','rb').read() else 1)",
+                "import sys; sys.exit(0 if b'beat' in open('/proc/1/cmdline','rb').read() else 1)",
             ],
             "interval": "30s",
             "timeout": "5s",

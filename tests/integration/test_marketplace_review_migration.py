@@ -95,9 +95,9 @@ def test_backfill_leaves_the_live_catalog_published(
     command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
     command.downgrade(alembic_config, _REVISION_BEFORE)  # type: ignore[arg-type]
 
-    assert not (
-        set(_NEW_COLUMNS) & asyncio.run(_columns(migrations_pg_dsn))
-    ), "el downgrade dejó columnas suyas atrás: no baja de verdad"
+    assert not (set(_NEW_COLUMNS) & asyncio.run(_columns(migrations_pg_dsn))), (
+        "el downgrade dejó columnas suyas atrás: no baja de verdad"
+    )
     listing_id = asyncio.run(_seed_listing_before_the_migration(migrations_pg_dsn))
 
     command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
@@ -133,8 +133,7 @@ def test_check_constraint_rejects_an_invented_state(
         try:
             with pytest.raises(asyncpg.exceptions.CheckViolationError):
                 await conn.execute(
-                    "UPDATE marketplace_listings SET review_status = 'aprobado-ya'"
-                    " WHERE id = $1",
+                    "UPDATE marketplace_listings SET review_status = 'aprobado-ya' WHERE id = $1",
                     listing_id,
                 )
         finally:

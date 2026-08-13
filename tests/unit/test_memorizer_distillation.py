@@ -108,9 +108,7 @@ async def test_clean_json_yields_candidates_in_order() -> None:
 @pytest.mark.asyncio
 async def test_markdown_fenced_json_is_parsed() -> None:
     """Models love wrapping JSON in fences; the parser unwraps it."""
-    llm = FakeLLM(
-        content=("```json\n" '[{"content": "Foo", "type": "semantic", "tags": []}]\n' "```")
-    )
+    llm = FakeLLM(content=('```json\n[{"content": "Foo", "type": "semantic", "tags": []}]\n```'))
     cands = await distil_execution(execution=_EXECUTION, agent=_AGENT, llm=llm)
     assert len(cands) == 1
     assert cands[0].content == "Foo"
@@ -229,7 +227,7 @@ async def test_too_many_candidates_are_capped() -> None:
 async def test_tags_are_stripped_and_filtered() -> None:
     llm = FakeLLM(
         content=(
-            '[{"content": "x", "type": "semantic", "tags":' ' ["  ok ", "", null, 42, "  good"]}]'
+            '[{"content": "x", "type": "semantic", "tags": ["  ok ", "", null, 42, "  good"]}]'
         )
     )
     cands = await distil_execution(execution=_EXECUTION, agent=_AGENT, llm=llm)

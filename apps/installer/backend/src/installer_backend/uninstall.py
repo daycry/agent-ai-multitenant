@@ -286,11 +286,10 @@ class Uninstaller:
             )
         # (b) explicit-yes confirmation — the SECOND of the double confirmation.
         if not self.confirmer.confirm_yes(
-            f"Esto DETENDRÁ y ELIMINARÁ el stack '{req.deployment_name}'. " "¿Continuar? [y/N]: "
+            f"Esto DETENDRÁ y ELIMINARÁ el stack '{req.deployment_name}'. ¿Continuar? [y/N]: "
         ):
             raise UninstallAbortedError(
-                "Desinstalación abortada: no se confirmó explícitamente "
-                "(no se ha eliminado nada)."
+                "Desinstalación abortada: no se confirmó explícitamente (no se ha eliminado nada)."
             )
 
     def _maybe_purge(self, req: UninstallRequest) -> bool:

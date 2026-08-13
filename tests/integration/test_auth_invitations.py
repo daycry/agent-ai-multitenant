@@ -69,7 +69,7 @@ _INVITATIONS_DDL: tuple[str, ...] = (
             REFERENCES users (id) ON DELETE SET NULL
     )
     """,
-    "CREATE INDEX IF NOT EXISTS ix_user_invitations_tenant_id" " ON user_invitations (tenant_id)",
+    "CREATE INDEX IF NOT EXISTS ix_user_invitations_tenant_id ON user_invitations (tenant_id)",
     "CREATE INDEX IF NOT EXISTS ix_user_invitations_tenant_pending"
     " ON user_invitations (tenant_id, email)"
     " WHERE redeemed_at IS NULL AND revoked_at IS NULL",
@@ -200,7 +200,7 @@ def configured_app(
 
     monkeypatch.setattr(
         "api_server.metrics.get_default_registry",
-        lambda: CollectorRegistry(),
+        CollectorRegistry,
     )
 
     from api_server.auth.deps import reset_redis_cache
@@ -386,8 +386,7 @@ async def test_valid_invitation_creates_user_and_membership(
             " JOIN users u ON u.id = m.user_id WHERE u.email = 'invitee@example.com'"
         )
         invitation = await conn.fetchrow(
-            "SELECT redeemed_at, redeemed_by_user_id FROM user_invitations"
-            " WHERE token_hash = $1",
+            "SELECT redeemed_at, redeemed_by_user_id FROM user_invitations WHERE token_hash = $1",
             minted.token_hash,
         )
     finally:

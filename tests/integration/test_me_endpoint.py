@@ -47,7 +47,7 @@ async def _seed_db(dsn: str) -> dict[str, UUID]:
             "TRUNCATE user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
             tenant_a,
             "Acme Corp",
             "acme",

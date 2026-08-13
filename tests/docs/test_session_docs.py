@@ -51,9 +51,9 @@ def runbook() -> str:
 def test_the_document_exists_and_its_folder_index_links_it(doc: Path, index: Path) -> None:
     """Un documento que no está en el índice de su carpeta no lo encuentra nadie."""
     assert doc.is_file(), f"falta {doc.relative_to(_ROOT)}"
-    assert f"./{doc.name}" in index.read_text(
-        encoding="utf-8"
-    ), f"{doc.name} no está enlazado desde {index.relative_to(_ROOT)}"
+    assert f"./{doc.name}" in index.read_text(encoding="utf-8"), (
+        f"{doc.name} no está enlazado desde {index.relative_to(_ROOT)}"
+    )
 
 
 # ---------------------------------------------------------------------------

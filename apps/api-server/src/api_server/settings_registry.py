@@ -102,9 +102,7 @@ KNOWN_SETTINGS: dict[str, CategoryDef] = {
     "costs": CategoryDef(
         label_es="Costes",
         icon="Coins",
-        description_es=(
-            "Tarifa horaria del tenant para el cálculo de coste humano " "de los planes."
-        ),
+        description_es=("Tarifa horaria del tenant para el cálculo de coste humano de los planes."),
         # The hourly-rate page predates the generic settings system —
         # we link to it directly instead of duplicating the form.
         external_page="/admin/settings/hourly-rate",
@@ -226,8 +224,8 @@ def registry_to_dict() -> dict[str, Any]:
 
 
 __all__ = [
-    "CategoryDef",
     "KNOWN_SETTINGS",
+    "CategoryDef",
     "SettingDef",
     "SettingType",
     "UnknownSettingError",

@@ -491,7 +491,7 @@ async def test_current_price_lookup(configured_app, migrations_pg_dsn: str) -> N
 
     async with _client(configured_app) as client:
         resp = await client.get(
-            "/model-prices/current" "?provider=anthropic&model_id=claude-sonnet-4-5&modality=text",
+            "/model-prices/current?provider=anthropic&model_id=claude-sonnet-4-5&modality=text",
             headers=headers,
         )
     assert resp.status_code == 200, resp.text

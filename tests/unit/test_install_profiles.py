@@ -53,9 +53,9 @@ def _load(name: str) -> InstallerConfig:
 def test_profiles_directory_has_at_least_three_yaml_files() -> None:
     assert _PROFILES_DIR.is_dir(), f"falta el directorio de perfiles: {_PROFILES_DIR}"
     profiles = _profile_paths()
-    assert (
-        len(profiles) >= 3
-    ), f"se esperaban >= 3 perfiles en {_PROFILES_DIR}, se encontraron {len(profiles)}"
+    assert len(profiles) >= 3, (
+        f"se esperaban >= 3 perfiles en {_PROFILES_DIR}, se encontraron {len(profiles)}"
+    )
 
 
 def test_required_profiles_are_present() -> None:

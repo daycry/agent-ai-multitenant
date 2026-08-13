@@ -160,9 +160,9 @@ def test_unit_job_enforces_a_coverage_floor() -> None:
         step.get("run", "") for step in job.get("steps", []) if isinstance(step, dict)
     )
     match = re.search(r"--cov-fail-under=(\d+)", run_blocks)
-    assert (
-        match is not None
-    ), "the test-unit job must gate coverage with pytest --cov-fail-under=<floor>"
+    assert match is not None, (
+        "the test-unit job must gate coverage with pytest --cov-fail-under=<floor>"
+    )
     # Ratchet floor: 30.4% (2026-07-07) → 31%+ (2026-07-09, tras los tests puros de
     # detect_outliers, hallazgo #8). Never lower — raise toward conventions.md (70/80).
     assert int(match.group(1)) >= 31, (

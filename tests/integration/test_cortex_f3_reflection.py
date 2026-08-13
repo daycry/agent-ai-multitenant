@@ -111,8 +111,7 @@ async def _seed_owner_with_turns(
             "h",
         )
         await conn.execute(
-            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id)"
-            " VALUES ($1, $2, $3)",
+            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id) VALUES ($1, $2, $3)",
             conv_id,
             owner_id,
             tenant_id,
@@ -722,9 +721,9 @@ async def test_una_reflexion_sacia_el_drive_coherence(
 
     now = datetime.now(UTC)
     await _set_autonomy(migrations_pg_dsn, enabled=True)
-    assert (
-        await read_affect_state(api_redis, str(owner_id), now=now) is None
-    ), "el fixture arranca sin caché afectiva"
+    assert await read_affect_state(api_redis, str(owner_id), now=now) is None, (
+        "el fixture arranca sin caché afectiva"
+    )
 
     fake = _FakeLLM(content=_BIG_JUMP_JSON)
     result = await _reflect_async(

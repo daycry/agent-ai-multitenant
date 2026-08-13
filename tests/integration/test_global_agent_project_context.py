@@ -107,7 +107,7 @@ async def _seed_two_tenants(dsn: str) -> dict[str, Any]:
             " user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug)" " VALUES ($1,$2,$3),($4,$5,$6),($7,$8,$9)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1,$2,$3),($4,$5,$6),($7,$8,$9)",
             a["tenant_id"],
             "Tenant A",
             "tenant-a-gctx",
@@ -119,7 +119,7 @@ async def _seed_two_tenants(dsn: str) -> dict[str, Any]:
             "platform-gctx",
         )
         await conn.execute(
-            "INSERT INTO projects (id, tenant_id, name)" " VALUES ($1,$2,$3),($4,$5,$6),($7,$8,$9)",
+            "INSERT INTO projects (id, tenant_id, name) VALUES ($1,$2,$3),($4,$5,$6),($7,$8,$9)",
             a["p1_id"],
             a["tenant_id"],
             "Alpha P1",
@@ -132,7 +132,7 @@ async def _seed_two_tenants(dsn: str) -> dict[str, Any]:
         )
         # KBs + grants de tenant A.
         await conn.execute(
-            "INSERT INTO knowledge_bases (id, tenant_id, name)" " VALUES ($1,$2,$3),($4,$5,$6)",
+            "INSERT INTO knowledge_bases (id, tenant_id, name) VALUES ($1,$2,$3),($4,$5,$6)",
             a["kb_id"],
             a["tenant_id"],
             "Alpha KB",
@@ -141,8 +141,7 @@ async def _seed_two_tenants(dsn: str) -> dict[str, Any]:
             "Gamma KB",
         )
         await conn.execute(
-            "INSERT INTO kb_projects (kb_id, project_id, tenant_id)"
-            " VALUES ($1,$2,$3),($4,$5,$6)",
+            "INSERT INTO kb_projects (kb_id, project_id, tenant_id) VALUES ($1,$2,$3),($4,$5,$6)",
             a["kb_id"],
             a["p1_id"],
             a["tenant_id"],

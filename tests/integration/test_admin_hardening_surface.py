@@ -128,9 +128,9 @@ def test_every_admin_route_carries_the_hardening_gate(app: FastAPI) -> None:
         for label, dependant in _admin_routes(app)
         if _GATE_NAME not in _dependency_names(dependant)
     ]
-    assert (
-        not offenders
-    ), f"{len(offenders)} route(s) under /admin lack {_GATE_NAME}: {sorted(offenders)}"
+    assert not offenders, (
+        f"{len(offenders)} route(s) under /admin lack {_GATE_NAME}: {sorted(offenders)}"
+    )
 
 
 def test_the_guard_actually_found_the_admin_surface(app: FastAPI) -> None:

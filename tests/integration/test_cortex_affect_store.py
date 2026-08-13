@@ -148,8 +148,7 @@ async def test_affect_snapshot_migration_indexes_no_rls_and_reversible(
         conv_id = uuid4()
         turn_id = uuid4()
         await conn.execute(
-            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id)"
-            " VALUES ($1, $2, $3)",
+            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id) VALUES ($1, $2, $3)",
             conv_id,
             owner_id,
             seed["tenant_id"],

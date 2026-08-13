@@ -21,7 +21,7 @@ in a later phase and passes it in.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 # The four points in the LLM / tool cycle a guardrail can run at.
@@ -30,7 +30,7 @@ HookPoint = Literal["pre_llm", "post_llm", "pre_tool", "post_tool"]
 HOOK_POINTS: tuple[HookPoint, ...] = ("pre_llm", "post_llm", "pre_tool", "post_tool")
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """How serious a triggered guardrail is.
 
     A ``str`` enum so it round-trips cleanly through YAML / JSON config
@@ -45,7 +45,7 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
-class Action(str, Enum):
+class Action(StrEnum):
     """One of the six actions taken when a guardrail triggers.
 
     The engine surfaces the action on the decision; the host applies its

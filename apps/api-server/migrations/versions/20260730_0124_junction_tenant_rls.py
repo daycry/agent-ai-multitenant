@@ -180,8 +180,7 @@ _BUILTIN_READ_POLICIES: tuple[tuple[str, str], ...] = (
     ),
     (
         "team_members",
-        "EXISTS (SELECT 1 FROM teams t"
-        " WHERE t.id = team_members.team_id AND t.is_builtin IS TRUE)",
+        "EXISTS (SELECT 1 FROM teams t WHERE t.id = team_members.team_id AND t.is_builtin IS TRUE)",
     ),
 )
 

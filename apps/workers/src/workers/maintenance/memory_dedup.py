@@ -27,8 +27,7 @@ _log = structlog.get_logger("workers.maintenance")
 # Todas-menos-la-más-antigua por grupo exacto. COALESCE con el UUID cero para
 # que los owners NULL agrupen entre sí (NULL != NULL en un PARTITION BY crudo
 # no rompe, pero el cero-UUID lo hace explícito y legible en el plan).
-_CONSOLIDATE_SQL = text(
-    """
+_CONSOLIDATE_SQL = text("""
     WITH ranked AS (
         SELECT id,
                row_number() OVER (
@@ -47,8 +46,7 @@ _CONSOLIDATE_SQL = text(
     SET deleted_at = now()
     FROM ranked r
     WHERE m.id = r.id AND r.rn > 1
-    """
-)
+    """)
 
 
 async def consolidate_exact_duplicate_memories(session: AsyncSession) -> int:

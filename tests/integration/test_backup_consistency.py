@@ -127,8 +127,7 @@ def _redis_dir(tmp_path: Path) -> Path:
     (aof / "appendonly.aof.2.base.rdb").write_bytes(b"base")
     (aof / "appendonly.aof.2.incr.aof").write_bytes(b"incr")
     (aof / "appendonly.aof.manifest").write_text(
-        "file appendonly.aof.2.base.rdb seq 2 type b\n"
-        "file appendonly.aof.2.incr.aof seq 2 type i\n"
+        "file appendonly.aof.2.base.rdb seq 2 type b\nfile appendonly.aof.2.incr.aof seq 2 type i\n"
     )
     (root / "dump.rdb").write_bytes(b"rdb")
     return root

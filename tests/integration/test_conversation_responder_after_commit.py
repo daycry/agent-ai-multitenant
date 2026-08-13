@@ -135,8 +135,7 @@ async def test_responder_fires_after_user_message_commits(
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
             count = await conn.fetchval(
-                "SELECT count(*) FROM messages WHERE conversation_id = $1"
-                " AND author_kind = 'user'",
+                "SELECT count(*) FROM messages WHERE conversation_id = $1 AND author_kind = 'user'",
                 conversation_id,
             )
         finally:

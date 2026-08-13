@@ -20,8 +20,7 @@ VERDICT_REJECT = "<verdict>reject</verdict>"
 # The shared closing sentence of every review NUDGE (graph.py) — the actionable
 # "stop and deliver the verdict" push. One wording, one place.
 REVIEW_FINISH_SUMMARY = (
-    "reply with your final summary ending in exactly one "
-    f"{VERDICT_APPROVE} or {VERDICT_REJECT} tag"
+    f"reply with your final summary ending in exactly one {VERDICT_APPROVE} or {VERDICT_REJECT} tag"
 )
 
 

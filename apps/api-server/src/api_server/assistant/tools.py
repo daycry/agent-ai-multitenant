@@ -183,8 +183,7 @@ async def _search_knowledge(
     if not q:
         return {"hits": [], "note": "query vacía"}
     k = max(1, min(int(limit or 5), _KB_SEARCH_LIMIT_MAX))
-    sql = sa_text(
-        """
+    sql = sa_text("""
         SELECT chunks.content, documents.kb_id, documents.title
         FROM chunks
         JOIN documents ON documents.id = chunks.document_id
@@ -196,8 +195,7 @@ async def _search_knowledge(
             to_tsvector('public.es_unaccent', chunks.content),
             plainto_tsquery('public.es_unaccent', :q)) DESC
         LIMIT :k
-        """
-    )
+        """)
     rows = (await ctx.session.execute(sql, {"q": q, "k": k})).all()
     return {
         "hits": [
@@ -489,8 +487,7 @@ ASSISTANT_TOOLS: dict[str, ToolEntry] = {
         schema={
             "name": "tenant_projects_status",
             "description": (
-                "Estado consolidado de todos los proyectos del tenant "
-                "(conteo total y por estado)."
+                "Estado consolidado de todos los proyectos del tenant (conteo total y por estado)."
             ),
             "parameters": {"type": "object", "properties": {}},
         },

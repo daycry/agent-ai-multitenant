@@ -337,8 +337,7 @@ async def test_mcp_server_chain_from_install_to_the_project_having_it(
         assert install.status_code == 201, install.text
         installation_id = install.json()["id"]
         assert install.json()["status"] == "enabled", (
-            "un listing verified se instala habilitado; si no, el despliegue no"
-            " podría ni empezar"
+            "un listing verified se instala habilitado; si no, el despliegue no podría ni empezar"
         )
 
         # 2. El proyecto lo ve como DISPONIBLE, con su formulario y su rol sugerido.
@@ -365,9 +364,9 @@ async def test_mcp_server_chain_from_install_to_the_project_having_it(
 
     # ---- EL ASSERT QUE JUSTIFICA EL PLAN --------------------------------
     servers, policy = await _project_state(migrations_pg_dsn, ids["project"])
-    assert [s["name"] for s in servers] == [
-        "jira"
-    ], "instalar seguía siendo comprar sin recibir: el proyecto NO tiene el MCP"
+    assert [s["name"] for s in servers] == ["jira"], (
+        "instalar seguía siendo comprar sin recibir: el proyecto NO tiene el MCP"
+    )
     assert servers[0]["url"] == "https://jira-de-este-proyecto.test/mcp"
     assert policy == {
         "jira.create_issue": ["backend_dev"],
@@ -419,9 +418,9 @@ async def test_mcp_server_chain_from_install_to_the_project_having_it(
         await conn.close()
     assert row is not None
     assert row["status"] == "retired" and row["retired_at"] is not None
-    assert json.loads(row["created_refs"])["mcp_servers"] == [
-        "jira"
-    ], "la fila retirada perdió el rastro de qué había creado"
+    assert json.loads(row["created_refs"])["mcp_servers"] == ["jira"], (
+        "la fila retirada perdió el rastro de qué había creado"
+    )
     assert actions[0] == "install"
     assert actions[-2:] == ["deploy", "retire"], actions
 
@@ -464,9 +463,9 @@ async def test_tool_chain_gives_the_targeted_agent_the_tool(
     # nombre del listing por `normalize_tool_name`. Se afirma el nombre REAL
     # porque ir por HTTP es justo lo que descubre estas cosas — un test que
     # llamara al servicio a mano habría fijado el nombre del listing.
-    assert tools_after == [
-        ("qa", "status_checker")
-    ], f"el agente del rol destino NO tiene la tool: {tools_after}"
+    assert tools_after == [("qa", "status_checker")], (
+        f"el agente del rol destino NO tiene la tool: {tools_after}"
+    )
 
     async with _client(configured_app) as client:
         await client.post(f"/marketplace/deployments/{deployment_id}/retire", headers=headers)

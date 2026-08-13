@@ -83,7 +83,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             agent_researcher,
         )
         await conn.execute(
-            "INSERT INTO team_members (team_id, agent_id)" " VALUES ($1, $2), ($1, $3), ($1, $4)",
+            "INSERT INTO team_members (team_id, agent_id) VALUES ($1, $2), ($1, $3), ($1, $4)",
             team_a,
             agent_pm,
             agent_qa,

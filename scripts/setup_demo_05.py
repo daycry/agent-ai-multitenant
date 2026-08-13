@@ -232,7 +232,7 @@ async def main() -> int:
                 output_schema={},
                 implementation_type="docker_command",
                 implementation_ref=(
-                    "python:3.12-alpine#python -c " "'print(__import__(\"os\").getuid())'"
+                    "python:3.12-alpine#python -c 'print(__import__(\"os\").getuid())'"
                 ),
                 security_level="privileged",
                 timeout_seconds=60,

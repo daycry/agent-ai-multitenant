@@ -187,10 +187,10 @@ class ReviewSession:
 
 
 __all__ = [
-    "AuxComposeService",
     "DEFAULT_IDLE_SUSPEND_S",
     "DEFAULT_TENANT_CAP",
     "DEFAULT_VERDICT_TIMEOUT_S",
+    "AuxComposeService",
     "HumanCheckItem",
     "ReviewRuntimeSpec",
     "ReviewSession",

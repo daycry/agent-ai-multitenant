@@ -333,8 +333,7 @@ async def _seed_tenant_admin(dsn: str) -> tuple[UUID, UUID]:
             tenant_id,
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash)"
-            " VALUES ($1, 'admin@mktseed.test', 'h')",
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, 'admin@mktseed.test', 'h')",
             user_id,
         )
         await conn.execute(

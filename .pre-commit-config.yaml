@@ -37,18 +37,31 @@ repos:
         exclude: \.(ps1|cmd|bat)$
 
   # -------------------- Python --------------------
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
-    hooks:
-      - id: black
-        # The generated Python SDK (Plan 13 task_13_13) follows the
-        # generator's own style. `tool.black.extend-exclude` in pyproject is
-        # IGNORED for files pre-commit passes explicitly (only force-exclude
-        # applies to those), so exclude the generated dir at the hook level.
-        exclude: ^packages/sdk-python/src/agentic_platform_sdk/.*$
-
+  # ---------------------------------------------------------------------------
+  # UN SOLO FORMATEADOR (2026-08-13). Aquí había también `psf/black`, y el repo
+  # corría los dos — lo cual sólo funciona mientras sus estilos coincidan.
+  #
+  # Al subir black a 26.3.1 (obligado: PYSEC-2026-2120 y PYSEC-2026-2121) y ruff
+  # a 0.16.3, dejaron de coincidir: black reformateaba 17 ficheros, ruff-format
+  # los devolvía, y así **sin converger jamás**. Un `git commit` no podía
+  # terminar, porque cada hook deshacía al otro.
+  #
+  # No es el gotcha conocido de `black-vs-ruff-format-chained-call-comment.md`
+  # (un comentario dentro de una llamada encadenada): ahí basta mover el
+  # comentario. Aquí son dos estilos distintos sobre el árbol entero, y ningún
+  # cambio en el código lo arregla.
+  #
+  # Se queda `ruff-format` y no black porque es el MISMO motor que el linter
+  # —una versión, una config, un caché— y nació explícitamente black-compatible.
+  # Bajar black no era opción: su versión vieja es la vulnerable.
+  #
+  # Si alguien vuelve a añadir black aquí, esto se repite. El día que se quiera,
+  # hay que fijar las dos versiones a un par que se sepa compatible y comprobarlo
+  # con `pre-commit run black --all-files` seguido de `ruff-format`: si el
+  # segundo toca un fichero, no son compatibles.
+  # ---------------------------------------------------------------------------
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.0
+    rev: v0.16.3
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]

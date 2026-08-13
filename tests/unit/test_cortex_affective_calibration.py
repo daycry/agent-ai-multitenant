@@ -237,8 +237,7 @@ def test_la_critica_sostenida_satura_el_mood_en_el_piso_sin_cruzarlo() -> None:
 
     assert out.emotion.valence <= -0.95
     assert -0.65 <= out.mood.valence <= -0.55, (
-        f"el mood saturó en {out.mood.valence:.4f}; el piso debe cortar antes del "
-        "extremo del eje"
+        f"el mood saturó en {out.mood.valence:.4f}; el piso debe cortar antes del extremo del eje"
     )
     assert out.mood.valence >= MOOD_FLOOR - 1e-9
     assert out.mood.valence >= out.emotion.valence + 0.3

@@ -39,7 +39,7 @@ def test_without_vault_it_fails_loudly_instead_of_reporting_success(
     from workers import credential_rotation_task
 
     monkeypatch.setattr(credential_rotation_task, "_build_vault_client", lambda settings: None)
-    monkeypatch.setattr("workers.config.get_settings", lambda: _settings())
+    monkeypatch.setattr("workers.config.get_settings", _settings)
 
     assert revoke_previous_minio() == 2
 

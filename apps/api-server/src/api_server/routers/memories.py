@@ -426,8 +426,7 @@ async def list_similar_memories(
     # ``global`` there is no owner pointer, so no extra filter applies.
     owner_attr = _SCOPE_OWNER_ATTR.get(src.scope)
     owner_clause = f"AND {owner_attr} = :owner_id" if owner_attr is not None else ""
-    sql = _text(
-        f"""
+    sql = _text(f"""
         SELECT
             id,
             1 - (embedding <=> CAST(:src_embedding AS vector)) AS similarity
@@ -441,8 +440,7 @@ async def list_similar_memories(
           AND (1 - (embedding <=> CAST(:src_embedding AS vector))) >= :threshold
         ORDER BY embedding <=> CAST(:src_embedding AS vector)
         LIMIT :limit
-        """
-    )
+        """)
     # pgvector exige formato `'[a,b,c]'` con comas. `str(numpy_array)`
     # devuelve `'[a b c]'` con espacios y rompe el CAST. Misma receta
     # que `memorizer/recall.py` y `rag/search.py`.

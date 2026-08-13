@@ -118,9 +118,9 @@ def test_emits_one_env_line_per_service(tmp_path: Path) -> None:
     result, _ = _run(tmp_path)
 
     for var in _EXPECTED_VARS:
-        assert f"{var}=hvs" in result.stdout.replace(
-            "\r", ""
-        ), f"falta la línea de {var} en la salida:\n{result.stdout}"
+        assert f"{var}=hvs" in result.stdout.replace("\r", ""), (
+            f"falta la línea de {var} en la salida:\n{result.stdout}"
+        )
 
 
 def test_writes_nothing_to_disk_by_default(tmp_path: Path) -> None:

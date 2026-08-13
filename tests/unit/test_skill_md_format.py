@@ -32,8 +32,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-VALID_SKILL_MD = textwrap.dedent(
-    """\
+VALID_SKILL_MD = textwrap.dedent("""\
     ---
     name: web-researcher
     description: Researches a topic across the web and cites sources.
@@ -62,8 +61,7 @@ VALID_SKILL_MD = textwrap.dedent(
     ## Usage
 
     Ask it to research anything.
-    """
-)
+    """)
 
 
 def _minimal(**overrides: str) -> str:
@@ -196,8 +194,7 @@ def test_good_semver_accepted(good: str) -> None:
 # Bad permission keys / values error (shared vocabulary enforced)
 # ---------------------------------------------------------------------------
 def test_unknown_permission_key_errors() -> None:
-    text = textwrap.dedent(
-        """\
+    text = textwrap.dedent("""\
         ---
         name: x
         description: d
@@ -208,15 +205,13 @@ def test_unknown_permission_key_errors() -> None:
         ---
 
         Body.
-        """
-    )
+        """)
     with pytest.raises(SkillFormatError, match="unknown key"):
         parse_skill_md(text)
 
 
 def test_bad_network_policy_value_errors() -> None:
-    with_bad = textwrap.dedent(
-        """\
+    with_bad = textwrap.dedent("""\
         ---
         name: x
         description: d
@@ -226,8 +221,7 @@ def test_bad_network_policy_value_errors() -> None:
         ---
 
         Body.
-        """
-    )
+        """)
     with pytest.raises(SkillFormatError, match="network_policy"):
         parse_skill_md(with_bad)
 
@@ -239,8 +233,7 @@ def test_permissions_not_a_mapping_errors() -> None:
 
 
 def test_string_permission_value_coerced_to_list() -> None:
-    text = textwrap.dedent(
-        """\
+    text = textwrap.dedent("""\
         ---
         name: x
         description: d
@@ -250,8 +243,7 @@ def test_string_permission_value_coerced_to_list() -> None:
         ---
 
         Body.
-        """
-    )
+        """)
     manifest = parse_skill_md(text)
     assert manifest.permissions["allowed_domains"] == ["solo.example"]
 
@@ -307,8 +299,7 @@ def test_examples_not_a_list_errors() -> None:
 
 
 def test_empty_example_is_dropped() -> None:
-    text = textwrap.dedent(
-        """\
+    text = textwrap.dedent("""\
         ---
         name: x
         description: d
@@ -319,8 +310,7 @@ def test_empty_example_is_dropped() -> None:
         ---
 
         Body.
-        """
-    )
+        """)
     manifest = parse_skill_md(text)
     assert manifest.examples == (SkillExample(title="kept", prompt=None),)
 

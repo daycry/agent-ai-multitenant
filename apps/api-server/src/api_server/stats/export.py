@@ -43,7 +43,7 @@ import html
 import io
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 
 from api_server.schemas.tenant_stats import ConsumptionSummaryResponse, ExecutionRunRow
 
@@ -77,7 +77,7 @@ RUNS_COLUMNS: tuple[str, ...] = (
 )
 
 
-class ExportFormat(str, Enum):
+class ExportFormat(StrEnum):
     """The export format selected by the router's ``?format=`` parameter."""
 
     CSV = "csv"

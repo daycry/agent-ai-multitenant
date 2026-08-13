@@ -337,7 +337,7 @@ async def test_two_parallel_signatures_end_in_an_approved_plan_with_two_signers(
 
     body = final.json()
     assert body["status"] == "approved", (
-        "las dos firmas se pisaron: el plan se quedó sin la segunda " f"({body['status']})"
+        f"las dos firmas se pisaron: el plan se quedó sin la segunda ({body['status']})"
     )
     assert body["first_approved_by"] and body["approved_by"]
     assert body["first_approved_by"] != body["approved_by"], "el plan se aprobó con una sola firma"

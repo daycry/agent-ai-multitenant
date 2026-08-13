@@ -113,16 +113,16 @@ def test_dry_run_is_flagged_as_simulation_with_fake_credentials() -> None:
     assert re.search(r"--dry-run[^\n]*", text)
     # El bloque que explica real vs simulación debe nombrar las dos cosas.
     assert re.search(r"SIMULACI[ÓO]N", text), "el runbook no marca ninguna simulación"
-    assert re.search(
-        r"FALSAS|falsas", text
-    ), "el runbook no advierte de que las credenciales del --dry-run son FALSAS"
+    assert re.search(r"FALSAS|falsas", text), (
+        "el runbook no advierte de que las credenciales del --dry-run son FALSAS"
+    )
 
 
 def test_runbook_names_the_cli_as_the_real_path() -> None:
     text = _runbook()
-    assert re.search(
-        r"camino\s+REAL", text, re.IGNORECASE
-    ), "el runbook no identifica cuál es el camino REAL de instalación"
+    assert re.search(r"camino\s+REAL", text, re.IGNORECASE), (
+        "el runbook no identifica cuál es el camino REAL de instalación"
+    )
     assert "scripts/install.sh" in text, "el runbook no nombra el camino real (scripts/install.sh)"
 
 

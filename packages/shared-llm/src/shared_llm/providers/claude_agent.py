@@ -294,7 +294,7 @@ class ClaudeAgentProvider:
             from claude_agent_sdk import query
         except ImportError as exc:
             raise ImportError(
-                "claude-agent-sdk is not installed. " "Run `pip install 'shared-llm[claude]'`."
+                "claude-agent-sdk is not installed. Run `pip install 'shared-llm[claude]'`."
             ) from exc
         return query
 
@@ -314,7 +314,7 @@ class ClaudeAgentProvider:
             from claude_agent_sdk import ClaudeAgentOptions
         except ImportError as exc:
             raise ImportError(
-                "claude-agent-sdk is not installed. " "Run `pip install 'shared-llm[claude]'`."
+                "claude-agent-sdk is not installed. Run `pip install 'shared-llm[claude]'`."
             ) from exc
         # ADR 0070: extended-thinking effort (EffortLevel: low/medium/high/xhigh/max).
         # Solo se pasa cuando hay valor — así seguimos compatibles con SDKs sin el

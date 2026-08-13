@@ -48,7 +48,7 @@ def upgrade() -> None:
             postgresql_where=sa.text("is_builtin = true"),
         )
         op.execute(
-            f"CREATE POLICY {table}_builtin_read ON {table} FOR SELECT" " USING (is_builtin = true)"
+            f"CREATE POLICY {table}_builtin_read ON {table} FOR SELECT USING (is_builtin = true)"
         )
 
 

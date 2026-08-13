@@ -292,7 +292,7 @@ def test_runtime_wired_set_matches_runtime_executor() -> None:
         "run_build",
     }
     assert expected >= RUNTIME_WIRED_TOOL_NAMES, (
-        "se anuncian tools sin ejecutor real: " f"{sorted(RUNTIME_WIRED_TOOL_NAMES - expected)}"
+        f"se anuncian tools sin ejecutor real: {sorted(RUNTIME_WIRED_TOOL_NAMES - expected)}"
     )
     assert expected - RUNTIME_WIRED_TOOL_NAMES == honest_error_only, (
         "el runtime registra tools que no están en la lista de anunciables y que "

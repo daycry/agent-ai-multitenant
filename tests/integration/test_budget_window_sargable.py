@@ -69,7 +69,7 @@ async def _seed(dsn: str) -> tuple[UUID, UUID]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "TRUNCATE executions, tasks, plans, projects, organizations" " RESTART IDENTITY CASCADE"
+            "TRUNCATE executions, tasks, plans, projects, organizations RESTART IDENTITY CASCADE"
         )
         await conn.execute(
             "INSERT INTO organizations (id, name, slug) VALUES ($1, 'T', $2)",

@@ -124,8 +124,7 @@ async def _load_combo_stats(sessionmaker: Any, *, window_days: int = 30) -> list
 
     async with sessionmaker() as session:
         rows = await session.execute(
-            sa_text(
-                """
+            sa_text("""
                 SELECT e.tenant_id, e.agent_id, a.name, m.model,
                        count(*) AS runs,
                        (count(*) FILTER (WHERE e.status = 'done'))::float / count(*)
@@ -143,8 +142,7 @@ async def _load_combo_stats(sessionmaker: Any, *, window_days: int = 30) -> list
                 WHERE e.created_at >= now() - make_interval(days => :days)
                   AND e.agent_id IS NOT NULL
                 GROUP BY e.tenant_id, e.agent_id, a.name, m.model
-                """
-            ),
+                """),
             {"days": window_days},
         )
         return [

@@ -152,9 +152,9 @@ def test_a_clean_start_honours_service_user_password_from_the_environment() -> N
         "el script de init no lee `SERVICE_USER_PASSWORD`, así que no hay forma de"
         " darle una contraseña propia a un despliegue nuevo"
     )
-    assert (
-        "ALTER ROLE service_user" in script
-    ), "el script no aplica la contraseña al rol; solo la lee"
+    assert "ALTER ROLE service_user" in script, (
+        "el script no aplica la contraseña al rol; solo la lee"
+    )
     # El orden alfabético del entrypoint de la imagen de PostgreSQL es el
     # contrato: este script tiene que correr DESPUÉS del 04 que crea el rol.
     assert SERVICE_ROLE_PASSWORD_SH.name > SERVICE_ROLE_SQL.name, (

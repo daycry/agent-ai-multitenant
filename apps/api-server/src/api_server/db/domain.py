@@ -1694,8 +1694,7 @@ class HumanWorkSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMi
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
-            f"HumanWorkSession(id={self.id!r}, task_id={self.task_id!r},"
-            f" user_id={self.user_id!r})"
+            f"HumanWorkSession(id={self.id!r}, task_id={self.task_id!r}, user_id={self.user_id!r})"
         )
 
 
@@ -1746,7 +1745,7 @@ class HumanTaskAssignment(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timestam
         # The DB enforces the HumanTaskAssignmentStatus value set (mirrors the
         # ck_agents_agent_type CHECK shape).
         CheckConstraint(
-            "status IN ('pending_acceptance', 'accepted', 'reassigned'," " 'declined', 'expired')",
+            "status IN ('pending_acceptance', 'accepted', 'reassigned', 'declined', 'expired')",
             name="ck_human_task_assignments_status",
         ),
     )
@@ -1806,9 +1805,9 @@ __all__ = [
     "AgentTool",
     "AgentType",
     "ApprovalPolicyTemplate",
-    "AssignmentMode",
     "ApprovalRequest",
     "ApprovalRequestStatus",
+    "AssignmentMode",
     "BudgetPeriod",
     "ChatMode",
     "Conversation",

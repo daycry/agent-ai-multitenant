@@ -59,7 +59,7 @@ async def _seed_agent_only_kb(dsn: str, *, tenant_id: UUID, project_id: UUID, co
             tenant_id,
         )
         await conn.execute(
-            "INSERT INTO agent_knowledge_bases (agent_id, kb_id, tenant_id)" " VALUES ($1, $2, $3)",
+            "INSERT INTO agent_knowledge_bases (agent_id, kb_id, tenant_id) VALUES ($1, $2, $3)",
             agent_id,
             kb_id,
             tenant_id,

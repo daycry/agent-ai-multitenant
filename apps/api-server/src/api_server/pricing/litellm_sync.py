@@ -94,7 +94,7 @@ from api_server.db.model_prices import (
 # never as a provider runtime. Overridable via settings for an internal
 # mirror.
 DEFAULT_LITELLM_FEED_URL = (
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/" "model_prices_and_context_window.json"
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 )
 
 # The feed quotes per-token USD; the catalog stores per-1M-token prices.

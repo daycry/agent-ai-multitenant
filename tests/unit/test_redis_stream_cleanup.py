@@ -118,9 +118,9 @@ def test_the_conversation_delete_hard_deletes_its_messages() -> None:
     # mensajes se borran de verdad: si no, quedan filas huérfanas colgando de
     # una conversación que ya no se lista y que nadie volverá a mirar.
     body = _endpoint_body(_ROOT / "routers" / "conversations.py", "delete_conversation")
-    assert re.search(
-        r"delete\(Message\)\.where", body
-    ), "el DELETE de conversación ya no hard-borra sus mensajes"
+    assert re.search(r"delete\(Message\)\.where", body), (
+        "el DELETE de conversación ya no hard-borra sus mensajes"
+    )
 
 
 def test_clearing_a_chat_also_cleans_its_stream() -> None:
@@ -150,9 +150,9 @@ def test_every_stream_key_family_is_accounted_for() -> None:
         "cortex_telemetry_stream_key",  # una por OWNER: acotado, no crece con el uso
     }
     found = set(_all_stream_keys())
-    assert (
-        found <= known
-    ), f"familias de stream nuevas sin decidir su limpieza: {sorted(found - known)}"
+    assert found <= known, (
+        f"familias de stream nuevas sin decidir su limpieza: {sorted(found - known)}"
+    )
     # No-vacuo: si el descubrimiento deja de encontrar nada, el test dejaría de
     # vigilar sin avisar.
     assert len(found) >= 3, f"la búsqueda de claves de stream se rompió (vio {found})"

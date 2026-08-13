@@ -160,9 +160,9 @@ def test_tar_volume_argv_still_carries_the_mode_flag(tmp_path: Path) -> None:
     # que la guarda de arriba pasó a ser decorativa.
     without_mode = [a for a in argv if a != "--create"]
     done = subprocess.run(without_mode, capture_output=True, text=True, check=False)
-    assert (
-        done.returncode != 0
-    ), "tar aceptó un argv sin flag de modo: la guarda `--create` ya no prueba nada"
+    assert done.returncode != 0, (
+        "tar aceptó un argv sin flag de modo: la guarda `--create` ya no prueba nada"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -201,9 +201,9 @@ def test_tar_bind_path_extracts_back_and_excludes_the_backup_root(tmp_path: Path
     assert {
         k.removeprefix("projects/"): v for k, v in files.items() if k.startswith("projects/")
     } == (expected)
-    assert not [
-        k for k in files if k.startswith("backups/")
-    ], f"el tar del bind se auto-incluyó el backup_root: {sorted(files)}"
+    assert not [k for k in files if k.startswith("backups/")], (
+        f"el tar del bind se auto-incluyó el backup_root: {sorted(files)}"
+    )
 
 
 # --------------------------------------------------------------------------- #

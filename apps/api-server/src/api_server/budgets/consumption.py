@@ -777,7 +777,7 @@ async def tenant_budget_summary(
             "available": False,
             "reason": "no_budget_configured",
             "message": (
-                "No hay ningún presupuesto configurado para este tenant ni " "para sus proyectos."
+                "No hay ningún presupuesto configurado para este tenant ni para sus proyectos."
             ),
         }
 

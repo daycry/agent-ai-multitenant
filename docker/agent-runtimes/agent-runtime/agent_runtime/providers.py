@@ -709,7 +709,7 @@ _SUBMIT_PROGRESS_TOOL = {
     "function": {
         "name": "submit_progress",
         "description": (
-            "Report an honest self-assessment of your progress toward the " "acceptance criteria."
+            "Report an honest self-assessment of your progress toward the acceptance criteria."
         ),
         "parameters": {
             "type": "object",

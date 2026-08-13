@@ -201,13 +201,11 @@ def test_ci4_agents_are_global_builtin_without_pinned_model(
     async def _fetch() -> list[asyncpg.Record]:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            return await conn.fetch(
-                """
+            return await conn.fetch("""
                 SELECT name, scope, tenant_id, is_template, system_prompt, model_config
                   FROM agents
                  WHERE name LIKE 'CodeIgniter 4 —%'
-                """
-            )
+                """)
         finally:
             await conn.close()
 
@@ -249,24 +247,20 @@ def test_ci4_agents_carry_tool_assignments(alembic_config, migrations_pg_dsn: st
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
             total = int(
-                await conn.fetchval(
-                    """
+                await conn.fetchval("""
                     SELECT count(*)
                       FROM agent_tools at
                       JOIN agents a ON a.id = at.agent_id
                      WHERE a.name LIKE 'CodeIgniter 4 —%'
-                    """
-                )
+                    """)
             )
-            per_agent = await conn.fetch(
-                """
+            per_agent = await conn.fetch("""
                 SELECT a.name, count(at.tool_id) AS n
                   FROM agents a
                   LEFT JOIN agent_tools at ON at.agent_id = a.id
                  WHERE a.name LIKE 'CodeIgniter 4 —%'
                  GROUP BY a.name
-                """
-            )
+                """)
             return total, [(r["name"], int(r["n"])) for r in per_agent]
         finally:
             await conn.close()
@@ -340,15 +334,13 @@ def test_codeigniter_4_app_template_grants_eight_kbs(
     async def _inspect() -> dict[str, object]:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            row = await conn.fetchrow(
-                """
+            row = await conn.fetchrow("""
                 SELECT p.default_kb_grants, t.name AS team_name, t.is_builtin
                   FROM projects p
                   JOIN teams t ON t.id = p.team_id
                  WHERE p.name = 'Plantilla: App CodeIgniter 4'
                    AND p.is_template = true
-                """
-            )
+                """)
             assert row is not None
             return {
                 "grants": list(row["default_kb_grants"]),
@@ -417,7 +409,7 @@ def test_ci4_kb_visible_only_after_grant(alembic_config, migrations_pg_dsn: str)
                 tenant_ungranted,
             )
             await conn.execute(
-                "INSERT INTO kb_projects (kb_id, project_id, tenant_id)" " VALUES ($1, $2, $3)",
+                "INSERT INTO kb_projects (kb_id, project_id, tenant_id) VALUES ($1, $2, $3)",
                 kb_id,
                 project_granted,
                 tenant_granted,

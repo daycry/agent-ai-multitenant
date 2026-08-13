@@ -457,8 +457,7 @@ class AuditReport:
                 lines.append(f"        {category:<24} (implícita) -> {decision}{mark}")
             if not plan.changes:
                 lines.append(
-                    "    todas en `auto`: el comportamiento NO cambia,"
-                    " solo deja de ser implícito"
+                    "    todas en `auto`: el comportamiento NO cambia, solo deja de ser implícito"
                 )
         if plan.unlisted is not None:
             lines.append(f"    {UNLISTED_CATEGORY_KEY}: (ausente) -> {plan.unlisted}")
@@ -487,13 +486,11 @@ class AuditReport:
 # ---------------------------------------------------------------------------
 # La pasada sobre la base de datos
 # ---------------------------------------------------------------------------
-_PROJECTS_SQL = text(
-    """
+_PROJECTS_SQL = text("""
     SELECT id, tenant_id, name, is_template, deleted_at, human_approval_policy
       FROM projects
      ORDER BY tenant_id, name, id
-    """
-)
+    """)
 
 
 async def audit_approval_policies(session: AsyncSession) -> AuditReport:

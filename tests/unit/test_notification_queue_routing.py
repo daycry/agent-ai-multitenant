@@ -31,6 +31,6 @@ def test_each_lane_declares_its_own_exchange_and_routing_key() -> None:
     assert set(queues) == {"notifications.default", "notifications.priority"}
     for name, queue in queues.items():
         assert queue.routing_key == name, f"{name} routing_key={queue.routing_key!r}"
-        assert (
-            queue.exchange is not None and queue.exchange.name == name
-        ), f"{name} exchange={queue.exchange!r}"
+        assert queue.exchange is not None and queue.exchange.name == name, (
+            f"{name} exchange={queue.exchange!r}"
+        )

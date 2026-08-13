@@ -124,9 +124,9 @@ def test_close_pushes_the_closure_commit_in_incremental_mode(tmp_path: Path) -> 
     ).open_plan_pr(title="Plan X", body="body")
 
     assert info.url == "https://pr.test/1", info
-    assert (
-        _sha(remote_bare, f"refs/heads/{_PLAN_BRANCH}") == closure_sha
-    ), "el cierre debe empujar la punta de la rama (con la doc de cierre) al remoto"
+    assert _sha(remote_bare, f"refs/heads/{_PLAN_BRANCH}") == closure_sha, (
+        "el cierre debe empujar la punta de la rama (con la doc de cierre) al remoto"
+    )
 
 
 def test_close_does_not_push_when_push_forbidden(tmp_path: Path) -> None:
@@ -144,9 +144,9 @@ def test_close_does_not_push_when_push_forbidden(tmp_path: Path) -> None:
 
     assert info.skipped_reason == "push_policy=forbidden"
     assert called == []
-    assert (
-        _sha(remote_bare, f"refs/heads/{_PLAN_BRANCH}") is None
-    ), "un proyecto con push prohibido no debe dejar la rama en el remoto"
+    assert _sha(remote_bare, f"refs/heads/{_PLAN_BRANCH}") is None, (
+        "un proyecto con push prohibido no debe dejar la rama en el remoto"
+    )
 
 
 def test_close_reports_actionable_reason_when_the_push_is_rejected(tmp_path: Path) -> None:

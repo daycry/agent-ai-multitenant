@@ -95,9 +95,7 @@ async def _seed_tenant(dsn: str) -> dict[str, UUID]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES"
-            " ($1, 'Acme', $3),"
-            " ($2, 'Beta', $4)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'Acme', $3), ($2, 'Beta', $4)",
             tenant,
             foreign_tenant,
             f"acme-{nonce}",

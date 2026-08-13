@@ -701,9 +701,9 @@ class WorktreeManager:
 
 
 __all__ = [
+    "DEFAULT_WORKTREE_TTL_S",
     "BareRepoLayout",
     "BareRepoManager",
-    "DEFAULT_WORKTREE_TTL_S",
     "GitCommandError",
     "WorktreeInfo",
     "WorktreeManager",

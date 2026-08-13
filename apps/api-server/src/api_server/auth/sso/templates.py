@@ -119,8 +119,7 @@ class OIDCTemplate:
         missing = [p for p in self.required_params if not params.get(p)]
         if missing:
             raise OIDCTemplateError(
-                f"template {self.template_id.value!r} requires parameter(s): "
-                f"{', '.join(missing)}"
+                f"template {self.template_id.value!r} requires parameter(s): {', '.join(missing)}"
             )
         try:
             return self.issuer_template.format(**params)
@@ -281,7 +280,7 @@ OIDC_TEMPLATES: Final[dict[OIDCTemplateId, OIDCTemplate]] = {
             FIELD_EMAIL: "email",
             FIELD_FULL_NAME: "name",
         },
-        notes="Facebook OIDC Limited Login exposes email + name only; " "no groups concept.",
+        notes="Facebook OIDC Limited Login exposes email + name only; no groups concept.",
     ),
 }
 

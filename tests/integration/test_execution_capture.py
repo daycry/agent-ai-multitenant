@@ -352,11 +352,11 @@ async def test_snapshot_provider_without_the_kind_cannot_price_an_ambiguous_mode
         async with sm() as s:
             enriched, _ = await snapshot_execution_prices(s, steps=[blind, with_kind])
 
-        assert (
-            enriched[0]["price_snapshot"]["available"] is False
-        ), "sin `provider` el lookup adivinó entre dos familias — eso es facturar a ciegas"
-        assert (
-            enriched[1]["price_snapshot"]["available"] is True
-        ), "con `provider` debe casar: si no, este test no prueba que el kind sea la causa"
+        assert enriched[0]["price_snapshot"]["available"] is False, (
+            "sin `provider` el lookup adivinó entre dos familias — eso es facturar a ciegas"
+        )
+        assert enriched[1]["price_snapshot"]["available"] is True, (
+            "con `provider` debe casar: si no, este test no prueba que el kind sea la causa"
+        )
     finally:
         await engine.dispose()

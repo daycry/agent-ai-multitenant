@@ -158,7 +158,7 @@ EXCLUDED_SOFT_DELETE_TABLES: dict[str, str] = {
     ),
     "notification_preferences": "Configuración por usuario; volumen despreciable.",
     "notification_templates": (
-        "Override de plantilla del tenant: explica el texto de notificaciones " "ya enviadas."
+        "Override de plantilla del tenant: explica el texto de notificaciones ya enviadas."
     ),
     "sso_configurations": (
         "Configuración de identidad. Un proveedor retirado explica sesiones y "
@@ -179,8 +179,7 @@ EXCLUDED_SOFT_DELETE_TABLES: dict[str, str] = {
         "dónde salió una instalación viva."
     ),
     "marketplace_listings": (
-        "Un listing retirado sigue explicando instalaciones vivas y su "
-        "consentimiento de permisos."
+        "Un listing retirado sigue explicando instalaciones vivas y su consentimiento de permisos."
     ),
     "marketplace_installations": (
         "Registro de qué se instaló y qué permisos se concedieron; es la "

@@ -240,8 +240,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             (ids["project_b"], ids["tenant_b"], ids["team_b"], "Proyecto B", "proj-b"),
         ):
             await conn.execute(
-                "INSERT INTO projects (id, tenant_id, team_id, name, slug)"
-                " VALUES ($1,$2,$3,$4,$5)",
+                "INSERT INTO projects (id, tenant_id, team_id, name, slug) VALUES ($1,$2,$3,$4,$5)",
                 project,
                 tenant,
                 team,
@@ -479,8 +478,7 @@ async def test_tool_deploy_grants_only_the_targeted_role(
     finally:
         await conn.close()
     assert [r["role"] for r in rows] == ["qa"], (
-        "el `targets: [qa]` del manifest tiene que limitar el reparto: "
-        f"{[r['role'] for r in rows]}"
+        f"el `targets: [qa]` del manifest tiene que limitar el reparto: {[r['role'] for r in rows]}"
     )
     # El trigger de la 0124 estampa el tenant desde el agente propietario.
     assert rows[0]["tenant_id"] == ids["tenant_a"]
@@ -606,7 +604,7 @@ async def test_retire_does_not_take_the_very_same_tool_the_operator_granted_by_h
         await session.commit()
 
     assert "agent_tools" not in result.created_refs, (
-        "el despliegue se apuntó como suya una asignación que ya existía:" f" {result.created_refs}"
+        f"el despliegue se apuntó como suya una asignación que ya existía: {result.created_refs}"
     )
     assert any("ya tenía la tool" in w for w in result.warnings), result.warnings
 
@@ -622,9 +620,9 @@ async def test_retire_does_not_take_the_very_same_tool_the_operator_granted_by_h
         survivors = await conn.fetch("SELECT agent_id, tool_id FROM agent_tools")
     finally:
         await conn.close()
-    assert [(r["agent_id"], r["tool_id"]) for r in survivors] == [
-        (ids["agent_qa"], tool_id)
-    ], "la retirada se llevó la asignación que el OPERADOR había hecho a mano"
+    assert [(r["agent_id"], r["tool_id"]) for r in survivors] == [(ids["agent_qa"], tool_id)], (
+        "la retirada se llevó la asignación que el OPERADOR había hecho a mano"
+    )
 
 
 @pytest.mark.asyncio
@@ -703,9 +701,9 @@ async def test_retire_removes_exactly_what_it_created_and_nothing_else(
     finally:
         await conn.close()
 
-    assert [r["tool_id"] for r in survivors] == [
-        manual_tool
-    ], "la retirada se llevó la tool que el OPERADOR había asignado a mano"
+    assert [r["tool_id"] for r in survivors] == [manual_tool], (
+        "la retirada se llevó la tool que el OPERADOR había asignado a mano"
+    )
     assert status is not None
     assert status["status"] == "retired" and status["retired_at"] is not None
     # La fila retirada conserva su rastro: se puede auditar qué creó.
@@ -765,9 +763,9 @@ async def test_retire_leaves_an_mcp_server_the_project_already_declared(
         await session.commit()
 
     servers = json.loads((await _project_row(migrations_pg_dsn, ids["project_a"]))["mcp_servers"])
-    assert (
-        servers[0]["url"] == "https://el-jira-del-operador.test/mcp"
-    ), "la retirada se llevó (o pisó) el servidor MCP que el operador ya tenía"
+    assert servers[0]["url"] == "https://el-jira-del-operador.test/mcp", (
+        "la retirada se llevó (o pisó) el servidor MCP que el operador ya tenía"
+    )
 
 
 # ===========================================================================
@@ -820,9 +818,9 @@ async def test_second_deploy_is_a_noop_with_a_warning(
     finally:
         await conn.close()
     assert count == 1
-    assert (
-        json.loads(config)["base_url"] == "https://app-a.example"
-    ), "el segundo despliegue pisó la config del primero: no era un no-op"
+    assert json.loads(config)["base_url"] == "https://app-a.example", (
+        "el segundo despliegue pisó la config del primero: no era un no-op"
+    )
     assert grants == 1
 
 

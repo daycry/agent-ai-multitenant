@@ -186,7 +186,7 @@ class EmailAdapter:
             send_kwargs["password"] = password
 
         try:
-            errors, response = await aiosmtplib.send(mime, **send_kwargs)
+            errors, _response = await aiosmtplib.send(mime, **send_kwargs)
         except aiosmtplib.SMTPException as exc:
             # SMTP-level failure (auth refused, recipient refused, connect /
             # timeout). Surface the exception TYPE + its message — never the

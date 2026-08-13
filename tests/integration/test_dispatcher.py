@@ -184,7 +184,7 @@ async def _count_logs(dsn: str, *, channel_id: UUID) -> list[asyncpg.Record]:
 
 
 def _sync_dsn() -> str:
-    return f"postgresql://{_PG_MIG_USER}:{_PG_MIG_PASSWORD}" f"@{_PG_HOST}:{_PG_PORT}/{_PG_TEST_DB}"
+    return f"postgresql://{_PG_MIG_USER}:{_PG_MIG_PASSWORD}@{_PG_HOST}:{_PG_PORT}/{_PG_TEST_DB}"
 
 
 # ===========================================================================

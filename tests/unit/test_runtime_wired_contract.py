@@ -195,9 +195,9 @@ def test_retiring_a_run_tool_does_not_reopen_the_implementation_type_shortcut() 
         assert name in CANONICAL_TOOL_NAMES, f"{name} debe seguir siendo canónico"
         assert is_unwired_platform_builtin(name) is True, name
         # El tipo real de la fila sembrada, que es el que activaría el atajo.
-        assert (
-            tool_is_runtime_wired(name, "docker_command") is False
-        ), f"{name}: el atajo por implementation_type volvió a declararla ejecutable"
+        assert tool_is_runtime_wired(name, "docker_command") is False, (
+            f"{name}: el atajo por implementation_type volvió a declararla ejecutable"
+        )
 
 
 def test_a_surviving_run_row_is_never_advertised() -> None:

@@ -84,7 +84,7 @@ def test_sandbox_is_all_auto_and_customer_is_all_human(
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
             rows = await conn.fetch(
-                "SELECT name, categories FROM approval_policy_templates" " WHERE is_builtin = true"
+                "SELECT name, categories FROM approval_policy_templates WHERE is_builtin = true"
             )
             out: dict[str, dict[str, str]] = {}
             for r in rows:
@@ -99,9 +99,9 @@ def test_sandbox_is_all_auto_and_customer_is_all_human(
     sandbox = policies["Sandbox"]
     customer = policies["Cliente Externo"]
     assert set(sandbox.values()) == {"auto"}, "Sandbox must be all auto"
-    assert set(customer.values()) == {
-        "human_required"
-    }, "Cliente Externo must be all human_required"
+    assert set(customer.values()) == {"human_required"}, (
+        "Cliente Externo must be all human_required"
+    )
     assert sandbox.keys() == customer.keys(), "All templates must enumerate the same categories"
 
 
@@ -141,7 +141,7 @@ def test_seed_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
         try:
             return int(
                 await conn.fetchval(
-                    "SELECT count(*) FROM approval_policy_templates" " WHERE is_builtin = true"
+                    "SELECT count(*) FROM approval_policy_templates WHERE is_builtin = true"
                 )
             )
         finally:
@@ -164,7 +164,7 @@ def test_seeded_policies_visible_to_tenant_sessions(alembic_config, migrations_p
     )
 
     tenant_id = uuid4()
-    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
     async def _seed_tenant_and_count() -> int:
         conn = await asyncpg.connect(migrations_pg_dsn)
@@ -188,7 +188,7 @@ def test_seeded_policies_visible_to_tenant_sessions(alembic_config, migrations_p
                 )
                 return int(
                     await conn.fetchval(
-                        "SELECT count(*) FROM approval_policy_templates" " WHERE is_builtin = true"
+                        "SELECT count(*) FROM approval_policy_templates WHERE is_builtin = true"
                     )
                 )
         finally:

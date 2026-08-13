@@ -141,7 +141,7 @@ class HvacVaultResolver:
         marker = "/data/"
         if marker not in path:
             raise MCPAuthError(
-                f"auth_ref {auth_ref!r} is not a KV v2 path " f"(expected '<mount>/data/<path>')"
+                f"auth_ref {auth_ref!r} is not a KV v2 path (expected '<mount>/data/<path>')"
             )
         mount, _, sub_path = path.partition(marker)
         return mount, sub_path
@@ -220,9 +220,9 @@ def apply_vault_auth(
 
 
 __all__ = [
+    "VAULT_PREFIX",
     "HvacVaultResolver",
     "StaticVaultResolver",
-    "VAULT_PREFIX",
     "VaultResolver",
     "apply_vault_auth",
 ]

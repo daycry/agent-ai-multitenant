@@ -121,8 +121,7 @@ async def runs_leaderboard(
     """
     tenant_id = require_tenant_id(principal)
     rows = await session.execute(
-        sa_text(
-            """
+        sa_text("""
             SELECT
                 m.model,
                 e.agent_id,
@@ -154,8 +153,7 @@ async def runs_leaderboard(
             HAVING count(*) >= :min_runs
             ORDER BY (count(*) FILTER (WHERE e.status = 'done'))::float / count(*) DESC,
                      coalesce(avg(e.total_cost_usd), 0) ASC
-            """
-        ),
+            """),
         {"tenant_id": str(tenant_id), "window_days": window_days, "min_runs": min_runs},
     )
     out: list[LeaderboardRow] = []

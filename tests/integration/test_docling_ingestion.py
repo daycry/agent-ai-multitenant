@@ -175,7 +175,7 @@ async def test_ingestion_pipeline_persists_chunks_and_marks_indexed(
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         doc_row = await conn.fetchrow(
-            "SELECT status, page_count, error_message, indexed_at" " FROM documents WHERE id = $1",
+            "SELECT status, page_count, error_message, indexed_at FROM documents WHERE id = $1",
             seeded["document_id"],
         )
         assert doc_row["status"] == "indexed"

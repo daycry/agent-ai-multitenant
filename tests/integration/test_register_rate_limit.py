@@ -85,7 +85,7 @@ def configured_app(
 
     monkeypatch.setattr(
         "api_server.metrics.get_default_registry",
-        lambda: CollectorRegistry(),
+        CollectorRegistry,
     )
 
     from api_server.auth.deps import reset_redis_cache

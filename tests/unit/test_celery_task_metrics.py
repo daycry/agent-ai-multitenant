@@ -163,9 +163,9 @@ def test_the_signal_handlers_are_actually_connected() -> None:
     try:
         for signal in (task_prerun, task_postrun, task_failure):
             names = _receiver_names(signal)
-            assert any(
-                name.startswith("_on_task_") for name in names
-            ), f"la señal {signal.name} quedó sin receptor: {names}"
+            assert any(name.startswith("_on_task_") for name in names), (
+                f"la señal {signal.name} quedó sin receptor: {names}"
+            )
     finally:
         uninstall_task_metrics()
         install_task_metrics()  # restaurar: la app real las quiere puestas

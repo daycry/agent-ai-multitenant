@@ -62,7 +62,7 @@ def require_project_active(project: Any) -> None:
 # ---------------------------------------------------------------------------
 # Writable lookup
 # ---------------------------------------------------------------------------
-async def get_writable_or_404(
+async def get_writable_or_404[T](
     session: AsyncSession,
     model_cls: type[T],
     obj_id: UUID,

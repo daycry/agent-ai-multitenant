@@ -83,19 +83,19 @@ from workers.secrets import StagedSecrets
 # tasks/maintenance/tests siguen importando de workers.execution. `__all__`
 # marca el re-export para mypy (no_implicit_reexport) y para ruff F401.
 __all__ = [
+    "_EMPTY_USAGE",
+    "_SDK_BASE_SHELL_COMMANDS",
     "CrossTenantExecutionError",
     "ExecutionOutcome",
     "ExecutionRequest",
-    "conduct_execution",
-    "transition_task_after_run",
-    "_EMPTY_USAGE",
     "_RuntimeResult",
-    "_SDK_BASE_SHELL_COMMANDS",
     "_agent_spec",
     "_assemble_result",
     "_parse_line",
     "_resolve_tool_spec_images",
     "_scan_logs_for_terminal",
+    "conduct_execution",
+    "transition_task_after_run",
 ]
 
 _log = structlog.get_logger("workers.execution")

@@ -78,7 +78,11 @@ async def _register(client: AsyncClient, email: str) -> dict:
     """
     resp = await client.post(
         "/auth/register",
-        json={"email": email, "password": "Sup3r-secret-pw!", "full_name": email.split("@")[0]},
+        json={
+            "email": email,
+            "password": "Sup3r-secret-pw!",
+            "full_name": email.split("@", maxsplit=1)[0],
+        },
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -88,7 +92,9 @@ async def _seed_extra_user(dsn: str, email: str) -> dict:
     """Un usuario NO-primero, sembrado directamente (ver ``_user_seeding``)."""
     from tests.integration._user_seeding import seed_user
 
-    user_id = await seed_user(dsn, email, "Sup3r-secret-pw!", full_name=email.split("@")[0])
+    user_id = await seed_user(
+        dsn, email, "Sup3r-secret-pw!", full_name=email.split("@", maxsplit=1)[0]
+    )
     return {"id": user_id, "is_system_owner": False, "is_system_admin": False}
 
 

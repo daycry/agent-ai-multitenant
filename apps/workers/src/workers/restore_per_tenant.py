@@ -217,8 +217,7 @@ class PerTenantRestoreConfig:
         for table in self.tenant_scoped_tables:
             if not _SAFE_IDENT.fullmatch(table):
                 raise PerTenantRestoreError(
-                    f"unsafe tenant-scoped table name {table!r}; must match "
-                    f"{_SAFE_IDENT.pattern}"
+                    f"unsafe tenant-scoped table name {table!r}; must match {_SAFE_IDENT.pattern}"
                 )
 
     @classmethod

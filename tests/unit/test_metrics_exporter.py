@@ -108,9 +108,9 @@ async def test_unmatched_paths_collapse_into_one_series(app) -> None:
     body = (await _get(app, "/metrics")).text
 
     for path in ("/wp-admin", "/.env", "/phpmyadmin"):
-        assert (
-            f'route="{path}"' not in body
-        ), f"el path no enrutado {path} creó su propia serie: cardinalidad sin cota"
+        assert f'route="{path}"' not in body, (
+            f"el path no enrutado {path} creó su propia serie: cardinalidad sin cota"
+        )
     line = next(
         ln
         for ln in body.splitlines()
@@ -191,6 +191,6 @@ def test_no_forbidden_high_cardinality_labels_are_declared() -> None:
 
     offenders = declared & set(FORBIDDEN_LABELS)
     assert not offenders, f"labels de cardinalidad ilimitada declarados: {sorted(offenders)}"
-    assert declared <= set(
-        ALLOWED_LABELS
-    ), f"labels fuera del catálogo cerrado: {sorted(declared - set(ALLOWED_LABELS))}"
+    assert declared <= set(ALLOWED_LABELS), (
+        f"labels fuera del catálogo cerrado: {sorted(declared - set(ALLOWED_LABELS))}"
+    )

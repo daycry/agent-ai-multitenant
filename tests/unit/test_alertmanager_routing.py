@@ -117,6 +117,6 @@ def test_the_platform_ingest_still_carries_its_bearer_token(config) -> None:
     assert webhook["url"].endswith("/internal/alerts/ingest")
     assert webhook["http_config"]["authorization"]["type"] == "Bearer"
     assert webhook["http_config"]["authorization"]["credentials"]
-    assert (
-        webhook.get("send_resolved") is True
-    ), "sin send_resolved el operador nunca se entera de que el incidente se cerró"
+    assert webhook.get("send_resolved") is True, (
+        "sin send_resolved el operador nunca se entera de que el incidente se cerró"
+    )

@@ -94,9 +94,9 @@ def test_the_debt_inventory_has_no_ghosts() -> None:
 def test_the_inventory_does_not_name_files_that_no_longer_exist() -> None:
     """Y un pendiente borrado tampoco puede seguir contando como deuda."""
     fantasmas = _SIN_INDEXAR_2026_08_12 - _gotcha_files()
-    assert (
-        not fantasmas
-    ), f"_SIN_INDEXAR_2026_08_12 nombra ficheros que ya no existen: {sorted(fantasmas)}."
+    assert not fantasmas, (
+        f"_SIN_INDEXAR_2026_08_12 nombra ficheros que ya no existen: {sorted(fantasmas)}."
+    )
 
 
 def test_the_index_does_not_link_files_that_do_not_exist() -> None:

@@ -55,9 +55,9 @@ def test_no_healthcheck_swallows_its_own_failure() -> None:
 
     # Guarda contra el paso en vacío (§4): si el parser deja de encontrar
     # healthchecks, este test debe FALLAR, no aprobar por silencio.
-    assert (
-        len(checks) >= 5
-    ), f"la guarda dejó de encontrar healthchecks en {_COMPOSE.name} (vio {len(checks)})"
+    assert len(checks) >= 5, (
+        f"la guarda dejó de encontrar healthchecks en {_COMPOSE.name} (vio {len(checks)})"
+    )
 
     offenders = sorted(name for name, test in checks.items() if "|| true" in test)
     assert not offenders, (

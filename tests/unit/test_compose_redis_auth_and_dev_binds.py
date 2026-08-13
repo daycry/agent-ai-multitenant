@@ -92,9 +92,9 @@ def test_redis_healthcheck_authenticates() -> None:
     service_healthy` bloquearía el arranque del stack entero."""
     healthcheck = _load(_CANONICAL)["services"]["redis"]["healthcheck"]["test"]
     rendered = " ".join(str(p) for p in healthcheck)
-    assert (
-        "-a" in rendered.split() or "--pass" in rendered
-    ), f"el healthcheck de redis no pasa credencial: {rendered!r}"
+    assert "-a" in rendered.split() or "--pass" in rendered, (
+        f"el healthcheck de redis no pasa credencial: {rendered!r}"
+    )
     assert "REDIS_PASSWORD" in rendered
 
 
@@ -115,9 +115,9 @@ def test_every_service_that_talks_to_redis_carries_the_credential() -> None:
 
     # Descubrimiento: si el parser deja de ver URLs, la guarda no vale nada.
     with_credential = [line for line in text.splitlines() if "redis://:" in line]
-    assert (
-        len(with_credential) >= 10
-    ), f"la guarda dejó de encontrar las URLs de Redis (vio {len(with_credential)})"
+    assert len(with_credential) >= 10, (
+        f"la guarda dejó de encontrar las URLs de Redis (vio {len(with_credential)})"
+    )
 
 
 # ---------------------------------------------------------------------------

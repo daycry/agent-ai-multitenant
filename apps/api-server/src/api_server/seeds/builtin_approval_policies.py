@@ -201,8 +201,7 @@ def preset_policy(slug: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO approval_policy_templates (
         id, tenant_id, name, description, categories, is_builtin
     )
@@ -215,8 +214,7 @@ _UPSERT_SQL = text(
         description = EXCLUDED.description,
         categories = EXCLUDED.categories,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def seed_builtin_approval_policies(session: AsyncSession) -> int:

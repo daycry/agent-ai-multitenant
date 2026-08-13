@@ -54,8 +54,7 @@ depends_on: str | Sequence[str] | None = None
 # ---------------------------------------------------------------------------
 _UP: tuple[str, ...] = (
     # Drop the permissive FOR ALL policy created in 0041.
-    "DROP POLICY IF EXISTS marketplace_audit_entries_tenant_isolation"
-    " ON marketplace_audit_entries",
+    "DROP POLICY IF EXISTS marketplace_audit_entries_tenant_isolation ON marketplace_audit_entries",
     # Read your own tenant's audit rows.
     "CREATE POLICY marketplace_audit_entries_select ON marketplace_audit_entries"
     " FOR SELECT"

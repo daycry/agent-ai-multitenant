@@ -344,7 +344,7 @@ async def _flush(
     """Write one batch and commit it. Values are BOUND, never interpolated."""
     for row_id, ciphertext in pending:
         await session.execute(
-            text(f"UPDATE {target.table} SET {target.column} = :ciphertext " "WHERE id = :row_id"),
+            text(f"UPDATE {target.table} SET {target.column} = :ciphertext WHERE id = :row_id"),
             {"ciphertext": ciphertext, "row_id": row_id},
         )
     await session.commit()

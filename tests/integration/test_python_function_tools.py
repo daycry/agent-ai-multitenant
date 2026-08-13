@@ -36,7 +36,7 @@ pytestmark = pytest.mark.integration
 def test_simple_run_returns_output() -> None:
     tool = PythonFunctionTool(
         name="adder",
-        code=("def run(args):\n" "    return {'sum': args['a'] + args['b']}\n"),
+        code=("def run(args):\n    return {'sum': args['a'] + args['b']}\n"),
     )
     result = tool({"a": 2, "b": 3})
     assert result.ok is True
@@ -97,7 +97,7 @@ def test_tool_returning_non_json_value_is_rejected() -> None:
     the agent."""
     tool = PythonFunctionTool(
         name="bad-return",
-        code=("def run(args):\n" "    return {1, 2, 3}  # set is not JSON-serialisable\n"),
+        code=("def run(args):\n    return {1, 2, 3}  # set is not JSON-serialisable\n"),
     )
     result = tool({})
     assert result.ok is False
@@ -110,7 +110,7 @@ def test_tool_returning_non_json_value_is_rejected() -> None:
 def test_infinite_loop_is_killed_at_timeout() -> None:
     tool = PythonFunctionTool(
         name="loop",
-        code=("def run(args):\n" "    while True:\n" "        pass\n"),
+        code=("def run(args):\n    while True:\n        pass\n"),
         timeout_s=0.5,
     )
     result = tool({})
@@ -144,7 +144,7 @@ def test_subprocess_does_not_inherit_parent_env(monkeypatch: pytest.MonkeyPatch)
 def test_args_arrive_as_dict() -> None:
     tool = PythonFunctionTool(
         name="echo",
-        code=("def run(args):\n" "    return {'type': type(args).__name__, 'received': args}\n"),
+        code=("def run(args):\n    return {'type': type(args).__name__, 'received': args}\n"),
     )
     result = tool({"hello": "world", "n": 42})
     assert result.ok is True

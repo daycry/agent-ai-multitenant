@@ -420,6 +420,6 @@ def test_no_unexpected_check_constraints() -> None:
         unexpected = found - expected
         assert not unexpected, f"{model.__name__} tiene CHECKs no declarados: {sorted(unexpected)}"
         missing = expected - found
-        assert (
-            not missing
-        ), f"{model.__name__} ha PERDIDO CHECKs que se daban por puestos: {sorted(missing)}"
+        assert not missing, (
+            f"{model.__name__} ha PERDIDO CHECKs que se daban por puestos: {sorted(missing)}"
+        )

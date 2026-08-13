@@ -154,7 +154,7 @@ _AUDIO_EXTENSIONS: dict[str, str] = {
 
 def _stt_filename(content_type: str) -> str:
     """``audio.<ext>`` derivado del mime (``audio.bin`` si es desconocido)."""
-    base = content_type.split(";")[0].strip().lower()
+    base = content_type.split(";", maxsplit=1)[0].strip().lower()
     return f"audio.{_AUDIO_EXTENSIONS.get(base, 'bin')}"
 
 

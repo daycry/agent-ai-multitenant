@@ -164,7 +164,7 @@ def retry_delay(
     return nominal * (0.5 + 0.5 * spread)
 
 
-async def with_retries(
+async def with_retries[T](
     call: Callable[[], Awaitable[T]],
     *,
     attempts: int = DEFAULT_ATTEMPTS,

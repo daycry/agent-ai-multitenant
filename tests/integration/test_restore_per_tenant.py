@@ -357,7 +357,7 @@ def test_restoring_tenant_a_never_touches_tenant_b(tmp_path: Path) -> None:
 @pytest.mark.cross_tenant
 def test_every_delete_and_remote_select_is_tenant_scoped(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
     )
@@ -381,7 +381,7 @@ def test_every_delete_and_remote_select_is_tenant_scoped(tmp_path: Path) -> None
 
 def test_restored_table_set_is_exactly_the_tenant_scoped_tables(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     result = PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
     )
@@ -397,7 +397,7 @@ def test_restored_table_set_is_exactly_the_tenant_scoped_tables(tmp_path: Path) 
 
 def test_inserts_in_fk_order_deletes_in_reverse(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
     )
@@ -447,7 +447,7 @@ def test_preview_lists_affected_tables_and_row_counts_without_writing(tmp_path: 
 
 def test_dry_run_run_returns_preview_and_writes_nothing(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 2 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 2))
     engine = PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner)
 
     result = engine.run(
@@ -492,7 +492,7 @@ def test_checksum_mismatch_aborts_fail_closed(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
     # Corrupt a volume archive AFTER the manifest captured its checksum.
     (bundle / "minio_data.tar.gz").write_bytes(b"tampered bytes not in the manifest")
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     engine = PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner)
 
     with pytest.raises(PerTenantRestoreVerificationError):
@@ -587,7 +587,7 @@ def test_unsafe_table_name_rejected_at_config_time() -> None:
 
 def test_dump_restored_into_staging_db_not_live(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
     )
@@ -608,7 +608,7 @@ def test_dump_restored_into_staging_db_not_live(tmp_path: Path) -> None:
 
 def test_staging_db_dropped_even_when_copy_fails(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES}, fail_copy=True)
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1), fail_copy=True)
     engine = PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner)
 
     with pytest.raises(PerTenantRestoreError, match="filtered per-tenant copy"):
@@ -622,7 +622,7 @@ def test_staging_db_dropped_even_when_copy_fails(tmp_path: Path) -> None:
 
 def test_staging_createdb_uses_maintenance_db(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
     )
@@ -642,7 +642,7 @@ def test_staging_createdb_uses_maintenance_db(tmp_path: Path) -> None:
 
 def test_only_tenant_object_store_slice_extracted(tmp_path: Path) -> None:
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     cfg = _restore_config(tmp_path)
     result = PerTenantRestoreEngine(cfg, runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
@@ -670,7 +670,7 @@ def test_minio_is_stopped_around_the_extraction_and_started_again(tmp_path: Path
     Hasta prod-04 el restore por tenant hacía exactamente eso.
     """
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
         bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
     )
@@ -694,27 +694,27 @@ def test_minio_is_restarted_even_when_the_extraction_fails(tmp_path: Path) -> No
     """Dejar MinIO caído por el restore de UN tenant deja sin object storage a
     TODOS los demás: peor que el problema que se estaba resolviendo."""
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES}, fail_slice_extract=True)
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1), fail_slice_extract=True)
     with pytest.raises(PerTenantRestoreError):
         PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
             bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
         )
-    assert any(
-        c[0] == "docker" and "start" in c for c in runner.calls
-    ), "MinIO se quedó parado tras un fallo de extracción"
+    assert any(c[0] == "docker" and "start" in c for c in runner.calls), (
+        "MinIO se quedó parado tras un fallo de extracción"
+    )
 
 
 def test_a_failed_stop_aborts_before_touching_the_volume(tmp_path: Path) -> None:
     """Si no se puede parar MinIO, NO se escribe su `_data`: fail-closed."""
     bundle = _build_plaintext_bundle(tmp_path)
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES}, fail_minio_stop=True)
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1), fail_minio_stop=True)
     with pytest.raises(PerTenantRestoreError, match="no se pudo parar"):
         PerTenantRestoreEngine(_restore_config(tmp_path), runner=runner).run(
             bundle, tenant_id=_TENANT_A, confirm=confirmation_token(_TENANT_A, bundle.name)
         )
-    assert not [
-        c for c in runner.calls if c[0] == "tar" and "--extract" in c and "--gzip" in c
-    ], "se extrajo la rebanada con MinIO vivo"
+    assert not [c for c in runner.calls if c[0] == "tar" and "--extract" in c and "--gzip" in c], (
+        "se extrajo la rebanada con MinIO vivo"
+    )
 
 
 def test_a_failed_wipe_is_a_hard_error_not_best_effort(tmp_path: Path) -> None:
@@ -731,7 +731,7 @@ def test_a_failed_wipe_is_a_hard_error_not_best_effort(tmp_path: Path) -> None:
     def _boom(path, *a, **k):  # type: ignore[no-untyped-def]
         raise OSError(13, "Permission denied")
 
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
     original = rpt.shutil.rmtree
     rpt.shutil.rmtree = _boom  # type: ignore[assignment]
     try:
@@ -757,7 +757,7 @@ def test_encrypted_bundle_decrypted_then_verified_then_restored(tmp_path: Path) 
     assert (bundle / "bundle.tar.enc").is_file()
     assert not (bundle / "postgres").exists()
 
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES}, decrypt_tar=True)
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1), decrypt_tar=True)
     engine = PerTenantRestoreEngine(
         _restore_config(tmp_path, encryption_enabled=True),
         runner=runner,
@@ -791,7 +791,7 @@ def test_run_per_tenant_restore_entrypoint_builds_engine_from_settings(tmp_path:
         restore_tenant_scoped_tables=list(_TABLES),
         restore_object_store_volume="minio_data",
     )
-    runner = PerTenantRunner(counts={t: 1 for t in _TABLES})
+    runner = PerTenantRunner(counts=dict.fromkeys(_TABLES, 1))
 
     result = run_per_tenant_restore(
         bundle.name,

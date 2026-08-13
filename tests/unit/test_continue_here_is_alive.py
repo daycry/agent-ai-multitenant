@@ -66,9 +66,9 @@ def test_it_agrees_with_the_protocol_on_in_progress_phases() -> None:
         for f in roadmap.glob("*.md")
         if re.search(r"^status: *in_progress", f.read_text(encoding="utf-8"), re.MULTILINE)
     ]
-    assert (
-        len(live) <= 1
-    ), f"{len(live)} fases in_progress a la vez, el protocolo permite una: {live}"
+    assert len(live) <= 1, (
+        f"{len(live)} fases in_progress a la vez, el protocolo permite una: {live}"
+    )
     claims_zero = "| `in_progress`               |  0  |" in _DOC.read_text(encoding="utf-8")
     if claims_zero:
         assert not live, f"CONTINUE_HERE.md dice 0 fases in_progress pero hay {live} — actualízalo"

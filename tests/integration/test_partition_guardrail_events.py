@@ -497,9 +497,9 @@ def test_ensure_partitions_creates_the_missing_month_with_its_rls(
             # Un mes MÁS ALLÁ del colchón que dejó la migración: el hueco es real.
             target_month = _add_months(now_month, HEADROOM + 1)
             target = _partition_name(target_month)
-            assert (
-                await conn.fetchval("SELECT to_regclass($1)", target)
-            ) is None, "el mes objetivo ya existía: el test no probaría nada"
+            assert (await conn.fetchval("SELECT to_regclass($1)", target)) is None, (
+                "el mes objetivo ya existía: el test no probaría nada"
+            )
         finally:
             await conn.close()
 

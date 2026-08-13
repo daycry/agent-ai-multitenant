@@ -63,17 +63,16 @@ _ALLOWLIST: dict[str, str] = {
         " el test afirma que las DB 1 y 2 llegan a app.conf"
     ),
     "test_backup_schedule.py": (
-        "Settings(broker_url=…) para registrar la entrada de beat del backup;" " no abre el broker"
+        "Settings(broker_url=…) para registrar la entrada de beat del backup; no abre el broker"
     ),
     "test_credential_rotation.py": (
-        "Settings(broker_url=…) para registrar la entrada de beat de rotación;" " no abre el broker"
+        "Settings(broker_url=…) para registrar la entrada de beat de rotación; no abre el broker"
     ),
     "test_fx_fetcher.py": (
-        "Settings(broker_url=…) para registrar la entrada de beat de FX; no abre" " el broker"
+        "Settings(broker_url=…) para registrar la entrada de beat de FX; no abre el broker"
     ),
     "test_scheduled_sync.py": (
-        "Settings(broker_url=…) para registrar la entrada de beat de price-sync;"
-        " no abre el broker"
+        "Settings(broker_url=…) para registrar la entrada de beat de price-sync; no abre el broker"
     ),
     # Y estos tres son el caso contrario, y por eso son intocables: apuntan a un
     # puerto MUERTO a propósito. Lo que prueban es el fail-open — con Redis caído

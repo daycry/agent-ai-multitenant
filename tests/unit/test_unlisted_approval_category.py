@@ -168,9 +168,9 @@ def test_the_two_mirrors_never_disagree() -> None:
     NADA en el código impide que se separen. Esto sí.
     """
     for case_id, policy, category, _ in _CASES:
-        assert requires_human_approval(policy, category) == requires_human(
-            policy, category
-        ), case_id
+        assert requires_human_approval(policy, category) == requires_human(policy, category), (
+            case_id
+        )
         assert unlisted_category_reason(policy, category) == runtime_unlisted_category_reason(
             policy, category
         ), case_id

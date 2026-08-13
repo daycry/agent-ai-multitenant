@@ -255,9 +255,9 @@ def test_dependabot_registers_every_python_distribution(dependabot: dict[str, An
         expected.add("/" + pyproject.parent.relative_to(REPO_ROOT).as_posix())
     expected.add("/docker/agent-runtimes/agent-runtime")
     expected.add("/")  # raíz: pyproject.toml + requirements-dev.txt del toolchain
-    assert (
-        len(expected) >= 12
-    ), f"la guarda dejó de encontrar las distribuciones Python (vio {len(expected)})"
+    assert len(expected) >= 12, (
+        f"la guarda dejó de encontrar las distribuciones Python (vio {len(expected)})"
+    )
     missing = sorted(expected - covered)
     assert not missing, "distribuciones Python sin entrada en dependabot.yml: " + ", ".join(missing)
 
@@ -278,9 +278,9 @@ def test_dependabot_registers_every_docker_directory(dependabot: dict[str, Any])
     expected = {
         "/" + p.parent.relative_to(REPO_ROOT).as_posix() for p in _dockerfiles_under_docker()
     }
-    assert (
-        len(expected) >= 18
-    ), f"la guarda dejó de encontrar los Dockerfiles de docker/ (vio {len(expected)})"
+    assert len(expected) >= 18, (
+        f"la guarda dejó de encontrar los Dockerfiles de docker/ (vio {len(expected)})"
+    )
     missing = sorted(expected - covered)
     assert not missing, "directorios Docker sin entrada en dependabot.yml: " + ", ".join(missing)
 
@@ -498,9 +498,9 @@ def test_pip_audit_report_is_verified_by_the_checker(
         "`python scripts/check_pip_audit_report.py <json>`: es lo que sustituye a "
         "--strict y lo único que impide que una auditoría incompleta pase por verde"
     )
-    assert (
-        REPO_ROOT / "scripts" / "check_pip_audit_report.py"
-    ).is_file(), "falta scripts/check_pip_audit_report.py, que el job invoca"
+    assert (REPO_ROOT / "scripts" / "check_pip_audit_report.py").is_file(), (
+        "falta scripts/check_pip_audit_report.py, que el job invoca"
+    )
     assert any(
         "--format=json" in inv and "--output" in inv
         for inv in _pip_audit_invocations(security_scan)
@@ -522,9 +522,9 @@ def test_pip_audit_audits_the_same_tree_the_unit_job_installs(
     unit = _jobs(ci).get("test-unit")
     assert unit is not None, "ci.yml no tiene el job 'test-unit'"
     unit_targets = _editable_targets(unit)
-    assert (
-        len(unit_targets) >= 10
-    ), f"la guarda dejó de encontrar los editable installs de test-unit (vio {len(unit_targets)})"
+    assert len(unit_targets) >= 10, (
+        f"la guarda dejó de encontrar los editable installs de test-unit (vio {len(unit_targets)})"
+    )
     missing = sorted(unit_targets - _editable_targets(security_scan))
     assert not missing, (
         f"'{SECURITY_SCAN_JOB}' no instala lo que test-unit sí instala, así que "
@@ -754,9 +754,9 @@ def test_root_dev_group_mirrors_requirements_dev() -> None:
         for line in (REPO_ROOT / "requirements-dev.txt").read_text(encoding="utf-8").splitlines()
         if line.split("#", 1)[0].strip()
     }
-    assert (
-        len(from_file) >= 8
-    ), f"la guarda dejó de encontrar el toolchain en requirements-dev.txt (vio {len(from_file)})"
+    assert len(from_file) >= 8, (
+        f"la guarda dejó de encontrar el toolchain en requirements-dev.txt (vio {len(from_file)})"
+    )
     assert group == from_file, (
         "el grupo `dev` de pyproject.toml y requirements-dev.txt divergen.\n"
         f"solo en pyproject: {sorted(group - from_file)}\n"
@@ -813,9 +813,9 @@ def test_agent_runtime_dockerfile_installs_with_constraints() -> None:
     """
     dockerfile = DOCKER_DIR / "agent-runtimes" / "agent-runtime" / "Dockerfile"
     text = dockerfile.read_text(encoding="utf-8")
-    assert re.search(
-        r"^COPY\s+constraints\.txt\b", text, re.M
-    ), "el Dockerfile del agent-runtime debe COPYar constraints.txt (contexto = raíz del repo)"
+    assert re.search(r"^COPY\s+constraints\.txt\b", text, re.M), (
+        "el Dockerfile del agent-runtime debe COPYar constraints.txt (contexto = raíz del repo)"
+    )
     seen = 0
     offenders: list[str] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):

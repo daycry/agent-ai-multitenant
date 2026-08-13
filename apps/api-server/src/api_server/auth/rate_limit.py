@@ -103,8 +103,8 @@ class RateLimiter:
         # The window frees a slot when the oldest in-window hit ages out.
         # Fall back to `now` if the set is somehow empty (defensive).
         oldest_score = oldest[0][1] if oldest else now
-        reset_at = int(math.ceil(oldest_score + window_seconds))
-        retry_after = max(1, int(math.ceil(oldest_score + window_seconds - now)))
+        reset_at = math.ceil(oldest_score + window_seconds)
+        retry_after = max(1, math.ceil(oldest_score + window_seconds - now))
 
         return RateLimitResult(
             allowed=allowed,

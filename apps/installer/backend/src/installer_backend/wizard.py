@@ -35,10 +35,10 @@ Design notes
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from enum import Enum
+from enum import StrEnum
 
 
-class WizardStep(str, Enum):
+class WizardStep(StrEnum):
     """The nine ordered wizard steps. ``str`` so it serialises as its value."""
 
     WELCOME = "welcome"

@@ -93,9 +93,9 @@ def test_cache_env_values_target_the_dep_cache_mount() -> None:
         assert t.dep_cache_mount, f"{t.id}: cache_env sin dep_cache_mount"
         mount = t.dep_cache_mount
         values = [v for _k, v in t.cache_env]
-        assert any(
-            mount == v or mount.startswith(v) or mount in v for v in values
-        ), f"{t.id}: ningún cache_env apunta a dep_cache_mount {mount!r}: {values}"
+        assert any(mount == v or mount.startswith(v) or mount in v for v in values), (
+            f"{t.id}: ningún cache_env apunta a dep_cache_mount {mount!r}: {values}"
+        )
 
 
 # --- call sites: dep_egress=True en aceptación + stack_exec (ADR 0094) ------
@@ -108,7 +108,7 @@ async def test_acceptance_launch_requests_dep_egress(monkeypatch: pytest.MonkeyP
 
     captured: dict = {}
     monkeypatch.setattr("workers.test_runtime.TestRuntimeRunner", _result_capture(captured))
-    monkeypatch.setattr("docker.from_env", lambda: MagicMock())
+    monkeypatch.setattr("docker.from_env", MagicMock)
 
     request = {
         "worktree_host_path": "/wt",
@@ -181,8 +181,8 @@ async def test_stack_exec_requests_dep_egress(
     # tests/unit/test_stack_exec_errors.py::_wire_db — el engine compartido cambió
     # la costura, no lo que se prueba.
     monkeypatch.setattr(tasks, "worker_engine", lambda _settings: _Engine())
-    monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: (lambda: _Session()))
-    monkeypatch.setattr("docker.from_env", lambda: MagicMock())
+    monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: _Session)
+    monkeypatch.setattr("docker.from_env", MagicMock)
     monkeypatch.setattr(
         "workers.test_runtime.resolve_run_runtime",
         lambda **_k: __import__("shared_test_runtimes.catalog", fromlist=["get"]).get(

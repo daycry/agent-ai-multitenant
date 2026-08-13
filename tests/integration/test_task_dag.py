@@ -24,7 +24,7 @@ async def _seed_project(conn: asyncpg.Connection) -> dict[str, UUID]:
     tenant = uuid4()
     project = uuid4()
     await conn.execute(
-        "TRUNCATE task_dependencies, tasks, projects, organizations" " RESTART IDENTITY CASCADE"
+        "TRUNCATE task_dependencies, tasks, projects, organizations RESTART IDENTITY CASCADE"
     )
     await conn.execute(
         "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
@@ -63,7 +63,7 @@ async def _add_task(
 
 async def _add_dependency(conn: asyncpg.Connection, task_id: UUID, depends_on: UUID) -> None:
     await conn.execute(
-        "INSERT INTO task_dependencies (task_id, depends_on_task_id)" " VALUES ($1, $2)",
+        "INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1, $2)",
         task_id,
         depends_on,
     )

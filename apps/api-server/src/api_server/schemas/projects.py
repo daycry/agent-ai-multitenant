@@ -153,7 +153,7 @@ def _normalise_allowed_commands(value: list[str]) -> list[str]:
             continue
         if len(cmd) > _MAX_COMMAND_LENGTH:
             raise ValueError(
-                f"allowed_commands entry too long ({len(cmd)} chars); " f"max {_MAX_COMMAND_LENGTH}"
+                f"allowed_commands entry too long ({len(cmd)} chars); max {_MAX_COMMAND_LENGTH}"
             )
         if cmd in seen:
             continue
@@ -282,7 +282,7 @@ def _check_json_config_size(value: Any, field_name: str) -> None:
     size = len(json.dumps(value, default=str).encode("utf-8"))
     if size > _MAX_JSON_CONFIG_BYTES:
         raise ValueError(
-            f"{field_name} is too large ({size} bytes); " f"max {_MAX_JSON_CONFIG_BYTES} bytes"
+            f"{field_name} is too large ({size} bytes); max {_MAX_JSON_CONFIG_BYTES} bytes"
         )
 
 

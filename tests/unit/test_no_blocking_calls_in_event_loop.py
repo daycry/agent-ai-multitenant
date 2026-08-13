@@ -130,9 +130,9 @@ async def test_sandbox_gate_runs_off_the_event_loop() -> None:
     await installer._gate_sandbox(ctx, _FakeArtifact())
 
     assert probe.calls == 1
-    assert (
-        probe.thread_id != await _loop_thread_id()
-    ), "el SDK de Docker corrió EN el bucle de eventos (perf-1)"
+    assert probe.thread_id != await _loop_thread_id(), (
+        "el SDK de Docker corrió EN el bucle de eventos (perf-1)"
+    )
     assert ctx.gate_report["sandbox"]["passed"] is True
 
 
@@ -199,12 +199,12 @@ def test_backup_router_wraps_the_blocking_adapter_calls() -> None:
     assert wrapped >= 2, f"esperaba >= 2 llamadas envueltas en to_thread, vi {wrapped}"
 
     # Ninguna llamada directa (sin `to_thread`) a los dos métodos bloqueantes.
-    assert (
-        "destination.test_connectivity()" not in source
-    ), "test_connectivity() se llama directamente en un handler async (api-3)"
-    assert (
-        "destination.list_remote()" in source
-    ), "la guarda dejó de encontrar list_remote(): el fichero cambió de forma"
+    assert "destination.test_connectivity()" not in source, (
+        "test_connectivity() se llama directamente en un handler async (api-3)"
+    )
+    assert "destination.list_remote()" in source, (
+        "la guarda dejó de encontrar list_remote(): el fichero cambió de forma"
+    )
     # `list_remote()` sí aparece, pero DENTRO del helper síncrono `_list_one`,
     # que es lo que se despacha a un hilo.
     assert "def _list_one(" in source
@@ -244,7 +244,7 @@ def test_hvac_client_is_built_with_a_short_timeout(monkeypatch: pytest.MonkeyPat
 
         vault_token = _Token()
 
-    monkeypatch.setattr("api_server.config.get_settings", lambda: _SpySettings(), raising=True)
+    monkeypatch.setattr("api_server.config.get_settings", _SpySettings, raising=True)
     monkeypatch.setattr(mod, "HvacLLMProviderVaultStore", lambda client: object())
     mod.reset_provider_vault_store_cache()
     try:
@@ -270,9 +270,9 @@ async def test_vault_secret_reads_run_off_the_event_loop() -> None:
 
     source = Path(mod.__file__).read_text(encoding="utf-8")
     wrapped = source.count("asyncio.to_thread(store.")
-    assert (
-        wrapped == 4
-    ), f"esperaba las 4 llamadas al store de Vault envueltas en to_thread, vi {wrapped}"
+    assert wrapped == 4, (
+        f"esperaba las 4 llamadas al store de Vault envueltas en to_thread, vi {wrapped}"
+    )
     for direct in (
         "store.write_secret(secret_path",
         "store.delete_secret(provider.",

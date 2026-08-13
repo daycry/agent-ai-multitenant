@@ -134,7 +134,7 @@ def test_hook_is_registered_in_pre_commit_config() -> None:
     `verificar-antes-de-implementar.md`): mecanismo entregado, cero llamantes.
     """
     config = (_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    assert (
-        "check_commit_trailers.py" in config
-    ), "el hook existe pero pre-commit no lo llama: sería mecanismo sin llamante"
+    assert "check_commit_trailers.py" in config, (
+        "el hook existe pero pre-commit no lo llama: sería mecanismo sin llamante"
+    )
     assert "commit-msg" in config, "el hook debe declarar stage `commit-msg`"

@@ -581,7 +581,7 @@ def _install_raising_model(app, exc: Exception) -> None:
         async def decide(self, state):
             raise exc
 
-    app.dependency_overrides[get_assistant_model] = lambda: _RaisingModel()
+    app.dependency_overrides[get_assistant_model] = _RaisingModel
 
 
 @pytest.mark.asyncio

@@ -166,10 +166,10 @@ class GuardrailAlertRule(
 __all__ = [
     "DEFAULT_THRESHOLD",
     "DEFAULT_WINDOW_SECONDS",
-    "GuardrailAlertRule",
     "MAX_WINDOW_SECONDS",
     "MIN_THRESHOLD",
     "MIN_WINDOW_SECONDS",
     "SEVERITY_ORDER",
+    "GuardrailAlertRule",
     "severities_at_or_above",
 ]

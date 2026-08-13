@@ -921,8 +921,7 @@ class MarketplaceAuditEntry(Base, UUIDPrimaryKeyMixin):
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
-            f"MarketplaceAuditEntry(id={self.id!r}, action={self.action!r}, "
-            f"actor={self.actor!r})"
+            f"MarketplaceAuditEntry(id={self.id!r}, action={self.action!r}, actor={self.actor!r})"
         )
 
 

@@ -71,8 +71,7 @@ def upgrade() -> None:
     for role in _APPLICATION_ROLES:
         # `IF EXISTS` sobre el rol: una instalación puede no tener `service_user`
         # (se añadió en prod-14), y una migración no puede reventar por eso.
-        op.execute(
-            f"""
+        op.execute(f"""
             DO $$
             BEGIN
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}')
@@ -80,8 +79,7 @@ def upgrade() -> None:
                     EXECUTE 'REVOKE ALL ON TABLE public.{_BACKUP_TABLE} FROM {role}';
                 END IF;
             END $$;
-            """
-        )
+            """)
 
 
 def downgrade() -> None:

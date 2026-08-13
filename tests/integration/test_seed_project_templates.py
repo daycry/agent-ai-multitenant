@@ -91,15 +91,13 @@ def test_every_template_points_to_a_builtin_team(alembic_config, migrations_pg_d
     async def _check() -> int:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            row = await conn.fetchrow(
-                """
+            row = await conn.fetchrow("""
                 SELECT count(*)
                   FROM projects p
                   JOIN teams t ON t.id = p.team_id
                  WHERE p.is_template = true
                    AND t.is_builtin = true
-                """
-            )
+                """)
             return int(row[0])
         finally:
             await conn.close()
@@ -142,7 +140,7 @@ def test_templates_visible_to_tenant_sessions(alembic_config, migrations_pg_dsn:
     )
 
     tenant_id = uuid4()
-    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
     async def _seed_tenant_and_count() -> int:
         conn = await asyncpg.connect(migrations_pg_dsn)

@@ -182,8 +182,7 @@ def resolve_sp_private_key(
         key = entry.get(VAULT_SP_PRIVATE_KEY_FIELD) if isinstance(entry, dict) else None
         if not key:
             raise SSOSecretError(
-                f"Vault entry {sp_private_key_ref!r} has no "
-                f"{VAULT_SP_PRIVATE_KEY_FIELD!r} field"
+                f"Vault entry {sp_private_key_ref!r} has no {VAULT_SP_PRIVATE_KEY_FIELD!r} field"
             )
         return str(key)
 
@@ -194,9 +193,9 @@ def resolve_sp_private_key(
 
 
 __all__ = [
-    "SSOSecretError",
     "VAULT_SECRET_FIELD",
     "VAULT_SP_PRIVATE_KEY_FIELD",
+    "SSOSecretError",
     "decrypt_client_secret",
     "encrypt_client_secret",
     "resolve_client_secret",

@@ -205,12 +205,12 @@ async def test_cross_tenant_isolation(
     assert UUID(body_b[0]["tenant_id"]) == seeded["tenant_b"]
 
     # Neither tenant ever observes the other's id.
-    assert all(
-        UUID(row["tenant_id"]) != seeded["tenant_b"] for row in body_a
-    ), "tenant A should NEVER see tenant B rows"
-    assert all(
-        UUID(row["tenant_id"]) != seeded["tenant_a"] for row in body_b
-    ), "tenant B should NEVER see tenant A rows"
+    assert all(UUID(row["tenant_id"]) != seeded["tenant_b"] for row in body_a), (
+        "tenant A should NEVER see tenant B rows"
+    )
+    assert all(UUID(row["tenant_id"]) != seeded["tenant_a"] for row in body_b), (
+        "tenant B should NEVER see tenant A rows"
+    )
 
 
 @pytest.mark.asyncio

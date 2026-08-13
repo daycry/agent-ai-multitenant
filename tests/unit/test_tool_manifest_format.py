@@ -35,8 +35,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-VALID_TOOL_YAML = textwrap.dedent(
-    """\
+VALID_TOOL_YAML = textwrap.dedent("""\
     name: web-fetch
     version: 2.0.1
     description: Fetch a URL and return its body.
@@ -70,8 +69,7 @@ VALID_TOOL_YAML = textwrap.dedent(
           type: integer
         body:
           type: string
-    """
-)
+    """)
 
 
 def _minimal(**overrides: str) -> str:
@@ -246,8 +244,7 @@ def test_implementation_not_a_mapping_errors() -> None:
 
 def test_implementation_missing_runtime_errors() -> None:
     text = (
-        "name: x\nversion: 1.0.0\ndescription: d\nentrypoint: x:run\n"
-        "implementation:\n  module: x\n"
+        "name: x\nversion: 1.0.0\ndescription: d\nentrypoint: x:run\nimplementation:\n  module: x\n"
     )
     with pytest.raises(ToolFormatError, match="runtime"):
         parse_tool_manifest(text)
@@ -281,8 +278,7 @@ def test_unknown_kind_errors() -> None:
 # Bad permission keys / values error (shared vocabulary enforced)
 # ---------------------------------------------------------------------------
 def test_unknown_permission_key_errors() -> None:
-    text = textwrap.dedent(
-        """\
+    text = textwrap.dedent("""\
         name: x
         version: 1.0.0
         description: d
@@ -292,15 +288,13 @@ def test_unknown_permission_key_errors() -> None:
         permissions:
           allowed_domains: [a.example]
           can_delete_everything: true
-        """
-    )
+        """)
     with pytest.raises(ToolFormatError, match="unknown key"):
         parse_tool_manifest(text)
 
 
 def test_bad_network_policy_value_errors() -> None:
-    text = textwrap.dedent(
-        """\
+    text = textwrap.dedent("""\
         name: x
         version: 1.0.0
         description: d
@@ -309,8 +303,7 @@ def test_bad_network_policy_value_errors() -> None:
           runtime: python
         permissions:
           network_policy: wide-open
-        """
-    )
+        """)
     with pytest.raises(ToolFormatError, match="network_policy"):
         parse_tool_manifest(text)
 
@@ -325,8 +318,7 @@ def test_permissions_not_a_mapping_errors() -> None:
 
 
 def test_string_permission_value_coerced_to_list() -> None:
-    text = textwrap.dedent(
-        """\
+    text = textwrap.dedent("""\
         name: x
         version: 1.0.0
         description: d
@@ -335,8 +327,7 @@ def test_string_permission_value_coerced_to_list() -> None:
           runtime: python
         permissions:
           allowed_domains: solo.example
-        """
-    )
+        """)
     manifest = parse_tool_manifest(text)
     assert manifest.permissions["allowed_domains"] == ["solo.example"]
 

@@ -366,9 +366,7 @@ async def test_conduct_execution_cancelled_by_operator_flag(
                     rows = await list_executions_for_task(s, ids["task"])
                     if rows and rows[0].status == ExecutionStatus.RUNNING:
                         await s.execute(
-                            text(
-                                "UPDATE executions SET cancel_requested_at = now()" " WHERE id = :i"
-                            ),
+                            text("UPDATE executions SET cancel_requested_at = now() WHERE id = :i"),
                             {"i": rows[0].id},
                         )
                         await s.commit()

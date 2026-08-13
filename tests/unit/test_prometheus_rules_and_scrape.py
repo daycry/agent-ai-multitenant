@@ -178,8 +178,7 @@ def test_every_rule_file_is_well_formed() -> None:
         )
         annotations = rule.get("annotations") or {}
         assert annotations.get("summary"), (
-            f"{where} — sin `summary`: la notificación al System Admin llegaría "
-            "sin decir qué pasa"
+            f"{where} — sin `summary`: la notificación al System Admin llegaría sin decir qué pasa"
         )
 
 

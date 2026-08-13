@@ -104,7 +104,7 @@ async def seed_rag_corpus(dsn: str) -> dict[str, Any]:
             "RAG KB",
         )
         await conn.execute(
-            "INSERT INTO kb_projects (kb_id, project_id, tenant_id)" " VALUES ($1, $2, $3)",
+            "INSERT INTO kb_projects (kb_id, project_id, tenant_id) VALUES ($1, $2, $3)",
             kb_id,
             project_id,
             tenant_id,

@@ -437,8 +437,7 @@ BUILTIN_TOOLS: tuple[BuiltinTool, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO tools (
         id, tenant_id, name, description, category,
         input_schema, output_schema, implementation_type,
@@ -463,8 +462,7 @@ _UPSERT_SQL = text(
         timeout_seconds = EXCLUDED.timeout_seconds,
         rate_limit_per_minute = EXCLUDED.rate_limit_per_minute,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def seed_builtin_tools(session: AsyncSession) -> int:

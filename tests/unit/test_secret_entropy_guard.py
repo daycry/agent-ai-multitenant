@@ -236,8 +236,7 @@ def test_a_single_repeated_character_is_rejected(env: str, field: str) -> None:
 
     rendered = str(excinfo.value)
     assert field.upper() in rendered.upper(), (
-        f"el error no nombra la variable ofensora; el operador no sabrá cuál "
-        f"cambiar:\n{rendered}"
+        f"el error no nombra la variable ofensora; el operador no sabrá cuál cambiar:\n{rendered}"
     )
 
 

@@ -182,8 +182,7 @@ def test_the_policy_keeps_its_original_shape(migrated: str) -> None:
     assert row is not None, "la policy del padre desapareció en la conversión"
     assert "app.tenant_id" in row["qual"]
     assert row["with_check"] is None, (
-        "la conversión le añadió un WITH CHECK explícito que la 0001 no tenía:"
-        f" {row['with_check']}"
+        f"la conversión le añadió un WITH CHECK explícito que la 0001 no tenía: {row['with_check']}"
     )
 
 

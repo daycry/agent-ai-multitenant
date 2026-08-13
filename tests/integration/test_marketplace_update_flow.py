@@ -222,8 +222,7 @@ async def _seed(dsn: str, *, v2_manifest: dict[str, Any]) -> dict[str, UUID]:
             ("project_b", "Proyecto B", "proj-b"),
         ):
             await conn.execute(
-                "INSERT INTO projects (id, tenant_id, team_id, name, slug)"
-                " VALUES ($1,$2,$3,$4,$5)",
+                "INSERT INTO projects (id, tenant_id, team_id, name, slug) VALUES ($1,$2,$3,$4,$5)",
                 ids[key],
                 ids["tenant"],
                 ids["team"],
@@ -428,9 +427,9 @@ def test_a_broken_deployment_is_disabled_with_a_reason_and_the_rest_go_on(
         rows = await _deployment_rows(migrations_pg_dsn)
         ok, broken = rows[0], rows[1]
         assert ok["status"] == "active" and ok["version"] == "1.1.0"
-        assert (
-            broken["status"] == "disabled"
-        ), "un despliegue que no encaja en el esquema nuevo NO se aplica a medias"
+        assert broken["status"] == "disabled", (
+            "un despliegue que no encaja en el esquema nuevo NO se aplica a medias"
+        )
         assert broken["version"] == "1.0.0", "y no avanza de versión fingiendo que sí"
         assert broken["disabled_reason"] and "workspace" in broken["disabled_reason"], (
             "`disabled` sin motivo es un estado mudo: el operador ve una "

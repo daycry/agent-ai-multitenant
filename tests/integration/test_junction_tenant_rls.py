@@ -191,8 +191,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             ids["agent_builtin"],
         )
         await conn.execute(
-            "INSERT INTO task_dependencies (task_id, depends_on_task_id)"
-            " VALUES ($1, $2), ($3, $4)",
+            "INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1, $2), ($3, $4)",
             ids["task_a2"],
             ids["task_a1"],
             ids["task_b2"],
@@ -372,9 +371,9 @@ def test_without_tenant_guc_returns_zero_rows(seeded, app_database_url: str) -> 
         # `team_members`/`agent_*` de plataforma siguen visibles por la policy de
         # built-in (fork/adopt lo necesitan); lo que NO puede aparecer es una
         # fila de tenant real sin GUC.
-        assert all(
-            r["tenant_id"] == _PLATFORM_TENANT_ID for r in rows
-        ), f"{table}: sin app.tenant_id se filtraron filas de tenants reales"
+        assert all(r["tenant_id"] == _PLATFORM_TENANT_ID for r in rows), (
+            f"{table}: sin app.tenant_id se filtraron filas de tenants reales"
+        )
 
 
 # ===========================================================================
@@ -634,8 +633,7 @@ def test_backfill_stamps_pre_existing_rows_on_upgrade(
                     ids["agent_builtin"],  # miembro built-in en equipo de tenant
                 )
                 await conn.execute(
-                    "INSERT INTO task_dependencies (task_id, depends_on_task_id)"
-                    " VALUES ($1, $2)",
+                    "INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES ($1, $2)",
                     ids["task_b1"],
                     ids["task_b2"],
                 )
@@ -650,8 +648,7 @@ def test_backfill_stamps_pre_existing_rows_on_upgrade(
             try:
                 assert (
                     await conn.fetchval(
-                        "SELECT tenant_id FROM agent_skills"
-                        " WHERE agent_id = $1 AND skill_id = $2",
+                        "SELECT tenant_id FROM agent_skills WHERE agent_id = $1 AND skill_id = $2",
                         ids["agent_a"],
                         ids["skill_builtin"],
                     )
@@ -659,8 +656,7 @@ def test_backfill_stamps_pre_existing_rows_on_upgrade(
                 ), "el backfill debe tomar el tenant del AGENTE, no de la skill built-in"
                 assert (
                     await conn.fetchval(
-                        "SELECT tenant_id FROM team_members"
-                        " WHERE team_id = $1 AND agent_id = $2",
+                        "SELECT tenant_id FROM team_members WHERE team_id = $1 AND agent_id = $2",
                         ids["team_a"],
                         ids["agent_builtin"],
                     )

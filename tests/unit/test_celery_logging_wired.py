@@ -61,9 +61,9 @@ def test_importing_celery_app_installs_the_logging_pipeline(
         f"{module_name} no conectó setup_logging: sus logs seguirán saliendo "
         "en el formato por defecto de Celery, sin JSON y sin enmascarado PII"
     )
-    assert _connected(
-        task_prerun
-    ), f"{module_name} no conectó task_prerun: el request_id no se bindeará"
+    assert _connected(task_prerun), (
+        f"{module_name} no conectó task_prerun: el request_id no se bindeará"
+    )
     # El servicio con el que se etiquetarán las líneas de log.
     assert pipeline._CONFIG["service"] == expected_service
 
@@ -83,9 +83,9 @@ def test_api_server_installs_the_producer_half(pipeline) -> None:
     importlib.reload(main)
 
     handlers = {r for _, r in before_task_publish.receivers}
-    assert (
-        pipeline.on_before_task_publish in handlers
-    ), "api_server.main no instaló la propagación de request_id a Celery"
+    assert pipeline.on_before_task_publish in handlers, (
+        "api_server.main no instaló la propagación de request_id a Celery"
+    )
 
 
 def test_request_id_survives_the_celery_boundary_round_trip(pipeline) -> None:

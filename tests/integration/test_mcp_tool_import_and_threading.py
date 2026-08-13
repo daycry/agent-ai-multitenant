@@ -780,9 +780,9 @@ async def test_project_mcp_tool_schema_reaches_the_model(
         # 2. Y el esquema llega al bloque que el proveedor pasa al modelo.
         spec = _agent_spec(ExecutionRequest.from_dict(request), None)
         advertised = {t["function"]["name"]: t["function"] for t in spec["model"]["tools"]}
-        assert (
-            "filesystem.list_directory" in advertised
-        ), "la tool MCP del proyecto sigue siendo invisible para el modelo"
+        assert "filesystem.list_directory" in advertised, (
+            "la tool MCP del proyecto sigue siendo invisible para el modelo"
+        )
         assert advertised["filesystem.list_directory"]["parameters"] == _MCP_TOOL_SCHEMA
     finally:
         await redis.delete("default")

@@ -92,9 +92,9 @@ def test_the_three_role_passwords_are_declared_the_same_way(
     asimetría aquí es exactamente cómo se coló el hueco original."""
     for var in ("MIGRATIONS_USER_PASSWORD", "APP_USER_PASSWORD", VAR):
         assert var in postgres_env, f"falta {var}"
-        assert postgres_env[var].startswith(
-            f"${{{var}:?"
-        ), f"{var} no es obligatoria; los tres roles deben declararse igual"
+        assert postgres_env[var].startswith(f"${{{var}:?"), (
+            f"{var} no es obligatoria; los tres roles deben declararse igual"
+        )
 
 
 def test_no_role_password_literal_leaks_into_the_compose(postgres_env: dict[str, str]) -> None:

@@ -63,9 +63,9 @@ TENANT_SCOPED = [d.Agent, d.Skill, d.Tool, d.Team, d.Project, d.Plan, d.Task]
 
 @pytest.mark.parametrize("model", TENANT_SCOPED)
 def test_top_level_models_are_tenant_scoped(model) -> None:
-    assert issubclass(
-        model, TenantScopedMixin
-    ), f"{model.__name__} must inherit TenantScopedMixin for RLS"
+    assert issubclass(model, TenantScopedMixin), (
+        f"{model.__name__} must inherit TenantScopedMixin for RLS"
+    )
     assert issubclass(model, UUIDPrimaryKeyMixin)
     assert issubclass(model, TimestampMixin)
 
@@ -109,9 +109,9 @@ JUNCTIONS = {
 def test_junctions_have_composite_pk(model, pk_cols) -> None:
     """La PK sigue siendo la pareja de FKs: `tenant_id` es defensa, no identidad."""
     cols = model.__table__.primary_key.columns
-    assert {c.name for c in cols} == set(
-        pk_cols
-    ), f"{model.__name__} expected PK {pk_cols}, got {[c.name for c in cols]}"
+    assert {c.name for c in cols} == set(pk_cols), (
+        f"{model.__name__} expected PK {pk_cols}, got {[c.name for c in cols]}"
+    )
 
 
 @pytest.mark.parametrize("model", list(JUNCTIONS.keys()))

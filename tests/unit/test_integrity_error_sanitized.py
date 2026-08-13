@@ -86,9 +86,9 @@ def test_known_constraints_map_to_distinct_codes() -> None:
         assert code != "conflict", f"{name} cayó en el genérico"
         codes.add(code)
 
-    assert (
-        len(_CONSTRAINT_MESSAGES) >= 8
-    ), f"el mapa se quedó en {len(_CONSTRAINT_MESSAGES)} constraints: ¿se vació?"
+    assert len(_CONSTRAINT_MESSAGES) >= 8, (
+        f"el mapa se quedó en {len(_CONSTRAINT_MESSAGES)} constraints: ¿se vació?"
+    )
     assert len(codes) >= 6, f"demasiados nombres comparten código: {sorted(codes)}"
 
 

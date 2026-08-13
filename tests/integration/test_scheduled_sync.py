@@ -70,8 +70,7 @@ def migrated_db(alembic_config, migrations_pg_dsn: str):
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
             await conn.execute(
-                "TRUNCATE model_prices, llm_providers, platform_settings"
-                " RESTART IDENTITY CASCADE"
+                "TRUNCATE model_prices, llm_providers, platform_settings RESTART IDENTITY CASCADE"
             )
         finally:
             await conn.close()

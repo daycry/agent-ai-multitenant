@@ -116,6 +116,6 @@ def test_tmp_never_eats_more_than_half_the_container_memory(template_id: str) ->
     """
     kwargs = _kwargs(template_id=template_id)
     mem_mb = int(str(kwargs["mem_limit"]).rstrip("m"))
-    assert (
-        _size_mb(str(kwargs["tmpfs"]["/tmp"])) <= mem_mb // 2
-    ), f"{template_id}: /tmp ({kwargs['tmpfs']['/tmp']}) contra mem_limit {mem_mb}m"
+    assert _size_mb(str(kwargs["tmpfs"]["/tmp"])) <= mem_mb // 2, (
+        f"{template_id}: /tmp ({kwargs['tmpfs']['/tmp']}) contra mem_limit {mem_mb}m"
+    )

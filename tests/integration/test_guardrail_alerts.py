@@ -508,7 +508,7 @@ async def test_default_dispatcher_enqueues_plan10_event(
 
     import api_server.celery_client as cc
 
-    monkeypatch.setattr(cc, "get_celery_client", lambda: _FakeCelery())
+    monkeypatch.setattr(cc, "get_celery_client", _FakeCelery)
 
     # Use the DEFAULT dispatcher (CeleryAlertDispatcher) by passing None.
     from api_server.auth.deps import AuthPrincipal, open_tenant_session

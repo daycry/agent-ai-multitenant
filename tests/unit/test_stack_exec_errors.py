@@ -81,8 +81,8 @@ def _wire_db(
     # compartido, así que la costura a parchear cambió de nombre. El doble sigue
     # siendo el mismo y lo que el test verifica no cambia.
     monkeypatch.setattr(tasks, "worker_engine", lambda _settings: _Engine())
-    monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: (lambda: _Session()))
-    monkeypatch.setattr("docker.from_env", lambda: MagicMock())
+    monkeypatch.setattr(tasks, "async_sessionmaker", lambda _engine, **_k: _Session)
+    monkeypatch.setattr("docker.from_env", MagicMock)
 
 
 def _request() -> dict:

@@ -112,9 +112,9 @@ def test_lifecycle_columns_nullable() -> None:
 
 def test_column_server_defaults() -> None:
     for col_name in ("scopes", "rate_limit", "ip_allowlist"):
-        assert (
-            ApiToken.__table__.columns[col_name].server_default is not None
-        ), f"{col_name} should carry a server default"
+        assert ApiToken.__table__.columns[col_name].server_default is not None, (
+            f"{col_name} should carry a server default"
+        )
 
 
 def test_rate_limit_default_matches_named_constant() -> None:

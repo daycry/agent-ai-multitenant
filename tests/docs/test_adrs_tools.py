@@ -177,9 +177,9 @@ def test_adr_frontmatter_references_plan_06_18(adr: tuple[str, str, str]) -> Non
     data = yaml.safe_load(frontmatter)
     found = [data[f] for f in _PLAN_FIELDS if f in data and data[f] is not None]
     assert found, f"{adr_key}: falta un campo de plan ({' / '.join(_PLAN_FIELDS)})"
-    assert any(
-        str(v) == PLAN_ID for v in found
-    ), f"{adr_key}: el campo de plan debe apuntar a {PLAN_ID!r}, no a {found!r}"
+    assert any(str(v) == PLAN_ID for v in found), (
+        f"{adr_key}: el campo de plan debe apuntar a {PLAN_ID!r}, no a {found!r}"
+    )
 
 
 # --- secciones canónicas ---------------------------------------------------
@@ -189,9 +189,9 @@ def test_adr_frontmatter_references_plan_06_18(adr: tuple[str, str, str]) -> Non
 def test_adr_has_required_sections(adr: tuple[str, str, str], prefix: str) -> None:
     adr_key, _, body = adr
     titles = _heading_titles(body)
-    assert any(
-        t.startswith(prefix) for t in titles
-    ), f"{adr_key}: falta la sección '## {prefix}...' (encabezados: {titles})"
+    assert any(t.startswith(prefix) for t in titles), (
+        f"{adr_key}: falta la sección '## {prefix}...' (encabezados: {titles})"
+    )
 
 
 def test_adr_options_has_at_least_two_options(adr: tuple[str, str, str]) -> None:
@@ -238,6 +238,6 @@ def test_adr_0048_has_three_namespace_mapping_table() -> None:
 def test_adr_0048_references_adr_0044() -> None:
     """ADR 0048 debe referenciar el ADR 0044 (taxonomía derivada)."""
     _, body = _adr_0048_text()
-    assert re.search(r"\bADR\s*0044\b", body) or re.search(
-        r"\b0044\b", body
-    ), "adr_0048: debe referenciar el ADR 0044"
+    assert re.search(r"\bADR\s*0044\b", body) or re.search(r"\b0044\b", body), (
+        "adr_0048: debe referenciar el ADR 0044"
+    )

@@ -168,9 +168,9 @@ async def test_assignable_users_never_lists_a_member_of_another_tenant(
         "el listado no trae ni al propio miembro del tenant: este test estaría"
         f" pasando en vacío. Devolvió {returned!r}"
     )
-    assert (
-        str(ids["user_b"]) not in returned
-    ), "el directorio de usuarios se filtra: el tenant A ve al usuario del tenant B"
+    assert str(ids["user_b"]) not in returned, (
+        "el directorio de usuarios se filtra: el tenant A ve al usuario del tenant B"
+    )
     assert _EMAIL_B not in response.text, (
         f"el correo de un usuario de otro tenant ({_EMAIL_B}) apareció en la"
         " respuesta: eso es enumeración del directorio de la organización"
@@ -191,9 +191,9 @@ async def test_each_tenant_sees_only_its_own_directory(
 
     assert response.status_code == 200, response.text
     returned = {row["user_id"] for row in response.json()}
-    assert returned == {
-        str(ids["user_b"])
-    }, f"el tenant B debería ver exactamente a su único miembro; vio {returned!r}"
+    assert returned == {str(ids["user_b"])}, (
+        f"el tenant B debería ver exactamente a su único miembro; vio {returned!r}"
+    )
     assert _EMAIL_A not in response.text
 
 

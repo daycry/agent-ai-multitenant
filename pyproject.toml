@@ -121,6 +121,24 @@ select = [
 ignore = [
   "PLR0913",  # too many arguments — handled case by case
   "PLR2004",  # magic value — common in tests
+  # ---------------------------------------------------------------------------
+  # Reglas que ENTRARON SOLAS al subir ruff (2026-08-13). `select` nombra
+  # FAMILIAS (`PL`, `RUF`, `UP`…), así que cada versión nueva matricula reglas
+  # que nadie eligió. Las dos de abajo se rechazan a conciencia; el resto de las
+  # nuevas SÍ se adoptaron y su deuda se arregló en el mismo commit.
+  #
+  # No se ponen `# noqa` en 717 sitios: una decisión de estilo se toma una vez y
+  # aquí, no se disemina en anotaciones que nadie vuelve a revisar.
+  # ---------------------------------------------------------------------------
+  "PLC0415",  # import fuera del nivel superior — 669 casos, y son DELIBERADOS:
+  #             este repo importa dentro de la función para romper ciclos
+  #             (api_server.db ↔ routers) y para no pagar el arranque de
+  #             dependencias pesadas (spacy, presidio, langgraph) en procesos que
+  #             no las usan. Subirlos al módulo rompería importaciones circulares
+  #             reales y encarecería el arranque de los workers.
+  "PLR0917",  # demasiados argumentos POSICIONALES — 48 casos. Es la hermana de
+  #             PLR0913, que ya se ignora arriba «case by case»: adoptar una y no
+  #             la otra sería incoherente.
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -137,6 +155,11 @@ ignore = [
   "RUF003",
   "N802",
 ]
+# `ast.NodeVisitor` despacha por nombre: el método TIENE que llamarse
+# `visit_Call`, con la mayúscula del nodo. No es estilo, es la API — renombrarlo
+# a `visit_call` haría que el visitante no se llamara nunca y el analizador de
+# seguridad dejaría de ver las llamadas EN SILENCIO.
+"packages/shared-guardrails/src/shared_guardrails/checks/code_safety.py" = ["N802"]
 # Process entry points use lazy imports inside `main()` so logging
 # is configured before the app builds. Intentional, not a smell.
 "apps/orchestrator/src/orchestrator/__main__.py" = ["PLC0415"]

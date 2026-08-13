@@ -1000,7 +1000,7 @@ class _AgentLoop:
             node_step(
                 base + len(steps),
                 "plan",
-                "Safeguard tripped: reflection_stalled (model self-reported " "no progress twice)",
+                "Safeguard tripped: reflection_stalled (model self-reported no progress twice)",
                 status="aborted" if trip_status == STATUS_ABORTED else trip_status,
             )
         )
@@ -1221,8 +1221,7 @@ class _AgentLoop:
                         result=extra_result.as_dict(),
                         status="ok" if extra_result.ok else "error",
                         summary=(
-                            f"Tool '{extra_tool}' (batch) → "
-                            f"{'ok' if extra_result.ok else 'error'}"
+                            f"Tool '{extra_tool}' (batch) → {'ok' if extra_result.ok else 'error'}"
                         ),
                     )
                 )
@@ -1603,8 +1602,7 @@ class _AgentLoop:
             approval = state["approval"] or {}
             action = approval.get("action", {})
             output = (
-                f"Awaiting human approval for '{action.get('tool')}' "
-                f"({approval.get('category')})."
+                f"Awaiting human approval for '{action.get('tool')}' ({approval.get('category')})."
             )
             step = node_step(
                 base,

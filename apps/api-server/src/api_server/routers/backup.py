@@ -225,7 +225,7 @@ async def update_backup_destinations(
 REMOTE_PROBE_TIMEOUT_S = 15.0
 
 
-async def run_remote_probe(coro: Awaitable[_T], *, timeout_s: float, on_timeout: _T) -> _T:
+async def run_remote_probe[T](coro: Awaitable[T], *, timeout_s: float, on_timeout: T) -> T:
     """Espera a ``coro`` como mucho ``timeout_s``; al vencer devuelve ``on_timeout``.
 
     **Lo que esto NO hace, y conviene tenerlo escrito**: el hilo del executor

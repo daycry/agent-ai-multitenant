@@ -157,8 +157,7 @@ class OutlierAlertRule(
         ),
         # A success-rate floor is a fraction in [0, 1] when set.
         CheckConstraint(
-            "success_rate_floor IS NULL "
-            "OR (success_rate_floor >= 0 AND success_rate_floor <= 1)",
+            "success_rate_floor IS NULL OR (success_rate_floor >= 0 AND success_rate_floor <= 1)",
             name="ck_outlier_alert_rules_floor_unit_range",
         ),
         # The standard-deviation multiplier is non-negative when set.

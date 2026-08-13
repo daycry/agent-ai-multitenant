@@ -299,9 +299,7 @@ def dependency_dirs() -> tuple[str, ...]:
 
 
 __all__ = [
-    "assert_manifest_covers_catalog",
     "CATALOG",
-    "dependency_dirs",
     "DOTNET_TEST",
     "GENERIC_HTTP",
     "GENERIC_SHELL",
@@ -317,6 +315,8 @@ __all__ = [
     "PYTHON_PYTEST",
     "RUBY_RSPEC",
     "RUST_CARGO",
+    "assert_manifest_covers_catalog",
+    "dependency_dirs",
     "get",
     "list_ids",
 ]

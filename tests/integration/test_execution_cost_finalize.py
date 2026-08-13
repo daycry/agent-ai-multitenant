@@ -202,8 +202,7 @@ async def test_a_cost_reported_by_the_runtime_is_never_overwritten(
 
         assert loaded is not None
         assert float(loaded.total_cost_usd) == pytest.approx(0.0042), (
-            "la estimación de catálogo pisó el coste real del proveedor "
-            "(riesgo 3 del plan prod-07)"
+            "la estimación de catálogo pisó el coste real del proveedor (riesgo 3 del plan prod-07)"
         )
     finally:
         await engine.dispose()

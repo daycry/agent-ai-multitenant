@@ -319,7 +319,7 @@ async def test_export_zip_empty_tree_is_valid_empty_archive(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     """A project whose worktree is not materialised → a valid empty ZIP."""
-    app, roots, tmp_path = configured_app
+    app, _roots, _tmp_path = configured_app
     await _truncate(migrations_pg_dsn)
     seeded = await _seed_single_tenant(migrations_pg_dsn)
     token = await _mint_token(seeded["member_id"], seeded["tenant_id"])

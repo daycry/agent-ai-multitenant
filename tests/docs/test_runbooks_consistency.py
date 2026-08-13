@@ -92,9 +92,9 @@ def test_upgrade_checkout_shortcut_stays_fenced_in_the_dev_subsection(upgrade_te
 def test_upgrade_applies_schema_via_oneshot_migrations_service(upgrade_text: str) -> None:
     # The schema is applied by the stack's one-shot `migrations` service,
     # launched as a one-off that brings postgres up as its dependency.
-    assert (
-        "run --rm migrations" in upgrade_text
-    ), "upgrade runbook must apply migrations via `docker compose run --rm migrations`"
+    assert "run --rm migrations" in upgrade_text, (
+        "upgrade runbook must apply migrations via `docker compose run --rm migrations`"
+    )
 
 
 def test_upgrade_steps_are_ordered_backup_pull_migrate_up(upgrade_text: str) -> None:

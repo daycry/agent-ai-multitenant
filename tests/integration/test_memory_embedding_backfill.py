@@ -150,7 +150,7 @@ async def _count_null(dsn: str) -> int:
     conn = await asyncpg.connect(dsn)
     try:
         return await conn.fetchval(
-            "SELECT count(*) FROM memory_entries" " WHERE embedding IS NULL AND deleted_at IS NULL"
+            "SELECT count(*) FROM memory_entries WHERE embedding IS NULL AND deleted_at IS NULL"
         )
     finally:
         await conn.close()

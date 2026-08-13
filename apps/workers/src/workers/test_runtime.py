@@ -46,12 +46,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+from docker.types import Mount
 from shared_test_runtimes.catalog import get as get_template
 from shared_test_runtimes.images import pinned_pull_reference
 from shared_test_runtimes.types import RuntimeTemplate
 
 import docker
-from docker.types import Mount
 from workers.config import Settings
 from workers.isolation import (
     AGENT_HOME,
@@ -797,7 +797,7 @@ class TestRuntimeRunner:
             budget = check.timeout_s or DEFAULT_TIMEOUT_S
             exec_rc, exec_logs = self._exec(container, check.command, timeout_s=budget)
             all_logs.append(
-                f"--- check {check.id or check.description!r}: {check.command}\n" f"{exec_logs}\n"
+                f"--- check {check.id or check.description!r}: {check.command}\n{exec_logs}\n"
             )
             exit_codes.append(exec_rc)
             if exec_rc == 124:
@@ -1010,11 +1010,13 @@ def _apply_cwd(command: str, cwd: str | None) -> str:
 
 
 __all__ = [
-    "AcceptanceCheck",
-    "AuxServiceSpec",
     "DEFAULT_POSTGRES",
     "DEFAULT_REDIS",
     "DEFAULT_RUN_RUNTIME_ID",
+    "AcceptanceCheck",
+    "AuxServiceSpec",
+    # Re-exported for tests
+    "DockerSocketLeakError",
     "RuntimePlan",
     "RuntimeResolutionError",
     "TestRuntimeResult",
@@ -1026,6 +1028,4 @@ __all__ = [
     "resolve_run_runtime",
     "resolve_run_runtime_id",
     "resolve_run_runtime_image",
-    # Re-exported for tests
-    "DockerSocketLeakError",
 ]

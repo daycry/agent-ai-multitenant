@@ -227,8 +227,7 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO knowledge_bases
         (id, tenant_id, name, description, embedding_model_id, category_id, is_builtin)
     VALUES
@@ -240,8 +239,7 @@ _UPSERT_SQL = text(
         is_builtin = true,
         updated_at = now(),
         deleted_at = NULL
-    """
-)
+    """)
 
 
 async def seed_builtin_kbs(session: AsyncSession) -> int:
@@ -277,8 +275,8 @@ async def seed_builtin_kbs(session: AsyncSession) -> int:
 
 __all__ = [
     "BUILTIN_KBS",
-    "BuiltinKB",
     "KB_SLUG_NAMESPACE",
+    "BuiltinKB",
     "kb_id_for_slug",
     "seed_builtin_kbs",
 ]

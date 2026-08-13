@@ -459,7 +459,7 @@ async def seed_marketplace_listings(
 
 
 __all__ = [
-    "CatalogSeedResult",
     "OFFICIAL_AUTHOR",
+    "CatalogSeedResult",
     "seed_marketplace_listings",
 ]

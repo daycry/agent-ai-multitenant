@@ -250,9 +250,9 @@ def test_bind_tar_excludes_nested_backup_root(tmp_path: Path) -> None:
     # El argv debe llevar un --exclude que cubra el backup_root anidado (rel al
     # directorio archivado, p.ej. './backups' o 'backups').
     excludes = [t.split("=", 1)[1] for t in bind_tar if t.startswith("--exclude=")]
-    assert any(
-        "backups" in e for e in excludes
-    ), f"el bind tar no excluye el backup_root anidado; argv={bind_tar}"
+    assert any("backups" in e for e in excludes), (
+        f"el bind tar no excluye el backup_root anidado; argv={bind_tar}"
+    )
 
 
 def test_bind_tar_no_exclude_when_backup_root_outside(tmp_path: Path) -> None:

@@ -203,8 +203,7 @@ class E2ETestTemplate:
         unknown = set(supplied) - set(declared)
         if unknown:
             raise E2ETemplateError(
-                f"e2e template {self.name!r} got unknown parameter(s): "
-                f"{', '.join(sorted(unknown))}"
+                f"e2e template {self.name!r} got unknown parameter(s): {', '.join(sorted(unknown))}"
             )
 
         resolved: dict[str, str] = {}

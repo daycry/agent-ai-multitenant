@@ -105,8 +105,7 @@ def upgrade() -> None:
             name="ck_outlier_alert_rules_min_runs_positive",
         ),
         sa.CheckConstraint(
-            "success_rate_floor IS NULL "
-            "OR (success_rate_floor >= 0 AND success_rate_floor <= 1)",
+            "success_rate_floor IS NULL OR (success_rate_floor >= 0 AND success_rate_floor <= 1)",
             name="ck_outlier_alert_rules_floor_unit_range",
         ),
         sa.CheckConstraint(

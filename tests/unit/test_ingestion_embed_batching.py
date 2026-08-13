@@ -142,7 +142,7 @@ async def test_a_big_document_is_embedded_in_several_bounded_batches() -> None:
     from api_server.ingestion.pipeline import EMBED_BATCH_SIZE
 
     embedder = _BatchEmbedder()
-    result, session = await _run(150, embedder)
+    result, _session = await _run(150, embedder)
 
     assert result.status == "indexed"
     assert result.chunks_persisted == 150

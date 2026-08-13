@@ -18,7 +18,7 @@ from shared_domain.tool_names import CANONICAL_TOOL_NAMES, RUNTIME_WIRED_TOOL_NA
 def _preset(decision: str) -> dict[str, dict[str, str]]:
     """A policy where every canonical category takes `decision` (mirrors the
     sandbox = all-auto / customer-external = all-human_required seeds)."""
-    return {"categories": {cat: decision for cat in APPROVAL_CATEGORIES}}
+    return {"categories": dict.fromkeys(APPROVAL_CATEGORIES, decision)}
 
 
 def test_every_gate_category_is_canonical() -> None:
@@ -96,9 +96,9 @@ def test_unwired_tools_keep_their_gate_category() -> None:
     for tool, category in _UNWIRED_BUT_KEEP_CATEGORY.items():
         assert tool in DEFAULT_TOOL_CATEGORIES, f"{tool} perdió su categoría al retirarse"
         assert DEFAULT_TOOL_CATEGORIES[tool] == category, tool
-        assert (
-            tool not in RUNTIME_WIRED_TOOL_NAMES
-        ), f"{tool} volvió a estar wired — si es a propósito, muévela a _MUST_BE_GATED"
+        assert tool not in RUNTIME_WIRED_TOOL_NAMES, (
+            f"{tool} volvió a estar wired — si es a propósito, muévela a _MUST_BE_GATED"
+        )
 
 
 def test_sensitive_wired_tools_are_gated() -> None:
@@ -157,7 +157,7 @@ def test_every_wired_tool_is_gated_or_exempt_with_a_reason() -> None:
     # La guarda tiene que ENCONTRAR algo (un descubrimiento vacío pasaría
     # vacuamente y envejecería sin avisar).
     assert len(RUNTIME_WIRED_TOOL_NAMES) >= 10, (
-        "la guarda dejó de ver el conjunto de tools wired " f"(vio {len(RUNTIME_WIRED_TOOL_NAMES)})"
+        f"la guarda dejó de ver el conjunto de tools wired (vio {len(RUNTIME_WIRED_TOOL_NAMES)})"
     )
     ungated = sorted(
         RUNTIME_WIRED_TOOL_NAMES - set(DEFAULT_TOOL_CATEGORIES) - set(_WIRED_UNGATED_BY_DESIGN)
@@ -199,9 +199,9 @@ def test_the_exemption_list_stays_honest() -> None:
             f"{tool} ya no está wired — quítalo de _WIRED_UNGATED_BY_DESIGN "
             "para que la lista siga siendo honesta"
         )
-        assert (
-            tool not in DEFAULT_TOOL_CATEGORIES
-        ), f"{tool} está exento Y tiene categoría — contradicción; borra una de las dos"
+        assert tool not in DEFAULT_TOOL_CATEGORIES, (
+            f"{tool} está exento Y tiene categoría — contradicción; borra una de las dos"
+        )
         assert reason.strip(), f"{tool} está exento sin motivo escrito"
 
 
@@ -210,7 +210,7 @@ def _development_preset() -> dict[str, dict[str, str]]:
     (`_resolve_effective_approval_policy` → `DEFAULT_APPROVAL_POLICY_PRESET`)."""
     return {
         "categories": {
-            **{cat: "human_required" for cat in APPROVAL_CATEGORIES},
+            **dict.fromkeys(APPROVAL_CATEGORIES, "human_required"),
             "code_changes": "auto",
             "git_commit": "auto",
             "external_http_get": "auto",

@@ -71,8 +71,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "Cancel Project",
         )
         await conn.execute(
-            "INSERT INTO tasks (id, tenant_id, project_id, title, status)"
-            " VALUES ($1,$2,$3,$4,$5)",
+            "INSERT INTO tasks (id, tenant_id, project_id, title, status) VALUES ($1,$2,$3,$4,$5)",
             a["task"],
             a["tenant"],
             a["project"],

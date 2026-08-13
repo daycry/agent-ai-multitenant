@@ -52,9 +52,9 @@ def test_restart_services_opens_with_the_unseal_step() -> None:
         text[: text.index("## Comprobación previa")] if "## Comprobación previa" in text else text
     )
 
-    assert (
-        "unseal" in head.lower() or "desellar" in head.lower()
-    ), "restart-services.md no menciona el desellado antes de sus pasos normales"
+    assert "unseal" in head.lower() or "desellar" in head.lower(), (
+        "restart-services.md no menciona el desellado antes de sus pasos normales"
+    )
     assert "operator unseal" in head, "no dice el comando concreto para desellar"
     assert "dr-vault-unseal-rotation.md" in text, "no enlaza el runbook de custodias"
 
@@ -92,9 +92,9 @@ def test_key_rotation_keeps_the_minio_order_explicit() -> None:
     text = _read(_RUNBOOKS / "05-key-rotation.md")
     assert "revoke_previous_minio_credential" in text or "revoke-previous-minio" in text
     lowered = text.lower()
-    assert (
-        "solo entonces" in lowered or "sólo después" in lowered
-    ), "el runbook ya no marca que la revocación de MinIO va DESPUÉS del reinicio"
+    assert "solo entonces" in lowered or "sólo después" in lowered, (
+        "el runbook ya no marca que la revocación de MinIO va DESPUÉS del reinicio"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ def test_the_reference_lists_every_variable_the_canonical_compose_demands() -> N
     catalogue = _read(_REFERENCE / "mandatory-env-vars.md")
     missing = sorted(var for var in required if var not in catalogue)
     assert not missing, (
-        "el compose canónico exige estas variables y el catálogo no las documenta: " f"{missing}"
+        f"el compose canónico exige estas variables y el catálogo no las documenta: {missing}"
     )
 
 

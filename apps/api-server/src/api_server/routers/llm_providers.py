@@ -93,7 +93,7 @@ class _StoreCache:
     """Module-level singleton holding the store (class attr, not a global,
     so ruff PLW0603 stays happy and the test reset hook reads cleanly)."""
 
-    value: LLMProviderVaultStore | None | object = _UNSET
+    value: LLMProviderVaultStore | object | None = _UNSET
 
 
 def get_provider_vault_store() -> LLMProviderVaultStore | None:

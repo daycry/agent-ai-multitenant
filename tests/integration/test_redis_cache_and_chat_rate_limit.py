@@ -143,9 +143,9 @@ async def test_write_invalidates_immediately_so_a_new_value_is_never_stale(
         await set_platform_setting(session, key, "nuevo", actor=admin)
 
     async with sessionmaker() as session:
-        assert (
-            await get_platform_setting(session, key, default="fallback") == "nuevo"
-        ), "la caché sirvió el MISS anterior después de escribir el valor"
+        assert await get_platform_setting(session, key, default="fallback") == "nuevo", (
+            "la caché sirvió el MISS anterior después de escribir el valor"
+        )
 
 
 @pytest.mark.asyncio
@@ -317,6 +317,6 @@ async def test_stream_endpoint_copies_the_rate_limit_headers_into_its_response()
     from pathlib import Path
 
     source = Path("apps/api-server/src/api_server/routers/assistant.py").read_text(encoding="utf-8")
-    assert (
-        "**dict(response.headers)," in source
-    ), "/chat/stream dejó de propagar los headers X-RateLimit-* a su StreamingResponse"
+    assert "**dict(response.headers)," in source, (
+        "/chat/stream dejó de propagar los headers X-RateLimit-* a su StreamingResponse"
+    )

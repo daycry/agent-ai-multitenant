@@ -123,9 +123,9 @@ def test_the_fingerprint_is_stable_key_specific_and_not_the_key() -> None:
     assert _KEY not in fp
     import hashlib
 
-    assert (
-        fp != hashlib.sha256(_KEY.encode()).hexdigest()
-    ), "la huella es la clave derivada: publicarla en el manifest publicaría la clave"
+    assert fp != hashlib.sha256(_KEY.encode()).hexdigest(), (
+        "la huella es la clave derivada: publicarla en el manifest publicaría la clave"
+    )
 
 
 # --------------------------------------------------------------------------- #

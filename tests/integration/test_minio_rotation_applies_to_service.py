@@ -240,9 +240,9 @@ def test_a_revoked_credential_stops_authenticating() -> None:
 
     rotator.revoke(access_key)
 
-    assert not _authenticates(
-        access_key, secret_key
-    ), "la credencial revocada sigue autenticando: la revocación no llegó a MinIO"
+    assert not _authenticates(access_key, secret_key), (
+        "la credencial revocada sigue autenticando: la revocación no llegó a MinIO"
+    )
 
 
 @requires_minio

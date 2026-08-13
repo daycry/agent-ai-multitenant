@@ -77,7 +77,7 @@ async def resolve_visible_kbs(
             "        )"
         )
         params["agent_id"] = str(agent_id)
-    sql += "       )" " ORDER BY kb.id"
+    sql += "       ) ORDER BY kb.id"
 
     result = await session.execute(text(sql), params)
     return [row[0] for row in result.all()]
