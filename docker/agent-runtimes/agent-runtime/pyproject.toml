@@ -5,8 +5,8 @@ description = "Sandboxed agent loop runtime (LangGraph) for the agentic platform
 requires-python = ">=3.12"
 dependencies = [
   # Agent-loop engine
-  "langgraph>=0.2,<1.0",
-  "langchain-core>=0.3,<1.0",
+  "langgraph>=1.2,<2",
+  "langchain-core>=1.5,<2",
 
   # LLM provider layer (ADR 0021). The agent-runtime ModelClient
   # adapters in `providers.py` are thin wrappers over shared_llm.

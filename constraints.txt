@@ -99,10 +99,11 @@ jsonpointer==3.1.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 kombu==5.6.2
-langchain-core==0.3.86
-langgraph==0.6.11
-langgraph-checkpoint==3.0.1
-langgraph-prebuilt==0.6.5
+langchain-protocol==0.0.18
+langchain-core==1.5.4
+langgraph==1.2.11
+langgraph-checkpoint==4.2.0
+langgraph-prebuilt==1.1.0
 langgraph-sdk==0.4.2
 langsmith==0.10.18
 librt==0.15.0 ; platform_python_implementation != 'PyPy'
@@ -219,7 +220,7 @@ watchfiles==1.2.0
 wcwidth==0.8.2
 weasel==1.0.0
 webauthn==2.8.0
-websockets==17.0.1
+websockets==15.0.1  # tope de langgraph-sdk 0.4.2 (<16); ver ADR/commit de la subida a langgraph 1.2
 wrapt==2.3.0
 xmlsec==1.3.17
 xxhash==3.8.1
