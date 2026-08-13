@@ -39,13 +39,7 @@ import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 
 export type CallStatus =
-  | "lobby"
-  | "connecting"
-  | "ready"
-  | "recording"
-  | "thinking"
-  | "speaking"
-  | "error";
+  "lobby" | "connecting" | "ready" | "recording" | "thinking" | "speaking" | "error";
 
 export type VoiceOption = {
   id: string;

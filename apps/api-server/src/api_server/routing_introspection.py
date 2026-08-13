@@ -44,16 +44,17 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["iter_routes", "route_paths"]
+__all__ = ["iter_routes", "iter_routes_with_paths", "route_paths"]
 
 
 def iter_routes(container: Any) -> list[Any]:
     """Todas las rutas de ``container``, descendiendo por los routers incluidos.
 
-    Devuelve los objetos ruta tal cual. Si lo que necesitas son los caminos
-    EFECTIVOS usa :func:`route_paths`: descender a un router incluido da los
-    ``path`` del hijo **sin el prefijo con el que se montó**, y esa diferencia
-    importa (ver allí).
+    Devuelve los objetos ruta tal cual. **Ojo**: leer ``route.path`` de lo que
+    sale de aquí NO da el camino efectivo, porque descender a un router incluido
+    da los ``path`` del hijo **sin el prefijo con el que se montó**. Si necesitas
+    el camino usa :func:`route_paths` (conjunto) o
+    :func:`iter_routes_with_paths` (ruta + camino, en orden de registro).
     """
     out: list[Any] = []
     _walk(getattr(container, "routes", []) or [], out, None, set())
@@ -101,6 +102,34 @@ def _walk(
                 _walk(hijas, out, acc, visto, hijo_prefijo)
 
 
+def iter_routes_with_paths(container: Any) -> list[tuple[Any, str]]:
+    """Cada ruta junto a su camino EFECTIVO, en orden de registro.
+
+    Existe porque las dos funciones que ya había dejaban un hueco por el que se
+    cae quien introspecciona un router compuesto:
+
+    * :func:`iter_routes` da los objetos ruta, pero su ``.path`` es el del hijo
+      **sin prefijo** desde FastAPI 0.141 (antes el aplanado lo reescribía).
+    * :func:`route_paths` da los caminos efectivos, pero como ``set``: pierde el
+      orden y no permite llegar al ``name`` ni a los ``methods`` de la ruta.
+
+    Quien necesitaba las tres cosas a la vez —camino efectivo, métodos y nombre—
+    acababa leyendo ``route.path`` de ``iter_routes``, que es correcto en 0.136 y
+    falso en 0.141. Eso hizo rojo en CI a
+    ``tests/unit/test_sso_router_package.py`` mientras seguía verde en el ``.venv``
+    de desarrollo: el paquete ``routers/sso/`` monta sus sub-routers bajo el
+    ``prefix="/auth/sso"`` del padre, así que las rutas salían como ``/providers``
+    en vez de ``/auth/sso/providers``.
+
+    El orden es el de registro (recorrido en profundidad, padre antes que hijas),
+    que es el que FastAPI usa para casar: por eso esto sirve además para afirmar
+    que una ruta literal quedó ANTES que la paramétrica que se la comería.
+    """
+    acc: list[tuple[Any, str]] = []
+    _walk(getattr(container, "routes", []) or [], [], acc, set())
+    return acc
+
+
 def route_paths(container: Any) -> set[str]:
     """Los caminos EFECTIVOS de todas las rutas, incluidas las de routers incluidos.
 
@@ -120,6 +149,4 @@ def route_paths(container: Any) -> set[str]:
     0.141.1 en un venv aislado: cuatro de los cinco casos pasaban y éste no. Es
     la diferencia entre creer que el arreglo funciona y saberlo.
     """
-    acc: list[tuple[Any, str]] = []
-    _walk(getattr(container, "routes", []) or [], [], acc, set())
-    return {p for _, p in acc}
+    return {p for _, p in iter_routes_with_paths(container)}

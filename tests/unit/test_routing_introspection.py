@@ -29,7 +29,7 @@ caído por facturación. Verificado en un venv aislado con 0.141.1 el 2026-08-01
 from __future__ import annotations
 
 import pytest
-from api_server.routing_introspection import route_paths
+from api_server.routing_introspection import iter_routes_with_paths, route_paths
 from fastapi import APIRouter, FastAPI
 
 pytestmark = pytest.mark.unit
@@ -155,6 +155,78 @@ def test_is_admin_surface_still_refuses_a_mixed_router() -> None:
 
     with pytest.raises(RuntimeError, match="mixes /admin paths"):
         _is_admin_surface(mixto)
+
+
+def _sub_router(*paths: str) -> APIRouter:
+    """Un router con una GET por cada camino, en ese orden."""
+    router = APIRouter()
+    for path in paths:
+        router.add_api_route(path, lambda: {}, methods=["GET"], name=path.strip("/"))
+    return router
+
+
+def test_iter_routes_with_paths_applies_the_parent_prefix() -> None:
+    """El hueco que esta función existe para tapar.
+
+    ``iter_routes`` da la ruta pero con el ``.path`` del hijo —sin el prefijo del
+    padre desde FastAPI 0.141—, y ``route_paths`` da el camino efectivo pero
+    pierde el nombre y los métodos. Quien necesita las tres cosas (los tests de
+    troceo de routers) leía ``route.path`` y obtenía un camino falso: verde en
+    0.136, rojo en 0.141.
+    """
+    padre = APIRouter(prefix="/auth/sso")
+    padre.include_router(_sub_router("/providers"))
+
+    caminos = {path for _, path in iter_routes_with_paths(padre)}
+
+    assert caminos == {"/auth/sso/providers"}, (
+        "el prefijo del padre se perdió: es exactamente lo que puso rojo en CI a "
+        f"test_sso_router_package con FastAPI 0.141 — {caminos}"
+    )
+
+
+def test_iter_routes_with_paths_keeps_the_route_object() -> None:
+    """No basta el camino: hace falta llegar al ``name`` y a los ``methods``."""
+    padre = APIRouter(prefix="/agents")
+    padre.include_router(_sub_router("/{agent_id}"))
+
+    firmas = {
+        (path, tuple(sorted(route.methods)), route.name)
+        for route, path in iter_routes_with_paths(padre)
+    }
+
+    assert firmas == {("/agents/{agent_id}", ("GET",), "{agent_id}")}
+
+
+def test_iter_routes_with_paths_preserves_registration_order() -> None:
+    """El orden es el que FastAPI usa para casar, así que es parte del contrato.
+
+    Si una ruta literal queda DETRÁS de la paramétrica que solapa con ella, la
+    literal desaparece en silencio (la sirve el comodín y responde 422). Afirmar
+    eso exige una lista, no el ``set`` de ``route_paths``.
+    """
+    padre = APIRouter(prefix="/agents")
+    padre.include_router(_sub_router("/provider-options"))
+    padre.include_router(_sub_router("/{agent_id}"))
+
+    caminos = [path for _, path in iter_routes_with_paths(padre)]
+
+    assert caminos.index("/agents/provider-options") < caminos.index("/agents/{agent_id}")
+
+
+def test_iter_routes_with_paths_survives_a_cycle() -> None:
+    """Misma defensa que ``route_paths``: un ciclo no puede colgar el proceso."""
+
+    class Ciclico:
+        path = "/raiz"
+
+        @property
+        def routes(self) -> list[object]:
+            return [self]
+
+    contenedor = type("C", (), {"routes": [Ciclico()]})()
+
+    assert [path for _, path in iter_routes_with_paths(contenedor)] == ["/raiz"]
 
 
 def test_iter_routes_survives_a_cycle() -> None:

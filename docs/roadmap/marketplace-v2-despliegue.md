@@ -60,7 +60,7 @@ docs_language: es
 
 ## Fase 0 — La decisión, formalizada (0,5 días)
 
-#### `task_mkt2_00` — ADR 0142: el despliegue como entidad y la config en tres capas
+### `task_mkt2_00` — ADR 0142: el despliegue como entidad y la config en tres capas
 
 - [x] **Título**: Redactar `docs/05-architecture-decisions/0142-marketplace-despliegue-tres-capas.md`, `status: accepted`
 - **Tiempo**: 3 h · **Complejidad**: s
@@ -70,7 +70,12 @@ docs_language: es
   entidad de despliegue con los dos enfoques rechazados, y la regla de NO
   política paralela (el `role_map` de un MCP escribe `projects.mcp_tool_roles`
   del ADR 0128). El cuerpo y el frontmatter dicen LO MISMO. Enlaza el diseño y
-  actualiza la fila de 0128 («extendido por 0142») sin tocar su estado.
+  **añade `0142` al `relates_to` del frontmatter de 0128**, sin tocar su `status`.
+  (El plan decía «actualiza la fila de 0128», pero **no existe ninguna tabla-índice
+  de ADR** en el repo: `05-architecture-decisions/README.md` es una sola línea. Esa
+  «fila» no tenía destino, así que la instrucción era imposible de cumplir y quedó
+  sin hacer hasta el 2026-08-13, cuando se corrigió el texto y se añadió el
+  `relates_to` de verdad.)
 - **Tests automáticos**:
   ```yaml
   - id: auto_mkt2_00_a
@@ -80,7 +85,7 @@ docs_language: es
 
 ## Fase 1 — Esquema y servicio de despliegue: comprar = recibir (4,5 días)
 
-#### `task_mkt2_01` — Migración: `marketplace_deployments` + `marketplace_listing_versions`
+### `task_mkt2_01` — Migración: `marketplace_deployments` + `marketplace_listing_versions`
 
 - [x] **Título**: Migración reversible (dos tablas, RLS FORCE, backfill de versiones) + modelos ORM
 - **Tiempo**: 6 h · **Complejidad**: m
@@ -97,8 +102,16 @@ docs_language: es
   manifest + permisos + `config_schema` + changelog + `published_by`/
   `reviewed_by`; UNIQUE `(listing_id, version)`. **Backfill**: cada listing
   existente pare su fila de versión (v = `listing.version`) y cada instalación
-  pina esa fila (`pinned_version_id` FK nueva en installations, NOT NULL tras el
-  backfill). Downgrade real: retira policies, tablas y la columna del pin.
+  pina esa fila (`pinned_version_id`, FK nueva en installations). **Queda NULLABLE,
+  desviándose de lo que este plan pedía** («NOT NULL tras el backfill»): el escritor
+  que la mantiene poblada en la PUBLICACIÓN no llega hasta las fases 3/4, y una
+  columna `NOT NULL` cuyo único escritor aterriza dos fases después convierte cada
+  instalación de listing privado nuevo en un 500. El backfill sí deja **cero nulos**,
+  y `marketplace.deploy.ensure_listing_version` la rellena en las altas posteriores;
+  el `NOT NULL` queda diferido. La desviación está razonada en el docstring de la
+  migración y junto a la columna en `db/marketplace.py` — y ahora también aquí, que
+  es donde alguien vendría a comprobar si se cumplió lo pedido.
+  Downgrade real: retira policies, tablas y la columna del pin.
   Modelos en `db/marketplace.py` con los mismos nombres.
 - **Tests automáticos**:
   ```yaml
@@ -114,7 +127,7 @@ docs_language: es
   backfill sobre datos sembrados (listing con instalación → versión creada y
   pinada) y que `test_rls_invariant.py` sigue verde con la tabla nueva.
 
-#### `task_mkt2_02` — Validador de config contra `config_schema`
+### `task_mkt2_02` — Validador de config contra `config_schema`
 
 - [x] **Título**: `marketplace/config_schema.py`: validar los VALORES de un despliegue contra el esquema del manifest
 - **Tiempo**: 4 h · **Complejidad**: s
@@ -140,7 +153,7 @@ tuple[values, list[str]]` para la Fase 4 (campos nuevos → default, retirados �
   Incluye el caso que muerde: un secreto en claro en un campo `secret` →
   rechazado con mensaje que NO ecoa el valor.
 
-#### `task_mkt2_03` — El servicio de despliegue (el corazón del plan)
+### `task_mkt2_03` — El servicio de despliegue (el corazón del plan)
 
 - [x] **Título**: `marketplace/deploy.py`: `deploy_installation` / `retire_deployment`, materialización por tipo con provenance
 - **Tiempo**: 10 h · **Complejidad**: l
@@ -171,7 +184,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   tool asignada A MANO al mismo agente → retirar el despliegue no se la lleva),
   idempotencia, y config inválida → nada escrito (transacción entera fuera).
 
-#### `task_mkt2_04` — Router `marketplace_deployments.py` + disponibilidad por proyecto
+### `task_mkt2_04` — Router `marketplace_deployments.py` + disponibilidad por proyecto
 
 - [x] **Título**: Endpoints de despliegue (fichero nuevo) + `GET /projects/{id}/marketplace/available`
 - **Tiempo**: 5 h · **Complejidad**: m
@@ -191,7 +204,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
     command: "pytest tests/integration/test_marketplace_deployments_api.py tests/unit/test_rbac_matrix_drift.py -q -p no:randomly"
   ```
 
-#### `task_mkt2_05` — La cadena entera, de publicar a usar
+### `task_mkt2_05` — La cadena entera, de publicar a usar
 
 - [x] **Título**: Test de integración de la cadena completa (el criterio de éxito §9 del diseño)
 - **Tiempo**: 4 h · **Complejidad**: m
@@ -212,7 +225,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 ## Fase 2 — Las tres puertas de UI (3 días)
 
-#### `task_mkt2_06` — Ficha de instalación: desplegado-en + «Desplegar a…» + retirar
+### `task_mkt2_06` — Ficha de instalación: desplegado-en + «Desplegar a…» + retirar
 
 - [x] **Título**: `app/admin/marketplace/installations/[id]/deployments-section.tsx` + formulario de despliegue
 - **Tiempo**: 6 h · **Complejidad**: m
@@ -233,7 +246,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   input de puntero Vault (nunca texto libre del secreto), roles pre-marcados
   desde `targets`, y submit bloqueado con errores de validación visibles.
 
-#### `task_mkt2_07` — Wizard de proyecto: paso «Capacidades»
+### `task_mkt2_07` — Wizard de proyecto: paso «Capacidades»
 
 - [x] **Título**: Paso nuevo en `app/admin/projects/new` que ofrece lo instalado y despliega al crear
 - **Tiempo**: 5 h · **Complejidad**: m
@@ -253,7 +266,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
     command: "npx vitest run app/admin/projects/new"
   ```
 
-#### `task_mkt2_08` — Pestañas del proyecto: «disponibles del tenant»
+### `task_mkt2_08` — Pestañas del proyecto: «disponibles del tenant»
 
 - [x] **Título**: Sección de activación local en las pestañas MCP y Tools del proyecto
 - **Tiempo**: 4 h · **Complejidad**: s
@@ -268,12 +281,17 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   ```yaml
   - id: auto_mkt2_08_a
     runtime: vitest
-    command: "npx vitest run app/admin/projects/[id]/mcp-servers app/admin/projects/[id]/tools"
+    # `app/admin/projects/[id]/tools` NUNCA existió: la pestaña real se llama
+    # `agent-tools-diagnostic`, y la sección compartida vive en `components/`.
+    # Corregido el 2026-08-13 al verificar las casillas: el comando anterior
+    # no casaba con ningún fichero, así que vitest pasaba sin ejecutar nada —
+    # un test automático que no puede fallar es peor que no declararlo.
+    command: "npx vitest run app/admin/projects/[id]/mcp-servers app/admin/projects/[id]/agent-tools-diagnostic components/marketplace/available-capabilities-section"
   ```
 
 ## Fase 3 — Publicar pasa por revisión (2,5 días)
 
-#### `task_mkt2_09` — Máquina de estados del listing + migración
+### `task_mkt2_09` — Máquina de estados del listing + migración
 
 - [x] **Título**: `draft → pending_review → published | rejected` (+ promoción a verified), con migración y transiciones auditadas
 - **Tiempo**: 5 h · **Complejidad**: m
@@ -294,9 +312,17 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   Con el negativo que importa: un tenant_user NO revisa, un `pending_review` NO
   aparece en el catálogo de otro usuario, y un rechazo sin motivo → 422.
 
-#### `task_mkt2_10` — Cola de revisión del admin + publicar desde la UI
+### `task_mkt2_10` — Cola de revisión del admin + publicar desde la UI
 
-- [x] **Título**: `app/admin/marketplace/review/page.tsx` (cola) + el flujo publicar deja el listing en `pending_review`
+- [ ] **Título**: `app/admin/marketplace/review/page.tsx` (cola) + el flujo publicar deja el listing en `pending_review`
+- ⚠️ **DESMARCADA el 2026-08-13**, tras verificar las 15 casillas contra el código.
+  La cola existe y es sólida (`review/page.tsx`, 423 líneas, + `review-types.ts`
+  con el delta de permisos puro). Lo que falta es **la otra mitad de la casilla**:
+  «y la UI lo dice (“pendiente de revisión”, no “publicado”)». `grep -rn "pendiente
+de revisi"` sobre todos los `.tsx`/`.ts` da **0 resultados en todo el repo**, y
+  una segunda pasada que intentó refutarlo lo confirmó buscando por funcionalidad,
+  no por ruta. Quien publique un listing sigue leyendo que está publicado cuando en
+  realidad espera revisión.
 - **Tiempo**: 5 h · **Complejidad**: m
 - Cola con diff del manifest cuando es versión nueva de algo publicado
   (reutiliza el helper de diff de la Fase 4 si ya existe; si no, muestra el
@@ -313,11 +339,14 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 ## Fase 4 — Versiones: actualización explícita (3 días)
 
-#### `task_mkt2_11` — Publicar versión nueva = fila de versión + revisión
+### `task_mkt2_11` — Publicar versión nueva = fila de versión + revisión
 
 - [x] **Título**: Re-publicar crea `marketplace_listing_versions` nueva en `pending_review`; el diff de permisos es un helper puro
 - **Tiempo**: 4 h · **Complejidad**: m
-- `marketplace/versions.py`: `permission_diff(old_manifest, new_manifest) ->
+- `marketplace/listing_versions.py` (el plan lo llamaba `versions.py`, que NUNCA
+  existió; corregido el 2026-08-13 tras hacer perder el tiempo a quien fue a
+  comprobar la casilla y concluyó que faltaba el trabajo):
+  `permission_diff(old_manifest, new_manifest) ->
 {added: [...], removed: [...]}` (puro, con test propio) y el alta de versión
   colgando del flujo de publicación de la Fase 3 (misma revisión, mismo audit).
   La versión vigente del listing solo avanza al aprobarse.
@@ -328,9 +357,18 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
     command: "pytest tests/unit/test_marketplace_permission_diff.py tests/integration/test_marketplace_versioning.py -q -p no:randomly"
   ```
 
-#### `task_mkt2_12` — Actualizar instalación: re-consentir SOLO el delta + refrescar despliegues
+### `task_mkt2_12` — Actualizar instalación: re-consentir SOLO el delta + refrescar despliegues
 
-- [x] **Título**: `POST /marketplace/installations/{id}/update` con re-consentimiento del delta y refresco de despliegues; rollback por el mismo mecanismo
+- [ ] **Título**: `POST /marketplace/installations/{id}/update` con re-consentimiento del delta y refresco de despliegues; rollback por el mismo mecanismo
+- ⚠️ **DESMARCADA el 2026-08-13**, por la misma verificación. El **backend está
+  completo y comprobado línea a línea**: `GET /installations/{id}/update-check`
+  (con `allow_major` y `permission_delta`), `POST …/update`, y `_delta_against_pin`
+  calculando el delta contra la fila de versión PINADA con degradación honesta a
+  `granted_permissions`. La UI, en cambio, se entregó **sólo en la ficha de
+  instalación** (`installations/[id]/update-banner.tsx`, 11 tests): el **catálogo**
+  (`app/admin/marketplace/page.tsx`) no llama ni a `update-check` ni a `update`, así
+  que quien mira el catálogo no se entera de que tiene actualizaciones pendientes.
+  Confirmado por refutación: no está en ningún otro sitio.
 - **Tiempo**: 8 h · **Complejidad**: l
 - El endpoint compara la versión pinada con la vigente: permisos nuevos → exige
   el consentimiento de ESOS (los ya concedidos no se re-preguntan; los
@@ -364,7 +402,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 ## Fase 5 — Playwright al modelo nuevo + honestidad documental (1,5 días)
 
-#### `task_mkt2_13` — La config guiada de Playwright se muda al despliegue
+### `task_mkt2_13` — La config guiada de Playwright se muda al despliegue
 
 - [x] **Título**: El install de Playwright deja de pedir config; su `config_schema` se rinde en el despliegue; migración de datos si hay config previa
 - ✅ **Cerrada (2026-08-01)**. Tres piezas, y una que **no hizo falta**:
@@ -411,7 +449,7 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   Con el caso de dos proyectos con `base_url` DISTINTA conviviendo — el que el
   modelo viejo no podía expresar.
 
-#### `task_mkt2_14` — Referencia, changelog y guía humana
+### `task_mkt2_14` — Referencia, changelog y guía humana
 
 - [x] **Título**: `docs/04-reference/marketplace.md` reescrito al modelo v2 + changelog + guía de tests humanos
 - ✅ **Cerrada (2026-08-01)**. Tres documentos, todos verificados contra el
@@ -430,13 +468,18 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
   - **Y dos correcciones a documentación que ya mentía**: la guía humana del
     plan 09 y el spec del manual 06 describían la pantalla de config guiada de
     Playwright, que `task_mkt2_13` borró.
-- ⚠️ **Hallazgo al documentar**: `task_mkt2_12` prometía un **banner de
-  actualización** («v X.Y disponible» con el diff de permisos) en la ficha y el
-  catálogo, y **no existe**: no hay ni una llamada a `update-check` ni a
-  `installations/{id}/update` en todo `apps/admin-panel` (grep del 2026-08-01;
-  el backend sí está entero). Queda anotado en la §Deuda conocida del changelog
-  y `human_mkt2_02` se conduce por API mientras tanto. **Su casilla sigue `[x]`
-  porque no es mía**: quien la cerró debe decidir si la reabre.
+- ⚠️ **Hallazgo al documentar (2026-08-01), resuelto A MEDIAS**: `task_mkt2_12`
+  prometía un **banner de actualización** («v X.Y disponible» con el diff de
+  permisos) en la ficha **y el catálogo**, y entonces no existía en ninguno de los
+  dos: no había ni una llamada a `update-check` ni a `installations/{id}/update` en
+  todo `apps/admin-panel`, aunque el backend sí estaba entero.
+
+  **Al día de hoy (2026-08-13)**: el banner de la **ficha** se entregó
+  (`installations/[id]/update-banner.tsx`, 11 tests). El del **catálogo** sigue sin
+  existir, así que la mitad del hallazgo continúa viva y `task_mkt2_12` está
+  DESMARCADA — quien la cerró (yo) la reabrió tras verificarla, que es lo que pedía
+  la nota original.
+
 - **Tiempo**: 4 h · **Complejidad**: s
 - La referencia cuenta las tres capas y las tres puertas con capturas de flujo;
   `docs/07-changelog/marketplace-v2-despliegue.md` al cierre;

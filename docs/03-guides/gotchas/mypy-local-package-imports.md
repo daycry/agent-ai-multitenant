@@ -71,3 +71,29 @@ Y `mypy` "real" en el venv sigue chequeando todo:
 ```bash
 .venv/Scripts/python -m mypy apps packages
 ```
+
+## Variante con varios agentes en el mismo árbol: el caché miente (2026-08-13)
+
+El gate `scripts/mypy_gate.py` corre con **caché incremental** (`.mypy_cache/`).
+Si otro carril está editando ficheros del mismo árbol MIENTRAS tú corres el
+gate, el caché puede quedar a medias y denunciar un módulo que existe:
+
+```text
+apps\workers\src\workers\git_remote_sweep.py:58: error:
+  Module "api_server.db" has no attribute "platform_settings"  [attr-defined]
+Found 1 error in 1 file (checked 703 source files)
+```
+
+`api_server/db/platform_settings.py` está ahí, no está en `exclude`, y el mismo
+gate había dicho **Passed** veinte minutos antes. No busques el bug en el
+código: **tira el caché y repite**.
+
+```bash
+rm -rf .mypy_cache && .venv/Scripts/python.exe scripts/mypy_gate.py
+# Success: no issues found in 703 source files
+```
+
+Antes de perseguir un `attr-defined` sobre un submódulo que existe, comprueba
+`git status`: si hay ficheros ajenos modificados, la pasada en frío es la única
+que cuenta. En CI no pasa —cada job arranca sin caché—, así que un error que
+sólo aparece en local y desaparece en frío es exactamente esto.

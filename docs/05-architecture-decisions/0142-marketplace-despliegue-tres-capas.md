@@ -132,7 +132,7 @@ auditoría. Igual que una instalación revocada.
 
 ## Consecuencias
 
-**A favor**
+### A favor
 
 - Instalar deja de ser comprar sin recibir: hay un test de integración que va de
   publicar a que el agente tenga la tool y el proyecto el MCP.
@@ -141,7 +141,7 @@ auditoría. Igual que una instalación revocada.
   servicio: `marketplace_deployments` nace con `ENABLE` + `FORCE` + política
   `tenant_isolation`, como toda tabla con `tenant_id` en este repo.
 
-**En contra / coste**
+### En contra / coste
 
 - Dos tablas más y una columna nueva en `marketplace_installations`
   (`pinned_version_id`). El backfill es obligatorio: cada listing existente pare
@@ -153,7 +153,7 @@ auditoría. Igual que una instalación revocada.
   el install. Mudar sus datos existentes es una migración de datos con caso
   esperado vacío (hoy no hay despliegues).
 
-**Lo que este ADR NO desbloquea**
+### Lo que este ADR NO desbloquea
 
 El sandbox para tools con código propio sigue **gated** por la infra que el ADR
 0081 nombra (sandbox out-of-process, registry de artefactos, clave de firma).

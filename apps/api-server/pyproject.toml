@@ -43,7 +43,13 @@ dependencies = [
   # ride in as the `python-jose[cryptography]` extra, and dropping python-jose
   # would otherwise have left a direct import with no declared source.
   "authlib>=1.3,<2",
-  "cryptography>=42,<47",
+  # Suelo 50 por CVE, no por compatibilidad (SCA 2026-08-13): 46.0.7 —el techo
+  # que imponía el `<47` anterior— arrastra CVE-2026-69247 (oráculo de
+  # Bleichenbacher en pkcs7_decrypt_der, corregido en 50.0.0), CVE-2026-69248 y
+  # CVE-2026-69249 (49.0.0) y GHSA-537c-gmf6-5ccf (48.0.1). Nada de lo que las
+  # majors 47→50 rompieron nos toca: usamos Fernet, Ed25519 y x509, no los
+  # alias de tipos retirados en 49 ni ChaCha20/FFDH/pkcs7.
+  "cryptography>=50,<51",
   # SAML 2.0 (Plan 08 task_08_04). python3-saml drives the SP-initiated
   # AuthnRequest + the ACS assertion validation. It binds the NATIVE
   # xmlsec/libxml2 libraries, which can fail to install on some hosts;

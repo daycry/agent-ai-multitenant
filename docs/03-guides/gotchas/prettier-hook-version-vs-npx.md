@@ -24,9 +24,18 @@ Parece un bucle de formateadores peleándose (como
 [black vs ruff-format](black-vs-ruff-format-chained-call-comment.md)), pero no lo es:
 aquí es **el mismo formateador en dos versiones distintas**.
 
+> **Actualizado el 2026-08-13.** El `rev` del hook ya no es `v4.0.0-alpha.8`: es
+> `rbubley/mirrors-prettier` en **`v3.9.6`**, que fija `prettier@3.9.6` EXACTO.
+> El diagnóstico de abajo sigue valiendo palabra por palabra —el árbitro es el
+> hook—, pero ahora la versión que instala es **estable y conocida**, así que
+> `npx prettier@3.9.6` sí coincide con él (un `npx prettier` a secas, no: sigue
+> siendo «la última publicada hoy»). El porqué del cambio, con la cadena de
+> dependencias que hacía flotar la versión pese al `rev` pineado, está en
+> [ci-tool-version-drift.md](./ci-tool-version-drift.md).
+
 ## Causa raíz
 
-`.pre-commit-config.yaml` usa `mirrors-prettier` con **`rev: v4.0.0-alpha.8`**, y
+`.pre-commit-config.yaml` usaba `mirrors-prettier` con **`rev: v4.0.0-alpha.8`**, y
 pre-commit lo instala en un entorno Node **aislado y pineado**.
 
 `apps/admin-panel/package.json` **no declara `prettier`** y no hay

@@ -45,11 +45,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export type HumanAction =
-  | "approve_manual"
-  | "reassign_with_guidance"
-  | "block_with_reason"
-  | "cancel"
-  | "retry";
+  "approve_manual" | "reassign_with_guidance" | "block_with_reason" | "cancel" | "retry";
 
 export interface HumanActionPayload {
   action: HumanAction;

@@ -73,7 +73,17 @@ jobs:
           # resolve in both pytest and pre-commit's mypy hook.
           python -m pip install -e "packages/shared-guardrails[dev]" -c constraints.txt
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]" -c constraints.txt
-          python -m pip install pre-commit
+          # El hook `mypy` es `language: system` A PROPÓSITO (mypy-total,
+          # 2026-07-08): corre con el ENTORNO DEL PROYECTO para ver los paquetes
+          # hermanos editables, que el venv aislado de mirrors-mypy no veía. Eso
+          # obliga a que mypy ESTÉ en ese entorno, y ningún extra `[dev]` de las
+          # apps lo declara: vive en el grupo `dev` de la raíz, espejo de
+          # requirements-dev.txt. Sin esta línea, `scripts/mypy_gate.py` aborta
+          # con «mypy no está instalado» y el gate de tipos NO CORRE — el job se
+          # ve rojo, pero por el wrapper, no por los tipos. `-c constraints.txt`
+          # lo pinea, y el fichero trae también pre-commit, que hasta ahora se
+          # instalaba SIN pin (la misma trampa del gotcha ci-tool-version-drift).
+          python -m pip install -r requirements-dev.txt -c constraints.txt
 
       - name: Run pre-commit on all files
         run: pre-commit run --all-files --show-diff-on-failure
@@ -349,10 +359,21 @@ jobs:
           python -m pip install -e "docker/agent-runtimes/agent-runtime[dev]" -c constraints.txt
 
       # `--skip-editable` deja fuera las 13 distribuciones locales (api-server,
-      # shared-*, agent-runtime…): no existen en PyPI, así que con `--strict`
-      # las contaría como "no auditables" y el paso moriría siempre por una
-      # razón que no es una vulnerabilidad. Sus dependencias SÍ se auditan:
-      # están instaladas en el entorno como distribuciones normales.
+      # shared-*, agent-runtime…): no existen en PyPI y no son auditables. Sus
+      # dependencias SÍ se auditan: están instaladas en el entorno como
+      # distribuciones normales.
+      #
+      # `--strict` NO puede acompañarlo, aunque suene a lo contrario: significa
+      # «falla si la recolección falla en CUALQUIER dependencia», y una
+      # dependencia omitida cuenta como fallo. Es decir, volvía fatal justo lo
+      # que `--skip-editable` acababa de omitir: el paso moría SIEMPRE en la
+      # primera editable por orden alfabético —«agent-runtime: distribution
+      # marked as editable»— sin auditar ni un paquete. Rojo permanente que no
+      # era una vulnerabilidad y que además tapaba las que sí hay.
+      # Lo que `--strict` aportaba de verdad —no dar por buena una auditoría
+      # incompleta— lo comprueba `scripts/check_pip_audit_report.py` sobre el
+      # JSON, y con más precisión: tolera las omisiones por «editable» y falla
+      # ante cualquier otro motivo.
       - name: pip-audit (entorno instalado, transitivas incluidas)
         run: |
           set -euo pipefail
@@ -367,7 +388,13 @@ jobs:
             [ -n "$line" ] && ignores+=(--ignore-vuln "$line")
           done < .pip-audit-ignore
           echo "Excepciones aplicadas: ${#ignores[@]}"
-          pip-audit --strict --skip-editable "${ignores[@]}"
+          # pip-audit sale con 1 si encuentra vulnerabilidades; se captura para
+          # que el informe legible se imprima igualmente y luego se propaga.
+          status=0
+          pip-audit --skip-editable --progress-spinner=off \
+            --format=json --output pip-audit.json "${ignores[@]}" || status=$?
+          python scripts/check_pip_audit_report.py pip-audit.json
+          exit "$status"
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -402,19 +429,6 @@ jobs:
     # cross-tenant gate push the whole job near 30; a slow runner tipped it over
     # and cancelled mid-suite (Plan prod-01 CI). Revisit when the suite is split.
     timeout-minutes: 45
-    # prod-10 task_prod10_05/06: the canonical compose no longer falls back to
-    # `changeme-dev-only` — every credential is `${VAR:?…}` and a missing one
-    # aborts `docker compose config`. On a developer machine these come from
-    # `docker/.env` (gitignored); CI has no such file, so they are declared here.
-    # The values are the SAME public dev-only strings that used to be inlined in
-    # the compose: this is a throwaway stack that lives for one job.
-    env:
-      POSTGRES_PASSWORD: changeme-dev-only
-      MIGRATIONS_USER_PASSWORD: changeme-migrations-dev-only
-      APP_USER_PASSWORD: changeme-app-dev-only
-      REDIS_PASSWORD: changeme-redis-dev-only
-      MINIO_ROOT_PASSWORD: changeme-dev-only
-      SEARXNG_SECRET: changeme-searxng-dev-only
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -427,6 +441,41 @@ jobs:
             echo "has_compose=false" >> "$GITHUB_OUTPUT"
             echo "No docker/docker-compose.yml yet — skipping."
           fi
+
+      # prod-10 (task_prod10_05/06) convirtió cada credencial del compose en
+      # `${VAR:?…}`: si falta UNA, `docker compose` aborta el proyecto ENTERO
+      # —no sólo su servicio, y tampoco `ps`/`logs`/`down`— porque la
+      # interpolación ocurre al cargar el fichero, antes de filtrar por perfiles.
+      # En una máquina de desarrollo esos valores salen de `docker/.env`, que
+      # está en .gitignore a propósito; en el runner ese fichero no existe, así
+      # que hay que materializarlo ANTES del primer `docker compose`.
+      #
+      # Se COPIA `docker/.env.example` en vez de enumerar las variables en un
+      # bloque `env:` del job, que es lo que había hasta 2026-08-13: aquella
+      # lista escrita a mano se quedó atrás cuando prod-14 añadió
+      # SERVICE_USER_PASSWORD y prod-08 API_SERVER_ALERTS_INGEST_TOKEN, y este
+      # job llevaba rojo desde entonces sin que se viera en local (donde SÍ hay
+      # `docker/.env`). El ejemplo es la única lista que una guarda mantiene al
+      # día: tests/unit/test_compose_required_env_is_documented.py exige que
+      # toda `${VAR:?…}` de cualquier compose esté asignada ahí, y —en el mismo
+      # fichero— que este paso siga existiendo antes del primer `docker compose`.
+      #
+      # Sobre los secretos: los del ejemplo son PÚBLICOS (están en el repo) y
+      # aquí son además EFÍMEROS — este stack lo levanta y lo destruye este job,
+      # no se expone fuera del runner y muere con él en el `down -v`. Eso es
+      # aceptable en CI y NO en producción, donde el instalador inyecta las
+      # credenciales desde Vault y el `${VAR:?…}` es justo lo que impide que un
+      # despliegue arranque con estas cadenas.
+      - name: Materialise docker/.env (ephemeral CI credentials)
+        if: steps.detect.outputs.has_compose == 'true'
+        run: |
+          cp docker/.env.example docker/.env
+          # La suite de integración construye la URL de Redis leyendo este mismo
+          # fichero (tests/integration/_redis_url.py). Se exporta aquí la base 15
+          # explícitamente para que los pasos de pytest de abajo no repitan la
+          # contraseña, que era la otra copia que se desincronizaba.
+          redis_password="$(sed -n 's/^REDIS_PASSWORD=//p' docker/.env)"
+          echo "TEST_REDIS_URL=redis://:${redis_password}@localhost:6379/15" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         if: steps.detect.outputs.has_compose == 'true'
@@ -544,11 +593,16 @@ jobs:
       # fails if pytest collected zero of them (`--strict-markers` is on, and
       # an empty selection would exit 5 = "no tests collected", which we treat
       # as a regression of the safety net rather than a pass).
+      # `TEST_REDIS_URL` NO se declara por paso: lo exporta a `$GITHUB_ENV` el
+      # paso «Materialise docker/.env» leyendo la contraseña del fichero. Antes
+      # se repetía aquí como `redis://:${{ env.REDIS_PASSWORD }}@…`, y al
+      # desaparecer el bloque `env:` del job eso interpolaría a una credencial
+      # VACÍA — un `NOAUTH` dentro de una fixture, que es el modo de fallo del
+      # gotcha redis-con-contrasena-rompe-la-integracion.md.
       - name: pytest cross-tenant isolation gate
         if: steps.detect.outputs.has_compose == 'true'
         env:
           TEST_PG_PORT: "15432"
-          TEST_REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/15
         run: pytest tests/integration -m cross_tenant -v
 
       - name: pytest tests/integration
@@ -557,7 +611,6 @@ jobs:
           # In GH Actions there is no Laragon — bind the docker container
           # to the standard port for ergonomic conftest defaults.
           TEST_PG_PORT: "15432"
-          TEST_REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/15
         run: |
           if find tests/integration -type f -name "test_*.py" | grep -q .; then
             pytest tests/integration -v
@@ -574,7 +627,6 @@ jobs:
         if: steps.detect.outputs.has_compose == 'true'
         env:
           TEST_PG_PORT: "15432"
-          TEST_REDIS_URL: redis://:${{ env.REDIS_PASSWORD }}@localhost:6379/15
         run: |
           if find tests/migrations -type f -name "test_*.py" | grep -q .; then
             pytest tests/migrations -v
@@ -662,6 +714,21 @@ jobs:
           # their own directory as the context. Everything already built above
           # is skipped from the SAME derived list, so the two branches cannot
           # drift apart again.
+          #
+          # `NEXT_PUBLIC_API_URL` no es opcional en un build de producción desde
+          # prod-09 (hallazgo frontend-8): `next.config.js` → `assertPublicApiUrl`
+          # revienta el build si falta, porque Next hornea las NEXT_PUBLIC_* en el
+          # bundle y sin ella el panel apunta al localhost de CADA usuario. Este
+          # bucle construía sin build-args, así que el admin-panel fallaba SIEMPRE
+          # desde que entró la guarda — invisible mientras CI estuvo caído por
+          # facturación. `/api` es el prefijo de mismo origen tras Caddy (ADR
+          # 0061), el mismo que hornean `release-images.yml` y el paso «next build
+          # (smoke)» de este workflow.
+          #
+          # Se DEDUCE del Dockerfile (`ARG NEXT_PUBLIC_API_URL`) en vez de
+          # nombrar al admin-panel: una lista de apps escrita a mano fue justo el
+          # defecto que motivó derivar la lista de arriba, y repetirla aquí lo
+          # repetiría con la siguiente app Next que entre.
           for f in $(find apps -name Dockerfile); do
             app_dir="$(dirname "$f")"
             app_name="$(basename "$app_dir")"
@@ -669,8 +736,13 @@ jobs:
             case " ${derived[*]:-} " in
               *" $app_name "*) continue ;;
             esac
+            build_args=()
+            if grep -qE '^ARG[[:space:]]+NEXT_PUBLIC_API_URL' "$f"; then
+              build_args+=(--build-arg NEXT_PUBLIC_API_URL=/api)
+            fi
             echo "::group::Building $app_name"
-            docker build -t "agentic-platform/$app_name:ci" "$app_dir"
+            docker build "${build_args[@]+"${build_args[@]}"}" \
+              -t "agentic-platform/$app_name:ci" "$app_dir"
             echo "::endgroup::"
           done
 

@@ -5,17 +5,47 @@
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
 # deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
 # (ecosistema docker, .github/dependabot.yml).
-FROM rust:1.79-slim@sha256:073c8e7ae12d2637d1d541cb0f3f9d92bfa22c97e2e45db87a9fc6a90c9a7f22 AS runtime
+# 2026-08-13: se sube de `rust:1.79-slim` a `rust:1.97-slim`. El digest anterior
+# era de un bookworm 12.6 (junio 2024) y acumulaba 940 CVE HIGH/CRITICAL CON fix
+# en apt; además, los propios binarios de `rustc`/`cargo` de la 1.79 vendorizan
+# crates vulnerables que Trivy lee como `rustbinary` (mio 0.8.10, openssl-sys
+# 0.10.38, rustls-webpki 0.102.6, aws-lc-sys 0.20.1, pyo3 0.20.0) y que sólo se
+# renuevan con el toolchain. De ahí que aquí no baste refrescar el digest de la
+# 1.79: el arreglo es la versión de Rust.
+FROM rust:1.97-slim@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-rust-cargo" \
       org.opencontainers.image.version="v1" \
-      org.opencontainers.image.description="Test-runtime template: Rust 1.79 + cargo + cargo-nextest."
+      org.opencontainers.image.description="Test-runtime template: Rust 1.97 + cargo + cargo-nextest."
+
+# La base de Rust se reconstruye con retraso respecto al archivo de seguridad
+# de Debian: con el digest más reciente seguían apareciendo 49 CVE HIGH de
+# `linux-libc-dev` (llega con el `libc6-dev` que necesita cualquier crate con
+# dependencias C) que Debian YA tiene parcheadas. Aplicar ese parche es el
+# arreglo; el pin del digest, por diseño, no lo trae. Se cura solo en cada
+# build, que es más de lo que da refrescar el digest a mano.
+RUN apt-get update \
+ && apt-get -y upgrade \
+ && rm -rf /var/lib/apt/lists/*
 
 # nextest produces structured JSON for the rust_test_json parser. Cheaper
 # to install in the image than to require every project to add it.
-# Pinned: las versiones >=0.9.86 requieren rustc 1.91+. v0.9.85 es la
-# ultima compatible con el base rust:1.79-slim (soporta rustc 1.75).
-RUN cargo install cargo-nextest --locked --version 0.9.85
+# El pin de 0.9.85 existía porque >=0.9.86 exige rustc 1.91+; con la base en
+# 1.97 esa restricción desaparece y la versión al día trae además los crates
+# vendorizados sin las CVE que Trivy contaba en el binario resultante.
+#
+# El `rm -rf` del final NO es sólo peso (371 MB): `cargo install` deja en
+# `$CARGO_HOME/registry/src` el CÓDIGO FUENTE de todo el grafo de nextest, y
+# con él los `Cargo.lock` que cada crate publica en su tarball. Trivy los lee
+# como manifiestos y cuenta 35 HIGH (gix, openssl-sys, rustls-webpki,
+# quinn-proto, pyo3...) que describen los lockfiles de DESARROLLO de esos
+# crates, no lo que se compiló en el binario. Y en tiempo de ejecución esto
+# tampoco sirve de nada: el worker reapunta `CARGO_HOME` a
+# `/home/agent/.cargo` (ver `cache_env` de la plantilla en el catálogo), así
+# que esta caché nunca se consulta. Borrar la fuente del ruido es lo correcto
+# por los dos motivos.
+RUN cargo install cargo-nextest --locked --version 0.9.143 \
+ && rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git"
 
 WORKDIR /workspace
 

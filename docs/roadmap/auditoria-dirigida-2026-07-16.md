@@ -80,7 +80,7 @@ critical/high/medium). No se modificó ningún estado, fila ni contenedor.
 
 ### AUD16-01 — `submit_result`/`submit_verdict` viajan sin envelope OpenAI a los 3 proveedores HTTP
 
-**Severidad: crítica · estado: broken (latente: hoy solo corre claude_sdk)**
+**Severidad**: crítica · **estado**: broken (latente: hoy solo corre claude_sdk)
 
 `_SUBMIT_RESULT_TOOL` y `_SUBMIT_VERDICT_TOOL`
 (`docker/agent-runtimes/agent-runtime/agent_runtime/providers.py:179-201` y
@@ -108,7 +108,7 @@ de los 3 kinds HTTP.
 
 ### AUD16-02 — Tools de orquestación: se ejecutan, devuelven `ok=true` y sus efectos no se aplican jamás
 
-**Severidad: alta · estado: broken (regresión parcial del H3 de 2026-06-24 a «éxito falso»)**
+**Severidad**: alta · **estado**: broken (regresión parcial del H3 de 2026-06-24 a «éxito falso»)
 
 `kanban_update`/`task_comment`/`agent_invoke`/`notify_user` emiten un _effect_
 a un `OrchestrationSink` local (`orchestration_tools.py:29-41`) «que el worker
@@ -124,7 +124,7 @@ modelo (`SYSTEM_TOOL_NAMES`, `agent_tool_schemas.py:201-213`) hasta cablearla.
 
 ### AUD16-03 — Cero runs jamás sobre ollama/copilot/azure: el camino HTTP no está validado en vivo
 
-**Severidad: alta · estado: gap de validación**
+**Severidad**: alta · **estado**: gap de validación
 
 SQL sobre steps_log: el histórico completo es `claude-opus-4-8` (103 runs,
 2026-06-29→07-09) + 25 runs sin model_call (fallos de infra). El default de
@@ -135,7 +135,7 @@ run e2e de humo por cada kind HTTP antes de dar por buenos los 4 caminos.
 
 ### AUD16-04 — Los system prompts anuncian `search_code`, que no existe en el runtime
 
-**Severidad: media · estado: broken**
+**Severidad**: media · **estado**: broken
 
 `providers.py:99` y `:126-128` nombran `search_code` entre las tools read-only,
 pero no está cableada (el propio `agent_tool_schemas.py:237-244` la excluye del
@@ -145,7 +145,7 @@ anuncio por g4). El modelo la invoca a pelo: steps_log 14 días → **7 llamadas
 
 ### AUD16-05 — claude_sdk degrada los JSON Schema de las tools a `{campo: tipo}`
 
-**Severidad: media · estado: risk**
+**Severidad**: media · **estado**: risk
 
 `claude_agent.py:745-764` (`_json_schema_to_tool_schema`) descarta `required`,
 `enum` (p. ej. los scopes de `memory_recall`), las descriptions por campo y los
@@ -157,7 +157,7 @@ especificados. **Acción**: pasar el JSON Schema completo al `@tool` del SDK
 
 ### AUD16-06 — Streaming OpenAI-compat descarta los deltas de `tool_calls`
 
-**Severidad: baja · estado: risk (hoy sin uso con tools)**
+**Severidad**: baja · **estado**: risk (hoy sin uso con tools)
 
 `_openai_compat.py:126-146` solo extrae `delta.content`; un `delta.tool_calls`
 se ignora en silencio. Único uso actual de `stream()` es el camino FINISH_NUDGE
@@ -198,7 +198,7 @@ Despliegue vivo verificado: base + dev + manuals + monitoring + monitoring.dev
 
 ### AUD16-07 — cAdvisor no ve NINGÚN contenedor en este host
 
-**Severidad: alta · estado: broken (en Docker Desktop)**
+**Severidad**: alta · **estado**: broken (en Docker Desktop)
 
 `count(container_last_seen)` = 1 (solo el cgroup raíz `{id="/"}`). Los logs de
 cAdvisor repiten para todos los contenedores: `failed to identify the
@@ -217,7 +217,7 @@ contenedor».
 
 ### AUD16-08 — Vigilancia de disco del host inexistente en Windows-dev
 
-**Severidad: media · estado: risk (degradación documentada, pero deja ciego un requisito)**
+**Severidad**: media · **estado**: risk (degradación documentada, pero deja ciego un requisito)
 
 `docker-compose.windows.yml:24-38` (`volumes: !override`) elimina el rootfs de
 node-exporter → `node_filesystem_size_bytes` solo expone 2 series tmpfs que la
@@ -228,7 +228,7 @@ de código razonable en dev Windows.
 
 ### AUD16-09 — Métricas de app omitidas cuando no hay datos: «No data» ≡ «sampler muerto»
 
-**Severidad: baja · estado: risk de diseño**
+**Severidad**: baja · **estado**: risk de diseño
 
 `queue_metrics.py:83` omite la familia entera `agentic_executions_24h` si el
 dict está vacío (ídem `dlq_depths`): el panel «pulso» no distingue «no hubo
@@ -279,7 +279,7 @@ Cloud API/neonize, SMS, webhook saliente con HMAC).
 
 ### AUD16-10 — Ninguna notificación llega de facto a un humano: los envíos platform-scoped son invisibles
 
-**Severidad: alta · estado: broken**
+**Severidad**: alta · **estado**: broken
 
 El único lector de `NotificationLog` es `GET /notifications/logs`
 (`routers/notifications.py:615-683`) que filtra `tenant_id == tenant_id` con
@@ -298,7 +298,7 @@ platform (telegram/email).
 
 ### AUD16-11 — `in_app` no persiste el contenido del mensaje
 
-**Severidad: media-alta · estado: broken (producto)**
+**Severidad**: media-alta · **estado**: broken (producto)
 
 `notification_logs` no tiene columna subject/body
 (`db/notification.py:344-403`); el body renderizado se descarta en
@@ -309,7 +309,7 @@ persistir subject/body (truncados) para `channel_type=in_app`.
 
 ### AUD16-12 — WhatsApp: body bug ARREGLADO; neonize implementado pero sin desplegar
 
-**Severidad: media · estado: fixed_verified (body) + risk operativo (neonize)**
+**Severidad**: media · **estado**: fixed_verified (body) + risk operativo (neonize)
 
 El body bug está corregido y desplegado (commit `6392a5f0`, NOTIF-1:
 `event_mapping.py:626-634` + fallback en `channels/whatsapp.py:339-345`; la
@@ -322,7 +322,7 @@ enviado nada (0 canales whatsapp en BD).
 
 ### AUD16-13 — Los eventos de escalado jamás se han notificado; sin canales tenant ni preferencias
 
-**Severidad: media · estado: unexercised**
+**Severidad**: media · **estado**: unexercised
 
 El dispatcher soporta `task_blocked`, `review_escalated`,
 `human_validation_needed`, `plan_*` (plantillas ES/EN incluidas), pero el
@@ -381,7 +381,7 @@ pone `NOTIFY_EVENTS_REDIS_URL` en DB **3** vs DB 0 en dev
 
 ### AUD16-14 — El destilador de memorias nunca usa el LLM del agente: 100% de las memorias vivas las destiló `llama3.2:1b`
 
-**Severidad: alta · estado: fix_regressed (nació muerto para modelos heredados)**
+**Severidad**: alta · **estado**: fix_regressed (nació muerto para modelos heredados)
 
 El camino primario de F2.1 lee `agent.model_config` crudo, pero los agentes
 con modelo heredado (plataforma→proyecto→agente, ADR 0065/0082) tienen
@@ -398,7 +398,7 @@ provider/model, y loguear el fallback en vez de tragarlo.
 
 ### AUD16-15 — Coste facturable por catálogo ciego en 128/128 runs
 
-**Severidad: alta · estado: broken**
+**Severidad**: alta · **estado**: broken
 
 `price_snapshot_cost_usd` es NULL en todas las executions pese a
 `total_cost_usd` poblado ($42,86 en 103 runs): cada `price_snapshot` dice
@@ -409,7 +409,7 @@ al catálogo de precios; alerta si el snapshot corre >N días sin precio.
 
 ### AUD16-16 — Gobernanza con cero dato vivo: guardrails, aprobaciones y audit_log jamás ejercitados
 
-**Severidad: alta · estado: unexercised/broken (principios rectores 10 y 11)**
+**Severidad**: alta · **estado**: unexercised/broken (principios rectores 10 y 11)
 
 - `guardrail_events` = 0, `guardrail_alert_rules` = 0, `guardrails_config`
   NULL en los 10 proyectos, cero claves de guardrails en `platform_settings`:

@@ -79,6 +79,17 @@ def _uses(job: dict[str, Any]) -> list[str]:
     return [s["uses"] for s in _steps(job) if isinstance(s.get("uses"), str)]
 
 
+def _pip_audit_invocations(job: dict[str, Any]) -> list[str]:
+    """Líneas que EJECUTAN pip-audit, con las continuaciones `\\` ya unidas.
+
+    Sin unir las continuaciones, una guarda que lea línea a línea puede dar por
+    ausente una bandera que sí está, sólo porque el comando se partió en dos
+    líneas para que se lea.
+    """
+    joined = re.sub(r"\\\n\s*", " ", _run_text(job))
+    return [line.strip() for line in joined.splitlines() if re.match(r"^\s*pip-audit\b", line)]
+
+
 def _dockerfiles_under_docker() -> list[Path]:
     return sorted(DOCKER_DIR.rglob("Dockerfile*"))
 
@@ -428,19 +439,74 @@ def test_security_scan_runs_pip_audit(security_scan: dict[str, Any]) -> None:
     de arriba ya contenía la subcadena. Ahora se exige una línea que EMPIECE
     por `pip-audit` — la invocación real.
     """
-    invocations = [
-        line.strip()
-        for line in _run_text(security_scan).splitlines()
-        if re.match(r"^\s*pip-audit\b", line)
-    ]
+    invocations = _pip_audit_invocations(security_scan)
     assert invocations, (
         f"el job '{SECURITY_SCAN_JOB}' debe EJECUTAR pip-audit sobre el entorno "
         "instalado (una línea `pip-audit …`, no solo instalarlo)"
     )
     assert any("--skip-editable" in inv for inv in invocations), (
         "pip-audit debe correr con --skip-editable: las 13 distribuciones locales "
-        "no existen en PyPI y con --strict harían fallar el paso siempre por una "
-        f"razón que no es una vulnerabilidad. Invocaciones vistas: {invocations}"
+        "se instalan con `pip install -e`, no existen en PyPI y no son auditables. "
+        f"Invocaciones vistas: {invocations}"
+    )
+
+
+def test_pip_audit_does_not_combine_strict_with_skip_editable(
+    security_scan: dict[str, Any],
+) -> None:
+    """`--strict` junto a `--skip-editable` es un rojo permanente, no una guarda.
+
+    `--strict` significa «falla si la recolección falla en CUALQUIER
+    dependencia», y una dependencia OMITIDA cuenta como fallo
+    (`pip_audit/_cli.py`: ``if args.strict: _fatal(f"{spec.name}: {spec.skip_reason}")``).
+    Con las dos banderas el paso moría siempre en la primera editable por orden
+    alfabético —«agent-runtime: distribution marked as editable»— sin auditar ni
+    un paquete: un rojo que no era una vulnerabilidad y que tapó durante semanas
+    las que sí había.
+
+    Lo que `--strict` aportaba —no dar por buena una auditoría incompleta— lo
+    comprueba `scripts/check_pip_audit_report.py`, que sólo tolera las omisiones
+    cuyo motivo es «editable». Esta guarda existe para que nadie "restaure" la
+    bandera creyendo que endurece algo.
+    """
+    offenders = [
+        inv
+        for inv in _pip_audit_invocations(security_scan)
+        if "--skip-editable" in inv and re.search(r"(^|\s)(--strict|-S)(\s|$)", inv)
+    ]
+    assert not offenders, (
+        "pip-audit no puede combinar --strict con --skip-editable: la omisión de "
+        "las editables locales se vuelve fatal y el paso muere sin auditar nada. "
+        f"Invocaciones infractoras: {offenders}"
+    )
+
+
+def test_pip_audit_report_is_verified_by_the_checker(
+    security_scan: dict[str, Any],
+) -> None:
+    """El JSON de pip-audit tiene que pasar por el verificador.
+
+    Sin `--strict`, quien decide si la auditoría fue COMPLETA es
+    `scripts/check_pip_audit_report.py`: si el paso deja de invocarlo, una
+    dependencia que pip-audit no pudo resolver (fuera de PyPI, red bloqueada,
+    sin versión) se omitiría con un simple aviso en el log y el verde no diría
+    nada sobre ella.
+    """
+    run_text = _run_text(security_scan)
+    assert "scripts/check_pip_audit_report.py" in run_text, (
+        f"el job '{SECURITY_SCAN_JOB}' debe verificar el informe de pip-audit con "
+        "`python scripts/check_pip_audit_report.py <json>`: es lo que sustituye a "
+        "--strict y lo único que impide que una auditoría incompleta pase por verde"
+    )
+    assert (
+        REPO_ROOT / "scripts" / "check_pip_audit_report.py"
+    ).is_file(), "falta scripts/check_pip_audit_report.py, que el job invoca"
+    assert any(
+        "--format=json" in inv and "--output" in inv
+        for inv in _pip_audit_invocations(security_scan)
+    ), (
+        "pip-audit debe escribir el informe con `--format=json --output <fichero>` "
+        "para que el verificador pueda leerlo"
     )
 
 

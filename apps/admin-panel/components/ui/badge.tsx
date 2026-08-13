@@ -9,13 +9,7 @@ import { cn } from "@/lib/utils";
  * single source of truth.
  */
 export type BadgeVariant =
-  | "default"
-  | "muted"
-  | "primary"
-  | "info"
-  | "success"
-  | "warning"
-  | "danger";
+  "default" | "muted" | "primary" | "info" | "success" | "warning" | "danger";
 
 const variantClasses: Record<BadgeVariant, string> = {
   default: "bg-muted text-muted-foreground",

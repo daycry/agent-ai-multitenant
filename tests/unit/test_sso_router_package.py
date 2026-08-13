@@ -23,15 +23,20 @@ Dos cosas más que fija, y que son las que de verdad muerden en un troceo así:
    del repo que anida sub-routers, o sea el primero que arma de verdad la trampa
    de FastAPI 0.141: `include_router` deja de aplanar y `router.routes` presenta
    `_IncludedRouter` sin `.path`. `main._is_admin_surface` decide con eso si un
-   router lleva la guarda de System Admin. Aquí se afirma sobre `route_paths`,
-   que es lo que hay que usar — y de paso queda un caso REAL de router compuesto
-   sobre el que ese contrato se ejercita.
+   router lleva la guarda de System Admin. Aquí se afirma sobre `route_paths` /
+   `iter_routes_with_paths`, que es lo que hay que usar — y de paso queda un caso
+   REAL de router compuesto sobre el que ese contrato se ejercita.
+
+   Que la trampa era real lo demostró este mismo fichero: comparaba el conjunto
+   leyendo `route.path` a pelo, y con 0.141 eso devuelve el camino del hijo SIN
+   el `/auth/sso` del padre. Verde en el `.venv` (0.136.1), rojo en CI (0.141.1
+   del `uv.lock`). El test que vigilaba la trampa cayó en ella.
 """
 
 from __future__ import annotations
 
 import pytest
-from api_server.routing_introspection import route_paths
+from api_server.routing_introspection import iter_routes_with_paths, route_paths
 
 pytestmark = pytest.mark.unit
 
@@ -68,15 +73,21 @@ DISCOVERY_ROUTE_BEFORE_THE_SPLIT = ("/auth/discover", ("GET",), "discover_login"
 
 
 def _signature(container: object) -> set[tuple[str, tuple[str, ...], str]]:
-    from api_server.routing_introspection import iter_routes
+    """Camino EFECTIVO + métodos + nombre de cada ruta.
 
-    out: set[tuple[str, tuple[str, ...], str]] = set()
-    for route in iter_routes(container):
-        path = getattr(route, "path", None)
-        if path is None:
-            continue
-        out.add((path, tuple(sorted(getattr(route, "methods", ()) or ())), route.name))
-    return out
+    El camino se toma de :func:`iter_routes_with_paths`, no de ``route.path``, y
+    la diferencia no es cosmética: este router monta sus sub-routers bajo el
+    ``prefix="/auth/sso"`` del padre, y desde FastAPI 0.141 ``include_router`` ya
+    no aplana, así que el ``.path`` de la ruta hija es ``/providers`` a secas. Leer
+    ``.path`` daba verde en el ``.venv`` de desarrollo (0.136.1, que sí aplanaba) y
+    rojo en CI (0.141.1 del ``uv.lock``) diciendo que faltaban las 21 rutas y
+    sobraban las 21 mismas sin prefijo — la trampa que el docstring de este módulo
+    anuncia, cerrándose sobre el propio test que la vigila.
+    """
+    return {
+        (path, tuple(sorted(getattr(route, "methods", ()) or ())), route.name)
+        for route, path in iter_routes_with_paths(container)
+    }
 
 
 def test_the_package_serves_exactly_the_routes_the_monolith_served() -> None:

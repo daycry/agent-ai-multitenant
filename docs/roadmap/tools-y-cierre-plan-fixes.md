@@ -103,7 +103,7 @@ requiere acción (deuda ADR 0081 ya planificada); se documenta como consciente.
       la colisión** (un spec no puede rebajar el gate de `write_file`) y **descartando** cualquier categoría fuera
       de las 13 (propagarla reeditaría el fail-open de g6 en pequeño). Cableado vivo en `__main__.py` del runtime.
       **Tests:** `tests/unit/test_mcp_tool_approval_category.py` (26) + `docker/agent-runtimes/agent-runtime/tests/
-    test_boot_approval_mcp_gate.py` (3, con control negativo: sin la categoría en el spec, «Cliente Externo» NO
+test_boot_approval_mcp_gate.py` (3, con control negativo: sin la categoría en el spec, «Cliente Externo» NO
       para la tool — el estado exacto anterior a T2).
 - [x] **T3 — Slice mínimo de guardrails en el loop (g1, P0)**: cablear `pre_tool`/`post_tool` del motor
       `shared-guardrails` en el loop del agent-runtime (o worker) en modo `log` (no bloqueante), de modo que las

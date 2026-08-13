@@ -49,9 +49,48 @@ cero rutas `/admin`, la función devuelve `False`, y el router se monta **sin la
 guarda**. Sin error y sin aviso: el fallo histórico, reintroducido por una
 actualización de dependencia.
 
-Hoy no salta porque ningún router del repo anida sub-routers. Es una trampa
-armada, no una avería — y salta el día que alguien parta un router grande en
-piezas, que en este repo pasa a menudo.
+Cuando se escribió esto no saltaba porque ningún router del repo anidaba
+sub-routers. Era una trampa armada, no una avería — y saltaba el día que alguien
+partiera un router grande en piezas, que en este repo pasa a menudo. Doce días
+después pasó: ver el segundo episodio, abajo.
+
+## Segundo episodio (2026-08-13): saltó, y mordió al test que la vigilaba
+
+El plan prod-16 partió `routers/sso.py` en el paquete `routers/sso/`: un padre
+`APIRouter(prefix="/auth/sso")` con tres sub-routers sin prefijo propio. Primer
+router compuesto del repo, o sea la trampa disparada de verdad.
+
+Rojo en CI, verde en local, en el test que existía **precisamente** para vigilar
+que el troceo no moviera ninguna ruta:
+
+```
+FAILED tests/unit/test_sso_router_package.py::test_the_package_serves_exactly_the_routes_the_monolith_served
+  AssertionError: sobran [('/providers', ('GET',), 'list_public_providers'), …],
+                  faltan [('/auth/sso/providers', ('GET',), 'list_public_providers'), …]
+```
+
+Comparaba `(camino, métodos, nombre)` leyendo `route.path` de `iter_routes()`.
+`route_paths()` estaba bien y se usaba en los otros tests del fichero; el fallo
+fue que **ese** necesitaba las tres cosas a la vez y `route_paths` devuelve solo
+caminos, así que se leyó el `.path` crudo — que es el del hijo, sin el
+`/auth/sso` del padre. Correcto en 0.136, falso en 0.141.
+
+Fix: `iter_routes_with_paths(container)` → `list[tuple[route, camino_efectivo]]`,
+en orden de registro. Tapa el hueco entre las dos funciones que ya había, y de
+paso sirve para afirmar sobre el ORDEN (una literal antes que la paramétrica que
+se la come), que antes exigía copiarse la travesía en el test.
+
+**La moraleja no es «faltaba una función».** Es que tener el arreglo bueno
+disponible no impide reintroducir el fallo si la API deja un caso de uso sin
+cubrir: quien necesitaba nombre y métodos además del camino se cayó al idioma
+frágil sin darse cuenta. Si publicas un sustituto de un idioma peligroso,
+cubre todos sus usos o el idioma vuelve.
+
+**Sigue abierto**: `tests/integration/test_admin_hardening_surface.py::_admin_routes`
+filtra por `str(getattr(route, "path", ""))`. Con un router `/admin` compuesto,
+las rutas hijas saldrían sin el prefijo y el filtro las descartaría: el test de
+seguridad diría verde sobre cero rutas. Hoy no hay ningún router admin compuesto;
+la trampa es la misma y sigue armada.
 
 ## Por qué no se veía
 

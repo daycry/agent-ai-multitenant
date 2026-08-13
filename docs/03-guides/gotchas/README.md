@@ -233,6 +233,12 @@ el problema ya esté documentado.
 
 - [ci-github-actions-node-deprecation.md](./ci-github-actions-node-deprecation.md)
   — Node 20 deprecado; `actions/checkout@v4 → v5`, etc.
+- [ci-no-tiene-docker-env-y-el-compose-lo-exige.md](./ci-no-tiene-docker-env-y-el-compose-lo-exige.md)
+  — `required variable SERVICE_USER_PASSWORD is missing a value` en
+  `docker compose config`, y en local exit 0: el runner no tiene `docker/.env`
+  (gitignored) y desde prod-10 cada credencial es `${VAR:?…}`, que aborta el
+  proyecto ENTERO —también `logs` y el `down` del teardown—. El workflow copia
+  `.env.example` en vez de enumerar las variables a mano.
 - [test-fixture-admin-db-url-override.md](./test-fixture-admin-db-url-override.md)
   — fixture que setea `API_SERVER_DATABASE_URL` pero NO
   `API_SERVER_ADMIN_DATABASE_URL`: el admin engine cae al DSN por defecto;

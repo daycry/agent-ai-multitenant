@@ -26,21 +26,26 @@ En `test_sso_router_package.py` el equivalente era
 bastaba con congelarla. Aquí NO se cumple, así que hay que afirmar sobre el orden
 real de registro.
 
-## Por qué el orden se lee con una travesía propia y no con `route_paths`
+## Por qué el orden se lee con `iter_routes_with_paths` y no con `route_paths`
 
 `routing_introspection.route_paths` devuelve un `set` — justo lo que no sirve para
-afirmar sobre el orden. La travesía de abajo es la misma de `_walk` (desciende por
-``original_router`` aplicando el prefijo de ``include_context``) pero conservando
-el orden, y funciona igual en FastAPI 0.136 (donde `include_router` aplana) que en
-0.141 (donde no).
+afirmar sobre el orden. `iter_routes_with_paths` hace la misma travesía (desciende
+por ``original_router`` aplicando el prefijo de ``include_context``) pero devuelve
+una LISTA en orden de registro, y funciona igual en FastAPI 0.136 (donde
+`include_router` aplana) que en 0.141 (donde no).
+
+Aquí había una copia local de esa travesía, y el fichero hermano
+`test_sso_router_package.py` leía `route.path` a pelo — que con 0.141 devuelve el
+camino del hijo SIN el prefijo del padre y por eso puso rojo el CI. Ahora los dos
+usan la misma función: este router no lleva prefijo y el `.path` crudo coincidía
+con el efectivo por casualidad, pero el día que lo lleve no queremos descubrirlo
+en CI.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
-from api_server.routing_introspection import iter_routes, route_paths
+from api_server.routing_introspection import iter_routes_with_paths, route_paths
 
 pytestmark = pytest.mark.unit
 
@@ -72,42 +77,16 @@ ROUTES_BEFORE_THE_SPLIT: frozenset[tuple[str, tuple[str, ...], str]] = frozenset
 
 
 def _signature(container: object) -> set[tuple[str, tuple[str, ...], str]]:
-    out: set[tuple[str, tuple[str, ...], str]] = set()
-    for route in iter_routes(container):
-        path = getattr(route, "path", None)
-        if path is None:
-            continue
-        out.add((path, tuple(sorted(getattr(route, "methods", ()) or ())), route.name))
-    return out
+    """Camino EFECTIVO + métodos + nombre de cada ruta (ver el docstring del módulo)."""
+    return {
+        (path, tuple(sorted(getattr(route, "methods", ()) or ())), route.name)
+        for route, path in iter_routes_with_paths(container)
+    }
 
 
-def _ordered_effective_paths(container: Any) -> list[str]:
-    """Los caminos EFECTIVOS en orden de registro (lo que FastAPI usa para casar).
-
-    Misma travesía que ``routing_introspection._walk`` —desciende por
-    ``original_router`` acumulando el prefijo de ``include_context``— pero
-    devolviendo una LISTA. `route_paths` devuelve un `set` y aquí el orden es
-    justamente lo que se afirma.
-    """
-    out: list[str] = []
-
-    def walk(routes: Any, prefix: str = "") -> None:
-        for route in routes:
-            path = getattr(route, "path", None)
-            if isinstance(path, str) and path:
-                out.append(prefix + path)
-            original = getattr(route, "original_router", None)
-            if original is None:
-                continue
-            ctx = getattr(route, "include_context", None)
-            sub_prefix = getattr(ctx, "prefix", "") if ctx is not None else ""
-            walk(
-                getattr(original, "routes", []) or [],
-                prefix + (sub_prefix if isinstance(sub_prefix, str) else ""),
-            )
-
-    walk(getattr(container, "routes", []) or [])
-    return out
+def _ordered_effective_paths(container: object) -> list[str]:
+    """Los caminos EFECTIVOS en orden de registro (lo que FastAPI usa para casar)."""
+    return [path for _, path in iter_routes_with_paths(container)]
 
 
 def test_the_package_serves_exactly_the_routes_the_monolith_served() -> None:
@@ -223,8 +202,7 @@ def test_the_response_models_of_every_route_survived() -> None:
 
     by_name = {
         route.name: getattr(route, "response_model", None)
-        for route in iter_routes(router)
-        if getattr(route, "path", None) is not None
+        for route, _ in iter_routes_with_paths(router)
     }
 
     from api_server.capabilities import CapabilitiesResponse
@@ -256,8 +234,7 @@ def test_the_status_codes_that_are_not_200_survived() -> None:
 
     codes = {
         route.name: getattr(route, "status_code", None)
-        for route in iter_routes(router)
-        if getattr(route, "path", None) is not None
+        for route, _ in iter_routes_with_paths(router)
     }
 
     assert codes["create_agent"] == 201

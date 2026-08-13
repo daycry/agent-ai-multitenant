@@ -148,13 +148,13 @@ locale)`. Override por tenant en `notification_templates` (**migración
     avatar, tono, idioma es|en, override de system*prompt, lista de tools
     habilitadas) como blob JSONB en `tenant_settings` (categoría `assistant`,
     sin migración). **Tools de lectura cross-proyecto** (`tenant_projects*
-    status`, `tenant_plans_summary`, `tenant_recent_activity`,
-`tenant_budget_status`) sobre la sesión RLS-bound del request — nunca
-devuelven datos de otro tenant. `tenant_budget_status` es un **marcador
-tipado "no disponible todavía"** (el motor de presupuesto es el Plan 11,
-§28.7), nunca cifras inventadas. El modelo se inyecta por dependencia
-(`get_assistant_model`), sobreescrita en tests por un
-`ScriptedAssistantModel`; el factory por defecto devuelve 503 hasta que se
+status`, `tenant_plans_summary`, `tenant_recent_activity`,
+    `tenant_budget_status`) sobre la sesión RLS-bound del request — nunca
+    devuelven datos de otro tenant. `tenant_budget_status` es un **marcador
+    tipado "no disponible todavía"** (el motor de presupuesto es el Plan 11,
+    §28.7), nunca cifras inventadas. El modelo se inyecta por dependencia
+    (`get_assistant_model`), sobreescrita en tests por un
+    `ScriptedAssistantModel`; el factory por defecto devuelve 503 hasta que se
     cablee un proveedor real.
 - ✅ **`task_10_15`** — **UI de configuración de canales en 3 capas**
   (admin-panel) sobre los endpoints `/notifications/platform/channel-types`

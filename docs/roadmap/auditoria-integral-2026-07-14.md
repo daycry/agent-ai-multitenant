@@ -48,7 +48,7 @@ de sintaxis o tipado.
 
 ### AUD14-01 — El gate de seguridad está rojo por el overlay de monitorización
 
-**Severidad: alta · estado: confirmado · prioridad: P0 de CI**
+**Severidad**: alta · **estado**: confirmado · **prioridad**: P0 de CI
 
 `pytest tests/docs tests/security -q` produce cuatro fallos. Tres convergen en
 `docker/docker-compose.monitoring.yml`: `textfile-init` no declara
@@ -67,7 +67,7 @@ base+overlay real, diferenciando servicios heredados, one-shot y host agents.
 
 ### AUD14-02 — `cortex_conversations.tenant_id` contradice el invariante RLS
 
-**Severidad: alta · estado: confirmado como contradicción de diseño**
+**Severidad**: alta · **estado**: confirmado como contradicción de diseño
 
 La migración `20260623_0092_cortex_threads.py` declara `tenant_id NOT NULL` sin
 ENABLE/FORCE RLS. Su cabecera afirma que la tabla es tenant-less y que el campo es
@@ -85,7 +85,7 @@ Acción: ADR propuesto y migración/test según la opción ratificada.
 
 ### AUD14-03 — `embedding_model_id` por KB es configuración no ejecutable
 
-**Severidad: alta · estado: confirmado · bug funcional/de contrato**
+**Severidad**: alta · **estado**: confirmado · bug funcional/de contrato
 
 La API crea y protege `knowledge_bases.embedding_model_id`, pero el worker construye
 `OllamaEmbedder()` antes de cargar documento y KB, por lo que usa siempre el default
@@ -102,7 +102,7 @@ alcance actual) o un registro real por modelo con reindexado y query por grupos.
 
 ### AUD14-04 — Creación de engines Celery dispersa y scope obsoleto de prod-13
 
-**Severidad: media · estado: confirmado como deuda de rendimiento**
+**Severidad**: media · **estado**: confirmado como deuda de rendimiento
 
 Hay 36 llamadas a `create_async_engine(settings.database_url)` en 30 módulos de
 workers. Todas las instancias revisadas ejecutan `dispose()`, por lo que no se
@@ -118,7 +118,7 @@ y meta-test que prohíba creaciones directas fuera del módulo autorizado.
 
 ### AUD14-05 — Escrituras WebSocket sin deadline
 
-**Severidad: media · estado: confirmado**
+**Severidad**: media · **estado**: confirmado
 
 `routers/ws.py::_pump` detecta cierres con un `receive()` concurrente y cancela
 `xread`, pero `await ws.send_json(event)` no tiene timeout. Un cliente que deja de
@@ -133,7 +133,7 @@ tasks y test con `send_json` bloqueante.
 
 ### AUD14-06 — Hay liveness, pero no readiness operativa
 
-**Severidad: media · estado: confirmado**
+**Severidad**: media · **estado**: confirmado
 
 `/healthz` devuelve siempre `{"status": "ok"}`. Es correcto como liveness, pero no
 existe `/readyz` no autenticado y acotado para PostgreSQL/Redis. El endpoint admin
@@ -149,7 +149,7 @@ dependencias son críticas.
 
 ### AUD14-07 — Cobertura y frontend pasan, pero con deuda medible
 
-**Severidad: media-baja · estado: confirmado, ya parcialmente planificado**
+**Severidad**: media-baja · **estado**: confirmado, ya parcialmente planificado
 
 - Cobertura unitaria: 32,96%, ratchet 31%; el objetivo sigue en 70% global y 80%
   para dominio crítico. Módulos sensibles como `routers/ws.py` (20,8%),
@@ -165,7 +165,7 @@ matriz Next/ESLint/TypeScript en vez de ignorar warnings.
 
 ### AUD14-08 — Documentación de diferidos contiene hechos ya obsoletos
 
-**Severidad: baja · estado: confirmado**
+**Severidad**: baja · **estado**: confirmado
 
 `analisis-diferidos-2026-07-12.md` todavía afirma que el import MCP descarta
 `input_schema`, mientras el código y `test_import_persists_discovered_schema` prueban

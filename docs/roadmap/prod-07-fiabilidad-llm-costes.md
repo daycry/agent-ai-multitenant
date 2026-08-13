@@ -293,7 +293,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
   consuman las tres copias actuales: `workers/model_resolver._overlay_provider_fields`
   (`model_resolver.py:49-74`), `agent_runtime/providers._overlay_resolved`
   (`providers.py:403-435`) y los `\_build*\*` del api-server (`factory.py:50-116`).
-Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
+  Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
   Azure mientras el factory sí lo acepta — un proveedor azure bearer-only es hoy
   construible vía asistente pero irresoluble vía dispatch.
 - **Tiempo**: 8 h · **Complejidad**: m

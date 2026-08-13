@@ -52,7 +52,7 @@ contaminación del worktree. La ola 4 contiene la única pieza realmente grande
 Sale de la auditoría de comportamiento (§11 del informe), no de leer código. **Va antes que
 todo lo demás**: hay 5 de 10 planes en un estado del que no pueden salir solos.
 
-#### `task_wf_m1` — Tarea `in_progress` sin ejecución: rescatarla y cerrar el agujero
+### `task_wf_m1` — Tarea `in_progress` sin ejecución: rescatarla y cerrar el agujero
 
 - [x] _(hecho 8ca290dd)_ **Título**: el barrido de tareas atascadas trata hoy solo «tarea `in_progress` cuyo
       último run es terminal»; con `latest is None` hace `continue`
@@ -69,7 +69,7 @@ todo lo demás**: hay 5 de 10 planes en un estado del que no pueden salir solos.
 - **Criterio de aceptación**: crear la situación a mano y ver que el reconciler la recupera en
   una pasada.
 
-#### ~~`task_wf_m2` — Plan `blocked` con todas las tareas `done`: cerrarlo~~ · DESCARTADA
+### ~~`task_wf_m2` — Plan `blocked` con todas las tareas `done`: cerrarlo~~ · DESCARTADA
 
 - [x] **Descartada tras verificar el código** (2026-07-25). La propuesta era extender el
       reconciler para cerrar automáticamente los planes `blocked` con todo terminal.
@@ -81,7 +81,7 @@ todo lo demás**: hay 5 de 10 planes en un estado del que no pueden salir solos.
       abiertas — son exactamente ese caso. **El reconciler hace lo correcto.**
       El problema real es de señal, y lo cubre `task_wf_m3`.
 
-#### `task_wf_m3` — Que un plan que espera al humano se vea
+### `task_wf_m3` — Que un plan que espera al humano se vea
 
 - [x] _(hecho 71798ca0)_ **Título**: el diseño dice «este bloqueo lo levanta el humano» y **no hay nada que le
       diga al humano que tiene algo que levantar**: tres planes llevan entre 2 y 5 días
@@ -114,7 +114,7 @@ Seis arreglos localizados más un rediseño (`task_wf_06`). El orden importa: la
 primero, porque son las que devuelven el producto a un estado usable en horas; el rediseño del
 contexto después, sobre esa base ya estable.
 
-#### `task_wf_00` — El chat de planning carga los mensajes RECIENTES
+### `task_wf_00` — El chat de planning carga los mensajes RECIENTES
 
 - [x] _(hecho 66e683b1)_ **Título**: invertir la ventana de `list_messages` para que devuelva los **últimos** N
       mensajes (orden descendente en la consulta, ascendente en la respuesta) manteniendo la
@@ -130,7 +130,7 @@ contexto después, sobre esa base ya estable.
 - **Criterio de aceptación**: con 60 mensajes, recargar muestra el último turno, «Generar
   Plan» sigue presente, y se puede subir en el scroll hasta el mensaje 1.
 
-#### `task_wf_01` — El equipo planifica sobre el contexto reciente (corrección)
+### `task_wf_01` — El equipo planifica sobre el contexto reciente (corrección)
 
 - [x] _(hecho, ver task_wf_06a)_ **Título**: misma inversión en la carga del histórico que alimenta el prompt de
       planning, verificando que `latest_user_text` recupera el mensaje de usuario realmente
@@ -139,7 +139,7 @@ contexto después, sobre esa base ya estable.
 - **Ficheros**: `apps/api-server/src/api_server/chat/responder.py:845-867`
 - **Tests**: unit que con 60 mensajes el prompt contiene el mensaje 60 y no el 1.
 
-#### `task_wf_02` — `summary` respeta su contrato
+### `task_wf_02` — `summary` respeta su contrato
 
 - [x] _(hecho 47f27efc)_ **Título**: emitir `summary` como objeto (`{"description": …}`) desde
       `_finish_planning_attachment` y `_normalise_plan_draft`, con coerción retrocompatible en
@@ -153,7 +153,7 @@ contexto después, sobre esa base ya estable.
 - **Criterio de aceptación**: un plan generado por chat se puede reenviar íntegro por `PUT` sin
   error, y la tarjeta «Resumen» muestra texto o no se renderiza.
 
-#### `task_wf_03` — Estimaciones reales en el plan
+### `task_wf_03` — Estimaciones reales en el plan
 
 - [x] _(hecho 47f27efc)_ **Título**: derivar `estimated_hours` de `complexity` con un mapa explícito
       (xs/s/m/l/xl → horas) en `_normalise_plan_draft`, y permitir que el LLM lo sobrescriba
@@ -167,7 +167,7 @@ contexto después, sobre esa base ya estable.
 - **Criterio de aceptación**: el Gantt de un plan con tareas xs y xl pinta barras de anchos
   distintos.
 
-#### `task_wf_04` — «Generar Plan» es idempotente, y lo dice
+### `task_wf_04` — «Generar Plan» es idempotente, y lo dice
 
 - [x] _(hecho 2e40b0bb)_ **Título**: si la conversación ya tiene `related_plan_id` y ese plan sigue vivo (no
       `cancelled`/`rejected`), `create_plan` devuelve el plan existente (200) en vez de crear
@@ -182,7 +182,7 @@ contexto después, sobre esa base ya estable.
 - **Criterio de aceptación**: pulsar «Generar Plan» dos veces no produce dos planes y el
   usuario entiende por qué.
 
-#### `task_wf_05` — Las fases del plan tienen nombre
+### `task_wf_05` — Las fases del plan tienen nombre
 
 - [x] _(hecho 47f27efc)_ **Título**: alinear el contrato de fase entre backend y frontend (`title`, con lectura
       tolerante de `name` para specs antiguos) en las dos vistas que lo consumen.
@@ -191,7 +191,7 @@ contexto después, sobre esa base ya estable.
 - **Tests**: unit de render con un spec de chat real → las opciones del desplegable llevan
   texto.
 
-#### `task_wf_06` — Encender la compresión de conversaciones que ya existe
+### `task_wf_06` — Encender la compresión de conversaciones que ya existe
 
 - [x] _(hecho 8a095da1 + 5b49093d)_ Apartados a/b/c/d/e completos.
 
@@ -259,8 +259,8 @@ pensados para un chat 1-a-1, no para este. Aquí **un turno son 6-10 mensajes** 
   Regla: **la ventana nunca corta dentro de un turno** — un turno empieza en cada mensaje
   `author_kind='user'`, así que se pliegan turnos enteros. No necesita estado nuevo.
 
-* **Tiempo**: 0,5 d · **Ficheros**: `chat/responder.py`, `db/conversation_compression.py`
-* **Tests**: integración de que tras N turnos existe una fila `is_summary=True`, el feed
+- **Tiempo**: 0,5 d · **Ficheros**: `chat/responder.py`, `db/conversation_compression.py`
+- **Tests**: integración de que tras N turnos existe una fila `is_summary=True`, el feed
   original sigue completo, y ningún resumen cubre un turno a medias.
 
 **d) Que el humano vea que hay un resumen.** Hoy `is_summary` llega hasta el tipo del
@@ -308,7 +308,7 @@ largas desborden igual.
 
 Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
-#### `task_wf_10` — Las tools MCP del proyecto se anuncian al modelo
+### `task_wf_10` — Las tools MCP del proyecto se anuncian al modelo
 
 - [x] _(hecho 193ab8ea)_ **Título**: propagar el `input_schema` de las tools MCP del proyecto hasta
       `build_model_tool_schemas`. La vía limpia es que `_assemble_run_request` añada las tools
@@ -331,7 +331,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
   integración del camino entero (fila `Tool` → dispatch → `ExecutionRequest` → agent-spec) con
   un agente **sin grants**.
 
-#### `task_wf_11` — Un agente sin grants ve las tools que puede ejecutar
+### `task_wf_11` — Un agente sin grants ve las tools que puede ejecutar
 
 - [x] _(hecho 43d1e74c)_ **Título**: cuando `allowed_tools` está ausente (sin restricción por agente), anunciar
       el conjunto de tools cableadas por defecto en vez de solo las de sistema — alineando lo
@@ -344,7 +344,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Criterio de aceptación**: un agente recién creado sin asignaciones ve `read_file`,
   `write_file` y `stack_exec`.
 
-#### `task_wf_12` — El OAuth de MCP llega al runtime
+### `task_wf_12` — El OAuth de MCP llega al runtime
 
 - [x] _(hecho 18a8c2a8 + 6fb35e7c)_ **Título**: construir el `httpx.Auth` con `build_oauth_provider` cuando el servidor
       declara `auth_kind="oauth"` y pasarlo como `auth=` en `MCPToolRunner.connect`. El
@@ -368,7 +368,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
   servidor OAuth vivo no se puede ejercitar sin navegador — es el mismo riesgo residual (c)
   que el propio ADR 0127 declaró.
 
-#### `task_wf_13` — `send_notification` deja de ser una promesa falsa
+### `task_wf_13` — `send_notification` deja de ser una promesa falsa
 
 - [x] _(hecho f51c4fa5)_ **Título**: retirar `send_notification` del anuncio al modelo (igual que se hizo con
       `kanban_update`/`agent_invoke` en AUD16-02) **y** de `RUNTIME_WIRED_TOOL_NAMES`, dejando
@@ -380,7 +380,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Tests**: contrato «toda tool en `RUNTIME_WIRED_TOOL_NAMES` tiene un ejecutor que no
   devuelve `not wired`».
 
-#### `task_wf_15` — Un invariante que mata la familia entera
+### `task_wf_15` — Un invariante que mata la familia entera
 
 - [x] _(hecho f51c4fa5 + ec461d8c)_ **Título**: test de contrato que fije, para cualquier combinación de agente / proyecto /
       modo: **toda tool del allowlist efectivo tiene esquema anunciado, y todo esquema
@@ -394,7 +394,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Criterio de aceptación**: introducir a mano una tool en el allowlist sin esquema hace
   fallar el test.
 
-#### `task_wf_14` — El prompt sabe si un servidor MCP no conectó
+### `task_wf_14` — El prompt sabe si un servidor MCP no conectó
 
 - [x] _(hecho 31279990)_ **Título**: bloque nuevo del preámbulo con el estado de los servidores MCP, presente
       solo cuando alguno falló, fenced como el resto de datos no confiables.
@@ -407,7 +407,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 ## Ola 2 — Infra de ejecución (P0 · ~2,5 d)
 
-#### `task_wf_20` — El test-runtime deja de contaminar el worktree
+### `task_wf_20` — El test-runtime deja de contaminar el worktree
 
 - [x] _(hecho 2fc6af07)_ **Título**: `HOME` del test/stack-runtime pasa a `/home/agent` (lo que ya declaran las
       imágenes) con su tmpfs correspondiente, replicando el patrón del agent-runtime. Verificar
@@ -420,7 +420,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Criterio de aceptación**: tras un `stack_exec` que escribe caché, `git status` en el
   worktree sale limpio.
 
-#### `task_wf_21` — El test-runtime hereda el envelope endurecido
+### `task_wf_21` — El test-runtime hereda el envelope endurecido
 
 - [x] _(hecho f3843e6f)_ **Título**: aplicar `pids_limit` y los perfiles seccomp/apparmor configurados al
       contenedor de test/stack, reutilizando la lógica de `isolation.py` en vez de duplicarla
@@ -431,7 +431,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Tests**: unit comparando los kwargs de ambos envelopes campo a campo (el test falla si uno
   gana una protección y el otro no).
 
-#### `task_wf_22` — Los tests de aceptación salen del worker `default`
+### `task_wf_22` — Los tests de aceptación salen del worker `default`
 
 - [x] _(hecho 78bce8eb)_ **Título**: encolar `_run_task_tests` a la cola `test` con espera acotada, siguiendo el
       patrón que `stack_exec` ya aplica por riesgo de deadlock, en vez del `await` inline.
@@ -450,7 +450,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
   invariante best-effort: broker caído, sin worker en `test` o presupuesto vencido → `{}`,
   nunca una excepción sobre un run ya terminado.
 
-#### `task_wf_23` — El run-lock sobrevive al hard kill
+### `task_wf_23` — El run-lock sobrevive al hard kill
 
 - [x] _(hecho, ver git log)_ **Título**: derivar el TTL del lock del `execution_hard_time_limit_s` efectivo (más
       margen), no del presupuesto de contenedor, para que nunca caduque antes que el run.
@@ -458,7 +458,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 - **Ficheros**: `apps/workers/src/workers/tasks/run_cycle.py:218-228`
 - **Tests**: unit de que `lock_ttl > hard_time_limit` para todos los kinds.
 
-#### `task_wf_24` — Un reintento no reinstala las dependencias
+### `task_wf_24` — Un reintento no reinstala las dependencias
 
 - [x] _(hecho 4725ff45)_ **Título**: acotar el `clean` de `sync_to_head` para que no arrase los directorios de
       dependencias (o `clean -fd` sin `-x` más una limpieza explícita de artefactos de build),
@@ -479,7 +479,7 @@ Sin esta ola, los ADR 0127 y 0128 no entregan lo que prometen.
 
 Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 
-#### `task_wf_30` — Una cabecera de plan, no cuatro secciones sueltas
+### `task_wf_30` — Una cabecera de plan, no cuatro secciones sueltas
 
 - [x] _(hecho 6e4c5f37 + 0a16f4ed)_ **Título**: **un** endpoint `GET /plans/{id}/status` que devuelva progreso X/Y (sobre
       `compute_plan_progress`, ya escrito y testeado), estado del PR (`pr_url` / `pr_branch` /
@@ -504,7 +504,7 @@ Casi todo el backend existe. Esta ola es mayoritariamente cableado y UI.
 - **Pendiente**: la versión reducida en la tarjeta del tablero gerencial (`app/admin/board`),
   que va con `task_wf_32` (el WebSocket de plan que la refresca).
 
-#### `task_wf_32` — WebSocket de plan
+### `task_wf_32` — WebSocket de plan
 
 - [x] _(hecho, con el enunciado corregido)_ **Título**: stream **`/ws/plans` de TENANT** (no
       `/ws/plan/{project_id}`) con las transiciones de estado de plan, consumido por el
@@ -526,7 +526,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   estado de un plan y no lo anuncie rompe la suite. Es lo que impide que el sitio nº 13
   vuelva a dejar el tablero rancio.
 
-#### `task_wf_33` — Estimaciones calibradas con datos reales
+### `task_wf_33` — Estimaciones calibradas con datos reales
 
 - [x] _(hecho — solo TOKENS, que era la decisión bloqueante)_ **Título**: cerrar el bucle de
       estimación. Mediana de tokens reales por nivel de complejidad, con fallback
@@ -547,7 +547,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   pareciendo un dato.
 - **Tests**: 8.
 
-#### `task_wf_34` — Standup y retrospectiva visibles
+### `task_wf_34` — Standup y retrospectiva visibles
 
 - [x] _(hecho — la retro; el standup ya se veía)_ **Título**: sección «Retrospectiva» en el
       detalle del plan cerrado, leyendo la memoria `project_shared` que ya escribe
@@ -567,7 +567,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Standup**: fuera de alcance, ya se ve en la bandeja (`inbox/page.tsx`) y su endpoint
   existe. El standup es de TENANT, no sabe de proyectos.
 
-#### `task_wf_35` — Configuración de proyecto sin agujeros
+### `task_wf_35` — Configuración de proyecto sin agujeros
 
 - [x] _(hecho, en tres tramos)_ **Título**: UI para `execution_budgets`, `guardrails_config`
       de proyecto, `budget_*` y `human_task_review_mode` en el hub del proyecto.
@@ -587,7 +587,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   tendría que replicar ese catálogo y divergiría del esquema a la primera. El backend valida
   con el MISMO parser que el worker, así que un error aquí es el que habría en ejecución.
 
-#### `task_wf_36` — Una sola definición de plan completado
+### `task_wf_36` — Una sola definición de plan completado
 
 - [x] _(hecho 482fe5a0)_ **Título**: decidir y unificar. Recomendación: `completed` significa «validado por el
       humano» (lo que hace hoy el camino real), y el estado del PR se refleja aparte
@@ -612,7 +612,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 ## Ola 4 — Workflow del humano (P1 · ~6 d · parcialmente gated)
 
-#### `task_wf_40` — Acciones humanas en la ficha de tarea
+### `task_wf_40` — Acciones humanas en la ficha de tarea
 
 - [x] _(hecho, solo frontend)_ **Título**: reintentar, reasignar con guía y desbloquear desde
       `TaskDetailSheet`, cableados a los endpoints de `task_lifecycle.py` que ya existen.
@@ -628,7 +628,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Nota**: el backend estaba entero, no se tocó. `retry` **es** el «desbloquear»: no había
   una quinta acción que añadir.
 
-#### `task_wf_41` — «Aprobar y arrancar»
+### `task_wf_41` — «Aprobar y arrancar»
 
 - [x] _(hecho, backend + UI)_ **Título**: acción combinada que encadena las transiciones cuando la política del
       proyecto no exige doble firma. La cadena sigue pasando por los mismos gates; solo se
@@ -637,7 +637,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Ficheros**: `plan-lifecycle-section.tsx:72-120`, `routers/plans.py`
 - **Tests**: integración de que con doble firma configurada la acción **no** se ofrece.
 
-#### `task_wf_42` — Editor del spec antes de aprobar
+### `task_wf_42` — Editor del spec antes de aprobar
 
 - [x] _(hecho, backend + UI)_ **Título**: tabla editable de tareas (título, descripción, rol,
       complejidad, horas, dependencias, criterios) sobre el `PUT /plans/{id}` existente,
@@ -657,7 +657,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   por la puerta de atrás una decisión pendiente de aprobación humana. La UI sí es más
   estrecha: el editor no se ofrece en `in_progress`.
 
-#### `task_wf_43` — Las @-menciones tienen efecto (o se retiran)
+### `task_wf_43` — Las @-menciones tienen efecto (o se retiran)
 
 - [x] _(hecho)_ **Título**: parsear las menciones del mensaje del usuario y pasarlas a
       `pm_decide` como preferencia de especialistas. Se implementó (no se retiró): la
@@ -674,7 +674,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   determinista. El desplegable ya no hardcodea los nueve roles del enum: lee el equipo REAL,
   que es el mismo conjunto con el que el servidor intersecta.
 
-#### `task_wf_44` — ADR de replanificación en caliente 🔒 GATED
+### `task_wf_44` — ADR de replanificación en caliente 🔒 GATED
 
 - [x] _(hecho — el ADR está escrito; **falta que el operador decida**)_ **Título**: redactar
       el ADR que decida cómo se replanifica un plan `in_progress`.
@@ -693,7 +693,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   ya añade tareas a un plan aprobado sin volver a firmar; (d) registrar el evento, no
   versionar el documento.
 
-#### `task_wf_45` — Implementar la replanificación 🔒 GATED tras `task_wf_44`
+### `task_wf_45` — Implementar la replanificación 🔒 GATED tras `task_wf_44`
 
 - [x] _(hecho — ADR 0132 **aceptado** con A2 + (b) + C1 + traza)_ **Título**: la
       reconciliación de tres vías.
@@ -709,7 +709,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 
 ## Ola 5 — Guardrails, prompts y deuda (P2 · ~5 d)
 
-#### `task_wf_50` — Cablear `pre_llm` y `post_llm`
+### `task_wf_50` — Cablear `pre_llm` y `post_llm`
 
 - [x] _(hecho)_ **Título**: invocar los dos hooks que faltan en el ciclo del runtime — el
       prompt antes de enviarlo al modelo y la respuesta al recibirla. Fail-open y baseline
@@ -729,7 +729,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Tests**: unit de que un prompt con contenido marcado dispara el hook; regresión de que con
   la política por defecto ningún run cambia de resultado.
 
-#### `task_wf_51` — `update_plan` pasa por los guardrails
+### `task_wf_51` — `update_plan` pasa por los guardrails
 
 - [x] _(hecho)_ **Título**: hacer que el scratchpad pase por `pre_tool`/`post_tool` como
       cualquier otra tool, sin perder su naturaleza de capacidad del loop. Un plan bloqueado
@@ -741,7 +741,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Tests**: unit de que un `update_plan` con contenido marcado se registra en los eventos de
   guardrail.
 
-#### `task_wf_52` — Versionado de prompts
+### `task_wf_52` — Versionado de prompts
 
 - [x] _(hecho la etiqueta y su persistencia; la propagación a `EvalRun` la cierra
       `task_wf_52b`, que es quien crea el productor)_ **Título**: hash estable del conjunto de
@@ -760,7 +760,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Tests**: unit de que el hash cambia al tocar un prompt y no cambia entre dos arranques
   idénticos; integración de que un `EvalRun` nuevo lleva versión no nula.
 
-#### `task_wf_52b` — Encender los evals: sembrar, lanzar y muestrear
+### `task_wf_52b` — Encender los evals: sembrar, lanzar y muestrear
 
 - [x] **Título**: el subsistema de evals (Plan 14) estaba construido entero —7 módulos, 7 tablas,
       18 endpoints, dashboard— y **las siete tablas vacías porque no había ninguna vía de
@@ -819,7 +819,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   muestreador están puestos y probados; lo único que queda para que el dashboard tenga datos es
   la curaduría humana del dataset.
 
-#### `task_wf_53` — Tests de `tool_classification`
+### `task_wf_53` — Tests de `tool_classification`
 
 - [x] _(hecho — 38 tests; la retirada NO se hace, ver abajo)_ **Título**: batería directa del
       módulo del que dependen las guardas de convergencia.
@@ -834,7 +834,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Tests**: cobertura de las tres clases (research / producing / read-only) y del latch de
   `has_produced`.
 
-#### `task_wf_54` — Resolver el ADR 0108 (canales de veredicto)
+### `task_wf_54` — Resolver el ADR 0108 (canales de veredicto)
 
 - [x] _(ya estaba resuelto — premisa obsoleta, verificado)_ **Título**: cerrar el ADR 0108.
 - **Hallazgo**: B-10 (medio) · **Tiempo**: 0,75 d
@@ -856,7 +856,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Desbloquea `task_wf_61`**: se estructura el canal que emite veredicto entre runs, no
   «los dos que iban a unificarse».
 
-#### `task_wf_55` — Pinear los perfiles seccomp/apparmor
+### `task_wf_55` — Pinear los perfiles seccomp/apparmor
 
 - [x] _(hecho el cableado; el smoke en dev es del operador)_ **Título**: exportar los
       perfiles en el compose de dev.
@@ -878,7 +878,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **PENDIENTE del operador**: el smoke de un run real con el perfil estricto. No se puede
   hacer desde aquí (exige desplegar) y es la única parte de la tarea que queda.
 
-#### `task_wf_56` — `pump.join()` acotado
+### `task_wf_56` — `pump.join()` acotado
 
 - [x] _(hecho)_ **Título**: timeout generoso (120 s) con log de la anomalía, conservando el
       drenaje completo del caso normal. Lo que aporta no es cortar antes: es que un daemon
@@ -886,7 +886,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 - **Hallazgo**: C-07 (bajo) · **Tiempo**: 0,25 d
 - **Ficheros**: `apps/workers/src/workers/container.py:196-212`
 
-#### `task_wf_57` — Retirar el código muerto
+### `task_wf_57` — Retirar el código muerto
 
 - [x] _(hecho — ~1.400 líneas fuera)_ **Título**: eliminar `runtime_pool.py`,
       `TestcontainersMode` + `build_dind_proxy_run_kwargs` y el `ReviewRuntimeManager` en
@@ -905,7 +905,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
   nombrar `/var/run/docker.sock`. Endurecer una vía de escape que nadie usa valía menos que
   no tenerla. `assert_no_docker_socket` sigue cubierto.
 
-#### `task_wf_58` — Test-contrato reconciler ↔ dispatch
+### `task_wf_58` — Test-contrato reconciler ↔ dispatch
 
 - [x] _(hecho — y además se elimina la duplicación)_ **Título**: fijar con un test la promesa
       que hoy es un comentario. Se hizo lo de un paso más allá: la secuencia de decisión vive
@@ -927,7 +927,7 @@ review_runtimes}.py`, `app/admin/board/page.tsx`
 No son bugs: el sistema funciona sin esto. Son las mejoras con mejor relación
 impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 
-#### `task_wf_60` — El reviewer juzga el DIFF, no ficheros enteros
+### `task_wf_60` — El reviewer juzga el DIFF, no ficheros enteros
 
 - [x] _(hecho)_ **Título**: entregar al review-runtime el **diff de la tarea** como artefacto
       primario del prompt, dejando `read_file` para el contexto de alrededor. Lo calcula el
@@ -947,7 +947,7 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 - **Fallback conservado**: sin diff (runs de análisis/diseño, o sin worktree) la sección no
   aparece y el review sigue con la cosecha de ficheros de siempre.
 
-#### `task_wf_61` — Veredicto por criterio
+### `task_wf_61` — Veredicto por criterio
 
 - [x] _(hecho)_ **Título**: que el reviewer emita un resultado **estructurado** —cada criterio
       con `pass`/`fail` y su evidencia— en vez de prosa con un único `<failed_criterion>`.
@@ -969,7 +969,7 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
   «rechazos previos».
 - **Tests**: 14 unit + 7 de render.
 
-#### `task_wf_62` — Trazabilidad del runtime: digest en vez de etiqueta flotante
+### `task_wf_62` — Trazabilidad del runtime: digest en vez de etiqueta flotante
 
 - [x] _(hecho — migración **0120**)_ **Título**: persistir el **digest** de la imagen que
       corrió en la fila de `executions`.
@@ -990,7 +990,7 @@ impacto/esfuerzo de toda la auditoría. Detalle y evidencia en §7c del informe.
 - **Sinergia**: junto a `task_wf_52` (versionado de prompts) cierra la trazabilidad completa de
   un run — **qué prompt y qué imagen** lo produjeron.
 
-#### `task_wf_63` — Medir la caché de prompt antes de optimizarla
+### `task_wf_63` — Medir la caché de prompt antes de optimizarla
 
 - [x] _(hecho — la MEDICIÓN; la optimización queda pendiente del dato, que es el punto)_
       **Título**: instrumentar los aciertos de caché por proveedor y el coste por iteración,
@@ -1022,7 +1022,7 @@ steps}.py`, `api_server/prompt_cache_report.py` (nuevo),
 No corrigen nada roto. Son capacidades que el sistema no tiene y que cambian cómo se trabaja.
 Justificación en §7 del informe.
 
-#### `task_wf_70` — Brief de las tareas predecesoras
+### `task_wf_70` — Brief de las tareas predecesoras
 
 - [x] _(hecho)_ **Título**: que el agente reciba, en el preámbulo, **qué hicieron las tareas de
       las que depende**: título + el resumen que su agente entregó en `submit_result`. Bloque
@@ -1040,7 +1040,7 @@ Justificación en §7 del informe.
   ESTA tarea, y enterrarla bajo dos resúmenes de dependencias degradaría la guía que más
   manda. Orden final: comentarios → briefs → skills.
 
-#### `task_wf_71` — Intervención en caliente sobre un run vivo
+### `task_wf_71` — Intervención en caliente sobre un run vivo
 
 - [x] _(hecho)_ **Título**: poder **redirigir** un run en vuelo en lugar de solo matarlo.
       Campo de guía en la ejecución (migración **0121**); el bucle lo consulta una vez por
@@ -1061,7 +1061,7 @@ state,__main__}.py`, `components/executions/execution-guidance.tsx`
   fallo del api-server no puede tumbar un run que está trabajando. Hay test de las dos cosas.
 - **Tests**: 6 de runtime + 5 del contrato servidor.
 
-#### `task_wf_72` — Preflight del plan antes de aprobar
+### `task_wf_72` — Preflight del plan antes de aprobar
 
 - [x] _(hecho)_ **Título**: semáforo de solo-lectura antes del botón de aprobar, componiendo
       resolvedores que **ya existen**: asignación por rol en modo seco, DAG, criterios de

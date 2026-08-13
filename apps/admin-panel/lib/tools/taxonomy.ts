@@ -41,11 +41,7 @@ export type SecurityLevel = "safe" | "sandboxed" | "privileged";
 
 /** `ToolImplementationType` — facet *Origen* (cómo se implementa/ejecuta). */
 export type ImplementationType =
-  | "builtin"
-  | "python_function"
-  | "http_endpoint"
-  | "mcp_tool"
-  | "docker_command";
+  "builtin" | "python_function" | "http_endpoint" | "mcp_tool" | "docker_command";
 
 /** `ToolCategory` — facet *Función*. */
 export type ToolCategory =

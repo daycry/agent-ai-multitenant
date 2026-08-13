@@ -89,8 +89,25 @@ repos:
         stages: [commit-msg]
 
   # -------------------- TypeScript / JavaScript --------------------
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
+  # El mirror es `rbubley/mirrors-prettier` y NO `pre-commit/mirrors-prettier`
+  # (archivado): aquél sigue publicando un tag por versión estable de prettier
+  # y su hook fija `prettier@3.9.6` EXACTO.
+  #
+  # Por qué se cambió (2026-08-13): con `pre-commit/mirrors-prettier` en
+  # `rev: v4.0.0-alpha.8` el pin era FALSO. Ese paquete de npm no trae
+  # formateador: es una cáscara cuya única dependencia es `@prettier/cli:
+  # ^0.3.0`, y el CLI se instala el `prettier` real como peer SIN fijar
+  # versión. O sea, el formateador que acababa corriendo era «el último
+  # prettier 3.x publicado el día que se creó el entorno del hook»:
+  #   · caché local (30-05-2026) → prettier 3.8.3
+  #   · runner de CI (13-08-2026, entorno nuevo cada run) → prettier 3.9.6
+  # y 3.9.x cambió el corte de los `type X = A | B | …` largos. Resultado:
+  # `pre-commit run --all-files` pasaba en local y reescribía 16 ficheros en
+  # CI, con el mismo `rev` en los dos lados. Un `rev` que no fija la versión
+  # de la herramienta es exactamente la trampa de
+  # docs/03-guides/gotchas/ci-tool-version-drift.md.
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.9.6
     hooks:
       - id: prettier
         types_or: [javascript, jsx, ts, tsx, json, yaml, markdown]

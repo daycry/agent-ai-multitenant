@@ -11,13 +11,18 @@
 # La imagen oficial pineada por digest da la misma garantía que un checksum y
 # encima es una etapa `FROM`, así que Dependabot (ecosistema docker) la refresca
 # sola; un `COPY --from=composer:2@sha256:…` en línea NO lo parsea.
-FROM composer:2@sha256:629d4ef35e75349d452851637d37a40ac33a09d6ac010139020603d79713d9bf AS composer-bin
+FROM composer:2@sha256:4d71c3c2109c61d5415544264b59ad4087e4c5b7244481723664138fd36d5040 AS composer-bin
 
 # Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
 # deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
 # (ecosistema docker, .github/dependabot.yml).
-FROM php:8.3-cli@sha256:db99254edaf6de1644b16afa38b150b8b89f05ec4091a631b59a954dd1330058 AS runtime
+#
+# 2026-08-13: digest refrescado. El anterior era un trixie 13.6 con 61 CVE
+# HIGH CON fix publicado en apt (el riesgo 3 de prod-11 en estado puro: el pin
+# sin refresco congela las CVE de la base). La versión de PHP no cambia — sube
+# el snapshot de Debian.
+FROM php:8.3-cli@sha256:f62df9916bc05ae3c5120b41a115938f22623b0c98c815cbe2c67bc73cec21ef AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-php-phpunit" \
       org.opencontainers.image.version="v1" \
@@ -40,7 +45,15 @@ ENV COMPOSER_ALLOW_SUPERUSER=1 \
 # 2026-07-07) — quemaba turnos del agente y confundía al reviewer. Anything
 # more specific lives in the project's composer.json and is installed by the
 # worker at task start.
+# 2026-08-13: `apt-get -y upgrade` ANTES de instalar. La base oficial de PHP se
+# reconstruye con retraso respecto al archivo de seguridad de Debian, y hoy eso
+# son 49 CVE HIGH CON fix publicado (todas de `linux-libc-dev`, que entra como
+# dependencia del toolchain que `pecl` y `docker-php-ext-install` necesitan).
+# No se arregla refrescando el digest: se comprobó con el más reciente y
+# seguían ahí. Aplicar el parche que Debian YA publicó es el arreglo, y a
+# diferencia de un pin se cura solo en el siguiente build.
 RUN apt-get update \
+ && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends \
       git unzip libzip-dev libpq-dev libonig-dev libicu-dev libxml2-dev \
  && rm -rf /var/lib/apt/lists/* \

@@ -30,24 +30,36 @@ CVE congelada para siempre.
 
 ## 1. Detección: qué se escanea y con qué umbral
 
-| Superficie                               | Herramienta                          | Dónde corre                                   | Umbral                             | Excepciones         |
-| ---------------------------------------- | ------------------------------------ | --------------------------------------------- | ---------------------------------- | ------------------- |
-| 14 distribuciones Python (+ transitivas) | `pip-audit --strict --skip-editable` | `ci.yml` → `security-scan`                    | cualquier aviso conocido           | `.pip-audit-ignore` |
-| npm `apps/admin-panel`                   | `npm audit --omit=dev`               | `ci.yml` → `security-scan`                    | `--audit-level=high`               | ninguna (§4)        |
-| npm `apps/installer`                     | `npm audit --omit=dev`               | `ci.yml` → `security-scan`                    | `--audit-level=high`               | ninguna (§4)        |
-| 5 imágenes de plataforma en cada push    | Trivy                                | `ci.yml` → `build-images`                     | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
-| 14 runtime templates                     | Trivy                                | `build-runtime-templates.yml` (matriz)        | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
-| 5 imágenes publicables                   | Trivy                                | `release-images.yml` (**bloquea la release**) | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
-| Drift del lockfile Python                | `uv lock --check`                    | `ci.yml` → `lint-python` (**bloqueante**)     | cualquier desincronía              | ninguna             |
+| Superficie                               | Herramienta                                                       | Dónde corre                                   | Umbral                             | Excepciones         |
+| ---------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------- | ---------------------------------- | ------------------- |
+| 14 distribuciones Python (+ transitivas) | `pip-audit --skip-editable` + `scripts/check_pip_audit_report.py` | `ci.yml` → `security-scan`                    | cualquier aviso conocido           | `.pip-audit-ignore` |
+| npm `apps/admin-panel`                   | `npm audit --omit=dev`                                            | `ci.yml` → `security-scan`                    | `--audit-level=high`               | ninguna (§4)        |
+| npm `apps/installer`                     | `npm audit --omit=dev`                                            | `ci.yml` → `security-scan`                    | `--audit-level=high`               | ninguna (§4)        |
+| 5 imágenes de plataforma en cada push    | Trivy                                                             | `ci.yml` → `build-images`                     | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| 14 runtime templates                     | Trivy                                                             | `build-runtime-templates.yml` (matriz)        | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| 5 imágenes publicables                   | Trivy                                                             | `release-images.yml` (**bloquea la release**) | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| Drift del lockfile Python                | `uv lock --check`                                                 | `ci.yml` → `lint-python` (**bloqueante**)     | cualquier desincronía              | ninguna             |
 
 **Por qué esos umbrales**: `--audit-level=high` porque sin umbral `npm audit`
 falla con cualquier aviso `low` de la toolchain y el gate muere por fatiga;
 `--omit=dev` porque eslint/vitest/playwright no se despliegan;
 `ignore-unfixed: true` en Trivy porque las bases `-slim`/`alpine` acumulan CVEs
 sin fix upstream y bloquearían PRs ajenos al problema; `--skip-editable` en
-pip-audit porque las 14 distribuciones locales no existen en PyPI y con
-`--strict` contarían como «no auditables» (sus dependencias **sí** se auditan:
-están instaladas como distribuciones normales).
+pip-audit porque las 14 distribuciones locales no existen en PyPI y no son
+auditables (sus dependencias **sí** se auditan: están instaladas como
+distribuciones normales).
+
+**Por qué NO va con `--strict`** (corregido el 2026-08-13): `--strict` significa
+«falla si la recolección falla en cualquier dependencia», y una dependencia
+OMITIDA cuenta como fallo — es decir, volvía fatal justo lo que
+`--skip-editable` acababa de omitir. El paso murió durante semanas en la primera
+editable por orden alfabético («agent-runtime: distribution marked as
+editable») sin auditar ni un paquete: un rojo permanente que no era una
+vulnerabilidad y que tapaba las que sí había. La exigencia útil de `--strict`
+—no dar por buena una auditoría incompleta— la hace ahora
+[`scripts/check_pip_audit_report.py`](../../scripts/check_pip_audit_report.py)
+sobre el JSON: tolera las omisiones por «editable» y falla ante cualquier otro
+motivo de omisión.
 
 **Reparto de Trivy entre los tres workflows**, para que ninguna imagen quede sin
 escanear ni se escanee dos veces por inercia: los 14 templates van con su build

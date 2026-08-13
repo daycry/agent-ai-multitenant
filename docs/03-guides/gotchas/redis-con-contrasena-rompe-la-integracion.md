@@ -77,7 +77,12 @@ sus conexiones por su cuenta. Ya pasó dos veces en agosto de 2026:
 
 - las contraseñas por defecto del compose desaparecieron y el stack no arrancaba
   hasta crear un `docker/.env` (mismo plan, misma semana);
-- ésta.
+- ésta;
+- y una tercera, en la CI, descubierta el 2026-08-13:
+  [ci-no-tiene-docker-env-y-el-compose-lo-exige.md](./ci-no-tiene-docker-env-y-el-compose-lo-exige.md).
+  El runner tampoco tiene `docker/.env`, y el workflow cubría el hueco con una
+  lista de credenciales escrita a mano que se quedó atrás. La CI llevaba meses
+  roja en `docker compose config` sin que el rojo señalara al plan que lo causó.
 
 Regla práctica: **al endurecer una credencial, busca quién más la construye a
 mano** — `grep -rn "redis://\|postgresql://" tests/` — antes de dar el

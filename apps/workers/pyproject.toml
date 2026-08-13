@@ -17,7 +17,9 @@ dependencies = [
   # At-rest backup encryption — AES-256-GCM of the backup bundle, keyed by a
   # Vault-resolved secret (Plan 12 task_12_02). Same lib the rest of the
   # platform already uses for Fernet-at-rest secrets.
-  "cryptography>=42,<49",
+  # Suelo 50 por CVE, no por compatibilidad (SCA 2026-08-13): ver la nota
+  # extensa en apps/api-server/pyproject.toml. AESGCM no cambió en 47→50.
+  "cryptography>=50,<51",
 
   # Remote backup destinations — S3 / any S3-compatible provider (MinIO,
   # Backblaze B2, Wasabi, R2) via the AWS SDK (Plan 12 task_12_05+). The S3

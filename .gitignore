@@ -155,3 +155,7 @@ scripts/.demo_state_06_9.json
 
 # Bundles de backup locales (bind de workers-aux; durabilidad 2026-07-03)
 .backups/
+
+# Informe JSON de pip-audit (lo escribe el job security-scan y quien reproduzca
+# el SCA en local con el comando del runbook). Es un artefacto, no una fuente.
+pip-audit.json

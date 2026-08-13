@@ -13,13 +13,7 @@ import { agentVisualState } from "@/lib/office/mapping";
 
 /** Estados que entiende el motor miniverse (src/citizens/Citizen AgentState). */
 export type MiniverseState =
-  | "working"
-  | "idle"
-  | "thinking"
-  | "sleeping"
-  | "speaking"
-  | "error"
-  | "waiting";
+  "working" | "idle" | "thinking" | "sleeping" | "speaking" | "error" | "waiting";
 
 export interface AgentStatus {
   id: string;

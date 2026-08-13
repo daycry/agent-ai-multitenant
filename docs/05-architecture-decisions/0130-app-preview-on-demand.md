@@ -98,7 +98,7 @@ opt)`, `list_review_sessions_for_plan` filtra `kind='plan'`,
   (`kind`/`plan_id` opcional/`preview_ref`) + `_resolve_preview_worktree_host_path`
   (rama por defecto) + key de worktree por `kind`; guards (autostart idempotencia
   `kind='plan'`, `submit_verdict`/expiry con `plan_id` NULL); `celery_client.
-  enqueue_compose_review_runtime`; endpoints `POST/GET /projects/{id}/preview` y
+enqueue_compose_review_runtime`; endpoints `POST/GET /projects/{id}/preview` y
   `/plans/{id}/preview` (+ builder puro `preview_launch.build_preview_request`);
   UI `PreviewLauncher` (hub de proyecto + página de plan). Tests
   `tests/unit/test_preview_launch.py`, `tests/integration/test_preview_sessions_db.py`.

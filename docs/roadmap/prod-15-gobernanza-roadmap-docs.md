@@ -189,12 +189,15 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
   - **Lo corregido hoy**: el `README.md` del roadmap seguía diciendo que el ADR estaba `proposed` y «pendiente de decisión humana». Ya no.
   - **Por qué la casilla NO se marca**: falta el tercer bullet de la tarea — la cola de validación tiene el **orden** publicado, pero no **responsable ni ventana**. Y eso no es trabajo pendiente, es una decisión que un agente no puede tomar: el propio ADR 0138 la deja fuera de su alcance por escrito («`prod-15` exige nombrarlos; este ADR no los puede inventar») porque compromete el calendario de una persona. **Firma humana pendiente**, sin nada que implementar antes.
   - ✅ **Verificado el 2026-08-01 — los tres guardas del ADR 0138 no son cargo cult, y había un cuarto agujero.** Lo que pedía comprobar esta casilla era que el mecanismo se cumple HOY y que los tests lo vigilan de verdad. Se hizo por mutación, rompiendo cada invariante a propósito y mirando el rojo antes de restaurar:
-    | Guarda | Mutación aplicada | Resultado |
-    | ------ | ----------------- | --------- |
-    | `test_gate_override_carries_a_written_justification` | `reason` de `11.1-budgets-fx` reducido a 9 caracteres | **rojo**, nombrando plan y longitud |
-    | `test_gate_override_only_where_the_gate_is_actually_unmet` | `11-guardrails-precios` → `completed` | **rojo**: «la excepción caducó: `11.1-budgets-fx`» |
-    | `test_gate_debt_inventory_has_not_grown` + `test_started_phase_declares_its_gate` | `prod-11` → `pending_human_validation` con su gate incumplido | **rojo los dos** |
+
+    | Guarda                                                                            | Mutación aplicada                                             | Resultado                                          |
+    | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+    | `test_gate_override_carries_a_written_justification`                              | `reason` de `11.1-budgets-fx` reducido a 9 caracteres         | **rojo**, nombrando plan y longitud                |
+    | `test_gate_override_only_where_the_gate_is_actually_unmet`                        | `11-guardrails-precios` → `completed`                         | **rojo**: «la excepción caducó: `11.1-budgets-fx`» |
+    | `test_gate_debt_inventory_has_not_grown` + `test_started_phase_declares_its_gate` | `prod-11` → `pending_human_validation` con su gate incumplido | **rojo los dos**                                   |
+
     Los 6 `gate_override` vivos tienen los cuatro campos y una `reason` por encima del mínimo. Solo hay una fase `in_progress` (`marketplace-v2-despliegue`).
+
   - 🔧 **Agujero encontrado y cerrado (1): un `gate_override` sobre un plan sin `blocking_plan` pasaba los once guardas en silencio.** `test_gate_override_only_where_the_gate_is_actually_unmet` solo mira planes con dependencias (`if deps and not sin_cerrar`), y `unmet_gates()` descarta los planes sin bloqueantes **antes** de mirar el override. Comprobado inyectando uno en `prod-14` (`blocking_plan: null`): 11/11 en verde. No es hipotético — `blocking_plan` es una lista YAML multilínea en varios planes y basta vaciarla para que el gate deje de declararse y el override sobreviva como afirmación de una excepción que ya no se refiere a nada. Cerrado con `test_gate_override_names_a_gate_that_actually_exists` (rojo con la inyección, verde al retirarla).
   - 🔧 **Agujero encontrado y cerrado (2): 17 ficheros del roadmap llevan un `status:` del enum de fases y NO llevan `plan_id`, así que ningún guarda de gate los ve.** `_plans()` exige los dos campos; sin `plan_id`, un fichero se salta `test_at_most_one_phase_in_progress`, el gate, el `gate_override` y el changelog. Ocho de los diecisiete son las fases del córtex, **con casillas `- [ ]` y `blocking_plan` propio**: planes en todo menos en el campo que los haría auditables. Se destapó por un recuento que daba 46 por fichero y 35 por plan. Cerrado con `test_no_new_roadmap_file_escapes_the_guards_by_omitting_plan_id`, con la deuda acotada e inventariada al estilo de `_GATE_DEBT_2026_07_29`: **no arregla los 17** —darles `plan_id` los somete de golpe al guarda de changelog, que es trabajo de otro carril— pero impide que aparezca el número dieciocho. Mutación verificada: un `.md` nuevo con `status: in_progress` y sin `plan_id` lo pone rojo.
   - ➕ **De paso, la tercera guarda que faltaba**: el recuento de la cola de validación del `README.md` («35 planes están en `pending_human_validation`») no lo vigilaba nadie, a diferencia del recuento hermano de planes de construcción. Ahora sí (`test_readme_declares_the_real_size_of_the_validation_queue`, mutado a 34 → rojo). Y conviene dejar dicho, porque casi me lleva a «corregir» un número correcto: **35 son los planes; los 46 que cuenta `CONTINUE_HERE.md` incluyen 11 ficheros sin `plan_id`**. Son las dos poblaciones del agujero (2).
@@ -373,15 +376,17 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
     que faltaba en las tres anotaciones anteriores es _cuántos ficheros ajenos_
     hay que editar, y es el que decide: **48**, de los cuales 31 son guías de
     `docs/03-guides/human-tests/`. El detalle:
-    | Qué | Cuánto | Quién lo toca |
-    | -------------------------------------------------- | -----: | ------------- |
-    | Scripts a mover (`demo_human_*`, `setup_demo_*`, `_demo_common.py`) | 22 | el rename |
-    | Guías de tests humanos que citan rutas | 31 | otro carril |
-    | `pyproject.toml` (carve-outs de ruff, 2 líneas) | 1 | otro carril |
-    | `.gitignore` (6 patrones `scripts/.demo_state*`) | 1 | otro carril |
-    | `apps/api-server/.../seeds/builtin_kbs.py` | 1 | otro carril |
-    | `tests/docs/test_human_test_guides.py` | 1 | otro carril |
-    | Gotchas / ADR / changelogs (relato histórico) | 11 | — |
+
+    | Qué                                                                 | Cuánto | Quién lo toca |
+    | ------------------------------------------------------------------- | -----: | ------------- |
+    | Scripts a mover (`demo_human_*`, `setup_demo_*`, `_demo_common.py`) |     22 | el rename     |
+    | Guías de tests humanos que citan rutas                              |     31 | otro carril   |
+    | `pyproject.toml` (carve-outs de ruff, 2 líneas)                     |      1 | otro carril   |
+    | `.gitignore` (6 patrones `scripts/.demo_state*`)                    |      1 | otro carril   |
+    | `apps/api-server/.../seeds/builtin_kbs.py`                          |      1 | otro carril   |
+    | `tests/docs/test_human_test_guides.py`                              |      1 | otro carril   |
+    | Gotchas / ADR / changelogs (relato histórico)                       |     11 | —             |
+
     **Y una trampa que ninguna anotación anterior nombró**:
     `tests/docs/test_human_test_guides.py` resuelve la existencia de cada script
     recomendado contra `_SCRIPTS = repo/scripts`. En cuanto se mueve el primer
@@ -411,6 +416,7 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
        árbol, y sin estado intermedio verde. El riesgo técnico es bajo; el de
        conflicto, alto; y el coste de hacerlo mal —guías de test humano apuntando a
        scripts que no arrancan— lo paga un humano en mitad de una validación.
+
   - ⏳ **2026-08-12 — sigue sin ejecutarse, y el motivo ya NO es la medición.** Re-verificado
     en 30 segundos y sin cambios: **14 `demo_human_*` + 7 `setup_demo_*` + `_demo_common.py`**
     en la raíz de `scripts/`, `scripts/demos/` no existe, `tests/unit/test_scripts_layout.py`

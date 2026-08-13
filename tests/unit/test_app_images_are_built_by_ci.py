@@ -146,3 +146,47 @@ def test_every_derived_app_is_published_by_the_release_workflow(app: str) -> Non
         f"release-images.yml no publica `{app}`, que hereda de la imagen base. "
         f"Las apps publicadas son {sorted(published)}."
     )
+
+
+def _self_contained_dockerfiles_with_required_build_args() -> list[tuple[str, str]]:
+    """Apps autocontenidas con un `ARG NEXT_PUBLIC_*` que su build EXIGE.
+
+    Next hornea las `NEXT_PUBLIC_*` en el bundle, así que el valor se fija al
+    construir la imagen y no al arrancar el contenedor. Por eso el Dockerfile las
+    declara como `ARG`, y por eso `ci.yml` tiene que pasarlas: no hay forma de
+    corregirlas después con una variable de entorno del compose.
+    """
+    found: list[tuple[str, str]] = []
+    for dockerfile in sorted(_APPS.glob("**/Dockerfile")):
+        app = dockerfile.parent.name
+        if app == "api-server" or app in _DERIVED:
+            continue
+        for arg in re.findall(
+            r"^ARG[ \t]+(NEXT_PUBLIC_[A-Z0-9_]+)", dockerfile.read_text(encoding="utf-8"), re.M
+        ):
+            found.append((app, arg))
+    return found
+
+
+_SELF_CONTAINED_ARGS = _self_contained_dockerfiles_with_required_build_args()
+
+
+@pytest.mark.parametrize(("app", "arg"), _SELF_CONTAINED_ARGS)
+def test_self_contained_apps_get_their_baked_build_args(app: str, arg: str) -> None:
+    """El defecto (2026-08-13): el bucle de autocontenidas construía sin build-args.
+
+    `next.config.js` → `assertPublicApiUrl` (prod-09, hallazgo frontend-8)
+    revienta el build de producción si falta `NEXT_PUBLIC_API_URL`, para que
+    nadie publique un panel que apunta al `localhost` de cada usuario. El bucle
+    de `ci.yml` no la pasaba, así que el job `build-images` fallaba SIEMPRE desde
+    que entró la guarda — no se vio porque CI estuvo caído por facturación desde
+    el 2026-07-30. La guarda de la app tenía razón; lo que faltaba era el
+    argumento.
+    """
+    script = _build_each_app_script()
+    assert f"--build-arg {arg}=" in script, (
+        f"apps/{app}/Dockerfile declara `ARG {arg}`, que Next hornea en el "
+        f"bundle, y ci.yml:build-images no lo pasa. Con el valor vacío el build "
+        f"de producción falla (o, si algún día deja de fallar, publica una "
+        f"imagen que apunta al localhost de quien la abra)."
+    )

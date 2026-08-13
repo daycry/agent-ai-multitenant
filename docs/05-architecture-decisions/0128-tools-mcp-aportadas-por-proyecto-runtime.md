@@ -3,7 +3,7 @@ title: "ADR 0128: Tools MCP aportadas por el proyecto en runtime (agentes compar
 status: accepted
 date: 2026-07-23
 deciders: [operador]
-relates_to: [0052, 0066, 0091, 0117, 0127]
+relates_to: [0052, 0066, 0091, 0117, 0127, 0142]
 ---
 
 # ADR 0128: Tools MCP aportadas por el proyecto en runtime

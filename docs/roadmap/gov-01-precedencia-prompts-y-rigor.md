@@ -65,7 +65,7 @@ La más barata de las seis y la única que resuelve un problema que está pasand
 **ahora**: durante agosto, un plan pidió tres veces algo que un ADR posterior
 había rechazado, y se resolvió a ojo cada vez.
 
-#### `task_gov_01` — La regla de precedencia, escrita y con test
+### `task_gov_01` — La regla de precedencia, escrita y con test
 
 - [ ] **Título**: Sección de precedencia en `CLAUDE.md` + `rejects:` en el frontmatter de los ADR + guarda de gobernanza
 - **Tiempo**: 1-2 días · **Complejidad**: s
@@ -113,7 +113,7 @@ había rechazado, y se resolvió a ojo cada vez.
 **Habilita la fase 2 entera.** Es la idea nº2 del informe y la única de las cinco
 sin decisión pendiente.
 
-#### `task_gov_02` — El `system_prompt` deja de reescribirse sin rastro
+### `task_gov_02` — El `system_prompt` deja de reescribirse sin rastro
 
 - [ ] **Título**: Historial versionado del prompt del agente, con diff y autor
 - **Tiempo**: 2 días · **Complejidad**: m
@@ -139,7 +139,7 @@ sin decisión pendiente.
     command: "pytest tests/security/test_rls_invariant.py -q"
   ```
 
-#### `task_gov_03` — `prompt_version` sella el prompt del AGENTE, no tres módulos
+### `task_gov_03` — `prompt_version` sella el prompt del AGENTE, no tres módulos
 
 - [ ] **Título**: `executions.prompt_version` incluye la versión del prompt del agente
 - **Tiempo**: 1 día · **Complejidad**: s
@@ -168,7 +168,7 @@ sin decisión pendiente.
 Decisión del operador: **bloquean, pero solo en `production` y
 `customer-external`**. En desarrollo y sandbox avisan y dejan guardar.
 
-#### `task_gov_04` — El gate de evals corre de verdad
+### `task_gov_04` — El gate de evals corre de verdad
 
 - [ ] **Título**: La rama con secreto de `eval-on-prompt-change.yml`, contra un dataset real
 - **Tiempo**: 1-2 días · **Complejidad**: m
@@ -188,7 +188,7 @@ Decisión del operador: **bloquean, pero solo en `production` y
     command: "pytest tests/docs/test_supply_chain_docs.py tests/unit/test_eval_gate_config.py -q"
   ```
 
-#### `task_gov_05` — La eval bloquea al editar un prompt, según el preset
+### `task_gov_05` — La eval bloquea al editar un prompt, según el preset
 
 - [ ] **Título**: `PUT /agents/{id}` corre la eval y bloquea en `production` / `customer-external`
 - **Tiempo**: 2 días · **Complejidad**: m
@@ -219,7 +219,7 @@ Decisión del operador: **bloquean, pero solo en `production` y
 Las dos tareas que el operador prefirió a sus alternativas caras. Producen el
 dato con el que se decidirá si aquéllas merecen la pena.
 
-#### `task_gov_06` — Detector de Goodhart: ¿el revisor juzga o repite?
+### `task_gov_06` — Detector de Goodhart: ¿el revisor juzga o repite?
 
 - [ ] **Título**: Medir cuánto se parece el veredicto del revisor al relato del implementador
 - **Tiempo**: 1-2 días · **Complejidad**: s
@@ -243,7 +243,7 @@ dato con el que se decidirá si aquéllas merecen la pena.
     command: "pytest tests/unit/test_review_contamination_metric.py -q"
   ```
 
-#### `task_gov_07` — Aviso de linaje compartido entre autor y revisor
+### `task_gov_07` — Aviso de linaje compartido entre autor y revisor
 
 - [ ] **Título**: El Hub de Capacidad avisa cuando implementador y revisor son de la misma familia
 - **Tiempo**: 1 día · **Complejidad**: s
@@ -272,7 +272,7 @@ dato con el que se decidirá si aquéllas merecen la pena.
 Decisión del operador: **sí, pero solo las pasadas de review**. La validación
 humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 
-#### `task_gov_08` — ADR del rigor por niveles
+### `task_gov_08` — ADR del rigor por niveles
 
 - [ ] **Título**: ADR que fija qué cambia en cada nivel y quién clasifica
 - **Tiempo**: 4 h · **Complejidad**: s
@@ -289,7 +289,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
     command: "pytest tests/docs/test_docs_internal_links.py -q"
   ```
 
-#### `task_gov_09` — `estimated_complexity` gobierna las pasadas de review
+### `task_gov_09` — `estimated_complexity` gobierna las pasadas de review
 
 - [ ] **Título**: El número de pasadas de review depende del nivel del cambio
 - **Tiempo**: 4-5 días · **Complejidad**: l
@@ -319,7 +319,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 
 ## Fase 5 — El dato que hace posible aprender (2-3 días)
 
-#### `task_gov_10` — Reflexión estructurada del rechazo
+### `task_gov_10` — Reflexión estructurada del rechazo
 
 - [ ] **Título**: El rechazo se registra como `target` × `class`, no como prosa
 - **Tiempo**: 2-3 días · **Complejidad**: m
@@ -343,7 +343,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
     command: "pytest tests/unit/test_reject_taxonomy.py tests/integration/test_review_verdict_shape.py -q -p no:randomly"
   ```
 
-#### `task_gov_11` — El disparador de SkillOpt, escrito para que no se olvide
+### `task_gov_11` — El disparador de SkillOpt, escrito para que no se olvide
 
 - [ ] **Título**: Nota de decisión aplazada CON su condición de reapertura
 - **Tiempo**: 1 h · **Complejidad**: s

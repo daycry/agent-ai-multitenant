@@ -24,15 +24,15 @@ Resumen operativo. La ficha completa —con el porqué de cada umbral, el repart
 de Trivy entre los tres workflows y lo que queda deliberadamente sin pinear— está
 en la referencia [cadena-suministro.md](../04-reference/cadena-suministro.md).
 
-| Superficie                              | Herramienta                          | Dónde corre                                   | Umbral                             | Excepciones         |
-| --------------------------------------- | ------------------------------------ | --------------------------------------------- | ---------------------------------- | ------------------- |
-| Dependencias Python (14 distribuciones) | `pip-audit --strict --skip-editable` | `ci.yml` → job `security-scan`                | cualquier aviso conocido           | `.pip-audit-ignore` |
-| npm `apps/admin-panel`                  | `npm audit --omit=dev`               | `ci.yml` → job `security-scan`                | `--audit-level=high`               | (ver §5)            |
-| npm `apps/installer`                    | `npm audit --omit=dev`               | `ci.yml` → job `security-scan`                | `--audit-level=high`               | (ver §5)            |
-| 5 imágenes de plataforma                | Trivy                                | `ci.yml` → job `build-images`                 | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
-| 14 runtime templates                    | Trivy                                | `build-runtime-templates.yml` (matriz)        | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
-| 5 imágenes publicables                  | Trivy                                | `release-images.yml`                          | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
-| Drift del lockfile                      | `uv lock --check`                    | `ci.yml` → job `lint-python` (**bloqueante**) | cualquier desincronía              | ninguna             |
+| Superficie                              | Herramienta                                                       | Dónde corre                                   | Umbral                             | Excepciones         |
+| --------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------- | ---------------------------------- | ------------------- |
+| Dependencias Python (14 distribuciones) | `pip-audit --skip-editable` + `scripts/check_pip_audit_report.py` | `ci.yml` → job `security-scan`                | cualquier aviso conocido           | `.pip-audit-ignore` |
+| npm `apps/admin-panel`                  | `npm audit --omit=dev`                                            | `ci.yml` → job `security-scan`                | `--audit-level=high`               | (ver §5)            |
+| npm `apps/installer`                    | `npm audit --omit=dev`                                            | `ci.yml` → job `security-scan`                | `--audit-level=high`               | (ver §5)            |
+| 5 imágenes de plataforma                | Trivy                                                             | `ci.yml` → job `build-images`                 | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| 14 runtime templates                    | Trivy                                                             | `build-runtime-templates.yml` (matriz)        | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| 5 imágenes publicables                  | Trivy                                                             | `release-images.yml`                          | `HIGH,CRITICAL` + `ignore-unfixed` | `.trivyignore`      |
+| Drift del lockfile                      | `uv lock --check`                                                 | `ci.yml` → job `lint-python` (**bloqueante**) | cualquier desincronía              | ninguna             |
 
 Vía reactiva: [`.github/dependabot.yml`](../../.github/dependabot.yml) con
 cuatro ecosistemas (pip, npm, docker, github-actions), semanal, agrupado.
