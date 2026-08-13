@@ -138,9 +138,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
-  "pytest-cov>=5.0,<6",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
+  "pytest-cov>=7.1,<8",
   "freezegun>=1.5,<2",
   # Marketplace pre-install static analysis (Plan 09 task_09_05). Bandit
   # is the primary scanner — a clean, pure-Python wheel run as a

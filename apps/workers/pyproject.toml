@@ -37,8 +37,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
   # Stubs para el gate mypy (2026-07-08, mypy-total): boto3 es untyped y
   # paramiko publica stubs aparte — sin ellos backup_destinations no pasa
   # strict en el entorno del proyecto (antes vivían solo en el venv aislado

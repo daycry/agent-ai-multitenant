@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
+  "pytest>=9.1,<10",
   "types-PyYAML>=6.0,<7",
 ]
 # PII detection backend (task_11_04). Microsoft Presidio pulls spaCy + an

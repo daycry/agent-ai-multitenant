@@ -55,8 +55,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
   # The channel adapters talk to external services over HTTP; tests mock
   # the transport (httpx.MockTransport) so no real network is hit. httpx
   # is a runtime dep above; pinned here too so the dev env always has it.

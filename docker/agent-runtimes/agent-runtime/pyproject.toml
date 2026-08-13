@@ -42,8 +42,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
 ]
 # provider=claude only — the Claude Agent SDK. Optional so a deployment
 # that uses Azure Foundry / Copilot / Ollama doesn't drag the SDK in.
