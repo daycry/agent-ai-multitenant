@@ -26,11 +26,29 @@ from alembic import command
 from api_server.db.domain import Plan, Task, TaskStatus
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._redis_url import TEST_REDIS_URL
+
 pytestmark = pytest.mark.integration
 
 
 class _FakeRedis:
-    """Captures ``xadd`` calls so the test asserts the re-emitted task events."""
+    """Captura los `xadd` para poder afirmar sobre los eventos re-emitidos.
+
+    Implementa `pipeline()` además de `xadd` porque `api_server.events` publica
+    los dos streams —el global y el del proyecto— en UN pipeline (events.py:95),
+    para hacer una sola ida y vuelta a Redis.
+
+    Este doble sólo tenía `xadd`, así que el publicador moría con
+    `'_FakeRedis' object has no attribute 'pipeline'`… **y el reconciliador se lo
+    tragaba**, porque publica en un `try/except` que nunca debe romper la pasada.
+    Resultado: la tarea SÍ pasaba a `blocked` en la BD, pero no se capturaba
+    ningún evento y el test fallaba en `assert 'blocked' in []` — una aserción que
+    parece de negocio y en realidad delataba un doble desactualizado.
+
+    Moraleja para el siguiente doble: si el código real cambia de una llamada a un
+    pipeline, el fake tiene que seguirle. Un fake incompleto no falla donde está
+    incompleto; falla tres capas más allá.
+    """
 
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
@@ -38,8 +56,36 @@ class _FakeRedis:
     async def xadd(self, stream: str, fields: dict[str, Any], **_kw: Any) -> None:
         self.events.append({"stream": stream, **fields})
 
+    def pipeline(self) -> _FakePipeline:
+        return _FakePipeline(self)
+
     async def aclose(self) -> None:  # pragma: no cover - injected, never closed here
         ...
+
+
+class _FakePipeline:
+    """El pipeline de redis-py acumula en SÍNCRONO y ejecuta en `await execute()`.
+
+    Se imita esa asimetría a propósito: si `xadd` fuese async aquí, el código real
+    —que NO lo espera— dejaría corrutinas sin consumir y el test pasaría sin haber
+    publicado nada.
+    """
+
+    def __init__(self, redis: _FakeRedis) -> None:
+        self._redis = redis
+        self._pendientes: list[dict[str, Any]] = []
+
+    def xadd(self, stream: str, fields: dict[str, Any], **_kw: Any) -> None:
+        self._pendientes.append({"stream": stream, **fields})
+
+    def expire(self, *_a: Any, **_kw: Any) -> None:
+        """`events.py:175` encadena un `expire` en el mismo pipeline."""
+
+    async def execute(self) -> list[Any]:
+        self._redis.events.extend(self._pendientes)
+        enviados = len(self._pendientes)
+        self._pendientes = []
+        return [None] * enviados
 
 
 @pytest.fixture()
@@ -51,6 +97,15 @@ def _migrated(alembic_config: object) -> None:
 def workers_settings(monkeypatch: pytest.MonkeyPatch, migrations_pg_dsn: str):
     async_dsn = migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
     monkeypatch.setenv("WORKERS_DATABASE_URL", async_dsn)
+    # Celery también, y las DOS: `broker_url` Y `result_backend`. Apuntar sólo la
+    # BD dejaba los dos en su default de PRODUCCIÓN (`redis://localhost:6379/1`
+    # y `/2`), que desde prod-10 exige contraseña. El síntoma no delata la causa:
+    # el envío del autostart de review muere con «Retry limit exceeded while
+    # trying to reconnect to the Celery result store backend» tras minutos de
+    # reintentos, y el test acaba fallando en una aserción de estado que parece
+    # de negocio. Es la trampa que documenta `_redis_url.py`.
+    monkeypatch.setenv("WORKERS_BROKER_URL", TEST_REDIS_URL)
+    monkeypatch.setenv("WORKERS_RESULT_BACKEND", TEST_REDIS_URL)
     from workers.config import get_settings, reset_settings_cache
 
     reset_settings_cache()
@@ -211,7 +266,11 @@ async def test_reconcile_pipeline_state(
     new_statuses = [
         json.loads(e["payload"]).get("new_status")
         for e in redis.events
-        if e.get("type") == "task.status_changed"
+        # SOLO el stream global. `api_server.events` publica CADA evento en dos
+        # streams —`events:tasks` y el del proyecto— en el mismo pipeline, así que
+        # contar sobre `redis.events` a secas duplica todo y un `count(...) == 1`
+        # pasa a valer 2 sin que haya cambiado nada del negocio.
+        if e.get("type") == "task.status_changed" and e.get("stream") == "events:tasks"
     ]
     assert TaskStatus.BLOCKED.value in new_statuses
     assert new_statuses.count(TaskStatus.IN_REVIEW.value) == 1
@@ -393,7 +452,9 @@ async def test_reconciler_escalates_review_stuck_past_cap(
         new_statuses = [
             json.loads(e["payload"]).get("new_status")
             for e in redis.events
-            if e.get("type") == "task.status_changed"
+            # Sólo el stream global (ver la nota del test de arriba): el evento
+            # se publica también en el del proyecto.
+            if e.get("type") == "task.status_changed" and e.get("stream") == "events:tasks"
         ]
         assert new_statuses == [TaskStatus.BLOCKED.value]
     finally:
