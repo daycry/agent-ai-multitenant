@@ -96,6 +96,12 @@ el problema ya esté documentado.
 - [alembic-dev-db-branch-only-revision.md](./alembic-dev-db-branch-only-revision.md)
   — `Can't locate revision`: la DB de dev quedó en una revisión cuyo fichero
   solo existe en otra rama; verifica migraciones SOLO en la DB de test.
+- [sqlalchemy-flush-fallido-mata-la-transaccion-exterior.md](./sqlalchemy-flush-fallido-mata-la-transaccion-exterior.md)
+  — `Can't operate on closed transaction inside context manager`: un `flush()`
+  que falla deja `DEACTIVE` la transacción EXTERIOR aunque vaya dentro de
+  `begin_nested()`, y el `rollback()` que la desatasca se lleva el
+  `set_config('app.tenant_id')` de la RLS → consultas que devuelven vacío sin
+  error. Consulta ANTES del flush.
 
 ### llm-providers
 

@@ -905,14 +905,34 @@ export const dictionary = {
       en: "the original's knowledge, tools and skills, and it is independent: editing it does not affect the source agent.",
     },
     forkNameLabel: { es: "Nombre de la copia", en: "Name of the copy" },
+    // Las dos plantillas de la sugerencia de `lib/agents/fork-name.ts`. La
+    // numerada existe porque hay un índice único (tenant, proyecto, nombre)
+    // sobre los agentes vivos: forkear dos veces al mismo destino con el mismo
+    // nombre choca, y el backend contesta 409 sin renombrar por su cuenta.
     forkCopySuffix: { es: "{name} (copia)", en: "{name} (copy)" },
+    forkCopySuffixNumbered: { es: "{name} (copia {n})", en: "{name} (copy {n})" },
+    forkNameHelp: {
+      es: "Sugerimos un nombre libre en el destino. Puedes cambiarlo: el nombre identifica al agente y es con el que se le elige al montar equipos y planes.",
+      en: "We suggest a name that is free at the destination. You can change it: the name identifies the agent and is what you pick it by when building teams and plans.",
+    },
+    // El 409 de los endpoints de fork. Se prefiere este texto al `detail` del
+    // backend porque la UI sabe DOS cosas que el backend no puede poner en un
+    // mensaje genérico: qué nombre se intentó y que el campo para arreglarlo
+    // está justo encima.
+    forkConflictName: {
+      es: "Ya existe un agente llamado «{name}» en el destino. Cambia el nombre de la copia y vuelve a intentarlo.",
+      en: "An agent named “{name}” already exists at the destination. Change the name of the copy and try again.",
+    },
     forkProjectLabel: { es: "Proyecto destino", en: "Target project" },
     forkPickProject: { es: "— Selecciona —", en: "— Select —" },
     forkNoProjects: {
       es: "No tienes proyectos creados. Crea uno primero para poder personalizar.",
       en: "You have no projects yet. Create one first so you can customize.",
     },
-    forkError: { es: "Error al crear la copia", en: "Could not create the copy" },
+    // `forkError` («Error al crear la copia») se retiró al pasar el diálogo a
+    // `errorText`: era el respaldo de un `mutation.error.message ?? …` que nunca
+    // se daba, y su único efecto real era tapar que el mensaje que SÍ salía era
+    // el cuerpo crudo del backend.
     forkSubmit: { es: "Crear copia", en: "Create copy" },
 
     // --- sección "Tools del agente" (`agent-tools-section.tsx`) ---

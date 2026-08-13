@@ -20,6 +20,7 @@ from api_server.auth.deps import (
     require_tenant_member,
 )
 from api_server.db.domain import Agent, AgentScope, Project
+from api_server.routers._agent_names import flush_agent_or_conflict
 from api_server.routers._helpers import get_writable_or_404, require_tenant_id
 from api_server.routers.agents.common import (
     _agent_capability_ids,
@@ -129,7 +130,17 @@ async def fork_agent(
         anchored_version=None,
     )
     session.add(fork)
-    await session.flush()
+    # El nombre HEREDADO del origen (`payload.name or source.name`) choca con
+    # `uq_agents_tenant_project_name_live` en cuanto se forkea dos veces la misma
+    # plantilla al mismo proyecto. Sin este envoltorio era un 500; ahora es un 409
+    # que dice qué nombre está cogido y propone uno libre (ver `_agent_names`).
+    await flush_agent_or_conflict(
+        session,
+        context="agent.fork",
+        name=fork.name,
+        tenant_id=tenant_id,
+        project_id=payload.project_id,
+    )
 
     # Plan 06.17 task_06_17_12: el fork hereda las CAPACIDADES del origen, no
     # solo la persona. Clonamos las tres junctions (SABER/HACER/SER):

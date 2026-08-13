@@ -53,6 +53,8 @@ vi.mock("@/components/teams/adopt-team-dialog", () => ({
 }));
 
 import TeamDetailPage from "@/app/admin/teams/[team_id]/page";
+import { ApiError } from "@/lib/api";
+import { translate } from "@/lib/i18n/translate";
 
 const TEAM = {
   id: "team-1",
@@ -103,12 +105,19 @@ const PROJECTS = [
 ];
 
 let team = TEAM;
+/** Mutable como `team`: el caso del segundo fork necesita sembrar la copia. */
+let agents: typeof AGENTS = AGENTS;
+/** Error que devuelve el fork cuando falla; `null` = crea bien. */
+let forkError: unknown = null;
 
 function routeApi(path: string): unknown {
   if (path === "/teams/team-1") return team;
-  if (path === "/agents") return AGENTS;
+  if (path === "/agents") return agents;
   if (path === "/projects") return PROJECTS;
-  if (path === "/agents/a3/fork") return { ...AGENTS[2], id: "a3-fork" };
+  if (path === "/agents/a3/fork") {
+    if (forkError) throw forkError;
+    return { ...AGENTS[2], id: "a3-fork" };
+  }
   if (path === "/teams/team-1/members") return team;
   throw new Error(`unexpected endpoint in test: ${path}`);
 }
@@ -122,6 +131,20 @@ function renderPage() {
   );
 }
 
+/**
+ * Elige el proyecto destino del fork.
+ *
+ * Espera a que la opción EXISTA antes del `change`: cambiar un `<select>` a un
+ * valor que todavía no tiene opción es un no-op silencioso —jsdom lo deja en
+ * `""`— y el test pasaría a depender de si la consulta de proyectos respondió.
+ */
+async function pickProject(value: string, label: string) {
+  const select = (await screen.findByTestId("project-select")) as HTMLSelectElement;
+  await screen.findByRole("option", { name: label });
+  fireEvent.change(select, { target: { value } });
+  expect(select.value).toBe(value);
+}
+
 /** [ruta, init] de las llamadas de escritura (las que llevan `init`). */
 function writes(): [string, { method?: string; body?: Record<string, unknown> }][] {
   return apiFetchMock.mock.calls.filter(([, init]) => init !== undefined) as [
@@ -132,6 +155,8 @@ function writes(): [string, { method?: string; body?: Record<string, unknown> }]
 
 beforeEach(() => {
   team = TEAM;
+  agents = AGENTS;
+  forkError = null;
   pushMock.mockReset();
   apiFetchMock.mockReset();
   apiFetchMock.mockImplementation(async (path: string) => routeApi(path));
@@ -240,14 +265,78 @@ describe("añadir miembro", () => {
     fireEvent.click(await screen.findByTestId("add-member-button"));
     fireEvent.change(await screen.findByTestId("agent-select"), { target: { value: "a3" } });
     fireEvent.click(screen.getByTestId("mode-forked"));
-    fireEvent.change(await screen.findByTestId("project-select"), { target: { value: "p1" } });
+    await pickProject("p1", "Proyecto Uno");
     fireEvent.click(screen.getByTestId("add-member-submit"));
 
     await waitFor(() => expect(writes().length).toBe(2));
     expect(writes()[0][0]).toBe("/agents/a3/fork");
-    expect(writes()[0][1].body).toEqual({ project_id: "p1" });
+    // El nombre viaja SIEMPRE. Este diálogo mandaba sólo `project_id`, y desde
+    // la migración 0126 (índice único por tenant+proyecto+nombre) eso significa
+    // "hereda el nombre del origen": añadir al equipo un agente que ya estaba
+    // en ese proyecto chocaba con el índice.
+    expect(writes()[0][1].body).toEqual({ project_id: "p1", name: "Grace (copia)" });
     expect(writes()[1][0]).toBe("/teams/team-1/members");
     expect(writes()[1][1].body).toEqual({ agent_id: "a3-fork" });
+  });
+
+  it("enseña el nombre sugerido de la copia y deja cambiarlo", async () => {
+    renderPage();
+    fireEvent.click(await screen.findByTestId("add-member-button"));
+    fireEvent.change(await screen.findByTestId("agent-select"), { target: { value: "a3" } });
+    fireEvent.click(screen.getByTestId("mode-forked"));
+    await pickProject("p1", "Proyecto Uno");
+
+    // Visible: la sugerencia va DELANTE del usuario, no detrás (que es lo que
+    // haría auto-renombrar en el backend).
+    const input = await screen.findByTestId("add-member-fork-name");
+    await waitFor(() => expect(input).toHaveProperty("value", "Grace (copia)"));
+
+    // Y editable: lo tecleado manda.
+    fireEvent.change(input, { target: { value: "Grace QA" } });
+    fireEvent.click(screen.getByTestId("add-member-submit"));
+
+    await waitFor(() => expect(writes().length).toBe(2));
+    expect(writes()[0][1].body).toEqual({ project_id: "p1", name: "Grace QA" });
+  });
+
+  it("si el destino ya tiene esa copia, sugiere la siguiente libre", async () => {
+    agents = [
+      ...AGENTS,
+      {
+        id: "a4",
+        name: "Grace (copia)",
+        role: "reviewer",
+        scope: "project_local",
+        project_id: "p1",
+        forked_from_agent_id: "a3",
+      },
+    ];
+    renderPage();
+    fireEvent.click(await screen.findByTestId("add-member-button"));
+    fireEvent.change(await screen.findByTestId("agent-select"), { target: { value: "a3" } });
+    fireEvent.click(screen.getByTestId("mode-forked"));
+    await pickProject("p1", "Proyecto Uno");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("add-member-fork-name")).toHaveProperty("value", "Grace (copia 2)"),
+    );
+  });
+
+  it("un 409 al forkear se explica como choque de nombre, no como fallo genérico", async () => {
+    forkError = new ApiError(409, JSON.stringify({ detail: "agent name already in use" }));
+    renderPage();
+    fireEvent.click(await screen.findByTestId("add-member-button"));
+    fireEvent.change(await screen.findByTestId("agent-select"), { target: { value: "a3" } });
+    fireEvent.click(screen.getByTestId("mode-forked"));
+    await pickProject("p1", "Proyecto Uno");
+    fireEvent.click(screen.getByTestId("add-member-submit"));
+
+    const shown = await screen.findByTestId("add-member-error");
+    expect(shown.textContent).toBe(
+      translate("es", "agents", "forkConflictName", { name: "Grace (copia)" }),
+    );
+    // Y no se añade nada al equipo: la primera llamada falló.
+    expect(writes().length).toBe(1);
   });
 
   it("el destino del fork sólo ofrece proyectos reales, no plantillas", async () => {

@@ -48,6 +48,7 @@ from api_server.auth.deps import (
 )
 from api_server.db.domain import Agent, AgentScope, AgentType, HumanAgentConfig
 from api_server.db.models import User, UserOrganizationMembership
+from api_server.routers._agent_names import flush_agent_or_conflict
 from api_server.routers._helpers import (
     get_writable_or_404,
     require_tenant_id,
@@ -258,7 +259,16 @@ async def create_human_agent(
         is_template=True,
     )
     session.add(agent)
-    await session.flush()
+    # El nombre lo da el usuario (no se hereda), pero el índice de la 0126 es el
+    # mismo: sin traducir, un nombre ya usado en el tenant salía como 500.
+    await flush_agent_or_conflict(
+        session,
+        context="human_agent.create",
+        name=agent.name,
+        tenant_id=tenant_id,
+        # `global_tenant_template` ⇒ `project_id` NULO ⇒ índice GLOBAL del tenant.
+        project_id=None,
+    )
 
     cfg = payload.config
     config = HumanAgentConfig(
@@ -417,7 +427,17 @@ async def clone_human_agent_template(
         anchored_version=None,
     )
     session.add(fork)
-    await session.flush()
+    # `payload.name or source.name`: clonar dos veces la misma plantilla humana
+    # repite el nombre heredado y choca con `uq_agents_tenant_name_global_live`
+    # (la copia es `global_tenant_template`, con `project_id` NULO, así que cae en
+    # el índice del TENANT, no en el de proyecto).
+    await flush_agent_or_conflict(
+        session,
+        context="human_agent.clone",
+        name=fork.name,
+        tenant_id=tenant_id,
+        project_id=None,
+    )
 
     # A fresh, tenant-owned config — NEVER linked to the global. The template's
     # planning estimates (response/execution time) ride along in model_config

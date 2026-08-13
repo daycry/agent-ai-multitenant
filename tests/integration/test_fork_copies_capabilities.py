@@ -433,7 +433,16 @@ async def test_fork_does_not_leak_other_tenant_capabilities(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     """Tenant B forkea su propio agente: el fork hereda SOLO los recursos de B;
-    ninguna KB/tool/skill del tenant A aparece en el fork de B."""
+    ninguna KB/tool/skill del tenant A aparece en el fork de B.
+
+    El `name` explícito NO es decorativo: `agent_b` ya es `project_local` de
+    `project_b`, así que forkearlo A SU PROPIO PROYECTO sin renombrar repite el
+    par `(project_b, 'b-dev')` y choca con `uq_agents_tenant_project_name_live`
+    (migración 0126, 2026-07-30). Este test lleva roto desde entonces —el fork
+    salía como 500 y el `.json()` no traía `id`—; lo que comprueba es el
+    AISLAMIENTO de capacidades, no la herencia del nombre, así que se le da uno
+    libre y sigue midiendo lo suyo.
+    """
     seeded = await _seed(migrations_pg_dsn)
     token_b = await _mint(seeded["admin_b"], seeded["tenant_b"])
     headers = {"Authorization": f"Bearer {token_b}"}
@@ -441,14 +450,13 @@ async def test_fork_does_not_leak_other_tenant_capabilities(
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
-        fork = (
-            await client.post(
-                f"/agents/{seeded['agent_b']}/fork",
-                json={"project_id": str(seeded["project_b"])},
-                headers=headers,
-            )
-        ).json()
-        fork_id = fork["id"]
+        response = await client.post(
+            f"/agents/{seeded['agent_b']}/fork",
+            json={"project_id": str(seeded["project_b"]), "name": "b-dev (copia)"},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        fork_id = response.json()["id"]
 
         kbs = (await client.get(f"/agents/{fork_id}/knowledge-bases", headers=headers)).json()
         assert {row["kb_id"] for row in kbs} == {str(seeded["kb_b"])}

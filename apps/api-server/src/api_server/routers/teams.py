@@ -48,6 +48,7 @@ from api_server.capabilities import (
     merge_kbs,
 )
 from api_server.db.domain import Agent, AgentScope, Project, Team, TeamMember
+from api_server.routers._agent_names import flush_agent_or_conflict
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -181,8 +182,14 @@ async def create_team(
 # tenant. Crea un Team `is_builtin=false` enlazado al origen (`forked_from_*`),
 # forkea cada miembro (persona + tools + skills, reusando el helper de fork por
 # agente) al scope destino (project_local | global_tenant_template) y recrea los
-# TeamMember. El built-in original queda intacto (read-only, global). La
-# re-adopción está permitida (cada llamada crea copias nuevas).
+# TeamMember. El built-in original queda intacto (read-only, global).
+#
+# La re-adopción crea copias nuevas, pero desde la migración 0126 NO cabe dos
+# veces en el MISMO destino: ni el nombre del equipo ni el de sus miembros
+# forkeados pueden repetirse en ese espacio de nombres. El equipo se renombra por
+# la petición (`payload.name`); los miembros no tienen dónde, así que readoptar en
+# el mismo proyecto responde 409 y hay que elegir otro destino o quitar de en
+# medio los agentes que ya están. Ver `_agent_names`.
 @router.post("/{source_id}/adopt", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
 async def adopt_team(
     source_id: UUID,
@@ -264,7 +271,10 @@ async def fork_team_into(
         memory_scope=src.memory_scope,  # ADR 0071: hereda la política del origen
     )
     session.add(new_team)
-    await session.flush()
+    # `name or src.name`: adoptar dos veces el mismo equipo sin renombrarlo choca
+    # con `uq_teams_tenant_name_live` (misma migración 0126). El genérico basta
+    # aquí porque el nombre del equipo SÍ es un campo de la petición.
+    await flush_or_conflict(session, context="team.adopt")
 
     # Miembros del origen (team_members no tiene RLS; los agentes built-in son
     # visibles vía la policy de SELECT). Orden estable para reproducibilidad.
@@ -313,7 +323,21 @@ async def fork_team_into(
             anchored_version=None,
         )
         session.add(fork)
-        await session.flush()
+        # Cada MIEMBRO se forkea con el nombre del origen y la petición no tiene
+        # dónde renombrarlo: readoptar el mismo equipo al mismo destino choca aquí
+        # aunque el equipo se haya renombrado. El `hint` dice qué se puede hacer,
+        # porque la sugerencia de nombre sola no es accionable en esta ruta.
+        await flush_agent_or_conflict(
+            session,
+            context="team.adopt.member",
+            name=fork.name,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            hint=(
+                "Es un miembro del equipo que estás adoptando: adopta el equipo en"
+                " otro proyecto, o renombra/borra el agente que ya existe."
+            ),
+        )
         # Clona SABER/HACER/SER (KBs/tools/skills) del agente origen al fork.
         await _clone_agent_capabilities(
             session,

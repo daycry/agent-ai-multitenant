@@ -10,9 +10,23 @@
  * (POST /agents/{id}/fork) hereda automáticamente KBs/tools/skills del origen.
  * El fork siempre aterriza en un proyecto concreto, por eso el selector de
  * proyecto destino es obligatorio — y las plantillas se filtran fuera.
+ *
+ * ## El nombre de la copia
+ *
+ * Hay un índice único parcial `(tenant_id, project_id, name)` sobre los agentes
+ * vivos (migración 0126), así que forkear dos veces el mismo origen al mismo
+ * proyecto choca. La API contesta **409** y NO auto-renombra: el nombre es
+ * identidad (con él se eligen agentes en los `role_map` y al montar equipos), y
+ * renombrar en silencio decide por el usuario algo que luego tiene que deshacer.
+ *
+ * La mitad que le toca a la UI es *sugerir*: el campo arranca con un nombre
+ * libre EN EL DESTINO elegido —de ahí la consulta de agentes, que sólo mira los
+ * del proyecto seleccionado— y sigue siendo editable. Si el usuario lo toca, la
+ * sugerencia se calla; y si aun así choca (una carrera, o un nombre escrito a
+ * mano), el 409 se explica en vez de enseñar el error crudo.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
@@ -28,8 +42,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { namesTakenInProject, suggestForkName } from "@/lib/agents/fork-name";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { Agent } from "./agent-detail-types";
 
@@ -37,6 +53,13 @@ interface ForkProject {
   id: string;
   name: string;
   is_template: boolean;
+}
+
+/** Lo único que hace falta del catálogo para saber qué nombres están cogidos. */
+interface AgentNameRow {
+  id: string;
+  name: string;
+  project_id: string | null;
 }
 
 export function AgentForkDialog({
@@ -51,15 +74,19 @@ export function AgentForkDialog({
   onForked: (newId: string) => void;
 }) {
   const t = useT("agents");
+  const errorText = useErrorText();
   const [projectId, setProjectId] = useState("");
   const [name, setName] = useState("");
+  // Mientras esté en `false`, el campo sigue a la sugerencia; en cuanto el
+  // usuario escribe, manda lo suyo y cambiar de destino ya no le pisa el texto.
+  const [nameEdited, setNameEdited] = useState(false);
 
   useEffect(() => {
     if (open) {
       setProjectId("");
-      setName(t("forkCopySuffix", { name: agent.name }));
+      setNameEdited(false);
     }
-  }, [open, agent.name, t]);
+  }, [open]);
 
   const projectsQuery = useQuery<ForkProject[], ApiError>({
     queryKey: ["projects", "list"],
@@ -69,6 +96,24 @@ export function AgentForkDialog({
   });
   const projects = (projectsQuery.data ?? []).filter((p) => !p.is_template);
 
+  // Misma `queryKey` que el resto del panel: comparte caché con la lista de
+  // agentes, así que abrir el diálogo no suele costar una petición extra.
+  const agentsQuery = useQuery<AgentNameRow[], ApiError>({
+    queryKey: ["agents", "list"],
+    queryFn: () => apiFetch<AgentNameRow[]>("/agents"),
+    enabled: open,
+    refetchOnWindowFocus: false,
+  });
+
+  const suggestedName = useMemo(
+    () => suggestForkName(agent.name, namesTakenInProject(agentsQuery.data ?? [], projectId), t),
+    [agent.name, agentsQuery.data, projectId, t],
+  );
+
+  useEffect(() => {
+    if (open && !nameEdited) setName(suggestedName);
+  }, [open, nameEdited, suggestedName]);
+
   const mutation = useMutation<Agent, ApiError, void>({
     mutationFn: () =>
       apiFetch<Agent>(`/agents/${agent.id}/fork`, {
@@ -77,6 +122,16 @@ export function AgentForkDialog({
       }),
     onSuccess: (fork) => onForked(fork.id),
   });
+
+  // 409 = el nombre ya existe en el destino (la API no renombra sola). Se dice
+  // QUÉ nombre choca, porque el campo para cambiarlo está justo encima. Para el
+  // resto, `errorText`: esto pintaba `mutation.error.message`, que es el crudo
+  // `api 409: {"detail":…}` — lo que prod-16 `task_prod16_05` vino a quitar.
+  const errorMessage = !mutation.isError
+    ? null
+    : mutation.error?.status === 409
+      ? t("forkConflictName", { name: name.trim() || agent.name })
+      : errorText(mutation.error);
 
   return (
     <Dialog
@@ -100,9 +155,15 @@ export function AgentForkDialog({
             <Input
               id="fork-name"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setNameEdited(true);
+                setName(e.target.value);
+              }}
               data-testid="fork-agent-name"
             />
+            <p className="text-muted-foreground text-xs" data-testid="fork-agent-name-help">
+              {t("forkNameHelp")}
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="fork-project">{t("forkProjectLabel")}</Label>
@@ -125,12 +186,12 @@ export function AgentForkDialog({
               </p>
             )}
           </div>
-          {mutation.isError && (
+          {errorMessage && (
             <p
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="fork-agent-error"
             >
-              {mutation.error?.message ?? t("forkError")}
+              {errorMessage}
             </p>
           )}
         </DialogBody>
