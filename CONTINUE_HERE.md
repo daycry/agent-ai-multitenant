@@ -1,6 +1,6 @@
 # CONTINUE HERE — dónde retomar el trabajo
 
-> **Última actualización: 2026-08-12** · rama `work/validacion-cortex-seguridad-2026-07-30`
+> **Última actualización: 2026-08-13** · rama `work/validacion-cortex-seguridad-2026-07-30`
 >
 > Este archivo es un **puntero**, no una copia del estado. La fuente de verdad es
 > el frontmatter de `docs/roadmap/*.md`. Si algo de aquí contradice a un
@@ -9,26 +9,50 @@
 > es el modo de fallo nº1 de
 > [verificar-antes-de-implementar.md](docs/03-guides/verificar-antes-de-implementar.md).
 >
-> Todas las cifras de abajo se midieron el 2026-08-12 con los comandos que
+> Todas las cifras de abajo se midieron el 2026-08-12 (el estado del despliegue, el 2026-08-13) con los comandos que
 > aparecen junto a ellas. Lo que no se pudo medir se dice, no se estima.
 
 ## En una frase
 
-La rama lleva **17 migraciones nuevas** sobre `origin/master`, entre ellas **cinco
-conversiones a tabla particionada que copian la tabla entera bajo
-`ACCESS EXCLUSIVE`** — o sea que el redespliegue de hoy **no es un `up -d`**: hay
-que parar el stack, medir `executions` y seguir el runbook.
+**La rama está DESPLEGADA desde el 2026-08-13** (antes lo estaba desde el
+2026-07-28). El stack corre la cabeza de la rama y la BD va por la última
+migración; comprueba las dos cosas con los comandos del §2 antes de fiarte de
+esta frase.
+
+Lo que sigue abajo describe **el despliegue que ya se hizo**, no uno pendiente.
+Se conserva porque el §1 es el inventario de riesgos que hay que releer el día
+que se despliegue en OTRA máquina o se restaure un backup anterior a las cinco
+conversiones a particionado — ahí sí vuelve a aplicar entero.
 
 El número de commits sin empujar no se escribe aquí a propósito: cambia con cada
 commit, así que cualquier cifra escrita queda falsa antes de que nadie la lea. Ya
 pasó (`git rev-list --count origin/master..HEAD` decía 19 mientras esta frase
 decía 18). Si lo necesitas, mídelo con ese comando.
-El último despliegue real fue el **2026-07-28**; todo lo del 30 de julio al 10 de
-agosto está sin desplegar.
 
-## Lo primero que hay que saber — riesgos del despliegue de hoy
+> **Cómo fue el despliegue del 2026-08-13**, para que el siguiente sea más corto:
+> las cinco conversiones a particionado YA estaban aplicadas (`executions` con sus
+> seis particiones), así que sólo quedaba la `0139` — **5 segundos**, sin ventana.
+> Se desplegó con `--scale orchestrator=0` sobre 0 tareas en vuelo y 0
+> reclamaciones huérfanas, y el orchestrator se restauró después comprobando que
+> no había nada que despachar. Cinco imágenes reconstruidas; `agent-runtime` NO,
+> porque el commit no tocó ninguna de sus entradas de build (los cuatro paquetes
+> `shared-*`, su `pyproject.toml` y su `agent_runtime/`) y reconstruirla habría
+> dado una imagen idéntica.
+>
+> **Y una trampa nueva del juego de ficheros compose**: el stack incluye
+> `manuals.yml`, así que desde el 2026-08-12 hay que añadir
+> `-f docker/docker-compose.monitoring.apps.yml`. Sin él, el `up -d` le QUITA al
+> worker el mount del textfile-collector y las cuatro métricas de aplicación
+> dejan de existir **en silencio**. Verificado tras el despliegue: el drop-dir en
+> 1777 con tres `.prom` de dos escritores distintos, y las series en Prometheus.
 
-Por orden de «cuánto duele si lo ignoras».
+## Inventario de riesgos de despliegue (el del 2026-08-13 ya pasó)
+
+Por orden de «cuánto duele si lo ignoras». **No es una lista de pendientes**: los
+puntos 1, 2, 3 y 6 se ejecutaron el 2026-08-13 y están resueltos en ESTA máquina.
+Se conservan porque vuelven a aplicar enteros al desplegar en otra máquina, al
+restaurar un backup anterior a las cinco conversiones a particionado, o al
+preparar el despliegue de producción. Los puntos 4, 5 y 7 **siguen abiertos**.
 
 1. **Las cinco migraciones de particionado copian tablas enteras.** `0131`
    (`guardrail_events`), `0134` (`notification_logs`), `0135`
@@ -106,17 +130,19 @@ Por orden de «cuánto duele si lo ignoras».
 
 ## Estado de la rama respecto a `origin/master`
 
-```
-git rev-list --left-right --count origin/master...HEAD   # →  1  18
+```bash
+git rev-list --left-right --count origin/master...HEAD   # detrás  delante
 ```
 
-- **18 commits por delante**, del 2026-07-30 al 2026-08-10, 1208 ficheros
-  tocados.
+**El número no se escribe aquí**, por lo mismo que en «En una frase»: sube con
+cada commit. Mídelo. Lo que sí es estable y sí importa:
+
 - **1 commit por detrás**: `72fe899b`, el merge del PR #66. Hay que integrarlo
   antes de abrir el PR de esta rama.
 - El **PR #66 está mergeado** desde el 2026-07-30, así que el criterio 5 de
   cierre («PR mergeado») dejó de bloquear a los planes anteriores a esa fecha.
-  Los 18 commits de arriba **necesitan su propio PR**.
+- Los commits de esta rama —del 2026-07-30 en adelante— **necesitan su propio
+  PR**, y hasta que se mergee ningún plan posterior puede pasar a `completed`.
 
 ## Estado del roadmap (regenerable, ver §«Comprobar»)
 
