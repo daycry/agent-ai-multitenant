@@ -1,0 +1,17 @@
+# El Dockerfile hace `COPY --from=deps /app/node_modules` y DESPUÉS `COPY . .`.
+# Sin este fichero, un build lanzado desde un checkout de trabajo —donde sí hay
+# `node_modules/` y `.next/` locales— pisa las dependencias que acaba de instalar
+# `npm ci` con las del portátil de quien construye: en Windows o macOS eso mete
+# binarios nativos de otra plataforma en una imagen Linux.
+#
+# En CI no se notaba porque el checkout está limpio, así que el build era
+# reproducible SOLO allí. Esa asimetría es justo lo que hace que un fallo
+# aparezca en el sitio donde nadie lo puede reproducir.
+node_modules
+.next
+tsconfig.tsbuildinfo
+
+# Ni las pruebas de navegador ni su config entran en la imagen: el runtime sirve
+# el bundle standalone y nada más.
+e2e
+playwright.config.ts

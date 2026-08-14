@@ -2,7 +2,7 @@
   "name": "admin-panel",
   "version": "0.0.0",
   "private": true,
-  "description": "System Admin panel for the agentic platform (Next.js 14 App Router).",
+  "description": "System Admin panel for the agentic platform (Next.js 15 App Router).",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
@@ -23,8 +23,8 @@
     "clsx": "^2.1.0",
     "github-slugger": "^2.0.0",
     "lucide-react": "^0.400.0",
-    "mermaid": "^11.15.0",
-    "next": "14.2.35",
+    "mermaid": "^11.16.1",
+    "next": "15.5.23",
     "qrcode.react": "^4.2.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
@@ -44,12 +44,43 @@
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.0",
     "eslint": "^8.57.0",
-    "eslint-config-next": "14.2.35",
+    "eslint-config-next": "15.5.23",
     "jsdom": "^27.0.1",
     "openapi-typescript": "^7.4.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.9"
+  },
+  "//overrides": [
+    "JSON no admite comentarios, así que la justificación de cada override vive aquí.",
+    "postcss: `next` lo declara PINEADO EXACTO (next@15.5.23 depende de postcss 8.4.31),",
+    "así que subir `next` no arrastra el parche y npm instala una copia anidada vulnerable",
+    "en node_modules/next/node_modules/postcss. El override la sube a la línea 8.5.x, que",
+    "cierra cuatro avisos de postcss, dos de ellos HIGH — el umbral con el que CI corre",
+    "`npm audit --omit=dev --audit-level=high`:",
+    "  GHSA-6g55-p6wh-862q (HIGH, <=8.5.11) lectura arbitraria de ficheros vía sourceMappingURL",
+    "  GHSA-r28c-9q8g-f849 (HIGH, <=8.5.17) path traversal al auto-cargar el source map previo",
+    "  GHSA-fxqj-rqcc-2cmp (MOD, <=8.5.22) fix incompleto del anterior cuando `from` no se pasa",
+    "  GHSA-qx2v-qp2m-jg93 (MOD, <8.5.10)  XSS por </style> sin escapar al serializar CSS",
+    "El salto 8.4.31 -> 8.5.x es de minor dentro de semver y el resto del árbol (tailwind,",
+    "autoprefixer, vite) ya resolvía a 8.5.x: la copia de `next` era la única atrasada.",
+    "Está acotado a `next` a propósito, para no forzar la versión de nadie más que la necesite.",
+    "",
+    "sharp: lo arrastra `next` como optionalDependency (^0.34.3) para optimizar imágenes.",
+    "El fix de GHSA-f88m-g3jw-g9cj (HIGH) está en 0.35.0, que para sharp es MAJOR, así que el",
+    "rango de next no llega nunca — hace falta forzarlo. Cierra las cuatro CVE de libvips que",
+    "sharp hereda: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590 y CVE-2026-35591.",
+    "Nuestro impacto real es nulo: el panel no importa `next/image` en ningún sitio y no hay",
+    "bloque `images` en next.config.js, así que ese binario nativo no llega a ejecutarse. Se",
+    "sube igualmente porque `npm ci` SÍ lo instala y por tanto viaja dentro de la imagen del",
+    "panel: dejar una libvips vulnerable en el contenedor es superficie aunque hoy nadie la",
+    "invoque, y el día que alguien añada un <Image> pasaría a ser explotable sin que se note."
+  ],
+  "overrides": {
+    "next": {
+      "postcss": "^8.5.23",
+      "sharp": "^0.35.3"
+    }
   }
 }

@@ -2486,6 +2486,45 @@ export const dictionary = {
     colActions: { es: "Acciones", en: "Actions" },
     deleteAria: { es: "Borrar {name}", en: "Delete {name}" },
   },
+
+  /**
+   * Ficha de coste de un plan (`plan-cost-section.tsx`) — carril D.
+   *
+   * Sólo el AVISO de estimación con el modelo por defecto. El resto de la ficha
+   * (cabeceras de tabla, «Total», «ID», «Modelo») sigue cableada: son términos
+   * que se escriben igual en los dos idiomas y migrarlos exige tocar la
+   * allowlist `identicalOnPurpose` de `i18n.test.ts`, que es de otro carril.
+   * Lo que NO puede pasar es que texto NUEVO nazca cableado, y eso es lo que
+   * esta entrada evita.
+   *
+   * Por qué el aviso existe: `resolve_plan_task_models` devuelve `{}` cuando el
+   * proyecto no tiene equipo (sin agentes por rol no hay cadena agente → equipo
+   * → proyecto → plataforma que resolver, ADR 0065), y entonces TODAS las
+   * tareas se tarifican con el modelo por defecto. La tabla se ve igual de
+   * medida en los dos casos, así que quien la lee no distingue «40 EUR con
+   * Opus» de «no sé con qué modelo, te lo cobro como gpt-4o».
+   *
+   * El texto dice «la causa habitual» y no «este proyecto no tiene equipo»
+   * porque el panel NO puede afirmarlo: con lo que hoy devuelve
+   * `/cost-breakdown` sólo se ve que ninguna fila trae un modelo distinto del
+   * por defecto, y eso también pasa —legítimamente— si el equipo existe y todos
+   * sus agentes heredan justo el modelo por defecto. Afirmar la causa sería
+   * cambiar un número engañoso por un diagnóstico falso.
+   */
+  planCost: {
+    defaultOnlyTitle: {
+      es: "Ninguna tarea tiene modelo propio: todas se estiman con el modelo por defecto «{model}».",
+      en: "No task has a model of its own: all of them are estimated with the default model «{model}».",
+    },
+    defaultOnlyCause: {
+      es: "La causa habitual es que el proyecto no tenga equipo asignado: sin equipo no hay agente por rol del que heredar el modelo (ADR 0065), y entonces estas cifras son de relleno, no medidas.",
+      en: "The usual cause is a project with no team assigned: with no team there is no per-role agent to inherit the model from (ADR 0065), and then these figures are filler, not measured.",
+    },
+    defaultOnlyLink: {
+      es: "Revisar el equipo del proyecto",
+      en: "Check the project's team",
+    },
+  },
 } as const satisfies Dictionary;
 
 /** La forma exacta del diccionario, para derivar las claves válidas. */

@@ -134,7 +134,7 @@ export default function PlanDetailPage() {
       <PlanCodeDiffSection projectId={projectId} planId={plan.id} />
       <SummarySection summary={spec.summary} />
       <EstimatesSection estimates={spec.estimates} />
-      <CostBreakdownSection planId={plan.id} />
+      <CostBreakdownSection planId={plan.id} projectId={projectId} />
       <SyncToKanbanSection
         planId={plan.id}
         status={plan.status}

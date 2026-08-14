@@ -294,6 +294,12 @@ el problema ya esté documentado.
   cinco tablas del ADR 0151 no tienen partición `DEFAULT` y detrás del mes en
   curso no hay nada. Usar `ensure_partition_for`, que reusa el DDL de producción
   (con RLS); crearla a mano deja una partición SIN aislamiento entre tenants.
+- [singleton-httpx-atado-al-event-loop.md](./singleton-httpx-atado-al-event-loop.md)
+  — una guarda de fuga entre tenants que pasa SOLA y falla EN LOTE con un 500: el
+  `httpx.AsyncClient` en `lru_cache` conserva conexiones de un loop ya cerrado
+  (`RuntimeError: Event loop is closed`), y ese error no degrada a BM25 como sí
+  hace un `httpx.HTTPError`. Antes de creerse la contaminación entre tests, mira
+  qué caché global de PRODUCCIÓN sobrevive entre peticiones.
 - [pytest-en-segundo-plano-no-avisa-de-que-docker-murio.md](./pytest-en-segundo-plano-no-avisa-de-que-docker-murio.md)
   — una hora de pytest quemando CPU contra una base que ya no existía: `-q` con
   stdout redirigido no vuelca los puntos, y las fixtures reintentan la conexión,

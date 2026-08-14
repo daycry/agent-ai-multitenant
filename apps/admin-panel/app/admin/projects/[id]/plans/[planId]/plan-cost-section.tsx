@@ -5,9 +5,11 @@
 // hotspot residual de 1248 líneas — auditoría 2026-07-10). No es una ruta
 // (nombre ≠ page.tsx dentro de app/**); testids intactos.
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Cost breakdown (task_03_24)
@@ -50,7 +52,41 @@ interface CostBreakdownResponse {
   };
 }
 
-export function CostBreakdownSection({ planId }: { planId: string }) {
+/**
+ * ¿Se ha tarificado TODO el plan con el modelo por defecto? (carril D)
+ *
+ * El backend resuelve el modelo de cada tarea por la cadena agente → equipo →
+ * proyecto → plataforma (ADR 0065) y sólo cae al `default_model_id` para las
+ * tareas que no resuelve. Cuando el proyecto no tiene equipo,
+ * `resolve_plan_task_models` devuelve `{}` y caen TODAS: la tabla sigue
+ * pintándose igual de segura, con un modelo que nadie eligió.
+ *
+ * La respuesta de `/cost-breakdown` no trae hoy ninguna señal de esa caída —
+ * `model_id` es el modelo EFECTIVO, y una tarea resuelta a `gpt-4o` y otra
+ * caída a `gpt-4o` son indistinguibles. Lo que sí se deriva de lo que ya llega
+ * es esta condición más débil: **ninguna fila trae un modelo distinto del por
+ * defecto**. Es la que se usa aquí, y por eso el aviso habla de «causa
+ * habitual» en vez de afirmar que no hay equipo: con un equipo cuyos agentes
+ * hereden justo el modelo por defecto, esta función también da `true`, y ahí el
+ * número SÍ está medido.
+ *
+ * Con cero tareas no hay nada que avisar: de eso ya habla el estado vacío.
+ */
+export function pricedWithDefaultModelOnly(ai: CostBreakdownResponse["ai"]): boolean {
+  if (ai.tasks.length === 0) return false;
+  return ai.tasks.every((task) => task.model_id === ai.default_model_id);
+}
+
+export function CostBreakdownSection({
+  planId,
+  projectId,
+}: {
+  planId: string;
+  // Sólo para enlazar al sitio donde se asigna el equipo: el aviso sin el
+  // «dónde se arregla» deja al lector igual de atascado que sin aviso.
+  projectId: string;
+}) {
+  const t = useT("planCost");
   const query = useQuery({
     queryKey: ["plan-cost-breakdown", planId],
     queryFn: () => apiFetch<CostBreakdownResponse>(`/plans/${planId}/cost-breakdown`),
@@ -146,6 +182,28 @@ export function CostBreakdownSection({ planId }: { planId: string }) {
                 Coste IA · {ai.currency} · modelo por defecto{" "}
                 <span className="font-mono">{ai.default_model_id}</span>
               </p>
+              {/*
+                El aviso va ANTES de la tabla a propósito: debajo se leería
+                después de haber creído los números.
+              */}
+              {pricedWithDefaultModelOnly(ai) ? (
+                <div
+                  className="mb-2 rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400"
+                  data-testid="plan-cost-ai-default-only"
+                >
+                  <p className="font-semibold">
+                    {t("defaultOnlyTitle", { model: ai.default_model_id })}
+                  </p>
+                  <p className="mt-1">{t("defaultOnlyCause")}</p>
+                  <Link
+                    href={`/admin/projects/${projectId}`}
+                    className="mt-1 inline-block underline underline-offset-2"
+                    data-testid="plan-cost-ai-default-only-link"
+                  >
+                    {t("defaultOnlyLink")}
+                  </Link>
+                </div>
+              ) : null}
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="text-left">

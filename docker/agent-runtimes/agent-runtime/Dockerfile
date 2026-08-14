@@ -20,7 +20,13 @@
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
 # deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
 # (ecosistema docker, .github/dependabot.yml).
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
+# 2026-08-14: digest refrescado (era `57cd7c3a…`). Ese snapshot traía
+# `libexpat1` 2.7.1-2 con cuatro CVE HIGH —CVE-2025-59375, CVE-2026-25210,
+# CVE-2026-45186 y CVE-2026-56408— cuyo fix (2.8.2-1~deb13u1) ya estaba en el
+# archivo de Debian. El pin no se quita, se ADELANTA: verificado con Trivy que
+# el digest nuevo trae CERO HIGH/CRITICAL con fix. Es el riesgo 3 de prod-11 en
+# estado puro — un pin sin refresco congela las CVE de la base.
+FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -88,7 +94,7 @@ COPY docker/agent-runtimes/agent-runtime/agent_runtime/ ./agent_runtime/
 RUN pip install --no-cache-dir -c /constraints.txt .
 
 # ---- runtime: slim image, non-root, no build tools ----------------
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
+FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime" \
       org.opencontainers.image.version="v1" \

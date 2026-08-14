@@ -78,6 +78,43 @@ async def test_closing_a_shared_embedder_does_not_kill_the_pool() -> None:
         reset_shared_embed_client_cache()
 
 
+def test_the_shared_client_is_rebuilt_when_the_event_loop_changes() -> None:
+    """Un singleton de proceso, sí; de POR VIDA a través de loops, no.
+
+    El pool de httpx está atado al loop donde se abrieron sus conexiones. Si el
+    proceso abre un loop nuevo (`asyncio.run` por tarea Celery; un test asyncio
+    por caso) y se le devuelve el cliente cacheado, la primera petición que
+    intente reciclar una conexión keep-alive muerta revienta con
+    `RuntimeError: Event loop is closed` — y ese error NO degrada a BM25 como sí
+    hace un `httpx.HTTPError`: sale por arriba como un 500. Es lo que hacía que
+    `test_rag_search_does_not_leak_ungranted_kb` pasara solo y fallara en lote.
+    """
+    import asyncio
+
+    from api_server.ingestion.embed_client import (
+        get_shared_embed_client,
+        reset_shared_embed_client_cache,
+    )
+
+    reset_shared_embed_client_cache()
+    try:
+
+        async def _acquire_twice() -> tuple[object, object]:
+            # Dentro de UN loop el cliente se reutiliza: es el punto del singleton.
+            return (get_shared_embed_client(), get_shared_embed_client())
+
+        first_a, first_b = asyncio.run(_acquire_twice())
+        assert first_a is first_b
+
+        second_a, _ = asyncio.run(_acquire_twice())
+        assert second_a is not first_a, (
+            "el cliente del loop anterior sobrevivió: sus conexiones están atadas"
+            " a un loop ya cerrado"
+        )
+    finally:
+        reset_shared_embed_client_cache()
+
+
 def test_the_singleton_has_exactly_one_home() -> None:
     """Una sola definición, y por tanto una sola ``lru_cache``.
 
