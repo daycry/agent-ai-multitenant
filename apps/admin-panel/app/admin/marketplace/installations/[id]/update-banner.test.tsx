@@ -29,17 +29,15 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
-import {
-  UpdateBanner,
-  deltaWidens,
-  pendingTypes,
-  type UpdateCheck,
-} from "@/app/admin/marketplace/installations/[id]/update-banner";
+import { UpdateBanner } from "@/app/admin/marketplace/installations/[id]/update-banner";
+import type { UpdateCheck } from "@/components/marketplace/update-check";
 
 const INSTALLATION_ID = "inst-1";
 
 const AL_DIA: UpdateCheck = {
   installation_id: INSTALLATION_ID,
+  listing_id: "listing-1",
+  name: "acme-checker",
   installed_version: "1.2.0",
   latest_version: "1.2.0",
   target_version: null,
@@ -64,6 +62,27 @@ const CON_MAS_PERMISOS: UpdateCheck = {
   requires_consent: true,
 };
 
+/**
+ * Lo único más nuevo cruza un MAJOR y nadie ha pedido el opt-in.
+ *
+ * **`update_available` va en `false`, y eso es lo que dice el backend de
+ * verdad**: la propiedad es literalmente `target_version is not None`
+ * (`versioning.py::UpdateAssessment`), así que sin destino elegible vale
+ * `false` aunque `outdated` sea `true`. El fixture anterior lo ponía a `true`,
+ * que es un estado que el servidor no emite nunca — y con esa mentira el test
+ * daba por buena una UI en la que el banner NO se pintaba: gateaba por
+ * `update_available`, o sea que el aviso de versión mayor y su opt-in eran
+ * invisibles en producción mientras el test iba en verde.
+ */
+const SOLO_MAJOR: UpdateCheck = {
+  ...AL_DIA,
+  latest_version: "2.0.0",
+  target_version: null,
+  outdated: true,
+  update_available: false,
+  latest_is_major_bump: true,
+};
+
 function montar(check: UpdateCheck) {
   apiFetchMock.mockImplementation((path: string) => {
     if (String(path).includes("update-check")) return Promise.resolve(check);
@@ -82,26 +101,9 @@ afterEach(() => {
   apiFetchMock.mockReset();
 });
 
-describe("lógica pura del delta", () => {
-  it("quitar un permiso NO cuenta como ampliación: no hay nada que decidir", () => {
-    const soloQuita = { added: [], removed: [{ type: "network" }], changed: [] };
-    expect(deltaWidens(soloQuita)).toBe(false);
-    expect(pendingTypes(soloQuita)).toEqual([]);
-  });
-
-  it("añadir o cambiar SÍ amplía, y ambos entran en los tipos a consentir", () => {
-    expect(deltaWidens(CON_MAS_PERMISOS.permission_delta)).toBe(true);
-    expect(pendingTypes(CON_MAS_PERMISOS.permission_delta)).toEqual([
-      "allowed_domains",
-      "filesystem_write",
-    ]);
-  });
-
-  it("sin delta no amplía nada (una instalación sin histórico previo)", () => {
-    expect(deltaWidens(null)).toBe(false);
-    expect(pendingTypes(undefined)).toEqual([]);
-  });
-});
+// La lógica pura (deltaWidens / pendingTypes / hasUpdate…) se mudó a
+// `components/marketplace/update-check.ts` cuando el catálogo tuvo que hacerse
+// las mismas preguntas, y sus tests con ella: `update-check.test.ts`.
 
 describe("el banner", () => {
   it("NO se pinta cuando la instalación está al día", async () => {
@@ -154,14 +156,7 @@ describe("el banner", () => {
   });
 
   it("regla 2: un salto de major NO ofrece actualizar, ofrece verlo primero", async () => {
-    montar({
-      ...AL_DIA,
-      latest_version: "2.0.0",
-      target_version: null, // sin opt-in el servidor no propone destino
-      outdated: true,
-      update_available: true,
-      latest_is_major_bump: true,
-    });
+    montar(SOLO_MAJOR);
     await screen.findByTestId("update-banner");
     expect(screen.getByTestId("update-banner-major")).toBeTruthy();
     expect(screen.getByTestId("update-banner-allow-major")).toBeTruthy();
@@ -169,14 +164,7 @@ describe("el banner", () => {
   });
 
   it("el opt-in de major re-consulta con allow_major=true", async () => {
-    montar({
-      ...AL_DIA,
-      latest_version: "2.0.0",
-      target_version: null,
-      outdated: true,
-      update_available: true,
-      latest_is_major_bump: true,
-    });
+    montar(SOLO_MAJOR);
     fireEvent.click(await screen.findByTestId("update-banner-allow-major"));
     await waitFor(() => {
       const llamadas = apiFetchMock.mock.calls.map((c) => String(c[0]));

@@ -16,6 +16,11 @@
  * El backend ya venía preparado: `permission_delta` y `requires_consent` en la
  * respuesta de `update-check` existen precisamente para pintarse aquí.
  *
+ * La mitad del CATÁLOGO llegó después (`../../catalog-updates.tsx`), y con ella
+ * los tipos y predicados se mudaron a `components/marketplace/update-check.ts`:
+ * los dos avisos tienen que estar de acuerdo sobre si una actualización pide
+ * más permisos, y dos copias de esa aritmética no lo estarían mucho tiempo.
+ *
  * ## Las tres reglas que hacen que el banner no mienta
  *
  * 1. **El delta se enseña ANTES de ofrecer el botón, no después.** Actualizar
@@ -35,48 +40,20 @@ import { AlertTriangle, ArrowUpCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  awaitsMajorOptIn,
+  deltaWidens,
+  hasUpdate,
+  pendingTypes,
+  proposedVersion,
+  requiresConsent,
+  updateCheckKey,
+  updateCheckPath,
+  type UpdateCheck,
+} from "@/components/marketplace/update-check";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
-
-export interface PermissionDelta {
-  added: { type: string; value?: unknown }[];
-  removed: { type: string; value?: unknown }[];
-  changed: { type: string; from: unknown; to: unknown }[];
-}
-
-export interface UpdateCheck {
-  installation_id: string;
-  installed_version: string;
-  latest_version: string;
-  target_version: string | null;
-  outdated: boolean;
-  update_available: boolean;
-  latest_is_major_bump: boolean;
-  permission_delta: PermissionDelta | null;
-  requires_consent: boolean;
-}
-
-/** ¿Este delta amplía algo? Quitar un permiso no pide decisión: no amplía nada. */
-export function deltaWidens(delta: PermissionDelta | null | undefined): boolean {
-  if (!delta) return false;
-  return delta.added.length > 0 || delta.changed.length > 0;
-}
-
-/**
- * Los tipos de permiso sobre los que el update va a preguntar.
- *
- * Espeja `marketplace/update_consent.py::pending_consent_types`. Se duplica en
- * el cliente por lo mismo que el diff de la cola de revisión: pintarlo exige
- * tenerlo antes de llamar, y pedir un endpoint por fila sería una ida y vuelta
- * por instalación.
- */
-export function pendingTypes(delta: PermissionDelta | null | undefined): string[] {
-  if (!delta) return [];
-  return [
-    ...new Set([...delta.added.map((p) => p.type), ...delta.changed.map((c) => c.type)]),
-  ].sort();
-}
 
 export function UpdateBanner({ installationId }: { installationId: string }) {
   const t = useT("marketplaceDeploy");
@@ -86,11 +63,8 @@ export function UpdateBanner({ installationId }: { installationId: string }) {
   const [allowMajor, setAllowMajor] = useState(false);
 
   const check = useQuery<UpdateCheck>({
-    queryKey: ["marketplace-update-check", installationId, allowMajor],
-    queryFn: () =>
-      apiFetch<UpdateCheck>(
-        `/marketplace/installations/${installationId}/update-check?allow_major=${allowMajor}`,
-      ),
+    queryKey: updateCheckKey(installationId, allowMajor),
+    queryFn: () => apiFetch<UpdateCheck>(updateCheckPath(installationId, allowMajor)),
   });
 
   const update = useMutation({
@@ -111,14 +85,20 @@ export function UpdateBanner({ installationId }: { installationId: string }) {
   const data = check.data;
   // Nada que ofrecer: ni banner. Una franja permanente diciendo «estás al día»
   // enseña a ignorar la franja, y el día que diga algo tampoco se leerá.
-  if (!data || !data.update_available) return null;
+  //
+  // La condición es `hasUpdate`, NO `update_available`: éste último es
+  // `target_version is not None` en el backend, así que un salto de MAJOR
+  // pendiente del opt-in lo trae en `false`. Gatear por él escondía el caso
+  // que la regla 2 dice cubrir — el banner no se pintaba y el opt-in de major
+  // no llegaba a existir en pantalla.
+  if (!data || !hasUpdate(data)) return null;
 
   const delta = data.permission_delta;
   const pending = pendingTypes(delta);
-  const needsConsent = data.requires_consent || pending.length > 0;
+  const needsConsent = requiresConsent(data);
   // Un salto de major solo se propone si YA se pidió el opt-in; si no, se
   // anuncia que existe y se ofrece el interruptor.
-  const majorOnly = data.latest_is_major_bump && data.target_version === null;
+  const majorOnly = awaitsMajorOptIn(data);
 
   const consentAll = () => Object.fromEntries(pending.map((type) => [type, "grant"]));
 
@@ -131,7 +111,7 @@ export function UpdateBanner({ installationId }: { installationId: string }) {
         <ArrowUpCircle className="text-warning h-5 w-5 shrink-0" />
         <span className="font-medium" data-testid="update-banner-headline">
           {t("updateAvailable", {
-            version: data.target_version ?? data.latest_version,
+            version: proposedVersion(data),
             installed: data.installed_version,
           })}
         </span>

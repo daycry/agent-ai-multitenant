@@ -314,15 +314,20 @@ retire_deployment(session, *, deployment_id, actor) -> int`. Por tipo:
 
 ### `task_mkt2_10` — Cola de revisión del admin + publicar desde la UI
 
-- [ ] **Título**: `app/admin/marketplace/review/page.tsx` (cola) + el flujo publicar deja el listing en `pending_review`
-- ⚠️ **DESMARCADA el 2026-08-13**, tras verificar las 15 casillas contra el código.
-  La cola existe y es sólida (`review/page.tsx`, 423 líneas, + `review-types.ts`
-  con el delta de permisos puro). Lo que falta es **la otra mitad de la casilla**:
-  «y la UI lo dice (“pendiente de revisión”, no “publicado”)». `grep -rn "pendiente
-de revisi"` sobre todos los `.tsx`/`.ts` da **0 resultados en todo el repo**, y
-  una segunda pasada que intentó refutarlo lo confirmó buscando por funcionalidad,
-  no por ruta. Quien publique un listing sigue leyendo que está publicado cuando en
-  realidad espera revisión.
+- [x] **Título**: `app/admin/marketplace/review/page.tsx` (cola) + el flujo publicar deja el listing en `pending_review`
+- ✅ **Completada el 2026-08-18** con la mitad que faltaba: **la UI ya dice
+  «pendiente de revisión», no «publicado»**. `private/page.tsx` avisa ANTES de
+  pulsar de que publicar deja el listing en cola, y el resultado se decide con el
+  `review_status` que devuelve el backend —no con el hecho de que la petición
+  fuese bien— diciendo quién lo revisa y qué pasa mientras tanto: mientras espera
+  **no lo ve nadie más que su tenant**, ni siquiera aquéllos con los que se
+  comparta (`catalog_visibility_clause` = `published OR propio`), que era la
+  consecuencia que la palabra «publicado» tapaba del todo. Cada fila del catálogo
+  privado —y del catálogo general, donde también aparecen los propios sin
+  publicar— enseña su estado real con su motivo si fue un rechazo
+  (`components/marketplace/review-status-badge.tsx`, vocabulario y color
+  compartidos con la cola del admin). 7 tests nuevos en
+  `private/page.test.tsx` + 3 en `page.test.tsx`.
 - **Tiempo**: 5 h · **Complejidad**: m
 - Cola con diff del manifest cuando es versión nueva de algo publicado
   (reutiliza el helper de diff de la Fase 4 si ya existe; si no, muestra el
@@ -359,16 +364,21 @@ de revisi"` sobre todos los `.tsx`/`.ts` da **0 resultados en todo el repo**, y
 
 ### `task_mkt2_12` — Actualizar instalación: re-consentir SOLO el delta + refrescar despliegues
 
-- [ ] **Título**: `POST /marketplace/installations/{id}/update` con re-consentimiento del delta y refresco de despliegues; rollback por el mismo mecanismo
-- ⚠️ **DESMARCADA el 2026-08-13**, por la misma verificación. El **backend está
-  completo y comprobado línea a línea**: `GET /installations/{id}/update-check`
-  (con `allow_major` y `permission_delta`), `POST …/update`, y `_delta_against_pin`
-  calculando el delta contra la fila de versión PINADA con degradación honesta a
-  `granted_permissions`. La UI, en cambio, se entregó **sólo en la ficha de
-  instalación** (`installations/[id]/update-banner.tsx`, 11 tests): el **catálogo**
-  (`app/admin/marketplace/page.tsx`) no llama ni a `update-check` ni a `update`, así
-  que quien mira el catálogo no se entera de que tiene actualizaciones pendientes.
-  Confirmado por refutación: no está en ningún otro sitio.
+- [x] **Título**: `POST /marketplace/installations/{id}/update` con re-consentimiento del delta y refresco de despliegues; rollback por el mismo mecanismo
+- ✅ **Completada el 2026-08-18** con el aviso del **catálogo**, que era lo que
+  faltaba: `app/admin/marketplace/catalog-updates.tsx` pregunta por cada
+  instalación viva y pinta (a) un aviso agregado FUERA de las pestañas —«N
+  instalaciones con una versión más nueva», cuántas piden permisos nuevos, y un
+  enlace por fila a su ficha— y (b) un distintivo en la tarjeta de la capacidad
+  atrasada. El catálogo AVISA y la ficha DECIDE: aplicar exige enseñar el delta
+  antes del botón, y eso no cabe en una lista. La aritmética se sacó a
+  `components/marketplace/update-check.ts` para que las dos superficies no puedan
+  discrepar. **De camino salió un defecto real**: la ficha gateaba por
+  `update_available`, que en el backend es `target_version is not None`, así que
+  un salto de MAJOR pendiente del opt-in (`update_available=false`,
+  `outdated=true`) **no pintaba banner** — el aviso de versión mayor y su opt-in
+  eran invisibles, y el test que los cubría usaba un fixture que el servidor no
+  emite nunca. Corregido con `hasUpdate()` y el fixture realista.
 - **Tiempo**: 8 h · **Complejidad**: l
 - El endpoint compara la versión pinada con la vigente: permisos nuevos → exige
   el consentimiento de ESOS (los ya concedidos no se re-preguntan; los
@@ -474,11 +484,14 @@ de revisi"` sobre todos los `.tsx`/`.ts` da **0 resultados en todo el repo**, y
   dos: no había ni una llamada a `update-check` ni a `installations/{id}/update` en
   todo `apps/admin-panel`, aunque el backend sí estaba entero.
 
-  **Al día de hoy (2026-08-13)**: el banner de la **ficha** se entregó
-  (`installations/[id]/update-banner.tsx`, 11 tests). El del **catálogo** sigue sin
-  existir, así que la mitad del hallazgo continúa viva y `task_mkt2_12` está
-  DESMARCADA — quien la cerró (yo) la reabrió tras verificarla, que es lo que pedía
-  la nota original.
+  **Cerrado el 2026-08-18**: la ficha se entregó el 2026-08-13
+  (`installations/[id]/update-banner.tsx`) y el catálogo ahora
+  (`catalog-updates.tsx`, 7 tests). El hallazgo deja además una moraleja que
+  sobrevive a la casilla: al cablear la segunda superficie se descubrió que la
+  primera gateaba por `update_available` —que NO significa «hay algo más nuevo»—
+  y por eso escondía los saltos de major; el test que lo cubría pasaba porque su
+  fixture inventaba un estado que el backend no emite. Un test verde sobre un
+  fixture imposible no prueba nada.
 
 - **Tiempo**: 4 h · **Complejidad**: s
 - La referencia cuenta las tres capas y las tres puertas con capturas de flujo;

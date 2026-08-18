@@ -1872,7 +1872,41 @@ export const dictionary = {
       es: "Ver el salto de versión mayor",
       en: "Show the major version jump",
     },
-    updateOutdatedShort: { es: "actualizable", en: "update available" },
+
+    // --- el mismo aviso, en el CATÁLOGO (task_mkt2_12) --------------------
+    // La ficha avisa de UNA instalación; esto avisa de todas a la vez, que es
+    // lo que se ve sin entrar en ninguna. Y no dice «Actualizar» en ningún
+    // sitio: desde una lista sólo se puede llevar al lugar donde el delta de
+    // permisos cabe en pantalla, que es la ficha.
+    catalogUpdatesTitle: {
+      es: "{n} instalación(es) con una versión más nueva disponible",
+      en: "{n} installation(s) with a newer version available",
+    },
+    catalogUpdatesConsent: {
+      es: "{n} de ellas piden permisos que no tienes concedidos: se revisan en su ficha antes de aplicar nada.",
+      en: "{n} of them ask for permissions you have not granted: review them on their page before applying anything.",
+    },
+    catalogUpdatesRow: {
+      es: "{name}: de la {installed} a la {version}",
+      en: "{name}: from {installed} to {version}",
+    },
+    catalogUpdatesRowMajor: {
+      es: "{name}: tienes la {installed} y existe la {version}",
+      en: "{name}: you have {installed} and {version} exists",
+    },
+    catalogUpdatesNeedsConsent: {
+      es: "pide permisos nuevos",
+      en: "asks for new permissions",
+    },
+    catalogUpdatesOpen: { es: "Abrir la instalación", en: "Open the installation" },
+    catalogUpdateChip: {
+      es: "actualizable a {version}",
+      en: "update available: {version}",
+    },
+    catalogUpdateChipMany: {
+      es: "{n} instalaciones actualizables",
+      en: "{n} installations can be updated",
+    },
     // --- el formulario del `config_schema` -------------------------------
     configTitle: { es: "Configuración", en: "Configuration" },
     configHelp: {
@@ -2004,6 +2038,65 @@ export const dictionary = {
     wizardGoToProject: { es: "Ir al proyecto", en: "Go to the project" },
     back: { es: "Atrás", en: "Back" },
     next: { es: "Siguiente", en: "Next" },
+  },
+
+  /**
+   * La revisión de un listing, contada al AUTOR (ADR 0142 D6, `task_mkt2_10`).
+   *
+   * Publicar un listing privado NO lo publica: lo deja en `pending_review` a la
+   * espera de que un System Admin lo mire. La UI decía «Listing publicado. Ya
+   * aparece en tu catálogo privado», y era falso dos veces — porque además la
+   * cláusula de visibilidad del catálogo es `published OR propio`, así que
+   * mientras espera no lo ve NADIE salvo su tenant autor, ni siquiera aquéllos
+   * con los que se comparta por un grant. Este namespace es lo que hace que la
+   * pantalla diga eso en vez de una felicitación.
+   *
+   * Los cuatro `status*` son el vocabulario COMPARTIDO con la cola del System
+   * Admin: `review/review-i18n.ts` los toma de aquí en vez de tener su copia,
+   * para que el autor lea del estado de su listing exactamente la misma palabra
+   * que usa quien lo revisa.
+   */
+  marketplaceReview: {
+    statusPendingReview: { es: "Pendiente de revisión", en: "Pending review" },
+    statusPublished: { es: "Publicado", en: "Published" },
+    statusRejected: { es: "Rechazado", en: "Rejected" },
+    statusDraft: { es: "Borrador", en: "Draft" },
+
+    // --- antes de pulsar «Publicar» ---------------------------------------
+    beforePublish: {
+      es: "«Publicar» no publica todavía: el listing entra en la cola de revisión de un System Admin de la plataforma.",
+      en: "«Publish» does not publish yet: the listing joins a platform System Admin's review queue.",
+    },
+
+    // --- después de pulsarlo ----------------------------------------------
+    queuedTitle: {
+      es: "Enviado a revisión — todavía no está publicado.",
+      en: "Submitted for review — not published yet.",
+    },
+    queuedWho: {
+      es: "Lo aprueba o lo rechaza un System Admin de la plataforma; no hay un plazo comprometido.",
+      en: "A platform System Admin approves or rejects it; there is no committed deadline.",
+    },
+    queuedMeanwhile: {
+      es: "Mientras espera, el listing sólo es visible para tu tenant: no aparece en el catálogo de nadie más, ni siquiera de los tenants con los que lo compartas.",
+      en: "While it waits, the listing is visible only to your tenant: it shows up in nobody else's catalog, not even in that of the tenants you share it with.",
+    },
+    publishedTitle: {
+      es: "Aprobado y visible en el catálogo.",
+      en: "Approved and visible in the catalog.",
+    },
+    pendingSince: { es: "En cola desde el {date}", en: "Queued since {date}" },
+
+    // --- un rechazo --------------------------------------------------------
+    rejectionReason: { es: "Motivo del rechazo", en: "Rejection reason" },
+    rejectionMissing: {
+      es: "El rechazo llegó sin motivo. Pregunta al System Admin antes de reenviarlo.",
+      en: "The rejection arrived with no reason. Ask the System Admin before resubmitting.",
+    },
+    rejectedFix: {
+      es: "Corrige lo que dice el motivo y vuelve a publicar: eso lo devuelve a la cola.",
+      en: "Fix what the reason says and publish again: that puts it back in the queue.",
+    },
   },
 
   /**

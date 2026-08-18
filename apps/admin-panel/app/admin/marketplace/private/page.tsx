@@ -24,6 +24,19 @@
  * crea fila. El nivel de confianza (community), la fuente privada y el
  * tenant_id son siempre derivados en servidor — nunca del wire.
  *
+ * task_mkt2_10 — **publicar no publica.** Desde el ADR 0142 D6 la fila nace en
+ * `review_status = 'pending_review'` y espera a que un System Admin la mire.
+ * Esta pantalla decía «Listing publicado. Ya aparece en tu catálogo privado» y
+ * era falso dos veces: ni estaba publicado, ni «aparecía» para nadie más que
+ * este tenant — la cláusula de visibilidad del catálogo es `published OR
+ * propio` (`marketplace/review.py`), así que ni siquiera un tenant con un grant
+ * de share lo ve mientras espera. Quien publicaba y compartía se quedaba
+ * esperando una instalación que era imposible.
+ *
+ * Ahora el resultado sale del `review_status` que devuelve el backend, y cada
+ * fila del catálogo privado enseña su estado real con su consecuencia
+ * (`components/marketplace/review-status-badge.tsx`).
+ *
  * Endpoints backend (routers/marketplace.py, RLS + RBAC):
  *   GET    /marketplace/listings              — browse (global + privados propios)
  *   POST   /marketplace/private/listings      — publicar (tenant_admin)
@@ -46,7 +59,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
+import { ReviewStatusBadge, ReviewStatusNote } from "@/components/marketplace/review-status-badge";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.marketplace
@@ -63,6 +78,12 @@ interface MarketplaceListing {
   description: string | null;
   author: string | null;
   trust_level: string;
+  // ADR 0142 D6 — el dato que esta pantalla omitía. Publicar deja la fila en
+  // `pending_review`, y hasta que un System Admin la apruebe no la ve nadie más
+  // que este tenant (`catalog_visibility_clause` = `published OR propio`).
+  review_status: string;
+  reviewed_at: string | null;
+  rejection_reason: string | null;
   requested_permissions: { type: string; value: unknown }[];
   is_signed: boolean;
   created_at: string;
@@ -235,6 +256,7 @@ function publishErrorMessage(err: unknown): string {
 // --------------------------------------------------------------------------
 export default function PrivateMarketplacePage() {
   const queryClient = useQueryClient();
+  const t = useT("marketplaceReview");
 
   const listingsQuery = useQuery({
     queryKey: ["marketplace-listings"],
@@ -416,6 +438,17 @@ export default function PrivateMarketplacePage() {
               </p>
             </div>
 
+            {/* Lo que «Publicar» hace de verdad, ANTES de pulsarlo. Que la
+                sorpresa llegue después —con el listing ya en cola y su autor
+                creyendo que está publicado— es el fallo que arregla
+                `task_mkt2_10`. */}
+            <p
+              className="border-info/40 bg-info/10 rounded-md border p-2 text-xs"
+              data-testid="private-publish-review-note"
+            >
+              {t("beforePublish")}
+            </p>
+
             <div className="flex items-center justify-between gap-3">
               <p className="text-muted-foreground text-xs">
                 El nombre y la versión se leen del manifest. Una versión duplicada se rechaza.
@@ -446,13 +479,39 @@ export default function PrivateMarketplacePage() {
               </div>
             ) : null}
 
+            {/* El resultado dice lo que HAY, no lo que se esperaba: el estado
+                sale de la fila que devuelve el backend (`review_status`), no de
+                que la petición haya ido bien. Decir «publicado» a un
+                `pending_review` era mentir con un 201 en la mano. */}
             {publishMutation.isSuccess ? (
-              <p
-                className="text-xs text-green-600 dark:text-green-400"
-                data-testid="private-publish-success"
-              >
-                Listing publicado. Ya aparece en tu catálogo privado.
-              </p>
+              publishMutation.data.review_status === "published" ? (
+                <p
+                  className="text-xs text-green-600 dark:text-green-400"
+                  data-testid="private-publish-success"
+                >
+                  {t("publishedTitle")}
+                </p>
+              ) : (
+                <div
+                  className="border-warning/40 bg-warning/10 space-y-1 rounded-md border p-3"
+                  role="status"
+                  data-testid="private-publish-queued"
+                >
+                  <p className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                    {t("queuedTitle")}
+                    <ReviewStatusBadge
+                      status={publishMutation.data.review_status}
+                      testId="private-publish-queued-status"
+                    />
+                  </p>
+                  {/* Quién decide y qué pasa mientras: las dos preguntas que
+                      quedaban sin respuesta y que llevaban a esperar a que un
+                      tenant con quien se había compartido lo instalara… algo
+                      que no podía pasar, porque no lo veía. */}
+                  <p className="text-xs">{t("queuedWho")}</p>
+                  <p className="text-muted-foreground text-xs">{t("queuedMeanwhile")}</p>
+                </div>
+              )
             ) : null}
           </CardContent>
         </Card>
@@ -500,19 +559,29 @@ export default function PrivateMarketplacePage() {
                 <Card data-testid={`private-listing-${listing.id}`}>
                   <CardHeader className="flex flex-row items-start justify-between gap-4">
                     <div className="min-w-0">
-                      <CardTitle className="flex items-center gap-2 text-base">
+                      <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                         <span className="truncate">{listing.name}</span>
                         <Badge variant="info" data-testid={`private-listing-kind-${listing.id}`}>
                           {listing.kind}
                         </Badge>
                         <Badge variant="muted">{listing.version}</Badge>
                         <Badge variant="warning">privado</Badge>
+                        {/* El estado REAL de cada fila. «privado» dice de quién
+                            es; esto dice si existe para alguien más. */}
+                        <ReviewStatusBadge
+                          status={listing.review_status}
+                          testId={`private-listing-status-${listing.id}`}
+                        />
                       </CardTitle>
                       {listing.description ? (
                         <p className="text-muted-foreground mt-1 break-words text-xs">
                           {listing.description}
                         </p>
                       ) : null}
+                      <ReviewStatusNote
+                        listing={listing}
+                        testId={`private-listing-note-${listing.id}`}
+                      />
                     </div>
                     <RoleGuard min="tenant_admin">
                       <Button

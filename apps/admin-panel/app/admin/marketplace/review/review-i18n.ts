@@ -20,8 +20,25 @@
 
 import { useCallback } from "react";
 
-import { interpolate, type Lang, type Translation, type TranslationVars } from "@/lib/i18n";
+import {
+  dictionary,
+  interpolate,
+  type Lang,
+  type Translation,
+  type TranslationVars,
+} from "@/lib/i18n";
 import { useLangOptional } from "@/lib/lang-context";
+
+/**
+ * Los cuatro estados NO se escriben aquí: se toman del diccionario global.
+ *
+ * Desde `task_mkt2_10` hay dos públicos leyendo los mismos valores —el System
+ * Admin en esta cola y el autor en su marketplace privado—, y una copia local
+ * de estos textos es el camino conocido para que la cola diga «Pendiente de
+ * revisión» donde la otra pantalla dice otra cosa. El resto de este diccionario
+ * sigue siendo local porque nadie fuera de esta carpeta lo usa.
+ */
+const sharedStatus = dictionary.marketplaceReview;
 
 const messages = {
   title: { es: "Cola de revisión", en: "Review queue" },
@@ -36,10 +53,10 @@ const messages = {
   },
   loading: { es: "Cargando…", en: "Loading…" },
   filterLabel: { es: "Estado", en: "Status" },
-  statusPendingReview: { es: "Pendiente de revisión", en: "Pending review" },
-  statusPublished: { es: "Publicado", en: "Published" },
-  statusRejected: { es: "Rechazado", en: "Rejected" },
-  statusDraft: { es: "Borrador", en: "Draft" },
+  statusPendingReview: sharedStatus.statusPendingReview,
+  statusPublished: sharedStatus.statusPublished,
+  statusRejected: sharedStatus.statusRejected,
+  statusDraft: sharedStatus.statusDraft,
   ownerGlobal: { es: "Catálogo oficial", en: "Official catalog" },
   ownerTenant: { es: "Tenant {tenant}", en: "Tenant {tenant}" },
   approve: { es: "Aprobar", en: "Approve" },

@@ -1,5 +1,3 @@
-import type { BadgeVariant } from "@/components/ui/badge";
-
 /**
  * Tipos y lógica pura de la cola de revisión (ADR 0142 D6, `task_mkt2_10`).
  *
@@ -187,24 +185,12 @@ export function availableActions(status: string): {
 }
 
 /**
- * El color del estado en la cola de revisión.
+ * El color del estado de revisión.
  *
- * En una cola, «rechazado» y «publicado» no pueden leerse igual de un vistazo:
- * el color es lo que se ve antes que el texto. `default` para lo desconocido en
- * vez de reventar, porque un estado nuevo en el backend no debe dejar la cola
- * en blanco.
+ * Vivía aquí hasta que `task_mkt2_10` dio al AUTOR su propia lectura del estado
+ * en el marketplace privado: dos pantallas pintando los mismos cuatro valores
+ * es exactamente cómo «rechazado» acaba siendo rojo en una y gris en la otra.
+ * La implementación se mudó a `components/marketplace/review-status.ts` y aquí
+ * queda el re-export, para no tocar los llamantes de la cola.
  */
-export function reviewStatusVariant(status: string): BadgeVariant {
-  switch (status) {
-    case "published":
-      return "success";
-    case "pending_review":
-      return "warning";
-    case "rejected":
-      return "danger";
-    case "draft":
-      return "muted";
-    default:
-      return "default";
-  }
-}
+export { reviewStatusVariant } from "@/components/marketplace/review-status";

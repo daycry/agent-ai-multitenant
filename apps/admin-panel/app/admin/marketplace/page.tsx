@@ -54,7 +54,16 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
 
+import {
+  CatalogUpdateChip,
+  INSTALLATIONS_KEY,
+  INSTALLATIONS_PATH,
+  MarketplaceUpdatesCallout,
+  useInstallationUpdates,
+} from "./catalog-updates";
+
 import { PageHeader } from "@/components/layout/page-header";
+import { ReviewStatusBadge, ReviewStatusNote } from "@/components/marketplace/review-status-badge";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -64,6 +73,7 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
@@ -79,6 +89,12 @@ interface MarketplaceListing {
   description: string | null;
   author: string | null;
   trust_level: string;
+  // ADR 0142 D6: el catálogo devuelve lo publicado MÁS lo propio en cualquier
+  // estado, así que un listing del propio tenant puede llegar aquí sin estar
+  // publicado. Pintarlo como uno más sería decirle a su autor que ya está en el
+  // catálogo de todos cuando no lo ve nadie más que él.
+  review_status: string;
+  rejection_reason: string | null;
   requested_permissions: { type: string; value: unknown }[];
   is_signed: boolean;
   created_at: string;
@@ -165,6 +181,11 @@ export default function MarketplaceAdminPage() {
         }
       />
 
+      {/* `task_mkt2_12`: el aviso de actualización va FUERA de las pestañas.
+          Dentro de «Instaladas» volvería a ser algo a lo que hay que ir a
+          mirar, que es exactamente lo que hacía invisible el mecanismo. */}
+      <MarketplaceUpdatesCallout />
+
       <Tabs defaultValue="catalog" className="mt-6" data-testid="marketplace-tabs">
         <TabsList data-testid="marketplace-tablist">
           <TabsTrigger value="catalog" data-testid="marketplace-tab-catalog">
@@ -197,6 +218,11 @@ export default function MarketplaceAdminPage() {
 // ===========================================================================
 function CatalogTab() {
   const errorText = useErrorText();
+  // El estado de actualización de lo instalado, indexado por listing: es lo que
+  // convierte una tarjeta del catálogo en «ésta la tienes atrasada». Comparte
+  // caché con el aviso de arriba y con la ficha, así que no cuesta una segunda
+  // ronda de peticiones.
+  const { byListing } = useInstallationUpdates();
   const listingsQuery = useQuery({
     queryKey: ["marketplace-listings"],
     queryFn: () => apiFetch<MarketplaceListing[]>("/marketplace/listings?limit=100"),
@@ -265,12 +291,31 @@ function CatalogTab() {
                           global
                         </Badge>
                       )}
+                      {/* `task_mkt2_10`: si esta fila NO está publicada es que
+                          es del propio tenant y sigue en revisión (o fue
+                          rechazada) — nadie más la ve. El catálogo lo dice
+                          aquí, donde su autor la va a buscar. */}
+                      {listing.review_status !== "published" ? (
+                        <ReviewStatusBadge
+                          status={listing.review_status}
+                          testId={`catalog-review-status-${listing.id}`}
+                        />
+                      ) : null}
+                      {/* `task_mkt2_12`: y si la tiene instalada y atrasada. */}
+                      <CatalogUpdateChip
+                        checks={byListing.get(listing.id)}
+                        testId={`catalog-update-${listing.id}`}
+                      />
                     </CardTitle>
                     {listing.description ? (
                       <p className="text-muted-foreground mt-1 break-words text-xs">
                         {listing.description}
                       </p>
                     ) : null}
+                    <ReviewStatusNote
+                      listing={listing}
+                      testId={`catalog-review-note-${listing.id}`}
+                    />
                   </div>
                 </CardHeader>
               </Card>
@@ -291,6 +336,7 @@ function CatalogTab() {
  * Hidden for non-admins (the RoleGuard), since they cannot publish anyway.
  */
 function PublishCallout() {
+  const t = useT("marketplaceReview");
   return (
     <RoleGuard min="tenant_admin">
       <Card
@@ -307,6 +353,16 @@ function PublishCallout() {
               <p className="text-muted-foreground text-xs">
                 Publícala como listing privado de tu tenant. Solo tu organización la verá; el
                 manifest se valida al publicar.
+              </p>
+              {/* La otra mitad, que faltaba: publicar deja el listing EN COLA.
+                  Decirlo aquí —antes de que nadie pulse— evita que la sorpresa
+                  llegue después, cuando el listing ya está esperando y su autor
+                  cree que está publicado. */}
+              <p
+                className="text-muted-foreground text-xs"
+                data-testid="catalog-publish-review-note"
+              >
+                {t("beforePublish")}
               </p>
             </div>
           </div>
@@ -329,9 +385,12 @@ function InstalledTab() {
   const errorText = useErrorText();
   const queryClient = useQueryClient();
 
+  // Misma clave y misma ruta que el aviso de actualización (`catalog-updates`):
+  // una sola petición para las dos lecturas, y ningún sitio donde el `limit`
+  // pueda discrepar.
   const installedQuery = useQuery({
-    queryKey: ["marketplace-installations"],
-    queryFn: () => apiFetch<MarketplaceInstallation[]>("/marketplace/installations?limit=100"),
+    queryKey: INSTALLATIONS_KEY,
+    queryFn: () => apiFetch<MarketplaceInstallation[]>(INSTALLATIONS_PATH),
     refetchOnWindowFocus: false,
   });
 
