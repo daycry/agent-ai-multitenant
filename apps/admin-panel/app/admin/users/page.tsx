@@ -170,14 +170,16 @@ function UsersContent() {
     refetchOnWindowFocus: false,
   });
 
-  const users = usersQuery.data ?? [];
+  // El default se aplica DENTRO del memo: fuera crea un array nuevo por render
+  // mientras la consulta no ha respondido y el memo no memoizaría nada.
   const filtered = useMemo(() => {
+    const loaded = usersQuery.data ?? [];
     const q = query.trim().toLowerCase();
-    if (q === "") return users;
-    return users.filter(
+    if (q === "") return loaded;
+    return loaded.filter(
       (u) => u.email.toLowerCase().includes(q) || (u.full_name ?? "").toLowerCase().includes(q),
     );
-  }, [users, query]);
+  }, [usersQuery.data, query]);
 
   return (
     <>

@@ -147,11 +147,16 @@ export default function ApprovalPolicyPage() {
   const [submitOk, setSubmitOk] = useState(false);
 
   // Auto-select the first preset (Sandbox) once policies load.
+  //
+  // El default (`?? []`) vive DENTRO del efecto a propósito: fuera crea un array
+  // nuevo en cada render mientras la consulta no ha respondido, y con `policies`
+  // en las dependencias el efecto se re-dispararía en cada uno de ellos.
   useEffect(() => {
-    if (!selectedPolicyId && policies.length > 0) {
-      setSelectedPolicyId(policies[0].id);
+    const loaded = policiesQuery.data ?? [];
+    if (!selectedPolicyId && loaded.length > 0) {
+      setSelectedPolicyId(loaded[0].id);
     }
-  }, [policies, selectedPolicyId]);
+  }, [policiesQuery.data, selectedPolicyId]);
 
   // Limpia los cambios sin guardar SOLO al cambiar de preset de verdad.
   //

@@ -68,9 +68,11 @@ export default function KnowledgeBasesPage() {
   }
 
   const uncategorized = t("uncategorized");
+  // El default (`?? []`) se aplica DENTRO del memo: fuera, cada render sin datos
+  // devuelve un array nuevo y el memo dejaría de memoizar nada.
   const grouped = useMemo(
-    () => groupByCategory(kbs, categories, uncategorized),
-    [kbs, categories, uncategorized],
+    () => groupByCategory(kbsQuery.data ?? [], categoriesQuery.data ?? [], uncategorized),
+    [kbsQuery.data, categoriesQuery.data, uncategorized],
   );
 
   return (

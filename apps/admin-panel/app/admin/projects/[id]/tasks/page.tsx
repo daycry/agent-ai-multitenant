@@ -136,7 +136,9 @@ export default function ProjectTasksPage() {
     refetchOnWindowFocus: false,
   });
 
-  const tasks = tasksQuery.data ?? [];
+  // Referencia estable: `?? []` a pelo devuelve un array nuevo en cada render
+  // mientras no hay datos, y los memos de abajo lo llevan en sus dependencias.
+  const tasks = useMemo(() => tasksQuery.data ?? [], [tasksQuery.data]);
   const plans = plansQuery.data ?? [];
 
   const counts = useMemo(() => {

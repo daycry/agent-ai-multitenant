@@ -96,7 +96,10 @@ export default function ProjectPlansPage() {
     enabled: Boolean(projectId),
   });
 
-  const plans = plansQuery.data ?? [];
+  // Referencia estable: `plansQuery.data ?? []` a pelo devuelve un array nuevo en
+  // cada render mientras no hay datos, y los dos memos de abajo lo llevan en sus
+  // dependencias.
+  const plans = useMemo(() => plansQuery.data ?? [], [plansQuery.data]);
 
   const visible = useMemo(() => {
     if (statusFilter === "all") return plans;
