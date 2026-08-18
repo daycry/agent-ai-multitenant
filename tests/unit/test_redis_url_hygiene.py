@@ -32,6 +32,7 @@ explícita esta guarda sería ruido y acabaría desactivada.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -160,3 +161,80 @@ def test_la_fuente_de_verdad_existe_y_resuelve_con_credencial() -> None:
     assert TEST_REDIS_URL.startswith("redis://")
     # DB 15 por defecto: no puede pisar la DB 0 de desarrollo.
     assert default_redis_url().endswith("/15")
+
+
+# ===========================================================================
+# La otra mitad de la higiene: la base ELEGIDA tampoco puede ser del stack vivo
+# ===========================================================================
+def test_las_bases_del_stack_vivo_estan_prohibidas() -> None:
+    """Apuntar `TEST_REDIS_URL` a la 0, la 1 o la 2 tiene que abortar.
+
+    El stack de docker-compose usa la 0 (event streams), la 1 (broker de Celery)
+    y la 2 (result backend) mientras uno corre la suite en la máquina de
+    desarrollo. Con el worker vivo bloqueado en `BRPOP default` sobre la base 1,
+    un test que encola y lee se queda sin su mensaje: el rojo sale tres capas
+    más allá como `assert len(raw) == 1` con cero elementos, y no menciona
+    Docker por ningún lado. Pasó de verdad —una tanda de 4 shards repartida
+    sobre las bases 1-4 tumbó seis tests de despacho— y el diagnóstico natural
+    («flaky») es el que borra la guarda en vez del defecto.
+
+    Encima el daño va en las dos direcciones: los tests hacen `DEL default`, o
+    sea que tirarían trabajo real encolado del stack.
+    """
+    from tests.integration._redis_url import PLATFORM_REDIS_DATABASES, _reject_platform_database
+
+    assert sorted(PLATFORM_REDIS_DATABASES) == [0, 1, 2]
+    for indice in sorted(PLATFORM_REDIS_DATABASES):
+        with pytest.raises(RuntimeError, match=f"base de Redis {indice}"):
+            _reject_platform_database(f"redis://:pwd@localhost:6379/{indice}")
+    # Una URL sin path es la base 0 en redis-py: también prohibida.
+    with pytest.raises(RuntimeError, match="base de Redis 0"):
+        _reject_platform_database("redis://:pwd@localhost:6379")
+
+
+def test_las_bases_del_arnes_siguen_permitidas() -> None:
+    """La guarda de arriba no puede pasarse de frenada.
+
+    La 15 es el default del arnés y la que usa la CI; de la 5 en adelante es lo
+    que se reparte al paralelizar en local. Y lo que no se sabe leer no se
+    bloquea: la guarda es contra un despiste concreto, no un validador de URLs.
+    """
+    from tests.integration._redis_url import _reject_platform_database
+
+    for url in (
+        "redis://:pwd@localhost:6379/15",
+        "redis://:pwd@localhost:6379/5",
+        "redis://:pwd@localhost:6379/3",
+        "redis://:pwd@redis:6379/no-es-un-numero",
+    ):
+        _reject_platform_database(url)  # no levanta
+
+
+def test_la_lista_de_bases_del_stack_no_se_queda_corta() -> None:
+    """La lista prohibida se compara con lo que declara el compose.
+
+    `PLATFORM_REDIS_DATABASES` es una constante escrita a mano, y una constante
+    escrita a mano se pudre en silencio: el día que un servicio nuevo use la
+    base 3, la guarda seguiria diciendo que la 3 es libre y volveria el mismo
+    rojo mentiroso. Asi que aqui se lee del `docker/*.yml` que bases usa el
+    stack y se exige que todas esten cubiertas.
+
+    Al reves NO se exige: la lista puede ser mas ancha que el compase de hoy (no
+    cuesta nada reservar una base y evita que un servicio futuro reabra el
+    agujero).
+    """
+    declaradas = set()
+    for compose in sorted((_REPO_ROOT / "docker").glob("*.yml")):
+        texto = compose.read_text(encoding="utf-8")
+        declaradas.update(int(m) for m in re.findall(r"redis:6379/(\d+)", texto))
+
+    from tests.integration._redis_url import PLATFORM_REDIS_DATABASES
+
+    assert declaradas, "ningun compose declara una base de Redis: ha cambiado el formato"
+    sin_cubrir = sorted(declaradas - set(PLATFORM_REDIS_DATABASES))
+    assert not sin_cubrir, (
+        "el stack usa bases de Redis que la guarda del arnes NO prohibe: "
+        f"{sin_cubrir}. Anadelas a PLATFORM_REDIS_DATABASES en "
+        "tests/integration/_redis_url.py, o los tests que encolen sobre ellas "
+        "perderan sus mensajes contra el worker vivo."
+    )

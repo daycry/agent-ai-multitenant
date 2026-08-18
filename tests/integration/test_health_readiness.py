@@ -172,10 +172,21 @@ async def test_a_hanging_check_times_out_instead_of_hanging(
 
 @pytest.mark.asyncio
 async def test_readyz_recovers_without_a_restart(
-    configured_app: Any, monkeypatch: pytest.MonkeyPatch
+    configured_app: Any, monkeypatch: pytest.MonkeyPatch, test_redis_url: str
 ) -> None:
     """`human_audit14_03`: al recuperar la dependencia, `/readyz` vuelve a 200 sin
-    reiniciar el proceso. Si el resultado se cacheara, esto se quedaría en 503."""
+    reiniciar el proceso. Si el resultado se cacheara, esto se quedaría en 503.
+
+    La vuelta se hace REPONIENDO la URL buena, no con `monkeypatch.undo()`. El
+    `undo()` deshace TODOS los parches del test, y `configured_app` monta su
+    cableado (`API_SERVER_DATABASE_URL`, `_REDIS_URL`, `_JWT_SECRET`…) sobre ESE
+    MISMO `monkeypatch`: deshacerlo dejaba el proceso en los defaults de
+    producción, o sea `redis://localhost:6379/0` SIN contraseña —que desde
+    prod-10 contesta `NOAUTH` y da 503— y la base de datos de DESARROLLO. Con lo
+    cual la aserción final no probaba la recuperación de la dependencia de
+    pruebas: probaba el stack de desarrollo, y sólo pasaba si ese stack estaba
+    en pie y sin contraseña.
+    """
     good_url = (await _get(configured_app, "/readyz")).status_code
     assert good_url == 200
 
@@ -185,13 +196,6 @@ async def test_readyz_recovers_without_a_restart(
     )
     assert (await _get(configured_app, "/readyz")).status_code == 503
 
-    monkeypatch.undo()
-    from api_server.auth.deps import reset_redis_cache
-    from api_server.config import get_settings
-    from api_server.db.session import reset_engine_cache
-
-    get_settings.cache_clear()
-    reset_engine_cache()
-    reset_redis_cache()
+    _rewire(monkeypatch, API_SERVER_REDIS_URL=test_redis_url)
 
     assert (await _get(configured_app, "/readyz")).status_code == 200

@@ -262,11 +262,21 @@ def test_seed_exposes_shell_exec_as_assignable_builtin(
             await conn.close()
         return n, row
 
+    from api_server.seeds.builtin_tools import BUILTIN_TOOLS
+
     n, row = asyncio.run(_seed_and_fetch())
-    # The catalog count: 18 -> 19 (shell_exec) -> 15 (git family retired,
-    # task_06_18_06) -> 16 (delete_file, R6/ADR 0089) -> 17 (stack_exec,
-    # ADR 0093). Quedó desactualizado en la rama (auditoría 2026-07-02).
-    assert n == 17
+    # El seed escribe EXACTAMENTE lo que declara el catálogo: ni de más
+    # (duplicados) ni de menos (una fila que falla en silencio).
+    #
+    # Aquí había un literal (17) y por eso este test se quedó atrás: el número
+    # de built-ins ha bajado dos veces por decisión de producto —la familia
+    # `git_*` (task_06_18_06) y las cuatro `run_*`, retiradas el 2026-07-28
+    # (commit 35130adb, migración 0122) porque eran `docker_command` y dentro
+    # del sandbox fallan SIEMPRE—. Aquel commit actualizó los contadores de
+    # `test_seed_tools` y `test_tool_catalog_contract` y no vio éste. La
+    # igualdad con `len(BUILTIN_TOOLS)` es el invariante que no caduca; lo que
+    # este test guarda de verdad son las aserciones de la fila `shell_exec`.
+    assert n == len(BUILTIN_TOOLS)
     assert row is not None
     assert row["category"] == "command"
     assert row["security_level"] == "privileged"

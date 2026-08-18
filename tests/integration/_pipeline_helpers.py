@@ -33,6 +33,7 @@ import docker
 
 from ._docker_helpers import docker_client, skip_or_fail
 from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+from ._wiring import point_everything_at_the_test_redis
 
 AGENT_RUNTIME_IMAGE = "agent-runtime:v1"
 # Overridable por env, como en conftest.
@@ -63,6 +64,7 @@ async def consume_and_take_job(
     YA haya publicado el worker (el eslabón real, I-7). Grupo fresco por llamada:
     ``ensure_group`` crea en ``id="0"`` (mkstream), así que lee el stream desde el
     principio — incluidos los eventos publicados ANTES de crear el grupo."""
+    point_everything_at_the_test_redis()
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     engine = create_async_engine(db_url)
     try:
@@ -116,6 +118,12 @@ def run_worker_job(request: dict[str, Any], admin_database_url: str) -> dict[str
 
     os.environ["WORKERS_DATABASE_URL"] = admin_database_url
     os.environ["WORKERS_EVENTS_REDIS_URL"] = TEST_REDIS_URL
+    # El run toca TRES Redis más allá del stream de eventos (la caché de
+    # platform_settings del api-server, el broker del memorizer y el del
+    # despacho de eventos). Los tres degradan en silencio contra sus defaults
+    # de producción, pero cobran ~13 s + ~80 s + ~80 s de reloj por run — que es
+    # lo que hacía saltar el `timeout(300)` del ciclo autónomo. Ver `_wiring.py`.
+    point_everything_at_the_test_redis()
     reset_settings_cache()
     try:
         return run_execution(request)  # type: ignore[no-any-return]

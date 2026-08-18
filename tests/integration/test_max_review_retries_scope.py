@@ -9,6 +9,9 @@ users against real Postgres.
 
 from __future__ import annotations
 
+import asyncio
+
+import asyncpg
 import pytest
 from alembic import command
 from api_server.db.models import PlatformSetting, User
@@ -162,8 +165,53 @@ async def test_system_admin_can_update_an_existing_setting(
         await engine.dispose()
 
 
-def test_migration_0011_is_reversible(alembic_config: object) -> None:
-    """downgrade to 0010 then back up to head must both succeed."""
+async def _exec(dsn: str, sql: str, *args: object) -> None:
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(sql, *args)
+    finally:
+        await conn.close()
+
+
+def test_migration_0011_is_reversible(alembic_config: object, admin_pg_dsn: str) -> None:
+    """downgrade to 0010 then back up to head must both succeed — CON DATOS.
+
+    La bajada hasta 0010 arrastra 128 revisiones, así que esto no prueba sólo la
+    0011: prueba que la cadena entera va y vuelve. Y tiene que probarlo sobre una
+    base **con filas**, porque la de producción las tiene y la regla dura de
+    ``CLAUDE.md`` («no desplegar sin comprobar que las migraciones son
+    reversibles») no admite el matiz «reversible si la tabla está vacía».
+
+    Se siembra a propósito la fila que rompía: una configuración **SAML**. La
+    0033 introdujo SAML relajando ``issuer`` y ``client_id`` a NULL, y su
+    ``downgrade`` los volvía a poner NOT NULL confiando en que «no puede haber
+    filas saml al bajar». Con una sola, la bajada moría con
+    ``column "client_id" … contains null values``. Arreglado el 2026-08-18 en la
+    propia migración (borra lo que el esquema de destino no sabe representar).
+
+    Antes de este cambio el test NO sembraba nada, así que sólo se ponía rojo
+    cuando **otro fichero** de la sesión dejaba una fila SAML atrás
+    (``test_key_rotation_drill.py``, que siembra una y no la retira; la base de
+    integración es de ámbito sesión y se comparte). Es decir: pasaba en
+    solitario, fallaba en la suite completa, y parecía «flaky de orden» cuando
+    lo que denunciaba era un defecto real de la cadena de migraciones. Sembrar
+    aquí lo vuelve determinista y deja de depender de la contaminación ajena.
+    """
     command.upgrade(alembic_config, "head")
+
+    asyncio.run(
+        _exec(
+            admin_pg_dsn,
+            """
+            INSERT INTO sso_configurations
+                (id, provider, display_name, enabled, idp_entity_id,
+                 idp_sso_url, idp_x509_cert)
+            VALUES ($1, 'saml', 'Reversibility SAML', true, 'urn:rev:idp',
+                    'https://idp.test/sso', 'MIIB-fake-cert')
+            """,
+            uuid7(),
+        )
+    )
+
     command.downgrade(alembic_config, "0010_executions")
     command.upgrade(alembic_config, "head")

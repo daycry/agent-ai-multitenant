@@ -59,3 +59,35 @@ def test_idempotent():
     second = configure_tracing(...)
     assert first is second
 ```
+
+## La reincidencia (2026-08-18): un reset «de test» que sólo resetea la mitad
+
+El fix de arriba aguantó hasta que `telemetry/setup.py` ganó un
+`_reset_for_tests()` que ponía `_PROVIDER = None`. La caché del módulo se
+suelta, pero **el global de OTEL no**, porque es irreversible. A partir de ahí
+`configure_tracing()` volvía a entrar en su cuerpo, construía un provider nuevo,
+`set_tracer_provider()` lo rechazaba en silencio (sólo un WARNING) y la función
+**devolvía y cacheaba el provider rechazado**: un objeto que no usa ningún
+tracer del proceso.
+
+Síntoma, y por qué despista: `test_configure_tracing_is_idempotent` pasaba en
+solitario y fallaba en la suite completa con
+
+```
+assert <TracerProvider object at 0x…A> is <TracerProvider object at 0x…B>
+```
+
+Sólo falla en lote porque hace falta que **otro** fichero haya instalado antes
+el provider — y basta con que importe `api_server.main`, que llama a
+`configure_tracing()` a nivel de módulo. Tiene toda la pinta de «flaky de
+orden»; no lo es.
+
+Y no era un problema sólo de tests: el `exporter` que se le pasa a
+`configure_tracing()` se colgaba del provider muerto, así que **el destino de
+trazas que pidió el llamante quedaba mudo sin un solo error**.
+
+**Fix**: `configure_tracing()` lee el provider EFECTIVO después de intentar
+instalarlo (`trace.get_tracer_provider()`), cuelga ahí el exporter y devuelve
+ése. Nunca devuelve uno propio que OTEL haya rechazado. Regla general: cuando un
+recurso global es _set-once_, «lo instalo y devuelvo lo que instalé» es una
+suposición; lo correcto es «lo intento instalar y devuelvo lo que hay».

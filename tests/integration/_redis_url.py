@@ -30,12 +30,37 @@ Y al paralelizar, cada proceso necesita SU base de Redis
 otra mitad: dos tandas de pytest simultáneas sobre la misma base de Redis se
 pisan las claves y los streams, y el resultado es un rojo intermitente que se
 achaca a «flaky». Por eso se puede pasar ``TEST_REDIS_URL`` por entorno para dar
-a cada tanda su base (1, 2, 3…).
+a cada tanda su base.
 
-Ojo con esa vía, que es justo donde reaparece la trampa de arriba: **la URL que
-exportes a mano TIENE que llevar la contraseña**. ``redis://localhost:6379/9``
-sin credencial vuelve a fallar con ``AuthenticationError``, no con «acceso
-denegado», y otra vez dentro de una fixture.
+Pero **no cualquier base**: las 0, 1 y 2 son del STACK VIVO
+----------------------------------------------------------
+El compose reparte así las bases de Redis, y los contenedores están levantados
+mientras uno corre los tests en la máquina de desarrollo:
+
+* **0** — event streams (``events:tasks``), que consume el orquestador;
+* **1** — broker de Celery, que drenan ``workers``/``workers-aux``;
+* **2** — result backend de Celery.
+
+Apuntar el arnés a la 1 no da un error: da un **rojo mentiroso**. El worker vivo
+está bloqueado en ``BRPOP default`` sobre esa misma base, así que se lleva el
+mensaje que el test acababa de encolar antes de que el test pueda leerlo, y la
+aserción que cae es ``assert len(raw) == 1`` con cero elementos — a tres capas de
+distancia del despacho, sin nada que apunte a Docker. Pasa en aislamiento (si el
+stack está parado) y falla en lote: la firma exacta que se despacha como
+«flaky». Sucedió: una tanda de 4 shards repartida sobre las bases 1-4 tumbó los
+seis tests de despacho de ``test_agent_skills`` /
+``test_agent_tool_specs_serialization`` / ``test_agent_tools_enforcement``.
+Y hay una segunda cara peor que el rojo: el test hace ``DEL default`` sobre la
+cola del stack vivo, o sea que puede TIRAR trabajo real encolado.
+
+De ahí la guarda de abajo, que se niega a arrancar sobre esas tres bases. Para
+paralelizar, usa las de la 5 en adelante (la 15 es el default del arnés).
+
+Ojo también con esta vía, que es justo donde reaparece la trampa de arriba: **la
+URL que exportes a mano TIENE que llevar la contraseña**.
+``redis://localhost:6379/9`` sin credencial vuelve a fallar con
+``AuthenticationError``, no con «acceso denegado», y otra vez dentro de una
+fixture.
 
 Y con Celery hay que redirigir DOS cosas, no una
 ------------------------------------------------
@@ -53,9 +78,19 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
-__all__ = ["TEST_REDIS_URL", "default_redis_url", "redis_password"]
+__all__ = [
+    "PLATFORM_REDIS_DATABASES",
+    "TEST_REDIS_URL",
+    "default_redis_url",
+    "redis_password",
+]
+
+#: Bases de Redis que el stack de docker-compose usa EN CALIENTE (ver el
+#: docstring): 0 event streams, 1 broker de Celery, 2 result backend. El arnés no
+#: puede usarlas: el worker vivo drena la cola antes de que el test la lea.
+PLATFORM_REDIS_DATABASES = frozenset({0, 1, 2})
 
 
 def redis_password() -> str:
@@ -88,8 +123,72 @@ def default_redis_url() -> str:
     return f"redis://{credencial}localhost:6379/15"
 
 
+def _database_index(url: str) -> int | None:
+    """El número de base de una URL de Redis, o ``None`` si no se puede leer.
+
+    ``redis://host:6379/1`` -> 1. Una URL sin path (``redis://host:6379``)
+    significa base 0, igual que en redis-py. Lo que no se sabe leer no se
+    bloquea: la guarda es contra un despiste conocido, no un validador de URLs.
+    """
+    path = urlsplit(url).path.lstrip("/")
+    if not path:
+        return 0
+    try:
+        return int(path)
+    except ValueError:
+        return None
+
+
+def _reject_platform_database(url: str) -> None:
+    """Aborta si ``url`` apunta a una base que el stack vivo está usando.
+
+    Se falla en la IMPORTACIÓN, con el nombre de la variable y el número de
+    base, porque el modo de fallo alternativo —seguir adelante— es un rojo que
+    no se parece a su causa (``assert len(raw) == 1`` con cero elementos, tres
+    capas más allá) y encima borra la cola de trabajo real del stack.
+    """
+    indice = _database_index(url)
+    if indice is None or indice not in PLATFORM_REDIS_DATABASES:
+        return
+    raise RuntimeError(
+        f"TEST_REDIS_URL apunta a la base de Redis {indice}, que es del STACK VIVO "
+        "(0 = event streams, 1 = broker de Celery, 2 = result backend). Los "
+        "contenedores `orchestrator` y `workers` consumen esas bases, así que se "
+        "llevarían los mensajes que encolan los tests —el rojo sale como "
+        "`assert len(raw) == 1` con cero elementos— y el `DEL default` de los "
+        "tests tiraría trabajo real encolado. Usa una base de la 5 en adelante "
+        "(la 15 es el default del arnés)."
+    )
+
+
+def _prefer_ipv4_loopback(url: str) -> str:
+    """`localhost` -> `127.0.0.1` en el host (y SÓLO en el host).
+
+    En Windows el resolver devuelve `::1` antes que `127.0.0.1`, y los puertos
+    que publica Docker Desktop escuchan sólo en IPv4. El intento IPv6 no falla
+    rápido: tarda ~2 s en darse por rechazado, y sólo entonces se prueba la
+    IPv4. O sea que **cada conexión nueva del arnés cuesta 2 s de más**, sin dar
+    ningún error — se paga en horas de suite y no se ve por ningún lado.
+
+    Donde sí se ve es en cualquier cosa con un deadline corto: `/readyz` da 2 s
+    por check, así que `test_health_readiness` respondía 503 «timeout tras 2s»
+    con PostgreSQL y Redis VIVOS. Ver
+    `docs/03-guides/gotchas/localhost-ipv6-primero-cuesta-dos-segundos.md`.
+
+    Se reescribe el host reconstruyendo el netloc, no con un `replace` sobre la
+    URL entera: una contraseña que contuviera «localhost» se corrompería.
+    """
+    partes = urlsplit(url)
+    if partes.hostname != "localhost":
+        return url
+    userinfo, arroba, hostport = partes.netloc.rpartition("@")
+    netloc = f"{userinfo}{arroba}{hostport.replace('localhost', '127.0.0.1', 1)}"
+    return urlunsplit(partes._replace(netloc=netloc))
+
+
 # `or` y no `os.environ.get(..., default)` a propósito: así una `TEST_REDIS_URL`
 # exportada VACÍA (el caso de `TEST_REDIS_URL=` en la línea de comandos, o de un
 # `.env` que la declara sin valor) cae en la resolución por defecto en vez de
 # construir un cliente contra la cadena vacía.
-TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL") or default_redis_url()
+TEST_REDIS_URL = _prefer_ipv4_loopback(os.environ.get("TEST_REDIS_URL") or default_redis_url())
+_reject_platform_database(TEST_REDIS_URL)

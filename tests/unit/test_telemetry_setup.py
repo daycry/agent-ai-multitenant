@@ -114,3 +114,56 @@ def test_console_exporter_stays_opt_in() -> None:
     )
 
     assert 'os.environ.get("API_SERVER_OTEL_CONSOLE") == "1"' in main
+
+
+# ---------------------------------------------------------------------------
+# `configure_tracing` no puede devolver un provider que OTEL rechazó
+# ---------------------------------------------------------------------------
+def test_configure_tracing_returns_the_provider_that_is_actually_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """El global de OTEL es *set-once*; la función debe devolver lo que HAY.
+
+    Regresión de 2026-08-18. `set_tracer_provider()` sólo acepta la primera
+    llamada del proceso: la segunda emite un WARNING y no hace nada. La versión
+    anterior construía su provider, lo «instalaba», y devolvía y cacheaba **el
+    suyo** aunque OTEL lo hubiese descartado — un objeto que no usa ningún
+    tracer del proceso. Consecuencia en producción, no sólo en tests: el
+    `exporter` que pasa el llamante se cuelga de ese provider muerto, así que el
+    destino de trazas queda mudo **sin un solo error**.
+
+    Se simula el escenario en vez de tocar el global real (instalarlo de verdad
+    en la sesión de tests unitarios sería, precisamente, contaminación global).
+    """
+    from api_server.telemetry import setup as setup_mod
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    foreign = TracerProvider()  # el que «ya estaba instalado»
+    installed: list[object] = []
+
+    monkeypatch.setattr(setup_mod, "_PROVIDER", None, raising=False)
+    # Ya instrumentado: nos interesa la resolución del provider, no volver a
+    # enganchar asyncpg/Redis/httpx en el proceso de los tests unitarios.
+    monkeypatch.setattr(setup_mod, "_INSTRUMENTED", True, raising=False)
+    monkeypatch.setattr(setup_mod.trace, "set_tracer_provider", installed.append)
+    monkeypatch.setattr(setup_mod.trace, "get_tracer_provider", lambda: foreign)
+
+    exporter = InMemorySpanExporter()
+    returned = setup_mod.configure_tracing(service_name="unit-test", exporter=exporter)
+
+    assert returned is foreign, (
+        "configure_tracing devolvió el provider que OTEL descartó; los spans "
+        "saldrían por el provider activo y el exporter quedaría colgado del muerto"
+    )
+    # Y el exporter tiene que haber quedado colgado del provider VIVO. Se mira
+    # el multi-processor interno del SDK: un `TracerProvider` recién construido
+    # SIEMPRE tiene `_active_span_processor`, así que afirmar sobre su
+    # existencia pasaría en vacío; lo que prueba algo es que contenga uno.
+    attached = foreign._active_span_processor._span_processors
+    assert len(attached) == 1, f"el exporter no llegó al provider activo: {attached!r}"
+    # Se intentó instalar uno propio (OTEL real lo habría descartado con un
+    # WARNING); lo que importa es que NO sea el que se devolvió.
+    assert len(installed) == 1 and installed[0] is not foreign

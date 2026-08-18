@@ -180,7 +180,15 @@ async def test_serialize_projects_implementation_type_and_config(
         run = by_name["run_pytest"]
         assert run["implementation_type"] == "docker_command"
         assert run["config"]["runtime_template"] == "python-pytest"
-        assert run["config"]["command_template"][0] == "pytest"
+        # `command_template`: este test exigía `["pytest", "{path}"]` porque el
+        # mapa `_RUN_TOOL_COMMANDS` del serializador traía un argv por cada una
+        # de las cuatro `run_*`. El commit 35130adb (F5, 2026-07-28) las retiró
+        # del catálogo —no podían ejecutarse dentro del sandbox— y dejó el mapa
+        # VACÍO a propósito, conservando el MECANISMO para las tools
+        # `docker_command` que da de alta un tenant. Así que el contrato de hoy
+        # para una tool ausente del mapa es el fallback documentado: un argv
+        # bien formado y no-op, no un comando inventado.
+        assert run["config"]["command_template"] == ["echo", "{path}"]
     finally:
         await engine.dispose()
 

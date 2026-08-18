@@ -34,6 +34,7 @@ raises before any handler (hence any engine) is reached.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from typing import Any
 from uuid import UUID, uuid4
@@ -331,6 +332,23 @@ async def test_dev_does_not_over_enforce_the_widened_surface(
     assert resp.status_code not in (401, 403), resp.text
 
 
+def _fake_secret(seed: str) -> str:
+    """48 caracteres deterministas y de ALTA ENTROPÍA.
+
+    Esto era `"p" * 48` (y sus hermanos `"q"`…`"v"`): largo, sin marcador de dev
+    y, hasta prod-10, aceptado por producción. El 2026-08-10 (commit ``7fcff541``,
+    ``task_prod10_04``) el config añadió un **suelo de entropía** además del de
+    longitud: ≥8 caracteres distintos y ≥2 bits/carácter, porque `"x" * 48` es
+    exactamente el relleno de plantilla que el guard persigue. Desde entonces
+    este helper no construía ``Settings`` en absoluto, y los dos tests de
+    hardening morían con ``ValidationError`` ANTES de poder comprobar lo que les
+    importa (MFA y allowlist de IP). El guard tiene razón; el relleno era el
+    obsoleto. Mismo remedio que en ``tests/unit/test_settings_prod_validation.py``:
+    hex de SHA-256 — determinista, 16 símbolos, ~4 bits/carácter.
+    """
+    return hashlib.sha256(seed.encode()).hexdigest()[:48]
+
+
 def _prod_settings(**overrides: Any) -> Any:
     """A ``prod`` Settings that satisfies the fail-closed secret guard."""
     from api_server.config import Settings
@@ -339,13 +357,13 @@ def _prod_settings(**overrides: Any) -> Any:
         "environment": "prod",
         "admin_require_mfa": True,
         "admin_session_ttl_minutes": 15,
-        "jwt_secret": "p" * 48,
-        "internal_token_secret": "q" * 48,
-        "review_url_signing_secret": "r" * 48,
-        "sso_encryption_key": "s" * 48,
-        "notification_encryption_key": "t" * 48,
-        "incoming_webhook_encryption_key": "u" * 48,
-        "minio_secret_key": "v" * 48,
+        "jwt_secret": _fake_secret("jwt"),
+        "internal_token_secret": _fake_secret("internal"),
+        "review_url_signing_secret": _fake_secret("review"),
+        "sso_encryption_key": _fake_secret("sso"),
+        "notification_encryption_key": _fake_secret("notify"),
+        "incoming_webhook_encryption_key": _fake_secret("webhook"),
+        "minio_secret_key": _fake_secret("minio"),
         "minio_access_key": "prod-minio-access",
         "database_url": "postgresql+asyncpg://app_user:realpw@db/agentic_platform",
         "admin_database_url": "postgresql+asyncpg://migrations_user:realpw@db/agentic_platform",

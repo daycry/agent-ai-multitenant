@@ -176,7 +176,9 @@ async def test_embedder_enables_vector_path_in_planning_context(
 # Ollama falla al crear, y el re-embed nunca existió (solo el de memorias).
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_chunk_embedding_backfill_fills_nulls(schema_at_head, migrations_pg_dsn: str) -> None:
+async def test_chunk_embedding_backfill_fills_nulls(
+    schema_at_head, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
     import asyncpg as _asyncpg
     from workers.config import Settings as WorkerSettings
     from workers.maintenance import _backfill_chunk_embeddings_async
@@ -209,20 +211,15 @@ async def test_chunk_embedding_backfill_fills_nulls(schema_at_head, migrations_p
     finally:
         await conn.close()
 
-    import os
-
+    # La URL sale de la fixture `admin_database_url`, NUNCA de un literal: el
+    # nombre de la base lo fija `TEST_PG_DB_NAME` (cada shard/agente usa el
+    # suyo), y un DSN escrito a mano apunta a una base que no existe. El fallo
+    # no se parece a su causa: `_backfill_chunk_embeddings_async` traga
+    # cualquier excepción de la pasada (el beat no muere nunca) y devuelve
+    # `{"updated": 0}`, así que el test rojo dice «no actualizó nada» mientras
+    # el error real —`database "…" does not exist`— solo sale por el log.
     result = await _backfill_chunk_embeddings_async(
-        settings=(
-            WorkerSettings(database_url=os.environ["WORKERS_TEST_ADMIN_URL"])
-            if os.environ.get("WORKERS_TEST_ADMIN_URL")
-            else WorkerSettings(
-                database_url=os.environ.get(
-                    "API_SERVER_ADMIN_DATABASE_URL",
-                    "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
-                    "@localhost:15432/agentic_platform_test",
-                )
-            )
-        ),
+        settings=WorkerSettings(database_url=admin_database_url),
         embedder_factory=lambda _s: HashEmbedder(),
     )
 

@@ -116,8 +116,24 @@ def get_vault_resolver() -> VaultResolver | None:
 def reset_vault_resolver_cache() -> None:
     """Test hook: forget the cached resolver so the next call rebuilds
     it from current settings + env. Used by tests that mutate
-    ``API_SERVER_VAULT_TOKEN`` between cases."""
+    ``API_SERVER_VAULT_TOKEN`` between cases.
+
+    Vacía LAS DOS cachés, no sólo la de este módulo. Desde que prod-10
+    (``task_prod10_07``) metió :func:`api_server.vault_client.build_vault_client`
+    debajo, hay un segundo singleton —el ``hvac.Client``— que este hook no
+    tocaba: un caso que corriese SIN token dejaba ese cliente cacheado en
+    ``None``, y el siguiente, ya con token, reconstruía el resolver sobre el
+    mismo ``None`` y se lo encontraba a ``None`` otra vez. El hook seguía
+    prometiendo en su docstring que reconstruye «from current settings + env»
+    y había dejado de hacerlo; el síntoma es un test que sólo pasa cuando corre
+    solo, y lo sufren también los módulos que llaman a este hook para no
+    arrastrar el Vault de otro test (``test_jit_provisioning``,
+    ``test_sso_global_login``, ``test_post_login_membership_resolution``).
+    """
+    from api_server.vault_client import reset_vault_client_cache
+
     _ResolverCache.value = _UNSET
+    reset_vault_client_cache()
 
 
 # ---------------------------------------------------------------------------

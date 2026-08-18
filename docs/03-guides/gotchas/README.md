@@ -102,6 +102,11 @@ el problema ya esté documentado.
 - [alembic-dev-db-branch-only-revision.md](./alembic-dev-db-branch-only-revision.md)
   — `Can't locate revision`: la DB de dev quedó en una revisión cuyo fichero
   solo existe en otra rama; verifica migraciones SOLO en la DB de test.
+- [downgrade-que-asume-que-no-hay-datos.md](./downgrade-que-asume-que-no-hay-datos.md)
+  — `column "X" contains null values` al bajar: un `downgrade` que restaura un
+  NOT NULL confiando en que «no puede haber filas de este tipo». El test sólo
+  se pone rojo en la suite completa (BD de ámbito sesión compartida), y parece
+  flaky de orden cuando denuncia una cadena no reversible.
 - [sqlalchemy-flush-fallido-mata-la-transaccion-exterior.md](./sqlalchemy-flush-fallido-mata-la-transaccion-exterior.md)
   — `Can't operate on closed transaction inside context manager`: un `flush()`
   que falla deja `DEACTIVE` la transacción EXTERIOR aunque vaya dentro de
@@ -162,6 +167,8 @@ el problema ya esté documentado.
   — `ConsoleSpanExporter` revienta cuando pytest captura stdout.
 - [otel-global-provider-tests.md](./otel-global-provider-tests.md)
   — el provider global no se puede reemplazar; tests añaden un span processor.
+  Incluye la reincidencia de 2026-08-18: `configure_tracing()` devolvía el
+  provider que OTEL había descartado, y el exporter quedaba mudo sin error.
 
 ### windows
 
@@ -278,6 +285,14 @@ el problema ya esté documentado.
 - [integration-tests-share-one-database.md](./integration-tests-share-one-database.md)
   — dos pytest de integración a la vez se dropean la BD mutuamente (una sola
   `agentic_platform_test` para todo el repo); `TEST_PG_DB_NAME` distinto por proceso.
+- [tests-de-integracion-en-la-redis-del-stack-vivo.md](./tests-de-integracion-en-la-redis-del-stack-vivo.md)
+  — dar a cada shard «su» base de Redis (1, 2, 3…) mete el arnés en el broker de
+  Celery del stack levantado: el worker vivo drena la cola y el test cae con
+  `assert len(raw) == 1` sobre cero elementos, tres capas más allá. De la 5 en adelante.
+- [localhost-ipv6-primero-cuesta-dos-segundos.md](./localhost-ipv6-primero-cuesta-dos-segundos.md)
+  — `localhost` resuelve `::1` antes que `127.0.0.1` y Docker Desktop sólo escucha
+  en IPv4: 2 s regalados por CADA conexión del arnés, sin ningún error. Se ve en
+  `/readyz`, cuyo deadline por check es de 2 s, que da 503 con las dependencias vivas.
 - [git-checkout-para-deshacer-una-mutacion-borra-el-trabajo-ajeno.md](./git-checkout-para-deshacer-una-mutacion-borra-el-trabajo-ajeno.md)
   — `git checkout -- fichero` no deshace TU cambio: restaura el fichero entero
   desde el índice y se lleva las 149 líneas sin comitear que había encima. Pasó

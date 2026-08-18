@@ -25,12 +25,33 @@ A CHECK constraint enforces that a ``saml`` row carries the three SAML
 essentials (entity id, SSO URL, cert), mirroring how the OIDC invariant
 is guarded — without forcing them onto ``oidc`` rows.
 
-Reversible: ``downgrade`` drops the SAML CHECK + columns and restores
-the OIDC NOT NULL constraints (no ``saml`` rows can exist at downgrade
-time because the table only held OIDC rows before this revision; the
-backfill is a no-op for any future saml rows, which downgrade removes
-implicitly is NOT done — instead we hard-require the operator to drop
-saml rows first, matching Alembic's "data loss is explicit" stance).
+Reversible (corregido el 2026-08-18)
+------------------------------------
+``downgrade`` **borra las filas ``saml``** antes de restaurar los NOT NULL de
+``issuer`` / ``client_id``, y luego tira el CHECK y las columnas SAML.
+
+El texto original decía lo contrario: «no ``saml`` rows can exist at downgrade
+time because the table only held OIDC rows before this revision … we hard-
+require the operator to drop saml rows first». Ese razonamiento era cierto el
+día que se escribió —esta revisión ES la que introduce SAML— y falso desde el
+día siguiente. Con una sola configuración SAML viva, el ``downgrade`` moría con
+
+    ERROR: column "client_id" of relation "sso_configurations" contains null values
+
+un mensaje que no nombra SAML, no dice qué borrar y deja la bajada a medias:
+exactamente lo contrario de «data loss is explicit». Y choca de frente con la
+regla dura de ``CLAUDE.md`` (no desplegar sin comprobar que las migraciones son
+reversibles), porque la base de datos de producción SÍ tiene datos.
+
+Se sigue el patrón que ya usa el resto de la cadena cuando una bajada no puede
+representar un dato: **borrarlo y decirlo**, no abortar a mitad —
+``0113_notification_log_content`` (``DELETE FROM notification_log_reads WHERE
+tenant_id IS NULL``), ``0115_sso_multi_provider`` (borra soft-borradas y
+duplicadas de ESTA MISMA tabla, y se ejecuta ANTES que esta bajada) y
+``0137_partition_executions`` (borra hijas huérfanas). La pérdida es real y
+está anotada arriba: al bajar de 0033 el esquema destino **no tiene columnas
+donde guardar una configuración SAML**, así que conservarla no es una opción;
+la alternativa honesta a borrarla es no poder bajar.
 
 Revision ID: 0033_sso_saml_columns
 Revises: 0032_sso_configurations
@@ -112,9 +133,16 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint("ck_sso_config_provider_shape", "sso_configurations", type_="check")
-    # Restore the OIDC NOT NULL constraints. Any pre-existing rows are
-    # OIDC and always have these set; saml rows (added by this revision)
-    # must be removed by the operator before downgrading.
+
+    # Las filas que NO CABEN en el esquema de 0032 — las SAML, que por
+    # definición no llevan `issuer` ni `client_id`. Se filtran por el dato y no
+    # por `provider = 'saml'` a propósito: lo que impide restaurar el NOT NULL
+    # es el NULL, venga del provider que venga (0115 añadió más providers
+    # simultáneos por tenant). Así la condición dice exactamente lo que la
+    # siguiente línea necesita.
+    op.execute("DELETE FROM sso_configurations WHERE client_id IS NULL OR issuer IS NULL")
+
+    # Restore the OIDC NOT NULL constraints.
     op.alter_column(
         "sso_configurations",
         "client_id",

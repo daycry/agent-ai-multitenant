@@ -85,13 +85,24 @@ Mismo fix, y hay que poner **las dos** variables, no solo la de Postgres:
 
 ```bash
 TEST_PG_DB_NAME=agentic_platform_test_mi_carril \
-TEST_REDIS_URL=redis://localhost:6379/14 \
+TEST_REDIS_URL="redis://:${P}@localhost:6379/14" \
   .venv/Scripts/python.exe -m pytest tests/integration/test_x.py -q -p no:randomly
 ```
 
-Redis trae 16 DBs (0-15); la 0 es la de desarrollo y la 15 el default de los
-tests, así que reparte entre la 1 y la 14. Si el choque fuese entre tests del
-mismo fichero, que cada uno mintee su sesión **después** del flush, no antes.
+(`P=$(grep '^REDIS_PASSWORD=' docker/.env | cut -d= -f2-)` antes, porque **esa
+URL lleva contraseña**: desde prod-10 Redis arranca con `--requirepass` y una
+URL pelada falla con `AuthenticationError` dentro de una fixture — ERROR y no
+FAILED, con el traceback apuntando al parser de `redis-py`. Ver
+[redis-con-contrasena-rompe-la-integracion.md](redis-con-contrasena-rompe-la-integracion.md).)
+
+Redis trae 16 DBs (0-15). La 15 es el default de los tests, y **la 0, la 1 y la
+2 son del stack de docker-compose**: streams de eventos, broker de Celery y
+result backend. Reparte entre la 5 y la 14 — nunca por debajo. Apuntar el arnés
+a la 1 no da un error de conexión: da un rojo mentiroso tres capas más allá,
+porque el worker vivo drena la cola que el test acaba de llenar
+([tests-de-integracion-en-la-redis-del-stack-vivo.md](tests-de-integracion-en-la-redis-del-stack-vivo.md)).
+Si el choque fuese entre tests del mismo fichero, que cada uno mintee su sesión
+**después** del flush, no antes.
 
 ## Y el tercer caso: `test_migrations.py` no puede ir en un lote
 

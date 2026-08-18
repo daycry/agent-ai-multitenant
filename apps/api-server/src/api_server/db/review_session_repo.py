@@ -1,10 +1,18 @@
 """Repository for `review_sessions` (Plan 06.5 task_06_5_03).
 
-Persistence layer for `workers.review_runtime.ReviewRuntimeManager`.
-The manager already operates in-memory; this module is the seam
-through which a future async worker (Plan 06.5 Fase C) writes each
-transition (create / suspend / verdict / expire) to the DB so that
-state survives a worker restart mid-review.
+Capa de persistencia del ciclo de vida de una sesión de review. Nació como
+«seam» para un manager en memoria (`ReviewRuntimeManager`) que nunca llegó a
+correr y que se retiró en el commit 7959cdcb: hoy esta tabla ES la fuente de
+verdad, y cada transición (create / touch / suspend / verdict / expire) se
+escribe aquí, así que el estado sobrevive a un reinicio del worker a mitad de
+review.
+
+Quién llama a qué:
+  * `create_review_session` ← `workers.compose_review_runtime` (alta + spawn).
+  * `list_running_overdue` / `list_running_idle` / `suspend_session` /
+    `mark_terminal` ← el barrido de beat `workers.expire_review_runtimes`.
+  * `touch_activity` / `mark_rerun_requested` ← el router de review de la
+    api-server, en cada gesto del validador.
 
 The functions here are session-bound (the caller owns the
 transaction) and tenant-scoped via RLS — the SQLAlchemy session must

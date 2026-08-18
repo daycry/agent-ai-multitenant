@@ -32,7 +32,15 @@ import pytest
 # `gotchas/redis-con-contrasena-rompe-la-integracion.md`.
 from ._redis_url import TEST_REDIS_URL
 
-PG_HOST = os.environ.get("TEST_PG_HOST", "localhost")
+#: `127.0.0.1` y NO `localhost`, a propósito. En Windows el resolver devuelve
+#: `::1` ANTES que `127.0.0.1`, y los puertos que publica Docker Desktop sólo
+#: escuchan en IPv4: cada conexión paga ~2 s esperando el rechazo del intento
+#: IPv6 antes de caer al fallback. No es un error —todo acaba conectando—, así
+#: que no se ve: sólo se nota en que la suite tarda horas… y en que
+#: `/readyz`, cuyo deadline por check es de 2 s, da 503 con las dos
+#: dependencias VIVAS. Ver
+#: `docs/03-guides/gotchas/localhost-ipv6-primero-cuesta-dos-segundos.md`.
+PG_HOST = os.environ.get("TEST_PG_HOST", "127.0.0.1")
 # Default 15432 matches docker/docker-compose.dev.yml — avoids clashing
 # with any local postgres on the host. Override TEST_PG_PORT for CI.
 PG_PORT = int(os.environ.get("TEST_PG_PORT", "15432"))

@@ -1,8 +1,17 @@
 """OpenTelemetry tracing — integration tests.
 
 The setup uses InMemorySpanExporter so spans can be inspected
-synchronously without piping JSON to stdout. Each test gets a fresh
-TracerProvider via `_reset_for_tests`.
+synchronously without piping JSON to stdout.
+
+Lo que este fichero **no** puede hacer, y decirlo evita repetir el fallo: dar a
+cada test un ``TracerProvider`` nuevo. El provider global de OTEL es *set-once*
+por proceso, y cualquier fichero anterior que importe ``api_server.main`` ya lo
+instala (``main.py`` llama a ``configure_tracing()`` a nivel de módulo). Lo que
+``_reset_for_tests()`` suelta es la caché del módulo, no el global de OTEL; a
+partir de ahí ``configure_tracing()`` devuelve el provider ACTIVO —desde el fix
+de 2026-08-18— en vez de uno recién construido que nadie usa. Los spans se leen
+enganchando un ``SimpleSpanProcessor`` a ese provider vivo, que es lo que hace
+la fixture ``exporter``.
 
 What we verify:
 
@@ -48,10 +57,10 @@ def _fresh_global_state_shield():
     get_settings.cache_clear()
     reset_engine_cache()
     reset_redis_cache()
-    # El TracerProvider global de OTEL es set-once: si otro fichero de la
-    # suite lo configuró (con su instrumentación), los spans de ESTE test
-    # salen con otro trace y la propagación parece rota. El reset que el
-    # docstring del módulo siempre prometió — ahora de verdad.
+    # Suelta la caché de `api_server.telemetry.setup` para que la fixture
+    # `exporter` vuelva a resolver el provider activo. OJO: esto NO desinstala
+    # el TracerProvider global de OTEL (set-once, irreversible sin API privada)
+    # ni desinstrumenta asyncpg/Redis/httpx — ver el docstring del módulo.
     _reset_for_tests()
     yield
 
@@ -62,9 +71,9 @@ def exporter():
 
     OpenTelemetry forbids replacing the global TracerProvider, so we
     add a SimpleSpanProcessor (synchronous) that pushes finished
-    spans into the in-memory store. The default ConsoleSpanExporter
-    set by configure_tracing keeps running in parallel — harmless
-    for tests, useful for stdout debugging.
+    spans into the in-memory store. ``configure_tracing`` no adjunta
+    ningún exporter por su cuenta (el de consola es opt-in y lo cuelga
+    ``add_console_exporter()``), así que éste es el único que lee.
     """
     # Make sure the provider exists; this is idempotent.
     configure_tracing(service_name="api-server-test")

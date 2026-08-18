@@ -58,9 +58,17 @@ ls tests/integration/test_*.py | sort > /tmp/allint.txt
 split -n l/4 -d /tmp/allint.txt /tmp/shard_
 
 P=$(grep '^REDIS_PASSWORD=' docker/.env | cut -d= -f2-)
-TEST_REDIS_URL="redis://:${P}@localhost:6379/1" TEST_PG_DB_NAME=agentic_int_s0 \
+TEST_REDIS_URL="redis://:${P}@localhost:6379/5" TEST_PG_DB_NAME=agentic_int_s0 \
   pytest $(cat /tmp/shard_00 | tr '\n' ' ') -q -p no:randomly --timeout=600
 ```
+
+**La base de Redis, de la 5 en adelante.** Esta receta decía `/1`, y ahí está el
+broker de Celery del stack levantado: el worker vivo drena la cola `default`
+antes de que el test la lea, y seis tests de despacho salen rojos con
+`assert len(raw) == 1` sobre cero elementos, sin nada que apunte a Docker (y de
+paso el `DEL default` del test se lleva trabajo real encolado). Las bases 0, 1 y
+2 son del stack; `_redis_url.py` ahora aborta si se las pides. Está contado en
+[tests-de-integracion-en-la-redis-del-stack-vivo.md](tests-de-integracion-en-la-redis-del-stack-vivo.md).
 
 `--timeout=600` es la otra mitad: con él, un test colgado contra una base muerta
 muere en diez minutos en vez de mantener viva la ilusión indefinidamente.
