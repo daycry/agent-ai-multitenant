@@ -50,9 +50,51 @@ ENV COMPOSER_ALLOW_SUPERUSER=1 \
 # son 49 CVE HIGH CON fix publicado (todas de `linux-libc-dev`, que entra como
 # dependencia del toolchain que `pecl` y `docker-php-ext-install` necesitan).
 # No se arregla refrescando el digest: se comprobó con el más reciente y
-# seguían ahí. Aplicar el parche que Debian YA publicó es el arreglo, y a
-# diferencia de un pin se cura solo en el siguiente build.
-RUN apt-get update \
+# seguían ahí. Aplicar el parche que Debian YA publicó es el arreglo.
+#
+# 2026-08-18: la frase que seguía aquí —«a diferencia de un pin se cura solo en
+# el siguiente build»— era FALSA, y justo por eso este job se puso rojo. Lo que
+# se cierra ahora es CVE-2026-6473 (HIGH) en `libpq-dev`/`libpq5`: instalada
+# 17.10-0+deb13u1, corregida 17.11-0+deb13u1 en `trixie-security`.
+#
+# Es DERIVA DE CVE, no una regresión nuestra: esta plantilla pasó Trivy en verde
+# el 13-08 a las 23:33 y falló el 14-08 a las 08:53 sin que cambiara una línea de
+# este Dockerfile. Lo que se movió fue la base de datos de Trivy, no la imagen.
+#
+# Pero el arreglo NO puede ser el de `a8022af2` (refrescar el digest de la base),
+# y conviene dejar dicho por qué, que si no el próximo lector lo intenta:
+#
+#   1. No hay digest nuevo que poner. `php:8.3-cli` SIGUE resolviendo hoy al
+#      mismo `f62df991…` que ya está pineado arriba, y `composer:2` al mismo
+#      `4d71c3c2…`.
+#   2. `libpq` tampoco viene de la base. Comprobado ejecutando la base pineada:
+#      no trae `libpq5` ni `libpq-dev` instalados — entran por ESTE `apt-get
+#      install` de aquí abajo, y con el índice fresco `apt` ya ofrece 17.11 como
+#      candidata desde `trixie-security`.
+#
+# La causa real es la CACHÉ DE CAPAS. El workflow construye con `cache-from` /
+# `cache-to: type=gha`, y la clave de esta capa sale del digest de la base y del
+# TEXTO de este RUN. Como el 14-08 no había cambiado ninguno de los dos, buildkit
+# la dio por buena (`#13 CACHED`, literal en el log del job) y el `apt-get -y
+# upgrade` de aquí arriba no llegó a ejecutarse: se reutilizó tal cual la capa
+# construida el 13-08, cuando Debian aún no había publicado 17.11. Un
+# `apt-get upgrade` que no se ejecuta no parchea nada.
+#
+# De ahí esta ÉPOCA. Su valor entra en la clave de caché del RUN —verificado a
+# mano: mismo valor → capa cacheada, valor distinto → capa re-ejecutada—, así que
+# subir la fecha obliga a rehacer el `update`+`upgrade` contra el archivo de
+# seguridad del día.
+#
+# Y el precio, dicho en voz alta para no repetir el error de la frase anterior:
+# esto NO se cura solo. Es la misma palanca manual que refrescar un digest, con
+# la misma cadencia de mantenimiento — cuando Debian publique el siguiente
+# parche de seguridad habrá que volver a subir la fecha. Lo que NO se hace es
+# recortar la severidad de Trivy, añadir una entrada a `.trivyignore`, meter
+# `continue-on-error` ni soltar el pin del digest: el gate sigue igual de duro;
+# lo que se arregla es la imagen.
+ARG APT_SECURITY_EPOCH=2026-08-18
+RUN echo "apt security epoch: ${APT_SECURITY_EPOCH}" \
+ && apt-get update \
  && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends \
       git unzip libzip-dev libpq-dev libonig-dev libicu-dev libxml2-dev \

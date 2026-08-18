@@ -63,6 +63,12 @@ el problema ya esté documentado.
   `agent-runtime:v1` **SIN prefijo** (construir el prefijado no llega a los
   runs), y admin-panel se construye DESDE PowerShell (Git Bash mangla el
   build-arg de ruta).
+- [trivy-en-rojo-tres-causas-distintas.md](./trivy-en-rojo-tres-causas-distintas.md)
+  — Trivy se pone rojo SOLO (refresca su BD cada corrida), y las tres causas se
+  confunden: (1) el paquete viene de la base → refrescar digest; (2) lo instala
+  nuestro `apt-get` pero la capa está `CACHED` por `type=gha` → un `apt-get upgrade`
+  NO sirve, hay que invalidar la capa; (3) el binario no tiene dueño en dpkg
+  (`/usr/bin/pebble` de Canonical) → no lo arregla ni el digest ni apt.
 - [deploy-relaunches-frozen-tasks.md](./deploy-relaunches-frozen-tasks.md)
   — un `up -d` lanza runs que nadie pidió: el reconciler rescata a los 90 s las
   tareas `in_progress` **sin ejecución** (>30 min), y son invisibles al chequeo
@@ -309,6 +315,11 @@ el problema ya esté documentado.
   — una tabla particionada es `relkind = 'p'`: la introspección que filtra por
   `'r'` la declara SIN RLS teniéndola (falso positivo que invita a eximirla), y
   asyncpg devuelve `relkind` como `bytes`.
+- [alembic-round-trip-anclado-por-nombre.md](./alembic-round-trip-anclado-por-nombre.md)
+  — `command.downgrade(cfg, "-1")` es relativo a la CABEZA, no a la migración que
+  el test quiere deshacer: en cuanto se apila otra encima, el test deja de cubrir
+  lo que decía cubrir y luego falla señalando a una migración inocente. Anclar por
+  nombre a la revisión anterior.
 - [beat-entry-whose-task-nobody-imports.md](./beat-entry-whose-task-nobody-imports.md)
   — una entrada de beat cuyo módulo no está en `celery_app(imports=...)` se encola
   y muere con `NotRegistered` **sin ruido**: seis features «desplegadas» que nunca

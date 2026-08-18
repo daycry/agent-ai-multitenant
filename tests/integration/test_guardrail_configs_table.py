@@ -326,13 +326,29 @@ def test_a_tenant_cannot_write_a_layer_for_another_tenant(migrated: str) -> None
 # ---------------------------------------------------------------------------
 # Reversibilidad
 # ---------------------------------------------------------------------------
+# La revisión inmediatamente ANTERIOR a la que crea la tabla. Se ancla por
+# NOMBRE y nunca con `downgrade("-1")`: `-1` significa «una revisión por debajo
+# de la cabeza actual», no «deshaz 0132». Cuando este fichero se escribió, 0132
+# ERA la cabeza y las dos cosas coincidían; hoy la cabeza es 0139, así que `-1`
+# se limitaba a deshacer 0139 y dejaba `guardrail_configs` en su sitio — el test
+# fallaba sin que la migración tuviera nada malo. Con el nombre, el round-trip
+# sigue apuntando a lo que este test quiere probar aunque encima se apilen otras
+# veinte migraciones. Mismo razonamiento (y misma solución) que en
+# `test_migrations.py::test_fk_cleanup_migration_is_reversible`.
+_REVISION_BEFORE = "0131_partition_guardrail_events"
+
+
 def test_downgrade_drops_the_table_and_upgrade_puts_it_back_with_rls(
     alembic_config: object, migrations_pg_dsn: str
 ) -> None:
     command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
     asyncio.run(_seed(migrations_pg_dsn))
 
-    command.downgrade(alembic_config, "-1")  # type: ignore[arg-type]
+    # Bajar hasta 0131 deshace de paso 0133..0139, entre ellas las cuatro que
+    # convierten tablas a particionadas (ADR 0151). Es a propósito: el ida y
+    # vuelta completo es justo lo que CLAUDE.md exige comprobar antes de
+    # desplegar, y un downgrade incompleto de cualquiera de ellas rompe aquí.
+    command.downgrade(alembic_config, _REVISION_BEFORE)  # type: ignore[arg-type]
     assert asyncio.run(_table_exists(migrations_pg_dsn)) is False
 
     command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
