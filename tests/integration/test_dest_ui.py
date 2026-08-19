@@ -14,9 +14,11 @@ test:
   * PUT  /admin/backup/destinations           — System-Admin-only (a Tenant
     Admin is 403); validates EVERY item (unknown type / missing required field /
     any secret-looking field -> 422, nothing persisted) and PERSISTS the list.
-  * POST /admin/backup/destinations/{name}/test — System-Admin-only; builds the
-    right adapter via the workers' registered-by-type factory and runs its
-    ``test_connectivity`` probe (MOCKED — no real S3/SFTP/rclone endpoint).
+  * POST /admin/backup/destinations/{name}/test — System-Admin-only; DELEGATES
+    the probe to the worker (prod-15 ``task_gov_app_boundary_11``) and relays its
+    ok/detail. Hasta 2026-08-19 el adaptador se construía en el proceso del
+    api-server, que es donde NO están las ``WORKERS_BACKUP_*``; el productor está
+    MOCKEADO aquí, así que no hay broker ni red.
 
 The headline guarantee under test is that CREDENTIALS are NEVER stored nor
 echoed: a payload that tries to smuggle a secret into ``config`` is a clean 422,
@@ -321,9 +323,14 @@ async def test_set_destinations_rejects_unknown_type_and_missing_field(
 async def test_connectivity_probe_is_system_admin_gated_and_mocked(
     configured_app, migrations_pg_dsn: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The connectivity probe builds the right adapter from the stored
-    NON-secret config and runs its test_connectivity — MOCKED so no real S3
-    endpoint is reached. A Tenant Admin is 403; a System Admin gets ok/detail."""
+    """The connectivity probe hands the stored NON-secret config to the WORKER
+    and relays its verdict — MOCKED so no broker and no real S3 endpoint are
+    reached. A Tenant Admin is 403; a System Admin gets ok/detail.
+
+    Desde prod-15 ``task_gov_app_boundary_11`` el api-server ya no construye el
+    adaptador: lo hace ``workers.backup_test_destination``, que corre donde están
+    las credenciales. Lo que este test sigue fijando —y ahora dice algo más
+    fuerte— es QUÉ viaja: la config no secreta del destino y nada más."""
     seeded = await _seed(migrations_pg_dsn)
     admin_token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
     sys_token = await _mint_token(seeded["sysadmin"], None, is_system_admin=True)
@@ -337,22 +344,19 @@ async def test_connectivity_probe_is_system_admin_gated_and_mocked(
         )
         assert seed_resp.status_code == 200, seed_resp.text
 
-        # MOCK the workers' registry so the probe never touches boto3 / the
-        # network: build_destination returns a fake whose test_connectivity is a
-        # canned result, and we assert the factory got the right NON-secret config.
-        import workers.backup_destinations as bd
+        # MOCK the PRODUCER so the probe never reaches a broker (and therefore
+        # never a real S3 endpoint): it returns the canned verdict a worker would
+        # send back, and we capture the payload to assert it carries the right
+        # NON-secret config and nothing else.
+        from api_server import celery_client
 
         captured: dict[str, Any] = {}
 
-        class _FakeDestination:
-            def test_connectivity(self) -> bd.ConnectivityResult:
-                return bd.ConnectivityResult(ok=True, detail="bucket 'backups' reachable")
-
-        def _fake_build(config: dict[str, Any], **_kwargs: Any) -> Any:
+        async def _fake_probe(config: dict[str, Any], *, timeout_s: float) -> dict[str, Any]:
             captured["config"] = config
-            return _FakeDestination()
+            return {"ok": True, "detail": "bucket 'backups' reachable"}
 
-        monkeypatch.setattr(bd, "build_destination", _fake_build)
+        monkeypatch.setattr(celery_client, "probe_backup_destination_and_wait", _fake_probe)
 
         # A Tenant Admin cannot probe.
         forbidden = await client.post(
@@ -378,8 +382,8 @@ async def test_connectivity_probe_is_system_admin_gated_and_mocked(
         )
         assert missing.status_code == 404, missing.text
 
-    # The factory was handed the destination's type/name + its NON-secret config,
-    # never a credential.
+    # Lo que viajó al worker es el type/name del destino + su config NO SECRETA,
+    # nunca una credencial: las resuelve el worker desde su propio entorno.
     assert captured["config"]["type"] == "s3"
     assert captured["config"]["name"] == "offsite-s3"
     assert captured["config"]["bucket"] == "backups"

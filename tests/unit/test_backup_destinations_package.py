@@ -9,11 +9,13 @@ módulo era 1449 líneas con cuatro adaptadores completos + la fábrica.
 Este módulo NO se consume por su API pública nada más. Se consume **por su nombre
 de módulo**, en dos formas que un troceo mal hecho rompe en silencio:
 
-1. **`monkeypatch` sobre el atributo del módulo.** `routers/backup.py` y
-   `workers/backup_task.py` hacen `from workers.backup_destinations import
+1. **`monkeypatch` sobre el atributo del módulo.** `workers/backup_task.py` y
+   `workers/backup_probe_task.py` hacen `from workers.backup_destinations import
    build_destination` DENTRO de la función, así que leen el atributo del módulo en
-   cada llamada — y los tests (`test_dest_ui.py`, `test_backup_remote_upload.py`)
-   se apoyan justo en eso para no tocar boto3 ni la red. Si un consumidor pasara a
+   cada llamada — y los tests (`test_backup_remote_upload.py`,
+   `test_backup_probe_runs_in_the_worker.py`) se apoyan justo en eso para no tocar
+   boto3 ni la red. (`routers/backup.py` fue un tercer consumidor hasta prod-15
+   `task_gov_app_boundary_11`; ahora encola la sonda en el worker.) Si un consumidor pasara a
    importar de `workers.backup_destinations.factory`, el parche sobre el paquete
    dejaría de alcanzarle: los tests seguirían VERDES **haciendo red de verdad**, o
    fallando por una razón que no tiene nada que ver. Por eso hay abajo una guarda
@@ -234,10 +236,10 @@ def _modules_importing_a_submodule() -> list[str]:
 def test_nobody_outside_the_package_imports_a_submodule_directly() -> None:
     """El punto de parcheo tiene que seguir siendo UNO: el paquete.
 
-    `routers/backup.py` y `workers/backup_task.py` importan `build_destination`
-    dentro de la función y los tests parchean el atributo del PAQUETE. Un import
-    desde `…backup_destinations.factory` esquivaría ese parche, y el síntoma sería
-    un test que pasa haciendo red de verdad — no un rojo.
+    `workers/backup_task.py` y `workers/backup_probe_task.py` importan
+    `build_destination` dentro de la función y los tests parchean el atributo del
+    PAQUETE. Un import desde `…backup_destinations.factory` esquivaría ese parche,
+    y el síntoma sería un test que pasa haciendo red de verdad — no un rojo.
     """
     offenders = _modules_importing_a_submodule()
     assert not offenders, (

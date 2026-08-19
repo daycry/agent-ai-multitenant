@@ -28,17 +28,17 @@ function Invoke-Demo {
 }
 
 $results = @{}
-$results.setup = Invoke-Demo -Label "Setup compartido" -ScriptRel "scripts\setup_demo_06.py"
+$results.setup = Invoke-Demo -Label "Setup compartido" -ScriptRel "scripts\demos\setup_demo_06.py"
 if ($results.setup -ne 0) {
     Write-Host ""
     Write-Host "FAIL - setup termino con exit $($results.setup); abortando."
     exit 1
 }
 
-$results.a = Invoke-Demo -Label "Demo A - end-to-end pipeline (06_01 + 06_06 + 06_09)" -ScriptRel "scripts\demo_human_06_a_endtoend.py"
-$results.b = Invoke-Demo -Label "Demo B - cache + aux + multi-repo (06_02 + 06_03 + 06_05)" -ScriptRel "scripts\demo_human_06_b_cache_aux.py"
-$results.c = Invoke-Demo -Label "Demo C - pool + policies (06_07 + 06_08)" -ScriptRel "scripts\demo_human_06_c_pool_policies.py"
-$results.d = Invoke-Demo -Label "Demo D - review + escalado + audit (06_04 + 06_10 + 06_11 + 06_12)" -ScriptRel "scripts\demo_human_06_d_review_audit.py"
+$results.a = Invoke-Demo -Label "Demo A - end-to-end pipeline (06_01 + 06_06 + 06_09)" -ScriptRel "scripts\demos\demo_human_06_a_endtoend.py"
+$results.b = Invoke-Demo -Label "Demo B - cache + aux + multi-repo (06_02 + 06_03 + 06_05)" -ScriptRel "scripts\demos\demo_human_06_b_cache_aux.py"
+$results.c = Invoke-Demo -Label "Demo C - pool + policies (06_07 + 06_08)" -ScriptRel "scripts\demos\demo_human_06_c_pool_policies.py"
+$results.d = Invoke-Demo -Label "Demo D - review + escalado + audit (06_04 + 06_10 + 06_11 + 06_12)" -ScriptRel "scripts\demos\demo_human_06_d_review_audit.py"
 
 Write-Host ""
 Write-Host "========================================================================"

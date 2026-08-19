@@ -8,13 +8,13 @@
 #
 # Flujo:
 #   1) Verifica que api-server :8001 y admin-panel :3000 responden.
-#   2) Lee scripts/.demo_state_06_8.json (creado por
+#   2) Lee scripts/demos/.demo_state_06_8.json (creado por
 #      setup_demo_06_8.py) e imprime las credenciales de los 3 usuarios
 #      + las URLs a abrir.
 #   3) Lista qué hacer con cada cuenta - matchea los checklists del doc.
 #
 # Si nunca corriste el setup: ejecuta primero
-#   .\.venv\Scripts\python.exe scripts\setup_demo_06_8.py
+#   .\.venv\Scripts\python.exe scripts\demos\setup_demo_06_8.py
 # -----------------------------------------------------------------------------
 
 [CmdletBinding()]
@@ -57,10 +57,10 @@ if (-not $webOk) {
 # -----------------------------------------------------------------------------
 # 2) Leer state del seed
 # -----------------------------------------------------------------------------
-$StateFile = Join-Path $RepoRoot "scripts\.demo_state_06_8.json"
+$StateFile = Join-Path $RepoRoot "scripts\demos\.demo_state_06_8.json"
 if (-not (Test-Path $StateFile)) {
     Write-Step "No existe $StateFile"
-    Write-Hint "Corre primero: .\.venv\Scripts\python.exe scripts\setup_demo_06_8.py"
+    Write-Hint "Corre primero: .\.venv\Scripts\python.exe scripts\demos\setup_demo_06_8.py"
     exit 1
 }
 

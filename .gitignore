@@ -78,8 +78,10 @@ playwright/.cache/
 .dev/
 
 # Estado del setup_demo_project.py (ids del proyecto y agente compartidos
-# entre los demos de los tests humanos — local, no versionar).
-scripts/.demo_state.json
+# entre los demos de los tests humanos — local, no versionar). Los escribe
+# `Path(__file__).parent`, o sea JUNTO al script: viven en scripts/demos/
+# desde prod-15 task_gov_higiene_10.
+scripts/demos/.demo_state.json
 
 # =============================================================================
 # Docker / Compose
@@ -144,11 +146,11 @@ temp/
 # to avoid accidentally committing local-only overrides if the convention changes.
 # (currently tracked — uncomment to ignore again)
 # .claude/settings.local.json
-scripts/.demo_state_05.json
-scripts/.demo_state_06.json
-scripts/.demo_06/
-scripts/.demo_state_06_8.json
-scripts/.demo_state_06_9.json
+scripts/demos/.demo_state_05.json
+scripts/demos/.demo_state_06.json
+scripts/demos/.demo_06/
+scripts/demos/.demo_state_06_8.json
+scripts/demos/.demo_state_06_9.json
 
 # Claude Code internal lockfile (per-session / per-machine).
 .claude/scheduled_tasks.lock

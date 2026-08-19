@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import TypeVar
+from typing import Any, TypeVar
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +69,8 @@ from api_server.schemas.backup import (
 )
 
 router = APIRouter(prefix="/admin/backup", tags=["admin", "backup"])
+
+_log = structlog.get_logger("api_server.routers.backup")
 
 _T = TypeVar("_T")
 
@@ -213,16 +216,47 @@ async def update_backup_destinations(
 # ---------------------------------------------------------------------------
 # Plazo de las sondas remotas (prod-13 task_prod13_02)
 # ---------------------------------------------------------------------------
-# `to_thread` saca las llamadas de red del bucle de eventos, pero no les pone
-# plazo. Contra una IP que DROPea paquetes (firewall silencioso) el `connect` de
-# paramiko hereda el timeout del SO — minutos — y pasan dos cosas: la petición no
-# termina nunca, y el executor por defecto de asyncio (`min(32, cpu+4)` hilos) se
-# va llenando de sondas colgadas hasta que `to_thread` deja de ser una salida y
-# vuelve a hacer cola. O sea, el bloqueo que se quería evitar entra por detrás.
+# El plazo de las sondas remotas. Desde prod-15 `task_gov_app_boundary_11` la red
+# NO la hace este proceso: la sonda se encola en el worker (que es donde están
+# las `WORKERS_BACKUP_*`) y aquí sólo se espera su resultado. El plazo sigue
+# haciendo falta, por el mismo motivo de siempre y por uno nuevo:
+#
+#   * el de siempre — una petición HTTP que no termina nunca es un spinner
+#     eterno, y el operador vuelve a pulsar;
+#   * el nuevo — la lane `privileged` corre con `--concurrency=1` y drena el
+#     backup nocturno, así que una sonda puede quedarse esperando su turno.
+#     Vencido el plazo se descarta en el broker (`expires`) en vez de ejecutarse
+#     tarde: ver `celery_client._probe_backup_worker`.
 #
 # 15 s: una sonda de alcanzabilidad que no ha contestado en quince segundos ya
 # dijo lo que tenía que decir.
 REMOTE_PROBE_TIMEOUT_S = 15.0
+
+# Plazo de la PETICIÓN, un poco por encima del de la sonda. El camino normal lo
+# corta `get(timeout=REMOTE_PROBE_TIMEOUT_S)` en el hilo del productor, que
+# devuelve un `None` limpio; este margen es el cinturón para lo que ese `get` no
+# acota — un `send_task` colgado del socket del broker. Sin él, el que se queda
+# sin plazo es el request, que es justo lo que se quiere evitar.
+_PROBE_REQUEST_MARGIN_S = 5.0
+PROBE_REQUEST_DEADLINE_S = REMOTE_PROBE_TIMEOUT_S + _PROBE_REQUEST_MARGIN_S
+
+
+def destination_probe_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """Lo ÚNICO que viaja al worker de un destino: su config NO SECRETA.
+
+    ``{type, name, **config}``, tal cual lo espera
+    ``workers.backup_destinations.build_destination``. Que no lleve credenciales
+    no es una promesa de este helper: lo garantiza
+    ``validate_backup_destinations``, que acepta por allow-list de campos por
+    tipo y devuelve 422 ante cualquier nombre que huela a secreto. Las
+    credenciales las resuelve el worker desde su propio entorno.
+
+    Un helper, y no el literal repetido en los dos llamantes, porque el día que
+    la forma cambie tiene que cambiar en los dos sitios a la vez: si el listado
+    remoto y la sonda de conectividad construyeran el destino de forma distinta,
+    «probar» diría OK sobre un destino que luego no se lista.
+    """
+    return {"type": item["type"], "name": item["name"], **(item.get("config") or {})}
 
 
 async def run_remote_probe[T](coro: Awaitable[T], *, timeout_s: float, on_timeout: T) -> T:
@@ -230,13 +264,17 @@ async def run_remote_probe[T](coro: Awaitable[T], *, timeout_s: float, on_timeou
 
     **Lo que esto NO hace, y conviene tenerlo escrito**: el hilo del executor
     sigue colgado. Python no puede matar un hilo, así que `wait_for` solo cancela
-    la espera. Acota la RESPUESTA, no el recurso. El arreglo completo es un
-    timeout de socket dentro de los adaptadores (`workers/backup_destinations.py`),
-    que vive en otro paquete.
+    la espera. Acota la RESPUESTA, no el recurso.
 
-    Un fallo real del adaptador se deja subir: convertirlo en ``on_timeout``
-    diría «se colgó» donde hubo un error con causa, y el operador perdería justo
-    el mensaje que necesita para arreglarlo.
+    Desde prod-15 ``task_gov_app_boundary_11`` el recurso está acotado por otro
+    lado: la red la hace el worker, y el hilo que este proceso deja esperando
+    lleva su propio ``get(timeout=…)`` (ver ``celery_client._probe_backup_worker``).
+    Este plazo es ahora el cinturón del camino que aquel no cubre — un
+    ``send_task`` colgado del socket del broker.
+
+    Un fallo real se deja subir: convertirlo en ``on_timeout`` diría «se colgó»
+    donde hubo un error con causa, y el operador perdería justo el mensaje que
+    necesita para arreglarlo.
     """
     try:
         return await asyncio.wait_for(coro, timeout=timeout_s)
@@ -254,11 +292,13 @@ async def test_backup_destination(
 
     System-Admin only (a connectivity probe resolves the destination's
     credentials from the secret seam). Looks up the destination's NON-secret
-    config, builds the right adapter via the workers' registered-by-type factory,
-    and runs its cheap reachability/auth probe (``head_bucket`` / SFTP ``stat`` /
-    ``rclone lsd``). Returns a typed ok/detail result; the adapter guarantees the
-    ``detail`` never carries a credential. The probe is audited (ok flag + name,
-    never a secret)."""
+    config and DELEGATES the probe to the worker, which is where the adapters and
+    —esto es lo que importa— las credenciales de destino viven: el api-server no
+    declara ninguna ``WORKERS_BACKUP_*``, así que la sonda ejecutada aquí daba
+    FAIL en cuanto el destino tenía credencial (prod-15
+    ``task_gov_app_boundary_11``). Returns a typed ok/detail result; the adapter
+    guarantees the ``detail`` never carries a credential. The probe is audited
+    (ok flag + name, never a secret)."""
     items = await get_backup_destinations(session)
     match = next((item for item in items if item.get("name") == name), None)
     if match is None:
@@ -267,41 +307,33 @@ async def test_backup_destination(
             detail=f"no backup destination named {name!r}",
         )
 
-    # Lazy import — keep the workers' boto3/paramiko import cost off the
-    # api-server hot path; this endpoint is the only one that needs the adapters.
-    from workers.backup_destinations import DestinationError, build_destination
-    from workers.backup_encryption import EnvSecretsProvider
+    # Import diferido del productor, como el resto de este router
+    # (`enqueue_restore`, `get_restore_job_status`): es también el punto de
+    # parcheo de los tests.
+    from api_server.celery_client import probe_backup_destination_and_wait
 
-    # The destination's NON-secret config plus its type/name, as the factory
-    # expects. Credentials are resolved by the adapter through the secret seam —
-    # NEVER from this dict (validation guarantees it holds no secret).
-    factory_config = {"type": match["type"], "name": match["name"], **match.get("config", {})}
-    try:
-        destination = build_destination(factory_config, secrets=EnvSecretsProvider())
-        # `test_connectivity` es SÍNCRONO y hace red: `head_bucket` de boto3, un
-        # `stat` de paramiko, `rclone lsd`. Contra un destino inalcanzable se
-        # queda esperando el timeout del socket, y ejecutado en el bucle de
-        # eventos congela TODAS las requests y WebSockets del api-server
-        # (hallazgo api-3). `to_thread` lo saca a un hilo del executor: la
-        # petición sigue esperando, el resto de la plataforma no. Y con plazo,
-        # porque `to_thread` no pone ninguno (ver `run_remote_probe`).
-        result = await run_remote_probe(
-            asyncio.to_thread(destination.test_connectivity),
-            timeout_s=REMOTE_PROBE_TIMEOUT_S,
-            on_timeout=None,
+    # La config NO SECRETA del destino, lo ÚNICO que viaja por el broker: las
+    # credenciales las resuelve el worker desde su propio entorno, y
+    # `validate_backup_destinations` ya garantiza por allow-list que este dict
+    # no lleva ninguna.
+    factory_config = destination_probe_payload(match)
+    probe = await run_remote_probe(
+        probe_backup_destination_and_wait(factory_config, timeout_s=REMOTE_PROBE_TIMEOUT_S),
+        timeout_s=PROBE_REQUEST_DEADLINE_S,
+        on_timeout=None,
+    )
+    if probe is None:
+        # El worker no contestó (lane ocupada, broker caído, sonda caducada). Es
+        # un FALLO de la sonda, con su motivo, no un 504: la UI pinta FAIL +
+        # detalle igual que con cualquier otro.
+        result_ok = False
+        result_detail = (
+            f"the backup worker did not answer in {REMOTE_PROBE_TIMEOUT_S:.0f}s "
+            "(is the privileged queue draining?)"
         )
-    except DestinationError as exc:
-        # A config the factory rejects (shouldn't happen post-validation) maps to
-        # a clean not-ok result rather than a 500 — the UI renders FAIL + detail.
-        result_ok, result_detail = False, str(exc)
     else:
-        if result is None:
-            # Se agotó el plazo. Es un FALLO de la sonda, con su motivo, no un
-            # 504: la UI renderiza FAIL + detalle igual que con cualquier otro.
-            result_ok = False
-            result_detail = f"connectivity probe did not answer in {REMOTE_PROBE_TIMEOUT_S:.0f}s"
-        else:
-            result_ok, result_detail = result.ok, result.detail
+        result_ok = bool(probe.get("ok", False))
+        result_detail = str(probe.get("detail", ""))
 
     await write_audit_log(
         session,
@@ -415,46 +447,30 @@ async def _list_remote_backups(session: AsyncSession) -> list[tuple[str, str]]:
     if not items:
         return []
 
-    from workers.backup_destinations import DestinationError, build_destination
-    from workers.backup_encryption import EnvSecretsProvider
-
-    secrets = EnvSecretsProvider()
-
-    def _list_one(item: dict[str, object]) -> list[tuple[str, str]]:
-        """Build the adapter and enumerate it. SÍNCRONO y con red — se ejecuta
-        en un hilo, nunca en el bucle de eventos (hallazgo api-3): con N destinos
-        remotos configurados, uno solo inalcanzable bloqueaba el api-server
-        entero durante su timeout de socket."""
-        name = str(item["name"])
-        factory_config = {
-            "type": item["type"],
-            "name": item["name"],
-            **(item.get("config") or {}),  # type: ignore[dict-item]
-        }
-        try:
-            destination = build_destination(factory_config, secrets=secrets)
-            return [(entry.name, name) for entry in destination.list_remote()]
-        except DestinationError:
-            # One unreachable / misconfigured destination must not fail the list.
-            return []
-        except Exception:  # pragma: no cover - defensive: never 500 the list
-            return []
+    from api_server.celery_client import list_remote_backup_entries_and_wait
 
     out: list[tuple[str, str]] = []
     for item in items:
         if not item.get("enabled", True):
             continue
-        # Con plazo POR DESTINO: sin él, N destinos configurados y uno colgado
-        # hacen que el listado entero tarde lo que tarde ese uno. Un destino que
-        # no contesta se salta, que es el mismo trato que ya recibe uno que
-        # falla — «best-effort» tiene que incluir «no contesta».
-        out.extend(
-            await run_remote_probe(
-                asyncio.to_thread(_list_one, item),
-                timeout_s=REMOTE_PROBE_TIMEOUT_S,
-                on_timeout=[],
-            )
+        name = str(item["name"])
+        # UNA tarea POR DESTINO, con su propio plazo: sin él, N destinos
+        # configurados y uno colgado hacen que el listado entero tarde lo que
+        # tarde ese uno. Un destino que no contesta se salta, que es el mismo
+        # trato que ya recibe uno que falla — «best-effort» tiene que incluir
+        # «no contesta». La enumeración corre en el worker, que es donde están
+        # las credenciales del destino (prod-15 task_gov_app_boundary_11).
+        entries = await run_remote_probe(
+            list_remote_backup_entries_and_wait(
+                destination_probe_payload(item), timeout_s=REMOTE_PROBE_TIMEOUT_S
+            ),
+            timeout_s=PROBE_REQUEST_DEADLINE_S,
+            on_timeout=None,
         )
+        if entries is None:
+            _log.info("backup.list_remote.no_answer", destination=name)
+            continue
+        out.extend((entry, name) for entry in entries)
     return out
 
 

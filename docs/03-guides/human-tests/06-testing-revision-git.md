@@ -53,11 +53,11 @@ Todos los demos PASSED. Puedes marcar los 12 human_06_* como pass.
 
 ## Opciones del launcher
 
-| Modo                            | Comando                                                           |
-| ------------------------------- | ----------------------------------------------------------------- |
-| Todos los demos                 | `.\scripts\dev\run-human-tests-06.ps1`                            |
-| Solo setup (re-siembra sandbox) | `.\.venv\Scripts\python.exe scripts\setup_demo_06.py`             |
-| Solo un demo concreto           | `.\.venv\Scripts\python.exe scripts\demo_human_06_<a/b/c/d>_*.py` |
+| Modo                            | Comando                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| Todos los demos                 | `.\scripts\dev\run-human-tests-06.ps1`                                  |
+| Solo setup (re-siembra sandbox) | `.\.venv\Scripts\python.exe scripts\demos\setup_demo_06.py`             |
+| Solo un demo concreto           | `.\.venv\Scripts\python.exe scripts\demos\demo_human_06_<a/b/c/d>_*.py` |
 
 No hay flags `-Only` / `-SkipSetup` como en Plan 05 — el launcher es
 intencionalmente lineal porque los demos son rápidos (~45s total).
@@ -71,7 +71,7 @@ scripts/.demo_06/
 │   └── frontend.git/                # bare seedeado, branch main + 1 commit
 └── data/                            # data_root del PlanRunner
     └── (vacío hasta que un demo lo poblé)
-scripts/.demo_state_06.json          # paths + slugs que los demos leen
+scripts/demos/.demo_state_06.json          # paths + slugs que los demos leen
 ```
 
 Los demos siguientes construyen `projects/<tenant>/<project>/repos/` bajo
@@ -122,8 +122,8 @@ sandbox `remote/`).
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\setup_demo_06.py
-.\.venv\Scripts\python.exe scripts\demo_human_06_a_endtoend.py
+.\.venv\Scripts\python.exe scripts\demos\setup_demo_06.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_a_endtoend.py
 ```
 
 **Output esperado** (resumido):
@@ -182,7 +182,7 @@ git branch -a
 - **"git clone failed (rc=128)"** sin más mensaje → falta heredar
   `os.environ` en el subprocess (git necesita `SYSTEMROOT` /
   `USERPROFILE` en Windows). El demo ya lo hace; si lo replicas en
-  un script tuyo, copia la receta de `_git()` en `scripts/setup_demo_06.py`.
+  un script tuyo, copia la receta de `_git()` en `scripts/demos/setup_demo_06.py`.
 
 ---
 
@@ -201,7 +201,7 @@ git branch -a
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_b_cache_aux.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_b_cache_aux.py
 ```
 
 **Output esperado**:
@@ -243,7 +243,7 @@ human_06_02 - dep-cache (hash + invalidacion por lock)
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_b_cache_aux.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_b_cache_aux.py
 # bloque "human_06_03 - aux services isolation per task"
 ```
 
@@ -283,7 +283,7 @@ human_06_02 - dep-cache (hash + invalidacion por lock)
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_d_review_audit.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_d_review_audit.py
 # bloque "human_06_04 - review-runtime URL firmada"
 ```
 
@@ -341,7 +341,7 @@ npm run dev
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_b_cache_aux.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_b_cache_aux.py
 # bloque "human_06_05 - multiples repos por plan"
 ```
 
@@ -375,7 +375,7 @@ pushes, `git fsck --full` sobre el bare reporta cero errores.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_a_endtoend.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_a_endtoend.py
 # bloque "human_06_06 - bare repo integrity"
 ```
 
@@ -419,7 +419,7 @@ git fsck --full --strict
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_c_pool_policies.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_c_pool_policies.py
 # bloque "human_06_07 - pool elastico por plan"
 ```
 
@@ -461,7 +461,7 @@ por matriz.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_c_pool_policies.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_c_pool_policies.py
 # bloque "human_06_08 - matriz 4 combinaciones"
 ```
 
@@ -501,7 +501,7 @@ remota y maneja `git push --force-with-lease` failures.
 **Cómo ejecutarlo** (solo la parte que el demo cubre):
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_a_endtoend.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_a_endtoend.py
 # bloque "human_06_09 - conflicto entre tareas paralelas"
 # imprime "Skipped en este demo - el conflicto real ... requiere DB-backed orchestrator"
 ```
@@ -533,7 +533,7 @@ remota y maneja `git push --force-with-lease` failures.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_d_review_audit.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_d_review_audit.py
 # bloque "human_06_10 - escalado a humano"
 ```
 
@@ -585,7 +585,7 @@ outputs y los 4 botones de acción.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_d_review_audit.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_d_review_audit.py
 # bloque "human_06_11 - checkbox fail genera tarea plan-scoped"
 ```
 
@@ -627,7 +627,7 @@ outputs y los 4 botones de acción.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_06_d_review_audit.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_06_d_review_audit.py
 # bloque "human_06_12 - audit trail completo"
 ```
 
@@ -705,7 +705,7 @@ orquesta en secuencia y ejecuta git real).
 | `ModuleNotFoundError: orchestrator.plan_runner`     | Plan 06 introdujo el módulo; falta `pip install -e apps/orchestrator` | `pip install -e apps/orchestrator[dev]`                              |
 | `git clone failed (rc=128)` durante setup           | Sandbox residual con read-only flags                                  | `Remove-Item -Recurse -Force scripts/.demo_06` y re-ejecutar         |
 | `git: 'worktree' is not a git command`              | `git --version < 2.5`                                                 | Actualizar git a 2.30+                                               |
-| Demo `b` falla con `commit_task: worktree is clean` | Re-ejecutaste demo `b` sin re-correr setup                            | `.\.venv\Scripts\python.exe scripts\setup_demo_06.py` primero        |
+| Demo `b` falla con `commit_task: worktree is clean` | Re-ejecutaste demo `b` sin re-correr setup                            | `.\.venv\Scripts\python.exe scripts\demos\setup_demo_06.py` primero  |
 | Caracteres `→` mal renderizados en consola          | cp1252 en cmd.exe                                                     | Usa PowerShell 7+; los scripts hacen `reconfigure(encoding='utf-8')` |
 
 ## Trampas conocidas del toolchain (transversales)

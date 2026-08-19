@@ -167,7 +167,11 @@ Ajusta el dict de config al destino real (`type`: `s3` / `b2` / `sftp` /
 `rclone` y sus knobs no-secretos). Las credenciales NO van en el dict: se
 resuelven por el seam de secretos (`secrets=`). Antes de un upload real
 puedes usar el **test de conectividad** de la UI de destinos
-(`task_12_09`), que llama a `build_destination(...)` sin transferir datos.
+(`task_12_09`), que hace la sonda sin transferir datos. Desde prod-15
+`task_gov_app_boundary_11` la ejecuta el worker (`workers.backup_test_destination`,
+cola `privileged`), que es el proceso que tiene las `WORKERS_BACKUP_*`; si el
+pool `workers-backup` no está drenando, la UI responde «the backup worker did not
+answer» en vez de un veredicto.
 
 ### Recuperar un bundle del destino remoto
 

@@ -97,8 +97,38 @@ región y pinea el part-size multipart; SFTP usa `host_key_policy: reject` por
 defecto (el host debe estar en known_hosts — nunca se desactiva el check
 silenciosamente); rclone escribe el blob a un temp `rclone.conf` (0600) pasado
 con `--config` (creds en el FICHERO, nunca en argv/log) y lo borra en un finally.
-El botón "test de conectividad" de la UI (task_12_09) construye el destino (lazy,
-sin red) y hace una sonda barata (`head_bucket` / `stat` / `lsd`).
+El botón "test de conectividad" de la UI (task_12_09) hace una sonda barata
+(`head_bucket` / `stat` / `lsd`).
+
+### Dónde CORREN la sonda y el listado remoto (prod-15 `task_gov_app_boundary_11`)
+
+**En el worker, no en el api-server**, y esto no es un detalle de arquitectura:
+los adaptadores resuelven sus credenciales de `os.environ` **del proceso que los
+ejecuta** (`backup_s3_access_key_id` → `WORKERS_BACKUP_S3_ACCESS_KEY_ID`), y el
+api-server no declara ninguna `WORKERS_BACKUP_*` — las lleva la lane
+`privileged` (servicio `workers-backup`), que es donde la tabla de knobs de más
+abajo manda ponerlas. Hasta 2026-08-19 la sonda se ejecutaba dentro del
+api-server: en cuanto un destino tuviera credencial, el botón habría dicho FAIL
+con un «faltan credenciales» correcto e inútil, y el listado remoto habría vuelto
+vacío en silencio.
+
+| Qué                    | Tarea Celery                      | Cola         |
+| ---------------------- | --------------------------------- | ------------ |
+| Probar conectividad    | `workers.backup_test_destination` | `privileged` |
+| Listar bundles remotos | `workers.backup_list_remote`      | `privileged` |
+
+El router (`POST /admin/backup/destinations/{name}/test`,
+`GET /admin/backup/restore/backups`) encola **por nombre** y relaya el resultado
+— el contrato HTTP no cambió. Por el broker viaja sólo la config NO secreta del
+destino. Dos plazos: `expires` en el mensaje (la lane es `--concurrency=1` y
+drena el backup nocturno, así que una sonda que no arranca a tiempo se descarta
+en vez de correr tarde) y un plazo de respuesta en el endpoint, que ante silencio
+devuelve FAIL con motivo en vez de colgarse.
+
+> **Si se configura un destino remoto y la sonda dice «did not answer»**: mira
+> que el pool `workers-backup` esté vivo y drenando `privileged`
+> (`docker compose ps workers-backup`), y que las `WORKERS_BACKUP_*` de ese
+> destino estén declaradas **en ese servicio**.
 
 ## Modos de restore + seguridad
 

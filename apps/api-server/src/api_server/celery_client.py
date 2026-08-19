@@ -57,6 +57,22 @@ _RESTORE_FULL_TASK = "workers.run_restore"
 _RESTORE_PER_TENANT_TASK = "workers.run_restore_per_tenant"
 _RESTORE_QUEUE = "privileged"
 
+# Las sondas de destino remoto de backup (prod-15 task_gov_app_boundary_11,
+# hallazgo api-9). Hasta 2026-08-19 el router las ejecutaba EN PROCESO, con dos
+# `from workers…` diferidos que construían boto3/paramiko/rclone dentro del
+# api-server. No era sólo acoplamiento: los adaptadores resuelven sus
+# credenciales de `os.environ` DEL PROCESO QUE LOS EJECUTA, y el api-server no
+# declara ninguna `WORKERS_*` — las credenciales de destino viven en la lane
+# `privileged` (servicio `workers-backup`). O sea que la sonda daba FAIL en
+# cuanto el destino tenía credencial. Ahora se encolan POR NOMBRE, como el
+# restore, y corren donde están los secretos (`workers.backup_probe_task`).
+_BACKUP_TEST_DESTINATION_TASK = "workers.backup_test_destination"
+_BACKUP_LIST_REMOTE_TASK = "workers.backup_list_remote"
+# La MISMA lane que el restore, porque es la única que lleva las
+# `WORKERS_BACKUP_*`. Corre con `--concurrency=1` y drena también el backup
+# nocturno, así que las sondas van con `expires`: ver `_probe_backup_worker`.
+_BACKUP_PROBE_QUEUE = _RESTORE_QUEUE
+
 # The human Memorizer task (Plan 16 task_16_15). When a human task reaches
 # `done` (auto_approve submit, or a peer reviewer's approval) the inbox/review
 # endpoint enqueues this by name so the Memorizer distils the HumanWorkSession
@@ -483,6 +499,84 @@ async def enqueue_restore(
     return str(async_result.id)
 
 
+async def _probe_backup_worker(task_name: str, config: dict[str, Any], *, timeout_s: float) -> Any:
+    """Encolar una sonda de backup y ESPERAR su resultado. ``None`` si no llega.
+
+    Mismo patrón síncrono que :func:`compute_plan_code_diff_and_wait`: el
+    api-server produce por nombre y relaya lo que devuelve el worker, así que el
+    contrato HTTP de los dos endpoints no cambia — sólo cambia **dónde** se
+    ejecuta la red.
+
+    Dos plazos, y no son redundantes:
+
+    * ``expires`` — si la sonda no ha ARRANCADO cuando vence, el broker la
+      descarta. La lane ``privileged`` es ``--concurrency=1`` y drena el backup
+      nocturno; sin esto, una sonda encolada detrás de un backup de media hora se
+      ejecutaría cuando el operador hace rato que cerró el panel. Una sonda de
+      alcanzabilidad caducada no vale nada: mejor no correrla.
+    * ``get(timeout=…)`` — acota la ESPERA de este proceso. Sin él, el hilo del
+      executor se queda colgado del backend de resultados para siempre, y
+      ``to_thread`` no puede matarlo.
+
+    Cualquier fallo —broker caído, plazo vencido, la tarea reventó— devuelve
+    ``None``, que el llamante traduce a un fallo acotado con motivo. NUNCA se
+    propaga: un botón de «probar conectividad» que da 500 no le dice nada al
+    operador que un FAIL con detalle no le diga mejor.
+    """
+
+    def _send_and_wait() -> Any:
+        async_result = get_celery_client().send_task(
+            task_name,
+            args=[config],
+            queue=_BACKUP_PROBE_QUEUE,
+            expires=timeout_s,
+        )
+        return async_result.get(timeout=timeout_s)
+
+    try:
+        return await asyncio.to_thread(_send_and_wait)
+    except Exception as exc:
+        _log.warning(
+            "backup.probe.enqueue_failed",
+            task=task_name,
+            destination=str(config.get("name", "")),
+            error=str(exc)[:300],
+        )
+        return None
+
+
+async def probe_backup_destination_and_wait(
+    config: dict[str, Any], *, timeout_s: float
+) -> dict[str, Any] | None:
+    """«Probar conectividad» de un destino, ejecutado en el worker.
+
+    ``config`` es la config NO SECRETA del destino (``{type, name, …}``), la que
+    ``validate_backup_destinations`` deja pasar por su allow-list — ninguna
+    credencial viaja por el broker; las resuelve el worker desde su entorno.
+
+    Devuelve el ``{"ok": bool, "detail": str}`` del worker, o ``None`` si no
+    contestó dentro del plazo.
+    """
+    result = await _probe_backup_worker(_BACKUP_TEST_DESTINATION_TASK, config, timeout_s=timeout_s)
+    return dict(result) if isinstance(result, dict) else None
+
+
+async def list_remote_backup_entries_and_wait(
+    config: dict[str, Any], *, timeout_s: float
+) -> list[str] | None:
+    """Nombres de los objetos de UN destino remoto, enumerados en el worker.
+
+    Una llamada por destino (no una por lista) para que el «best-effort por
+    destino» del listado de restore siga siendo por destino: uno inalcanzable no
+    puede vaciar la lista de los demás.
+
+    Devuelve la lista de nombres, o ``None`` si el worker no contestó — que el
+    llamante trata igual que un destino que falla: se salta.
+    """
+    result = await _probe_backup_worker(_BACKUP_LIST_REMOTE_TASK, config, timeout_s=timeout_s)
+    return [str(name) for name in result] if isinstance(result, list) else None
+
+
 async def get_restore_job_status(job_id: str) -> dict[str, Any]:
     """Read a restore background job's status from the result backend (task_12_12).
 
@@ -548,6 +642,8 @@ __all__ = [
     "enqueue_restore",
     "get_celery_client",
     "get_restore_job_status",
+    "list_remote_backup_entries_and_wait",
+    "probe_backup_destination_and_wait",
     "reset_celery_client_cache",
 ]
 

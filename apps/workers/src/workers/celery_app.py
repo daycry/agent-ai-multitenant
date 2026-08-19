@@ -120,6 +120,10 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.ingestion",
             "workers.price_sync",
             "workers.backup_task",
+            # prod-15 task_gov_app_boundary_11: las sondas de destino remoto
+            # (probar conectividad / listar bundles) que el api-server ejecutaba
+            # EN SU PROPIO PROCESO, donde no están las `WORKERS_BACKUP_*`.
+            "workers.backup_probe_task",
             "workers.restore_task",
             "workers.credential_rotation_task",
             "workers.fx_fetcher",

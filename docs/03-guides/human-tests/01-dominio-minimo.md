@@ -15,7 +15,7 @@ claridad del doble Kanban.
 
 ## TL;DR
 
-El Plan 01 **no tiene** `scripts/setup_demo_01.py` ni launcher
+El Plan 01 **no tiene** `scripts/demos/setup_demo_01.py` ni launcher
 dedicado: las plantillas seed se cargan en el arranque del stack y el
 resto del recorrido es navegación de UI. Setup manual:
 
@@ -26,7 +26,7 @@ resto del recorrido es navegación de UI. Setup manual:
 
 > Para los tests linked/forked y de aislamiento conviene tener al menos
 > dos proyectos y dos tenants. Puedes apoyarte en
-> `scripts/setup_demo_project.py` (crea proyecto + agente compartidos)
+> `scripts/demos/setup_demo_project.py` (crea proyecto + agente compartidos)
 > para tener contexto visible, pero no es obligatorio: las plantillas
 > seed ya existen tras `up.ps1`.
 

@@ -108,16 +108,16 @@ function Invoke-NativeScript {
 
 if (-not $SkipSetup) {
     Write-Step "Sembrando escenario Plan 05 (proyecto + agentes + tools)"
-    $setupCode = Invoke-NativeScript (Join-Path $RepoRoot "scripts\setup_demo_05.py")
+    $setupCode = Invoke-NativeScript (Join-Path $RepoRoot "scripts\demos\setup_demo_05.py")
     if ($setupCode -ne 0) {
         Write-Fail "setup_demo_05.py termino con exit $setupCode"
         exit 1
     }
     Write-Ok "setup OK"
 } else {
-    $stateFile = Join-Path $RepoRoot "scripts\.demo_state_05.json"
+    $stateFile = Join-Path $RepoRoot "scripts\demos\.demo_state_05.json"
     if (-not (Test-Path $stateFile)) {
-        Write-Fail "-SkipSetup pero no hay scripts\.demo_state_05.json. Quita -SkipSetup."
+        Write-Fail "-SkipSetup pero no hay scripts\demos\.demo_state_05.json. Quita -SkipSetup."
         exit 1
     }
     Write-Step "Reutilizando state previo (-SkipSetup)"
@@ -149,7 +149,7 @@ foreach ($d in $Demos) {
     }
 
     Write-Step "Ejecutando $($d.Script)"
-    $script = Join-Path $RepoRoot "scripts\$($d.Script)"
+    $script = Join-Path $RepoRoot "scripts\demos\$($d.Script)"
     $code = Invoke-NativeScript $script
     if ($code -eq 0) {
         Write-Ok "$($d.Script) termino OK"
@@ -171,7 +171,7 @@ $Results | Format-Table -AutoSize | Out-Host
 
 # Carga el state para enseñar las URLs del proyecto sembrado.
 $state = $null
-$stateFile = Join-Path $RepoRoot "scripts\.demo_state_05.json"
+$stateFile = Join-Path $RepoRoot "scripts\demos\.demo_state_05.json"
 if (Test-Path $stateFile) {
     try {
         $state = Get-Content $stateFile -Raw | ConvertFrom-Json

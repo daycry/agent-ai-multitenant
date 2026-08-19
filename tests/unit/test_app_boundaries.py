@@ -18,28 +18,33 @@ ignora. Lo que hace es congelar el inventario. Cada import que hoy existe está
 declarado abajo con su motivo y su clasificación, y la guarda se pone roja si
 aparece **uno nuevo** o si uno declarado desaparece sin retirar su entrada.
 
-La clasificación importa porque los diez imports no son la misma falta:
+La clasificación importa porque los imports no son la misma falta:
 
 - **`helper`** — importa una FUNCIÓN PURA (`_run_git`, `worktree_coordinates`,
   `sign_review_url`, `DEFAULT_TENANT_SCOPED_TABLES`). Feo por acoplamiento, pero
   importarla no ejecuta trabajo de worker ni arrastra I/O al api-server. La
   salida limpia es mover el helper a `packages/`, no encolar una tarea.
 - **`worker-work`** — importa un ADAPTADOR que hace **red síncrona** dentro del
-  api-server (boto3 / paramiko / rclone). Ése es el hallazgo api-9 de verdad, y
-  su salida es la decisión D5 del plan: dos tareas Celery
-  (`backup.test_destination`, `backup.list_remote`) encoladas **por nombre**, como
-  ya hace el restore en el mismo fichero.
+  api-server (boto3 / paramiko / rclone). Ése era el hallazgo api-9 de verdad.
 
 Una allowlist que no distinguiera las dos clases sería deshonesta: daría por
 igual de aceptable importar una función pura que ejecutar boto3 en el bucle de
 eventos.
 
-## Por qué la casilla del plan sigue abierta
+## El único `worker-work` está cerrado (2026-08-19)
 
-Porque cerrarla exige crear las dos tareas Celery en `apps/workers/**` y cambiar
-el contrato de dos endpoints que consume el `admin-panel`. Esta guarda es el
-suelo —impide que la deuda crezca mientras la decisión de diseño espera—, no el
-arreglo.
+`routers/backup.py` era el que ejecutaba boto3/paramiko/rclone dentro del
+api-server. prod-15 `task_gov_app_boundary_11` lo mudó al worker con dos tareas
+encoladas por nombre (`workers.backup_test_destination` /
+`workers.backup_list_remote`), como ya hacía el restore en el mismo fichero. No
+era sólo acoplamiento: los adaptadores resuelven sus credenciales de
+`os.environ` **del proceso que los ejecuta**, y el api-server no declara ninguna
+`WORKERS_BACKUP_*` — la sonda daba FAIL en cuanto el destino tenía credencial.
+El contrato de los dos endpoints no cambió: el router relaya lo que devuelve el
+worker. Ver `tests/unit/test_backup_probe_runs_in_the_worker.py`.
+
+Lo que queda inventariado son cinco `helper`, cuya salida es moverlos a
+`packages/`. Esta guarda sigue siendo el suelo que impide que la deuda crezca.
 """
 
 from __future__ import annotations
@@ -86,14 +91,18 @@ WORKERS_IMPORT_DEBT: dict[str, tuple[str, str]] = {
         "Import de MÓDULO (no diferido): el api-server carga `workers` al "
         "arrancar. Es el candidato más claro a mudarse a `packages/`.",
     ),
-    "routers/backup.py": (
-        "worker-work",
-        "build_destination / EnvSecretsProvider: adaptadores boto3 / paramiko / "
-        "rclone que hacen RED. Hoy corren en un hilo (`to_thread`, que cerró el "
-        "bloqueo del event loop de api-3), pero siguen ejecutándose dentro del "
-        "api-server. Es el hallazgo api-9 y lo cierra la decisión D5.",
-    ),
 }
+
+#: prod-15 `task_gov_app_boundary_11`, 2026-08-19. `routers/backup.py` era la
+#: ÚNICA entrada `worker-work` del inventario —el hallazgo api-9— y ya no está:
+#: la sonda de conectividad y el listado remoto se encolan por nombre
+#: (`workers.backup_test_destination` / `workers.backup_list_remote`) y corren en
+#: el worker, que es donde viven las `WORKERS_BACKUP_*`. Ver
+#: `tests/unit/test_backup_probe_runs_in_the_worker.py`.
+#:
+#: Lo que queda en el inventario son las cinco entradas `helper`: importan
+#: funciones puras y su salida limpia es moverlas a `packages/`, no encolar nada.
+WORKER_WORK_ENTRIES_EXPECTED: tuple[str, ...] = ()
 
 
 def _modules_importing_workers() -> dict[str, list[str]]:
@@ -163,21 +172,45 @@ def test_the_debt_inventory_has_no_dead_entries() -> None:
     )
 
 
-def test_only_one_module_still_runs_worker_work_inside_the_api_server() -> None:
-    """El hallazgo api-9, acotado y nombrado.
+def test_no_module_runs_worker_work_inside_the_api_server_any_more() -> None:
+    """El hallazgo api-9, cerrado.
 
-    Si aparece un segundo `worker-work`, el problema dejó de ser un caso
-    aislado con una decisión pendiente (D5) y pasó a ser un patrón.
+    Era UNO —`routers/backup.py`, que corría boto3/paramiko/rclone dentro del
+    api-server— y desde prod-15 `task_gov_app_boundary_11` es NINGUNO: esas dos
+    sondas se encolan por nombre y corren en el worker.
+
+    La guarda no se retira al cerrarlo, cambia de umbral: hoy exige CERO. Que
+    reaparezca un `worker-work` significa que alguien volvió a ejecutar trabajo
+    de worker en el proceso equivocado, y esta vez sin decisión pendiente que lo
+    ampare.
     """
-    worker_work = sorted(
-        name for name, (kind, _) in WORKERS_IMPORT_DEBT.items() if kind == "worker-work"
+    worker_work = tuple(
+        sorted(name for name, (kind, _) in WORKERS_IMPORT_DEBT.items() if kind == "worker-work")
     )
 
-    assert worker_work == ["routers/backup.py"], (
-        f"cambió el conjunto de módulos que ejecutan trabajo de worker dentro "
-        f"del api-server: {worker_work}. La decisión D5 del plan prod-15 está "
-        "escrita para UNO."
+    assert worker_work == WORKER_WORK_ENTRIES_EXPECTED, (
+        f"volvió a haber módulos que ejecutan trabajo de worker dentro del "
+        f"api-server: {list(worker_work)}. La red/los adaptadores corren donde "
+        "están sus credenciales — encola una tarea por nombre, como hacen "
+        "`workers.backup_test_destination` y `workers.backup_list_remote`."
     )
+
+
+def test_the_debt_that_remains_is_only_pure_helpers() -> None:
+    """No-vacuidad del test de arriba: con el inventario vacío, «cero
+    `worker-work`» pasaría por la razón equivocada.
+
+    Las cinco entradas que quedan son `helper` y su salida es moverlas a
+    `packages/`, que es otra tarea y otro carril.
+    """
+    kinds = {kind for kind, _ in WORKERS_IMPORT_DEBT.values()}
+
+    assert len(WORKERS_IMPORT_DEBT) >= 5, (
+        f"el inventario bajó a {len(WORKERS_IMPORT_DEBT)} entradas: si de verdad "
+        "se saldó más deuda, actualiza este suelo; si el descubrimiento dejó de "
+        "encontrar módulos, el test de arriba está pasando en vacío."
+    )
+    assert kinds == {"helper"}, f"el inventario ya no es sólo de helpers: {sorted(kinds)}"
 
 
 def test_every_debt_entry_is_classified_and_justified() -> None:

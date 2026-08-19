@@ -226,19 +226,23 @@ fijar`. El ADR 0138 las deja fuera de su alcance por escrito porque
 
 ## Deuda conocida que NO bloquea el despliegue
 
-- **`routers/backup.py` importa `workers`** (hallazgo api-9, decisión D5 de
-  prod-15). Y no es sólo estético: los adaptadores resuelven credenciales con
-  `EnvSecretsProvider`, que lee el entorno **del proceso que lo ejecuta**, y el
-  servicio `api-server` del compose **no declara ni una variable `WORKERS_*`**.
-  En cuanto configures un destino remoto con credencial, el botón «probar
-  conectividad» dirá FAIL. Hoy no hay ninguno configurado, así que nadie lo ha
-  visto. La guarda que impide que la deuda crezca:
-  `tests/unit/test_app_boundaries.py`.
-- **Los demos de fase siguen en la raíz de `scripts/`** (21 ficheros +
-  `_demo_common.py`). El movimiento a `scripts/demos/` está medido y con receta
-  escrita en prod-15 `task_gov_higiene_10`; toca 48 ficheros y **no tiene estado
-  intermedio verde**, así que necesita una pasada con el repo para ella sola.
-  ~30 min.
+- ~~**`routers/backup.py` importa `workers`**~~ — **cerrado el 2026-08-19**
+  (prod-15 `task_gov_app_boundary_11`, hallazgo api-9 / decisión D5). Las dos
+  sondas de destino remoto se encolan por nombre
+  (`workers.backup_test_destination` / `workers.backup_list_remote`, cola
+  `privileged`) y corren donde están las `WORKERS_BACKUP_*`. El contrato HTTP de
+  los dos endpoints no cambió. Guardas: `tests/unit/test_app_boundaries.py`
+  (ya exige CERO `worker-work`) y
+  `tests/unit/test_backup_probe_runs_in_the_worker.py`. **Pendiente de un
+  humano**: probar el botón «probar conectividad» con un destino remoto real —
+  nunca se ha ejercitado con credenciales, ni antes ni después.
+- ~~**Los demos de fase siguen en la raíz de `scripts/`**~~ — **movidos el
+  2026-08-19** a `scripts/demos/` (prod-15 `task_gov_higiene_10`), con las
+  referencias de `pyproject.toml`, `.gitignore`, los cinco launchers
+  `scripts/dev/run-human-tests*.ps1` y las guías actualizadas. Guarda:
+  `tests/unit/test_scripts_layout.py`. **Pendiente de un humano**: correr un
+  launcher de verdad (p.ej. `scripts/dev/run-human-tests-05.ps1`) — los `.ps1`
+  no los ejercita ninguna suite.
 - **Un plan `completed` sin changelog**: `ciclo-vida-planes-fixes` (inventariado
   en `_CHANGELOG_DEBT_2026_07_29`).
 

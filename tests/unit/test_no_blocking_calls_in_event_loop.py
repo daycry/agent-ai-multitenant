@@ -185,29 +185,59 @@ async def test_backup_connectivity_probe_runs_off_the_event_loop() -> None:
     assert probe.thread_id != await _loop_thread_id()
 
 
-def test_backup_router_wraps_the_blocking_adapter_calls() -> None:
-    """Guarda estática con aserción de que ENCONTRÓ algo (§4 de
-    verificar-antes-de-implementar): las dos llamadas bloqueantes del router de
-    backup tienen que estar dentro de un `to_thread`, y tiene que haber DOS."""
+def test_backup_router_delegates_the_blocking_adapter_calls() -> None:
+    """Las dos llamadas bloqueantes del adaptador de destinos NO viven en el
+    api-server: viven en el worker.
+
+    Esta guarda cambió de forma el 2026-08-19 con `task_gov_app_boundary_11`, y
+    el cambio NO la relaja. Antes exigía que el router envolviese las dos
+    llamadas en `asyncio.to_thread`; era lo mejor que se podía pedir mientras el
+    router las hacía él. Ahora no las hace: las encola en el worker, que es el
+    único proceso con las credenciales `WORKERS_BACKUP_*` — hasta entonces el
+    botón «probar conectividad» habría dado FAIL en cuanto un destino tuviera
+    credencial de verdad. Envolver en un hilo una llamada que no puede funcionar
+    era tratar un problema de frontera entre apps como uno de event loop.
+
+    Así que la guarda afirma ahora las DOS mitades, y las dos tienen que
+    encontrar algo para no pasar en vacío (§4 de verificar-antes-de-implementar):
+    cero llamadas bloqueantes en el router, y las mismas llamadas presentes en la
+    task del worker, donde el contexto es síncrono y bloquear es correcto.
+    """
     from pathlib import Path
 
     import api_server.routers.backup as backup_router
 
     source = Path(backup_router.__file__).read_text(encoding="utf-8")
 
-    wrapped = source.count("asyncio.to_thread(")
-    assert wrapped >= 2, f"esperaba >= 2 llamadas envueltas en to_thread, vi {wrapped}"
+    # 1) El router no las llama, ni directamente ni dentro de un hilo.
+    for blocking in ("destination.test_connectivity()", "destination.list_remote()"):
+        assert blocking not in source, (
+            f"{blocking} volvió al api-server, que no tiene las credenciales"
+            " WORKERS_BACKUP_* (api-9, D5): la sonda daría FAIL en cuanto el"
+            " destino tuviera una de verdad"
+        )
 
-    # Ninguna llamada directa (sin `to_thread`) a los dos métodos bloqueantes.
-    assert "destination.test_connectivity()" not in source, (
-        "test_connectivity() se llama directamente en un handler async (api-3)"
-    )
-    assert "destination.list_remote()" in source, (
-        "la guarda dejó de encontrar list_remote(): el fichero cambió de forma"
-    )
-    # `list_remote()` sí aparece, pero DENTRO del helper síncrono `_list_one`,
-    # que es lo que se despacha a un hilo.
-    assert "def _list_one(" in source
+    # 2) …porque delega. Si esto desapareciera, la mitad de arriba pasaría en
+    #    vacío con un router que ya no hace nada.
+    for delegation in (
+        "probe_backup_destination_and_wait",
+        "list_remote_backup_entries_and_wait",
+    ):
+        assert delegation in source, (
+            f"la guarda dejó de encontrar la delegación `{delegation}`:"
+            " el router cambió de forma y hay que revisar este test"
+        )
+
+    # 3) Y las llamadas bloqueantes siguen existiendo, en el worker, que corre
+    #    en un hilo de Celery sin event loop debajo.
+    worker_task = Path("apps/workers/src/workers/backup_probe_task.py")
+    assert worker_task.is_file(), f"no encuentro {worker_task}"
+    worker_source = worker_task.read_text(encoding="utf-8")
+    for blocking in ("destination.test_connectivity()", "destination.list_remote()"):
+        assert blocking in worker_source, (
+            f"{blocking} no está en la task del worker: si no está aquí ni en el"
+            " router, la sonda no la hace nadie"
+        )
 
 
 # ---------------------------------------------------------------------------

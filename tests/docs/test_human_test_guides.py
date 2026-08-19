@@ -58,7 +58,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ROADMAP = _REPO_ROOT / "docs" / "roadmap"
 _GUIDES = _REPO_ROOT / "docs" / "03-guides" / "human-tests"
 _INDEX = _GUIDES / "README.md"
-_SCRIPTS = _REPO_ROOT / "scripts"
+# prod-15 `task_gov_higiene_10`: los demos de fase se separaron del tooling de
+# plataforma; los `setup_demo_*.py` que las guías recomiendan viven aquí.
+_SCRIPTS = _REPO_ROOT / "scripts" / "demos"
 
 # ---------------------------------------------------------------------------
 # Alcance declarado del plan (§Alcance «Entra» + las 11 preexistentes del
@@ -322,7 +324,7 @@ def test_the_mention_classifier_reads_affirmative_sentences_as_affirmative() -> 
 
 def test_guides_only_recommend_setup_scripts_that_exist() -> None:
     existing = _existing_setup_scripts()
-    assert existing, "no se encontró ningún scripts/setup_demo_*.py: el descubrimiento falló"
+    assert existing, "no se encontró ningún scripts/demos/setup_demo_*.py: el descubrimiento falló"
 
     affirmative = 0
     negative = 0
