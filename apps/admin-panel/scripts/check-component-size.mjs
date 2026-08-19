@@ -80,7 +80,7 @@ const SECTION_MAX_LINES = 500;
 /**
  * Deuda de PIEZAS. **Sólo puede MENGUAR.**
  *
- * Siguen siendo dos entradas, pero ya no son el mismo caso que el 2026-08-01:
+ * Queda UNA entrada. El 2026-08-01 eran dos y ninguna era el caso de hoy:
  *
  * · `mcp-server-sections.tsx` (1125) **ya no existe**. Era el ejemplar del
  *   problema —el tramo de modularización #9 sacó el bulto del `page.tsx` sin
@@ -89,20 +89,23 @@ const SECTION_MAX_LINES = 500;
  *   `mcp-tool-roles-section` (~235) y `mcp-server-dialog`, que hereda el resto.
  *   Los 15 tests del módulo siguen verdes sin tocar una aserción.
  *
- * · `mcp-server-dialog.tsx` queda por encima del techo **a propósito, y está
- *   argumentado en su docstring**: es UN formulario con una decena de `useState`
- *   entrelazados, y partirlo pide decidir cómo viaja ese estado (prop-drilling o
- *   contexto local). Eso no es un movimiento mecánico, es un rediseño con riesgo
- *   de regresión. Anotarlo aquí con su tamaño real es deuda medida y decreciente;
- *   partirlo a lo bruto para que el número baje sería el atajo que esta guarda
- *   existe para castigar.
+ * · `mcp-server-dialog.tsx` **salió de aquí el 2026-08-19** (`task_prod16_07`):
+ *   665 → 468. Estaba anotado con un argumento razonado —un formulario con una
+ *   decena de `useState` entrelazados, partirlo pedía prop-drilling— y el
+ *   argumento era correcto para el corte que se estaba mirando y falso para el
+ *   que había: dos de sus bloques no COMPARTÍAN ese estado, lo tenían prestado.
+ *   `mcp-connection-test-section.tsx` se llevó siete `useState` y
+ *   `mcp-advanced-options-section.tsx` 112 líneas de JSX; el diálogo quedó con
+ *   MENOS estado que antes, no con el mismo repartido. La lección para el
+ *   siguiente que lea esta lista: una entrada bien argumentada tampoco es
+ *   permanente — merece que alguien vuelva a mirarla con el corte en la mano.
  *
  * · `agent-tools-section.tsx` (691) sigue igual: el mismo caso del tramo #9,
- *   pendiente de una pasada propia.
+ *   pendiente de una pasada propia. Es ya la ÚNICA entrada, así que el día que
+ *   caiga esta lista queda vacía y `--strict` deja de tener a quién perdonar.
  */
 const SECTION_ALLOWLIST = {
   "app/admin/agents/[id]/agent-tools-section.tsx": 691,
-  "app/admin/projects/[id]/mcp-servers/mcp-server-dialog.tsx": 665,
 };
 
 /**

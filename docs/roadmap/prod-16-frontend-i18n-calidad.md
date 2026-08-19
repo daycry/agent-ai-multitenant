@@ -489,7 +489,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 
 #### `task_prod16_07` — Partir `mcp-servers` (1105) y `plans/[planId]` (1079)
 
-- [ ] **Título**: Mismo tratamiento para
+- [x] **Título**: Mismo tratamiento para
       `app/admin/projects/[id]/mcp-servers/page.tsx` y
       `app/admin/projects/[id]/plans/[planId]/page.tsx`. Refactor mecánico:
       sin cambios de comportamiento, los specs e2e existentes deben pasar sin
@@ -515,17 +515,71 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     trocearlo a lo bruto para que el número baje sería el atajo que esa guarda
     existe para castigar. La casilla sigue abierta con razón: le falta esa pasada
     y la verificación Playwright que el plan pide.
+  - ✅ **CERRADA el 2026-08-19: `mcp-server-dialog.tsx` 665 → 468.** Los dos
+    módulos del enunciado están por debajo del techo, y lo dice la guarda, no una
+    opinión: `node scripts/check-component-size.mjs` sale **0** y reporta «81
+    pantalla(s), 0 por encima de 800; 73 pieza(s), **1** por encima de 500» — esa
+    una es `agent-tools-section.tsx` (691), que no es de esta tarea. En
+    `plans/[planId]` no había nada que hacer: sus 12 piezas ya estaban repartidas,
+    la mayor en 334 líneas.
+  - 🔍 **Y el argumento de 2026-08-10 estaba mal, que es lo que hay que leerse de
+    esta entrada.** No estaba mal en su razonamiento —partir el formulario SÍ pedía
+    prop-drilling— sino en su alcance: **dos de los bloques del diálogo no
+    COMPARTÍAN ese estado, lo tenían prestado por haber nacido ahí**.
+    · `mcp-connection-test-section.tsx` (145) se llevó **siete** `useState`
+    —probando, resultado, error, tools marcadas, importando, error de
+    importación, importadas— y sólo necesita `buildPayload`: se prueba
+    exactamente lo que se va a guardar.
+    · `mcp-advanced-options-section.tsx` (168) se llevó 112 líneas de JSX y
+    `setAuthRefManual`.
+    El diálogo quedó con **menos** `useState` que antes, no con los mismos
+    repartidos por la jerarquía — que era justo el riesgo que la nota temía.
+    `showRawAuth` se quedó en el diálogo a propósito y está argumentado: el
+    diálogo lo reinicia en dos sitios (al aplicar plantilla y al reabrirse), y
+    bajarlo pedía un `key` que remonta —perdiendo el foco a media escritura— o un
+    `useEffect` que dispara también cuando la plantilla pasa a null.
+    **Lección para la `SECTION_ALLOWLIST`**: una entrada bien argumentada tampoco
+    es permanente. Merece que alguien vuelva a mirarla con el corte en la mano, no
+    con el corte que se imaginó quien la escribió. Queda anotado en el docstring
+    del script.
+  - ⚠️ **Un rojo que NO salió, y por eso hay un fichero de test nuevo.** Al
+    verificar la rotura se quitó `<McpAdvancedOptionsSection/>` del JSX del
+    diálogo: los **23** tests del módulo siguieron **verdes**. Es el modo de fallo
+    nº5 de `verificar-antes-de-implementar` —«mecanismo entregado, cero
+    llamantes»— en su versión más barata de cometer: la sección nueva tiene sus
+    tests y pasa, el diálogo compila, `tsc` calla, y en producción las opciones
+    avanzadas no existen. Se cubrió con `mcp-server-dialog.test.tsx` (5 tests) y
+    con la rotura repetida: entonces sí, **4 rojos**.
+  - **Verificación ejecutada (2026-08-19)**, toda desde `apps/admin-panel`:
+    `npx vitest run` → **1180 passed / 142 ficheros**, de los cuales **28** son de
+    este módulo (los 15 de antes intactos + 13 nuevos: 8 de la sección avanzada,
+    que **no tenía ni uno**, y 5 del cableado); `npx tsc --noEmit` limpio salvo un
+    rojo ajeno y anterior (`app/admin/cortex/identity/onboarding-proposal.test.tsx`,
+    `TS6133`, de otro carril); `node scripts/check-component-size.mjs` OK;
+    `node scripts/check-i18n.mjs` OK; y `NEXT_PUBLIC_API_URL=/api npx next build`
+    **construye** — el paso que ninguno de los otros cubre.
+    Roturas comprobadas, cada una con su rojo y sólo el suyo: el fallback del
+    timeout a 30 (llegaba `0`/NaN al backend), el aviso de edición manual de la
+    ruta de Vault, y las dos secciones desmontadas del diálogo.
+  - ⏳ **Lo que sigue necesitando un humano**: la verificación Playwright que pide
+    el enunciado. Los specs necesitan stack levantado; se dejan repuntados abajo a
+    los ficheros que existen de verdad (`mcp-servers.spec.ts` y
+    `plan-detail.spec.ts` **nunca existieron** — es el mismo caso que destapó
+    `test_declared_tests_exist` con `task_prod16_02`).
 - **Tiempo**: 1,5 días · **Complejidad**: m · **Depende de**: `task_prod16_06`
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod16_07_a
     runtime: node-jest
-    command: "npm --prefix apps/admin-panel run e2e -- e2e/mcp-servers.spec.ts e2e/plan-detail.spec.ts"
+    command: "npx vitest run app/admin/projects/[id]/mcp-servers app/admin/projects/[id]/plans/[planId]"
+  - id: auto_prod16_07_b
+    runtime: node-jest
+    command: "npm --prefix apps/admin-panel run e2e -- e2e/mcp-config-ui.spec.ts e2e/mcp-test-connection.spec.ts e2e/plan-detail-view.spec.ts"
   ```
 
 #### `task_prod16_08` — Partir las 7 páginas restantes >800 líneas + guard de tamaño
 
-- [ ] **Título**: knowledge-bases (1042), llm-providers (951),
+- [x] **Título**: knowledge-bases (1042), llm-providers (951),
       settings/sso/saml (943), tenant-stats (862), settings/sso (842),
       agents/[id] (813) y notifications (810). Añadir a `check-i18n.mjs` (o
       script hermano `check-component-size.mjs`) un guard que falle si algún
@@ -627,6 +681,24 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     (37 en total), escritos en rojo antes de la implementación, más una
     autocomprobación nueva en el script: si `SECTION_SUFFIXES` dejara de casar
     con cómo se nombran las piezas, falla en vez de pasar en vacío.
+  - ✅ **MARCADA el 2026-08-19 — el trabajo llevaba nueve días hecho y la casilla seguía
+    en `[ ]`.** Las dos mitades del enunciado están, y se comprobó ejecutando, no leyendo
+    las notas: `node scripts/check-component-size.mjs --max-lines 800` desde
+    `apps/admin-panel` dice **«81 pantalla(s), 0 por encima de 800 línea(s)»** y sale con
+    **exit 0**. El guard existe (`scripts/check-component-size.mjs` + `npm run check:size`)
+    y su `ALLOWLIST` de pantallas está **vacía**, así que el modo normal y `--strict` ya
+    dicen lo mismo para pantallas.
+    **De paso, un número mal contado en las notas de arriba**: dicen «11 tests» y luego
+    «+7 tests … (37 en total)» en `scripts/check-component-size.test.ts`. Contados hoy:
+    **19** `it(...)`, y sin `it.each` que pudiera esconder más. Las notas históricas se
+    dejan como están —son el registro de lo que se creyó entonces— pero el número vigente
+    es 19.
+    **No es una guarda vacía**: bajando el techo a `--max-lines 100` reporta 73
+    infractoras y falla, o sea que mide de verdad.
+    **Lo que sigue abierto NO es de esta casilla**: `--strict` sale 1 por dos PIEZAS
+    (`agent-tools-section.tsx` 691 y `mcp-server-dialog.tsx` 665), que caen bajo el techo
+    de 500 de `task_prod16_06` y bajo la nota de `task_prod16_07`. El objetivo numérico de
+    ESTA tarea —pantallas por encima de 800— está en cero.
 - **Tiempo**: 2,5 días · **Complejidad**: l · **Depende de**: `task_prod16_07`
 - **Tests automáticos**:
   ```yaml
@@ -720,7 +792,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 
 #### `task_prod16_11` — Partir `db/domain.py` (1506) por agregados
 
-- [ ] **Título**: Dividir el modelo ORM en módulos por agregado
+- [x] **Título**: Dividir el modelo ORM en módulos por agregado
       (`db/models/tenancy.py`, `projects.py`, `agents.py`, `plans_tasks.py`,
       `llm.py`…), manteniendo `db/domain.py` como fachada de re-export para
       no romper los imports existentes. Verificar que `alembic` no detecta
@@ -737,6 +809,74 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     hay que escribirlo **antes** de mover la primera tabla.
     El troceo de `routers/sso.py` de `task_prod16_10` sirve de patrón: cortar por
     rangos del AST y fijar el contrato con un test escrito antes.
+  - ✅ **CERRADA el 2026-08-19, con el árbol para uno solo, como pedía la nota.**
+    `db/domain.py` (**1840** líneas al abrirlo, no las 1506 del plan ni las 1768
+    de julio) es hoy el paquete `db/domain/`: `enums.py` (347, los 22
+    vocabularios, sin tablas), `agents.py` (354), `humans.py` (338),
+    `executions.py` (256), `plans_tasks.py` (216), `projects.py` (209),
+    `teams.py` (133), `approvals.py` (130) y un `__init__.py` (152) que **sólo
+    re-exporta**.
+    **El paquete NO se llama `db/models/`, y la razón importa**: existe
+    `db/models.py` (el agregador de la fase 0), y un directorio con ese nombre
+    junto a él gana la resolución de import y deja el módulo **inalcanzable**.
+    Habría roto el `env.py` de Alembic y medio arranque, en silencio y por un
+    nombre. `db/domain/` no tiene ese problema y además conserva la ruta que
+    importan los 233 ficheros.
+  - **El troceo fue mecánico de verdad**: los bloques se cortaron por rangos del
+    AST del monolito (recuperado con `git show HEAD:`), y los imports de cada
+    módulo se resolvieron por análisis de nombres libres, no a mano. **La prueba
+    más fuerte no es un test**: comparando `ast.unparse` definición a definición
+    contra el monolito, las **39** (22 enums + 17 modelos) son **IDÉNTICAS**.
+    Cero perdidas, cero alteradas.
+  - **La red se escribió ANTES de mover la primera tabla**, como en
+    `task_prod16_10`: `tests/unit/test_domain_models_package.py` (7 tests) corrió
+    contra el monolito con **4 en verde y 3 en rojo**, y los tres rojos eran
+    exactamente «el paquete no existe». Congela los 19 modelos con su
+    `__tablename__`, los 24 enums **con sus valores** —son contrato de BD: el
+    `CHECK` de la migración `0101` deriva de `TaskStatus`—, el `__all__` de 41
+    nombres y, lo que de verdad se puede perder, **el DDL compilado de las 17
+    tablas**: digest del `CREATE TABLE` + sus `CREATE INDEX` contra el dialecto
+    PostgreSQL. Eso es el «autogenerate vacío» del enunciado pero **offline**, en
+    milisegundos y sin base de datos.
+  - **Y se verificó el ROJO rompiendo la implementación a propósito, seis veces**:
+    borrar la columna `agents.avatar_url` (rojo, sólo el test de DDL, diciendo qué
+    columna); cambiar un `server_default` dejando las mismas columnas (rojo, el
+    digest — es el caso sutil que justifica el digest); que la fachada dejara de
+    importar `teams` (4 rojos); renombrar un valor de `TaskStatus` (rojo, sólo el
+    de enums); añadir un submódulo que el `__init__` no importa (rojo, el que
+    vigila que ninguna tabla se caiga de `Base.metadata`); y **mudar `TeamMember`
+    al `__init__`** —el atajo de «mover el bulto», que funciona y compila— (rojo,
+    el que lo prohíbe). Cada rotura tumbó su test y ninguno más.
+  - 🔍 **`auto_prod16_11_b` pedía «autogenerate vacío» y hoy NO lo está — por
+    razones anteriores a este troceo.** Se ejecutó de verdad contra la BD migrada
+    a head: el diff trae **~150 items**. Ninguno viene de aquí (lo demuestra la
+    comparación por AST), y son de tres familias: nombres de índice y de FK que
+    las migraciones pusieron y el modelo no declara, `TEXT` frente a `String(n)`
+    en columnas creadas por migración, e índices por partición de las cinco tablas
+    del ADR 0151, que el modelo no puede declarar. Sobre las 17 tablas del
+    dominio son **11**, todas de esas familias y **ninguna una columna perdida**.
+    El test existe (`tests/integration/test_alembic_autogenerate_clean.py`, 2
+    tests) y afirma lo que esta tarea sí puede sostener: **el diff del dominio no
+    crece**, con las 11 congeladas en un inventario que sólo puede menguar.
+    Comprobado en rojo borrando `agents.avatar_url`: sale
+    `remove_column:agents.avatar_url`.
+  - ⚠️ **Hallazgo aparte, y conviene leerlo**: `migrations/env.py` importa **sólo**
+    `api_server.db.models`, que no arrastra `db/domain`. Medido: `Base.metadata`
+    tiene **34** tablas por esa vía y **83** importando el paquete `db` entero. O
+    sea que un `alembic revision --autogenerate` corrido hoy tal cual **no vería
+    49 tablas** —`agents`, `projects`, `tasks`, `executions`…— y las propondría
+    **borrar**. Es anterior a este troceo (`db/domain.py` tampoco estaba importado
+    cuando era un fichero suelto) y se arregla con una línea, pero cambia lo que
+    genera la herramienta de migraciones para todo el mundo: **merece su propio
+    cambio**. El test lo rodea cargando el modelo completo y deja una aserción que
+    se pondrá roja el día que alguien lo arregle, para que venga a quitar el apaño.
+  - **Verificación ejecutada (2026-08-19)**: `pytest tests/unit tests/security
+tests/docs` → **5016 passed** (los 3 rojos son de otros carriles: el
+    inventario de `test_declared_tests_exist` y dos de rotación de Vault que pasan
+    aislados); `pytest tests/unit -k 'domain or models'` → **337 passed**;
+    `mypy apps/ packages/` → **693 ficheros, limpio**; `ruff` y `black` limpios.
+    Integración con base propia (`TEST_PG_DB_NAME=agentic_ola3_l2`):
+    `test_alembic_autogenerate_clean.py` → 2 passed.
 - **Tiempo**: 1,5 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
@@ -750,7 +890,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 
 #### `task_prod16_12` — Partir los 4 restantes (agents, backup_destinations, marketplace, litellm_sync)
 
-- [ ] **Título**: `routers/agents.py` (1414), `workers/backup_destinations.py`
+- [x] **Título**: `routers/agents.py` (1414), `workers/backup_destinations.py`
       (1392), `routers/marketplace.py` (1380) y `pricing/litellm_sync.py`
       (1338): extraer sub-módulos cohesivos (p. ej. CRUD vs diagnóstico en
       agents; un módulo por tipo de destino en backup_destinations). Tarea

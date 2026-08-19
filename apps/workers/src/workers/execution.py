@@ -109,6 +109,15 @@ _AWAITING_APPROVAL = "awaiting_human_approval"
 # kill it cooperatively on an operator cancel (POST /executions/{id}/cancel).
 _CANCEL_POLL_INTERVAL_S = 3.0
 
+#: `kind` del evento de auditoría que lleva la métrica de contaminación del
+#: revisor (`task_gov_06`). Kind propio, y no un campo dentro de
+#: `review_comment`, porque un APPROVE sin desglose de criterios no emite
+#: `review_comment`: colgar la métrica de ahí la perdería justo en la mitad de
+#: los casos que interesa medir. El front filtra por `kind`
+#: (`components/tasks/task-review-criteria.tsx`), así que uno nuevo es inerte
+#: para la UI.
+REVIEW_CONTAMINATION_EVENT_KIND = "review_contamination"
+
 
 # Eligibility (R5): the task status the orchestrator sets right before enqueueing
 # a run of each kind — the ONLY status a run of that kind may launch from.
@@ -482,6 +491,98 @@ async def _apply_review_verdict(
     if task.status == old_status:
         return None
     return (task, old_status, task.status)
+
+
+async def _record_review_contamination(
+    session: AsyncSession,
+    *,
+    task_id: UUID,
+    tenant_id: UUID,
+    review_execution_id: UUID,
+    reviewer_agent_id: UUID | None,
+    reviewer_output: str,
+) -> None:
+    """Mide cuánto del veredicto venía ya en el relato del autor (`task_gov_06`).
+
+    El detector de Goodhart del plan `gov-01`: el revisor ve los tres últimos
+    intentos del implementador —el último verbatim— y resuelve el mismo modelo,
+    así que hereda su encuadre antes de opinar. En vez de pagar de entrada la
+    pasada de review ciega (4-6 días y un ADR), se **mide** cada review y la
+    decisión se toma con el número delante. El resultado es un dato: no bloquea,
+    no avisa y no cambia el veredicto, que ya está aplicado cuando esto corre.
+
+    Cuál es «el relato del autor»: la ejecución más reciente de la misma task que
+    NO sea ésta ni de este mismo agente revisor. Excluir sólo `review_execution_id`
+    no basta — un review no concluyente se re-despacha (ADR 0095 D3), así que la
+    ejecución anterior puede ser otra pasada del propio revisor, y compararlo
+    consigo mismo daría contaminación altísima por construcción.
+
+    Best-effort dentro de un SAVEPOINT, igual que `_persist_guardrail_events`:
+    esto es instrumentación, y romper aquí anularía un veredicto correcto por un
+    fallo de medición.
+    """
+    try:
+        from api_server.db.domain import Execution
+        from api_server.db.task_audit_repo import append_audit_event
+        from api_server.review_contamination import measure_review_contamination
+        from api_server.reviewer_bridge import parse_reviewer_output
+
+        async with session.begin_nested():
+            author_filter = [
+                Execution.task_id == task_id,
+                Execution.tenant_id == tenant_id,
+                Execution.id != review_execution_id,
+            ]
+            if reviewer_agent_id is not None:
+                author_filter.append(Execution.agent_id.is_distinct_from(reviewer_agent_id))
+            author = (
+                await session.execute(
+                    select(Execution.id, Execution.output, Execution.finish_status)
+                    .where(*author_filter)
+                    .order_by(Execution.created_at.desc())
+                    .limit(1)
+                )
+            ).first()
+            if author is None:
+                # Sin run del implementador no hay nada con lo que comparar (una
+                # task cuyo único run es el review). No se emite fila: un cero
+                # aquí contaría como «revisor limpio» en el agregado.
+                return
+            author_id, author_output, author_finish_status = author
+            metric = measure_review_contamination(
+                reviewer_text=reviewer_output or "",
+                author_text=str(author_output or ""),
+                verdict=parse_reviewer_output(reviewer_output or "").label,
+                author_finish_status=author_finish_status,
+            )
+            payload = {
+                **metric.as_payload(),
+                "review_execution_id": str(review_execution_id),
+                "author_execution_id": str(author_id),
+            }
+            await append_audit_event(
+                session,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                kind=REVIEW_CONTAMINATION_EVENT_KIND,
+                actor="platform:goodhart-detector",
+                payload=payload,
+            )
+        # El log estructurado va a Loki (ADR 0139), que es donde se lee la
+        # ventana de «una semana de runs» del test humano `human_gov_03` sin
+        # tener que escribir SQL contra `task_audit_events`.
+        _log.info(
+            "workers.review_contamination",
+            task_id=str(task_id),
+            review_execution_id=str(review_execution_id),
+            **{k: v for k, v in payload.items() if k != "review_execution_id"},
+        )
+    except Exception:
+        _log.warning(
+            "workers.review_contamination_failed",
+            task_id=str(task_id),
+            review_execution_id=str(review_execution_id),
+        )
 
 
 class RepoHistoryLostError(RuntimeError):
@@ -1555,6 +1656,18 @@ async def _finalize_and_transition(
             # the task. Apply its parsed verdict (approve -> done, reject ->
             # backlog/blocked) instead of the normal post-run transition.
             task_event = await _apply_review_verdict(session, task_id, tenant_id, result)
+            # `task_gov_06`: y, con el veredicto YA aplicado, se mide cuánto de
+            # él venía en el relato del implementador. Post-proceso puro (cero
+            # tokens, cero llamadas al modelo) y best-effort — ver
+            # `_record_review_contamination`.
+            await _record_review_contamination(
+                session,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                review_execution_id=execution_id,
+                reviewer_agent_id=UUID(request.agent_id) if request.agent_id else None,
+                reviewer_output=result.output or "",
+            )
         elif result.status == _AWAITING_APPROVAL and approval:
             execution = await get_execution(session, execution_id)
             project = await _load_project(session, task_id)

@@ -1,25 +1,42 @@
 "use client";
 
 /**
- * Diálogo de crear/editar un MCP server: campos por transporte, plantillas del
- * catálogo y "probar conexión" con importación de tools (task_05_06/05_07).
+ * Diálogo de crear/editar un MCP server: campos por transporte y plantillas del
+ * catálogo (task_05_06/05_07).
  *
- * Troceado desde `mcp-server-sections.tsx` en prod-16 `task_prod16_08`.
+ * Troceado desde `mcp-server-sections.tsx` (1125 líneas) en prod-16
+ * `task_prod16_08`; repartido del todo en `task_prod16_07`.
  *
- * **Sigue por encima del techo de 500 líneas de una pieza, y es deliberado.**
- * Este componente es UN formulario con una decena de `useState` entrelazados
- * (estado del server, args en crudo, plantilla aplicada, escotilla de Vault,
- * resultado del test, selección de tools a importar). Partirlo de verdad exige
- * decidir cómo viaja ese estado —prop-drilling a cinco niveles o un contexto
- * local—, y eso no es un movimiento mecánico: es un rediseño con riesgo de
- * regresión en un formulario que ya funciona. Queda anotado en
- * `SECTION_ALLOWLIST` con su tamaño real (de 1125 a esto), que es deuda medida
- * y decreciente, no deuda escondida.
+ * ## Por qué esto tardó dos olas, y qué estaba mal en el argumento de la primera
+ *
+ * El 2026-08-10 este fichero se dejó a propósito en 665 líneas, por encima del
+ * techo de 500 de una pieza y anotado en `SECTION_ALLOWLIST` con su razón
+ * escrita: era UN formulario con una decena de `useState` entrelazados, y
+ * partirlo pedía decidir cómo viaja ese estado —prop-drilling a cinco niveles o
+ * un contexto local—, o sea un rediseño con riesgo de regresión.
+ *
+ * El argumento valía para el corte que se estaba mirando, que era trocear el
+ * formulario. No valía para el que había: **dos de esos bloques no compartían
+ * estado con el formulario, lo tenían prestado por haber nacido aquí.**
+ *
+ *  - `mcp-connection-test-section.tsx` se llevó **siete** `useState` (probando,
+ *    resultado, error, tools marcadas, importando, error de importación,
+ *    importadas) y sólo necesita `buildPayload`: así se prueba exactamente lo
+ *    que se va a guardar, no una copia que se pueda desincronizar.
+ *  - `mcp-advanced-options-section.tsx` se llevó 112 líneas de JSX y
+ *    `setAuthRefManual`. Su `showRawAuth` se queda AQUÍ porque el diálogo lo
+ *    reinicia en dos sitios (al aplicar plantilla y al reabrirse); está
+ *    argumentado en el docstring de esa sección.
+ *
+ * O sea que el corte **bajó** el número de `useState` de este fichero en vez de
+ * repartirlos por la jerarquía, que era justo el riesgo que se quería evitar. Lo
+ * que queda es un formulario indivisible de verdad: nombre, transporte, sus
+ * campos y la plantilla aplicada se tocan entre sí.
  */
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,7 +48,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { McpAdvancedOptionsSection } from "./mcp-advanced-options-section";
+import { McpConnectionTestSection } from "./mcp-connection-test-section";
 import {
   CATEGORY_LABEL,
   OAUTH_AUTH_KIND,
@@ -40,7 +59,6 @@ import {
   type McpServerConfig,
   type Transport,
 } from "./mcp-server-types";
-import { TestResultPanel, type TestConnectionResult } from "./mcp-test-result-panel";
 
 // Dialog form — create/edit one MCP server
 // --------------------------------------------------------------------------
@@ -100,18 +118,6 @@ export function McpServerDialog({
     staleTime: 5 * 60_000,
   });
 
-  // For task_05_07 — the panel shows results below the form.
-  const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
-  const [testError, setTestError] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
-  // task_06_18_12 (ADR 0052) — selección de tools a importar al catálogo.
-  // Multiselección configurable por el operador: NO importamos todo, el
-  // operador marca qué tools de terceros entran en su catálogo (supply chain).
-  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-  const [importing, setImporting] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [importedCount, setImportedCount] = useState<number | null>(null);
-
   const isStdio = state.transport === "stdio";
 
   function applyTemplate(templateId: string) {
@@ -126,14 +132,6 @@ export function McpServerDialog({
     // If the template declares secrets, expand the advanced section so
     // the operator can see the credential card right away.
     if (entry.requires_auth) setAdvancedOpen(true);
-  }
-
-  // Any manual edit of auth_ref breaks the "managed by template"
-  // invariant — drop the appliedTemplate marker so the raw input
-  // takes over again.
-  function setAuthRefManual(value: string) {
-    setState({ ...state, auth_ref: value });
-    if (appliedTemplate) setAppliedTemplate(null);
   }
 
   // Build the canonical server shape used by both Save and Probar.
@@ -156,64 +154,6 @@ export function McpServerDialog({
     },
     [state, argsRaw, isStdio],
   );
-
-  async function handleTestConnection() {
-    setTesting(true);
-    setTestResult(null);
-    setTestError(null);
-    setImportError(null);
-    setImportedCount(null);
-    try {
-      const result = await apiFetch<TestConnectionResult>(
-        `/projects/${projectId}/mcp/test-connection`,
-        {
-          method: "POST",
-          body: buildPayload(),
-        },
-      );
-      setTestResult(result);
-      // Pre-seleccionar todas las tools descubiertas — el operador puede
-      // desmarcar las que no quiera importar (multiselección configurable).
-      setSelectedTools(new Set(result.tools.map((t) => t.name)));
-    } catch (err) {
-      setTestError(err instanceof ApiError ? err.body : String(err));
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  function toggleSelectedTool(name: string) {
-    setSelectedTools((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
-  }
-
-  async function handleImportTools() {
-    // El nombre del server tal como se guarda en el proyecto — es el prefijo
-    // de namespacing <server>.<tool> que el backend aplica.
-    const serverName = buildPayload().name;
-    if (!serverName || selectedTools.size === 0) return;
-    setImporting(true);
-    setImportError(null);
-    setImportedCount(null);
-    try {
-      const result = await apiFetch<{ tools: { name: string }[] }>(
-        `/projects/${projectId}/mcp/servers/${encodeURIComponent(serverName)}/import-tools`,
-        {
-          method: "POST",
-          body: { tool_names: Array.from(selectedTools) },
-        },
-      );
-      setImportedCount(result.tools.length);
-    } catch (err) {
-      setImportError(err instanceof ApiError ? err.body : String(err));
-    } finally {
-      setImporting(false);
-    }
-  }
 
   function handleSubmit() {
     onSubmit(buildPayload());
@@ -376,159 +316,22 @@ export function McpServerDialog({
               </div>
             ) : null}
 
-            {/* Opciones avanzadas — colapsa auth + timeout */}
-            <div className="border-t pt-3">
-              <button
-                type="button"
-                onClick={() => setAdvancedOpen(!advancedOpen)}
-                data-testid="mcp-form-advanced-toggle"
-                aria-expanded={advancedOpen}
-                className="text-muted-foreground hover:text-foreground flex w-full items-center justify-between text-sm font-medium transition-colors"
-              >
-                <span className="flex items-center gap-1.5">
-                  {advancedOpen ? (
-                    <ChevronDown className="h-4 w-4" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4" />
-                  )}
-                  Opciones avanzadas
-                </span>
-                <span className="text-xs opacity-60">
-                  {state.auth_ref ? "credencial • " : ""}timeout {state.timeout_s}s
-                </span>
-              </button>
+            <McpAdvancedOptionsSection
+              state={state}
+              onChange={setState}
+              appliedTemplate={appliedTemplate}
+              onManualAuthEdit={() => setAppliedTemplate(null)}
+              open={advancedOpen}
+              onOpenChange={setAdvancedOpen}
+              showRawAuth={showRawAuth}
+              onShowRawAuthChange={setShowRawAuth}
+            />
 
-              {advancedOpen && (
-                <div className="mt-3 space-y-4">
-                  {appliedTemplate?.requires_auth && !showRawAuth ? (
-                    <div
-                      className="bg-success-soft text-success-soft-foreground rounded-md border border-success/30 p-3"
-                      data-testid="mcp-form-auth-managed"
-                    >
-                      <p className="text-sm font-medium">🔒 Esta integración requiere credencial</p>
-                      <p className="mt-1 text-xs">
-                        El sistema ya sabe dónde guardar el secreto. Pide al{" "}
-                        <strong>administrador del tenant</strong> que añada{" "}
-                        <code>{appliedTemplate.secret_keys.join(", ") || "la credencial"}</code> en
-                        Vault antes del primer uso. Mientras no esté, las llamadas a este MCP
-                        devolverán un error de autenticación tipado (no se cae el sistema).
-                      </p>
-                      <p className="mt-2 text-xs">
-                        <a
-                          href="https://github.com/daycry/agent-ai-multitenant/blob/master/docs/03-guides/configurar-mcp-server.md"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary underline-offset-2 hover:underline"
-                        >
-                          Ver guía de configuración →
-                        </a>
-                        {"  ·  "}
-                        <button
-                          type="button"
-                          onClick={() => setShowRawAuth(true)}
-                          className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
-                          data-testid="mcp-form-show-raw-auth"
-                        >
-                          Detalles técnicos
-                        </button>
-                      </p>
-                    </div>
-                  ) : (
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="mcp-form-auth-ref">
-                          {appliedTemplate?.requires_auth
-                            ? "Ruta del secreto en Vault"
-                            : "Credencial del servidor (opcional)"}
-                        </Label>
-                        {appliedTemplate?.requires_auth && showRawAuth && (
-                          <button
-                            type="button"
-                            onClick={() => setShowRawAuth(false)}
-                            className="text-muted-foreground hover:text-foreground text-xs underline-offset-2 hover:underline"
-                            data-testid="mcp-form-hide-raw-auth"
-                          >
-                            ← Ocultar detalles técnicos
-                          </button>
-                        )}
-                      </div>
-                      <Input
-                        id="mcp-form-auth-ref"
-                        data-testid="mcp-form-auth-ref"
-                        value={state.auth_ref ?? ""}
-                        onChange={(e) => setAuthRefManual(e.target.value)}
-                        placeholder="vault:secret/data/mcp/<servicio>/<proyecto>"
-                      />
-                      <p className="text-muted-foreground mt-1 text-xs">
-                        {appliedTemplate?.requires_auth
-                          ? "El sistema rellena esta ruta automáticamente al aplicar una plantilla. Solo edítala si tu Vault tiene una convención distinta."
-                          : "Solo para MCPs que necesitan API key / token. El admin del tenant guarda el secreto en Vault y aquí solo se referencia con la ruta vault:…"}
-                      </p>
-                    </div>
-                  )}
-
-                  <div>
-                    <Label htmlFor="mcp-form-timeout">Timeout (segundos)</Label>
-                    <Input
-                      id="mcp-form-timeout"
-                      data-testid="mcp-form-timeout"
-                      type="number"
-                      min={1}
-                      max={300}
-                      value={state.timeout_s}
-                      onChange={(e) =>
-                        setState({ ...state, timeout_s: Number(e.target.value) || 30 })
-                      }
-                    />
-                    <p className="text-muted-foreground mt-1 text-xs">
-                      Tiempo máximo por llamada. 30s va bien para la mayoría; sube a 120s para MCPs
-                      lentos como Docling o Puppeteer.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Probar conexión */}
-            <div className="border-muted rounded-md border p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-medium">Probar conexión</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleTestConnection}
-                  disabled={testing || submitting || !state.name}
-                  data-testid="mcp-form-test"
-                >
-                  {testing ? "Probando…" : "Probar"}
-                </Button>
-              </div>
-              {testResult ? (
-                <TestResultPanel
-                  result={testResult}
-                  serverName={buildPayload().name}
-                  selected={selectedTools}
-                  onToggle={toggleSelectedTool}
-                  onImport={handleImportTools}
-                  importing={importing}
-                  importError={importError}
-                  importedCount={importedCount}
-                />
-              ) : testError ? (
-                <p
-                  className="text-destructive mt-2 whitespace-pre-wrap text-xs"
-                  data-testid="mcp-form-test-error"
-                >
-                  {testError}
-                </p>
-              ) : (
-                <p className="text-muted-foreground mt-2 text-xs">
-                  Abre una sesión one-shot contra el servidor y lista las tools que expone. No
-                  guarda nada.
-                </p>
-              )}
-            </div>
+            <McpConnectionTestSection
+              projectId={projectId}
+              buildPayload={buildPayload}
+              disabled={submitting}
+            />
 
             {backendError ? (
               <p

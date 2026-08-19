@@ -716,7 +716,7 @@ async def seed_ci4_agents(session: AsyncSession) -> int:
 # ---------------------------------------------------------------------------
 # Seed: tools por agente (junction agent_tools)
 # ---------------------------------------------------------------------------
-# La tabla agent_tools NO restringe scope (db/domain.py), así que SÍ se puede
+# La tabla agent_tools NO restringe scope (db/domain/agents.py), así que SÍ se puede
 # cablear tools a agentes global_builtin. Debe correr DESPUÉS de
 # seed_builtin_tools (FK agent_tools.tool_id) y de seed_ci4_agents
 # (FK agent_tools.agent_id).
