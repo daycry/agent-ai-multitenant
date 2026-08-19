@@ -85,6 +85,7 @@ __all__ = [
     "TEST_REDIS_URL",
     "default_redis_url",
     "redis_password",
+    "redis_port",
 ]
 
 #: Bases de Redis que el stack de docker-compose usa EN CALIENTE (ver el
@@ -93,34 +94,59 @@ __all__ = [
 PLATFORM_REDIS_DATABASES = frozenset({0, 1, 2})
 
 
+def _from_docker_env(clave: str) -> str:
+    """El valor de ``clave`` en ``docker/.env``, o cadena vacía.
+
+    Leer el ``.env`` es deliberado y acotado al arnés: es el MISMO fichero que
+    lee el compose, así que el arnés y el stack no pueden divergir. Es también
+    de donde sale la contraseña de Postgres en ``conftest.py``.
+    """
+    env = Path(__file__).resolve().parents[2] / "docker" / ".env"
+    if not env.is_file():
+        return ""
+    prefijo = f"{clave}="
+    for linea in env.read_text(encoding="utf-8").splitlines():
+        if linea.startswith(prefijo):
+            return linea.split("=", 1)[1].strip()
+    return ""
+
+
 def redis_password() -> str:
     """La contraseña de la Redis de desarrollo, si la hay.
 
     Se busca en dos sitios, por orden: la variable de entorno
     (``TEST_REDIS_PASSWORD``, y si no ``REDIS_PASSWORD``), y el ``docker/.env``
-    que el propio compose lee.
-
-    Leer el ``.env`` es deliberado y acotado al arnés de tests: es el mismo
-    fichero del que sale la contraseña de Postgres en ``conftest.py``, y evita
-    que cada invocación de pytest tenga que exportar a mano un secreto que ya
-    está en disco. Nunca se imprime.
+    que el propio compose lee. Nunca se imprime.
     """
     directa = os.environ.get("TEST_REDIS_PASSWORD") or os.environ.get("REDIS_PASSWORD")
     if directa:
         return directa
-    env = Path(__file__).resolve().parents[2] / "docker" / ".env"
-    if env.is_file():
-        for linea in env.read_text(encoding="utf-8").splitlines():
-            if linea.startswith("REDIS_PASSWORD="):
-                return linea.split("=", 1)[1].strip()
-    return ""
+    return _from_docker_env("REDIS_PASSWORD")
+
+
+def redis_port() -> int:
+    """El puerto que el compose PUBLICA en el host para su Redis.
+
+    No es siempre 6379, y darlo por hecho fue justo el fallo del 2026-08-19: en
+    esta máquina el 6379 lo ocupa una Redis local de Laragon (5.0.14, **sin
+    contraseña**), así que el compose lo publica en otro puerto —``REDIS_PORT``
+    de ``docker/.env``, que el propio compose interpola en
+    ``127.0.0.1:${REDIS_PORT:-6379}:6379``—. El arnés lee la MISMA variable para
+    no poder apuntar a otro servidor que el stack.
+    """
+    directo = os.environ.get("TEST_REDIS_PORT") or os.environ.get("REDIS_PORT")
+    bruto = directo or _from_docker_env("REDIS_PORT") or "6379"
+    try:
+        return int(bruto)
+    except ValueError:
+        return 6379
 
 
 def default_redis_url() -> str:
-    """`redis://[:pwd@]localhost:6379/15` — DB 15 para no pisar la dev (DB 0)."""
+    """`redis://[:pwd@]localhost:<REDIS_PORT>/15` — DB 15 para no pisar la dev."""
     pwd = redis_password()
     credencial = f":{quote(pwd, safe='')}@" if pwd else ""
-    return f"redis://{credencial}localhost:6379/15"
+    return f"redis://{credencial}localhost:{redis_port()}/15"
 
 
 def _database_index(url: str) -> int | None:
@@ -186,9 +212,61 @@ def _prefer_ipv4_loopback(url: str) -> str:
     return urlunsplit(partes._replace(netloc=netloc))
 
 
+def _reject_a_stranger_on_the_port(url: str) -> None:
+    """Aborta si quien contesta en ese puerto NO es la Redis del compose.
+
+    El 2026-08-19 el arnés estuvo hablando con una Redis que no era la del
+    stack: el contenedor no llegó a publicar su puerto —lo tenía tomado el
+    ``redis-server.exe`` 5.0.14 que trae Laragon— y en ``127.0.0.1:6379``
+    contestaba ese, **sin contraseña**. Ninguna guarda lo veía:
+    ``_reject_platform_database`` mira el número de base, no con quién habla.
+
+    La señal es barata y no admite discusión: si el compose configura
+    contraseña, su Redis TIENE que rechazar una conexión sin autenticar. Si
+    alguien contesta ``PONG`` sin credencial, ese alguien no es la Redis del
+    compose.
+
+    Sólo se aborta en ese caso. Si la conexión se rechaza (stack parado) no se
+    dice nada: el fallo posterior ya es legible, y abortar aquí cambiaría un
+    mensaje claro por otro peor.
+    """
+    if not redis_password():
+        return
+    try:
+        import redis as _redis
+    except ImportError:  # pragma: no cover - redis es dependencia del arnés
+        return
+
+    partes = urlsplit(url)
+    try:
+        cliente = _redis.Redis(
+            host=partes.hostname or "127.0.0.1",
+            port=partes.port or redis_port(),
+            socket_connect_timeout=3,
+            socket_timeout=3,
+        )
+        cliente.ping()
+    except Exception:
+        return
+
+    raise RuntimeError(
+        f"En {partes.hostname}:{partes.port} contesta una Redis que NO pide "
+        "contraseña, pero el compose la configura con `--requirepass`. O sea que "
+        "el arnés está hablando con OTRO servidor: lo más probable es que el "
+        "contenedor no haya podido publicar su puerto porque ya lo ocupaba una "
+        "Redis local (Laragon trae una en 6379). Comprueba con:\n"
+        "    docker port agentic-platform-redis-1\n"
+        "Si sale vacío, el contenedor no publica nada. Ajusta `REDIS_PORT` en "
+        "docker/.env a un puerto libre y recrea el servicio, o para la Redis "
+        "local. Correr la suite contra el servidor equivocado no da error: da "
+        "resultados que no describen el sistema que crees estar midiendo."
+    )
+
+
 # `or` y no `os.environ.get(..., default)` a propósito: así una `TEST_REDIS_URL`
 # exportada VACÍA (el caso de `TEST_REDIS_URL=` en la línea de comandos, o de un
 # `.env` que la declara sin valor) cae en la resolución por defecto en vez de
 # construir un cliente contra la cadena vacía.
 TEST_REDIS_URL = _prefer_ipv4_loopback(os.environ.get("TEST_REDIS_URL") or default_redis_url())
 _reject_platform_database(TEST_REDIS_URL)
+_reject_a_stranger_on_the_port(TEST_REDIS_URL)

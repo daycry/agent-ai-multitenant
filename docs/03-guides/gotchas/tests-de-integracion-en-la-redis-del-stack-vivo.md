@@ -86,3 +86,49 @@ Al paralelizar la suite hay que aislar **dos** cosas, no una:
 `TEST_PG_DB_NAME` (ver `integration-tests-share-one-database.md`) y la base de
 Redis — y ésta, además, no compite sólo con las otras tandas de pytest: compite
 con el stack que tienes levantado en la misma máquina.
+
+## Peor que la base equivocada: el SERVIDOR equivocado (2026-08-19)
+
+Todo lo de arriba da por hecho que en el puerto del host contesta la Redis del
+compose. En esta máquina no era así, y no había ninguna guarda que lo viese.
+
+`agentic-platform-redis-1` **no publicaba puerto ninguno**:
+
+```console
+$ docker port agentic-platform-redis-1
+$ netstat -ano | findstr :6379
+  TCP    127.0.0.1:6379    LISTENING    16336
+$ (Get-Process -Id 16336).Path
+C:\laragon\bin\redis\redis-x64-5.0.14.1\redis-server.exe
+```
+
+El compose declara `127.0.0.1:${REDIS_PORT:-6379}:6379`, pero el puerto lo tenía
+tomado el `redis-server.exe` **5.0.14 que trae Laragon**, sin contraseña. Así que
+en `127.0.0.1:6379` contestaba ése, y el arnés —que construía la URL con la
+contraseña de `docker/.env`— o fallaba con `AuthenticationError`, o, cuando el
+contenedor sí llegaba a publicar en algún momento, alternaba entre dos servidores
+distintos sin que nada lo dijera.
+
+Lo detectó un subagente al que el arreglo «oficial» no le funcionaba, y tuvo que
+sobrescribir la URL a mano para poder correr sus tests. Es la peor forma de
+detectarlo: cada uno se hace su parche local y el arnés compartido sigue mintiendo.
+
+**Arreglo, en tres piezas:**
+
+1. `REDIS_PORT` de `docker/.env` pasa a un puerto libre (aquí 6380) y el servicio
+   se recrea. El compose ya tenía la variable; lo que faltaba era usarla.
+2. `tests/integration/_redis_url.py` **lee ese `REDIS_PORT`** en vez de dar 6379
+   por hecho, del mismo `.env` del que ya leía la contraseña. Arnés y stack no
+   pueden divergir porque leen el mismo fichero.
+3. Guarda nueva `_reject_a_stranger_on_the_port`: si el compose configura
+   contraseña, su Redis **tiene** que rechazar una conexión sin autenticar. Si
+   alguien contesta `PONG` sin credencial, ése no es el Redis del compose, y se
+   aborta en la importación con el `docker port` que hay que ejecutar.
+
+La guarda vieja (`_reject_platform_database`) mira el número de base; ésta mira
+**con quién se está hablando**. Son dos preguntas distintas y hacían falta las dos.
+
+Comprobado en las tres direcciones: apuntando al 6379 de Laragon aborta;
+apuntando al 6380 del compose no dice nada; y con el puerto muerto tampoco —si el
+stack está parado, el fallo posterior ya es legible y abortar aquí sólo cambiaría
+un mensaje claro por otro peor.
