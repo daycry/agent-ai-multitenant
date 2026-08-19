@@ -5,6 +5,28 @@
 Admin may change it — a Tenant Admin cannot. These tests exercise the
 `platform_settings` service with real System Admin and Tenant Admin
 users against real Postgres.
+
+## Por qué el seed purga también la caché (2026-08-19)
+
+`get_platform_setting` sirve de una caché Redis con TTL 30 s desde prod-13
+(`task_prod13_21`). El `TRUNCATE platform_settings` de `_make_users` borra la
+fila pero **no** la caché, así que el `5` que escribe el primer test de este
+fichero sobrevivía al truncado y lo leían los dos siguientes: `assert 5 == 3`,
+dos rojos que acusaban a un default que nadie había tocado (vale 3 en los tres
+sitios donde vive: aquí, `task_lifecycle` y `agent_runtime.safeguards`).
+
+El camino de PRODUCCIÓN no tiene ese agujero —`set_platform_setting` invalida
+dos veces, antes y después del commit—, y por eso el defecto es del test: simula
+la acción del System Admin con SQL crudo, que dejó de ser equivalente el día que
+la caché existió. Mismo arreglo y misma razón que en `test_approval_expiry_job`,
+`test_backup_schedule` y `test_celery_idempotency`.
+
+Y por eso no se veía: en local, un fichero suelto no tiene `API_SERVER_REDIS_URL`
+apuntando al Redis del arnés, la caché no conecta y toda lectura va a la BD. En
+CI el shard corre ~137 ficheros en UN proceso y a alguno le basta con haber
+llamado antes a `_wiring.point_everything_at_the_test_redis()` para dejar la
+caché VIVA para el resto de la sesión. Reproducirlo en local es exportar
+`API_SERVER_REDIS_URL=$TEST_REDIS_URL`.
 """
 
 from __future__ import annotations
@@ -20,6 +42,7 @@ from api_server.db.platform_settings import (
     MAX_REVIEW_RETRIES_KEY,
     PlatformSettingForbiddenError,
     get_max_review_retries,
+    invalidate_platform_setting_cache,
     set_platform_setting,
 )
 from sqlalchemy import text
@@ -36,7 +59,10 @@ def _migrated(alembic_config: object) -> None:
 
 async def _make_users(session: async_sessionmaker) -> tuple[User, User]:
     """A System Admin and a Tenant Admin; the platform_settings table is
-    cleared so each test starts from the unset state."""
+    cleared so each test starts from the unset state.
+
+    «Unset» tiene que serlo también para la caché: ver la cabecera del módulo.
+    """
     system_admin = User(
         id=uuid7(),
         email=f"sysadmin-{uuid7()}@example.test",
@@ -52,6 +78,7 @@ async def _make_users(session: async_sessionmaker) -> tuple[User, User]:
     async with session() as s, s.begin():
         await s.execute(text("TRUNCATE platform_settings"))
         s.add_all([system_admin, tenant_admin])
+    await invalidate_platform_setting_cache(MAX_REVIEW_RETRIES_KEY)
     return system_admin, tenant_admin
 
 

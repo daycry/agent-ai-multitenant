@@ -110,15 +110,15 @@ converge, aborta el run), y un `BGREWRITEAOF` que termina con estado ≠ `ok`.
 El backup **para los escritores** durante la captura (ADR 0149, opción A). Lo que
 un operador necesita saber:
 
-| Qué                             | Valor                                                                                                                    |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Servicios que se paran          | `WORKERS_BACKUP_QUIESCE_SERVICES` — api-server, orchestrator, workers, cortex-beat, notification-dispatcher, admin-panel |
-| Servicios que NUNCA se paran    | `WORKERS_BACKUP_QUIESCE_NEVER_STOP` — `workers-privileged`, **la lane que ejecuta el propio backup**                     |
-| Lo que sigue en pie a propósito | PostgreSQL, MinIO, Redis y Vault: son los que se leen                                                                    |
-| Plazo de espera                 | `WORKERS_BACKUP_QUIESCE_TIMEOUT_SECONDS`, 180 s                                                                          |
-| Corte de servicio esperado      | 1-3 min diarios en la ventana del backup                                                                                 |
-| Desactivarlo                    | `WORKERS_BACKUP_QUIESCE_SERVICES=[]` — vuelve el skew de la tabla de arriba                                              |
-| A qué stack le habla            | `WORKERS_RESTORE_COMPOSE_PROJECT` + `WORKERS_RESTORE_COMPOSE_FILE` (las mismas del restore: es el mismo stack)           |
+| Qué                             | Valor                                                                                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Servicios que se paran          | `WORKERS_BACKUP_QUIESCE_SERVICES` — api-server, orchestrator, workers, workers-marketplace, cortex-beat, notification-dispatcher, admin-panel |
+| Servicios que NUNCA se paran    | `WORKERS_BACKUP_QUIESCE_NEVER_STOP` — `workers-privileged`, **la lane que ejecuta el propio backup**                                          |
+| Lo que sigue en pie a propósito | PostgreSQL, MinIO, Redis y Vault: son los que se leen                                                                                         |
+| Plazo de espera                 | `WORKERS_BACKUP_QUIESCE_TIMEOUT_SECONDS`, 180 s                                                                                               |
+| Corte de servicio esperado      | 1-3 min diarios en la ventana del backup                                                                                                      |
+| Desactivarlo                    | `WORKERS_BACKUP_QUIESCE_SERVICES=[]` — vuelve el skew de la tabla de arriba                                                                   |
+| A qué stack le habla            | `WORKERS_RESTORE_COMPOSE_PROJECT` + `WORKERS_RESTORE_COMPOSE_FILE` (las mismas del restore: es el mismo stack)                                |
 
 > **Comprueba esto al desplegar.** El instalador **no emite**
 > `WORKERS_RESTORE_COMPOSE_FILE`, y su default (`/data/agent-platform/docker-compose.yml`)
@@ -321,6 +321,16 @@ Resumen del flujo (el detalle, comandos y rollback están en ese runbook):
 > el stack, y `workers` está entre los servicios que para. Un restore que corre
 > dentro de un contenedor se mata a sí mismo a mitad de una operación
 > destructiva.
+
+> **Si el compose desplegado es anterior a prod-13, el preflight aborta nombrando
+> `workers-marketplace`.** Esa lane se sumó a los servicios que el restore para
+> (escribe en PostgreSQL: estado de instalación, auditoría y materialización), y
+> el preflight exige que todo lo que va a parar esté declarado en
+> `WORKERS_RESTORE_COMPOSE_FILE`. Aborta **antes** de tocar nada y dice qué
+> falta, así que no hay daño: regenera el compose con el instalador (que además
+> es lo que hace falta para que las puertas del marketplace se drenen: sin esa
+> lane, una instalación se queda en `analyzing` para siempre) y repite. No la
+> quites de la lista para salir del paso.
 
 > **Fail-stopped**: si un paso de la fase destructiva falla, el stack queda
 > **PARADO** (solo PostgreSQL sigue alcanzable, porque nunca se para) y el error

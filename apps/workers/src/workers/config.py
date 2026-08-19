@@ -719,10 +719,17 @@ class Settings(BaseSettings):
         # corre el propio backup — que además queda bloqueada por
         # `backup_quiesce_never_stop`, porque una lista de servicios la escribe
         # un operador y la guarda no puede ser «no lo pongas».
+        # `workers-marketplace` entra por la misma regla que en
+        # `restore_app_services`: escribe en PostgreSQL (estado de instalación,
+        # auditoría, materialización), así que dejarla en pie durante la captura
+        # es justo el skew que el ADR 0149 vino a cerrar. Su task es idempotente
+        # (`task_acks_late` + guarda de `status != ANALYZING`), así que la pausa
+        # no pierde la instalación: el mensaje se re-entrega al volver.
         default_factory=lambda: [
             "api-server",
             "orchestrator",
             "workers",
+            "workers-marketplace",
             "cortex-beat",
             "notification-dispatcher",
             "admin-panel",
@@ -1008,11 +1015,22 @@ class Settings(BaseSettings):
         # significar TODOS los que escriben, no los cuatro más visibles.
         # `caddy` queda fuera a propósito: es el proxy y no escribe; pararlo solo
         # añadiría un corte de red innecesario. `migrations` es one-shot.
+        # prod-13 task_prod13_01: `workers-marketplace` es el CUARTO escritor que
+        # se cuela sin entrar aquí. Drena la cola `marketplace`, y sus
+        # puertas de seguridad escriben de verdad: mueven
+        # `marketplace_installations.status` fuera de `analyzing`, insertan
+        # entradas de auditoría (`_block`) y materializan agentes/equipos al
+        # aprobar. Con la lane viva durante un `pg_restore --clean`, una puerta
+        # en vuelo escribe encima del dump recién restaurado o hace fallar el
+        # DROP. Pararla es seguro además de necesario: la task es idempotente por
+        # diseño (`task_acks_late` + la guarda de `status != ANALYZING`), así que
+        # el mensaje se re-entrega y la instalación se reanuda al levantar.
         default_factory=lambda: [
             "api-server",
             "orchestrator",
             "workers",
             "workers-privileged",
+            "workers-marketplace",
             "cortex-beat",
             "notification-dispatcher",
             "admin-panel",

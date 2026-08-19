@@ -34,6 +34,8 @@ from api_server.db.approval_repo import (
 from api_server.db.llm_providers import LLM_PROVIDER_KINDS
 from api_server.db.platform_settings import (
     DEFAULT_MODEL_CONFIG,
+    DEFAULT_PRICE_SYNC_ENABLED,
+    PRICE_SYNC_ENABLED_KEY,
     InvalidModelConfigError,
     validate_chat_model_config,
 )
@@ -323,6 +325,28 @@ PLATFORM_KNOWN_SETTINGS: dict[str, PlatformCategoryDef] = {
                 label_en="Human task escalation",
                 description_es="Sweep que reasigna/bloquea tareas humanas vencidas por timeout.",
                 description_en="Sweep that reassigns/blocks human tasks past their timeout.",
+            ),
+            # Plan 11 task_11_18. Estaba en la misma situación que las dos
+            # palancas de caducidad de aprobaciones antes de prod-03: el beat
+            # `workers.sync_model_prices` la LEE en cada disparo y cuatro
+            # docstrings prometían que «un System Admin la cambia desde el panel
+            # de administración», pero la clave no estaba aquí — o sea que
+            # `PUT /admin/platform-settings/price_sync_enabled` devolvía 404 y la
+            # única forma de apagar el job era un INSERT a mano en la tabla.
+            # Un interruptor de emergencia que sólo se acciona con SQL no es un
+            # interruptor: el día que el feed de precios meta basura en el
+            # catálogo, apagarlo tiene que costar un clic.
+            PRICE_SYNC_ENABLED_KEY: PlatformSettingDef(
+                type="bool",
+                default=DEFAULT_PRICE_SYNC_ENABLED,
+                label_es="Sync programado de precios",
+                label_en="Scheduled price sync",
+                description_es="Refresco periódico del catálogo de precios desde el feed "
+                "de LiteLLM (cadencia WORKERS_PRICE_SYNC_CRON). Apagado, la pasada es un "
+                "no-op: ni descarga el feed ni escribe el catálogo.",
+                description_en="Periodic refresh of the price catalogue from the LiteLLM "
+                "feed (cadence WORKERS_PRICE_SYNC_CRON). When off the run is a no-op: it "
+                "neither fetches the feed nor writes the catalogue.",
             ),
             # ADR 0098: barrido periódico de fetch de los remotos git de los
             # proyectos. OFF por defecto — sondear remotos de terceros es una

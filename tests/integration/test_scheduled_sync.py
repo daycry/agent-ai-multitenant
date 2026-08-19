@@ -18,7 +18,9 @@ What is asserted (task_11_18):
   * a scheduled run applies SAFE (<=10%) changes automatically;
   * a >10% spike is HELD for manual confirm (NOT auto-applied) and recorded;
   * disabling the schedule (``price_sync_enabled=false``) is honoured — the run
-    is a no-op (no feed fetch, no catalog write).
+    is a no-op (no feed fetch, no catalog write). La palanca se acciona por el
+    camino REAL (``set_platform_setting`` con un System Admin), que es el que
+    conduce el panel de administración; ver ``_set_enabled``.
 
 Fixture / DB wiring mirrors ``test_sync_prices_litellm.py``.
 """
@@ -67,6 +69,11 @@ def migrated_db(alembic_config, migrations_pg_dsn: str):
     command.upgrade(alembic_config, "head")
 
     async def _truncate() -> None:
+        from api_server.db.platform_settings import (
+            PRICE_SYNC_ENABLED_KEY,
+            invalidate_platform_setting_cache,
+        )
+
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
             await conn.execute(
@@ -74,6 +81,10 @@ def migrated_db(alembic_config, migrations_pg_dsn: str):
             )
         finally:
             await conn.close()
+        # El truncado borra la fila pero no la caché Redis de prod-13 (TTL 30 s),
+        # así que sin esto el estado de un test se filtra al siguiente y al de
+        # otro fichero: «tabla vacía» tiene que significar también «caché vacía».
+        await invalidate_platform_setting_cache(PRICE_SYNC_ENABLED_KEY)
 
     asyncio.run(_truncate())
     return migrations_pg_dsn
@@ -128,16 +139,41 @@ def _patch_fetcher(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> 
     monkeypatch.setattr(ls, "HttpxPriceFeedFetcher", _fake_fetcher)
 
 
-async def _set_enabled(dsn: str, enabled: bool) -> None:
-    conn = await asyncpg.connect(dsn)
+async def _set_enabled(database_url: str, enabled: bool) -> None:
+    """Apaga (o enciende) el sync como lo hace un System Admin de verdad.
+
+    Antes esto era un `INSERT` crudo, y dejó de ser equivalente el día que
+    prod-13 (`task_prod13_21`) puso una caché Redis con TTL 30 s delante de
+    `get_platform_setting`: la fila cambiaba, la caché no, y el beat seguía
+    leyendo el valor anterior. El test se ponía rojo (`enabled` seguía en True)
+    acusando a la palanca de no apagar, cuando lo que no apagaba era el atajo del
+    propio test.
+
+    El camino real —`set_platform_setting`— invalida la caché dos veces, antes y
+    después del commit, así que pasar por él prueba de paso lo que la pantalla
+    hace: escribir la clave que el beat lee. Y verifica el permiso, que es la
+    otra mitad de la regla: sólo un System Admin puede tocar esta palanca.
+    """
+    from api_server.db.models import User
+    from api_server.db.platform_settings import PRICE_SYNC_ENABLED_KEY, set_platform_setting
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from uuid6 import uuid7
+
+    engine = create_async_engine(database_url)
     try:
-        await conn.execute(
-            "INSERT INTO platform_settings (key, value) VALUES ('price_sync_enabled', $1::jsonb)"
-            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            "true" if enabled else "false",
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        admin = User(
+            id=uuid7(),
+            email=f"sysadmin-{uuid7()}@example.test",
+            password_hash="x",
+            is_system_admin=True,
         )
+        async with maker() as db, db.begin():
+            db.add(admin)
+        async with maker() as db, db.begin():
+            await set_platform_setting(db, PRICE_SYNC_ENABLED_KEY, enabled, actor=admin)
     finally:
-        await conn.close()
+        await engine.dispose()
 
 
 # ===========================================================================
@@ -299,8 +335,9 @@ async def test_disabled_schedule_is_a_noop(
     from api_server.db.model_prices import ModelPrice
     from workers.price_sync import _sync_model_prices
 
-    # A System Admin turned the scheduled sync OFF.
-    await _set_enabled(migrated_db, enabled=False)
+    # A System Admin turned the scheduled sync OFF (through the real write path
+    # — the one the admin panel drives; ver `_set_enabled`).
+    await _set_enabled(admin_database_url, enabled=False)
 
     # Wire a fetcher that explodes if touched — proving the disabled run never
     # fetches the feed nor writes the catalog.

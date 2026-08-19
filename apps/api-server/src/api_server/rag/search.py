@@ -172,6 +172,31 @@ async def bm25_chunks(
 # ---------------------------------------------------------------------------
 # Vector (task_04_17)
 # ---------------------------------------------------------------------------
+def vector_sql(*, with_agent: bool) -> str:
+    """El SQL exacto que ejecuta :func:`vector_chunks`.
+
+    Extraído a una función para que un test pueda pedirle el **plan** a
+    PostgreSQL (`EXPLAIN`) sobre esta misma cadena en vez de sobre una copia.
+    `tests/integration/test_vector_recall_desbalanceado.py` lo necesita porque su
+    control sólo significa algo si la consulta la resuelve el índice HNSW; una
+    copia del SQL en el test se habría desincronizado en silencio justo el día en
+    que un filtro nuevo cambia el plan — que es exactamente lo que pasó con el
+    `EXISTS` de espacio de embeddings del ADR 0155.
+
+    Parámetros ligados: ``:qvec``, ``:limit``, ``:tenant_id``, ``:project_id``,
+    ``:embedding_model_refs`` y, con ``with_agent``, ``:agent_id``.
+    """
+    return (
+        "SELECT chunks.id"
+        " FROM chunks"
+        " WHERE chunks.embedding IS NOT NULL"
+        + _kb_visibility_filter(with_agent=with_agent)
+        + _same_embedding_space_filter()
+        + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
+        " LIMIT :limit"
+    )
+
+
 async def vector_chunks(
     session: AsyncSession,
     *,
@@ -193,15 +218,7 @@ async def vector_chunks(
     if query_embedding is None:
         return []
     await tune_hnsw_session(session)
-    sql = (
-        "SELECT chunks.id"
-        " FROM chunks"
-        " WHERE chunks.embedding IS NOT NULL"
-        + _kb_visibility_filter(with_agent=agent_id is not None)
-        + _same_embedding_space_filter()
-        + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
-        " LIMIT :limit"
-    )
+    sql = vector_sql(with_agent=agent_id is not None)
     qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
     params: dict[str, object] = {
         "qvec": qvec_str,
@@ -471,4 +488,5 @@ __all__ = [
     "recall_chunks",
     "search_kb_chunks",
     "vector_chunks",
+    "vector_sql",
 ]

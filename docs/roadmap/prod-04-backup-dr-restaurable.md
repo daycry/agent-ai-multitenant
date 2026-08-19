@@ -215,7 +215,9 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 >
 > ⚠️ **Y una consecuencia operativa que hay que leer ANTES del próximo despliegue**: con
 > los defaults, el backup de las 03:00 **para api-server, orchestrator, workers,
-> cortex-beat, notification-dispatcher y admin-panel** durante la captura. Es lo que el
+> workers-marketplace, cortex-beat, notification-dispatcher y admin-panel** durante la
+> captura (la lane `workers-marketplace` se sumó con prod-13 `task_prod13_01`, que la
+> creó como escritora nueva). Es lo que el
 > operador firmó, pero es un corte de servicio diario que antes no existía. Además, el
 > instalador **no emite `WORKERS_RESTORE_COMPOSE_FILE`** (el puntero al compose que usa el
 > quiesce): con un `data_root` distinto del default, el quiesce no encuentra el compose y

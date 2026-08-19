@@ -41,6 +41,41 @@ def test_approval_expiry_settings_are_exposed() -> None:
     assert "approval_expiry_enabled" in keys
 
 
+# ---------------------------------------------------------------------------
+# Sync programado de precios (Plan 11 task_11_18)
+# ---------------------------------------------------------------------------
+# Misma historia que las dos de arriba, encontrada el 2026-08-19: el beat
+# `workers.sync_model_prices` leía `price_sync_enabled` en cada disparo y cuatro
+# docstrings prometían que se cambiaba «desde el panel de administración», pero
+# la clave no estaba en el registro. `PUT /admin/platform-settings/{key}` valida
+# contra ÉL, así que respondía 404 y la palanca sólo se accionaba con un INSERT a
+# mano. Un interruptor que sólo se acciona con SQL no es un interruptor.
+def test_price_sync_lever_is_exposed() -> None:
+    keys = set(all_setting_keys())
+    assert "price_sync_enabled" in keys, (
+        "el beat de precios lee esta clave en cada disparo; fuera del registro, "
+        "el endpoint de escritura devuelve 404 y no hay forma de apagarlo"
+    )
+
+
+def test_price_sync_default_is_the_one_the_beat_task_reads() -> None:
+    """El default del registro es EL MISMO que usa la lectura, no una copia.
+
+    Si divergieran, la pantalla enseñaría «activado» mientras el job lee
+    «desactivado» (o al revés) — el peor estado posible para un interruptor de
+    emergencia, porque miente justo cuando se consulta con prisa.
+    """
+    from api_server.db.platform_settings import (
+        DEFAULT_PRICE_SYNC_ENABLED,
+        PRICE_SYNC_ENABLED_KEY,
+    )
+    from api_server.platform_settings_registry import PLATFORM_KNOWN_SETTINGS
+
+    entry = PLATFORM_KNOWN_SETTINGS["mantenimiento"].settings[PRICE_SYNC_ENABLED_KEY]
+    assert entry.type == "bool"
+    assert entry.default is DEFAULT_PRICE_SYNC_ENABLED
+
+
 def test_approval_timeout_defaults_and_bounds_match_the_read_path() -> None:
     """Los límites del registro son LOS MISMOS que clampa `approval_repo`.
 

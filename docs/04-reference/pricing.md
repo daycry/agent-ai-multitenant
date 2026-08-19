@@ -136,8 +136,9 @@ altera el snapshot histórico. Precio ausente → snapshot tipado `unknown`
   Cadencia configurable (`Settings.price_sync_cron`, env
   `WORKERS_PRICE_SYNC_CRON`, default `0 4 * * *`; malformado → default). Palanca
   live `price_sync_enabled` (`platform_settings`, solo System Admin) leída al
-  inicio (OFF → no-op). El guard >10% aplica también programado (difiere para
-  confirmación manual).
+  inicio (OFF → no-op), en **Valores por defecto de plataforma →
+  Mantenimiento** del panel. El guard >10% aplica también programado (difiere
+  para confirmación manual).
 - **Audit** (task_11_19): `price_sync_audit` escribe una fila por corrida
   (`actor` `user:<uuid>` o `scheduler`, `trigger`, `source`, `feed_url`,
   contadores, `held_large_increases`, `confirmed`, `diff` JSONB) en la **misma

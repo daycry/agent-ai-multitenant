@@ -34,6 +34,38 @@ tenant grande contra 30 del pequeño:
 La fila del medio es la que hace que este test signifique algo: descarta la
 explicación alternativa de que lo que arregla el recall sea el `ef_search` más
 alto. Lo que lo arregla es el escaneo iterativo.
+
+## Segunda vez que el planificador se escapa por la puerta de al lado (2026-08-19)
+
+El control dejó de reproducir el defecto: devolvía 10 chunks donde debía devolver
+cero, y el test se puso rojo por su propia guarda —correctamente— en vez de pasar
+en vacío. La causa no fue la mitigación ni el corpus: fue que `vector_chunks`
+ganó un filtro nuevo, el `EXISTS` de espacio de embeddings de la **regla 5 del
+ADR 0155** (`kbm.embedding_model_id = ANY(:embedding_model_refs)`).
+
+Ese `EXISTS` es un semi-join que PostgreSQL puede subir al plan, y con 2.030
+filas le sale barato: en vez de preguntarle al índice HNSW, recorre los 30 chunks
+alcanzables desde `kb_projects → documents → chunks` y los **ordena a mano**.
+Recall exacto, cero relación con db-6. Medido con `EXPLAIN`: el plan del control
+no mencionaba `ix_chunks_embedding_hnsw` por ninguna parte.
+
+Es la MISMA trampa que el `enable_seqscan = off` de más arriba, un piso más
+abajo: a escala de juguete el planificador tiene un atajo exacto que en
+producción —millones de chunks— no puede pagar. La cura es la misma, quitarle el
+atajo:
+
+    SET LOCAL enable_sort = off
+
+Con eso vuelve el `Nested Loop Semi Join` sobre `ix_chunks_embedding_hnsw`, y con
+él las tres filas medidas de la tabla de arriba. Comprobado en esta base:
+
+    enable_sort=on   · control → 10 resultados   ← el atajo: ordenar 30 filas
+    enable_sort=off  · control →  0 resultados   ← db-6, otra vez reproducido
+    enable_sort=off  · mitigado → 10 resultados
+
+Y para que la próxima no cueste una tarde: el test **comprueba el plan**, no solo
+el número de filas. Si el HNSW deja de aparecer en el `EXPLAIN`, lo dice con esas
+palabras en vez de dejar que lo adivine quien vea un cero raro.
 """
 
 from __future__ import annotations
@@ -128,10 +160,39 @@ async def _seed_tenant(
     return tenant, project
 
 
+#: El índice que tiene que aparecer en el plan. Si no está, la consulta se
+#: resolvió por otro camino y lo que mida el test no es db-6.
+_HNSW_INDEX = "ix_chunks_embedding_hnsw"
+
+
+async def _vector_query_plan(session: AsyncSession, *, tenant: UUID, project: UUID) -> str:
+    """El `EXPLAIN` de la MISMA consulta que acaba de correr `vector_chunks`.
+
+    Sobre `search.vector_sql`, no sobre una copia: una copia se desincroniza y
+    el test seguiría afirmando cosas sobre un SQL que ya no se ejecuta.
+    Se llama dentro de la misma transacción, así que hereda sus `SET LOCAL`
+    —incluidos o no los GUC de HNSW según el caso— y describe el plan real.
+    """
+    from api_server.rag import search as search_mod
+
+    query = [1.0] + [0.0] * (_DIM - 1)
+    rows = await session.execute(
+        sa_text("EXPLAIN (COSTS OFF) " + search_mod.vector_sql(with_agent=False)),
+        {
+            "qvec": "[" + ",".join(f"{x:.6f}" for x in query) + "]",
+            "tenant_id": tenant,
+            "project_id": project,
+            "limit": 10,
+            "embedding_model_refs": search_mod._accepted_refs_param(None),
+        },
+    )
+    return "\n".join(str(row[0]) for row in rows.all())
+
+
 async def _small_tenant_hits(
     session: AsyncSession, *, tenant: UUID, project: UUID, mitigated: bool
-) -> list[UUID]:
-    """Los ids que la búsqueda vectorial devuelve al tenant PEQUEÑO.
+) -> tuple[list[UUID], str]:
+    """Los ids que la búsqueda vectorial devuelve al tenant PEQUEÑO, y su plan.
 
     ``mitigated=False`` desactiva el ajuste HNSW dejando el resto idéntico: es el
     control, y sin él la aserción del caso bueno no mediría nada.
@@ -142,9 +203,14 @@ async def _small_tenant_hits(
     await session.execute(
         sa_text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant)}
     )
-    # La línea que hacía «imposible» este test: sin ella el planificador resuelve
-    # por el filtro de tenant y el defecto no aparece a escala de test.
+    # Las dos líneas que le quitan al planificador los atajos que sólo existen a
+    # escala de juguete; en producción no puede pagar ninguno de los dos y acaba
+    # en el índice, que es el escenario que db-6 describe. Ver la cabecera.
+    #  · sin `enable_seqscan = off` resuelve por el filtro de tenant;
+    #  · sin `enable_sort = off` recorre los 30 chunks alcanzables por el
+    #    semi-join del `EXISTS` del ADR 0155 y los ordena a mano.
     await session.execute(sa_text("SET LOCAL enable_seqscan = off"))
+    await session.execute(sa_text("SET LOCAL enable_sort = off"))
 
     original = search_mod.tune_hnsw_session
     if not mitigated:
@@ -154,7 +220,7 @@ async def _small_tenant_hits(
 
         search_mod.tune_hnsw_session = _no_tuning  # type: ignore[assignment]
     try:
-        return await search_mod.vector_chunks(
+        hits = await search_mod.vector_chunks(
             session,
             query_embedding=query,
             tenant_id=tenant,
@@ -163,6 +229,7 @@ async def _small_tenant_hits(
         )
     finally:
         search_mod.tune_hnsw_session = original  # type: ignore[assignment]
+    return hits, await _vector_query_plan(session, tenant=tenant, project=project)
 
 
 @pytest.mark.asyncio
@@ -171,10 +238,18 @@ async def test_the_small_tenant_keeps_its_recall_in_a_lopsided_corpus(
 ) -> None:
     """Corpus 98/2 con el tenant grande MÁS cerca del query que el pequeño.
 
-    Se comprueban las dos mitades, y la primera es la que da sentido a la
-    segunda: sin la mitigación el tenant pequeño recibe CERO resultados aunque su
-    corpus tenga respuesta. Si algún día ese control dejara de dar cero, el test
-    habría dejado de reproducir el defecto y su parte verde no valdría nada.
+    Se comprueban tres cosas, y cada una sostiene a la siguiente:
+
+    1. que las dos consultas las resuelve el índice HNSW (si no, no estamos
+       mirando db-6 y el recuento de filas no dice nada);
+    2. que sin la mitigación el tenant pequeño recibe CERO resultados aunque su
+       corpus tenga respuesta — el control;
+    3. que con ella recibe resultados.
+
+    Si algún día el control dejara de dar cero, el test habría dejado de
+    reproducir el defecto y su parte verde no valdría nada. Ya pasó dos veces, y
+    las dos por lo mismo: el planificador encontró un atajo que sólo existe con
+    dos mil filas. La cabecera del módulo cuenta ambas.
     """
     from api_server.rag.hnsw import reset_hnsw_support_probe
 
@@ -197,15 +272,27 @@ async def test_the_small_tenant_keeps_its_recall_in_a_lopsided_corpus(
             await session.execute(sa_text("ANALYZE chunks"))
 
         async with sessionmaker() as session, session.begin():
-            unmitigated = await _small_tenant_hits(
+            unmitigated, control_plan = await _small_tenant_hits(
                 session, tenant=small_tenant, project=small_project, mitigated=False
             )
         async with sessionmaker() as session, session.begin():
-            mitigated = await _small_tenant_hits(
+            mitigated, mitigated_plan = await _small_tenant_hits(
                 session, tenant=small_tenant, project=small_project, mitigated=True
             )
     finally:
         await engine.dispose()
+
+    # Antes que nada: las dos mitades tienen que estar midiendo db-6, o sea que
+    # la consulta la resuelve el ÍNDICE y los filtros van después. Si el
+    # planificador se escapa por otro camino, el número de filas no significa
+    # nada y hay que decirlo con esas palabras, no dejar un cero sospechoso.
+    for label, plan in (("control", control_plan), ("mitigado", mitigated_plan)):
+        assert _HNSW_INDEX in plan, (
+            f"el plan del caso «{label}» no usa {_HNSW_INDEX}, así que esta consulta"
+            " ya no reproduce db-6 (el índice global resolviendo primero y los"
+            " filtros después). Un filtro nuevo en `vector_sql` le habrá dado al"
+            f" planificador un atajo exacto a escala de test. Plan:\n{plan}"
+        )
 
     assert unmitigated == [], (
         "el CONTROL no reprodujo db-6: sin la mitigación el tenant pequeño debería"
