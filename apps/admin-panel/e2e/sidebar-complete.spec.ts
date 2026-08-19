@@ -120,12 +120,18 @@ test("un grupo colapsado no renderiza sus enlaces; al abrirlo aparecen", async (
   // El grupo con la ruta activa sí está abierto (guarda no-vacía: si NADA se
   // renderizara, el `toHaveCount(0)` de abajo pasaría por vacuidad).
   await expect(nav.getByRole("link", { name: "Dashboard" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Agentes" })).toHaveCount(0);
+  // Por TESTID y no por nombre accesible: `{ name: "Agentes" }` dejó de ser
+  // único el día que entró «Agentes humanos» en la nav, y Playwright en modo
+  // estricto resuelve a DOS elementos (`nav-agents` y `nav-human-agents`) — el
+  // spec caía con `strict mode violation`, no con un fallo de producto. El
+  // testid es lo que esta casa usa para seleccionar y no lo mueve un cambio de
+  // copy ni un vecino con nombre parecido.
+  await expect(nav.getByTestId("nav-agents")).toHaveCount(0);
 
   await header.click();
 
   await expect(header).toHaveAttribute("aria-expanded", "true");
-  await expect(nav.getByRole("link", { name: "Agentes" })).toBeVisible();
+  await expect(nav.getByTestId("nav-agents")).toBeVisible();
 });
 
 test("un tenant_admin no ve el grupo Plataforma (ADR 0028)", async ({ page }) => {

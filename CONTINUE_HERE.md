@@ -226,6 +226,26 @@ fijar`. El ADR 0138 las deja fuera de su alcance por escrito porque
 
 ## Deuda conocida que NO bloquea el despliegue
 
+- 🔴 **El subset e2e del panel lleva semanas ROJO y CI no podía decirlo**
+  (descubierto el 2026-08-19). El job «Frontend e2e (Playwright, mocked subset)»
+  acumula **106+ tests en rojo**; cada uno agota su timeout de 30 s, así que sólo
+  en esperas se iban ~53 de los 60 minutos del job y GitHub lo marcaba
+  `cancelled` — que no es ni verde ni rojo. Un job que no termina no informa de
+  nada, y por eso nadie lo vio.
+  - **Ya arreglado**: el job falla rápido (`--max-failures=15 --timeout=15000`),
+    así que a partir de ahora da veredicto en minutos. Y una causa raíz cerrada:
+    `sidebar-complete.spec.ts` seleccionaba por nombre accesible
+    (`{ name: "Agentes" }`), que dejó de ser único el día que entró «Agentes
+    humanos» en la nav — `strict mode violation`, no un fallo de producto.
+    Ahora selecciona por `data-testid`, que es lo que esta casa usa.
+  - **Lo que queda**: los ~100 rojos restantes, sin agrupar por causa. Muestra de
+    3 specs: 5 fallos, de los que 1 era el selector de arriba. `settings-memories`
+    falla en el número de PUT y en un `data-testid` que no aparece; hay que
+    mirarlos uno a uno y separar **deuda del arnés** (selector movido, testid
+    renombrado) de **defecto real del panel**. Lo segundo NO se maquilla.
+  - Ni un `test.skip` para poner el marcador en verde: si algo no se arregla, se
+    queda rojo y se explica.
+
 - ~~**`routers/backup.py` importa `workers`**~~ — **cerrado el 2026-08-19**
   (prod-15 `task_gov_app_boundary_11`, hallazgo api-9 / decisión D5). Las dos
   sondas de destino remoto se encolan por nombre

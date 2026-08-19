@@ -440,12 +440,48 @@ jobs:
   # runs the tenant/auth/admin/tracing tests against real Postgres + Redis.
   # ---------------------------------------------------------------------------
   test-integration:
-    name: Integration tests
+    name: Integration tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    # 45 (was 30): the full integration suite (~22 min) + agent-runtime build +
-    # cross-tenant gate push the whole job near 30; a slow runner tipped it over
-    # and cancelled mid-suite (Plan prod-01 CI). Revisit when the suite is split.
+    # ------------------------------------------------------------------------
+    # 2026-08-19 — LA SUITE SE PARTE, que es lo que este comentario llevaba
+    # pidiendo desde prod-01 («Revisit when the suite is split»).
+    #
+    # Por qué: el job NUNCA daba veredicto. Medido en el run 32254592142, que es
+    # de donde salen todos los números de aquí:
+    #
+    #     setup (compose + pip + 2 imágenes)  2 min 40 s
+    #     pytest -m cross_tenant             10 min 14 s   <- recolecta los 549
+    #                                                          ficheros para correr
+    #                                                          un puñado de tests
+    #     pytest tests/integration           32 min 23 s   <- y ahí murió, al 45 %
+    #                                        ------------
+    #                                        45 min = el timeout exacto
+    #
+    # O sea que la suite entera pide ~72 min y el job entero ~85. GitHub marca un
+    # job que agota su reloj como `cancelled`, que no es ni verde ni rojo: se lee
+    # como «lo paró alguien». Por eso este PR llevaba semanas sin evidencia de
+    # integración sin que nadie lo notara.
+    #
+    # Con 4 shards: el 0 hace ~31 min (setup + gate cross-tenant + su cuarto) y
+    # los otros ~21. Los 45 minutos siguen sobrando, y ahora sobran de verdad en
+    # vez de quedarse a un minuto.
+    #
+    # El precio es 4x el setup (2 min 40 s cada uno). Se paga a gusto: la
+    # alternativa era subir el reloj a 90 y esperar hora y media por un veredicto.
+    #
+    # OJO al añadir la protección de rama: el check ya no se llama «Integration
+    # tests» sino «Integration tests (shard N/4)», uno por shard. Hay que exigir
+    # los cuatro.
+    # ------------------------------------------------------------------------
     timeout-minutes: 45
+    strategy:
+      # `fail-fast: false` a propósito: si el shard 1 encuentra un rojo, quiero
+      # saber también qué hicieron el 2, el 3 y el 4. Con fail-fast se cancelan
+      # los demás y volvemos a no tener veredicto, que es el problema que este
+      # cambio resuelve.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
@@ -623,32 +659,57 @@ jobs:
       # desaparecer el bloque `env:` del job eso interpolaría a una credencial
       # VACÍA — un `NOAUTH` dentro de una fixture, que es el modo de fallo del
       # gotcha redis-con-contrasena-rompe-la-integracion.md.
+      # Sólo en el shard 0: recolecta los 549 ficheros para correr un puñado de
+      # tests, así que cuesta 10 minutos y repetirlo cuatro veces serían 40. Su
+      # cobertura no depende del shard —selecciona por marca, no por fichero—,
+      # así que correrlo una vez lo cubre entero.
       - name: pytest cross-tenant isolation gate
-        if: steps.detect.outputs.has_compose == 'true'
+        if: steps.detect.outputs.has_compose == 'true' && matrix.shard == 0
         env:
           TEST_PG_PORT: "15432"
         run: pytest tests/integration -m cross_tenant -v
 
-      - name: pytest tests/integration
+      - name: pytest tests/integration (shard ${{ matrix.shard }}/4)
         if: steps.detect.outputs.has_compose == 'true'
         env:
           # In GH Actions there is no Laragon — bind the docker container
           # to the standard port for ergonomic conftest defaults.
           TEST_PG_PORT: "15432"
+          SHARD: ${{ matrix.shard }}
+          SHARDS: "4"
         run: |
-          if find tests/integration -type f -name "test_*.py" | grep -q .; then
-            pytest tests/integration -v
-          else
+          # El reparto: `find | sort` (determinista, mismo orden en los cuatro
+          # jobs) + módulo. Es exhaustivo y disjunto por construcción, y eso NO
+          # se deja a la fe: `tests/unit/test_ci_integration_shards.py` reproduce
+          # esta misma fórmula y afirma que la unión de los cuatro shards es
+          # exactamente el conjunto de ficheros y que las intersecciones son
+          # vacías. Un reparto que se dejara ficheros fuera sería lo peor que
+          # puede pasar aquí: CI en verde probando menos.
+          mapfile -t all < <(find tests/integration -type f -name "test_*.py" | sort)
+          if [ "${#all[@]}" -eq 0 ]; then
             echo "No integration tests yet."
+            exit 0
           fi
+          mine=()
+          for i in "${!all[@]}"; do
+            if [ $((i % SHARDS)) -eq "$SHARD" ]; then mine+=("${all[$i]}"); fi
+          done
+          echo "shard $SHARD/$SHARDS: ${#mine[@]} de ${#all[@]} ficheros"
+          if [ "${#mine[@]}" -eq 0 ]; then
+            echo "El shard quedó vacío: hay menos ficheros que shards." >&2
+            exit 1
+          fi
+          pytest "${mine[@]}" -v
 
       # Migration tests (Plan 16 task_16_01 onward) live in tests/migrations/
       # and reuse the integration DB fixtures (throwaway PG + Alembic), so they
       # need the same stack + env as the integration suite. Run them explicitly
       # — testpaths=["tests"] discovers the dir locally, but CI invokes pytest
       # per-directory, so this dir needs its own step to be exercised in CI.
+      # Shard 0: son 33 tests y dos minutos; repartirlos no compensa y
+      # duplicarlos en los cuatro, menos.
       - name: pytest tests/migrations
-        if: steps.detect.outputs.has_compose == 'true'
+        if: steps.detect.outputs.has_compose == 'true' && matrix.shard == 0
         env:
           TEST_PG_PORT: "15432"
         run: |
@@ -966,6 +1027,33 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:8001
         run: npm run build
 
+      # ------------------------------------------------------------------
+      # 2026-08-19 — este job pasa de MORIR MUDO a dar un veredicto.
+      #
+      # Lo que pasaba, medido en el run 32254592142: el subset acumula 106+
+      # tests en rojo, y cada uno agota su timeout de 30 s antes de rendirse.
+      # Sólo en esperas se iban ~53 minutos de los 60 del job, así que GitHub lo
+      # marcaba `cancelled` — que no es ni verde ni rojo, y se lee como «lo paró
+      # alguien». Resultado: el subset e2e llevaba semanas roto y nadie lo sabía,
+      # porque un job que no termina no informa de nada.
+      #
+      # Dos palancas, y ninguna esconde el rojo:
+      #
+      #   --max-failures=15  para en cuanto acumula 15 fallos y REPORTA. Convierte
+      #                      «60 minutos sin veredicto» en «rojo en minutos con la
+      #                      lista de los primeros 15». Si hay menos de 15, corre
+      #                      entera y el número no cambia nada.
+      #   --timeout=15000    el subset es MOCKEADO: no habla con ningún backend, y
+      #                      la página la sirve un `next start` local. Un click que
+      #                      tarda 30 s aquí ya ha fallado; los 30 s por defecto son
+      #                      un valor pensado para el arnés contra backend real.
+      #
+      # Lo que NO se hizo, a propósito: ni `continue-on-error`, ni sacar el job de
+      # los checks, ni marcar specs como `skip`, ni subir el reloj a 120 para que
+      # quepan los 106 fallos. El objetivo no es que el job termine: es que diga
+      # algo. Cuando los rojos se arreglen, esto sigue siendo la red que evita que
+      # el job vuelva a quedarse mudo.
+      # ------------------------------------------------------------------
       - name: Playwright e2e (mocked subset — no live backend)
         if: steps.detect.outputs.has_node == 'true'
         working-directory: apps/admin-panel
@@ -975,4 +1063,4 @@ jobs:
           # Self-contained specs only: those that mock the API via page.route.
           mapfile -t specs < <(grep -rlE "page\.route|\.route\(" e2e)
           echo "Running ${#specs[@]} mocked Playwright specs (no api-server)"
-          npm run e2e -- "${specs[@]}"
+          npm run e2e -- "${specs[@]}" --max-failures=15 --timeout=15000
