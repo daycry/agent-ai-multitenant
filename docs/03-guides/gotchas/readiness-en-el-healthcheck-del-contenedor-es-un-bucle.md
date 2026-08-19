@@ -58,10 +58,10 @@ y en `docker/caddy-manuals/Caddyfile`):
 
 ```caddyfile
 reverse_proxy api-server:8000 {
-	health_uri /readyz
-	health_interval 10s
-	health_timeout 5s
-	health_status 2xx
+  health_uri /readyz
+  health_interval 10s
+  health_timeout 5s
+  health_status 2xx
 }
 ```
 

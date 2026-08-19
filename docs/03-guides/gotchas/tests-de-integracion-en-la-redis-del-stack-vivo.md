@@ -37,9 +37,11 @@ WORKERS_BROKER_URL=redis://:***@redis:6379/1
 O sea que había un worker **vivo** bloqueado en `BRPOP default` sobre la misma
 base a la que apuntaba el arnés. Se comprueba en dos líneas:
 
-```
-$ redis-cli -n 1 lpush default '{"probe":"x"}'   # -> 1
-$ redis-cli -n 1 llen default                    # -> 0
+```console
+$ redis-cli -n 1 lpush default '{"probe":"x"}'
+1
+$ redis-cli -n 1 llen default
+0
 ```
 
 El mensaje que el test acababa de encolar se lo llevaba el worker antes de que

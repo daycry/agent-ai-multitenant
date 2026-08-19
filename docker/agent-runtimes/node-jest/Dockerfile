@@ -21,6 +21,22 @@ ENV NODE_ENV=test \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     NPM_CONFIG_FUND=false
 
+# Parches de seguridad del SO. Las bases `-slim` se reconstruyen cada pocas
+# semanas, asi que entre reconstrucciones arrastran los paquetes de Debian sin
+# los parches YA publicados: el 2026-08-18 el gate cayo con CVE-2026-53615
+# (nueve paquetes de la familia util-linux; fix `2.41.5-0+deb13u1` disponible en
+# `trixie-security` y ausente todavia de la imagen oficial).
+#
+# Esta capa NO se puede dejar cachear, y no es una precaucion teorica: el
+# template `rust-cargo` YA tenia este mismo `apt-get -y upgrade` y aun asi
+# entrego los paquetes viejos, porque buildx la sirvio del cache de GHA
+# (`RUN apt-get update && apt-get -y upgrade` -> `CACHED` en el log). Por eso
+# los workflows que construyen estas imagenes pasan `no-cache-filters`. Ver
+# `docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md`.
+RUN apt-get update \
+ && apt-get -y upgrade \
+ && rm -rf /var/lib/apt/lists/*
+
 # npm publica su árbol de dependencias EMPAQUETADO (`bundleDependencies`), así
 # que estas dos indirectas no se pueden actualizar con un `npm install -g npm@…`:
 # la 12.0.2 —la última publicada el 2026-08-13— sigue trayendo brace-expansion

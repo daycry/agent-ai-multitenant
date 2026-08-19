@@ -88,7 +88,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Runtime shared libs the compiled xmlsec binding links against (no -dev, no
 # compilers). libxml2 is pulled in transitively but we name it for clarity.
+# El `apt-get -y upgrade` va en la MISMA capa que el install: el indice se
+# descarga una sola vez y los dos resuelven contra el mismo. El porque del
+# upgrade —y por que esta capa no puede cachearse— esta en
+# `docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md`.
 RUN apt-get update \
+ && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends \
       libxml2 libxmlsec1 libxmlsec1-openssl \
  && rm -rf /var/lib/apt/lists/*

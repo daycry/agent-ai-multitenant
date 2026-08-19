@@ -144,6 +144,21 @@ jobs:
           # layers under a key derived from the matrix value.
           cache-from: type=gha,scope=runtime-${{ matrix.template }}
           cache-to: type=gha,mode=max,scope=runtime-${{ matrix.template }}
+          # La etapa `runtime` NO se cachea, y no es una precaucion teorica.
+          # El 2026-08-18 cuatro templates cayeron con CVE-2026-53615 (familia
+          # util-linux, fix ya publicado en `trixie-security`). `rust-cargo`
+          # llevaba su `apt-get -y upgrade` desde hacia semanas y aun asi
+          # entrego los paquetes viejos: el log dice
+          # `#12 [2/5] RUN apt-get update && apt-get -y upgrade` -> `CACHED`.
+          # Una capa que dice parchear y se sirve del cache es una medida que
+          # miente, y encima la unica que protege las imagenes donde corre el
+          # codigo NO confiable (Principio Rector 2).
+          #
+          # El coste es reconstruir la etapa final en cada build; las etapas
+          # `builder` (compilaciones caras) siguen cacheadas. Es el precio de
+          # que el parche sea real.
+          # Ver docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md
+          no-cache-filters: runtime
 
       # Trivy sobre CADA template de la matriz (prod-11 task_trivy_07, gap5-1).
       #
