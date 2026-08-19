@@ -28,8 +28,10 @@ contenedor + ``_apply_review_verdict``), no mockeadas. Seams y límites DECLARAD
 Modelos SCRIPTED (sin LLM real): el implementador escribe+finish; el reviewer cierra
 con el tag ``<verdict>approve|reject</verdict>`` (el canal de veredicto del run
 reviewer, ADR 0084). Necesita el stack local: Docker + ``agent-runtime:v1`` + Postgres
-+ Redis (``@requires_docker`` + ``_agent_runtime_image`` hacen skip honesto si faltan)
-+ el api-server del stack dev (la runtime llama a la API interna en ``agentic-agents``).
++ Redis + el api-server del stack de aplicaciones (la runtime llama a la API interna
+en ``agentic-agents``, y desde prod-01 task_11 **no arranca** si no contesta). Las
+tres precondiciones se comprueban antes de correr —``@requires_docker``,
+``_agent_runtime_image`` y ``_internal_api``—: skip honesto en local, FAIL bajo CI.
 
 NOTA de ubicación: vive en ``tests/integration/`` (no ``tests/e2e/``) porque reutiliza
 el harness de integración probado del smoke (PG efímero + imagen agent-runtime +
@@ -57,9 +59,11 @@ from ._pipeline_helpers import (
     consume_and_take_job,
     execution_statuses,
     require_agent_runtime_image,
+    require_internal_api_reachable,
     run_worker_job,
     status_changed_event,
     task_status,
+    why_the_run_failed,
 )
 
 # M-6: timeout por-test — si un contenedor se cuelga, el test muere acotado en
@@ -92,6 +96,14 @@ def _migrated(alembic_config: object) -> None:
 @pytest.fixture()
 def _agent_runtime_image() -> None:
     require_agent_runtime_image()
+
+
+@pytest.fixture()
+def _internal_api() -> None:
+    """El api-server vivo en `agentic-agents` — precondición REAL de estos dos
+    tests, no una comodidad: con `reviewer_agent_id` y `assigned_agent_id` puestos,
+    los dos runs llevan token interno y el runtime no arranca sin `/healthz`."""
+    require_internal_api_reachable()
 
 
 async def _seed(db_url: str, *, verdict_tag: str) -> dict[str, UUID]:
@@ -232,7 +244,11 @@ _run = run_worker_job
 
 @requires_docker
 def test_plan_task_travels_dispatch_run_review_to_done(
-    _migrated: None, _agent_runtime_image: None, admin_database_url: str
+    # Precondiciones antes de `_migrated`: ver el comentario gemelo del smoke.
+    _agent_runtime_image: None,
+    _internal_api: None,
+    _migrated: None,
+    admin_database_url: str,
 ) -> None:
     """El ciclo feliz completo: implementador → in_review → reviewer approve → done."""
     ids = asyncio.run(_seed(admin_database_url, verdict_tag="<verdict>approve</verdict>"))
@@ -244,7 +260,9 @@ def test_plan_task_travels_dispatch_run_review_to_done(
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "in_progress"
 
     impl_outcome = _run(impl_req, admin_database_url)
-    assert impl_outcome["status"] == ExecutionStatus.DONE
+    assert impl_outcome["status"] == ExecutionStatus.DONE, why_the_run_failed(
+        admin_database_url, ids["task"], impl_outcome
+    )
     # Con reviewer adjunto, el run del implementador deja la tarea en in_review.
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "in_review"
 
@@ -266,14 +284,21 @@ def test_plan_task_travels_dispatch_run_review_to_done(
 
 @requires_docker
 def test_reviewer_reject_sends_task_back_to_backlog(
-    _migrated: None, _agent_runtime_image: None, admin_database_url: str
+    # Precondiciones antes de `_migrated`: ver el comentario gemelo del smoke.
+    _agent_runtime_image: None,
+    _internal_api: None,
+    _migrated: None,
+    admin_database_url: str,
 ) -> None:
     """El reviewer rechaza (``<verdict>reject</verdict>``) → la tarea vuelve a
     backlog para otra ronda del implementador (ADR 0084/0096)."""
     ids = asyncio.run(_seed(admin_database_url, verdict_tag="<verdict>reject</verdict>"))
 
     impl_req = asyncio.run(_dispatch(admin_database_url, ids, old="backlog", new="ready"))
-    assert _run(impl_req, admin_database_url)["status"] == ExecutionStatus.DONE
+    impl_outcome = _run(impl_req, admin_database_url)
+    assert impl_outcome["status"] == ExecutionStatus.DONE, why_the_run_failed(
+        admin_database_url, ids["task"], impl_outcome
+    )
     assert asyncio.run(_task_status(admin_database_url, ids["task"])) == "in_review"
 
     review_req = asyncio.run(_dispatch_from_worker_event(admin_database_url))

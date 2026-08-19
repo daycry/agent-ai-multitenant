@@ -11,7 +11,12 @@ plays itself is the Celery worker process: it reads the message the
 dispatcher enqueued and invokes `run_execution` with that exact
 payload — the same call a worker daemon would make.
 
-Needs the full local stack: Docker, PostgreSQL and Redis.
+Needs the full local stack: Docker, PostgreSQL, Redis **and the api-server**.
+Lo último no es opcional ni es nuevo, sólo estaba sin escribir: la tarea lleva
+agente asignado, así que el worker mintea `AGENTIC_INTERNAL_TOKEN` y el runtime
+—desde prod-01 task_11— exige que `/internal/agent/*` responda en la red
+`agentic-agents` antes de arrancar el loop. Sin api-server el run acaba `failed`.
+La precondición la comprueba `require_internal_api_reachable()`.
 """
 
 from __future__ import annotations
@@ -34,9 +39,11 @@ from ._pipeline_helpers import (
     TEST_REDIS_URL,
     consume_and_take_job,
     require_agent_runtime_image,
+    require_internal_api_reachable,
     run_worker_job,
     status_changed_event,
     task_status,
+    why_the_run_failed,
 )
 
 # M-6: timeout por-test — un contenedor colgado muere acotado, no al timeout del job.
@@ -61,6 +68,11 @@ def _migrated(alembic_config: object) -> None:
 @pytest.fixture()
 def _agent_runtime_image() -> None:
     require_agent_runtime_image()
+
+
+@pytest.fixture()
+def _internal_api() -> None:
+    require_internal_api_reachable()
 
 
 async def _seed(db_url: str) -> dict[str, UUID]:
@@ -171,8 +183,12 @@ async def _exec_stream_event_types(execution_id: str) -> list[str]:
 
 @requires_docker
 def test_full_pipeline_dispatches_runs_and_persists_an_execution(
-    _migrated: None,
+    # Las precondiciones VAN PRIMERO: pytest instancia las fixtures en el orden de
+    # la firma, y `_migrated` corre las ~140 migraciones (minutos). Con este orden,
+    # un stack incompleto se dice en segundos en vez de tras la espera.
     _agent_runtime_image: None,
+    _internal_api: None,
+    _migrated: None,
     admin_database_url: str,
 ) -> None:
     """One task end to end — orchestrator → worker → container → DB.
@@ -192,7 +208,9 @@ def test_full_pipeline_dispatches_runs_and_persists_an_execution(
     # --- worker: run the enqueued job (container → loop → DB) --------------
     outcome = run_worker_job(request, admin_database_url)
 
-    assert outcome["status"] == ExecutionStatus.DONE
+    assert outcome["status"] == ExecutionStatus.DONE, why_the_run_failed(
+        admin_database_url, ids["task"], outcome
+    )
 
     # --- the persisted execution row --------------------------------------
     execution = asyncio.run(_execution(admin_database_url, ids["task"]))

@@ -78,6 +78,12 @@ el problema ya esté documentado.
   — un `up -d` lanza runs que nadie pidió: el reconciler rescata a los 90 s las
   tareas `in_progress` **sin ejecución** (>30 min), y son invisibles al chequeo
   de «¿queda algo corriendo?». Despliega con `--scale orchestrator=0`.
+- [agent-run-failed-si-el-sandbox-no-alcanza-la-api-interna.md](./agent-run-failed-si-el-sandbox-no-alcanza-la-api-interna.md)
+  — `assert 'failed' == 'done'` sin una palabra sobre red: con **agente
+  asignado** el worker mintea el token interno y el runtime **no arranca** si
+  `/internal/agent/*` no contesta en `agentic-agents` (prod-01 task_11). El
+  discriminante es `agent_id`, no la credencial del LLM; en CI faltaba el
+  `api-server` entero.
 
 ### ollama / embeddings
 
