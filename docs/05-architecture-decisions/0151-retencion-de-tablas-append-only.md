@@ -6,6 +6,9 @@ deciders: [dirección, operador]
 relates_to: [0028, 0116, 0126, 0149]
 plan_referenced: prod-13-rendimiento-y-datos
 task: [task_prod13_15, task_prod13_18]
+# `task_gov_01`: la opcion C (particionar, sin borrar nada) deja sin objeto la
+# task beat de retencion que pedia task_prod13_15. task_prod13_18 NO se rechaza.
+rejects: [task_prod13_15]
 docs_language: es
 ---
 

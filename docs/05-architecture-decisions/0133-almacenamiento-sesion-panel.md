@@ -6,6 +6,9 @@ deciders: [operador]
 relates_to: [0002, 0010, 0015, 0047, 0074, 0117]
 plan_referenced: prod-09-sesiones-autorizacion-frontend
 task: task_prod09_06
+# `task_gov_01`: la sesion en cookie deja el ticket WS sin objeto — la casilla
+# se cerro EN NEGATIVO el 2026-08-01 y este campo lo hace consultable.
+rejects: [task_prod09_12]
 ---
 
 # ADR 0133: Almacenamiento de la sesión del panel — cookie httpOnly vs localStorage

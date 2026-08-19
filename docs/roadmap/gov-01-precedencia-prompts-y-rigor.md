@@ -43,6 +43,21 @@ existen y no los consume nadie**.
 
 Por eso la mayor parte de este plan es cableado, no construcción.
 
+## Estado de esta pasada (2026-08-19)
+
+Se cerraron las **tres** casillas que no dependen de una decisión del operador:
+`task_gov_01` (fase 0), `task_gov_06` y `task_gov_07` (fase 3). Las ocho
+restantes siguen abiertas, así que el plan NO pasa a
+`pending_human_validation` y el `status` se queda en `approved` — además,
+`marketplace-v2-despliegue` ya está `in_progress` y la regla dura de `CLAUDE.md`
+sólo admite una fase activa a la vez.
+
+**Los ids de test se renombraron a `auto_govp_*` / `human_govp_*`.** Los
+originales (`auto_gov_01_a`…`auto_gov_09_a`, `human_gov_01`…`03`) los usa ya
+[`prod-15-gobernanza-roadmap-docs`](prod-15-gobernanza-roadmap-docs.md), y dos
+planes con el mismo id de test hacen imposible saber cuál falló al leer un
+informe de CI.
+
 ## Avisos al implementador (léelos, ahorran horas)
 
 1. **Verifica los números antes de usarlos.** Las citas `fichero:línea` de abajo
@@ -67,7 +82,38 @@ había rechazado, y se resolvió a ojo cada vez.
 
 ### `task_gov_01` — La regla de precedencia, escrita y con test
 
-- [ ] **Título**: Sección de precedencia en `CLAUDE.md` + `rejects:` en el frontmatter de los ADR + guarda de gobernanza
+- [x] **Título**: Sección de precedencia en `CLAUDE.md` + `rejects:` en el frontmatter de los ADR + guarda de gobernanza
+  - ✅ **Cerrada (2026-08-19).** Las tres piezas, y la premisa del recon
+    verificada antes de tocar nada: **cero** ADR con `rejects:` y **cero**
+    menciones de precedencia en `CLAUDE.md`.
+  - **(a)** `CLAUDE.md` §«Qué manda cuando dos documentos se contradicen», con la
+    cadena del 2026-08-12, la obligación de actualizarlo en el MISMO commit y el
+    precedente Fernet del ADR 0146 citado. `## Sobre el Documento Maestro` remite
+    a la sección nueva para que las dos no digan cosas distintas.
+  - **(b)** `rejects:` puesto en los **cuatro** ADR cuya relación se verificó
+    contra el roadmap, casilla a casilla: **0133**→`task_prod09_12`,
+    **0141**→`task_prod08_shared_logging_08` + `task_prod08_metrics_workers_05`,
+    **0150**→`task_prod07_09`, **0151**→`task_prod13_15`. Las cinco casillas
+    están `[x]` y cerradas en negativo desde antes; este campo sólo hace
+    mecánico lo que ya estaba en prosa. El **0117 (b) NO entra**: retiró una
+    promesa de `CLAUDE.md` (`task.human_validation_required`), no una casilla, y
+    `rejects:` apunta a casillas. Y el renderer de ADR
+    (`tech_writer/adr.py`) aprende el campo, de modo que un ADR nuevo puede
+    nacer con él — se omite entero cuando está vacío, como las secciones de cola.
+  - **(c)** `tests/docs/test_adr_precedence.py` (8): existencia del id, casilla
+    `[x]`, y **cita de vuelta** del documento rechazado al ADR — sin esa tercera
+    regla el campo sería una anotación de un solo lado y el implementador que
+    abre el plan seguiría sin enterarse.
+  - **Rojo verificado**, como pedía el enunciado: inventando en el 0150 un
+    `rejects: [task_prod07_09, task_gov_02, task_que_no_existe_9999]` caen los
+    **tres** tests (referencia muerta, casilla abierta y falta de cita de vuelta).
+    También se rompió el renderer emitiendo `rejects: []` siempre → 2 rojos.
+  - **Hallazgo lateral** (no arreglado, no es este carril): los ADR **0107** y
+    **0108** tienen frontmatter que **PyYAML no carga** — `related: [hallazgo #11
+(…), ADR 0072]`, donde el `#` abre un comentario dentro de una secuencia de
+    flujo. Por eso el parseo del `rejects:` es un escáner de líneas y no
+    `yaml.safe_load`: si dependiera de PyYAML, un `rejects:` en cualquiera de
+    esos dos sería invisible y la guarda pasaría en verde ignorando el fichero roto.
 - **Tiempo**: 1-2 días · **Complejidad**: s
 - **Descripción**: Tres piezas, y la tercera es la que hace que las dos primeras
   no envejezcan.
@@ -95,16 +141,23 @@ había rechazado, y se resolvió a ojo cada vez.
   guard que convierte la regla en algo comprobable en vez de una costumbre.
 
 - **Tests automáticos**:
+
   ```yaml
-  - id: auto_gov_01_a
+  - id: auto_govp_01_a
     runtime: python-pytest
     command: "pytest tests/docs/test_adr_precedence.py -q"
-  - id: auto_gov_01_b
+  - id: auto_govp_01_b
     runtime: python-pytest
-    command: "pytest tests/unit/test_docs_governance.py -q"
+    command: "pytest tests/unit/test_adr_template.py tests/unit/test_docs_governance.py -q"
   ```
+
   El primero debe fallar de verdad al inventar un `rejects:` que apunte a una
   casilla inexistente Y al apuntar a una casilla abierta.
+
+  Ejecutados el 2026-08-19: `auto_govp_01_a` → **8 passed**; `auto_govp_01_b` →
+  **47 passed** (36 del renderer, con los tres casos nuevos de `rejects:`, y 11
+  de la guarda documental que vigila que el `CLAUDE.md` editado siga cuadrando
+  con el repo).
 
 ---
 
@@ -131,10 +184,10 @@ sin decisión pendiente.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_02_a
+  - id: auto_govp_02_a
     runtime: python-pytest
     command: "pytest tests/integration/test_agent_prompt_versions.py -q -p no:randomly"
-  - id: auto_gov_02_b
+  - id: auto_govp_02_b
     runtime: python-pytest
     command: "pytest tests/security/test_rls_invariant.py -q"
   ```
@@ -156,7 +209,7 @@ sin decisión pendiente.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_03_a
+  - id: auto_govp_03_a
     runtime: python-pytest
     command: "pytest docker/agent-runtimes/agent-runtime/tests/test_prompt_version.py -q"
   ```
@@ -183,7 +236,7 @@ Decisión del operador: **bloquean, pero solo en `production` y
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_04_a
+  - id: auto_govp_04_a
     runtime: python-pytest
     command: "pytest tests/docs/test_supply_chain_docs.py tests/unit/test_eval_gate_config.py -q"
   ```
@@ -205,7 +258,7 @@ Decisión del operador: **bloquean, pero solo en `production` y
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_05_a
+  - id: auto_govp_05_a
     runtime: python-pytest
     command: "pytest tests/integration/test_prompt_edit_eval_gate.py -q -p no:randomly"
   ```
@@ -221,7 +274,44 @@ dato con el que se decidirá si aquéllas merecen la pena.
 
 ### `task_gov_06` — Detector de Goodhart: ¿el revisor juzga o repite?
 
-- [ ] **Título**: Medir cuánto se parece el veredicto del revisor al relato del implementador
+- [x] **Título**: Medir cuánto se parece el veredicto del revisor al relato del implementador
+  - ✅ **Cerrada (2026-08-19).** Premisa verificada contra el código antes de
+    medir nada: `_format_prior_outputs` + `_REVIEW_PRIOR_OUTPUTS = 3` en
+    `orchestrator/dispatch.py` — el revisor recibe los tres últimos intentos y,
+    cuando sólo hay uno, **verbatim**; y `_build_review_request` resuelve el
+    modelo con el MISMO `_resolve_model_spec` que el implementador.
+  - **La métrica**: `api_server/review_contamination.py`, pura y determinista
+    (sin reloj, sin red, sin LLM). Tres números por review: `phrase_overlap`
+    (contención **dirigida** revisor→autor sobre 5-gramas), `verbatim_share`
+    (superficie del veredicto cubierta por tiradas literales de 12 tokens
+    compartidas) y `echoed_conclusion` (el veredicto frente al `finish_status`
+    que el propio autor se puso; `None` cuando no se autoevaluó — un dato
+    ausente no es un dato negativo y sesgaría la media de la semana). Lleva
+    `METRIC_VERSION` para que un agregado de meses no mezcle dos fórmulas: es
+    el fallo que ya se pagó con `EvalRun.subject_prompt_version`.
+  - **Cableada**, que es la mitad que esta base se suele dejar
+    (`verificar-antes-de-implementar.md` §5): `workers/execution.py` la calcula
+    en la rama `if request.review:` con el veredicto YA aplicado y deja un
+    evento de auditoría `review_contamination` + una línea structlog que va a
+    Loki, que es por donde se leerá la ventana de `human_govp_03` sin escribir
+    SQL. `kind` propio y no un campo dentro de `review_comment`: un APPROVE sin
+    desglose de criterios no emite `review_comment`, así que colgarlo de ahí
+    perdería la métrica en la mitad de los casos que interesa medir. Best-effort
+    en SAVEPOINT, como `_persist_guardrail_events`.
+  - **Un detalle que sólo aparece leyendo el ciclo real**: el «relato del autor»
+    excluye la ejecución del propio revisor **y** las de su mismo `agent_id` —
+    un review no concluyente se re-despacha (ADR 0095 D3), así que la ejecución
+    anterior puede ser otra pasada del revisor y compararlo consigo mismo daría
+    contaminación altísima por construcción.
+  - **Rojos verificados**: (1) cambiar la contención por un Jaccard simétrico →
+    caen `test_containment_is_directional_not_symmetric` y
+    `test_copying_the_author_verbatim_scores_high`; (2) tokenizar con `\S+` (sin
+    descartar el andamiaje markdown) → cae
+    `test_markdown_scaffolding_is_invisible_to_the_metric`; (3) borrar la llamada
+    del worker → caen las dos guardas de cableado. La guarda de cableado se
+    endureció **por ese tercer rojo**: contar apariciones del nombre daba verde
+    con la llamada borrada (el comentario y la `async def` ya suman dos), así que
+    busca la invocación `await …(`.
 - **Tiempo**: 1-2 días · **Complejidad**: s
 - **Descripción**: Hoy el revisor recibe los tres últimos intentos del
   implementador, **el último verbatim** (`dispatch.py:182-206`), y resuelve el
@@ -238,14 +328,56 @@ dato con el que se decidirá si aquéllas merecen la pena.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_06_a
+  - id: auto_govp_06_a
     runtime: python-pytest
     command: "pytest tests/unit/test_review_contamination_metric.py -q"
   ```
+  Ejecutado el 2026-08-19: **21 passed** (18 de la métrica + 3 guardas de que el
+  worker la llama de verdad, en la rama de review y con su `kind` propio).
 
 ### `task_gov_07` — Aviso de linaje compartido entre autor y revisor
 
-- [ ] **Título**: El Hub de Capacidad avisa cuando implementador y revisor son de la misma familia
+- [x] **Título**: El Hub de Capacidad avisa cuando implementador y revisor son de la misma familia
+  - ✅ **Cerrada (2026-08-19).** Confirmado lo que el enunciado ya avisaba: el
+    mapa `KIND_TO_LITELLM_FAMILIES` existe y **no se ha duplicado** —
+    `capabilities.model_families()` lo lee de `pricing/litellm_sync.py`, con un
+    test que lo compara entrada por entrada contra el mapa vivo. Y `model_origin`
+    ya se resolvía, serializaba y pintaba: se ha reutilizado, no rehecho.
+  - **Backend**: `shared_lineage_warning()` compara **familias**, no proveedores
+    —`claude_sdk` y `copilot` son entradas distintas del catálogo y el segundo
+    sirve modelos de Anthropic, así que un «¿son proveedores distintos?» ingenuo
+    daría por bueno el peor caso—, y el endpoint lo emite con el `code` estable
+    `shared_model_lineage`, bilingüe como el resto de avisos del Hub.
+  - **Quién es «el revisor»**: el agente de rol `reviewer` del equipo del
+    proyecto, la MISMA fuente que usa el planner al materializar tareas
+    (`sync_to_kanban._resolve_assignment`). No `tasks.reviewer_agent_id`: el Hub
+    es una vista por agente, no por tarea, y preguntarle a una tarea concreta
+    ataría el aviso al azar de cuál se mirase.
+  - **Se comparan los proveedores EFECTIVOS**, resueltos por la misma
+    `resolve_model_config_chain` que el dispatch, default de plataforma incluido.
+    Comparar los `model_config` crudos daría «no comparten linaje» para dos
+    agentes que en realidad heredan los dos el mismo default, que es el caso más
+    común de todos.
+  - **Frontend**: `sharedLineageNotice()` en `lib/capability/hub.ts` + su caja en
+    el Hub, emparejando por `code` y nunca por el texto castellano — hacerlo por
+    texto ya dejó muerta la rama EN una vez. Tono neutro (`Info`), no de aviso:
+    no bloquea nada, y el operador decidió expresamente quedarse en avisar.
+  - **Lo que descubrió el código y no la especificación**: `model_config
+["provider"]` guarda HOY las dos formas — el catálogo cerrado del ADR 0021 y
+    `DEFAULT_MODEL_CONFIG` usan el **kind** (`claude_sdk`), pero los **once**
+    agentes built-in se siembran con la **familia** (`anthropic`,
+    `seeds/builtin_agents.py`). Un resolutor que entendiera sólo una de las dos
+    daría «sin linaje compartido» justo para los equipos built-in, que son los
+    que más lo comparten. Se aceptan las dos, y hay test para cada una.
+  - **Rojo verificado**: quitando el bloque de render del Hub caen los dos tests
+    de pintado (es/en) y sobreviven los del selector — o sea que las dos mitades
+    se comprueban por separado.
+  - **Regresión**: `pytest tests/integration/test_capabilities_endpoint.py -q -p
+no:randomly` → **7 passed** contra la base `agentic_ola3_l3`, y los tests
+    vivos del Hub (`i18n.test.tsx` + `capability-hub.test.ts`) siguen verdes.
+  - **Corregido el `command:` declarado**: apuntaba a `app/admin/projects`, donde
+    no hay ni un `*.test.tsx`, así que `npx vitest run` habría salido != 0 por
+    «no test files found». Ahora nombra el fichero que existe y que se ejecutó.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Descripción**: El override por proyecto **ya existe**: la cadena
   agente→equipo→proyecto→plataforma (`db/platform_settings.py:1017`) resuelve el
@@ -260,10 +392,16 @@ dato con el que se decidirá si aquéllas merecen la pena.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_07_a
+  - id: auto_govp_07_a
     runtime: vitest
-    command: "npx vitest run app/admin/projects --reporter=dot"
+    command: "npx vitest run components/capability/shared-lineage.test.tsx --reporter=dot"
+  - id: auto_govp_07_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_shared_model_lineage.py -q"
   ```
+  Ejecutados el 2026-08-19 (el de vitest, desde `apps/admin-panel/`):
+  `auto_govp_07_a` → **9 passed** (6 del selector + 3 de que el Hub lo pinta);
+  `auto_govp_07_b` → **14 passed**.
 
 ---
 
@@ -284,7 +422,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
   ser el nivel ALTO: un cambio sin clasificar no es un cambio pequeño).
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_08_a
+  - id: auto_govp_08_a
     runtime: python-pytest
     command: "pytest tests/docs/test_docs_internal_links.py -q"
   ```
@@ -309,7 +447,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_09_a
+  - id: auto_govp_09_a
     runtime: python-pytest
     command: "pytest tests/integration/test_review_passes_by_tier.py -q -p no:randomly"
   ```
@@ -338,7 +476,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_10_a
+  - id: auto_govp_10_a
     runtime: python-pytest
     command: "pytest tests/unit/test_reject_taxonomy.py tests/integration/test_review_verdict_shape.py -q -p no:randomly"
   ```
@@ -359,7 +497,7 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 
 - **Tests automáticos**:
   ```yaml
-  - id: auto_gov_11_a
+  - id: auto_govp_11_a
     runtime: python-pytest
     command: "pytest tests/docs/ -q"
   ```
@@ -369,19 +507,19 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 ## Tests humanos del Plan
 
 ```yaml
-- id: human_gov_01
+- id: human_govp_01
   title: La precedencia resuelve un caso real
   steps: >-
     Coge uno de los tres casos de agosto en que un plan pedía algo que un ADR
     posterior rechazó (0117 b, 0150, 0141). Comprueba que hoy, con la regla y el
     campo `rejects:`, se resuelve leyendo el frontmatter y sin deliberar.
-- id: human_gov_02
+- id: human_govp_02
   title: Editar un prompt en producción y ver que la eval te para
   steps: >-
     En un proyecto `production`, edita el `system_prompt` de un agente
     empeorándolo a propósito. Debe rechazarse Y decir QUÉ escenarios empeoraron.
     Repite en un proyecto `development`: debe guardar y avisar.
-- id: human_gov_03
+- id: human_govp_03
   title: El número del detector de Goodhart, leído
   steps: >-
     Tras una semana de runs, mira la métrica de contaminación. La DECISIÓN de si

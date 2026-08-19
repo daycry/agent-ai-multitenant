@@ -58,6 +58,12 @@ WARN_MODEL_NOT_CONFIGURED = "model_not_configured"
 WARN_PRIVATE_MEMORY = "private_memory_scope"
 WARN_GLOBAL_AGENT = "global_agent_no_project_context"
 WARN_TEAM_NO_MEMBERS = "team_no_members"
+#: `task_gov_07`: el agente que implementa y el que revisa su trabajo resuelven
+#: modelos del MISMO linaje. Ni bloquea ni cambia nada — hace visible una
+#: decisión que hoy es invisible. Decisión expresa del operador (2026-08-12): se
+#: avisa, no se exige; un proyecto sin un segundo proveedor no puede quedarse
+#: sin poder cerrar reviews.
+WARN_SHARED_MODEL_LINEAGE = "shared_model_lineage"
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +434,85 @@ def agent_global_warning(agent: Agent) -> list[CapabilityWarning]:
     return []
 
 
+def model_families(provider: str | None) -> frozenset[str]:
+    """Familias de modelo detrás de un ``model_config["provider"]`` (`task_gov_07`).
+
+    La tabla kind→familia **no se copia aquí**: se lee de
+    :data:`api_server.pricing.litellm_sync.KIND_TO_LITELLM_FAMILIES`, que ya la
+    usan el catálogo de modelos del asistente y el snapshot de precios. Duplicarla
+    dejaría este aviso mintiendo el día que un proveedor cambie de linaje.
+
+    Se aceptan **las dos formas** que el dato tiene hoy, y esto no es laxitud:
+    el catálogo cerrado del ADR 0021 y ``DEFAULT_MODEL_CONFIG`` guardan el
+    **kind** (``claude_sdk``), mientras que los once agentes built-in se siembran
+    con la **familia** (``anthropic``, ``seeds/builtin_agents.py``). Entender solo
+    una de las dos daría «no comparten linaje» precisamente para los equipos
+    built-in, que son los que más lo comparten.
+
+    Un proveedor desconocido devuelve ``frozenset()``: desconocido no es
+    compartido, y afirmar linaje común sobre un dato ilegible sería un aviso
+    inventado.
+    """
+    from api_server.pricing.litellm_sync import KIND_TO_LITELLM_FAMILIES
+
+    if not provider or not provider.strip():
+        return frozenset()
+    normalised = provider.strip().lower()
+    by_kind = KIND_TO_LITELLM_FAMILIES.get(normalised)
+    if by_kind is not None:
+        return frozenset(by_kind)
+    known_families = {
+        family for families in KIND_TO_LITELLM_FAMILIES.values() for family in families
+    }
+    if normalised in known_families:
+        return frozenset({normalised})
+    return frozenset()
+
+
+def shared_lineage_warning(
+    *,
+    agent_provider: str | None,
+    reviewer_provider: str | None,
+    reviewer_name: str | None,
+) -> list[CapabilityWarning]:
+    """Aviso BILINGÜE cuando implementador y revisor comparten linaje (`task_gov_07`).
+
+    Compara las FAMILIAS, no los proveedores: ``claude_sdk`` y ``copilot`` son
+    dos entradas distintas del catálogo y sin embargo el segundo sirve modelos
+    de Anthropic, así que un «¿son proveedores distintos?» ingenuo daría por
+    bueno el peor caso. El revisor se nombra y las familias compartidas se
+    listan ordenadas: un aviso que no dice con QUIÉN ni de QUÉ linaje no es
+    accionable, y el orden estable evita que dos peticiones idénticas parezcan
+    un cambio de estado.
+
+    Devuelve ``[]`` —sin avisar— cuando no hay revisor, cuando alguno de los dos
+    proveedores no se sabe leer, o cuando no comparten ninguna familia.
+    """
+    shared = model_families(agent_provider) & model_families(reviewer_provider)
+    if not shared or not reviewer_name:
+        return []
+    families = ", ".join(sorted(shared))
+    return [
+        CapabilityWarning(
+            code=WARN_SHARED_MODEL_LINEAGE,
+            es=(
+                f"Linaje compartido: este agente y su revisor «{reviewer_name}» "
+                f"resuelven modelos de la misma familia ({families}), así que "
+                "heredan los mismos puntos ciegos. No bloquea nada; si quieres un "
+                "juicio con otro sesgo, fija otro proveedor al revisor desde su "
+                "ficha o desde el equipo."
+            ),
+            en=(
+                f"Shared lineage: this agent and its reviewer “{reviewer_name}” "
+                f"resolve models from the same family ({families}), so they "
+                "inherit the same blind spots. Nothing is blocked; for a "
+                "differently-biased judgement, pin another provider on the "
+                "reviewer from its page or from the team."
+            ),
+        )
+    ]
+
+
 def private_memory_warning(memory_scope: str) -> list[CapabilityWarning]:
     """Aviso BILINGÜE de ``memory_scope=private`` silencioso para un agente IA."""
     if memory_scope == "private":
@@ -456,6 +541,7 @@ __all__ = [
     "WARN_GLOBAL_AGENT",
     "WARN_MODEL_NOT_CONFIGURED",
     "WARN_PRIVATE_MEMORY",
+    "WARN_SHARED_MODEL_LINEAGE",
     "WARN_TEAM_NO_MEMBERS",
     "CapabilitiesResponse",
     "CapabilityHacer",
@@ -472,5 +558,7 @@ __all__ = [
     "kbs_for_project",
     "memory_counts",
     "merge_kbs",
+    "model_families",
     "private_memory_warning",
+    "shared_lineage_warning",
 ]

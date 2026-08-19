@@ -52,6 +52,7 @@ import {
   globalAgentNotice,
   hubTitle,
   resolveKBLevel,
+  sharedLineageNotice,
   type CapabilitiesResponse,
   type CapabilityEntityType,
   type SectionKey,
@@ -91,6 +92,10 @@ export function CapabilityHub({ entityType, entityId }: CapabilityHubProps) {
   const sections = useMemo(() => (data ? buildSections(data, lang) : []), [data, lang]);
   const checklist = useMemo(() => (data ? buildChecklist(data, lang) : []), [data, lang]);
   const notice = useMemo(() => (data ? globalAgentNotice(data, lang) : null), [data, lang]);
+  // `task_gov_07`: implementador y revisor con el mismo linaje de modelo. Es
+  // informativo — ni bloquea ni cambia nada — así que se pinta con el tono
+  // neutro de `Info`, no con el de aviso del agente global.
+  const lineage = useMemo(() => (data ? sharedLineageNotice(data, lang) : null), [data, lang]);
 
   return (
     <Card data-testid="capability-hub">
@@ -124,6 +129,18 @@ export function CapabilityHub({ entityType, entityId }: CapabilityHubProps) {
                   role="status"
                 >
                   {notice}
+                </p>
+              )}
+
+              {/* Linaje compartido implementador↔revisor (task_gov_07). */}
+              {lineage && (
+                <p
+                  className="text-muted-foreground bg-muted flex items-start gap-2 rounded p-3 text-xs"
+                  data-testid="capability-hub-shared-lineage"
+                  role="status"
+                >
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span>{lineage}</span>
                 </p>
               )}
 

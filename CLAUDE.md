@@ -39,6 +39,58 @@ El sistema se opera como un stack **Docker Compose en una sola máquina** (no Ku
 
 12. **Idiomas soportados**: **ES + EN únicamente** en esta versión. No invertir esfuerzo en más idiomas.
 
+## Qué manda cuando dos documentos se contradicen
+
+Decisión del operador del **2026-08-12** (plan
+[`gov-01`](docs/roadmap/gov-01-precedencia-prompts-y-rigor.md), `task_gov_01`).
+Existe porque durante agosto de 2026 pasó **tres veces** lo mismo: un plan pedía
+algo que un ADR posterior había rechazado, y se resolvió a ojo cada vez. Había
+precedencia escrita en cinco ADR, ninguna sobre este caso.
+
+**El orden, de más fuerte a más débil:**
+
+> `.docx` maestro **>** `CLAUDE.md` **>** decisión escrita del operador **>**
+> ADR `accepted` posterior **>** plan **>** código **>** intuición
+
+Se lee de izquierda a derecha y se para en el primer eslabón que se pronuncie
+sobre el caso. Dos lecturas que la cadena descarta expresamente: el código **no**
+gana por estar desplegado (un comportamiento vivo que contradice un ADR aceptado
+es una regresión, no una decisión), y la intuición no gana nunca — cuando no hay
+eslabón que se pronuncie, se abre un ADR, no se decide.
+
+**La regla fina, que es la que impide que esto envejezca:** un ADR que
+contradiga el `CLAUDE.md` está **obligado a actualizarlo en el mismo commit** en
+el que pasa a `accepted`. No gana por ser posterior: gana porque al aceptarse
+deja el `CLAUDE.md` diciendo la verdad. Sin esa obligación, la cadena se vuelve
+su contraria a los seis meses — `CLAUDE.md` manda, pero dice algo derogado.
+
+Hay precedente y conviene citarlo: la excepción Fernet del
+[ADR 0146](docs/05-architecture-decisions/0146-fernet-en-db-vs-vault.md) vive en
+este archivo (§«Dónde vive un secreto») precisamente porque **una excepción que
+no consta donde se busca no es una excepción**: es una discrepancia entre el
+principio y el código.
+
+**La mitad mecanizable: `rejects:` en el frontmatter del ADR.** Cuando una
+decisión invalida casillas concretas del roadmap, el ADR las lista:
+
+```yaml
+rejects: [task_prod07_09]
+```
+
+Es una lista de `plan_id` o `task_id` cuyas casillas quedan sin objeto por esta
+decisión. Antes esa relación existía sólo en prosa —el ADR 0150 retiró dos
+mitades de `task_prod07_09`, el 0141 descartó las premisas de dos tareas de
+prod-08, el 0133 dejó sin objeto `task_prod09_12`, el 0151 descartó
+`task_prod13_15`—, así que sólo la encontraba quien ya sabía que estaba. Con el
+campo, quien abre una casilla puede preguntar «¿la rechaza algún ADR?» de forma
+mecánica.
+
+Tres condiciones que comprueba
+[`tests/docs/test_adr_precedence.py`](tests/docs/test_adr_precedence.py), y que
+no son opcionales: el id apuntado **existe**; la casilla apuntada está **cerrada
+`[x]`** con su nota de cierre en negativo; y el documento rechazado **cita de
+vuelta al ADR**, porque un implementador abre el plan, no el corpus de ADR.
+
 ## Estructura del Repositorio (Real)
 
 Este árbol describe el repo **como está hoy**, no como se planeó. Las carpetas
@@ -355,6 +407,6 @@ stack con auto-unseal, esta sección está vencida.
 
 ## Sobre el Documento Maestro
 
-El `.docx` es la fuente de verdad. Si en algún momento Claude Code tiene una intuición que contradice el documento, **el documento gana**. El documento puede tener huecos en detalles concretos de implementación (eso es intencional, son decisiones técnicas a tomar durante el desarrollo), pero las decisiones de producto y arquitectura ya están cerradas.
+El `.docx` es la fuente de verdad, y por eso encabeza la cadena de §«Qué manda cuando dos documentos se contradicen». Si en algún momento Claude Code tiene una intuición que contradice el documento, **el documento gana**. El documento puede tener huecos en detalles concretos de implementación (eso es intencional, son decisiones técnicas a tomar durante el desarrollo), pero las decisiones de producto y arquitectura ya están cerradas.
 
 Cuando una fase remite a "ver sección X.Y", esa referencia es al .docx. Para no tener que abrirlo constantemente, cada fase en `docs/roadmap/` resume las secciones relevantes; el .docx es para consultas profundas.

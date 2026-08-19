@@ -8,6 +8,9 @@ phase: prod-07-fiabilidad-llm-costes
 related: ["0021", "0086", "0087", "0092", "0097"]
 plan_referenced: prod-07-fiabilidad-llm-costes
 task: task_prod07_09
+# `task_gov_01`: la opcion A retira las mitades (a) y (b) de la casilla — su
+# premisa dejo de ser cierta y aplicarlas hoy romperia el proveedor principal.
+rejects: [task_prod07_09]
 docs_language: es
 ---
 

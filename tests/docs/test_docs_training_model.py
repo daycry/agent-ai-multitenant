@@ -152,7 +152,7 @@ def test_domain_model_uses_forked_from_agent_id() -> None:
     text = _read(_DOMAIN_MODEL)
     assert "forked_from_agent_id" in text, (
         "domain-model.md: debe usar la columna real 'forked_from_agent_id' "
-        "(ver agents en db/domain.py)"
+        "(ver agents en db/domain/agents.py)"
     )
 
 

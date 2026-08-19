@@ -6,6 +6,10 @@ deciders: [claude-code]
 relates_to: [0139, 0140]
 plan_referenced: prod-08-observabilidad-alertas
 task: [task_prod08_shared_logging_08, task_prod08_metrics_workers_05]
+# `task_gov_01`: las DOS casillas que este ADR referencia quedaron sin objeto tal
+# y como estaban escritas (no se extrae shared-logging; PoolMetrics y el
+# start_http_server del plan ya no existen). Ambas cerradas en negativo.
+rejects: [task_prod08_shared_logging_08, task_prod08_metrics_workers_05]
 docs_language: es
 ---
 
