@@ -131,6 +131,41 @@ Todos viven en la red `agentic-net`. El puerto **host** es el que abre
 > próximo `up` vuelve a correr y es un no-op si el modelo ya está. Ver
 > [runbook Ollama](../06-runbooks/ollama-gpu-setup.md).
 
+## Servicio bajo perfil: `watchdog`
+
+No arranca con un `docker compose up` normal — vive **bajo `profiles: [watchdog]`**
+a propósito, porque `docker-compose.yml` es la capa de infraestructura y el
+watchdog es una app: sin el perfil, un `up` de sólo infra intentaría levantar una
+imagen que ese fichero no construye.
+
+| Servicio   | Imagen                                       | Qué hace                                                                                          | Puerto host (dev) |
+| ---------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------- |
+| `watchdog` | `agentic-platform/watchdog:latest` (_build_) | Vigila la salud de los servicios y **reinicia con backoff exponencial** lo que salga `unhealthy`. | — (no escucha)    |
+
+```bash
+# Construir la imagen (contexto = raíz del repo; se apoya en la de api-server)
+docker build -f apps/watchdog/Dockerfile -t agentic-platform/watchdog:latest .
+
+# Arrancarlo: hay que nombrar el perfil explícitamente
+docker compose --profile watchdog -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d watchdog
+```
+
+Dos cosas que conviene saber antes de tocarlo:
+
+- **Habla con Docker por `docker-socket-proxy`** (`tecnativa/docker-socket-proxy`,
+  definido en `docker-compose.manuals.yml`), nunca con el socket crudo — ADR 0060.
+- **Cuando se rinde, la alerta sale del contenedor**: `WATCHDOG_ALERTS_INGEST_URL`
+  - `WATCHDOG_ALERTS_INGEST_TOKEN` (el mismo `API_SERVER_ALERTS_INGEST_TOKEN`)
+    publican `watchdog.alert` en el api-server, que la rutea. Un vigilante que sólo
+    escribiera en su propio log no vigila nada: nadie lee el log de lo que se
+    supone que te avisa.
+- **Por eso el healthcheck de contenedor del api-server apunta a `/healthz` y no
+  a `/readyz`.** Docker sólo admite uno, y el watchdog reinicia lo `unhealthy`:
+  con readiness ahí, «se cayó PostgreSQL» se convertiría en «la api-server se
+  reinicia en bucle». La readiness la consume el **proxy** (`health_uri /readyz`
+  en el Caddyfile), que es quien debe dejar de mandarle tráfico sin matarla. Ver
+  [gotcha](../03-guides/gotchas/readiness-en-el-healthcheck-del-contenedor-es-un-bucle.md).
+
 ## Servicios de monitoring (`docker-compose.monitoring.yml`)
 
 | Servicio        | Imagen                             | Qué hace                                                                   | Puerto host (dev) | Acceso (dev)                                          |

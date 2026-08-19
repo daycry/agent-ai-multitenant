@@ -40,6 +40,11 @@ el problema ya esté documentado.
 
 - [docker-compose-volumes-merge.md](./docker-compose-volumes-merge.md)
   — `volumes:` se mergea entre overrides, no se reemplaza.
+- [readiness-en-el-healthcheck-del-contenedor-es-un-bucle.md](./readiness-en-el-healthcheck-del-contenedor-es-un-bucle.md)
+  — apuntar el `healthcheck` de la api-server a `/readyz` parece la mejora obvia
+  y es un bucle de reinicios: hay UN healthcheck por contenedor, readiness prueba
+  dependencias externas y el watchdog reinicia lo `unhealthy`. Liveness al
+  contenedor (`/healthz`), readiness al proxy (`health_uri /readyz`).
 - [vault-dev-mode-port-conflict.md](./vault-dev-mode-port-conflict.md)
   — `-dev` + config.hcl mount → EADDRINUSE 8200.
 - [vault-entrypoint-config-flag.md](./vault-entrypoint-config-flag.md)
@@ -289,6 +294,11 @@ el problema ya esté documentado.
   — dar a cada shard «su» base de Redis (1, 2, 3…) mete el arnés en el broker de
   Celery del stack levantado: el worker vivo drena la cola y el test cae con
   `assert len(raw) == 1` sobre cero elementos, tres capas más allá. De la 5 en adelante.
+- [cuatro-shards-y-cinco-agentes-tumban-postgres.md](./cuatro-shards-y-cinco-agentes-tumban-postgres.md)
+  — separar `TEST_PG_DB_NAME` y `TEST_REDIS_URL` por shard no separa la RAM del
+  anfitrión: 4 pytest + 5 subagentes + el stack dejan 0 GB libres, WSL2 reinicia y
+  Postgres vuelve haciendo recuperación. `restartCount=0` NO lo desmiente. Los
+  rojos de esa pasada no valen: cuatro de ocho pasaron al repetirlos en serie.
 - [localhost-ipv6-primero-cuesta-dos-segundos.md](./localhost-ipv6-primero-cuesta-dos-segundos.md)
   — `localhost` resuelve `::1` antes que `127.0.0.1` y Docker Desktop sólo escucha
   en IPv4: 2 s regalados por CADA conexión del arnés, sin ningún error. Se ve en
@@ -335,6 +345,11 @@ el problema ya esté documentado.
   el test quiere deshacer: en cuanto se apila otra encima, el test deja de cubrir
   lo que decía cubrir y luego falla señalando a una migración inocente. Anclar por
   nombre a la revisión anterior.
+- [rls-en-bucle-invisible-para-el-guard-estatico.md](./rls-en-bucle-invisible-para-el-guard-estatico.md)
+  — activar la RLS con `op.execute(f"ALTER TABLE {table} ENABLE …")` deja en el
+  fichero una sentencia sin nombre de tabla: el guard ESTÁTICO de
+  `test_pentest_findings.py` no la ve y pide eximir la tabla que sí está
+  protegida. Sentencias literales, una por tabla.
 - [beat-entry-whose-task-nobody-imports.md](./beat-entry-whose-task-nobody-imports.md)
   — una entrada de beat cuyo módulo no está en `celery_app(imports=...)` se encola
   y muere con `NotRegistered` **sin ruido**: seis features «desplegadas» que nunca

@@ -353,7 +353,52 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
 
 #### `task_gov_higiene_10` — Higiene de raíz y reordenación de scripts/
 
-- [ ] **Título**: Borrar restos locales y mover demos de fase a `scripts/demos/`
+- [x] **Título**: Borrar restos locales y mover demos de fase a `scripts/demos/`
+  - ✅ **2026-08-19 — HECHO, en la pasada dedicada que las cinco mediciones anteriores
+    pedían.** `scripts/demos/` existe con los **22 ficheros** (14 `demo_human_*` + 7
+    `setup_demo_*` + `_demo_common.py`); la raíz de `scripts/` se queda con las **cinco**
+    utilidades de plataforma (`audit_rbac`, `check_commit_trailers`,
+    `check_no_secret_artifacts`, `check_pip_audit_report`, `mypy_gate`).
+    `tests/unit/test_scripts_layout.py` (`auto_gov_10_a`) existe y está verde con 7 tests.
+    - **La trampa que ninguna de las cinco mediciones nombró, y era la única de verdad
+      peligrosa.** La receta escrita abajo daba el movimiento por «mecánico»; no lo era.
+      **Siete demos resolvían rutas contra la raíz del repo con
+      `Path(__file__).resolve().parent.parent`**, que al bajar un nivel deja de apuntar a
+      la raíz. Y peor: cinco de ellos leían el estado compartido como
+      `_REPO_ROOT / "scripts" / ".demo_state_05.json"` mientras el `setup_demo_*` que lo
+      ESCRIBE usa `Path(__file__).parent`. Con todos en `scripts/` las dos formas daban
+      el mismo fichero; separados, no — y el síntoma **no habría sido un error**, sino un
+      demo que arranca y dice «no hay estado, corre el setup» habiéndolo corrido. Un
+      `git mv` a secas, tal como la receta lo describía, habría dejado exactamente eso.
+      Arreglado poniendo las dos mitades en `Path(__file__).parent` (deja de importar
+      dónde viva el directorio) y subiendo los `_REPO_ROOT` supervivientes a `parents[2]`.
+      Hay un test dedicado a cada mitad.
+    - **Referencias actualizadas** (grep previo de las cuatro formas, POSIX y Windows):
+      `pyproject.toml` (2 carve-outs de ruff), `.gitignore` (6 patrones — se escriben
+      junto al script, así que van a `scripts/demos/`), `tests/docs/test_human_test_guides.py`
+      (`_SCRIPTS` + el mensaje de su guarda), los **cinco** launchers
+      `scripts/dev/run-human-tests*.ps1`, **15 guías** de `docs/03-guides/human-tests/`
+      y 2 gotchas que dan un comando ejecutable.
+    - **Lo que NO se reescribió, y por qué**: los ADR, los changelog y las auditorías
+      citan estas rutas **narrando lo que pasó entonces**. Cambiarlas ahí no arregla nada
+      y falsea el relato. El test lo dice explícitamente: sólo vigila `docs/03-guides/`,
+      que es lo operativo. La única excepción es el `hint:` de un test humano en
+      `docs/roadmap/02-ejecucion-agentes.md`, que es una instrucción, no un relato.
+    - **La receta de abajo estaba mal en un punto más**: decía «48 ficheros, 35 fuera del
+      carril». El grep real da **74 menciones en 52 ficheros ajenos**, de los que sólo
+      **26 había que tocar**; el resto son narrativa histórica. La cuenta que importaba no
+      era cuántos ficheros mencionan el nombre, sino cuántos le dicen a alguien qué ejecutar.
+    - **Un efecto colateral que sólo se ve ejecutándolo, y que la receta no preveía**:
+      cambiar los patrones de `.gitignore` **designoró los seis ficheros de estado que ya
+      había** en `scripts/` (`.demo_state*.json`, `.demo_06/`) — el estado local del
+      operador, con ids de tenant y de proyecto, apareciendo de golpe como untracked y a
+      un `git add -A` de ser comiteado. Se movieron con los scripts, que es donde el
+      código los lee y escribe ahora, así que además se conserva el `-SkipSetup`.
+    - ⏳ **Pendiente de un humano**: correr un launcher `.ps1` de verdad. Ninguna suite los
+      ejecuta —son PowerShell contra un stack vivo—, así que sus rutas están verificadas
+      por lectura y grep, no por ejecución.
+  - _Historial de las cinco mediciones previas, conservado porque explica por qué esta
+    casilla tardó tanto en cerrarse:_
   - ⏳ **Sigue pendiente, y el 2026-08-01 se midió su radio de explosión antes de tocar nada:** confirmado que no hay `scripts/demos/`, que quedan **14 `demo_human_*` + 7 `setup_demo_*`** (de 26 `.py` en la raíz de `scripts/`; el plan decía «~27» contando el resto de tooling), que `scripts/__pycache__/check_commit_trailers.cpython-313.pyc` sigue ahí —bytecode huérfano, aunque no el `setup_webscorpo` que citaba la tarea— y que `tests/unit/test_scripts_layout.py` no existe.
   - **Dos correcciones a la descripción de la tarea, que la subestima:** (1) dice que «nada de esto está trackeado en git» — **es falso**, los 21 demos y `_demo_common.py` están todos en `git ls-files`, así que esto no es higiene local sino un rename de ficheros versionados; (2) `_demo_common.py` **tiene que moverse con ellos**: **11 scripts** hacen `from _demo_common import …`, que solo resuelve porque el directorio del script está en `sys.path` — si se quedara en `scripts/` los once dejarían de arrancar.
   - **Blast radius medido: 74 ficheros** mencionan `demo_human_*` / `setup_demo_*` / `_demo_common` / `.demo_state`, repartidos en `docs/03-guides/human-tests/` (24), `docs/03-guides/gotchas/`, `docs/05-architecture-decisions/`, `docs/07-changelog/`, `scripts/dev/*.ps1`, `.gitignore`, `pyproject.toml`, `apps/api-server/.../seeds/builtin_kbs.py` y `tests/docs/test_human_test_guides.py` (una guarda que se pondría roja a mitad del movimiento).
@@ -451,7 +496,54 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
 
 #### `task_gov_app_boundary_11` — Restaurar la frontera apps: backup sin importar workers
 
-- [ ] **Título**: `routers/backup.py` deja de hacer `from workers...` (api-9, D5)
+- [x] **Título**: `routers/backup.py` deja de hacer `from workers...` (api-9, D5)
+  - ✅ **2026-08-19 — HECHO por la decisión D5, y sin tocar el contrato de los dos
+    endpoints, que era lo que las cuatro pasadas anteriores daban por imposible.**
+    `routers/backup.py` no tiene ni un `from workers`; el AST lo comprueba en
+    `tests/unit/test_backup_probe_runs_in_the_worker.py`.
+    - **Lo entregado**: `apps/workers/src/workers/backup_probe_task.py` con
+      `workers.backup_test_destination` y `workers.backup_list_remote` (registrado en el
+      `imports` de `celery_app`), los productores
+      `probe_backup_destination_and_wait` / `list_remote_backup_entries_and_wait` en
+      `celery_client.py`, y el router encolando **por nombre** y relayando el resultado.
+    - **Por qué el contrato NO tenía que cambiar, que es lo que desbloqueó la casilla.**
+      Las anotaciones de agosto asumían que D5 obligaba a «polling corto o respuesta
+      diferida», o sea a cambiar dos endpoints que consume el `admin-panel`. No hacía
+      falta: `compute_plan_code_diff_and_wait` ya era el precedente de un
+      **send+get síncrono** en este mismo repo (el visor de diff, ADR 0099). El endpoint
+      sigue devolviendo `BackupConnectivityResult` en la misma petición; lo único que
+      cambia es **dónde** se ejecuta la red. Sin cambio de contrato, la superficie del
+      `admin-panel` deja de estar en juego y la coordinación con prod-04/prod-13 se
+      reduce a un rebase de fichero.
+    - **La cola: `privileged`, con `expires`.** Es la única lane del compose que lleva
+      las `WORKERS_BACKUP_*` (servicio `workers-backup`), así que mandarla a `default`
+      reproduciría el fallo que la casilla arregla. La objeción de la anotación del
+      2026-08-12 —`--concurrency=1`, detrás del backup nocturno— se resuelve con
+      `expires` en el mensaje: una sonda que no ha ARRANCADO cuando vence su plazo se
+      **descarta en el broker** en vez de ejecutarse tarde, y el endpoint devuelve un
+      FAIL con motivo («the backup worker did not answer in 15s»). O sea que **no hizo
+      falta la decisión de despliegue** que la anotación creía bloqueante: una lane
+      propia o replicar las `WORKERS_BACKUP_*` en `default` mejorarían la latencia, no
+      la corrección.
+    - **`test_app_boundaries.py` cambió de umbral, no se retiró**: `routers/backup.py`
+      sale del inventario y el test que exigía «exactamente un `worker-work`» ahora exige
+      **cero**, con un test hermano que impide que pase en vacío (las cinco entradas que
+      quedan son `helper`, y su salida es moverlas a `packages/` — otra tarea).
+    - **`auto_gov_11_b` sigue sin fichero, y ahora por otra razón.** Nombraba
+      `tests/integration/test_backup_destination_endpoints.py` para «el nuevo flujo
+      encolado»; ese flujo está cubierto por unitarios (14 tests, con el productor y el
+      worker por separado) y por el de integración que ya existía,
+      `tests/integration/test_dest_ui.py`, adaptado para mockear el **productor** en vez
+      del constructor de adaptadores. Crear un integration nuevo que no se puede ejecutar
+      en esta pasada —la suite de integración corre en 4 shards contra la misma BD— sería
+      añadir un arnés sin verde, que es justo el problema que tuvo esta casilla durante
+      tres pasadas. Ver el comando corregido debajo.
+    - ⏳ **Pendiente de un humano, y es lo mismo que estaba pendiente antes**: nadie ha
+      probado nunca este botón con un destino remoto **con credencial** — ni antes ni
+      después del cambio, porque este stack no tiene ninguno configurado. Lo que se puede
+      afirmar es que ahora corre en el proceso que tiene las credenciales. Y hay que
+      ejecutar `tests/integration/test_dest_ui.py`, que se editó a ciegas.
+  - _Historial de las cuatro pasadas previas:_
   - ⏳ **Pendiente. Re-medido el 2026-08-01 con el inventario exacto**, que es el dato que faltaba para dimensionarla: `from workers` aparece en **6 ficheros** de `api_server`, no en uno —
     `routers/backup.py:234,235,369,370` (`backup_destinations`, `backup_encryption`),
     `backup_restore.py:164` (`restore_per_tenant`),
@@ -546,10 +638,26 @@ tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_pro
     command: "pytest tests/unit/test_app_boundaries.py -v"
   - id: auto_gov_11_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_backup_destination_endpoints.py -v"
+    command: "pytest tests/unit/test_backup_probe_runs_in_the_worker.py -v"
+  - id: auto_gov_11_c
+    runtime: python-pytest
+    command: "pytest tests/integration/test_dest_ui.py -v"
   ```
   (el primero es la guardia permanente: AST de imports `workers` en todo `api_server`;
-  el segundo cubre el nuevo flujo encolado de test/list con worker simulado)
+  el segundo cubre el flujo encolado —productor, worker, lane, caducidad y degradación—
+  con worker simulado; el tercero es el de integración que ya existía, adaptado al
+  productor)
+
+> **`auto_gov_11_b` cambió de fichero el 2026-08-19.** Nombraba
+> `tests/integration/test_backup_destination_endpoints.py`, un fichero que nunca
+> existió porque cubría «el nuevo flujo encolado» mientras ese flujo estaba sin
+> diseñar. Ahora el flujo existe y está cubierto donde de verdad se ejerce:
+> `tests/unit/test_backup_probe_runs_in_the_worker.py` (14 tests) prueba las dos
+> mitades —productor y tarea de worker— sin broker; `test_dest_ui.py` prueba el
+> endpoint entero contra la app y el Postgres reales, mockeando el productor. Un
+> tercer fichero de integración habría duplicado ese segundo, y crear un arnés que
+> no se puede poner en verde es lo que dejó a esta casilla nombrando un fichero
+> inexistente durante tres pasadas.
 
 > **`auto_gov_11_a` cambió de selector el 2026-08-10, a propósito.** Nombraba
 > `::test_api_server_never_imports_workers`, un test que **no puede estar en verde

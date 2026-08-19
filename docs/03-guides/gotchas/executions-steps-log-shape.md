@@ -57,7 +57,7 @@ que producen las funciones `node_step` / `model_call_step` /
 ## Fix
 
 Cuando siembres `steps_log` en un script demo o un test, usa el shape
-canónico — copia el patrón de `scripts/demo_human_04_5_01.py` (5
+canónico — copia el patrón de `scripts/demos/demo_human_04_5_01.py` (5
 pasos `perceive → plan → act → observe → finalize`) o llama
 directamente a `agent_runtime.steps.{node_step, model_call_step,
 tool_call_step}` desde Python.
@@ -84,7 +84,7 @@ la página inconsistente aunque la Timeline sí cargue.
 ## Cómo verificar el fix
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\demo_human_04_5_01.py
+.\.venv\Scripts\python.exe .\scripts\demos\demo_human_04_5_01.py
 # copia el execution_id del Paso 1
 ```
 
@@ -102,7 +102,7 @@ curl -H "Authorization: Bearer <token>" \
   generadores canónicos.
 - `apps/admin-panel/app/admin/executions/[id]/page.tsx:117` — código
   de la UI que requiere `step.index`.
-- `scripts/demo_human_04_5_01.py:_seed_done_execution` — ejemplo de
+- `scripts/demos/demo_human_04_5_01.py:_seed_done_execution` — ejemplo de
   sembrado correcto.
 
 ## Migración retroactiva

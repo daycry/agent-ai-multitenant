@@ -771,7 +771,7 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
 
 - id: human_02_04
   description: "Validación humana pausa correctamente"
-  hint: "Configurar proyecto con policy 'code_execution: human_required' y disparar una tarea que la requiera (ver scripts/demo_human_02_04.py). ADR 0020 fija la semántica."
+  hint: "Configurar proyecto con policy 'code_execution: human_required' y disparar una tarea que la requiera (ver scripts/demos/demo_human_02_04.py). ADR 0020 fija la semántica."
   checklist:
     - "La tarea pasa a awaiting_human_approval (columna 'Pendiente de aprobación' del board); el agente queda libre (assigned_agent_id NULL)"
     - "Aparece notificación in-app al project_owner / aparece la solicitud pendiente en la pantalla Aprobaciones"
