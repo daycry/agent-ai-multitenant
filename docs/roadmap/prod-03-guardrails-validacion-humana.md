@@ -440,15 +440,34 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
 - **Tiempo**: 2,5 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: ni `test_agent_loop_guardrail_hooks.py` ni
+  # `test_indirect_prompt_injection.py` han existido nunca en `tests/integration/`, y no
+  # podían: los cuatro hooks corren DENTRO del sandbox, en
+  # `docker/agent-runtimes/agent-runtime/agent_runtime/graph.py`, así que sus tests viven
+  # al lado del código —no en el árbol del api-server— y están repartidos por punto del
+  # ciclo en vez de en un fichero único. Los cuatro puntos del principio rector 10 quedan
+  # cubiertos así: `pre_llm`/`post_llm` en `test_llm_guardrail_hooks.py` (`task_wf_50`),
+  # `pre_tool`/`post_tool` con enforce de `block` en `test_guardrails_enforce.py`
+  # (ADR 0102), y el cableado del nodo `act` en `test_act_guardrail_wiring.py`.
+  # Comprobados que muerden (24 verdes → rojo dirigido → restaurados con
+  # `git show HEAD:… > …` → 24 verdes):
+  #   · vaciar `blocked_types` en `_call_tool` → cae `test_pre_tool_block_rejects_the_call`;
+  #   · dejar de plegar `state["context"]` en el prompt de `pre_llm` → caen tres,
+  #     entre ellas `test_injected_content_folded_into_the_prompt_trips_pre_llm` y
+  #     `test_a_blocked_prompt_is_never_sent_to_the_model`.
   - id: auto_prod03_12_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_agent_loop_guardrail_hooks.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_llm_guardrail_hooks.py docker/agent-runtimes/agent-runtime/tests/test_guardrails_enforce.py docker/agent-runtimes/agent-runtime/tests/test_act_guardrail_wiring.py -v"
   - id: auto_prod03_12_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_indirect_prompt_injection.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_guardrails_seam.py -v"
   ```
   `_b`: una tool stub devuelve un payload con instrucción inyectada → el
-  hook `post_tool` lo marca/bloquea y el evento queda registrado.
+  hook `post_tool` lo marca/bloquea y el evento queda registrado. Es exactamente
+  `test_post_tool_flags_indirect_injection` («a tool output carrying an injection must be
+  flagged BEFORE it re-enters the model context»), con
+  `test_act_records_guardrail_event_on_injected_output` cerrando el otro extremo: que el
+  evento sale del nodo `act` hacia `ExecutionResult` y de ahí al worker.
 
 #### `task_prod03_13` — Persistencia de eventos de guardrails desde el worker
 

@@ -183,9 +183,20 @@ verificaciones el código realmente cumple.
   - id: auto_prod05_01_a
     runtime: python-pytest
     command: "pytest tests/unit/test_multifernet_builders.py -v"
+  # CORREGIDO el 2026-08-19: `tests/integration/test_fernet_rotation_two_keys.py` no ha
+  # existido nunca, y no hace falta que exista: la propiedad que iba a probar —«con dos
+  # claves en el anillo, lo escrito con la vieja sigue leyéndose»— la prueba
+  # `test_multifernet_builders.py` sobre los CUATRO builders a la vez, parametrizado, y
+  # sin BD (que es por lo que tampoco es un test de integración). Además fija lo que un
+  # roundtrip ingenuo se dejaría: QUÉ clave produjo el token, porque un anillo que
+  # descifra con todas pero sigue cifrando con la vieja pasaría en verde y haría que el
+  # paso 3 de la rotación destruyese datos.
+  # Comprobado que muerde: `MultiFernet([... for raw in ring])` → `ring[:1]` y saltaron
+  # tres parametrizaciones de `test_a_token_written_under_the_old_key_survives_adding_a_new_one`
+  # (sso, mfa, webhooks). Restaurado con `git show HEAD:… > …`; 30 verdes.
   - id: auto_prod05_01_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_fernet_rotation_two_keys.py -v"
+    command: "pytest tests/unit/test_multifernet_builders.py -k 'survives_adding_a_new_one or notification_secrets_pair_survives' -v"
   ```
 
 #### `task_prod05_02` — Comando de re-cifrado masivo por tabla
@@ -281,9 +292,23 @@ verificaciones el código realmente cumple.
   - id: auto_prod05_05_a
     runtime: python-pytest
     command: "pytest tests/unit/test_vault_rotation_client_hvac.py -v"
+  # CORREGIDO el 2026-08-19: `tests/integration/test_rotation_never_succeeds_on_fake.py`
+  # no ha existido nunca. El «test de regresión que falle si la task de producción reporta
+  # SUCCEEDED con el cliente fake» que pide la descripción SÍ está escrito, dentro del
+  # mismo fichero que `_a` y con ese nombre casi literal:
+  # `test_a_skipped_cycle_never_reports_succeeded`. No es de integración porque no lo
+  # necesita —Vault y MinIO están tras seams y los dobles registran el ORDEN de llamadas,
+  # que es la propiedad que importa— y el fichero fija además la otra mitad, la que un
+  # test de comportamiento solo no protege: `test_the_production_module_does_not_even_import_the_fake`,
+  # una guarda estática sobre el fuente para el día que alguien reintroduzca el fallback
+  # con otro nombre.
+  # Comprobado que muerde: `RotationStatus.SKIPPED` → `SUCCEEDED` en `_skipped_summary` y
+  # cayeron las dos (`test_a_skipped_cycle_never_reports_succeeded` y
+  # `test_a_cycle_without_vault_is_skipped_alerted_and_not_ok`). Restaurado con
+  # `git show HEAD:… > …`; 19 verdes.
   - id: auto_prod05_05_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_rotation_never_succeeds_on_fake.py -v"
+    command: "pytest tests/unit/test_vault_rotation_client_hvac.py -k 'never_reports_succeeded or skipped_alerted_and_not_ok or does_not_even_import_the_fake' -v"
   ```
 
 #### `task_prod05_06` — ADR modelo de consumo + propagación ejecutable con reinicio coordinado
@@ -332,9 +357,14 @@ verificaciones el código realmente cumple.
 - **Dependencias**: `task_prod05_04`, `task_prod05_05`
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: el propio bloque de arriba ya documentaba la desviación
+  # («el test se llamaba tests/integration/test_rotation_propagation_cycle.py … vive en
+  # tests/unit/ porque no necesita Postgres ni Redis»), pero NADIE bajó a corregir el
+  # `command:`, así que la casilla marcada seguía declarando un fichero inexistente. Es el
+  # patrón que este arreglo persigue: la prosa se actualiza y el yaml no.
   - id: auto_prod05_06_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_rotation_propagation_cycle.py -v"
+    command: "pytest tests/unit/test_rotate_platform_secret_script.py tests/unit/test_rotation_apply_cli.py -v"
   ```
 
 #### `task_prod05_07` — Rotación MinIO real en el servicio
@@ -393,9 +423,20 @@ verificaciones el código realmente cumple.
   - id: auto_prod05_08_a
     runtime: python-pytest
     command: "pytest tests/unit/test_backup_encryption_keyring.py -v"
+  # CORREGIDO el 2026-08-19: `tests/integration/test_restore_v1_blob_after_rotation.py` no
+  # ha existido nunca. Lo que iba a probar —«un blob v1 escrito ANTES del cambio sigue
+  # restaurando tras rotar»— es la aserción nº 1 del fichero de `_a`, y allí está mejor
+  # construida de lo que habría estado suelta: la cabecera v1 se fabrica a mano desde la
+  # spec de AES-GCM y no desde el módulo bajo prueba, así que el test seguiría siendo
+  # significativo aunque las constantes del módulo estuviesen mal.
+  # Comprobado que muerde: en la rama v1 de `decrypt_bytes`, `for key in ring` →
+  # `for key in ring[:1]` (o sea, «solo la clave cabeza descifra») y saltó
+  # `test_a_version_1_bundle_still_restores_after_the_rotation` con el mensaje del propio
+  # módulo («no key in the ring (2 configured) decrypts it»). Restaurado con
+  # `git show HEAD:… > …`; 16 verdes.
   - id: auto_prod05_08_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_restore_v1_blob_after_rotation.py -v"
+    command: "pytest tests/unit/test_backup_encryption_keyring.py -k 'version_1_bundle or retired_key' -v"
   ```
 
 ### Fase E — Runbook veraz y drill (gap2-6)

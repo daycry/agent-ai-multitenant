@@ -228,9 +228,18 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
   - id: auto_prod10_06_a
     runtime: python-pytest
     command: "pytest tests/unit/test_compose_redis_auth_and_dev_binds.py -v"
-  - id: auto_prod10_06_b
-    runtime: python-pytest
-    command: "pytest tests/integration/test_redis_requires_password.py -v"
+  # `auto_prod10_06_b` RETIRADO el 2026-08-19. La nota de 2026-08-10 ya decía que
+  # `tests/integration/test_redis_requires_password.py` «NO existe y no se ha fingido»,
+  # con el argumento correcto: afirmaría una propiedad del contenedor DESPLEGADO, no del
+  # código, y por tanto sólo demostraría que el stack necesita redespliegue. Pero el
+  # `command:` seguía ahí, así que la casilla marcada declaraba una verificación imposible
+  # de pasar. Se retira el bloque; esa comprobación es `human_prod10_02`, que la lleva
+  # literalmente en su checklist («redis-cli ping sin -a contra el Redis del stack →
+  # NOAUTH; con la password → PONG»).
+  # Lo que SÍ es verificable sin desplegar —que el compose lo exige— es `_a`, y muerde:
+  # quitar `--requirepass` + `${REDIS_PASSWORD:?…}` del `command:` del servicio `redis`
+  # pone en rojo `test_redis_requires_a_password`. Restaurado con `git show HEAD:… > …`;
+  # 6 verdes.
   ```
 
 ### Fase C — Vault operable: tokens renovables y unseal con estrategia
@@ -329,6 +338,27 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
     que se pueda seguir documentando por qué se abandonó `/v1/sys/health`) y que
     **alguna regla de Prometheus mira el gauge** — una métrica que nadie vigila no
     es una alerta.
+  - **El test de integración declarado (`auto_prod10_09_b`) ya existe (2026-08-19).**
+    Hasta hoy la casilla estaba marcada nombrando un fichero que no existía, y
+    figuraba por eso en el inventario congelado de
+    `tests/unit/test_declared_tests_exist.py` (entrada ya retirada).
+    `tests/integration/test_system_health_vault_sealed.py` (4 verdes) cubre la vuelta
+    entera —login de System Admin → `/admin/system-health` → sonda httpx real contra
+    un Vault de mentira en `127.0.0.1`— y fija las tres cosas que el unit test de la
+    sonda no puede ver: (a) sellado ⇒ **200 con `status: degraded`**, ni un 500 ni un
+    `ok`, con el detalle nombrando el sello y el runbook; (b) el veredicto lo causa el
+    sello, porque con `sealed: false` y el MISMO montaje el agregado vuelve a `ok`
+    —sin ese contraste, un endpoint que respondiera `degraded` siempre pasaría—; (c)
+    un Vault que NO contesta sale `down`, no `degraded`, y con detalle genérico (no
+    filtra la URL interna a un panel). Rojos verificados: borrando la rama
+    `elif vault_h.status == "degraded"` de `routers/admin.py` cae (a), y devolviendo
+    `str(exc)` como detalle en `probe_vault_seal` cae (c).
+  - **Anotado, no fijado**: cuando Vault **no responde**, el agregado se queda en
+    `ok` (la rama del router sólo mira `degraded`). Puede ser correcto —de un
+    servicio caído se ocupa la regla `ServiceDown`— o un hueco equivalente al
+    secrets-5 en la otra dirección. El test lo deja **sin aserción a propósito**,
+    con la razón escrita: es una decisión del operador, no algo que un test deba
+    bendecir por su cuenta.
   - **Runbook**: `docs/06-runbooks/restart-services.md` abre con un **PASO 0**
     («tras cualquier reinicio del HOST — desellar Vault») que incluye cómo
     detectarlo, cómo desellar con 3 de 5 shares, cómo confirmarlo y el enlace a
@@ -389,16 +419,46 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
     notificación y webhooks entrantes —
     `docs/06-runbooks/04-disaster-recovery.md`. Es una ausencia **visible** (el
     botón de SSO no aparece), no un fallo silencioso.
-  - `auto_prod10_11_a` (`test_sso_notification_webhook_secrets_vault.py`) **no se
-    escribe**: afirmaría lo contrario de lo que el ADR decidió.
+  - ✅ **2026-08-19 — el bloque `yaml` ya no declara el test contrario.** La nota de
+    arriba decía, con razón, que `test_sso_notification_webhook_secrets_vault.py` «no se
+    escribe» porque afirmaría lo contrario de lo que el ADR 0146 decidió… pero el
+    `command:` de abajo **seguía declarándolo**, así que la casilla marcada apuntaba a una
+    verificación que, de existir, habría que romper. Se sustituye por la que de verdad
+    toca: que la salvaguarda de la opción B se cumple **y que la excepción no ha crecido**.
+    `tests/unit/test_backup_column_secrets.py`, 8 verdes.
+    **Comprobado que muerde, no supuesto**: se añadió `"llm_providers"` a
+    `COLUMN_SECRET_TABLES` (una credencial de PLATAFORMA, justo lo que la frontera del ADR
+    prohíbe) y saltaron dos —
+    `test_the_excluded_tables_are_exactly_the_three_families_the_adr_names` y
+    `test_the_settings_default_matches_the_adr`—; restaurado el fichero con
+    `git show HEAD:… > …`, verde otra vez.
 - **Descripción**: Si se aprueba la opción A: script de migración que mueva los valores Fernet existentes a Vault (`secret/tenants/{tenant}/...`), cambie los read-paths de api-server y notification-dispatcher (`notification_dispatcher/config.py:345`) a Vault-first y devuelva 503 en escrituras sin Vault, replicando `routers/llm_providers.py:90-119`. Si opción B: marcar las columnas, excluirlas del export de backups o cifrarlas con clave distinta, y documentar. Estimación para la opción A (peor caso).
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Dependencias**: `task_prod10_10` aprobado por humano; `task_prod10_07` (cliente Vault renovable)
 - **Tests automáticos**:
   ```yaml
+  # REESCRITO el 2026-08-19. El id anterior declaraba
+  # `tests/integration/test_sso_notification_webhook_secrets_vault.py`, que nunca existió
+  # y que además habría verificado la MIGRACIÓN A VAULT — la opción A, la que el ADR 0146
+  # descartó. Un comando así no es sólo un fichero que falta: es una medida que contradice
+  # la decisión que la casilla implementa. Lo que hay que verificar de la opción B son las
+  # dos mitades de su condición «no opcional»:
   - id: auto_prod10_11_a
+    description: >-
+      La salvaguarda se cumple: los DATOS de las tres tablas de secretos de columna no
+      viajan en el `pg_dump` (`--exclude-table-data`, nunca `--exclude-table`: el esquema
+      sí viaja o el restore dejaría la base sin esas tablas), el manifiesto dice cuáles se
+      quedaron fuera, y el default del `Settings` es el seguro.
     runtime: python-pytest
-    command: "pytest tests/integration/test_sso_notification_webhook_secrets_vault.py -v"
+    command: "pytest tests/unit/test_backup_column_secrets.py -v"
+  - id: auto_prod10_11_b
+    description: >-
+      Y la excepción NO ha crecido: `COLUMN_SECRET_TABLES` son exactamente las tres
+      familias que el ADR 0146 nombra, y cada columna declarada existe en el ORM real (un
+      renombrado dejaría la frontera diciendo una cosa y el esquema otra). Añadir aquí una
+      credencial de PLATAFORMA pone el test en rojo, que es el punto.
+    runtime: python-pytest
+    command: "pytest tests/unit/test_backup_column_secrets.py -k 'excluded_tables_are_exactly or every_declared_column_exists or settings_default_matches' -v"
   ```
 
 #### `task_prod10_12` — Runbooks y referencia actualizados

@@ -85,20 +85,20 @@ sandbox `remote/`).
 
 ## Mapa rápido test humano → demo
 
-| Test humano   | Demo     | Cubierto                                                                         |
-| ------------- | -------- | -------------------------------------------------------------------------------- |
-| `human_06_01` | `demo_a` | end-to-end pipeline con commits + push + transición a `pending_human_validation` |
-| `human_06_02` | `demo_b` | dep-cache hash determinista + invalidación por cambio de lock                    |
-| `human_06_03` | `demo_b` | aux services per-task isolation (paths/aliases distintos)                        |
-| `human_06_04` | `demo_d` | review-runtime spawn + URL firmada HMAC + rerun flag                             |
-| `human_06_05` | `demo_b` | múltiples repos por plan, cada uno con su rama                                   |
-| `human_06_06` | `demo_a` | `git fsck --full` verde tras todas las operaciones                               |
-| `human_06_07` | `demo_c` | pool min/max/eviction + role-switch in-place                                     |
-| `human_06_08` | `demo_c` | matriz `branch_push_mode × plan_validation_mode`                                 |
-| `human_06_09` | `demo_a` | conflicto entre tareas paralelas (parcial — full en 06.5)                        |
-| `human_06_10` | `demo_d` | escalado a `awaiting_human` tras 3 rechazos + 4 acciones                         |
-| `human_06_11` | `demo_d` | checkbox fail → tarea plan-scoped en backlog                                     |
-| `human_06_12` | `demo_d` | audit trail cronológico append-only                                              |
+| Test humano       | Demo     | Cubierto                                                                         |
+| ----------------- | -------- | -------------------------------------------------------------------------------- |
+| `human_06_01`     | `demo_a` | end-to-end pipeline con commits + push + transición a `pending_human_validation` |
+| `human_06_02`     | `demo_b` | dep-cache hash determinista + invalidación por cambio de lock                    |
+| `human_06_03`     | `demo_b` | aux services per-task isolation (paths/aliases distintos)                        |
+| `human_06_04`     | `demo_d` | review-runtime spawn + URL firmada HMAC + rerun flag                             |
+| `human_06_05`     | `demo_b` | múltiples repos por plan, cada uno con su rama                                   |
+| `human_06_06`     | `demo_a` | `git fsck --full` verde tras todas las operaciones                               |
+| ~~`human_06_07`~~ | —        | **RETIRADO**: el pool elástico se borró del repo el 2026-07-26                   |
+| `human_06_08`     | `demo_c` | matriz `branch_push_mode × plan_validation_mode`                                 |
+| `human_06_09`     | `demo_a` | conflicto entre tareas paralelas (parcial — full en 06.5)                        |
+| `human_06_10`     | `demo_d` | escalado a `awaiting_human` tras 3 rechazos + 4 acciones                         |
+| `human_06_11`     | `demo_d` | checkbox fail → tarea plan-scoped en backlog                                     |
+| `human_06_12`     | `demo_d` | audit trail cronológico append-only                                              |
 
 ---
 
@@ -401,50 +401,33 @@ git fsck --full --strict
 
 ---
 
-## `human_06_07` — Pool elástico de runtime por plan
+## ~~`human_06_07` — Pool elástico de runtime por plan~~ (RETIRADO 2026-08-19)
 
-**Cubierto por**: `demo_c`.
-
-**Qué prueba**:
-
-1. `pool.start()` arranca exactamente `min` containers.
-2. 3 acquires paralelos hacen crecer el pool a `max=3`.
-3. El mismo container sirve a 4 roles distintos
-   (implementador → reviewer → memorizer → technical_writer) sin
-   destrucción/respawn.
-4. `sweep_idle(now=future)` elimina containers por encima de `min`.
-5. Métricas (`size`, `busy`, `idle`, `evictions_total`,
-   `role_executions_total`) reflejan la realidad.
-
-**Cómo ejecutarlo**:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\demos\demo_human_06_c_pool_policies.py
-# bloque "human_06_07 - pool elastico por plan"
-```
-
-**Output esperado**:
-
-```
-[ OK ] pool arranca con min=1 container
-[ OK ] pool crece a max=3 con 3 acquires paralelos
-[ OK ] los 3 slots estan busy
-[ OK ] post-release todos idle
-[ OK ] mismo container sirve 4 roles distintos sin reinicio - {'c-2'}
-[ OK ] sweep_idle elimina 2 (min=1 sobrevive) - 2
-[ OK ] pool vuelve a tamano min=1
-[ OK ] evictions_total counter en 2
-[ OK ] role_executions_total acumula >=7 invocaciones - {...}
-```
-
-**Checklist pass/fail**:
-
-- [ ] Al iniciar el plan el pool arranca con `min` contenedores (default 1)
-- [ ] Al ejecutarse pasos paralelos, el pool crece hasta `max`
-- [ ] Cuando un paso termina y empieza la revisión, se reutiliza el mismo contenedor
-- [ ] Tras periodos de inactividad superiores a `idle_ttl_seconds`, contenedores por encima de `min` se destruyen
-- [ ] Las métricas `runtime_pool_*` exportadas a Prometheus reflejan el comportamiento _(export Prometheus Plan 06.5)_
-- [ ] Al cerrar el plan, todos los contenedores del pool se destruyen limpiamente
+> **Este test humano ya no se puede ejecutar, y no porque falle: porque su sujeto
+> no existe.** `workers/runtime_pool.py` —con `RuntimePool`, `PoolConfig`,
+> `sweep_idle` y el cambio de rol en caliente— se **borró del repo el 2026-07-26**
+> (commit `7959cdcb`), junto con sus ocho ficheros de test. Hoy el worker lanza
+> **un contenedor efímero por tarea** (`workers/execution.py` construye
+> `AgentContainerRunner`; `container.py` hace `containers.run(detach=True)`), que
+> es el modelo de la Fase 2 que este test daba por sustituido.
+>
+> El procedimiento estuvo casi un mes diciendo a un humano que ejecutase un script
+> que reventaba con `ImportError` en su línea 36. No lo detectó nadie porque un
+> test humano sólo falla cuando alguien lo intenta.
+>
+> **Qué queda en su lugar**: nada que verificar aquí. El aislamiento por tarea lo
+> cubren los tests de `AgentContainerRunner`, y la mitad viva del demo `demo_c`
+> —la matriz de policies Git— es `human_06_08`, justo debajo.
+>
+> Las casillas del plan `06` que describían este pool (`task_06_20b1` … `b6`)
+> quedaron desmarcadas el mismo día con su enunciado reescrito, y el plan quedó
+> `completed` con casillas abiertas: una incoherencia deliberada y **a la vista**,
+> anotada en `_COMPLETED_WITH_OPEN_BOXES_2026_08_19`
+> (`tests/unit/test_roadmap_frontmatter.py`) esperando que el operador elija entre
+> aceptar el recorte de alcance o mover la fase a un plan propio.
+>
+> Se conserva la sección, tachada, en vez de borrarla: quien lea la tabla de
+> arriba y busque `human_06_07` merece encontrar por qué no está, no un hueco.
 
 ---
 

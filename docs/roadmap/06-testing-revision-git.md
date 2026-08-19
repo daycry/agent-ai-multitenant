@@ -447,121 +447,125 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
     expected_signal: "exit_code == 0"
   ```
 
-### Fase E2 — Pool Elástico de Runtime por Plan (sección 12.5 del .docx)
+### Fase E2 — Pool Elástico de Runtime por Plan (sección 12.5 del .docx) — **RETIRADA**
+
+> **La feature entera se RETIRÓ del repo el 2026-07-26**, en el commit
+> [`7959cdcb`](../../) («refactor: fuera 2.200 líneas de código que no ejecuta nadie»,
+> `Plan-Id: remediacion-gestion-proyectos-2026-07-25`, `Task-Id: task_wf_57`). Ese commit
+> borró `apps/workers/src/workers/runtime_pool.py` (393 líneas), su único importador
+> `apps/orchestrator/src/orchestrator/plan_runner.py` (el runner síncrono de las demos
+> del Plan 06, nunca cableado) y **los seis ficheros de test** que estas casillas
+> declaraban (`test_runtime_pool_model.py`, `test_pool_assign.py`, `test_pool_queue.py`,
+> `test_pool_idle_eviction.py`, `test_pool_role_switch.py`, `test_pool_cleanup.py`,
+> `test_pool_metrics.py`, `test_worker_uses_pool.py`). El motivo escrito allí: el
+> exportador Prometheus que los tests de `task_06_20b5` decían proteger **no existía en
+> `apps/`** — «seis métricas fijadas contra nada».
+>
+> **Las seis casillas quedaban `[x]` describiendo código inexistente.** Se desmarcan el
+> 2026-08-19. Verificado antes de tocarlas: `grep -ril "runtime_pool\|RuntimePool"` sobre
+> el árbol sólo encuentra (a) un comentario en `workers/maintenance/cleanup.py` y (b)
+> `scripts/demos/demo_human_06_c_pool_policies.py`, que hace
+> `from workers.runtime_pool import PoolConfig, RuntimePool` — o sea que **el demo está
+> roto** desde aquel commit y nadie se ha enterado. Ése es el residuo real de esta fase.
+>
+> **Los enunciados NO se borran a propósito**: por qué existió el diseño (y por qué se
+> descartó al medirlo) vale más que el hueco limpio. Si algún día vuelve, vuelve con ADR,
+> igual que el modo testcontainers que se fue en el mismo commit.
+>
+> Lo que hoy hace el sistema en su lugar está en `task_02_06`: **un contenedor efímero por
+> tarea** (`workers/execution.py` construye un `ContainerSpec` y
+> `AgentContainerRunner.run()` lo lanza y lo borra al terminar).
 
 #### `task_06_20b1` — Modelo del pool elástico por plan con parámetros `min` / `max` / `idle_ttl_seconds`
 
-- [x] **Título**: Modelo del pool elástico por plan: estructura de datos en orquestador, parámetros `min` (default 1) / `max` (default 5) / `idle_ttl_seconds` (default 300) heredados desde proyecto, con límite duro de plataforma `max_runtime_pool_size_per_tenant` (default 20)
+- [ ] **RETIRADA (2026-08-19)** — el modelo de datos del pool no existe: `workers/runtime_pool.py`
+      se borró en `7959cdcb`. Enunciado original, conservado como historia del diseño:
+      Modelo del pool elástico por plan: estructura de datos en orquestador, parámetros `min` (default 1) / `max` (default 5) / `idle_ttl_seconds` (default 300) heredados desde proyecto, con límite duro de plataforma `max_runtime_pool_size_per_tenant` (default 20)
 - **Tiempo estimado**: 8 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
 - **Dependencias**: `task_06_20`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_20b1_a
-    description: "Pool por plan se crea con min contenedores al iniciar el plan y respeta max"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_runtime_pool_model.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno. `tests/integration/test_runtime_pool_model.py` se borró
+  en `7959cdcb` junto con el código que probaba. El bloque `yaml` se retira en vez de
+  dejar un `command:` que no puede pasar (pytest sale != 0 con «No tests found»).
 
 #### `task_06_20b2` — Lógica del orchestrator: asignación de contenedores del pool (libre / nuevo / cola) y barrido de idle
 
-- [x] **Título**: Lógica del orchestrator para asignar contenedores del pool: si hay libre lo toma, si no y `size < max` crea uno, si el pool está al máximo encola el paso. Barrido de contenedores idle cada 30s y eviction de los que llevan más de `idle_ttl_seconds` por encima de `min`.
+- [ ] **RETIRADA (2026-08-19)** — la lógica de asignación vivía en `RuntimePool`, borrado en
+      `7959cdcb`. Enunciado original, conservado como historia del diseño:
+      Lógica del orchestrator para asignar contenedores del pool: si hay libre lo toma, si no y `size < max` crea uno, si el pool está al máximo encola el paso. Barrido de contenedores idle cada 30s y eviction de los que llevan más de `idle_ttl_seconds` por encima de `min`.
 - **Tiempo estimado**: 12 h
 - **Complejidad**: l
 - **Rol sugerido**: backend-dev
 - **Dependencias**: `task_06_20b1`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_20b2_a
-    description: "Asignación a contenedor libre del pool funciona y reutiliza"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_pool_assign.py -v"
-    expected_signal: "exit_code == 0"
-  - id: auto_06_20b2_b
-    description: "Pool al máximo encola pasos hasta que se libera un contenedor"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_pool_queue.py -v"
-    expected_signal: "exit_code == 0"
-  - id: auto_06_20b2_c
-    description: "Eviction de contenedores idle por encima de min tras idle_ttl_seconds"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_pool_idle_eviction.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno. `test_pool_assign.py`, `test_pool_queue.py` y
+  `test_pool_idle_eviction.py` se borraron en `7959cdcb` junto con el código que probaban.
 
 #### `task_06_20b3` — Cambio de rol dentro de un mismo contenedor del pool sin reiniciar proceso Python
 
-- [x] **Título**: Cambio de rol dentro de un mismo contenedor del pool: nuevo system_prompt + nuevo set de tools + nuevo contexto sin reiniciar proceso Python, sin reiniciar conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), sin recargar tokenizer. El contenedor pasa de Backend Senior a Reviewer a Memorizer manteniendo caliente proceso, conexiones, cliente MCP y tokenizer.
+- [ ] **RETIRADA (2026-08-19)** — no hay contenedor que reutilizar entre pasos: el pool se
+      borró en `7959cdcb` y hoy cada tarea estrena contenedor (`task_02_06`), así que el
+      proceso Python, las conexiones HTTP y el tokenizer se rehacen en cada paso por
+      diseño. Enunciado original, conservado como historia del diseño:
+      Cambio de rol dentro de un mismo contenedor del pool: nuevo system_prompt + nuevo set de tools + nuevo contexto sin reiniciar proceso Python, sin reiniciar conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), sin recargar tokenizer. El contenedor pasa de Backend Senior a Reviewer a Memorizer manteniendo caliente proceso, conexiones, cliente MCP y tokenizer.
 - **Tiempo estimado**: 10 h
 - **Complejidad**: l
 - **Rol sugerido**: ai-engineer + backend-dev
 - **Dependencias**: `task_06_20b2`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_20b3_a
-    description: "Un mismo contenedor del pool ejecuta sucesivamente implementador → reviewer → memorizer sin reiniciar proceso"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_pool_role_switch.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno. `test_pool_role_switch.py` se borró en `7959cdcb` junto
+  con el código que probaba.
 
 #### `task_06_20b4` — Limpieza entre pasos: desmontar worktree, limpiar /tmp, unset vars, matar hijos huérfanos, reiniciar handlers de señales
 
-- [x] **Título**: Rutina de limpieza al devolver un contenedor al pool: desmontar worktree del paso anterior (no borrarlo del FS), limpiar `/tmp`, unset de variables TASK_ID/EXECUTION_ID/secrets, matar procesos hijos huérfanos, reiniciar handlers de señales. Mantener caliente proceso Python, conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), cliente MCP, tokenizer, dep-cache.
+- [ ] **RETIRADA (2026-08-19)** — no hay «devolver al pool»: el contenedor de cada tarea se
+      destruye al terminar (`AgentContainerRunner.run()` lo borra en su `finally`), que es
+      la limpieza que esta rutina emulaba. Enunciado original, conservado como historia del
+      diseño:
+      Rutina de limpieza al devolver un contenedor al pool: desmontar worktree del paso anterior (no borrarlo del FS), limpiar `/tmp`, unset de variables TASK_ID/EXECUTION_ID/secrets, matar procesos hijos huérfanos, reiniciar handlers de señales. Mantener caliente proceso Python, conexiones HTTP de los proveedores LLM (`shared-llm`, ADR 0021), cliente MCP, tokenizer, dep-cache.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
 - **Dependencias**: `task_06_20b3`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_20b4_a
-    description: "Tras soltar un contenedor al pool, /tmp está vacío, no quedan procesos huérfanos, las vars específicas del paso anterior no están presentes"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_pool_cleanup.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno. `test_pool_cleanup.py` se borró en `7959cdcb` junto con
+  el código que probaba.
 
 #### `task_06_20b5` — Métricas Prometheus del pool: size / busy / idle / wait_seconds / evictions_total / role_executions_total
 
-- [x] **Título**: Exposición de métricas Prometheus por plan: `runtime_pool_size{plan_id, project_id}`, `runtime_pool_busy{plan_id}`, `runtime_pool_idle{plan_id}`, `runtime_pool_wait_seconds{plan_id}`, `runtime_pool_evictions_total{plan_id, reason}`, `runtime_pool_role_executions_total{plan_id, role}`.
+- [ ] **RETIRADA (2026-08-19)** — ninguna de las seis métricas se exporta: el commit
+      `7959cdcb` dejó escrito que el exportador Prometheus que su test decía proteger «no
+      existe en `apps/`», o sea que eran **seis métricas fijadas contra nada**. Es el caso
+      de libro de `verificar-antes-de-implementar` §4: una guarda que no podía fallar.
+      Enunciado original, conservado como historia del diseño:
+      Exposición de métricas Prometheus por plan: `runtime_pool_size{plan_id, project_id}`, `runtime_pool_busy{plan_id}`, `runtime_pool_idle{plan_id}`, `runtime_pool_wait_seconds{plan_id}`, `runtime_pool_evictions_total{plan_id, reason}`, `runtime_pool_role_executions_total{plan_id, role}`.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev + devops
 - **Dependencias**: `task_06_20b4`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_20b5_a
-    description: "Las seis métricas del pool se exportan correctamente y reflejan la realidad"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_pool_metrics.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno. `test_pool_metrics.py` se borró en `7959cdcb` junto con
+  el código que probaba.
 
 #### `task_06_20b6` — Migración desde el modelo simple de Fase 2 (un contenedor por tarea) al pool elástico por plan
 
-- [x] **Título**: Sustituir el lanzamiento "un contenedor por tarea" de Fase 2 (`task_02_06`) por la lógica de solicitud al pool. El worker deja de lanzar contenedores directamente; pide al orchestrator un slot del pool del plan.
+- [ ] **RETIRADA (2026-08-19), y era la más engañosa de las seis**: afirmaba en `[x]` que
+      «el worker deja de lanzar contenedores directamente», y hoy es **falso al revés**.
+      Comprobado sobre el árbol: `workers/execution.py:1531` construye
+      `AgentContainerRunner(settings)` y le pasa un `ContainerSpec` por ejecución;
+      `workers/container.py:213` hace `client.containers.run(..., detach=True)` y el
+      `finally` de `AgentContainerRunner.run()` lo borra al terminar. O sea que el modelo
+      vivo es **exactamente** el «un contenedor por tarea» de `task_02_06` que esta
+      casilla decía haber sustituido. La migración no sólo no se hizo: se revirtió el
+      sentido de la flecha. Enunciado original, conservado como historia del diseño:
+      Sustituir el lanzamiento "un contenedor por tarea" de Fase 2 (`task_02_06`) por la lógica de solicitud al pool. El worker deja de lanzar contenedores directamente; pide al orchestrator un slot del pool del plan.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
 - **Dependencias**: `task_06_20b5`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_20b6_a
-    description: "El worker ya no lanza contenedores directamente; recibe un slot del pool y le monta el worktree"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_worker_uses_pool.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno. `test_worker_uses_pool.py` se borró en `7959cdcb`. Lo que
+  hoy cubre el camino real —el contrario— es
+  `tests/integration/test_worker_launches_container.py` («the Celery worker launches agent
+  containers through the Docker SDK (task_02_06) … starts containers, waits for them, and
+  reaps them») junto con `tests/integration/test_container_isolation.py` y el tripwire
+  `assert_no_docker_socket`. Ambos exigen un demonio Docker vivo.
 
 ### Fase F — Integración Git con el Plan
 
@@ -1175,6 +1179,30 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
 ---
 
 ## Criterios de Cierre del Plan
+
+> ⚠️ **El criterio 1 dejó de cumplirse DESPUÉS del cierre, y no por un descuido de
+> ejecución (nota del 2026-08-19).** Este plan se cerró `completed` el 2026-05-28 con las
+> seis casillas de la **Fase E2 — Pool Elástico** en `[x]`. El 2026-07-26 el commit
+> `7959cdcb` **borró del repo** el código que esas seis describían (`workers/runtime_pool.py`
+> y sus ocho ficheros de test), por ser código que no ejecutaba nadie. Desde ese día las
+> seis afirmaban trabajo inexistente; se han desmarcado hoy y reescrito con el motivo, así
+> que **este plan `completed` tiene ahora seis casillas abiertas**.
+>
+> Es una incoherencia deliberada y preferible a la alternativa: dejarlas en `[x]` mandaba a
+> quien las leyese a buscar un módulo que no existe. Ninguna guarda de la suite la detecta
+> —no hay test que exija «`completed` ⇒ todas las casillas marcadas»—, lo que la vuelve
+> justo del tipo que envejece en silencio.
+>
+> **Lo que queda es una decisión de protocolo, y es del operador**, porque CLAUDE.md
+> prohíbe reordenar el roadmap sin aprobación humana: o (a) se acepta que el alcance del
+> plan se recortó a posteriori y se anota en su changelog, o (b) la Fase E2 se mueve a un
+> plan propio en `pending_approval` para que el 06 vuelva a cerrar limpio. Este carril no
+> elige: no toca `status:` ni `completed_at:`.
+>
+> Residuo ejecutable que la retirada dejó atrás y que sí conviene arreglar:
+> `scripts/demos/demo_human_06_c_pool_policies.py` sigue haciendo
+> `from workers.runtime_pool import PoolConfig, RuntimePool`, o sea que está **roto** desde
+> el 2026-07-26.
 
 El plan se cierra como `completed` cuando se cumplen TODOS estos criterios:
 

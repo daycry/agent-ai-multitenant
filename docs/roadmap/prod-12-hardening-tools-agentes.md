@@ -195,9 +195,20 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 - **Depende de**: task_prod12_ssrf_01
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: `tests/unit/test_http_tools_dns_pinning_redirects.py` no ha
+  # existido nunca. El trabajo SÍ está —`http_tool.py:78-92` y `http_endpoint_tool.py`
+  # conectan a `pinned_url(url, pin)` con `Host` y `sni_hostname` preservados y
+  # `follow_redirects=False` explícito— y su test también, con otro nombre y en OTRO ÁRBOL:
+  # vive junto al código que prueba, en `docker/agent-runtimes/agent-runtime/tests/`, y
+  # cubre las dos mitades de esta casilla (su propio docstring: «conectan a la IP pineada
+  # (Host + SNI preservados, redirects NO seguidos)»).
+  # Comprobado que muerde: `follow_redirects=False` → `True` en `http_tool.py` y
+  # `test_request_tool_does_not_follow_redirects` se puso ROJO enseñando el salto real
+  # (`GET https://93.184.216.34/redirige` → `GET http://10.0.0.5/internal`, o sea el SSRF
+  # consumado). Restaurado con `git show HEAD:… > …`; 7 verdes.
   - id: auto_prod12_ssrf_02_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_http_tools_dns_pinning_redirects.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py -v"
   ```
 
 #### `task_prod12_ssrf_03` — Validar las entradas de allowlist en el api-server

@@ -260,9 +260,21 @@ converja a un estado terminal visible.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: `tests/integration/test_ready_task_resweep.py` no ha existido
+  # nunca, y la propia casilla explica por qué — «(b) YA lo cubre el beat de dag_02
+  # `promote_ready_plans` … no se duplica». Lo que faltó fue repuntar el `command:` a los
+  # tests de ESE beat, que sí existen: `test_dag_promotion.py` prueba el primitivo
+  # (devuelve las `ready` sin execution viva, incluidas las que el trigger de BD ya había
+  # volteado sin publicar evento, y NO re-anuncia una ya despachada) y
+  # `test_dag_promotion_beat.py` prueba el barrido periódico sobre planes `in_progress`.
+  # Comprobado que muerde: en el paso 2 de `promote_ready_tasks`, `Task.status == _READY`
+  # → `Task.id.in_(eligible)` —o sea, anunciar sólo lo que se acaba de voltear— y saltó
+  # `test_promote_ready_tasks` justo en la dependiente que el trigger ya había puesto en
+  # `ready`, que es exactamente la tarea varada que esta casilla existe para rescatar.
+  # Restaurado con `git show HEAD:… > …`; 3 verdes.
   - id: auto_prod06_evento_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_consumer_pel_reclaim.py tests/integration/test_ready_task_resweep.py -v"
+    command: "pytest tests/integration/test_consumer_pel_reclaim.py tests/integration/test_dag_promotion.py tests/integration/test_dag_promotion_beat.py -v"
   ```
 
 ### Fase C — Cancelación real de ejecuciones (workers-5)

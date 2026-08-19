@@ -146,14 +146,14 @@ def test_at_most_one_phase_in_progress() -> None:
 #: definido pero **no empezado**». Inventario medido el 2026-08-12.
 #:
 #: No es una allowlist: es deuda con una salida escrita. A cada uno de estos
-#: seis sólo le falta su entrada en `docs/07-changelog/` para poder pasar a
+#: siete sólo le falta su entrada en `docs/07-changelog/` para poder pasar a
 #: `pending_human_validation` — el guarda que la exige es
 #: `test_every_started_phase_has_changelog`, así que cambiar el estado sin
 #: escribirla pone la suite roja, que es exactamente lo que debe pasar.
 #:
-#: **Y ojo con la población, porque el titular es peor que estos seis**: los
+#: **Y ojo con la población, porque el titular es peor que estos siete**: los
 #: CATORCE planes en `pending_approval` tienen casillas marcadas, o sea que
-#: «`pending_approval` == nunca empezado» ya no describe a ninguno. Estos seis
+#: «`pending_approval` == nunca empezado» ya no describe a ninguno. Estos siete
 #: son sólo los que además no tienen NADA abierto, que es lo que los hace
 #: accionables sin emitir un juicio sobre trabajo a medias. El resto exige
 #: decidir si lo hecho vale, y eso no lo cierra un test.
@@ -169,6 +169,15 @@ _DELIVERED_BUT_UNSTARTED_2026_08_12 = frozenset(
         "prod-05-rotacion-claves",
         "prod-07-fiabilidad-llm-costes",
         "prod-09-sesiones-autorizacion-frontend",
+        # Se unió el 2026-08-19, y por la vía (3) que este propio guarda ofrece: su
+        # última casilla abierta (`task_prod14_10`) NO se cerró implementando nada, se
+        # cerró al comprobar que el trabajo llevaba hecho desde la migración
+        # `20260730_0126_perf_indexes_uniqueness` y que el checkbox era lo único que
+        # seguía diciendo lo contrario — cuatro notas del propio plan (08-01, 08-02,
+        # 08-10, 08-12) ya lo habían constatado sin tocarlo. Cambiarle el estado exige
+        # su entrada de changelog, o sea auditar las cuarenta y pico tareas del plan, y
+        # eso no lo decide el carril que reparó un checkbox.
+        "prod-14-tenancy-defensa-profundidad",
     }
 )
 
@@ -196,8 +205,8 @@ def test_no_new_plan_is_delivered_while_still_labelled_unstarted() -> None:
     El estado es lo primero que se lee al retomar el trabajo, y un plan con
     16/16 casillas marcadas etiquetado «no empezado» manda a quien lo lea a
     reimplementar lo que ya existe — el modo de fallo nº1 de
-    `verificar-antes-de-implementar.md`. Este guarda no arregla los seis que
-    ya están así (necesitan changelog); impide que aparezca el séptimo.
+    `verificar-antes-de-implementar.md`. Este guarda no arregla los siete que
+    ya están así (necesitan changelog); impide que aparezca el octavo.
     """
     new_drift = sorted(_delivered_but_labelled_unstarted() - _DELIVERED_BUT_UNSTARTED_2026_08_12)
 
@@ -410,6 +419,77 @@ def test_changelog_debt_has_not_grown() -> None:
     assert still_missing == set(_CHANGELOG_DEBT_2026_07_29), (
         "la deuda de changelogs se saldó: retira de _CHANGELOG_DEBT_2026_07_29 "
         f"lo que ya tiene entrada ({set(_CHANGELOG_DEBT_2026_07_29) - still_missing})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# `completed` con casillas abiertas — el agujero que nadie vigilaba
+# ---------------------------------------------------------------------------
+#: Planes `status: completed` que HOY tienen casillas `- [ ]`, medidos el
+#: 2026-08-19. Es una contradicción con el enum de CLAUDE.md —`completed` es
+#: «plan cerrado completamente»— y hasta hoy **ninguna guarda la veía**: los
+#: tests de este fichero comprueban el gate, el override, el changelog y la cola
+#: de validación, pero nadie preguntaba lo más simple.
+#:
+#: Salió al desmarcar seis casillas del plan `06` que estaban `[x]` describiendo
+#: el pool elástico de runtimes, código **borrado del repo el 2026-07-26**
+#: (commit `7959cdcb`). Dejarlas marcadas mandaba a cualquiera a buscar un módulo
+#: que no existe; desmarcarlas deja el plan `completed` con seis huecos. Las dos
+#: cosas son incoherentes, y la segunda al menos lo es **a la vista**.
+#:
+#: Por qué no se arregla cambiando el `status:`: pasar `06` a otro estado es
+#: aceptar un recorte de alcance o partir la fase, y las dos salidas están
+#: escritas en sus Criterios de Cierre esperando una decisión humana. CLAUDE.md
+#: prohíbe reordenar el roadmap sin que un humano apruebe el cambio.
+#:
+#: Se retira esta entrada cuando el operador elija: (a) aceptar el recorte y
+#: anotarlo en el changelog, o (b) mover la Fase E2 a un plan propio en
+#: `pending_approval`.
+_COMPLETED_WITH_OPEN_BOXES_2026_08_19 = frozenset({"06-testing-revision-git"})
+
+
+def _plans_completed_with_open_boxes() -> dict[str, int]:
+    """`{plan_id: nº de casillas abiertas}` de los planes `completed`."""
+    fuera: dict[str, int] = {}
+    for path, fm in _plans():
+        if fm["status"] != "completed":
+            continue
+        abiertas = sum(
+            1 for linea in path.read_text(encoding="utf-8").split("\n") if linea.startswith("- [ ]")
+        )
+        if abiertas:
+            fuera[str(fm["plan_id"])] = abiertas
+    return fuera
+
+
+def test_no_new_completed_plan_has_open_boxes() -> None:
+    """`completed` significa cerrado. El inventario de arriba sólo puede encoger.
+
+    No-vacuidad: se afirma también que el descubrimiento encontró planes
+    `completed` que mirar. Sin eso, un `_plans()` roto haría pasar este test
+    describiendo un mundo sin planes cerrados.
+    """
+    completados = sum(1 for _p, fm in _plans() if fm["status"] == "completed")
+    assert completados >= 10, f"esperaba decenas de planes `completed`, vi {completados}"
+
+    con_huecos = _plans_completed_with_open_boxes()
+    nuevos = set(con_huecos) - _COMPLETED_WITH_OPEN_BOXES_2026_08_19
+    assert not nuevos, (
+        "planes con `status: completed` y casillas `- [ ]` que NO estaban en el "
+        f"inventario del 2026-08-19: { ({k: con_huecos[k] for k in sorted(nuevos)}) }.\n"
+        "El enum de CLAUDE.md define `completed` como «plan cerrado completamente». "
+        "O se cierran las casillas, o el plan no está `completed`: las dos son "
+        "arreglos; dejarlo así es que el estado del roadmap deje de significar algo."
+    )
+
+
+def test_the_completed_with_open_boxes_inventory_has_no_dead_entries() -> None:
+    """Un plan que ya no tiene huecos tiene que salir del inventario."""
+    con_huecos = _plans_completed_with_open_boxes()
+    muertas = _COMPLETED_WITH_OPEN_BOXES_2026_08_19 - set(con_huecos)
+    assert not muertas, (
+        "estos planes ya no tienen casillas abiertas (o ya no están `completed`): "
+        f"{sorted(muertas)}. Retíralos de `_COMPLETED_WITH_OPEN_BOXES_2026_08_19`."
     )
 
 

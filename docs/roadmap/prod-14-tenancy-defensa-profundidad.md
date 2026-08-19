@@ -542,7 +542,7 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
 
 #### `task_prod14_10` — Unicidad (tenant_id, name) en teams, skills y agents
 
-- [ ] **Título**: Migración que replica el patrón 0077 de tools
+- [x] **Título**: Migración que replica el patrón 0077 de tools
       (`uq_tools_tenant_name`, `domain.py:535`): índice único parcial
       `(tenant_id, name) WHERE deleted_at IS NULL` para `teams` (convertir
       `ix_teams_tenant_name`, `domain.py:634`, en único), `skills` y `agents`,
@@ -650,6 +650,24 @@ TABLE` fallan; (c) SELECT/INSERT cross-tenant sobre `executions` funciona
     **0**, así que lo probable es que (a) salga gratis. **No la ejecuto yo**: la
     orden permanente de no tocar entornos vivos sin verificación previa está por
     encima de cerrar una casilla.
+  - ✅ **MARCADA el 2026-08-19.** La casilla llevaba en `[ ]` desde el 2026-08-12 con su
+    propia nota diciendo «cerrada EN NEGATIVO … no queda migración que escribir». Cuatro
+    pasadas seguidas (08-01, 08-02, 08-10, 08-12) reconfirmaron lo mismo sin que nadie
+    tocase el checkbox: es el caso literal del §1 de
+    [`verificar-antes-de-implementar`](../03-guides/verificar-antes-de-implementar.md) —
+    una casilla «pendiente» que invita a reimplementar DDL ya aplicado, lo que sobre una
+    base que ya lo tiene no es trabajo duplicado sino un **fallo de arranque**.
+    Reverificado hoy ejecutando: `pytest tests/integration/test_tenant_name_uniqueness.py`
+    → **9 passed**. Y comprobado que el test muerde, no que pasa: se vació el `try/except
+IntegrityError` de `flush_or_conflict` (`routers/_integrity.py`) y saltaron las tres
+    parametrizaciones de `test_duplicate_name_in_the_same_tenant_is_a_409_not_a_500`
+    (teams, skills, agents) — o sea, se volvió al 500 que esta casilla existe para
+    eliminar. Restaurado con `git show HEAD:… > …`.
+    **Lo que se marca es el CÓDIGO**, que es lo que la casilla pide: índices únicos
+    parciales + `BigInteger` + `created_by` nullable + 409 con código de dominio. La
+    decisión (a)/(b) sobre las filas que la 0126 soft-borró en los entornos vivos **sigue
+    abierta y sigue siendo del operador** — no es código, es datos, y está descrita justo
+    encima con la consulta de solo lectura que la resuelve.
 - **Tiempo**: 5 h · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml

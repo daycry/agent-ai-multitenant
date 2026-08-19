@@ -25,6 +25,30 @@ que nombre el que de verdad cubre esa tarea, con una nota que diga por que. El
 caso que destapo esto: ``task_prod16_02`` declaraba ``e2e/lang-toggle.spec.ts``,
 que nunca existio; el equivalente real, ``e2e/lang-switcher.spec.ts``, cubre lo
 mismo y llevaba meses al lado.
+
+Primera cosecha, 2026-08-19: **-20 entradas** (de 76 a 56), y las tres formas que
+tomaba la mentira resultaron ser distintas, lo que importa porque cada una se
+arregla de otra manera:
+
+1. **El test existe con otro nombre o en otro arbol** (11). Casi siempre el arbol
+   es ``docker/agent-runtimes/agent-runtime/tests/``: los guardrails y las tools
+   HTTP corren DENTRO del sandbox, asi que sus tests viven junto al codigo y no
+   en ``tests/integration/``. Otras veces el test es ``unit`` y el plan lo
+   declaro ``integration`` porque se asumio que haria falta una BD.
+2. **La medida no puede ser automatica** (1, ``task_prod10_06``). Afirmaba una
+   propiedad del contenedor DESPLEGADO. El bloque se retira y apunta al test
+   humano que ya la lleva; escribirlo habria sido fingir.
+3. **El comando contradecia la decision que la casilla implementa** (1,
+   ``task_prod10_11``): declaraba el test de la migracion a Vault que el
+   ADR 0146 descarto. Ahi no hay nada que repuntar, hay que reescribir que se
+   verifica.
+
+Y el hallazgo que este inventario no podia ver por si solo: **ocho** de las
+entradas (``task_06_20b1``..``b6``) no eran comandos desfasados sino casillas
+``[x]`` describiendo codigo BORRADO del repo el 2026-07-26 (``7959cdcb``, el pool
+elastico de runtime). El fichero que falta era la sombra de un modulo que
+tampoco esta. Este test detecta el sintoma; distinguirlo del resto exige mirar
+el ``git log``.
 """
 
 from __future__ import annotations
@@ -50,30 +74,12 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_06_07",
             "tests/integration/test_testcontainers_mode.py",
         ),
-        (
-            "06-testing-revision-git.md",
-            "task_06_20b1",
-            "tests/integration/test_runtime_pool_model.py",
-        ),
-        ("06-testing-revision-git.md", "task_06_20b2", "tests/integration/test_pool_assign.py"),
-        (
-            "06-testing-revision-git.md",
-            "task_06_20b2",
-            "tests/integration/test_pool_idle_eviction.py",
-        ),
-        ("06-testing-revision-git.md", "task_06_20b2", "tests/integration/test_pool_queue.py"),
-        (
-            "06-testing-revision-git.md",
-            "task_06_20b3",
-            "tests/integration/test_pool_role_switch.py",
-        ),
-        ("06-testing-revision-git.md", "task_06_20b4", "tests/integration/test_pool_cleanup.py"),
-        ("06-testing-revision-git.md", "task_06_20b5", "tests/integration/test_pool_metrics.py"),
-        (
-            "06-testing-revision-git.md",
-            "task_06_20b6",
-            "tests/integration/test_worker_uses_pool.py",
-        ),
+        # Las OCHO entradas de `task_06_20b1`..`b6` (el pool elastico de runtime) salieron
+        # el 2026-08-19: no eran comandos desfasados sino casillas `[x]` describiendo
+        # codigo BORRADO en el commit 7959cdcb (2026-07-26), que se llevo por delante
+        # `workers/runtime_pool.py` y esos mismos ocho ficheros de test. Las seis casillas
+        # estan hoy desmarcadas y con el enunciado reescrito en
+        # docs/roadmap/06-testing-revision-git.md.
         ("06-testing-revision-git.md", "task_06_34", "tests/integration/test_review_cap.py"),
         ("06.17-capacitacion-agentes.md", "task_06_17_11", "agent-persona.spec.ts"),
         ("06.17-capacitacion-agentes.md", "task_06_17_16", "capability-hub.spec.ts"),
@@ -125,16 +131,10 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod03_05",
             "tests/unit/test_beat_schedule.py",
         ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_12",
-            "tests/integration/test_agent_loop_guardrail_hooks.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_12",
-            "tests/integration/test_indirect_prompt_injection.py",
-        ),
+        # `task_prod03_12` salio el 2026-08-19: los cuatro hooks corren DENTRO del sandbox,
+        # asi que sus tests viven en docker/agent-runtimes/agent-runtime/tests/
+        # (test_llm_guardrail_hooks / test_guardrails_enforce / test_act_guardrail_wiring /
+        # test_guardrails_seam), no en tests/integration/.
         (
             "prod-03-guardrails-validacion-humana.md",
             "task_prod03_13",
@@ -155,11 +155,12 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod_04_08",
             "tests/integration/test_restore_grants.py",
         ),
-        (
-            "prod-05-rotacion-claves.md",
-            "task_prod05_01",
-            "tests/integration/test_fernet_rotation_two_keys.py",
-        ),
+        # Cuatro entradas de prod-05 salieron el 2026-08-19 (`task_prod05_01`, `_05`, `_06`
+        # y `_08`): las cuatro declaraban un test de INTEGRACION que nunca existio, y las
+        # cuatro propiedades estan probadas en `tests/unit/` porque no necesitan BD — lo
+        # que verifican es el anillo de claves, el ORDEN de las operaciones y la cabecera
+        # del blob. El `_06` lo decia ya su propia prosa («vive en tests/unit/ porque no
+        # necesita Postgres ni Redis») sin que nadie bajara a corregir el `command:`.
         (
             "prod-05-rotacion-claves.md",
             "task_prod05_03",
@@ -170,42 +171,26 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod05_04",
             "tests/integration/test_agent_token_survives_rotation.py",
         ),
-        (
-            "prod-05-rotacion-claves.md",
-            "task_prod05_05",
-            "tests/integration/test_rotation_never_succeeds_on_fake.py",
-        ),
-        (
-            "prod-05-rotacion-claves.md",
-            "task_prod05_06",
-            "tests/integration/test_rotation_propagation_cycle.py",
-        ),
-        (
-            "prod-05-rotacion-claves.md",
-            "task_prod05_08",
-            "tests/integration/test_restore_v1_blob_after_rotation.py",
-        ),
         ("prod-05-rotacion-claves.md", "task_prod05_10", "tests/e2e/test_key_rotation_drill.py"),
         (
             "prod-06-ciclo-vida-ejecucion.md",
             "task_prod06_dag_02",
             "tests/e2e/test_plan_autonomous_lifecycle.py",
         ),
-        (
-            "prod-06-ciclo-vida-ejecucion.md",
-            "task_prod06_evento_01",
-            "tests/integration/test_ready_task_resweep.py",
-        ),
+        # `task_prod06_evento_01` salio el 2026-08-19: el resweep de tareas `ready` varadas
+        # lo cubre el beat de dag_02 (test_dag_promotion.py + test_dag_promotion_beat.py),
+        # como la propia casilla ya decia («no se duplica»).
         (
             "prod-06-ciclo-vida-ejecucion.md",
             "task_prod06_zombi_02",
             "tests/integration/test_worker_lost_redelivery.py",
         ),
-        (
-            "prod-06-ciclo-vida-ejecucion.md",
-            "task_prod06_zombi_03",
-            "tests/unit/test_celery_broker_options.py",
-        ),
+        # `task_prod06_zombi_03` NO lo retira este carril: otro de la misma ola escribio
+        # `tests/unit/test_celery_broker_options.py` (sin comitear todavia) y dejo la
+        # entrada atras, con lo que `test_the_inventory_has_no_dead_entries` se ponia rojo
+        # por una razon ajena. Se borra aqui para no dejar la suite en rojo; si aquel
+        # carril intenta borrarla tambien, su edicion fallara en limpio (no encontrara el
+        # texto) en vez de duplicar nada.
         (
             "prod-08-observabilidad-alertas.md",
             "task_prod08_celery_logging_09",
@@ -256,11 +241,9 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod10_02",
             "tests/integration/test_init_vault_script.py",
         ),
-        (
-            "prod-10-vault-secretos-operables.md",
-            "task_prod10_06",
-            "tests/integration/test_redis_requires_password.py",
-        ),
+        # `task_prod10_06` salio el 2026-08-19: su `auto_..._b` se RETIRA en vez de
+        # repuntarse. Afirmaba una propiedad del contenedor DESPLEGADO, no del codigo, y
+        # eso es `human_prod10_02`, que ya la lleva en su checklist.
         (
             "prod-10-vault-secretos-operables.md",
             "task_prod10_07",
@@ -271,16 +254,11 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod10_08",
             "tests/integration/test_vault_service_tokens.py",
         ),
-        (
-            "prod-10-vault-secretos-operables.md",
-            "task_prod10_09",
-            "tests/integration/test_system_health_vault_sealed.py",
-        ),
-        (
-            "prod-10-vault-secretos-operables.md",
-            "task_prod10_11",
-            "tests/integration/test_sso_notification_webhook_secrets_vault.py",
-        ),
+        # `task_prod10_11` salio el 2026-08-19, y era el peor de los 76: el fichero no solo
+        # faltaba, es que habria verificado la MIGRACION A VAULT — la opcion A, la que el
+        # ADR 0146 descarto. El bloque yaml declara ahora lo que de verdad hay que
+        # comprobar: que la salvaguarda de la opcion B se cumple y que la excepcion
+        # Fernet-en-columna no ha crecido (tests/unit/test_backup_column_secrets.py).
         (
             "prod-12-hardening-tools-agentes.md",
             "task_prod12_allow_01",
@@ -306,26 +284,22 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod12_ssrf_01",
             "tests/unit/test_ssrf_guard.py",
         ),
-        (
-            "prod-12-hardening-tools-agentes.md",
-            "task_prod12_ssrf_02",
-            "tests/unit/test_http_tools_dns_pinning_redirects.py",
-        ),
-        (
-            "prod-13-rendimiento-y-datos.md",
-            "task_prod13_10",
-            "tests/integration/test_chunks_fts_index_es_unaccent.py",
-        ),
+        # `task_prod12_ssrf_02` salio el 2026-08-19: el anclaje de DNS y el
+        # `follow_redirects=False` los prueba
+        # docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py,
+        # al lado del codigo. Ojo: las entradas de `task_prod12_ssrf_01` de aqui arriba
+        # apuntan a `tests/unit/` con ESE MISMO nombre de fichero y siguen vivas — son otra
+        # casilla y no las toca este arreglo.
+        # `task_prod13_10` salio el 2026-08-19: el indice y la unificacion de configuracion
+        # FTS los prueba tests/integration/test_bm25_search.py.
         (
             "prod-13-rendimiento-y-datos.md",
             "task_prod13_15",
             "tests/integration/test_append_only_retention.py",
         ),
-        (
-            "prod-13-rendimiento-y-datos.md",
-            "task_prod13_17",
-            "tests/integration/test_pagination_conversations_docs_citations.py",
-        ),
+        # `task_prod13_17` salio el 2026-08-19: lo cubre tests/unit/test_row_lock_and_pagination.py,
+        # que nombra la tarea en su primera linea y es unit a proposito (verifica la FIRMA
+        # que FastAPI publica y el SQL emitido; ninguna de las dos necesita Postgres).
         (
             "prod-13-rendimiento-y-datos.md",
             "task_prod13_20",

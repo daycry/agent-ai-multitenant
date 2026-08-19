@@ -177,26 +177,70 @@ def test_listing_endpoints_accept_bounded_limit_and_offset(module: str, func_nam
 # perf-8 — el visor de citas no arrastra el vector
 # ---------------------------------------------------------------------------
 def test_citations_query_does_not_select_the_embedding_vector() -> None:
-    """Se compila el SELECT real y se comprueba que `embedding` no está entre las
-    columnas. Antes era `select(Chunk)`, que trae la entidad ENTERA: para un PDF
-    de 2.000 chunks son ~6 MB de vectores que el visor no usa."""
-    from api_server.db.knowledge import Chunk
-    from sqlalchemy import select
+    """El visor de citas no puede arrastrar el vector: son ~6 MB por PDF de 2.000
+    chunks que nadie usa.
 
-    good = select(Chunk.id, Chunk.ordinal, Chunk.content, Chunk.bbox, Chunk.metadata_)
-    assert "embedding" not in str(good.compile())
+    **Esta guarda se reescribió el 2026-08-19 porque no cogía su propia
+    regresión.** Antes hacía dos cosas y ninguna interrogaba al router: compilaba
+    un `select(...)` construido A MANO en el propio test —o sea, comprobaba que
+    SQLAlchemy funciona— y hacía `grep` de la cadena ANTIGUA
+    (`select(Chunk).where(...)`). Añadir `Chunk.embedding` a la lista de columnas
+    del router dejaba las dos aserciones en verde: se comprobó, y siguió pasando.
 
-    # Control: la versión anterior SÍ lo traía. Si esto dejara de ser cierto, el
-    # test de arriba pasaría por la razón equivocada.
-    assert "embedding" in str(select(Chunk).compile())
-
+    Ahora se lee el AST del router, se localiza la llamada `select(...)` de la
+    función de citas y se mira QUÉ COLUMNAS pide de verdad. La diferencia
+    importa: el fallo que perf-8 quiere evitar es que alguien amplíe esa lista,
+    no que alguien reescriba una cadena concreta.
+    """
+    import ast
     from pathlib import Path
 
-    source = Path("apps/api-server/src/api_server/routers/knowledge_bases.py").read_text(
-        encoding="utf-8"
+    ruta = Path("apps/api-server/src/api_server/routers/knowledge_bases.py")
+    arbol = ast.parse(ruta.read_text(encoding="utf-8"))
+
+    objetivo = next(
+        (
+            n
+            for n in ast.walk(arbol)
+            if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef)
+            and n.name == "get_document_citations"
+        ),
+        None,
     )
-    assert "select(Chunk).where(Chunk.document_id == document_id)" not in source, (
-        "el visor de citas volvió a seleccionar la entidad Chunk completa (perf-8)"
+    assert objetivo is not None, (
+        "no encuentro `get_document_citations` en el router: si se renombró, este"
+        " test dejó de vigilar lo que dice vigilar"
+    )
+
+    # Las columnas de CADA `select(...)` dentro de la función.
+    columnas: list[str] = []
+    selects = 0
+    for nodo in ast.walk(objetivo):
+        if not (isinstance(nodo, ast.Call) and getattr(nodo.func, "id", None) == "select"):
+            continue
+        selects += 1
+        for arg in nodo.args:
+            if isinstance(arg, ast.Attribute) and getattr(arg.value, "id", None) == "Chunk":
+                columnas.append(arg.attr)
+            elif isinstance(arg, ast.Name) and arg.id == "Chunk":
+                columnas.append("<ENTIDAD COMPLETA>")
+
+    # No-vacuidad: si el walk no encontró nada, las aserciones de abajo pasarían
+    # sobre una lista vacía. Es el modo de fallo por el que hubo que reescribir
+    # esta guarda.
+    assert selects >= 1, "no vi ningún `select(...)` en la función de citas"
+    assert len(columnas) >= 3, (
+        f"esperaba varias columnas explícitas de Chunk, vi {columnas!r}."
+        " Con menos, o el parseo se rompió o el router volvió a pedir la entidad."
+    )
+
+    assert "<ENTIDAD COMPLETA>" not in columnas, (
+        "el visor de citas volvió a hacer `select(Chunk)`, que trae la entidad"
+        " entera y con ella el vector (perf-8)"
+    )
+    assert "embedding" not in columnas, (
+        f"el visor de citas pide `Chunk.embedding` entre sus columnas: {columnas!r}."
+        " Son ~6 MB por PDF de 2.000 chunks que la pantalla no usa (perf-8)."
     )
 
 
