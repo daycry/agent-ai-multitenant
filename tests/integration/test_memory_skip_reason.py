@@ -42,10 +42,15 @@ class _FakeLLM:
 
     def __init__(self, candidates_json: str) -> None:
         self._json = candidates_json
+        # Cuántas veces se ha destilado CON este doble. Lo comprueba
+        # `_run_worker`: sin contador, que el memorizer llame a otro provider
+        # es indistinguible de que llame a éste (ver allí).
+        self.calls = 0
 
     async def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
         from shared_llm.types import CompletionResponse, Usage
 
+        self.calls += 1
         return CompletionResponse(
             content=self._json,
             model="fake-model",
@@ -67,6 +72,42 @@ class _FakeLLM:
 @pytest.fixture()
 def schema_at_head(alembic_config) -> None:
     command.upgrade(alembic_config, "head")
+
+
+# Los settings que este fichero trunca o escribe, y que el memorizer lee en vivo.
+_CACHED_SETTING_KEYS: tuple[str, ...] = (
+    "memory.memorizable_statuses",
+    "memory.default_scope",
+    "model.default_config",
+)
+
+
+@pytest.fixture(autouse=True)
+def _redis_client_bound_to_this_loop():
+    """Rebindea el cliente Redis al event loop de ESTE test — sin esto la purga
+    de caché de abajo falla EN SILENCIO la primera vez (`get_redis` es
+    `lru_cache` y su pool quedó atado al loop ya cerrado del test anterior).
+    Mismo remedio que `test_approval_expiry_job.py`."""
+    from api_server.auth.deps import reset_redis_cache
+
+    reset_redis_cache()
+    yield
+    reset_redis_cache()
+
+
+async def _forget_setting_cache(*keys: str) -> None:
+    """Purga la caché Redis de los settings que este fichero trunca o escribe.
+
+    `get_platform_setting` cachea 30 s (prod-13 task_prod13_21) y sólo
+    `set_platform_setting` —la vía del System Admin— invalida al escribir. Aquí
+    se siembra por SQL directo, que se salta esa invalidación: el `TRUNCATE
+    platform_settings` del seed borra la fila pero no la entrada cacheada, y el
+    `memory.memorizable_statuses` que escribe el último test tampoco se leería.
+    """
+    from api_server.db.platform_settings import invalidate_platform_setting_cache
+
+    for key in keys or _CACHED_SETTING_KEYS:
+        await invalidate_platform_setting_cache(key)
 
 
 @pytest.fixture()
@@ -97,9 +138,21 @@ async def _seed(
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
+            # `llm_providers` está en la lista a propósito, y es lo que arregla
+            # los cuatro rojos que CI destapó el 2026-08-19. `_select_distiller`
+            # elige destilador en TRES escalones —provider del agente → fila
+            # ACTIVA del catálogo (prod-07 llm-10) → `llm_factory`— y el doble
+            # que estos tests inyectan es el ÚLTIMO. Cualquier fila `ollama`
+            # activa que otro fichero del shard dejara atrás
+            # (`test_cortex_model_settings.py` y `test_assistant_provider_teardown.py`
+            # dejan una, con `base_url` http://ollama:11434/v1) gana al doble:
+            # el memorizer sale a una red que no existe y las cuatro pruebas que
+            # llegan a destilar acaban en `llm_error` en vez de en su motivo.
+            # El escalón intermedio es correcto en producción; lo que faltaba era
+            # que el seed dejase el catálogo vacío para que el doble se alcance.
             "TRUNCATE memory_entries, executions, tasks, plans, conversations,"
             " projects, agents, teams, user_org_memberships, organizations,"
-            " platform_settings, users RESTART IDENTITY CASCADE"
+            " platform_settings, llm_providers, users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
             "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
@@ -169,6 +222,8 @@ async def _seed(
         )
     finally:
         await conn.close()
+    # El TRUNCATE borra las FILAS, no las entradas cacheadas.
+    await _forget_setting_cache()
     return {
         "tenant_id": tenant_id,
         "team_id": team_id,
@@ -183,12 +238,29 @@ async def _seed(
 async def _run_worker(execution_id: UUID, settings, candidates_json: str) -> dict[str, Any]:
     from workers.memorizer import _memorize_execution_async
 
-    return await _memorize_execution_async(
+    llm = _FakeLLM(candidates_json)
+    result = await _memorize_execution_async(
         execution_id,
         settings=settings,
-        llm_factory=lambda _s: _FakeLLM(candidates_json),
+        llm_factory=lambda _s: llm,
         embedder_factory=None,
     )
+
+    # Guarda: si el memorizer destiló, tuvo que hacerlo con el doble inyectado.
+    # Inyectar `llm_factory` NO garantiza por sí solo que se use —es el último
+    # de los tres escalones de `_select_distiller`—, así que sin esta comprobación
+    # el fichero puede salir a la red de verdad creyendo estar aislado. Eso es
+    # justo lo que pasó: el motivo salía `llm_error` (provider inalcanzable) en
+    # vez del que cada test afirma, y el mensaje no señalaba a la causa.
+    reason = str(result["reason"])
+    distilled = reason == "ok" or reason.startswith("ok:no_candidates")
+    if distilled:
+        assert llm.calls == 1, (
+            f"el memorizer destiló (reason={reason!r}) sin usar el doble inyectado "
+            f"(llamadas={llm.calls}): `_select_distiller` eligió otro provider — "
+            "revisa que el seed deje `llm_providers` sin filas activas"
+        )
+    return result
 
 
 async def _skip_reason(dsn: str, execution_id: UUID) -> str | None:
@@ -309,6 +381,8 @@ async def test_eligible_statuses_operator_configurable(
         )
     finally:
         await conn.close()
+    # Escrito por SQL directo: hay que invalidar como haría `set_platform_setting`.
+    await _forget_setting_cache("memory.memorizable_statuses")
 
     result = await _run_worker(seeded["execution_id"], workers_settings, _TWO_CANDIDATES)
     assert result["reason"] == "ok", result

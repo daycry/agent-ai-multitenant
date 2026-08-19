@@ -79,6 +79,43 @@ await invalidate_platform_setting_cache(CLAVE)   # lo que hace set_platform_sett
 - **Dar el rojo por flaky**: es determinista; lo que cambió es que la caché ahora
   funciona.
 
+## Por qué el rojo sale en CI y NO en local (2026-08-19)
+
+El corolario que costó dos rojos más, y que engaña porque parece «flaky de CI»:
+esta trampa **sólo muerde donde la caché conecta de verdad**.
+
+`_redis_for_this_loop()` usa `api_server.auth.deps.get_redis()`, o sea el
+`API_SERVER_REDIS_URL` de `Settings`, cuyo default (`redis://localhost:6379/0`,
+sin credencial) no llega al Redis del arnés. Corriendo **un fichero suelto** en
+local, ninguna operación de caché acierta, toda lectura cae a la BD y el atajo
+del `TRUNCATE` sigue funcionando: **verde**.
+
+En CI cada shard corre ~137 ficheros en **un solo proceso**, y basta con que uno
+cualquiera de los anteriores haya llamado a
+`tests/integration/_wiring.point_everything_at_the_test_redis()` —que fija
+`API_SERVER_REDIS_URL` en `os.environ` y tira las cachés de proceso— para que la
+caché quede **VIVA para el resto de la sesión**. A partir de ahí, cualquier test
+que escriba o trunque ajustes por debajo de la API lee lo de antes: **rojo**.
+
+Reproducirlo en local es una línea:
+
+```bash
+export API_SERVER_REDIS_URL="$TEST_REDIS_URL"   # lo que deja el wiring en CI
+pytest tests/integration/test_max_review_retries_scope.py -q
+```
+
+Los dos casos reales fueron `test_max_review_retries_scope` (el `5` que escribe
+el primer test del fichero sobrevivía al `TRUNCATE` y los dos siguientes leían
+`assert 5 == 3`, acusando a un default que **nunca** ha valido otra cosa que 3) y
+`test_scheduled_sync::test_disabled_schedule_is_a_noop` (el `price_sync_enabled =
+false` insertado con SQL crudo no llegaba al beat, que seguía leyendo el
+`enabled: True` cacheado y arrancaba una pasada que debía ser un no-op).
+
+**Regla**: antes de declarar ambiental un rojo de integración que no reproduces
+en local, comprueba si el fichero toca `platform_settings` y repítelo con
+`API_SERVER_REDIS_URL` apuntando al Redis de test. «No reproduce suelto» es
+justamente el síntoma de esta trampa, no la prueba de que no exista.
+
 ## Cómo verificar el fix
 
 Que la invalidación sea de carga, no decorativa — sustitúyela por `return None` y
