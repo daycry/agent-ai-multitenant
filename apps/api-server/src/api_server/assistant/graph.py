@@ -27,7 +27,7 @@ from typing import Any, Protocol, runtime_checkable
 import structlog
 from langgraph.graph import END, START, StateGraph
 
-from api_server.assistant.tools import AssistantToolContext, run_assistant_tool
+from api_server.assistant.tools import AssistantToolBinding, run_assistant_tool
 
 _log = structlog.get_logger("api_server.assistant.graph")
 
@@ -184,8 +184,10 @@ class AssistantState:
     # model otherwise repeats the same call until the round ceiling).
     executed_signatures: set[str] = field(default_factory=set)
 
-    # Injected, not serialised into the prompt — the RLS-bound context.
-    tool_ctx: AssistantToolContext | None = None
+    # Injected, not serialised into the prompt — de dónde sale la sesión
+    # tenant-scoped: un contexto ya enlazado, o el alcance que abre una sesión
+    # corta por llamada (prod-13 task_prod13_07).
+    tool_ctx: AssistantToolBinding | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +357,7 @@ async def run_assistant_turn(
     *,
     system_prompt: str,
     enabled_tools: tuple[str, ...],
-    tool_ctx: AssistantToolContext,
+    tool_ctx: AssistantToolBinding,
     chat_history: Sequence[dict[str, Any]] | None = None,
     on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     on_delta: Callable[[str], Awaitable[None]] | None = None,

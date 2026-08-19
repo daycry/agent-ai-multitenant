@@ -14,9 +14,17 @@ ACCESS (binding constraints — see docs/roadmap/10-asistente-personal.md):
     false; when off, even a Tenant Admin is denied (403 "disabled"). The
     ``require_assistant_access`` dependency enforces both.
 
-Cross-project read tools run through the request's RLS-bound session
-(``get_tenant_session``), so a tool can never see another tenant's data
-and never more than the admin's RLS scope permits.
+Cross-project read tools run through an RLS-bound session opened for the asking
+principal, so a tool can never see another tenant's data and never more than the
+admin's RLS scope permits.
+
+TRANSACCIONES (prod-13 ``task_prod13_07``, hallazgos perf-2/db-2): un turno del
+asistente NO se atiende dentro de una transacción. Va en tres tramos —sesión
+corta para resolver, turno LLM sin conexión retenida, sesión corta para
+persistir— porque retener una conexión durante el turno (hasta seis rondas de
+tools, cada una una llamada de red) agotaba el pool con ~15 chats concurrentes y
+tumbaba TODA la API, no solo el asistente. Las tools abren su propia sesión
+corta por llamada: ver ``assistant/tools.py::AssistantToolScope``.
 
 The LLM is injected via ``get_assistant_model`` so tests override it with
 a ``ScriptedAssistantModel`` — no real provider is contacted (the chat-test
@@ -27,6 +35,7 @@ rather than fabricating answers.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -37,7 +46,7 @@ from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from shared_llm.reasoning import reasoning_call_kwargs
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.assistant.config import get_assistant_identity, set_assistant_identity
@@ -58,12 +67,14 @@ from api_server.assistant.model_config import (
     set_tenant_model_override,
     to_provider_model_name,
 )
-from api_server.assistant.tools import AssistantToolContext
+from api_server.assistant.tools import AssistantToolScope
 from api_server.auth.deps import (
     AuthPrincipal,
     get_admin_session,
+    get_principal,
     get_redis,
     get_tenant_session,
+    open_tenant_session,
     require_system_admin,
     require_tenant_admin,
 )
@@ -244,8 +255,7 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 # Access gate: Tenant Admin AND personal_assistant_enabled
 # ---------------------------------------------------------------------------
 async def require_assistant_access(
-    principal: AuthPrincipal = Depends(require_tenant_admin),
-    session: AsyncSession = Depends(get_tenant_session),
+    principal: AuthPrincipal = Depends(get_principal),
 ) -> AuthPrincipal:
     """Gate every assistant endpoint.
 
@@ -257,11 +267,27 @@ async def require_assistant_access(
     A System Admin acting WITHOUT a tenant context (no ``tid``) has no
     tenant whose toggle to check, so we 400 — they must pick a tenant
     first (the same rule every tenant-scoped write follows).
+
+    Sesión CORTA, y no ``Depends(get_tenant_session)`` (prod-13 task_prod13_07)
+    --------------------------------------------------------------------------
+    Ésta es la mitad del hallazgo db-2 que no se ve leyendo el handler: una
+    dependencia con ``yield`` abre su sesión ANTES de que el endpoint corra y la
+    cierra DESPUÉS de enviar la respuesta. Mientras esta puerta pidiera la sesión
+    del request, la conexión seguía retenida durante todo el turno LLM aunque el
+    handler ya no la usara — o sea que no basta con no USAR la sesión, hay que no
+    PEDIRLA. Aquí se abre para las dos comprobaciones y se suelta antes de seguir.
+
+    ``require_tenant_admin`` se llama como función normal con la sesión ya
+    abierta: sus parámetros ``Depends(...)`` sólo los interpreta FastAPI. Se
+    invoca al original a propósito, en vez de reescribir la comprobación de rol,
+    para no acabar con dos predicados de autorización que puedan divergir.
     """
-    tenant_id = require_tenant_id(principal)
-    enabled = await session.scalar(
-        select(Organization.personal_assistant_enabled).where(Organization.id == tenant_id)
-    )
+    async with open_tenant_session(principal) as session:
+        await require_tenant_admin(principal=principal, session=session)
+        tenant_id = require_tenant_id(principal)
+        enabled = await session.scalar(
+            select(Organization.personal_assistant_enabled).where(Organization.id == tenant_id)
+        )
     if not enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -406,31 +432,43 @@ _HISTORY_TURNS_LIMIT = 20
 _TITLE_MAX = 60
 
 
-async def _resolve_conversation(
+async def _load_conversation(
     session: AsyncSession,
     *,
     tenant_id: UUID,
     user_id: UUID,
-    conversation_id: UUID | None,
+    conversation_id: UUID,
+) -> AssistantConversation:
+    """El hilo del usuario — SOLO suyo: 404 si es de otro."""
+    conv = (
+        await session.execute(
+            select(AssistantConversation).where(
+                AssistantConversation.id == conversation_id,
+                AssistantConversation.tenant_id == tenant_id,
+                AssistantConversation.user_id == user_id,
+                AssistantConversation.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if conv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return conv
+
+
+async def _create_conversation(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    user_id: UUID,
     first_message: str,
 ) -> AssistantConversation:
-    """El hilo del usuario (SOLO suyo — 404 si es de otro) o uno nuevo."""
-    if conversation_id is not None:
-        conv = (
-            await session.execute(
-                select(AssistantConversation).where(
-                    AssistantConversation.id == conversation_id,
-                    AssistantConversation.tenant_id == tenant_id,
-                    AssistantConversation.user_id == user_id,
-                    AssistantConversation.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if conv is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found"
-            )
-        return conv
+    """Un hilo nuevo, titulado con el primer mensaje.
+
+    Se crea en la fase de PERSISTENCIA, no en la de resolución (prod-13
+    task_prod13_07). Con una sola transacción por request daba igual: si el
+    proveedor fallaba, el rollback se llevaba también el hilo vacío. Troceada la
+    transacción, crearlo antes del turno dejaría un hilo huérfano —visible en la
+    lista del usuario, sin un solo mensaje— cada vez que el LLM diera error."""
     title = first_message.strip()[:_TITLE_MAX] or None
     conv = AssistantConversation(tenant_id=tenant_id, user_id=user_id, title=title)
     session.add(conv)
@@ -461,18 +499,24 @@ async def _conversation_history(
 async def _persist_turns(
     session: AsyncSession,
     *,
-    conversation: AssistantConversation,
+    tenant_id: UUID,
+    conversation_id: UUID,
     user_id: UUID,
     user_message: str,
     answer: str,
     tools_called: list[str],
     rounds: int,
 ) -> None:
-    """Persiste el par user/assistant y refresca el updated_at del hilo."""
+    """Persiste el par user/assistant y refresca el updated_at del hilo.
+
+    Toma **ids** y no la instancia ORM del hilo: desde task_prod13_07 la
+    resolución y la persistencia ocurren en sesiones distintas, y un objeto
+    cargado en la primera está desligado en la segunda — asignarle un atributo
+    allí no escribe nada. El `UPDATE` explícito no tiene esa trampa."""
     session.add(
         AssistantTurn(
-            tenant_id=conversation.tenant_id,
-            conversation_id=conversation.id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
             user_id=user_id,
             role="user",
             content=user_message,
@@ -480,8 +524,8 @@ async def _persist_turns(
     )
     session.add(
         AssistantTurn(
-            tenant_id=conversation.tenant_id,
-            conversation_id=conversation.id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
             user_id=user_id,
             role="assistant",
             content=answer,
@@ -489,8 +533,135 @@ async def _persist_turns(
             rounds=rounds,
         )
     )
-    conversation.updated_at = datetime.now(UTC)
+    await session.execute(
+        update(AssistantConversation)
+        .where(
+            AssistantConversation.id == conversation_id,
+            AssistantConversation.tenant_id == tenant_id,
+        )
+        .values(updated_at=datetime.now(UTC))
+    )
     await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Las tres fases de un turno (prod-13 task_prod13_07)
+# ---------------------------------------------------------------------------
+# El turno del asistente pasa de UNA transacción abierta de punta a punta a tres
+# tramos: (1) sesión corta para resolver, (2) turno LLM SIN conexión retenida,
+# (3) sesión corta para persistir. Las fases 1 y 3 viven en estos dos helpers y
+# no en cada endpoint porque `/chat` y `/chat/stream` hacen exactamente lo mismo:
+# duplicarlas era la vía por la que uno de los dos se quedaba atrás.
+@dataclass(frozen=True)
+class _TurnSetup:
+    """Lo que el turno necesita, ya leído de la base y desligado de ella."""
+
+    tenant_id: UUID
+    system_prompt: str
+    enabled_tools: tuple[str, ...]
+    # None cuando el usuario no traía hilo: el hilo se crea al persistir.
+    conversation_id: UUID | None
+    history: list[dict[str, str]]
+    tool_ctx: AssistantToolScope
+
+
+async def _prepare_turn(
+    *,
+    principal: AuthPrincipal,
+    payload: AssistantChatRequest,
+    response: Response,
+    redis: Redis,
+) -> _TurnSetup:
+    """FASE 1 — resolver contra la base y SOLTAR la conexión.
+
+    Nada de lo que sale de aquí es un objeto ORM vivo: son ids y datos planos,
+    porque el turno corre ya sin sesión. El ``tool_ctx`` que se devuelve no lleva
+    sesión sino la fábrica ``open_tenant_session(principal)`` — la MISMA que abre
+    la del request, para que no exista una segunda forma de enlazar el tenant."""
+    tenant_id = require_tenant_id(principal)
+    async with open_tenant_session(principal) as session:
+        await enforce_assistant_chat_rate_limit(response, principal, session, redis)
+        identity = await get_assistant_identity(session, tenant_id)
+        enabled_tools = identity.effective_tools()
+        # Surface what we already know about this user and fold it into the
+        # system prompt so the assistant "knows" them without a tool call (ADR 0054).
+        known_facts = await recall_user_memories(
+            session, tenant_id=tenant_id, user_id=principal.user_id
+        )
+        system_prompt = augment_system_prompt(
+            identity.system_prompt(),
+            known_facts=known_facts,
+            remember_enabled="remember_about_me" in enabled_tools,
+        )
+        # A1 (investigación 2026-07-11): hilo persistente — el historial reciente
+        # alimenta el prompt (human_10_04: «mantiene contexto entre mensajes»).
+        conversation_id: UUID | None = None
+        history: list[dict[str, str]] = []
+        if payload.conversation_id is not None:
+            conv = await _load_conversation(
+                session,
+                tenant_id=tenant_id,
+                user_id=principal.user_id,
+                conversation_id=payload.conversation_id,
+            )
+            conversation_id = conv.id
+            history = await _conversation_history(session, conversation_id=conv.id)
+    return _TurnSetup(
+        tenant_id=tenant_id,
+        system_prompt=system_prompt,
+        enabled_tools=enabled_tools,
+        conversation_id=conversation_id,
+        history=history,
+        tool_ctx=AssistantToolScope(
+            tenant_id=tenant_id,
+            user_id=principal.user_id,
+            session_factory=lambda: open_tenant_session(principal),
+        ),
+    )
+
+
+async def _persist_turn_result(
+    *,
+    principal: AuthPrincipal,
+    setup: _TurnSetup,
+    model: AssistantModelClient,
+    user_message: str,
+    result: Any,
+) -> UUID:
+    """FASE 3 — sesión corta nueva para escribir; devuelve el id del hilo.
+
+    Crea el hilo si el usuario no traía uno: así un fallo del proveedor no deja
+    hilos vacíos en su lista (ver :func:`_create_conversation`)."""
+    async with open_tenant_session(principal) as session:
+        conversation_id = setup.conversation_id
+        if conversation_id is None:
+            conversation_id = (
+                await _create_conversation(
+                    session,
+                    tenant_id=setup.tenant_id,
+                    user_id=principal.user_id,
+                    first_message=user_message,
+                )
+            ).id
+        await _persist_turns(
+            session,
+            tenant_id=setup.tenant_id,
+            conversation_id=conversation_id,
+            user_id=principal.user_id,
+            user_message=user_message,
+            answer=result.content,
+            tools_called=list(result.tools_called),
+            rounds=result.rounds,
+        )
+        # ADR 0116: contabilidad del consumo (best-effort).
+        await record_llm_usage(
+            session,
+            source="assistant",
+            model_client=model,
+            tenant_id=setup.tenant_id,
+            user_id=principal.user_id,
+        )
+    return conversation_id
 
 
 @router.post("/chat/stream")
@@ -498,7 +669,6 @@ async def assistant_chat_stream(
     payload: AssistantChatRequest,
     response: Response,
     principal: AuthPrincipal = Depends(require_assistant_access),
-    session: AsyncSession = Depends(get_tenant_session),
     model: AssistantModelClient = Depends(get_assistant_model),
     redis: Redis = Depends(get_redis),
 ) -> StreamingResponse:
@@ -513,27 +683,9 @@ async def assistant_chat_stream(
     import asyncio as _asyncio
     import json as _json
 
-    await enforce_assistant_chat_rate_limit(response, principal, session, redis)
-    tenant_id = require_tenant_id(principal)
-    identity = await get_assistant_identity(session, tenant_id)
-    tool_ctx = AssistantToolContext(session=session, tenant_id=tenant_id, user_id=principal.user_id)
-    enabled_tools = identity.effective_tools()
-    known_facts = await recall_user_memories(
-        session, tenant_id=tenant_id, user_id=principal.user_id
+    setup = await _prepare_turn(
+        principal=principal, payload=payload, response=response, redis=redis
     )
-    system_prompt = augment_system_prompt(
-        identity.system_prompt(),
-        known_facts=known_facts,
-        remember_enabled="remember_about_me" in enabled_tools,
-    )
-    conversation = await _resolve_conversation(
-        session,
-        tenant_id=tenant_id,
-        user_id=principal.user_id,
-        conversation_id=payload.conversation_id,
-        first_message=payload.message,
-    )
-    history = await _conversation_history(session, conversation_id=conversation.id)
 
     queue: _asyncio.Queue[tuple[str, dict[str, Any]]] = _asyncio.Queue()
 
@@ -549,31 +701,20 @@ async def assistant_chat_stream(
         try:
             result = await run_assistant_turn(
                 model,
-                system_prompt=system_prompt,
-                enabled_tools=enabled_tools,
-                tool_ctx=tool_ctx,
-                chat_history=[*history, {"role": "user", "content": payload.message}],
+                system_prompt=setup.system_prompt,
+                enabled_tools=setup.enabled_tools,
+                tool_ctx=setup.tool_ctx,
+                chat_history=[*setup.history, {"role": "user", "content": payload.message}],
                 on_progress=_on_progress,
                 on_delta=_on_delta,
             )
-            await _persist_turns(
-                session,
-                conversation=conversation,
-                user_id=principal.user_id,
+            conversation_id = await _persist_turn_result(
+                principal=principal,
+                setup=setup,
+                model=model,
                 user_message=payload.message,
-                answer=result.content,
-                tools_called=list(result.tools_called),
-                rounds=result.rounds,
+                result=result,
             )
-            # ADR 0116: contabilidad del consumo (best-effort).
-            await record_llm_usage(
-                session,
-                source="assistant",
-                model_client=model,
-                tenant_id=tenant_id,
-                user_id=principal.user_id,
-            )
-            await session.commit()
             await queue.put(
                 (
                     "answer",
@@ -581,7 +722,7 @@ async def assistant_chat_stream(
                         "answer": result.content,
                         "tools_called": list(result.tools_called),
                         "rounds": result.rounds,
-                        "conversation_id": str(conversation.id),
+                        "conversation_id": str(conversation_id),
                     },
                 )
             )
@@ -675,12 +816,11 @@ async def list_assistant_turns(
 ) -> list[AssistantTurnItem]:
     """Los turnos de un hilo del usuario (cronológicos; 404 si no es suyo)."""
     tenant_id = require_tenant_id(principal)
-    conv = await _resolve_conversation(
+    conv = await _load_conversation(
         session,
         tenant_id=tenant_id,
         user_id=principal.user_id,
         conversation_id=conversation_id,
-        first_message="",
     )
     rows = list(
         (
@@ -714,48 +854,19 @@ async def assistant_chat(
     payload: AssistantChatRequest,
     response: Response,
     principal: AuthPrincipal = Depends(require_assistant_access),
-    session: AsyncSession = Depends(get_tenant_session),
     model: AssistantModelClient = Depends(get_assistant_model),
     redis: Redis = Depends(get_redis),
 ) -> AssistantChatResponse:
-    await enforce_assistant_chat_rate_limit(response, principal, session, redis)
-    tenant_id = require_tenant_id(principal)
-    identity = await get_assistant_identity(session, tenant_id)
-    tool_ctx = AssistantToolContext(
-        session=session,
-        tenant_id=tenant_id,
-        user_id=principal.user_id,
+    setup = await _prepare_turn(
+        principal=principal, payload=payload, response=response, redis=redis
     )
-    enabled_tools = identity.effective_tools()
-    # Surface what we already know about this user and fold it into the system
-    # prompt so the assistant "knows" them without a tool call (ADR 0054).
-    known_facts = await recall_user_memories(
-        session, tenant_id=tenant_id, user_id=principal.user_id
-    )
-    system_prompt = augment_system_prompt(
-        identity.system_prompt(),
-        known_facts=known_facts,
-        remember_enabled="remember_about_me" in enabled_tools,
-    )
-    # A1 (investigación 2026-07-11): hilo persistente — resolver/crear la
-    # conversación del usuario y alimentar el prompt con su historial reciente
-    # (human_10_04: «mantiene contexto entre mensajes»; antes cada POST enviaba
-    # SOLO el mensaje actual y una recarga lo perdía todo).
-    conversation = await _resolve_conversation(
-        session,
-        tenant_id=tenant_id,
-        user_id=principal.user_id,
-        conversation_id=payload.conversation_id,
-        first_message=payload.message,
-    )
-    history = await _conversation_history(session, conversation_id=conversation.id)
     try:
         result = await run_assistant_turn(
             model,
-            system_prompt=system_prompt,
-            enabled_tools=enabled_tools,
-            tool_ctx=tool_ctx,
-            chat_history=[*history, {"role": "user", "content": payload.message}],
+            system_prompt=setup.system_prompt,
+            enabled_tools=setup.enabled_tools,
+            tool_ctx=setup.tool_ctx,
+            chat_history=[*setup.history, {"role": "user", "content": payload.message}],
         )
     except AuthError as exc:
         # Bad/expired provider credential — most often a misconfigured provider
@@ -776,28 +887,18 @@ async def assistant_chat(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=_provider_error_detail(exc, kind="provider", context="assistant.chat"),
         ) from exc
-    await _persist_turns(
-        session,
-        conversation=conversation,
-        user_id=principal.user_id,
+    conversation_id = await _persist_turn_result(
+        principal=principal,
+        setup=setup,
+        model=model,
         user_message=payload.message,
-        answer=result.content,
-        tools_called=list(result.tools_called),
-        rounds=result.rounds,
-    )
-    # ADR 0116: el consumo del asistente por fin se contabiliza (best-effort).
-    await record_llm_usage(
-        session,
-        source="assistant",
-        model_client=model,
-        tenant_id=tenant_id,
-        user_id=principal.user_id,
+        result=result,
     )
     return AssistantChatResponse(
         answer=result.content,
         tools_called=list(result.tools_called),
         rounds=result.rounds,
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
     )
 
 

@@ -447,7 +447,7 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
 
 #### `task_prod13_07` — La transacción por request no abarca llamadas LLM ni embeds
 
-- [ ] **Título**: Implementar la decisión clave 2: `POST /assistant/chat`
+- [x] **Título**: Implementar la decisión clave 2: `POST /assistant/chat`
       (`routers/assistant.py:171-199`) resuelve datos, cierra la transacción de
       `open_tenant_session` (`auth/deps.py:242-252`) y ejecuta `run_assistant_turn`
       sin conexión retenida — las tools reciben un session-factory tenant-aware en
@@ -510,6 +510,79 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
     cambio de la cadena de autenticación del asistente que no se ha podido correr
     entero contra un árbol estable es exactamente lo que no se puede permitir el
     día que el operador levanta el stack. **Pide su rama y su tanda.**
+  - ✅ **Cerrada (2026-08-19), con la suite de integración del asistente corrida
+    entera ANTES y DESPUÉS del cambio: 57 verdes → 57 verdes, más los 11 tests
+    nuevos de los dos ficheros que declara la casilla.** El diseño de
+    las notas de arriba se confirmó al completo, incluido el obstáculo del
+    2026-08-12: lo que retenía la conexión durante el turno no era el handler,
+    era la **cadena de dependencias**. `require_assistant_access` pedía
+    `Depends(get_tenant_session)`, y una dependencia con `yield` abre su sesión
+    antes de que el endpoint corra y la cierra después de enviar la respuesta —
+    o sea que quitar el parámetro del handler no habría cambiado nada medible.
+    Está comprobado en rojo: reponiendo SÓLO esa dependencia en la puerta, con el
+    handler ya limpio, el test vuelve a observar `[1, 1]` conexiones retenidas
+    durante el turno y el de concurrencia recae en el `TimeoutError` de
+    producción. Ése es el hallazgo que un test de firma del endpoint no habría
+    visto nunca.
+
+    Lo que cambió respecto al diseño escrito, y por qué: el contexto de tools se
+    partió en **dos tipos** en vez de hacer `session` opcional.
+    `AssistantToolContext` sigue siendo el contexto ENLAZADO que recibe cada tool
+    —sus once implementaciones y toda la suite previa quedan intactas— y el nuevo
+    `AssistantToolScope` es lo que el endpoint entrega al grafo: tenant, usuario y
+    la fábrica. Con una `session: AsyncSession | None` compartida, mypy strict
+    marcaba los once cuerpos de tool (`Item "None" ... has no attribute
+"execute"`), y la única salida barata habría sido un `type: ignore` por tool,
+    o sea trece renuncias a la comprobación de tipos para ahorrar una clase.
+
+    Lo que NO cambió, porque es el cierre del riesgo nº 1: la fábrica es
+    `lambda: open_tenant_session(principal)` tal cual. Los dos tests de fuga
+    fallan en las DOS direcciones, comprobado rompiendo el despacho: con una
+    sesión BYPASSRLS el tenant A ve el proyecto de B (`total: 2`), y con una
+    sesión de `app_user` sin los `set_config` el tenant deja de ver lo suyo
+    (`total: 0`) y la tool de escritura muere con «new row violates row-level
+    security policy». Una guarda que sólo comprobara la ausencia de fuga habría
+    pasado en verde vacío ante el segundo caso.
+
+    Tres decisiones de comportamiento que conviene tener escritas:
+
+    1. **El hilo se crea al persistir, no al resolver.** Con una transacción
+       única daba igual: si el proveedor fallaba, el rollback se llevaba también
+       el hilo vacío. Troceada, crearlo antes del turno dejaría un hilo huérfano
+       en la lista del usuario por cada error de LLM.
+    2. **`_persist_turns` toma ids, no la instancia ORM del hilo.** Cargada en la
+       sesión de resolución, en la de persistencia está desligada y asignarle
+       `updated_at` no escribe nada — un fallo que no da error.
+    3. **La tool de escritura commitea al volver de la tool**, no al final del
+       turno. Es más honesto (el asistente ya dijo «lo he recordado») y el dedup
+       sigue funcionando entre sesiones cortas.
+
+    Alcance real entregado, que va más allá de los dos endpoints del enunciado
+    porque comparten la misma costura: `/assistant/chat`, `/assistant/chat/stream`
+    —donde era peor: la sesión vivía todo el SSE—, el WebSocket de voz
+    (`_respond` retenía una conexión durante STT+cerebro+TTS, decenas de
+    segundos) y `GET /knowledge-bases/{id}/search`, que embebe la query contra
+    Ollama y ahora lo hace fuera de toda transacción. En las DOS puertas que
+    había que dejar sin sesión retenida —`require_assistant_access` y la del
+    search de KB— se llama al `require_tenant_admin` / `require_tenant_member`
+    originales como función normal con la sesión corta ya abierta: sus
+    `Depends(...)` sólo los interpreta FastAPI, y así no aparece un segundo
+    predicado de autorización que pueda divergir. **`auth/deps.py` no se tocó**,
+    como decía la nota del 2026-08-10.
+
+    Y el test que vale más que las aserciones de pool, porque traduce la
+    propiedad a su consecuencia: con `pool_size=1, max_overflow=0` dos chats
+    simultáneos —solapados de verdad con una `asyncio.Barrier`— salen los dos.
+    Antes, el segundo no llegaba ni a pasar la puerta.
+
+    Arista lateral encontrada y NO arreglada (no es de esta tarea): los dos
+    turnos de un mensaje se insertan en el mismo flush y comparten `created_at`
+    al microsegundo, así que el orden entre el `user` y el `assistant` de un
+    mismo turno no es determinista — `_conversation_history` ordena DESC y
+    revierte, `list_assistant_turns` ordena ASC, y con el empate pueden dar
+    órdenes distintos. Se descubrió porque un assert por índice del test nuevo
+    salió rojo por eso y no por el cambio. El test se hizo insensible al orden;
+    el empate sigue ahí.
 - **Tiempo**: 2,5 días · **Complejidad**: l
 - **Depende de**: `task_prod13_06`
 - **Tests automáticos**:
@@ -576,9 +649,20 @@ max_overflow` porque sin denominador la alerta de saturación de prod-08 no
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: `tests/integration/test_chunks_fts_index_es_unaccent.py` no
+  # ha existido nunca. Las dos mitades de la casilla están probadas dentro de
+  # `test_bm25_search.py`, junto al resto de la recuperación por texto en vez de en un
+  # fichero suelto: `test_chunks_fts_index_uses_es_unaccent` lee el `indexdef` real de
+  # `ix_chunks_content_fts` en `pg_indexes` (la migración `0107`), y
+  # `test_spanish_accents_and_stemming_match` prueba la unificación de `bm25_chunks` con
+  # una consulta SIN acentos y con otra inflexión, que sólo casa con unaccent+spanish_stem.
+  # Comprobado que muerde: `_TS_CONFIG = "public.es_unaccent"` → `"simple"` en
+  # `rag/search.py` y saltó `test_spanish_accents_and_stemming_match` — la divergencia
+  # índice/consulta que la casilla existe para cerrar. Restaurado con
+  # `git show HEAD:… > …`; 6 verdes.
   - id: auto_prod13_10_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_chunks_fts_index_es_unaccent.py -v"
+    command: "pytest tests/integration/test_bm25_search.py -v"
   ```
 
 #### `task_prod13_11` — Índice `(tenant_id, created_at)` en executions + predicado sargable
@@ -816,9 +900,30 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: `tests/integration/test_pagination_conversations_docs_citations.py`
+  # no ha existido nunca. El test real es `tests/unit/test_row_lock_and_pagination.py`,
+  # que nombra `task_prod13_17` en su primera línea, y es UNIT a propósito y con razón:
+  # lo que hay que verificar es **la firma que FastAPI publica** (que `limit`/`offset`
+  # existen y llevan los bounds compartidos `ge=1` / `le=MAX_PAGE_SIZE`, que es lo que
+  # impide un `?limit=1000000`) y **el SQL que se emite**, y ninguna de las dos necesita
+  # Postgres. Cubre los tres endpoints parametrizados —`list_conversations`,
+  # `list_documents`, `get_document_citations`— más los dos contornos del visor de citas:
+  # default = `MAX_PAGE_SIZE` (con el blando, un PDF de 2.000 chunks se truncaría en
+  # silencio) y `total`/`has_more` en el payload.
+  # Comprobado que muerde: `limit: int = limit_query(default=MAX_PAGE_SIZE)` →
+  # `limit: int = 500` en `get_document_citations` y saltaron dos, entre ellas la
+  # parametrización de `get_document_citations` en
+  # `test_listing_endpoints_accept_bounded_limit_and_offset`.
+  # ⚠️ HALLAZGO, sin arreglar aquí porque no es de este carril:
+  # `test_citations_query_does_not_select_the_embedding_vector` NO compila el SELECT del
+  # router — reconstruye uno equivalente y luego hace `grep` del texto
+  # `select(Chunk).where(Chunk.document_id == document_id)` sobre el fuente. Coge la
+  # regresión que nombra (volver a la entidad entera), pero se le escapa añadir
+  # `Chunk.embedding` a la lista explícita de columnas: se probó y siguió verde. Es
+  # `verificar-antes-de-implementar` §4 con otro disfraz.
   - id: auto_prod13_17_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_pagination_conversations_docs_citations.py -v"
+    command: "pytest tests/unit/test_row_lock_and_pagination.py -v"
   ```
 
 #### `task_prod13_18` — No materializar `steps_log` en listados/exports de runs

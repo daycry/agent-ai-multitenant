@@ -31,7 +31,7 @@ from redis.asyncio import Redis  # noqa: F401  (kept for parity / future stream 
 from api_server.assistant.config import get_assistant_identity
 from api_server.assistant.graph import run_assistant_turn
 from api_server.assistant.memory import augment_system_prompt, recall_user_memories
-from api_server.assistant.tools import AssistantToolContext
+from api_server.assistant.tools import AssistantToolScope
 from api_server.assistant.voice_clients import HttpSpeechToText, HttpTextToSpeech
 from api_server.assistant.voice_session import VoiceSession, VoiceTurn
 from api_server.auth.deps import (
@@ -138,10 +138,16 @@ async def _reject(ws: WebSocket, reason: str) -> None:
 async def _respond(principal: AuthPrincipal, model: Any, user_text: str, voice: str = "") -> str:
     """Run ONE assistant turn for `user_text`, reusing the chat brain verbatim.
 
-    Opens a fresh RLS-bound tenant session per turn (like the REST chat endpoint),
-    recalls the user's memory, folds it into the system prompt, and runs the
-    provider-agnostic graph. Returns the answer text. ``voice`` fija el idioma de
-    la respuesta al de la voz elegida (español para ef_/em_)."""
+    Recalls the user's memory in a SHORT RLS-bound session, folds it into the
+    system prompt, and runs the provider-agnostic graph **without holding that
+    session**. Returns the answer text. ``voice`` fija el idioma de la respuesta
+    al de la voz elegida (español para ef_/em_).
+
+    Lo de la sesión corta es prod-13 ``task_prod13_07`` y aquí pesa más que en
+    REST: un turno de voz es STT + cerebro + TTS, o sea decenas de segundos, y
+    esto corre sobre un WebSocket que puede durar toda una conversación. Retener
+    una conexión del pool mientras el modelo habla es exactamente el hallazgo
+    db-2, con una duración peor."""
     tenant_id = require_tenant_id(principal)
     async with open_tenant_session(principal) as session:
         identity = await get_assistant_identity(session, tenant_id)
@@ -149,23 +155,25 @@ async def _respond(principal: AuthPrincipal, model: Any, user_text: str, voice: 
         known_facts = await recall_user_memories(
             session, tenant_id=tenant_id, user_id=principal.user_id
         )
-        system_prompt = augment_system_prompt(
-            identity.system_prompt(),
-            known_facts=known_facts,
-            remember_enabled="remember_about_me" in enabled_tools,
-        )
-        if voice:
-            system_prompt += voice_language_instruction(voice)
-        tool_ctx = AssistantToolContext(
-            session=session, tenant_id=tenant_id, user_id=principal.user_id
-        )
-        result = await run_assistant_turn(
-            model,
-            system_prompt=system_prompt,
-            enabled_tools=enabled_tools,
-            tool_ctx=tool_ctx,
-            chat_history=[{"role": "user", "content": user_text}],
-        )
+    system_prompt = augment_system_prompt(
+        identity.system_prompt(),
+        known_facts=known_facts,
+        remember_enabled="remember_about_me" in enabled_tools,
+    )
+    if voice:
+        system_prompt += voice_language_instruction(voice)
+    tool_ctx = AssistantToolScope(
+        tenant_id=tenant_id,
+        user_id=principal.user_id,
+        session_factory=lambda: open_tenant_session(principal),
+    )
+    result = await run_assistant_turn(
+        model,
+        system_prompt=system_prompt,
+        enabled_tools=enabled_tools,
+        tool_ctx=tool_ctx,
+        chat_history=[{"role": "user", "content": user_text}],
+    )
     return result.content
 
 
@@ -305,8 +313,7 @@ async def assistant_voice(
     # Personal-assistant tenant gate (Tenant Admin + feature toggle). The gate
     # opens its own RLS session; an HTTPException → policy close (never a 500).
     try:
-        async with open_tenant_session(principal) as gate_session:
-            await require_assistant_access(principal, gate_session)
+        await require_assistant_access(principal)
         # `build_assistant_model`, no la dependencia: `get_assistant_model` es un
         # async generator (prod-07 task_prod07_05) y este socket no es una request
         # con ciclo de vida de FastAPI. El cierre del provider lo hacemos aquí, en
