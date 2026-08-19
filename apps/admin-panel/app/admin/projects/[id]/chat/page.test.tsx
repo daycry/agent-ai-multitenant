@@ -139,7 +139,18 @@ describe("Chat del proyecto — barra de historial de conversaciones", () => {
     await waitFor(() => expect(picker().options.length).toBe(3));
 
     // La lista es ascendente: la activa por defecto es la última (la más nueva).
-    expect(picker().value).toBe("conv-3");
+    //
+    // Va en `waitFor` y no en un `expect` a pelo porque la selección la hace un
+    // `useEffect` DESPUÉS de que aterrice la lista (`page.tsx`: «Auto-select the
+    // most recent conversation as soon as the list lands»). Entre que se pintan
+    // las `<option>` y que ese efecto commitea el `setActiveConversationId`, el
+    // `<select>` no tiene value y el DOM devuelve la PRIMERA opción — o sea
+    // `conv-1`. En esta máquina la ventana no se ve nunca; en el runner de CI,
+    // el 2026-08-19, sí: `AssertionError: expected 'conv-1' to be 'conv-3'`.
+    // El `waitFor` no relaja la aserción —un componente que no eligiera la más
+    // reciente seguiría fallando por timeout—, sólo deja de dar por hecho que
+    // React ya vació sus efectos.
+    await waitFor(() => expect(picker().value).toBe("conv-3"));
     await waitFor(() => expect(feedCalls().some((p) => p.includes("conv-3"))).toBe(true));
     expect(screen.getByTestId("chat-current-mode").textContent).toBe("execution");
 
