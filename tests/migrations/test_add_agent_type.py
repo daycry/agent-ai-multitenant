@@ -82,22 +82,38 @@ def _agent_type_check_exists(dsn: str) -> bool:
 
 def _insert_global_agent(dsn: str, agent_id: UUID, tenant_id: UUID, agent_type: str | None) -> None:
     """Insert a `global_tenant_template` agent (project_id NULL). When
-    `agent_type` is None we omit the column so the server_default applies."""
+    `agent_type` is None we omit the column so the server_default applies.
+
+    El nombre se deriva del `agent_id` a propósito. Era `'seed-agent'` fijo, y
+    desde la migración ``0126_perf_indexes_uniqueness`` (prod-14
+    `task_prod14_10`) hay un índice único parcial ``uq_agents_tenant_name_global_live``
+    sobre ``(tenant_id, name)``: dos agentes del MISMO tenant con el mismo nombre
+    ya no caben. `test_orm_agent_type_round_trips` inserta dos —uno `ai` y otro
+    `human`— bajo el mismo tenant, así que reventaba con
+    ``UniqueViolationError`` en el segundo. El defecto era del arnés, no de la
+    unicidad: el test necesita dos filas distinguibles, no dos filas iguales.
+
+    Y se usa el hex **entero**, no un prefijo: ``uuid7`` empieza por la marca de
+    tiempo, así que dos ids generados en el mismo milisegundo comparten los
+    primeros dígitos. Con ``agent_id.hex[:8]`` los dos agentes volvían a llamarse
+    igual y el arreglo no arreglaba nada.
+    """
+    name = f"seed-agent-{agent_id.hex}"
     if agent_type is None:
         sql = (
             "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope)"
-            " VALUES ($1, $2, 'seed-agent', 'backend_dev', 'You are a dev.',"
+            " VALUES ($1, $2, $3, 'backend_dev', 'You are a dev.',"
             "         'global_tenant_template')"
         )
-        asyncio.run(_execute(dsn, sql, agent_id, tenant_id))
+        asyncio.run(_execute(dsn, sql, agent_id, tenant_id, name))
     else:
         sql = (
             "INSERT INTO agents"
             " (id, tenant_id, name, role, system_prompt, scope, agent_type)"
-            " VALUES ($1, $2, 'seed-agent', 'backend_dev', 'You are a dev.',"
-            "         'global_tenant_template', $3)"
+            " VALUES ($1, $2, $3, 'backend_dev', 'You are a dev.',"
+            "         'global_tenant_template', $4)"
         )
-        asyncio.run(_execute(dsn, sql, agent_id, tenant_id, agent_type))
+        asyncio.run(_execute(dsn, sql, agent_id, tenant_id, name, agent_type))
 
 
 def _agent_type(dsn: str, agent_id: UUID) -> str:
