@@ -1,14 +1,15 @@
 """Córtex F3 (bloque 1) — cortex_identity (singleton) + cortex_identity_history.
 
 Ejercita (a) la migración 0094: ``alembic upgrade head`` crea ``cortex_identity``
-+ ``cortex_identity_history`` + sus índices, NO les pone RLS (tenant-less sobre
-BYPASSRLS, ADR 0074), el UNIQUE singleton ``uq_cortex_identity_owner`` rechaza un
++ ``cortex_identity_history`` + sus índices; desde la migración ``0140`` (ADR 0156)
+las dos llevan RLS de eje OWNER, el UNIQUE singleton ``uq_cortex_identity_owner`` rechaza un
 segundo identity del MISMO owner, y ``alembic downgrade 0093_cortex_affect`` las
 elimina (reversible); (b) la capa de persistencia owner-scoped:
 ``ensure_identity`` crea una default idempotente (singleton), ``update_identity``
 versiona en history (v1, v2…) con diff+reason y ``get_identity`` devuelve el
 último estado; (c) **cross-owner**: un owner ajeno NUNCA ve/edita la identidad de
-otro (filtro ``owner_user_id`` explícito; no hay RLS de respaldo).
+otro (filtro ``owner_user_id`` explícito **y**, desde la migración ``0140`` /
+ADR 0156, RLS de eje owner por debajo).
 
 Patrón de fixtures + admin sessionmaker BYPASSRLS tomado de
 ``test_cortex_affect_store.py``.
@@ -105,7 +106,8 @@ async def _seed_two_owners(dsn: str) -> dict[str, UUID]:
 
 
 # ---------------------------------------------------------------------------
-# Migración 0094: tablas + índices + UNIQUE singleton + NO RLS + reversible
+# Migración 0094: tablas + índices + UNIQUE singleton + reversible
+# (+ RLS de eje owner desde la 0140 — ADR 0156)
 # ---------------------------------------------------------------------------
 async def _table_exists(conn: asyncpg.Connection, name: str) -> bool:
     return bool(
@@ -128,7 +130,7 @@ async def _index_exists(conn: asyncpg.Connection, name: str) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_identity_migration_indexes_no_rls_singleton_and_reversible(
+async def test_identity_migration_indexes_rls_singleton_and_reversible(
     configured_app, migrations_pg_dsn: str, alembic_config
 ) -> None:
     seed = await _seed_two_owners(migrations_pg_dsn)
@@ -141,12 +143,40 @@ async def test_identity_migration_indexes_no_rls_singleton_and_reversible(
         assert await _index_exists(conn, "ix_cortex_identity_history_owner_version")
         assert await _index_exists(conn, "uq_cortex_identity_history_owner_version")
 
-        # tenant-less BYPASSRLS: ninguna tabla debe llevar RLS activada.
+        # RLS de eje OWNER (ADR 0156, migración 0140). Esta aserción decía lo
+        # CONTRARIO hasta el 2026-08-19 —«ninguna tabla debe llevar RLS
+        # activada»— y no era un descuido: venía del ADR 0074, que leyó
+        # «tenant-less» como «sin eje que defender». El ADR 0156 corrige la
+        # inferencia: que el eje no sea el tenant no exime de RLS, obliga a
+        # defender el eje que sí hay. Aquí vive la identidad del System Owner,
+        # y `app_user` (NOBYPASSRLS) tiene DML sobre estas tablas por los
+        # default privileges, así que lo único que las separaba de una sesión
+        # de tenant era que cada query recordase su filtro.
         for tname in ("cortex_identity", "cortex_identity_history"):
             relrowsecurity = await conn.fetchval(
                 "SELECT relrowsecurity FROM pg_class WHERE relname = $1", tname
             )
-            assert relrowsecurity is False, tname
+            assert relrowsecurity is True, (
+                f"{tname} se quedó sin RLS: la migración 0140 la protege por"
+                " `owner_user_id = app.user_id` (ADR 0156)"
+            )
+            relforcerowsecurity = await conn.fetchval(
+                "SELECT relforcerowsecurity FROM pg_class WHERE relname = $1", tname
+            )
+            assert relforcerowsecurity is True, (
+                f"{tname} tiene RLS pero sin FORCE: el dueño de la tabla se la"
+                " saltaría, que es justo el rol de las migraciones"
+            )
+            policies = await conn.fetch(
+                "SELECT polname, pg_get_expr(polqual, polrelid) AS qual FROM pg_policy"
+                " WHERE polrelid = $1::regclass",
+                tname,
+            )
+            assert len(policies) == 1, f"{tname}: esperaba UNA policy, vi {len(policies)}"
+            qual = policies[0]["qual"] or ""
+            assert "app.user_id" in qual, (
+                f"{tname}: la policy no cuelga de `app.user_id` sino de {qual!r}"
+            )
 
         # Singleton: un segundo identity para el MISMO owner viola el UNIQUE.
         await conn.execute(
@@ -471,7 +501,9 @@ async def test_list_history_limit_keeps_the_latest_versions(
 async def test_list_history_is_owner_scoped(
     configured_app, migrations_pg_dsn: str, admin_database_url: str
 ) -> None:
-    """Cross-owner OBLIGATORIO (ADR 0074: no hay RLS que respalde estas tablas)."""
+    """Cross-owner OBLIGATORIO: el filtro explícito es la primera línea, y desde
+    la migración 0140 (ADR 0156) hay RLS de eje owner detrás. Este test vigila la
+    primera; el catálogo de `test_cortex_owner_rls.py` vigila la segunda."""
     from api_server.cortex.identity import ensure_identity, list_history, update_identity
 
     seed = await _seed_two_owners(migrations_pg_dsn)

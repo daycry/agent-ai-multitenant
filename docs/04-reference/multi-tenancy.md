@@ -2,7 +2,7 @@
 title: Multi-tenancy — cobertura RLS, roles de BD y excepciones
 docs_language: es
 audience: backend-dev, architect, security
-updated: 2026-07-30
+updated: 2026-08-19
 ---
 
 # Multi-tenancy: cobertura RLS y excepciones
@@ -100,43 +100,99 @@ dependencia cross-tenant es un DAG imposible.
 
 Sin ninguna columna de tenant. Cada una está en `GLOBAL_TABLES_ALLOWLIST`.
 
-| Tabla                                                                                                                | Por qué es global                                                                                     |
-| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `alembic_version`                                                                                                    | Contabilidad interna de Alembic.                                                                      |
-| `organizations`                                                                                                      | **Es** el tenant: se aísla con `id = app.tenant_id` (`org_self_only`), no con `tenant_id = …`.        |
-| `users`                                                                                                              | Directorio global de identidades; el login es pre-tenant. Decisión razonada en el **ADR 0137**.       |
-| `platform_settings`                                                                                                  | Ajustes de plataforma (System Admin).                                                                 |
-| `llm_providers`                                                                                                      | Catálogo cerrado de proveedores (ADR 0021). Las credenciales por tenant no viven aquí.                |
-| `model_prices`, `price_sync_audit`, `exchange_rates`                                                                 | Tarifas y tipos de cambio: mismo dato para todos los tenants.                                         |
-| `sso_configurations`                                                                                                 | Global por decisión de la migración 0076: el descubrimiento de proveedor SSO ocurre antes del tenant. |
-| `cortex_identity`, `cortex_identity_history`, `cortex_turns`, `cortex_affect_snapshots`, `cortex_curiosity_pursuits` | Córtex (ADR 0074): pertenecen al usuario dueño, no a un tenant; aislados por `owner_user_id`.         |
+| Tabla                                                                                                                | Por qué es global                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `alembic_version`                                                                                                    | Contabilidad interna de Alembic.                                                                                                                                             |
+| `organizations`                                                                                                      | **Es** el tenant: se aísla con `id = app.tenant_id` (`org_self_only`), no con `tenant_id = …`.                                                                               |
+| `users`                                                                                                              | Directorio global de identidades; el login es pre-tenant. Decisión razonada en el **ADR 0137**.                                                                              |
+| `platform_settings`                                                                                                  | Ajustes de plataforma (System Admin).                                                                                                                                        |
+| `llm_providers`                                                                                                      | Catálogo cerrado de proveedores (ADR 0021). Las credenciales por tenant no viven aquí.                                                                                       |
+| `model_prices`, `price_sync_audit`, `exchange_rates`                                                                 | Tarifas y tipos de cambio: mismo dato para todos los tenants.                                                                                                                |
+| `sso_configurations`                                                                                                 | Global por decisión de la migración 0076: el descubrimiento de proveedor SSO ocurre antes del tenant.                                                                        |
+| `cortex_identity`, `cortex_identity_history`, `cortex_turns`, `cortex_affect_snapshots`, `cortex_curiosity_pursuits` | Córtex (ADR 0074): pertenecen al usuario dueño, no a un tenant. **No** son «globales sin protección»: se aíslan por el eje owner, con RLS propia (ver la sección siguiente). |
+
+## Excepciones: aislamiento por PERSONA (eje owner)
+
+No toda tabla que no lleva `tenant_id` es global. Hay una familia cuyo dato
+pertenece a **alguien**, no a un tenant, y su aislamiento es
+`owner_user_id = app.user_id`. El [**ADR 0156**](../05-architecture-decisions/0156-aislamiento-estructural-del-cortex.md)
+fija la regla: que el eje no sea el tenant **no exime de RLS**, obliga a ponerla
+sobre el eje que sí es.
+
+La forma canónica (migración 0001 para `sessions`, 0125 y 0140 para el córtex):
+
+```sql
+ALTER TABLE t ENABLE ROW LEVEL SECURITY;
+ALTER TABLE t FORCE ROW LEVEL SECURITY;
+CREATE POLICY t_owner_only ON t FOR ALL
+  USING      (owner_user_id = NULLIF(current_setting('app.user_id', true), '')::uuid)
+  WITH CHECK (owner_user_id = NULLIF(current_setting('app.user_id', true), '')::uuid);
+```
+
+| Tabla                       | De quién es el dato                                        | Policy desde |
+| --------------------------- | ---------------------------------------------------------- | ------------ |
+| `sessions`                  | La sesión es de la PERSONA, que puede tener varios tenants | 0001         |
+| `cortex_conversations`      | Los hilos del córtex del System Owner                      | 0125         |
+| `cortex_turns`              | El texto literal de esas conversaciones                    | 0140         |
+| `cortex_identity`           | La identidad evolutiva del córtex (ADR 0077)               | 0140         |
+| `cortex_identity_history`   | Su versionado append-only                                  | 0140         |
+| `cortex_affect_snapshots`   | La serie temporal del motor afectivo (ADR 0075)            | 0140         |
+| `cortex_curiosity_pursuits` | Lo que el córtex investiga por su cuenta (ADR 0078)        | 0140         |
+
+Dos de ellas —`sessions` y `cortex_conversations`— **sí** tienen columna
+`tenant_id`, así que además entran por el invariante nº 1 y aparecen en
+`POLICY_WITHOUT_TENANT_GUC_ALLOWLIST` con el porqué de que su policy no cite
+`app.tenant_id`. En `cortex_conversations` ese `tenant_id` es el **discriminante
+físico** que la memoria del owner necesita (`memory_entries` lo exige `NOT NULL`),
+no un eje de autorización; el ADR 0156 descarta expresamente renombrarlo o
+borrarlo, y explica por qué.
+
+**Nunca la policy de tenant sobre estas tablas.** Sería a la vez más permisiva
+(pertenecer al tenant bastaría para leer la mente privada del owner) y
+funcionalmente rota: `open_tenant_session` fija `app.tenant_id` al tenant
+**elegido en la request**, así que el owner entrando con otro contexto perdería
+su historial en silencio. Lo vigila
+`test_rls_invariant.py::test_the_cortex_is_not_isolated_by_tenant`.
+
+Con los roles de hoy estas policies son **inertes**: todos los caminos del córtex
+conectan con `migrations_user` o `service_user`, que son BYPASSRLS, y BYPASSRLS
+gana a `FORCE`. Lo que cierran es el camino `app_user`, que tiene DML sobre todas
+ellas por los default privileges de `02-roles.sh` y hasta la 0140 no encontraba
+NADA que se le opusiera. El día que los servicios dejen de ser BYPASSRLS hay que
+**cablear el GUC `app.user_id`**, no relajar las policies; hay un test que se pone
+rojo para recordarlo.
 
 ## Excepciones: columna de tenant sin RLS
 
 | Tabla                 | Por qué                                                                                                                                                                                                            |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `marketplace_sources` | Decisión declarada en el modelo: una source es un endpoint de registro de plataforma. `owner_tenant_id` es NULLABLE y solo marca el catálogo privado de un tenant; la visibilidad la resuelve la capa de servicio. |
-| `sessions`            | Tiene `tenant_id`, pero se aísla por `app.user_id` (`session_owner_only`): una sesión es de la PERSONA, que puede tener varios tenants.                                                                            |
 
-## Huecos conocidos (ratchet)
+## Los huecos que hubo, y cómo se cerraron
 
-Encontrados por el invariante la primera vez que se ejecutó (2026-07-30). **No
-son decisiones: son olvidos.** El plan `prod-14` los deja anotados en vez de
-arreglarlos para no hacer scope creep. El test exige que el conjunto sea exacto:
-si aparece uno nuevo, rojo; si se arregla uno y no se borra de la lista, rojo
-también. La lista solo puede encoger.
+La primera ejecución del invariante (2026-07-30) destapó cuatro desviaciones
+reales. Se anotaron en un ratchet (`KNOWN_RLS_GAPS_*`) para no hacer scope creep,
+y **ese ratchet ya no existe**: las cuatro están cerradas y el test pasó a la
+forma cerrada, donde toda exención vive en una allowlist con justificación escrita
+y caduca sola en cuanto deja de hacer falta.
 
-| Tabla                  | Hueco                                      | Arreglo                                                                                           |
-| ---------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `cortex_conversations` | tiene `tenant_id` y **cero** protección    | `ENABLE` + `FORCE` + policy canónica, tras comprobar que el bucle del córtex fija `app.tenant_id` |
-| `review_sessions`      | RLS + policy OK, falta `FORCE` (mig. 0024) | `ALTER TABLE review_sessions FORCE ROW LEVEL SECURITY`                                            |
-| `task_audit_events`    | RLS + policy OK, falta `FORCE` (mig. 0025) | `ALTER TABLE task_audit_events FORCE ROW LEVEL SECURITY`                                          |
-| `tenant_settings`      | RLS + policy OK, falta `FORCE` (mig. 0023) | `ALTER TABLE tenant_settings FORCE ROW LEVEL SECURITY`                                            |
+| Tabla                  | Hueco                                        | Cerrado por                                                        |
+| ---------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| `cortex_conversations` | tenía `tenant_id` y **cero** protección      | Migración **0125**: `ENABLE`+`FORCE`+policy por owner              |
+| `review_sessions`      | RLS + policy OK, faltaba `FORCE` (mig. 0024) | Migración **0125**                                                 |
+| `task_audit_events`    | RLS + policy OK, faltaba `FORCE` (mig. 0025) | Migración **0125**                                                 |
+| `tenant_settings`      | RLS + policy OK, faltaba `FORCE` (mig. 0023) | Migración **0125**                                                 |
+| `marketplace_sources`  | `owner_tenant_id` sin RLS                    | No era un olvido: decisión documentada, catalogada en la allowlist |
 
-Sin `FORCE`, el **propietario** de la tabla salta la policy. Hoy el propietario
-es `migrations_user`, que ya es BYPASSRLS, así que el impacto práctico es nulo;
-pasa a ser real el día que una tabla la posea un rol sin BYPASSRLS. Lo de
-`cortex_conversations` es de otra categoría: ahí no hay protección ninguna.
+Sin `FORCE`, el **propietario** de la tabla salta la policy. Hoy el propietario es
+`migrations_user`, que ya es BYPASSRLS, así que el impacto práctico fue nulo; pasa
+a ser real el día que una tabla la posea un rol sin BYPASSRLS.
+
+Y quedó **un quinto hueco que el invariante no podía ver**, porque su
+descubrimiento solo mira columnas `%tenant_id`: las otras cinco tablas del córtex
+seguían sin una sola policy, despachadas con una frase en la allowlist de globales
+que nadie comprobaba. Lo cerraron el ADR 0156 y la migración **0140**, y el
+invariante nº 5 (`OWNER_SCOPED_TABLES`) es lo que impide que vuelva a pasar.
 
 ## Cómo comprobarlo
 
@@ -158,4 +214,5 @@ TEST_PG_DB_NAME=... TEST_REDIS_URL=... \
 - [`rbac.md`](./rbac.md) — la capa de autorización (por encima de la RLS).
 - ADR 0137 — por qué `users` se queda global.
 - ADR 0074 — por qué el córtex es tenant-less.
+- ADR 0156 — por qué tenant-less no significa sin RLS: el eje owner y sus policies.
 - ADR 0076 — por qué `sso_configurations` dejó de ser por tenant.

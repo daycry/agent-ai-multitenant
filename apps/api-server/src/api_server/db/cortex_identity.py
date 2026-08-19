@@ -8,11 +8,14 @@ La **identidad evolutiva** del System Owner:
 - :class:`CortexIdentityHistory` — versionado **append-only** de cada reescritura, con
   el ``diff`` (qué cambió: ``{campo:{before,after}}``) y un ``reason`` 1-línea.
 
-Como el resto del córtex es **tenant-less** (excepción consciente al Principio 1 —
-no hay RLS, ADR 0074): el aislamiento es por un filtro ``owner_user_id`` explícito
-en TODO SQL (defensa en profundidad; ver ``cortex/identity.py`` y el test
-cross-owner de F3). La identidad **nunca se borra** (ADR 0077: ``kind ∈ {identity,
-owner_model}`` protegido) — solo se versiona.
+Como el resto del córtex es **tenant-less** (ADR 0074): el aislamiento es por
+``owner_user_id``, en dos capas — el filtro explícito en TODO SQL (ver
+``cortex/identity.py`` y el test cross-owner de F3), que es la que actúa mientras
+todos los caminos conecten con un rol BYPASSRLS, y las policies
+``cortex_identity_owner_only`` / ``cortex_identity_history_owner_only`` de la
+migración ``0140`` (ADR 0156), que son la que responde si una query llega por la
+sesión ordinaria de ``app_user``. La identidad **nunca se borra** (ADR 0077:
+``kind ∈ {identity, owner_model}`` protegido) — solo se versiona.
 
 Estilo espejo de :mod:`api_server.db.cortex` / :mod:`api_server.db.cortex_affect`.
 """
@@ -35,7 +38,7 @@ from api_server.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class CortexIdentity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """La identidad SINGLETON del córtex del owner (un blob ``identity_state``).
 
-    NO :class:`TenantScopedMixin` (no hay RLS), NO :class:`SoftDeleteMixin`
+    NO :class:`TenantScopedMixin` (la RLS no cuelga del tenant), NO :class:`SoftDeleteMixin`
     (ADR 0077: la identidad nunca se borra, solo se versiona). ``owner_user_id``
     es el eje de aislamiento (filtro explícito en todo SQL) y el UNIQUE
     ``uq_cortex_identity_owner`` impone el invariante singleton por owner.

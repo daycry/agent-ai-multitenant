@@ -1,11 +1,18 @@
-"""Córtex conversational threads (córtex F1, ADR 0074).
+"""Córtex conversational threads (córtex F1, ADR 0074; RLS por owner, ADR 0156).
 
-The two FIRST **tenant-less** tables of the platform (a conscious exception
-to Principle 1 — RLS): the System Owner's córtex is a singleton, so its
-conversation history is NOT scoped by ``tenant_id`` + RLS. Isolation is by an
-**explicit ``owner_user_id`` filter on every SQL statement** (defence in
-depth — there is no RLS to fall back on; see ``cortex/threads.py`` and the
-mandatory cross-owner test of F1).
+The two FIRST **tenant-less** tables of the platform: the System Owner's córtex
+is a singleton, so its conversation history is NOT scoped by ``tenant_id``.
+Isolation has **two layers**, and they are not interchangeable:
+
+1. an **explicit ``owner_user_id`` filter on every SQL statement** — the layer
+   that actually bites today, because every córtex path connects with a
+   BYPASSRLS role (see ``cortex/threads.py`` and the mandatory cross-owner test
+   of F1). Do NOT drop it "because there is RLS now";
+2. **row-level security on the owner axis** — ``ENABLE`` + ``FORCE`` + policy
+   ``owner_user_id = app.user_id`` (migration ``0125`` for conversations,
+   ``0140`` for turns). It is what stands in the way the day a query reaches
+   these tables through the ordinary ``app_user`` session, which holds DML on
+   them by default privileges. Never a tenant policy: see ADR 0156.
 
 - :class:`CortexConversation` — a persistent thread the owner holds with the
   córtex (unlike the tenant assistant, whose chat is stateless). Soft-deletable.
@@ -51,10 +58,11 @@ from api_server.db.base import (
 class CortexConversation(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     """A persistent córtex thread owned by the System Owner.
 
-    NOT :class:`TenantScopedMixin` — there is no RLS here. ``tenant_id`` is a
-    plain column (the memory's physical discriminator, Decisión D1), and
-    ``owner_user_id`` is the real isolation axis enforced by explicit SQL
-    filters in :mod:`api_server.cortex.threads`.
+    NOT :class:`TenantScopedMixin`: its RLS does not hang off the tenant.
+    ``tenant_id`` is a plain column (the memory's physical discriminator,
+    Decisión D1) and ``owner_user_id`` is the real isolation axis — enforced by
+    explicit SQL filters in :mod:`api_server.cortex.threads` AND by the
+    ``cortex_conversations_owner_only`` policy (migration ``0125``).
     """
 
     __tablename__ = "cortex_conversations"
@@ -102,7 +110,9 @@ class CortexTurn(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     Immutable (no soft-delete): turns are append-only. ``owner_user_id`` is
     duplicated from the parent conversation on purpose so the isolation filter
-    is a column predicate, never a join (defence in depth on BYPASSRLS).
+    is a column predicate, never a join (defence in depth on BYPASSRLS) — and so
+    the ``cortex_turns_owner_only`` policy of migration ``0140`` needs no join
+    either, which is what makes it cheap enough to be ``FOR ALL``.
     """
 
     __tablename__ = "cortex_turns"

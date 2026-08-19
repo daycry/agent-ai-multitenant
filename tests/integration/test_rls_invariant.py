@@ -13,7 +13,7 @@ tenant-scoped y exige que lo esté. Lo que no lo esté tiene que aparecer en una
 allowlist con su justificación escrita al lado. Añadir una entrada nueva a una
 allowlist es una decisión que se ve en el diff del PR; olvidarse de la RLS, no.
 
-Cuatro invariantes:
+Cinco invariantes:
 
 1. Toda tabla con una columna `*tenant_id` tiene RLS `ENABLE` + `FORCE`, al
    menos una policy, y esa policy referencia `app.tenant_id`.
@@ -22,6 +22,15 @@ Cuatro invariantes:
    llevan justificación de verdad.
 4. Las allowlists son **MÍNIMAS**: ninguna exime a una tabla que ya no lo
    necesita, y el conjunto de tablas exentas es EXACTAMENTE el catalogado.
+5. Toda tabla de :data:`OWNER_SCOPED_TABLES` —las que se aíslan por PERSONA y no
+   por tenant— tiene `ENABLE` + `FORCE` + una policy que referencia
+   `app.user_id`. Es el invariante que añade el ADR 0156, y existe porque los
+   cuatro de arriba tenían un punto ciego: una tabla sin columna de tenant sale
+   por el nº 2, o sea con una frase en una allowlist. Cinco tablas del córtex
+   llevaban ahí desde F1-F4 la frase «aislado por `owner_user_id`» sin que nada
+   la comprobase, y era falsa en el único sentido que importa: no había policy
+   ninguna. Una justificación que nadie verifica es precisamente lo que este
+   fichero existe para no aceptar.
 
 ## Sobre el ratchet que había aquí y ya no está
 
@@ -102,11 +111,68 @@ GLOBAL_TABLES_ALLOWLIST: dict[str, str] = {
         " RETIRÓ su `tenant_id` y su RLS: el descubrimiento de proveedor SSO"
         " ocurre ANTES de saber el tenant. Revertirlo exige revertir la 0076."
     ),
-    "cortex_identity": "Córtex (ADR 0074): pertenece al usuario dueño, no a un tenant.",
-    "cortex_identity_history": "Córtex (ADR 0074): aislado por `owner_user_id`.",
-    "cortex_turns": "Córtex (ADR 0074): aislado por `owner_user_id`.",
-    "cortex_affect_snapshots": "Córtex (ADR 0074): aislado por `owner_user_id`.",
-    "cortex_curiosity_pursuits": "Córtex (ADR 0074): aislado por `owner_user_id`.",
+    "cortex_identity": (
+        "Córtex (ADR 0074): pertenece al usuario dueño, no a un tenant. Su"
+        " aislamiento NO es una promesa de esta allowlist: entra por el"
+        " invariante nº 5 (`OWNER_SCOPED_TABLES`), que exige policy por"
+        " `app.user_id` — ADR 0156, migración 0140."
+    ),
+    "cortex_identity_history": (
+        "Córtex (ADR 0074): aislado por `owner_user_id`, comprobado por el"
+        " invariante nº 5 (`OWNER_SCOPED_TABLES`) — ADR 0156, migración 0140."
+    ),
+    "cortex_turns": (
+        "Córtex (ADR 0074): el CONTENIDO del chat del owner. Aislado por"
+        " `owner_user_id`, comprobado por el invariante nº 5"
+        " (`OWNER_SCOPED_TABLES`) — ADR 0156, migración 0140."
+    ),
+    "cortex_affect_snapshots": (
+        "Córtex (ADR 0074/0075): aislado por `owner_user_id`, comprobado por el"
+        " invariante nº 5 (`OWNER_SCOPED_TABLES`) — ADR 0156, migración 0140."
+    ),
+    "cortex_curiosity_pursuits": (
+        "Córtex (ADR 0074/0078): aislado por `owner_user_id`, comprobado por el"
+        " invariante nº 5 (`OWNER_SCOPED_TABLES`) — ADR 0156, migración 0140."
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# Tablas cuyo eje de aislamiento es la PERSONA (`owner_user_id`) y no el tenant.
+# El ADR 0156 fija la regla: que el eje no sea el tenant NO exime de RLS, obliga
+# a ponerla sobre el eje que sí es. Cada entrada dice de quién es el dato.
+#
+# Estar aquí NO es una exención: es una obligación EXTRA. Estas tablas siguen
+# pasando por los invariantes 1 y 2 (según tengan o no columna de tenant), y
+# además tienen que traer su policy por `app.user_id`.
+# ---------------------------------------------------------------------------
+OWNER_SCOPED_TABLES: dict[str, str] = {
+    "sessions": (
+        "Una sesión pertenece a la PERSONA, que puede tener varios tenants."
+        " Policy `session_owner_only` desde la migración 0001; es el patrón que"
+        " copian todas las de abajo."
+    ),
+    "cortex_conversations": (
+        "Hilos del córtex del System Owner. Policy"
+        " `cortex_conversations_owner_only` desde la migración 0125, que la"
+        " destapó sin NINGUNA protección: `app_user` veía los hilos de todos los"
+        " owners y podía insertar uno a nombre ajeno."
+    ),
+    "cortex_turns": ("El texto literal de las conversaciones del owner. Migración 0140."),
+    "cortex_identity": (
+        "La identidad evolutiva del córtex (ADR 0077): nombre autoelegido,"
+        " valores, rasgos, narrativa y modelo del owner. Migración 0140."
+    ),
+    "cortex_identity_history": (
+        "El versionado append-only de esa identidad, con el diff de cada"
+        " reescritura. Migración 0140."
+    ),
+    "cortex_affect_snapshots": (
+        "La serie temporal del motor afectivo del owner (ADR 0075). Migración 0140."
+    ),
+    "cortex_curiosity_pursuits": (
+        "Lo que el córtex está investigando por su cuenta (ADR 0078), con su"
+        " coste y su veredicto de aprobación. Migración 0140."
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -147,7 +213,10 @@ POLICY_WITHOUT_TENANT_GUC_ALLOWLIST: dict[str, str] = {
         " fija `app.tenant_id` al tenant ELEGIDO en la request, así que el owner"
         " entrando con otro contexto perdería su historial en silencio). El"
         " aislamiento por owner es estrictamente más restrictivo. Cobertura"
-        " funcional: `tests/integration/test_cortex_conversations_rls.py`."
+        " funcional: `tests/integration/test_cortex_conversations_rls.py`. Desde"
+        " el ADR 0156 esta exención NO es la última palabra: la tabla entra"
+        " además por el invariante nº 5 (`OWNER_SCOPED_TABLES`), que exige que"
+        " la policy exista y cuelgue de `app.user_id`."
     ),
 }
 
@@ -207,6 +276,10 @@ async def _introspect(dsn: str) -> dict[str, dict[str, object]]:
                 "force": force,
                 "policies": [p[0] for p in pols],
                 "guc_policies": [p[0] for p in pols if "app.tenant_id" in p[1]],
+                # Invariante nº 5 (ADR 0156): el eje PERSONA. Se mira el GUC
+                # `app.user_id` y no el nombre de la columna a propósito — lo que
+                # importa es de qué cuelga la policy, no cómo se llame el campo.
+                "owner_policies": [p[0] for p in pols if "app.user_id" in p[1]],
             }
         return out
     finally:
@@ -364,6 +437,9 @@ def test_allowlists_have_no_dead_entries(schema) -> None:
         ("GLOBAL_TABLES_ALLOWLIST", GLOBAL_TABLES_ALLOWLIST),
         ("TENANT_COLUMN_WITHOUT_RLS_ALLOWLIST", TENANT_COLUMN_WITHOUT_RLS_ALLOWLIST),
         ("POLICY_WITHOUT_TENANT_GUC_ALLOWLIST", POLICY_WITHOUT_TENANT_GUC_ALLOWLIST),
+        # No es una allowlist (no exime de nada, obliga de más), pero envejece
+        # igual: una entrada que nombra una tabla borrada deja de vigilar.
+        ("OWNER_SCOPED_TABLES", OWNER_SCOPED_TABLES),
     ):
         dead = [t for t in allowlist if t not in schema]
         assert not dead, (
@@ -443,7 +519,75 @@ def test_allowlists_are_minimal(schema) -> None:
 
 
 # ===========================================================================
-# 5. Las 4 junctions de la migración 0124 entran por el camino normal, sin
+# 5. EL EJE PERSONA (ADR 0156). Las tablas cuyo dato pertenece a alguien y no a
+#    un tenant llevan `ENABLE` + `FORCE` + una policy que cuelga de
+#    `app.user_id`. Sin esto, una tabla sin columna de tenant se despachaba con
+#    una frase en `GLOBAL_TABLES_ALLOWLIST` que nadie comprobaba — que es como
+#    cinco tablas del córtex pasaron de F1 a F4 sin una sola policy mientras su
+#    justificación decía «aislado por owner_user_id».
+# ===========================================================================
+def test_every_owner_scoped_table_has_owner_rls(schema) -> None:
+    missing_from_schema = [t for t in OWNER_SCOPED_TABLES if t not in schema]
+    assert not missing_from_schema, (
+        f"OWNER_SCOPED_TABLES nombra tablas que no existen: {missing_from_schema}."
+        " Una entrada muerta aquí es un invariante que dejó de vigilar algo."
+    )
+
+    offenders: list[str] = []
+    for table in sorted(OWNER_SCOPED_TABLES):
+        meta = schema[table]
+        if not meta["rls"]:
+            offenders.append(f"{table}: sin ENABLE ROW LEVEL SECURITY")
+        elif not meta["force"]:
+            offenders.append(f"{table}: sin FORCE ROW LEVEL SECURITY")
+        elif not meta["policies"]:
+            offenders.append(f"{table}: RLS activa pero SIN NINGUNA POLICY")
+        elif not meta["owner_policies"]:
+            offenders.append(
+                f"{table}: tiene policies {meta['policies']} pero ninguna cuelga de app.user_id"
+            )
+
+    assert len(OWNER_SCOPED_TABLES) >= 7, (
+        f"solo {len(OWNER_SCOPED_TABLES)} tablas owner-scoped catalogadas: el"
+        " catálogo se ha encogido y este invariante estaría vigilando de menos"
+    )
+    assert not offenders, (
+        "tablas que se aíslan por persona y NO lo defienden estructuralmente."
+        " Añade a su migración:\n  ALTER TABLE t ENABLE ROW LEVEL SECURITY;\n"
+        "  ALTER TABLE t FORCE ROW LEVEL SECURITY;\n"
+        "  CREATE POLICY t_owner_only ON t FOR ALL"
+        " USING (owner_user_id = NULLIF(current_setting('app.user_id', true), '')::uuid)"
+        " WITH CHECK (...);\n"
+        "NO uses el bloque de tenant: sobre estas tablas es a la vez más permisivo"
+        " (todo el tenant entra) y funcionalmente roto (el owner con otro contexto"
+        f" se queda a oscuras). Ver ADR 0156.\nOfensores: {offenders}"
+    )
+
+
+def test_the_cortex_is_not_isolated_by_tenant(schema) -> None:
+    """Ninguna policy del córtex cuelga de `app.tenant_id`. La regresión concreta.
+
+    El «arreglo» plausible ante un fallo de aislamiento aquí es copiar el bloque
+    canónico de una tabla de tenant. Sobre el córtex eso abre la mente privada
+    del System Owner a cualquier miembro de su tenant Y, a la vez, se la esconde
+    a él en cuanto entra con el contexto de otro (`open_tenant_session` fija
+    `app.tenant_id` al tenant ELEGIDO en la request). Es más permisivo y encima
+    no funciona, así que se vigila explícitamente.
+    """
+    cortex = sorted(t for t in OWNER_SCOPED_TABLES if t.startswith("cortex_"))
+    assert len(cortex) >= 6, (
+        f"solo {len(cortex)} tablas del córtex en el catálogo: el descubrimiento"
+        " se rompió y este test pasaría en vacío"
+    )
+    offenders = [t for t in cortex if schema[t]["guc_policies"]]
+    assert not offenders, (
+        f"tablas del córtex con una policy que cuelga de app.tenant_id: {offenders}."
+        " Ver ADR 0156 §Opciones A."
+    )
+
+
+# ===========================================================================
+# 6. Las 4 junctions de la migración 0124 entran por el camino normal, sin
 #    excepciones: es la comprobación de que este invariante y prod-14 encajan.
 # ===========================================================================
 def test_junction_tables_need_no_exception(schema) -> None:

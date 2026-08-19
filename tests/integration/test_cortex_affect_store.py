@@ -6,7 +6,8 @@ BYPASSRLS, ADR 0074), el UNIQUE parcial por turno rechaza un duplicado, y
 ``alembic downgrade 0092_cortex_threads`` la elimina (reversible); (b) la capa
 de persistencia: ``save_affect_snapshot`` → ``load_affect_state`` round-trip con
 decay lazy aplicado en lectura; (c) **cross-owner**: un owner ajeno NUNCA lee el
-snapshot de otro (filtro ``owner_user_id`` explícito; no hay RLS de respaldo).
+snapshot de otro (filtro ``owner_user_id`` explícito **y**, desde la migración
+``0140`` / ADR 0156, RLS de eje owner por debajo).
 
 Patrón de fixtures + admin sessionmaker BYPASSRLS tomado de
 ``test_cortex_threads.py``.
@@ -103,7 +104,8 @@ async def _seed_two_owners(dsn: str) -> dict[str, UUID]:
 
 
 # ---------------------------------------------------------------------------
-# Migración 0093: tabla + índices + UNIQUE parcial + NO RLS + reversible
+# Migración 0093: tabla + índices + UNIQUE parcial + reversible
+# (+ RLS de eje owner desde la 0140 — ADR 0156)
 # ---------------------------------------------------------------------------
 async def _table_exists(conn: asyncpg.Connection, name: str) -> bool:
     return bool(
@@ -126,7 +128,7 @@ async def _index_exists(conn: asyncpg.Connection, name: str) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_affect_snapshot_migration_indexes_no_rls_and_reversible(
+async def test_affect_snapshot_migration_indexes_rls_and_reversible(
     configured_app, migrations_pg_dsn: str, alembic_config
 ) -> None:
     seed = await _seed_two_owners(migrations_pg_dsn)
@@ -137,11 +139,30 @@ async def test_affect_snapshot_migration_indexes_no_rls_and_reversible(
         assert await _index_exists(conn, "ix_cortex_affect_snapshots_owner_created")
         assert await _index_exists(conn, "ix_cortex_affect_snapshots_owner_mood_label")
 
-        # tenant-less BYPASSRLS: la tabla NO debe llevar RLS activada.
-        relrowsecurity = await conn.fetchval(
-            "SELECT relrowsecurity FROM pg_class WHERE relname = 'cortex_affect_snapshots'"
+        # RLS de eje OWNER (ADR 0156, migración 0140). Esta aserción decía lo
+        # contrario —«la tabla NO debe llevar RLS activada»— porque el ADR 0074
+        # leyó «tenant-less» como «sin eje que defender». Aquí vive el estado
+        # afectivo del System Owner y `app_user` (NOBYPASSRLS) tiene DML sobre
+        # la tabla por los default privileges: sin policy, lo único que la
+        # separaba de una sesión de tenant era que cada query recordase su filtro.
+        for col, nombre in (
+            ("relrowsecurity", "RLS"),
+            ("relforcerowsecurity", "FORCE"),
+        ):
+            valor = await conn.fetchval(
+                f"SELECT {col} FROM pg_class WHERE relname = 'cortex_affect_snapshots'"
+            )
+            assert valor is True, (
+                f"cortex_affect_snapshots se quedó sin {nombre}: la migración 0140"
+                " la protege por `owner_user_id = app.user_id` (ADR 0156)"
+            )
+        qual = await conn.fetchval(
+            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy"
+            " WHERE polrelid = 'cortex_affect_snapshots'::regclass"
         )
-        assert relrowsecurity is False
+        assert qual and "app.user_id" in qual, (
+            f"la policy no cuelga de `app.user_id` sino de {qual!r}"
+        )
 
         # Sembramos una conversación + turno reales (el FK source_turn_id apunta
         # a cortex_turns.id).

@@ -10,10 +10,11 @@ consumidas y la memoria ``learning`` generada. Sirve para:
     ``metadata_``, así una re-ejecución no duplica);
   * el dedup por tema reciente (no re-investigar lo mismo en N días).
 
-Como el resto del córtex es **tenant-less** (excepción consciente al Principio 1 —
-ADR 0074): NO hay RLS; el aislamiento es por filtro ``owner_user_id`` explícito en
-TODO SQL (la prueba de mérito es el test cross-owner). Estilo espejo de
-:mod:`api_server.db.cortex_affect`.
+Como el resto del córtex es **tenant-less** (ADR 0074): el aislamiento es por
+``owner_user_id``, con el filtro explícito en TODO SQL como primera capa (la
+prueba de mérito es el test cross-owner) y la policy
+``cortex_curiosity_pursuits_owner_only`` de la migración ``0140`` como defensa
+estructural (ADR 0156). Estilo espejo de :mod:`api_server.db.cortex_affect`.
 """
 
 from __future__ import annotations
@@ -53,8 +54,9 @@ CURIOSITY_STATUSES: tuple[str, ...] = (
 class CortexCuriosityPursuit(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Una persecución autónoma de curiosidad del córtex (auditoría + idempotencia).
 
-    NO :class:`TenantScopedMixin` (no hay RLS). ``owner_user_id`` es el eje de
-    aislamiento (filtro explícito en todo SQL).
+    NO :class:`TenantScopedMixin` (la RLS no cuelga del tenant).
+    ``owner_user_id`` es el eje de aislamiento: filtro explícito en todo SQL +
+    policy ``cortex_curiosity_pursuits_owner_only`` (migración ``0140``).
     """
 
     __tablename__ = "cortex_curiosity_pursuits"

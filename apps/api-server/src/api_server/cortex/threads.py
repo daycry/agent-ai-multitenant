@@ -1,9 +1,14 @@
 """Capa de persistencia del hilo del córtex — owner-scoped, BYPASSRLS (F1).
 
 Funciones puras async sobre una :class:`AsyncSession` (la del admin/BYPASSRLS,
-que pasa el caller). Las tablas del córtex son **tenant-less**: no hay RLS, así
-que **TODO `SELECT`/`UPDATE`/`DELETE` lleva un filtro `owner_user_id` explícito**
-(defensa en profundidad; el test cross-owner de F1 es la prueba de mérito).
+que pasa el caller). Las tablas del córtex son **tenant-less** y se aíslan por
+`owner_user_id`. Desde el ADR 0156 hay RLS sobre ese eje (policies
+`*_owner_only`, migraciones 0125 y 0140), pero **eso NO releva a este módulo de
+su filtro**: el caller conecta con un rol BYPASSRLS, y BYPASSRLS se salta la RLS
+incluso con `FORCE`, así que **TODO `SELECT`/`UPDATE`/`DELETE` sigue llevando su
+filtro `owner_user_id` explícito** — hoy es la única capa que actúa de verdad.
+Quitarlo "porque ya hay RLS" sería un cambio de seguridad neto a peor; el test
+cross-owner de F1 es la prueba de mérito.
 
 ``tenant_id`` es un discriminante físico para la memoria del owner (Decisión D1),
 NO un eje de autorización: se resuelve una vez como el tenant de la membresía
