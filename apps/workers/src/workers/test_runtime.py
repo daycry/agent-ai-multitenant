@@ -386,9 +386,45 @@ class AuxServiceSpec:
 # Curated defaults for the two stacks every project asks for. The
 # worker accepts user-provided AuxServiceSpec lists; these are just
 # the names we register by default through `default_aux_services()`.
+#
+# ---------------------------------------------------------------------------
+# FIJADAS POR DIGEST (prod-11 task_digest_pin_11 / gap5-3), 2026-08-19.
+#
+# Las 22 bases externas bajo `docker/` llevan `@sha256:` desde el 2026-07-31.
+# Estas dos se quedaron fuera porque no viven en un Dockerfile sino aquí, en
+# constantes de módulo, y la guarda que recorría Dockerfiles no las veía.
+#
+# No es un hueco de inventario. Son los ÚNICOS contenedores del sistema que
+# comparten la red per-tarea con código no confiable: el agente escribe los
+# tests que se ejecutan al lado de este postgres. Con un tag rodante, la
+# pregunta que se hace después de un incidente —«¿qué binario corrió en ese
+# run?»— no tiene respuesta.
+#
+# LA REGLA DURA DE LA FASE ES «sin refresco automático, no se pinea», y aquí el
+# vehículo NO es Dependabot: su ecosistema `docker` parsea Dockerfiles y ficheros
+# compose, no fuentes Python. El plan dejó cuatro salidas abiertas; se toma la
+# (b) —pinear y revisar a mano, con la fecha escrita— y se descarta la (a)
+# (mover las referencias a un fichero que exista sólo para que un bot lo lea) y
+# la (c) (dejarlas por tag), porque «sidecar efímero» describe su ciclo de vida,
+# no su vecindario: comparten red con el código del agente.
+# El coste de (b) es honesto y está acotado: dos líneas cada revisión.
+# Procedimiento y calendario en docs/06-runbooks/triage-vulnerabilidades.md.
+#
+# El tag legible va DENTRO de la referencia (`postgres:16-alpine@sha256:…`), no
+# en un comentario al lado: así el operador que lee un `docker ps` sabe qué
+# versión es, y el día que se cambie el digest sin cambiar el tag se ve en el
+# diff. Ambos resueltos contra el registry con `docker buildx imagetools
+# inspect` (digest del ÍNDICE multi-arch, no el del manifest de una plataforma:
+# fijar el de amd64 rompería el arranque en un host arm64).
+#
+# review: 2026-11-19
+# ---------------------------------------------------------------------------
 DEFAULT_POSTGRES = AuxServiceSpec(
     name="postgres-test",
-    image="postgres:16-alpine",
+    # postgres:16-alpine == 16.15-alpine3.24 (resuelto 2026-08-19)
+    image=(
+        "postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685"
+    ),
     env={
         "POSTGRES_USER": "test",
         "POSTGRES_PASSWORD": "test",
@@ -402,7 +438,11 @@ DEFAULT_POSTGRES = AuxServiceSpec(
 
 DEFAULT_REDIS = AuxServiceSpec(
     name="redis-test",
-    image="redis:7-alpine",
+    # redis:7-alpine == 7.4.10-alpine (resuelto 2026-08-19). Ver el bloque de
+    # DEFAULT_POSTGRES para el porqué del pin y su calendario de revisión.
+    image=(
+        "redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+    ),
     healthcheck_cmd=("redis-cli", "ping"),
     mem_limit="128m",
 )
@@ -713,7 +753,17 @@ class TestRuntimeRunner:
         started: list[Any] = []
         for aux in spec.aux_services:
             run_kwargs = build_aux_run_kwargs(self._settings, aux, network_name)
-            container = self.client.containers.run(aux.image, **run_kwargs)
+            # ADR 0148 (condición 2) + prod-11 task_digest_pin_11: se lanza la
+            # referencia CANÓNICA por digest, no el tag del que salió. Pasar el
+            # tag aquí después de haber descargado el digest deja al daemon
+            # elegir otra vez, y puede elegir distinto — el pin quedaría en
+            # decoración. Si el pull falla se ABORTA: levantar «un postgres
+            # cualquiera» bajo el nombre correcto, al lado del código no
+            # confiable que el agente escribe, daría un run verde que nadie
+            # puede auditar. Una referencia sin digest (aux declarada por un
+            # proyecto, ADR 0129) pasa intacta.
+            image = ensure_runtime_image(self.client, aux.image)
+            container = self.client.containers.run(image, **run_kwargs)
             started.append(container)
             if aux.healthcheck_cmd is not None:
                 self._wait_healthy(container, aux)

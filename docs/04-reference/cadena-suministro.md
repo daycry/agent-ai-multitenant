@@ -2,7 +2,7 @@
 title: Cadena de suministro — qué se escanea, dónde y con qué umbral
 docs_language: es
 audience: security, devops, backend-dev, tech-lead
-updated: 2026-08-01
+updated: 2026-08-19
 ---
 
 # Cadena de suministro
@@ -69,12 +69,15 @@ backends vía `BASE_IMAGE`), `agent-runtime` y `browser-runtime` (los
 contenedores donde corre el código NO confiable, Principio Rector 2) y las dos
 del installer.
 
-> **Modo del gate a 2026-07-31**: `security-scan` corre con
-> `continue-on-error: true` — **informa, no bloquea**. Convertirlo en check
-> obligatorio es `task_sca_gate_08` del plan y exige permisos de administración
-> del repo (branch protection). El `uv lock --check` sí es bloqueante desde el
-> primer día: vive en `lint-python` a propósito, porque es higiene de repo y no
-> un hallazgo de vulnerabilidad.
+> **Modo del gate desde 2026-08-19**: `security-scan` declara
+> `continue-on-error: false` — **un hallazgo SCA rompe el job**. Se pudo encender
+> porque el backlog que justificaba el modo informe se vació (§4). Queda un paso
+> humano para que además impida el merge: añadir el check
+> `SCA (pip-audit + npm audit)` —el `name:` del job, no su id— a los _required
+> status checks_ de branch protection, que exige permisos de administración del
+> repo (runbook §6). El `uv lock --check` sí es bloqueante desde el primer día:
+> vive en `lint-python` a propósito, porque es higiene de repo y no un hallazgo
+> de vulnerabilidad.
 
 ---
 
@@ -158,22 +161,40 @@ Lo que **no** está pineado por digest, a propósito o por decidir:
   > trabajo pendiente, no una excepción razonada. Pinearlas recrea medio stack en
   > el siguiente `up -d`, así que quiere su propia ventana.
 
-- `postgres:16-alpine` / `redis:7-alpine` de los servicios auxiliares del worker
-  (`apps/workers/src/workers/test_runtime.py`): un digest en una constante de
-  Python no lo refresca ningún ecosistema de Dependabot, así que pinearlo ahí
-  chocaría con la regla dura del propio plan. Pendiente de decisión.
+- ~~`postgres:16-alpine` / `redis:7-alpine` de los servicios auxiliares del
+  worker~~ — **pineados el 2026-08-19**, ver abajo.
 
-  > **Lo que cambió el 2026-08-01 y afecta a esa decisión**: la premisa de arriba
-  > —«en Python no hay vía de refresco»— dejó de ser cierta en general. El ADR
-  > 0148 entregó exactamente eso para las 14 imágenes de runtime: un manifiesto
-  > generado (`runtime_images.json`) que **no refresca Dependabot sino un job de
-  > CI** (`refresh-digests`), que resuelve los digests contra el registry y abre
-  > un PR. O sea: el vehículo de refresco no tiene por qué ser Dependabot, y la
-  > opción (b) del plan («pinear en Python + revisión manual mensual») ya no es la
-  > única salida del lado Python. Sigue siendo una decisión, no una
-  > implementación: estas dos imágenes **no las publica este proyecto**, así que
-  > reutilizar el mecanismo del 0148 significaría resolver digests de imágenes
-  > ajenas en un job propio, que es un diseño distinto y hay que quererlo.
+  > **Decisión tomada (2026-08-19): opción (b) del plan — pinear en Python con
+  > revisión manual anotada.** Las dos referencias viven en
+  > `apps/workers/src/workers/test_runtime.py` (`DEFAULT_POSTGRES` /
+  > `DEFAULT_REDIS`) y ahora llevan `tag@sha256:…`, con la versión legible en un
+  > comentario y un `# review: YYYY-MM-DD` que entra en el mismo calendario que
+  > las excepciones SCA (runbook §6).
+  >
+  > Se descartaron las otras tres: **(a)** mover las referencias a un fichero que
+  > Dependabot parsee es crear un fichero que existe sólo para que lo lea un bot;
+  > **(c)** dejarlas por tag como «excepción razonada por ser sidecars efímeros»
+  > confunde su ciclo de vida con su vecindario —son los **únicos** contenedores
+  > que comparten la red per-tarea con código no confiable, y la pregunta de
+  > después de un incidente es «¿qué binario corrió?»—; **(d)** reutilizar el job
+  > `refresh-digests` del ADR 0148 resuelve digests de imágenes que este proyecto
+  > **no publica**, que es un diseño distinto del que ese ADR firmó.
+  >
+  > Y el pin no se quedó en la declaración: `_start_aux_services` pasa por
+  > `ensure_runtime_image`, así que se lanza la referencia canónica
+  > `repo@sha256:…` y un pull irresoluble **aborta la tarea** en vez de levantar
+  > lo que hubiera en el daemon local con ese nombre (ADR 0148, condición 2).
+  > Guardado por `tests/unit/test_aux_images_pinned_by_digest.py`.
+  >
+  > **Con ellas van los cinco tipos del catálogo del ADR 0129**
+  > (`workers/runtime_services.py::SERVICE_CATALOG`: mysql, mariadb, postgres,
+  > redis, beanstalkd), que es lo que un proyecto declara en su config y acaba en
+  > los mismos sidecars. Ahí vivía el peor caso del repo por este criterio:
+  > `schickling/beanstalkd:latest`, un tag rodante de una imagen de tercero sin
+  > annotations OCI —el digest es su única identificación—. El review/preview,
+  > que levanta esos mismos sidecars por otra puerta, también resuelve por digest;
+  > allí un digest irresoluble degrada a «preview sin base de datos» en vez de
+  > abortar, que es la semántica correcta para una vista previa.
 
 ### 3.1 Las 14 imágenes de runtime (ADR 0148)
 
@@ -243,46 +264,46 @@ los cumpla.
 
 **npm no admite ignore por aviso** — solo `--audit-level`. Por eso una
 vulnerabilidad npm que no se puede arreglar **no se suprime**: se registra en un
-plan o ADR y el gate npm no puede volverse obligatorio hasta resolverla.
+plan o ADR. Bajar el umbral a `critical` **no** es una salida: no documenta la
+excepción, la esconde, y se lleva por delante todos los `high` futuros a la vez.
 
-### Backlog conocido (re-medido el 2026-08-10)
+### Backlog: VACÍO (medido el 2026-08-19)
 
-> **Actualización del 2026-08-10 — el backlog EMPEORÓ sin que cambiara una línea
-> de código.** `next` sigue en 14.2.35 y `critical` sigue limpio, pero los avisos
-> `high` han pasado de **2 a 3**, uno de ellos por el `postcss` empotrado. Y lo
-> que más importa para decidir: el rango vulnerable que reporta npm es ahora
-> **`next 9.3.4-canary.0 – 16.3.0-preview.10`**, así que **ni la línea 14 ni la 15
-> lo cierran** y el destino de la migración es **`next@16.3.0`** (antes 16.2.12).
-> La condición de salida de más abajo no cambia; el coste de no elegir, sí. Ocho
-> advisories de `next` (bypass de middleware con i18n, DoS en Server Actions, dos
-> SSRF, dos confusiones de caché, payload sin cota en Edge y la divulgación de
-> endpoints de Server Functions) más cuatro de `postcss`.
+| Superficie                                              | Resultado                           |
+| ------------------------------------------------------- | ----------------------------------- |
+| `pip-audit -r constraints.txt`                          | _No known vulnerabilities_ (exit 0) |
+| `npm audit --omit=dev --audit-level=high` (admin-panel) | _found 0 vulnerabilities_ (exit 0)  |
+| `npm audit --omit=dev --audit-level=high` (installer)   | _found 0 vulnerabilities_ (exit 0)  |
 
-### Backlog medido el 2026-08-01
+Sin apoyarse en ninguna supresión: los dos ficheros de excepciones siguen sin una
+sola entrada vigente. **La condición de salida que este documento escribió el
+2026-08-01 —`--audit-level=high` en exit 0 en las dos superficies— se cumple**, y
+con ella `security-scan` pasó a `continue-on-error: false` (gate real; queda el
+clic de branch protection, runbook §6).
 
-`next` está en **14.2.35**, el último parche de la línea 14.2.x: eso cerró la
-crítica `GHSA-955p-x3mx-jcvp` (divulgación no autenticada de Server Functions) y
-`npm audit --audit-level=critical` sale **limpio** en las dos superficies. Pero
-`--audit-level=high` sigue en rojo: quedan 2 avisos `high` cuyo rango abarca
-**todo 14.x** (más un `postcss` empotrado) y el único fix disponible es
-**`next` 16**, un salto de major con roturas. Eso necesita su propio plan; hasta
-entonces el gate npm no puede ser obligatorio sin mentir.
+### Cómo se cerró, y qué aprender de ello
 
-Medición del 2026-08-01, **idéntica** a la del 2026-07-31 (npm propone
-`next@16.2.12`, «which is a breaking change»):
+Cuatro mediciones (2026-07-31, 08-01, 08-10) concluyeron lo mismo: `next` estaba
+en 14.2.35, el rango vulnerable reportado era `next 9.3.4-canary.0 –
+16.3.0-preview.10` —o sea que **ninguna versión de las líneas 14 ni 15 lo
+cerraba**— y la única salida parecía una migración a `next` 16, un salto de major
+con roturas que necesitaba su propio plan.
 
-| Comando                                       | admin-panel | installer  |
-| --------------------------------------------- | ----------- | ---------- |
-| `npm audit --omit=dev --audit-level=critical` | exit **0**  | exit **0** |
-| `npm audit --omit=dev --audit-level=high`     | exit **1**  | exit **1** |
+No hizo falta. Las dos superficies van hoy por **`next 15.5.23`** y los avisos han
+desaparecido: el ecosistema publicó el parche dentro de una línea que se daba por
+condenada, y alguien lo aplicó. El coste estimado de aquel bloqueo —un plan de
+migración de major— nunca se pagó.
 
-**Condición de salida, para no volver a medir esto a ciegas**: este backlog se
-cierra cuando `npm audit --omit=dev --audit-level=high` salga en **exit 0** en las
-dos superficies. Hoy eso solo puede venir de migrar a `next` 16 en el admin-panel
-y en el frontend del installer; un parche nuevo de 14.2.x **no basta**, porque el
-rango vulnerable de los dos avisos abarca toda la línea 14. Mientras eso siga así,
-`task_next_update_01` y `task_sca_gate_08` de `prod-11` permanecen abiertas por
-esta razón y no por falta de trabajo.
+> **La lección, porque va a repetirse**: un veredicto de SCA tiene fecha de
+> caducidad en las dos direcciones. Los avisos aparecen sin que cambie el código
+> (eso ya lo registró la medición del 08-10, que empeoró de 2 a 3 avisos) y
+> **también desaparecen sin que cambie el código**. Antes de presupuestar un
+> salto de major por un aviso de SCA, vuelve a medir.
+
+El suelo de la guarda anti-regresión se subió en consecuencia: `MIN_NEXT` en
+`tests/unit/test_supply_chain_config.py` pasa de `14.2.35` a `15.5.23`. Dejarlo en
+14.2.35 —«el último parche de la línea 14»— habría dado por bueno un downgrade a
+una versión que la medición del 08-10 sitúa **dentro** del rango vulnerable.
 
 ---
 

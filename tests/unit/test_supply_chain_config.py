@@ -37,9 +37,24 @@ CONSTRAINTS = REPO_ROOT / "constraints.txt"
 # Superficies npm del monorepo (task_next_update_01 / task_npm_audit_06).
 NPM_SURFACES = ("apps/admin-panel", "apps/installer")
 
-# next 14.2.35 es el último parche de la línea 14.2.x y cierra la crítica
-# GHSA-955p-x3mx-jcvp + GHSA-h64f-5h5j-jqjh/c4j6/wfc6/36qx y el postcss embebido.
-MIN_NEXT = (14, 2, 35)
+# next: el suelo NO es «el último parche de la línea 14», es la primera versión
+# que sale limpia del gate.
+#
+# Historia corta, porque el número de aquí se ha quedado obsoleto una vez y sería
+# fácil repetirlo: el suelo estuvo en `14.2.35` (último parche de 14.2.x, cierra
+# la crítica GHSA-955p-x3mx-jcvp y el postcss embebido). El 2026-08-10 se midió
+# que **el rango vulnerable de los avisos `high` vivos abarcaba toda la línea 14
+# y toda la 15 hasta 16.3.0-preview**: o sea que 14.2.35 dejó de ser un suelo
+# seguro sin que cambiara una sola línea del repo, y esta guarda lo habría dado
+# por bueno. Un suelo que sólo cierra las CVEs del día que se escribió no es una
+# guarda anti-regresión, es un comentario.
+#
+# Hoy (2026-08-19) las dos superficies van en `15.5.23` y `npm audit --omit=dev
+# --audit-level=high` sale en **exit 0 en ambas** (medido, ver
+# task_next_update_01). El suelo se sube a esa versión: degradar a cualquier
+# 14.x —todas dentro del rango vulnerable medido— rompe la suite en vez de
+# esperar a que lo cace un `npm audit` que nadie mira.
+MIN_NEXT = (15, 5, 23)
 
 # El job de CI que orquesta el SCA (task_pip_audit_05 / 06 / 07).
 SECURITY_SCAN_JOB = "security-scan"
@@ -699,6 +714,44 @@ def test_security_scan_declares_its_gate_mode(security_scan: dict[str, Any]) -> 
         f"el job '{SECURITY_SCAN_JOB}' debe declarar `continue-on-error` "
         "explícitamente (true = modo informe de la semana de triage; "
         "false = gate de task_sca_gate_08)"
+    )
+
+
+def test_security_scan_is_an_enforcing_gate(security_scan: dict[str, Any]) -> None:
+    """Y el modo declarado es GATE, no informe (task_sca_gate_08).
+
+    El job nació con `continue-on-error: true` para no bloquear el día 1 todos
+    los PRs con el backlog heredado de CVEs. Ese backlog está **vacío**, medido
+    el 2026-08-19 en las tres superficies del job:
+
+      * `pip-audit --skip-editable` → *No known vulnerabilities found* (exit 0);
+      * `npm audit --omit=dev --audit-level=high` en `apps/admin-panel` →
+        *found 0 vulnerabilities* (exit 0);
+      * lo mismo en `apps/installer` (exit 0).
+
+    Y las dos listas de excepciones (`.trivyignore`, `.pip-audit-ignore`) no
+    tienen ni una entrada vigente, así que el verde no se apoya en ninguna
+    supresión.
+
+    Con el backlog a cero, dejar el job en modo informe ya no protege de nada:
+    sólo hace que la próxima vulnerabilidad entre en `master` con el check en
+    verde-tachado que nadie lee. Esta guarda impide que el flip se deshaga en
+    silencio — volver a `true` exige tocar este test y explicar por qué.
+
+    Lo que esta guarda NO puede comprobar: que el check esté en los *required
+    status checks* de la protección de rama. Eso vive en la configuración de
+    GitHub, no en el repo, y es el paso que sigue siendo del operador
+    (nombre exacto del check: el `name:` del job, no su id).
+    """
+    mode = security_scan["continue-on-error"]
+    assert mode is False, (
+        f"el job '{SECURITY_SCAN_JOB}' sigue en modo informe "
+        f"(continue-on-error: {mode!r}): un hallazgo SCA no rompe el build. "
+        "El backlog que justificaba el modo informe está vacío desde el "
+        "2026-08-19 (pip-audit y npm audit en exit 0 en las tres superficies, "
+        "sin excepciones vigentes en .trivyignore ni .pip-audit-ignore). Si hay "
+        "un motivo nuevo para volver al modo informe, escríbelo aquí y en "
+        "docs/06-runbooks/triage-vulnerabilidades.md §6."
     )
 
 

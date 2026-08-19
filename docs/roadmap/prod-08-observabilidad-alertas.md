@@ -292,11 +292,32 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
   —el `docker compose config` pasa, porque los binds son sintácticamente
   válidos— y sólo se ve al arrancar.
 
+- ⏳ **2026-08-19 — sin cambios, y hoy se cae el último argumento que quedaba a
+  favor de esperar.** No repito la investigación: la config, el `continue: true`,
+  el buzón montado en los dos composes y la validación con `amtool` siguen como
+  el 2026-08-12 (re-comprobado con `pytest tests/unit/test_alertmanager_routing.py
+tests/unit/test_alertmanager_secret_mount.py tests/unit/test_compose_generator.py -k
+alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de este
+  plan que se aplazaban por «eso es `apps/installer/**`, otro carril» se han
+  cerrado hoy tocando justo ese carril** (14 y 15). O sea que la frase que
+  acompañaba a esta casilla —«lo que falta no es código»— ya no puede apoyarse en
+  un reparto de trabajo: se sostiene sola, y es verdad. Falta **una credencial de
+  Slack y su decisión de custodia** (prod-10, humano).
+  El bloqueante REAL que sigue abierto y que sí es código es el otro, el que
+  registró la ⚠️ de arriba: **el instalador no escribe el árbol `monitoring/`
+  junto al compose que genera**, así que en una instalación generada con
+  monitorización Docker crea directorios donde los binds esperan ficheros y ni
+  Prometheus ni Alertmanager arrancan con su configuración. Eso no lo arregla una
+  línea —hay que elegir entre copiar el árbol del repo, generarlo o empaquetarlo
+  en la imagen del instalador— y sigue mereciendo su propia casilla.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod08_02_a
     runtime: python-pytest
     command: "pytest tests/unit/test_compose_generator.py -k alertmanager -v"
+  - id: auto_prod08_02_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_alertmanager_routing.py tests/unit/test_alertmanager_secret_mount.py -v"
   ```
 
 #### `task_prod08_alert_e2e_03` — Test e2e de alerta sintética
@@ -528,7 +549,7 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
 
 #### `task_prod08_watchdog_14` — Watchdog desplegado con alerta real
 
-- [ ] **Título**: Declarar el watchdog como servicio de compose y enrutar `watchdog.alert` a la
+- [x] **Título**: Declarar el watchdog como servicio de compose y enrutar `watchdog.alert` a la
       ingestión de alertas
 - **Descripción**: hoy `apps/watchdog` no aparece en ningún `docker-compose.*.yml` ni en
   `_BUILDERS` del instalador (`compose_generator.py:704`) y al agotar reintentos su única salida
@@ -667,16 +688,63 @@ watchdog desplegado con alerta real y healthcheck del egress-proxy que puede fal
     `test_every_derived_app_is_published_by_the_release_workflow[watchdog]`.
   - **Sigue SIN marcar** por lo mismo de siempre: el servicio en
     `compose_generator.py` con sus dos redes (`apps/installer/**`, otro carril).
+- ✅ **CERRADA el 2026-08-19 — la mitad que faltaba (el generador del
+  instalador) está entregada.** Es la cuarta pasada de esta casilla y la primera
+  que toca `apps/installer/**`; las tres anteriores la aplazaron por reparto de
+  carriles, no por dificultad.
+  - **Qué había**: emisor (`alerting.py`), lista vigilada con los dos proxies,
+    resolución por etiquetas de Compose, servicio en el compose canónico con sus
+    dos redes, Dockerfile, y publicación por `release-images.yml`. Todo
+    verificado hoy, nada reimplementado.
+  - **Qué faltaba y se ha hecho**: `_watchdog_service` en
+    `compose_generator.py`, registrado en `_BUILDERS` **y en `CORE_SERVICES`**.
+    Lo segundo es la decisión que importa: en el compose canónico el watchdog va
+    bajo `profiles: [watchdog]` porque ese fichero es infraestructura y no
+    construye imágenes de aplicación; en el generado las apps SÍ están, y un
+    vigilante que hay que acordarse de levantar con un flag no vigila nada.
+  - **Lleva las DOS redes** (`agentic-net` + `agentic-docker`), que es el
+    requisito extra que dejó anotado la pasada del 2026-08-10: sin
+    `agentic-docker` no resuelve `docker-socket-proxy` y **no ve ningún
+    contenedor**; sin `agentic-net` no puede POSTear la alerta y ésta vuelve a
+    ser una línea de log local. Y `depends_on: docker-socket-proxy
+(service_healthy)`, para no abrir en cada `up` una ventana de
+    `container_missing`.
+  - **El token no se inventa**: referencia el MISMO
+    `${API_SERVER_ALERTS_INGEST_TOKEN}` que valida el endpoint y que el
+    instalador ya genera (`config_generators.py:302`). Una variable propia habría
+    dado un watchdog que cree avisar y se come un 401 en cada alerta.
+  - **Guarda**: `tests/security/test_watchdog_service_declaration.py` pasa a
+    ejecutar sus 8 invariantes contra los **dos artefactos** (canónico y
+    generado) mediante una fixture parametrizada — 16 tests. El test de red
+    deriva la red del daemon del sitio donde el proxy está declarado en CADA
+    artefacto, no de un literal. Con las guardas sobre un solo fichero, este
+    servicio estuvo diez días declarado en dev y ausente de producción; ahora
+    arreglar uno y olvidar el otro no compila.
+  - **Rojo verificado antes del arreglo**: los 8 tests `[compose-generado]` en
+    error, todos por la misma raíz («`compose-generado` no declara el servicio
+    `watchdog`»). Verde después, y `docker compose config` acepta el fichero
+    generado con el servicio nuevo.
+  - **Gotcha que costó una lectura equivocada**: la primera ejecución dio «8
+    passed» con la parametrización ya escrita — era la **caché de pytest**
+    sirviendo la colección anterior. Con `-p no:cacheprovider` aparecieron los 16
+    ítems y los 8 rojos. Un TDD que confirma su propio rojo contra una colección
+    cacheada no verifica nada.
 - **Tests automáticos**:
   ```yaml
+  # Corregido 2026-08-19: `apps/watchdog/tests/` no está en `testpaths` ni lo
+  # corre CI — habría sido un test que nadie ejecuta. Los del watchdog viven en
+  # tests/unit y tests/security desde el 2026-08-02.
   - id: auto_prod08_14_a
     runtime: python-pytest
-    command: "pytest apps/watchdog/tests/test_alert_delivery.py -v"
+    command: "pytest tests/unit/test_watchdog_alert_delivery.py tests/unit/test_watchdog_container_resolution.py -v"
+  - id: auto_prod08_14_b
+    runtime: python-pytest
+    command: "pytest tests/security/test_watchdog_service_declaration.py -v  # los dos composes"
   ```
 
 #### `task_prod08_egress_health_15` — Healthcheck del egress-proxy que puede fallar
 
-- [ ] **Título**: Eliminar el `|| true` del healthcheck de tinyproxy en compose canónico y
+- [x] **Título**: Eliminar el `|| true` del healthcheck de tinyproxy en compose canónico y
       generador
 - **Descripción**: en `docker/docker-compose.yml:268-273` y `compose_generator.py:366-374`,
   sustituir el final `|| true` del test `wget ... | grep -q tinyproxy` por `|| exit 1`. El
@@ -748,11 +816,45 @@ exit 1`. Fuera del carril `observabilidad` (`apps/installer/**`). Ojo: el test
   contraria y también habría estado «arreglado» sobre el papel.
 - **Sigue SIN marcar**: la mitad del generador es `apps/installer/**`, fuera de este
   carril, y ahora tiene un requisito extra que no tenía (portar la línea entera).
+- ✅ **CERRADA el 2026-08-19 — se portó la línea ENTERA al generador, que es lo
+  que las cuatro anotaciones anteriores dictaban y ninguna ejecutaba.**
+  - **Qué faltaba**: `compose_generator.py` seguía emitiendo
+    `wget -q -O- --no-proxy … | grep -q tinyproxy || true` para los dos proxies.
+    O sea que en la instalación de PRODUCCIÓN —la única sin nadie mirando
+    `docker ps`— un tinyproxy muerto seguía saliendo `healthy`, y desde que el
+    watchdog los vigila (casilla 14), tampoco se reiniciaba.
+  - **Qué se hizo**: una constante única, `TINYPROXY_HEALTHCHECK_CMD`, copia
+    literal del compose canónico —`-Y off` (la forma de BusyBox) y afirmando el
+    `403 Access denied`—, usada por `_egress_proxy_service` y
+    `_registry_proxy_service`. Una constante y no dos cadenas: tener el comando
+    escrito dos veces es exactamente cómo el registry-proxy heredó del
+    egress-proxy el mismo defecto por copy-paste.
+  - **NO se ejecutó el «arreglo de dos caracteres»** que el plan repitió tres
+    veces (`|| true` → `|| exit 1`). Habría dejado un healthcheck que falla
+    SIEMPRE —`--no-proxy` no existe en el wget de BusyBox— con los dos proxies
+    permanentemente `unhealthy` y el watchdog reiniciándolos en bucle. La
+    anotación 🔴 del 2026-08-12 tenía razón y aquí queda ejecutada.
+  - **Guarda**: las dos superficies se comprueban ahora en el MISMO fichero
+    (`tests/unit/test_compose_healthchecks_honest.py`, 5 tests), y el test del
+    generador no compara el sufijo: exige que la cadena sea **idéntica** a la
+    canónica, que es la única verificada contra el binario. Arreglar una
+    superficie y olvidar la otra —lo que pasó durante doce días— ya no compila.
+  - **Rojo verificado antes del arreglo**: 3 fallos
+    (`test_no_generated_healthcheck_swallows_its_own_failure` y las dos
+    parametrizaciones de `test_generated_tinyproxy_healthcheck_is_the_canonical_one`,
+    con el diff de las dos cadenas en el mensaje). Verde después, y
+    `docker compose config` acepta el fichero generado
+    (`test_docker_compose_config_accepts_generated_file`, ejecutado de verdad:
+    el CLI está presente, no se saltó).
 - **Tests automáticos**:
   ```yaml
+  # Corregido 2026-08-19: el comando declarado apuntaba a
+  # `test_compose_generator.py -k egress_healthcheck`, que no selecciona nada.
+  # La invariante («un healthcheck que no puede fallar no vigila nada») vive en
+  # un fichero propio y cubre las DOS superficies a la vez.
   - id: auto_prod08_15_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_compose_generator.py -k egress_healthcheck -v"
+    command: "pytest tests/unit/test_compose_healthchecks_honest.py -v"
   ```
 
 ### Fase F — Documentación y runbook

@@ -99,3 +99,91 @@ def test_the_two_tinyproxy_proxies_are_covered_and_fail_loudly() -> None:
             f"el healthcheck de {name} debe afirmar el 403 que tinyproxy da a "
             "una petición directa: es la señal de que está vivo y filtrando"
         )
+
+
+# ---------------------------------------------------------------------------
+# La MISMA invariante, en el otro artefacto: el compose que genera el instalador.
+#
+# Por qué vive en este fichero y no en `test_compose_generator.py`: el defecto
+# `deploy-9` no es «el compose canónico tiene un `|| true`», es «hay un
+# healthcheck que no puede fallar». Con la guarda sólo sobre el fichero
+# canónico, el arreglo del 2026-08-10 dejó el generador intacto durante doce
+# días y la casilla `task_prod08_egress_health_15` medio hecha: en el despliegue
+# de PRODUCCIÓN —el único que el operador ejecuta— un tinyproxy muerto seguía
+# saliendo `healthy`. Tener las dos superficies en el mismo fichero es lo que
+# impide que se vuelvan a arreglar por separado.
+#
+# Y la trampa que documentó el plan el 2026-08-12: el arreglo NO es cambiar el
+# final `|| true` por `|| exit 1`. El resto del comando del generador
+# (`wget --no-proxy … | grep -q tinyproxy`) **nunca fue válido** — el wget de
+# BusyBox no reconoce `--no-proxy` y sale por usage con rc≠0. Cambiar sólo el
+# final deja un healthcheck que falla SIEMPRE: los dos proxies quedan
+# permanentemente `unhealthy` y el watchdog (que desde prod-08 los vigila) entra
+# a reiniciarlos en bucle. Por eso el test de abajo no compara el sufijo: exige
+# el comando ENTERO del compose canónico, que es el único que se ha verificado
+# contra el binario (`docker inspect` → healthy, FailingStreak=0).
+# ---------------------------------------------------------------------------
+
+_TINYPROXY_SERVICES = ("egress-proxy", "registry-proxy")
+
+
+def _generated_healthcheck_tests() -> dict[str, str]:
+    """{servicio: comando del healthcheck} del compose que genera el instalador."""
+    from installer_backend.compose_generator import generate_compose
+
+    from tests.unit.test_compose_generator import _config
+
+    compose = generate_compose(_config(), monitoring=True)
+    found: dict[str, str] = {}
+    for name, service in (compose.get("services") or {}).items():
+        if not isinstance(service, dict):
+            continue
+        healthcheck = service.get("healthcheck")
+        if not isinstance(healthcheck, dict):
+            continue
+        test = healthcheck.get("test")
+        if isinstance(test, list):
+            found[name] = " ".join(str(part) for part in test)
+        elif isinstance(test, str):
+            found[name] = test
+    return found
+
+
+def test_no_generated_healthcheck_swallows_its_own_failure() -> None:
+    checks = _generated_healthcheck_tests()
+
+    assert len(checks) >= 5, (
+        f"la guarda dejó de encontrar healthchecks en el compose generado (vio {len(checks)})"
+    )
+
+    offenders = sorted(name for name, test in checks.items() if "|| true" in test)
+    assert not offenders, (
+        "en el compose que genera el INSTALADOR estos healthchecks se tragan su "
+        "propio fallo con `|| true`, así que el servicio sale healthy aunque esté "
+        f"muerto: {offenders}. Es el despliegue donde más duele: ahí no hay nadie "
+        "mirando `docker ps`."
+    )
+
+
+@pytest.mark.parametrize("service", _TINYPROXY_SERVICES)
+def test_generated_tinyproxy_healthcheck_is_the_canonical_one(service: str) -> None:
+    """El generador debe llevar el comando ENTERO del compose canónico.
+
+    No basta con que «no tenga `|| true`»: el comando del generador arrastra
+    `--no-proxy`, que el wget de BusyBox no reconoce. Portar sólo el sufijo daría
+    un healthcheck que no puede pasar NUNCA — el defecto simétrico del que esta
+    tarea vino a cerrar, y peor, porque el watchdog reiniciaría los dos proxies
+    en bucle.
+    """
+    canonical = _healthcheck_tests()
+    generated = _generated_healthcheck_tests()
+
+    assert service in canonical, f"{service} perdió su healthcheck en el compose canónico"
+    assert service in generated, f"{service} perdió su healthcheck en el compose generado"
+
+    assert generated[service] == canonical[service], (
+        f"el healthcheck de {service} DIVERGE entre el compose canónico y el "
+        f"generado.\n  canónico : {canonical[service]}\n  generado : {generated[service]}\n"
+        "El canónico es el único verificado contra el binario (docker inspect → "
+        "healthy, FailingStreak=0); el generado debe ser idéntico, no parecido."
+    )

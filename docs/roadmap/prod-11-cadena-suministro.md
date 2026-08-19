@@ -85,13 +85,17 @@ integridad de las imágenes en build).
   `apps/*` y `packages/*` + `requirements-dev.txt`), npm (`apps/admin-panel`,
   `apps/installer`), docker (`docker/agent-runtimes/*`, `docker/egress-proxy`)
   y github-actions, con agrupación de PRs para no inundar el repo.
-- Actualización de `next` 14.2.5 → 14.2.35 en admin-panel e installer +
-  regeneración de lockfiles + `npm audit fix`.
+- `npm audit --omit=dev --audit-level=high` en **exit 0** en admin-panel e
+  installer. (El alcance decía «subir `next` 14.2.5 → 14.2.35»; corregido el
+  2026-08-19 — 14.2.35 dejó de ser un destino válido y hoy las dos superficies
+  van por 15.5.23. Ver `task_next_update_01`.)
 - Lockfile Python con `uv` (constraints exportados) consumido por CI y por
   `docker/agent-runtimes/agent-runtime/Dockerfile`, con check de drift en CI.
-- Pin por `@sha256` de los 17 `FROM` bajo `docker/` y de las imágenes
-  auxiliares `postgres:16-alpine`/`redis:7-alpine` de
-  `apps/workers/src/workers/test_runtime.py:306,320`.
+- Pin por `@sha256` de los `FROM` bajo `docker/` (22, no 17: el árbol creció) y
+  de las imágenes auxiliares del worker — las dos por defecto de
+  `test_runtime.py` **y los cinco tipos del catálogo del ADR 0129** en
+  `runtime_services.py`, que el alcance original no contemplaba y donde estaba el
+  único `:latest`. Ver `task_digest_pin_11`.
 - Verificación del SHA-384 del instalador de Composer (o `COPY --from` de la
   imagen oficial pineada) en `php-phpunit` y `php-pest`.
 - Pin por SHA de commit de los 17 usos de actions en los 3 workflows.
@@ -145,15 +149,25 @@ integridad de las imágenes en build).
 
 ### Fase A — Quick wins (sin dependencias, paralelizables)
 
-#### `task_next_update_01` — Subir next a 14.2.35 en admin-panel e installer
+#### `task_next_update_01` — `npm audit` limpio en las dos superficies npm
 
-- [ ] **Título**: Actualizar `next` 14.2.5 → 14.2.35 y limpiar `npm audit`
-- **Descripción**: Cambiar el pin en `apps/admin-panel/package.json:25` y
-  `apps/installer/package.json:18` a `14.2.35` (misma línea 14.2.x: cubre
-  GHSA-h64f-5h5j-jqjh, GHSA-c4j6-fc7j-m34r, GHSA-wfc6-r584-vfw7,
-  GHSA-36qx-fr4f-26g5 y el postcss embebido), regenerar ambos
-  `package-lock.json`, ejecutar `npm audit fix` y verificar que
-  `npm run build` y `npm run typecheck` siguen en verde en ambos frontends.
+> **Enunciado reescrito el 2026-08-19. El original decía «actualizar `next`
+> 14.2.5 → 14.2.35» y estaba doblemente obsoleto**: las dos superficies pasaron
+> por 14.2.35 (hecho el 2026-07-31) y hoy van por **15.5.23**, y sobre todo,
+> 14.2.35 dejó de ser un destino válido — la medición del 2026-08-10 situó el
+> rango vulnerable en `next 9.3.4-canary.0 – 16.3.0-preview.10`, que abarca toda
+> la línea 14. Implementar el enunciado literal habría sido un **downgrade a una
+> versión vulnerable**. Lo que la tarea perseguía de verdad —y es lo que ahora
+> dice el título— es que `npm audit` salga limpio; el número de versión era el
+> medio, no el fin, y por eso envejeció.
+
+- [x] **Título**: `npm audit --omit=dev --audit-level=high` en exit 0 en
+      `admin-panel` e `installer`
+- **Descripción**: mantener `next` (y `eslint-config-next` en la misma versión)
+  en una línea sin avisos `high` en dependencias de producción en las dos
+  superficies npm, con `npm run build` en verde en ambas. El pin concreto es
+  consecuencia de la medición, no un objetivo: la condición de salida está
+  escrita en [`cadena-suministro.md` §4](../04-reference/cadena-suministro.md).
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
@@ -276,6 +290,50 @@ integridad de las imágenes en build).
   **La casilla sigue abierta por lo mismo del 08-10**: su test declarado
   (`npm audit … --audit-level=high`) no puede salir verde dentro de 14.x. Hace
   falta elegir (a) migrar a next 16.3.0 o (b) registrar la excepción razonada.
+
+- ✅ **CERRADA el 2026-08-19 — y no por (a) ni por (b): el backlog se vació
+  solo.** Quinta medición, y la primera con dato nuevo en la dirección buena:
+
+  | Comando                                   | admin-panel | installer   |
+  | ----------------------------------------- | ----------- | ----------- |
+  | `npm audit --omit=dev --audit-level=high` | exit **0**  | exit **0**  |
+  | `npm run build`                           | exit **0**  | exit **0**  |
+  | `next` instalado                          | **15.5.23** | **15.5.23** |
+
+  «found 0 vulnerabilities» en las dos superficies. El bloqueante que cuatro
+  pasadas dieron por estructural —rango vulnerable `next 9.3.4-canary.0 –
+16.3.0-preview.10`, «ninguna versión de las líneas 14 ni 15 lo cierra»— **ya no
+  aparece**: las dos superficies salieron de la línea 14 y el ecosistema publicó
+  el parche. Ni el plan de migración a un major ni la excepción razonada llegaron
+  a hacer falta.
+
+  **La lección, que vale más que la casilla**: este plan registró cuatro veces
+  «no volver a medir, ya sabemos el resultado» y una de ellas midió igualmente y
+  encontró un empeoramiento (2→3 avisos). Hoy se ha encontrado lo contrario. Los
+  veredictos de SCA caducan **en las dos direcciones**, porque cambian los avisos
+  _y_ las versiones publicadas. Antes de presupuestar un salto de major por un
+  aviso de SCA, medir. Escrito en
+  [`cadena-suministro.md` §4](../04-reference/cadena-suministro.md) y en el
+  [runbook §6](../06-runbooks/triage-vulnerabilidades.md).
+
+  **Lo que se ha añadido para que esto no se deshaga**: el suelo de la guarda
+  anti-regresión sube de `14.2.35` a `15.5.23`
+  (`MIN_NEXT`, `tests/unit/test_supply_chain_config.py`). Dejarlo en 14.2.35
+  habría dado por bueno un downgrade a una versión que la propia medición del
+  08-10 sitúa **dentro** del rango vulnerable: un suelo que sólo cierra las CVEs
+  del día que se escribió no es una guarda, es un comentario. **Rojo verificado
+  por mutación**: bajando `next` a `14.2.35` en `apps/admin-panel/package.json`
+  caen `test_npm_surfaces_pin_a_patched_next` y
+  `test_npm_surfaces_pin_a_matching_eslint_config_next`; restaurado y verde.
+
+  **Alcance de lo medido, para no vender de más**: el gate es `--omit=dev`, así
+  que lo verde son las dependencias de PRODUCCIÓN. Sin `--omit=dev` quedan avisos
+  en la toolchain de build (vitest/vite y un `js-yaml` vía `@redocly/openapi-core`
+  en admin-panel; `brace-expansion` y `js-yaml` en installer). Están fuera del
+  umbral acordado a propósito (§1 de la referencia) y no se despliegan.
+  El `npm ci` del test declarado **no se ejecutó** —borrar `node_modules` con
+  otros carriles trabajando en el árbol no compensa—; sí el `npm audit` y el
+  `npm run build`, que son las aserciones.
 
 #### `task_dependabot_02` — Crear `.github/dependabot.yml` (pip + npm + docker + actions)
 
@@ -513,6 +571,50 @@ integridad de las imágenes en build).
   **Sigue haciendo falta**: permisos de administración del repositorio (pasos 2–4)
   y elegir (a) o (b) en el paso 1. Nada de eso es código.
 
+- 🟢 **2026-08-19 — el triage está HECHO y el gate ENCENDIDO en el workflow.
+  Queda un clic, y sigue siendo del operador.**
+  - **Triage, medido hoy**: `pip-audit -r constraints.txt` → _No known
+    vulnerabilities_ (exit 0); `npm audit --omit=dev --audit-level=high` → _found
+    0 vulnerabilities_ (exit 0) en las **dos** superficies. Y sin apoyarse en
+    ninguna supresión: `.trivyignore` y `.pip-audit-ignore` siguen sin una sola
+    entrada vigente. El bloqueante del paso 1 —elegir entre migrar a next 16 o
+    declarar la excepción— **desapareció**: ver `task_next_update_01`.
+  - **El pip-audit se corrió sobre `constraints.txt`, no sobre el `.venv`**, y la
+    distinción no es cosmética: el venv local va 74 paquetes por detrás del lock
+    (§2 de la referencia), así que auditarlo habría medido un árbol que CI no
+    instala. Es la misma trampa que ya escondió dos rojos de `fastapi`.
+  - **Paso 2 ejecutado**: el job pasa a `continue-on-error: **false**` — explícito,
+    no borrado. El modo debe seguir a la vista (lo exige
+    `test_security_scan_declares_its_gate_mode`) y volver a informe debe ser una
+    decisión escrita, no una ausencia. **Guarda nueva**:
+    `test_security_scan_is_an_enforcing_gate`, **rojo verificado** con el job
+    todavía en `true` («sigue en modo informe … un hallazgo SCA no rompe el
+    build»).
+  - **Deliberadamente NO se ha creado una ignore-list de npm.** npm no admite
+    ignore por aviso, y crear el mecanismo hoy —con cero entradas— sería un
+    mecanismo sin un solo llamante (trampa nº5 de
+    `verificar-antes-de-implementar.md`). Cuando aparezca un `high` sin fix se
+    construye entonces, con ese aviso como primera entrada justificada. Lo que
+    **no** es una salida, y queda escrito en el runbook: bajar `--audit-level` a
+    `critical`, que esconde la excepción en vez de documentarla y se lleva por
+    delante todos los `high` futuros.
+  - **POR QUÉ NO SE MARCA**: el título de la casilla es «→ gate obligatorio de
+    **branch protection**», y eso vive en la configuración de GitHub, no en el
+    repo. Lo que falta, exactamente y en este orden (checklist reescrita en el
+    [runbook §6](../06-runbooks/triage-vulnerabilidades.md)):
+    1. **arreglar la facturación** (CI caído desde el 2026-07-30 por «recent
+       account payments have failed»). Este orden importa: un check requerido que
+       nunca corre bloquea TODOS los merges;
+    2. Settings → Branches → `master` → Require status checks → añadir
+       **`SCA (pip-audit + npm audit)`**, el `name:` del job y **no** su id
+       `security-scan` (con el id el check no casa nunca y la protección queda de
+       adorno);
+    3. verificar con el test humano `human_prod11_01`.
+  - **Aviso honesto sobre el flip**: con CI caído no he podido observar el job en
+    verde. La evidencia es la medición local de las tres superficies sobre la
+    misma resolución que CI instala. El primer run tras restaurar la facturación
+    es la confirmación que falta.
+
 ### Fase C — Lockfile Python y builds reproducibles
 
 #### `task_uv_lock_09` — ADR de toolchain + generar lockfile del monorepo
@@ -703,7 +805,7 @@ integridad de las imágenes en build).
 
 #### `task_digest_pin_11` — Pinear por `@sha256` los 17 FROM y las imágenes auxiliares
 
-- [ ] **Título**: Digest-pinning de todas las bases bajo `docker/` + aux del worker
+- [x] **Título**: Digest-pinning de todas las bases bajo `docker/` + aux del worker
 - **Descripción**: Pinear por digest (formato
   `FROM python:3.12-slim@sha256:… # 3.12-slim`) los 17 `FROM`:
   `python:3.12-slim` (python-pytest:9, agent-runtime:19 y :62), `node:20-slim`
@@ -835,6 +937,88 @@ integridad de las imágenes en build).
   - **Lo pendiente sigue siendo lo mismo**: `postgres:16-alpine` y
     `redis:7-alpine` en `apps/workers/src/workers/test_runtime.py` (fuera de este
     carril) y la decisión (a)/(b)/(c)/(d) de arriba, con **(c)** recomendada.
+
+- ✅ **CERRADA el 2026-08-19 — decisión tomada (b) y ejecutada, con los digests
+  resueltos contra el registry.**
+  - **La mitad de `docker/` sigue en 22/22** (`grep '^FROM ' -r docker/`: 22
+    bases externas, las 22 con `@sha256:` y tag legible). No se re-mide como
+    narrativa: lo guardan `test_docker_bases_pinned_by_digest` y
+    `test_digest_pinned_bases_keep_their_tag_readable`, ejecutados en verde.
+  - **La decisión: (b), pinear en Python con revisión manual anotada.** Se
+    descartan las otras tres y conviene que conste por qué, porque tres pasadas
+    recomendaron **(c)**:
+    · **(c) «son sidecars efímeros, excepción razonada»** confunde el ciclo de
+    vida con el vecindario. Son los **únicos** contenedores del sistema que
+    comparten la red per-tarea con **código no confiable** —el agente escribe los
+    tests que corren a su lado—, y la pregunta de después de un incidente es «¿qué
+    binario corrió en ese run?». Con un tag rodante no tiene respuesta.
+    · **(a)** crear un fichero compose que exista sólo para que lo lea un bot es
+    el coste que el propio plan criticó.
+    · **(d)** reutilizar `refresh-digests` resuelve digests de imágenes que este
+    proyecto **no publica**: es un diseño distinto del que firmó el ADR 0148.
+    El coste de (b) es honesto y acotado —dos líneas por revisión—, y la regla
+    dura de la fase se cumple con el mismo mecanismo que las excepciones SCA: un
+    `# review: YYYY-MM-DD` (hoy `2026-11-19`) dentro del calendario del
+    [runbook §6](../06-runbooks/triage-vulnerabilidades.md).
+  - **Digests REALES, resueltos y verificados en los dos sentidos** (no
+    inventados):
+    `postgres:16-alpine@sha256:cf78e766…0685` (== 16.15-alpine3.24) y
+    `redis:7-alpine@sha256:e7723ff7…19a2` (== 7.4.10-alpine), vía
+    `docker buildx imagetools inspect`, y confirmando después que la forma
+    canónica `repo@sha256:…` resuelve contra el registry. Se fija el digest del
+    **índice multi-arch**, no el del manifest de una plataforma: pinear el de
+    amd64 rompería el arranque en un host arm64. El tag legible va DENTRO de la
+    referencia, no en un comentario al lado.
+  - **Y el pin no se queda en la declaración, que es donde esta casilla se
+    jugaba de verdad**: `_start_aux_services` pasa ahora por
+    `ensure_runtime_image`, así que se lanza la referencia canónica por digest y
+    un pull irresoluble **ABORTA la tarea** en vez de levantar lo que hubiera en
+    el daemon local con ese nombre (ADR 0148, condición 2). Sin esto, las
+    constantes pineadas habrían sido decoración: `containers.run` con el tag
+    habría seguido descargando cualquier cosa.
+  - 🔎 **Y aparece una TERCERA superficie que el enunciado no nombraba, con el
+    peor caso del sistema dentro.** El enunciado decía «`postgres:16-alpine` y
+    `redis:7-alpine` de `test_runtime.py`», y eso son los dos sidecars POR
+    DEFECTO. Lo que un proyecto **declara** en su config sale de otro sitio:
+    `workers/runtime_services.py::SERVICE_CATALOG` (ADR 0129), cinco tipos
+    —mysql, mariadb, postgres, redis, beanstalkd— que acaban en los mismos
+    `AuxServiceSpec`, en el mismo bridge per-tarea, junto al mismo código no
+    confiable. Los cinco iban por tag, y uno por **`schickling/beanstalkd:latest`**:
+    un tag rodante de una imagen de tercero sin annotations OCI, o sea que ni
+    siquiera publica versión — el digest es su única identificación posible.
+    Pinear sólo los dos del enunciado y declarar «las auxiliares del worker
+    fijadas» habría sido **cobertura aparente**, que es peor que ninguna porque
+    se lee como cobertura. Los cinco quedan pineados con digests resueltos
+    (`mysql:8` == 8.4.11, `mariadb:11` == 11.8.8-noble, y los tres ya citados) y
+    la guarda los recorre por descubrimiento.
+    El review/preview (`tasks/review_runtime_task.py`), que levanta esos mismos
+    sidecars por otra puerta, pasa también por `ensure_runtime_image`; ahí la
+    degradación correcta ante un digest irresoluble **no es abortar** sino
+    «preview sin su base de datos» —ya lo hacía su `except` best-effort—, a
+    diferencia del test-runtime, donde un sidecar impostor contaminaría un
+    veredicto.
+  - **Guarda**: `tests/unit/test_aux_images_pinned_by_digest.py` (4 tests), por
+    descubrimiento sobre `default_aux_services()` y sobre `SERVICE_CATALOG`, las
+    dos con suelo (`>= 2` y `>= 5`). **Rojo verificado en los cuatro antes del
+    arreglo** — el del catálogo listando los cinco infractores por su nombre—, y
+    las invariantes son distintas: la declaración, la referencia que se lanza, y
+    —la que importa— que ante un pull fallido **`containers.run` NO se llame.**
+  - **Dos tests existentes tuvieron que cambiar, y conviene decir por qué no es
+    «adaptar el test para que pase»**: `test_mysql_service_sidecar_and_connection_env`
+    y `test_services_spawn_aux_on_private_bridge_and_inject_env` afirmaban el
+    literal `"mysql:8"`. Ninguno de los dos está comprobando qué versión de MySQL
+    se usa —comprueban que el tipo `mysql` resuelve a su imagen y que el sidecar
+    aterriza en el bridge privado con sus labels—, así que fijaban un dato
+    incidental. Ahora **derivan del catálogo**, que es lo que siempre quisieron
+    decir. Y el segundo destapó de paso una carencia de su doble de Docker (sin
+    `client.images`), que hacía que el `except` best-effort se tragase el fallo y
+    el review saliera sin servicios: el mecanismo de degradación funcionando por
+    el motivo equivocado.
+  - **Sigue fuera de alcance, medido y nombrado**: las **19 imágenes de terceros
+    por `image:`** de los `docker-compose*.yml` (0 de 19 pineadas, dos de ellas
+    por tag rodante). Ahí el vehículo de refresco SÍ existe (Dependabot parsea
+    compose), así que es trabajo pendiente y no una excepción razonada; pinearlas
+    recrea medio stack en el siguiente `up -d` y quiere su propia ventana.
 
 #### `task_registry_adr_12` — ADR: registry y tags inmutables para los runtimes
 

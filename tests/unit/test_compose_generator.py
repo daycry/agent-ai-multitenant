@@ -227,6 +227,11 @@ def test_embedder_env_wired_into_app_services_when_ollama_on() -> None:
     # The memory back-fill worker is wired too.
     worker_env = compose["services"]["workers"]["environment"]
     assert worker_env["WORKERS_MEMORY_EMBEDDER_BASE_URL"] == "http://ollama:11434"
+    # ADR 0155: los workers resuelven el modelo activo con el MISMO setting que
+    # la api-server. La api-server sella el modelo en la KB y el worker embebe
+    # con el suyo: si los dos procesos leyeran valores distintos, la guarda de
+    # la ingesta rechazaría todos los documentos por un fallo de despliegue.
+    assert worker_env["API_SERVER_EMBEDDING_MODEL"] == api_env["API_SERVER_EMBEDDING_MODEL"]
 
 
 def test_legacy_gpu_enabled_maps_to_gpu_mode() -> None:

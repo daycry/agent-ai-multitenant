@@ -126,6 +126,12 @@ CORE_SERVICES: tuple[str, ...] = (
     "workers-privileged",
     "cortex-beat",
     "notification-dispatcher",
+    # prod-08 task_prod08_watchdog_14: NÚCLEO, no overlay opcional. Es lo que
+    # reinicia postgres/redis/minio/vault/clamav y los dos proxies cuando se
+    # caen, y lo que avisa a un humano cuando no consigue levantarlos. Dejarlo
+    # fuera del núcleo era lo que hacía que la instalación de producción —la que
+    # nadie vigila— fuese el único despliegue SIN recuperación automática.
+    "watchdog",
     "admin-panel",
     "caddy",
 )
@@ -189,6 +195,43 @@ TEXTFILE_INIT_SERVICE = "textfile-init"
 #: la fuente de BackupLastRunFailed/BackupTooOld). Montar solo uno dejaría la
 #: mitad de las series sin publicar, que es otra forma de mentir.
 TEXTFILE_WRITER_SERVICES: tuple[str, ...] = ("workers", "workers-privileged")
+
+# ---------------------------------------------------------------------------
+# Healthcheck de los DOS tinyproxy (prod-08 task_prod08_egress_health_15 /
+# deploy-9). Una sola constante para los dos servicios y COPIA LITERAL de la
+# línea del compose canónico: son la misma imagen y el mismo demonio, y tenerlo
+# escrito dos veces es exactamente cómo el egress-proxy y el registry-proxy
+# heredaron el mismo defecto por copy-paste.
+#
+# Tres decisiones dentro de una línea, ninguna cosmética:
+#
+#  * **`|| exit 1`, no `|| true`.** Con `|| true` el comando SIEMPRE devolvía 0:
+#    el contenedor salía `healthy` con tinyproxy muerto. Como el egress-proxy es
+#    la única salida de los agent-runtimes hacia los LLM (ADR 0019), los agentes
+#    se quedaban sin red y el stack no delataba la causa. Y desde que el watchdog
+#    vigila los dos proxies (`task_prod08_watchdog_14`), un estado mentiroso
+#    también desactiva la recuperación automática: no reinicia lo que cree sano.
+#  * **`-Y off`, no `--no-proxy`.** La imagen lleva el wget de BusyBox, que NO
+#    reconoce `--no-proxy`: salía por el mensaje de uso con rc≠0, así que este
+#    healthcheck NUNCA fue válido. Invisible mientras hubo un `|| true` delante.
+#    Portar sólo el final —el «arreglo de dos caracteres» que el plan dictó
+#    durante tres pasadas— habría dejado los dos proxies permanentemente
+#    `unhealthy` y al watchdog reiniciándolos en bucle: peor que no vigilar.
+#  * **Se afirma el `403 Access denied`, no la palabra «tinyproxy».** El cuerpo
+#    de la página de error no viaja con `-q`; la línea de estado sí. Un 403 a una
+#    petición DIRECTA prueba que el demonio escucha y aplica su política (sólo
+#    sirve peticiones proxificadas); caído, wget diría «Connection refused».
+#
+# Verificado contra el binario, no contra el YAML: con el stack arriba,
+# `docker inspect` de agentic-egress-proxy y agentic-registry-proxy →
+# `healthy`, `FailingStreak=0` (2026-08-12).
+#
+# Guardado por tests/unit/test_compose_healthchecks_honest.py, que exige que
+# esta cadena sea IDÉNTICA a la del compose canónico — no parecida.
+# ---------------------------------------------------------------------------
+TINYPROXY_HEALTHCHECK_CMD = (
+    "wget -q -O- -Y off http://127.0.0.1:8888/ 2>&1 | grep -q '403 Access denied' || exit 1"
+)
 
 # ---------------------------------------------------------------------------
 # Buzón de credenciales del receiver de RESPALDO de Alertmanager (prod-08
@@ -537,10 +580,7 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         "build": "./egress-proxy",
         "container_name": "agentic-egress-proxy",
         "healthcheck": {
-            "test": [
-                "CMD-SHELL",
-                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
-            ],
+            "test": ["CMD-SHELL", TINYPROXY_HEALTHCHECK_CMD],
             "interval": "30s",
             "timeout": "5s",
             "retries": 3,
@@ -561,10 +601,7 @@ def _registry_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, An
         "build": "./registry-proxy",
         "container_name": "agentic-registry-proxy",
         "healthcheck": {
-            "test": [
-                "CMD-SHELL",
-                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
-            ],
+            "test": ["CMD-SHELL", TINYPROXY_HEALTHCHECK_CMD],
             "interval": "30s",
             "timeout": "5s",
             "retries": 3,
@@ -1051,6 +1088,71 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
     return svc
 
 
+def _watchdog_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Vigilante de salud: reinicia con backoff y, al agotarlo, AVISA a un humano.
+
+    prod-08 ``task_prod08_watchdog_14`` (observability-6 + deploy-10). Hasta que
+    esto existió, ``apps/watchdog`` era código escrito, probado y **no
+    desplegado**: el compose canónico lo declaró el 2026-08-02, y el que se
+    ejecuta en casa del operador —éste— siguió sin él. O sea que la
+    «recuperación automática de la plataforma» no existía justo en el entorno
+    donde no hay nadie mirando ``docker ps``.
+
+    Tres decisiones que van juntas y conviene no separar:
+
+    * **Sin socket Docker.** El enunciado del plan pedía montarlo; el principio
+      rector 2 y ``tests/security/test_pentest_findings.py`` lo prohíben, y con
+      razón: un contenedor con ``/var/run/docker.sock`` escapa al host de forma
+      trivial. Habla con el daemon por ``DOCKER_HOST`` contra el
+      ``docker-socket-proxy`` del **ADR 0060**, al que le basta ``CONTAINERS=1``
+      + ``POST=1`` para listar y reiniciar. El riesgo 4 del plan queda así
+      disuelto, no mitigado.
+    * **DOS redes, y las dos hacen falta.** ``agentic-docker`` (``internal``)
+      para RESOLVER el proxy —el fallo del 2026-08-10 en el compose canónico fue
+      declararlo sólo en ``agentic-net``: el nombre DNS no resolvía, el watchdog
+      no veía NINGÚN contenedor, no reiniciaba nada y se callaba, que es
+      indistinguible de un stack sano— y ``agentic-net`` para POSTear la alerta
+      al api-server, sin la cual la alerta terminal vuelve a ser una línea de log
+      local dentro de un contenedor (el defecto original de observability-6).
+    * **La alerta comparte secreto con el endpoint.** ``WATCHDOG_ALERTS_INGEST_TOKEN``
+      referencia el MISMO ``${API_SERVER_ALERTS_INGEST_TOKEN}`` que valida
+      ``/internal/alerts/ingest`` (el instalador ya lo genera y lo escribe en el
+      ``.env``). Inventar aquí una variable propia daría un watchdog que cree
+      avisar y se come un 401 en cada alerta — peor que no tenerlo, porque nadie
+      mira.
+
+    Sin perfil, a diferencia del compose canónico: allí va bajo ``profiles:``
+    porque ese fichero es la capa de infraestructura y no construye imágenes de
+    aplicación. Aquí las apps SON parte del stack, y un vigilante que hay que
+    acordarse de levantar con un flag no vigila nada.
+    """
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/watchdog:{APP_IMAGE_TAG}",
+        "environment": {
+            # ADR 0060: la pasarela de mínimo privilegio, NUNCA el socket crudo.
+            "DOCKER_HOST": "tcp://docker-socket-proxy:2375",
+            # Sin esto el watchdog busca contenedores del proyecto por defecto y
+            # no encuentra los de esta instalación: resuelve por las etiquetas
+            # `com.docker.compose.project` que Docker pone en cada contenedor.
+            "WATCHDOG_COMPOSE_PROJECT": PROJECT_NAME,
+            "WATCHDOG_POLL_INTERVAL": "30",
+            "WATCHDOG_ALERTS_INGEST_URL": ("http://api-server:8000/internal/alerts/ingest"),
+            "WATCHDOG_ALERTS_INGEST_TOKEN": _env_ref(
+                "API_SERVER_ALERTS_INGEST_TOKEN", None, prod=prod
+            ),
+        },
+        "depends_on": {
+            # El proxy del daemon: sin él arranca igual (degradación deliberada,
+            # lo dice en el log) pero no ve nada. Ordenarlo evita una ventana de
+            # `container_missing` en cada `up`.
+            "docker-socket-proxy": {"condition": "service_healthy"},
+        },
+        "networks": ["agentic-net", "agentic-docker"],
+    }
+    svc.update(_hardening(limits_cpus="0.25", limits_memory="192m"))
+    return svc
+
+
 def _admin_panel_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     svc: dict[str, Any] = {
         "image": f"{APP_IMAGE_REGISTRY}/admin-panel:{APP_IMAGE_TAG}",
@@ -1471,6 +1573,7 @@ _BUILDERS = {
     "workers-privileged": _workers_privileged_service,
     "cortex-beat": _cortex_beat_service,
     "notification-dispatcher": _notification_dispatcher_service,
+    "watchdog": _watchdog_service,
     "admin-panel": _admin_panel_service,
     "caddy": _reverse_proxy_service,
     "ollama": _ollama_service,

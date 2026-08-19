@@ -196,88 +196,102 @@ volverse obligatorio hasta resolverla (§6).
 
 ## 6. Del modo informe al gate obligatorio
 
-`security-scan` arranca con `continue-on-error: true` a propósito
-(`task_sca_gate_08`): convertirlo en gate el día 1 bloquearía todos los PRs con
-el backlog heredado. Para flipearlo hacen falta **dos pasos, ambos humanos**:
+**Estado a 2026-08-19: el gate está ENCENDIDO en el workflow.** `security-scan`
+declara `continue-on-error: false` y un hallazgo SCA rompe el job. Queda **un
+solo paso**, y es de un humano con permisos de administración del repo: añadirlo
+a los _required status checks_ de la protección de rama (paso 1 de la checklist).
 
-1. **Vaciar o justificar el backlog.** Bloqueante conocido a 2026-07-31:
-   `next` no sale limpio de `npm audit --omit=dev --audit-level=high` **ni en
-   14.2.35**, que es el último parche de la línea 14.2.x. El rango de los avisos
-   abarca todo 14.x (y arrastra un `postcss` empotrado) y el único fix es
-   **next 16**, un salto de major con roturas. Eso necesita su propio plan.
-   Mientras tanto el gate npm no puede ser obligatorio sin mentir.
+### Por qué se pudo encender (medición del 2026-08-19)
 
-   Medición del 2026-07-31 sobre `next` 14.2.35 ya instalado (`node -e` lo
-   confirma en las dos superficies), para que nadie tenga que repetirla:
+El job nació en modo informe a propósito: convertirlo en gate el día 1 habría
+bloqueado todos los PRs con el backlog heredado de CVEs. Ese backlog **está
+vacío**, medido en las tres superficies del job:
 
-   | Comando                                       | admin-panel | installer  |
-   | --------------------------------------------- | ----------- | ---------- |
-   | `npm audit --omit=dev --audit-level=critical` | exit **0**  | exit **0** |
-   | `npm audit --omit=dev --audit-level=high`     | exit **1**  | exit **1** |
+| Superficie                                              | Resultado                           |
+| ------------------------------------------------------- | ----------------------------------- |
+| `pip-audit -r constraints.txt`                          | _No known vulnerabilities_ (exit 0) |
+| `npm audit --omit=dev --audit-level=high` (admin-panel) | _found 0 vulnerabilities_ (exit 0)  |
+| `npm audit --omit=dev --audit-level=high` (installer)   | _found 0 vulnerabilities_ (exit 0)  |
 
-   Es decir: la **crítica** que motivó el hallazgo (`GHSA-955p-x3mx-jcvp`,
-   divulgación no autenticada de Server Functions) **está cerrada**; quedan 2
-   avisos `high` sin fix dentro de 14.x. `npm audit fix --force` propondría
-   `next@16`: no se ejecuta a ciegas.
+Y sin apoyarse en ninguna supresión: `.trivyignore` y `.pip-audit-ignore` siguen
+**sin una sola entrada vigente**.
 
-   **Re-medido el 2026-08-01: resultado idéntico**, con npm nombrando ya la
-   versión concreta (`next@16.2.12`, «which is a breaking change»). Es la tercera
-   medición con el mismo resultado, así que **no vuelvas a medirla**: la
-   condición de salida está escrita en
-   [cadena-suministro.md §4](../04-reference/cadena-suministro.md) y es
-   `--audit-level=high` en exit 0 en las dos superficies. Un parche nuevo de
-   14.2.x **no la cumple** — el rango vulnerable abarca toda la línea 14.
+> El pip-audit se corrió **sobre `constraints.txt`**, no sobre el `.venv` local, y esa distinción importa: el venv del repo se resolvió desde los rangos antes de que existiera el lock y va 74 paquetes por detrás (§2 de [cadena-suministro.md](../04-reference/cadena-suministro.md)). Auditarlo habría medido un árbol que CI no instala.
 
-2. **Quitar el `continue-on-error`** del job en `.github/workflows/ci.yml` y
-   añadir `SCA (pip-audit + npm audit)` a los **checks requeridos de branch
-   protection** (Settings → Branches → `master`). Esa lista la administra
-   [`prod-02-ci-en-verde`](../roadmap/prod-02-ci-en-verde.md); este plan la
-   extiende, no la redefine. Requiere permisos de administración del repo.
+**Qué cambió respecto a las cuatro mediciones anteriores** (2026-07-31, 08-01,
+08-10), todas con el mismo veredicto «bloqueado por `next`»: las dos superficies
+npm ya no van por la línea 14. Van por **`next 15.5.23`**. El bloqueante que se
+midió cuatro veces —el rango vulnerable `next 9.3.4-canary.0 – 16.3.0-preview.10`,
+que ninguna 14.x ni 15.x anterior cerraba— **ya no aparece**. No hizo falta la
+migración a next 16 que se daba por inevitable, ni la excepción razonada que era
+la alternativa: el ecosistema publicó el parche y alguien lo aplicó.
 
-Verificación de que el gate hace lo que dice (test humano `human_prod11_01`):
-crear una rama que degrade una dependencia a una versión vulnerable conocida y
-comprobar que el PR sale en rojo y que branch protection impide mergearlo.
+> **La lección, porque va a repetirse:** durante tres semanas la conclusión
+> escrita fue «esto sólo se cierra con un plan de migración a un major». Los
+> avisos de npm cambian aunque el código no, **y las versiones publicadas
+> también**. Antes de presupuestar un salto de major por un aviso de SCA, vuelve
+> a medir.
 
-### Checklist del operador (2026-08-02)
+### Si mañana aparece un `high` sin fix
 
-Lo que sigue es **todo** lo que falta, en el orden en que hay que hacerlo. Nada de
-esto lo puede hacer un agente: el paso 1 es una decisión de alcance y los pasos
-3–4 exigen permisos de administración del repositorio.
+No hay ignore-list de npm, **y es deliberado**: crear una vacía hoy sería un
+mecanismo sin un solo llamante. Cuando haga falta se construye entonces, con el
+aviso real como su primera entrada justificada. Lo que **no** es una salida:
+bajar `--audit-level` a `critical`. Eso no documenta la excepción, la esconde, y
+se lleva por delante todos los `high` futuros a la vez.
 
-- [ ] **1. Decidir qué hacer con `next`.** Es el único bloqueante técnico. Dos
-      salidas honestas, y hay que elegir una:
-      **(a)** abrir un plan/ADR de migración a **next 16** en el `admin-panel` y
-      en el frontend del `installer` (salto de major con roturas; no cabe en una
-      tarea suelta), o
-      **(b)** declarar los avisos `high` como excepción razonada en la
-      ignore-list de npm con `# review: YYYY-MM-DD`, igual que las de
-      `.trivyignore` / `.pip-audit-ignore` (§5), asumiendo por escrito el riesgo
-      residual hasta que exista (a).
-      Sin (a) o (b), el gate npm nace en rojo permanente y bloquea todos los PRs. > **Medido de nuevo el 2026-08-10, y va a peor: son 3 avisos `high`, no 2.** > El rango vulnerable que reporta npm es `next 9.3.4-canary.0 –
-  > 16.3.0-preview.10`, así que **ninguna versión de las líneas 14 ni 15 lo > cierra** y el destino de (a) es **`next@16.3.0`** (antes 16.2.12). Uno de > los tres llega por el `postcss`empotrado en`next`, no por `next` mismo: > si se elige (b), la excepción tiene que cubrirlo explícitamente. La > conclusión operativa no cambia —hay que elegir—, pero el coste de **no** > elegir sube en cada medición.
-- [ ] **2. Quitar el modo informe.** Borrar la línea `continue-on-error: true`
-      del job `security-scan` en `.github/workflows/ci.yml` (hoy en la **línea
-      321**, justo bajo `timeout-minutes: 30`). Es un cambio de una línea:
-      el modo está declarado explícitamente y no es un olvido — lo guarda
-      `test_security_scan_declares_its_gate_mode`, y `auto_prod11_08_a`
-      (`pytest tests/unit/test_supply_chain_config.py -k 'gate and not
-continue_on_error'`) pasa a verde en cuanto se retira.
-- [ ] **3. Añadirlo a branch protection.** GitHub → **Settings → Branches →
-      `master` → Require status checks to pass** → añadir el check con su nombre
-      exacto: **`SCA (pip-audit + npm audit)`** (es el `name:` del job, no el id
-      `security-scan`; si se escribe el id, el check nunca casa y la protección
-      queda de adorno sin avisar).
-- [ ] **4. Arreglar antes la facturación de la cuenta.** CI está caído por
-      «recent account payments have failed» (<https://github.com/settings/billing>).
-      Un check requerido que nunca corre **bloquea todos los merges**: hacer el
-      paso 3 con CI caído deja el repo sin poder integrar nada.
-- [ ] **5. Verificar** con el test humano `human_prod11_01` descrito arriba.
+### Digests de las imágenes auxiliares (revisión manual)
 
-**Lo que ya está listo para ese día** y no hay que preparar: las dos ignore-lists
-existen con justificación y fecha de revisión por entrada
-(`test_sca_ignore_lists_exist_and_document_every_exception`, en verde), los tres
-workflows escanean sus imágenes con Trivy (24 imágenes, 9 pasos) y el lock no ha
-derivado (`uv lock --check` → exit 0).
+`postgres:16-alpine` y `redis:7-alpine` —los sidecars que el worker levanta junto
+al test-runtime— van fijados por digest en
+`apps/workers/src/workers/test_runtime.py` (`DEFAULT_POSTGRES` / `DEFAULT_REDIS`).
+Su vehículo de refresco **no es Dependabot**: el ecosistema `docker` parsea
+Dockerfiles y ficheros compose, no fuentes Python. Por eso llevan
+`# review: YYYY-MM-DD` como las excepciones de §5 y entran en el mismo calendario:
+
+```bash
+# Resolver el digest actual del tag (índice multi-arch, NO el de una plataforma)
+docker buildx imagetools inspect postgres:16-alpine --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect redis:7-alpine     --format '{{.Manifest.Digest}}'
+```
+
+Lo mismo para los cinco tipos del catálogo del ADR 0129
+(`workers/runtime_services.py::SERVICE_CATALOG`: mysql, mariadb, postgres, redis,
+beanstalkd), que comparten fecha de revisión con los dos de arriba.
+
+Si el digest ha cambiado, actualizar la constante **y su comentario de versión**
+(`# postgres:16-alpine == 16.15-alpine3.24`), y mover la fecha de `review:`.
+Guardado por `tests/unit/test_aux_images_pinned_by_digest.py`, que además exige
+que el lanzamiento honre el digest y aborte si no lo puede resolver (ADR 0148).
+
+### Checklist del operador (2026-08-19)
+
+Queda esto, en este orden:
+
+- [ ] **1. Arreglar la facturación de la cuenta ANTES de tocar branch
+      protection.** CI lleva caído desde el 2026-07-30 por «recent account
+      payments have failed» (<https://github.com/settings/billing>). Un check
+      requerido que nunca corre **bloquea todos los merges**: hacer el paso 2 con
+      CI caído deja el repo sin poder integrar nada. Este orden no es
+      cosmético.
+- [ ] **2. Añadir el check a branch protection.** GitHub → **Settings → Branches
+      → `master` → Require status checks to pass** → añadir el check con su
+      nombre exacto: **`SCA (pip-audit + npm audit)`**. Es el `name:` del job, no
+      el id `security-scan`; con el id el check no casa nunca y la protección
+      queda de adorno sin avisar.
+- [ ] **3. Verificar** con el test humano `human_prod11_01`: rama que degrade una
+      dependencia a una versión vulnerable conocida → el PR sale en rojo y branch
+      protection impide mergearlo.
+
+**Lo que ya no hay que hacer** (estaba en la checklist del 2026-08-02 y está
+hecho): elegir entre migrar a next 16 o declarar una excepción —el backlog se
+vació solo—, y quitar el `continue-on-error` —ya está en `false` explícito, con
+`test_security_scan_is_an_enforcing_gate` impidiendo que se deshaga en silencio—.
+
+**Lo que ya estaba listo**: las dos ignore-lists con justificación y fecha por
+entrada (`test_sca_ignore_lists_exist_and_document_every_exception`), los tres
+workflows escaneando sus imágenes con Trivy (24 imágenes, 9 pasos) y el lock sin
+derivar (`uv lock --check` → exit 0).
 
 ---
 

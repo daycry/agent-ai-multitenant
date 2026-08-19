@@ -21,6 +21,7 @@ Estos tests fijan las cuatro cosas que hacen que la declaración sea honesta:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,18 +34,65 @@ COMPOSE = REPO_ROOT / "docker" / "docker-compose.yml"
 SERVICE = "watchdog"
 
 
-def _services() -> dict[str, dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# DOS artefactos, las MISMAS invariantes.
+#
+# `docker/docker-compose.yml` es el stack de desarrollo; el que corre en casa de
+# un operador lo escribe `installer_backend.compose_generator`. Con las guardas
+# sólo sobre el fichero canónico, el watchdog quedó declarado en dev y ausente
+# del despliegue generado durante diez días — o sea que la recuperación
+# automática que esta tarea entrega NO existía justo donde nadie mira el
+# `docker ps`. Cada invariante de abajo se ejecuta contra los dos artefactos:
+# no hay forma de arreglar uno y olvidar el otro sin que la suite lo diga.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Artifact:
+    """Los `services:` de un compose, con su nombre para los mensajes de fallo."""
+
+    label: str
+    services: dict[str, dict[str, Any]]
+
+
+def _canonical_services() -> dict[str, dict[str, Any]]:
     raw = yaml.safe_load(COMPOSE.read_text(encoding="utf-8")) or {}
     return dict(raw.get("services") or {})
 
 
-@pytest.fixture(scope="module")
-def watchdog() -> dict[str, Any]:
-    services = _services()
+def _generated_services() -> dict[str, dict[str, Any]]:
+    """El compose que el instalador escribe para una instalación real."""
+    # Import perezoso: `installer_backend` es un paquete editable aparte y este
+    # fichero no debe fallar en la recolección si alguien corre la suite de
+    # seguridad sin él instalado — fallará en el test, que es donde se lee.
+    from installer_backend.compose_generator import generate_compose
+
+    from tests.unit.test_compose_generator import _config
+
+    return dict(generate_compose(_config(), monitoring=True).get("services") or {})
+
+
+_SOURCES = {
+    "compose-canonico": _canonical_services,
+    "compose-generado": _generated_services,
+}
+
+
+@pytest.fixture(params=sorted(_SOURCES))
+def artifact(request: pytest.FixtureRequest) -> _Artifact:
+    label = str(request.param)
+    return _Artifact(label=label, services=_SOURCES[label]())
+
+
+@pytest.fixture
+def watchdog(artifact: _Artifact) -> dict[str, Any]:
+    services = artifact.services
     assert SERVICE in services, (
-        "docker/docker-compose.yml no declara el servicio `watchdog`: el paquete "
+        f"`{artifact.label}` no declara el servicio `watchdog`: el paquete "
         "apps/watchdog existe y está probado, pero sin declaración no corre en "
-        "ningún sitio (prod-08 observability-6 / deploy-10)."
+        "ningún sitio (prod-08 observability-6 / deploy-10). En el compose "
+        "GENERADO su ausencia es peor todavía: es el despliegue de producción, "
+        "el único sin un humano mirando `docker ps`."
     )
     spec = dict(services[SERVICE])
     # Resolver el merge de anclas YAML (`<<: [*a, *b]`), que safe_load deja como
@@ -159,12 +207,23 @@ MANUALS_COMPOSE = REPO_ROOT / "docker" / "docker-compose.manuals.yml"
 SOCKET_PROXY = "docker-socket-proxy"
 
 
-def _socket_proxy_networks() -> set[str]:
+def _socket_proxy_networks(artifact: _Artifact) -> set[str]:
+    """Las redes del proxy del daemon, derivadas de donde ESE artefacto lo declara.
+
+    En el compose generado el proxy viaja dentro del propio fichero, así que la
+    referencia correcta es él mismo; el canónico no lo declara (es la capa de
+    infraestructura) y la referencia es el overlay de dev. Derivarlo en vez de
+    fijar `agentic-docker` como literal es lo que hace que un renombrado de la
+    red rompa la suite en vez de pasar desapercibido.
+    """
+    if SOCKET_PROXY in artifact.services:
+        return set(artifact.services[SOCKET_PROXY].get("networks") or [])
+
     raw = yaml.safe_load(MANUALS_COMPOSE.read_text(encoding="utf-8")) or {}
     services = dict(raw.get("services") or {})
     assert SOCKET_PROXY in services, (
-        f"{MANUALS_COMPOSE.name} dejó de declarar `{SOCKET_PROXY}`: esta guarda "
-        "deriva de ahí la red del daemon y se quedaría sin referencia"
+        f"ni `{artifact.label}` ni {MANUALS_COMPOSE.name} declaran `{SOCKET_PROXY}`: "
+        "esta guarda deriva de ahí la red del daemon y se quedaría sin referencia"
     )
     return set(services[SOCKET_PROXY].get("networks") or [])
 
@@ -178,7 +237,9 @@ def _docker_host_target(spec: dict[str, Any]) -> str:
     return raw.split("//", 1)[-1].split(":", 1)[0]
 
 
-def test_the_watchdog_can_actually_reach_the_socket_proxy(watchdog: dict[str, Any]) -> None:
+def test_the_watchdog_can_actually_reach_the_socket_proxy(
+    watchdog: dict[str, Any], artifact: _Artifact
+) -> None:
     """Estar en la misma red no es un detalle: es lo que hace resoluble el nombre."""
     target = _docker_host_target(watchdog)
     assert target == SOCKET_PROXY, (
@@ -186,7 +247,7 @@ def test_the_watchdog_can_actually_reach_the_socket_proxy(watchdog: dict[str, An
         "ADR 0060; si es a propósito, actualiza esta guarda"
     )
 
-    proxy_networks = _socket_proxy_networks()
+    proxy_networks = _socket_proxy_networks(artifact)
     assert proxy_networks, "el proxy no declara redes: la guarda pasaría en vacío"
 
     own = set(watchdog.get("networks") or [])

@@ -309,26 +309,43 @@ jobs:
   # Trivy en `build-images`, en build-runtime-templates.yml y en
   # release-images.yml (donde bloquea la publicación).
   #
-  # ── MODO INFORME ────────────────────────────────────────────────────────
-  # `continue-on-error: true` es DELIBERADO y temporal (task_sca_gate_08): el
-  # gate arranca informando durante la semana de triage para no bloquear el
-  # día 1 todos los PRs con el backlog de CVEs heredado. Para convertirlo en
-  # gate hacen falta dos cosas, y las dos son de un humano:
+  # ── MODO GATE (desde 2026-08-19) ────────────────────────────────────────
+  # El job nació con `continue-on-error: true` a propósito: durante la semana de
+  # triage no debía bloquear el día 1 todos los PRs con el backlog de CVEs
+  # heredado. El bloqueante concreto era `next` —el rango de los avisos `high`
+  # abarcaba TODA la línea 14 y el único fix anunciado era un major.
   #
-  #   1. Vaciar o justificar el backlog (docs/06-runbooks/triage-vulnerabilidades.md).
-  #      A 2026-07-31 el bloqueante conocido es `next`: ni siquiera en 14.2.35
-  #      —el último parche de la línea— sale limpio de `npm audit --audit-level=high`,
-  #      porque el rango de los avisos abarca TODO 14.x y el único fix es
-  #      next 16 (major, rotura). Eso pide su propio plan/ADR.
-  #   2. Quitar este `continue-on-error` y añadir "SCA (pip-audit + npm audit)"
-  #      a los checks obligatorios de branch protection (los administra
-  #      prod-02-ci-en-verde; este plan extiende esa lista, no la redefine).
+  # Ese backlog está vacío. Medido el 2026-08-19, con las dos superficies npm ya
+  # en `next 15.5.23`:
+  #
+  #   * pip-audit -r constraints.txt ......... No known vulnerabilities (exit 0)
+  #   * npm audit --omit=dev --audit-level=high
+  #       apps/admin-panel ................... found 0 vulnerabilities (exit 0)
+  #       apps/installer ..................... found 0 vulnerabilities (exit 0)
+  #
+  # y sin apoyarse en ninguna supresión: `.trivyignore` y `.pip-audit-ignore` no
+  # tienen ni una entrada vigente. Con el backlog a cero, el modo informe ya no
+  # protegía de nada — sólo garantizaba que la PRÓXIMA vulnerabilidad entrase en
+  # `master` con un check en verde-tachado que nadie lee.
+  #
+  # `continue-on-error: false` explícito en vez de borrar la línea: el modo del
+  # job debe estar A LA VISTA (lo exige `test_security_scan_declares_its_gate_mode`),
+  # y volver a informe debe ser una decisión escrita, no una ausencia.
+  # Guardado por `test_security_scan_is_an_enforcing_gate`.
+  #
+  # QUEDA UN PASO, Y ES DE UN HUMANO: añadir este check a los *required status
+  # checks* de la protección de rama (Settings → Branches → `master`). El nombre
+  # exacto que hay que escribir ahí es el `name:` del job —
+  # "SCA (pip-audit + npm audit)"— NO su id `security-scan`: con el id, el check
+  # no casa nunca y la protección queda de adorno. Hasta ese clic, este job
+  # falla en rojo pero no impide el merge. Procedimiento completo en
+  # docs/06-runbooks/triage-vulnerabilidades.md §6.
   # ---------------------------------------------------------------------------
   security-scan:
     name: SCA (pip-audit + npm audit)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
