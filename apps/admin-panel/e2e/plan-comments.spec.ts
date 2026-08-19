@@ -8,6 +8,12 @@ import { seedSession } from "./helpers/session";
  * existing comments and a form to add a new one. The form can target
  * the whole plan OR a specific task id; the POSTed body matches the
  * shape expected by `POST /plans/{id}/comments`.
+ *
+ * Reparado el 2026-08-19: el cuerpo del comentario se escribe en un
+ * `<MarkdownTextarea>`, y ese componente pone el `data-testid` en el CONTENEDOR
+ * — el `<textarea>` real lleva el sufijo `-edit`. Rellenar el contenedor falla
+ * con "Element is not an <input>...", no con "no existe", que es lo que
+ * despistaba.
  */
 
 const PROJECT_ID = "00000000-0000-0000-0000-000000000001";
@@ -103,7 +109,7 @@ test("posting a plan-scoped comment renders it in the list", async ({ page }) =>
     waitUntil: "domcontentloaded",
   });
 
-  await page.getByTestId("plan-comment-content").fill("Falta detalle de seguridad.");
+  await page.getByTestId("plan-comment-content-edit").fill("Falta detalle de seguridad.");
   await page.getByTestId("plan-comment-submit").click();
 
   await expect.poll(() => capture.calls).toBe(1);
@@ -126,7 +132,7 @@ test("posting a task-scoped comment POSTs the right target_ref", async ({ page }
   // Switch the target dropdown to a specific task.
   await page.getByTestId("plan-comment-target-kind").selectOption("task");
   await page.getByTestId("plan-comment-target-ref").selectOption("t2");
-  await page.getByTestId("plan-comment-content").fill("¿De qué proveedor?");
+  await page.getByTestId("plan-comment-content-edit").fill("¿De qué proveedor?");
   await page.getByTestId("plan-comment-submit").click();
 
   await expect.poll(() => capture.calls).toBe(1);
@@ -146,6 +152,6 @@ test("submit is disabled when the textarea is empty", async ({ page }) => {
     waitUntil: "domcontentloaded",
   });
   await expect(page.getByTestId("plan-comment-submit")).toBeDisabled();
-  await page.getByTestId("plan-comment-content").fill("ok");
+  await page.getByTestId("plan-comment-content-edit").fill("ok");
   await expect(page.getByTestId("plan-comment-submit")).toBeEnabled();
 });

@@ -6,6 +6,11 @@ import { seedSession } from "./helpers/session";
  *
  * Approve / Reject buttons + an optional reason. Resolving a request
  * POSTs `/approvals/{id}/resolve` and drops the card from the feed.
+ *
+ * Reparado el 2026-08-19: el motivo se escribe en un `<MarkdownTextarea>`, y ese
+ * componente pone el `data-testid` en el CONTENEDOR — el `<textarea>` real lleva
+ * el sufijo `-edit`. Rellenar el contenedor no falla con "no existe" sino con
+ * "Element is not an <input>...", que es lo que despistaba.
  */
 
 const REQUEST = {
@@ -73,7 +78,7 @@ test("rejecting a request sends the optional reason", async ({ page }) => {
   const capture = await setup(page);
   await page.goto("/admin/approvals", { waitUntil: "domcontentloaded" });
 
-  await page.getByTestId(`reason-${REQUEST.id}`).fill("deploy window closed");
+  await page.getByTestId(`reason-${REQUEST.id}-edit`).fill("deploy window closed");
   await page.getByTestId(`reject-${REQUEST.id}`).click();
 
   await expect.poll(() => capture.calls).toBe(1);

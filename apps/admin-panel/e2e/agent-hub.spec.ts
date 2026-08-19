@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -26,7 +27,7 @@ const TENANT_AGENT = {
 
 async function setup(page: Page, agent: object = TENANT_AGENT): Promise<void> {
   await seedSession(page);
-  await page.route(`**/agents/${AGENT_ID}`, (route) => {
+  await page.route(apiRoute(`/agents/${AGENT_ID}`), (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({
       status: 200,

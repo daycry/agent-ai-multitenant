@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -95,7 +96,7 @@ async function setup(
 
   let forked = false;
 
-  await page.route("**/me", (route) =>
+  await page.route(apiRoute("/me"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -103,7 +104,33 @@ async function setup(
     }),
   );
 
-  await page.route("**/human-agents/templates/*/clone", (route) => {
+  await page.route(apiRoute("/human-agents/templates**"), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([TEMPLATE]),
+    }),
+  );
+
+  await page.route(apiRoute("/human-agents/assignable-users**"), (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
+
+  await page.route(apiRoute("/human-agents"), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: forked ? JSON.stringify([FORK]) : "[]",
+    }),
+  );
+
+  // ORDEN, no capricho: Playwright resuelve las rutas de la MÁS RECIENTE a la
+  // más antigua, y `**/human-agents/templates**` casa también con
+  // `.../templates/{id}/clone` (`**` cruza las barras). Registrada antes, la
+  // lista de plantillas se comía el POST del fork: `onClone` no llegaba a
+  // correr nunca y el test esperaba un contador que jamás subía. La específica
+  // va la ÚLTIMA para que gane (2026-08-19).
+  await page.route(apiRoute("/human-agents/templates/*/clone"), (route) => {
     opts.onClone?.();
     forked = true;
     return route.fulfill({
@@ -112,26 +139,6 @@ async function setup(
       body: JSON.stringify(FORK),
     });
   });
-
-  await page.route("**/human-agents/templates**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify([TEMPLATE]),
-    }),
-  );
-
-  await page.route("**/human-agents/assignable-users**", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
-  );
-
-  await page.route("**/human-agents", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: forked ? JSON.stringify([FORK]) : "[]",
-    }),
-  );
 }
 
 test("the global template catalog lists the platform templates", async ({ page }) => {

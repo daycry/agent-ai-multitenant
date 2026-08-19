@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -39,7 +40,7 @@ const PROJECT_FIXTURE = {
 
 async function setup(page: Page): Promise<void> {
   await seedSession(page);
-  await page.route(`**/projects/${PROJECT_ID}`, (route) => {
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({
       status: 200,
@@ -88,7 +89,7 @@ test("edit + delete buttons are visible when project loaded", async ({ page }) =
 
 test("404 from backend shows error card with back link", async ({ page }) => {
   await seedSession(page);
-  await page.route(`**/projects/${PROJECT_ID}`, (route) =>
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) =>
     route.fulfill({
       status: 404,
       contentType: "application/json",

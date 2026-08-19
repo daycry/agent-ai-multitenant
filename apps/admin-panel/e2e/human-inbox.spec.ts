@@ -190,19 +190,29 @@ test("reject with a justification posts it and removes the row", async ({ page }
 });
 
 test("an accepted assignment can be marked complete", async ({ page }) => {
+  // Reparado el 2026-08-19: "Marcar completada" ya NO abre el diálogo de
+  // justificación (`inbox-action-text`), abre el FORMULARIO DE ENTREGA
+  // (`submit-dialog.tsx`), que es lo que hace del cierre una entrega y no un
+  // comentario: el cuerpo del POST /complete lleva `output` + `attachments`
+  // (+ horas), no `comments`. El detalle del formulario lo cubre
+  // `human-task-submit.spec.ts`; aquí sólo se comprueba que el botón de la
+  // bandeja lleva a él y que la entrega viaja.
   const calls: { path: string; body: Record<string, unknown> }[] = [];
   await setup(page, { onAction: (path, body) => calls.push({ path, body }) });
   await page.goto("/admin/inbox", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`)).toBeVisible();
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
-  await page.getByTestId("inbox-action-text-edit").fill("Listo, sin observaciones");
-  await page.getByTestId("inbox-action-confirm").click();
+  await page.getByTestId("submit-output-edit").fill("Listo, sin observaciones");
+  await page.getByTestId("submit-confirm").click();
 
   await expect.poll(() => calls.length).toBeGreaterThanOrEqual(1);
   const complete = calls.find((c) => c.path.endsWith("/complete"));
   expect(complete).toBeTruthy();
-  expect(complete?.body).toMatchObject({ comments: "Listo, sin observaciones" });
+  expect(complete?.body).toMatchObject({
+    output: "Listo, sin observaciones",
+    attachments: [],
+  });
 });
 
 test("any assignment can be escalated to the admin", async ({ page }) => {

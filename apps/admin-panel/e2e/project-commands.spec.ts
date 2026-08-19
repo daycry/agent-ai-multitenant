@@ -83,6 +83,36 @@ async function setup(
 
   await seedSession(page, { tenantId: TENANT_ID });
 
+  // El catálogo de runtimes lo sirve `GET /runtime-templates` desde el Plan
+  // 06.18 (`task_06_18_11`); el panel ya no lo hardcodea. Sin este mock la query
+  // se queda en `isLoading` y el `<select>` NUNCA se habilita — que es como se
+  // veía el fallo: "selectOption sobre un elemento disabled" (2026-08-19).
+  await page.route(`${BASE}/runtime-templates`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          id: "python-pytest",
+          label: { es: "Python · pytest", en: "Python · pytest" },
+          dep_cache_mount: "/cache/pip",
+          network_policy: "restricted",
+        },
+        {
+          id: "node-jest",
+          label: { es: "Node · Jest", en: "Node · Jest" },
+          dep_cache_mount: "/cache/npm",
+          network_policy: "restricted",
+        },
+        {
+          id: "php-phpunit",
+          label: { es: "PHP · PHPUnit", en: "PHP · PHPUnit" },
+          dep_cache_mount: "/cache/composer",
+          network_policy: "restricted",
+        },
+      ]),
+    }),
+  );
   await page.route(`${BASE}/me`, (route) =>
     route.fulfill({
       status: 200,
@@ -136,8 +166,11 @@ test("non-admin sees chips + runtime read-only (no edit controls)", async ({ pag
   await expect(page.getByTestId("commands-add-input")).toHaveCount(0);
   await expect(page.getByTestId("command-chip-remove-php")).toHaveCount(0);
   await expect(page.getByTestId("commands-save-button")).toHaveCount(0);
-  // Runtime is shown read-only.
-  await expect(page.getByTestId("commands-runtime-readonly")).toContainText("php-phpunit");
+  // Runtime is shown read-only, con la ETIQUETA bilingüe que sirve el catálogo
+  // (Plan 06.18 `task_06_18_11`: "render the bilingual label the endpoint
+  // serves — never a raw slug"). El spec afirmaba el slug, o sea lo contrario.
+  await expect(page.getByTestId("commands-runtime-readonly")).toContainText("PHP · PHPUnit");
+  await expect(page.getByTestId("commands-runtime-readonly")).not.toContainText("php-phpunit");
   await expect(page.getByTestId("commands-runtime-select")).toHaveCount(0);
 });
 

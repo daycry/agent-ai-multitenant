@@ -1,44 +1,62 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { apiRoute } from "./helpers/api";
+import { seedSession, systemAdminMe } from "./helpers/session";
+
 /**
  * E2E for the top-header tenant picker.
- *
- * Wires together the three backend pieces:
- *   1. First-user auto-promotion to system_admin (the test admin
- *      seeded by run-e2e.ps1 is the first user → superadmin).
- *   2. /admin/tenants visible to superadmins.
- *   3. apiFetch injecting X-Tenant-Id from localStorage.
  *
  * Coverage:
  *   - Picker visible for superadmin (default state: "Todos los
  *     tenants" because no tenant is selected yet).
  *   - The platform tenant (00000000-0000-0000-0000-000000000001) is
  *     hidden from the list — it's reserved for built-in catalogs.
- *   - Selecting a (mocked) tenant updates the label, persists in
- *     localStorage, and the next apiFetch call sends X-Tenant-Id.
+ *   - Selecting a tenant updates the label, persists in localStorage,
+ *     and the next apiFetch call sends X-Tenant-Id.
  *   - "Todos los tenants" clears the selection again.
+ *
+ * ---------------------------------------------------------------------------
+ * 2026-08-19 — MIGRADO a sesión sembrada (ADR 0133). Hacía LOGIN REAL, y CI lo
+ * barre dentro del subset "mockeado" (usa `page.route`), donde no hay
+ * api-server: los cuatro tests morían en `toHaveURL(/admin/dashboard)` sin
+ * llegar a ver la cabecera. Lo que comprobaban —que el picker filtra el tenant
+ * de plataforma, que la elección viaja en `X-Tenant-Id` y sobrevive a una
+ * recarga, y que crear un tenant deriva el slug— es comportamiento del PANEL y
+ * se sigue comprobando igual; lo único que cambia es de dónde sale la identidad
+ * de superadmin, que antes exigía la BD de e2e con su primer usuario sembrado.
  */
-const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? "root@example.com";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "longenoughpw";
 
-async function login(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(ADMIN_EMAIL);
-  await page.getByLabel(/^(password|contraseña)$/i).fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
-  await expect(page).toHaveURL(/\/admin\/dashboard$/);
+/** Prefijo de la clave que persiste abierto/cerrado cada grupo del menú. */
+const NAV_GROUP_LS_PREFIX = "agentic.nav.group.";
+
+/** Siembra la sesión de superadmin. Va ANTES de los `page.route` del spec. */
+async function seedSuperadmin(page: Page): Promise<void> {
+  await seedSession(page, { me: systemAdminMe() });
+  // "Proyectos" vive en el grupo "recursos", que arranca PLEGADO fuera de sus
+  // rutas: su enlace ni siquiera está en el DOM hasta que se abre.
+  await page.addInitScript(
+    ([key]) => window.localStorage.setItem(key, "1"),
+    [NAV_GROUP_LS_PREFIX + "recursos"],
+  );
+}
+
+/** Abre el panel ya autenticado y espera a que la cabecera esté montada. */
+async function openPanel(page: Page): Promise<void> {
+  await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("tenant-picker")).toBeVisible();
 }
 
 test("picker shows for superadmin and defaults to 'Todos los tenants'", async ({ page }) => {
-  await login(page);
-  await expect(page.getByTestId("tenant-picker")).toBeVisible();
+  await seedSuperadmin(page);
+  await openPanel(page);
   await expect(page.getByTestId("tenant-picker-label")).toHaveText("Todos los tenants");
 });
 
 test("the platform tenant is hidden from the picker options", async ({ page }) => {
+  await seedSuperadmin(page);
   // Mock /admin/tenants to return the platform tenant plus a real one.
   // The picker must filter the platform UUID out.
-  await page.route("**/admin/tenants", async (route) => {
+  await page.route(apiRoute("/admin/tenants"), async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     await route.fulfill({
       status: 200,
@@ -54,7 +72,7 @@ test("the platform tenant is hidden from the picker options", async ({ page }) =
     });
   });
 
-  await login(page);
+  await openPanel(page);
   await page.getByTestId("tenant-picker").click();
   await expect(page.getByTestId("tenant-picker-popover")).toBeVisible();
 
@@ -69,7 +87,8 @@ test("the platform tenant is hidden from the picker options", async ({ page }) =
 test("selecting a tenant injects X-Tenant-Id on subsequent fetches and persists", async ({
   page,
 }) => {
-  await page.route("**/admin/tenants", async (route) => {
+  await seedSuperadmin(page);
+  await page.route(apiRoute("/admin/tenants"), async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     await route.fulfill({
       status: 200,
@@ -87,7 +106,7 @@ test("selecting a tenant injects X-Tenant-Id on subsequent fetches and persists"
   // Capture the X-Tenant-Id header on any /projects GET after the
   // tenant is selected.
   let lastTenantHeader: string | null = null;
-  await page.route("**/projects", async (route) => {
+  await page.route(apiRoute("/projects*"), async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     lastTenantHeader = route.request().headers()["x-tenant-id"] ?? null;
     await route.fulfill({
@@ -97,7 +116,7 @@ test("selecting a tenant injects X-Tenant-Id on subsequent fetches and persists"
     });
   });
 
-  await login(page);
+  await openPanel(page);
   await page.getByTestId("tenant-picker").click();
   await page.getByTestId("tenant-picker-option-11111111-1111-1111-1111-111111111111").click();
   await expect(page.getByTestId("tenant-picker-label")).toHaveText("Acme Corp");
@@ -129,7 +148,8 @@ test("creating a tenant from the dialog selects it and auto-derives the slug", a
   // Start with an empty tenant list, then have the POST return a
   // fresh tenant and the follow-up GET include it.
   let created = false;
-  await page.route("**/admin/tenants", async (route) => {
+  await seedSuperadmin(page);
+  await page.route(apiRoute("/admin/tenants"), async (route) => {
     const method = route.request().method();
     if (method === "GET") {
       await route.fulfill({
@@ -171,7 +191,7 @@ test("creating a tenant from the dialog selects it and auto-derives the slug", a
     await route.continue();
   });
 
-  await login(page);
+  await openPanel(page);
   await page.getByTestId("tenant-picker").click();
   await expect(page.getByTestId("tenant-picker-empty")).toBeVisible();
 

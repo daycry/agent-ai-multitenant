@@ -156,14 +156,22 @@ test("phases list with their task ids and task table with deps", async ({ page }
   await expect(t1).toContainText("—");
 });
 
-test("back link points to the project plans list", async ({ page }) => {
+test("la miga de pan devuelve al proyecto (y a la lista de proyectos)", async ({ page }) => {
+  // Reparado el 2026-08-19: el enlace suelto `plan-detail-back` ya no existe. La
+  // vuelta atrás la da `<ProjectBreadcrumb>`, la misma miga que pintan las diez
+  // sub-pantallas del proyecto (prod-16 `task_prod16_03`), así que el destino
+  // "arriba" es la FICHA del proyecto, no su lista de planes. Se afirma el
+  // camino real, con sus dos saltos, en vez de un testid retirado.
   await setup(page);
   await page.goto(`/admin/projects/${PROJECT_ID}/plans/${PLAN_ID}`, {
     waitUntil: "domcontentloaded",
   });
-  await expect(page.getByTestId("plan-detail-back")).toHaveAttribute(
+  const crumbs = page.getByTestId("breadcrumb");
+  await expect(crumbs).toBeVisible();
+  await expect(crumbs.getByTestId("breadcrumb-link-0")).toHaveAttribute("href", "/admin/projects");
+  await expect(crumbs.getByTestId("breadcrumb-link-1")).toHaveAttribute(
     "href",
-    `/admin/projects/${PROJECT_ID}/plans`,
+    `/admin/projects/${PROJECT_ID}`,
   );
 });
 

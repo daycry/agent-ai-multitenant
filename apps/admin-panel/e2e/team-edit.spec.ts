@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -26,7 +27,7 @@ async function setup(
   opts: { onPut?: (body: Record<string, unknown>) => void } = {},
 ): Promise<void> {
   await seedSession(page);
-  await page.route(`**/teams/${TEAM_ID}`, async (route) => {
+  await page.route(apiRoute(`/teams/${TEAM_ID}`), async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
         status: 200,
@@ -46,10 +47,10 @@ async function setup(
     return route.fallback();
   });
   // The detail page also fetches /agents and /projects.
-  await page.route("**/agents", (route) =>
+  await page.route(apiRoute("/agents"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route("**/projects", (route) =>
+  await page.route(apiRoute("/projects"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
 }

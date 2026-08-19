@@ -29,9 +29,14 @@
  *     let a regression in `apiFetch` pass unnoticed.
  *   * optionally the active tenant in `localStorage`, which is NOT a
  *     credential and legitimately stays there.
+ *   * la respuesta de `GET /me` (y `/auth/me`), o sea QUIÉN es el que entra.
+ *     Sin ella el panel tiene sesión pero no sujeto, y `<RoleGuard>` esconde
+ *     toda acción de admin — ver el comentario largo al final del fichero.
  */
 
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
+
+import { apiRoute } from "./api";
 
 /** Session cookie name — must match `lib/auth.ts` / `api_server.auth.cookies`. */
 export const SESSION_COOKIE = "agentic_session";
@@ -48,6 +53,64 @@ export const E2E_CSRF_TOKEN = "e2e-csrf-token";
 
 const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 
+/** Tenant por defecto de la identidad mockeada (cualquier UUID sirve). */
+export const E2E_TENANT_ID = "11111111-0000-0000-0000-000000000001";
+
+/**
+ * Forma de `GET /me` que consume `lib/use-current-user.ts`.
+ *
+ * Se declara aquí y no en cada spec porque la forma ya rompió el arnés una vez:
+ * `sidebar-complete.spec.ts` devolvía `{user_id, tenant_id, role:"admin"}` (de
+ * antes del Plan 06.8) y `useCurrentUser` reventaba al hacer
+ * `memberships.find(...)` sobre `undefined`, tumbando el shell entero contra el
+ * `AdminErrorBoundary`. Un solo sitio, un solo arreglo la próxima vez.
+ */
+export interface MeFixture {
+  user_id: string;
+  email: string | null;
+  full_name: string | null;
+  is_system_admin: boolean;
+  is_system_owner: boolean;
+  memberships: Array<{
+    tenant_id: string;
+    tenant_name: string;
+    role: string;
+    is_active: boolean;
+  }>;
+  active_tenant_id: string | null;
+}
+
+/** `tenant_admin` en el tenant activo: el rol con el que se escribió el subset. */
+export function tenantAdminMe(tenantId: string = E2E_TENANT_ID): MeFixture {
+  return {
+    user_id: "aaaa0000-0000-0000-0000-000000000001",
+    email: "admin@a.test",
+    full_name: "Admin A",
+    is_system_admin: false,
+    is_system_owner: false,
+    memberships: [
+      { tenant_id: tenantId, tenant_name: "Tenant A", role: "tenant_admin", is_active: true },
+    ],
+    active_tenant_id: tenantId,
+  };
+}
+
+/**
+ * `system_admin` de plataforma: el rol que ve el selector de tenants.
+ *
+ * `is_system_admin` es lo que decide si el `TenantProvider` pide
+ * `/admin/tenants` y pinta el picker; sin él, la cabecera no lo monta.
+ */
+export function systemAdminMe(tenantId: string = E2E_TENANT_ID): MeFixture {
+  return {
+    ...tenantAdminMe(tenantId),
+    user_id: "aaaa0000-0000-0000-0000-0000000000ad",
+    email: "root@example.com",
+    full_name: "Root Admin",
+    is_system_admin: true,
+  };
+}
+
 export interface SeedSessionOptions {
   /** Override the session token (specs that assert on a specific value). */
   token?: string;
@@ -55,6 +118,14 @@ export interface SeedSessionOptions {
   tenantId?: string;
   /** Override the CSRF token. */
   csrfToken?: string;
+  /**
+   * Identidad que responde `GET /me`.
+   *
+   * Por defecto un `tenant_admin` del tenant activo. `null` desactiva el mock
+   * para el spec que quiera afirmar qué pasa SIN identidad (o montar la suya
+   * antes de que se registre ninguna otra ruta).
+   */
+  me?: MeFixture | null;
 }
 
 /**
@@ -100,6 +171,35 @@ export async function seedSession(page: Page, options: SeedSessionOptions = {}):
       },
       [TENANT_STORAGE_KEY, options.tenantId],
     );
+  }
+
+  // La cookie abre la puerta (el gate de `middleware.ts`), pero no dice QUIÉN
+  // entra: eso lo pregunta el panel con `GET /me`, y de ahí salen los
+  // predicados de `<RoleGuard>`. En el subset MOCKEADO no hay api-server que
+  // conteste, así que la petición falla, `isTenantAdmin` queda en `false` y
+  // TODA acción admin desaparece del DOM. El síntoma es un testid que no
+  // aparece nunca — indistinguible de un botón borrado —, y por eso
+  // `agent-create.spec.ts` llevaba semanas esperando a `new-agent-button`, que
+  // vive dentro de un `<RoleGuard min="tenant_admin">`.
+  //
+  // Sembrar la identidad aquí es lo mismo que sembrar la cookie: una sesión sin
+  // sujeto no es una sesión. Va primero a propósito — Playwright resuelve las
+  // rutas de la MÁS RECIENTE a la más antigua, así que cualquier `page.route`
+  // que el spec registre después (los de córtex con su OWNER, por ejemplo)
+  // gana sin tener que desactivar nada.
+  if (options.me !== null) {
+    const me = options.me ?? tenantAdminMe(options.tenantId ?? E2E_TENANT_ID);
+    const answer = (route: Route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(me),
+      });
+    // Dos endpoints distintos con la misma respuesta: `/me` lo lee
+    // `useCurrentUser` (los roles) y `/auth/me` el `TenantProvider` (si es
+    // superadmin, para decidir si pinta el selector de tenants).
+    await page.route(apiRoute("/me"), answer);
+    await page.route(apiRoute("/auth/me"), answer);
   }
 }
 

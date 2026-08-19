@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -21,7 +22,7 @@ const PROJECTS_FIXTURE = [
 
 async function setup(page: Page): Promise<void> {
   await seedSession(page);
-  await page.route("**/projects", (route) =>
+  await page.route(apiRoute("/projects"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -42,7 +43,7 @@ test("card has a link wrapper pointing to the hub", async ({ page }) => {
 test("clicking the card navigates to the hub URL", async ({ page }) => {
   await setup(page);
   // Mock the hub backend so we don't get a 500 on arrival.
-  await page.route(`**/projects/${PROJECTS_FIXTURE[0].id}`, (route) =>
+  await page.route(apiRoute(`/projects/${PROJECTS_FIXTURE[0].id}`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",

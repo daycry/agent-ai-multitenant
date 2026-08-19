@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -18,6 +19,10 @@ import { seedSession } from "./helpers/session";
  *
  * Lo que queda para el test HUMANO y no se puede mockear: publicar de verdad,
  * aprobar como system admin y completar el OAuth del ADR 0127 en el proveedor.
+ *
+ * Reparado el 2026-08-19: los mocks colgaban de un prefijo `/api/…` que
+ * `lib/api.ts` no usa — pide `http://localhost:8001/marketplace/…`, sin `/api`.
+ * No casaba ni uno, así que la ficha hablaba con un backend inexistente.
  */
 
 const INSTALLATION_ID = "inst-e2e-1";
@@ -94,7 +99,7 @@ async function setup(
 
   await seedSession(page);
 
-  await page.route(`**/api/marketplace/installations/${INSTALLATION_ID}/permissions`, (route) =>
+  await page.route(apiRoute(`/marketplace/installations/${INSTALLATION_ID}/permissions`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -109,12 +114,12 @@ async function setup(
     }),
   );
 
-  await page.route(`**/api/marketplace/listings/${LISTING_ID}`, (route) =>
+  await page.route(apiRoute(`/marketplace/listings/${LISTING_ID}`), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LISTING) }),
   );
 
   await page.route(
-    `**/api/marketplace/installations/${INSTALLATION_ID}/deployments`,
+    apiRoute(`/marketplace/installations/${INSTALLATION_ID}/deployments`),
     async (route) => {
       if (route.request().method() === "POST") {
         const body = JSON.parse(route.request().postData() ?? "{}");
@@ -145,7 +150,7 @@ async function setup(
     },
   );
 
-  await page.route("**/api/marketplace/deployments/*/retire", async (route) => {
+  await page.route(apiRoute("/marketplace/deployments/*/retire"), async (route) => {
     const id = route.request().url().split("/deployments/")[1].split("/")[0];
     retired.push(id);
     const row = deployments.find((d) => d.id === id);
@@ -157,11 +162,11 @@ async function setup(
     });
   });
 
-  await page.route("**/api/projects", (route) =>
+  await page.route(apiRoute("/projects"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PROJECTS) }),
   );
 
-  await page.route(`**/api/projects/${PROJECT_A}/marketplace/available`, (route) =>
+  await page.route(apiRoute(`/projects/${PROJECT_A}/marketplace/available`), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) }),
   );
 
@@ -244,18 +249,18 @@ test("la pestaña MCP del proyecto ofrece activar lo disponible del tenant", asy
   const calls: DeployCall[] = [];
   await setup(page, { onDeploy: (call) => calls.push(call) });
 
-  await page.route(`**/api/projects/${PROJECT_A}`, (route) =>
+  await page.route(apiRoute(`/projects/${PROJECT_A}`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ id: PROJECT_A, name: "App A", mcp_servers: [], mcp_tool_roles: {} }),
     }),
   );
-  await page.route("**/api/mcp-catalog", (route) =>
+  await page.route(apiRoute("/mcp-catalog"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.unroute(`**/api/projects/${PROJECT_A}/marketplace/available`);
-  await page.route(`**/api/projects/${PROJECT_A}/marketplace/available`, (route) =>
+  await page.unroute(apiRoute(`/projects/${PROJECT_A}/marketplace/available`));
+  await page.route(apiRoute(`/projects/${PROJECT_A}/marketplace/available`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",

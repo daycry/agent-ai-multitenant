@@ -122,7 +122,11 @@ test("cerrar sesión y entrar como otro usuario no pinta los datos del anterior"
   });
   await page.route(onApiPath("/auth/logout"), (route) => route.fulfill(json({ status: "ok" })));
   await page.route(onApiPath("/auth/login"), async (route) => {
-    await seedSession(page);
+    // `me: null`: la identidad la gobierna el handler de `/me` de ARRIBA (es el
+    // sujeto del test — quién contesta y cuánto tarda). Si `seedSession`
+    // registrase aquí el suyo, al correr DENTRO de este handler quedaría como
+    // ruta más reciente y ganaría, y el usuario entrante nunca sería Bruno.
+    await seedSession(page, { me: null });
     await route.fulfill(
       json({ access_token: "irrelevante", token_type: "bearer", expires_in: 900 }),
     );

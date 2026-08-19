@@ -172,8 +172,14 @@ test("taxonomy labels are the shared human ones, never the raw enum", async ({ p
   await expect(card).toContainText("Aislada"); // sandboxed
   await expect(card).toContainText("Contenedor"); // docker_command
   // The raw enum is NEVER rendered.
-  await expect(card).not.toContainText("sandboxed");
-  await expect(card).not.toContainText("docker_command");
+  //
+  // Se busca el slug como texto EXACTO de un elemento —que es como saldría un
+  // badge—, no como subcadena de toda la tarjeta: la DESCRIPCIÓN de una tool
+  // puede mencionar la palabra con toda legitimidad ("Lint in a sandboxed
+  // container"), y con `toContainText` el test se caía por su propio fixture
+  // sin que nada estuviera mal en la pantalla (2026-08-19).
+  await expect(card.getByText("sandboxed", { exact: true })).toHaveCount(0);
+  await expect(card.getByText("docker_command", { exact: true })).toHaveCount(0);
 });
 
 test("invented 'sensitive' enum never renders verbatim", async ({ page }) => {

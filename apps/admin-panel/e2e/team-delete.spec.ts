@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
 import { seedSession } from "./helpers/session";
 
 /**
@@ -23,7 +24,7 @@ const TEAM_FIXTURE = {
 
 async function setup(page: Page, opts: { onDelete?: () => void } = {}): Promise<void> {
   await seedSession(page);
-  await page.route(`**/teams/${TEAM_ID}`, async (route) => {
+  await page.route(apiRoute(`/teams/${TEAM_ID}`), async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
         status: 200,
@@ -37,13 +38,13 @@ async function setup(page: Page, opts: { onDelete?: () => void } = {}): Promise<
     }
     return route.fallback();
   });
-  await page.route("**/agents", (route) =>
+  await page.route(apiRoute("/agents"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route("**/projects", (route) =>
+  await page.route(apiRoute("/projects"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route("**/teams", (route) =>
+  await page.route(apiRoute("/teams"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
 }
@@ -67,17 +68,17 @@ test("confirm disabled until name matches; matching name fires DELETE", async ({
 test("builtin team hides edit/delete buttons", async ({ page }) => {
   const builtin = { ...TEAM_FIXTURE, is_builtin: true };
   await seedSession(page);
-  await page.route(`**/teams/${TEAM_ID}`, (route) =>
+  await page.route(apiRoute(`/teams/${TEAM_ID}`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(builtin),
     }),
   );
-  await page.route("**/agents", (route) =>
+  await page.route(apiRoute("/agents"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route("**/projects", (route) =>
+  await page.route(apiRoute("/projects"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
 

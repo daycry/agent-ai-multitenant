@@ -14,6 +14,19 @@ import { seedSession } from "./helpers/session";
  *     badges (builtin / mcp_tool / http_endpoint / python_function /
  *     docker_command),
  *   - render of the project's MCP servers card with auth badge.
+ *
+ * Reparado el 2026-08-19 (subset mockeado de CI). El spec afirmaba que la
+ * tarjeta contenía los ENUM crudos (`builtin`, `http_endpoint`,
+ * `docker_command`, `privileged`), y el ADR 0049 decidió justo lo contrario:
+ * la taxonomía de tools se pinta con etiquetas humanas bilingües
+ * (`lib/tools/taxonomy.ts`) y **el enum crudo no se renderiza nunca**. O sea que
+ * el test no sólo estaba desfasado: vigilaba lo contrario de lo acordado. Ahora
+ * comprueba la etiqueta Y que el slug NO aparece, que es el contrato de verdad.
+ *
+ * De paso, el fixture usaba `security_level: "sensitive"`, un valor que el enum
+ * del backend nunca tuvo (lo dice el comentario de `taxonomy.ts`): el mock
+ * describía un backend imposible. Los tres niveles reales son
+ * safe / sandboxed / privileged, y ahora salen los tres.
  */
 
 const PROJECT_ID = "22222222-0000-0000-0000-000000000001";
@@ -26,6 +39,8 @@ interface ToolFixture {
   implementation_type: string;
   security_level: string;
   timeout_seconds: number;
+  /** Lo que decide el badge "No disponible aún" (honestidad de estado). */
+  executable_in_runtime: boolean;
 }
 
 interface AgentFixture {
@@ -116,8 +131,9 @@ test("agent card lists wired tools with impl-type + security badges", async ({ p
             description: "Run a shell command in the workspace.",
             category: "system",
             implementation_type: "builtin",
-            security_level: "sensitive",
+            security_level: "privileged",
             timeout_seconds: 60,
+            executable_in_runtime: true,
           },
           {
             id: "44444444-0000-0000-0000-000000000002",
@@ -127,6 +143,7 @@ test("agent card lists wired tools with impl-type + security badges", async ({ p
             implementation_type: "http_endpoint",
             security_level: "safe",
             timeout_seconds: 10,
+            executable_in_runtime: true,
           },
           {
             id: "44444444-0000-0000-0000-000000000003",
@@ -134,8 +151,9 @@ test("agent card lists wired tools with impl-type + security badges", async ({ p
             description: "Pyflakes-style lint in a sandboxed container.",
             category: "code",
             implementation_type: "docker_command",
-            security_level: "privileged",
+            security_level: "sandboxed",
             timeout_seconds: 30,
+            executable_in_runtime: true,
           },
         ],
       },
@@ -150,19 +168,41 @@ test("agent card lists wired tools with impl-type + security badges", async ({ p
   await expect(page.getByTestId(`diagnostic-agent-card-${AGENT_ID}`)).toBeVisible();
   await expect(page.getByTestId(`diagnostic-agent-tool-count-${AGENT_ID}`)).toHaveText("3 tools");
 
-  // Each tool row appears with its data.
+  // Cada fila con su dato. El NOMBRE de la tool sí es literal (es el
+  // identificador que el agente invoca); lo que se traduce es la taxonomía.
   const card = page.getByTestId(`diagnostic-agent-card-${AGENT_ID}`);
   await expect(card).toContainText("shell_exec");
-  await expect(card).toContainText("builtin");
-  await expect(card).toContainText("sensitive");
+  await expect(card).toContainText("Nativa");
+  await expect(card).toContainText("Privilegiada");
 
   await expect(card).toContainText("weather_lookup");
-  await expect(card).toContainText("http_endpoint");
-  await expect(card).toContainText("safe");
+  await expect(card).toContainText("HTTP");
+  await expect(card).toContainText("Segura");
 
   await expect(card).toContainText("lint_python");
-  await expect(card).toContainText("docker_command");
-  await expect(card).toContainText("privileged");
+  await expect(card).toContainText("Contenedor");
+  await expect(card).toContainText("Aislada");
+
+  // ADR 0049, la mitad que faltaba: el enum crudo NO se enseña. Sin esto, la
+  // pantalla podría volver a pintar `docker_command` al lado de "Contenedor" y
+  // el test seguiría en verde.
+  //
+  // Se busca el slug como texto EXACTO de un elemento (que es como saldría un
+  // badge), no como subcadena de la tarjeta: la descripción de una tool puede
+  // mencionar legítimamente la palabra ("...in a sandboxed container").
+  for (const raw of [
+    "builtin",
+    "http_endpoint",
+    "docker_command",
+    "safe",
+    "sandboxed",
+    "privileged",
+  ]) {
+    await expect(card.getByText(raw, { exact: true })).toHaveCount(0);
+  }
+
+  // Las tres están cableadas: ningún badge de "No disponible aún".
+  await expect(card.getByText("No disponible aún")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

@@ -192,6 +192,11 @@ test("adding an http server hides stdio fields and PUTs url + headers", async ({
   await expect(page.getByTestId("mcp-form-url")).toBeVisible();
 
   await page.getByTestId("mcp-form-url").fill("https://toy.example/mcp");
+  // La credencial vive bajo "Opciones avanzadas", que arranca PLEGADA: el
+  // formulario deja arriba lo que casi siempre basta. El spec la rellenaba
+  // directamente, sobre un campo que no estaba en el DOM (2026-08-19).
+  await expect(page.getByTestId("mcp-form-auth-ref")).toHaveCount(0);
+  await page.getByTestId("mcp-form-advanced-toggle").click();
   await page.getByTestId("mcp-form-auth-ref").fill("vault:secret/data/toy/proj-1");
   await page.getByTestId("mcp-form-submit").click();
 

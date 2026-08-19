@@ -44,6 +44,22 @@ export function KbDeleteDialog({
   const [typed, setTyped] = useState("");
   const matches = typed === kb.name;
 
+  /**
+   * Cerrar SIEMPRE limpia la confirmación tecleada.
+   *
+   * El botón Cancelar llamaba a `onOpenChange(false)` directamente, saltándose
+   * el envoltorio del `<Dialog>` que hacía el reset: al reabrir, el nombre
+   * seguía escrito y el botón destructivo estaba HABILITADO de entrada. La
+   * confirmación por nombre existe justo para que borrar sea un acto
+   * deliberado; si sobrevive a un "Cancelar", el siguiente borrado es un click.
+   * Detectado el 2026-08-19 por `project-delete.spec.ts` (el mismo defecto
+   * estaba en las cuatro pantallas con confirmación por nombre).
+   */
+  const closeAndReset = () => {
+    setTyped("");
+    onOpenChange(false);
+  };
+
   const mutation = useMutation<void, ApiError, void>({
     mutationFn: async () => {
       await apiFetch(`/knowledge-bases/${kb.id}`, { method: "DELETE" });
@@ -55,8 +71,8 @@ export function KbDeleteDialog({
     <Dialog
       open={true}
       onOpenChange={(v) => {
-        if (!v) setTyped("");
-        onOpenChange(v);
+        if (!v) closeAndReset();
+        else onOpenChange(v);
       }}
     >
       <DialogContent>
@@ -89,7 +105,7 @@ export function KbDeleteDialog({
           )}
         </DialogBody>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={closeAndReset}>
             {t("cancel")}
           </Button>
           <Button
