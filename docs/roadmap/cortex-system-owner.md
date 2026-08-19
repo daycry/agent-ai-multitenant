@@ -190,10 +190,21 @@ tests, no esta línea.
 con histórico y `diff`, clamp de rasgos y cota de baseline por ciclo
 (`BASELINE_MAX_DELTA_PER_REFLECTION = 0.05`), bucle `workers.cortex_reflect` y UI de identidad; el
 `identity_preamble` entra en el self-context de cada turno, así que la identidad **gobierna la
-conducta** y no decora. Lo que falta de las viñetas de abajo, verificado el 2026-07-30: la
-**co-construcción del autonombrado** (no hay `propose_identity`: el owner rellena un formulario),
-el **timeline de evolución** de la UI (no existe `GET /identity/history`, y el `/journal` descarta
-el `diff`), el **budget de la reflexión** y el saciado del drive `coherence`.
+conducta** y no decora.
+
+**Re-verificado contra el código el 2026-08-19, y las cuatro cosas que este párrafo daba por
+faltantes ya no faltan**: `propose_identity` existe (`cortex/identity.py:391`) y la
+co-construcción del autonombrado aterrizó en esa fecha (`cortex/onboarding.py` +
+`POST /identity/onboarding`); el **timeline** de evolución tiene su lectura
+(`GET /owner/cortex/identity/history`, `routers/cortex_mind.py:543`, con el `diff` que el
+`/journal` descartaba) y su pantalla (`components/cortex/identity-timeline.tsx` +
+`trait-radar.tsx`); el **budget** de la reflexión existe y se comprueba en el núcleo, o sea
+también en el botón «Reflexionar ahora» (`REFLECTION_DAILY_CAP = 12`); y el drive `coherence`
+**se sacia** (`_satisfy_coherence`). La contradicción de diseño que bloqueaba los endpoints
+—quién reescribe la narrativa— la cerró el
+[ADR 0157](../05-architecture-decisions/0157-quien-reescribe-la-narrativa-del-cortex.md).
+Lo que sigue abierto de F3 es el **copy honesto ES-only** de la tarjeta de identidad (debe ir
+por el diccionario, ES **y** EN) y el **PR sin abrir**. Estado por casilla: el plan.
 
 - Migración `cortex_identity` + `cortex_identity_history`.
 - Onboarding de identidad (autonombrado, co-construcción de valores).

@@ -348,9 +348,12 @@ const ATTR_ALLOWLIST = {
   "app/admin/assistant/page.tsx": 5,
   "app/admin/assistant/settings/page.tsx": 5,
   "app/admin/board/page.tsx": 4,
-  "app/admin/cortex/identity/page.tsx": 7,
-  "app/admin/cortex/mind/affect-panel.tsx": 1,
-  "app/admin/cortex/mind/page.tsx": 3,
+  // El córtex baja de 20 a 9 al cerrarse las dos casillas de UI (F2 «MindPanel»
+  // y F3.6 «IdentityCard»): el Panel de Mente (`mind/page.tsx` 3 +
+  // `mind/affect-panel.tsx` 1) y la identidad (`identity/page.tsx` 7) están a
+  // CERO y salen del mapa, así que el trinquete los mantiene ahí. Las dos
+  // casillas pedían «ES+EN» y seguían abiertas justamente por esto.
+  // Queda el chat (`cortex/page.tsx`), que es de la fase F1 y no de estas dos.
   "app/admin/cortex/page.tsx": 9,
   "app/admin/dashboard/page.tsx": 3,
   "app/admin/docs/doc-diff-view.tsx": 2,

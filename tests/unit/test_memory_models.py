@@ -135,3 +135,30 @@ def test_per_owner_partial_indexes_are_present() -> None:
         "ix_memory_entries_team_id",
         "ix_memory_entries_user_id",
     } <= idx_names
+
+
+def test_cortex_forgetting_sweep_index_is_in_the_model_too() -> None:
+    """The index migration 0142 creates must ALSO be declared in the ORM.
+
+    The behaviour is tested where behaviour lives — against a real Postgres, in
+    ``tests/integration/test_cortex_forget_sweep_index.py``, which checks the
+    planner actually picks it and stops sorting. What this unit test buys is the
+    other half: that model and schema do not drift. A migration whose index is
+    missing from ``__table_args__`` is invisible to anything that builds the
+    schema from metadata, and nothing else in the suite would notice.
+
+    Column ORDER is asserted on purpose: ``(user_id, created_at)`` is what lets
+    the sweep's ``ORDER BY created_at ... LIMIT`` be served straight from the
+    index. Drop ``created_at`` and the plan goes back to sorting the owner's
+    whole live private memory before the limit applies.
+    """
+    by_name = {idx.name: idx for idx in MemoryEntry.__table__.indexes}
+    index = by_name.get("ix_memory_entries_cortex_sweep")
+    assert index is not None, "migration 0142's index is missing from the model"
+    assert [c.name for c in index.columns] == ["user_id", "created_at"]
+
+    # Partial, and on the four conditions the sweep holds constant. The DB column
+    # behind ``metadata_`` is named ``metadata`` -- see the migration's docstring.
+    predicate = str(index.dialect_options["postgresql"]["where"])
+    for condition in ("deleted_at IS NULL", "'private'", "'episodic'", "metadata ->> 'cortex'"):
+        assert condition in predicate, f"missing {condition!r} in the predicate: {predicate}"

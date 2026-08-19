@@ -90,6 +90,25 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             "user_id",
             postgresql_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
         ),
+        # Write path of the cortex's forgetting sweep (Cortex F5 D3, ADR 0077):
+        # `workers.cortex_maintenance` scans the owner's LIVE, private, episodic
+        # cortex memories ordered by `created_at` and stops at a limit. Without
+        # this index the plan sorts the owner's whole private memory before the
+        # limit applies — and that saco includes the assistant's memories too,
+        # because the only usable index is keyed on `user_id` alone. The four
+        # fixed conditions live in the predicate; `created_at` is the sort key.
+        # NOTE: the DB column behind `metadata_` is named `metadata`.
+        Index(
+            "ix_memory_entries_cortex_sweep",
+            "user_id",
+            "created_at",
+            postgresql_where=text(
+                "deleted_at IS NULL"
+                " AND scope = 'private'"
+                " AND type = 'episodic'"
+                " AND (metadata ->> 'cortex') = 'true'"
+            ),
+        ),
         # Read path: "the memories distilled from this human work session"
         # (Plan 16 task_16_15). Partial — only set on human-distilled rows.
         Index(

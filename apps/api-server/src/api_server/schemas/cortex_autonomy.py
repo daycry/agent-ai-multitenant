@@ -1,9 +1,10 @@
 """Pydantic schemas de la autonomía del córtex (Córtex F4, ADR 0078).
 
 Dan forma a ``GET/PUT /owner/cortex/autonomy`` (gated ``require_system_owner``): el
-estado del KILL-SWITCH global, los caps de budget y el budget de búsquedas consumido
-hoy. Copy honesto: la curiosidad es un comportamiento PROGRAMADO con límites de coste
-auditables, no curiosidad consciente.
+estado del KILL-SWITCH global, los caps de budget y el budget consumido hoy en sus
+dos dimensiones (búsquedas y dólares). Copy honesto: la curiosidad es un
+comportamiento PROGRAMADO con límites de coste auditables, no curiosidad
+consciente.
 """
 
 from __future__ import annotations
@@ -24,12 +25,25 @@ AUTONOMY_NOTE_EN = (
 
 
 class CortexAutonomyBudget(BaseModel):
-    """El budget de búsquedas de curiosidad: consumido hoy vs cap diario."""
+    """El budget de curiosidad del día: consumido vs cap, en sus DOS dimensiones.
+
+    Búsquedas y dólares son topes independientes que se aplican como AND (ADR
+    0078): contar búsquedas acota el egress, pero no el dinero — una sola pasada
+    con razonamiento profundo (``claude_sdk`` + WebSearch nativa, ADR 0076) puede
+    costar más que veinte búsquedas baratas. Enseñar solo la primera dimensión
+    dejaba al owner leyendo «3 de 5 búsquedas» con el cap de dólares agotado y la
+    curiosidad parada sin explicación visible.
+    """
 
     model_config = _BASE_CONFIG
 
     searches_today: int
     searches_cap: int
+    #: Gasto real acumulado hoy (``INCRBYFLOAT`` de ``record_spend``) y su tope.
+    #: Con un proveedor sin factura de API (Ollama local, ADR 0021) el gasto es 0
+    #: legítimamente: 0 significa «no costó dinero», NO «no se sabe».
+    cost_usd_today: float = 0.0
+    cost_usd_cap: float = 0.0
 
 
 class CortexAutonomyResponse(BaseModel):

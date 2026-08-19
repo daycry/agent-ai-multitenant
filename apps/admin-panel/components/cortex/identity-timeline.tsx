@@ -29,19 +29,28 @@ import {
   identityVersionLabel,
   type CortexIdentityVersion,
 } from "@/lib/cortex-identity";
+import { useT } from "@/lib/i18n";
 import { useLangOptional } from "@/lib/lang-context";
 
 const HISTORY_LIMIT = 20;
 
-/** Quién movió la identidad, en lenguaje del owner. */
-const UPDATED_BY_LABEL: Record<string, string> = {
-  reflection: "reflexión",
-  owner_override: "tú",
-  onboarding: "onboarding",
-};
+/**
+ * Quién movió la identidad, en lenguaje del owner.
+ *
+ * El mapa ya no guarda TEXTO: guarda la clave de diccionario, porque el copy en
+ * castellano fijo dejaba «reflexión» y «tú» dentro del timeline con el panel en
+ * inglés. Un valor desconocido se pinta crudo a propósito — es vocabulario del
+ * backend y verlo tal cual dice más que esconderlo.
+ */
+const UPDATED_BY_KEYS = {
+  reflection: "byReflection",
+  owner_override: "byOwner",
+  onboarding: "byOnboarding",
+} as const;
 
 export function IdentityTimeline() {
   const lang = useLangOptional();
+  const t = useT("cortexIdentity");
   const query = useQuery<CortexIdentityVersion[], ApiError>({
     queryKey: ["cortex", "identity", "history"],
     queryFn: () => getCortexIdentityHistory(HISTORY_LIMIT),
@@ -57,34 +66,30 @@ export function IdentityTimeline() {
     <Card data-testid="cortex-identity-timeline">
       <CardContent className="flex flex-col gap-3 pt-5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold">Cómo ha ido cambiando</h2>
-          <span className="text-muted-foreground text-xs">
-            Una versión por cambio, con lo que se movió — modelo computacional, no memoria de un yo
-          </span>
+          <h2 className="text-sm font-semibold">{t("timelineTitle")}</h2>
+          <span className="text-muted-foreground text-xs">{t("timelineSubtitle")}</span>
         </div>
 
         {query.isLoading ? (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <Spinner />
-            Cargando el histórico…
+            {t("timelineLoading")}
           </p>
         ) : notDeployed ? (
           <p
             className="text-muted-foreground text-sm"
             data-testid="cortex-identity-timeline-pending"
           >
-            El histórico de versiones todavía no está disponible en este despliegue (falta el
-            endpoint <code>GET /owner/cortex/identity/history</code>). Los cambios sí se están
-            guardando: aparecerán aquí en cuanto el endpoint esté.
+            {t("timelinePendingLead")} <code>GET /owner/cortex/identity/history</code>
+            {t("timelinePendingTail")}
           </p>
         ) : query.isError ? (
           <p className="text-destructive text-sm" data-testid="cortex-identity-timeline-error">
-            No se pudo cargar el histórico de identidad.
+            {t("timelineError")}
           </p>
         ) : versions.length === 0 ? (
           <p className="text-muted-foreground text-sm" data-testid="cortex-identity-timeline-empty">
-            Aún no hay versiones anteriores: esta identidad es la primera. Cada reflexión (o cada
-            cambio tuyo) dejará aquí su rastro.
+            {t("timelineEmpty")}
           </p>
         ) : (
           <ol className="flex flex-col gap-3" data-testid="cortex-identity-timeline-list">
@@ -96,7 +101,12 @@ export function IdentityTimeline() {
                   </span>
                   <span className="tabular-nums">{formatWhen(v.created_at)}</span>
                   {v.updated_by ? (
-                    <span>· {UPDATED_BY_LABEL[v.updated_by] ?? v.updated_by}</span>
+                    <span>
+                      ·{" "}
+                      {v.updated_by in UPDATED_BY_KEYS
+                        ? t(UPDATED_BY_KEYS[v.updated_by as keyof typeof UPDATED_BY_KEYS])
+                        : v.updated_by}
+                    </span>
                   ) : null}
                   {v.reason ? <span className="italic">({v.reason})</span> : null}
                 </div>

@@ -7,7 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import type { ApiError } from "@/lib/api";
 import { getCortexAutonomy, setCortexAutonomy, type CortexAutonomy } from "@/lib/cortex";
-import { budgetUsageLabel, honestNote } from "@/lib/cortex-curiosity";
+import { autonomyHonestNote, budgetUsageLabel } from "@/lib/cortex-curiosity";
 import { useLangOptional } from "@/lib/lang-context";
 
 // ---------------------------------------------------------------------------
@@ -137,9 +137,11 @@ export function AutonomyPanel() {
                 </span>
               </li>
             </ul>
-            {/* La API manda las dos notas; se muestra la del idioma activo. */}
+            {/* La API manda las dos notas; se muestra la del idioma activo, y
+                si no llegara ninguna, el respaldo bilingüe del diccionario: el
+                aviso del ADR 0075 §6 no es removible. */}
             <p className="text-muted-foreground text-xs" data-testid="cortex-autonomy-note">
-              {honestNote(autonomy, lang)}
+              {autonomyHonestNote(autonomy, lang)}
             </p>
           </>
         )}

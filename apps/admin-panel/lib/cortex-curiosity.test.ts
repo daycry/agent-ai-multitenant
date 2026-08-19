@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  autonomyHonestNote,
   budgetUsageLabel,
   budgetUsageRatio,
   honestNote,
@@ -147,5 +148,33 @@ describe("honestNote", () => {
   it("sin ninguna nota devuelve cadena vacía y el llamante pone su fallback", () => {
     expect(honestNote({}, "es")).toBe("");
     expect(honestNote({ note_es: null, note_en: null }, "en")).toBe("");
+  });
+});
+
+describe("autonomyHonestNote", () => {
+  // Es `honestNote` MÁS la garantía de que nunca sale vacío. La tarjeta de
+  // autonomía enseña el kill-switch y el gasto del día: sin el aviso, esos dos
+  // controles quedan sin el contexto que el ADR 0075 §6 declara no removible.
+  it("prefiere la nota del backend cuando la hay (no la pisa con el respaldo)", () => {
+    const block = { note_es: "Nota del backend.", note_en: "Backend note." };
+    expect(autonomyHonestNote(block, "es")).toBe("Nota del backend.");
+    expect(autonomyHonestNote(block, "en")).toBe("Backend note.");
+  });
+
+  it("sin ninguna nota cae al respaldo del diccionario, en el idioma pedido", () => {
+    const es = autonomyHonestNote({}, "es");
+    const en = autonomyHonestNote({ note_es: null, note_en: "  " }, "en");
+    expect(es).toContain("comportamiento programado, no curiosidad consciente");
+    expect(en).toContain("programmed behaviour, not conscious curiosity");
+    // Y son textos DISTINTOS: un respaldo copiado dejaría al panel en inglés
+    // enseñando castellano, que es el fallo que ya ocurrió con el banner de afecto.
+    expect(es).not.toBe(en);
+  });
+
+  it("nunca devuelve vacío — la diferencia entera con `honestNote`", () => {
+    expect(honestNote({}, "es")).toBe("");
+    for (const lang of ["es", "en"] as const) {
+      expect(autonomyHonestNote({}, lang).trim().length).toBeGreaterThan(0);
+    }
   });
 });

@@ -133,3 +133,23 @@ export function honestNote(
 ): string {
   return pickLang(lang, { es: note.note_es ?? "", en: note.note_en ?? "" }).trim();
 }
+
+/**
+ * El aviso honesto de la tarjeta de AUTONOMÍA, con respaldo garantizado.
+ *
+ * `honestNote` devuelve `""` cuando el backend no manda ninguna de las dos notas
+ * y deja al llamante poner su texto por defecto. Para esta tarjeta ese contrato
+ * no vale: el aviso NO es removible (ADR 0075 §6) y la tarjeta enseña
+ * precisamente el kill-switch y el dinero gastado, o sea lo que el aviso
+ * explica. Un `<p>` vacío deja los controles sin su contexto.
+ *
+ * Por eso el respaldo vive aquí y no en el componente: así lo cubre el mismo
+ * test que el resto de helpers, y el texto sale del diccionario (ES+EN) en vez
+ * de ser una cadena fija en castellano dentro del JSX.
+ */
+export function autonomyHonestNote(
+  note: { note_es?: string | null; note_en?: string | null },
+  lang: CortexLang,
+): string {
+  return honestNote(note, lang) || translate(lang, "cortexCuriosity", "autonomyHonestyFallback");
+}

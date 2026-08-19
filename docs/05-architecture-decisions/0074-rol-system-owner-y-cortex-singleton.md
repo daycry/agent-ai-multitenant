@@ -59,3 +59,37 @@ El diseño del [Córtex del Owner](../roadmap/cortex-system-owner.md) introduce 
 - ✅ Cambio de menor radio de impacto sobre la authz existente; singleton garantizado por constraint.
 - ⚠️ Introduce tablas sin RLS — el aislamiento depende del filtro explícito + tests. Debe auditarse como punto crítico.
 - ⚠️ Un segundo "owner" es imposible por constraint (decisión deliberada: el córtex es del dueño del despliegue).
+
+## F3 — identidad evolutiva (anotado el 2026-08-19)
+
+**Anotado desde la casilla F3.7 del plan [cortex-f3-identidad](../roadmap/cortex-f3-identidad.md).**
+La fase que materializa el «córtex singleton» de este ADR es F3: `cortex_identity`
+(una fila por owner, `uq_cortex_identity_owner`) + `cortex_identity_history`
+(versionado append-only con `diff`), migración `0094_cortex_identity`. Tres cosas de
+este ADR que F3 concreta, y una que lo corrige:
+
+1. **El guardrail de auto-modificación existe y es determinista**: `clamp_traits` /
+   `clamp_baseline` / `bounded_update` con `BASELINE_MAX_DELTA_PER_REFLECTION = 0.05`
+   por ciclo (`cortex/identity.py`). Un ciclo de reflexión no puede derivar la
+   identidad de golpe, y el `diff` de cada versión deja auditable qué movió.
+2. **El punto 5 («aislamiento por `owner_user_id` explícito», test cross-owner
+   obligatorio) se cumple** y tiene sus tests
+   (`tests/integration/test_cortex_f3_identity_endpoints.py`,
+   `test_cortex_identity.py`).
+3. **Pero la mitad «tablas sin RLS» de ese punto 5 ya NO describe el sistema**: el
+   [ADR 0156](0156-aislamiento-estructural-del-cortex.md) + la migración
+   `0140_cortex_owner_rls` (2026-08-19) pusieron RLS de eje owner (`ENABLE` + `FORCE` +
+   policy `owner_user_id = app.user_id`) en las seis tablas del córtex. El aislamiento
+   es hoy de **dos capas**, no de una, y la consecuencia ⚠️ de arriba —«el aislamiento
+   depende del filtro explícito + tests»— queda atenuada por esa segunda capa.
+4. **Qué puede tocar el owner a mano, dicho con precisión**: el
+   [ADR 0157](0157-quien-reescribe-la-narrativa-del-cortex.md) resolvió la
+   contradicción que F3 arrastraba desde junio. La frontera **no** es «lo
+   autobiográfico» sino **lo acotado**: el owner co-diseña la prosa
+   (`name`/`core_values`/`narrative`/`language`/`learning_goals`) y no escribe a mano
+   el estado derivado numérico (`traits`, `mood_baseline`, `relationship_model`,
+   `affect_params`) — 422, porque un número escrito a mano rompería en silencio la
+   cota del punto 1 y convertiría el histórico en un registro falso de cómo evolucionó.
+
+Detalle de lo entregado y de las divergencias:
+[changelog de F3](../07-changelog/cortex-f3-identidad.md).

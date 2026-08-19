@@ -51,14 +51,15 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
 - `memory_entries` (de F1) — el olvido escribe `deleted_at` (soft-delete) y opcionalmente `metadata_.retention_score` / `metadata_.consolidated_into`.
 - `cortex_affect_snapshots` (de F2) — leído para el frame afectivo; no se altera su esquema.
 
-**Migración `0092`** (`apps/api-server/migrations/versions/20260623_0092_cortex_forgetting_columns.py`, encadena `down_revision="0091_system_owner_f0"`): añade, SI Y SÓLO SI F1/F2 no las crearon ya, columnas de soporte al olvido sobre `memory_entries` **de forma aditiva y reversible**:
+~~**Migración `0092`**: dos columnas de soporte al olvido (`last_recalled_at`, `recall_count`) más un índice parcial sobre `memory_entries`.~~
 
-- `last_recalled_at TIMESTAMPTZ NULL` (recencia de acceso para el retention score).
-- `recall_count INTEGER NOT NULL server_default '0'` (frecuencia de acceso).
-- Índice parcial `ix_memory_entries_cortex_active ON memory_entries (user_id, last_recalled_at) WHERE deleted_at IS NULL AND (metadata_->>'cortex') = 'true'` para el barrido del bucle.
-- `down()`: `drop_index` + `drop_column` de ambas (reversible).
-
-> Nota: si F1/F2 ya hubieran añadido estas columnas, `0092` queda como no-op documentado o se fusiona en su migración; **verificar el esquema real de `memory_entries` antes de escribir `0092`**.
+> **Reescrito el 2026-08-19 — ver la tarea D3.** Las columnas **no se escribieron**: el diseño pivotó a JSONB (`metadata_.recall_count` / `metadata_.last_recalled_at`) y ese pivote está cableado de punta a punta —productor `cortex.memory._bump_recall_counters`, consumidores en `cortex.forgetting`—, así que duplicarlo en columnas era abrir dos fuentes de verdad para el mismo dato sobre una tabla de 321 filas.
+>
+> Lo que sí se entregó es lo único del enunciado que seguía faltando y seguía siendo buena idea: el **índice parcial**, en la migración **`0142`** (`20260819_0142_cortex_forget_sweep_index.py`, `down_revision="0141_kb_embedding_canonical"`), con la forma que de verdad usa el barrido:
+>
+> `ix_memory_entries_cortex_sweep ON memory_entries (user_id, created_at) WHERE deleted_at IS NULL AND scope='private' AND type='episodic' AND (metadata->>'cortex')='true'`
+>
+> Ordena por `created_at`, no por `last_recalled_at`, porque es por `created_at` por lo que ordena el sweep. `down()`: `drop_index` (reversible; no hay columnas que quitar).
 
 ## Endpoints / WS
 
@@ -168,14 +169,13 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
     3. Verde + commit `feat(cortex-f5): reversible forgetting maintenance loop (ADR 0077)`.
   - Aceptación: olvido reversible (sólo soft-delete), protección de identity/owner_model, aislamiento cross-owner, y respeto del kill-switch — los tres comprobados.
 
-- [ ] **D3. Migración `0092` — columnas de soporte al olvido**
-  - Ficheros: `apps/api-server/migrations/versions/20260623_0092_cortex_forgetting_columns.py` (NUEVO, `down_revision="0091_system_owner_f0"`); test `tests/migrations/test_0092_cortex_forgetting.py` (NUEVO, patrón de los tests de migración existentes).
-  - TDD:
-    1. Test de migración: `upgrade()` crea `last_recalled_at`, `recall_count` y el índice parcial; `downgrade()` los elimina (round-trip limpio). Falla (migración no existe).
-    2. Escribe la migración aditiva + reversible (ver sección "Tablas nuevas"). **Antes**: confirmar que F1/F2 no añadieron ya estas columnas (si sí, fusionar/no-op).
-    3. `alembic upgrade head` + `alembic downgrade -1` limpios; verde + commit.
-  - Aceptación: migración reversible; `down()` deja `memory_entries` exactamente como antes.
-  - ⏳ **Pendiente (2026-07-30):** el diseño pivotó a JSONB (`metadata_.recall_count`/`last_recalled_at`, que el sweep ya lee) y no existe ni la migración ni el índice parcial ni su test — falta la decisión de producto: escribir columnas+índice o cerrar la tarea documentando el JSONB y añadir al menos el índice parcial que hoy suple `_FORGET_SCAN_LIMIT = 500`.
+- [x] **D3. ~~Migración `0092` — columnas de soporte al olvido~~ → Migración `0142`: el índice parcial del barrido (las columnas NO se escriben)**
+  - ✅ **Cerrada el 2026-08-19, con la decisión de producto tomada: opción (b).** El enunciado original queda **obsoleto** y se reescribe aquí; lo que se hizo en su lugar y por qué:
+  - **Las dos columnas no se escriben.** El diseño pivotó a JSONB y el pivote está **entero y cableado**, no a medias: lo escribe `api_server.cortex.memory._bump_recall_counters` (`jsonb_set` anidado de `metadata_.recall_count` + `metadata_.last_recalled_at`, re-filtrado por `user_id`+`scope='private'`, cross-owner safe) y lo leen los dos consumidores de `api_server.cortex.forgetting` (`recency` desde `last_recalled_at`, `recall_frequency_factor` desde `recall_count`). Duplicarlo en columnas pedía backfill, reescribir productor y consumidores, y una ventana con **dos fuentes de verdad para el mismo dato** — sobre una tabla de **321 filas** (medidas contra la BD del stack el 2026-08-19: 230 vivas, 29 del córtex, 27 en el conjunto que barre el sweep, 3232 kB). Trabajo de simetría con el enunciado, cero de producto.
+  - **El índice parcial sí, y no por completitud: porque hay un `Sort` que `_FORGET_SCAN_LIMIT = 500` no acota.** El plan real de `workers.cortex_maintenance._forget_low_retention` contra la BD viva era `Limit → Sort (created_at) → Index Scan using ix_memory_entries_user_id + Filter`. El `LIMIT` se aplica **después** de ordenar, así que cada pasada traía y ordenaba toda la memoria privada viva del owner —la del asistente incluida, porque el único índice aprovechable va por `user_id` a secas— para quedarse con 500 filas.
+  - Ficheros: `apps/api-server/migrations/versions/20260819_0142_cortex_forget_sweep_index.py` (NUEVO, `down_revision="0141_kb_embedding_canonical"` — la cabeza REAL; el `0091` del enunciado tiene dos meses); índice también declarado en el modelo (`apps/api-server/src/api_server/db/memory.py`). Tests: `tests/integration/test_cortex_forget_sweep_index.py` (NUEVO) y `tests/unit/test_memory_models.py::test_cortex_forgetting_sweep_index_is_in_the_model_too` (NUEVO).
+  - El índice: `ix_memory_entries_cortex_sweep ON memory_entries (user_id, created_at) WHERE deleted_at IS NULL AND scope='private' AND type='episodic' AND (metadata->>'cortex')='true'`. Las cuatro condiciones fijas van al predicado; `created_at` es la clave de orden. Sirve igual al otro barrido de la misma tarea (`_consolidate_similar`). Sin `CONCURRENTLY` a propósito: Alembic corre en transacción y con 3,2 MB la construcción es de milisegundos.
+  - **Aceptación (verificada):** el test de integración afirma que el planificador **elige el índice**, que **desaparece el `Sort`** y que **no queda ninguna línea `Filter:`** (el predicado implica las cuatro condiciones); el round-trip está anclado a `0141_kb_embedding_canonical` **por su nombre**, nunca `downgrade("-1")` — ver `docs/03-guides/gotchas/alembic-round-trip-anclado-por-nombre.md`. El `downgrade` deja `memory_entries` exactamente como antes (el índice es lo único que la migración crea; ningún dato se toca).
 
 ### Fase E — Cierre
 
@@ -196,7 +196,7 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
 - **Egress:** ✅ el WS de voz no abre egress nuevo (STT/TTS internos en `agentic-net`); el bucle de olvido es local (DB+Redis), sin red externa.
 - **Honestidad afectiva:** ✅ disclaimer obligatorio en C3; el frame `affect` se rotula como modelo computacional.
 - **Kill-switch / coste:** ✅ D2 aborta bajo `cortex:budget:{owner}` agotado o circuit-breaker abierto (F4). El WS de voz es interactivo (owner presente), no autónomo.
-- **Reversibilidad:** ✅ olvido = soft-delete (`deleted_at`), nunca DELETE físico; migración `0092` con `down()`.
+- **Reversibilidad:** ✅ olvido = soft-delete (`deleted_at`), nunca DELETE físico; migración `0142` con `downgrade()` que retira el índice (las columnas del enunciado `0092` no llegaron a existir — ver D3).
 
 ### Critical Files for Implementation
 

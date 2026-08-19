@@ -28,12 +28,12 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Brain, Info } from "lucide-react";
+import { Activity, Brain } from "lucide-react";
 
 import { LearningPanel } from "@/components/cortex/learning-panel";
 import { MindPadSpace } from "@/components/cortex/mind-pad-space";
+import { MindPanel } from "@/components/cortex/mind-panel";
 import { PageHeader } from "@/components/layout/page-header";
-import { honestNote } from "@/lib/cortex-curiosity";
 import { useT } from "@/lib/i18n";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -51,11 +51,10 @@ import {
   type CortexMind,
   type CortexPursuit,
 } from "@/lib/cortex";
-import { useLangOptional } from "@/lib/lang-context";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
-import { DrivesPanel, EpisodesPanel, MoodChart, PadPanel } from "./affect-panel";
+import { EpisodesPanel, MoodChart } from "./affect-panel";
 import { AutonomyPanel } from "./autonomy-panel";
 import { BrowseInboxPanel } from "./browse-inbox-panel";
 import { JournalPanel, type CortexJournalEntry } from "./journal-panel";
@@ -63,6 +62,7 @@ const POLL_INTERVAL_MS = 10_000;
 
 export default function CortexMindPage() {
   const { isSystemOwner, isLoading: userLoading } = useCurrentUser();
+  const tCommon = useT("common");
 
   // Mientras no sabemos el rol, nada: nunca parpadear contenido owner-only
   // antes de saber si el usuario puede verlo.
@@ -71,7 +71,7 @@ export default function CortexMindPage() {
       <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
         <p className="text-muted-foreground flex items-center gap-2 text-sm">
           <Spinner />
-          Cargando…
+          {tCommon("loading")}
         </p>
       </div>
     );
@@ -90,6 +90,7 @@ function CortexMindBody() {
   // WS. El polling re-sincroniza /mind por si el WS cae o pierde un frame.
   const [live, setLive] = useState<CortexMind | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const t = useT("cortexMind");
 
   const mindQuery = useQuery<CortexMind, ApiError>({
     queryKey: ["cortex", "mind"],
@@ -174,8 +175,12 @@ function CortexMindBody() {
         <MindHeader />
         <Card className="mt-6">
           <CardContent className="text-destructive pt-5 text-sm" data-testid="cortex-mind-error">
-            No se pudo cargar el estado del córtex:{" "}
-            {mindQuery.error instanceof ApiError ? mindQuery.error.body : String(mindQuery.error)}
+            {t("loadError", {
+              detail:
+                mindQuery.error instanceof ApiError
+                  ? mindQuery.error.body
+                  : String(mindQuery.error),
+            })}
           </CardContent>
         </Card>
       </div>
@@ -191,15 +196,12 @@ function CortexMindBody() {
     >
       <MindHeader />
 
-      {/* Copy honesto OBLIGATORIO y bien visible (ADR 0075 §6). */}
-      <HonestyBanner mind={mind} />
-
-      {mind ? (
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <PadPanel mind={mind} />
-          <DrivesPanel mind={mind} />
-        </div>
-      ) : null}
+      {/* Diales PAD + drives + copy honesto OBLIGATORIO (ADR 0075 §6). Los tres
+          viven juntos en `MindPanel` para que no exista forma de montar los
+          diales sin el aviso, ni aquí ni en la segunda columna del chat. */}
+      <div className="mt-4">
+        <MindPanel mind={mind} />
+      </div>
 
       {/* Espacio PAD 2D con estela: las dos dimensiones del cuadrante a la vez
           (la línea de abajo sólo enseña la valencia del mood en el tiempo). */}
@@ -269,67 +271,47 @@ function CortexMindBody() {
 // ---------------------------------------------------------------------------
 
 function MindHeader() {
+  const t = useT("cortexMind");
   return (
     <PageHeader
       icon={<Activity className="h-6 w-6 sm:h-7 sm:w-7" />}
-      title="Panel de Mente"
-      description="El estado afectivo del córtex en vivo: emoción (PAD), mood, sensaciones (drives), evolución temporal y episodios. Es una simulación computacional, no sentimientos reales."
+      title={t("title")}
+      description={t("description")}
       data-testid="cortex-mind-header"
     />
   );
 }
 
-/**
- * Banner de honestidad — NO removible (ADR 0075 §6). Usa el copy del bloque
- * `honesty` que devuelve `/mind` (ES; cae a EN si falta); si aún no hay estado,
- * un texto por defecto equivalente para que NUNCA se muestren diales sin él.
- */
-function HonestyBanner({ mind }: { mind: CortexMind | null }) {
-  const lang = useLangOptional();
-  const t = useT("cortexCuriosity");
-  // La API manda `note_es` + `note_en`: se muestra la del idioma activo (y la
-  // otra si esa viniera vacía — el aviso no puede quedar en blanco). El respaldo
-  // sale del diccionario y NO por un defecto de comportamiento: el ternario que
-  // había aquí ya daba los dos idiomas, porque `useT` resuelve el idioma con el
-  // mismo `useLangOptional()` que leía el ternario. El respaldo que sí fue
-  // monolingüe es el ANTERIOR al ternario, y lo arregló `63e6a135`.
-  // El motivo del cambio es dejar el `ALLOWLIST` de `scripts/check-i18n.mjs` a
-  // cero: mientras quedara un ternario de idioma en el árbol, la guarda tenía
-  // que seguir tolerando excepciones, y una allowlist viva es por donde vuelve
-  // a colarse castellano cableado en pantallas nuevas.
-  // Y por eso este comentario NO escribe el ternario tal cual: `PATTERN` casa
-  // sobre el fuente entero, comentarios incluidos, así que citarlo literalmente
-  // vuelve a poner roja la guarda que este cambio vino a dejar a cero.
-  const note = honestNote(mind?.honesty ?? {}, lang) || t("honestyFallback");
-  return (
-    <div
-      className="border-border bg-muted text-muted-foreground mt-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm"
-      role="note"
-      data-testid="cortex-mind-honesty"
-    >
-      <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-      <p>
-        <span className="text-foreground font-medium">Aviso de honestidad:</span> {note} Lo que ves
-        es una simulación determinista del afecto del córtex; no se vende como emociones ni
-        consciencia reales.
-      </p>
-    </div>
-  );
-}
+// ---------------------------------------------------------------------------
+// El banner de honestidad YA NO VIVE AQUÍ (ADR 0075 §6).
+//
+// Se lo llevó `components/cortex/mind-panel.tsx` junto con los diales y los
+// drives, y no es un movimiento cosmético: mientras el aviso y los diales eran
+// piezas separadas que la pantalla montaba una al lado de la otra, montar los
+// diales SIN el aviso era un olvido de una línea. Ahora no hay forma de pedir
+// los diales sin el aviso, aquí ni en la segunda columna del chat, porque son el
+// mismo componente y su test lo afirma.
+//
+// El respaldo bilingüe sigue saliendo del diccionario
+// (`cortexCuriosity.honestyFallback`) y su invariante lo cubre
+// `honesty-i18n.test.tsx`, que renderiza ESTA pantalla — así que también
+// acredita el traslado.
+// ---------------------------------------------------------------------------
 
 function CortexMindNoAccess() {
+  const t = useT("cortexMind");
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Brain className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Panel de Mente"
+        title={t("title")}
         data-testid="cortex-mind-header"
       />
       <EmptyState
         data-testid="cortex-mind-no-access"
         icon={Brain}
-        title="Panel de Mente no disponible"
-        description="El Panel de Mente es exclusivo del System Owner (el dueño del despliegue). Tu cuenta no tiene ese rol."
+        title={t("noAccessTitle")}
+        description={t("noAccessDescription")}
       />
     </div>
   );

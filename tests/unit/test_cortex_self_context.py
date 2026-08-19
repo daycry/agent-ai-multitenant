@@ -140,6 +140,46 @@ def test_digest_de_learning_se_trunca() -> None:
 
 
 # ---------------------------------------------------------------------------
+# El LABEL del learning es bilingüe (ES + EN) — copy honesto del surfacing
+# ---------------------------------------------------------------------------
+# Por qué existen estos dos tests: el tema y el digest de un `PendingLearning`
+# son DATOS del pursuit, así que los tests de arriba pasan aunque el label
+# desaparezca del prompt o se emita siempre en castellano. Y el label no es
+# decorativo: es la única frase que le dice al modelo QUÉ es esa línea («un tema
+# que aprendí por curiosidad y quiero sacar»), sin la cual el digest queda como
+# un hecho suelto dentro de <<<DATOS>>>. Con `language="en"` el córtex habla
+# inglés al owner (`_language_of`), y un label español ahí es el defecto que
+# nadie fijaba: la mitad «copy ES+EN» de la aceptación de F4 4.4.
+def test_label_de_learning_en_castellano() -> None:
+    learning = PendingLearning(
+        pursuit_id=uuid4(), topic="arquitectura hexagonal", digest="separa dominio de adaptadores"
+    )
+    state = default_identity_state()
+    state["language"] = "es"
+    prompt = compose_self_context_prompt(
+        _BASE, _ctx(identity_state=state, learnings=(learning,)), remember_enabled=True
+    )
+    assert "aprendí por curiosidad" in prompt
+    assert "learned out of curiosity" not in prompt
+
+
+def test_label_de_learning_en_ingles() -> None:
+    """Con la identidad en inglés, el label del learning va en inglés (y solo en inglés)."""
+    learning = PendingLearning(
+        pursuit_id=uuid4(), topic="hexagonal architecture", digest="ports and adapters"
+    )
+    state = default_identity_state()
+    state["language"] = "en"
+    prompt = compose_self_context_prompt(
+        _BASE, _ctx(identity_state=state, learnings=(learning,)), remember_enabled=True
+    )
+    assert "learned out of curiosity" in prompt
+    # El label castellano NO debe colarse en un prompt en inglés (el fallo real
+    # que este test fija: `_LEARNING_LABEL["es"]` cableado en vez de `[language]`).
+    assert "aprendí por curiosidad" not in prompt
+
+
+# ---------------------------------------------------------------------------
 # compose_self_context_prompt — guías FUERA de los marcadores + copy honesto
 # ---------------------------------------------------------------------------
 def test_guias_de_tono_y_estilo_van_fuera_de_datos() -> None:

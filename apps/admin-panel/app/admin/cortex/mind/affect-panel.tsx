@@ -1,151 +1,30 @@
 "use client";
 
 /**
- * Los cuatro paneles que pintan el afecto simulado: diales PAD, drives, la curva
- * de mood en el tiempo (SVG a mano — el panel no tiene librería de charts) y los
- * episodios con su `appraisal_reason`.
+ * Las dos piezas HISTÓRICAS del afecto simulado: la curva de mood en el tiempo
+ * (SVG a mano — el panel no tiene librería de charts) y los episodios con su
+ * `appraisal_reason`.
  *
  * Salen de `page.tsx` en `task_prod16_08`. No tienen estado propio ni consultan
- * nada: reciben el `CortexMind` ya resuelto, así que el corte es limpio.
+ * nada: reciben los datos ya resueltos, así que el corte es limpio.
+ *
+ * Los diales PAD y los drives estuvieron aquí y se fueron a
+ * `components/cortex/mind-panel.tsx` al cerrar la casilla F2 del Panel de Mente:
+ * son el estado VIVO, se montan también en la segunda columna del chat, y tenían
+ * que viajar pegados al aviso honesto (ADR 0075 §6) para que no exista forma de
+ * pintar un dial sin él. Lo de aquí es el histórico y sólo se ve en la pantalla
+ * completa.
+ *
+ * Todo el copy va por el diccionario (`cortexMind`): el panel era ES-only y por
+ * eso su casilla seguía abierta.
  */
 
 import { useMemo } from "react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  driveToPercent,
-  padToPercent,
-  type CortexAffectPoint,
-  type CortexEpisode,
-  type CortexMind,
-  type PadDimension,
-} from "@/lib/cortex";
-
-// ---------------------------------------------------------------------------
-// Diales PAD + mood
-// ---------------------------------------------------------------------------
-const PAD_DIMENSIONS: {
-  key: PadDimension;
-  label: string;
-  testid: string;
-  /** Una dimensión bipolar [-1,1] marca su punto neutro (0) en el centro. */
-  bipolar: boolean;
-}[] = [
-  { key: "valence", label: "Valencia", testid: "pad-valence", bipolar: true },
-  { key: "arousal", label: "Activación", testid: "pad-arousal", bipolar: false },
-  { key: "dominance", label: "Dominancia", testid: "pad-dominance", bipolar: true },
-  { key: "intensity", label: "Intensidad", testid: "pad-intensity", bipolar: false },
-];
-
-export function PadPanel({ mind }: { mind: CortexMind }) {
-  return (
-    <Card>
-      <CardContent className="space-y-4 pt-5">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-muted-foreground text-xs uppercase tracking-wider">
-            Emoción (PAD) y mood
-          </p>
-          <span
-            className="bg-primary/10 text-primary inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold"
-            data-testid="mood-label"
-          >
-            {mind.mood_label || "—"}
-          </span>
-        </div>
-        <div className="space-y-3">
-          {PAD_DIMENSIONS.map((d) => (
-            <PadDial
-              key={d.key}
-              label={d.label}
-              testid={d.testid}
-              value={mind[d.key]}
-              percent={padToPercent(d.key, mind[d.key])}
-              bipolar={d.bipolar}
-            />
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function PadDial({
-  label,
-  testid,
-  value,
-  percent,
-  bipolar,
-}: {
-  label: string;
-  testid: string;
-  value: number;
-  percent: number;
-  bipolar: boolean;
-}) {
-  return (
-    <div data-testid={testid}>
-      <div className="mb-1 flex items-center justify-between text-sm">
-        <span>{label}</span>
-        <span className="text-muted-foreground tabular-nums">{value.toFixed(2)}</span>
-      </div>
-      <div className="bg-muted relative h-2.5 w-full overflow-hidden rounded-full">
-        {/* Punto neutro (0) de una dimensión bipolar, marca visual al 50%. */}
-        {bipolar ? (
-          <span
-            aria-hidden="true"
-            className="bg-border absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
-          />
-        ) : null}
-        <div
-          className="bg-primary absolute inset-y-0 left-0 rounded-full transition-[width] duration-300"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Drives ("sensaciones")
-// ---------------------------------------------------------------------------
-const DRIVE_DIMENSIONS: { key: keyof CortexMind["drives"]; label: string }[] = [
-  { key: "curiosity", label: "Curiosidad" },
-  { key: "bonding", label: "Vínculo" },
-  { key: "coherence", label: "Coherencia" },
-  { key: "competence", label: "Competencia" },
-];
-
-export function DrivesPanel({ mind }: { mind: CortexMind }) {
-  return (
-    <Card>
-      <CardContent className="space-y-4 pt-5">
-        <p className="text-muted-foreground text-xs uppercase tracking-wider">
-          Sensaciones (drives)
-        </p>
-        <div className="space-y-3" data-testid="drives">
-          {DRIVE_DIMENSIONS.map((d) => {
-            const value = mind.drives[d.key];
-            return (
-              <div key={d.key} data-testid={`drive-${d.key}`}>
-                <div className="mb-1 flex items-center justify-between text-sm">
-                  <span>{d.label}</span>
-                  <span className="text-muted-foreground tabular-nums">{value.toFixed(2)}</span>
-                </div>
-                <div className="bg-muted relative h-2.5 w-full overflow-hidden rounded-full">
-                  <div
-                    className="bg-info absolute inset-y-0 left-0 rounded-full transition-[width] duration-300"
-                    style={{ width: `${driveToPercent(value)}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+import { type CortexAffectPoint, type CortexEpisode } from "@/lib/cortex";
+import { useT } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Gráfico de mood en el tiempo — SVG puro (no hay librería de charts en el panel)
@@ -159,6 +38,7 @@ export function MoodChart({
   isLoading: boolean;
   isError: boolean;
 }) {
+  const t = useT("cortexMind");
   // La línea sigue la VALENCIA del mood (capa lenta) ∈ [-1,1] re-escalada a
   // [0,1] para el dibujo; es el indicador de "humor general" más legible.
   const width = 720;
@@ -184,7 +64,7 @@ export function MoodChart({
     <Card>
       <CardContent className="pt-5">
         <p className="text-muted-foreground mb-2 text-xs uppercase tracking-wider">
-          Mood en el tiempo (valencia del mood)
+          {t("moodChartTitle")}
         </p>
         {isLoading ? (
           <div className="flex items-center justify-center py-10">
@@ -192,11 +72,11 @@ export function MoodChart({
           </div>
         ) : isError ? (
           <p className="text-destructive text-sm" data-testid="mood-chart-error">
-            No se pudo cargar la serie temporal.
+            {t("moodChartError")}
           </p>
         ) : points.length === 0 ? (
           <p className="text-muted-foreground text-sm" data-testid="mood-chart-empty">
-            Aún no hay snapshots afectivos. Conversa con el córtex para empezar a registrar su mood.
+            {t("moodChartEmpty")}
           </p>
         ) : (
           <svg
@@ -204,7 +84,7 @@ export function MoodChart({
             viewBox={`0 0 ${width} ${height}`}
             className="text-primary h-36 w-full"
             role="img"
-            aria-label="Evolución de la valencia del mood en el tiempo"
+            aria-label={t("moodChartAria")}
             preserveAspectRatio="none"
           >
             {/* Línea neutra (valencia 0) al centro vertical. */}
@@ -238,11 +118,12 @@ export function EpisodesPanel({
   isLoading: boolean;
   isError: boolean;
 }) {
+  const t = useT("cortexMind");
   return (
     <Card>
       <CardContent className="pt-5">
         <p className="text-muted-foreground mb-3 text-xs uppercase tracking-wider">
-          Episodios recientes
+          {t("episodesTitle")}
         </p>
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
@@ -250,11 +131,11 @@ export function EpisodesPanel({
           </div>
         ) : isError ? (
           <p className="text-destructive text-sm" data-testid="episodes-error">
-            No se pudieron cargar los episodios.
+            {t("episodesError")}
           </p>
         ) : episodes.length === 0 ? (
           <p className="text-muted-foreground text-sm" data-testid="episodes-empty">
-            Sin episodios emocionales todavía.
+            {t("episodesEmpty")}
           </p>
         ) : (
           <ul className="space-y-2" data-testid="episodes">
@@ -269,12 +150,14 @@ export function EpisodesPanel({
 }
 
 function EpisodeRow({ episode }: { episode: CortexEpisode }) {
+  const t = useT("cortexMind");
   const when = formatWhen(episode.created_at);
   return (
     <li
       className="border-border rounded-lg border p-3"
       data-testid={`episode-${episode.id}`}
-      // El motivo del appraisal asoma al pasar el ratón (además de expandir).
+      // El motivo del appraisal asoma al pasar el ratón (además de expandir). Es
+      // texto del BACKEND, no de la UI: por eso no va por el diccionario.
       title={episode.appraisal_reason ?? undefined}
     >
       <details>
@@ -290,11 +173,11 @@ function EpisodeRow({ episode }: { episode: CortexEpisode }) {
         <div className="mt-2 space-y-1 text-sm">
           {episode.appraisal_reason ? (
             <p className="text-muted-foreground" data-testid={`episode-reason-${episode.id}`}>
-              <span className="text-foreground font-medium">Motivo:</span>{" "}
+              <span className="text-foreground font-medium">{t("episodeReasonLabel")}</span>{" "}
               {episode.appraisal_reason}
             </p>
           ) : (
-            <p className="text-muted-foreground italic">Sin motivo registrado.</p>
+            <p className="text-muted-foreground italic">{t("episodeNoReason")}</p>
           )}
           <p className="text-muted-foreground text-xs tabular-nums">
             V {fmtNum(episode.valence)} · A {fmtNum(episode.arousal)} · D{" "}

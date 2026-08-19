@@ -14,10 +14,25 @@
  * paso, es lo que hace verificable que el dato llegó).
  *
  * Honestidad de producto: es un modelo computacional de identidad, no un "yo"
- * real. El copy honesto lo pone la página que lo monta.
+ * real. El copy honesto lo pone la página (o la tarjeta) que lo monta.
+ *
+ * Los RÓTULOS salen del diccionario, no del `label` que trae `traitRadarAxes`:
+ * aquél es `TRAIT_LABELS_ES`, castellano fijo, y con el panel en inglés dejaba
+ * cinco palabras en castellano dentro del gráfico. La geometría (que es lo que
+ * la función pura aporta y lo que su test compara) se sigue usando tal cual.
  */
 
+import { useT } from "@/lib/i18n";
 import { radarPolygon, traitRadarAxes, type CortexTraits } from "@/lib/cortex-identity";
+
+/** Clave de diccionario por rasgo (el rótulo NO se escribe aquí). */
+const TRAIT_LABEL_KEYS = {
+  openness: "traitOpenness",
+  conscientiousness: "traitConscientiousness",
+  extraversion: "traitExtraversion",
+  agreeableness: "traitAgreeableness",
+  neuroticism: "traitNeuroticism",
+} as const;
 
 // Geometría por defecto de `traitRadarAxes` (centro 50,50 y radio 40 en el
 // viewBox 100×100): se deja explícita, pero DEBE coincidir con la de la función
@@ -29,7 +44,11 @@ const RADIUS = 40;
 const RINGS = [0.25, 0.5, 0.75, 1];
 
 export function TraitRadar({ traits }: { traits: CortexTraits }) {
-  const axes = traitRadarAxes(traits, { cx: CX, cy: CY, radius: RADIUS });
+  const t = useT("cortexIdentity");
+  const axes = traitRadarAxes(traits, { cx: CX, cy: CY, radius: RADIUS }).map((axis) => ({
+    ...axis,
+    label: t(TRAIT_LABEL_KEYS[axis.key]),
+  }));
 
   return (
     <div
@@ -40,9 +59,9 @@ export function TraitRadar({ traits }: { traits: CortexTraits }) {
         viewBox="0 0 100 100"
         className="text-primary h-48 w-48 shrink-0"
         role="img"
-        aria-label={`Radar de rasgos Big-Five: ${axes
-          .map((a) => `${a.label} ${a.value.toFixed(2)}`)
-          .join(", ")}`}
+        aria-label={t("radarAria", {
+          detail: axes.map((a) => `${a.label} ${a.value.toFixed(2)}`).join(", "),
+        })}
       >
         {/* Rejilla: anillos concéntricos + un radio por eje. */}
         {RINGS.map((r) => (

@@ -229,26 +229,87 @@ async def test_put_identity_onboards_versions_and_marks_onboarded(
 
 
 @pytest.mark.asyncio
-async def test_put_identity_rejects_non_editable_fields(
+async def test_put_identity_owner_can_rewrite_narrative_versioned(
     configured_app, migrations_pg_dsn: str
 ) -> None:
-    """traits/mood_baseline NO son editables por el owner (extra=forbid → 422)."""
+    """El OWNER puede reescribir la ``narrative``, y la reescritura queda firmada.
+
+    Acredita la decisión del **ADR 0157** (la frontera de lo intocable es el estado
+    derivado NUMÉRICO, no lo autobiográfico): la prosa la co-diseña el owner y su
+    autoría queda registrada por versión, que es lo que sostiene la honestidad —
+    procedencia, no prohibición.
+
+    Se pone rojo si alguien deshace la decisión en cualquiera de los dos sentidos:
+    quitando la asignación de ``narrative`` en ``cortex/identity.py::
+    editable_owner_state`` (el PUT devolvería 200 pero el texto NO se persistiría —
+    el fallo silencioso caro; comprobado rompiéndolo), o rechazándola con 422 como
+    pedía el enunciado original del plan. Y comprueba lo que da sentido a la
+    frontera: el override del owner **no mueve los derivados** (``traits``), que
+    sólo muta la reflexión de forma acotada."""
     seed = await _seed_two_owners(migrations_pg_dsn)
     token = await _mint(seed["owner_id"], seed["tenant_id"])
     headers = {"Authorization": f"Bearer {token}"}
+    nueva = "Soy el córtex de este despliegue; aprendo de lo que trabajamos juntos."
     async with _client(configured_app) as client:
+        base = await client.get("/owner/cortex/identity", headers=headers)
+        assert base.status_code == 200, base.text
+        antes = base.json()
+
         resp = await client.put(
-            "/owner/cortex/identity",
-            json={"name": "X", "traits": {"openness": 1.0}},
-            headers=headers,
+            "/owner/cortex/identity", json={"narrative": nueva}, headers=headers
         )
-        assert resp.status_code == 422, resp.text
-        resp2 = await client.put(
-            "/owner/cortex/identity",
-            json={"mood_baseline": {"valence": 0.9, "arousal": 0.5, "dominance": 0.0}},
-            headers=headers,
-        )
-        assert resp2.status_code == 422, resp2.text
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["narrative"] == nueva
+
+        # Persistida de verdad, no sólo devuelta en el eco del PUT.
+        vuelta = await client.get("/owner/cortex/identity", headers=headers)
+        assert vuelta.status_code == 200, vuelta.text
+        assert vuelta.json()["narrative"] == nueva
+        # El override de PROSA no toca el estado derivado (ADR 0074: lo acotado
+        # sólo lo mueve la reflexión).
+        assert vuelta.json()["traits"] == antes["traits"]
+        assert vuelta.json()["mood_baseline"] == antes["mood_baseline"]
+
+        # Firmada: versión propia, autoría `owner_override` y diff de la narrativa.
+        hist = await client.get("/owner/cortex/identity/history", headers=headers)
+        assert hist.status_code == 200, hist.text
+        versiones = hist.json()
+        assert [v["version"] for v in versiones] == [1], versiones
+        assert versiones[0]["updated_by"] == "owner_override"
+        assert versiones[0]["diff"]["narrative"] == {
+            "before": antes["narrative"],
+            "after": nueva,
+        }
+
+
+@pytest.mark.asyncio
+async def test_put_identity_rejects_non_editable_fields(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El estado derivado NO es editable por el owner (extra=forbid → 422).
+
+    Los CUATRO campos que sólo muta la reflexión de forma clampeada y acotada
+    (ADR 0074/0157): ``traits``, ``mood_baseline``, ``relationship_model`` y
+    ``affect_params``. Un número escrito a mano rompería en silencio la cota
+    |Δ| ≤ ``BASELINE_MAX_DELTA_PER_REFLECTION`` por ciclo y dejaría
+    ``cortex_identity_history`` como un registro falso de cómo evolucionó.
+
+    Importa que sea **422 y no un campo ignorado**: un `extra="ignore"` aceptaría
+    el PUT con 200 y descartaría el valor sin decirlo, que es la forma de fallo que
+    hace creer al owner que movió los rasgos."""
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+    derivados: list[dict[str, object]] = [
+        {"name": "X", "traits": {"openness": 1.0}},
+        {"mood_baseline": {"valence": 0.9, "arousal": 0.5, "dominance": 0.0}},
+        {"relationship_model": {"prefiere": "que le suba la extraversión"}},
+        {"affect_params": {"decay": 0.0}},
+    ]
+    async with _client(configured_app) as client:
+        for payload in derivados:
+            resp = await client.put("/owner/cortex/identity", json=payload, headers=headers)
+            assert resp.status_code == 422, f"{payload} → {resp.status_code}: {resp.text}"
 
 
 @pytest.mark.asyncio

@@ -1815,9 +1815,121 @@ export const dictionary = {
       es: "{used} de {cap} búsquedas hoy ({pct} %)",
       en: "{used} of {cap} searches today ({pct}%)",
     },
+    /**
+     * Respaldo del aviso honesto de la tarjeta de AUTONOMÍA (ADR 0078), hermano
+     * de `honestyFallback` pero para otra tarjeta y otro aviso: aquélla explica
+     * los diales de afecto, ésta explica que hay bucles gastando dinero solos.
+     *
+     * El aviso llega bilingüe del backend (`AUTONOMY_NOTE_ES`/`_EN` en
+     * `schemas/cortex_autonomy.py`), así que en el camino feliz este texto no se
+     * ve. Existe porque el camino infeliz sí pasaba: con las dos notas vacías
+     * —backend viejo, respuesta recortada— el panel pintaba un `<p>` en blanco y
+     * seguía enseñando el kill-switch y el gasto SIN el aviso que los explica,
+     * que es justo lo que el ADR 0075 §6 declara no removible.
+     */
+    autonomyHonestyFallback: {
+      es:
+        "El córtex investiga temas por su cuenta dentro de límites de coste que tú" +
+        " controlas; es un comportamiento programado, no curiosidad consciente.",
+      en:
+        "The cortex researches topics on its own within cost limits you control;" +
+        " this is a programmed behaviour, not conscious curiosity.",
+    },
   },
 
-  /** `lib/cortex-identity.ts` — resumen legible del diff de identidad. */
+  /**
+   * Panel de Mente del córtex (Córtex F2, ADR 0075) — `components/cortex/
+   * mind-panel.tsx` y la pantalla `app/admin/cortex/mind/`.
+   *
+   * El panel nació cableado en castellano salvo el aviso honesto, y por eso su
+   * casilla del plan seguía abierta: el requisito «ES+EN» de la fase no se
+   * cumplía. Aquí está el copy entero, incluido el del aviso — que NO es
+   * removible (ADR 0075 §6): sin él no se pintan diales de afecto.
+   *
+   * Lo que NO entra aquí: la nota `note_es`/`note_en` que redacta el backend.
+   * Esa llega en DATOS y se elige con `honestNote(...)`/`pickLang`; el respaldo
+   * de cuando viene vacía vive en `cortexCuriosity.honestyFallback`, que es
+   * quien ya lo tenía y a quien apuntan sus tests.
+   */
+  cortexMind: {
+    title: { es: "Panel de Mente", en: "Mind Panel" },
+    description: {
+      es: "El estado afectivo del córtex en vivo: emoción (PAD), mood, sensaciones (drives), evolución temporal y episodios. Es una simulación computacional, no sentimientos reales.",
+      en: "The córtex's affective state, live: emotion (PAD), mood, drives, evolution over time and episodes. It is a computational simulation, not real feelings.",
+    },
+    noAccessTitle: { es: "Panel de Mente no disponible", en: "Mind Panel unavailable" },
+    noAccessDescription: {
+      es: "El Panel de Mente es exclusivo del System Owner (el dueño del despliegue). Tu cuenta no tiene ese rol.",
+      en: "The Mind Panel belongs to the System Owner (the deployment's owner). Your account does not have that role.",
+    },
+    loadError: {
+      es: "No se pudo cargar el estado del córtex: {detail}",
+      en: "Could not load the córtex state: {detail}",
+    },
+    // --- el aviso honesto (ADR 0075 §6) ---------------------------------
+    honestyLabel: { es: "Aviso de honestidad:", en: "Honesty notice:" },
+    honestyTail: {
+      es: "Lo que ves es una simulación determinista del afecto del córtex; no se vende como emociones ni consciencia reales.",
+      en: "What you see is a deterministic simulation of the córtex's affect; it is not offered as real emotions or consciousness.",
+    },
+    // --- diales PAD ------------------------------------------------------
+    padTitle: { es: "Emoción (PAD) y mood", en: "Emotion (PAD) and mood" },
+    valence: { es: "Valencia", en: "Valence" },
+    arousal: { es: "Activación", en: "Arousal" },
+    dominance: { es: "Dominancia", en: "Dominance" },
+    intensity: { es: "Intensidad", en: "Intensity" },
+    noState: {
+      es: "Aún no hay estado afectivo que enseñar.",
+      en: "No affective state to show yet.",
+    },
+    // --- drives ("sensaciones") -----------------------------------------
+    drivesTitle: { es: "Sensaciones (drives)", en: "Drives (needs)" },
+    curiosity: { es: "Curiosidad", en: "Curiosity" },
+    bonding: { es: "Vínculo", en: "Bonding" },
+    coherence: { es: "Coherencia", en: "Coherence" },
+    competence: { es: "Competencia", en: "Competence" },
+    // --- curva de mood ---------------------------------------------------
+    moodChartTitle: {
+      es: "Mood en el tiempo (valencia del mood)",
+      en: "Mood over time (mood valence)",
+    },
+    moodChartAria: {
+      es: "Evolución de la valencia del mood en el tiempo",
+      en: "Mood valence over time",
+    },
+    moodChartError: {
+      es: "No se pudo cargar la serie temporal.",
+      en: "Could not load the time series.",
+    },
+    moodChartEmpty: {
+      es: "Aún no hay snapshots afectivos. Conversa con el córtex para empezar a registrar su mood.",
+      en: "No affective snapshots yet. Talk to the córtex to start recording its mood.",
+    },
+    // --- episodios -------------------------------------------------------
+    episodesTitle: { es: "Episodios recientes", en: "Recent episodes" },
+    episodesError: {
+      es: "No se pudieron cargar los episodios.",
+      en: "Could not load the episodes.",
+    },
+    episodesEmpty: {
+      es: "Sin episodios emocionales todavía.",
+      en: "No emotional episodes yet.",
+    },
+    episodeReasonLabel: { es: "Motivo:", en: "Reason:" },
+    episodeNoReason: { es: "Sin motivo registrado.", en: "No reason recorded." },
+  },
+
+  /**
+   * Identidad evolutiva del córtex (Córtex F3, ADR 0074/0077): el resumen del
+   * diff (`lib/cortex-identity.ts`), la tarjeta (`components/cortex/
+   * identity-card.tsx`), el timeline y la pantalla de edición.
+   *
+   * El **aviso honesto** (`honestyNote`) es la clave que cierra la casilla F3.6:
+   * era un `const HONESTY_NOTE` en castellano dentro de la pantalla, así que el
+   * «(ES+EN)» del enunciado no se cumplía. Vive aquí, en una sola clave, y la
+   * usan la tarjeta y la pantalla: dos copias del mismo aviso es como uno de los
+   * dos se queda atrás.
+   */
   cortexIdentity: {
     versionLabel: { es: "versión {n}", en: "version {n}" },
     unset: { es: "sin definir", en: "unset" },
@@ -1825,6 +1937,138 @@ export const dictionary = {
     changesMany: { es: "{label}: {n} ajustes", en: "{label}: {n} changes" },
     rewritten: { es: "{label} reescrita", en: "{label} rewritten" },
     noChanges: { es: "sin cambios", en: "no changes" },
+    // --- copy honesto (regla de producto de la fase) ----------------------
+    honestyNote: {
+      es: "La identidad del córtex es un modelo computacional que evoluciona — no es consciencia ni un «yo» real.",
+      en: "The córtex's identity is a computational model that evolves — it is not consciousness or a real self.",
+    },
+    // --- tarjeta + pantalla ----------------------------------------------
+    title: { es: "Identidad del córtex", en: "Córtex identity" },
+    description: {
+      es: "Co-diseña quién es tu córtex: su nombre, sus valores y su narrativa. Es un modelo computacional que evoluciona, no consciencia.",
+      en: "Co-design who your córtex is: its name, its values and its narrative. It is a computational model that evolves, not consciousness.",
+    },
+    noAccessTitle: { es: "Identidad no disponible", en: "Identity unavailable" },
+    noAccessDescription: {
+      es: "La identidad del córtex es exclusiva del System Owner (el dueño del despliegue). Tu cuenta no tiene ese rol.",
+      en: "The córtex identity belongs to the System Owner (the deployment's owner). Your account does not have that role.",
+    },
+    loading: { es: "Cargando identidad…", en: "Loading identity…" },
+    loadError: {
+      es: "No se pudo cargar la identidad del córtex.",
+      en: "Could not load the córtex identity.",
+    },
+    unnamed: { es: "Sin nombre todavía", en: "Not named yet" },
+    valuesTitle: { es: "Valores", en: "Core values" },
+    goalsTitle: { es: "Objetivos de aprendizaje", en: "Learning goals" },
+    narrativeTitle: { es: "Narrativa", en: "Narrative" },
+    narrativeEmpty: {
+      es: "Todavía no hay narrativa: la reflexión la irá escribiendo.",
+      en: "No narrative yet: reflection will write it over time.",
+    },
+    editLink: { es: "Editar identidad", en: "Edit identity" },
+    onboardingTitle: {
+      es: "Aún no le has dado identidad a tu córtex",
+      en: "You have not given your córtex an identity yet",
+    },
+    onboardingBody: {
+      es: "Ponle un nombre y unos valores. A partir de ahí, la reflexión periódica irá puliendo su narrativa y sus rasgos con el tiempo.",
+      en: "Give it a name and some values. From there, periodic reflection will refine its narrative and traits over time.",
+    },
+    // --- rasgos Big-Five (radar) -----------------------------------------
+    traitsTitle: {
+      es: "Rasgos derivados por la reflexión",
+      en: "Traits derived by reflection",
+    },
+    traitsHint: {
+      es: "Los rasgos Big-Five y el ánimo base los ajusta la reflexión periódica de forma acotada; no se editan a mano.",
+      en: "The Big Five traits and the mood baseline are adjusted within bounds by periodic reflection; they are not edited by hand.",
+    },
+    traitOpenness: { es: "Apertura", en: "Openness" },
+    traitConscientiousness: { es: "Responsabilidad", en: "Conscientiousness" },
+    traitExtraversion: { es: "Extraversión", en: "Extraversion" },
+    traitAgreeableness: { es: "Amabilidad", en: "Agreeableness" },
+    traitNeuroticism: { es: "Neuroticismo", en: "Neuroticism" },
+    radarAria: {
+      es: "Radar de rasgos Big-Five: {detail}",
+      en: "Big Five trait radar: {detail}",
+    },
+    // --- timeline de versiones -------------------------------------------
+    timelineTitle: { es: "Cómo ha ido cambiando", en: "How it has changed" },
+    timelineSubtitle: {
+      es: "Una versión por cambio, con lo que se movió — modelo computacional, no memoria de un yo",
+      en: "One version per change, with what moved — a computational model, not the memory of a self",
+    },
+    timelineLoading: { es: "Cargando el histórico…", en: "Loading the history…" },
+    timelinePendingLead: {
+      es: "El histórico de versiones todavía no está disponible en este despliegue (falta el endpoint",
+      en: "The version history is not available in this deployment yet (the endpoint",
+    },
+    timelinePendingTail: {
+      es: "). Los cambios sí se están guardando: aparecerán aquí en cuanto el endpoint esté.",
+      en: " is missing). The changes are being stored: they will show up here once the endpoint lands.",
+    },
+    timelineError: {
+      es: "No se pudo cargar el histórico de identidad.",
+      en: "Could not load the identity history.",
+    },
+    timelineEmpty: {
+      es: "Aún no hay versiones anteriores: esta identidad es la primera. Cada reflexión (o cada cambio tuyo) dejará aquí su rastro.",
+      en: "No earlier versions yet: this identity is the first one. Every reflection (or change of yours) will leave its trace here.",
+    },
+    byReflection: { es: "reflexión", en: "reflection" },
+    byOwner: { es: "tú", en: "you" },
+    byOnboarding: { es: "onboarding co-diseñado", en: "co-designed onboarding" },
+    // --- formulario de la pantalla ---------------------------------------
+    nameLabel: { es: "Nombre", en: "Name" },
+    namePlaceholder: {
+      es: "Cómo se llama tu córtex (p. ej. «Atlas»)",
+      en: "What your córtex is called (e.g. “Atlas”)",
+    },
+    valuesLabel: { es: "Valores (uno por línea)", en: "Core values (one per line)" },
+    valuesPlaceholder: {
+      es: "honestidad\ncuriosidad\nrigor",
+      en: "honesty\ncuriosity\nrigour",
+    },
+    narrativeLabel: { es: "Narrativa (en primera persona)", en: "Narrative (first person)" },
+    narrativePlaceholder: {
+      es: "Quién soy, qué me importa, cómo ayudo al owner…",
+      en: "Who I am, what I care about, how I help the owner…",
+    },
+    narrativeHint: {
+      es: "La reflexión periódica reescribe esta narrativa con el tiempo; aquí puedes darle un punto de partida.",
+      en: "Periodic reflection rewrites this narrative over time; here you can give it a starting point.",
+    },
+    languageLabel: { es: "Idioma", en: "Language" },
+    goalsLabel: {
+      es: "Objetivos de aprendizaje (uno por línea)",
+      en: "Learning goals (one per line)",
+    },
+    goalsPlaceholder: {
+      es: "entender mejor mis proyectos\nrecordar mis preferencias",
+      en: "understand my projects better\nremember my preferences",
+    },
+    save: { es: "Guardar", en: "Save" },
+    createIdentity: { es: "Crear identidad", en: "Create identity" },
+    saved: { es: "Identidad guardada (versión {n}).", en: "Identity saved (version {n})." },
+    reflectNow: { es: "Reflexionar ahora", en: "Reflect now" },
+    reflectQueued: {
+      es: "Reflexión en marcha; los cambios aparecerán en breve.",
+      en: "Reflection under way; the changes will show up shortly.",
+    },
+    reflectFailed: {
+      es: "No se pudo encolar la reflexión ahora mismo.",
+      en: "The reflection could not be queued right now.",
+    },
+    ownerModelTitle: { es: "Lo que sabe de ti", en: "What it knows about you" },
+    ownerModelHint: {
+      es: "Modelo computacional del owner — lo deriva la reflexión, no se edita a mano",
+      en: "Computational model of the owner — derived by reflection, not edited by hand",
+    },
+    ownerModelEmpty: {
+      es: "Aún no ha aprendido nada duradero sobre ti. Conversa con el córtex y pulsa «Reflexionar ahora»: lo que destile aparecerá aquí (y lo usará en cada turno).",
+      en: "It has not learned anything lasting about you yet. Talk to the córtex and press “Reflect now”: whatever it distils will show up here (and it will use it every turn).",
+    },
   },
 
   /** `lib/persona/persona.ts` — validación de cliente del `model_config`. */
