@@ -37,7 +37,10 @@ const KB_FIXTURE = {
   tenant_id: "tttttttt-0000-0000-0000-000000000001",
   name: "Manuales del producto",
   description: "Knowledge base con guías + manuales.",
-  embedding_model_id: "nomic-embed-text-v1.5",
+  // ADR 0155: la API devuelve el sello canonizado + el modelo activo.
+  embedding_model_id: "nomic-embed-text",
+  platform_embedding_model: "nomic-embed-text",
+  embedding_model_stale: false,
   created_by: null,
   created_at: "2026-05-25T10:00:00Z",
   updated_at: "2026-05-25T10:00:00Z",

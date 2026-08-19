@@ -61,10 +61,17 @@ export function KbRow({
                 </Badge>
               )}
             </CardTitle>
-            {/* "embedding:" es el nombre del campo del backend, no texto de UI. */}
+            {/* "embedding:" es el nombre del campo del backend, no texto de UI.
+                El valor es el SELLO de la KB (ADR 0155); si no es el modelo
+                activo de la plataforma, la fila lo dice en vez de callarlo. */}
             <span className="text-muted-foreground mt-1 block font-mono text-xs">
               embedding: {kb.embedding_model_id}
             </span>
+            {kb.embedding_model_stale && (
+              <Badge variant="muted" data-testid={`kb-embedding-stale-${kb.id}`}>
+                {t("embeddingStale")}
+              </Badge>
+            )}
           </span>
         </button>
         <Button

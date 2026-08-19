@@ -54,13 +54,24 @@ class _Result:
 
 
 class _FakeSession:
-    """Sesión de mentira: el pipeline solo hace `execute`, `add` y `flush`."""
+    """Sesión de mentira: el pipeline solo hace `execute`, `add` y `flush`.
 
-    def __init__(self, doc: _Doc) -> None:
+    Desde el ADR 0155 el pipeline hace DOS consultas distintas —la fila
+    `documents` y el sello de embeddings de su KB— así que la sesión ya no
+    puede devolver lo mismo a todo. Discrimina por la tabla que menciona el
+    SQL; devolver el documento también a la consulta del sello dejaba la KB
+    «sin sello» y el documento terminaba en `failed` antes de llegar al
+    troceado que este módulo mide.
+    """
+
+    def __init__(self, doc: _Doc, *, kb_embedding_model: str = "nomic-embed-text") -> None:
         self.doc = doc
+        self.kb_embedding_model = kb_embedding_model
         self.added: list[Any] = []
 
-    async def execute(self, _stmt: Any) -> _Result:
+    async def execute(self, stmt: Any) -> _Result:
+        if "knowledge_bases" in str(stmt):
+            return _Result(self.kb_embedding_model)
         return _Result(self.doc)
 
     def add(self, obj: Any) -> None:

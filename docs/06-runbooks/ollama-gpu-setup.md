@@ -14,11 +14,15 @@ cubre cómo levantarlo en dev y en producción (instalador), cómo activar la GP
 (NVIDIA/CUDA, incl. Windows/WSL2) y cómo diagnosticar los fallos típicos de
 embeddings.
 
-> **Tope de diseño (ADR 0056):** la columna pgvector es de **768 dims** y el
-> `embedding_model_id` de una KB es **inmutable** una vez tiene chunks (el
-> re-embed masivo es del Plan 12). Por eso el modelo de embeddings debe ser de
-> **768 dims** (`nomic-embed-text` lo es) y se **fija** por configuración, no se
-> cambia en caliente. Ver [gotcha del naming](../03-guides/gotchas/ollama-embedding-model-naming.md).
+> **Tope de diseño (ADR 0056 + ADR 0155):** la columna pgvector es de **768
+> dims** y la plataforma indexa con **un único modelo**, el de
+> `API_SERVER_EMBEDDING_MODEL`. Por eso el embedder debe ser de **768 dims**
+> (`nomic-embed-text` lo es) y **no se cambia en caliente**: cada KB lleva el
+> sello del modelo con el que se generaron sus vectores, y en cuanto deja de
+> coincidir con el activo sale del camino vectorial y rechaza documentos nuevos
+> hasta que se reindexe. El procedimiento está en el
+> [ADR 0155](../05-architecture-decisions/0155-modelo-de-embeddings-de-kb.md);
+> el naming, en el [gotcha](../03-guides/gotchas/ollama-embedding-model-naming.md).
 
 ## Modos
 

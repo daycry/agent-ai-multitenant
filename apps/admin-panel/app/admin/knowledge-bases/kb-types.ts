@@ -20,7 +20,12 @@ export interface KnowledgeBase {
   tenant_id: string;
   name: string;
   description: string | null;
+  /** ADR 0155: el SELLO — con qué modelo se generaron los vectores de la KB. */
   embedding_model_id: string;
+  /** El modelo activo de la plataforma. */
+  platform_embedding_model: string;
+  /** true = el sello no es el modelo activo → la KB necesita reindexado. */
+  embedding_model_stale: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -28,7 +33,10 @@ export interface KnowledgeBase {
   category: KbCategorySummary | null;
 }
 
-export const DEFAULT_EMBEDDING_MODEL = "nomic-embed-text-v1.5";
+// `DEFAULT_EMBEDDING_MODEL` vivía aquí y el alta de KB lo mandaba en el cuerpo
+// (ADR 0155). Era una etiqueta que no es un tag válido de Ollama y que ningún
+// embedder envió jamás: el modelo lo elige la PLATAFORMA, así que el alta ya no
+// manda nada y la respuesta trae el sello real.
 const NO_CATEGORY_KEY = "__none__";
 
 // ---------------------------------------------------------------------------

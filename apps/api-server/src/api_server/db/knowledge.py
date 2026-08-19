@@ -3,10 +3,13 @@
 Four tables make up the KB substrate:
 
   - **`knowledge_bases`** — top-level container, owned by a tenant.
-    A KB carries its embedding model id so we can mix-and-match
-    (one KB on `nomic-embed-text-v1.5`, another on a future
-    `text-embedding-3-small`); changing it triggers a re-embed
-    pipeline (out of scope until Plan 12).
+    A KB carries the embedding model its vectors were generated with.
+    Es un **sello**, no una preferencia: el ADR 0155 descartó el
+    mix-and-match por KB (un modelo por plataforma) porque dos modelos
+    distintos de la MISMA dimensión producen un `<=>` válido y sin
+    sentido —cero errores, recall peor—, y en producción sólo había un
+    valor. Cambiar el modelo de la plataforma es una operación
+    fuera-de-banda con re-ingesta; el procedimiento está en el ADR.
   - **`documents`** — one row per uploaded source file. Pointers to
     the MinIO object holding the raw bytes + lifecycle status
     (:class:`DocumentStatus`) the ingestion worker drives.
@@ -56,9 +59,9 @@ from api_server.db.base import (
     UUIDPrimaryKeyMixin,
 )
 
-# Same dim as memory entries: nomic-embed-text-v1.5 default
-# (ADR pending in Plan 04 Fase C / D). Changing it requires a
-# migration + re-embedding every chunk.
+# Misma dimensión que las memorias: la del modelo activo de la
+# plataforma (`nomic-embed-text`, ADR 0023 / 0155). Cambiarla exige
+# migración + re-embeber cada chunk.
 CHUNK_EMBEDDING_DIM = 768
 
 
@@ -86,10 +89,16 @@ class KnowledgeBase(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Free-form so the operator can choose between Ollama models
-    # without a migration. Defaults to the platform-wide pick.
+    # SELLO, no entrada del usuario (ADR 0155): dice con qué modelo se
+    # generaron los vectores de esta KB, no con cuál nos gustaría. Lo fija la
+    # API con el modelo activo de la plataforma y devuelve 422 ante cualquier
+    # otro; re-sellar una KB que ya tiene chunks es 409.
+    #
+    # El default era `'nomic-embed-text-v1.5'`, una etiqueta que Ollama NO
+    # conoce y que por tanto no se envió nunca a `/api/embed` (migración
+    # `0141_kb_embedding_canonical`).
     embedding_model_id: Mapped[str] = mapped_column(
-        String(120), nullable=False, server_default=text("'nomic-embed-text-v1.5'")
+        String(120), nullable=False, server_default=text("'nomic-embed-text'")
     )
     created_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),

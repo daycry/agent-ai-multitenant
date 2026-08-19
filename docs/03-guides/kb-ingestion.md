@@ -30,10 +30,15 @@ Content-Type: application/json
 
 {
   "name": "Manuales del producto",
-  "description": "PDFs internos del equipo de docs",
-  "embedding_model_id": "nomic-embed-text-v1.5"
+  "description": "PDFs internos del equipo de docs"
 }
 ```
+
+> **No mandes `embedding_model_id`** (ADR 0155). La plataforma indexa con un
+> único modelo y lo sella ella: mandar otro devuelve **422**. La respuesta trae
+> `embedding_model_id` (el sello, canonizado), `platform_embedding_model` (el
+> activo) y `embedding_model_stale` (si esta KB se indexó con otro y necesita
+> reindexado).
 
 Por defecto la KB es **invisible para todo project**. Pásala a un
 project con:

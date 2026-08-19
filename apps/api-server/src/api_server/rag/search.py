@@ -72,6 +72,43 @@ class ChunkHit:
 # ---------------------------------------------------------------------------
 # Internal SQL builders
 # ---------------------------------------------------------------------------
+def _same_embedding_space_filter() -> str:
+    """`AND` que restringe los chunks a KBs selladas con el modelo de la consulta.
+
+    ADR 0155 regla 5. Sin esto, el vector de consulta —producido por el modelo
+    ACTIVO— compite contra vectores de otro modelo: misma dimensión, ningún
+    error, y un `<=>` perfectamente válido entre dos espacios semánticos que no
+    tienen nada que ver. El filtro es sólo del camino VECTORIAL: BM25 sigue
+    viendo esos chunks, así que una KB sellada con otro modelo no se vuelve
+    invisible — pierde el vector, que es lo que ya había perdido de hecho.
+
+    Parámetro ligado: ``:embedding_model_refs`` (las grafías equivalentes del
+    modelo, ver `accepted_model_refs`; comparar alias en SQL sería duplicar el
+    contrato en un sitio donde no se puede testear igual de barato).
+    """
+    return (
+        " AND EXISTS ("
+        "     SELECT 1 FROM documents dm"
+        "     JOIN knowledge_bases kbm ON kbm.id = dm.kb_id"
+        "     WHERE dm.id = chunks.document_id"
+        "       AND kbm.embedding_model_id = ANY(:embedding_model_refs)"
+        " )"
+    )
+
+
+def _accepted_refs_param(embedding_model: str | None) -> list[str]:
+    """Las grafías aceptadas para el filtro, resolviendo el modelo activo
+    cuando el llamante no lo fija (producción: el mismo setting del que sale el
+    embedder de consulta)."""
+    from api_server.ingestion.embedding_contract import (
+        accepted_model_refs,
+        active_embedding_model,
+    )
+
+    model = embedding_model if embedding_model is not None else active_embedding_model()
+    return sorted(accepted_model_refs(model))
+
+
 def _kb_visibility_filter(*, with_agent: bool = False) -> str:
     """`AND` clause restricting chunks to KBs the caller can read.
 
@@ -143,6 +180,7 @@ async def vector_chunks(
     project_id: UUID,
     agent_id: UUID | None = None,
     limit: int = VECTOR_K_DEFAULT,
+    embedding_model: str | None = None,
 ) -> list[UUID]:
     """Top-`limit` chunk ids by cosine similarity. Empty list if no
     query embedding (an embedder is required for the vector path).
@@ -160,6 +198,7 @@ async def vector_chunks(
         " FROM chunks"
         " WHERE chunks.embedding IS NOT NULL"
         + _kb_visibility_filter(with_agent=agent_id is not None)
+        + _same_embedding_space_filter()
         + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
         " LIMIT :limit"
     )
@@ -169,6 +208,7 @@ async def vector_chunks(
         "tenant_id": tenant_id,
         "project_id": project_id,
         "limit": limit,
+        "embedding_model_refs": _accepted_refs_param(embedding_model),
     }
     if agent_id is not None:
         params["agent_id"] = agent_id
@@ -395,6 +435,7 @@ async def _kb_vector_chunks(
     kb_id: UUID,
     query_embedding: Sequence[float] | None,
     limit: int,
+    embedding_model: str | None = None,
 ) -> list[UUID]:
     """Top-`limit` chunk ids por similitud coseno, acotados a la KB.
     Lista vacía si no hay query embedding (sin embedder no hay vector)."""
@@ -407,11 +448,20 @@ async def _kb_vector_chunks(
         " WHERE documents.kb_id = :kb_id"
         "   AND documents.deleted_at IS NULL"
         "   AND chunks.embedding IS NOT NULL"
-        " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
+        + _same_embedding_space_filter()
+        + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
         " LIMIT :limit"
     )
     qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
-    result = await session.execute(text(sql), {"qvec": qvec_str, "kb_id": kb_id, "limit": limit})
+    result = await session.execute(
+        text(sql),
+        {
+            "qvec": qvec_str,
+            "kb_id": kb_id,
+            "limit": limit,
+            "embedding_model_refs": _accepted_refs_param(embedding_model),
+        },
+    )
     return [row[0] for row in result.all()]
 
 

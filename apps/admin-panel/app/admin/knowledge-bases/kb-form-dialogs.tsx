@@ -29,12 +29,11 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 
 import { CategoryCreateInlineDialog, CategorySelect } from "./kb-category-select";
-import { DEFAULT_EMBEDDING_MODEL, type KbCategory, type KnowledgeBase } from "./kb-types";
+import type { KbCategory, KnowledgeBase } from "./kb-types";
 
 interface KbForm {
   name: string;
   description: string | null;
-  embedding_model_id: string;
   category_id: string | null;
 }
 
@@ -141,9 +140,10 @@ export function KbCreateDialog({
               disabled={!name.trim() || mutation.isPending}
               onClick={() =>
                 mutation.mutate({
+                  // Sin `embedding_model_id`: lo sella la plataforma con su
+                  // modelo activo (ADR 0155). Mandarlo con otro valor es 422.
                   name: name.trim(),
                   description: description.trim() || null,
-                  embedding_model_id: DEFAULT_EMBEDDING_MODEL,
                   category_id: categoryId,
                 })
               }
@@ -238,18 +238,30 @@ export function KbEditDialog({
 
             <div className="flex flex-col gap-1.5">
               <Label>{t("embeddingLabel")}</Label>
-              {/* Read-only por diseño: cambiar el modelo invalida los
-                  embeddings de los chunks existentes (las queries no
-                  matchean) y rompe el RAG. El re-embedding pipeline
-                  llega con Plan 12; hasta entonces el operador del
-                  stack lo configura por seed, no por UI. */}
+              {/* Read-only por diseño (ADR 0155): la plataforma indexa con UN
+                  modelo, así que esto no es un selector sino el sello de con
+                  cuál se generaron los vectores de esta KB. Cambiarlo es una
+                  operación de plataforma (env var + reindexado), no un campo. */}
               <p
                 className="bg-muted/40 text-muted-foreground rounded border px-3 py-2 font-mono text-xs"
                 data-testid="kb-edit-embedding"
               >
                 {kb.embedding_model_id}
               </p>
-              <p className="text-muted-foreground text-xs">{t("embeddingHelp")}</p>
+              {kb.embedding_model_stale ? (
+                <p
+                  className="text-danger-soft-foreground text-xs"
+                  data-testid="kb-edit-embedding-stale"
+                >
+                  {t("embeddingStale")} —{" "}
+                  {t("embeddingStaleHelp", {
+                    stamp: kb.embedding_model_id,
+                    active: kb.platform_embedding_model,
+                  })}
+                </p>
+              ) : (
+                <p className="text-muted-foreground text-xs">{t("embeddingHelp")}</p>
+              )}
             </div>
 
             {mutation.isError && (

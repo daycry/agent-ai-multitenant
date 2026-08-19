@@ -68,7 +68,9 @@ const KB = {
   tenant_id: "t1",
   name: "Manual CI4",
   description: null,
-  embedding_model_id: "nomic-embed-text-v1.5",
+  embedding_model_id: "nomic-embed-text",
+  platform_embedding_model: "nomic-embed-text",
+  embedding_model_stale: false,
   created_by: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
@@ -208,8 +210,26 @@ describe("knowledge-bases en inglés", () => {
 
     expect(screen.getByText("Edit knowledge base")).toBeDefined();
     expect(screen.getByText("Embedding model")).toBeDefined();
-    expect(screen.getByText(/The model is fixed per KB/)).toBeDefined();
+    // ADR 0155: el aviso ya no dice «el modelo es fijo por KB» —era la
+    // descripción de un selector por KB que el código nunca honró—, sino que la
+    // plataforma indexa con uno solo y esto es el sello de esta KB.
+    expect(screen.getByText(/The platform indexes with a single model/)).toBeDefined();
     expect(screen.getByTestId("kb-edit-submit").textContent).toBe("Save");
+  });
+
+  it("traduce el aviso de reindexado cuando la KB quedó con otro modelo", async () => {
+    kbs("en", [
+      { ...KB, embedding_model_id: "granite-embedding:278m", embedding_model_stale: true },
+    ]);
+
+    fireEvent.click(await screen.findByTestId("kb-edit-kb-1"));
+    await waitFor(() => expect(screen.getByTestId("kb-edit-name")).toBeTruthy());
+
+    const stale = screen.getByTestId("kb-edit-embedding-stale").textContent ?? "";
+    expect(stale).toContain("Reindex pending");
+    // Y los dos modelos interpolados: sin ellos el aviso no dice qué reindexar.
+    expect(stale).toContain("granite-embedding:278m");
+    expect(stale).toContain("nomic-embed-text");
   });
 
   it("traduce el diálogo de borrado con confirmación por nombre", async () => {

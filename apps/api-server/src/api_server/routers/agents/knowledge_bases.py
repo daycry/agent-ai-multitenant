@@ -25,6 +25,7 @@ from api_server.auth.deps import (
 )
 from api_server.db.domain import Agent
 from api_server.db.knowledge import AgentKnowledgeBase, KnowledgeBase
+from api_server.ingestion.embedding_contract import canonical_model_ref
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import limit_query, offset_query
 from api_server.routers.agents.common import _load_writable_agent_for_kb
@@ -78,7 +79,11 @@ async def list_agent_kbs(
             "kb_id": str(r.kb_id),
             "name": r.name,
             "description": r.description,
-            "embedding_model_id": r.embedding_model_id,
+            # ADR 0155 regla 3: el sello canonizado, igual que en el resto de
+            # superficies. Devolver aquí la etiqueta cruda dejaría esta lista
+            # enseñando `nomic-embed-text-v1.5` mientras la ficha de la misma KB
+            # enseña `nomic-embed-text`.
+            "embedding_model_id": canonical_model_ref(r.embedding_model_id),
             "granted_at": r.granted_at.isoformat() if r.granted_at else None,
             "granted_by": str(r.granted_by) if r.granted_by else None,
         }

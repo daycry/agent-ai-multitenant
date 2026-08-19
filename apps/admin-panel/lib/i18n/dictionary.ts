@@ -1430,9 +1430,17 @@ export const dictionary = {
     // --- edición ---------------------------------------------------------
     editTitle: { es: "Editar Knowledge Base", en: "Edit knowledge base" },
     embeddingLabel: { es: "Modelo de embedding", en: "Embedding model" },
+    // ADR 0155: el texto anterior («el modelo es fijo por KB») describía un
+    // selector por KB que el código nunca honró. Lo que es fijo es el modelo de
+    // la PLATAFORMA; esto es el sello de con cuál se generaron estos vectores.
     embeddingHelp: {
-      es: "El modelo es fijo por KB. Para usar otro, crea una KB nueva y reindexa los documentos.",
-      en: "The model is fixed per KB. To use a different one, create a new KB and reindex the documents.",
+      es: "La plataforma indexa con un único modelo. Este es el modelo con el que se generaron los vectores de esta KB.",
+      en: "The platform indexes with a single model. This is the model that produced this KB's vectors.",
+    },
+    embeddingStale: { es: "Reindexado pendiente", en: "Reindex pending" },
+    embeddingStaleHelp: {
+      es: "Esta KB se indexó con {stamp} y la plataforma usa ahora {active}. Sus vectores no compiten en la búsqueda vectorial y no admite documentos nuevos hasta reindexarla.",
+      en: "This KB was indexed with {stamp} and the platform now uses {active}. Its vectors do not take part in vector search and it will not accept new documents until you reindex it.",
     },
     save: { es: "Guardar", en: "Save" },
     saving: { es: "Guardando…", en: "Saving…" },

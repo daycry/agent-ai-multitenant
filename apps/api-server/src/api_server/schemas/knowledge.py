@@ -60,7 +60,18 @@ class KnowledgeBaseResponse(BaseModel):
     tenant_id: UUID
     name: str
     description: str | None
+    # ADR 0155: el SELLO de la KB — con qué modelo se produjeron sus vectores —
+    # canonizado (una KB heredada sellada `nomic-embed-text-v1.5` responde
+    # `nomic-embed-text`, que es literalmente el modelo que la embebió). Ya no
+    # es una elección del usuario: la plataforma indexa con un único modelo.
     embedding_model_id: str
+    # El modelo ACTIVO de la plataforma (`API_SERVER_EMBEDDING_MODEL`). Se
+    # devuelve para que la UI pueda contrastar sin adivinar.
+    platform_embedding_model: str = ""
+    # true = el sello NO es el modelo activo. Los vectores de esta KB son de
+    # otro espacio semántico: no compiten en el camino vectorial y la ingesta
+    # de documentos nuevos se niega hasta reindexar (ADR 0155, reglas 4 y 5).
+    embedding_model_stale: bool = False
     created_by: UUID | None
     created_at: datetime
     updated_at: datetime
@@ -72,13 +83,35 @@ class KnowledgeBaseResponse(BaseModel):
     category: KbCategorySummary | None = None
 
 
-def to_kb_response(kb: KnowledgeBase, category: KbCategory | None = None) -> KnowledgeBaseResponse:
+def to_kb_response(
+    kb: KnowledgeBase,
+    category: KbCategory | None = None,
+    *,
+    active_model: str | None = None,
+) -> KnowledgeBaseResponse:
+    """La respuesta pública de una KB.
+
+    `active_model` se inyecta en los tests; en producción se resuelve del
+    setting. La canonización del sello es lo que hace que la pantalla deje de
+    mentir sobre las KBs ya existentes SIN esperar a la migración de datos
+    (ADR 0155, regla 3): el valor guardado sigue siendo la etiqueta heredada,
+    pero lo que se enseña es el modelo que de verdad produjo esos vectores.
+    """
+    from api_server.ingestion.embedding_contract import (
+        active_embedding_model,
+        canonical_model_ref,
+        models_match,
+    )
+
+    platform_model = active_model if active_model is not None else active_embedding_model()
     return KnowledgeBaseResponse(
         id=kb.id,
         tenant_id=kb.tenant_id,
         name=kb.name,
         description=kb.description,
-        embedding_model_id=kb.embedding_model_id,
+        embedding_model_id=canonical_model_ref(kb.embedding_model_id),
+        platform_embedding_model=platform_model,
+        embedding_model_stale=not models_match(kb.embedding_model_id, platform_model),
         created_by=kb.created_by,
         created_at=kb.created_at,
         updated_at=kb.updated_at,

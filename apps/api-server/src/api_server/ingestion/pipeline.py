@@ -39,7 +39,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.knowledge import Chunk, Document
+from api_server.db.knowledge import Chunk, Document, KnowledgeBase
 from api_server.events import (
     EVENT_DOCUMENT_PROGRESS,
     EVENT_DOCUMENT_STATUS,
@@ -47,6 +47,11 @@ from api_server.events import (
 )
 from api_server.ingestion.antivirus import AntivirusScanner, AntivirusVerdict
 from api_server.ingestion.docling import DoclingClient, DoclingParseError
+from api_server.ingestion.embedding_contract import (
+    EmbeddingModelMismatchError,
+    active_embedding_model,
+    require_matching_model,
+)
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.storage import ObjectStorage
 
@@ -93,21 +98,61 @@ async def ingest_document(
     embedder: Embedder,
     redis: Redis | None = None,
     av_failure_mode: str = "fail_closed",
+    platform_embedding_model: str | None = None,
 ) -> IngestionResult:
     """End-to-end ingestion. The session is the tenant-scoped one the
     Celery wrapper opens; we own the lifecycle of the row but commit
-    at the very end so a failure mid-flight rolls everything back."""
+    at the very end so a failure mid-flight rolls everything back.
+
+    ``platform_embedding_model`` es el modelo ACTIVO de la plataforma; ``None``
+    lo resuelve del setting (que es de donde lo saca también el embedder real,
+    ver :class:`~api_server.ingestion.embeddings.OllamaEmbedder`). Se acepta
+    como parámetro para poder ejercitar el mismatch sin tocar el entorno.
+    """
     doc = await _load_document(session, document_id)
 
     await _set_status(session, doc, "processing", error=None, redis=redis)
 
+    # 0. ADR 0155 regla 4: el sello de la KB gobierna. Si la KB se indexó con
+    #    otro modelo, negarse ANTES de bajar bytes, escanear y embeber: seguir
+    #    metería en la KB vectores de otro espacio semántico — misma dimensión,
+    #    ningún error, recall degradado sin rastro.
+    active_model = (
+        platform_embedding_model
+        if platform_embedding_model is not None
+        else active_embedding_model()
+    )
+    kb_model = await _load_kb_embedding_model(session, doc.kb_id)
+    try:
+        require_matching_model(kb_model=kb_model, active_model=active_model)
+    except EmbeddingModelMismatchError as exc:
+        # Nombre de evento ESTABLE: es el gancho sobre el que prod-08 monta el
+        # contador y la alerta (este plan excluye exporters por escrito).
+        logger.error(
+            "kb.embedding_model_mismatch",
+            stage="ingestion",
+            document_id=str(doc.id),
+            kb_id=str(doc.kb_id),
+            kb_model=exc.kb_model,
+            active_model=exc.active_model,
+        )
+        return await _fail(session, doc, str(exc), redis)
+
     # 1. fetch bytes
     try:
         data = await storage.get_object(key=doc.source_storage_key)
-    except KeyError:
-        return await _fail(session, doc, "source object missing in storage", redis)
     except Exception as exc:
-        return await _fail(session, doc, f"storage read failed: {exc}", redis)
+        # Dos motivos, una sola salida: `KeyError` es "el objeto no está" y
+        # cualquier otra cosa es un fallo de lectura. Iban en dos `except` con
+        # su propio `return` hasta que la guarda de modelo (ADR 0155) sumó una
+        # salida más de las que el linter tolera; el mensaje de cada caso se
+        # conserva íntegro, que es lo que lee el operador en la ficha.
+        reason = (
+            "source object missing in storage"
+            if isinstance(exc, KeyError)
+            else f"storage read failed: {exc}"
+        )
+        return await _fail(session, doc, reason, redis)
 
     # 2. antivirus scan
     av_report = await antivirus.scan(filename=doc.source_filename, data=data)
@@ -254,6 +299,20 @@ async def _embed_in_batches(
             continue
         embeddings.extend(vectors)
     return embeddings
+
+
+async def _load_kb_embedding_model(session: AsyncSession, kb_id: UUID) -> str:
+    """El sello de embeddings de la KB del documento, o cadena vacía.
+
+    Vacía se trata como mismatch a propósito (ver `require_matching_model`): una
+    KB sin sello no puede afirmar con qué modelo son sus vectores, y adivinar
+    «pues el activo» es exactamente la suposición que produjo el hallazgo
+    AUD14-03."""
+    result = await session.execute(
+        select(KnowledgeBase.embedding_model_id).where(KnowledgeBase.id == kb_id)
+    )
+    stamp = result.scalar_one_or_none()
+    return stamp if isinstance(stamp, str) else ""
 
 
 async def _load_document(session: AsyncSession, document_id: UUID) -> Document:

@@ -49,6 +49,7 @@ from api_server.ingestion.formats import cached_supported_formats
 from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
 from api_server.routers._helpers import require_tenant_id, soft_delete
+from api_server.routers._kb_embedding import stamp_for_kb_update, stamp_for_new_kb
 from api_server.routers._pagination import (
     MAX_PAGE_SIZE,
     apply_pagination,
@@ -167,7 +168,9 @@ async def create_kb(
         tenant_id=tenant_id,
         name=payload.name,
         description=payload.description,
-        embedding_model_id=payload.embedding_model_id or "nomic-embed-text-v1.5",
+        # ADR 0155: el sello lo pone la plataforma, no el cliente. Un modelo
+        # distinto del activo es 422, no un 201 con una etiqueta decorativa.
+        embedding_model_id=stamp_for_new_kb(payload.embedding_model_id),
         created_by=principal.user_id,
         category_id=payload.category_id,
     )
@@ -357,26 +360,19 @@ async def update_kb(
         kb.name = payload.name
     if payload.description is not None:
         kb.description = payload.description
-    if (
-        payload.embedding_model_id is not None
-        and payload.embedding_model_id != kb.embedding_model_id
-    ):
-        # Plan 06.17 task_06_17_05: cambiar el modelo de embedding con
-        # chunks ya indexados los dejaría con vectores de OTRO modelo, que
-        # el path vectorial nunca casaría → RAG roto en silencio. El
-        # re-embedding real está diferido a Plan 12; hasta entonces
-        # bloqueamos el cambio (409) si la KB tiene chunks. Una KB vacía sí
-        # puede cambiar de modelo (no hay nada que invalidar).
-        if await _kb_has_chunks(session, kb.id):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "no se puede cambiar embedding_model_id: la KB ya tiene chunks"
-                    " indexados (re-embedding diferido a Plan 12). Crea una KB nueva"
-                    " con el modelo deseado y reindexa los documentos."
-                ),
-            )
-        kb.embedding_model_id = payload.embedding_model_id
+    if payload.embedding_model_id is not None:
+        # ADR 0155: la plataforma tiene UN modelo. Pedir otro es 422 (antes se
+        # guardaba tal cual sobre una KB vacía, incluido `text-embedding-3-small`,
+        # que esta plataforma —Ollama, 768 dims— no puede ni ejecutar). Pedir el
+        # activo sobre una KB CON chunks sigue siendo 409: re-sellar sin
+        # re-embeber convertiría el sello en otra mentira.
+        new_stamp = stamp_for_kb_update(
+            requested=payload.embedding_model_id,
+            current=kb.embedding_model_id,
+            has_chunks=await _kb_has_chunks(session, kb.id),
+        )
+        if new_stamp is not None:
+            kb.embedding_model_id = new_stamp
     # Plan 06.10: model_fields_set para distinguir "category_id no
     # enviado" (no tocar) de "category_id explícitamente null" (limpiar).
     if "category_id" in payload.model_fields_set:

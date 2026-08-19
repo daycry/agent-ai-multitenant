@@ -44,7 +44,10 @@ interface KnowledgeBase {
   tenant_id: string;
   name: string;
   description: string | null;
+  /** ADR 0155: sello del modelo con el que se generaron los vectores. */
   embedding_model_id: string;
+  platform_embedding_model: string;
+  embedding_model_stale: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -387,6 +390,18 @@ function KnowledgeBaseCard({ kb }: { kb: KnowledgeBase }) {
           ) : null}
           <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
             Embedding: <span className="font-mono">{kb.embedding_model_id}</span>
+            {kb.embedding_model_stale ? (
+              // ADR 0155: sello ≠ modelo activo → esta KB no aporta al camino
+              // vectorial y rechaza documentos nuevos. Decirlo aquí, que es
+              // donde el usuario sube documentos, evita el «se subió y no pasa
+              // nada» que no se explica en ningún sitio.
+              <span
+                className="text-danger-soft-foreground ml-2"
+                data-testid={`kb-embedding-stale-${kb.id}`}
+              >
+                · reindexado pendiente (plataforma: {kb.platform_embedding_model})
+              </span>
+            ) : null}
           </p>
         </div>
         <Button onClick={() => setUploadOpen(true)} data-testid={`kb-upload-open-${kb.id}`}>

@@ -215,7 +215,12 @@ async def test_kb_crud_round_trip(configured_app, migrations_pg_dsn: str) -> Non
         )
         assert create.status_code == 201, create.text
         kb_id = create.json()["id"]
-        assert create.json()["embedding_model_id"] == "nomic-embed-text-v1.5"
+        # ADR 0155: la plataforma sella su modelo ACTIVO, no la etiqueta
+        # heredada `-v1.5` (que no es un tag válido de Ollama y que ningún
+        # embedder envió nunca), y la respuesta dice cuál es el activo.
+        assert create.json()["embedding_model_id"] == "nomic-embed-text"
+        assert create.json()["platform_embedding_model"] == "nomic-embed-text"
+        assert create.json()["embedding_model_stale"] is False
 
         # List.
         listed = await client.get("/knowledge-bases", headers=headers)
