@@ -67,6 +67,28 @@ export interface CortexReflectResult {
   enqueued: boolean;
 }
 
+/**
+ * POST /owner/cortex/identity/onboarding — el córtex se propone a sí mismo.
+ *
+ * Dos pasos sobre la MISMA ruta: sin `confirm` corre un turno y propone (no
+ * persiste nada, `onboarded_at` sigue nulo); con `confirm` guarda lo que el
+ * owner acepte, posiblemente editado.
+ */
+export interface CortexOnboardingResult {
+  /** Ya estaba onboardado: este POST no gastó turno ni reescribió nada. */
+  already_onboarded: boolean;
+  /** Este POST persistió la identidad. */
+  applied: boolean;
+  /** El turno literal del córtex proponiéndose. Vacío fuera del paso de propuesta. */
+  proposal: string;
+  /** El CANDIDATO en el paso de propuesta; el vigente tras confirmar. */
+  identity: CortexIdentity;
+  /** Lo que cambiaría (o cambió), en el formato `{campo:{before,after}}`. */
+  diff: IdentityDiff;
+  /** Aviso honesto bilingüe: la pantalla rotula el del idioma activo. */
+  honesty: { note_es: string; note_en: string };
+}
+
 // ---------------------------------------------------------------------------
 // Límites de campo — espejo del schema Pydantic (schemas/cortex_identity.py).
 // ---------------------------------------------------------------------------
@@ -97,6 +119,34 @@ export function updateCortexIdentity(body: CortexIdentityUpdate): Promise<Cortex
 /** Dispara una pasada de reflexión bajo demanda (best-effort). */
 export function reflectCortexIdentity(): Promise<CortexReflectResult> {
   return cortexFetch<CortexReflectResult>("/reflect", { method: "POST" });
+}
+
+/**
+ * Paso 1: pide al córtex que se proponga nombre, valores y narrativa.
+ *
+ * No persiste nada. El cuerpo va vacío a propósito —`confirm` es `false` por
+ * defecto en el schema— para que la propuesta no pueda escribir por accidente.
+ */
+export function proposeCortexOnboarding(): Promise<CortexOnboardingResult> {
+  return cortexFetch<CortexOnboardingResult>("/identity/onboarding", {
+    method: "POST",
+    body: {},
+  });
+}
+
+/**
+ * Paso 2: el owner acepta la propuesta (posiblemente editada) y ESO se guarda.
+ *
+ * Los campos que no se envíen conservan su valor actual, así que aceptar la
+ * propuesta tal cual es mandar exactamente lo que el paso 1 devolvió.
+ */
+export function confirmCortexOnboarding(
+  body: CortexIdentityUpdate,
+): Promise<CortexOnboardingResult> {
+  return cortexFetch<CortexOnboardingResult>("/identity/onboarding", {
+    method: "POST",
+    body: { ...body, confirm: true },
+  });
 }
 
 // ---------------------------------------------------------------------------

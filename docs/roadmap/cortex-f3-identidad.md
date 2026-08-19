@@ -183,11 +183,20 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
        así que la guarda de la función se ejercita **directamente** en
        `test_apply_onboarding_is_idempotent_on_its_own`: sin ese test la guarda interna estaría tapada por
        la del endpoint y nadie notaría si desaparece.
-  - ⏳ **Lo que sigue abierto y NO es de esta casilla:** el endpoint todavía no tiene llamante en el panel
-    (el owner sigue viendo sólo el formulario manual de `PUT /identity`). El botón «que se proponga él»
-    es trabajo de **F3.6**, que sigue sin marcar. Mientras tanto el flujo es probable end-to-end por HTTP
-    pero no hay pantalla que lo dispare — el patrón nº5 de `verificar-antes-de-implementar.md` queda
-    cerrado un nivel (ya hay quien llama a `propose_identity`) y abierto en el siguiente.
+  - ✅ **El llamante ya existe (2026-08-19, mismo día).** Cuando se escribió la nota de arriba, el
+    endpoint no tenía botón: el owner sólo veía el formulario manual de `PUT /identity`. Cada carril se
+    lo dejó al otro —F3.3 decía «es de F3.6» y F3.6 decía «esta casilla es la TARJETA»— y así es como el
+    patrón nº5 de `verificar-antes-de-implementar.md` sobrevive a dos personas que hacen bien su parte.
+    Cerrado con el botón «que se proponga él» en el banner de identidad pendiente
+    (`app/admin/cortex/identity/page.tsx`), su cliente
+    (`lib/cortex-identity.ts::proposeCortexOnboarding` / `confirmCortexOnboarding`) y once claves de
+    diccionario ES+EN. Cuatro tests en
+    `app/admin/cortex/identity/onboarding-proposal.test.tsx` fijan las propiedades que hacen que la
+    pantalla no mienta: el botón sólo sale si el córtex NO está onboardado; **proponer no persiste** (el
+    primer POST va sin `confirm`); el turno literal se PINTA, para que el owner acepte lo que ha leído;
+    y aceptar manda **lo que hay en el formulario**, no lo que propuso el modelo — si el owner cambia el
+    nombre, se guarda el suyo. Rojo comprobado por mutación en las tres direcciones (retirar el botón:
+    3 rojos; que aceptar ignore la edición: 1; que proponer mande `confirm: true`: 1).
 
 ### F3.4 — Bucle de reflexión periódica (Celery beat — GATED, ADR 0078)
 
@@ -231,7 +240,11 @@ Todos filtran `owner_user_id == principal.user_id` en SQL sobre `get_admin_sessi
   - Cliente API: `apps/admin-panel/lib/cortex-identity.ts` (fetch a los endpoints) + helper puro testeado `identityDiffSummary(diff)` (resumen legible de un cambio).
   - TDD: `apps/admin-panel/lib/cortex-identity.test.ts` (vitest, patrón `lib/conversation-history.ts`/`conversation-history.test.ts` de Feature 2): `identityDiffSummary` resume un diff multi-campo; etiqueta de versión correcta.
   - **Criterio**: la tarjeta renderiza identidad+narrativa con copy honesto; timeline muestra versiones; gated `isSystemOwner`; tests vitest en verde. **Cumplido**: 11 vitest de la tarjeta + 5 del montaje + los 11 del timeline y los 24 de `lib/cortex-identity.test.ts` que ya había, todos verdes; `tsc --noEmit`, `next lint --max-warnings=0`, `check-i18n` y `check-component-size` en verde.
-  - ⏳ **Lo que sigue abierto y NO es de esta casilla:** el botón «que se proponga él» (co-construcción de la identidad con `propose_identity`, que la nota de **F3.3** atribuye a F3.6 y que también reclama `gaps-cortex-2026-07-27.md`). Esta casilla es la TARJETA —radar, narrativa, copy honesto— y no menciona la propuesta por ninguna parte; marcarla no cierra aquello. Sigue sin llamante en el panel: el owner sólo tiene el formulario manual de `PUT /identity`.
+  - ✅ **Lo que quedaba abierto y NO era de esta casilla, cerrado el mismo día:** el botón «que se
+    proponga él» (co-construcción con `propose_identity`, que la nota de **F3.3** atribuía a F3.6 y que
+    también reclamaba `gaps-cortex-2026-07-27.md`). La observación de esta casilla era correcta —es la
+    TARJETA, y marcarla no cerraba aquello—, y por eso se entregó aparte: botón en el banner de
+    identidad pendiente + cliente + cuatro tests con su rojo comprobado. Ver la nota de F3.3.
 
 ### F3.7 — Documentación + cierre de ADRs
 

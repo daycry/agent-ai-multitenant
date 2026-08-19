@@ -51,11 +51,14 @@ import {
   getCortexIdentity,
   joinLines,
   needsOnboarding,
+  proposeCortexOnboarding,
+  confirmCortexOnboarding,
   parseLines,
   reflectCortexIdentity,
   updateCortexIdentity,
   type CortexIdentity,
 } from "@/lib/cortex-identity";
+import type { CortexOnboardingResult } from "@/lib/cortex-identity";
 import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
 
@@ -142,6 +145,48 @@ function CortexIdentityBody() {
     mutationFn: reflectCortexIdentity,
   });
 
+  // Co-construcción (F3.3): el córtex se propone a sí mismo y el owner acepta.
+  //
+  // El endpoint existía desde el 2026-08-19 y NO tenía llamante: el owner sólo
+  // veía el formulario manual, o sea el mecanismo entregado sin la puerta por la
+  // que se usa. La propuesta NO persiste nada; siembra el formulario para que lo
+  // que se guarde al aceptar sea lo que el owner tenga delante, editado o no.
+  const [proposal, setProposal] = useState<CortexOnboardingResult | null>(null);
+
+  const proposeMutation = useMutation<CortexOnboardingResult, ApiError, void>({
+    mutationFn: proposeCortexOnboarding,
+    onSuccess: (result) => {
+      setProposal(result);
+      const candidate = result.identity;
+      setName(candidate.name ?? "");
+      setCoreValues(joinLines(candidate.core_values));
+      setNarrative(candidate.narrative);
+      setLanguage(candidate.language || "es");
+      setLearningGoals(joinLines(candidate.learning_goals));
+    },
+    onError: (error) => {
+      if (error.status === 403) setForbidden(true);
+    },
+  });
+
+  const acceptMutation = useMutation<CortexOnboardingResult, ApiError, void>({
+    mutationFn: () =>
+      confirmCortexOnboarding({
+        name: name.trim() || null,
+        core_values: parseLines(coreValues),
+        narrative,
+        language,
+        learning_goals: parseLines(learningGoals),
+      }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["cortex", "identity"], result.identity);
+      setProposal(null);
+    },
+    onError: (error) => {
+      if (error.status === 403) setForbidden(true);
+    },
+  });
+
   if (forbidden) return <CortexIdentityNoAccess />;
 
   if (identityQuery.isLoading) {
@@ -178,6 +223,59 @@ function CortexIdentityBody() {
             <div className="text-sm">
               <p className="font-medium">{t("onboardingTitle")}</p>
               <p className="text-muted-foreground mt-1">{t("onboardingBody")}</p>
+
+              {/* Co-construcción: la otra vía, y la que el plan pedía. */}
+              <p className="text-muted-foreground mt-3">{t("proposeHelp")}</p>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-2"
+                data-testid="cortex-identity-propose"
+                disabled={proposeMutation.isPending}
+                onClick={() => proposeMutation.mutate()}
+              >
+                {proposeMutation.isPending ? t("proposeRunning") : t("proposeCta")}
+              </Button>
+
+              {proposeMutation.isError ? (
+                <p className="text-destructive mt-2" data-testid="cortex-identity-propose-error">
+                  {t("proposalError")}
+                </p>
+              ) : null}
+
+              {proposal ? (
+                <div className="mt-4 flex flex-col gap-2" data-testid="cortex-identity-proposal">
+                  <p className="font-medium">{t("proposalTitle")}</p>
+                  {/* El turno literal: el owner acepta lo que ha LEÍDO. */}
+                  <p
+                    className="text-muted-foreground whitespace-pre-wrap"
+                    data-testid="cortex-identity-proposal-text"
+                  >
+                    {proposal.proposal}
+                  </p>
+                  <p className="text-muted-foreground text-xs">{t("proposalEditHint")}</p>
+                  <div className="mt-1 flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      data-testid="cortex-identity-proposal-accept"
+                      disabled={acceptMutation.isPending}
+                      onClick={() => acceptMutation.mutate()}
+                    >
+                      {acceptMutation.isPending ? t("proposalAccepting") : t("proposalAccept")}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      data-testid="cortex-identity-proposal-discard"
+                      onClick={() => setProposal(null)}
+                    >
+                      {t("proposalDiscard")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </CardContent>
         </Card>

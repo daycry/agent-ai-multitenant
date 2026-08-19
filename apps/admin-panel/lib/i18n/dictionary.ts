@@ -1975,6 +1975,29 @@ export const dictionary = {
       es: "Ponle un nombre y unos valores. A partir de ahí, la reflexión periódica irá puliendo su narrativa y sus rasgos con el tiempo.",
       en: "Give it a name and some values. From there, periodic reflection will refine its narrative and traits over time.",
     },
+    // --- co-construcción: el córtex se propone a sí mismo (F3.3) -----------
+    proposeCta: { es: "Que se proponga él", en: "Let it propose itself" },
+    proposeRunning: { es: "Pensándolo…", en: "Thinking…" },
+    proposeHelp: {
+      es: "El córtex redactará una propuesta de nombre, valores y narrativa. No se guarda nada hasta que la aceptes.",
+      en: "The córtex will draft a proposal of name, values and narrative. Nothing is saved until you accept it.",
+    },
+    proposalTitle: { es: "Lo que propone", en: "What it proposes" },
+    proposalAccept: { es: "Aceptar y guardar", en: "Accept and save" },
+    proposalAccepting: { es: "Guardando…", en: "Saving…" },
+    proposalDiscard: { es: "Descartar", en: "Discard" },
+    proposalEditHint: {
+      es: "Puedes editar los campos de abajo antes de aceptar: se guarda lo que quede en el formulario.",
+      en: "You can edit the fields below before accepting: what gets saved is what the form holds.",
+    },
+    proposalError: {
+      es: "No se pudo generar la propuesta.",
+      en: "Could not generate the proposal.",
+    },
+    proposalAlready: {
+      es: "Tu córtex ya tiene identidad: la propuesta no vuelve a lanzarse.",
+      en: "Your córtex already has an identity: the proposal is not run again.",
+    },
     // --- rasgos Big-Five (radar) -----------------------------------------
     traitsTitle: {
       es: "Rasgos derivados por la reflexión",
