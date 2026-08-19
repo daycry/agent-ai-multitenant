@@ -224,9 +224,15 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: el comando nombraba `e2e/lang-toggle.spec.ts`, que
+  # NUNCA ha existido. Playwright con un fichero que no casa no pasa en verde —
+  # sale con código 1 y «No tests found» (comprobado)—, así que esta casilla
+  # tenía un test que no podía pasar jamás y por eso llevaba semanas sin poder
+  # marcarse. El equivalente real, que cubre lo mismo (presencia del selector,
+  # ES por defecto, cambio a EN, persistencia tras recarga), es:
   - id: auto_prod16_02_a
     runtime: node-jest
-    command: "npm --prefix apps/admin-panel run e2e -- e2e/lang-toggle.spec.ts"
+    command: "npm --prefix apps/admin-panel run e2e -- e2e/lang-switcher.spec.ts"
   ```
 
 #### `task_prod16_03` — Migrar módulos núcleo de administración
@@ -271,12 +277,45 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     el toggle en EN esas cuatro opciones siguen en castellano. El fichero está fuera
     de la propiedad de este carril; es el mismo caso que el `label_es` de
     `preferences-tab` anotado en `task_prod16_08`, y entra con `agents/*`.
+  - ✅ **2026-08-19 — el bloqueo de BACKEND está retirado.** La corrección (b) de
+    arriba decía que `settings/page.tsx` y `settings/memories/page.tsx` **no se
+    pueden migrar sólo en el frontend** porque sus títulos y descripciones los
+    sirve el backend en `label_es`/`description_es` y no existía el par `_en`.
+    Ya existe:
+    - `settings_registry.py` (tenant) y `platform_settings_registry.py`
+      (plataforma) sirven ahora `label_en`/`description_en` en **todas** sus
+      entradas: 3 + 7 categorías y 2 + 12 ajustes. El segundo tenía el mismo
+      defecto y no lo nombraba ningún plan — se arregla a la vez porque dejar uno
+      a medias reproduce exactamente la pantalla mitad-y-mitad que esto cierra.
+    - La regla no depende de que alguien se acuerde: `require_language_pair` la
+      valida **al construir el dataclass**, o sea al importar el módulo. Una
+      entrada nueva sin su inglés no arranca el proceso. Comprobarlo en un test a
+      posteriori habría dejado el hueco entre el `import` y el test.
+    - Guardas con rojo verificado por mutación (vaciar un `label_en`, borrar una
+      `description_en`, dejar de emitirla en el `_to_dict`): las dos primeras
+      tumban el módulo entero; la tercera, el test de serialización.
+      `pytest tests/unit/test_settings_registry.py tests/unit/test_platform_settings_registry.py`
+      → **32 passed**.
+      **Lo que queda de esta casilla es frontend**: que las dos pantallas de
+      settings —y la de platform-settings— elijan el par según el idioma activo.
+      No entra hoy porque `lib/i18n/dictionary.ts` lo están tocando dos carriles de
+      la ola del córtex y editarlo a la vez es pedir un pisotón.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: `e2e/lang-toggle-core.spec.ts` tampoco ha existido
+  # nunca, y a diferencia del de la casilla 02 **no tiene equivalente** con otro
+  # nombre. No se escribe uno ahora a propósito: sería añadir una medida que
+  # nadie puede ejecutar sin stack, que es el defecto que este plan corrige. Lo
+  # que SÍ existe y se ejecuta sin stack son los tests de render por pantalla en
+  # los dos idiomas —trece ficheros `i18n.test.tsx` hoy—, que es donde vive de
+  # verdad la cobertura de esta casilla; el recorrido del selector entre
+  # pantallas lo cubre `e2e/lang-switcher.spec.ts` (auto_prod16_02_a).
+  # Ejecutado antes de escribirlo aquí, que es la mitad que faltaba las otras
+  # dos veces: 17 ficheros, 142 tests, todos en verde (2026-08-19).
   - id: auto_prod16_03_a
-    runtime: node-jest
-    command: "npm --prefix apps/admin-panel run e2e -- e2e/lang-toggle-core.spec.ts"
+    runtime: node-vitest
+    command: "npm --prefix apps/admin-panel run test -- i18n.test"
   ```
 
 #### `task_prod16_04` — Migrar el resto del panel y barrido final

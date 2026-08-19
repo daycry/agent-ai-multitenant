@@ -167,3 +167,74 @@ def test_every_category_has_label_and_icon() -> None:
     for cat in PLATFORM_KNOWN_SETTINGS.values():
         assert cat.label_es
         assert cat.icon
+
+
+# ---------------------------------------------------------------------------
+# ES + EN — prod-16
+#
+# Mismo defecto que tenia `settings_registry` y misma cura: este registry sirve
+# los titulos y descripciones de `/admin/platform-settings`, asi que con solo
+# `label_es` la pantalla queda a medias en cuanto alguien mueve el selector de
+# idioma. Principio 12 de CLAUDE.md.
+# ---------------------------------------------------------------------------
+def test_every_platform_category_and_setting_carries_both_languages() -> None:
+    from api_server.platform_settings_registry import PLATFORM_KNOWN_SETTINGS
+
+    assert PLATFORM_KNOWN_SETTINGS, "el registry esta vacio: este test no comprobaria nada"
+
+    categorias = 0
+    ajustes = 0
+    for nombre, cat in PLATFORM_KNOWN_SETTINGS.items():
+        categorias += 1
+        assert cat.label_es.strip(), f"{nombre}: sin `label_es`"
+        assert cat.label_en.strip(), f"{nombre}: sin `label_en`"
+        if cat.description_es.strip():
+            assert cat.description_en.strip(), f"{nombre}: descripcion solo en castellano"
+        for clave, sdef in cat.settings.items():
+            ajustes += 1
+            ruta = f"{nombre}.{clave}"
+            assert sdef.label_es.strip(), f"{ruta}: sin `label_es`"
+            assert sdef.label_en.strip(), f"{ruta}: sin `label_en`"
+            assert sdef.description_es.strip(), f"{ruta}: sin `description_es`"
+            assert sdef.description_en.strip(), f"{ruta}: sin `description_en`"
+
+    # No-vacuidad: si el descubrimiento se rompe, los bucles pasan sin recorrer
+    # nada y el test diria que todo esta bien.
+    assert categorias >= 7, f"esperaba al menos 7 categorias, recorri {categorias}"
+    assert ajustes >= 12, f"esperaba al menos 12 ajustes, recorri {ajustes}"
+
+
+def test_platform_registry_to_dict_serialises_both_languages() -> None:
+    from api_server.platform_settings_registry import platform_registry_to_dict
+
+    payload = platform_registry_to_dict()
+    assert payload["ejecucion"]["label_en"] == "Execution"
+    assert payload["ejecucion"]["settings"]["max_review_retries"]["label_en"]
+
+    for nombre, cat in payload.items():
+        assert "label_en" in cat and "description_en" in cat, nombre
+        for clave, sdef in cat["settings"].items():
+            assert "label_en" in sdef and "description_en" in sdef, f"{nombre}.{clave}"
+
+
+def test_a_platform_setting_without_its_english_pair_refuses_to_be_built() -> None:
+    """Se valida al CONSTRUIR: una entrada nueva sin ingles no arranca el proceso."""
+    from api_server.platform_settings_registry import PlatformCategoryDef, PlatformSettingDef
+
+    with pytest.raises(ValueError, match="falta la variante `en`"):
+        PlatformSettingDef(
+            type="bool",
+            default=True,
+            label_es="Etiqueta",
+            label_en="",
+            description_es="Descripcion.",
+            description_en="A description.",
+        )
+
+    with pytest.raises(ValueError, match="falta la variante `en`"):
+        PlatformCategoryDef(
+            label_es="Algo",
+            label_en="Something",
+            icon="Box",
+            description_es="Solo en castellano.",
+        )
