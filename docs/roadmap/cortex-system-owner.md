@@ -30,9 +30,24 @@ docs_language: es
 >
 > **«Implementado» no es «cerrado».** F2, F3, F4 y F5 conservan casillas abiertas con hueco
 > identificado — inventario casilla a casilla en
-> [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md). La más importante para quien vaya a
-> encender algo: **F4 salió sin owner-approval gate ni tope de gasto en USD cableados al bucle**,
-> y por eso `cortex.autonomy_enabled` sigue OFF.
+> [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md), que es una auditoría **fechada**: sus
+> hallazgos describen el 27 de julio, no el estado de hoy.
+>
+> **Corregido el 2026-08-19 contra el código.** Este banner decía que «F4 salió sin
+> owner-approval gate ni tope de gasto en USD cableados al bucle, y por eso
+> `cortex.autonomy_enabled` sigue OFF». Las dos mitades eran falsas ya:
+>
+> - el **tope en USD** está cableado — `workers/cortex_curiosity.py:256` lee
+>   `cortex.curiosity_daily_usd_cap`, `:281` lo pasa a `check_and_reserve(usd_cap=…,
+searches_cap=…)` y `:372` liquida la pasada con `record_spend(cost_usd=…)` real;
+> - el **owner-approval gate** también — `:259` lee `cortex.curiosity_approval_gate` (ON por
+>   defecto), `:324` deja el pursuit recién elegido en `selected` con `approved IS NULL` **sin
+>   salir a Internet**, y `:303` lo mantiene ahí en pasadas posteriores hasta que el owner decide
+>   por `POST /owner/cortex/curiosity/pursuits/{id}/approve` (columna `approved`, migración 0123).
+>
+> Lo que sí sigue siendo cierto es que **`cortex.autonomy_enabled` está OFF**, pero por **decisión
+> del operador**, no porque falte el gobierno. Encenderlo es una decisión suya, no un pendiente
+> técnico de F4.
 
 > Diseño producido por un workflow multi-agente (research de 5 áreas → panel de 3 arquitecturas independientes → jueces → síntesis). El diseño ganador (score 90/100) es una **arquitectura cognitiva por capas** sobre el sustrato existente. La **crítica adversarial automática no llegó a correr** (límite de sesión); la suplo en la sección [Crítica de restricciones y seguridad](#crítica-de-restricciones-y-seguridad).
 
@@ -213,19 +228,35 @@ por el diccionario, ES **y** EN) y el **PR sin abrir**. Estado por casilla: el p
 
 ### Fase 4 — Curiosidad y pensamiento de fondo (ADR 0078)
 
-**Estado:** ✅ implementada y desplegada (migración 0095, +0103 para `surfaced`), ❌ **no cerrada, y
-la que menos conviene cerrar en falso**. Plan [cortex-f4-autonomia](cortex-f4-autonomia.md) ·
-[changelog](../07-changelog/cortex-f4-autonomia.md). El bucle elige tema, investiga, destila a una
-memoria de aprendizaje y **abre el tema en el siguiente encuentro**; tiene kill-switch,
-circuit-breaker y tope de nº de búsquedas. Lo que la auditoría dejó abierto es justo el **gobierno**
-que el ADR 0078 llama no negociable: el **owner-approval gate** de la viñeta de abajo (el ADR lo
-marcaba «opcional» y el plan lo subió al MVP) y el **tope de gasto en USD** cableado al bucle, más
-las **métricas OTEL**. `cortex.autonomy_enabled` sigue OFF, y eso es lo único que hoy impide que un
-bucle autónomo gaste sin freno.
+**Estado:** ✅ implementada y desplegada (migración 0095, +0103 para `surfaced`, +0123 para
+`approved`), ❌ **no cerrada** — pero por lo que queda, no por el gobierno. Plan
+[cortex-f4-autonomia](cortex-f4-autonomia.md) · [changelog](../07-changelog/cortex-f4-autonomia.md).
+El bucle elige tema, investiga, destila a una memoria de aprendizaje y **abre el tema en el
+siguiente encuentro**.
+
+**Los cuatro puntos que el ADR 0078 llama «gobierno no negociable» están cableados al bucle**
+(comprobado contra el código el 2026-08-19; este párrafo decía lo contrario y era un hueco cerrado
+en julio que nadie vino a tachar):
+
+| Punto del ADR 0078      | Dónde vive hoy                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Budget caps             | **DOS dimensiones**: nº de búsquedas y **dólares**. `cortex_curiosity.py:256` lee el cap USD, `:281` lo reserva con `check_and_reserve(usd_cap=…, searches_cap=…)` y `:372` liquida con `record_spend(cost_usd=…)`; agotada cualquiera, la pasada queda `skipped` con el motivo |
+| Circuit-breaker         | `is_circuit_open` antes de tocar nada; un fallo lo acerca a abrirse, un éxito lo resetea                                                                                                                                                                                        |
+| Owner-approval gate     | `cortex.curiosity_approval_gate`, **ON por defecto**: `:324` deja el pursuit en `selected` con `approved IS NULL` y NO busca; `:303` lo sigue reteniendo en pasadas siguientes; decide `POST /owner/cortex/curiosity/pursuits/{id}/approve`                                     |
+| Observabilidad de coste | Las cuatro series (`agentic_cortex_curiosity_{runs_total,cost_usd_total,searches_total,circuit_open}`) las publica `workers/cortex_curiosity_metrics.py`, llamado desde `cortex_curiosity.py:198`                                                                               |
+
+Dos matices honestos, para no cerrar en falso en la otra dirección:
+
+- La observabilidad salió por el **textfile-collector de node-exporter**, no por la instrumentación
+  **OTEL** que el ADR 0078 nombra. Es una divergencia deliberada (mismo patrón que
+  `backup_metrics.py`, y el exporter HTTP por proceso no funciona con el pool prefork — ADR 0141),
+  pero es una divergencia y hay que declararla donde toque.
+- **`cortex.autonomy_enabled` sigue OFF por decisión del operador**, no porque falte gobierno.
 
 - Bucle de curiosidad (drives bajos → metas desde entities → WebSearch→digest→memoria→satisfacción).
 - Inicia temas en el siguiente encuentro.
-- Budget caps + circuit-breaker + (opcional) owner-approval gate; métricas OTEL.
+- Budget caps + circuit-breaker + owner-approval gate (el ADR lo marcaba «opcional»; el plan lo
+  subió al MVP y así se entregó); métricas por textfile-collector.
 - UI: "lo que está aprendiendo".
 
 ### Fase 5 — Voz/avatar afectivo + olvido (ADR 0073/0077)

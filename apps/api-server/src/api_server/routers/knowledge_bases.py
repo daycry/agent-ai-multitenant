@@ -29,8 +29,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_principal,
     get_redis,
     get_tenant_session,
+    open_tenant_session,
     require_tenant_admin,
     require_tenant_member,
 )
@@ -291,13 +293,30 @@ async def get_kb(
     return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 
+async def _require_member_without_holding_a_session(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """``require_tenant_member`` con sesión CORTA (prod-13 task_prod13_07).
+
+    Existe sólo para ``GET /{kb_id}/search``, el endpoint que llama a Ollama en
+    medio: una dependencia con ``yield`` abre su sesión antes del handler y la
+    cierra después de la respuesta, así que mientras la puerta pidiera
+    ``get_tenant_session`` la conexión seguía retenida durante el embed por más
+    que el handler la soltara.
+
+    Llama al ``require_tenant_member`` original como función normal —sus
+    ``Depends(...)`` sólo los interpreta FastAPI— para no acabar con dos
+    predicados de pertenencia que puedan divergir."""
+    async with open_tenant_session(principal) as session:
+        return await require_tenant_member(principal=principal, session=session)
+
+
 @router.get("/{kb_id}/search", response_model=list[ChunkSearchHit])
 async def search_kb(
     kb_id: UUID,
     q: str,
     limit: int = 8,
-    _: AuthPrincipal = Depends(require_tenant_member),
-    session: AsyncSession = Depends(get_tenant_session),
+    principal: AuthPrincipal = Depends(_require_member_without_holding_a_session),
     embedder: Embedder = Depends(get_query_embedder),
 ) -> list[ChunkSearchHit]:
     """Preview/búsqueda de chunks dentro de UNA KB (Plan 06.17 task_06_17_05).
@@ -310,8 +329,15 @@ async def search_kb(
 
     Cross-tenant: ``_load_kb`` devuelve 404 para una KB de otro tenant
     (RLS la oculta), así que la búsqueda nunca filtra contenido ajeno.
+
+    Tres tramos y no uno (prod-13 task_prod13_07): comprobar la KB, **embeber
+    la query fuera de toda transacción** y buscar. El embed es una llamada de
+    red a Ollama; dentro de la transacción del request, una latencia de Ollama
+    se convertía en conexiones del pool retenidas y, con suficientes búsquedas
+    a la vez, en un `TimeoutError` para el resto de la API.
     """
-    await _load_kb(session, kb_id)
+    async with open_tenant_session(principal) as session:
+        await _load_kb(session, kb_id)
     if not q.strip():
         return []
 
@@ -324,13 +350,14 @@ async def search_kb(
         # embedder. Log + degradación, nunca 5xx por Ollama caído.
         _logger.warning("kb.search_embedder_failed", kb_id=str(kb_id), error=str(exc))
 
-    hits = await search_kb_chunks(
-        session,
-        kb_id=kb_id,
-        query=q,
-        query_embedding=query_embedding,
-        limit=max(1, min(limit, 50)),
-    )
+    async with open_tenant_session(principal) as session:
+        hits = await search_kb_chunks(
+            session,
+            kb_id=kb_id,
+            query=q,
+            query_embedding=query_embedding,
+            limit=max(1, min(limit, 50)),
+        )
     return [
         ChunkSearchHit(
             chunk_id=h.chunk_id,

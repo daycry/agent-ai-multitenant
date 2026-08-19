@@ -21,8 +21,13 @@ import { seedSession } from "./helpers/session";
  * navegador con el stack levantado; el mapeo afecto→avatar se cubre en el unit
  * test `avatarStyleFromAffect` / `parseVoiceAffectFrame` de `lib/cortex.test.ts`.
  *
- * NOTA: WRITTEN, NOT run aquí (no hay browser + admin-panel dev server en este
- * entorno). PENDING HUMAN VERIFICATION — `npx playwright test e2e/cortex-voice.spec.ts`.
+ * EJECUTADA Y EN VERDE el 2026-08-19 (`npx playwright test e2e/cortex-voice.spec.ts`,
+ * 2 passed, dos pasadas seguidas). La cabecera decía «WRITTEN, NOT run …
+ * PENDING HUMAN VERIFICATION» desde que se escribió: una spec que nunca ha
+ * corrido no es cobertura, es una intención — y el rojo se lo habría encontrado
+ * el operador. Lo que sigue pendiente de un humano NO es esta spec sino el QA
+ * visual del avatar en navegador (ES+EN, latencia de Kokoro), que ningún test
+ * automático puede dar por bueno.
  */
 
 const TENANT_ID = "11111111-0000-0000-0000-000000000001";

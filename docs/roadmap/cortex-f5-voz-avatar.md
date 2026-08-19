@@ -142,14 +142,32 @@ El transporte y la orquestación por turno son **idénticos** al asistente (`rou
   - Aceptación: e2e/manual en navegador (incertidumbre del ADR 0073, QA visual humano): cabeza + boca sincronizada + color que sigue al afecto, en ES y EN, con el disclaimer siempre visible.
   - ⏳ **Pendiente (2026-07-30):** sólo falta el QA visual humano en navegador (ES+EN) que exige su aceptación; el test vitest `components/cortex/cortex-voice-call.test.tsx` (frame `affect` → estado + copy honesto, binario → audio) ya está escrito y en verde.
 
-- [ ] **C4. Página `app/admin/cortex` integra la videollamada (gated isSystemOwner)**
+- [x] **C4. Página `app/admin/cortex` integra la videollamada (gated isSystemOwner)**
   - Ficheros: `apps/admin-panel/app/admin/cortex/page.tsx` (si F1 ya la creó, MODIFICAR para añadir el botón/tab "Videollamada" que monta `CortexVoiceCall`; si no existe aún por F1, crear el esqueleto gated). Gating con `useCurrentUser().isSystemOwner` (ya expuesto por F0); el grupo NAV "Córtex" `systemOwnerOnly` es de F1.
   - TDD:
     1. e2e Playwright `apps/admin-panel/e2e/cortex-voice.spec.ts` (NUEVO): un owner ve el control de videollamada; un no-owner no ve la superficie (count 0), espejando el patrón de `assistant-input` count 0 del asistente.
     2. Implementa el wiring.
     3. Verde + commit.
   - Aceptación: sólo el owner accede a la videollamada del córtex; no-owner sin superficie.
-  - ⏳ **Pendiente (2026-07-30):** la e2e `apps/admin-panel/e2e/cortex-voice.spec.ts` ya apunta a testids reales (`cortex-voice-toggle`/`cortex-voice-call`) pero NUNCA se ha ejecutado (su cabecera sigue diciendo «WRITTEN, NOT run … PENDING HUMAN VERIFICATION»): falta correr `npx playwright test e2e/cortex-voice.spec.ts` y verla en verde.
+  - ✅ **Cerrada (2026-08-19): la e2e se ha EJECUTADO y está en verde.** `npx playwright test
+e2e/cortex-voice.spec.ts` → **2 passed**, dos pasadas seguidas (una con compilación en frío de
+    `/admin/cortex` bajo `next dev`, otra con el servidor caliente). Cubre las dos mitades de la
+    aceptación: el owner ve `cortex-voice-toggle`, al pulsarlo aparece `cortex-voice-call` con su
+    botón de conectar; un `tenant_admin` que NO es owner ve `cortex-no-access` y **count 0** de las
+    dos superficies de voz.
+  - **Por qué estaba abierta, y qué se ha aprendido:** la spec llevaba escrita desde F5 con la
+    cabecera «WRITTEN, NOT run … PENDING HUMAN VERIFICATION». Una spec que nunca ha corrido no es
+    cobertura sino una intención, y de hecho ya había fallado antes en silencio: la auditoría del
+    2026-07-27 descubrió que apuntaba a un testid (`cortex-voice-card`) **que sólo existía en la
+    propia spec** — no podía pasar nunca, y el rojo se lo iba a encontrar el operador. Esa nota se
+    ha retirado del fichero y sustituido por el resultado real.
+  - **No necesitó credenciales**: la spec siembra la sesión con `e2e/helpers/session.ts` (cookie
+    `agentic_session` + CSRF de doble envío) e intercepta `GET /me` y
+    `GET /owner/cortex/conversations` con `page.route`. Corre 100 % offline contra el panel; no
+    toca la BD ni el api-server.
+  - ⏳ **Lo que sigue siendo de un humano** (y no lo cierra esta casilla, sino la C3): el QA visual
+    del avatar en navegador —cabeza y boca sincronizadas, color siguiendo al afecto, en ES y EN, con
+    el disclaimer siempre visible— y la latencia real de Kokoro.
 
 ### Fase D — Bucle de olvido / mantenimiento (GATED por ADR 0077 accepted + kill-switch F4)
 

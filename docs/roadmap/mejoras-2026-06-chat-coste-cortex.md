@@ -184,10 +184,16 @@ Cómo se resolvieron las tres preocupaciones que este plan levantaba, verificado
   kill-switch `cortex.web_enabled`, ADR 0067), no por las WebSearch nativas de `claude_sdk`.
   Divergencia deliberada y registrada.
 - **Beats autónomos con coste**: existen los tres (`cortex_reflection`, `cortex_curiosity`,
-  `cortex_maintenance`) detrás del kill-switch `cortex.autonomy_enabled`, que **sigue OFF**. Ese
-  interruptor es lo único que hoy separa al córtex de gastar sin que el owner lo pida, y por eso
-  no debería encenderse antes de cerrar los huecos de gobierno de F4 (sin owner-approval gate ni
-  tope de USD cableado al bucle: ver [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md)).
+  `cortex_maintenance`) detrás del kill-switch `cortex.autonomy_enabled`, que **sigue OFF**.
+  **Corregido el 2026-08-19 contra el código:** esta viñeta añadía «no debería encenderse antes de
+  cerrar los huecos de gobierno de F4 (sin owner-approval gate ni tope de USD cableado al bucle)»,
+  y esos dos huecos están cerrados desde julio — `workers/cortex_curiosity.py` reserva y liquida
+  presupuesto en dólares (`check_and_reserve(usd_cap=…)`:281, `record_spend(cost_usd=…)`:372) y
+  retiene el pursuit en `selected` con `approved IS NULL` hasta que el owner lo aprueba (:303,
+  :324). El enlace a [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md) se conserva porque
+  es la auditoría que los detectó, pero es un documento **fechado**: describe el 27 de julio.
+  El kill-switch sigue OFF por **decisión del operador**, no por gobierno pendiente; encenderlo es
+  una decisión suya, no un desbloqueo técnico.
 - **Copy honesto**: presente en el Panel de Mente y en la videollamada, pero **sólo en castellano**
   en varias superficies, aunque la API ya devuelve `note_es`/`note_en`. Es una de las casillas que
   siguen abiertas.

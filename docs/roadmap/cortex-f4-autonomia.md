@@ -221,9 +221,37 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
   - **Aceptación:** tras una pasada feliz, las métricas reflejan `outcome="digested"`, coste>0 y nº de búsquedas; el circuit-breaker abierto pone el gauge a 1.
 
 - [ ] **Doc + ADR flip**
-  - ⏳ **Pendiente (2026-07-30):** el flip de 0078 a `accepted-f4` exige el visto bueno del operador (sigue en `accepted` a secas) y, además, los tres documentos afirman que el owner-approval gate y el tope USD «no están cableados al bucle», lo que dejó de ser cierto hoy: hay que reescribirlos antes de dar el estado por coherente.
-  - Modificar: `docs/roadmap/cortex-system-owner.md` (marcar F4 en progreso) y `docs/roadmap/mejoras-2026-06-chat-coste-cortex.md` (Feature 1 → F4). Flip `docs/05-architecture-decisions/0078-...md` a `accepted-f4` **solo tras visto bueno del operador**.
-  - **Aceptación:** el roadmap refleja el estado real de F4; ADR 0078 documenta la aceptación parcial.
+  - ✅ **La mitad documental, hecha (2026-08-19).** Reescritos contra el código los pasajes que
+    afirmaban que el owner-approval gate y el tope en USD «no están cableados al bucle»:
+    - `docs/roadmap/cortex-system-owner.md` — el banner de cabecera («F4 salió sin owner-approval
+      gate ni tope de gasto en USD cableados al bucle, y por eso `cortex.autonomy_enabled` sigue
+      OFF») y la sección **Fase 4**, que ahora lleva la tabla punto-del-ADR → dónde vive, con
+      `fichero:línea`.
+    - `docs/roadmap/mejoras-2026-06-chat-coste-cortex.md` — la viñeta «Beats autónomos con coste».
+      Su «Feature 1 → F4» ya estaba: la cabecera dice «✅ F0 HECHO (y F1-F5 después, fuera de este
+      plan)».
+    - `docs/05-architecture-decisions/0078-...md` — **ya estaba corregido** por el carril de F3:
+      el matiz del 2026-07-30 lleva banner de **VENCIDO** y la sección «Estado de implementación
+      (2026-08-19)» acredita el gate (`:303`), el `check_and_reserve` (`:281`/`:279`) y el
+      `record_spend` (`:372`). No se ha tocado.
+  - **La evidencia, para que no haya que volver a rastrearla:** `workers/cortex_curiosity.py:256`
+    lee `cortex.curiosity_daily_usd_cap`; `:281` lo reserva junto al cap de búsquedas; `:372`
+    liquida con el coste real; `:259` lee `cortex.curiosity_approval_gate` (ON por defecto); `:324`
+    deja el pursuit recién elegido en `selected`/`approved IS NULL` **sin salir a Internet** y
+    `:303` lo retiene en pasadas posteriores; decide `POST /owner/cortex/curiosity/pursuits/{id}/approve`
+    (columna `approved`, migración 0123). Las cuatro métricas las publica
+    `workers/cortex_curiosity_metrics.py`, llamado desde `:198`.
+  - ⏳ **Lo que queda, y por qué la casilla NO se marca:** el flip de
+    `docs/05-architecture-decisions/0078-bucles-cognitivos-fondo-cortex.md` a `accepted-f4` exige
+    el **visto bueno del operador** y no se ha hecho (sigue en `accepted` a secas). Hay además un
+    argumento escrito **en contra** del propio ADR, en su sección del 2026-08-19: el corpus no usa
+    estados por fase —`accepted-f0` del ADR 0074 es el único, por una razón histórica anotada en
+    él— así que inventar `accepted-f4` reintroduce la ambigüedad que aquel banner conserva a
+    propósito. **Decisión del operador**: (a) flip a `accepted-f4`, o (b) dejarlo en `accepted` y
+    cerrar esta casilla apoyándose en el plan y el changelog, que es lo que el propio ADR
+    recomienda.
+  - **Aceptación:** el roadmap refleja el estado real de F4 ✅; ADR 0078 documenta la aceptación
+    parcial ⏳ (pendiente de la decisión de arriba).
 
 ---
 
