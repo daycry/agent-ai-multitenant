@@ -586,6 +586,13 @@ jobs:
           load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # La etapa `runtime` lleva el `apt-get -y upgrade` de los parches del
+          # SO, y una capa de seguridad servida del cache es una medida que
+          # miente: el 2026-08-18 cuatro templates cayeron por exactamente eso
+          # (`RUN apt-get update && apt-get -y upgrade` -> `CACHED` en el log).
+          # La etapa `builder` —que compila y resuelve dependencias— sigue
+          # cacheada. Ver docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md
+          no-cache-filters: runtime
 
       # Build browser-runtime:v1 (ADR 0080). Como el agent-runtime, el worker lo
       # lanza efímero en producción, así que su Dockerfile DEBE construir en CI
