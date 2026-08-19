@@ -113,7 +113,7 @@ afterEach(cleanup);
 
 describe("co-construcción de la identidad del córtex", () => {
   it("ofrece el botón cuando el córtex NO tiene identidad, y proponer no guarda nada", async () => {
-    apiFetchMock.mockImplementation((path: string, options?: { method?: string }) => {
+    apiFetchMock.mockImplementation((path: string) => {
       if (String(path).includes("/identity/onboarding")) return Promise.resolve(PROPUESTA);
       if (String(path).includes("/identity/history")) return Promise.resolve([]);
       if (String(path).includes("/identity")) return Promise.resolve(SIN_ONBOARDAR);
