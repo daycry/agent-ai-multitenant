@@ -18,8 +18,20 @@
 
 	# /api/* → api-server. handle_path STRIPS the /api prefix so the api-server
 	# sees its real routes (/auth/login, /projects, …) exactly as in dev.
+	#
+	# health_uri /readyz (task_audit14_08): Caddy deja de mandar tráfico a la
+	# api-server cuando ésta no puede atenderlo (PostgreSQL o Redis caídos) y lo
+	# repone solo en cuanto vuelve a 200. NO se toca el `healthcheck` del
+	# contenedor, que es liveness (/healthz): el watchdog reinicia lo unhealthy,
+	# así que apuntarlo a readiness pondría la api-server en bucle de reinicios
+	# cada vez que se cayera una dependencia.
 	handle_path /api/* {
-		reverse_proxy api-server:8000
+		reverse_proxy api-server:8000 {
+			health_uri /readyz
+			health_interval 10s
+			health_timeout 5s
+			health_status 2xx
+		}
 	}
 
 	# Everything else → the Next.js admin-panel SPA.

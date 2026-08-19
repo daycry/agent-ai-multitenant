@@ -88,8 +88,16 @@ _READ_COUNT = 64
 # pierde) sin re-reproducir el histórico completo del stream global.
 _KANBAN_REPLAY_WINDOW_MS = 15_000
 
-# Close codes (RFC 6455 1008 = policy violation).
+# Close codes. 1008 = policy violation (RFC 6455 §7.4.1); 1013 = «Try Again
+# Later» (registro IANA de códigos de cierre WebSocket) y 1011 = internal error.
+#
+# El 1013 es el del CONSUMIDOR LENTO (task_audit14_07) y la elección es
+# deliberada: 1008 le diría al cliente que violó una política —no lo hizo, sólo
+# no drenaba— y 1011 le diría que el servidor se rompió, y ninguna de las dos
+# invita a reconectar. 1013 dice justo lo que pasa: vuelve a intentarlo.
 _CLOSE_POLICY = 1008
+_CLOSE_SLOW_CONSUMER = 1013
+_CLOSE_INTERNAL = 1011
 
 
 def _decode(value: object) -> str:
@@ -338,6 +346,61 @@ async def _credential_still_valid(
     return True
 
 
+async def _settle(task: asyncio.Future[Any] | None) -> None:
+    """Cancela una tarea Y LA ESPERA (`task_audit14_07`).
+
+    `cancel()` sólo PIDE la cancelación: hasta que alguien hace `await`, la
+    corrutina sigue viva con su frame, y en el caso del `xread` con el cierre de
+    conexión de redis-py a medias. El pump cancelaba `reader` y `xread` sin
+    esperarlos, así que cada socket que se iba dejaba dos corrutinas en el aire
+    —visibles como `Task was destroyed but it is pending!` cuando el loop se
+    desmonta— y una conexión de Redis devuelta al pool en estado dudoso.
+
+    Esperar a una tarea ya terminada es barato y además RECOGE su excepción, que
+    si no queda sin recuperar y ensucia el log al recolectarse.
+    """
+    if task is None:
+        return
+    task.cancel()
+    # `CancelledError` hereda de BaseException, así que necesita su propia
+    # entrada: `suppress(Exception)` no la atraparía.
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+
+
+async def _close(ws: WebSocket, code: int, reason: str, *, timeout: float) -> None:
+    """Cierra el socket con deadline.
+
+    El cierre TAMBIÉN puede colgarse: el frame de CLOSE viaja por el mismo
+    socket cuya ventana está llena, que es exactamente la situación en la que se
+    cierra a un consumidor lento. Un `close()` sin tope convertiría el arreglo
+    del envío en el mismo cuelgue una línea más abajo.
+    """
+    with contextlib.suppress(Exception):
+        if timeout > 0:
+            await asyncio.wait_for(ws.close(code=code, reason=reason), timeout)
+        else:
+            await ws.close(code=code, reason=reason)
+
+
+async def _send_event(ws: WebSocket, event: dict[str, Any], *, timeout: float, stream: str) -> bool:
+    """Envía un evento con deadline. `False` si el cliente es lento (ya cerrado).
+
+    `timeout <= 0` desactiva el deadline (asa de escape del setting), y en ese
+    caso vuelve el comportamiento viejo: el envío puede tardar lo que quiera.
+    """
+    if timeout <= 0:
+        await ws.send_json(event)
+        return True
+    try:
+        await asyncio.wait_for(ws.send_json(event), timeout)
+    except TimeoutError:
+        _log.warning("api_server.ws_slow_consumer", stream=stream, timeout_seconds=timeout)
+        await _close(ws, _CLOSE_SLOW_CONSUMER, "slow consumer", timeout=timeout)
+        return False
+    return True
+
+
 async def _pump(
     ws: WebSocket,
     redis: Redis,
@@ -361,6 +424,16 @@ async def _pump(
     that closes while the stream is idle is noticed at once — no leaked
     task blocked on `xread`.
 
+    Backpressure (`task_audit14_07`, hallazgo AUD14-05). Cada envío lleva
+    deadline (``ws_send_timeout_seconds``): un cliente que deja de drenar llena
+    la ventana TCP y un ``send_json`` sin tope NO VUELVE nunca, lo que dejaba
+    este bucle colgado con su `receive()` y su `xread` detrás, reteniendo una
+    conexión de Redis y —lo más grave— sin volver al principio del bucle, o sea
+    sin re-validar la credencial. Al agotarse se cierra con 1013 y se sale.
+    Y en TODOS los caminos de salida las dos tareas se cancelan **y se
+    esperan** (:func:`_settle`): cancelar sin esperar no las mata, sólo se lo
+    pide.
+
     Every ``ws_session_revalidate_seconds`` the loop re-checks the caller's
     credential (:func:`_credential_still_valid`) and closes with 1008 if it has
     been revoked or has expired (task_prod09_13). The check sits at the TOP of the
@@ -370,10 +443,13 @@ async def _pump(
     only when an event happens to arrive. ``sessions``/``principal``/``token`` are
     keyword-REQUIRED so a new endpoint cannot mount a pump that never re-checks.
     """
-    revalidate_every = float(get_settings().ws_session_revalidate_seconds)
+    settings = get_settings()
+    revalidate_every = float(settings.ws_session_revalidate_seconds)
+    send_timeout = float(settings.ws_send_timeout_seconds)
     last_check = time.monotonic()
     last_id = await _initial_stream_id(redis, replay_window_ms)
     reader = asyncio.ensure_future(ws.receive())
+    xread: asyncio.Future[Any] | None = None
     try:
         while True:
             if revalidate_every > 0 and (time.monotonic() - last_check) >= revalidate_every:
@@ -394,9 +470,9 @@ async def _pump(
                 {reader, xread}, return_when=asyncio.FIRST_COMPLETED
             )
             if reader in done:
-                xread.cancel()
-                return  # client disconnected
+                return  # client disconnected — el `finally` desmonta el xread
             entries: Any = xread.result()
+            xread = None  # ya consumido: no hay nada que desmontar
             for _stream_name, items in entries or []:
                 for entry_id, fields in items:
                     last_id = _decode(entry_id)
@@ -405,20 +481,28 @@ async def _pump(
                         continue
                     if tenant_filter is not None and event.get("tenant_id") != tenant_filter:
                         continue
-                    await ws.send_json(event)
+                    if not await _send_event(ws, event, timeout=send_timeout, stream=stream):
+                        return  # consumidor lento: ya cerrado con 1013
     except WebSocketDisconnect:
         return
     except Exception as exc:  # a Redis blip must not leave the socket dangling
         _log.warning("api_server.ws_pump_error", stream=stream, error=str(exc))
-        with contextlib.suppress(Exception):
-            await ws.close(code=1011)
+        await _close(ws, _CLOSE_INTERNAL, "internal error", timeout=send_timeout)
     finally:
-        reader.cancel()
+        # Los DOS bordes, en TODOS los caminos: return normal, desconexión,
+        # revocación, consumidor lento, excepción y cancelación externa.
+        await _settle(reader)
+        await _settle(xread)
 
 
 async def _reject(ws: WebSocket, reason: str) -> None:
-    with contextlib.suppress(Exception):
-        await ws.close(code=_CLOSE_POLICY, reason=reason)
+    """Cierra con 1008 (policy violation) y con el mismo deadline que el envío.
+
+    El deadline importa aquí igual que en :func:`_send_event`: la revocación de
+    una sesión cierra sockets que pueden estar precisamente atascados, y un
+    `close()` que no vuelve deja colgada la corrutina que intentaba echarlos.
+    """
+    await _close(ws, _CLOSE_POLICY, reason, timeout=float(get_settings().ws_send_timeout_seconds))
 
 
 @router.websocket("/ws/executions/{execution_id}")

@@ -170,6 +170,18 @@ Además el pump re-valida la sesión cada `API_SERVER_WS_SESSION_REVALIDATE_SECO
 revocó o el token caducó. Sin eso, la garantía de «el logout cierra los sockets
 abiertos» solo se evaluaba en el `accept`.
 
+Y esa garantía tiene una condición que no se ve: **el bucle tiene que llegar a
+dar la vuelta**. Cada envío lleva deadline
+(`API_SERVER_WS_SEND_TIMEOUT_SECONDS`, por defecto **10 s**, `0` desactiva,
+`task_audit14_07`) porque un cliente que deja de drenar —pestaña dormida, red
+caída sin cerrar el TCP— llena la ventana TCP y un `send_json` sin tope **no
+vuelve nunca**: el pump se quedaba colgado ahí, sin volver al principio del
+bucle y por tanto **sin re-validar nada**, justo para el cliente que peor se
+comporta. Al agotarse el deadline el socket se cierra con **1013** («Try Again
+Later»: el cliente puede reconectar, no ha violado ninguna política) y las dos
+tareas del bucle (`receive` y `xread`) se cancelan **y se esperan** — un
+`cancel()` sin `await` sólo pide la cancelación y deja la corrutina viva.
+
 ## 6. Dominios criptográficos: dos secretos, no uno
 
 | Secreto                            | Firma                                   | Lo necesita          |
@@ -232,6 +244,7 @@ Para el inventario de secretos de prod-10 y el compose de prod-01:
 | `API_SERVER_ADMIN_IP_ALLOWLIST`                    | vacía    | solo staging/prod; vacía = sin restricción    |
 | `API_SERVER_ADMIN_SESSION_TTL_MINUTES`             | 15       | solo staging/prod                             |
 | `API_SERVER_WS_SESSION_REVALIDATE_SECONDS`         | 30       | `0` desactiva la re-validación                |
+| `API_SERVER_WS_SEND_TIMEOUT_SECONDS`               | 10       | deadline por envío; al agotarlo, cierre 1013  |
 | `API_SERVER_REGISTER_RATE_LIMIT_COUNT`             | 10       | por IP                                        |
 | `API_SERVER_REGISTER_RATE_LIMIT_WINDOW_SECONDS`    | 3600     | ventana deslizante                            |
 | `API_SERVER_LOGIN_RATE_LIMIT_COUNT`                | 5        | por IP **y** por email, independientes        |

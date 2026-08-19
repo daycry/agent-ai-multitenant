@@ -114,6 +114,11 @@ def _fast_revalidation(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
 
     class _S:
         ws_session_revalidate_seconds = seconds
+        # El pump lee AMBOS asas del mismo `get_settings()` desde
+        # `task_audit14_07`; sin este atributo el doble revienta con
+        # AttributeError en cuanto el pump intenta enviar o cerrar. 5 s = el
+        # deadline de envío no interfiere con lo que estos tests miden.
+        ws_send_timeout_seconds = 5.0
 
     monkeypatch.setattr(ws_mod, "get_settings", _S)
 

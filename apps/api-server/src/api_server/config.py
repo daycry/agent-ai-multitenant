@@ -438,6 +438,23 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ----- Backpressure de envío (task_audit14_07, hallazgo AUD14-05) -----
+    # Deadline de CADA `send_json` del pump. Sin él, un cliente que deja de
+    # drenar (pestaña dormida, red caída sin FIN, móvil en suspensión) llena la
+    # ventana TCP y el `await` del envío NO VUELVE: la corrutina del pump se
+    # queda colgada con su `receive()` y su `xread` detrás, reteniendo una
+    # conexión de Redis y —lo peor— sin volver al principio del bucle, o sea
+    # sin re-validar la credencial. 10 s es holgado para cualquier cliente sano
+    # (los eventos son de bytes) y corto para uno que ya no está. 0 desactiva el
+    # deadline; el socket se cierra con 1013 «Try Again Later» al agotarlo.
+    ws_send_timeout_seconds: float = Field(
+        default=10.0,
+        description=(
+            "Seconds a single WebSocket send may take before the client is "
+            "treated as a slow consumer and closed with 1013 (0 disables)."
+        ),
+    )
+
     # ----- Redis (sessions, rate limit) -----
     redis_url: str = Field(
         default="redis://localhost:6379/0",

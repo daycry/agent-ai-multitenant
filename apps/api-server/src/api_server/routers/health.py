@@ -12,8 +12,22 @@ tira las conexiones sanas que le quedaban. Es el `healthcheck` de Compose.
 
 ``GET /readyz`` — **readiness**: ¿puede este proceso atender tráfico AHORA? Prueba
 las dependencias sin las que toda petición fallaría —PostgreSQL y Redis— y
-responde 503 con el detalle de cuál falla. Es lo que debe consultar un proxy o un
-`depends_on` antes de mandarle tráfico.
+responde 503 con el detalle de cuál falla.
+
+Quién lo consulta
+-----------------
+**Caddy**, con readiness activa sobre los dos upstreams de la api-server
+(``health_uri /readyz`` en `installer_backend.proxy_generator._API_UPSTREAM` y en
+`docker/caddy-manuals/Caddyfile`): mientras este endpoint dé 503 el proxy
+contesta 503 sin enrutar, y repone el backend en cuanto vuelve a 200 —sin
+reiniciar nada—. También lo prueba el smoke post-despliegue
+(`tests/smoke/test_smoke.py::test_readyz`), que es donde se caza el «arrancado
+pero sin cablear».
+
+El `healthcheck` del CONTENEDOR **no** lo consulta, y es deliberado: Docker sólo
+admite uno por contenedor y el watchdog reinicia lo que sale `unhealthy`, así que
+apuntarlo aquí convertiría «se cayó PostgreSQL» en «la api-server se reinicia en
+bucle». Esa asimetría la fija `tests/unit/test_readyz_has_a_consumer.py`.
 
 Qué NO se comprueba, a propósito
 --------------------------------
