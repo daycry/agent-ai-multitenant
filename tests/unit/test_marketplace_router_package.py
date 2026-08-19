@@ -205,16 +205,47 @@ ADMIN_ROUTES_BEFORE_THE_SPLIT: tuple[
 )
 
 
+#: Rutas añadidas DESPUÉS del troceo, a propósito y una a una. La lista de arriba
+#: no se edita: dice «lo que servía el monolito» y editarla borraría el único punto
+#: de comparación que tiene este fichero. Lo que sí puede crecer es esto, y crecer
+#: aquí obliga a escribir por qué.
+ROUTES_ADDED_AFTER_THE_SPLIT: tuple[
+    tuple[str, tuple[str, ...], str, str | None, int | None], ...
+] = (
+    # prod-13 task_prod13_01. El recurso de estado del 202: quien acepta un
+    # `async_gates=true` recibe la instalación en `analyzing` y la consulta por
+    # SU url. Antes sólo existía el listado, o sea que había que sondear
+    # `GET /installations?limit=100` y buscarse dentro — lo que además se rompe
+    # en cuanto el tenant pasa de 100 instalaciones.
+    (
+        "/marketplace/installations/{installation_id}",
+        ("GET",),
+        "get_installation",
+        "MarketplaceInstallationResponse",
+        None,
+    ),
+)
+
+
 def test_the_tenant_router_serves_exactly_the_same_routes() -> None:
     """Mismo conjunto: camino, métodos, función, `response_model` y `status_code`.
 
     El `response_model` y el `status_code` están dentro a propósito: un troceo
     que reconstruya un decorador a mano y se deje el `status_code=201` cambia el
     contrato HTTP sin mover una ruta de sitio.
+
+    Se compara contra la línea base MÁS lo añadido después a propósito
+    (`ROUTES_ADDED_AFTER_THE_SPLIT`), y en las dos direcciones: una ruta que
+    DESAPARECE sigue siendo roja, que es lo que este fichero vino a impedir.
     """
     from api_server.routers.marketplace import router
 
-    assert set(_describe(router)) == set(ROUTES_BEFORE_THE_SPLIT)
+    esperadas = set(ROUTES_BEFORE_THE_SPLIT) | set(ROUTES_ADDED_AFTER_THE_SPLIT)
+    servidas = set(_describe(router))
+    assert servidas == esperadas, f"faltan {esperadas - servidas} / sobran {servidas - esperadas}"
+    # Y lo declarado como añadido tiene que existir: una entrada que sobra ahí
+    # describiría una ruta que ya no está.
+    assert set(ROUTES_ADDED_AFTER_THE_SPLIT) <= servidas
 
 
 def test_the_admin_router_serves_exactly_the_same_routes() -> None:

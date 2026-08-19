@@ -124,6 +124,11 @@ CORE_SERVICES: tuple[str, ...] = (
     "orchestrator",
     "workers",
     "workers-privileged",
+    # prod-13 task_prod13_01: la lane de las puertas del marketplace. Va en el
+    # NÚCLEO porque su cola se declara en `QUEUE_NAMES`: dejarla fuera dejaría
+    # una cola sin consumidor justo en la instalación de producción, que es el
+    # error que el ADR 0083 retiró para `heavy`/`gpu`.
+    "workers-marketplace",
     "cortex-beat",
     "notification-dispatcher",
     # prod-08 task_prod08_watchdog_14: NÚCLEO, no overlay opcional. Es lo que
@@ -815,6 +820,13 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 # ADR 0083 (prod-06 colas_02) — dead lanes on a single host.
 _WORKER_GENERIC_QUEUES = "default,ingestion,test,review"
 _WORKER_PRIVILEGED_QUEUE = "privileged"
+# prod-13 task_prod13_01: la lane de las puertas de seguridad del marketplace
+# (bandit + semgrep + prueba de humo del sandbox). Lane propia porque un trabajo
+# de ~4 min no cabe en los pools de arriba sin arriesgar la inanición que
+# documenta `workers-aux` en el compose de dev. Declararla en `QUEUE_NAMES` sin
+# drenarla aquí sería la cola muerta que el ADR 0083 retiró para heavy/gpu, y
+# `tests/unit/test_compose_generator.py` compara ambas cosas.
+_WORKER_MARKETPLACE_QUEUE = "marketplace"
 
 # Both worker lanes sit on three nets (task_09): agentic-net (general), the
 # internal agentic-agents (reach the egress-proxy + the runtimes they launch),
@@ -1003,6 +1015,50 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
         "networks": _WORKER_NETWORKS,
     }
     # Corre como root (el volume-tar del backup lo exige); NO fijamos user 1000.
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["deploy"]["replicas"] = 1
+    return svc
+
+
+def _workers_marketplace_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """Lane que drena SOLO la cola ``marketplace`` (prod-13 task_prod13_01).
+
+    Las puertas de seguridad de una instalación —bandit y semgrep por
+    ``subprocess`` con 120 s de plazo cada uno, más la prueba de humo del
+    sandbox— corrían dentro del request del api-server. ``asyncio.to_thread`` ya
+    impedía que congelasen el event loop, pero no las saca del HTTP: el request
+    seguía durando minutos y eso lo corta un proxy.
+
+    ``--concurrency=1`` porque instalar es una acción humana y rara, y así dos
+    instalaciones simultáneas no se pelean por la CPU del host. No es singleton
+    por corrección (a diferencia de la lane ``privileged``, cuyos jobs periódicos
+    no pueden doblarse): es una elección de capacidad, y subirla es cambiar este
+    número.
+
+    Necesita ``DOCKER_HOST`` porque la puerta 5 lanza un contenedor efímero de
+    prueba de humo — precisamente lo que el api-server NO puede hacer (no tiene
+    socket Docker, principio 2). Esta lane ES el «sandbox out-of-process» que el
+    ADR 0081 pedía para poder cerrar su Fase B/C.
+    """
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "command": (
+            f"celery -A workers.celery_app worker "
+            f"--queues={_WORKER_MARKETPLACE_QUEUE} --concurrency=1"
+        ),
+        "environment": _workers_env(cfg, prod=prod),
+        "volumes": _workers_volumes(cfg),
+        "healthcheck": _healthcheck(
+            "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
+            timeout="30s",
+        ),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": _WORKER_NETWORKS,
+    }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     svc["deploy"]["replicas"] = 1
     return svc
@@ -1571,6 +1627,7 @@ _BUILDERS = {
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
     "workers-privileged": _workers_privileged_service,
+    "workers-marketplace": _workers_marketplace_service,
     "cortex-beat": _cortex_beat_service,
     "notification-dispatcher": _notification_dispatcher_service,
     "watchdog": _watchdog_service,
@@ -1764,6 +1821,7 @@ def generate_compose(
         "orchestrator",
         "workers",
         "workers-privileged",
+        "workers-marketplace",
         "cortex-beat",
         "notification-dispatcher",
     )

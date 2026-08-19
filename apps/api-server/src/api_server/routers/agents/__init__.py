@@ -28,6 +28,7 @@ distintas. Repartido:
   * :mod:`.crud`   — list / provider-options / get / create / update / delete.
   * :mod:`.forks`  — fork, diff contra el origen y merge selectivo (ADR 0006).
   * :mod:`.knowledge_bases` — los grants agente↔KB del Plan 06.9.
+  * :mod:`.prompt_versions` — el historial del `system_prompt` (`task_gov_02`).
   * :mod:`.tools`  — asignación de tools (06.15) y el set efectivo (06.18).
   * :mod:`.skills` — asignación de skills (ADR 0050).
   * :mod:`.capabilities` — el Hub de Capacidad del Plan 06.17.
@@ -64,6 +65,7 @@ from api_server.routers.agents import (
     crud,
     forks,
     knowledge_bases,
+    prompt_versions,
     skills,
     tools,
 )
@@ -86,6 +88,9 @@ router = APIRouter()
 router.include_router(crud.router)
 router.include_router(forks.router)
 router.include_router(knowledge_bases.router)
+# `prompt-versions` tiene DOS segmentos, así que no solapa con `/{agent_id}` y no
+# necesita el cuidado de orden que sí exige `provider-options` (ver arriba).
+router.include_router(prompt_versions.router)
 router.include_router(tools.router)
 router.include_router(skills.router)
 router.include_router(capabilities.router)
@@ -101,6 +106,7 @@ __all__ = [
     "crud",
     "forks",
     "knowledge_bases",
+    "prompt_versions",
     "router",
     "skills",
     "tools",

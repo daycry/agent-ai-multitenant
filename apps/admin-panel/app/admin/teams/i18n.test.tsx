@@ -14,13 +14,15 @@
  * diccionario privado de fichero con veinte textos que la guarda contaba como
  * UNO.
  *
- * ## Lo que este test NO puede afirmar, y conviene leerlo
+ * ## El hueco que esta cabecera anotaba está CERRADO (2026-08-19)
  *
- * El `<Select>` de política de memoria del equipo pinta `MEMORY_SCOPE_OPTIONS`
- * de `lib/memory/constants.ts`, que sólo tiene etiquetas en castellano y lo
- * comparte la ficha del agente. Con el toggle en EN esas cuatro opciones siguen
- * en castellano. No se toca desde aquí (fichero de otro carril) y queda anotado
- * en el plan.
+ * Decía: «el `<Select>` de política de memoria pinta `MEMORY_SCOPE_OPTIONS` de
+ * `lib/memory/constants.ts`, que sólo tiene etiquetas en castellano y lo comparte
+ * la ficha del agente; con el toggle en EN esas cuatro opciones siguen en
+ * castellano». La constante guarda ahora la CLAVE del diccionario en vez del
+ * texto, y sus DOS consumidores la resuelven con el idioma activo. Lo cubre el
+ * caso «las opciones de política de memoria también se traducen» de más abajo,
+ * más `lib/memory/constants.test.ts`, que lo vigila en la fuente única.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -201,6 +203,26 @@ describe("detalle del equipo", () => {
 
     expect(screen.queryByText("Política de memoria del equipo")).toBeNull();
     expect(screen.queryByText("Añadir miembro")).toBeNull();
+  });
+
+  /**
+   * El hueco que la cabecera de este fichero anotaba como «lo que este test NO
+   * puede afirmar», cerrado el 2026-08-19: las cuatro opciones del `<Select>`
+   * salían de `MEMORY_SCOPE_OPTIONS` con la etiqueta castellana cableada, así que
+   * eran el único trozo de esta pantalla que el toggle no movía. Se comprueba
+   * sobre el `<option>` y no sobre el texto suelto porque un `<Select>` cerrado
+   * sí renderiza sus opciones en el DOM: si volviese el literal, salta aquí.
+   */
+  it("las opciones de política de memoria también se traducen (venían de un módulo compartido)", async () => {
+    renderIn("en", <TeamDetailPage />);
+
+    const select = await screen.findByTestId("team-memory-scope");
+    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+
+    expect(options).toContain("Shared with team");
+    expect(options).toContain("Shared with project");
+    expect(options).not.toContain("Compartida con equipo");
+    expect(options).not.toContain("Privada");
   });
 
   it("el diálogo de alta de miembro se traduce, incluidos los dos modos", async () => {

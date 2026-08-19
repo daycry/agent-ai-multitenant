@@ -10,7 +10,15 @@ LLM to finish its review with structured tags:
         <failed_criterion>...</failed_criterion>
         <testreport_evidence>...</testreport_evidence>
         <what_to_fix>...</what_to_fix>
+        <reject_target>code, tests</reject_target>      # `task_gov_10`
+        <reject_class>incorrect</reject_class>          # `task_gov_10`
       </rejection>
+
+`task_gov_10`: los dos últimos son el par ACOTADO del rechazo — vocabulario
+cerrado en `shared_domain.reject_taxonomy`, tope de tres por eje, y lo genérico
+se DESCARTA en vez de guardarse. Es la única parte del veredicto que agrega: la
+prosa contesta «¿qué arreglo ahora?» y el par contesta «¿qué se rechaza más en
+este proyecto?».
 
 The orchestrator (Plan 06.5 Fase F) feeds the agent's stdout through
 `parse_reviewer_output` to extract a typed `ReviewerVerdict`, then
@@ -36,6 +44,12 @@ from typing import Any, Literal
 from uuid import UUID
 
 import structlog
+from shared_domain.reject_taxonomy import (
+    REJECT_CLASS_TAG,
+    REJECT_TARGET_TAG,
+    normalise_classes,
+    normalise_targets,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,6 +84,14 @@ class ReviewerVerdict:
     `task_wf_61`: ``criteria`` es el desglose POR CRITERIO cuando el reviewer lo
     emite. Es ADITIVO — el `<verdict>` sigue mandando — así que un reviewer que
     no lo emita (o un modelo que se lo salte) se comporta exactamente como antes.
+
+    `task_gov_10`: ``reject_targets`` x ``reject_classes`` es el par ACOTADO del
+    rechazo (vocabulario en ``shared_domain.reject_taxonomy``), lo único de este
+    veredicto que se puede AGREGAR — la prosa sirve para el reintento inmediato y
+    no responde «¿qué se rechaza más?». También aditivo: `()` cuando el reviewer
+    no emite los tags o emite valores fuera del vocabulario, y `()` es un
+    resultado legítimo (el rechazo queda sin clasificar y el agregado lo cuenta
+    aparte) — NO hay bucket «otros» al que caer.
     """
 
     label: VerdictLabel
@@ -77,6 +99,8 @@ class ReviewerVerdict:
     testreport_evidence: str = ""
     what_to_fix: str = ""
     criteria: tuple[CriterionOutcome, ...] = ()
+    reject_targets: tuple[str, ...] = ()
+    reject_classes: tuple[str, ...] = ()
 
 
 # Audit cluster C1 (F37): capture the `<verdict>` tag BODY and normalise it,
@@ -103,6 +127,30 @@ _CRITERION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[\s*(pass|fail)\s*\]\s*(.+?)$", r
 # porque el modelo alterna entre ellas y perder la evidencia por el separador
 # sería tirar justo la parte accionable.
 _EVIDENCE_SPLIT_RE = re.compile(r"\s+(?:—|--)\s+evidence:\s*|\s+evidence:\s*", re.IGNORECASE)
+
+
+# `task_gov_10`: los dos ejes del rechazo. Tags planos (no anidados) por la misma
+# razón que el bloque de criteria usa líneas: el modelo los produce sin
+# equivocarse.
+#
+# Los nombres de los tags NO se teclean aquí: se construyen desde
+# `shared_domain.reject_taxonomy`, la misma declaración con la que el runtime
+# ARMA la instrucción del prompt. Así el anuncio y el parseo son literalmente la
+# misma cadena y no pueden derivar — que es cómo se rompió el tag `<verdict>`
+# (deletreado a mano en cinco prompts, hallazgo H3) y cómo se rompieron las 13
+# categorías de aprobación (hallazgo g6). El VOCABULARIO tampoco se valida aquí:
+# lo cierra `normalise_*`.
+#
+# Se admite el PLURAL del tag porque un modelo que emite dos etiquetas escribe
+# `<reject_targets>` la mitad de las veces, y perder el par por una `s` sería
+# tirar justo el dato que la casilla viene a producir.
+def _tag_re(tag: str, *, plural: str) -> re.Pattern[str]:
+    name = rf"{re.escape(tag)}(?:{plural})?"
+    return re.compile(rf"<{name}>(.*?)</{name}>", re.IGNORECASE | re.DOTALL)
+
+
+_REJECT_TARGET_RE = _tag_re(REJECT_TARGET_TAG, plural="s")
+_REJECT_CLASS_RE = _tag_re(REJECT_CLASS_TAG, plural="es")
 
 
 def parse_criteria_block(text: str) -> tuple[CriterionOutcome, ...]:
@@ -191,6 +239,13 @@ def parse_reviewer_output(text: str) -> ReviewerVerdict:
         testreport_evidence=_grab(_EVIDENCE_RE),
         what_to_fix=_grab(_WHAT_TO_FIX_RE),
         criteria=criteria,
+        # Se leen TODAS las apariciones y se concatenan antes de normalizar: un
+        # reviewer que emite un tag por etiqueta (dos `<reject_class>`) dice lo
+        # mismo que quien las lista separadas por comas, y quedarse con la
+        # primera perdería la mitad del par. El tope de tres y el descarte de lo
+        # genérico los aplica `normalise_*`, no este código.
+        reject_targets=normalise_targets(_REJECT_TARGET_RE.findall(text or "")),
+        reject_classes=normalise_classes(_REJECT_CLASS_RE.findall(text or "")),
     )
 
 
@@ -291,6 +346,15 @@ async def apply_reviewer_verdict(
             # quien lea el rechazo tiene ahí qué se comprobó y qué falló.
             # `[]` cuando el reviewer no lo emitió (comportamiento de antes).
             "criteria": [c.as_dict() for c in verdict.criteria],
+            # `task_gov_10`: el par agregable. Va al MISMO evento que la prosa
+            # —no a una tabla nueva ni a una columna— porque este payload JSONB
+            # ES la fila del veredicto, y el value-set queda cerrado por el
+            # ESCRITOR: aquí no entra nada que no haya pasado por
+            # `shared_domain.reject_taxonomy.normalise_*`. Mismo patrón que las
+            # 13 categorías de aprobación, que también viven en JSONB con un
+            # test de contrato en vez de un CHECK.
+            "reject_targets": list(verdict.reject_targets),
+            "reject_classes": list(verdict.reject_classes),
         },
     )
 

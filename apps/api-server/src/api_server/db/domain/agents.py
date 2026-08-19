@@ -9,6 +9,7 @@ configuracion propias.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -20,9 +21,10 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -352,3 +354,79 @@ class AgentTool(Base, TenantScopedMixin, TimestampMixin):
         nullable=False,
     )
     config_override: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+# =============================================================================
+# AgentPromptVersion — el historial del prompt (`task_gov_02`, migración 0143)
+# =============================================================================
+class AgentPromptVersion(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
+    """Una versión del prompt de un agente. **Append-only.**
+
+    Hasta la migración 0143, `PUT /agents/{id}` sobrescribía `system_prompt` y
+    `model_config.system_prompts` sin dejar rastro: si la calidad de un agente
+    caía, no había forma de saber qué cambió ni de volver.
+
+    **No lleva `TimestampMixin` a propósito**, y es la diferencia más visible con
+    el resto de las tablas de este módulo: `updated_at` no tiene sentido en una
+    fila de historial, y su ausencia es la señal en el esquema de que el
+    invariante append-only del repositorio
+    (:mod:`api_server.db.agent_prompt_version_repo` — sólo `append` y `list`) no
+    es una convención opcional.
+
+    Qué guarda cada columna, que no es intercambiable:
+
+    * ``system_prompt`` y ``persona`` son los valores **crudos** (el campo plano y
+      ``model_config.system_prompts``). Son los que un humano lee en el diff: si
+      sólo se guardase el texto efectivo, editar el idioma NO preferido no
+      aparecería en el historial aunque haya generado una versión.
+    * ``prompt_hash`` es el sello del texto **efectivo** —lo que
+      :func:`api_server.agent_persona.resolve_agent_persona` resuelve y lo único
+      que ve el modelo—, y es lo que ``task_gov_03`` mezcla en
+      ``executions.prompt_version``. Se persiste en vez de recalcularse al leer
+      porque recalcularlo lo ataría al resolutor de HOY: el día que cambie la
+      precedencia bilingüe o el cap, los sellos de los runs viejos se moverían y
+      dejarían de identificar lo que de verdad corrió.
+    """
+
+    __tablename__ = "agent_prompt_versions"
+    __table_args__ = (
+        # Dos cosas con un índice: impide dos filas con el mismo número —dos
+        # `PUT` simultáneos aterrizan como 409 vía `flush_or_conflict`, no como
+        # historial duplicado— y resuelve «la última versión de este agente»
+        # (`ORDER BY version DESC LIMIT 1`) como recorrido hacia atrás, sin Sort.
+        UniqueConstraint("agent_id", "version", name="uq_agent_prompt_versions_agent_version"),
+        CheckConstraint("version >= 1", name="ck_agent_prompt_versions_version_positive"),
+    )
+
+    agent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    persona: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # SET NULL en la FK: el historial sobrevive al usuario que lo escribió. NULL
+    # también es el autor HONESTO de la fila de base — la que registra el prompt
+    # que ya existía antes de que hubiera historial y cuyo autor nadie apuntó.
+    changed_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # La cadena. SET NULL y no CASCADE: borrar un eslabón no debe llevarse el
+    # resto del historial por delante.
+    parent_version_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agent_prompt_versions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"AgentPromptVersion(agent_id={self.agent_id!r}, version={self.version!r})"

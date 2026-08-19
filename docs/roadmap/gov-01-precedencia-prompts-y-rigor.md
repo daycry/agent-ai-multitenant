@@ -52,6 +52,15 @@ restantes siguen abiertas, así que el plan NO pasa a
 `marketplace-v2-despliegue` ya está `in_progress` y la regla dura de `CLAUDE.md`
 sólo admite una fase activa a la vez.
 
+**Segunda pasada, misma fecha: la fase 1 entera.** `task_gov_02` (historial
+versionado del prompt, migración **0143**) y `task_gov_03` (el sello del prompt del
+agente dentro de `executions.prompt_version`). Con eso queda **desbloqueada la
+fase 2** —el aviso nº2 de más abajo decía que sin versionado una eval que bloquea
+no tiene contra qué comparar— y también uno de los dos disparadores escritos de
+`task_gov_11`, que se reabre cuando existan `task_gov_02` **y** `task_gov_05`: la
+primera mitad ya está. El `status` del plan sigue en `approved`: quedan casillas
+abiertas y `marketplace-v2-despliegue` está `in_progress`.
+
 **Los ids de test se renombraron a `auto_govp_*` / `human_govp_*`.** Los
 originales (`auto_gov_01_a`…`auto_gov_09_a`, `human_gov_01`…`03`) los usa ya
 [`prod-15-gobernanza-roadmap-docs`](prod-15-gobernanza-roadmap-docs.md), y dos
@@ -168,7 +177,73 @@ sin decisión pendiente.
 
 ### `task_gov_02` — El `system_prompt` deja de reescribirse sin rastro
 
-- [ ] **Título**: Historial versionado del prompt del agente, con diff y autor
+- [x] **Título**: Historial versionado del prompt del agente, con diff y autor
+  - ✅ **Cerrada (2026-08-19).** Premisa re-verificada antes de escribir nada:
+    **cero** apariciones de `agent_prompt_versions` en todo el repo (sólo las tres
+    del propio roadmap), y `PUT /agents/{id}` seguía siendo
+    `apply_partial_update` + `flush_or_conflict` sin fila de versión, sin
+    auditoría y sin diff.
+  - **Migración 0143** (`20260819_0143_agent_prompt_versions.py`), encadenada a la
+    cabeza REAL comprobada con `ls` —`0142_cortex_forget_sweep_index`, no la 0142
+    que decía el enunciado por número— con el patrón EXACTO de la 0127:
+    `ENABLE` + `FORCE ROW LEVEL SECURITY` + policy `tenant_isolation` sobre
+    `app.tenant_id`. Más `UNIQUE (agent_id, version)`, un `CHECK version >= 1` y
+    el índice de `tenant_id` que `TenantScopedMixin` declara — sin ese último la
+    deriva modelo↔BD habría crecido en silencio a partir de hoy.
+  - **Append-only en la capa**, patrón de `db/task_audit_repo.py`:
+    `db/agent_prompt_version_repo.py` sólo tiene `record_*` y `list_*`/`latest_*`.
+    Y la tabla **no lleva `updated_at`**, que es la señal en el esquema de que ese
+    invariante no es una convención opcional. Se comprueba con un test que lee el
+    fuente del módulo y su superficie pública, porque en la BD el rol de la
+    aplicación **sí** puede hacer UPDATE: el `ALTER DEFAULT PRIVILEGES` de
+    producción concede los cuatro verbos a `app_user` sobre toda tabla nueva, y un
+    `REVOKE` en la migración lo desharía `workers/restore.py` al restaurar un
+    backup. La garantía real es que ningún camino del código lo escriba.
+  - **Dos filas en la primera edición, no una.** El enunciado pide «una fila ANTES
+    de escribir»; lo que hace falta es que quede registrado el estado ANTERIOR, y
+    las dos sentencias van en la misma transacción, así que el orden no lo observa
+    nadie —lo que ordena el historial es `version`—. Registrar sólo el estado
+    nuevo dejaría la primera edición sin nada contra lo que diffear, que es justo
+    cuando alguien abre la pantalla. La fila de base lleva `changed_by` a **NULL**:
+    nadie apuntó quién escribió ese prompt, y atribuírselo a quien edita hoy sería
+    inventar un autor. `POST /agents` sí escribe su `version 1` con el autor de
+    verdad, para que los agentes nuevos no hereden esa laguna.
+  - **La detección de cambio va sobre los valores CRUDOS**, y no es un detalle: si
+    se comparase el texto efectivo, dos ediciones reales no se registrarían nunca
+    —tocar el idioma que la precedencia NO prefiere, y tocar el prompt más allá de
+    `PERSONA_MAX_CHARS`—. Las dos dejan el efectivo idéntico. Simétricamente, un
+    `PUT` que sube `max_concurrent_tasks` o reenvía el mismo prompto **no** abre
+    versión: un historial con filas de diff vacío no se vuelve a abrir.
+  - **La mitad de lectura**, que es la que esta base se suele dejar sin hacer
+    (`verificar-antes-de-implementar.md` §5): `GET /agents/{id}/prompt-versions`,
+    más reciente primero, con el diff calculado al servir por `agent_prompt_diff`
+    (puro, sin BD). Se diffea un renderizado canónico de la versión COMPLETA —campo
+    plano + una sección por lengua, ORDENADAS— y no el texto efectivo: con el
+    efectivo, una edición del idioma no preferido daría una fila con diff vacío,
+    o sea una versión que existe y no se puede explicar. Y `404` en lugar de «200
+    con lista vacía» para un agente ajeno, indistinguible del inexistente.
+  - **Rojos verificados**, uno por decisión: (1) registrar en TODO `PUT` (`if True`)
+    → cae `..._does_not_touch_the_prompt_opens_no_version` con 3 filas donde debía
+    haber 0; (2) sin fila de base → caen **4** tests (la cadena, el historial, el
+    sello y el aislamiento); (3) sin el bloque RLS en la migración → caen **2** de
+    `test_rls_invariant.py`, que es la prueba de que la guarda que descubre tablas
+    en el catálogo cubre de verdad la nueva; (4) orden de lenguas no determinista
+    en el diff → cae la guarda de determinismo.
+  - **Inventarios congelados que había que hacer crecer, no romper**: `__all__` del
+    dominio (`test_domain_models_package.py`) y el conjunto de rutas del router
+    (`test_agents_router_package.py`) eran igualdades contra lo capturado del
+    monolito. Meter ahí lo nuevo habría convertido la afirmación en una mentira
+    («el monolito lo tenía»), así que se han partido en
+    `*_BEFORE_THE_SPLIT` + `*_ADDED_AFTER_THE_SPLIT`, con la tarea de procedencia
+    escrita al lado de cada adición. Lo que la guarda sigue impidiendo es lo que
+    importa: que algo desaparezca, o que aparezca sin declararse.
+  - **Hallazgo lateral, arreglado**: `test_provider_options_is_still_registered_before_the_agent_id_wildcard`
+    nombraba UNA ruta, y la trampa es de la FORMA. Se ha añadido la versión general
+    —ninguna ruta literal de un segmento bajo `/agents` puede quedar tras el
+    comodín— y su primer borrador **pasaba en verde con la trampa puesta**: agrupaba
+    los comodines en un dict por camino, y `/agents/{agent_id}` son TRES rutas
+    (GET/PUT/DELETE), así que sólo sobrevivía el DELETE y la comparación de métodos
+    salía vacía. Lo destapó el rojo provocado a mano; está escrito en el test.
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Descripción**: Hoy `PUT /agents/{id}` sobrescribe `system_prompt`
   (`routers/agents/crud.py:225-245`) **sin versión, sin auditoría y sin diff**.
@@ -183,18 +258,85 @@ sin decisión pendiente.
   Lo que NO se hace aquí: rollback automático. Poder volver es la fase 2.
 
 - **Tests automáticos**:
+
   ```yaml
   - id: auto_govp_02_a
     runtime: python-pytest
     command: "pytest tests/integration/test_agent_prompt_versions.py -q -p no:randomly"
   - id: auto_govp_02_b
     runtime: python-pytest
-    command: "pytest tests/security/test_rls_invariant.py -q"
+    command: "pytest tests/integration/test_rls_invariant.py -q -p no:randomly"
+  - id: auto_govp_02_c
+    runtime: python-pytest
+    command: "pytest tests/unit/test_agent_prompt_diff.py tests/unit/test_domain_models_package.py tests/unit/test_agents_router_package.py tests/unit/test_integrity_error_sanitized.py -q"
   ```
+
+  **La carrera entre dos `PUT`, traducida y no filtrada**: los dos calculan el
+  mismo `version` y el `UNIQUE` deja fuera al segundo. `record_prompt_change` hace
+  su propio `flush` para poder encadenar el `parent_version_id`, así que la
+  `IntegrityError` NO pasaba por `flush_or_conflict` y habría salido como **500 con
+  el mensaje crudo de PostgreSQL** — que nombra la constraint y trae el `tenant_id`
+  en el `DETAIL:`, o sea la fuga exacta que `routers/_integrity.py` existe para
+  evitar. Ahora el perdedor recibe un 409 con el código estable
+  `concurrent_prompt_edit`. Rojo verificado cambiando el `context` del `except`.
+
+  **`auto_govp_02_b` estaba mal declarado**: `tests/security/test_rls_invariant.py`
+  no existe ni existió — el invariante de cobertura RLS vive en
+  `tests/integration/`, porque descubre las tablas en el catálogo de PostgreSQL y
+  necesita una base. Con el camino viejo el comando habría salido != 0 por «no
+  tests found» y la casilla habría afirmado una verificación imposible
+  (`tests/unit/test_declared_tests_exist.py`). Corregido al fichero que existe y
+  que se ejecutó.
+
+  Ejecutados el 2026-08-19 contra la base `agentic_ola4_l1`: `auto_govp_02_a` →
+  **16 passed** (6 de la migración y sus constraints, 5 de la escritura, 4 de la
+  lectura, 2 de aislamiento y append-only, 1 del cableado); `auto_govp_02_b` →
+  **10 passed**; `auto_govp_02_c` → **40 passed**.
 
 ### `task_gov_03` — `prompt_version` sella el prompt del AGENTE, no tres módulos
 
-- [ ] **Título**: `executions.prompt_version` incluye la versión del prompt del agente
+- [x] **Título**: `executions.prompt_version` incluye la versión del prompt del agente
+  - ✅ **Cerrada (2026-08-19).** Premisa verificada: `_PROMPT_MODULES` tenía
+    exactamente los tres módulos del runtime (`providers`, `nudges`,
+    `review_contract`) y ni un byte del `system_prompt` del agente.
+  - **Se entrega con la versión Y el hash**, no sólo con el hash: la 02 salió
+    entera, así que el sello es `v{N}:{sha256}` cuando el agente tiene fila de
+    historial y `p:{sha256}` cuando no. La diferencia importa — «corrió con este
+    texto» frente a «corrió con la versión 7, que firmó tal usuario tal día»— y es
+    lo que hace accionable la etiqueta cuando alguien pregunta qué cambió.
+  - **La cadena completa**: `dispatch._assemble_run_request` emite
+    `agent_prompt_version` **pegado a `agent_persona`** (nunca sin ella: sin
+    persona no hay texto que sellar, y el hash del vacío movería la etiqueta de
+    todos esos runs sin distinguir nada) → `run_contract.ExecutionRequest` →
+    `run_spec` lo pone en el `AGENT_TASK_SPEC` → `__main__.run_task` resuelve el
+    sello con `agent_prompt_seal(spec)` → `run_agent(..., agent_seal=…)` →
+    `prompt_version(agent_seal)`. Cubre implementador **y** revisor, porque las dos
+    ramas pasan por `_assemble_run_request`.
+  - **El hash sale del agente VIVO, no de la fila.** Una fila puede estar desfasada
+    respecto a un `UPDATE` hecho por fuera de la API, y lo que corrió es el prompt
+    que el agente tiene hoy.
+  - **Sella el texto EFECTIVO** (`resolve_agent_persona`: es → en → plano, capado a
+    `PERSONA_MAX_CHARS`), no `agents.system_prompt`. Sellar el campo plano haría
+    idénticos a dos agentes con el mismo plano y distinto `system_prompts.es`,
+    cuando al modelo le llegan personas distintas; y sellar sin capar afirmaría una
+    diferencia que el modelo no vio.
+  - **El sello se calcula en DOS imágenes que no se pueden importar la una a la
+    otra** —api-server (`agent_persona.prompt_text_hash`) y agent-runtime
+    (`prompt_version.agent_prompt_seal`, para el agente sin historial, que es el
+    caso mayoritario el primer día)—. Es la forma clásica de que dos mitades se
+    desincronicen sin que nada falle: el mismo prompt daría dos etiquetas según por
+    qué rama entró. `tests/unit/test_agent_prompt_seal_contract.py` es el único
+    sitio del repo donde se comparan, y fija además la FÓRMULA (sha256 desnudo del
+    texto), porque cambiar las dos a la vez dejaría la comparación en verde
+    rompiendo el histórico entero.
+  - **Sin sello, la etiqueta es la de siempre byte a byte.** Es lo que impide que
+    el arreglo parta el eje del dashboard en dos y deje la métrica peor que antes.
+  - **Rojos verificados**: (1) ignorar el sello en el digest → caen los dos tests
+    de la propiedad; (2) hashear el campo plano en vez del efectivo → caen **5**
+    del contrato entre imágenes; (3) aceptar `version: true` (`bool` es subclase de
+    `int`, y un spec mal formado ataría el run a una versión que no existe) → cae
+    su test; (4) `agent_seal=None` en el entrypoint y (5) borrar la clave del
+    dispatch → caen las guardas de cableado de los dos lados.
 - **Tiempo**: 1 día · **Complejidad**: s
 - **Descripción**: Hoy `_PROMPT_MODULES`
   (`agent_runtime/prompt_version.py:33-37`) hashea `providers`, `nudges` y
@@ -208,11 +350,26 @@ sin decisión pendiente.
   `system_prompt` cambia el `prompt_version`** — es la propiedad entera.
 
 - **Tests automáticos**:
+
   ```yaml
   - id: auto_govp_03_a
     runtime: python-pytest
     command: "pytest docker/agent-runtimes/agent-runtime/tests/test_prompt_version.py -q"
+  - id: auto_govp_03_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_agent_prompt_seal_contract.py -q"
+  - id: auto_govp_03_c
+    runtime: python-pytest
+    command: "pytest tests/integration/test_dispatch_agent_persona.py -q -p no:randomly"
   ```
+
+  Tres y no uno porque las tres piezas se rompen por separado: el runtime, el
+  contrato entre las dos imágenes, y el despacho que lo emite. Ejecutados el
+  2026-08-19: `auto_govp_03_a` → **17 passed** (los 10 de `task_wf_52` intactos + 7
+  nuevos, incluido el que lee el entrypoint para comprobar que llama de verdad);
+  `auto_govp_03_b` → **16 passed**; `auto_govp_03_c` → **4 passed** contra
+  `agentic_ola4_l1` (los 2 de la persona, que siguen verdes, + 2 del sello sobre el
+  payload que sale a la cola).
 
 ---
 
@@ -234,12 +391,116 @@ Decisión del operador: **bloquean, pero solo en `production` y
   secreto ejecute la evaluación. **No quites la rama `--dry-run`**: existe para
   que un fork sin credenciales no falle, y eso sigue siendo correcto.
 
+  #### Cerrado el 2026-08-19: el defecto que hacía inútil esta casilla
+
+  El reconocimiento encontró que la casilla **no podía funcionar aunque el
+  operador pusiera el secreto**, y no por lo que dice el enunciado. Dos defectos
+  que se tapaban entre sí:
+
+  1. **El gate mentía.** `ci_run.main` devolvía **PASS** cuando
+     `diff_provider is None`, con el mensaje «no live diff provider available —
+     nothing to gate, treating as pass». Y **ningún** sitio del repo cablea un
+     productor de diff vivo (`DiffProvider` sólo se inyecta desde los tests), así
+     que ése era el único camino que la rama con secreto podía tomar: el
+     merge-gate de regresión era estructuralmente incapaz de bloquear nada, **y
+     lo decía en verde**. Peor que no tener gate.
+  2. **Los argumentos no existían.** La rama viva interpolaba
+     `${EVAL_GOLDEN_DATASET}` y `${EVAL_BASELINE_RUN}` sin definirlas en ningún
+     `env:` —se expandían a la cadena vacía, que `required=True` de argparse
+     acepta— y el agente salía de un default inventado
+     `:-changed-prompt-agent`.
+
+  **Cómo se resolvió el choque con el ADR.** El [ADR
+  0038](../05-architecture-decisions/0038-evals-continuos-llm-as-judge-golden-promote-merge-gate-shadow-cross-tenant.md)
+  (`accepted`) descarta expresamente el fail-closed **incondicional** («fallar si
+  no hay proveedor… bloquear todo merge sería inviable»), así que por la cadena de
+  precedencia de `CLAUDE.md` no se podía hacer que la ausencia de proveedor
+  fallase a secas. Pero el mismo ADR enumera las salidas del gate y **no incluye**
+  «sin proveedor, sin `--dry-run`, exit 0»: eso lo inventó el código, y el código
+  no gana por estar desplegado.
+
+  La frontera correcta no es «con o sin proveedor», es **qué afirma el
+  invocante** — y por eso hay ahora un tercer estado en vez de dos:
+
+  | Invocación                | Afirma                         | Salida            |
+  | ------------------------- | ------------------------------ | ----------------- |
+  | `--dry-run`               | «no vengo a gatear»            | `0` PASSED        |
+  | sin `--dry-run`, con diff | «medí, y este es el veredicto» | `0` / `1` BLOCKED |
+  | sin `--dry-run`, sin diff | «vengo a gatear» — y no pudo   | `2` INCONCLUSIVE  |
+
+  El `2` es no-cero (no puede leerse como aprobado) **y** distinto del `1` a
+  propósito: las dos situaciones piden arreglos distintos de quien lee el check
+  —«el prompt empeoró» vs «el gate está mal configurado»—. Un fail-closed que
+  reusara el `1` diría «regresión» de algo que nunca se evaluó.
+
+  **Lo que se entrega:**
+
+  - `GateOutcome` (PASSED / BLOCKED / INCONCLUSIVE) + `EXIT_GATE_INCONCLUSIVE` +
+    `inconclusive_gate()` en
+    [`evals/ci_run.py`](../../apps/api-server/src/api_server/evals/ci_run.py);
+    `GateDecision.blocked` pasa a propiedad derivada del `outcome`, así que nadie
+    puede construir una decisión cuyo bit de bloqueo contradiga su estado.
+  - Los tres argumentos requeridos rechazan un valor **en blanco** al parsear
+    (`_non_blank`), que es la forma en que llegaba una variable de CI sin definir.
+  - El workflow: `continue-on-error: false` **explícito** (mismo criterio que el
+    SCA de `ci.yml` — el modo del job a la vista, y volver a informe tiene que
+    ser una decisión escrita); las tres variables se leen de `vars.*` **sin
+    default**; y la detección exige **secreto Y configuración**, de modo que quien
+    dé de alta la credencial sin sembrar el dataset cae en la rama `--dry-run` con
+    un `::warning::` que **nombra las variables que faltan** en vez de encontrarse
+    el gate en rojo sin saber por qué.
+  - La rama `--dry-run` sigue donde estaba, con placeholders **con nombre** en vez
+    de UUIDs todo-ceros: un `00000000-…` se lee como un id real y sugiere que el
+    gate corrió contra algo.
+  - Se **reescribió** `test_cli_without_provider_does_not_block` de
+    [`tests/integration/test_regression_block.py`](../../tests/integration/test_regression_block.py),
+    que afirmaba el defecto («no regression signal to act on -> do NOT block») y
+    por tanto lo protegía de este arreglo. Trampa nº2 de
+    [verificar-antes-de-implementar.md](../03-guides/verificar-antes-de-implementar.md).
+
+  #### Lo que sigue pendiente (y de quién es)
+
+  **Del operador**, y esta casilla no se marca hasta entonces:
+
+  1. Dar de alta el secreto del proveedor (cualquiera de los cuatro caminos del
+     ADR 0021) en los secretos del repositorio.
+  2. Sembrar un **dataset golden real** y un run **baseline**, promocionando
+     tareas aprobadas (`POST /tasks/{id}/promote-to-dataset`).
+  3. Definir las tres **variables de repositorio** (Settings → Variables, no
+     secretos: son ids): `EVAL_SUBJECT_AGENT`, `EVAL_GOLDEN_DATASET`,
+     `EVAL_BASELINE_RUN`.
+  4. Añadir el check a los _required status checks_ de la protección de rama. El
+     nombre exacto es el `name:` del job — «Eval prompt change (regression
+     gate)» —, no su id; con el id la protección no casa nunca y queda de adorno.
+     Misma trampa que documenta el SCA en `ci.yml`.
+
+  **De código, y todavía sin hacer**: cablear el **productor de diff vivo** —
+  construir el run candidato con el prompt nuevo vía el motor de juez y diffearlo
+  contra el baseline. Necesita sesión tenant-bound + proveedor LLM, que es
+  justamente por lo que el seam `DiffProvider` está inyectado. **Mientras falte,
+  la rama viva sale en `2` INCONCLUSIVE**, que es la verdad: ya no finge un
+  verde. Ese es el trabajo que queda de esta casilla, y ahora es visible en vez
+  de estar tapado por un PASS.
+
+  Lo que el enunciado señala y sigue igual de cierto: el workflow vigila **dos
+  ficheros del repo**, no la ruta por la que un tenant edita un prompt de verdad.
+  Esa mitad la cubre `task_gov_05` (`PUT /agents/{id}`).
+
 - **Tests automáticos**:
+
   ```yaml
   - id: auto_govp_04_a
     runtime: python-pytest
     command: "pytest tests/docs/test_supply_chain_docs.py tests/unit/test_eval_gate_config.py -q"
+  - id: auto_govp_04_b
+    runtime: python-pytest
+    command: "pytest tests/integration/test_regression_block.py tests/unit/test_ci_eval_gate.py -q -p no:randomly"
   ```
+
+  `tests/unit/test_eval_gate_config.py` **no existía** cuando la casilla lo
+  declaró: el comando de arriba nombraba un fichero inexistente y no podía haber
+  pasado nunca. Existe desde el 2026-08-19, con las guardas del tercer estado y
+  las del modo del job.
 
 ### `task_gov_05` — La eval bloquea al editar un prompt, según el preset
 
@@ -459,7 +720,79 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 
 ### `task_gov_10` — Reflexión estructurada del rechazo
 
-- [ ] **Título**: El rechazo se registra como `target` × `class`, no como prosa
+- [x] **Título**: El rechazo se registra como `target` × `class`, no como prosa
+  - ✅ **Cerrada (2026-08-19).** Verificado antes de tocar nada: el veredicto era
+    prosa y **sólo** prosa (`failed_criterion` / `testreport_evidence` /
+    `what_to_fix` en el payload del evento `review_comment`,
+    `reviewer_bridge.py:277-295` antes del cambio), sin un solo campo agregable.
+  - **(a) El vocabulario, en `shared-domain`**:
+    [`reject_taxonomy.py`](../../packages/shared-domain/src/shared_domain/reject_taxonomy.py)
+    declara `RejectTarget` (`code`/`tests`/`scope`/`deliverable`) y `RejectClass`
+    (`incorrect`/`incomplete`/`unproven`/`regression`/`contract_drift`/`overreach`),
+    el tope de tres por eje y `GENERIC_LABELS`. **No hay bucket «otros»**: lo
+    genérico se descarta y el rechazo queda sin clasificar, que es lo que pedía
+    el enunciado. Y no hay sinónimos interpretativos (`bug` NO es `incorrect`):
+    se perdona la FORMA, no se adivina el VALOR.
+  - **(b) Anuncio y parseo, una sola cadena**: los tags y la instrucción salen
+    del mismo módulo, así que el prompt del reviewer no puede ofrecer un valor
+    que el parser tire. Interpolado en los **tres** sitios que piden el bloque
+    `<rejection>`: el preámbulo de todo run de review
+    (`agent_runtime/__main__.py`), el system del run reviewer
+    (`agent_runtime/providers.py`) y el prompt semilla del agente `reviewer`
+    (`seeds/builtin_agents.py`, ES + EN). `reviewer_bridge` construye sus regex
+    desde los mismos tags. Es la lección de dos incidentes: el `<verdict>`
+    deletreado a mano en cinco prompts (H3) y las 13 categorías de aprobación
+    que no intersecaban con ninguna política (g6).
+  - **(c) Dónde se escribe**: `apply_reviewer_verdict` añade `reject_targets` /
+    `reject_classes` al payload JSONB del evento `review_comment` que ya lleva la
+    prosa. **Sin migración y sin CHECK, a propósito**: el par no aterriza en una
+    columna, y el precedente de esta casa para un value-set cerrado que vive en
+    JSONB es `shared_domain.approval_categories` (13 categorías, cero CHECK, test
+    de contrato). El cierre lo garantizan el escritor (`normalise_*`) y la
+    lectura (`label = ANY(:allowed)`).
+  - **(d) Que agregue de verdad**:
+    [`db/reject_taxonomy_repo.py`](../../apps/api-server/src/api_server/db/reject_taxonomy_repo.py)
+    contesta «¿qué se rechaza más?» y «¿qué clase domina?» por tenant y por
+    proyecto — más `unlabelled`, la cobertura del dato, sin la cual las otras dos
+    engañan. Sin este lado sería el patrón de siempre: mecanismo entregado, cero
+    llamantes.
+  - **Rojo verificado** (cinco roturas, con el test que cayó cada vez): añadir
+    `OTHER = "other"` al enum → 3 rojos (`test_classes_are_closed_and_short`,
+    `test_neither_axis_has_a_generic_bucket`,
+    `test_the_prompt_advertises_exactly_the_parsed_vocabulary`); subir el tope a
+    99 → `test_the_cap_is_three_per_axis`; re-teclear la instrucción a mano en el
+    runtime → 5 rojos, incluido el del prompt semilla; que el parser deje de leer
+    `<reject_target>` → 4 rojos; que el payload deje de llevar el par → 6 rojos
+    del test de integración; y quitar el filtro de tenant y el `ANY(:allowed)` de
+    la lectura → `test_the_breakdown_does_not_cross_tenants` +
+    `test_a_label_outside_the_vocabulary_is_not_counted`.
+  - **Hallazgo propio al romper**: el descarte explícito de `GENERIC_LABELS` era
+    una guarda que **no podía fallar** (un `other` se cae igual por no estar en el
+    enum), así que se añadió el test que sí la ejerce —un alias genérico metido
+    por descuido— en vez de dejar un filtro decorativo.
+  - **Gotcha de Postgres, medido**: `CAST(:x AS uuid)` y no `:x::uuid` — el regex
+    de bind params de `text()` no reconoce un parámetro seguido de `::`, y un
+    `$n IS NULL` sin tipo es `AmbiguousParameterError` aunque el mismo parámetro
+    aparezca luego en una comparación tipada. Documentado en
+    [`gotchas/postgres-parametro-opcional-sin-tipo-en-text.md`](../03-guides/gotchas/postgres-parametro-opcional-sin-tipo-en-text.md).
+  - ⚠️ **Divergencia resuelta con el informe, y dicha aquí para que no se
+    resuelva a ojo la próxima vez.** El informe
+    [§2.4](2026-08-12-analisis-agentic-workflow.md) proponía los mismos nombres
+    con otro significado: `target` como PUNTERO (`skills/X` | `agents/Y`) y
+    `class` como `rule_missing | rule_wrong | rule_ignored` — o sea la mitad
+    barata de **SkillOpt**. Se ha implementado la versión de ESTA casilla (los
+    ejes describen el trabajo rechazado) por dos razones: (1) §4 del informe, que
+    es la parte que este plan declara fuente de verdad, **no se pronuncia** sobre
+    los ejes (la fila 4 de su tabla dice «¿Decide el operador? No»); y (2) la
+    variante del informe alimenta un bucle que el operador **aplazó** (decisión 6,
+    `task_gov_11`), mientras que el enunciado de aquí exige explícitamente un dato
+    que «sirve por sí solo aunque ese bucle no llegue nunca». Queda anotado en
+    `reject_taxonomy.py` (§«Qué NO es esto») que la reflexión de SkillOpt, si se
+    reabre, es un par **aditivo** y no una redefinición de estos ejes: `code x
+incorrect` no dice qué regla le falta al reviewer de CI4. **Si el operador
+    prefiere la lectura del informe, el cambio es barato**: la maquinaria
+    (normalización, tope, descarte, tags, punto de escritura, agregado) se
+    reutiliza entera y sólo cambia el vocabulario.
 - **Tiempo**: 2-3 días · **Complejidad**: m
 - **Descripción**: Hoy un rechazo se memoriza y se reinyecta como texto. Sirve
   para el reintento inmediato y **no agrega**: no se puede preguntar «¿por qué se

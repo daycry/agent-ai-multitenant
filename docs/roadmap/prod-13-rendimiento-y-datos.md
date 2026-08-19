@@ -138,7 +138,7 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
 
 #### `task_prod13_01` — Marketplace: puertas de análisis y sandbox fuera del event loop
 
-- [ ] **Título**: Mover `_run_static_analysis` (subprocess bandit/semgrep,
+- [x] **Título**: Mover `_run_static_analysis` (subprocess bandit/semgrep,
       `static_analysis.py:480-486`) y `_run_sandbox` (SDK Docker síncrono,
       `sandbox.py:419,433-435`) fuera del loop: task Celery en cola dedicada,
       endpoint de instalación/actualización devuelve 202 + recurso de estado
@@ -184,6 +184,112 @@ C (índices y búsqueda), D (retención y backfill), E (endpoints).
     [`marketplace-v2-despliegue`](./marketplace-v2-despliegue.md)** y cerrar
     aquí lo que de verdad pertenece a prod-13 (el no-bloqueo del bucle, ya
     hecho). Es una decisión de reparto de alcance entre planes: no la tomo yo.
+  - ✅ **Cerrada (2026-08-19). La premisa del aplazamiento ya no aplica, y la
+    entidad que el plan proponía como recurso de estado NO servía — su hermana
+    sí.** Por orden:
+
+    **La premisa, comprobada.** `marketplace-v2-despliegue` está entregado con
+    sus casillas cerradas (cero `[ ]` en el fichero) y con `marketplace_deployments`
+    en la migración `0128` (ADR 0142). O sea que el motivo escrito tres veces
+    aquí —«no se toca porque otro plan está reescribiendo este flujo»— caducó.
+
+    **Y la mitad que el plan daba por buena, no lo era.** `MarketplaceDeployment`
+    no puede ser el recurso de estado del 202: se crea **después** de que exista
+    la instalación, es por proyecto, y su `status` es `active`/`disabled`/`retired`
+    —el ciclo de vida de algo vivo, no el progreso de un trabajo—. Cuando el 202
+    responde no hay ningún despliegue al que apuntar. **La hermana un nivel más
+    arriba sí sirve y ya existía**: `marketplace_installations`, acotada por tenant
+    con RLS y con columna `status`. Es lo que la instalación crea, así que es lo
+    que el 202 devuelve. Ni tabla nueva ni segunda máquina de estados (la regla de
+    «NO política paralela» del ADR 0142), y **sin migración**: `status` es
+    `varchar(16)` **sin CHECK** (migración `0041`, líneas 256-260), así que los dos
+    valores transitorios nuevos —`analyzing`, `blocked`— se aplican en Python, y la
+    guarda es `tests/unit/test_marketplace_models.py::test_installation_status_enum_values`.
+
+    **Lo entregado.** `POST /marketplace/installations` acepta `async_gates: true`
+    y entonces responde **202** con `Location`, con la fila en `analyzing`
+    (`routers/marketplace/installations.py`); el productor es
+    `celery_client.enqueue_marketplace_install_gates` (cola `marketplace`) y el
+    consumidor `workers/marketplace_gates.py`, que corre las puertas y cierra la
+    instalación llamando al MISMO `marketplace/finalize.py` que el camino
+    síncrono. Ese fichero es nuevo y existe por una razón: el cierre
+    (consentimiento → estado → materialización → auditoría) estaba inline en el
+    router, y copiarlo al worker habría creado dos políticas de instalación
+    divergentes. `GET /marketplace/installations/{id}` es el recurso de estado, y
+    **no existía**: sólo había el listado, o sea que un cliente con un 202 tendría
+    que sondear `?limit=100` y buscarse dentro.
+
+    **La cola nace con consumidor, porque el ADR 0083 lo exige.** Retiró `heavy` y
+    `gpu` por ser lanes declaradas sin quien las drenase; `marketplace` entra con
+    su pool en los DOS composes (`workers-marketplace`, `--concurrency=1`, en
+    `docker-compose.manuals.yml` y en `compose_generator.py`). No se metió en un
+    pool existente porque los tres tienen su forma documentada de romperse con un
+    trabajo de 4 minutos: `workers`/`workers-aux` van a `--concurrency=2` y drenan
+    `test`, la cola por la que un agent-run BLOQUEADO espera su `stack_exec` (la
+    auto-inanición que motivó `workers-aux`), y `workers-backup` va a
+    `--concurrency=1` detrás del backup nocturno.
+
+    **Dos cosas que se encontraron por el camino y que no eran esta tarea:**
+
+    1. **Un fallo de fetch abortaba sin escribir su fila de auditoría.**
+       `_gate_fetch` tenía un `except InstallError: raise` DELANTE del `_abort`,
+       así que el fallo de fetch más común —el `ArtifactFetchError` que lanza
+       `LocalArtifactFetcher` cuando no hay artefacto— abortaba **mudo**, al
+       contrario de lo que promete el docstring de `_abort` y de lo que hacen las
+       otras cuatro puertas. La rama parecía evitar una doble auditoría, pero
+       ningún fetcher puede auditar: su `Protocol` no recibe sesión. Arreglado.
+    2. **El root de artefactos no está compartido, y eso podía apagar la puerta en
+       silencio.** Medido el 2026-08-19 en el stack vivo: el api-server **no monta
+       ningún volumen** (`docker inspect` → `Mounts: []`) y
+       `/data/agent-platform/marketplace/artifacts` no existe en el api-server ni
+       en el worker; `seed_official_catalog` además no tiene ningún llamante fuera
+       de los tests. Con las puertas en otro proceso, un fetch fallido es ambiguo
+       —«no hay artefacto» (skip honesto del ADR 0081) vs. «existe y desde aquí no
+       se alcanza»— y tragárselos como uno habría convertido el traslado en un
+       apagado silencioso del análisis: verde en los tests, `skipped` en
+       producción. Así que el productor observa el artefacto donde acepta la
+       petición (`InstallOrchestrator.artifact_expected`) y el worker distingue:
+       ausencia esperada → sigue; ausencia inesperada → `blocked`. Lo mide
+       `test_un_artefacto_que_el_worker_no_alcanza_no_se_traga_como_skip`, y
+       verificado rompiéndolo: con la guarda desactivada la instalación acaba
+       `enabled` y el test se pone rojo. **Un root de artefactos compartido y
+       durable sigue siendo la Fase B/C del ADR 0081** (registry + sandbox
+       out-of-process), no esta casilla.
+
+    **El tramo que queda, dicho en voz alta porque es el modo de fallo nº1 de esta
+    base.** El 202 es **opt-in** (`async_gates: true`) y **hoy no lo pide nadie**:
+    el admin-panel sigue mandando el POST sin el campo y recibiendo su 201. O sea
+    que el mecanismo está entregado y sin llamante en producción — el patrón
+    «mecanismo entregado, cero llamantes» del §5 de
+    `verificar-antes-de-implementar`. Se dejó así a propósito y por dos razones:
+    cambiar el 201 por un 202 por debajo convierte «instalado» en «aceptado» sin
+    que el llamante se entere, y cablear la pantalla exige tocar
+    `apps/admin-panel/lib/i18n/dictionary.ts`, que no es de este carril. Lo que
+    falta es pequeño y concreto: que el botón de instalar mande `async_gates`,
+    sondee `GET /marketplace/installations/{id}` y pinte los estados `analyzing` /
+    `blocked`.
+
+    - 🔎 **Corrección del 2026-08-19, comprobada antes de cablear nada: ese botón
+      NO EXISTE.** Fui a añadirle `async_gates: true` y no hay ninguna acción de
+      instalar en el panel. `grep` de `POST` contra `/marketplace/installations`
+      en todo `apps/admin-panel/` no da un solo hit: la pantalla del marketplace
+      **lista, revoca, desinstala y despliega**, pero instalar un listing sólo se
+      puede hacer llamando a la API. O sea que el 202 no es «un mecanismo al que
+      le falta su llamante»: es un mecanismo cuyo llamante no existiría tampoco en
+      la rama síncrona, porque la instalación entera es API-only hoy.
+      Eso convierte el último tramo en una casilla de producto —«el catálogo del
+      panel puede instalar»— y no en el cableado de una línea. No la abro yo: es
+      alcance nuevo y lo decide el operador. Lo que sí queda dicho es que la nota
+      de arriba daba por hecho un botón que nadie ha escrito.
+
+    **Lo que NO se afirma.** La puerta 5 (prueba de humo en sandbox) sólo corre
+    para los niveles de confianza cuya política la exige, y en el api-server nunca
+    podía correr (sin socket Docker, principio 2). La lane nueva SÍ lleva
+    `DOCKER_HOST`, o sea que es el «sandbox out-of-process» que el ADR 0081 pedía,
+    pero **eso no se ha ejercitado contra un Docker real**: el stack no está
+    redesplegado con el compose nuevo, así que en el stack vivo de hoy la cola
+    `marketplace` todavía no tiene quien la drene. Es un `docker compose up -d`
+    del operador, y hasta entonces un 202 se queda en `analyzing`.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
   ```yaml

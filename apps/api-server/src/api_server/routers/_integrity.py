@@ -93,6 +93,15 @@ _CONSTRAINT_MESSAGES: Final[dict[str, tuple[str, str]]] = {
         "duplicate_chat_mode_name",
         "Ya existe un modo de chat con ese nombre.",
     ),
+    # Historial del prompt del agente (`task_gov_02`, migración 0143). Lo provoca
+    # una petición VÁLIDA: dos `PUT /agents/{id}` simultáneos calculan el mismo
+    # `version` y el UNIQUE deja fuera al segundo. Sin esta entrada el perdedor se
+    # llevaba un genérico… y sin el `except` del router, un 500 con el crudo, que
+    # nombra la constraint y filtra el `tenant_id` — justo lo que este módulo evita.
+    "uq_agent_prompt_versions_agent_version": (
+        "concurrent_prompt_edit",
+        "Otro cambio del prompt de este agente llegó primero. Recarga y repite.",
+    ),
     # Grafo de dependencias de tareas.
     "ck_task_dependencies_no_self_loop": (
         "task_depends_on_itself",

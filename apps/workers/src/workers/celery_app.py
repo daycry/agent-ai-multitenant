@@ -13,6 +13,9 @@ Queues (spec §12, Plan 02 Fase A; trimmed by ADR 0083 / prod-06 colas_02):
   review       review-runtime execution.
   privileged   tasks touching secrets / infra — drained by a worker
                with a tighter security profile.
+  marketplace  las puertas de seguridad de una instalación del marketplace
+               (prod-13 task_prod13_01): análisis estático + sandbox, minutos
+               de CPU que no caben en un request HTTP.
 
 The ``heavy`` and ``gpu`` lanes were REMOVED (ADR 0083, Option B): they were
 declared but had no producer (the dispatcher always uses ``dispatch_queue`` =
@@ -72,6 +75,20 @@ QUEUE_NAMES: tuple[str, ...] = (
     "test",
     "review",
     "privileged",
+    # prod-13 `task_prod13_01`: las puertas de seguridad del marketplace
+    # (bandit + semgrep + prueba de humo del sandbox, hasta ~4 min). Lane PROPIA
+    # porque ninguna de las cinco de arriba puede absorberla sin un riesgo ya
+    # documentado en este repo: `default`/`test`/`review` los drenan pools de
+    # `--concurrency=2` que también atienden agent-runs y `stack_exec` (la
+    # auto-inanición que motivó `workers-aux`), y `privileged` va a
+    # `--concurrency=1` detrás del backup nocturno.
+    #
+    # Nace CON consumidor, que es la condición que puso el ADR 0083 al retirar
+    # `heavy` y `gpu`: el servicio `workers-marketplace` la drena en el compose de
+    # dev y en el que genera el instalador, y
+    # `tests/unit/test_compose_generator.py` compara las colas drenadas con esta
+    # tupla, así que una lane huérfana se pone roja sola.
+    "marketplace",
 )
 
 DEFAULT_QUEUE = "default"
@@ -133,6 +150,12 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.repo_clone",
             "workers.plan_pr",
             "workers.plan_docs",
+            # prod-13 task_prod13_01: las puertas de seguridad del marketplace,
+            # que el api-server ejecutaba DENTRO del request (hasta 4 min de
+            # escáner + sandbox). Sin este import el worker arranca sin
+            # registrar la task y los mensajes de la cola `marketplace` mueren
+            # con NotRegistered mientras el endpoint sigue devolviendo 202.
+            "workers.marketplace_gates",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

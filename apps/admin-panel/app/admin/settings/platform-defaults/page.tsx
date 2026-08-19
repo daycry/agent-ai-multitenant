@@ -10,6 +10,13 @@
  *   GET  /admin/platform-settings/_registry   → grupos + tipos + límites
  *   GET  /admin/platform-settings             → valores actuales
  *   PUT  /admin/platform-settings/{key}        → valida (por tipo) + persiste
+ *
+ * i18n (prod-16 `task_prod16_03`): marco del diccionario (`platformDefaults`) y
+ * etiquetas/descripciones de cada categoría y ajuste del propio registry vía
+ * `pickLang` — `platform_settings_registry.py` las sirve bilingües desde el
+ * 2026-08-19, validado al importar el módulo (`require_language_pair`). El
+ * NOMBRE de la clave (`max_review_retries`) se sigue pintando crudo: es lo que
+ * el operador busca en la BD y en los logs.
  */
 
 import { useState } from "react";
@@ -26,6 +33,8 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
+import { pickLang, useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useErrorText } from "@/lib/use-error-text";
 
@@ -40,7 +49,9 @@ interface SettingDef {
   type: SettingType;
   default: unknown;
   label_es: string;
+  label_en: string;
   description_es: string;
+  description_en: string;
   min_value: number | null;
   max_value: number | null;
   provider_kinds?: string[];
@@ -48,8 +59,10 @@ interface SettingDef {
 
 interface CategoryDef {
   label_es: string;
+  label_en: string;
   icon: string;
   description_es: string;
+  description_en: string;
   settings: Record<string, SettingDef>;
 }
 
@@ -76,6 +89,8 @@ interface ProviderOption {
 }
 
 export default function PlatformDefaultsPage() {
+  const t = useT("platformDefaults");
+
   return (
     <div
       className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8"
@@ -83,8 +98,8 @@ export default function PlatformDefaultsPage() {
     >
       <PageHeader
         icon={<Settings2 className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Valores por defecto de plataforma"
-        description="Ajustes globales de la plataforma sin página propia (modelo por defecto de agentes, límites de ejecución, RAG, mantenimiento…). Solo System Admin."
+        title={t("title")}
+        description={t("description")}
         data-testid="platform-defaults-header"
       />
       <RoleGuard
@@ -93,9 +108,7 @@ export default function PlatformDefaultsPage() {
           <Card className="mt-6">
             <CardContent className="flex items-center gap-3 py-10">
               <ShieldAlert className="text-muted-foreground h-5 w-5 shrink-0" />
-              <p className="text-muted-foreground text-sm">
-                Esta sección es exclusiva del System Admin de la plataforma.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("forbidden")}</p>
             </CardContent>
           </Card>
         }
@@ -107,6 +120,8 @@ export default function PlatformDefaultsPage() {
 }
 
 function PlatformDefaultsContent() {
+  const t = useT("platformDefaults");
+  const lang = useLangOptional();
   const registryQuery = useQuery<{ categories: Record<string, CategoryDef> }, ApiError>({
     queryKey: ["platform-settings", "_registry"],
     queryFn: () => apiFetch("/admin/platform-settings/_registry"),
@@ -131,29 +146,37 @@ function PlatformDefaultsContent() {
         isLoading={registryQuery.isLoading || valuesQuery.isLoading}
         isError={registryQuery.isError || valuesQuery.isError}
         error={registryQuery.error ?? valuesQuery.error}
-        loadingLabel="Cargando ajustes…"
+        loadingLabel={t("loading")}
       >
         <div className="space-y-6">
-          {Object.entries(registryQuery.data?.categories ?? {}).map(([catKey, cat]) => (
-            <Card key={catKey} data-testid={`platform-cat-${catKey}`}>
-              <CardHeader>
-                <CardTitle className="text-base">{cat.label_es}</CardTitle>
-                {cat.description_es ? (
-                  <p className="text-muted-foreground text-sm">{cat.description_es}</p>
-                ) : null}
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {Object.entries(cat.settings).map(([key, def]) => (
-                  <SettingControl
-                    key={key}
-                    settingKey={key}
-                    def={def}
-                    current={valueByKey.get(key)}
-                  />
-                ))}
-              </CardContent>
-            </Card>
-          ))}
+          {Object.entries(registryQuery.data?.categories ?? {}).map(([catKey, cat]) => {
+            const description = pickLang(lang, {
+              es: cat.description_es,
+              en: cat.description_en,
+            });
+            return (
+              <Card key={catKey} data-testid={`platform-cat-${catKey}`}>
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    {pickLang(lang, { es: cat.label_es, en: cat.label_en })}
+                  </CardTitle>
+                  {description ? (
+                    <p className="text-muted-foreground text-sm">{description}</p>
+                  ) : null}
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {Object.entries(cat.settings).map(([key, def]) => (
+                    <SettingControl
+                      key={key}
+                      settingKey={key}
+                      def={def}
+                      current={valueByKey.get(key)}
+                    />
+                  ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       </StateBlock>
 
@@ -171,6 +194,8 @@ function SettingControl({
   def: SettingDef;
   current: SettingValue | undefined;
 }) {
+  const t = useT("platformDefaults");
+  const lang = useLangOptional();
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const initial = current ? current.value : def.default;
@@ -184,7 +209,7 @@ function SettingControl({
         body: { value: v },
       }),
     onSuccess: () => {
-      setMsg("Guardado ✓");
+      setMsg(t("saved"));
       void queryClient.invalidateQueries({ queryKey: ["platform-settings", "values"] });
     },
     onError: (err) => setMsg(errorText(err)),
@@ -193,8 +218,12 @@ function SettingControl({
   return (
     <div className="border-border/60 flex flex-col gap-2 border-t pt-4 first:border-t-0 first:pt-0">
       <div className="flex flex-col gap-0.5">
-        <Label className="text-sm font-medium">{def.label_es}</Label>
-        <p className="text-muted-foreground text-xs">{def.description_es}</p>
+        <Label className="text-sm font-medium">
+          {pickLang(lang, { es: def.label_es, en: def.label_en })}
+        </Label>
+        <p className="text-muted-foreground text-xs">
+          {pickLang(lang, { es: def.description_es, en: def.description_en })}
+        </p>
         <code className="text-muted-foreground text-[11px]">{settingKey}</code>
       </div>
 
@@ -206,9 +235,9 @@ function SettingControl({
               checked={Boolean(value)}
               onChange={(e) => setValue(e.target.checked)}
             />
-            <span className="font-medium">{value ? "Activado" : "Desactivado"}</span>
+            <span className="font-medium">{value ? t("boolOn") : t("boolOff")}</span>
             <span className="text-muted-foreground text-xs">
-              {value ? "(desmarca para desactivar)" : "(marca para activar)"}
+              {value ? t("boolHintOn") : t("boolHintOff")}
             </span>
           </label>
           <SaveButton onClick={() => save.mutate(value)} pending={save.isPending} />
@@ -304,6 +333,7 @@ function ModelConfigControl({
   onSave: () => void;
   pending: boolean;
 }) {
+  const t = useT("platformDefaults");
   const set = (patch: Partial<ModelConfig>) => onChange({ ...value, ...patch });
 
   // Concrete providers by NAME (same source as the project/team/chat pickers) —
@@ -328,7 +358,7 @@ function ModelConfigControl({
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       <div className="space-y-1">
-        <Label className="text-xs">Proveedor</Label>
+        <Label className="text-xs">{t("provider")}</Label>
         <Select
           value={value.provider_id ?? ""}
           onChange={(e) => {
@@ -345,7 +375,7 @@ function ModelConfigControl({
         </Select>
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Modelo</Label>
+        <Label className="text-xs">{t("model")}</Label>
         {modelOptions.length > 0 ? (
           <Select value={value.model ?? ""} onChange={(e) => set({ model: e.target.value })}>
             <option value="">—</option>
@@ -363,15 +393,13 @@ function ModelConfigControl({
               placeholder="qwen3-coder:480b"
             />
             <p className="text-muted-foreground text-[11px]">
-              {value.provider_id
-                ? "Sin modelos sincronizados — sincroniza el proveedor o escribe el nombre."
-                : "Elige un proveedor para ver sus modelos."}
+              {value.provider_id ? t("noSyncedModels") : t("pickProviderFirst")}
             </p>
           </>
         )}
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Temperatura</Label>
+        <Label className="text-xs">{t("temperature")}</Label>
         <div className="flex items-end gap-2">
           <Input
             type="number"
@@ -389,9 +417,10 @@ function ModelConfigControl({
 }
 
 function SaveButton({ onClick, pending }: { onClick: () => void; pending: boolean }) {
+  const t = useT("platformDefaults");
   return (
     <Button size="sm" onClick={onClick} disabled={pending} data-testid="platform-setting-save">
-      {pending ? "Guardando…" : "Guardar"}
+      {pending ? t("saving") : t("save")}
     </Button>
   );
 }

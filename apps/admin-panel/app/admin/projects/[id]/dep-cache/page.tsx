@@ -39,6 +39,7 @@ import { StateBlock } from "@/components/shared/state-block";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import {
   runtimeLabel,
@@ -62,6 +63,7 @@ interface ResultRow {
 export default function DepCachePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id ?? "";
+  const t = useT("depCache");
   const { lang } = useLang();
   const [results, setResults] = useState<Record<string, ResultRow>>({});
 
@@ -87,7 +89,10 @@ export default function DepCachePage() {
         [data.runtime]: {
           runtime: data.runtime,
           ok: true,
-          message: `${data.invalidated_count} entradas invalidadas`,
+          message:
+            data.invalidated_count === 1
+              ? t("invalidatedCountOne")
+              : t("invalidatedCountMany", { n: data.invalidated_count }),
         },
       }));
     },
@@ -106,18 +111,18 @@ export default function DepCachePage() {
   const columns: DataTableColumn<RuntimeTemplateDto>[] = [
     {
       key: "runtime",
-      header: "Runtime",
+      header: t("colRuntime"),
       cell: (rt) => runtimeLabel(rt, lang),
     },
     {
       key: "mount",
-      header: "Punto de montaje",
+      header: t("colMount"),
       className: "font-mono text-xs",
       cell: (rt) => rt.dep_cache_mount,
     },
     {
       key: "actions",
-      header: "Acciones",
+      header: t("colActions"),
       cell: (rt) => {
         const isLoading = invalidate.isPending && invalidate.variables === rt.id;
         return (
@@ -129,14 +134,14 @@ export default function DepCachePage() {
             data-testid={`invalidate-${rt.id}`}
           >
             <Trash2 className="mr-1 h-3 w-3" />
-            {isLoading ? "Invalidando..." : "Invalidar"}
+            {isLoading ? t("invalidating") : t("invalidate")}
           </Button>
         );
       },
     },
     {
       key: "result",
-      header: "Resultado",
+      header: t("colResult"),
       cell: (rt) => {
         const result = results[rt.id];
         if (!result) return null;
@@ -157,19 +162,12 @@ export default function DepCachePage() {
 
   return (
     <div className="container mx-auto px-4 py-6">
-      <ProjectBreadcrumb projectId={projectId} current="Caché de dependencias" />
-      <PageHeader
-        title="Caché de dependencias"
-        description={
-          "Invalida la caché del dep-cache para forzar al worker-test a " +
-          "reinstalar las dependencias en el siguiente run. Útil cuando " +
-          "sospechas que la caché está corrupta."
-        }
-      />
+      <ProjectBreadcrumb projectId={projectId} current={t("title")} />
+      <PageHeader title={t("title")} description={t("description")} />
 
       <Card>
         <CardHeader>
-          <CardTitle>Runtimes con caché</CardTitle>
+          <CardTitle>{t("cardTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           <StateBlock
@@ -179,7 +177,7 @@ export default function DepCachePage() {
             loadingTestId="dep-cache-loading"
             isError={runtimesQuery.isError}
             error={runtimesQuery.error}
-            errorTitle="No se pudo cargar el catálogo de runtimes"
+            errorTitle={t("errorTitle")}
             errorTestId="dep-cache-error"
           >
             <DataTable

@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from api_server.evals.ci_run import (
     EXIT_GATE_BLOCKED,
+    EXIT_GATE_INCONCLUSIVE,
     EXIT_GATE_PASSED,
     CiRunArgs,
     DiffProvider,
     GateDecision,
+    GateOutcome,
     gate_decision,
+    inconclusive_gate,
     main,
     resolve_threshold,
 )
@@ -91,6 +94,7 @@ __all__ = [
     "DRIFT_DROP_THRESHOLD_ENV_VAR",
     "DRIFT_WINDOW_ENV_VAR",
     "EXIT_GATE_BLOCKED",
+    "EXIT_GATE_INCONCLUSIVE",
     "EXIT_GATE_PASSED",
     "QUALITY_DRIFT_ALERT_EVENT_TYPE",
     "REGRESSION_THRESHOLD_ENV_VAR",
@@ -108,6 +112,7 @@ __all__ = [
     "DriftEvaluationResult",
     "FixedSampler",
     "GateDecision",
+    "GateOutcome",
     "ItemChange",
     "JudgeModel",
     "JudgeResponseError",
@@ -129,6 +134,7 @@ __all__ = [
     "diff_runs",
     "evaluate_quality_drift",
     "gate_decision",
+    "inconclusive_gate",
     "judge_item",
     "main",
     "mean",

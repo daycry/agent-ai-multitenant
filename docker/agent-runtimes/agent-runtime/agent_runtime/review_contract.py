@@ -13,6 +13,8 @@ worker parses.
 
 from __future__ import annotations
 
+from shared_domain import reject_taxonomy as _rt
+
 # The canonical tag tokens the worker's `_VERDICT_RE` reads.
 VERDICT_APPROVE = "<verdict>approve</verdict>"
 VERDICT_REJECT = "<verdict>reject</verdict>"
@@ -49,3 +51,26 @@ CRITERIA_INSTRUCTION = (
     "Judge every criterion, including the ones that pass: a criterion you do not "
     "mention reads as 'not checked'."
 )
+
+
+# ---------------------------------------------------------------------------
+# Taxonomía del rechazo: `target` x `class` (`task_gov_10`)
+# ---------------------------------------------------------------------------
+# El rechazo se registraba SOLO como prosa, así que no agregaba: nadie podía
+# responder «¿qué se rechaza más en este proyecto?». Estos dos tags añaden un par
+# acotado al veredicto — ADITIVO, como el bloque de criteria: un reviewer que no
+# los emita se comporta exactamente como hoy, y el `<verdict>` sigue mandando.
+#
+# El vocabulario NO se escribe aquí: se DERIVA de `shared_domain.reject_taxonomy`,
+# la única declaración, que es también la que parsea la api-server
+# (`reviewer_bridge`). Por eso el prompt no puede anunciar un valor que el parser
+# rechace, que es la forma en que este contrato se rompería en silencio (pasó con
+# las 13 categorías de aprobación, hallazgo g6).
+REJECT_TARGET_OPEN = _rt.REJECT_TARGET_OPEN
+REJECT_TARGET_CLOSE = _rt.REJECT_TARGET_CLOSE
+REJECT_CLASS_OPEN = _rt.REJECT_CLASS_OPEN
+REJECT_CLASS_CLOSE = _rt.REJECT_CLASS_CLOSE
+
+#: Se resuelve al importar (una vez) y se expone como constante para que los
+#: prompts la interpolen igual que interpolan `CRITERIA_INSTRUCTION`.
+REJECT_TAXONOMY_INSTRUCTION = _rt.reject_taxonomy_instruction()

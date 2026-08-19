@@ -15,13 +15,20 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.agent_persona import effective_prompt_text
 from api_server.auth.deps import (
     AuthPrincipal,
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
+)
+from api_server.db.agent_prompt_version_repo import (
+    raw_prompt_snapshot,
+    record_initial_version,
+    record_prompt_change,
 )
 from api_server.db.domain import Agent, AgentScope
 from api_server.routers._helpers import (
@@ -30,7 +37,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
-from api_server.routers._integrity import flush_or_conflict
+from api_server.routers._integrity import flush_or_conflict, integrity_conflict
 from api_server.routers._pagination import (
     apply_pagination,
     limit_query,
@@ -214,6 +221,13 @@ async def create_agent(
     )
     session.add(agent)
     await flush_or_conflict(session, context="agent.create")
+    # `task_gov_02`: la `version 1` del historial, con su autor DE VERDAD. Los
+    # agentes que ya existían cuando llegó la tabla arrancan su historial con una
+    # fila de base de autor NULL (nadie lo apuntó); los que nacen a partir de aquí
+    # no tienen por qué heredar esa laguna.
+    await record_initial_version(
+        session, tenant_id=tenant_id, agent=agent, changed_by=principal.user_id
+    )
     await session.refresh(agent)
     return to_agent_response(agent)
 
@@ -228,10 +242,18 @@ async def update_agent(
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> AgentResponse:
-    require_tenant_id(principal)
+    tenant_id = require_tenant_id(principal)
     agent = await get_writable_or_404(
         session, Agent, agent_id, principal, not_found_detail="agent not found"
     )
+
+    # `task_gov_02`: el estado del prompt ANTES de escribir. Se captura aquí, con
+    # el objeto todavía intacto, porque `apply_partial_update` muta en sitio y
+    # después ya no hay de dónde sacarlo. Los valores CRUDOS deciden si hubo
+    # cambio (ver el docstring de `agent_prompt_version_repo`); el efectivo se
+    # lleva resuelto para no volver a resolverlo al sellar la fila de base.
+    prompt_before = raw_prompt_snapshot(agent)
+    effective_before = effective_prompt_text(agent)
 
     apply_partial_update(
         agent,
@@ -241,6 +263,28 @@ async def update_agent(
     )
 
     await flush_or_conflict(session, context="agent.update")
+    # Sólo cuando el prompt cambió DE VERDAD. Un `PUT` que sube
+    # `max_concurrent_tasks`, o que reenvía el mismo prompt, no abre una versión:
+    # un historial con filas idénticas no se lee, y el diff de esas filas sale
+    # vacío, que es la forma más rápida de que nadie vuelva a abrir la pantalla.
+    if raw_prompt_snapshot(agent) != prompt_before:
+        try:
+            await record_prompt_change(
+                session,
+                tenant_id=tenant_id,
+                agent=agent,
+                before=prompt_before,
+                before_effective_prompt=effective_before,
+                changed_by=principal.user_id,
+            )
+        except IntegrityError as exc:
+            # Dos `PUT` simultáneos calculan el mismo `version` y el UNIQUE deja
+            # fuera al segundo. Es una carrera entre peticiones VÁLIDAS, así que
+            # el perdedor se lleva un 409 con el código estable
+            # `concurrent_prompt_edit` — no un 500 con el mensaje crudo de
+            # PostgreSQL, que nombra la constraint y filtra el `tenant_id`.
+            await session.rollback()
+            raise integrity_conflict(exc, context="agent.prompt_version") from exc
     await session.refresh(agent)
     return to_agent_response(agent)
 

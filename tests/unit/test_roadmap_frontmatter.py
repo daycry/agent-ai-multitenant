@@ -146,14 +146,14 @@ def test_at_most_one_phase_in_progress() -> None:
 #: definido pero **no empezado**». Inventario medido el 2026-08-12.
 #:
 #: No es una allowlist: es deuda con una salida escrita. A cada uno de estos
-#: siete sólo le falta su entrada en `docs/07-changelog/` para poder pasar a
+#: ocho sólo le falta su entrada en `docs/07-changelog/` para poder pasar a
 #: `pending_human_validation` — el guarda que la exige es
 #: `test_every_started_phase_has_changelog`, así que cambiar el estado sin
 #: escribirla pone la suite roja, que es exactamente lo que debe pasar.
 #:
-#: **Y ojo con la población, porque el titular es peor que estos siete**: los
+#: **Y ojo con la población, porque el titular es peor que estos ocho**: los
 #: CATORCE planes en `pending_approval` tienen casillas marcadas, o sea que
-#: «`pending_approval` == nunca empezado» ya no describe a ninguno. Estos siete
+#: «`pending_approval` == nunca empezado» ya no describe a ninguno. Estos ocho
 #: son sólo los que además no tienen NADA abierto, que es lo que los hace
 #: accionables sin emitir un juicio sobre trabajo a medias. El resto exige
 #: decidir si lo hecho vale, y eso no lo cierra un test.
@@ -178,6 +178,15 @@ _DELIVERED_BUT_UNSTARTED_2026_08_12 = frozenset(
         # su entrada de changelog, o sea auditar las cuarenta y pico tareas del plan, y
         # eso no lo decide el carril que reparó un checkbox.
         "prod-14-tenancy-defensa-profundidad",
+        # Se unió el 2026-08-19, por la misma vía (3). Su última casilla abierta era
+        # `task_prod13_01` (las puertas del marketplace fuera del event loop), que
+        # llevaba tres pasadas aplazada a propósito y se cerró al caducar el motivo
+        # del aplazamiento: `marketplace-v2-despliegue` quedó entregado. Cerrar UNA
+        # casilla no autoriza a declarar el plan entregado — pasar a
+        # `pending_human_validation` exige su entrada de changelog, o sea auditar las
+        # veintitrés tareas de prod-13, incluidas las de particionado y pool que
+        # cerraron otros carriles.
+        "prod-13-rendimiento-y-datos",
     }
 )
 
@@ -205,8 +214,8 @@ def test_no_new_plan_is_delivered_while_still_labelled_unstarted() -> None:
     El estado es lo primero que se lee al retomar el trabajo, y un plan con
     16/16 casillas marcadas etiquetado «no empezado» manda a quien lo lea a
     reimplementar lo que ya existe — el modo de fallo nº1 de
-    `verificar-antes-de-implementar.md`. Este guarda no arregla los siete que
-    ya están así (necesitan changelog); impide que aparezca el octavo.
+    `verificar-antes-de-implementar.md`. Este guarda no arregla los ocho que
+    ya están así (necesitan changelog); impide que aparezca el noveno.
     """
     new_drift = sorted(_delivered_but_labelled_unstarted() - _DELIVERED_BUT_UNSTARTED_2026_08_12)
 

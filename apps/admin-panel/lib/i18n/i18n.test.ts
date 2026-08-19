@@ -184,6 +184,17 @@ describe("dictionary — invariantes", () => {
       "ollama.colCompatible",
       "ollama.no",
       "ollama.pull",
+      // prod-16 `task_prod16_03` — settings. El título del índice repite la
+      // etiqueta de la sidebar (`nav.settings`, que está aquí por la misma
+      // razón): el usuario acaba de pulsar "Settings" y cambiarle el nombre al
+      // entrar haría dudar de si ha llegado a otra pantalla.
+      "settingsIndex.title",
+      // prod-16 `task_prod16_03` — projects. "embedding" es el nombre de la
+      // columna del backend y "Runtime" el término que el propio panel usa en
+      // castellano: los dos se muestran tal cual para que coincidan con lo que
+      // el operador ve en la BD y en los logs.
+      "projectMemories.badgeEmbedding",
+      "depCache.colRuntime",
     ]);
 
     const identical = new Set(

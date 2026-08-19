@@ -28,6 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { memoryDetectorState } from "@/lib/memory/honesty";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
@@ -47,9 +48,16 @@ interface MemoryResponse {
   updated_at: string;
 }
 
-const TYPE_LABEL: Record<MemoryType, string> = {
-  episodic: "Episódica",
-  semantic: "Semántica",
+/**
+ * El tipo de memoria, por su clave del diccionario.
+ *
+ * Antes era el texto castellano directamente. Se guarda la CLAVE y no el texto
+ * para que la traducción la resuelva el componente con el idioma activo: un
+ * `Record` de literales no puede llamar a un hook.
+ */
+const TYPE_KEY: Record<MemoryType, "typeEpisodic" | "typeSemantic"> = {
+  episodic: "typeEpisodic",
+  semantic: "typeSemantic",
 };
 
 const TYPE_VARIANT: Record<MemoryType, BadgeVariant> = {
@@ -58,6 +66,7 @@ const TYPE_VARIANT: Record<MemoryType, BadgeVariant> = {
 };
 
 export default function ProjectMemoriesPage() {
+  const t = useT("projectMemories");
   const params = useParams<{ id: string }>();
   const projectId = params?.id ?? "";
 
@@ -74,16 +83,16 @@ export default function ProjectMemoriesPage() {
       className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="project-memories-page"
     >
-      <ProjectBreadcrumb projectId={projectId} current="Memoria" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumb")} />
       <PageHeader
         icon={<Brain className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Memoria del proyecto"
-        description="Lo que el equipo recuerda en el scope del proyecto (project_shared). La creación y el borrado se hacen desde la pantalla de Memoria del equipo."
+        title={t("title")}
+        description={t("description")}
       />
 
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Memoria del proyecto ({query.data?.length ?? "…"})</CardTitle>
+          <CardTitle>{t("cardTitle", { n: query.data?.length ?? "…" })}</CardTitle>
         </CardHeader>
         <CardContent>
           <StateBlock
@@ -94,15 +103,14 @@ export default function ProjectMemoriesPage() {
             skeletonRows={3}
             loadingTestId="project-memories-loading"
             errorTestId="project-memories-error"
-            errorTitle="No se pudo cargar la memoria del proyecto"
+            errorTitle={t("errorTitle")}
           >
             {(query.data ?? []).length === 0 ? (
               <p
                 className="text-muted-foreground text-sm italic"
                 data-testid="project-memories-empty"
               >
-                Sin memoria de proyecto todavía. Cierra tareas con un scope project_shared para que
-                el equipo recuerde entre runs.
+                {t("empty")}
               </p>
             ) : (
               <ul className="space-y-2" data-testid="project-memories-list">
@@ -119,6 +127,7 @@ export default function ProjectMemoriesPage() {
 }
 
 function MemoryRow({ memory }: { memory: MemoryResponse }) {
+  const t = useT("projectMemories");
   return (
     <li
       className="border-muted rounded border px-3 py-2 text-sm"
@@ -126,10 +135,12 @@ function MemoryRow({ memory }: { memory: MemoryResponse }) {
       data-type={memory.type}
     >
       <div className="flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-wide">
-        <Badge variant="primary">Proyecto</Badge>
-        <Badge variant={TYPE_VARIANT[memory.type] ?? "muted"}>{TYPE_LABEL[memory.type]}</Badge>
+        <Badge variant="primary">{t("badgeProject")}</Badge>
+        <Badge variant={TYPE_VARIANT[memory.type] ?? "muted"}>
+          {t(TYPE_KEY[memory.type] ?? "typeSemantic")}
+        </Badge>
         {memory.has_embedding ? (
-          <Badge variant="success">embedding</Badge>
+          <Badge variant="success">{t("badgeEmbedding")}</Badge>
         ) : (
           <SimilarUnavailableBadge memoryId={memory.id} />
         )}

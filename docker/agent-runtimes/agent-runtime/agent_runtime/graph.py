@@ -1896,6 +1896,7 @@ def run_agent(
     clock: Callable[[], float] | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     system_preamble: str | None = None,
+    agent_seal: str | None = None,
 ) -> ExecutionResult:
     """Run one execution of the agent loop end to end.
 
@@ -1907,6 +1908,13 @@ def run_agent(
     `system_preamble` (Plan 06.18 task_06_18_13) carries the assigned skills'
     prompt fragments to prepend to the model's system prompt; `None` keeps the
     historical prompt untouched (backward-compat).
+
+    `agent_seal` (`task_gov_03`) is the seal of the AGENT's own prompt, resolved by
+    the entrypoint from the run spec (`prompt_version.agent_prompt_seal`). It rides
+    in as an argument rather than being derived here because this function has the
+    graph, not the spec — and the whole point of `prompt_version` is that it is
+    computed from what actually ran, at the end, not handed down from outside.
+    `None` yields the pre-`task_gov_03` label, unchanged.
     """
     budgets = budgets or Budgets()
     tracker = SafeguardTracker(budgets, clock=clock or time.monotonic)
@@ -1948,6 +1956,8 @@ def run_agent(
         guardrail_events=final.get("guardrail_events") or [],
         # `task_wf_52`: se calcula al CERRAR el run, del código que acaba de
         # correr — no se pasa desde fuera, que es como se acaba etiquetando un
-        # run con la versión de otra imagen.
-        prompt_version=prompt_version(),
+        # run con la versión de otra imagen. `task_gov_03`: mezclando el sello del
+        # prompt del AGENTE, sin el cual dos runs con personas distintas
+        # compartían etiqueta y la atribución no era posible.
+        prompt_version=prompt_version(agent_seal),
     )

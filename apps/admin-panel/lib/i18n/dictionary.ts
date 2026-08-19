@@ -2893,6 +2893,264 @@ export const dictionary = {
       en: "Check the project's team",
     },
   },
+  /**
+   * `app/admin/settings/page.tsx` — el índice de categorías del tenant.
+   *
+   * Sólo el MARCO vive aquí. La etiqueta y la descripción de cada categoría las
+   * sirve el backend bilingües (`label_es`/`label_en`, `description_es`/
+   * `description_en` en `api_server/settings_registry.py`) y se eligen con
+   * `pickLang`: son datos, no texto compilado, y duplicarlas aquí reabriría la
+   * divergencia entre el registry y el panel.
+   *
+   * `title` dice "Settings" en los dos idiomas a propósito: es la etiqueta que
+   * el usuario acaba de pulsar en la sidebar (`nav.settings`), y cambiarla al
+   * entrar haría dudar de si se ha llegado a otra pantalla.
+   */
+  settingsIndex: {
+    title: { es: "Settings", en: "Settings" },
+    description: {
+      es: "Configuración del tenant — agrupada por categoría.",
+      en: "Tenant settings — grouped by category.",
+    },
+    loading: { es: "Cargando registry…", en: "Loading registry…" },
+    errorTitle: {
+      es: "No se pudo cargar el registry",
+      en: "The registry could not be loaded",
+    },
+    dedicatedPage: { es: "página dedicada", en: "dedicated page" },
+    settingCountOne: { es: "1 ajuste", en: "1 setting" },
+    settingCountMany: { es: "{n} ajustes", en: "{n} settings" },
+  },
+
+  /**
+   * `app/admin/settings/memories/page.tsx` — umbral y candidatos del detector.
+   *
+   * `thresholdFallback` y `limitFallback` son los nombres que se pintan mientras
+   * el registry no ha llegado (o si dejara de traer ese ajuste). No son una copia
+   * del registry para ahorrarse el `pickLang`: cuando el dato está, gana el dato.
+   *
+   * `saved` / `saving` / `saveError` sustituyen a un `status` que guardaba el
+   * MENSAJE y decidía el color con `status.startsWith("Error")`. Eso no sobrevive
+   * a la traducción —en inglés el mensaje empieza por "Could not"— así que el
+   * estado pasó a ser un discriminante y el texto se deriva de él.
+   */
+  settingsMemories: {
+    title: { es: "Memorias", en: "Memories" },
+    description: {
+      es: "Cómo el sistema detecta memorias similares para que el operador las fusione o descarte.",
+      en: "How the system spots similar memories so the operator can merge or discard them.",
+    },
+    detectorTitle: { es: "Detector de similares", en: "Similar-memory detector" },
+    thresholdFallback: { es: "Umbral de similitud", en: "Similarity threshold" },
+    limitFallback: { es: "Número de candidatos", en: "Candidate count" },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saved: { es: "Guardado", en: "Saved" },
+    saveError: { es: "Error al guardar: {detail}", en: "Could not save: {detail}" },
+    saveErrorUnknown: { es: "Error al guardar", en: "Could not save" },
+  },
+
+  /**
+   * `app/admin/settings/platform-defaults/page.tsx` — ajustes de plataforma sin
+   * página propia (System Admin).
+   *
+   * Mismo reparto que `settingsIndex`: marco aquí, etiquetas y descripciones de
+   * cada categoría y ajuste del `platform_settings_registry` vía `pickLang`.
+   *
+   * Los NOMBRES de los ajustes (`max_review_retries`, `model.default_config`) se
+   * pintan crudos junto a su etiqueta y no van al diccionario: son las claves con
+   * las que el operador los busca en la BD y en los logs.
+   */
+  platformDefaults: {
+    title: { es: "Valores por defecto de plataforma", en: "Platform defaults" },
+    description: {
+      es: "Ajustes globales de la plataforma sin página propia (modelo por defecto de agentes, límites de ejecución, RAG, mantenimiento…). Solo System Admin.",
+      en: "Platform-wide settings with no page of their own (default agent model, execution limits, RAG, maintenance…). System Admin only.",
+    },
+    forbidden: {
+      es: "Esta sección es exclusiva del System Admin de la plataforma.",
+      en: "This section is reserved for the platform System Admin.",
+    },
+    loading: { es: "Cargando ajustes…", en: "Loading settings…" },
+    saved: { es: "Guardado ✓", en: "Saved ✓" },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    boolOn: { es: "Activado", en: "Enabled" },
+    boolOff: { es: "Desactivado", en: "Disabled" },
+    boolHintOn: { es: "(desmarca para desactivar)", en: "(untick to disable)" },
+    boolHintOff: { es: "(marca para activar)", en: "(tick to enable)" },
+    provider: { es: "Proveedor", en: "Provider" },
+    model: { es: "Modelo", en: "Model" },
+    temperature: { es: "Temperatura", en: "Temperature" },
+    noSyncedModels: {
+      es: "Sin modelos sincronizados — sincroniza el proveedor o escribe el nombre.",
+      en: "No synced models — sync the provider or type the name in.",
+    },
+    pickProviderFirst: {
+      es: "Elige un proveedor para ver sus modelos.",
+      en: "Pick a provider to see its models.",
+    },
+  },
+
+  /**
+   * `app/admin/settings/platform-defaults/cortex-model-section.tsx` — el modelo
+   * del córtex (`cortex.default_model`), que sólo ve el System Owner.
+   *
+   * Vive en el mismo namespace-por-pantalla que el resto de `platform-defaults`
+   * porque se renderiza DENTRO de ella, pero separado: es config del owner y no
+   * del admin, y sus textos no se comparten con ningún otro ajuste.
+   *
+   * `reasoningOff` existe porque `lib/model-selection.reasoningLabel` tiene el
+   * "Desactivado" castellano como valor por defecto de su parámetro. El llamante
+   * le pasa la traducción, igual que ya hacen `components/capability/*` — así el
+   * helper sigue sin depender de React ni del idioma.
+   */
+  cortexModel: {
+    title: { es: "Modelo del córtex", en: "Cortex model" },
+    description: {
+      es: "Modelo que usa el córtex del System Owner para deliberar. Es independiente del modelo de los agentes y del asistente, no se hereda por tenant, y solo lo configura el System Owner. Sin un modelo aquí, el córtex no responde.",
+      en: "The model the System Owner's cortex uses to deliberate. It is independent from the agent and assistant models, is not inherited per tenant, and only the System Owner sets it. With no model here, the cortex does not answer.",
+    },
+    currentModel: { es: "Modelo actual:", en: "Current model:" },
+    invalid: {
+      es: "(no válido: el proveedor o el modelo ya no existen)",
+      en: "(not valid: the provider or the model no longer exist)",
+    },
+    unset: {
+      es: "Sin modelo configurado. El córtex no responderá hasta que elijas uno.",
+      en: "No model configured. The cortex will not answer until you pick one.",
+    },
+    noProviders: {
+      es: "No hay proveedores LLM activos. Configura uno en «Proveedores LLM» antes de elegir el modelo del córtex.",
+      en: "There are no active LLM providers. Set one up under «LLM providers» before choosing the cortex model.",
+    },
+    provider: { es: "Proveedor", en: "Provider" },
+    model: { es: "Modelo", en: "Model" },
+    reasoning: { es: "Razonamiento", en: "Reasoning" },
+    reasoningOff: { es: "Desactivado", en: "Off" },
+    pickProvider: { es: "— Selecciona un proveedor —", en: "— Pick a provider —" },
+    pickProviderFirst: { es: "— Elige primero un proveedor —", en: "— Pick a provider first —" },
+    noModels: {
+      es: "— Sin modelos (sincronízalos en Proveedores LLM) —",
+      en: "— No models (sync them under LLM providers) —",
+    },
+    pickModel: { es: "— Selecciona un modelo —", en: "— Pick a model —" },
+    savedOk: { es: "Modelo del córtex guardado.", en: "Cortex model saved." },
+    clear: { es: "Quitar modelo", en: "Remove model" },
+    save: { es: "Guardar modelo", en: "Save model" },
+    saving: { es: "Guardando…", en: "Saving…" },
+  },
+  /**
+   * `app/admin/projects/page.tsx` — el listado de proyectos del tenant.
+   *
+   * `errorTitle` corrige un caso de libro del hallazgo frontend-9: el fichero
+   * decía `errorTitle="Could not load projects"` —en inglés— dentro de una
+   * pantalla por lo demás en castellano. La mezcla no era una traducción a
+   * medias, era un descuido, y el guard de atributos no lo veía porque el
+   * literal no tiene una sola palabra castellana.
+   */
+  projectsList: {
+    title: { es: "Proyectos", en: "Projects" },
+    description: {
+      es: "Proyectos activos del tenant. Las plantillas se eligen al crear.",
+      en: "The tenant's active projects. Templates are picked when creating one.",
+    },
+    newProject: { es: "Crear proyecto", en: "New project" },
+    loading: { es: "Cargando proyectos…", en: "Loading projects…" },
+    errorTitle: {
+      es: "No se pudieron cargar los proyectos",
+      en: "The projects could not be loaded",
+    },
+    emptyBody: {
+      es: "Este tenant aún no tiene proyectos. Empieza desde una plantilla.",
+      en: "This tenant has no projects yet. Start from a template.",
+    },
+    emptyCta: { es: "Crear el primero", en: "Create the first one" },
+    noDescription: { es: "Sin descripción.", en: "No description." },
+  },
+
+  /**
+   * `app/admin/projects/[id]/memories/page.tsx` — memoria `project_shared`.
+   *
+   * `badgeEmbedding` dice "embedding" en los dos idiomas: es el nombre de la
+   * columna del backend y lo que el operador busca en los logs.
+   *
+   * El nombre del tipo de memoria (`episodic`/`semantic`) SÍ se traduce, porque
+   * el badge lo lee un humano; el valor crudo sigue en `data-type`, que es lo
+   * que consultan los tests y quien inspecciona el DOM.
+   */
+  projectMemories: {
+    breadcrumb: { es: "Memoria", en: "Memory" },
+    title: { es: "Memoria del proyecto", en: "Project memory" },
+    description: {
+      es: "Lo que el equipo recuerda en el scope del proyecto (project_shared). La creación y el borrado se hacen desde la pantalla de Memoria del equipo.",
+      en: "What the team remembers in the project scope (project_shared). Creating and deleting happen on the team Memory screen.",
+    },
+    cardTitle: { es: "Memoria del proyecto ({n})", en: "Project memory ({n})" },
+    errorTitle: {
+      es: "No se pudo cargar la memoria del proyecto",
+      en: "The project's memory could not be loaded",
+    },
+    empty: {
+      es: "Sin memoria de proyecto todavía. Cierra tareas con un scope project_shared para que el equipo recuerde entre runs.",
+      en: "No project memory yet. Close tasks with a project_shared scope so the team remembers between runs.",
+    },
+    badgeProject: { es: "Proyecto", en: "Project" },
+    badgeEmbedding: { es: "embedding", en: "embedding" },
+    typeEpisodic: { es: "Episódica", en: "Episodic" },
+    typeSemantic: { es: "Semántica", en: "Semantic" },
+  },
+
+  /**
+   * `app/admin/projects/[id]/dep-cache/page.tsx` — invalidar la caché de deps.
+   *
+   * El NOMBRE del runtime no está aquí: lo sirve `GET /runtime-templates`
+   * bilingüe y se resuelve con `runtimeLabel()` (que es `pickLang` por dentro).
+   * Duplicarlo como claves reabriría la divergencia que ese endpoint cerró — el
+   * mismo criterio que ya se aplicó a la taxonomía de tools del ADR 0049.
+   *
+   * Hay dos claves para el recuento porque «1 entradas invalidadas» es
+   * incorrecto en castellano y «1 entries» en inglés: la concordancia de número
+   * no se arregla con una plantilla sola.
+   */
+  depCache: {
+    title: { es: "Caché de dependencias", en: "Dependency cache" },
+    description: {
+      es: "Invalida la caché del dep-cache para forzar al worker-test a reinstalar las dependencias en el siguiente run. Útil cuando sospechas que la caché está corrupta.",
+      en: "Invalidate the dep-cache to force worker-test to reinstall the dependencies on the next run. Useful when you suspect the cache is corrupt.",
+    },
+    cardTitle: { es: "Runtimes con caché", en: "Runtimes with a cache" },
+    colRuntime: { es: "Runtime", en: "Runtime" },
+    colMount: { es: "Punto de montaje", en: "Mount point" },
+    colActions: { es: "Acciones", en: "Actions" },
+    colResult: { es: "Resultado", en: "Result" },
+    invalidate: { es: "Invalidar", en: "Invalidate" },
+    invalidating: { es: "Invalidando…", en: "Invalidating…" },
+    errorTitle: {
+      es: "No se pudo cargar el catálogo de runtimes",
+      en: "The runtime catalog could not be loaded",
+    },
+    invalidatedCountOne: { es: "1 entrada invalidada", en: "1 entry invalidated" },
+    invalidatedCountMany: { es: "{n} entradas invalidadas", en: "{n} entries invalidated" },
+  },
+  /**
+   * Las cuatro políticas de memoria (`MemoryScope` del backend, ADR 0055/0071).
+   *
+   * Namespace propio y COMPARTIDO, no una clave por pantalla, porque el catálogo
+   * lo consumen dos fichas distintas —la del equipo y la del agente— desde una
+   * constante única (`lib/memory/constants.ts`). Duplicarlo en `teams` y en
+   * `agents` sería exactamente la divergencia que esa constante existe para
+   * evitar: el día que se añada un scope habría que acordarse de dos sitios.
+   *
+   * Los VALORES (`private`, `team_shared`…) no están aquí: son el enum del
+   * backend, viajan en la API y se ven en la BD. Aquí sólo su etiqueta.
+   */
+  memoryScope: {
+    private: { es: "Privada", en: "Private" },
+    teamShared: { es: "Compartida con equipo", en: "Shared with team" },
+    projectShared: { es: "Compartida con proyecto", en: "Shared with project" },
+    global: { es: "Global del tenant", en: "Tenant-wide" },
+  },
 } as const satisfies Dictionary;
 
 /** La forma exacta del diccionario, para derivar las claves válidas. */

@@ -57,6 +57,9 @@ export function AgentEditDialog({
   onSaved: () => void;
 }) {
   const t = useT("agents");
+  // Namespace aparte porque el catálogo de scopes lo comparten esta ficha y la
+  // del equipo (`lib/memory/constants.ts`): la clave viene de la constante.
+  const tScope = useT("memoryScope");
   const { lang } = useLang();
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
@@ -165,7 +168,7 @@ export function AgentEditDialog({
               >
                 {MEMORY_SCOPE_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
-                    {o.label}
+                    {tScope(o.key)}
                   </option>
                 ))}
               </Select>

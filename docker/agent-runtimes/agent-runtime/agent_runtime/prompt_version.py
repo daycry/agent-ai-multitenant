@@ -20,6 +20,33 @@ El TEXTO que viaja al modelo, no el fichero que lo contiene.
 Así que se extraen, por AST, **todos los literales de cadena largos** de los
 módulos que hablan con el modelo, excluidos los docstrings. Un retoque de
 redacción mueve la versión; mejorar un comentario o renombrar algo, no.
+
+El prompt del AGENTE también cuenta (`task_gov_03`)
+---------------------------------------------------
+Los tres módulos de `_PROMPT_MODULES` son el ANDAMIAJE del runtime. Durante meses
+la etiqueta fue sólo eso: **ni un byte del `system_prompt` del agente**, que es el
+PRIMER bloque del preámbulo efectivo y lo que distingue a un backend senior de CI4
+de un QA. O sea que dos runs con el mismo `prompt_version` podían haber corrido
+con personas completamente distintas, y la etiqueta que existe para atribuir un
+cambio de comportamiento **no podía atribuir nada** — el mismo agujero que ya se
+pagó una vez con `EvalRun.subject_prompt_version` sin poblar.
+
+`prompt_version()` acepta ahora un **sello** del prompt del agente y lo mezcla en
+el sha256. El sello lo produce `agent_prompt_seal` a partir del spec del run, por
+dos vías con la misma forma:
+
+* ``agent_prompt_version`` — lo que manda el dispatch: el número de versión de
+  `agent_prompt_versions` (`task_gov_02`) más el hash del texto efectivo. Ésta es
+  la buena: identifica una FILA concreta del historial, así que un run se puede
+  atribuir a una edición con autor y fecha.
+* ``agent_persona`` — el propio texto que viaja al modelo, hasheado aquí. Es la
+  red de seguridad, y no es opcional: un agente que nunca se editó no tiene fila
+  de historial, y sin esta rama sus runs volverían a compartir etiqueta con los de
+  cualquier otro agente sin historial. El primer día ése es el caso mayoritario.
+
+Sin sello —run pelado, imagen antigua sin dispatch, agente sin persona— la
+etiqueta es exactamente la de antes, byte a byte, así que esto no reescribe el
+histórico ni parte el eje del dashboard en dos.
 """
 
 from __future__ import annotations
@@ -27,7 +54,9 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 # Módulos que declaran texto que viaja al modelo.
 _PROMPT_MODULES: tuple[str, ...] = (
@@ -44,6 +73,15 @@ _MIN_PROMPT_CHARS = 80
 # las decenas de releases de un tenant, y corta para caber en una columna, en
 # una URL de filtro y en un eje del dashboard.
 _LABEL_CHARS = 12
+
+# Claves del `AGENT_TASK_SPEC` de las que sale el sello del prompt del agente.
+_SPEC_VERSION_KEY = "agent_prompt_version"
+_SPEC_PERSONA_KEY = "agent_persona"
+
+# Prefijo del sello cuando NO hay número de versión. Distingue «este texto, sin
+# fila de historial» de «la versión N de este agente»: son dos afirmaciones
+# distintas sobre la misma cadena y no deben colapsar en la misma etiqueta.
+_UNVERSIONED_PREFIX = "p:"
 
 
 def _module_source(module_name: str) -> str | None:
@@ -109,8 +147,41 @@ def prompt_texts() -> list[tuple[str, str]]:
     return sorted(found)
 
 
-def prompt_version() -> str:
-    """Etiqueta estable del conjunto de prompts de ESTE runtime.
+def agent_prompt_seal(spec: Mapping[str, Any]) -> str | None:
+    """El sello del prompt del AGENTE que viaja en ``spec``, o ``None``.
+
+    Prefiere la versión registrada (``agent_prompt_version``, de `task_gov_02`)
+    sobre el texto crudo (``agent_persona``): identifica una FILA del historial,
+    con autor y fecha, no sólo un contenido. Las dos ramas comparten el hash del
+    mismo texto, así que hablan de lo mismo — lo fija
+    ``tests/unit/test_agent_prompt_seal_contract.py``, que compara este hash con
+    el que calcula la api-server en el otro lado de la frontera de imágenes.
+
+    ``None`` cuando el spec no trae ninguna de las dos, o las trae vacías:
+    entonces `prompt_version` produce la etiqueta histórica y no se inventa una
+    distinción donde no hay dato.
+    """
+    recorded = spec.get(_SPEC_VERSION_KEY)
+    if isinstance(recorded, Mapping):
+        prompt_hash = str(recorded.get("prompt_hash") or "").strip()
+        version = recorded.get("version")
+        # `bool` es subclase de `int`: sin descartarlo, un `version: true` de un
+        # spec mal formado daría el sello "v1:…" y lo ataría a una versión que no
+        # existe.
+        if prompt_hash and isinstance(version, int) and not isinstance(version, bool):
+            return f"v{version}:{prompt_hash}"
+        if prompt_hash:
+            return f"{_UNVERSIONED_PREFIX}{prompt_hash}"
+    persona = spec.get(_SPEC_PERSONA_KEY)
+    if isinstance(persona, Mapping):
+        text = str(persona.get("prompt") or "").strip()
+        if text:
+            return _UNVERSIONED_PREFIX + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return None
+
+
+def prompt_version(agent_seal: str | None = None) -> str:
+    """Etiqueta estable de los prompts de ESTE runtime **y del agente**.
 
     Determinista entre arranques idénticos —mismo código, misma etiqueta, sin
     depender de la hora ni del orden de importación— y distinta en cuanto se
@@ -118,11 +189,21 @@ def prompt_version() -> str:
 
     El módulo entra en el hash además del texto: mover un prompt de un módulo a
     otro cambia qué contrato aplica a qué llamada, aunque el texto sea idéntico.
+
+    ``agent_seal`` (de :func:`agent_prompt_seal`) mezcla el prompt del AGENTE.
+    Omitirlo da la etiqueta histórica byte a byte, que es lo que mantiene
+    comparables los runs anteriores a `task_gov_03`.
     """
     digest = hashlib.sha256()
     for module_name, text in prompt_texts():
         digest.update(module_name.encode("utf-8"))
         digest.update(b"\x00")
         digest.update(text.encode("utf-8"))
+        digest.update(b"\x00")
+    if agent_seal:
+        # Marcador de dominio propio: sin él, un sello podría hacerse pasar por el
+        # nombre de un módulo y dos entradas distintas darían el mismo dígito.
+        digest.update(b"\x00agent_prompt\x00")
+        digest.update(agent_seal.encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()[:_LABEL_CHARS]

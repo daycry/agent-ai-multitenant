@@ -63,7 +63,11 @@ from agent_runtime.model import (
     ModelResponse,
     ReviewResponse,
 )
-from agent_runtime.review_contract import VERDICT_APPROVE, VERDICT_REJECT
+from agent_runtime.review_contract import (
+    REJECT_TAXONOMY_INSTRUCTION,
+    VERDICT_APPROVE,
+    VERDICT_REJECT,
+)
 from agent_runtime.state import ReviewState
 from agent_runtime.tool_classification import _is_readonly_tool
 
@@ -144,7 +148,9 @@ _REVIEW_RUN_SYSTEM = (
     "can perform inside its sandbox: editing files in the worktree or running "
     "the project toolchain via stack_exec. NEVER ask the implementer to run git "
     "(commit/push), deploy, or any platform-side action — the platform persists "
-    "and versions the files automatically after the run."
+    "and versions the files automatically after the run.\n" + REJECT_TAXONOMY_INSTRUCTION
+    # `task_gov_10`: el par acotado del rechazo, derivado del vocabulario de
+    # shared-domain que la api-server parsea (nunca reescrito a mano aquí).
 )
 
 # ADR 0086: the verdict travels as a TOOL CALL, not formatted text — the contract

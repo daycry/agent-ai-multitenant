@@ -73,6 +73,28 @@ _BACKUP_LIST_REMOTE_TASK = "workers.backup_list_remote"
 # nocturno, así que las sondas van con `expires`: ver `_probe_backup_worker`.
 _BACKUP_PROBE_QUEUE = _RESTORE_QUEUE
 
+# Las puertas de seguridad del marketplace (prod-13 `task_prod13_01`, hallazgo
+# perf-1 de la auditoría de producción). bandit + semgrep por `subprocess` con
+# 120 s de plazo CADA UNO, más la prueba de humo del sandbox: hasta cuatro
+# minutos. `asyncio.to_thread` ya evitaba que congelasen el event loop, pero no
+# los saca del HTTP — el request sigue durando lo mismo y lo corta el proxy.
+#
+# Lane PROPIA, y no una de las que ya había, porque ninguna puede absorber un
+# trabajo de cuatro minutos sin un riesgo ya documentado en este repo: `default`
+# y `test`/`review` los drenan pools de `--concurrency=2` que también atienden
+# los agent-runs y `stack_exec` (la auto-inanición que motivó `workers-aux`: un
+# run bloqueado esperando la cola `test` ocupa el slot que esa cola necesita), y
+# `privileged` va a `--concurrency=1` detrás del backup nocturno. Declarar la
+# cola obliga a drenarla: el ADR 0083 retiró `heavy` y `gpu` por ser colas sin
+# consumidor, y `tests/unit/test_compose_generator.py` compara las colas drenadas
+# con `QUEUE_NAMES`, así que una lane huérfana se pone roja sola.
+#
+# Estas constantes son PÚBLICAS a propósito: `workers.marketplace_gates` declara
+# las suyas y un test compara las dos parejas. Un nombre distinto en cada lado
+# deja el mensaje en el broker para siempre y el endpoint devuelve 202 igual.
+MARKETPLACE_GATES_TASK = "workers.marketplace_run_install_gates"
+MARKETPLACE_GATES_QUEUE = "marketplace"
+
 # The human Memorizer task (Plan 16 task_16_15). When a human task reaches
 # `done` (auto_approve submit, or a peer reviewer's approval) the inbox/review
 # endpoint enqueues this by name so the Memorizer distils the HumanWorkSession
@@ -138,6 +160,42 @@ async def enqueue_ingestion(document_id: UUID) -> bool:
         )
     except Exception as exc:
         _log.warning("ingestion.enqueue_failed", document_id=str(document_id), error=str(exc))
+        return False
+    return True
+
+
+async def enqueue_marketplace_install_gates(*, installation_id: UUID, tenant_id: UUID) -> bool:
+    """Encola las puertas de seguridad de una instalación (prod-13 `task_prod13_01`).
+
+    NO es best-effort como `enqueue_ingestion`, y la diferencia importa: un
+    documento que no se encola sigue `pending` y lo re-encola el barrido de beat,
+    mientras que una instalación que no se encola se queda en `analyzing` sin
+    nadie que la mueva. Por eso aquí el fallo se **devuelve** (False) en vez de
+    tragarse: el llamante lo escribe en el informe de puertas, así que el cliente
+    que consulta el recurso de estado ve que la petición se aceptó y el análisis
+    no arrancó, en lugar de esperar un veredicto que no va a llegar.
+
+    Por el broker viajan sólo dos identificadores. Nada de config, nada de
+    permisos, nada de rutas: el worker lo lee todo de la BD bajo el `tenant_id`
+    que se le pasa, que es también la única forma de que un mensaje del broker no
+    pueda ampliar por sí mismo el alcance de lo que la task toca.
+
+    `send_task` hace I/O de socket bloqueante, así que va fuera del event loop
+    (mismo patrón que el resto del módulo).
+    """
+    try:
+        await asyncio.to_thread(
+            get_celery_client().send_task,
+            MARKETPLACE_GATES_TASK,
+            kwargs={"installation_id": str(installation_id), "tenant_id": str(tenant_id)},
+            queue=MARKETPLACE_GATES_QUEUE,
+        )
+    except Exception as exc:
+        _log.warning(
+            "marketplace.gates.enqueue_failed",
+            installation_id=str(installation_id),
+            error=str(exc),
+        )
         return False
     return True
 

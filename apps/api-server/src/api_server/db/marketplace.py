@@ -158,9 +158,28 @@ class ListingReviewStatus(enum.StrEnum):
 class InstallationStatus(enum.StrEnum):
     """Lifecycle of an installation.
 
+    - ``analyzing``: the security gates are QUEUED or RUNNING out-of-process
+                     (prod-13 ``task_prod13_01``). Transient: the row exists so
+                     the 202 of the install endpoint has a status resource to
+                     point at, and the worker moves it on. It is *live* for the
+                     ``uq_marketplace_installations_live`` index on purpose —
+                     two concurrent installs of the same listing must still
+                     collide — but it grants NOTHING: nothing is materialised
+                     until the gates pass.
+    - ``blocked``:   a gate REJECTED the artifact. Terminal-negative and kept
+                     for audit; the reason is in the ``MarketplaceAuditEntry``
+                     row the abort wrote. Retrying means revoking this row
+                     first (``DELETE``), which is deliberate: a rejected
+                     install is a fact the tenant acknowledges, not something
+                     a retry silently overwrites.
     - ``enabled``:   installed and ALLOWED to be used by the tenant's agents.
     - ``disabled``:  installed but temporarily turned off (reversible).
     - ``revoked``:   permanently uninstalled; the row is kept for audit.
+
+    NOTE on the two transient values: they need NO migration. ``status`` is a
+    plain ``varchar(16)`` with a server default and **no CHECK constraint**
+    (migration ``0041``), so the set of values is enforced here in Python and
+    nowhere in the DDL. Both new values fit in 16 chars.
 
     NOTE (ADR 0081): an ``enabled`` installation records *intent + permission*,
     NOT a live capability. The install pipeline does not yet **materialize** the
@@ -172,6 +191,8 @@ class InstallationStatus(enum.StrEnum):
     invoke it. See ADR 0081 and ``marketplace/install.py``.
     """
 
+    ANALYZING = "analyzing"
+    BLOCKED = "blocked"
     ENABLED = "enabled"
     DISABLED = "disabled"
     REVOKED = "revoked"
@@ -225,6 +246,13 @@ class MarketplaceAuditAction(enum.StrEnum):
     APPROVE = "approve"
     REJECT = "reject"
     PROMOTE = "promote"
+    # prod-13 `task_prod13_01`: la instalación aceptada cuyas puertas de
+    # seguridad se encolaron para correr fuera del request (202). Acción PROPIA y
+    # no un `install` temprano: contar una instalación como hecha antes de que
+    # pase sus puertas es justo la afirmación falsa que este rastro no debe
+    # hacer, y sin una fila aquí una instalación rechazada tendría el aborto sin
+    # el registro de quién la pidió.
+    GATES_QUEUED = "gates_queued"
     # ADR 0142 D7: los despliegues re-encajados tras un cambio de versión.
     # Acción PROPIA y no un segundo ``update``: la instalación se mueve de
     # versión una vez, y contar dos filas ``update`` por una sola actualización

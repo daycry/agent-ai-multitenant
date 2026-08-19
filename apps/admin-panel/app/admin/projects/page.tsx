@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * Listado de proyectos del tenant (sin plantillas: ésas se eligen en el wizard
+ * de `/admin/projects/new`).
+ *
+ * i18n (prod-16 `task_prod16_03`): todo el texto sale del diccionario
+ * (`projectsList`). El `status` del proyecto se sigue pintando crudo en el badge
+ * a propósito — es el valor del enum del backend, y es lo que el operador filtra
+ * en la API y busca en los logs.
+ */
+
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { FolderKanban, Plus } from "lucide-react";
@@ -11,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface Project {
   id: string;
@@ -28,6 +39,7 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "muted"> = {
 };
 
 export default function ProjectsListPage() {
+  const t = useT("projectsList");
   // Default filter: tenant's own projects (no templates -- those live
   // in the wizard at /admin/projects/new).
   const { data, isLoading, isError, error } = useQuery({
@@ -40,13 +52,13 @@ export default function ProjectsListPage() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<FolderKanban className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Proyectos"
-        description="Proyectos activos del tenant. Las plantillas se eligen al crear."
+        title={t("title")}
+        description={t("description")}
         actions={
           <RoleGuard min="tenant_admin">
             <Button asChild>
               <Link href="/admin/projects/new" data-testid="new-project-button">
-                <Plus className="mr-1 h-4 w-4" /> Crear proyecto
+                <Plus className="mr-1 h-4 w-4" /> {t("newProject")}
               </Link>
             </Button>
           </RoleGuard>
@@ -58,17 +70,15 @@ export default function ProjectsListPage() {
         isError={isError}
         error={error}
         isEmpty={Boolean(data && data.length === 0)}
-        loadingLabel="Cargando proyectos…"
-        errorTitle="Could not load projects"
+        loadingLabel={t("loading")}
+        errorTitle={t("errorTitle")}
         emptyIcon={FolderKanban}
         empty={
           <Card className="p-8 text-center" data-testid="projects-empty">
-            <p className="text-muted-foreground mb-4 text-sm">
-              Este tenant aún no tiene proyectos. Empieza desde una plantilla.
-            </p>
+            <p className="text-muted-foreground mb-4 text-sm">{t("emptyBody")}</p>
             <RoleGuard min="tenant_admin">
               <Button asChild>
-                <Link href="/admin/projects/new">Crear el primero</Link>
+                <Link href="/admin/projects/new">{t("emptyCta")}</Link>
               </Button>
             </RoleGuard>
           </Card>
@@ -100,7 +110,7 @@ export default function ProjectsListPage() {
                     {project.description ? (
                       <p className="text-muted-foreground text-sm">{project.description}</p>
                     ) : (
-                      <p className="text-muted-foreground text-xs italic">Sin descripción.</p>
+                      <p className="text-muted-foreground text-xs italic">{t("noDescription")}</p>
                     )}
                   </CardContent>
                 </Card>

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid5
 
+from shared_domain.reject_taxonomy import reject_taxonomy_instruction
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,11 @@ from api_server.seeds.builtin_skills import _skill_id as builtin_skill_id
 
 def _agent_id(slug: str) -> UUID:
     return uuid5(AGENT_SEED_NAMESPACE, f"agent:{slug}")
+
+
+#: `task_gov_10`: los dos ejes cerrados del rechazo, tal como los anuncia el
+#: runtime. Se resuelve una vez al importar el seed.
+REJECT_TAXONOMY_INSTRUCTION = reject_taxonomy_instruction()
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +455,13 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "Si rechazas, añade un bloque `<rejection>` con tres campos:\n"
             "  `<failed_criterion>...</failed_criterion>`\n"
             "  `<testreport_evidence>...</testreport_evidence>`\n"
-            "  `<what_to_fix>...</what_to_fix>`"
+            "  `<what_to_fix>...</what_to_fix>`\n" + REJECT_TAXONOMY_INSTRUCTION
+            # `task_gov_10`: los dos ejes CERRADOS del rechazo. El texto no se
+            # teclea aquí: se interpola desde `shared_domain.reject_taxonomy`,
+            # la misma declaración que parsea `reviewer_bridge` y que anuncia el
+            # preámbulo del runtime. Un prompt de reviewer que pidiera TRES
+            # campos mientras el preámbulo pide CINCO son dos contratos en
+            # competencia — exactamente el fallo que arregló F1.6c.
         ),
         system_prompt_en=(
             "You are a Code Reviewer. You review PRs along four axes, in "
@@ -472,7 +484,7 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "On reject, also emit a `<rejection>` block with three fields:\n"
             "  `<failed_criterion>...</failed_criterion>`\n"
             "  `<testreport_evidence>...</testreport_evidence>`\n"
-            "  `<what_to_fix>...</what_to_fix>`"
+            "  `<what_to_fix>...</what_to_fix>`\n" + REJECT_TAXONOMY_INSTRUCTION
         ),
     ),
     BuiltinAgent(

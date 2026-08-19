@@ -764,7 +764,20 @@ def test_workers_lanes_cover_every_queue_with_no_orphan() -> None:
     from workers.celery_app import QUEUE_NAMES
 
     services = generate_compose(_config())["services"]
-    covered = _queues_of(services["workers"]) | _queues_of(services["workers-privileged"])
+    # Se recorren TODOS los servicios en vez de nombrar dos: el 2026-08-19 esta
+    # aserción se puso roja al entrar la lane `marketplace` (prod-13
+    # task_prod13_01) porque la unión estaba escrita a mano con
+    # `workers` | `workers-privileged`, o sea que una lane NUEVA la rompía aunque
+    # tuviese su consumidor. Lo que la guarda quiere decir es «ninguna cola sin
+    # quien la drene», y eso se comprueba sobre el compose entero.
+    lanes = {name: _queues_of(svc) for name, svc in services.items() if _queues_of(svc)}
+    assert len(lanes) >= 2, (
+        f"el descubrimiento de lanes de celery dejó de encontrar servicios (vio "
+        f"{len(lanes)}): la guarda pasaría en vacío"
+    )
+    covered: set[str] = set()
+    for queues in lanes.values():
+        covered |= queues
     assert covered == set(QUEUE_NAMES), (
         f"queues drained {covered} != topology {set(QUEUE_NAMES)} — an orphan queue would "
         "be enqueued forever (runbook 06-capacity-management)"

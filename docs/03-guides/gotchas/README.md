@@ -112,6 +112,12 @@ el problema ya esté documentado.
   NOT NULL confiando en que «no puede haber filas de este tipo». El test sólo
   se pone rojo en la suite completa (BD de ámbito sesión compartida), y parece
   flaky de orden cuando denuncia una cadena no reversible.
+- [postgres-parametro-opcional-sin-tipo-en-text.md](./postgres-parametro-opcional-sin-tipo-en-text.md)
+  — `could not determine data type of parameter $n`: un filtro opcional
+  `:x IS NULL OR col = :x` en `text()` no le da tipo al parámetro, y el cast
+  obvio (`:x::uuid`) lo empeora porque el regex de bind params de `text()` no
+  reconoce un parámetro seguido de `::` y lo manda sin valor. `CAST(:x AS tipo)`
+  arregla las dos.
 - [sqlalchemy-flush-fallido-mata-la-transaccion-exterior.md](./sqlalchemy-flush-fallido-mata-la-transaccion-exterior.md)
   — `Can't operate on closed transaction inside context manager`: un `flush()`
   que falla deja `DEACTIVE` la transacción EXTERIOR aunque vaya dentro de
@@ -350,6 +356,12 @@ el problema ya esté documentado.
   fichero una sentencia sin nombre de tabla: el guard ESTÁTICO de
   `test_pentest_findings.py` no la ve y pide eximir la tabla que sí está
   protegida. Sentencias literales, una por tabla.
+- [commit-a-media-request-pierde-los-guc-de-rls.md](./commit-a-media-request-pierde-los-guc-de-rls.md)
+  — `set_config('app.tenant_id', …, true)` tiene ámbito de TRANSACCIÓN, así que un
+  `await session.commit()` dentro de un handler borra el contexto de tenant: la
+  consulta siguiente devuelve cero filas con `app_user` o filas de todos los
+  tenants con la sesión del System Admin. Síntoma: ninguno hasta que alguien añade
+  esa consulta. Usar `schedule_after_commit`.
 - [beat-entry-whose-task-nobody-imports.md](./beat-entry-whose-task-nobody-imports.md)
   — una entrada de beat cuyo módulo no está en `celery_app(imports=...)` se encola
   y muere con `NotRegistered` **sin ruido**: seis features «desplegadas» que nunca

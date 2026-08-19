@@ -441,3 +441,47 @@ def to_agent_response(a: Agent, teams: list[tuple[UUID, str]] | None = None) -> 
         "deleted_at": a.deleted_at,
     }
     return AgentResponse.model_validate(payload)
+
+
+# ---------------------------------------------------------------------------
+# Historial del prompt (`task_gov_02`)
+# ---------------------------------------------------------------------------
+class AgentPromptVersionEntry(BaseModel):
+    """Una versión del prompt del agente, con su diff contra la anterior.
+
+    ``changed_by`` a ``None`` no es un dato que falte por descuido: es el autor de
+    la fila de BASE, la que registra el prompt que ya existía antes de que hubiera
+    historial. Atribuírselo a quien hizo la primera edición sería inventar.
+
+    ``diff`` viene vacío en la fila más antigua de la cadena, que no tiene contra
+    qué compararse — el prompt entero ya viaja en ``system_prompt`` / ``persona``,
+    así que devolverlo también como diff de adición sería duplicarlo.
+    """
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    agent_id: UUID
+    version: int
+    system_prompt: str
+    persona: dict[str, Any] = Field(default_factory=dict)
+    prompt_hash: str
+    changed_by: UUID | None = None
+    parent_version_id: UUID | None = None
+    created_at: datetime
+    diff: str = ""
+
+
+class AgentPromptVersionsResponse(BaseModel):
+    """El historial completo de un agente, MÁS RECIENTE PRIMERO."""
+
+    model_config = _BASE_CONFIG
+
+    agent_id: UUID
+    #: Sello del texto EFECTIVO del prompt vigente del agente, calculado sobre la
+    #: fila viva y no sobre el historial. Es el mismo número que el dispatch manda
+    #: al runtime (`task_gov_03`), y estar aquí permite ver de un vistazo si el
+    #: agente lleva un prompt que NO está registrado — el caso de un agente que
+    #: nunca se editó desde que existe esta tabla.
+    current_prompt_hash: str
+    versions: list[AgentPromptVersionEntry] = Field(default_factory=list)

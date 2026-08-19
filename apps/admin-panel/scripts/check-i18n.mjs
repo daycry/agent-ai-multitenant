@@ -340,6 +340,28 @@ export function looksSpanish(value) {
  * patrón sólo ve atributos con tilde, así que un módulo entero escrito sin
  * acentos en los `<Button>` sale a 0 estando sin traducir. El contador mide la
  * deuda que se puede detectar sola, no la deuda.
+ *
+ * **2026-08-19** — salen seis entradas más, y con ellas 12 atributos (200 → 188,
+ * 77 → 71 ficheros). Dos lotes:
+ *
+ *   * `settings/page.tsx`, `settings/memories/page.tsx` y
+ *     `settings/platform-defaults/page.tsx`. Llevaban semanas aquí no por falta
+ *     de ganas sino porque el BACKEND sólo servía `label_es`/`description_es`:
+ *     sin el par `_en` en el registry, traducir el marco dejaba la pantalla
+ *     mitad-y-mitad. El par existe desde hoy y `require_language_pair` lo valida
+ *     al importar el módulo, así que el bloqueo se levantó y las tres se
+ *     migraron enteras (más `cortex-model-section.tsx`, que se renderiza dentro
+ *     de la tercera).
+ *   * `projects/page.tsx`, `projects/[id]/memories/page.tsx` y
+ *     `projects/[id]/dep-cache/page.tsx`, tres pantallas autocontenidas del
+ *     módulo de proyectos.
+ *
+ * Y una que NO cuenta el mapa porque nunca tuvo entrada: `ProjectBreadcrumb`
+ * escribía "Proyectos" fijo, así que la miga de pan de las DIEZ sub-pantallas
+ * del proyecto seguía en castellano con el toggle en EN. El literal no está en
+ * un atributo —es una propiedad de un objeto— y por eso ninguna de las dos
+ * señales lo veía. Tercer ejemplo del mismo aviso: el contador mide su patrón,
+ * no la deuda.
  */
 const ATTR_ALLOWLIST = {
   "app/admin/agents/[id]/agent-kbs-section.tsx": 1,
@@ -385,7 +407,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/projects/[id]/chat/chat-composer.tsx": 1,
   "app/admin/projects/[id]/chat/page.tsx": 4,
   "app/admin/projects/[id]/commands/page.tsx": 1,
-  "app/admin/projects/[id]/dep-cache/page.tsx": 1,
   "app/admin/projects/[id]/incoming-webhooks/page.tsx": 7,
   "app/admin/projects/[id]/knowledge-bases/page.tsx": 5,
   // El troceo de prod-16 `task_prod16_08` repartió `mcp-server-sections.tsx`
@@ -394,17 +415,12 @@ const ATTR_ALLOWLIST = {
   "app/admin/projects/[id]/mcp-servers/mcp-server-card.tsx": 2,
   "app/admin/projects/[id]/mcp-servers/mcp-server-dialog.tsx": 1,
   "app/admin/projects/[id]/mcp-servers/page.tsx": 2,
-  "app/admin/projects/[id]/memories/page.tsx": 2,
   "app/admin/projects/[id]/page.tsx": 1,
   "app/admin/projects/[id]/plans/[planId]/page.tsx": 1,
   "app/admin/projects/[id]/plans/[planId]/plan-spec-sections.tsx": 2,
   "app/admin/projects/[id]/plans/[planId]/plan-validation-section.tsx": 1,
   "app/admin/projects/[id]/plans/page.tsx": 4,
   "app/admin/projects/[id]/tasks/page.tsx": 4,
-  "app/admin/projects/page.tsx": 3,
-  "app/admin/settings/memories/page.tsx": 1,
-  "app/admin/settings/page.tsx": 2,
-  "app/admin/settings/platform-defaults/page.tsx": 3,
   "app/admin/settings/sso/callback-url-section.tsx": 2,
   "app/admin/settings/sso/page.tsx": 1,
   "app/admin/settings/sso/saml/page.tsx": 1,

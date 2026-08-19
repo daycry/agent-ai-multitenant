@@ -25,7 +25,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import structlog
-from api_server.agent_persona import resolve_agent_persona
+from api_server.agent_persona import effective_prompt_hash, resolve_agent_persona
 from api_server.agent_skills_enforcement import resolve_agent_skill_prompt_fragments
 from api_server.agent_tools_enforcement import (
     combine_tool_allowlists,
@@ -38,6 +38,7 @@ from api_server.agent_tools_enforcement import (
 )
 from api_server.budgets import budget_pause_block, resolve_execution_budgets
 from api_server.chat.sync_to_kanban import PLAN_TASK_SPEC_ID_KEY
+from api_server.db.agent_prompt_version_repo import latest_prompt_version_number
 from api_server.db.domain import (
     Agent,
     AgentType,
@@ -804,6 +805,19 @@ class TaskDispatcher:
         agent_persona = resolve_agent_persona(agent)
         if agent_persona is not None:
             request["agent_persona"] = agent_persona
+            # `task_gov_03`: el sello del prompt del agente, para que
+            # `executions.prompt_version` deje de hablar sólo del andamiaje del
+            # runtime. Viaja junto a la persona y NUNCA sin ella: sin persona no
+            # hay texto que sellar, y emitir el hash del vacío movería la etiqueta
+            # de todos esos runs sin distinguir nada.
+            request["agent_prompt_version"] = {
+                # De la fila VIVA, no del historial: es el prompt que se acaba de
+                # mandar. Si el agente lleva un prompt que nadie registró todavía
+                # (nunca se editó desde `task_gov_02`), el hash sigue siendo
+                # correcto y sólo falta el número.
+                "prompt_hash": effective_prompt_hash(agent),
+                "version": await latest_prompt_version_number(session, agent.id),
+            }
         project_commands = getattr(project, "allowed_commands", None) if project else None
         request["allowed_commands"] = [str(c) for c in (project_commands or [])]
         # prod-12 Fase B (gap4-2): la allowlist de dominios de las tools HTTP,

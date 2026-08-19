@@ -7,6 +7,7 @@ import { ChevronRight, FolderKanban, Home } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 export interface BreadcrumbItem {
   label: React.ReactNode;
@@ -87,6 +88,12 @@ interface ProjectBreadcrumbProps {
 }
 
 export function ProjectBreadcrumb({ projectId, current, className }: ProjectBreadcrumbProps) {
+  // Reutiliza la etiqueta de la sidebar (`nav.projects`) en vez de una clave
+  // propia: es el MISMO destino, y dos claves para un mismo enlace acaban
+  // divergiendo. Esta miga de pan la pintan las diez sub-pantallas del proyecto,
+  // así que traducirla aquí las arregla todas de una vez (prod-16
+  // `task_prod16_03`).
+  const t = useT("nav");
   const { data } = useQuery<ProjectChild>({
     queryKey: ["project", projectId],
     queryFn: () => apiFetch<ProjectChild>(`/projects/${projectId}`),
@@ -99,7 +106,7 @@ export function ProjectBreadcrumb({ projectId, current, className }: ProjectBrea
       className={className}
       items={[
         {
-          label: "Proyectos",
+          label: t("projects"),
           href: "/admin/projects",
           icon: <Home className="h-3.5 w-3.5" />,
         },

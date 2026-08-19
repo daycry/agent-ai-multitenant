@@ -24,6 +24,7 @@ from typing import Any, Literal, cast
 
 from agent_runtime.review_contract import (
     CRITERIA_INSTRUCTION,
+    REJECT_TAXONOMY_INSTRUCTION,
     VERDICT_APPROVE,
     VERDICT_REJECT,
 )
@@ -509,6 +510,13 @@ _REVIEW_VERDICT_INSTRUCTION = (
     "<what_to_fix>...</what_to_fix></rejection>\n"
     "The verdict tag is MANDATORY — without it the review cannot be applied.\n"
     + CRITERIA_INSTRUCTION
+    # `task_gov_10`: la taxonomía del rechazo. Se anuncia AQUÍ y no solo en el
+    # system prompt del reviewer porque este preámbulo viaja en TODO run de
+    # review (el system prompt del agente lo puede haber editado un tenant), y
+    # sin el anuncio nadie emite el par: el dato que la casilla produce se
+    # quedaría en cero para siempre.
+    + "\n"
+    + REJECT_TAXONOMY_INSTRUCTION
 )
 
 # Hallazgo H1 (refactor 2026-07-07): los preámbulos pliegan texto que un adversario
@@ -937,6 +945,7 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
     from agent_runtime.graph import AgentDeps, run_agent
     from agent_runtime.guardrails import build_pipeline
     from agent_runtime.model import model_from_spec
+    from agent_runtime.prompt_version import agent_prompt_seal
     from agent_runtime.safeguards import Budgets
     from agent_runtime.shell_exec import ShellExecTool
     from agent_runtime.tools import default_registry
@@ -1098,6 +1107,10 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             budgets=budgets,
             on_step=lambda step: _emit({"event": "step", "step": step}),
             system_preamble=system_preamble,
+            # `task_gov_03`: el sello del prompt del AGENTE entra en
+            # `executions.prompt_version`. Se resuelve AQUÍ, que es donde está el
+            # spec; `run_agent` sólo tiene el grafo.
+            agent_seal=agent_prompt_seal(spec),
         )
     finally:
         # Always tear down the MCP sessions (background loop + open transports),

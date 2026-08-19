@@ -30,6 +30,9 @@ export default function TeamDetailPage() {
   const teamId = params.team_id;
   const queryClient = useQueryClient();
   const t = useT("teams");
+  // Namespace aparte porque el catálogo de scopes lo comparten esta ficha y la
+  // del agente (`lib/memory/constants.ts`): la clave viene de la constante.
+  const tScope = useT("memoryScope");
   const errorText = useErrorText();
 
   const teamQuery = useQuery({
@@ -268,7 +271,7 @@ export default function TeamDetailPage() {
                 <option value="">{t("memoryPolicyNone")}</option>
                 {MEMORY_SCOPE_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
-                    {o.label}
+                    {tScope(o.key)}
                   </option>
                 ))}
               </Select>

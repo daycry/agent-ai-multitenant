@@ -129,6 +129,18 @@ class InstallationCreateRequest(BaseModel):
     listing_id: UUID
     project_id: UUID | None = None
     granted_permissions: list[Any] = Field(default_factory=list)
+    # prod-13 `task_prod13_01`. Con `True` el endpoint responde **202** y las
+    # puertas de seguridad corren en la cola `marketplace`: la instalación nace
+    # `analyzing` y ES el recurso de estado que el cliente consulta
+    # (`GET /marketplace/installations/{id}`).
+    #
+    # Opt-in, y no el nuevo comportamiento por defecto, por una razón que no es
+    # timidez: el 201 síncrono es un contrato que ya consumen el admin-panel y
+    # cualquier script del operador, y cambiarlo por debajo convierte «instalado»
+    # en «aceptado» sin que el llamante se entere — que es peor que una latencia
+    # alta. Un cliente que sepa consultar el estado lo pide; el que no, sigue
+    # esperando su 201.
+    async_gates: bool = False
 
 
 class MarketplaceInstallationResponse(BaseModel):

@@ -75,6 +75,27 @@ ROUTES_BEFORE_THE_SPLIT: frozenset[tuple[str, tuple[str, ...], str]] = frozenset
     }
 )
 
+#: Rutas AÑADIDAS al paquete después del troceo, con la tarea que las trajo.
+#:
+#: El inventario de arriba se capturó del monolito y su afirmación es «el troceo
+#: no movió ni una ruta». Meter una ruta nueva ahí la convertiría en una mentira
+#: —diría que el monolito la servía— así que las adiciones van aparte y **cada
+#: una con su procedencia escrita**. Lo que la guarda sigue impidiendo es lo que
+#: importa: que una ruta DESAPAREZCA en un refactor, o que aparezca una que nadie
+#: declaró aquí.
+ROUTES_ADDED_AFTER_THE_SPLIT: frozenset[tuple[str, tuple[str, ...], str]] = frozenset(
+    {
+        # `task_gov_02`: el historial versionado del `system_prompt`. Vive en
+        # `.prompt_versions`, y su camino tiene DOS segmentos, así que no entra en
+        # la trampa de orden de `provider-options` (el test de abajo lo comprueba
+        # para TODA ruta literal de un segmento, no sólo para aquélla).
+        ("/agents/{agent_id}/prompt-versions", ("GET",), "list_agent_prompt_versions"),
+    }
+)
+
+#: El conjunto que el paquete debe servir HOY.
+EXPECTED_ROUTES = ROUTES_BEFORE_THE_SPLIT | ROUTES_ADDED_AFTER_THE_SPLIT
+
 
 def _signature(container: object) -> set[tuple[str, tuple[str, ...], str]]:
     """Camino EFECTIVO + métodos + nombre de cada ruta (ver el docstring del módulo)."""
@@ -89,14 +110,20 @@ def _ordered_effective_paths(container: object) -> list[str]:
     return [path for _, path in iter_routes_with_paths(container)]
 
 
-def test_the_package_serves_exactly_the_routes_the_monolith_served() -> None:
+def test_the_package_still_serves_every_route_the_monolith_served() -> None:
+    """Ninguna ruta del monolito se perdió, y las nuevas están todas declaradas.
+
+    Las dos direcciones importan por motivos distintos: una ruta que falta es una
+    regresión silenciosa (el cliente recibe 404 donde recibía 200), y una que
+    sobra sin declararse es superficie de API que entró sin que nadie la mirase.
+    """
     from api_server.routers.agents import router
 
     got = _signature(router)
 
-    assert got == set(ROUTES_BEFORE_THE_SPLIT), (
-        f"sobran {sorted(got - set(ROUTES_BEFORE_THE_SPLIT))}, "
-        f"faltan {sorted(set(ROUTES_BEFORE_THE_SPLIT) - got)}"
+    assert got == set(EXPECTED_ROUTES), (
+        f"sobran {sorted(got - set(EXPECTED_ROUTES))} (¿falta declararlas en "
+        f"ROUTES_ADDED_AFTER_THE_SPLIT?), faltan {sorted(set(EXPECTED_ROUTES) - got)}"
     )
 
 
@@ -119,6 +146,57 @@ def test_provider_options_is_still_registered_before_the_agent_id_wildcard() -> 
     )
 
 
+def test_no_literal_single_segment_route_hides_behind_the_wildcard() -> None:
+    """La versión GENERAL del test de arriba, que no envejece.
+
+    Aquél nombra `provider-options` porque es la ruta que existía. La trampa, en
+    cambio, es de la FORMA: cualquier ruta literal de un segmento bajo `/agents`
+    la arma otra vez, y quien la añada dentro de un año no va a leer el docstring
+    de este fichero. Esta guarda la comprueba para todas.
+
+    Sólo cuentan las que comparten método con el comodín: una literal de un
+    segmento con `POST` no colisiona con un `GET /agents/{agent_id}`.
+    """
+    from api_server.routers.agents import router
+
+    rutas = list(iter_routes_with_paths(router))
+    # Una LISTA y no un dict por camino: `/agents/{agent_id}` son TRES rutas
+    # (GET, PUT, DELETE) con el mismo camino, y un dict se queda sólo con la
+    # última. Con el DELETE como único comodín, la comparación de métodos contra
+    # una literal `GET` sale vacía y la guarda pasa en verde con la trampa puesta.
+    # Verificado: el primer intento de este test tenía ese fallo exacto y el
+    # rojo provocado a mano fue lo que lo destapó.
+    comodines = [
+        (index, tuple(sorted(getattr(route, "methods", ()) or ())))
+        for index, (route, path) in enumerate(rutas)
+        if path == "/agents/{agent_id}"
+    ]
+    assert len(comodines) >= 3, (
+        f"esperaba GET/PUT/DELETE sobre `/agents/{{agent_id}}`; vi {comodines}"
+    )
+
+    literales = [
+        (index, path, tuple(sorted(getattr(route, "methods", ()) or ())))
+        for index, (route, path) in enumerate(rutas)
+        if path.startswith("/agents/") and "{" not in path and path.count("/") == 2
+    ]
+    assert literales, (
+        "la guarda dejó de encontrar rutas literales de un segmento bajo `/agents`:"
+        " estaría pasando en vacío"
+    )
+
+    tapadas = [
+        f"{path} ({'/'.join(metodos)}) se registra tras el comodín"
+        for index, path, metodos in literales
+        for comodin_index, comodin_metodos in comodines
+        if set(metodos) & set(comodin_metodos) and comodin_index < index
+    ]
+    assert not tapadas, (
+        "estas rutas literales quedan detrás de `/agents/{agent_id}`, que las sirve"
+        " y responde 422 al parsear el segmento como UUID: " + "; ".join(tapadas)
+    )
+
+
 def test_route_paths_sees_through_the_composed_router() -> None:
     """Un router compuesto de sub-routers arma la trampa de FastAPI 0.141.
 
@@ -133,7 +211,8 @@ def test_route_paths_sees_through_the_composed_router() -> None:
     assert "/agents" in paths
     assert "/agents/provider-options" in paths
     assert "/agents/{agent_id}/capabilities" in paths
-    assert len(paths) == len({path for path, _, _ in ROUTES_BEFORE_THE_SPLIT})
+    assert "/agents/{agent_id}/prompt-versions" in paths
+    assert len(paths) == len({path for path, _, _ in EXPECTED_ROUTES})
 
 
 def test_the_agents_router_is_not_an_admin_surface() -> None:

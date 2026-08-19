@@ -11,13 +11,31 @@ propiedades opuestas, y las dos se rompen fácil:
     distintas comparten etiqueta y la comparación miente;
   * **no se mueve** cuando no cambia — si no, cada refactor abre una «release»
     fantasma y el histórico se vuelve ilegible.
+
+## Y la mitad que faltaba: el prompt del AGENTE (`task_gov_03`)
+
+Los tres módulos que hasheaba `_PROMPT_MODULES` son el ANDAMIAJE del runtime. El
+`system_prompt` del agente —el PRIMER bloque del preámbulo, lo que distingue a un
+backend senior de CI4 de un QA— no entraba, ni un byte. Consecuencia exacta: dos
+runs con el mismo `prompt_version` podían haber corrido con personas
+completamente distintas, así que la etiqueta cumplía la segunda propiedad de
+arriba y **fallaba la primera**, que es la que justifica que exista.
+
+Los tests del último bloque fijan la propiedad entera: cambiar el `system_prompt`
+cambia el `prompt_version`. Y la contraria, que es la que impide que el arreglo
+rompa el histórico: **sin sello, la etiqueta es la de siempre byte a byte**.
 """
 
 from __future__ import annotations
 
 import textwrap
 
-from agent_runtime.prompt_version import _literals, prompt_texts, prompt_version
+from agent_runtime.prompt_version import (
+    _literals,
+    agent_prompt_seal,
+    prompt_texts,
+    prompt_version,
+)
 
 
 def test_the_label_is_stable_across_calls() -> None:
@@ -132,3 +150,113 @@ def test_an_older_result_shape_simply_has_none() -> None:
         status="done", abort_code=None, output="ok", iterations=1, steps=[], usage={}
     )
     assert result.as_dict()["prompt_version"] is None
+
+
+# ---------------------------------------------------------------------------
+# El prompt del AGENTE entra en la etiqueta (`task_gov_03`)
+# ---------------------------------------------------------------------------
+def _spec(prompt: str, **extra: object) -> dict[str, object]:
+    """Un `AGENT_TASK_SPEC` mínimo con la persona que el orchestrator emite."""
+    spec: dict[str, object] = {"agent_persona": {"prompt": prompt, "role": "backend_dev"}}
+    spec.update(extra)
+    return spec
+
+
+def test_changing_the_agent_system_prompt_changes_the_label() -> None:
+    """La propiedad ENTERA de `task_gov_03`, y la razón de ser de la tarea.
+
+    Sin esto, `executions.prompt_version` es una etiqueta del andamiaje del
+    runtime disfrazada de etiqueta del prompt: agrupa runs que corrieron con
+    personas distintas y no puede atribuir un cambio de comportamiento a nada.
+    """
+    uno = prompt_version(agent_prompt_seal(_spec("Eres un backend senior de CI4.")))
+    otro = prompt_version(agent_prompt_seal(_spec("Eres un QA meticuloso.")))
+    assert uno != otro
+
+
+def test_the_same_agent_prompt_gives_the_same_label() -> None:
+    # La otra mitad: si la etiqueta se moviera con cada run del MISMO prompt, no
+    # agruparía nada y el dashboard tendría una release por ejecución.
+    texto = "Eres un arquitecto de software."
+    assert prompt_version(agent_prompt_seal(_spec(texto))) == prompt_version(
+        agent_prompt_seal(_spec(texto))
+    )
+
+
+def test_a_run_without_an_agent_prompt_keeps_the_historical_label() -> None:
+    """Retro-compatibilidad, y no es cortesía: es lo que salva el histórico.
+
+    Los runs ya etiquetados no llevan sello. Si `prompt_version()` sin sello
+    devolviera otra cosa, el eje del dashboard se partiría en dos y la métrica que
+    esta tarea arregla quedaría peor que antes de arreglarla.
+    """
+    assert agent_prompt_seal({}) is None
+    assert prompt_version(None) == prompt_version()
+
+
+def test_the_recorded_version_is_what_the_seal_names_when_it_travels() -> None:
+    """Con `task_gov_02` desplegado, el sello nombra la FILA del historial.
+
+    Es la diferencia entre «corrió con este texto» y «corrió con la versión 7, que
+    firmó tal usuario tal día» — que es lo único que hace accionable la etiqueta
+    cuando alguien pregunta «¿qué cambió?».
+    """
+    sello = agent_prompt_seal(
+        _spec("Eres QA.", agent_prompt_version={"prompt_hash": "a" * 64, "version": 7})
+    )
+    assert sello == "v7:" + "a" * 64
+    # Y la versión manda sobre el texto: dos runs del mismo texto en versiones
+    # distintas no comparten etiqueta.
+    otra = agent_prompt_seal(
+        _spec("Eres QA.", agent_prompt_version={"prompt_hash": "a" * 64, "version": 8})
+    )
+    assert prompt_version(sello) != prompt_version(otra)
+
+
+def test_the_agent_prompt_and_the_runtime_prompts_are_independent_axes() -> None:
+    """Mover el andamiaje del runtime y mover la persona son cosas distintas.
+
+    Comprobado sin tocar los módulos: dos personas distintas dan dos etiquetas
+    distintas, y las dos difieren de la etiqueta sin persona. O sea que el sello se
+    MEZCLA con el hash de los módulos y no lo sustituye — si lo sustituyera, un
+    cambio en `nudges.py` dejaría de mover la etiqueta de los runs con persona,
+    que es la mitad que `task_wf_52` ya había ganado.
+    """
+    base = prompt_version()
+    uno = prompt_version(agent_prompt_seal(_spec("persona A")))
+    otro = prompt_version(agent_prompt_seal(_spec("persona B")))
+    assert len({base, uno, otro}) == 3
+
+
+def test_the_label_keeps_its_shape_with_a_seal() -> None:
+    # 12 hex: la columna, el filtro de la URL y el eje del dashboard no cambian.
+    label = prompt_version(agent_prompt_seal(_spec("Eres QA.")))
+    assert len(label) == 12
+    assert all(c in "0123456789abcdef" for c in label)
+
+
+def test_the_entrypoint_actually_passes_the_seal_to_run_agent() -> None:
+    """El cableado, que es la mitad que esta base se suele dejar sin hacer.
+
+    `verificar-antes-de-implementar.md` §5: el patrón dominante de este repo es
+    «mecanismo entregado, cero llamantes». `agent_prompt_seal` podría estar
+    perfecto y no llamarlo nadie, y todos los tests de arriba seguirían verdes
+    mientras `executions.prompt_version` siguiera sin el prompt del agente.
+
+    Se busca la INVOCACIÓN (`agent_seal=agent_prompt_seal(spec)`) y no una mención
+    del nombre: el import y el comentario ya suman dos apariciones, así que contar
+    apariciones daría verde con la llamada borrada.
+    """
+    from pathlib import Path
+
+    entrypoint = Path(__file__).resolve().parents[1] / "agent_runtime" / "__main__.py"
+    source = entrypoint.read_text(encoding="utf-8")
+    assert "agent_seal=agent_prompt_seal(spec)" in source, (
+        "el entrypoint ya no le pasa el sello a run_agent: la etiqueta volvería a"
+        " hablar sólo del andamiaje del runtime"
+    )
+
+    graph = Path(__file__).resolve().parents[1] / "agent_runtime" / "graph.py"
+    assert "prompt_version(agent_seal)" in graph.read_text(encoding="utf-8"), (
+        "run_agent ya no mezcla el sello en prompt_version(): el argumento llegaría y se tiraría"
+    )

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,14 +24,13 @@ from api_server.auth.deps import (
 from api_server.db.marketplace import (
     InstallationStatus,
     MarketplaceAuditAction,
-    MarketplaceAuditEntry,
     MarketplaceInstallation,
     MarketplaceListing,
 )
-from api_server.marketplace.consent import (
-    consent_required_for,
-)
+from api_server.marketplace.async_gates import queue_install_gates
+from api_server.marketplace.finalize import finalize_installation
 from api_server.marketplace.install import InstallError, InstallOrchestrator
+from api_server.marketplace.materialize import MaterializeError
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import (
     apply_pagination,
@@ -52,6 +51,33 @@ from api_server.schemas.marketplace import (
 router = APIRouter()
 
 
+def _pending_installation(
+    payload: InstallationCreateRequest,
+    listing: MarketplaceListing,
+    principal: AuthPrincipal,
+    *,
+    tenant_id: UUID,
+) -> MarketplaceInstallation:
+    """La fila de instalación recién nacida, sin veredicto todavía.
+
+    Nace `analyzing` en los DOS caminos, y el estado definitivo lo pone
+    `finalize_installation` (aquí mismo, dentro de la transacción del request) o
+    el worker de la cola `marketplace` cuando termina las puertas. `version` es la
+    versión actual del listing; el re-apuntado semver al actualizar es
+    `task_09_12`.
+    """
+    return MarketplaceInstallation(
+        tenant_id=tenant_id,
+        listing_id=listing.id,
+        project_id=payload.project_id,
+        version=listing.version,
+        status=InstallationStatus.ANALYZING.value,
+        granted_permissions=[],
+        denied_permissions=[],
+        installed_by=principal.user_id,
+    )
+
+
 # ===========================================================================
 # POST /marketplace/installations — install a listing
 # ===========================================================================
@@ -62,6 +88,7 @@ router = APIRouter()
 )
 async def install_listing(
     payload: InstallationCreateRequest,
+    response: Response,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     orchestrator: InstallOrchestrator = Depends(get_install_orchestrator),
@@ -127,6 +154,37 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         )
 
+    # ---------------------------------------------------------------------
+    # prod-13 task_prod13_01 — la rama que NO analiza dentro del request
+    # ---------------------------------------------------------------------
+    # Se decide ANTES del análisis, que es justo lo que hay que no hacer aquí.
+    if payload.async_gates:
+        installation = _pending_installation(payload, listing, principal, tenant_id=tenant_id)
+        session.add(installation)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="listing already installed for this tenant/project",
+            ) from exc
+        await queue_install_gates(
+            session,
+            installation=installation,
+            listing=listing,
+            actor=_actor(principal),
+            requested_permissions=payload.granted_permissions,
+            artifact_expected=orchestrator.artifact_expected(listing),
+        )
+        # 202 = «aceptada, todavía no hecha». El cuerpo es la instalación en
+        # `analyzing`, o sea el recurso de estado mismo, y `Location` dice dónde
+        # consultarlo — un 202 sin recurso al que apuntar obliga al cliente a
+        # sondear a ciegas la lista entera.
+        response.status_code = status.HTTP_202_ACCEPTED
+        response.headers["Location"] = f"/marketplace/installations/{installation.id}"
+        return to_installation_response(installation)
+
     # Gate de análisis estático (task_prod12_mkt_01): el MISMO pipeline
     # bandit/semgrep que el update, vía el orchestrator. Un hallazgo por
     # encima de la política aborta (audit row + 422); un artefacto ausente
@@ -148,34 +206,14 @@ async def install_listing(
             detail=f"install blocked by static analysis: {exc}",
         ) from exc
 
-    # Trust-level consent gate (plan decisions (a)+(b), task_09_07).
-    # community / experimental listings ALWAYS require explicit
-    # per-permission consent from the project owner: such an install lands
-    # DISABLED with NO granted permissions and cannot be enabled until every
-    # requested permission is granted via POST .../consent. A verified
-    # listing needs no per-permission consent (minimal friction, decision
-    # (d)) so it installs ENABLED, honouring the granted permissions from
-    # the request verbatim (Phase A behaviour preserved).
-    needs_consent = consent_required_for(listing.trust_level)
-    if needs_consent:
-        initial_status = InstallationStatus.DISABLED.value
-        granted: list[object] = []
-    else:
-        initial_status = InstallationStatus.ENABLED.value
-        granted = list(payload.granted_permissions)
-
-    installation = MarketplaceInstallation(
-        tenant_id=tenant_id,
-        listing_id=listing.id,
-        project_id=payload.project_id,
-        # The resolved version is the listing's current version (semver
-        # re-pointing on update is task_09_12).
-        version=listing.version,
-        status=initial_status,
-        granted_permissions=granted,
-        denied_permissions=[],
-        installed_by=principal.user_id,
-    )
+    # El gate de consentimiento por nivel de confianza (decisiones (a)+(b) de
+    # `task_09_07`) y la materialización del ADR 0100 viven ahora en
+    # `marketplace/finalize.py`, con su razonamiento: la fila nace en el estado
+    # transitorio y el finalizador decide el definitivo. El intermedio no lo ve
+    # nadie (misma transacción) y a cambio los DOS caminos —éste y el del worker
+    # de la cola `marketplace`— cierran la instalación con la MISMA política.
+    # Duplicarla era garantizar que divergieran al primer cambio.
+    installation = _pending_installation(payload, listing, principal, tenant_id=tenant_id)
     session.add(installation)
     try:
         await session.flush()
@@ -186,54 +224,23 @@ async def install_listing(
             detail="listing already installed for this tenant/project",
         ) from exc
 
-    # ADR 0100 (pieza 2): una instalación que nace ENABLED (listing verified)
-    # MATERIALIZA su capacidad nativa en la misma transacción — skill o tool
-    # de red (mcp_tool/http_endpoint); python/docker quedan diferidos honestos
-    # hasta el sandbox out-of-process (ADR 0081 B/C). Un manifest inválido
-    # aborta el install entero (422): nunca un ENABLED a medias.
-    materialize_summary: dict[str, object] | None = None
-    if initial_status == InstallationStatus.ENABLED.value:
-        from api_server.marketplace.materialize import (
-            MaterializeError,
-            materialize_installation,
-        )
-
-        try:
-            materialize_summary = (
-                await materialize_installation(session, installation=installation, listing=listing)
-            ).as_dict()
-        except MaterializeError as exc:
-            await session.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"install cannot materialise its capability: {exc}",
-            ) from exc
-
-    # Append-only audit: who installed what. Mandatory — the install and
-    # its audit row live in the same transaction so they commit atomically.
-    session.add(
-        MarketplaceAuditEntry(
-            tenant_id=tenant_id,
+    try:
+        await finalize_installation(
+            session,
+            installation=installation,
+            listing=listing,
+            requested_permissions=payload.granted_permissions,
             actor=_actor(principal),
-            action=MarketplaceAuditAction.INSTALL.value,
-            listing_id=listing.id,
-            installation_id=installation.id,
-            detail={
-                "version": listing.version,
-                "trust_level": listing.trust_level,
-                "consent_required": needs_consent,
-                "status": initial_status,
-                "granted_permissions": granted,
-                "project_id": (str(payload.project_id) if payload.project_id else None),
-                # task_prod12_mkt_01: el informe del gate de análisis (o su
-                # skip honesto) viaja en el mismo audit row del install.
-                "gates": analysis_gates,
-                # ADR 0100: qué materializó (o por qué se difirió).
-                "materialization": materialize_summary,
-            },
+            gates=analysis_gates,
         )
-    )
-    await session.flush()
+    except MaterializeError as exc:
+        # ADR 0100: un manifest que no puede materializar nunca deja un ENABLED a
+        # medias. Aquí la fila no ha comiteado, así que el rollback la borra.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"install cannot materialise its capability: {exc}",
+        ) from exc
     await session.refresh(installation)
     return to_installation_response(installation)
 
@@ -304,6 +311,54 @@ async def revoke_installation(
         select(MarketplaceInstallation).where(MarketplaceInstallation.id == installation_id)
     )
     installation = result.scalar_one()
+    return to_installation_response(installation)
+
+
+# ===========================================================================
+# GET /marketplace/installations/{id} — el recurso de estado del 202
+# ===========================================================================
+@router.get(
+    "/installations/{installation_id}",
+    response_model=MarketplaceInstallationResponse,
+)
+async def get_installation(
+    installation_id: UUID,
+    principal: AuthPrincipal = Depends(require_tenant_member),
+    session: AsyncSession = Depends(get_tenant_session),
+) -> MarketplaceInstallationResponse:
+    """Una instalación por id — el recurso que consulta quien recibió un 202.
+
+    prod-13 `task_prod13_01`. Faltaba: sólo existía el listado, así que un cliente
+    que hubiera aceptado un 202 tendría que sondear `GET /installations?limit=100`
+    y buscar la suya dentro, lo que además rompe en cuanto el tenant pasa de 100
+    instalaciones. Un 202 cuyo recurso de estado no se puede leer por su URL no es
+    un 202, es un «vuelve luego».
+
+    Los estados transitorios que puede devolver son los de
+    :class:`InstallationStatus`: `analyzing` mientras las puertas están en cola o
+    corriendo, `blocked` si una puerta rechazó el artefacto (el motivo está en el
+    audit row que escribió el aborto), y `enabled`/`disabled` cuando la
+    instalación se cerró según el consentimiento que exige su nivel de confianza.
+
+    RLS acota a la instalación al tenant del llamante: la de otro tenant es un 404
+    limpio, nunca un 403 que confirmaría que existe. `tenant_member` y no
+    `tenant_admin` porque es una LECTURA — quien está esperando el veredicto de
+    una instalación no tiene por qué poder instalar.
+    """
+    # `require_tenant_id` no es decorativo aquí: `open_tenant_session` le da al
+    # System Admin SIN tenant elegido la sesión BYPASSRLS, y esta consulta no
+    # lleva filtro de tenant propio porque confía en RLS. Sin esta línea, ese
+    # caso leería la instalación de cualquier tenant.
+    require_tenant_id(principal)
+    result = await session.execute(
+        select(MarketplaceInstallation).where(
+            MarketplaceInstallation.id == installation_id,
+            MarketplaceInstallation.deleted_at.is_(None),
+        )
+    )
+    installation = result.scalar_one_or_none()
+    if installation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="installation not found")
     return to_installation_response(installation)
 
 

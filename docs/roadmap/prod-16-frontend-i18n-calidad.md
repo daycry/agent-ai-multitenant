@@ -38,13 +38,14 @@ de producción de 2026-06-10. Cierra los hallazgos **frontend-9**,
 > observable de este plan, así que sus números viven aquí y no en la prosa de
 > cada tarea:
 >
-> | Métrica                            | Al escribirse el plan | 2026-08-01 | 2026-08-10 | **2026-08-12** |
-> | ---------------------------------- | --------------------: | ---------: | ---------: | -------------: |
-> | Pantallas `page.tsx` > 800 líneas  |                    10 |          5 |          0 |          **0** |
-> | Piezas del troceado > 500 líneas   |                     — |          2 |          2 |          **2** |
-> | Ternarios de idioma (`check-i18n`) |                    63 |         34 |          9 |          **0** |
-> | Ficheros con ternarios             |                    12 |          8 |          4 |          **0** |
-> | Atributos con castellano fijo      |                     — |        232 |        232 |        **211** |
+> | Métrica                            | Al escribirse el plan | 2026-08-01 | 2026-08-10 | 2026-08-12 | **2026-08-19** |
+> | ---------------------------------- | --------------------: | ---------: | ---------: | ---------: | -------------: |
+> | Pantallas `page.tsx` > 800 líneas  |                    10 |          5 |          0 |          0 |          **0** |
+> | Piezas del troceado > 500 líneas   |                     — |          2 |          2 |          2 |          **1** |
+> | Ternarios de idioma (`check-i18n`) |                    63 |         34 |          9 |          0 |          **0** |
+> | Ficheros con ternarios             |                    12 |          8 |          4 |          0 |          **0** |
+> | Atributos con castellano fijo      |                     — |        232 |        232 |        211 |        **188** |
+> | Ficheros con atributos             |                     — |          — |         85 |         80 |         **71** |
 >
 > Cuatro lecturas honestas de esa tabla:
 >
@@ -56,9 +57,12 @@ de producción de 2026-06-10. Cierra los hallazgos **frontend-9**,
 >    mismo para los ternarios. Volver a añadir una entrada ahí es reabrir la
 >    deuda, y hay un test que lo afirma.
 > 3. **Los atributos apenas se mueven, y decirlo importa más que el número.**
->    232 → 211 en dos olas. Un informe que sólo enseña las métricas que bajaron
->    es peor que no tener métricas: **el 91 % de la deuda de atributos sigue en
->    pie**, repartida en 80 ficheros.
+>    232 → 211 en dos olas, y 211 → **188** en las dos siguientes. Un informe que
+>    sólo enseña las métricas que bajaron es peor que no tener métricas: **el
+>    81 % de la deuda de atributos sigue en pie**, repartida en 71 ficheros. En
+>    cuatro olas se ha saldado menos de una quinta parte, así que al ritmo actual
+>    esta fila no la cierra `task_prod16_03`: la cierra `task_prod16_04`, y hay
+>    que contar con varias pasadas más.
 > 4. **Las dos guardas subestiman la deuda a propósito y hay que leerlas así.**
 >    El guard de atributos sólo ve castellano con carácter exclusivo o con
 >    palabra/sufijo de su lista (ya anotado el 08-01 y afinado el 08-02), y el de
@@ -300,6 +304,94 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       settings —y la de platform-settings— elijan el par según el idioma activo.
       No entra hoy porque `lib/i18n/dictionary.ts` lo están tocando dos carriles de
       la ola del córtex y editarlo a la vez es pedir un pisotón.
+  - ✅ **2026-08-19 (segunda pasada del día) — la mitad de FRONTEND que quedaba del
+    bloqueo, hecha; y tres pantallas de `projects/*` más.** Lo que la nota de arriba
+    dejaba pendiente («que las dos pantallas de settings —y la de platform-settings—
+    elijan el par según el idioma activo») **está cerrado**, y con él el módulo
+    `settings/` salvo su rama `sso`:
+    - `settings/page.tsx` (namespace `settingsIndex`), `settings/memories/page.tsx`
+      (`settingsMemories`) y `settings/platform-defaults/page.tsx`
+      (`platformDefaults`). El marco sale del diccionario y las
+      etiquetas/descripciones de cada categoría y ajuste del registry con
+      `pickLang` — que es lo correcto y no un atajo: el catálogo lo define el
+      backend, y duplicarlo como claves reabriría la divergencia que el par `_en`
+      acaba de cerrar.
+    - Entra además **`cortex-model-section.tsx`** (`cortexModel`, 259 líneas), que
+      el enunciado no nombra pero se renderiza DENTRO de platform-defaults: dejarla
+      fuera habría dado la pantalla mitad-y-mitad que es justo el fallo que este
+      plan cierra. La ve sólo el System Owner, que es quien más gana con el toggle.
+    - Y tres pantallas COMPLETAS de `projects/*`: el listado (`projectsList`), la
+      memoria del proyecto (`projectMemories`) y la caché de dependencias
+      (`depCache`). Elegidas por ser autocontenidas.
+      **Contadores, medidos ejecutando: atributos 200 → 188, ficheros 77 → 71**, y la
+      `ATTR_ALLOWLIST` pierde **seis** entradas. `node scripts/check-i18n.mjs` OK.
+      **Tests: 22 casos nuevos, todos ejecutados y todos en rojo ANTES de
+      implementar.** `app/admin/settings/i18n.test.tsx` pasa de 4 a **14** casos (las
+      cinco pantallas de settings en los dos idiomas, con fixtures del registry que
+      traen las DOS caras; 6 de 13 salieron rojos en la primera pasada),
+      `app/admin/projects/i18n.test.tsx` es nuevo con **7** (los 7 rojos),
+      `app/admin/teams/i18n.test.tsx` gana **1** y `lib/memory/constants.test.ts` es
+      nuevo con **4** (3 rojos entre los dos ficheros).
+      `npm --prefix apps/admin-panel run test -- i18n.test` —el `command:` declarado—
+      pasa de 17 ficheros/142 tests a **18 ficheros/160 tests**.
+      **Cinco cosas que enseñó esta pasada y valen más que el contador:**
+    1. **Un `status` de texto no sobrevive a la traducción.**
+       `settings/memories` decidía el color con `status.startsWith("Error")` sobre el
+       MENSAJE. En inglés el mensaje empieza por «Could not», así que el error habría
+       salido con el color de un guardado correcto — un fallo que no rompe nada, no
+       lo ve `tsc` y sólo se ve en producción. El estado pasó a **discriminante**
+       (`{kind: "saving"|"saved"|"error"}`) y el texto se deriva de él. Hay un test
+       que fija las dos mitades (texto inglés Y clase de error).
+    2. **La guarda de atributos no vio el peor caso de este lote.**
+       `ProjectBreadcrumb` escribía `"Proyectos"` fijo, así que la miga de pan de las
+       **diez** sub-pantallas del proyecto seguía en castellano con el toggle en EN.
+       El literal no está en un atributo —es una propiedad de un objeto— y por eso
+       ninguna de las dos señales lo cuenta. Tercer ejemplo del mismo aviso ya
+       anotado con los ternarios y con las frases sin tilde: **el contador mide su
+       patrón, no la deuda.** Arreglado reutilizando `nav.projects` (mismo destino:
+       dos claves para un enlace acaban divergiendo).
+    3. **El hueco de `MEMORY_SCOPE_OPTIONS` está CERRADO**, el que la pasada del
+       08-12 anotó como «lo que este carril NO puede tapar». La constante de
+       `lib/memory/constants.ts` guarda ahora la **clave** del diccionario y no el
+       texto, y sus **dos** consumidores la resuelven con el idioma activo
+       (`teams/[team_id]` y `agents/[id]/agent-edit-dialog` — se toca el segundo a
+       propósito, aunque `agents/*` sea de otro carril, porque migrar uno solo dejaba
+       la constante partida). Namespace compartido `memoryScope`, y no una clave por
+       pantalla, por la misma razón que la constante existe.
+       **De paso salió un caso del §5 de `verificar-antes-de-implementar`**:
+       `memoryScopeLabel()` tiene **cero llamantes** desde que se escribió. Se ha
+       traducido igual (para no dejar un helper castellano al lado de un catálogo
+       bilingüe) y se anota aquí, que es lo que faltaba: alguien debería decidir si
+       se borra.
+    4. **Un `[x]` que no se pone: el enunciado sigue sin cumplirse.** Quedan
+       `settings/sso/*` (6 ficheros, 16 atributos), **14 ficheros de
+       `app/admin/projects/*` y 3 de `components/projects/`**
+       —incluido el hub `projects/[id]/page.tsx`, que reparte su texto entre seis
+       ficheros de `components/projects/` y por eso NO entra a trozos— y
+       `agent-kbs-section.tsx` de `agents/*`. Tres de las ~28 pantallas de
+       `projects/*` no es «`projects/*` migrado».
+    5. **El bloqueo de backend era real, y verificarlo costó cinco minutos.** Antes
+       de escribir una línea se comprobó en el código que
+       `registry_to_dict()`/`platform_registry_to_dict()` emiten ya `label_en` y
+       `description_en` (`settings_registry.py:278`, `platform_settings_registry.py:453`)
+       y que `require_language_pair` lo valida al construir el dataclass. Los
+       fixtures de los tests son espejo de esas dos funciones, no de lo que la
+       pantalla espera — que es la diferencia entre un test que verifica y uno que
+       bendice el defecto.
+       **Verificación ejecutada, toda desde `apps/admin-panel`:** `npx vitest run` →
+       **1202 passed / 144 ficheros** (eran 1180/142 esta mañana); `npx tsc --noEmit`
+       **limpio, sin ninguna excepción** (el `TS6133` ajeno que anotaba
+       `task_prod16_07` ya no está); `npx next lint` sin avisos; `npx prettier --check`
+       de los ficheros tocados OK; `node scripts/check-i18n.mjs` y
+       `node scripts/check-component-size.mjs` en verde; y
+       `NEXT_PUBLIC_API_URL=/api npx next build` **construye** (65 páginas).
+       **Roturas comprobadas, cada una con su rojo y sólo el suyo:** volver `label_es`
+       en el índice de settings (cae el caso inglés del índice), volver `label_es` en
+       platform-defaults (cae el suyo), desmontar `<CortexModelSection/>` del hub de
+       platform-defaults (caen **2**), y reintroducir
+       `aria-label="Configuración del tenant"` en `settings/page.tsx` → `check-i18n`
+       sale **exit 1** nombrando el fichero, o sea que el trinquete que acaba de
+       protegerlas MUERDE.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
@@ -312,7 +404,9 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
   # verdad la cobertura de esta casilla; el recorrido del selector entre
   # pantallas lo cubre `e2e/lang-switcher.spec.ts` (auto_prod16_02_a).
   # Ejecutado antes de escribirlo aquí, que es la mitad que faltaba las otras
-  # dos veces: 17 ficheros, 142 tests, todos en verde (2026-08-19).
+  # dos veces: 17 ficheros, 142 tests, todos en verde (2026-08-19). Tras el lote
+  # de settings + tres pantallas de projects del mismo día: **18 ficheros, 160
+  # tests**, también ejecutado.
   - id: auto_prod16_03_a
     runtime: node-vitest
     command: "npm --prefix apps/admin-panel run test -- i18n.test"

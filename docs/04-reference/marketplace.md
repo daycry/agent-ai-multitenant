@@ -315,6 +315,7 @@ mismo mecanismo de refresco, misma auditoría (el audit marca `rollback: true`).
 | ---------------------------------------------- | ------ | --------------- |
 | `/marketplace/installations`                   | GET    | `tenant_member` |
 | `/marketplace/installations`                   | POST   | `tenant_admin`  |
+| `/marketplace/installations/{id}`              | GET    | `tenant_member` |
 | `/marketplace/installations/{id}/permissions`  | GET    | `tenant_member` |
 | `/marketplace/installations/{id}/consent`      | POST   | `tenant_admin`  |
 | `/marketplace/installations/{id}/update-check` | GET    | `tenant_member` |
@@ -339,6 +340,25 @@ mismo mecanismo de refresco, misma auditoría (el audit marca `rollback: true`).
   skip honesto (`skipped_reason=no_artifact`) — el hueco pre-registry que
   ADR 0081 documenta. Firma y sandbox en el install fresco siguen diferidos
   a la Fase B/C (ADR 0081).
+- **`async_gates: true` → 202 en vez de 201** (prod-13 `task_prod13_01`). Las dos
+  puertas caras —análisis estático y prueba de humo en sandbox— duran hasta
+  ~4 minutos (120 s de plazo por escáner). `asyncio.to_thread` ya impedía que
+  congelasen el event loop del api-server, pero el REQUEST seguía durando lo
+  mismo, y eso lo corta el timeout de un proxy inverso mientras el cliente
+  reintenta sobre una instalación cuyo estado no conoce. Con `async_gates` el
+  endpoint persiste la instalación en el estado transitorio **`analyzing`**,
+  encola `workers.marketplace_run_install_gates` en la cola **`marketplace`** y
+  responde **202** con `Location: /marketplace/installations/{id}` — el cuerpo ya
+  ES ese recurso. El worker corre las puertas y cierra la instalación con la
+  MISMA política que el camino síncrono (`marketplace/finalize.py`:
+  consentimiento → estado → materialización → auditoría); una puerta que rechaza
+  la deja **`blocked`** con su audit row de aborto enlazado a la instalación.
+  Es **opt-in**: sin el campo, el 201 síncrono no cambia.
+- **`GET /installations/{id}`** es ese recurso de estado (`tenant_member` — es una
+  lectura). Estados que puede devolver: `analyzing` (puertas en cola o
+  corriendo), `blocked` (una puerta rechazó; el motivo está en el audit row),
+  `enabled` / `disabled` (cerrada según el consentimiento que exige su nivel de
+  confianza) y `revoked`. Una instalación de otro tenant es 404, no 403.
 - **`GET .../permissions`** lista los permisos solicitados + su estado
   (GRANTED / DENIED / PENDING) para la UI de consentimiento.
 - **`POST .../consent`** registra la decisión grant/deny por permiso. Cuando

@@ -185,6 +185,26 @@ class LocalArtifactFetcher:
             signature=signature,
         )
 
+    def has_artifact(self, listing: MarketplaceListing) -> bool:
+        """¿Hay artefacto en disco para ``listing``? Sin leerlo.
+
+        prod-13 ``task_prod13_01``. Cuando las puertas corren en el worker hay
+        DOS procesos distintos que preguntan por el mismo artefacto, y el
+        ``root_dir`` es hoy un directorio **local del contenedor**: el api-server
+        no monta ningún volumen (verificado el 2026-08-19 en el stack vivo:
+        ``docker inspect`` devuelve ``Mounts: []``), así que lo que uno ve el
+        otro puede no verlo.
+
+        Eso importa porque un fetch fallido en el worker es ambiguo: puede ser
+        «este listing no tiene artefacto» —el skip honesto que el ADR 0081
+        documenta y que NO debe bloquear la instalación— o «el artefacto existe
+        pero desde aquí no se alcanza», que es un análisis que ha dejado de
+        correr en silencio. El productor responde a esta pregunta antes de
+        encolar, y el worker usa la respuesta para distinguir los dos casos en
+        vez de tragárselos como uno.
+        """
+        return (Path(self.root_dir) / str(listing.id)).is_dir()
+
 
 def _manifest_filename(kind: str) -> str:
     """The manifest file name expected on disk for a listing ``kind``."""
@@ -263,6 +283,14 @@ class _GateContext:
     actor: str
     listing: MarketplaceListing
     gate_report: dict[str, Any] = field(default_factory=dict)
+    # prod-13 `task_prod13_01`: la instalación a la que colgar el audit row del
+    # aborto, cuando ya existe. En el camino SÍNCRONO no existe (la fila se
+    # persiste después de las puertas), y por eso el default es None y el rastro
+    # histórico no cambia. En el camino ASÍNCRONO la fila se crea ANTES —es el
+    # recurso de estado que consulta el cliente tras el 202— y sin este enlace el
+    # motivo del rechazo quedaría en una fila de auditoría que nadie puede
+    # relacionar con la instalación que quedó `blocked`.
+    installation_id: UUID | None = None
     # The audit action a gate abort is recorded under: ``install`` for a
     # fresh install, ``update`` for the update path (task_09_12) — so the
     # trail distinguishes a failed install from a failed update.
@@ -445,6 +473,56 @@ class InstallOrchestrator:
         await self._gate_static_analysis(ctx, artifact, policy)
         return ctx.gate_report
 
+    def artifact_expected(self, listing: MarketplaceListing) -> bool:
+        """¿Debería haber artefacto para ``listing``, según el fetcher?
+
+        prod-13 ``task_prod13_01``. Lo contesta el fetcher si sabe hacerlo
+        (:meth:`LocalArtifactFetcher.has_artifact`); si no sabe, se responde
+        **True**, que es fallar cerrado: un fetcher de registro remoto que no
+        puede traer el artefacto tiene un problema de verdad, no un listing sin
+        artefacto, y tragárselo como un skip sería apagar la puerta en silencio.
+        """
+        has_artifact = getattr(self._fetcher, "has_artifact", None)
+        if has_artifact is None:
+            return True
+        return bool(has_artifact(listing))
+
+    async def run_gates_for_installation(
+        self,
+        *,
+        session: AsyncSession,
+        tenant_id: UUID,
+        actor: str,
+        listing: MarketplaceListing,
+        installation_id: UUID,
+        artifact_expected: bool,
+        abort_action: MarketplaceAuditAction = MarketplaceAuditAction.INSTALL,
+    ) -> dict[str, Any]:
+        """Corre las puertas 1-5 para una instalación que YA existe (prod-13).
+
+        Es el punto de entrada del worker (``workers.marketplace_gates``): la
+        fila de instalación se creó antes —es el recurso de estado que el 202
+        devolvió— y aquí se decide si sobrevive. Un fallo de puerta escribe su
+        audit row de aborto **enlazado a esa instalación** y propaga el
+        :class:`InstallError` típico, que el worker traduce a ``blocked``.
+
+        ``artifact_expected`` viene del productor (:meth:`artifact_expected`
+        evaluado donde se aceptó la request) y decide la ambigüedad del fetch:
+        con ``False`` la ausencia de artefacto es el skip honesto del ADR 0081;
+        con ``True`` la ausencia es un fallo, porque significa que el artefacto
+        estaba donde se aceptó la petición y no está donde se analiza.
+        """
+        ctx = await self._run_security_gates(
+            session=session,
+            tenant_id=tenant_id,
+            actor=actor,
+            listing=listing,
+            abort_action=abort_action,
+            tolerate_missing_artifact=not artifact_expected,
+            installation_id=installation_id,
+        )
+        return ctx.gate_report
+
     async def update(
         self,
         *,
@@ -554,6 +632,7 @@ class InstallOrchestrator:
         listing: MarketplaceListing,
         abort_action: MarketplaceAuditAction = MarketplaceAuditAction.INSTALL,
         tolerate_missing_artifact: bool = False,
+        installation_id: UUID | None = None,
     ) -> _GateContext:
         """Run gates 1-5 (fetch → parse → signature → analysis → sandbox).
 
@@ -580,6 +659,7 @@ class InstallOrchestrator:
             listing=listing,
             gate_report={"trust_level": str(policy.level)},
             abort_action=abort_action,
+            installation_id=installation_id,
         )
         if tolerate_missing_artifact:
             try:
@@ -611,10 +691,26 @@ class InstallOrchestrator:
         """Gate 1: fetch the artifact onto local disk (abort on transport fail)."""
         try:
             artifact = self._fetcher.fetch(ctx.listing)
-        except InstallError:
-            raise
         except Exception as exc:  # any fetch transport failure → typed abort
+            # Hasta el 2026-08-19 había aquí un `except InstallError: raise` DELANTE
+            # de este bloque, y su efecto era que el fallo de fetch más común —el
+            # `ArtifactFetchError` que lanza `LocalArtifactFetcher` cuando el
+            # artefacto no está en disco— abortaba la instalación **sin escribir
+            # su fila de auditoría**, al contrario de lo que promete el docstring
+            # de `_abort` («cada subclase corresponde a UNA puerta fallida») y de
+            # lo que hacen las otras cuatro puertas. La rama parecía evitar una
+            # doble auditoría, pero ningún fetcher puede auditar: el `Protocol`
+            # de `ArtifactFetcher` no recibe sesión.
+            #
+            # Se destapó al mover las puertas al worker (prod-13 task_prod13_01):
+            # el caso «el artefacto existía cuando se aceptó la petición y desde
+            # el worker no se alcanza» es justo el que más necesita explicarse, y
+            # era el único que se quedaba mudo.
             await self._abort(ctx, reason="artifact_fetch_failed", message=str(exc))
+            if isinstance(exc, InstallError):
+                # Ya viene tipado por el fetcher: se propaga tal cual para no
+                # envolver un error nuestro dentro de otro igual.
+                raise
             raise ArtifactFetchError(f"could not fetch artifact: {exc}") from exc
         ctx.gate_report["fetched"] = True
         return artifact
@@ -768,7 +864,7 @@ class InstallOrchestrator:
                 actor=ctx.actor,
                 action=ctx.abort_action.value,
                 listing_id=ctx.listing.id,
-                installation_id=None,
+                installation_id=ctx.installation_id,
                 detail={
                     "version": ctx.listing.version,
                     "trust_level": ctx.listing.trust_level,

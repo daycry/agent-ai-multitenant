@@ -659,10 +659,50 @@ def test_every_enum_keeps_its_values() -> None:
     )
 
 
-def test_the_public_all_list_is_unchanged() -> None:
-    """`__all__` gobierna `from … import *`; el troceo no lo toca."""
+#: Nombres AÑADIDOS a `__all__` después del troceo, con la tarea que los trajo.
+#:
+#: El inventario de arriba congela el `__all__` del monolito y su afirmación es
+#: «el troceo no movió la API pública». Meter ahí un nombre nuevo la convertiría
+#: en una mentira —diría que el monolito lo tenía— así que las adiciones viven
+#: separadas y **cada una con su procedencia escrita**. Lo que la guarda sigue
+#: impidiendo es lo que importa: que un nombre DESAPAREZCA, o que aparezca uno
+#: sin que nadie lo declare aquí.
+PUBLIC_API_ADDED_AFTER_THE_SPLIT: dict[str, str] = {
+    # `task_gov_02`: el historial versionado del `system_prompt` (migración 0143).
+    # Es parte del agregado de capacidad, así que vive en `domain/agents.py`.
+    "AgentPromptVersion": "task_gov_02",
+}
+
+
+def test_the_public_all_list_only_grew_where_it_was_declared() -> None:
+    """`__all__` gobierna `from … import *`: nada puede caerse, y nada puede colarse.
+
+    Antes esto era una igualdad contra el `__all__` del monolito. La igualdad
+    tenía una consecuencia que no era la buscada: cualquier modelo nuevo del
+    dominio —uno legítimo, con su migración— ponía en rojo un test que dice
+    hablar del troceo. Ahora la afirmación es la correcta en las dos
+    direcciones: los 41 nombres del monolito siguen ahí, y los que se han
+    añadido después son EXACTAMENTE los declarados con su tarea al lado.
+    """
     domain = _load_domain()
-    assert tuple(domain.__all__) == PUBLIC_API_BEFORE_THE_SPLIT  # type: ignore[attr-defined]
+    actual = tuple(domain.__all__)  # type: ignore[attr-defined]
+
+    perdidos = [name for name in PUBLIC_API_BEFORE_THE_SPLIT if name not in actual]
+    assert not perdidos, (
+        "el troceo (o un cambio posterior) se llevó nombres de la API pública del"
+        f" dominio: {perdidos}"
+    )
+
+    nuevos = sorted(set(actual) - set(PUBLIC_API_BEFORE_THE_SPLIT))
+    assert nuevos == sorted(PUBLIC_API_ADDED_AFTER_THE_SPLIT), (
+        "hay nombres en `__all__` que nadie declaró en"
+        " PUBLIC_API_ADDED_AFTER_THE_SPLIT (o al revés, entradas que ya no"
+        f" existen): {nuevos} vs {sorted(PUBLIC_API_ADDED_AFTER_THE_SPLIT)}"
+    )
+
+    # `__all__` ORDENADO: es lo que era antes (el monolito lo tenía alfabético) y
+    # lo que hace legible un diff de esta lista.
+    assert list(actual) == sorted(actual), "`__all__` dejó de estar ordenado"
 
 
 # --------------------------------------------------------------------------- #

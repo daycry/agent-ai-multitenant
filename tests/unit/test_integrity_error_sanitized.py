@@ -143,3 +143,50 @@ def test_no_router_still_returns_the_raw_orig() -> None:
         f"la guarda dejó de encontrar los routers que capturan IntegrityError "
         f"(vio {len(catchers)}: {catchers})"
     )
+
+
+def test_the_prompt_version_race_has_its_own_code() -> None:
+    """`task_gov_02`: dos `PUT /agents/{id}` a la vez son una carrera, no un bug.
+
+    Los dos calculan el mismo `version` para `agent_prompt_versions` y el UNIQUE
+    deja fuera al segundo. Sin entrada en el mapa el perdedor recibía el genérico
+    `conflict`, que no le dice qué hacer; con ella recibe `concurrent_prompt_edit`,
+    que es accionable («recarga y repite»). Y en ningún caso el crudo, que nombra
+    la constraint y trae el `tenant_id` en el `DETAIL:`.
+    """
+    from api_server.routers._integrity import integrity_conflict
+
+    exc = integrity_conflict(
+        _integrity_error(
+            "duplicate key value violates unique constraint"
+            ' "uq_agent_prompt_versions_agent_version"\nDETAIL:  Key (agent_id, version)='
+            "(3f2a0000-0000-0000-0000-000000000001, 3) already exists."
+        ),
+        context="agent.prompt_version",
+    )
+    assert exc.status_code == 409
+    assert isinstance(exc.detail, dict)
+    assert exc.detail["error"] == "concurrent_prompt_edit"
+    # Ni el nombre de la constraint ni el UUID salen por la API.
+    rendered = repr(exc.detail)
+    assert "uq_agent_prompt_versions" not in rendered
+    assert "3f2a0000" not in rendered
+
+
+def test_the_agents_crud_router_catches_the_prompt_version_race() -> None:
+    """El cableado: el mapa no sirve si nadie captura la excepción.
+
+    `record_prompt_change` hace su propio `flush`, así que la `IntegrityError` NO
+    pasa por `flush_or_conflict` — sale cruda del `await` y, sin este `except`, el
+    cliente recibiría un 500 con el mensaje de PostgreSQL. Es la clase de agujero
+    que el mapa de arriba parece cerrar y no cierra.
+    """
+    from pathlib import Path
+
+    source = Path("apps/api-server/src/api_server/routers/agents/crud.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'integrity_conflict(exc, context="agent.prompt_version")' in source, (
+        "el PUT de agentes ya no traduce la carrera del historial de prompts:"
+        " un 500 con el crudo de PostgreSQL volvería al cliente"
+    )

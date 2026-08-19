@@ -149,7 +149,9 @@ producción:
    in-memory siguen funcionando hasta la próxima limpieza manual.
 2. **Detener workers de las colas afectadas**: `celery -A workers
 control shutdown -Q test,review` deja `default` / `ingestion` /
-   `privileged` corriendo (las colas `heavy`/`gpu` se retiraron — ADR 0083).
+   `privileged` / `marketplace` corriendo (las colas `heavy`/`gpu` se retiraron
+   — ADR 0083; `marketplace` entró en prod-13 `task_prod13_01`: las puertas de
+   seguridad de una instalación, que corrían dentro del request del api-server).
    Los planes nuevos esperan; los existentes en
    `pending_human_validation` se sirven desde `review_sessions` (la
    tabla persiste su estado).

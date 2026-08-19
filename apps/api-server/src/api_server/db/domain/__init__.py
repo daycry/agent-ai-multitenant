@@ -65,7 +65,14 @@ from api_server.db.conversation import (  # (re-export)
     Message,
     MessageAuthorKind,
 )
-from api_server.db.domain.agents import Agent, AgentSkill, AgentTool, Skill, Tool
+from api_server.db.domain.agents import (
+    Agent,
+    AgentPromptVersion,
+    AgentSkill,
+    AgentTool,
+    Skill,
+    Tool,
+)
 from api_server.db.domain.approvals import ApprovalPolicyTemplate, ApprovalRequest
 from api_server.db.domain.enums import (
     AgentRole,
@@ -110,6 +117,7 @@ from api_server.db.domain.teams import Team, TeamMember
 
 __all__ = [
     "Agent",
+    "AgentPromptVersion",
     "AgentRole",
     "AgentScope",
     "AgentSkill",

@@ -14,6 +14,7 @@ una persona real en el otro idioma que ninguna.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 # Cap defensivo: las personas built-in más ricas rondan 2k chars; 8k deja sitio
@@ -61,3 +62,37 @@ def resolve_agent_persona(agent: Any) -> dict[str, str] | None:
     if name:
         persona["name"] = str(name)
     return persona
+
+
+def effective_prompt_text(agent: Any) -> str:
+    """El texto que el runtime prepende de verdad, o ``""`` si no hay persona.
+
+    Es :func:`resolve_agent_persona` sin el envoltorio: ya resuelto (es → en →
+    plano), ya recortado y ya capado a :data:`PERSONA_MAX_CHARS`. Sellar el
+    ``system_prompt`` crudo en su lugar sería sellar algo que el modelo puede no
+    haber visto — dos personas que sólo difieren pasados los 8000 caracteres
+    llegan idénticas al modelo, y dos agentes con el mismo campo plano pero
+    distinto ``system_prompts.es`` llegan distintas.
+    """
+    persona = resolve_agent_persona(agent)
+    return persona["prompt"] if persona is not None else ""
+
+
+def prompt_text_hash(text: str) -> str:
+    """sha256 hex del texto de un prompt. **Contrato compartido con el runtime.**
+
+    El agent-runtime vive en otra imagen y no puede importar este módulo, así que
+    tiene su propia copia de estas cuatro líneas
+    (``agent_runtime.prompt_version.agent_prompt_seal``). Las dos tienen que
+    producir el MISMO dígito para el mismo texto: el sello que el dispatch manda
+    en el spec y el que el runtime calcula cuando no lo recibe son el mismo
+    número, o dos runs del mismo prompt acabarían con etiquetas distintas según
+    por qué rama entraron. Lo fija
+    ``tests/unit/test_agent_prompt_seal_contract.py``.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def effective_prompt_hash(agent: Any) -> str:
+    """Sello del texto efectivo de ``agent`` (`task_gov_02` / `task_gov_03`)."""
+    return prompt_text_hash(effective_prompt_text(agent))

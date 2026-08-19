@@ -28,7 +28,8 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
-import { reasoningLabel, selectableReasoningOptions } from "@/lib/model-selection";
+import { useT } from "@/lib/i18n";
+import { reasoningLabel as labelFor, selectableReasoningOptions } from "@/lib/model-selection";
 import { useErrorText } from "@/lib/use-error-text";
 import {
   clearCortexModel,
@@ -45,6 +46,12 @@ function modelsFor(providers: CortexModelOption[], providerId: string): string[]
 }
 
 export function CortexModelSection() {
+  const t = useT("cortexModel");
+  const tCommon = useT("common");
+  // `labelFor` trae "Desactivado" como valor por defecto de su parámetro: el
+  // llamante le pasa la traducción para que el helper siga sin saber de idiomas
+  // (mismo trato que en `components/capability/provider-model-selects.tsx`).
+  const reasoningLabel = (opt: string) => labelFor(opt, t("reasoningOff"));
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
@@ -107,51 +114,41 @@ export function CortexModelSection() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Brain className="h-5 w-5" />
-          Modelo del córtex
+          {t("title")}
         </CardTitle>
-        <p className="text-muted-foreground text-sm">
-          Modelo que usa el córtex del System Owner para deliberar. Es independiente del modelo de
-          los agentes y del asistente, no se hereda por tenant, y solo lo configura el System Owner.
-          Sin un modelo aquí, el córtex no responde.
-        </p>
+        <p className="text-muted-foreground text-sm">{t("description")}</p>
       </CardHeader>
       <CardContent className="space-y-4" data-testid="cortex-model-control">
         {optionsQuery.isLoading || currentQuery.isLoading ? (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <Spinner />
-            Cargando…
+            {tCommon("loading")}
           </p>
         ) : (
           <>
             <p className="text-muted-foreground text-sm" data-testid="cortex-model-effective">
               {hasModel ? (
                 <>
-                  Modelo actual:{" "}
+                  {t("currentModel")}{" "}
                   <strong>
                     {current?.provider_display_name} · {current?.model_id}
                   </strong>
                   {current && !current.is_valid ? (
-                    <span className="text-destructive">
-                      {" "}
-                      (no válido: el proveedor o el modelo ya no existen)
-                    </span>
+                    <span className="text-destructive"> {t("invalid")}</span>
                   ) : null}
                 </>
               ) : (
-                "Sin modelo configurado. El córtex no responderá hasta que elijas uno."
+                t("unset")
               )}
             </p>
 
             {providers.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No hay proveedores LLM activos. Configura uno en &laquo;Proveedores LLM&raquo; antes
-                de elegir el modelo del córtex.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("noProviders")}</p>
             ) : (
               <>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-1.5">
-                    <Label htmlFor="cortex-model-provider">Proveedor</Label>
+                    <Label htmlFor="cortex-model-provider">{t("provider")}</Label>
                     <Select
                       id="cortex-model-provider"
                       data-testid="cortex-model-provider"
@@ -164,7 +161,7 @@ export function CortexModelSection() {
                         saveMutation.reset();
                       }}
                     >
-                      <option value="">— Selecciona un proveedor —</option>
+                      <option value="">{t("pickProvider")}</option>
                       {providers.map((p) => (
                         <option key={p.provider_id} value={p.provider_id}>
                           {p.display_name} ({p.slug})
@@ -173,7 +170,7 @@ export function CortexModelSection() {
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="cortex-model-model">Modelo</Label>
+                    <Label htmlFor="cortex-model-model">{t("model")}</Label>
                     <Select
                       id="cortex-model-model"
                       data-testid="cortex-model-model"
@@ -186,10 +183,10 @@ export function CortexModelSection() {
                     >
                       <option value="">
                         {!providerId
-                          ? "— Elige primero un proveedor —"
+                          ? t("pickProviderFirst")
                           : models.length === 0
-                            ? "— Sin modelos (sincronízalos en Proveedores LLM) —"
-                            : "— Selecciona un modelo —"}
+                            ? t("noModels")
+                            : t("pickModel")}
                       </option>
                       {models.map((m) => (
                         <option key={m} value={m}>
@@ -200,7 +197,7 @@ export function CortexModelSection() {
                   </div>
                   {reasoningOptions.length > 0 ? (
                     <div className="space-y-1.5">
-                      <Label htmlFor="cortex-model-reasoning">Razonamiento</Label>
+                      <Label htmlFor="cortex-model-reasoning">{t("reasoning")}</Label>
                       <Select
                         id="cortex-model-reasoning"
                         data-testid="cortex-model-reasoning"
@@ -227,7 +224,7 @@ export function CortexModelSection() {
                   </p>
                 ) : saveMutation.isSuccess ? (
                   <p className="text-sm text-emerald-600" role="status">
-                    Modelo del córtex guardado.
+                    {t("savedOk")}
                   </p>
                 ) : null}
 
@@ -240,7 +237,7 @@ export function CortexModelSection() {
                       disabled={busy}
                       onClick={() => clearMutation.mutate()}
                     >
-                      Quitar modelo
+                      {t("clear")}
                     </Button>
                   ) : null}
                   <Button
@@ -249,7 +246,7 @@ export function CortexModelSection() {
                     disabled={busy || !providerId || !modelId}
                     onClick={() => saveMutation.mutate()}
                   >
-                    {saveMutation.isPending ? "Guardando…" : "Guardar modelo"}
+                    {saveMutation.isPending ? t("saving") : t("save")}
                   </Button>
                 </div>
               </>

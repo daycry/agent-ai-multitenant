@@ -58,7 +58,18 @@ def test_trust_level_enum_values() -> None:
 
 
 def test_installation_status_enum_values() -> None:
+    # `analyzing` y `blocked` entraron el 2026-08-19 (prod-13 task_prod13_01): la
+    # instalacion es el RECURSO DE ESTADO del 202 que devuelve el endpoint cuando
+    # las puertas de seguridad corren en la cola `marketplace`, asi que necesita
+    # decir «esperando veredicto» y «rechazada por una puerta».
+    #
+    # Los dos son valores TRANSITORIOS y NO necesitaron migracion: la columna es
+    # `varchar(16)` sin CHECK (migracion 0041), o sea que el conjunto valido se
+    # aplica aqui en Python y en ningun sitio del DDL — este test ES la guarda.
+    # Ambos caben en 16 caracteres.
     assert {s.value for s in InstallationStatus} == {
+        "analyzing",
+        "blocked",
         "enabled",
         "disabled",
         "revoked",

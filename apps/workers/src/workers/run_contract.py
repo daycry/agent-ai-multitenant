@@ -146,6 +146,15 @@ class ExecutionRequest:
     # reviewer runs carry the agent's domain identity. `None` = no key
     # (agent without persona) → prompt untouched (backward-compat).
     agent_persona: dict[str, Any] | None = None
+    # `task_gov_03`: el sello del prompt del agente — `{prompt_hash, version}`,
+    # donde `version` es el número de la última fila de `agent_prompt_versions`
+    # (`task_gov_02`) o `None` si el agente nunca se editó. El runtime lo mezcla en
+    # `executions.prompt_version`, que hasta ahora sólo hablaba del andamiaje del
+    # runtime y no podía atribuir un cambio de comportamiento a un cambio de
+    # persona. Viaja SIEMPRE junto a `agent_persona`; `None` = sin clave
+    # (retro-compat con un orchestrator anterior, y el runtime cae a hashear la
+    # persona por su cuenta).
+    agent_prompt_version: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe dict — the Celery payload the orchestrator sends."""
@@ -171,6 +180,7 @@ class ExecutionRequest:
             "human_answers": self.human_answers,
             "predecessors": self.predecessors,
             "agent_persona": self.agent_persona,
+            "agent_prompt_version": self.agent_prompt_version,
         }
 
     @classmethod
@@ -198,6 +208,7 @@ class ExecutionRequest:
             prior_failure=raw.get("prior_failure"),
             human_answers=raw.get("human_answers"),
             agent_persona=raw.get("agent_persona"),
+            agent_prompt_version=raw.get("agent_prompt_version"),
         )
 
 
