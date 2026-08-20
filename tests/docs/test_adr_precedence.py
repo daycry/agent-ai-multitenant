@@ -49,8 +49,16 @@ _CLAUDE_MD = _ROOT / "CLAUDE.md"
 #: es frontmatter.
 _FRONTMATTER_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
 
-#: `rejects:` con el resto de la línea (vacío si la lista viene en bloque).
-_REJECTS_RE = re.compile(r"^rejects:\s*(.*?)\s*$")
+
+#: Una clave del frontmatter con el resto de su línea (vacío si la lista viene
+#: en bloque). Se construye por clave y no se fija a `rejects:` porque el mismo
+#: parseo lo necesita el `reopen_when:` de las decisiones aplazadas
+#: (`tests/docs/test_adr_deferrals.py`, `task_gov_11`), y dos copias de un
+#: parser de YAML-a-mano se bifurcan como se bifurcó el vocabulario del hallazgo
+#: g6.
+def _key_line_re(key: str) -> re.Pattern[str]:
+    return re.compile(rf"^{re.escape(key)}:\s*(.*?)\s*$")
+
 
 #: Un ítem de lista YAML en bloque (`  - task_prod07_09`).
 _YAML_ITEM_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
@@ -88,16 +96,22 @@ def _frontmatter_block(path: Path) -> str | None:
 
 
 def _parse_rejects(block: str) -> tuple[str, ...]:
-    """Los valores de `rejects:` de un frontmatter, sin pasar por PyYAML.
+    """Los valores de `rejects:` de un frontmatter, sin pasar por PyYAML."""
+    return _parse_list_field(block, "rejects")
+
+
+def _parse_list_field(block: str, key: str) -> tuple[str, ...]:
+    """Los valores de una clave-lista de un frontmatter, sin pasar por PyYAML.
 
     Tolera las tres formas que admite YAML y que el corpus mezcla:
     lista de flujo (``rejects: [a, b]``), lista en bloque (``rejects:`` y luego
     ``  - a``) y escalar suelto (``rejects: a``). Devuelve ``()`` cuando la clave
     no está.
     """
+    key_re = _key_line_re(key)
     lines = block.split("\n")
     for index, line in enumerate(lines):
-        match = _REJECTS_RE.match(line)
+        match = key_re.match(line)
         if match is None:
             continue
         rest = match.group(1)

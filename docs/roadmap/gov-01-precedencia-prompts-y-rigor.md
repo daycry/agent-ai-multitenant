@@ -65,7 +65,14 @@ eval contra el golden set y rechaza la escritura bajo preset estricto, con el
 mensaje nombrando los escenarios y una válvula de escape acotada al caso
 `inconclusive`. Con eso **las dos condiciones escritas de `task_gov_11` están
 cumplidas** —`task_gov_02` y `task_gov_05`—, así que esa casilla ya sólo depende
-de escribir la nota de reapertura. De la fase 2 queda `task_gov_04`, cuyo resto
+de escribir la nota de reapertura. **Cuarta pasada (2026-08-20): `task_gov_11`**,
+que es justo esa nota — [ADR 0158](../05-architecture-decisions/0158-skillopt-aplazado-con-disparador.md)
+con la condición en frontmatter comprobable (`reopen_when:` /
+`reopen_triggered_on:`, guarda en `tests/docs/test_adr_deferrals.py`), addendum en
+el informe, y la constatación de que **el disparador ya había saltado sin que
+nadie lo notara**. Su enunciado mandaba la nota a «el ADR de la fase 4», que **no
+existe** —lo produce `task_gov_08`, abierta y de otro tema—: está corregido en la
+casilla. De la fase 2 queda `task_gov_04`, cuyo resto
 es del operador (secreto, dataset, variables de repositorio) más el productor de
 diff vivo de CI — que esta casilla NO cubre: aquí el productor vive en el
 api-server, con sesión tenant-bound, y en CI no la hay. El `status` del plan
@@ -255,6 +262,11 @@ sin decisión pendiente.
     los comodines en un dict por camino, y `/agents/{agent_id}` son TRES rutas
     (GET/PUT/DELETE), así que sólo sobrevivía el DELETE y la comparación de métodos
     salía vacía. Lo destapó el rojo provocado a mano; está escrito en el test.
+  - ⏰ **Cerrar esta casilla vence un aplazamiento** (anotado el 2026-08-20 por
+    `task_gov_11`): es la primera de las dos condiciones del
+    [ADR 0158](../05-architecture-decisions/0158-skillopt-aplazado-con-disparador.md),
+    que aplazó **SkillOpt** por no existir el versionado del prompt. La segunda
+    (`task_gov_05`) se cerró el 2026-08-20, así que el disparador ya saltó.
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Descripción**: Hoy `PUT /agents/{id}` sobrescribe `system_prompt`
   (`routers/agents/crud.py:225-245`) **sin versión, sin auditoría y sin diff**.
@@ -605,6 +617,13 @@ Decisión del operador: **bloquean, pero solo en `production` y
     válvula hasta que la corrida se mueva a un worker; (c) `shadow_evals.py`
     sigue construyendo su `LLMSubjectModel` sin prompt — mismo defecto que se
     acaba de arreglar aquí, pero es otro carril.
+  - ⏰ **Cerrar esta casilla venció un aplazamiento** (anotado el 2026-08-20 por
+    `task_gov_11`): era la **segunda** y última condición del
+    [ADR 0158](../05-architecture-decisions/0158-skillopt-aplazado-con-disparador.md),
+    que aplazó **SkillOpt** por no existir evals que bloqueasen de verdad. Con
+    `task_gov_02` cerrada el 2026-08-19, el disparador saltó el **2026-08-20** y
+    ese ADR queda vencido: hay que reabrir la decisión. Ojo a la letra pequeña
+    que el ADR anota — la ruta de CI (`task_gov_04`) sigue en `--dry-run`.
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Descripción**: Al cambiar `system_prompt`, se lanza la eval contra el golden
   set. En un proyecto `production` o `customer-external`, un resultado peor que
@@ -805,6 +824,22 @@ humana al cierre del plan NO se toca — sigue siendo del operador siempre.
 ### `task_gov_08` — ADR del rigor por niveles
 
 - [ ] **Título**: ADR que fija qué cambia en cada nivel y quién clasifica
+  - 📝 **Borrador `proposed` listo para elegir (2026-08-20)**, escrito de paso al
+    cerrar `task_gov_11`; la casilla **sigue abierta** porque lo que falta es la
+    firma, no el texto:
+    [ADR 0159](../05-architecture-decisions/0159-rigor-de-review-por-nivel-del-cambio.md).
+    Lleva los hechos verificados contra el código con `fichero:línea`, **cuatro
+    opciones con su coste** (A pasadas · B pasadas + auto-promoción · C
+    profundidad de una pasada · D instrumentar primero) y las tres preguntas del
+    enunciado con recomendación. Dos hallazgos del recon que cambian el
+    presupuesto: (1) **hay dos cosas llamadas «review»** —el nodo `self_review`
+    acotado por `max_review_retries`, límite duro de plataforma sin `tenant_id`
+    (ADR 0013), y la ejecución del reviewer (ADR 0087)—, y cablear el nivel a la
+    primera sería una regresión de salvaguarda; (2) lo caro de la opción A no es
+    despachar la 2ª pasada sino que **la guarda de idempotencia que protege de un
+    evento re-entregado es la misma que impide una segunda pasada legítima**
+    (`orchestrator/dispatch.py:655-672`). Al firmar hay que pasarlo a `accepted`
+    con la opción elegida, como pide este enunciado.
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Descripción**: Nace `accepted` con la decisión del 2026-08-12 escrita
   —incluida su frontera: **la validación humana no participa**—, y con lo que
@@ -947,7 +982,70 @@ incorrect` no dice qué regla le falta al reviewer de CI4. **Si el operador
 
 ### `task_gov_11` — El disparador de SkillOpt, escrito para que no se olvide
 
-- [ ] **Título**: Nota de decisión aplazada CON su condición de reapertura
+- [x] **Título**: Nota de decisión aplazada CON su condición de reapertura
+  - ✅ **Cerrada (2026-08-20).** Y lo primero es el recon, porque **el enunciado
+    se equivocaba de sitio**: «el ADR de la fase 4» **no existe**. La fase 4 sólo
+    produce un ADR —el de `task_gov_08`—, que sigue `[ ]` porque lo decide un
+    humano, y que además es de **otro tema** (rigor por niveles de review). Meter
+    ahí la nota de SkillOpt la habría dejado (a) sin escribir hasta que el
+    operador firmase una decisión no relacionada, y (b) escondida bajo un título
+    que nadie abre buscando SkillOpt. La nota vive donde se busca: un ADR propio.
+  - **(a) [ADR 0158](../05-architecture-decisions/0158-skillopt-aplazado-con-disparador.md)**,
+    `accepted`, con `date: 2026-08-12` —la fecha de la decisión del operador, no
+    la de este escrito, que consta aparte—. Dice QUÉ se aplazó, la razón **real**
+    (no el coste: el **orden** — copiar la pieza vistosa sin el suelo sobre el que
+    se apoya es adoptar su riesgo sin su seguro, y su radio de daño es una máquina
+    mientras que el nuestro son los runs de un tenant en producción), la condición
+    con sus dos `task_id`, y qué NO significa que haya saltado: **reabrir no es
+    aprobar**, SkillOpt sigue sin construirse hasta que alguien lo firme.
+  - **(b) El disparador ya había saltado, y nadie lo había notado.** Verificado
+    mecánicamente contra el roadmap con el parser de la guarda, no de memoria:
+    `task_gov_02` **`[x]` el 2026-08-19** y `task_gov_05` **`[x]` el 2026-08-20**.
+    O sea que la condición se cumplió el mismo día que se escribía esta casilla,
+    y **quien cerró cada una de esas dos casillas no tenía cómo saberlo** —
+    que es exactamente la clase de documento que esta semana se está limpiando.
+  - **(c) El mecanismo, en vez de sólo prosa** — que es lo que la casilla pedía
+    de fondo. Dos campos en el frontmatter del ADR, hermanos del `rejects:` de
+    `task_gov_01`: `reopen_when: [task_gov_02, task_gov_05]` y
+    `reopen_triggered_on: 2026-08-20`. Los comprueba
+    [`tests/docs/test_adr_deferrals.py`](../../tests/docs/test_adr_deferrals.py)
+    con **cuatro reglas**: los ids existen; **cada casilla cita de vuelta al
+    ADR** (quien la cierra abre el plan, no el corpus de ADR — sin esto el
+    campo sería otra anotación de un solo lado); el disparo **consta con fecha**
+    en cuanto todas están `[x]`; y **no consta** mientras alguna siga abierta,
+    porque si no `reopen_triggered_on:` sería la forma barata de silenciar la
+    regla anterior. Mismo espíritu que el `gate_override` que caduca de
+    `CLAUDE.md`. Las notas de cierre de `task_gov_02` y `task_gov_05` llevan ya
+    la cita de vuelta.
+  - **(d) En el informe**, que es el otro sitio que sí nombraba bien el
+    enunciado: addendum fechado en
+    [`2026-08-12-analisis-agentic-workflow.md`](2026-08-12-analisis-agentic-workflow.md)
+    §«El disparador de SkillOpt», con la tabla de las dos condiciones y su estado,
+    más la fila 6 de la tabla de decisiones, que es donde aterriza quien la lee en
+    diagonal.
+  - **Sin un segundo parser de YAML-a-mano**: `_parse_rejects` de
+    `test_adr_precedence.py` se generaliza a `_parse_list_field(block, key)` y el
+    fichero nuevo lo importa. Dos copias de un parser del mismo frontmatter se
+    bifurcan igual que se bifurcó el vocabulario del hallazgo g6 (los 8 tests de
+    la guarda de precedencia siguen en verde tras el refactor).
+  - **Rojo verificado, una rotura por regla** (además del rojo inicial de
+    no-vacuidad, con el corpus todavía sin ningún `reopen_when:`): quitar
+    `reopen_triggered_on` → cae la del disparo silencioso; apuntar a
+    `task_gov_04`, que sigue abierta → caen la del disparo prematuro y la de la
+    cita de vuelta; `task_no_existe_9999` → cae la de referencias muertas;
+    `reopen_triggered_on: ayer` → cae la de la fecha ISO; quitar `reopen_when`
+    dejando la fecha → cae la del aplazamiento sin condición.
+  - **La letra pequeña que el ADR anota y esta casilla no puede resolver**: la
+    condición se cumple **como está escrita**, pero el gate de evals tiene dos
+    mitades y `task_gov_04` sigue `[ ]` — la ruta de CI toma todavía la rama
+    `--dry-run`, así que un parche a un prompt del **repositorio** (`seeds/`) no
+    lo frena hoy ninguna eval. Quien reabra decide si eso basta; descubrirlo
+    después sale más caro.
+  - **Lo que NO se hizo, con motivo**: el renderer `tech_writer/adr.py` **no**
+    aprende `reopen_when:` (sí aprendió `rejects:` en `task_gov_01`). Un ADR
+    auto-generado al cierre de un plan sabe qué casillas cerró en negativo, pero
+    **no sabe que está aplazando algo**: eso es una deliberación, se escribe a
+    mano, y un campo que el renderer nunca poblaría sería superficie sin llamante.
 - **Tiempo**: 1 h · **Complejidad**: s
 - **Descripción**: El operador aplazó SkillOpt —el bucle que convierte rechazos
   repetidos en parches a las instrucciones del agente— **con disparador escrito**,
@@ -1010,7 +1108,12 @@ incorrect` no dice qué regla le falta al reviewer de CI4. **Si el operador
 
 - **No implementa la pasada ciega del revisor.** Se mide primero (fase 3). Si el
   dato la justifica, será su propio plan con su ADR.
-- **No implementa SkillOpt.** Aplazado con disparador escrito (`task_gov_11`).
+- **No implementa SkillOpt.** Aplazado con disparador escrito (`task_gov_11`),
+  hoy en el [ADR 0158](../05-architecture-decisions/0158-skillopt-aplazado-con-disparador.md).
+  **Ese disparador saltó el 2026-08-20**, al cerrarse la segunda de sus dos
+  condiciones (`task_gov_02` y `task_gov_05`): el aplazamiento está vencido y la
+  decisión hay que reabrirla — lo que no equivale a aprobarla, así que este plan
+  sigue sin implementarlo.
 - **No toca la validación humana.** El rigor por niveles se queda en las pasadas
   de review por decisión expresa del operador.
 - **No adopta el consilium de cinco revisores** ni el puente MCP a Codex: Azure

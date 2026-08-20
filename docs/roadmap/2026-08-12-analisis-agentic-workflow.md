@@ -501,7 +501,7 @@ obedecer. La respuesta va inmediatamente después de cada una.
 | 3   | ¿Pasada ciega del revisor?           | **Primero el detector barato**, y decidir con el dato                |
 | 4   | ¿Evals bloqueantes al editar prompt? | **Sí, solo en `production` y `customer-external`**                   |
 | 5   | ¿Revisor de otra familia?            | **Solo medirlo y avisar** en el Hub de Capacidad                     |
-| 6   | ¿Entra SkillOpt?                     | **No ahora, con disparador escrito** (ver abajo)                     |
+| 6   | ¿Entra SkillOpt?                     | **No ahora, con disparador escrito** — que **saltó el 2026-08-20**   |
 
 ### Lo que estas seis respuestas tienen en común
 
@@ -537,6 +537,36 @@ Las dos están aprobadas en las respuestas 4 y 2.2. **El día que existan, esta
 decisión caduca y hay que reabrirla** — no es un «no» indefinido. Montar el bucle
 antes que las redes sería exactamente lo contrario de lo que hace el framework
 que lo inspira: ellos lo tienen porque PRIMERO tienen el golden-set.
+
+> ### ⏰ Addendum del 2026-08-20 — el día llegó
+>
+> **Las dos redes existen. Este aplazamiento está vencido.** Escrito al cerrar
+> `task_gov_11` del plan
+> [`gov-01`](gov-01-precedencia-prompts-y-rigor.md), y verificado contra el
+> roadmap, no recordado:
+>
+> | Condición                        | Casilla       | Estado                 | Qué la cerró                                                                                                                                   |
+> | -------------------------------- | ------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+> | Versionado del prompt (1)        | `task_gov_02` | **`[x]` (2026-08-19)** | Migración `0143` (`agent_prompt_versions`, RLS + append-only) y, con `task_gov_03`, `executions.prompt_version` sellando `v{N}:{sha256}`       |
+> | Evals que bloqueen de verdad (2) | `task_gov_05` | **`[x]` (2026-08-20)** | `PUT /agents/{id}` corre la eval contra el golden set y **rechaza** la escritura bajo preset estricto, nombrando los escenarios que empeoraron |
+>
+> La decisión, su condición y el hecho de que se haya cumplido viven desde hoy en
+> el
+> [**ADR 0158**](../05-architecture-decisions/0158-skillopt-aplazado-con-disparador.md),
+> con la condición en **dos campos de frontmatter que un test comprueba**
+> (`reopen_when:` / `reopen_triggered_on:`, guarda en
+> `tests/docs/test_adr_deferrals.py`) — precisamente porque esta nota, mientras
+> fue sólo prosa, se cumplió sin que quien cerró cada una de las dos casillas
+> pudiera saber que estaba venciendo un aplazamiento.
+>
+> Dos precisiones que van con el disparo:
+>
+> - **Reabrir no es aprobar.** Mientras nadie decida lo contrario, SkillOpt sigue
+>   sin construirse; lo que el disparo obliga es a volver a mirarlo con el coste
+>   delante (15-20 d), no a hacerlo.
+> - **Media red tiene un hueco conocido**: la ruta de BD sí bloquea, pero la de CI
+>   (`task_gov_04`, abierta) sigue tomando la rama `--dry-run`. Un parche a un
+>   prompt del **repositorio** (`seeds/`) no lo frena hoy ninguna eval.
 
 ### Las preguntas, tal como se formularon
 

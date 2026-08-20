@@ -38,9 +38,14 @@ PUNTERO al objeto a corregir (`skills/X` | `agents/Y`) y `class` como
 `rule_missing | rule_wrong | rule_ignored`. Eso es la mitad barata de **SkillOpt**
 —el bucle que convierte rechazos repetidos en parches a las instrucciones del
 agente—, y el operador lo **aplazó con disparador escrito** (decisión 6 del
-informe; `task_gov_11`). El enunciado de `task_gov_10` reorientó el dato para que
-**sirva por sí solo aunque ese bucle no llegue nunca**, y es el que se ha
-implementado.
+informe; `task_gov_11`, hoy **ADR 0158**). El enunciado de `task_gov_10` reorientó
+el dato para que **sirva por sí solo aunque ese bucle no llegue nunca**, y es el
+que se ha implementado.
+
+**Aviso para quien llegue aquí a reabrirlo**: el disparador de aquel aplazamiento
+**saltó el 2026-08-20** (`task_gov_02` + `task_gov_05` cerradas), así que el ADR
+0158 está vencido y la decisión está por reabrir — que no es lo mismo que
+aprobada.
 
 Consecuencia práctica, y la razón de que esto esté escrito aquí: el día que
 SkillOpt se reabra, su reflexión (`skills/X` x `rule_missing`) es un par
