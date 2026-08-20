@@ -23,7 +23,6 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.capabilities import (
     CapabilitiesResponse,
@@ -38,6 +37,7 @@ from api_server.celery_client import (
     enqueue_compose_review_runtime,
     revoke_job_callback,
 )
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization

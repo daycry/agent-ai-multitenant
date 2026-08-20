@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from api_server.config import get_settings
+from api_server.db.after_commit import AfterCommitSession
 
 
 def pool_kwargs() -> dict[str, object]:
@@ -75,9 +76,18 @@ def _install_pool_metrics_once() -> None:
 
 @lru_cache(maxsize=1)
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    maker = async_sessionmaker(
+    # `async_sessionmaker[AsyncSession]` explícito: la clase concreta es la
+    # subclase, pero el tipo público sigue siendo el genérico —
+    # `async_sessionmaker` es INVARIANTE, y siete consumidores anotan
+    # `async_sessionmaker[AsyncSession]`.
+    maker = async_sessionmaker[AsyncSession](
         bind=get_engine(),
-        class_=AsyncSession,
+        # `AfterCommitSession` y NO `AsyncSession`: la clase es la que drena los
+        # callbacks de `schedule_after_commit` al cerrar. Ver
+        # `api_server.db.after_commit` — el arreglo vive aquí, en las DOS
+        # factorías, y no en cada llamador precisamente porque un llamador se
+        # olvida (nueve rutas de settings lo estaban).
+        class_=AfterCommitSession,
         expire_on_commit=False,
     )
     _install_pool_metrics_once()
@@ -98,9 +108,11 @@ def get_admin_engine() -> AsyncEngine:
 
 @lru_cache(maxsize=1)
 def get_admin_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    maker = async_sessionmaker(
+    maker = async_sessionmaker[AsyncSession](
         bind=get_admin_engine(),
-        class_=AsyncSession,
+        # Ver `get_sessionmaker`: es LA sesión que se saltaba el drenaje, porque
+        # todas las escrituras de platform settings son System-Admin only.
+        class_=AfterCommitSession,
         expire_on_commit=False,
     )
     _install_pool_metrics_once()

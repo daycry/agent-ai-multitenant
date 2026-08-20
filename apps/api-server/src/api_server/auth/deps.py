@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
 
-import structlog
 from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy import select, text
@@ -364,22 +363,12 @@ async def require_system_owner(
 # ---------------------------------------------------------------------------
 # Tenant-scoped session dependency
 # ---------------------------------------------------------------------------
-_log = structlog.get_logger("api_server.auth.deps")
-
-_AFTER_COMMIT_KEY = "_after_commit"
-
-
-def schedule_after_commit(session: AsyncSession, factory: Callable[[], Awaitable[None]]) -> None:
-    """Register a zero-arg coroutine factory to run AFTER this request's tenant
-    session commits (see :func:`open_tenant_session`).
-
-    Domain events must be published only once their triggering row is durable:
-    publishing inline (before ``open_tenant_session`` commits on return) lets a
-    fast consumer — the orchestrator — read the not-yet-committed row in
-    ``_dispatch`` and silently skip it (root cause of the "consumer se atasca"
-    symptom). Registering the publish here guarantees it fires post-commit.
-    """
-    session.info.setdefault(_AFTER_COMMIT_KEY, []).append(factory)
+# `schedule_after_commit` YA NO VIVE AQUÍ: se mudó a `api_server.db.after_commit`,
+# junto a la sesión que lo DRENA, y la mudanza ES el arreglo. Mientras el registro
+# estaba en este módulo y el único consumidor era `open_tenant_session`, toda ruta
+# que abriese su propia sesión admin —las nueve que escriben platform settings—
+# registraba callbacks que no ejecutaba nadie. No se deja un re-export: importarlo
+# de `auth.deps` es justo lo que hacía pensar que el drenaje era cosa del request.
 
 
 @asynccontextmanager
@@ -418,29 +407,22 @@ async def open_tenant_session(
     else:
         sessionmaker = get_sessionmaker()
 
-    async with sessionmaker() as session:
-        async with session.begin():
+    async with sessionmaker() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(principal.user_id)},
+        )
+        if principal.tenant_id is not None:
             await session.execute(
-                text("SELECT set_config('app.user_id', :uid, true)"),
-                {"uid": str(principal.user_id)},
+                text("SELECT set_config('app.tenant_id', :tid, true)"),
+                {"tid": str(principal.tenant_id)},
             )
-            if principal.tenant_id is not None:
-                await session.execute(
-                    text("SELECT set_config('app.tenant_id', :tid, true)"),
-                    {"tid": str(principal.tenant_id)},
-                )
-            yield session
-        # The request transaction has COMMITTED here (the `session.begin()`
-        # block exited without an exception — a route that raised would
-        # propagate past this point and skip the callbacks). Run anything
-        # registered via `schedule_after_commit` now, post-commit, so domain
-        # events are published only once their row is durable. Best-effort: a
-        # publish blip must never break the already-committed request.
-        for factory in session.info.get(_AFTER_COMMIT_KEY, ()):
-            try:
-                await factory()
-            except Exception as exc:  # - best-effort, never fail the request
-                _log.warning("api_server.after_commit_failed", error=str(exc))
+        yield session
+    # Lo registrado con `schedule_after_commit` lo ejecuta la propia sesión al
+    # cerrarse (`AfterCommitSession.close`), post-commit y best-effort. Aquí había
+    # antes una copia del bucle, y ser el ÚNICO sitio que drenaba era el bug: las
+    # rutas de System Admin abren su sesión por su cuenta y no pasan por aquí.
+    # Ver `api_server.db.after_commit`.
 
 
 async def get_tenant_session(
@@ -463,6 +445,11 @@ async def get_admin_session(
     Used by /admin/* endpoints: System Admin sees and writes
     everything cross-tenant, including audit_log rows with
     tenant_id IS NULL.
+
+    Lo registrado con `schedule_after_commit` durante el request lo ejecuta la
+    sesión al cerrarse — ver `api_server.db.after_commit`. Hasta 2026-08-20 no lo
+    ejecutaba NADIE por esta vía, que es justo la de las siete rutas de settings
+    con `Depends(get_admin_session)`.
     """
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session, session.begin():

@@ -38,7 +38,7 @@ propia sesión y busca la instalación por `id`, así que encolar antes del comm
 abre la carrera clásica —el consumidor llega primero y no encuentra nada— con el
 agravante de que el mensaje ya no vuelve y la instalación se queda en `analyzing`
 para siempre. Es literalmente el fallo que documenta el docstring de
-:func:`api_server.auth.deps.schedule_after_commit` («publishing inline lets a fast
+:func:`api_server.db.after_commit.schedule_after_commit` («publishing inline lets a fast
 consumer read the not-yet-committed row and silently skip it»).
 
 La primera versión de este módulo lo resolvía con un `await session.commit()` aquí
@@ -68,7 +68,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.auth.deps import schedule_after_commit
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.marketplace import (
     InstallationStatus,
     MarketplaceAuditAction,

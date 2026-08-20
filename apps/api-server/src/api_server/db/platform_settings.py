@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.models import PlatformSetting, User
 
 # Setting keys.
@@ -186,6 +187,14 @@ async def set_platform_setting(
         concurrente todavía ve el valor antiguo en la BD y podría repoblar la
         caché con él — una invalidación sola dejaría el valor viejo cacheado 30 s
         DESPUÉS de haberlo cambiado, que es el peor de los dos mundos.
+
+    La segunda la ejecuta la sesión al cerrarse
+    (:class:`~api_server.db.after_commit.AfterCommitSession`).
+    Hasta 2026-08-20 sólo la drenaba ``open_tenant_session``, así que **ninguna**
+    de las nueve rutas que escriben settings —todas System-Admin, todas con sesión
+    admin— llegaba a ejecutarla: el kill-switch de egress del córtex tardaba hasta
+    30 s en apagar. El test que fija la ventana es
+    ``tests/integration/test_platform_settings_after_commit_invalidation.py``.
     """
     if not actor.is_system_admin:
         raise PlatformSettingForbiddenError(
@@ -208,16 +217,15 @@ async def set_platform_setting(
 def _schedule_cache_invalidation(session: AsyncSession, key: str) -> None:
     """Registra la segunda invalidación para después del commit.
 
-    `schedule_after_commit` solo lo consume `open_tenant_session`; un llamante que
-    abra la sesión por su cuenta (un worker, un seed) no lo ejecutará, y por eso la
-    invalidación inmediata de arriba NO es redundante.
-    """
-    try:
-        from api_server.auth.deps import schedule_after_commit
+    La invalidación inmediata de arriba NO es redundante con ésta: cubre el tramo
+    anterior al commit, en el que un lector concurrente todavía obtendría el valor
+    viejo de la BD. Y ésta cubre justo ese recacheo.
 
-        schedule_after_commit(session, lambda: invalidate_platform_setting_cache(key))
-    except Exception:  # pragma: no cover - defensivo
-        return
+    Se registra sobre la sesión, que es quien la ejecuta al cerrarse. Con una
+    sesión ajena al api-server (un doble de test, un worker) el registro no
+    ejecuta nada, y `schedule_after_commit` lo dice en un log en vez de callarlo.
+    """
+    schedule_after_commit(session, lambda: invalidate_platform_setting_cache(key))
 
 
 # ---------------------------------------------------------------------------

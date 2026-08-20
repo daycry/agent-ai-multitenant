@@ -39,7 +39,6 @@ from api_server.auth.deps import (
     require_can_approve_plan,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.celery_client import (
     compute_plan_code_diff_and_wait,
@@ -78,6 +77,7 @@ from api_server.chat.sync_to_kanban import (
     sync_plan_to_kanban,
 )
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Execution, Plan, PlanStatus, Project, Task
 from api_server.db.execution_repo import cancel_tasks_and_executions

@@ -419,7 +419,8 @@ def publish_plan_transition_after_commit(session: Any, plan: Any, old_status: st
     api-server (donde `schedule_after_commit` existe); los caminos del
     orchestrator y del worker publican a mano tras su propio commit.
     """
-    from api_server.auth.deps import get_redis, schedule_after_commit
+    from api_server.auth.deps import get_redis
+    from api_server.db.after_commit import schedule_after_commit
 
     new_status = plan.status
     if old_status == new_status:

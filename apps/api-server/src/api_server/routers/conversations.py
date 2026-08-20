@@ -34,10 +34,10 @@ from api_server.auth.deps import (
     get_redis,
     get_tenant_session,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.chat.modes import list_chat_modes
 from api_server.chat.responder import schedule_reply, team_planning_roles
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.conversation import (
     ChatMode,
     Conversation,

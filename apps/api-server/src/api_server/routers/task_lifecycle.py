@@ -27,9 +27,9 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.chat.dag_enforcement import DependenciesNotDoneError, assert_dependencies_done
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Plan, Task, TaskDependency
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
 from api_server.events import publish_task_status_changed

@@ -26,7 +26,6 @@ from api_server.auth.deps import (
     principal_is_tenant_admin,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.celery_client import revoke_job_callback
 from api_server.chat.criteria_llm import (
@@ -40,6 +39,7 @@ from api_server.chat.dag_enforcement import (
 )
 from api_server.chat.planning_llm import _clean_acceptance_criteria
 from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Plan, Task, TaskDependency, TaskStatus
 from api_server.db.execution_repo import cancel_running_executions_for_task
 from api_server.events import publish_task_created, publish_task_status_changed

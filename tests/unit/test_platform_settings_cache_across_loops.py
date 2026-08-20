@@ -109,7 +109,11 @@ def deps(monkeypatch: pytest.MonkeyPatch) -> _FakeDeps:
     fake = _FakeDeps()
     monkeypatch.setattr(real_deps, "get_redis", fake.get_redis)
     monkeypatch.setattr(real_deps, "reset_redis_cache", fake.reset_redis_cache)
-    monkeypatch.setattr(real_deps, "schedule_after_commit", fake.schedule_after_commit)
+    # `schedule_after_commit` se parchea SOBRE `db.platform_settings`, que es
+    # quien lo llama: desde 2026-08-20 vive en `db.after_commit` (junto a la
+    # sesión que lo drena) y ya no en `auth.deps`, así que parchearlo allí dejó
+    # de tener efecto — y de existir.
+    monkeypatch.setattr(ps, "schedule_after_commit", fake.schedule_after_commit)
     # El estado de binding es de proceso: arrancar de cero en cada test.
     ps.reset_platform_setting_cache_binding()
     yield fake
