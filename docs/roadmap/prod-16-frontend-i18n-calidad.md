@@ -688,9 +688,9 @@ scripts/check-i18n.mjs` sale **exit 1** por eso, más un segundo ternario vivo
       `viewToggle`.
       **Contadores medidos ejecutando, y separando lo que es de este carril:** de
       las **119 marcas en 45 ficheros** con las que empezó el día, este carril se
-      lleva **28 atributos en 11 entradas** de la `ATTR_ALLOWLIST` (14 de `plans/*`
-    * `mcp-servers/*` + los dos diagramas de `lib/`, y 14 de `tasks/*` +
-      `components/tasks/*`). La guarda cerró el día en **77 atributos / 28
+      lleva **28 atributos en 11 entradas** de la `ATTR_ALLOWLIST` (14 de
+      `plans/*` + `mcp-servers/*` + los dos diagramas de `lib/`, y 14 de
+      `tasks/*` + `components/tasks/*`). La guarda cerró el día en **77 atributos / 28
       ficheros**; el resto de la bajada es de los otros dos carriles, que migraban
       el hub del proyecto y `marketplace`/`docs`/`assistant` **en el mismo árbol de
       trabajo** — sumar las cifras en un solo número haría irreproducible

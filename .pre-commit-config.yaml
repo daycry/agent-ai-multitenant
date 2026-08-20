@@ -119,6 +119,30 @@ repos:
   # CI, con el mismo `rev` en los dos lados. Un `rev` que no fija la versión
   # de la herramienta es exactamente la trampa de
   # docs/03-guides/gotchas/ci-tool-version-drift.md.
+  # markdownlint sobre docs/, con el MISMO pin que `.github/workflows/ci.yml`
+  # (`markdownlint-cli@0.48.0`). Que las dos versiones no se separen lo comprueba
+  # `tests/unit/test_markdownlint_pin_matches_ci.py`: un pin distinto en cada lado
+  # es la trampa de `docs/03-guides/gotchas/ci-tool-version-drift.md`, y aquí
+  # sería peor que no tener el hook — pasaría en local y rompería en CI.
+  #
+  # Por qué se añade (2026-08-20): la puerta existía SÓLO en CI, y prettier —que
+  # sí corre en local sobre markdown— formatea pero no aplica estas reglas. Un `*`
+  # a principio de línea, que markdownlint lee como viñeta de otro estilo, costaba
+  # un run completo de CI para enterarse. Dos veces en dos días.
+  #
+  # `docs/manuals/node_modules/` se excluye porque son READMEs de dependencias
+  # vendorizadas: en CI no existen (nadie instala ahí) y en local ensucian la
+  # salida con cientos de avisos ajenos.
+  - repo: local
+    hooks:
+      - id: markdownlint
+        name: markdownlint (docs, mismo pin que CI)
+        entry: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc
+        language: system
+        files: ^docs/.*\.md$
+        exclude: ^docs/manuals/node_modules/.*$
+        pass_filenames: true
+
   - repo: https://github.com/rbubley/mirrors-prettier
     rev: v3.9.6
     hooks:
