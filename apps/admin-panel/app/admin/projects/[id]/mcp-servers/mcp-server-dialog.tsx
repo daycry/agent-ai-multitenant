@@ -49,6 +49,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { McpAdvancedOptionsSection } from "./mcp-advanced-options-section";
 import { McpConnectionTestSection } from "./mcp-connection-test-section";
 import {
@@ -81,6 +82,7 @@ export function McpServerDialog({
   onSubmit: (server: McpServerConfig) => void;
   backendError: string | null;
 }) {
+  const t = useT("mcpServers");
   const [state, setState] = useState<McpServerConfig>(initial);
   const [argsRaw, setArgsRaw] = useState<string>(initial.args.join("\n"));
   const [advancedOpen, setAdvancedOpen] = useState<boolean>(
@@ -163,14 +165,14 @@ export function McpServerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="mcp-server-dialog">
         <DialogHeader>
-          <DialogTitle>Configurar MCP server</DialogTitle>
+          <DialogTitle>{t("dialogTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div className="space-y-4">
             {/* Template picker — only when creating */}
             {isCreate && (
               <div className="bg-muted/30 -mx-2 rounded-md border p-3">
-                <Label htmlFor="mcp-form-template">Plantilla rápida</Label>
+                <Label htmlFor="mcp-form-template">{t("templateLabel")}</Label>
                 <select
                   id="mcp-form-template"
                   data-testid="mcp-form-template"
@@ -180,9 +182,7 @@ export function McpServerDialog({
                   disabled={catalogQuery.isLoading}
                 >
                   <option value="">
-                    {catalogQuery.isLoading
-                      ? "Cargando catálogo…"
-                      : "— Elige una plantilla (opcional) —"}
+                    {catalogQuery.isLoading ? t("templateLoading") : t("templateNone")}
                   </option>
                   {Object.entries(
                     (catalogQuery.data ?? []).reduce<Record<string, McpCatalogEntry[]>>(
@@ -195,7 +195,7 @@ export function McpServerDialog({
                       {},
                     ),
                   ).map(([cat, entries]) => (
-                    <optgroup key={cat} label={CATEGORY_LABEL[cat] ?? cat}>
+                    <optgroup key={cat} label={CATEGORY_LABEL[cat] ? t(CATEGORY_LABEL[cat]) : cat}>
                       {entries.map((entry) => (
                         <option key={entry.id} value={entry.id}>
                           {entry.display_name}
@@ -205,17 +205,13 @@ export function McpServerDialog({
                     </optgroup>
                   ))}
                 </select>
-                <p className="text-muted-foreground mt-1.5 text-xs">
-                  Aplica una configuración verificada (GitHub, Jira, Google Drive, Slack, etc.). El
-                  candado 🔒 indica que la integración necesita credenciales — el campo aparecerá en
-                  Opciones avanzadas.
-                </p>
+                <p className="text-muted-foreground mt-1.5 text-xs">{t("templateHelp")}</p>
               </div>
             )}
 
             {/* Name */}
             <div>
-              <Label htmlFor="mcp-form-name">Nombre</Label>
+              <Label htmlFor="mcp-form-name">{t("nameLabel")}</Label>
               <Input
                 id="mcp-form-name"
                 data-testid="mcp-form-name"
@@ -224,14 +220,13 @@ export function McpServerDialog({
                 placeholder="github-mcp"
               />
               <p className="text-muted-foreground mt-1 text-xs">
-                Identificador del server dentro del proyecto. Solo letras, números, <code>_-.</code>
-                .
+                {t("nameHelp")} <code>_-.</code>.
               </p>
             </div>
 
             {/* Transport selector */}
             <div>
-              <Label htmlFor="mcp-form-transport">Transporte</Label>
+              <Label htmlFor="mcp-form-transport">{t("transportLabel")}</Label>
               <select
                 id="mcp-form-transport"
                 data-testid="mcp-form-transport"
@@ -239,7 +234,9 @@ export function McpServerDialog({
                 value={state.transport}
                 onChange={(e) => setState({ ...state, transport: e.target.value as Transport })}
               >
-                <option value="stdio">stdio (subprocess local)</option>
+                <option value="stdio">{t("transportStdio")}</option>
+                {/* Los otros dos son el identificador del transporte tal cual
+                    lo nombra el protocolo: no hay nada que traducir. */}
                 <option value="sse">sse (HTTP server-sent events)</option>
                 <option value="streamable_http">streamable_http</option>
               </select>
@@ -249,7 +246,7 @@ export function McpServerDialog({
             {isStdio ? (
               <>
                 <div>
-                  <Label htmlFor="mcp-form-command">Comando</Label>
+                  <Label htmlFor="mcp-form-command">{t("commandLabel")}</Label>
                   <Input
                     id="mcp-form-command"
                     data-testid="mcp-form-command"
@@ -259,7 +256,7 @@ export function McpServerDialog({
                   />
                 </div>
                 <div>
-                  <Label htmlFor="mcp-form-args">Argumentos (uno por línea)</Label>
+                  <Label htmlFor="mcp-form-args">{t("argsLabel")}</Label>
                   <textarea
                     id="mcp-form-args"
                     data-testid="mcp-form-args"
@@ -270,9 +267,9 @@ export function McpServerDialog({
                   />
                 </div>
                 <KeyValueEditor
-                  label="Variables de entorno"
+                  label={t("envLabel")}
                   testIdPrefix="mcp-form-env"
-                  emptyHint="No hay variables. Pulsa “Añadir” para declarar una."
+                  emptyHint={t("envEmpty")}
                   entries={state.env}
                   onChange={(env) => setState({ ...state, env })}
                 />
@@ -290,9 +287,9 @@ export function McpServerDialog({
                   />
                 </div>
                 <KeyValueEditor
-                  label="Cabeceras"
+                  label={t("headersLabel")}
                   testIdPrefix="mcp-form-headers"
-                  emptyHint="No hay cabeceras. Pulsa “Añadir” para declarar una."
+                  emptyHint={t("headersEmpty")}
                   entries={state.headers}
                   onChange={(headers) => setState({ ...state, headers })}
                 />
@@ -306,12 +303,11 @@ export function McpServerDialog({
                 className="bg-info-soft text-info-soft-foreground rounded-md border border-info/30 p-3"
                 data-testid="mcp-form-oauth-note"
               >
-                <p className="text-sm font-medium">🔗 Este servidor se conecta por OAuth</p>
+                <p className="text-sm font-medium">{t("oauthNoteTitle")}</p>
                 <p className="mt-1 text-xs">
-                  No necesitas pegar ningún token. <strong>Guarda</strong> el server y pulsa{" "}
-                  <strong>«Conectar»</strong> en su ficha: te llevará a{" "}
-                  {appliedTemplate.display_name} para autorizar una vez, y la plataforma refrescará
-                  el token sola.
+                  {t("oauthNoteIntro")} <strong>{t("oauthNoteSaveStrong")}</strong>{" "}
+                  {t("oauthNoteMiddle")} <strong>{t("oauthNoteConnectStrong")}</strong>{" "}
+                  {t("oauthNoteTail", { provider: appliedTemplate.display_name })}
                 </p>
               </div>
             ) : null}
@@ -350,14 +346,14 @@ export function McpServerDialog({
             disabled={submitting}
             data-testid="mcp-form-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={handleSubmit}
             disabled={submitting || !state.name}
             data-testid="mcp-form-submit"
           >
-            {submitting ? "Guardando…" : submitLabel}
+            {submitting ? t("saving") : submitLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -381,6 +377,7 @@ function KeyValueEditor({
   entries: Record<string, string>;
   onChange: (next: Record<string, string>) => void;
 }) {
+  const t = useT("mcpServers");
   // Stable ordering — Object.entries() preserves insertion order so
   // the rows don't reshuffle when the user types.
   const rows = Object.entries(entries);
@@ -422,7 +419,7 @@ function KeyValueEditor({
           data-testid={`${testIdPrefix}-add`}
         >
           <Plus className="mr-1 h-3.5 w-3.5" />
-          Añadir
+          {t("kvAdd")}
         </Button>
       </div>
       {rows.length === 0 ? (
@@ -434,7 +431,7 @@ function KeyValueEditor({
           {rows.map(([key, value], idx) => (
             <li key={`${idx}-${key}`} className="flex items-center gap-1.5">
               <Input
-                aria-label="key"
+                aria-label={t("kvKey")}
                 data-testid={`${testIdPrefix}-key-${idx}`}
                 value={key}
                 onChange={(e) => update(key, e.target.value, value)}
@@ -442,7 +439,7 @@ function KeyValueEditor({
                 className="flex-1"
               />
               <Input
-                aria-label="value"
+                aria-label={t("kvValue")}
                 data-testid={`${testIdPrefix}-value-${idx}`}
                 value={value}
                 onChange={(e) => update(key, key, e.target.value)}
@@ -455,7 +452,7 @@ function KeyValueEditor({
                 size="sm"
                 onClick={() => remove(key)}
                 data-testid={`${testIdPrefix}-remove-${idx}`}
-                aria-label="Quitar"
+                aria-label={t("kvRemove")}
               >
                 <X className="h-3.5 w-3.5" />
               </Button>

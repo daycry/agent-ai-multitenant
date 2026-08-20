@@ -4,6 +4,7 @@
 // (shared_mcp.catalog vía GET /mcp-catalog). Sin JSX ni hooks.
 
 import { type BadgeVariant } from "@/components/ui/badge";
+import type { MessageKey } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Types (mirror api_server.mcp.config.MCPServerConfigModel)
@@ -58,18 +59,29 @@ export const AGENT_ROLES = [
 
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
-/** Etiqueta humana (ES) de cada rol para el multi-select. */
-export const ROLE_LABEL: Record<AgentRole, string> = {
-  project_manager: "Project Manager",
-  architect: "Arquitecto",
-  backend_dev: "Backend Dev",
-  frontend_dev: "Frontend Dev",
-  qa: "QA",
-  reviewer: "Reviewer",
-  devops: "DevOps",
-  security: "Security",
-  technical_writer: "Technical Writer",
-  specialist: "Especialista",
+/**
+ * CLAVE del diccionario con la etiqueta humana de cada rol (prod-16
+ * `task_prod16_03`).
+ *
+ * Guardaba el TEXTO, y en castellano: los dos consumidores —la política rol→tool
+ * de aquí y `components/marketplace/deployment-config-form.tsx`— pintaban los
+ * diez roles en castellano con el toggle en EN. El segundo estaba dado por
+ * migrado desde su propia ola, porque el guard mira ficheros y esto es un módulo
+ * puro sin atributos ni ternarios: exactamente el fallo que ya tuvo
+ * `MEMORY_SCOPE_OPTIONS`. Con la clave, la cara inglesa no puede quedarse sin
+ * llamante.
+ */
+export const ROLE_LABEL: Record<AgentRole, MessageKey<"agentRole">> = {
+  project_manager: "projectManager",
+  architect: "architect",
+  backend_dev: "backendDev",
+  frontend_dev: "frontendDev",
+  qa: "qa",
+  reviewer: "reviewer",
+  devops: "devops",
+  security: "security",
+  technical_writer: "technicalWriter",
+  specialist: "specialist",
 };
 
 /**
@@ -177,18 +189,24 @@ export function authKindByUrl(catalog: McpCatalogEntry[]): Record<string, string
   return out;
 }
 
-export const CATEGORY_LABEL: Record<string, string> = {
-  docs: "Documentos",
-  scm: "Control de versiones",
-  data: "Bases de datos",
-  files: "Archivos",
-  comms: "Comunicación",
-  issues: "Issue trackers",
-  observability: "Observabilidad",
-  search: "Búsqueda web",
-  browser: "Navegador",
-  meta: "Meta / Agent helpers",
-  other: "Otros",
+/**
+ * CLAVE del diccionario con el nombre de cada categoría del catálogo (prod-16
+ * `task_prod16_03`). Agrupa el `<optgroup>` del selector de plantillas; una
+ * categoría que el backend añada y no esté aquí cae a su propio id, que es lo
+ * que ya hacía.
+ */
+export const CATEGORY_LABEL: Record<string, MessageKey<"mcpServers">> = {
+  docs: "categoryDocs",
+  scm: "categoryScm",
+  data: "categoryData",
+  files: "categoryFiles",
+  comms: "categoryComms",
+  issues: "categoryIssues",
+  observability: "categoryObservability",
+  search: "categorySearch",
+  browser: "categoryBrowser",
+  meta: "categoryMeta",
+  other: "categoryOther",
 };
 
 /**

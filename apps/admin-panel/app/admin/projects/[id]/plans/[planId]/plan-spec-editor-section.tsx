@@ -28,6 +28,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import {
   describeSaveError,
   localSpecProblems,
@@ -50,6 +52,8 @@ export function PlanSpecEditorSection({
   status: string;
   spec: PlanSpecification;
 }) {
+  const t = useT("planDetail");
+  const lang = useLangOptional();
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<TaskDraft[] | null>(null);
   const [keyer, setKeyer] = useState(0);
@@ -87,7 +91,7 @@ export function PlanSpecEditorSection({
               data-testid="plan-spec-edit-open"
             >
               <Pencil className="mr-1 h-3.5 w-3.5" />
-              Editar tareas
+              {t("specEditOpen")}
             </Button>
           </div>
         ) : null}
@@ -95,8 +99,8 @@ export function PlanSpecEditorSection({
     );
   }
 
-  const problems = localSpecProblems(drafts);
-  const serverError = mutation.isError ? describeSaveError(mutation.error, drafts) : null;
+  const problems = localSpecProblems(drafts, lang);
+  const serverError = mutation.isError ? describeSaveError(mutation.error, drafts, lang) : null;
 
   function patch(key: number, change: Partial<TaskDraft>) {
     setDrafts((prev) => (prev ?? []).map((d) => (d.key === key ? { ...d, ...change } : d)));
@@ -127,7 +131,7 @@ export function PlanSpecEditorSection({
   return (
     <Card className="mt-6" data-testid="plan-spec-editor">
       <CardHeader>
-        <CardTitle>Editar tareas ({drafts.length})</CardTitle>
+        <CardTitle>{t("specEditorTitle", { count: drafts.length })}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {drafts.map((draft) => (
@@ -142,13 +146,13 @@ export function PlanSpecEditorSection({
 
         {drafts.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="plan-spec-editor-empty">
-            El plan no tiene tareas. Añade la primera.
+            {t("specEditorEmpty")}
           </p>
         ) : null}
 
         <Button variant="outline" size="sm" onClick={addTask} data-testid="plan-spec-add-task">
           <Plus className="mr-1 h-3.5 w-3.5" />
-          Añadir tarea
+          {t("specAddTask")}
         </Button>
 
         {problems.length > 0 ? (
@@ -178,7 +182,7 @@ export function PlanSpecEditorSection({
             onClick={() => setDrafts(null)}
             data-testid="plan-spec-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             size="sm"
@@ -186,7 +190,7 @@ export function PlanSpecEditorSection({
             onClick={() => mutation.mutate(drafts)}
             data-testid="plan-spec-save"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar cambios"}
+            {mutation.isPending ? t("saving") : t("saveChanges")}
           </Button>
         </div>
       </CardContent>
@@ -205,6 +209,7 @@ function TaskDraftRow({
   onChange: (change: Partial<TaskDraft>) => void;
   onRemove: () => void;
 }) {
+  const t = useT("planDetail");
   function toggleDependency(id: string) {
     onChange({
       dependsOn: draft.dependsOn.includes(id)
@@ -220,7 +225,7 @@ function TaskDraftRow({
     >
       <div className="flex items-start gap-2">
         <div className="flex w-24 shrink-0 flex-col gap-1.5">
-          <Label>ID</Label>
+          <Label>{t("colId")}</Label>
           <Input
             value={draft.id}
             onChange={(e) => onChange({ id: e.target.value })}
@@ -229,7 +234,7 @@ function TaskDraftRow({
           />
         </div>
         <div className="flex flex-1 flex-col gap-1.5">
-          <Label>Título</Label>
+          <Label>{t("colTitle")}</Label>
           <Input
             value={draft.title}
             onChange={(e) => onChange({ title: e.target.value })}
@@ -240,7 +245,7 @@ function TaskDraftRow({
           variant="ghost"
           size="sm"
           onClick={onRemove}
-          aria-label={`Quitar la tarea ${draft.id}`}
+          aria-label={t("specRemoveTask", { id: draft.id })}
           data-testid={`plan-spec-remove-${draft.key}`}
           className="mt-6"
         >
@@ -249,7 +254,7 @@ function TaskDraftRow({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label>Descripción</Label>
+        <Label>{t("specFieldDescription")}</Label>
         <MarkdownTextarea
           value={draft.description}
           onChange={(next) => onChange({ description: next })}
@@ -260,7 +265,7 @@ function TaskDraftRow({
 
       <div className="grid grid-cols-3 gap-2">
         <div className="flex flex-col gap-1.5">
-          <Label>Rol</Label>
+          <Label>{t("colRole")}</Label>
           <Input
             value={draft.role}
             onChange={(e) => onChange({ role: e.target.value })}
@@ -269,16 +274,16 @@ function TaskDraftRow({
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>Complejidad</Label>
+          <Label>{t("specFieldComplexity")}</Label>
           <Input
             value={draft.complexity}
             onChange={(e) => onChange({ complexity: e.target.value })}
-            placeholder="media"
+            placeholder={t("specComplexityPlaceholder")}
             data-testid={`plan-spec-complexity-${draft.key}`}
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>Horas estimadas</Label>
+          <Label>{t("specFieldHours")}</Label>
           <Input
             value={draft.estimatedHours}
             onChange={(e) => onChange({ estimatedHours: e.target.value })}
@@ -290,7 +295,7 @@ function TaskDraftRow({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label>Criterios de aceptación (uno por línea)</Label>
+        <Label>{t("specFieldCriteria")}</Label>
         <MarkdownTextarea
           value={draft.criteria}
           onChange={(next) => onChange({ criteria: next })}
@@ -301,9 +306,9 @@ function TaskDraftRow({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label>Depende de</Label>
+        <Label>{t("colDependsOn")}</Label>
         {others.length === 0 ? (
-          <p className="text-muted-foreground text-xs italic">No hay otras tareas en el plan.</p>
+          <p className="text-muted-foreground text-xs italic">{t("specNoOtherTasks")}</p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
             {others.map((other) => {

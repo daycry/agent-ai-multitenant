@@ -20,6 +20,7 @@ import { AlertTriangle, CheckCircle2, GitBranch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface PreflightFinding {
   code: string;
@@ -56,6 +57,7 @@ export function planNeedsPreflight(status: string | null | undefined): boolean {
 }
 
 export function PlanPreflightSection({ planId, status }: { planId: string; status: string }) {
+  const t = useT("planDetail");
   const preflightQuery = useQuery({
     queryKey: ["plan-preflight", planId],
     queryFn: () => apiFetch<PreflightReport>(`/plans/${planId}/preflight`),
@@ -77,25 +79,28 @@ export function PlanPreflightSection({ planId, status }: { planId: string; statu
         ) : (
           <AlertTriangle className="text-warning h-5 w-5" />
         )}
-        <CardTitle>Antes de aprobar</CardTitle>
+        <CardTitle>{t("preflightTitle")}</CardTitle>
         {report.blockers > 0 ? (
           <Badge variant="danger" data-testid="preflight-blockers">
-            {report.blockers} {report.blockers === 1 ? "problema serio" : "problemas serios"}
+            {report.blockers === 1
+              ? t("preflightBlockersOne", { count: report.blockers })
+              : t("preflightBlockersMany", { count: report.blockers })}
           </Badge>
         ) : null}
       </CardHeader>
       <CardContent className="space-y-3">
         {clean ? (
           <p className="text-muted-foreground text-sm" data-testid="preflight-clean">
-            Las {report.task_count} tareas tienen rol asignable y criterios de aceptación, y el
-            grafo no tiene ciclos.
+            {t("preflightClean", { count: report.task_count })}
           </p>
         ) : (
           <ul className="space-y-2" data-testid="preflight-findings">
             {report.findings.map((finding) => (
               <li key={finding.code} className="flex gap-2 text-sm">
                 <Badge variant={finding.severity === "blocker" ? "danger" : "warning"}>
-                  {finding.severity === "blocker" ? "serio" : "aviso"}
+                  {finding.severity === "blocker"
+                    ? t("preflightSeverityBlocker")
+                    : t("preflightSeverityWarning")}
                 </Badge>
                 <span>
                   {finding.message}
@@ -113,14 +118,21 @@ export function PlanPreflightSection({ planId, status }: { planId: string; statu
         <div className="text-muted-foreground flex flex-wrap gap-4 text-xs">
           <span className="flex items-center gap-1">
             <GitBranch className="h-3.5 w-3.5" />
-            Camino crítico: {report.critical_path_length} de {report.task_count} tareas en serie
+            {t("preflightCriticalPath", {
+              length: report.critical_path_length,
+              total: report.task_count,
+            })}
           </span>
-          <span>Paralelismo máximo: {report.max_parallelism}</span>
+          <span>{t("preflightParallelism", { count: report.max_parallelism })}</span>
           {report.cost?.human_hours ? (
             <span>
-              Estimado: {report.cost.human_hours} h ({report.cost.human_cost}{" "}
-              {report.cost.human_currency}) · IA {report.cost.ai_usd_min}–{report.cost.ai_usd_max}{" "}
-              USD
+              {t("preflightCost", {
+                hours: report.cost.human_hours,
+                cost: report.cost.human_cost ?? "",
+                currency: report.cost.human_currency ?? "",
+                aiMin: report.cost.ai_usd_min ?? "",
+                aiMax: report.cost.ai_usd_max ?? "",
+              })}
             </span>
           ) : null}
         </div>

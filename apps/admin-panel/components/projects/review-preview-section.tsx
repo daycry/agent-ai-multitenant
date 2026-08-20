@@ -15,7 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface ReviewPreviewSectionProps {
   projectId: string;
@@ -25,6 +27,8 @@ interface ReviewPreviewSectionProps {
 
 export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionProps) {
   const queryClient = useQueryClient();
+  const t = useT("projectReviewPreview");
+  const errorText = useErrorText();
   const [image, setImage] = useState(
     typeof value?.["review_image"] === "string" ? (value["review_image"] as string) : "",
   );
@@ -62,7 +66,7 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
     },
     onError: (e) => {
       setSaved(false);
-      setErrorMsg(e instanceof ApiError ? e.body : String(e));
+      setErrorMsg(errorText(e));
     },
   });
 
@@ -76,18 +80,13 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
     <Card data-testid="review-preview-section">
       <CardHeader className="flex flex-row items-center gap-2">
         <MonitorPlay className="text-muted-foreground h-5 w-5" />
-        <CardTitle>App-preview de validación humana</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-muted-foreground text-sm">
-          Cuando un plan llega a validación humana, la plataforma puede levantar la app del proyecto
-          para que el revisor la pruebe en vivo. La imagen la construye y publica la CI del propio
-          proyecto (la plataforma solo la referencia — ADR 0063). Sin imagen configurada, la sesión
-          de review funciona igual (checklist + veredicto), solo que sin app en vivo.
-        </p>
+        <p className="text-muted-foreground text-sm">{t("description")}</p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_10rem]">
           <div className="space-y-1.5">
-            <Label htmlFor="review-image">Imagen del app-preview</Label>
+            <Label htmlFor="review-image">{t("imageLabel")}</Label>
             <Input
               id="review-image"
               data-testid="review-image-input"
@@ -98,15 +97,10 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
                 setImage(e.target.value);
               }}
             />
-            <p className="text-muted-foreground text-xs">
-              Tag de imagen Docker auto-servible (su CMD arranca un servidor HTTP; el código del
-              plan se monta en /workspace). En dev vale un tag local (`docker build -t ...`); en
-              producción, la referencia del registry que publica tu CI. Vacío = app-preview
-              desactivada.
-            </p>
+            <p className="text-muted-foreground text-xs">{t("imageHint")}</p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="review-port">Puerto</Label>
+            <Label htmlFor="review-port">{t("portLabel")}</Label>
             <Input
               id="review-port"
               data-testid="review-port-input"
@@ -118,7 +112,7 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
                 setPort(e.target.value);
               }}
             />
-            <p className="text-muted-foreground text-xs">Puerto HTTP interno (vacío = 8080).</p>
+            <p className="text-muted-foreground text-xs">{t("portHint")}</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -127,12 +121,10 @@ export function ReviewPreviewSection({ projectId, value }: ReviewPreviewSectionP
             disabled={save.isPending || portInvalid}
             data-testid="review-preview-save"
           >
-            Guardar app-preview
+            {t("save")}
           </Button>
-          {portInvalid ? (
-            <p className="text-destructive text-xs">Puerto inválido (1-65535).</p>
-          ) : null}
-          {saved ? <p className="text-success text-xs">Guardado.</p> : null}
+          {portInvalid ? <p className="text-destructive text-xs">{t("portInvalid")}</p> : null}
+          {saved ? <p className="text-success text-xs">{t("saved")}</p> : null}
           {errorMsg ? (
             <p className="text-destructive text-xs" data-testid="review-preview-error">
               {errorMsg}

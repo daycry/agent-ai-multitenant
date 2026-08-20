@@ -10,6 +10,7 @@
  */
 
 import { ApiError } from "@/lib/api";
+import { translate, type Lang, type MessageKey } from "@/lib/i18n";
 import type { PlanTaskSpec } from "@/app/admin/projects/[id]/plans/[planId]/plan-spec-types";
 
 /** Estados en los que la UI ofrece editar la especificación.
@@ -117,18 +118,20 @@ export function nextTaskId(drafts: readonly TaskDraft[]): string {
 /** Problemas que se ven sin preguntar al servidor. No sustituyen a su
  * validación —el ciclo lo detecta él— pero evitan mandar un PUT que ya se
  * sabe que va a fallar. */
-export function localSpecProblems(drafts: readonly TaskDraft[]): string[] {
+export function localSpecProblems(drafts: readonly TaskDraft[], lang: Lang): string[] {
+  const t = (key: MessageKey<"planDetail">, vars?: Record<string, string>) =>
+    translate(lang, "planDetail", key, vars);
   const problems: string[] = [];
   const ids = drafts.map((d) => d.id.trim());
-  if (ids.some((id) => !id)) problems.push("Toda tarea necesita un identificador.");
+  if (ids.some((id) => !id)) problems.push(t("specProblemNoId"));
   const seen = new Set<string>();
   for (const id of ids) {
-    if (id && seen.has(id)) problems.push(`El identificador «${id}» está repetido.`);
+    if (id && seen.has(id)) problems.push(t("specProblemDuplicateId", { id }));
     seen.add(id);
   }
   for (const draft of drafts) {
     if (!draft.title.trim()) {
-      problems.push(`La tarea «${draft.id || "sin id"}» no tiene título.`);
+      problems.push(t("specProblemNoTitle", { id: draft.id || t("specProblemNoIdFallback") }));
     }
   }
   return problems;
@@ -150,7 +153,11 @@ function parseDetail(error: unknown): unknown {
  * se acompaña de los TÍTULOS, porque `t3 → t7 → t3` no le dice nada a quien
  * acaba de escribir «Migrar el esquema» y «Cargar los datos».
  */
-export function describeSaveError(error: unknown, drafts: readonly TaskDraft[]): string {
+export function describeSaveError(
+  error: unknown,
+  drafts: readonly TaskDraft[],
+  lang: Lang,
+): string {
   const detail = parseDetail(error);
   const obj =
     detail && typeof detail === "object" && !Array.isArray(detail)
@@ -167,18 +174,15 @@ export function describeSaveError(error: unknown, drafts: readonly TaskDraft[]):
         const title = titleById.get(id);
         return title ? `${id} («${title}»)` : id;
       });
-      return (
-        `Dependencia circular: ${chain.join(" → ")}. ` +
-        "Quita una de esas dependencias para romper el ciclo."
-      );
+      return translate(lang, "planDetail", "specErrorCycle", { chain: chain.join(" → ") });
     }
-    return "Hay una dependencia circular entre las tareas.";
+    return translate(lang, "planDetail", "specErrorCycleShort");
   }
 
   if (code === "spec_not_editable") {
     return typeof obj?.["message"] === "string"
       ? (obj["message"] as string)
-      : "Este plan ya no admite cambios en su especificación.";
+      : translate(lang, "planDetail", "specErrorNotEditable");
   }
 
   // 422 de pydantic: `detail` es la lista de errores. Su `msg` ya es legible

@@ -265,6 +265,64 @@ describe("dictionary — invariantes", () => {
       "marketplacePrivate.manifestLabel",
       "marketplacePrivate.kindSkill",
       "marketplacePrivate.fieldVersionShort",
+      // prod-16 `task_prod16_03` — el hub del proyecto y sus piezas. Tres
+      // familias, ninguna traducible: los nombres de sub-sección que la UI
+      // castellana YA escribía en inglés («Chat», «Tasks», «Knowledge Bases»,
+      // «MCP servers» — los dos últimos por la misma razón que `nav.*`),
+      // «irreversible», que se escribe igual en los dos idiomas (como en
+      // `knowledgeBases`, `teams` y `agents`), y las siglas del formulario de
+      // git y de servicios: «PAT», «HTTPS», «Token», «Alias» y «hostname» son
+      // lo que el operador copia de la consola de su proveedor.
+      "projectHub.sectionChat",
+      "projectHub.sectionTasks",
+      "projectHub.sectionKbs",
+      "projectHub.sectionMcp",
+      "projectHub.deleteDescriptionStrong",
+      "projectGit.authPat",
+      "projectGit.tokenLabel",
+      "projectRuntimeServices.serviceAliasLabel",
+      // prod-16 `task_prod16_03` — roles de agente. Ocho de los diez son los
+      // nombres que la UI castellana ya escribía en inglés, exactamente igual
+      // que `agents.*` y `nav.*`: «Arquitecto» y «Especialista» SÍ se traducen,
+      // que es lo que hace que esta lista siga significando algo.
+      "agentRole.projectManager",
+      "agentRole.backendDev",
+      "agentRole.frontendDev",
+      "agentRole.qa",
+      "agentRole.reviewer",
+      "agentRole.devops",
+      "agentRole.security",
+      "agentRole.technicalWriter",
+      // prod-16 `task_prod16_03` — `mcp-servers`. «MCP servers» es el nombre del
+      // subsistema (el rótulo de la sidebar y del propio protocolo); «tool» y
+      // «roles» son la jerga del dominio que la UI castellana ya usaba en
+      // inglés; y «Issue trackers» y «Meta / Agent helpers» son nombres de dos
+      // categorías del catálogo del backend — las otras nueve SÍ se traducen.
+      "mcpServers.breadcrumbCurrent",
+      "mcpServers.testToolOne",
+      "mcpServers.testToolMany",
+      "mcpServers.rolesCount",
+      "mcpServers.categoryIssues",
+      "mcpServers.categoryMeta",
+      // prod-16 `task_prod16_03` — detalle de plan y desglose de coste.
+      // «Pull request» es el nombre del objeto en GitHub/GitLab (el operador lo
+      // busca así en su plataforma git), «Gantt» es un apellido, «est.» la misma
+      // abreviatura en los dos idiomas, e «ID»/«Total» se escriben igual.
+      "planDetail.statusPr",
+      "planDetail.statusCostEstimatedSuffix",
+      "planDetail.ganttTitle",
+      "planDetail.colId",
+      "planCost.colId",
+      "planCost.total",
+      // prod-16 `task_prod16_03` — tareas del proyecto. «Kanban», «Backlog»,
+      // «Ready», «Tasks», «Plan» y «Runs» son los rótulos que la UI castellana
+      // ya escribía en inglés; los otros seis estados de tarea SÍ se traducen.
+      "viewToggle.kanban",
+      "taskStatus.backlog",
+      "taskStatus.ready",
+      "projectTasks.breadcrumbCurrent",
+      "projectTasks.fieldPlan",
+      "taskDetail.runsHeading",
     ]);
 
     const identical = new Set(

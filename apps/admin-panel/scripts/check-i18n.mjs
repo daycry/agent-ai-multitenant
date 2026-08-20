@@ -378,12 +378,54 @@ export function looksSpanish(value) {
  * pantallas que le faltaban a `marketplace`, más los cuatro comboboxes
  * compartidos.
  *
+ * **2026-08-20, segunda pasada** — salen NUEVE entradas más (14 atributos) al
+ * migrar enteros `projects/[id]/plans` con `plans/[planId]/*` (16 ficheros) y
+ * `projects/[id]/mcp-servers` (9), más los dos diagramas de `lib/` que el
+ * detalle monta; y otras TRES (14 atributos) con `projects/[id]/tasks` y la
+ * ficha compartida de `components/tasks/*`.
+ *
+ * Dos avisos nuevos del mismo tipo, y son los que más valen de esta pasada:
+ *
+ *   1. **Un fichero a medio migrar es indistinguible de uno migrado.**
+ *      `plan-cost-section.tsx` YA usaba `useT()` y no tenía ni un atributo con
+ *      castellano —o sea, limpio para las dos guardas— y seguía pintando el
+ *      título de la tarjeta, el texto de carga y las dos cabeceras de tabla en
+ *      castellano fijo. Las guardas ven patrones, no pantallas.
+ *   2. **`components/ui/view-toggle.tsx` nunca tuvo entrada aquí** y llevaba
+ *      «Cambiar vista» y «Lista» cableados: ninguna de las dos palabras lleva
+ *      tilde ni está en `SPANISH_WORDS`, así que el detector le veía CERO. Lo
+ *      montan exactamente las dos pantallas de este lote.
+ *
+ * Y la deuda que este lote NO se lleva, dicha en ficheros: el texto propio de
+ * `app/admin/board` y de `app/admin/plans/[id]/escalated`, que comparten la
+ * ficha de tarea ya migrada pero tienen sus propias cabeceras y columnas.
+ *
  * Y con ellas, la cuarta demostración del mismo aviso: `docs` son DOCE ficheros
  * y ~2.300 líneas, y este mapa sólo le veía **ocho atributos en cinco ficheros**
  * porque su deuda vivía en texto JSX suelto —los seis estados de cada panel—,
  * no en atributos. `assistant` era peor todavía: sus ocho etiquetas de
  * herramienta y sus cinco mensajes de validación estaban en `lib/assistant.ts`,
  * un módulo PURO, donde ni este mapa ni el de ternarios miran.
+ *
+ * **2026-08-20** — salen SEIS entradas más (14 atributos) con el **hub del
+ * proyecto**: `projects/[id]/page.tsx` y sus piezas de `components/projects/`
+ * (git, gobierno, servicios de runtime; `review-preview` y `preview-launcher`
+ * nunca tuvieron entrada aquí y estaban igual de sin traducir), más
+ * `components/ui/markdown-textarea.tsx` y el `title=` que la ficha del plan le
+ * pasaba al lanzador de preview.
+ *
+ * Y la QUINTA demostración del mismo aviso, esta vez en tres formas a la vez:
+ *
+ *   * El hub entero valía **1 atributo** en este mapa. Detrás había ~2.300
+ *     líneas en siete ficheros: la rejilla de diez sub-secciones, los dos
+ *     diálogos y las cinco tarjetas de configuración.
+ *   * `lib/project-governance.ts` —los cinco nombres de presupuesto, los tres
+ *     catálogos y los diez mensajes de validación— es un módulo PURO: ni este
+ *     mapa ni el de ternarios miran ahí. Mismo caso que `lib/assistant.ts`.
+ *   * `markdown-textarea` valía 2 y lo montan **22 pantallas**, varias de ellas
+ *     ya «migradas»: su barra de pestañas salía en castellano dentro de diálogos
+ *     por lo demás ingleses. El mapa mira FICHEROS, no PANTALLAS, así que esa
+ *     deuda no se la cargaba ninguna de las 22.
  */
 const ATTR_ALLOWLIST = {
   "app/admin/agents/[id]/agent-kbs-section.tsx": 1,
@@ -409,21 +451,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/inbox/submit-dialog.tsx": 3,
   "app/admin/office/page.tsx": 6,
   "app/admin/plans/[id]/escalated/page.tsx": 2,
-  // El troceo de la pantalla (prod-16 `task_prod16_08`) repartió esta deuda
-  // entre el `page.tsx` y la pieza que se llevó el `placeholder` del textarea.
-  // 5 = 4 + 1: no crece, cambia de fichero.
-  // El troceo de prod-16 `task_prod16_08` repartió `mcp-server-sections.tsx`
-  // (1125 líneas) en cuatro piezas. La deuda de atributos se reparte con él:
-  // 3 = 2 + 1, mismo total, dos ficheros.
-  "app/admin/projects/[id]/mcp-servers/mcp-server-card.tsx": 2,
-  "app/admin/projects/[id]/mcp-servers/mcp-server-dialog.tsx": 1,
-  "app/admin/projects/[id]/mcp-servers/page.tsx": 2,
-  "app/admin/projects/[id]/page.tsx": 1,
-  "app/admin/projects/[id]/plans/[planId]/page.tsx": 1,
-  "app/admin/projects/[id]/plans/[planId]/plan-spec-sections.tsx": 2,
-  "app/admin/projects/[id]/plans/[planId]/plan-validation-section.tsx": 1,
-  "app/admin/projects/[id]/plans/page.tsx": 4,
-  "app/admin/projects/[id]/tasks/page.tsx": 4,
   "app/developers/api-reference/page.tsx": 3,
   "app/developers/sdks/page.tsx": 1,
   "app/developers/tutorials/page.tsx": 3,
@@ -433,16 +460,8 @@ const ATTR_ALLOWLIST = {
   "components/executions/execution-guidance.tsx": 1,
   "components/executions/replay-bar.tsx": 2,
   "components/layout/tenant-picker.tsx": 1,
-  "components/projects/git-config-section.tsx": 2,
-  "components/projects/governance-section.tsx": 2,
-  "components/projects/runtime-services-section.tsx": 6,
   "components/shared/form-section.tsx": 4,
   "components/shared/list-toolbar.tsx": 1,
-  "components/tasks/task-detail-sheet.tsx": 3,
-  "components/tasks/task-human-actions.tsx": 7,
-  "components/ui/markdown-textarea.tsx": 2,
-  "lib/plan-dag.tsx": 1,
-  "lib/plan-gantt.tsx": 1,
 };
 
 /** Mínimo de ficheros que el recorrido DEBE ver para creerse a sí mismo. */

@@ -14,6 +14,7 @@ import { Pencil, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useT } from "@/lib/i18n";
 import { McpOAuthConnect } from "./mcp-oauth-connect";
 import {
   OAUTH_AUTH_KIND,
@@ -45,6 +46,7 @@ export function McpServerCard({
   authKind?: string;
   providerLabel?: string;
 }) {
+  const t = useT("mcpServers");
   const isOAuth = authKind === OAUTH_AUTH_KIND;
   return (
     <Card data-testid={`mcp-server-card-${server.name}`}>
@@ -78,7 +80,7 @@ export function McpServerCard({
             onClick={onEdit}
             disabled={busy}
             data-testid={`mcp-server-edit-${server.name}`}
-            aria-label="Editar"
+            aria-label={t("edit")}
           >
             <Pencil className="h-3.5 w-3.5" />
           </Button>
@@ -88,7 +90,7 @@ export function McpServerCard({
             onClick={onDelete}
             disabled={busy}
             data-testid={`mcp-server-delete-${server.name}`}
-            aria-label="Eliminar"
+            aria-label={t("delete")}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>

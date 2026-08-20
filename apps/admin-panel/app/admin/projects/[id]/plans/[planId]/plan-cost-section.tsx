@@ -97,10 +97,10 @@ export function CostBreakdownSection({
     return (
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Desglose de coste</CardTitle>
+          <CardTitle>{t("title")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground text-sm">Calculando…</p>
+          <p className="text-muted-foreground text-sm">{t("calculating")}</p>
         </CardContent>
       </Card>
     );
@@ -115,7 +115,7 @@ export function CostBreakdownSection({
   return (
     <Card className="mt-6" data-testid="plan-cost-breakdown">
       <CardHeader>
-        <CardTitle>Desglose de coste</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {noTasks ? (
@@ -123,23 +123,26 @@ export function CostBreakdownSection({
             className="text-muted-foreground text-sm italic"
             data-testid="plan-cost-breakdown-empty"
           >
-            El plan aún no tiene tareas para calcular el coste.
+            {t("empty")}
           </p>
         ) : (
           <>
             {/* Human cost table */}
             <div data-testid="plan-cost-human">
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide">
-                Coste humano · {human.currency} · {human.hourly_rate} {human.currency}/h
+                {t("humanHeading", {
+                  currency: human.currency,
+                  rate: human.hourly_rate,
+                })}
               </p>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="text-left">
                     <tr className="border-muted border-b">
-                      <th className="py-1 pr-2 font-semibold">ID</th>
-                      <th className="py-1 pr-2 font-semibold">Tarea</th>
-                      <th className="py-1 pr-2 font-semibold text-right">Horas</th>
-                      <th className="py-1 pr-2 font-semibold text-right">Coste</th>
+                      <th className="py-1 pr-2 font-semibold">{t("colId")}</th>
+                      <th className="py-1 pr-2 font-semibold">{t("colTask")}</th>
+                      <th className="py-1 pr-2 font-semibold text-right">{t("colHours")}</th>
+                      <th className="py-1 pr-2 font-semibold text-right">{t("colCost")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -159,7 +162,7 @@ export function CostBreakdownSection({
                     ))}
                     <tr className="font-semibold">
                       <td colSpan={2} className="py-1 pr-2 text-right">
-                        Total
+                        {t("total")}
                       </td>
                       <td
                         className="py-1 pr-2 text-right"
@@ -179,7 +182,7 @@ export function CostBreakdownSection({
             {/* AI cost table — range (min / max) */}
             <div data-testid="plan-cost-ai">
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide">
-                Coste IA · {ai.currency} · modelo por defecto{" "}
+                {t("aiHeading", { currency: ai.currency })}{" "}
                 <span className="font-mono">{ai.default_model_id}</span>
               </p>
               {/*
@@ -208,12 +211,12 @@ export function CostBreakdownSection({
                 <table className="w-full text-xs">
                   <thead className="text-left">
                     <tr className="border-muted border-b">
-                      <th className="py-1 pr-2 font-semibold">ID</th>
-                      <th className="py-1 pr-2 font-semibold">Tarea</th>
-                      <th className="py-1 pr-2 font-semibold">Compl.</th>
-                      <th className="py-1 pr-2 font-semibold">Modelo</th>
-                      <th className="py-1 pr-2 font-semibold text-right">Coste mín</th>
-                      <th className="py-1 pr-2 font-semibold text-right">Coste máx</th>
+                      <th className="py-1 pr-2 font-semibold">{t("colId")}</th>
+                      <th className="py-1 pr-2 font-semibold">{t("colTask")}</th>
+                      <th className="py-1 pr-2 font-semibold">{t("colComplexity")}</th>
+                      <th className="py-1 pr-2 font-semibold">{t("colModel")}</th>
+                      <th className="py-1 pr-2 font-semibold text-right">{t("colCostMin")}</th>
+                      <th className="py-1 pr-2 font-semibold text-right">{t("colCostMax")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -237,7 +240,7 @@ export function CostBreakdownSection({
                     ))}
                     <tr className="font-semibold">
                       <td colSpan={4} className="py-1 pr-2 text-right">
-                        Total (rango)
+                        {t("totalRange")}
                       </td>
                       <td className="py-1 pr-2 text-right" data-testid="plan-cost-ai-total-min">
                         {ai.cost_min} {ai.currency}
@@ -254,7 +257,7 @@ export function CostBreakdownSection({
                   className="text-destructive mt-2 text-xs"
                   data-testid="plan-cost-ai-missing-models"
                 >
-                  Modelos sin precio en el catálogo: {ai.missing_models.join(", ")}
+                  {t("missingModels", { models: ai.missing_models.join(", ") })}
                 </p>
               ) : null}
             </div>

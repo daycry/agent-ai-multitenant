@@ -19,6 +19,10 @@
  * guardrail; un formulario tendría que replicar ese catálogo y divergiría del
  * esquema real a la primera. El backend valida con el MISMO parser que el
  * worker, así que un error aquí es exactamente el que habría en ejecución.
+ *
+ * i18n (prod-16 `task_prod16_03`): los catálogos y los mensajes de validación
+ * viven en `lib/project-governance.ts` y guardan la CLAVE del diccionario; esta
+ * pantalla los resuelve con el idioma activo.
  */
 
 import { useState } from "react";
@@ -30,12 +34,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   BUDGET_PERIODS,
   EXECUTION_BUDGET_CEILING,
   EXECUTION_BUDGET_KEYS,
-  EXECUTION_BUDGET_LABEL,
+  executionBudgetLabel,
   governanceProblems,
   HUMAN_TASK_REVIEW_MODES,
   toForm,
@@ -52,6 +59,10 @@ export function ProjectGovernanceSection({
   value: GovernanceValue | null;
 }) {
   const queryClient = useQueryClient();
+  const t = useT("projectGovernance");
+  const tCommon = useT("common");
+  const lang = useLangOptional();
+  const errorText = useErrorText();
   const [form, setForm] = useState<GovernanceForm>(() => toForm(value));
   const [saved, setSaved] = useState(false);
 
@@ -69,34 +80,31 @@ export function ProjectGovernanceSection({
     setForm((prev) => ({ ...prev, ...change }));
   }
 
-  const problems = governanceProblems(form);
+  const problems = governanceProblems(form, lang);
   const mode = HUMAN_TASK_REVIEW_MODES.find((m) => m.value === form.humanTaskReviewMode);
 
   return (
     <Card data-testid="project-governance-section">
       <CardHeader className="flex flex-row items-center gap-2">
         <SlidersHorizontal className="text-muted-foreground h-5 w-5" />
-        <CardTitle>Límites y gobierno del proyecto</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* --- Presupuesto por run ------------------------------------- */}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold">Presupuesto de un run</h3>
-          <p className="text-muted-foreground text-sm">
-            El techo de UNA ejecución de agente en este proyecto. Vacío = hereda el de la
-            plataforma. Un valor por encima del techo de plataforma se recorta a ese techo (no es un
-            error); un valor de cero o negativo se rechaza, porque se descartaría en silencio y
-            creerías haber capado el gasto.
-          </p>
+          <h3 className="text-sm font-semibold">{t("runBudgetHeading")}</h3>
+          <p className="text-muted-foreground text-sm">{t("runBudgetDescription")}</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {EXECUTION_BUDGET_KEYS.map((key) => (
               <div key={key} className="space-y-1.5">
-                <Label htmlFor={`budget-${key}`}>{EXECUTION_BUDGET_LABEL[key]}</Label>
+                <Label htmlFor={`budget-${key}`}>{executionBudgetLabel(key, lang)}</Label>
                 <Input
                   id={`budget-${key}`}
                   data-testid={`exec-budget-${key}`}
                   inputMode="decimal"
-                  placeholder={`plataforma: ${EXECUTION_BUDGET_CEILING[key].toLocaleString("es-ES")}`}
+                  placeholder={t("ceilingPlaceholder", {
+                    ceiling: EXECUTION_BUDGET_CEILING[key].toLocaleString(tCommon("dateLocale")),
+                  })}
                   value={form.budgets[key]}
                   onChange={(e) => patch({ budgets: { ...form.budgets, [key]: e.target.value } })}
                 />
@@ -107,24 +115,22 @@ export function ProjectGovernanceSection({
 
         {/* --- Presupuesto de gasto ------------------------------------ */}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold">Presupuesto de gasto</h3>
-          <p className="text-muted-foreground text-sm">
-            El techo ACUMULADO del proyecto por periodo. Al agotarse, el proyecto se pausa.
-          </p>
+          <h3 className="text-sm font-semibold">{t("spendHeading")}</h3>
+          <p className="text-muted-foreground text-sm">{t("spendDescription")}</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label htmlFor="budget-amount">Importe</Label>
+              <Label htmlFor="budget-amount">{t("amountLabel")}</Label>
               <Input
                 id="budget-amount"
                 data-testid="budget-amount"
                 inputMode="decimal"
-                placeholder="sin límite"
+                placeholder={t("amountPlaceholder")}
                 value={form.budgetAmount}
                 onChange={(e) => patch({ budgetAmount: e.target.value })}
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="budget-currency">Moneda</Label>
+              <Label htmlFor="budget-currency">{t("currencyLabel")}</Label>
               <Input
                 id="budget-currency"
                 data-testid="budget-currency"
@@ -135,7 +141,7 @@ export function ProjectGovernanceSection({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="budget-period">Periodo</Label>
+              <Label htmlFor="budget-period">{t("periodLabel")}</Label>
               <Select
                 id="budget-period"
                 data-testid="budget-period"
@@ -144,7 +150,7 @@ export function ProjectGovernanceSection({
               >
                 {BUDGET_PERIODS.map((p) => (
                   <option key={p.value} value={p.value}>
-                    {p.label}
+                    {t(p.labelKey)}
                   </option>
                 ))}
               </Select>
@@ -153,7 +159,7 @@ export function ProjectGovernanceSection({
           {form.budgetPeriod === "custom" ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
-                <Label htmlFor="budget-start-day">Día de inicio del periodo</Label>
+                <Label htmlFor="budget-start-day">{t("startDayLabel")}</Label>
                 <Input
                   id="budget-start-day"
                   data-testid="budget-start-day"
@@ -164,7 +170,7 @@ export function ProjectGovernanceSection({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="budget-length">Duración (días)</Label>
+                <Label htmlFor="budget-length">{t("lengthLabel")}</Label>
                 <Input
                   id="budget-length"
                   data-testid="budget-length"
@@ -180,32 +186,32 @@ export function ProjectGovernanceSection({
 
         {/* --- Tareas humanas ------------------------------------------ */}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold">Revisión de tareas humanas</h3>
+          <h3 className="text-sm font-semibold">{t("humanReviewHeading")}</h3>
           <div className="space-y-1.5 sm:max-w-md">
             <Select
-              aria-label="Revisión de tareas humanas"
+              aria-label={t("humanReviewHeading")}
               data-testid="human-task-review-mode"
               value={form.humanTaskReviewMode}
               onChange={(e) => patch({ humanTaskReviewMode: e.target.value })}
             >
               {HUMAN_TASK_REVIEW_MODES.map((m) => (
                 <option key={m.value} value={m.value}>
-                  {m.label}
+                  {t(m.labelKey)}
                 </option>
               ))}
             </Select>
-            {mode ? <p className="text-muted-foreground text-xs">{mode.hint}</p> : null}
+            {mode ? <p className="text-muted-foreground text-xs">{t(mode.hintKey)}</p> : null}
           </div>
         </section>
 
         {/* --- Guardrails ---------------------------------------------- */}
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold">Guardrails del proyecto</h3>
+          <h3 className="text-sm font-semibold">{t("guardrailsHeading")}</h3>
           <p className="text-muted-foreground text-sm">
-            Capa de guardrails que se fusiona sobre la de plataforma. Vacío = solo la de plataforma.
-            Se valida con el mismo parser que usa el worker, así que lo que se guarde aquí es lo que
-            se aplicará. Forma: <code>{'{"guardrails": {"pre_tool": [{"type": "..."}]}}'}</code> —
-            hooks válidos: <code>pre_llm</code>, <code>post_llm</code>, <code>pre_tool</code>,{" "}
+            {t("guardrailsDescriptionBefore")}
+            <code>{'{"guardrails": {"pre_tool": [{"type": "..."}]}}'}</code>
+            {t("guardrailsDescriptionHooks")}
+            <code>pre_llm</code>, <code>post_llm</code>, <code>pre_tool</code>,{" "}
             <code>post_tool</code>.
           </p>
           <textarea
@@ -236,12 +242,12 @@ export function ProjectGovernanceSection({
             disabled={problems.length > 0 || save.isPending}
             data-testid="governance-save"
           >
-            {save.isPending ? "Guardando…" : "Guardar límites"}
+            {save.isPending ? t("saving") : t("save")}
           </Button>
-          {saved ? <p className="text-success text-xs">Guardado.</p> : null}
+          {saved ? <p className="text-success text-xs">{t("saved")}</p> : null}
           {save.isError ? (
             <p className="text-destructive text-xs" data-testid="governance-error">
-              {save.error instanceof ApiError ? save.error.body : String(save.error)}
+              {errorText(save.error)}
             </p>
           ) : null}
         </div>

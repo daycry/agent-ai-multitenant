@@ -43,6 +43,15 @@ async function openCreateDialog(page: Page): Promise<void> {
   await page.goto(`/admin/projects/${PROJECT_ID}/mcp-servers`, {
     waitUntil: "domcontentloaded",
   });
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
   await expect(page.getByTestId("mcp-server-dialog")).toBeVisible();
 
@@ -146,6 +155,15 @@ test("Probar button is disabled until name is filled", async ({ page }) => {
   await page.goto(`/admin/projects/${PROJECT_ID}/mcp-servers`, {
     waitUntil: "domcontentloaded",
   });
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
 
   // Fresh form: name empty → button disabled.

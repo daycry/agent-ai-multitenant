@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import {
   AGENT_ROLES,
   ROLE_LABEL,
@@ -38,6 +39,9 @@ import {
 // `{}` borra la política y vuelve al default "todos los agentes, todas las MCP".
 // --------------------------------------------------------------------------
 export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
+  const t = useT("mcpServers");
+  const tRole = useT("agentRole");
+  const tCommon = useT("common");
   const queryClient = useQueryClient();
 
   // Comparte la caché de la página (misma queryKey) — el PUT la invalida.
@@ -136,13 +140,11 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
         <div className="min-w-0">
           <CardTitle className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4" />
-            Acceso por rol a las tools MCP
-            <Badge variant="muted">opcional</Badge>
+            {t("rolesTitle")}
+            <Badge variant="muted">{t("rolesOptional")}</Badge>
           </CardTitle>
           <p className="text-muted-foreground mt-1 text-xs">
-            Las tools MCP las aporta el proyecto: cualquier agente del proyecto puede usarlas. Aquí
-            puedes restringir cada tool MCP a ciertos roles. Sin ningún rol marcado, la tool queda{" "}
-            <strong>abierta a todos</strong> (por defecto).
+            {t("rolesHelpBefore")} <strong>{t("rolesHelpStrong")}</strong> {t("rolesHelpAfter")}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -154,7 +156,7 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
               disabled={saveMutation.isPending}
               data-testid="mcp-tool-roles-reset"
             >
-              Descartar
+              {t("rolesDiscard")}
             </Button>
           )}
           <Button
@@ -163,7 +165,7 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
             disabled={!dirty || saveMutation.isPending}
             data-testid="mcp-tool-roles-save"
           >
-            {saveMutation.isPending ? "Guardando…" : "Guardar"}
+            {saveMutation.isPending ? t("saving") : t("rolesSave")}
           </Button>
           {!saveMutation.isPending && savedAt !== null && !dirty && (
             <span
@@ -171,7 +173,7 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
               data-testid="mcp-tool-roles-saved"
             >
               <Check className="h-4 w-4" />
-              Guardado
+              {t("rolesSaved")}
             </span>
           )}
         </div>
@@ -190,13 +192,11 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
 
         {isLoading ? (
           <p className="text-muted-foreground text-sm" data-testid="mcp-tool-roles-loading">
-            Cargando…
+            {tCommon("loading")}
           </p>
         ) : mcpTools.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="mcp-tool-roles-empty">
-            Este proyecto aún no tiene tools MCP importadas. Configura un MCP server arriba y usa{" "}
-            <strong>“Probar”</strong> para importar sus tools al catálogo; luego podrás afinar aquí
-            qué roles las usan.
+            {t("rolesEmptyBefore")} <strong>“{t("testButton")}”</strong> {t("rolesEmptyAfter")}
           </p>
         ) : (
           <ul className="space-y-3" data-testid="mcp-tool-roles-list">
@@ -223,10 +223,10 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
                     </span>
                     {openToAll ? (
                       <Badge variant="muted" data-testid={`mcp-tool-roles-open-${tool.name}`}>
-                        Abierta a todos
+                        {t("rolesOpenToAll")}
                       </Badge>
                     ) : (
-                      <Badge variant="info">{selected.size} roles</Badge>
+                      <Badge variant="info">{t("rolesCount", { count: selected.size })}</Badge>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -243,9 +243,12 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
                             checked={selected.has(role)}
                             onChange={() => toggleRole(tool.name, role)}
                             data-testid={id}
-                            aria-label={`${ROLE_LABEL[role]} puede usar ${tool.name}`}
+                            aria-label={t("roleCanUse", {
+                              role: tRole(ROLE_LABEL[role]),
+                              tool: tool.name,
+                            })}
                           />
-                          {ROLE_LABEL[role]}
+                          {tRole(ROLE_LABEL[role])}
                         </label>
                       );
                     })}

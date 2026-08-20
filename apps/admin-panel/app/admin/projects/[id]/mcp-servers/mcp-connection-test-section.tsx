@@ -21,6 +21,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { TestResultPanel, type TestConnectionResult } from "./mcp-test-result-panel";
 import { type McpServerConfig } from "./mcp-server-types";
 
@@ -33,6 +34,7 @@ export function McpConnectionTestSection({
   buildPayload: () => McpServerConfig;
   disabled: boolean;
 }) {
+  const t = useT("mcpServers");
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
@@ -105,7 +107,7 @@ export function McpConnectionTestSection({
   return (
     <div className="border-muted rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-medium">Probar conexión</p>
+        <p className="text-sm font-medium">{t("testTitle")}</p>
         <Button
           type="button"
           variant="outline"
@@ -114,7 +116,7 @@ export function McpConnectionTestSection({
           disabled={testing || disabled || !buildPayload().name}
           data-testid="mcp-form-test"
         >
-          {testing ? "Probando…" : "Probar"}
+          {testing ? t("testing") : t("testButton")}
         </Button>
       </div>
       {testResult ? (
@@ -136,9 +138,7 @@ export function McpConnectionTestSection({
           {testError}
         </p>
       ) : (
-        <p className="text-muted-foreground mt-2 text-xs">
-          Abre una sesión one-shot contra el servidor y lista las tools que expone. No guarda nada.
-        </p>
+        <p className="text-muted-foreground mt-2 text-xs">{t("testHelp")}</p>
       )}
     </div>
   );

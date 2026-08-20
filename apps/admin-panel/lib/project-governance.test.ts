@@ -89,46 +89,64 @@ describe("toPayload", () => {
 
 describe("governanceProblems", () => {
   it("is quiet on an untouched form", () => {
-    expect(governanceProblems(EMPTY)).toEqual([]);
+    expect(governanceProblems(EMPTY, "es")).toEqual([]);
   });
 
   it("rejects a budget the resolver would silently discard", () => {
     // `resolve_execution_budgets` tira los valores ≤ 0 y los no numéricos sin
     // decir nada: el operador creería haber capado el gasto.
-    expect(governanceProblems(form({ budgets: { ...EMPTY.budgets, max_tokens: "0" } }))).toContain(
-      "«Tokens por run» tiene que ser mayor que cero.",
-    );
     expect(
-      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_cost_usd: "mucho" } })),
+      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_tokens: "0" } }), "es"),
+    ).toContain("«Tokens por run» tiene que ser mayor que cero.");
+    expect(
+      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_cost_usd: "mucho" } }), "es"),
     ).toContain("«Coste por run (USD)» tiene que ser un número.");
+  });
+
+  it("says the same thing in English, label included (prod-16 task_prod16_03)", () => {
+    // El nombre del presupuesto se interpola DENTRO del problema, así que si el
+    // catálogo se quedara en castellano el mensaje saldría medio traducido —
+    // que es el fallo concreto que este plan cierra.
+    expect(
+      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_tokens: "0" } }), "en"),
+    ).toContain("«Tokens per run» must be greater than zero.");
+    expect(
+      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_cost_usd: "mucho" } }), "en"),
+    ).toContain("«Cost per run (USD)» must be a number.");
   });
 
   it("does not complain about a value above the platform ceiling", () => {
     // Recortar está documentado y es intencionado: no es un error.
     expect(
-      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_tokens: "999999" } })),
+      governanceProblems(form({ budgets: { ...EMPTY.budgets, max_tokens: "999999" } }), "es"),
     ).toEqual([]);
   });
 
   it("catches malformed guardrails before the round-trip", () => {
-    expect(governanceProblems(form({ guardrailsJson: "{no json" }))).toContain(
+    expect(governanceProblems(form({ guardrailsJson: "{no json" }), "es")).toContain(
       "Los guardrails no son JSON válido.",
     );
-    expect(governanceProblems(form({ guardrailsJson: "[1,2]" }))).toContain(
+    expect(governanceProblems(form({ guardrailsJson: "[1,2]" }), "es")).toContain(
       "Los guardrails tienen que ser un objeto JSON.",
     );
-    expect(governanceProblems(form({ guardrailsJson: '{"guardrails":{}}' }))).toEqual([]);
+    expect(governanceProblems(form({ guardrailsJson: "{no json" }), "en")).toContain(
+      "Guardrails are not valid JSON.",
+    );
+    expect(governanceProblems(form({ guardrailsJson: '{"guardrails":{}}' }), "es")).toEqual([]);
   });
 
   it("enforces the spend-budget invariants the backend also enforces", () => {
-    expect(governanceProblems(form({ budgetAmount: "100" }))).toContain(
+    expect(governanceProblems(form({ budgetAmount: "100" }), "es")).toContain(
       "Un importe necesita moneda (código de 3 letras).",
     );
-    expect(governanceProblems(form({ budgetPeriod: "custom" }))).toContain(
+    expect(governanceProblems(form({ budgetPeriod: "custom" }), "es")).toContain(
       "Un periodo personalizado necesita día de inicio y duración.",
     );
     expect(
-      governanceProblems(form({ budgetPeriod: "monthly", budgetPeriodStartDay: "3" })),
+      governanceProblems(form({ budgetPeriod: "monthly", budgetPeriodStartDay: "3" }), "es"),
     ).toContain("El día de inicio y la duración solo aplican a un periodo personalizado.");
+    expect(governanceProblems(form({ budgetAmount: "100" }), "en")).toContain(
+      "An amount needs a currency (3-letter code).",
+    );
   });
 });

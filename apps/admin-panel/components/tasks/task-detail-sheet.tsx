@@ -35,6 +35,7 @@ import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { cleanCriteria, criterionText, type CriterionDraft } from "@/lib/acceptance-criteria";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { fetchAllPages } from "@/lib/paginate";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
@@ -82,6 +83,8 @@ export function TaskDetailSheet({
   open: boolean;
   onOpenChange: (next: boolean) => void;
 }) {
+  const t = useT("taskDetail");
+  const tCommon = useT("common");
   const router = useRouter();
   const queryClient = useQueryClient();
   const taskId = task?.id ?? null;
@@ -133,7 +136,7 @@ export function TaskDetailSheet({
     <Dialog open={open} onOpenChange={onOpenChange} size="xl">
       <DialogContent data-testid="task-detail-sheet">
         <DialogHeader>
-          <DialogTitle>{task?.title ?? "Tarea"}</DialogTitle>
+          <DialogTitle>{task?.title ?? t("fallbackTitle")}</DialogTitle>
           {detail && (
             <p className="text-muted-foreground text-sm">
               <Badge variant="muted">{detail.status}</Badge>
@@ -166,17 +169,17 @@ export function TaskDetailSheet({
           {/* Runs */}
           <section className="mb-4" data-testid="task-detail-runs">
             <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-              Runs
+              {t("runsHeading")}
             </h4>
             {runsQuery.isLoading ? (
-              <p className="text-muted-foreground text-sm">Cargando runs…</p>
+              <p className="text-muted-foreground text-sm">{t("runsLoading")}</p>
             ) : null}
             {!runsQuery.isLoading && rows.length === 0 ? (
               <p
                 className="text-muted-foreground text-sm italic"
                 data-testid="task-detail-runs-empty"
               >
-                Esta tarea no tiene ejecuciones todavía.
+                {t("runsEmpty")}
               </p>
             ) : null}
             <div className="space-y-1">
@@ -210,9 +213,7 @@ export function TaskDetailSheet({
           {planId && specId ? (
             <TaskComments planId={planId} specId={specId} />
           ) : (
-            <p className="text-muted-foreground text-xs italic">
-              Los comentarios están disponibles para tareas de un plan.
-            </p>
+            <p className="text-muted-foreground text-xs italic">{t("commentsOnlyForPlanTasks")}</p>
           )}
         </DialogBody>
         <DialogFooter>
@@ -228,7 +229,7 @@ export function TaskDetailSheet({
             ) : null}
           </div>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Cerrar
+            {tCommon("close")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -246,6 +247,7 @@ interface TaskLite {
  * (cheap, cached; only fetched when the task actually has dependencies); falls
  * back to a short id if a title can't be resolved. */
 function DependsOnSection({ projectId, dependsOn }: { projectId: string; dependsOn: string[] }) {
+  const t = useT("taskDetail");
   // PROY2-08: paginado exhaustivo — con >100 tareas en el proyecto, las deps
   // más allá de la primera página se quedaban sin título (solo el UUID).
   const tasksQuery = useQuery({
@@ -259,7 +261,7 @@ function DependsOnSection({ projectId, dependsOn }: { projectId: string; depends
   return (
     <section className="mb-4" data-testid="task-detail-deps">
       <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-        Depende de
+        {t("dependsOn")}
       </h4>
       <ul className="list-disc space-y-1 pl-5 text-sm" data-testid="task-detail-deps-list">
         {dependsOn.map((id) => {
@@ -288,6 +290,7 @@ function CriteriaSection({
   taskId: string;
   criteria: unknown[];
 }) {
+  const t = useT("taskDetail");
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [rows, setRows] = useState<CriterionRow[]>([]);
@@ -349,7 +352,7 @@ function CriteriaSection({
       <section className="mb-4" data-testid="task-detail-criteria">
         <div className="mb-1 flex items-center justify-between">
           <h4 className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
-            Criterios de aceptación
+            {t("criteriaHeading")}
           </h4>
           <div className="flex gap-2">
             <Button
@@ -360,10 +363,10 @@ function CriteriaSection({
               data-testid="task-criteria-generate"
             >
               {generateMutation.isPending
-                ? "Generando…"
+                ? t("criteriaGenerating")
                 : criteria.length > 0
-                  ? "Regenerar con IA"
-                  : "Generar con IA"}
+                  ? t("criteriaRegenerate")
+                  : t("criteriaGenerate")}
             </Button>
             <Button
               variant="outline"
@@ -371,7 +374,7 @@ function CriteriaSection({
               onClick={startEdit}
               data-testid="task-criteria-edit"
             >
-              Editar
+              {t("criteriaEdit")}
             </Button>
           </div>
         </div>
@@ -383,12 +386,12 @@ function CriteriaSection({
           </ul>
         ) : (
           <p className="text-muted-foreground text-xs italic" data-testid="task-criteria-empty">
-            Sin criterios de aceptación.
+            {t("criteriaEmpty")}
           </p>
         )}
         {generateMutation.isError ? (
           <p className="text-destructive mt-1 text-sm" data-testid="task-criteria-generate-error">
-            No se pudieron generar los criterios:{" "}
+            {t("criteriaGenerateError")}{" "}
             {generateMutation.error instanceof ApiError
               ? generateMutation.error.body
               : String(generateMutation.error)}
@@ -408,7 +411,7 @@ function CriteriaSection({
   return (
     <section className="mb-4" data-testid="task-detail-criteria">
       <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-        Criterios de aceptación
+        {t("criteriaHeading")}
       </h4>
       <div className="space-y-2">
         {rows.map((row, i) => (
@@ -424,7 +427,7 @@ function CriteriaSection({
                   prev.map((r) => (r.key === row.key ? { ...r, text: e.target.value } : r)),
                 )
               }
-              placeholder="Condición concreta y verificable…"
+              placeholder={t("criterionPlaceholder")}
               data-testid="task-criterion-input"
             />
             <Button
@@ -432,7 +435,7 @@ function CriteriaSection({
               size="sm"
               onClick={() => setRows((prev) => prev.filter((r) => r.key !== row.key))}
               data-testid={`task-criterion-remove-${i}`}
-              aria-label="Quitar criterio"
+              aria-label={t("criterionRemove")}
             >
               ×
             </Button>
@@ -448,7 +451,7 @@ function CriteriaSection({
           }
           data-testid="task-criterion-add"
         >
-          + Añadir criterio
+          {t("criterionAdd")}
         </Button>
         <div className="flex gap-2">
           <Button
@@ -457,7 +460,7 @@ function CriteriaSection({
             onClick={() => setEditing(false)}
             data-testid="task-criteria-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             size="sm"
@@ -465,13 +468,13 @@ function CriteriaSection({
             disabled={mutation.isPending}
             data-testid="task-criteria-save"
           >
-            Guardar
+            {t("save")}
           </Button>
         </div>
       </div>
       {mutation.isError ? (
         <p className="text-destructive mt-1 text-sm">
-          No se pudieron guardar los criterios:{" "}
+          {t("criteriaSaveError")}{" "}
           {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
         </p>
       ) : null}
@@ -496,6 +499,7 @@ function CriteriaCompareDialog({
   onAccept: () => void;
   onCancel: () => void;
 }) {
+  const t = useT("taskDetail");
   return (
     <Dialog
       open={open}
@@ -506,13 +510,13 @@ function CriteriaCompareDialog({
     >
       <DialogContent data-testid="task-criteria-compare">
         <DialogHeader>
-          <DialogTitle>Comparar criterios de aceptación</DialogTitle>
+          <DialogTitle>{t("compareTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div className="grid grid-cols-2 gap-4">
             <div data-testid="task-criteria-compare-current">
               <h5 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-                Actuales
+                {t("compareCurrent")}
               </h5>
               <ul className="list-disc space-y-1 pl-5 text-sm">
                 {current.map((c, i) => (
@@ -522,7 +526,7 @@ function CriteriaCompareDialog({
             </div>
             <div data-testid="task-criteria-compare-proposed">
               <h5 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-                Propuestos
+                {t("compareProposed")}
               </h5>
               <ul className="list-disc space-y-1 pl-5 text-sm">
                 {proposed.map((c, i) => (
@@ -539,10 +543,10 @@ function CriteriaCompareDialog({
             onClick={onCancel}
             data-testid="task-criteria-compare-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button size="sm" onClick={onAccept} data-testid="task-criteria-compare-accept">
-            Aceptar cambios
+            {t("compareAccept")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -551,6 +555,7 @@ function CriteriaCompareDialog({
 }
 
 function TaskComments({ planId, specId }: { planId: string; specId: string }) {
+  const t = useT("taskDetail");
   const queryClient = useQueryClient();
   const [content, setContent] = useState("");
 
@@ -583,11 +588,11 @@ function TaskComments({ planId, specId }: { planId: string; specId: string }) {
   return (
     <section data-testid="task-comments">
       <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-        Comentarios
+        {t("commentsHeading")}
       </h4>
       {commentsQuery.isError ? (
         <p className="text-destructive text-sm">
-          No se pudieron cargar los comentarios:{" "}
+          {t("commentsLoadError")}{" "}
           {commentsQuery.error instanceof ApiError
             ? commentsQuery.error.body
             : String(commentsQuery.error)}
@@ -605,7 +610,7 @@ function TaskComments({ planId, specId }: { planId: string; specId: string }) {
         ))}
         {mine.length === 0 ? (
           <p className="text-muted-foreground text-xs italic" data-testid="task-comments-empty">
-            Aún no hay comentarios.
+            {t("commentsEmpty")}
           </p>
         ) : null}
       </ul>
@@ -620,13 +625,13 @@ function TaskComments({ planId, specId }: { planId: string; specId: string }) {
         <MarkdownTextarea
           value={content}
           onChange={setContent}
-          placeholder="Escribe un comentario para el equipo (lo verá el agente)…"
+          placeholder={t("commentPlaceholder")}
           rows={3}
           data-testid="task-comment-content"
         />
         <div className="flex justify-end">
           <Button type="submit" disabled={!canSubmit} data-testid="task-comment-submit">
-            Comentar
+            {t("commentSubmit")}
           </Button>
         </div>
       </form>

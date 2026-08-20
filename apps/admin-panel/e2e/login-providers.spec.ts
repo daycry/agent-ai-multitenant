@@ -45,7 +45,7 @@ const GOOGLE: PublicProviderFixture = {
   id: "bbbbbbbb-0000-0000-0000-000000000002",
   kind: "oidc",
   display_name: "Google Workspace",
-  button_label: null, // → brand default "Sign in with Google"
+  button_label: null, // → texto de respaldo de la marca, ya traducido
   login_url: "/auth/sso/bbbbbbbb-0000-0000-0000-000000000002/oidc/login",
 };
 
@@ -121,8 +121,12 @@ test("renders one branded button per enabled provider + the divider", async ({ p
   await expect(ms).toContainText("Iniciar sesión con Microsoft");
   await expect(gh).toContainText("Continuar con GitHub");
   await expect(saml).toContainText("Acceder con SSO corporativo");
-  // No label → the brand default text.
-  await expect(google).toContainText("Sign in with Google");
+  // No label → the brand default text. Desde prod-16 `task_prod16_02` ese
+  // respaldo sale del diccionario y no cableado en inglés, así que en el idioma
+  // por DEFECTO del panel (ES) se lee en castellano. Antes decía "Sign in with
+  // Google" con el resto de la pantalla en castellano: la misma pantalla
+  // mitad-y-mitad que este plan cierra, sólo que en el otro sentido.
+  await expect(google).toContainText("Iniciar sesión con Google");
 
   // Brand inferred from kind + label/display_name.
   await expect(ms).toHaveAttribute("data-brand", "microsoft");

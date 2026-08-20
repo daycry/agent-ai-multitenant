@@ -28,6 +28,7 @@ import { PreviewLauncher } from "@/components/projects/preview-launcher";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { type PlanResponse, STATUS_LABEL, STATUS_VARIANT } from "./plan-spec-types";
 import {
@@ -54,6 +55,8 @@ import { HumanValidationSection } from "./plan-validation-section";
 // Page
 // --------------------------------------------------------------------------
 export default function PlanDetailPage() {
+  const t = useT("planDetail");
+  const tStatus = useT("planStatus");
   const params = useParams<{ id: string; planId: string }>();
   const projectId = params.id;
   const planId = params.planId;
@@ -68,7 +71,7 @@ export default function PlanDetailPage() {
   if (planQuery.isLoading) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <p className="text-muted-foreground text-sm">Cargando plan…</p>
+        <p className="text-muted-foreground text-sm">{t("loading")}</p>
       </div>
     );
   }
@@ -77,7 +80,7 @@ export default function PlanDetailPage() {
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
         <Card>
           <CardHeader>
-            <CardTitle>Error cargando el plan</CardTitle>
+            <CardTitle>{t("errorTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-destructive text-sm" data-testid="plan-detail-error">
@@ -102,7 +105,7 @@ export default function PlanDetailPage() {
         title={plan.title}
         actions={
           <Badge variant={variant} data-testid="plan-detail-status-badge" data-status={plan.status}>
-            {STATUS_LABEL[plan.status] ?? plan.status}
+            {STATUS_LABEL[plan.status] ? tStatus(STATUS_LABEL[plan.status]) : plan.status}
           </Badge>
         }
         data-testid="plan-detail-header"
@@ -125,7 +128,10 @@ export default function PlanDetailPage() {
       {/* ADR 0130: preview on-demand de la rama del plan (24h, sin veredicto) —
           útil para re-inspeccionar un plan cuya validación humana ya caducó. */}
       <div className="mt-2">
-        <PreviewLauncher scope="plans" id={plan.id} title="Preview de la app (este plan)" />
+        {/* El título ya no llega por prop: lo elige el propio componente según
+            el scope (prod-16 `task_prod16_03`). Con el prop, migrar el
+            componente no traducía ninguna de las dos pantallas que lo montan. */}
+        <PreviewLauncher scope="plans" id={plan.id} />
       </div>
       {/* task_wf_34: la retro que el beat escribía para nadie. */}
       <PlanRetroSection planId={plan.id} status={plan.status} />

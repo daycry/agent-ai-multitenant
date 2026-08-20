@@ -78,6 +78,12 @@ export function DeploymentConfigForm({
   disabled = false,
 }: DeploymentConfigFormProps) {
   const t = useT("marketplaceDeploy");
+  // El catálogo de roles es COMPARTIDO con la política rol→tool de
+  // `projects/[id]/mcp-servers`, y guarda la CLAVE y no el texto desde
+  // prod-16 `task_prod16_03`. Antes esta pantalla, dada por migrada,
+  // pintaba los diez roles en castellano con el toggle en EN: el guard
+  // mira ficheros y la constante vive en un módulo puro sin atributos.
+  const tRole = useT("agentRole");
   const fields = schemaFields(capability.config_schema);
   const errors = draftErrors(capability, draft);
 
@@ -137,7 +143,7 @@ export function DeploymentConfigForm({
                 onChange={() => toggleRole(role)}
                 data-testid={`${idPrefix}-role-${role}`}
               />
-              {ROLE_LABEL[role]}
+              {tRole(ROLE_LABEL[role])}
             </label>
           ))}
         </div>

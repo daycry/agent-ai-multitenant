@@ -2,6 +2,7 @@
 
 import { KanbanSquare, List } from "lucide-react";
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type ViewMode = "list" | "kanban";
@@ -14,25 +15,26 @@ interface ViewToggleProps {
 }
 
 export function ViewToggle({ value, onChange, className, ...props }: ViewToggleProps) {
+  const t = useT("viewToggle");
   return (
     <div
       className={cn("bg-muted inline-flex rounded-md p-1", className)}
       role="tablist"
-      aria-label="Cambiar vista"
+      aria-label={t("ariaLabel")}
       data-testid={props["data-testid"] ?? "view-toggle"}
     >
       <ToggleButton
         active={value === "list"}
         onClick={() => onChange("list")}
         icon={<List className="h-3.5 w-3.5" />}
-        label="Lista"
+        label={t("list")}
         testid="view-toggle-list"
       />
       <ToggleButton
         active={value === "kanban"}
         onClick={() => onChange("kanban")}
         icon={<KanbanSquare className="h-3.5 w-3.5" />}
-        label="Kanban"
+        label={t("kanban")}
         testid="view-toggle-kanban"
       />
     </div>

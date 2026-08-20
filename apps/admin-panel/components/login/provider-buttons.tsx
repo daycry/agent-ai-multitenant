@@ -24,6 +24,7 @@ import { useEffect, useState } from "react";
 
 import { Spinner } from "@/components/ui/spinner";
 import { apiUrl } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 import { brandSpec, resolveBrand } from "./provider-brand";
@@ -38,6 +39,8 @@ interface PublicProvider {
 }
 
 export function ProviderButtons() {
+  // i18n vía diccionario (prod-16 `task_prod16_02`).
+  const t = useT("login");
   const [providers, setProviders] = useState<PublicProvider[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -83,7 +86,7 @@ export function ProviderButtons() {
       <div className="flex items-center gap-3" aria-hidden="true" data-testid="login-divider">
         <span className="bg-border h-px flex-1" />
         <span className="text-muted-foreground text-xs uppercase tracking-wide">
-          o continúa con
+          {t("ssoDivider")}
         </span>
         <span className="bg-border h-px flex-1" />
       </div>
@@ -98,9 +101,12 @@ export function ProviderButtons() {
 }
 
 function ProviderButton({ provider }: { provider: PublicProvider }) {
+  const t = useT("login");
   const brand = resolveBrand(provider.kind, provider.button_label, provider.display_name);
   const spec = brandSpec(brand);
-  const label = provider.button_label?.trim() || spec.defaultLabel;
+  // La etiqueta que escribió el OPERADOR manda sobre el respaldo traducido: la
+  // redactó una persona para su IdP y traducirla sería inventarse su texto.
+  const label = provider.button_label?.trim() || t(spec.defaultLabelKey);
 
   function start() {
     // Full-page navigation to the api-server login route; it redirects to

@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Plan lifecycle — explicit state transitions (draft → approval → in_progress)
@@ -39,6 +40,7 @@ export function lifecycleActions(status: string) {
 }
 
 export function PlanLifecycleSection({ planId, status }: { planId: string; status: string }) {
+  const t = useT("planDetail");
   const queryClient = useQueryClient();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -116,7 +118,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
   return (
     <Card className="mt-6" data-testid="plan-lifecycle">
       <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle>Ciclo de vida del plan</CardTitle>
+        <CardTitle>{t("lifecycleTitle")}</CardTitle>
         <div className="flex flex-wrap gap-2">
           {canSendToApproval ? (
             <Button
@@ -124,7 +126,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
               disabled={pending}
               data-testid="plan-send-to-approval"
             >
-              Enviar a aprobación
+              {t("lifecycleSendToApproval")}
             </Button>
           ) : null}
           {canApprove ? (
@@ -134,7 +136,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
               variant={canApproveAndStart ? "outline" : "default"}
               data-testid="plan-lifecycle-approve"
             >
-              Aprobar plan
+              {t("lifecycleApprove")}
             </Button>
           ) : null}
           {canApproveAndStart ? (
@@ -143,7 +145,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
               disabled={pending}
               data-testid="plan-approve-and-start"
             >
-              Aprobar y arrancar
+              {t("lifecycleApproveAndStart")}
             </Button>
           ) : null}
           {canStart ? (
@@ -152,7 +154,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
               disabled={pending}
               data-testid="plan-start-execution"
             >
-              Empezar ejecución
+              {t("lifecycleStart")}
             </Button>
           ) : null}
           {canUnblock ? (
@@ -161,7 +163,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
               disabled={pending}
               data-testid="plan-detail-unblock"
             >
-              Desbloquear plan
+              {t("lifecycleUnblock")}
             </Button>
           ) : null}
         </div>
@@ -169,14 +171,14 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
       <CardContent>
         <p className="text-muted-foreground text-sm">
           {canSendToApproval
-            ? "El plan está en borrador. Envíalo a aprobación para revisarlo y aprobarlo."
+            ? t("lifecycleHelpDraft")
             : canApprove
               ? canApproveAndStart
-                ? "El plan espera aprobación. «Aprobar y arrancar» lo firma y lo pone en marcha en un paso; «Aprobar plan» solo lo firma. Si el plan necesita dos firmas, ambos botones dejan la primera y esperan a la segunda."
-                : "El plan tiene la primera firma y espera la segunda, que debe dar otra persona."
+                ? t("lifecycleHelpApproveAndStart")
+                : t("lifecycleHelpSecondSignature")
               : canUnblock
-                ? "El plan está bloqueado: ninguna tarea abierta puede avanzar. «Desbloquear plan» lo reactiva y re-encola todas sus tareas bloqueadas (reinicia sus reintentos)."
-                : "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban."}
+                ? t("lifecycleHelpBlocked")
+                : t("lifecycleHelpApproved")}
         </p>
         {errorMsg ? (
           <p className="text-destructive mt-2 text-xs" data-testid="plan-lifecycle-error">

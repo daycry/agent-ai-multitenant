@@ -152,6 +152,15 @@ test("adding a stdio server PUTs the new entry appended to mcp_servers", async (
     waitUntil: "domcontentloaded",
   });
 
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
   await expect(page.getByTestId("mcp-server-dialog")).toBeVisible();
 
@@ -182,6 +191,15 @@ test("adding an http server hides stdio fields and PUTs url + headers", async ({
     waitUntil: "domcontentloaded",
   });
 
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
   await page.getByTestId("mcp-form-name").fill("toy-http");
   await page.getByTestId("mcp-form-transport").selectOption("streamable_http");
@@ -268,6 +286,15 @@ test("env editor add/remove rows shows up in the PUT payload", async ({ page }) 
     waitUntil: "domcontentloaded",
   });
 
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
   await page.getByTestId("mcp-form-name").fill("env-toy");
   await page.getByTestId("mcp-form-command").fill("env-mcp");

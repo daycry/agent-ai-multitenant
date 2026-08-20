@@ -23,7 +23,12 @@ import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import type { Lang } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { cn } from "@/lib/utils";
+
+import { numberLocale } from "./plan-spec-types";
 
 export interface PlanStatusResponse {
   plan_id: string;
@@ -62,12 +67,18 @@ export function formatMoney(raw: string | number | null | undefined, currency: s
   return `${value.toFixed(2)} ${currency}`;
 }
 
-/** 812345 → "812,3k". Token counts are read as magnitudes, not exact figures. */
-export function formatTokens(tokens: number | null | undefined): string {
+/**
+ * 812345 → "812,3k". Token counts are read as magnitudes, not exact figures.
+ *
+ * `lang` es obligatorio y sin default: el separador decimal lo elige el idioma
+ * activo, y con `"es-ES"` cableado el panel en inglés escribía «812,3k» donde
+ * un lector inglés lee «812.3k» (prod-16 `task_prod16_03`).
+ */
+export function formatTokens(tokens: number | null | undefined, lang: Lang): string {
   const value = Number(tokens ?? 0);
   if (!Number.isFinite(value) || value <= 0) return "0";
   if (value < 1000) return String(value);
-  return `${(value / 1000).toLocaleString("es-ES", { maximumFractionDigits: 1 })}k`;
+  return `${(value / 1000).toLocaleString(numberLocale(lang), { maximumFractionDigits: 1 })}k`;
 }
 
 function Metric({
@@ -88,6 +99,8 @@ function Metric({
 }
 
 export function PlanStatusHeader({ planId }: { planId: string }) {
+  const t = useT("planDetail");
+  const lang = useLangOptional();
   const { data, isLoading } = useQuery({
     queryKey: ["plan-status", planId],
     queryFn: () => apiFetch<PlanStatusResponse>(`/plans/${planId}/status`),
@@ -96,7 +109,9 @@ export function PlanStatusHeader({ planId }: { planId: string }) {
   if (isLoading || !data) {
     return (
       <Card className="mt-2" data-testid="plan-status-header-loading">
-        <CardContent className="text-muted-foreground pt-6 text-sm">Cargando estado…</CardContent>
+        <CardContent className="text-muted-foreground pt-6 text-sm">
+          {t("statusLoading")}
+        </CardContent>
       </Card>
     );
   }
@@ -106,21 +121,23 @@ export function PlanStatusHeader({ planId }: { planId: string }) {
   return (
     <Card className="mt-2" data-testid="plan-status-header">
       <CardContent className="grid gap-4 pt-6 sm:grid-cols-3">
-        <Metric label="Progreso" testId="plan-status-progress">
+        <Metric label={t("statusProgress")} testId="plan-status-progress">
           <span data-testid="plan-status-progress-label">{data.progress.label}</span>
           {percent !== null ? (
             <span className="text-muted-foreground ml-2 text-xs">{percent}%</span>
           ) : (
-            <span className="text-muted-foreground ml-2 text-xs">sin tareas todavía</span>
+            <span className="text-muted-foreground ml-2 text-xs">{t("statusNoTasks")}</span>
           )}
           {data.progress.open > 0 ? (
             <span className="text-muted-foreground ml-2 text-xs">
-              · {data.progress.open} abierta{data.progress.open === 1 ? "" : "s"}
+              {data.progress.open === 1
+                ? t("statusOpenOne", { count: data.progress.open })
+                : t("statusOpenMany", { count: data.progress.open })}
             </span>
           ) : null}
         </Metric>
 
-        <Metric label="Pull request" testId="plan-status-pr">
+        <Metric label={t("statusPr")} testId="plan-status-pr">
           {data.pr.url ? (
             <a
               className="inline-flex items-center gap-1 underline"
@@ -129,21 +146,21 @@ export function PlanStatusHeader({ planId }: { planId: string }) {
               rel="noreferrer noopener"
               data-testid="plan-status-pr-link"
             >
-              {data.pr.branch ?? "ver PR"}
+              {data.pr.branch ?? t("statusPrFallback")}
               <ExternalLink className="h-3 w-3" />
             </a>
           ) : data.pr.error ? (
             <span className="text-destructive text-xs" data-testid="plan-status-pr-error">
-              No se pudo abrir: {data.pr.error}
+              {t("statusPrError", { error: data.pr.error })}
             </span>
           ) : (
             <span className="text-muted-foreground text-xs" data-testid="plan-status-pr-none">
-              Todavía sin PR
+              {t("statusPrNone")}
             </span>
           )}
         </Metric>
 
-        <Metric label="Coste real / estimado" testId="plan-status-cost">
+        <Metric label={t("statusCost")} testId="plan-status-cost">
           <span
             className={cn(data.cost.over_estimate && "text-destructive")}
             data-testid="plan-status-cost-actual"
@@ -152,17 +169,20 @@ export function PlanStatusHeader({ planId }: { planId: string }) {
           </span>
           <span className="text-muted-foreground text-xs">
             {" / "}
-            {formatMoney(data.cost.estimated_ai_max, data.cost.ai_currency)} est.
+            {formatMoney(data.cost.estimated_ai_max, data.cost.ai_currency)}{" "}
+            {t("statusCostEstimatedSuffix")}
           </span>
           {data.cost.over_estimate ? (
             <Badge variant="danger" className="ml-2" data-testid="plan-status-over-estimate">
-              por encima
+              {t("statusOverEstimate")}
             </Badge>
           ) : null}
           <p className="text-muted-foreground mt-0.5 text-[10px]">
-            {formatTokens(data.cost.actual_tokens)} tokens · {data.cost.actual_runs} run
-            {data.cost.actual_runs === 1 ? "" : "s"} · estimación humana{" "}
-            {formatMoney(data.cost.estimated_human_cost, data.cost.human_currency)}
+            {t(data.cost.actual_runs === 1 ? "statusFootnoteOne" : "statusFootnoteMany", {
+              tokens: formatTokens(data.cost.actual_tokens, lang),
+              runs: data.cost.actual_runs,
+              cost: formatMoney(data.cost.estimated_human_cost, data.cost.human_currency),
+            })}
           </p>
         </Metric>
       </CardContent>

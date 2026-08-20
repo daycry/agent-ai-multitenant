@@ -18,6 +18,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { type PlanPhaseSpec, phaseLabel } from "./plan-spec-types";
 
 // --------------------------------------------------------------------------
@@ -42,6 +44,8 @@ export function SyncToKanbanSection({
   phases: PlanPhaseSpec[];
   taskIds: string[];
 }) {
+  const t = useT("planDetail");
+  const lang = useLangOptional();
   const [open, setOpen] = useState(false);
   const [scope, setScope] = useState<SyncScope>("total");
   const [phaseIndex, setPhaseIndex] = useState<number>(0);
@@ -86,7 +90,7 @@ export function SyncToKanbanSection({
   return (
     <Card className="mt-6" data-testid="plan-sync-to-kanban">
       <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Sincronizar al Kanban</CardTitle>
+        <CardTitle>{t("syncTitle")}</CardTitle>
         <Button
           onClick={() => {
             setLastResult(null);
@@ -96,26 +100,23 @@ export function SyncToKanbanSection({
           disabled={taskIds.length === 0 || !syncable}
           data-testid="plan-sync-open"
         >
-          Sincronizar al Kanban
+          {t("syncTitle")}
         </Button>
       </CardHeader>
       <CardContent>
         {!syncable ? (
           <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-not-approved">
-            Solo se pueden materializar tareas de un plan <strong>aprobado</strong> o en curso.
-            Aprueba el plan primero.
+            {t("syncNotApprovedBefore")} <strong>{t("syncNotApprovedStrong")}</strong>{" "}
+            {t("syncNotApprovedAfter")}
           </p>
         ) : taskIds.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="plan-sync-empty">
-            El plan aún no tiene tareas para materializar.
+            {t("syncEmpty")}
           </p>
         ) : lastResult ? (
           <SyncResultLine result={lastResult} />
         ) : (
-          <p className="text-muted-foreground text-sm">
-            Materializa las tareas del plan como tarjetas del Kanban. Puedes sincronizar el plan
-            completo, una fase concreta o una selección.
-          </p>
+          <p className="text-muted-foreground text-sm">{t("syncHelp")}</p>
         )}
       </CardContent>
 
@@ -127,7 +128,7 @@ export function SyncToKanbanSection({
       >
         <DialogContent data-testid="plan-sync-dialog">
           <DialogHeader>
-            <DialogTitle>Sincronizar al Kanban</DialogTitle>
+            <DialogTitle>{t("syncTitle")}</DialogTitle>
           </DialogHeader>
           <DialogBody>
             <fieldset className="flex flex-col gap-2 text-sm">
@@ -140,7 +141,7 @@ export function SyncToKanbanSection({
                   onChange={() => setScope("total")}
                   data-testid="plan-sync-scope-total"
                 />
-                <span>Plan completo ({taskIds.length} tareas)</span>
+                <span>{t("syncScopeTotal", { count: taskIds.length })}</span>
               </label>
               <label className="flex items-center gap-2" data-testid="plan-sync-scope-phase-row">
                 <input
@@ -152,7 +153,7 @@ export function SyncToKanbanSection({
                   disabled={phases.length === 0}
                   data-testid="plan-sync-scope-phase"
                 />
-                <span>Una fase</span>
+                <span>{t("syncScopePhase")}</span>
                 {scope === "phase" ? (
                   <select
                     value={phaseIndex}
@@ -162,7 +163,7 @@ export function SyncToKanbanSection({
                   >
                     {phases.map((p, i) => (
                       <option key={i} value={i}>
-                        {phaseLabel(p, i)}
+                        {phaseLabel(p, i, lang)}
                       </option>
                     ))}
                   </select>
@@ -180,7 +181,7 @@ export function SyncToKanbanSection({
                   onChange={() => setScope("selection")}
                   data-testid="plan-sync-scope-selection"
                 />
-                <span>Selección custom</span>
+                <span>{t("syncScopeSelection")}</span>
               </label>
 
               {scope === "selection" ? (
@@ -221,14 +222,14 @@ export function SyncToKanbanSection({
               disabled={mutation.isPending}
               data-testid="plan-sync-cancel"
             >
-              Cancelar
+              {t("cancel")}
             </Button>
             <Button
               onClick={() => mutation.mutate()}
               disabled={!canSubmit}
               data-testid="plan-sync-confirm"
             >
-              {mutation.isPending ? "Sincronizando…" : "Sincronizar"}
+              {mutation.isPending ? t("syncing") : t("syncConfirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -238,14 +239,16 @@ export function SyncToKanbanSection({
 }
 
 function SyncResultLine({ result }: { result: SyncResponse }) {
+  const t = useT("planDetail");
   const created = Object.keys(result.created_task_ids).length;
   const skipped = Object.keys(result.skipped_task_ids).length;
   return (
     <p className="text-sm" data-testid="plan-sync-result">
-      Materializadas <span className="font-semibold">{created}</span> tareas nuevas,{" "}
-      <span className="font-semibold">{skipped}</span> ya existían.{" "}
+      {t("syncResultBefore")} <span className="font-semibold">{created}</span>{" "}
+      {t("syncResultMiddle")} <span className="font-semibold">{skipped}</span>{" "}
+      {t("syncResultAfter")}{" "}
       <span className="text-muted-foreground">
-        {result.dependencies_created} dependencias creadas.
+        {t("syncResultDeps", { count: result.dependencies_created })}
       </span>
     </p>
   );

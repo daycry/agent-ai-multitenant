@@ -8,6 +8,8 @@
  */
 
 import type { BadgeVariant } from "@/components/ui/badge";
+import { translate } from "@/lib/i18n";
+import type { Lang, MessageKey } from "@/lib/i18n";
 
 export interface PlanTaskSpec {
   id: string;
@@ -48,9 +50,19 @@ export interface PlanPhaseSpec {
   tasks?: string[];
 }
 
-/** Etiqueta visible de una fase, sea cual sea la clave con la que se guardó. */
-export function phaseLabel(phase: PlanPhaseSpec, index: number): string {
-  return (phase.title || phase.name || "").trim() || `Fase ${index + 1}`;
+/**
+ * Etiqueta visible de una fase, sea cual sea la clave con la que se guardó.
+ *
+ * `lang` es OBLIGATORIO y sin default (prod-16 `task_prod16_03`): el rótulo de
+ * respaldo («Fase 3») es texto de UI, y con un default el próximo llamante
+ * reintroduce el castellano fijo sin enterarse. Es la misma decisión que se
+ * tomó en `conversationLabel()`.
+ */
+export function phaseLabel(phase: PlanPhaseSpec, index: number, lang: Lang): string {
+  return (
+    (phase.title || phase.name || "").trim() ||
+    translate(lang, "planDetail", "phaseFallback", { n: index + 1 })
+  );
 }
 
 export interface PlanSpecification {
@@ -103,22 +115,47 @@ export const STATUS_VARIANT: Record<string, BadgeVariant> = {
   archived: "muted",
 };
 
-export const STATUS_LABEL: Record<string, string> = {
-  draft: "Borrador",
-  pending_approval: "Pendiente de aprobación",
-  approved: "Aprobado",
-  in_progress: "En progreso",
-  blocked: "Bloqueado",
-  pending_human_validation: "Pendiente validación humana",
-  completed: "Completado",
-  rejected: "Rechazado",
-  cancelled: "Cancelado",
-  archived: "Archivado",
+/**
+ * CLAVE del diccionario con la etiqueta de cada estado (prod-16 `task_prod16_03`).
+ *
+ * Este mapa existía DOS veces, copiado byte a byte aquí y en
+ * `plans/page.tsx`. Dos listas del mismo enum del backend divergen en cuanto
+ * alguien añade un estado, y traducirlas por separado lo garantizaba: ahora hay
+ * una sola y el listado la importa de aquí.
+ */
+export const STATUS_LABEL: Record<string, MessageKey<"planStatus">> = {
+  draft: "draft",
+  pending_approval: "pendingApproval",
+  approved: "approved",
+  in_progress: "inProgress",
+  blocked: "blocked",
+  pending_human_validation: "pendingHumanValidation",
+  completed: "completed",
+  rejected: "rejected",
+  cancelled: "cancelled",
+  archived: "archived",
 };
 
-export function formatCostRange(value: number | [number, number] | undefined): string | null {
+/**
+ * Locale de formateo numérico del idioma activo.
+ *
+ * Vivía como `"es-ES"` cableado en `formatCostRange` y en `formatTokens`, así
+ * que con el panel en inglés los importes salían con separadores castellanos.
+ * Sale de `common.dateLocale` —el mismo dato que ya usa el otro carril para las
+ * fechas— y no de un mapa propio: dos mecanismos para el mismo dato divergen, y
+ * el ternario de comparación de idioma lo prohíbe `check-i18n.mjs` con razón.
+ */
+export function numberLocale(lang: Lang): string {
+  return translate(lang, "common", "dateLocale");
+}
+
+export function formatCostRange(
+  value: number | [number, number] | undefined,
+  lang: Lang,
+): string | null {
   if (value === undefined) return null;
-  if (typeof value === "number") return `${value.toLocaleString("es-ES")} €`;
+  const locale = numberLocale(lang);
+  if (typeof value === "number") return `${value.toLocaleString(locale)} €`;
   const [min, max] = value;
-  return `${min.toLocaleString("es-ES")} – ${max.toLocaleString("es-ES")} €`;
+  return `${min.toLocaleString(locale)} – ${max.toLocaleString(locale)} €`;
 }

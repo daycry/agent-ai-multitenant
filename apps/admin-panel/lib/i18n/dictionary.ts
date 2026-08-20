@@ -50,6 +50,20 @@ export const dictionary = {
   common: {
     loading: { es: "Cargando…", en: "Loading…" },
     close: { es: "Cerrar", en: "Close" },
+    /**
+     * El BCP-47 con el que formatear fechas y números (`toLocaleString`).
+     *
+     * No es texto de UI, pero sí un dato POR IDIOMA, y su sitio natural es el
+     * mismo: hasta prod-16 `task_prod16_03` había nueve `toLocaleString("es-ES")`
+     * cableados por el panel, así que con el toggle en inglés la fecha del último
+     * sync y el techo de tokens de plataforma seguían con formato castellano.
+     * La alternativa —`lang === "es" ? "es-ES" : "en-GB"`— es justo el ternario
+     * que `check-i18n` prohíbe, y con razón: es la misma decisión repetida.
+     *
+     * `en-GB` y no `en-US` porque el panel es interno y europeo: mantiene el día
+     * delante, que es como lo lee quien también usa la cara castellana.
+     */
+    dateLocale: { es: "es-ES", en: "en-GB" },
   },
 
   /**
@@ -339,6 +353,43 @@ export const dictionary = {
       es: "No se pudo contactar con el servidor.",
       en: "Could not reach the server.",
     },
+
+    // --- segundo factor (`components/login/mfa-challenge.tsx`) -------------
+    // El paso de TOTP estaba entero en castellano cableado hasta
+    // `task_prod16_02`: con el toggle en EN, quien tiene MFA activado leía
+    // «Código de verificación» en el momento en que más se lee. No lo veía
+    // ninguna de las dos guardas (no hay ternario, y su texto es JSX suelto,
+    // no atributos) ni el test del login, que sólo renderiza el formulario de
+    // password. `errorUnreachable` se COMPARTE con el paso anterior a
+    // propósito: es el mismo fallo de red y dos claves acabarían divergiendo.
+    mfaHelp: {
+      es: "Introduce el código de tu app de autenticación (o un código de recuperación).",
+      en: "Enter the code from your authenticator app (or a recovery code).",
+    },
+    mfaCodeLabel: { es: "Código de verificación", en: "Verification code" },
+    mfaSubmit: { es: "Verificar", en: "Verify" },
+    mfaSubmitting: { es: "Verificando…", en: "Verifying…" },
+    mfaErrorInvalidCode: {
+      es: "Código incorrecto. Prueba de nuevo o usa un código de recuperación.",
+      en: "Incorrect code. Try again or use a recovery code.",
+    },
+    mfaErrorExpired: {
+      es: "El desafío ha caducado. Vuelve a iniciar sesión.",
+      en: "The challenge has expired. Please sign in again.",
+    },
+
+    // --- botones de SSO (`components/login/provider-buttons.tsx`) ----------
+    // El separador estaba en castellano fijo y los cinco textos de respaldo de
+    // marca en INGLÉS fijo, o sea el mismo defecto en los dos sentidos dentro
+    // de la misma tarjeta. Los respaldos SÓLO se usan cuando el operador dejó
+    // `button_label` vacío: su etiqueta manda, porque la escribió una persona
+    // para su IdP. Microsoft, Google y GitHub publican su texto de «sign in»
+    // traducido, así que traducirlo no rompe ninguna guía de marca.
+    ssoDivider: { es: "o continúa con", en: "or continue with" },
+    ssoWithMicrosoft: { es: "Iniciar sesión con Microsoft", en: "Sign in with Microsoft" },
+    ssoWithGoogle: { es: "Iniciar sesión con Google", en: "Sign in with Google" },
+    ssoWithGithub: { es: "Iniciar sesión con GitHub", en: "Sign in with GitHub" },
+    ssoWithSso: { es: "Iniciar sesión con SSO", en: "Sign in with SSO" },
   },
 
   /**
@@ -2892,6 +2943,47 @@ export const dictionary = {
       es: "Revisar el equipo del proyecto",
       en: "Check the project's team",
     },
+
+    /*
+     * El resto del desglose, que llevaba desde la pasada anterior a medias.
+     *
+     * Este fichero es el aviso más incómodo de todos los que lleva anotado el
+     * plan: **usa `useT()` y no tiene ni un atributo con castellano**, así que
+     * las DOS guardas lo daban por migrado… y seguía pintando el título de la
+     * tarjeta, el texto de carga, el estado vacío, las dos cabeceras de tabla y
+     * los dos totales en castellano fijo. Un fichero a medio migrar es
+     * indistinguible de uno migrado para un guard que mira patrones.
+     */
+    title: { es: "Desglose de coste", en: "Cost breakdown" },
+    calculating: { es: "Calculando…", en: "Computing…" },
+    empty: {
+      es: "El plan aún no tiene tareas para calcular el coste.",
+      en: "The plan has no tasks to compute a cost from yet.",
+    },
+    humanHeading: {
+      es: "Coste humano · {currency} · {rate} {currency}/h",
+      en: "Human cost · {currency} · {rate} {currency}/h",
+    },
+    aiHeading: {
+      es: "Coste IA · {currency} · modelo por defecto",
+      en: "AI cost · {currency} · default model",
+    },
+    // El identificador de la tarea y la fila de total: se escriben igual en los
+    // dos idiomas.
+    colId: { es: "ID", en: "ID" },
+    total: { es: "Total", en: "Total" },
+    colTask: { es: "Tarea", en: "Task" },
+    colHours: { es: "Horas", en: "Hours" },
+    colCost: { es: "Coste", en: "Cost" },
+    colComplexity: { es: "Compl.", en: "Cplx." },
+    colModel: { es: "Modelo", en: "Model" },
+    colCostMin: { es: "Coste mín", en: "Min cost" },
+    colCostMax: { es: "Coste máx", en: "Max cost" },
+    totalRange: { es: "Total (rango)", en: "Total (range)" },
+    missingModels: {
+      es: "Modelos sin precio en el catálogo: {models}",
+      en: "Models with no price in the catalog: {models}",
+    },
   },
   /**
    * `app/admin/settings/page.tsx` — el índice de categorías del tenant.
@@ -4803,6 +4895,1450 @@ export const dictionary = {
     },
     saving: { es: "Guardando…", en: "Saving…" },
     submit: { es: "Guardar decisiones", en: "Save decisions" },
+  },
+
+  /**
+   * El HUB del proyecto (`app/admin/projects/[id]/page.tsx`) — prod-16
+   * `task_prod16_03`.
+   *
+   * Sólo el MARCO: cabecera, rejilla de sub-secciones y los dos diálogos. Las
+   * seis piezas que la página monta dentro tienen namespace propio
+   * (`projectGit`, `projectReviewPreview`, `projectRuntimeServices`,
+   * `projectGovernance`, `previewLauncher`), porque son componentes con vida
+   * propia y una de ellas la comparte la ficha del plan.
+   */
+  projectHub: {
+    fallbackTitle: { es: "Proyecto", en: "Project" },
+    edit: { es: "Editar", en: "Edit" },
+    delete: { es: "Borrar", en: "Delete" },
+    loadError: {
+      es: "No se pudo cargar el proyecto: {detail}",
+      en: "Could not load the project: {detail}",
+    },
+    backToList: { es: "Volver al listado", en: "Back to the list" },
+    statusLabel: { es: "Estado:", en: "Status:" },
+    templateBadge: { es: "plantilla", en: "template" },
+    teamLabel: { es: "Equipo:", en: "Team:" },
+    execModelTitle: { es: "Modelo del proyecto", en: "Project model" },
+    execModelDescription: {
+      es:
+        "Proveedor + modelo por defecto del proyecto, que heredan los agentes sin " +
+        "modelo propio. Vacío = heredar del nivel superior (equipo → plataforma).",
+      en:
+        "The project's default provider + model, inherited by agents without their " +
+        "own. Empty = inherit from the level above (team → platform).",
+    },
+    sectionsHeading: { es: "Secciones", en: "Sections" },
+    sectionChat: { es: "Chat", en: "Chat" },
+    sectionChatDesc: {
+      es: "Conversación con los agentes del proyecto.",
+      en: "Conversation with the project's agents.",
+    },
+    sectionPlans: { es: "Planes", en: "Plans" },
+    sectionPlansDesc: {
+      es: "Planes de construcción + Kanban de sus tareas.",
+      en: "Build plans + the Kanban of their tasks.",
+    },
+    sectionTasks: { es: "Tasks", en: "Tasks" },
+    sectionTasksDesc: {
+      es: "Todas las tareas del proyecto, incluidas las que no tienen plan.",
+      en: "Every task in the project, including those with no plan.",
+    },
+    sectionKbs: { es: "Knowledge Bases", en: "Knowledge Bases" },
+    sectionKbsDesc: {
+      es: "Bases de conocimiento + documentos indexados.",
+      en: "Knowledge bases + indexed documents.",
+    },
+    sectionMemories: { es: "Memoria", en: "Memory" },
+    sectionMemoriesDesc: {
+      es: "Lo que el equipo recuerda en el scope del proyecto (project_shared).",
+      en: "What the team remembers in the project scope (project_shared).",
+    },
+    sectionMcp: { es: "MCP servers", en: "MCP servers" },
+    sectionMcpDesc: {
+      es: "Servidores MCP a los que se conectan los agentes.",
+      en: "MCP servers the agents connect to.",
+    },
+    sectionToolsDiagnostic: { es: "Tools por agente", en: "Tools by agent" },
+    sectionToolsDiagnosticDesc: {
+      es: "Diagnóstico read-only de tools wired a cada agente.",
+      en: "Read-only diagnostic of the tools wired to each agent.",
+    },
+    sectionCommands: { es: "Comandos & runtime", en: "Commands & runtime" },
+    sectionCommandsDesc: {
+      es: "Comandos autorizados (shell_exec) + runtime por defecto del stack.",
+      en: "Allowed commands (shell_exec) + the stack's default runtime.",
+    },
+    sectionDepCache: { es: "Caché de dependencias", en: "Dependency cache" },
+    sectionDepCacheDesc: {
+      es: "Invalidar caché de deps por runtime.",
+      en: "Invalidate the dependency cache per runtime.",
+    },
+    sectionWebhooks: { es: "Webhooks entrantes", en: "Incoming webhooks" },
+    sectionWebhooksDesc: {
+      es: "Eventos de GitHub, Jira, Sentry… que disparan acciones.",
+      en: "Events from GitHub, Jira, Sentry… that trigger actions.",
+    },
+    editTitle: { es: "Editar proyecto", en: "Edit project" },
+    editDescription: {
+      es:
+        "Cambia los campos básicos. La configuración avanzada (MCP, KBs, etc.) se edita " +
+        "desde sus respectivas sub-secciones.",
+      en:
+        "Change the basic fields. Advanced configuration (MCP, KBs, etc.) is edited from " +
+        "its own sub-sections.",
+    },
+    fieldName: { es: "Nombre", en: "Name" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    fieldStatus: { es: "Estado", en: "Status" },
+    fieldTeam: { es: "Equipo", en: "Team" },
+    statusActive: { es: "Activo", en: "Active" },
+    statusPaused: { es: "Pausado", en: "Paused" },
+    statusArchived: { es: "Archivado", en: "Archived" },
+    noTeam: { es: "Sin equipo", en: "No team" },
+    teamHint: {
+      es:
+        "El equipo del proyecto gobierna qué agentes ejecutan sus tareas y la política de " +
+        "memoria (ADR 0071).",
+      en:
+        "The project's team governs which agents run its tasks and the memory policy " +
+        "(ADR 0071).",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    deleteTitle: { es: "Borrar proyecto", en: "Delete project" },
+    deleteDescriptionIntro: { es: "Esta acción es ", en: "This action is " },
+    deleteDescriptionStrong: { es: "irreversible", en: "irreversible" },
+    deleteDescriptionRest: {
+      es: ". Borra el proyecto, sus planes, tareas y conversaciones. Los repos git en disco NO se tocan.",
+      en: ". It deletes the project, its plans, tasks and conversations. The git repos on disk are NOT touched.",
+    },
+    deleteConfirmPrompt: {
+      es: "Para confirmar, teclea el nombre del proyecto:",
+      en: "To confirm, type the project name:",
+    },
+    deleteConfirm: { es: "Borrar definitivamente", en: "Delete permanently" },
+    deleting: { es: "Borrando…", en: "Deleting…" },
+  },
+
+  /**
+   * Configuración del repositorio Git del proyecto (ADR 0072) — prod-16
+   * `task_prod16_03`.
+   *
+   * Los nombres de los proveedores (GitHub, GitLab, Azure DevOps) NO están
+   * aquí: son nombres propios y no se traducen, así que siguen siendo literales
+   * del `<option>`. Sí entra «Genérico», que es la única de las cuatro que es
+   * una palabra y no una marca.
+   */
+  projectGit: {
+    title: { es: "Repositorio Git", en: "Git repository" },
+    description: {
+      es:
+        "Remoto + credenciales (PAT/SSH). El secreto se guarda en Vault y nunca se muestra; " +
+        "al guardar se encola el clone. Deja la credencial vacía para conservar la ya guardada.",
+      en:
+        "Remote + credentials (PAT/SSH). The secret is kept in Vault and never shown; saving " +
+        "queues the clone. Leave the credential empty to keep the stored one.",
+    },
+    providerLabel: { es: "Proveedor", en: "Provider" },
+    providerGeneric: { es: "Genérico", en: "Generic" },
+    branchLabel: { es: "Rama por defecto", en: "Default branch" },
+    remoteUrlLabel: { es: "URL del remoto", en: "Remote URL" },
+    authModeLabel: { es: "Autenticación", en: "Authentication" },
+    authNone: {
+      es: "Sin auth (público / preconfigurado)",
+      en: "No auth (public / pre-configured)",
+    },
+    authPat: { es: "PAT (HTTPS)", en: "PAT (HTTPS)" },
+    authSsh: { es: "Clave SSH", en: "SSH key" },
+    usernameLabel: { es: "Usuario (opcional)", en: "Username (optional)" },
+    tokenLabel: { es: "Token (PAT)", en: "Token (PAT)" },
+    tokenPlaceholder: { es: "••• (vacío = conservar)", en: "••• (empty = keep)" },
+    sshKeyLabel: { es: "Clave SSH privada", en: "Private SSH key" },
+    sshKeyPlaceholder: {
+      es: "(pegar clave privada; vacío = conservar la guardada)",
+      en: "(paste the private key; empty = keep the stored one)",
+    },
+    flowHeading: { es: "Flujo git del plan", en: "Plan git flow" },
+    flowDescription: {
+      es:
+        "Cómo se publican las ramas y qué pasa al cerrar el plan. Por defecto: los agentes " +
+        "empujan la rama del plan tarea a tarea, el humano valida al cerrar y se abre un PR " +
+        "(sin merge directo).",
+      en:
+        "How branches get published and what happens when the plan closes. By default: agents " +
+        "push the plan branch task by task, a human validates at closing time and a PR is " +
+        "opened (no direct merge).",
+    },
+    branchPushLabel: { es: "Push de la rama", en: "Branch push" },
+    branchPushIncremental: { es: "Incremental (cada tarea)", en: "Incremental (every task)" },
+    branchPushFinal: { es: "Solo al cerrar el plan", en: "Only when the plan closes" },
+    planValidationLabel: { es: "Validación del plan", en: "Plan validation" },
+    planValidationHuman: { es: "Validación humana", en: "Human validation" },
+    planValidationAuto: { es: "Auto-aprobar", en: "Auto-approve" },
+    pushPolicyLabel: { es: "Al cerrar el plan", en: "When the plan closes" },
+    pushPolicyForbidden: { es: "No hacer nada", en: "Do nothing" },
+    pushPolicyPr: { es: "Abrir PR (revisión humana)", en: "Open a PR (human review)" },
+    saveOk: {
+      es:
+        "Guardado. Sincronización con el remoto encolada — el resultado aparece abajo en unos " +
+        "segundos.",
+      en: "Saved. Sync with the remote queued — the result shows up below in a few seconds.",
+    },
+    syncQueued: { es: "Sincronización encolada.", en: "Sync queued." },
+    lastSyncLabel: { es: "Última sincronización:", en: "Last sync:" },
+    lastSyncOk: { es: "correcta", en: "succeeded" },
+    lastSyncFailed: { es: "con error", en: "failed" },
+    alignmentCreated: {
+      es: "Rama por defecto local creada desde el remoto.",
+      en: "Local default branch created from the remote.",
+    },
+    alignmentFastForwarded: {
+      es: "Rama por defecto local actualizada al remoto.",
+      en: "Local default branch fast-forwarded to the remote.",
+    },
+    alignmentUpToDate: {
+      es: "Rama por defecto local al día con el remoto.",
+      en: "Local default branch is up to date with the remote.",
+    },
+    alignmentRemoteEmpty: {
+      es:
+        "El remoto no tiene la rama por defecto (repo vacío). Haz un push inicial; hasta " +
+        "entonces el PR del plan no podrá abrirse.",
+      en:
+        "The remote has no default branch (empty repo). Do an initial push; until then the " +
+        "plan's PR cannot be opened.",
+    },
+    alignmentDiverged: {
+      es:
+        "La base local NO comparte historia con la rama por defecto del remoto — el PR del " +
+        "plan fallará con «no history in common». Reconcilia el repo (rebasa la rama del plan " +
+        "sobre el remoto) o revisa la rama por defecto configurada.",
+      en:
+        "The local base shares NO history with the remote's default branch — the plan's PR " +
+        "will fail with «no history in common». Reconcile the repo (rebase the plan branch " +
+        "onto the remote) or review the configured default branch.",
+    },
+    sync: { es: "Sincronizar", en: "Sync" },
+    syncing: { es: "Sincronizando…", en: "Syncing…" },
+    save: { es: "Guardar repositorio", en: "Save repository" },
+    saving: { es: "Guardando…", en: "Saving…" },
+  },
+
+  /**
+   * App-preview de validación humana (`review_image`/`review_port`, ADR 0063) —
+   * prod-16 `task_prod16_03`.
+   */
+  projectReviewPreview: {
+    title: { es: "App-preview de validación humana", en: "Human-validation app preview" },
+    description: {
+      es:
+        "Cuando un plan llega a validación humana, la plataforma puede levantar la app del " +
+        "proyecto para que el revisor la pruebe en vivo. La imagen la construye y publica la " +
+        "CI del propio proyecto (la plataforma solo la referencia — ADR 0063). Sin imagen " +
+        "configurada, la sesión de review funciona igual (checklist + veredicto), solo que " +
+        "sin app en vivo.",
+      en:
+        "When a plan reaches human validation, the platform can bring up the project's app so " +
+        "the reviewer tries it live. The image is built and published by the project's own CI " +
+        "(the platform only references it — ADR 0063). With no image configured the review " +
+        "session still works (checklist + verdict), just without a live app.",
+    },
+    imageLabel: { es: "Imagen del app-preview", en: "App-preview image" },
+    imageHint: {
+      es:
+        "Tag de imagen Docker auto-servible (su CMD arranca un servidor HTTP; el código del " +
+        "plan se monta en /workspace). En dev vale un tag local (`docker build -t ...`); en " +
+        "producción, la referencia del registry que publica tu CI. Vacío = app-preview " +
+        "desactivada.",
+      en:
+        "Self-serving Docker image tag (its CMD starts an HTTP server; the plan's code is " +
+        "mounted at /workspace). In dev a local tag works (`docker build -t ...`); in " +
+        "production, the registry reference your CI publishes. Empty = app preview disabled.",
+    },
+    portLabel: { es: "Puerto", en: "Port" },
+    portHint: {
+      es: "Puerto HTTP interno (vacío = 8080).",
+      en: "Internal HTTP port (empty = 8080).",
+    },
+    portInvalid: { es: "Puerto inválido (1-65535).", en: "Invalid port (1-65535)." },
+    save: { es: "Guardar app-preview", en: "Save app preview" },
+    saved: { es: "Guardado.", en: "Saved." },
+  },
+
+  /**
+   * Servicios de respaldo + variables de entorno + imagen de runtime (ADR 0129)
+   * — prod-16 `task_prod16_03`.
+   *
+   * Los tipos del catálogo (`mysql`, `postgres`, `redis`…) NO están aquí: son
+   * los identificadores que viajan al backend, y se pintan tal cual.
+   */
+  projectRuntimeServices: {
+    title: { es: "Servicios e imagen de runtime", en: "Backing services and runtime image" },
+    description: {
+      es:
+        "Servicios de respaldo (base de datos, caché, colas) que la plataforma levanta como " +
+        "sidecars endurecidos junto al runtime del proyecto, para que sus tests y el " +
+        "app-preview arranquen. Los servicios del catálogo derivan su cadena de conexión " +
+        "automáticamente (`DATABASE_URL`, `REDIS_URL`, …); para una imagen arbitraria, fija " +
+        "tú la conexión en las variables de entorno. Aíslados en una red interna por " +
+        "tarea/sesión (ADR 0129).",
+      en:
+        "Backing services (database, cache, queues) the platform brings up as hardened " +
+        "sidecars next to the project's runtime, so its tests and the app preview can start. " +
+        "Catalog services derive their connection string automatically (`DATABASE_URL`, " +
+        "`REDIS_URL`, …); for an arbitrary image, set the connection yourself in the " +
+        "environment variables. Isolated on an internal per-task/session network (ADR 0129).",
+    },
+    servicesLabel: { es: "Servicios", en: "Services" },
+    servicesEmpty: { es: "Sin servicios declarados.", en: "No services declared." },
+    addService: { es: "Añadir servicio", en: "Add service" },
+    serviceTypeLabel: { es: "Tipo de servicio", en: "Service type" },
+    serviceImageOption: { es: "imagen…", en: "image…" },
+    serviceVersionLabel: { es: "Versión", en: "Version" },
+    serviceVersionPlaceholder: {
+      es: "versión (ej. 8.4) — vacío = por defecto",
+      en: "version (e.g. 8.4) — empty = default",
+    },
+    serviceImageLabel: { es: "Imagen", en: "Image" },
+    serviceAliasLabel: { es: "Alias (hostname)", en: "Alias (hostname)" },
+    serviceAliasPlaceholder: {
+      es: "alias/hostname (vacío = tipo)",
+      en: "alias/hostname (empty = type)",
+    },
+    removeService: { es: "Quitar servicio", en: "Remove service" },
+    envLabel: { es: "Variables de entorno", en: "Environment variables" },
+    envHint: {
+      es:
+        "Inyectadas en el contenedor principal (tests / app-preview). Sobrescriben la " +
+        "connection-env derivada si repites la clave. No es Vault: no pongas secretos de " +
+        "producción aquí.",
+      en:
+        "Injected into the main container (tests / app preview). They override the derived " +
+        "connection env if you repeat a key. This is not Vault: do not put production secrets " +
+        "here.",
+    },
+    envKeyLabel: { es: "Clave", en: "Key" },
+    envValueLabel: { es: "Valor", en: "Value" },
+    removeEnv: { es: "Quitar variable", en: "Remove variable" },
+    addEnv: { es: "Añadir variable", en: "Add variable" },
+    runtimeImageLabel: {
+      es: "Imagen de runtime custom (opcional)",
+      en: "Custom runtime image (optional)",
+    },
+    runtimeImageHintBefore: {
+      es:
+        "Solo si necesitas paquetes/extensiones de sistema no cubiertos por los comandos del " +
+        "proyecto. Básala en un runtime-template de la plataforma (p.ej. ",
+      en:
+        "Only if you need system packages/extensions the project's commands do not cover. " +
+        "Base it on a platform runtime template (e.g. ",
+    },
+    runtimeImageHintAfter: {
+      es:
+        ") e instala lo que falte; la publica tu CI (la plataforma no la construye, ADR 0129). " +
+        "Vacío = usa el runtime por defecto del proyecto.",
+      en:
+        ") and install what is missing; your CI publishes it (the platform does not build it, " +
+        "ADR 0129). Empty = use the project's default runtime.",
+    },
+    save: { es: "Guardar servicios", en: "Save services" },
+    saved: { es: "Guardado.", en: "Saved." },
+    invalidAlias: {
+      es: "Alias inválido: {alias} (usa [a-z][a-z0-9-]*).",
+      en: "Invalid alias: {alias} (use [a-z][a-z0-9-]*).",
+    },
+    duplicateAlias: { es: "Alias duplicado: {alias}.", en: "Duplicate alias: {alias}." },
+    imageNeedsTag: {
+      es: "Una imagen de servicio requiere un tag.",
+      en: "A service image needs a tag.",
+    },
+    invalidImage: { es: "Imagen inválida: {image}.", en: "Invalid image: {image}." },
+    imageNeedsAlias: {
+      es: "Una imagen de servicio requiere un alias.",
+      en: "A service image needs an alias.",
+    },
+    tooManyServices: { es: "Máximo 8 servicios.", en: "At most 8 services." },
+    invalidEnvKey: {
+      es: "Variable inválida: {key} (usa [A-Z][A-Z0-9_]*).",
+      en: "Invalid variable: {key} (use [A-Z][A-Z0-9_]*).",
+    },
+    invalidRuntimeImage: {
+      es: "Imagen de runtime inválida: {image}.",
+      en: "Invalid runtime image: {image}.",
+    },
+  },
+
+  /**
+   * Límites y gobierno del proyecto (`task_wf_35`) — prod-16 `task_prod16_03`.
+   *
+   * Comparten namespace la sección (`components/projects/governance-section.tsx`)
+   * y su módulo puro (`lib/project-governance.ts`), que redacta los problemas
+   * de validación y guarda los tres catálogos. El módulo es puro: resuelve con
+   * `translate(lang, …)` y recibe el idioma como parámetro OBLIGATORIO.
+   */
+  projectGovernance: {
+    title: { es: "Límites y gobierno del proyecto", en: "Project limits and governance" },
+    runBudgetHeading: { es: "Presupuesto de un run", en: "Per-run budget" },
+    runBudgetDescription: {
+      es:
+        "El techo de UNA ejecución de agente en este proyecto. Vacío = hereda el de la " +
+        "plataforma. Un valor por encima del techo de plataforma se recorta a ese techo (no " +
+        "es un error); un valor de cero o negativo se rechaza, porque se descartaría en " +
+        "silencio y creerías haber capado el gasto.",
+      en:
+        "The ceiling for ONE agent run in this project. Empty = inherit the platform's. A " +
+        "value above the platform ceiling is clamped to it (that is not an error); zero or " +
+        "negative is rejected, because it would be dropped silently and you would believe you " +
+        "had capped the spend.",
+    },
+    budgetMaxIterations: { es: "Iteraciones por run", en: "Iterations per run" },
+    budgetMaxTokens: { es: "Tokens por run", en: "Tokens per run" },
+    budgetMaxCostUsd: { es: "Coste por run (USD)", en: "Cost per run (USD)" },
+    budgetMaxWallClock: { es: "Tiempo de reloj por run (s)", en: "Wall-clock per run (s)" },
+    budgetMaxToolCalls: { es: "Llamadas a tools por run", en: "Tool calls per run" },
+    ceilingPlaceholder: { es: "plataforma: {ceiling}", en: "platform: {ceiling}" },
+    spendHeading: { es: "Presupuesto de gasto", en: "Spend budget" },
+    spendDescription: {
+      es: "El techo ACUMULADO del proyecto por periodo. Al agotarse, el proyecto se pausa.",
+      en: "The project's CUMULATIVE ceiling per period. When it runs out, the project pauses.",
+    },
+    amountLabel: { es: "Importe", en: "Amount" },
+    amountPlaceholder: { es: "sin límite", en: "no limit" },
+    currencyLabel: { es: "Moneda", en: "Currency" },
+    periodLabel: { es: "Periodo", en: "Period" },
+    periodNone: { es: "Sin límite de gasto", en: "No spend limit" },
+    periodDaily: { es: "Diario", en: "Daily" },
+    periodWeekly: { es: "Semanal", en: "Weekly" },
+    periodMonthly: { es: "Mensual", en: "Monthly" },
+    periodCustom: { es: "Personalizado", en: "Custom" },
+    startDayLabel: { es: "Día de inicio del periodo", en: "Period start day" },
+    lengthLabel: { es: "Duración (días)", en: "Length (days)" },
+    humanReviewHeading: { es: "Revisión de tareas humanas", en: "Human task review" },
+    reviewAutoApprove: { es: "Auto-aprobar al entregar", en: "Auto-approve on submit" },
+    reviewAutoApproveHint: {
+      es: "Entregar la tarea la da por hecha. Adecuado para tareas de «firma».",
+      en: "Submitting the task marks it done. Right for «sign-off» tasks.",
+    },
+    reviewPeer: { es: "Revisión de otra persona", en: "Review by another person" },
+    reviewPeerHint: {
+      es: "La tarea queda en revisión y se asigna a un segundo humano, que aprueba o rechaza.",
+      en: "The task goes to review and is assigned to a second human, who approves or rejects.",
+    },
+    guardrailsHeading: { es: "Guardrails del proyecto", en: "Project guardrails" },
+    guardrailsDescriptionBefore: {
+      es:
+        "Capa de guardrails que se fusiona sobre la de plataforma. Vacío = solo la de " +
+        "plataforma. Se valida con el mismo parser que usa el worker, así que lo que se " +
+        "guarde aquí es lo que se aplicará. Forma: ",
+      en:
+        "Guardrail layer merged on top of the platform's. Empty = the platform's only. It is " +
+        "validated with the same parser the worker uses, so what you save here is what gets " +
+        "applied. Shape: ",
+    },
+    guardrailsDescriptionHooks: { es: " — hooks válidos: ", en: " — valid hooks: " },
+    problemNotANumber: {
+      es: "«{field}» tiene que ser un número.",
+      en: "«{field}» must be a number.",
+    },
+    problemNotPositive: {
+      es: "«{field}» tiene que ser mayor que cero.",
+      en: "«{field}» must be greater than zero.",
+    },
+    problemGuardrailsNotObject: {
+      es: "Los guardrails tienen que ser un objeto JSON.",
+      en: "Guardrails must be a JSON object.",
+    },
+    problemGuardrailsNotJson: {
+      es: "Los guardrails no son JSON válido.",
+      en: "Guardrails are not valid JSON.",
+    },
+    problemAmountNotANumber: {
+      es: "El importe del presupuesto tiene que ser un número.",
+      en: "The budget amount must be a number.",
+    },
+    problemAmountNegative: {
+      es: "El importe del presupuesto no puede ser negativo.",
+      en: "The budget amount cannot be negative.",
+    },
+    problemAmountNeedsCurrency: {
+      es: "Un importe necesita moneda (código de 3 letras).",
+      en: "An amount needs a currency (3-letter code).",
+    },
+    problemCurrencyLength: {
+      es: "La moneda es un código de 3 letras (EUR, USD…).",
+      en: "The currency is a 3-letter code (EUR, USD…).",
+    },
+    problemCustomNeedsBoth: {
+      es: "Un periodo personalizado necesita día de inicio y duración.",
+      en: "A custom period needs a start day and a length.",
+    },
+    problemCustomOnly: {
+      es: "El día de inicio y la duración solo aplican a un periodo personalizado.",
+      en: "The start day and the length only apply to a custom period.",
+    },
+    save: { es: "Guardar límites", en: "Save limits" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saved: { es: "Guardado.", en: "Saved." },
+  },
+
+  /**
+   * Lanzador de app-preview on-demand (ADR 0130) — prod-16 `task_prod16_03`.
+   *
+   * Lo montan DOS pantallas (el hub del proyecto y la ficha del plan) y el
+   * texto cambia según cuál: por eso el título y la descripción tienen una
+   * clave por scope en vez de llegar por props. Antes llegaban por props, y
+   * cada llamante pasaba su literal castellano — o sea que migrar el componente
+   * no habría traducido ni una de las dos pantallas.
+   */
+  previewLauncher: {
+    titleProject: { es: "Preview de la app (proyecto)", en: "App preview (project)" },
+    titlePlan: { es: "Preview de la app (este plan)", en: "App preview (this plan)" },
+    descriptionProject: {
+      es:
+        "Levanta la app del proyecto (rama por defecto) en un contenedor efímero durante 24h " +
+        "para probarla en vivo. Reutiliza la imagen de app-preview del proyecto (ADR 0130). " +
+        "No cambia el estado de ningún plan.",
+      en:
+        "Brings up the project's app (default branch) in an ephemeral container for 24h so " +
+        "you can try it live. It reuses the project's app-preview image (ADR 0130). It " +
+        "changes no plan's state.",
+    },
+    descriptionPlan: {
+      es:
+        "Levanta la app de la rama de este plan en un contenedor efímero durante 24h para " +
+        "probarla en vivo. Reutiliza la imagen de app-preview del proyecto (ADR 0130). No " +
+        "cambia el estado de ningún plan.",
+      en:
+        "Brings up the app from this plan's branch in an ephemeral container for 24h so you " +
+        "can try it live. It reuses the project's app-preview image (ADR 0130). It changes no " +
+        "plan's state.",
+    },
+    openApp: { es: "Abrir app", en: "Open app" },
+    launch: { es: "Levantar preview", en: "Launch preview" },
+    relaunch: { es: "Relanzar preview", en: "Relaunch preview" },
+    launching: { es: "Levantando…", en: "Bringing it up…" },
+    provisioning: { es: "Provisionando el contenedor…", en: "Provisioning the container…" },
+    expires: { es: "Expira: {at}", en: "Expires: {at}" },
+    slow: {
+      es: "El preview está tardando más de lo normal. Reintenta en unos segundos.",
+      en: "The preview is taking longer than usual. Retry in a few seconds.",
+    },
+  },
+
+  /**
+   * El editor markdown con pestañas (`components/ui/markdown-textarea.tsx`) —
+   * prod-16 `task_prod16_03`.
+   *
+   * Es un primitivo COMPARTIDO: lo montan 22 pantallas, varias de ellas ya
+   * «migradas». Su barra de pestañas y su ayuda estaban cableadas en
+   * castellano, así que con el toggle en EN todas esas pantallas enseñaban
+   * «Editar / Vista previa» dentro de un diálogo por lo demás inglés. Ninguna
+   * de las dos guardas de `check-i18n` lo veía como deuda de sus pantallas:
+   * miran ficheros, no pantallas.
+   */
+  markdownTextarea: {
+    tablistLabel: { es: "Modo del editor markdown", en: "Markdown editor mode" },
+    tabEdit: { es: "Editar", en: "Edit" },
+    tabPreview: { es: "Vista previa", en: "Preview" },
+    hintLead: { es: "Soporta markdown:", en: "Markdown supported:" },
+    hintTail: { es: ", listas, tablas y encabezados ", en: ", lists, tables and headings " },
+    emptyPreview: {
+      es: "Sin contenido para previsualizar.",
+      en: "Nothing to preview yet.",
+    },
+  },
+
+  /**
+   * Roles de agente — catálogo COMPARTIDO (prod-16 `task_prod16_03`).
+   *
+   * Vive fuera de la pantalla que lo escribió porque lo consumen DOS: la
+   * política rol→tool de `projects/[id]/mcp-servers` y el formulario de
+   * despliegue del marketplace (`components/marketplace/deployment-config-form`).
+   * Ese segundo consumidor ya estaba migrado y aun así pintaba los diez roles en
+   * castellano, porque los sacaba de `ROLE_LABEL` — una constante con TEXTO. Es
+   * el mismo caso que `memoryScope`: la constante guarda ahora la CLAVE y cada
+   * consumidor la resuelve con el idioma activo, que es lo que impide que
+   * traducir una pantalla deje la otra a medias.
+   *
+   * Ocho de los diez se escriben igual en los dos idiomas porque son los nombres
+   * que la UI castellana ya usaba en inglés (los mismos que `agents.*` y `nav.*`
+   * tienen en la allowlist de `i18n.test.ts`).
+   */
+  agentRole: {
+    projectManager: { es: "Project Manager", en: "Project Manager" },
+    architect: { es: "Arquitecto", en: "Architect" },
+    backendDev: { es: "Backend Dev", en: "Backend Dev" },
+    frontendDev: { es: "Frontend Dev", en: "Frontend Dev" },
+    qa: { es: "QA", en: "QA" },
+    reviewer: { es: "Reviewer", en: "Reviewer" },
+    devops: { es: "DevOps", en: "DevOps" },
+    security: { es: "Security", en: "Security" },
+    technicalWriter: { es: "Technical Writer", en: "Technical Writer" },
+    specialist: { es: "Especialista", en: "Specialist" },
+  },
+
+  /**
+   * `projects/[id]/mcp-servers/*` — los nueve ficheros (prod-16 `task_prod16_03`).
+   *
+   * La `ATTR_ALLOWLIST` sólo le veía 5 atributos en 3 ficheros de ~1.900 líneas.
+   * El grueso está en texto JSX suelto (el panel de tools descubiertas, la
+   * tarjeta de credencial gestionada, el aviso OAuth) y en los catálogos de
+   * `mcp-server-types.ts`, que es un módulo puro donde ninguna de las dos
+   * guardas mira. Quinto ejemplo del mismo aviso: el contador mide su patrón, no
+   * la deuda.
+   */
+  mcpServers: {
+    // --- pantalla ---------------------------------------------------------
+    // «MCP servers» es el nombre del subsistema y no se traduce: es lo que el
+    // operador lee en la sidebar y en la documentación del protocolo.
+    breadcrumbCurrent: { es: "MCP servers", en: "MCP servers" },
+    title: { es: "MCP servers del proyecto", en: "Project MCP servers" },
+    description: {
+      es: "Servidores MCP (Model Context Protocol) que los agentes de este proyecto podrán usar como tools.",
+      en: "MCP (Model Context Protocol) servers that the agents of this project will be able to use as tools.",
+    },
+    addButton: { es: "Añadir MCP server", en: "Add MCP server" },
+    deleteConfirm: {
+      es: "¿Borrar este MCP server del proyecto?",
+      en: "Delete this MCP server from the project?",
+    },
+    emptyBefore: {
+      es: "Este proyecto aún no tiene MCP servers configurados. Pulsa",
+      en: "This project has no MCP servers configured yet. Click",
+    },
+    emptyAfter: { es: "para declarar el primero.", en: "to declare the first one." },
+    edit: { es: "Editar", en: "Edit" },
+    delete: { es: "Eliminar", en: "Delete" },
+
+    // --- banner de vuelta del consentimiento OAuth (ADR 0127) -------------
+    // Frases ENTERAS por caso, no un prefijo y un sufijo que se concatenan:
+    // partir una oración en trozos es lo que la vuelve intraducible cuando el
+    // otro idioma cambia el orden, y aquí el trozo variable es un nombre propio.
+    oauthBannerConnected: {
+      es: "✓ Conexión OAuth completada. El token quedó guardado y se refrescará automáticamente.",
+      en: "✓ OAuth connection completed. The token was stored and will be refreshed automatically.",
+    },
+    oauthBannerConnectedFor: {
+      es: "✓ Conexión OAuth completada para «{server}». El token quedó guardado y se refrescará automáticamente.",
+      en: "✓ OAuth connection completed for “{server}”. The token was stored and will be refreshed automatically.",
+    },
+    oauthBannerError: {
+      es: "No se pudo completar la conexión OAuth.",
+      en: "The OAuth connection could not be completed.",
+    },
+    oauthBannerErrorFor: {
+      es: "No se pudo completar la conexión OAuth de «{server}».",
+      en: "The OAuth connection for “{server}” could not be completed.",
+    },
+    oauthBannerRetry: {
+      es: "Vuelve a intentarlo con «Conectar».",
+      en: "Try again with “Connect”.",
+    },
+
+    // --- ficha «Conexión OAuth» de un server ya guardado ------------------
+    oauthTitle: { es: "Conexión OAuth", en: "OAuth connection" },
+    oauthProviderFallback: { es: "el proveedor", en: "the provider" },
+    oauthChecking: { es: "comprobando…", en: "checking…" },
+    oauthConnectedBadge: { es: "Conectado", en: "Connected" },
+    oauthDisconnectedBadge: { es: "No conectado", en: "Not connected" },
+    oauthConnectedHelp: {
+      es: "Autorizado con {provider}. La plataforma refresca el token automáticamente.",
+      en: "Authorized with {provider}. The platform refreshes the token automatically.",
+    },
+    oauthDisconnectedHelp: {
+      es: "Autoriza el acceso a {provider} una sola vez; la plataforma guardará y refrescará el token.",
+      en: "Authorize access to {provider} once; the platform will store and refresh the token.",
+    },
+    oauthExpires: { es: " · caduca {date}", en: " · expires {date}" },
+    oauthRedirecting: { es: "Redirigiendo…", en: "Redirecting…" },
+    oauthReconnect: { es: "Reconectar", en: "Reconnect" },
+    oauthConnect: { es: "Conectar", en: "Connect" },
+    oauthStatusUnavailable: {
+      es: "No se pudo consultar el estado de conexión (el flujo OAuth puede no estar disponible todavía).",
+      en: "The connection status could not be read (the OAuth flow may not be available yet).",
+    },
+
+    // --- diálogo de alta/edición ------------------------------------------
+    dialogTitle: { es: "Configurar MCP server", en: "Configure MCP server" },
+    submitCreate: { es: "Crear", en: "Create" },
+    submitSave: { es: "Guardar cambios", en: "Save changes" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    templateLabel: { es: "Plantilla rápida", en: "Quick template" },
+    templateLoading: { es: "Cargando catálogo…", en: "Loading catalog…" },
+    templateNone: {
+      es: "— Elige una plantilla (opcional) —",
+      en: "— Pick a template (optional) —",
+    },
+    templateHelp: {
+      es: "Aplica una configuración verificada (GitHub, Jira, Google Drive, Slack, etc.). El candado 🔒 indica que la integración necesita credenciales — el campo aparecerá en Opciones avanzadas.",
+      en: "Applies a verified configuration (GitHub, Jira, Google Drive, Slack, …). The 🔒 padlock means the integration needs credentials — the field shows up under Advanced options.",
+    },
+    nameLabel: { es: "Nombre", en: "Name" },
+    nameHelp: {
+      es: "Identificador del server dentro del proyecto. Solo letras, números,",
+      en: "Identifier of the server within the project. Letters, digits,",
+    },
+    transportLabel: { es: "Transporte", en: "Transport" },
+    transportStdio: { es: "stdio (subproceso local)", en: "stdio (local subprocess)" },
+    commandLabel: { es: "Comando", en: "Command" },
+    argsLabel: { es: "Argumentos (uno por línea)", en: "Arguments (one per line)" },
+    envLabel: { es: "Variables de entorno", en: "Environment variables" },
+    envEmpty: {
+      es: "No hay variables. Pulsa “Añadir” para declarar una.",
+      en: "No variables. Click “Add” to declare one.",
+    },
+    headersLabel: { es: "Cabeceras", en: "Headers" },
+    headersEmpty: {
+      es: "No hay cabeceras. Pulsa “Añadir” para declarar una.",
+      en: "No headers. Click “Add” to declare one.",
+    },
+    kvAdd: { es: "Añadir", en: "Add" },
+    kvRemove: { es: "Quitar", en: "Remove" },
+    kvKey: { es: "clave", en: "key" },
+    kvValue: { es: "valor", en: "value" },
+
+    // --- aviso de plantilla OAuth dentro del diálogo ----------------------
+    oauthNoteTitle: {
+      es: "🔗 Este servidor se conecta por OAuth",
+      en: "🔗 This server connects over OAuth",
+    },
+    oauthNoteIntro: {
+      es: "No necesitas pegar ningún token.",
+      en: "You do not need to paste any token.",
+    },
+    oauthNoteSaveStrong: { es: "Guarda", en: "Save" },
+    oauthNoteMiddle: { es: "el server y pulsa", en: "the server and click" },
+    oauthNoteConnectStrong: { es: "«Conectar»", en: "“Connect”" },
+    oauthNoteTail: {
+      es: "en su ficha: te llevará a {provider} para autorizar una vez, y la plataforma refrescará el token sola.",
+      en: "on its card: it will take you to {provider} to authorize once, and the platform will refresh the token for you.",
+    },
+
+    // --- opciones avanzadas ------------------------------------------------
+    advancedTitle: { es: "Opciones avanzadas", en: "Advanced options" },
+    advancedHasCredential: { es: "credencial", en: "credential" },
+    // El resumen colapsado. En castellano el sustantivo va delante («timeout
+    // 30s»); en inglés detrás («30s timeout»), que es como se lee.
+    advancedTimeoutSummary: { es: "timeout {seconds}s", en: "{seconds}s timeout" },
+    authManagedTitle: {
+      es: "🔒 Esta integración requiere credencial",
+      en: "🔒 This integration requires a credential",
+    },
+    authManagedIntro: {
+      es: "El sistema ya sabe dónde guardar el secreto. Pide al",
+      en: "The system already knows where to store the secret. Ask your",
+    },
+    authManagedRole: { es: "administrador del tenant", en: "tenant administrator" },
+    authManagedAdd: { es: "que añada", en: "to add" },
+    authManagedFallbackKeys: { es: "la credencial", en: "the credential" },
+    authManagedTail: {
+      es: "en Vault antes del primer uso. Mientras no esté, las llamadas a este MCP devolverán un error de autenticación tipado (no se cae el sistema).",
+      en: "to Vault before the first use. Until it is there, calls to this MCP return a typed authentication error (nothing crashes).",
+    },
+    authGuideLink: { es: "Ver guía de configuración →", en: "See the setup guide →" },
+    authShowDetails: { es: "Detalles técnicos", en: "Technical details" },
+    authHideDetails: { es: "← Ocultar detalles técnicos", en: "← Hide technical details" },
+    authRefLabelTemplate: { es: "Ruta del secreto en Vault", en: "Vault path of the secret" },
+    authRefLabel: {
+      es: "Credencial del servidor (opcional)",
+      en: "Server credential (optional)",
+    },
+    authRefPlaceholder: {
+      es: "vault:secret/data/mcp/<servicio>/<proyecto>",
+      en: "vault:secret/data/mcp/<service>/<project>",
+    },
+    authRefHelpTemplate: {
+      es: "El sistema rellena esta ruta automáticamente al aplicar una plantilla. Solo edítala si tu Vault tiene una convención distinta.",
+      en: "The system fills this path in automatically when you apply a template. Only edit it if your Vault uses a different convention.",
+    },
+    authRefHelp: {
+      es: "Solo para MCPs que necesitan API key / token. El admin del tenant guarda el secreto en Vault y aquí solo se referencia con la ruta vault:…",
+      en: "Only for MCPs that need an API key / token. The tenant admin stores the secret in Vault and this only references it with the vault:… path.",
+    },
+    timeoutLabel: { es: "Timeout (segundos)", en: "Timeout (seconds)" },
+    timeoutHelp: {
+      es: "Tiempo máximo por llamada. 30s va bien para la mayoría; sube a 120s para MCPs lentos como Docling o Puppeteer.",
+      en: "Maximum time per call. 30s is fine for most; raise it to 120s for slow MCPs such as Docling or Puppeteer.",
+    },
+
+    // --- probar conexión + importación selectiva de tools -----------------
+    testTitle: { es: "Probar conexión", en: "Test connection" },
+    testButton: { es: "Probar", en: "Test" },
+    testing: { es: "Probando…", en: "Testing…" },
+    testHelp: {
+      es: "Abre una sesión one-shot contra el servidor y lista las tools que expone. No guarda nada.",
+      en: "Opens a one-shot session against the server and lists the tools it exposes. Nothing is saved.",
+    },
+    testConnectedTo: { es: "Conectado a", en: "Connected to" },
+    testNoName: { es: "(sin nombre)", en: "(unnamed)" },
+    // «tool» es la jerga del dominio que la UI castellana ya escribía en inglés
+    // (igual que `nav.runs` o `tenantStats.runs`); lo que cambia entre idiomas
+    // es el resto de la frase, no esta palabra.
+    testToolOne: { es: "tool", en: "tool" },
+    testToolMany: { es: "tools", en: "tools" },
+    testSelectTool: { es: "Seleccionar {tool}", en: "Select {tool}" },
+    importing: { es: "Importando…", en: "Importing…" },
+    importButtonOne: {
+      es: "Importar {count} tool al catálogo",
+      en: "Import {count} tool to the catalog",
+    },
+    importButtonMany: {
+      es: "Importar {count} tools al catálogo",
+      en: "Import {count} tools to the catalog",
+    },
+    importSuccess: {
+      es: "Importadas {count} al catálogo (Origen MCP, nivel “Aislada”).",
+      en: "{count} imported to the catalog (Origin MCP, “Isolated” level).",
+    },
+
+    // --- política rol→tool (ADR 0128 fase 4) ------------------------------
+    rolesTitle: { es: "Acceso por rol a las tools MCP", en: "Role-based access to MCP tools" },
+    rolesOptional: { es: "opcional", en: "optional" },
+    rolesHelpBefore: {
+      es: "Las tools MCP las aporta el proyecto: cualquier agente del proyecto puede usarlas. Aquí puedes restringir cada tool MCP a ciertos roles. Sin ningún rol marcado, la tool queda",
+      en: "MCP tools come from the project: any agent in the project can use them. Here you can restrict each MCP tool to certain roles. With no role ticked, the tool stays",
+    },
+    rolesHelpStrong: { es: "abierta a todos", en: "open to everyone" },
+    rolesHelpAfter: { es: "(por defecto).", en: "(the default)." },
+    rolesDiscard: { es: "Descartar", en: "Discard" },
+    rolesSave: { es: "Guardar", en: "Save" },
+    rolesSaved: { es: "Guardado", en: "Saved" },
+    rolesEmptyBefore: {
+      es: "Este proyecto aún no tiene tools MCP importadas. Configura un MCP server arriba y usa",
+      en: "This project has no MCP tools imported yet. Configure an MCP server above and use",
+    },
+    rolesEmptyAfter: {
+      es: "para importar sus tools al catálogo; luego podrás afinar aquí qué roles las usan.",
+      en: "to import its tools into the catalog; then you can tune here which roles may use them.",
+    },
+    rolesOpenToAll: { es: "Abierta a todos", en: "Open to all" },
+    rolesCount: { es: "{count} roles", en: "{count} roles" },
+    roleCanUse: { es: "{role} puede usar {tool}", en: "{role} can use {tool}" },
+
+    // --- catálogo de categorías del selector de plantillas ----------------
+    categoryDocs: { es: "Documentos", en: "Documents" },
+    categoryScm: { es: "Control de versiones", en: "Version control" },
+    categoryData: { es: "Bases de datos", en: "Databases" },
+    categoryFiles: { es: "Archivos", en: "Files" },
+    categoryComms: { es: "Comunicación", en: "Communication" },
+    categoryIssues: { es: "Issue trackers", en: "Issue trackers" },
+    categoryObservability: { es: "Observabilidad", en: "Observability" },
+    categorySearch: { es: "Búsqueda web", en: "Web search" },
+    categoryBrowser: { es: "Navegador", en: "Browser" },
+    categoryMeta: { es: "Meta / Agent helpers", en: "Meta / Agent helpers" },
+    categoryOther: { es: "Otros", en: "Other" },
+  },
+
+  /**
+   * Estados de un plan — catálogo COMPARTIDO (prod-16 `task_prod16_03`).
+   *
+   * Existía DOS veces con el mismo contenido: `plans/page.tsx` y
+   * `plans/[planId]/plan-spec-types.ts` tenían cada uno su `STATUS_LABEL`
+   * copiado. Dos listas del mismo enum del backend divergen en cuanto alguien
+   * añade un estado, así que al traducirlas se quedan en una sola: el mapa vive
+   * en `plan-spec-types.ts` y guarda la CLAVE, y el listado lo importa.
+   *
+   * El orden es el del workflow (CLAUDE.md §«Estados Válidos del Frontmatter»).
+   */
+  planStatus: {
+    draft: { es: "Borrador", en: "Draft" },
+    pendingApproval: { es: "Pendiente de aprobación", en: "Pending approval" },
+    approved: { es: "Aprobado", en: "Approved" },
+    inProgress: { es: "En progreso", en: "In progress" },
+    blocked: { es: "Bloqueado", en: "Blocked" },
+    pendingHumanValidation: {
+      es: "Pendiente validación humana",
+      en: "Pending human validation",
+    },
+    completed: { es: "Completado", en: "Completed" },
+    rejected: { es: "Rechazado", en: "Rejected" },
+    cancelled: { es: "Cancelado", en: "Cancelled" },
+    archived: { es: "Archivado", en: "Archived" },
+  },
+
+  /** `projects/[id]/plans/page.tsx` — el listado de planes del proyecto. */
+  plansList: {
+    breadcrumbCurrent: { es: "Planes", en: "Plans" },
+    title: { es: "Planes del proyecto", en: "Project plans" },
+    description: {
+      es: "Cada plan agrupa fases, tareas y dependencias listas para sincronizar al Kanban.",
+      en: "Each plan groups phases, tasks and dependencies ready to sync to the Kanban.",
+    },
+    generateFromChat: { es: "Generar desde chat", en: "Generate from chat" },
+    filterAriaLabel: { es: "Filtrar planes por estado", en: "Filter plans by status" },
+    filterAll: { es: "Todos", en: "All" },
+    loading: { es: "Cargando planes…", en: "Loading plans…" },
+    errorTitle: { es: "Error al cargar los planes", en: "Could not load the plans" },
+    emptyNoPlans: {
+      es: "Este proyecto aún no tiene planes. Empieza una conversación en el chat para generar uno.",
+      en: "This project has no plans yet. Start a conversation in the chat to generate one.",
+    },
+    emptyFiltered: { es: "Ningún plan en este estado.", en: "No plans in this status." },
+    noDescription: { es: "Sin descripción", en: "No description" },
+  },
+
+  /**
+   * `projects/[id]/plans/[planId]/*` — las quince piezas del detalle de plan,
+   * más los dos diagramas de `lib/` que monta (prod-16 `task_prod16_03`).
+   *
+   * La `ATTR_ALLOWLIST` le veía **6 atributos en 5 ficheros** de ~2.900 líneas:
+   * casi todo su castellano es texto JSX suelto y frases de ayuda, que es donde
+   * ninguna de las dos guardas mira. Entra el módulo entero —incluidos el
+   * diálogo de rechazo, el de sincronización al Kanban y el editor del spec—
+   * porque son pantallas de DECISIÓN: quien las abre está firmando, rechazando o
+   * materializando trabajo, y leerlas a medias en otro idioma es el peor sitio
+   * donde dejar la deuda.
+   */
+  planDetail: {
+    // --- página ------------------------------------------------------------
+    loading: { es: "Cargando plan…", en: "Loading plan…" },
+    errorTitle: { es: "Error cargando el plan", en: "Could not load the plan" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saveChanges: { es: "Guardar cambios", en: "Save changes" },
+
+    // --- cabecera de estado (task_wf_30) -----------------------------------
+    statusLoading: { es: "Cargando estado…", en: "Loading status…" },
+    statusProgress: { es: "Progreso", en: "Progress" },
+    statusNoTasks: { es: "sin tareas todavía", en: "no tasks yet" },
+    statusOpenOne: { es: "· {count} abierta", en: "· {count} open" },
+    statusOpenMany: { es: "· {count} abiertas", en: "· {count} open" },
+    // «Pull request» es el nombre del objeto en GitHub/GitLab: el operador lo
+    // busca con ese nombre en la plataforma git, no traducido.
+    statusPr: { es: "Pull request", en: "Pull request" },
+    statusPrFallback: { es: "ver PR", en: "view PR" },
+    statusPrError: { es: "No se pudo abrir: {error}", en: "Could not open it: {error}" },
+    statusPrNone: { es: "Todavía sin PR", en: "No PR yet" },
+    statusCost: { es: "Coste real / estimado", en: "Actual / estimated cost" },
+    // Abreviatura de «estimado»/«estimated»: coincide en los dos idiomas.
+    statusCostEstimatedSuffix: { es: "est.", en: "est." },
+    statusOverEstimate: { es: "por encima", en: "over budget" },
+    statusFootnoteOne: {
+      es: "{tokens} tokens · {runs} run · estimación humana {cost}",
+      en: "{tokens} tokens · {runs} run · human estimate {cost}",
+    },
+    statusFootnoteMany: {
+      es: "{tokens} tokens · {runs} runs · estimación humana {cost}",
+      en: "{tokens} tokens · {runs} runs · human estimate {cost}",
+    },
+
+    // --- semáforo de preflight (task_wf_72) --------------------------------
+    preflightTitle: { es: "Antes de aprobar", en: "Before approving" },
+    preflightBlockersOne: { es: "{count} problema serio", en: "{count} serious problem" },
+    preflightBlockersMany: { es: "{count} problemas serios", en: "{count} serious problems" },
+    preflightClean: {
+      es: "Las {count} tareas tienen rol asignable y criterios de aceptación, y el grafo no tiene ciclos.",
+      en: "All {count} tasks have an assignable role and acceptance criteria, and the graph has no cycles.",
+    },
+    preflightSeverityBlocker: { es: "serio", en: "serious" },
+    preflightSeverityWarning: { es: "aviso", en: "warning" },
+    preflightCriticalPath: {
+      es: "Camino crítico: {length} de {total} tareas en serie",
+      en: "Critical path: {length} of {total} tasks in series",
+    },
+    preflightParallelism: { es: "Paralelismo máximo: {count}", en: "Max parallelism: {count}" },
+    preflightCost: {
+      es: "Estimado: {hours} h ({cost} {currency}) · IA {aiMin}–{aiMax} USD",
+      en: "Estimated: {hours} h ({cost} {currency}) · AI {aiMin}–{aiMax} USD",
+    },
+
+    // --- ciclo de vida ------------------------------------------------------
+    lifecycleTitle: { es: "Ciclo de vida del plan", en: "Plan lifecycle" },
+    lifecycleSendToApproval: { es: "Enviar a aprobación", en: "Send for approval" },
+    lifecycleApprove: { es: "Aprobar plan", en: "Approve plan" },
+    lifecycleApproveAndStart: { es: "Aprobar y arrancar", en: "Approve and start" },
+    lifecycleStart: { es: "Empezar ejecución", en: "Start execution" },
+    lifecycleUnblock: { es: "Desbloquear plan", en: "Unblock plan" },
+    lifecycleHelpDraft: {
+      es: "El plan está en borrador. Envíalo a aprobación para revisarlo y aprobarlo.",
+      en: "The plan is a draft. Send it for approval to review and sign it off.",
+    },
+    lifecycleHelpApproveAndStart: {
+      es: "El plan espera aprobación. «Aprobar y arrancar» lo firma y lo pone en marcha en un paso; «Aprobar plan» solo lo firma. Si el plan necesita dos firmas, ambos botones dejan la primera y esperan a la segunda.",
+      en: "The plan is awaiting approval. “Approve and start” signs it and puts it in motion in one step; “Approve plan” only signs it. If the plan needs two signatures, both buttons leave the first one and wait for the second.",
+    },
+    lifecycleHelpSecondSignature: {
+      es: "El plan tiene la primera firma y espera la segunda, que debe dar otra persona.",
+      en: "The plan has the first signature and is waiting for the second, which another person must give.",
+    },
+    lifecycleHelpBlocked: {
+      es: "El plan está bloqueado: ninguna tarea abierta puede avanzar. «Desbloquear plan» lo reactiva y re-encola todas sus tareas bloqueadas (reinicia sus reintentos).",
+      en: "The plan is blocked: no open task can move forward. “Unblock plan” reactivates it and re-queues all its blocked tasks (resetting their retries).",
+    },
+    lifecycleHelpApproved: {
+      es: "El plan está aprobado. «Empezar ejecución» lo marca en curso y crea las tareas en el Kanban.",
+      en: "The plan is approved. “Start execution” marks it in progress and creates its tasks in the Kanban.",
+    },
+
+    // --- validación humana (ADR 0062) --------------------------------------
+    validationTitle: {
+      es: "Validación humana — probar la app",
+      en: "Human validation — try the app",
+    },
+    validationIntroBefore: { es: "El plan está en", en: "The plan is in" },
+    validationIntroMiddle: {
+      es: ": los agentes han terminado y la aplicación se ha",
+      en: ": the agents have finished and the application has been",
+    },
+    validationIntroStrong: {
+      es: "levantado en un contenedor de revisión",
+      en: "brought up in a review container",
+    },
+    validationIntroAfter: {
+      es: ". Ábrela para probarla y, si todo está bien, aprueba el plan.",
+      en: ". Open it to try it out and, if all is well, approve the plan.",
+    },
+    validationSearching: {
+      es: "Buscando la sesión de revisión…",
+      en: "Looking for the review session…",
+    },
+    validationNone: {
+      es: "Aún no hay una sesión de revisión levantada para este plan.",
+      en: "There is no review session up for this plan yet.",
+    },
+    validationOpenApp: { es: "Abrir app para probar", en: "Open the app to try it" },
+    validationOpenConsole: {
+      es: "Consola de revisión (terminal + logs + checklist)",
+      en: "Review console (terminal + logs + checklist)",
+    },
+    validationProxyNote: {
+      es: "El enlace abre la app servida por el review-runtime a través del proxy firmado del api-server (no se publica ningún puerto). La sesión caduca el {date}.",
+      en: "The link opens the app served by the review-runtime through the api-server signed proxy (no port is published). The session expires on {date}.",
+    },
+    validationReject: { es: "Rechazar", en: "Reject" },
+    validationMsgApproved: { es: "Plan aprobado ✓", en: "Plan approved ✓" },
+    validationMsgRejected: { es: "Plan rechazado", en: "Plan rejected" },
+    validationMsgError: {
+      es: "Error al registrar el veredicto",
+      en: "Could not record the verdict",
+    },
+    validationVerdictApproved: { es: "Aprobado", en: "Approved" },
+    validationVerdictRejected: { es: "Rechazado", en: "Rejected" },
+    rejectDialogTitle: { es: "Rechazar plan", en: "Reject plan" },
+    rejectDialogHelp: {
+      es: "El motivo llega a los agentes como feedback del rework — cuanto más concreto (qué está mal, dónde y qué se espera), mejor corrige el equipo. Tras rechazar podrás generar tareas correctivas desde el motivo y aceptarlas en este mismo plan.",
+      en: "The reason reaches the agents as rework feedback — the more concrete it is (what is wrong, where, and what is expected), the better the team fixes it. After rejecting you can generate corrective tasks from the reason and accept them into this same plan.",
+    },
+    rejectPlaceholder: {
+      es: "P. ej.: El filtro de Content-Type application/json es global; debe acotarse al grupo api/v1…",
+      en: "E.g.: The application/json Content-Type filter is global; it should be scoped to the api/v1 group…",
+    },
+    rejectDefaultReason: {
+      es: "Rechazado desde el panel de validación (sin motivo).",
+      en: "Rejected from the validation panel (no reason given).",
+    },
+
+    // --- retrospectiva (task_wf_34) ----------------------------------------
+    retroTitle: { es: "Retrospectiva", en: "Retrospective" },
+    retroFootnote: {
+      es: "Escrita automáticamente al cerrarse el plan y guardada en la memoria del proyecto: los agentes del siguiente plan la recuerdan.",
+      en: "Written automatically when the plan closed and stored in the project memory: the agents of the next plan remember it.",
+    },
+
+    // --- deep links ---------------------------------------------------------
+    deepLinksTitle: { es: "Paneles del plan", en: "Plan panels" },
+    deepLinkEscalatedTitle: {
+      es: "Tareas escaladas y bloqueadas",
+      en: "Escalated and blocked tasks",
+    },
+    deepLinkEscalatedHelp: {
+      es: "Tareas esperando una acción humana (aprobar, reintentar, desbloquear) — incluye las bloqueadas por reintentos agotados y el desbloqueo del plan.",
+      en: "Tasks waiting for a human action (approve, retry, unblock) — including those blocked by exhausted retries, and unblocking the plan.",
+    },
+    deepLinkReviewTitle: { es: "Sesión de review", en: "Review session" },
+    deepLinkReviewHelp: {
+      es: "El plan está en validación humana — abre la review-runtime con stack + tests.",
+      en: "The plan is in human validation — opens the review-runtime with stack + tests.",
+    },
+    deepLinkReviewPending: {
+      es: "La sesión de review aparecerá aquí cuando el plan pase a",
+      en: "The review session will show up here once the plan moves to",
+    },
+
+    // --- correcciones del rechazo (ADR 0107) -------------------------------
+    correctionsTitle: { es: "Correcciones del rechazo", en: "Rejection fixes" },
+    correctionsReasonLabel: { es: "Motivo del validador", en: "Validator reason" },
+    correctionsNoReason: {
+      es: "El plan fue rechazado sin sesión de review con motivo: no hay nada desde lo que generar correcciones automáticas.",
+      en: "The plan was rejected without a review session carrying a reason: there is nothing to generate automatic fixes from.",
+    },
+    correctionsGenerateHelp: {
+      es: "Genera tareas correctivas a partir del motivo: se añaden al plan como propuestas y podrás revisarlas antes de aceptarlas. Al aceptar, se crean en el Kanban y el plan vuelve a estar en curso — mismo plan, misma rama git.",
+      en: "Generate corrective tasks from the reason: they are added to the plan as proposals and you can review them before accepting. On acceptance they are created in the Kanban and the plan goes back in progress — same plan, same git branch.",
+    },
+    correctionsGenerating: {
+      es: "Generando tareas correctivas…",
+      en: "Generating corrective tasks…",
+    },
+    correctionsGenerate: { es: "Generar tareas correctivas", en: "Generate corrective tasks" },
+    correctionsEmptyGeneration: {
+      es: "El modelo no propuso tareas usables. Reintenta o crea las tareas a mano.",
+      en: "The model proposed no usable tasks. Retry, or create the tasks by hand.",
+    },
+    correctionsProposedHelp: {
+      es: "Tareas correctivas propuestas — desmarca las que no quieras materializar:",
+      en: "Proposed corrective tasks — untick the ones you do not want to materialize:",
+    },
+    correctionsMetaRole: { es: "rol: {role}", en: "role: {role}" },
+    correctionsMetaComplexity: { es: "complejidad: {value}", en: "complexity: {value}" },
+    correctionsMetaDependsOn: { es: "depende de: {ids}", en: "depends on: {ids}" },
+    correctionsAccepting: { es: "Aceptando…", en: "Accepting…" },
+    correctionsAccept: {
+      es: "Aceptar correcciones ({count})",
+      en: "Accept fixes ({count})",
+    },
+    correctionsAcceptedBadge: { es: "aceptada", en: "accepted" },
+    correctionsAcceptedTail: {
+      es: "— las tareas están en el Kanban y el plan sigue su ciclo.",
+      en: "— the tasks are in the Kanban and the plan carries on with its cycle.",
+    },
+
+    // --- sincronizar al Kanban (task_03_27) --------------------------------
+    syncTitle: { es: "Sincronizar al Kanban", en: "Sync to the Kanban" },
+    syncNotApprovedBefore: {
+      es: "Solo se pueden materializar tareas de un plan",
+      en: "Tasks can only be materialized from a plan that is",
+    },
+    syncNotApprovedStrong: { es: "aprobado", en: "approved" },
+    syncNotApprovedAfter: {
+      es: "o en curso. Aprueba el plan primero.",
+      en: "or in progress. Approve the plan first.",
+    },
+    syncEmpty: {
+      es: "El plan aún no tiene tareas para materializar.",
+      en: "The plan has no tasks to materialize yet.",
+    },
+    syncHelp: {
+      es: "Materializa las tareas del plan como tarjetas del Kanban. Puedes sincronizar el plan completo, una fase concreta o una selección.",
+      en: "Materializes the plan tasks as Kanban cards. You can sync the whole plan, one phase, or a selection.",
+    },
+    syncScopeTotal: { es: "Plan completo ({count} tareas)", en: "Whole plan ({count} tasks)" },
+    syncScopePhase: { es: "Una fase", en: "One phase" },
+    syncScopeSelection: { es: "Selección custom", en: "Custom selection" },
+    syncing: { es: "Sincronizando…", en: "Syncing…" },
+    syncConfirm: { es: "Sincronizar", en: "Sync" },
+    syncResultBefore: { es: "Materializadas", en: "Materialized" },
+    syncResultMiddle: { es: "tareas nuevas,", en: "new tasks," },
+    syncResultAfter: { es: "ya existían.", en: "already existed." },
+    syncResultDeps: { es: "{count} dependencias creadas.", en: "{count} dependencies created." },
+
+    // --- diff de código de la rama (ADR 0099) ------------------------------
+    codeDiffTitle: { es: "Diff de código de la rama", en: "Branch code diff" },
+    codeDiffCalculating: { es: "Calculando diff…", en: "Computing the diff…" },
+    codeDiffNoBranch: {
+      es: "El plan aún no tiene rama materializada (ningún commit todavía).",
+      en: "The plan has no materialized branch yet (no commits so far).",
+    },
+    codeDiffUnchangedBefore: { es: "La rama", en: "Branch" },
+    codeDiffUnchangedMiddle: {
+      es: "no aporta cambios sobre",
+      en: "brings no changes over",
+    },
+    codeDiffFiles: { es: "{count} fichero(s)", en: "{count} file(s)" },
+    codeDiffTruncated: {
+      es: "diff truncado para esta vista — el resumen por fichero es completo",
+      en: "diff truncated for this view — the per-file summary is complete",
+    },
+
+    // --- comentarios (task_03_21) ------------------------------------------
+    commentsTitle: { es: "Comentarios", en: "Comments" },
+    commentOnTask: { es: "Sobre tarea", en: "On task" },
+    commentOnPhase: { es: "Sobre fase {ref}", en: "On phase {ref}" },
+    commentOnPlan: { es: "Sobre el plan", en: "On the plan" },
+    commentOnATask: { es: "Sobre una tarea", en: "On a task" },
+    commentsEmpty: { es: "Aún no hay comentarios.", en: "No comments yet." },
+    commentPlaceholder: { es: "Escribe tu comentario…", en: "Write your comment…" },
+    commentSubmit: { es: "Comentar", en: "Comment" },
+
+    // --- secciones presentacionales ----------------------------------------
+    // «Gantt» es el nombre del diagrama (un apellido): no se traduce.
+    ganttTitle: { es: "Gantt", en: "Gantt" },
+    ganttAriaLabel: {
+      es: "Diagrama de Gantt con línea crítica",
+      en: "Gantt chart with the critical path",
+    },
+    dagTitle: { es: "Grafo de dependencias", en: "Dependency graph" },
+    dagAriaLabel: { es: "Grafo DAG de tareas del plan", en: "DAG graph of the plan tasks" },
+    diagramEmpty: { es: "Sin tareas para representar.", en: "No tasks to draw." },
+    summaryTitle: { es: "Resumen", en: "Summary" },
+    summaryEmpty: {
+      es: "Este plan aún no tiene resumen. La sección se rellenará cuando el equipo termine la conversación de planning.",
+      en: "This plan has no summary yet. The section fills in once the team finishes the planning conversation.",
+    },
+    scopeIn: { es: "En alcance", en: "In scope" },
+    scopeOut: { es: "Fuera de alcance", en: "Out of scope" },
+    decisions: { es: "Decisiones", en: "Decisions" },
+    risks: { es: "Riesgos", en: "Risks" },
+    estimatesTitle: { es: "Estimaciones", en: "Estimates" },
+    estimateDuration: { es: "Duración", en: "Duration" },
+    estimateEffort: { es: "Esfuerzo (persona-días)", en: "Effort (person-days)" },
+    estimateCostHuman: { es: "Coste humano", en: "Human cost" },
+    estimateCostAi: { es: "Coste IA", en: "AI cost" },
+    phasesTitle: { es: "Fases", en: "Phases" },
+    phaseFallback: { es: "Fase {n}", en: "Phase {n}" },
+    tasksTitle: { es: "Tareas ({count})", en: "Tasks ({count})" },
+    // El identificador de la tarea: se escribe igual en los dos idiomas.
+    colId: { es: "ID", en: "ID" },
+    colTitle: { es: "Título", en: "Title" },
+    colRole: { es: "Rol", en: "Role" },
+    colComplexity: { es: "Compl.", en: "Cplx." },
+    colDependsOn: { es: "Depende de", en: "Depends on" },
+    taskOriginCorrection: { es: "corrección", en: "fix" },
+
+    // --- editor del spec (task_wf_42) --------------------------------------
+    specEditOpen: { es: "Editar tareas", en: "Edit tasks" },
+    specEditorTitle: { es: "Editar tareas ({count})", en: "Edit tasks ({count})" },
+    specEditorEmpty: {
+      es: "El plan no tiene tareas. Añade la primera.",
+      en: "The plan has no tasks. Add the first one.",
+    },
+    specAddTask: { es: "Añadir tarea", en: "Add task" },
+    specFieldDescription: { es: "Descripción", en: "Description" },
+    specFieldComplexity: { es: "Complejidad", en: "Complexity" },
+    specComplexityPlaceholder: { es: "media", en: "medium" },
+    specFieldHours: { es: "Horas estimadas", en: "Estimated hours" },
+    specFieldCriteria: {
+      es: "Criterios de aceptación (uno por línea)",
+      en: "Acceptance criteria (one per line)",
+    },
+    specNoOtherTasks: {
+      es: "No hay otras tareas en el plan.",
+      en: "There are no other tasks in the plan.",
+    },
+    specRemoveTask: { es: "Quitar la tarea {id}", en: "Remove task {id}" },
+    specProblemNoId: {
+      es: "Toda tarea necesita un identificador.",
+      en: "Every task needs an identifier.",
+    },
+    specProblemDuplicateId: {
+      es: "El identificador «{id}» está repetido.",
+      en: "Identifier “{id}” is duplicated.",
+    },
+    specProblemNoTitle: {
+      es: "La tarea «{id}» no tiene título.",
+      en: "Task “{id}” has no title.",
+    },
+    specProblemNoIdFallback: { es: "sin id", en: "no id" },
+    specErrorCycle: {
+      es: "Dependencia circular: {chain}. Quita una de esas dependencias para romper el ciclo.",
+      en: "Circular dependency: {chain}. Remove one of those dependencies to break the cycle.",
+    },
+    specErrorCycleShort: {
+      es: "Hay una dependencia circular entre las tareas.",
+      en: "There is a circular dependency between the tasks.",
+    },
+    specErrorNotEditable: {
+      es: "Este plan ya no admite cambios en su especificación.",
+      en: "This plan no longer accepts changes to its specification.",
+    },
+  },
+
+  /**
+   * Estados de una TAREA — catálogo compartido (prod-16 `task_prod16_03`).
+   *
+   * Namespace propio y no dentro de `projectTasks` porque el mismo enum lo pinta
+   * también `app/admin/board` con su propio `COLUMNS` copiado: ese fichero es de
+   * otro lote, pero cuando le toque tiene el catálogo ya escrito y no volverá a
+   * duplicar el texto. «Backlog» y «Ready» se escriben igual en los dos idiomas
+   * porque son los nombres que la UI castellana ya usaba en inglés.
+   */
+  /**
+   * `components/ui/view-toggle.tsx` — el conmutador lista/Kanban
+   * (prod-16 `task_prod16_03`).
+   *
+   * Lo montan EXACTAMENTE las dos pantallas de este lote (el listado de planes y
+   * el Kanban de tareas), y sus tres textos estaban en castellano fijo sin que
+   * ninguna de las dos guardas los viera: «Cambiar vista» y «Lista» no llevan
+   * tilde y ninguna de las dos palabras está en la lista del detector. Sexto
+   * ejemplo del mismo aviso — el contador mide su patrón, no la deuda.
+   */
+  viewToggle: {
+    ariaLabel: { es: "Cambiar vista", en: "Change view" },
+    list: { es: "Lista", en: "List" },
+    // «Kanban» es el nombre del tablero: no se traduce.
+    kanban: { es: "Kanban", en: "Kanban" },
+  },
+
+  taskStatus: {
+    backlog: { es: "Backlog", en: "Backlog" },
+    ready: { es: "Ready", en: "Ready" },
+    inProgress: { es: "En curso", en: "In progress" },
+    awaitingHumanApproval: { es: "Pendiente aprobación", en: "Pending approval" },
+    inReview: { es: "Revisión", en: "Review" },
+    blocked: { es: "Bloqueada", en: "Blocked" },
+    done: { es: "Hecho", en: "Done" },
+    cancelled: { es: "Cancelada", en: "Cancelled" },
+  },
+
+  /** `projects/[id]/tasks/page.tsx` — el Kanban de tareas del proyecto. */
+  projectTasks: {
+    // «Tasks» es el rótulo que la UI castellana ya usaba en inglés, igual que
+    // «Runs» o «Backlog».
+    breadcrumbCurrent: { es: "Tasks", en: "Tasks" },
+    title: { es: "Tasks del proyecto", en: "Project tasks" },
+    description: {
+      es: "Todas las tareas — incluyendo las que no están asociadas a un plan. Filtra por plan para evitar mezclar contextos.",
+      en: "All tasks — including those not attached to a plan. Filter by plan to avoid mixing contexts.",
+    },
+    createButton: { es: "Crear tarea", en: "Create task" },
+    filterAriaLabel: { es: "Filtrar tareas por plan", en: "Filter tasks by plan" },
+    filterAll: { es: "Todas", en: "All" },
+    filterNoPlan: { es: "Sin plan", en: "No plan" },
+    loading: { es: "Cargando tareas…", en: "Loading tasks…" },
+    errorTitle: { es: "Error al cargar las tareas", en: "Could not load the tasks" },
+    emptyNoTasks: {
+      es: "Este proyecto no tiene tareas todavía.",
+      en: "This project has no tasks yet.",
+    },
+    emptyFiltered: {
+      es: "Ninguna tarea coincide con el filtro.",
+      en: "No task matches the filter.",
+    },
+    rowNoPlan: { es: "Sin plan asignado", en: "No plan assigned" },
+    colEmpty: { es: "Sin tareas", en: "No tasks" },
+    cardNoPlan: { es: "sin plan", en: "no plan" },
+    // El motivo de que un arrastre se revierta. Estaba en un helper puro del
+    // propio fichero, o sea fuera del alcance de las dos guardas.
+    moveErrorDepsOne: {
+      es: "No se puede mover: {count} dependencia sin completar.",
+      en: "Cannot move it: {count} dependency is not done.",
+    },
+    moveErrorDepsMany: {
+      es: "No se puede mover: {count} dependencias sin completar.",
+      en: "Cannot move it: {count} dependencies are not done.",
+    },
+    moveErrorIllegal: {
+      es: "Movimiento no permitido: no es una transición válida desde el estado actual.",
+      en: "Move not allowed: it is not a valid transition from the current state.",
+    },
+    createDialogDescription: {
+      es: "Las tareas pueden colgar de un plan existente o vivir como tareas libres del proyecto (sin plan).",
+      en: "Tasks can hang off an existing plan, or live as free project tasks (with no plan).",
+    },
+    fieldTitle: { es: "Título", en: "Title" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    // «Plan» se escribe igual en los dos idiomas.
+    fieldPlan: { es: "Plan", en: "Plan" },
+    planNoneOption: { es: "Sin plan (tarea libre)", en: "No plan (free task)" },
+    fieldPriority: { es: "Prioridad", en: "Priority" },
+    priorityLow: { es: "Baja", en: "Low" },
+    priorityMedium: { es: "Media", en: "Medium" },
+    priorityHigh: { es: "Alta", en: "High" },
+    priorityCritical: { es: "Crítica", en: "Critical" },
+    createError: { es: "Error al crear la tarea", en: "Could not create the task" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    creating: { es: "Creando…", en: "Creating…" },
+  },
+
+  /**
+   * `components/tasks/task-detail-sheet.tsx` + `task-review-criteria.tsx`
+   * (prod-16 `task_prod16_03`).
+   *
+   * Es una ficha COMPARTIDA: la montan el Kanban del proyecto, el tablero por
+   * plan (`app/admin/board`) y —vía `TaskHumanActions`— el panel de tareas
+   * escaladas. Ninguno de esos tres ficheros la contaba como su deuda, porque
+   * `check-i18n` mira ficheros y no pantallas: era la mitad castellana de tres
+   * pantallas a la vez.
+   */
+  taskDetail: {
+    fallbackTitle: { es: "Tarea", en: "Task" },
+    criteriaHeading: { es: "Criterios de aceptación", en: "Acceptance criteria" },
+    criteriaGenerate: { es: "Generar con IA", en: "Generate with AI" },
+    criteriaRegenerate: { es: "Regenerar con IA", en: "Regenerate with AI" },
+    criteriaGenerating: { es: "Generando…", en: "Generating…" },
+    criteriaEdit: { es: "Editar", en: "Edit" },
+    criteriaEmpty: { es: "Sin criterios de aceptación.", en: "No acceptance criteria." },
+    criteriaGenerateError: {
+      es: "No se pudieron generar los criterios:",
+      en: "The criteria could not be generated:",
+    },
+    criteriaSaveError: {
+      es: "No se pudieron guardar los criterios:",
+      en: "The criteria could not be saved:",
+    },
+    criterionPlaceholder: {
+      es: "Condición concreta y verificable…",
+      en: "A concrete, verifiable condition…",
+    },
+    criterionRemove: { es: "Quitar criterio", en: "Remove criterion" },
+    criterionAdd: { es: "+ Añadir criterio", en: "+ Add criterion" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    save: { es: "Guardar", en: "Save" },
+    compareTitle: {
+      es: "Comparar criterios de aceptación",
+      en: "Compare acceptance criteria",
+    },
+    compareCurrent: { es: "Actuales", en: "Current" },
+    compareProposed: { es: "Propuestos", en: "Proposed" },
+    compareAccept: { es: "Aceptar cambios", en: "Accept changes" },
+    dependsOn: { es: "Depende de", en: "Depends on" },
+    // «Runs» es la jerga que la UI castellana ya escribía en inglés (igual que
+    // `nav.runs` y `tenantStats.runs`).
+    runsHeading: { es: "Runs", en: "Runs" },
+    runsLoading: { es: "Cargando runs…", en: "Loading runs…" },
+    runsEmpty: {
+      es: "Esta tarea no tiene ejecuciones todavía.",
+      en: "This task has no executions yet.",
+    },
+    commentsHeading: { es: "Comentarios", en: "Comments" },
+    commentsOnlyForPlanTasks: {
+      es: "Los comentarios están disponibles para tareas de un plan.",
+      en: "Comments are available for tasks that belong to a plan.",
+    },
+    commentsLoadError: {
+      es: "No se pudieron cargar los comentarios:",
+      en: "The comments could not be loaded:",
+    },
+    commentsEmpty: { es: "Aún no hay comentarios.", en: "No comments yet." },
+    commentPlaceholder: {
+      es: "Escribe un comentario para el equipo (lo verá el agente)…",
+      en: "Write a comment for the team (the agent will read it)…",
+    },
+    commentSubmit: { es: "Comentar", en: "Comment" },
+    reviewHeading: { es: "Veredicto del reviewer", en: "Reviewer verdict" },
+    reviewFailed: { es: "{failed} de {total} sin cumplir", en: "{failed} of {total} not met" },
+    reviewAllPassed: { es: "{total} criterios cumplidos", en: "{total} criteria met" },
+    reviewPassedIcon: { es: "cumplido", en: "met" },
+    reviewFailedIcon: { es: "sin cumplir", en: "not met" },
+  },
+
+  /**
+   * `components/tasks/task-human-actions.tsx` — las cinco acciones humanas
+   * sobre una tarea (prod-16 `task_prod16_03`).
+   *
+   * Namespace propio y no dentro de `taskDetail` porque el componente lo montan
+   * DOS pantallas distintas (la ficha de la tarea y el panel de tareas
+   * escaladas del plan) y su texto no depende de ninguna de las dos.
+   */
+  taskActions: {
+    approve: { es: "Aprobar manualmente", en: "Approve manually" },
+    retry: { es: "Reintentar", en: "Retry" },
+    reassign: { es: "Reasignar con guía", en: "Reassign with guidance" },
+    block: { es: "Bloquear con motivo", en: "Block with a reason" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    reassignDescription: {
+      es: "Devuelve la tarea al backlog con instrucciones específicas para el siguiente intento. La guía queda en el historial de la tarea.",
+      en: "Sends the task back to the backlog with specific instructions for the next attempt. The guidance is kept in the task history.",
+    },
+    reassignLabel: { es: "Guía para el agente", en: "Guidance for the agent" },
+    reassignPlaceholder: {
+      es: "Por ejemplo: 'Intenta otro enfoque usando la librería X en vez de Y.'",
+      en: "For example: “Try another approach using library X instead of Y.”",
+    },
+    reassignSubmit: { es: "Reasignar", en: "Reassign" },
+    blockDescription: {
+      es: "Marca la tarea como bloqueada por una causa externa (falta de acceso, dependencia pendiente, decisión de producto…). El motivo queda visible en el historial.",
+      en: "Marks the task as blocked by an external cause (missing access, a pending dependency, a product decision…). The reason stays visible in the history.",
+    },
+    blockLabel: { es: "Motivo del bloqueo", en: "Reason for blocking" },
+    blockPlaceholder: {
+      es: "Por ejemplo: 'Esperando credencial de la API del cliente.'",
+      en: "For example: “Waiting for the customer API credential.”",
+    },
+    blockSubmit: { es: "Bloquear", en: "Block" },
   },
 } as const satisfies Dictionary;
 

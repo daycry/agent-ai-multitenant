@@ -42,6 +42,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export type HumanAction =
@@ -75,6 +76,7 @@ export function TaskHumanActions({
   onApplied?: () => void;
   className?: string;
 }) {
+  const t = useT("taskActions");
   const [dialog, setDialog] = useState<"reassign" | "block" | null>(null);
 
   const mutation = useMutation({
@@ -100,7 +102,7 @@ export function TaskHumanActions({
           data-testid={`approve-${taskId}`}
         >
           <Check className="mr-1 h-3.5 w-3.5" />
-          Aprobar manualmente
+          {t("approve")}
         </Button>
         <Button
           size="sm"
@@ -110,7 +112,7 @@ export function TaskHumanActions({
           data-testid={`retry-${taskId}`}
         >
           <RotateCcw className="mr-1 h-3.5 w-3.5" />
-          Reintentar
+          {t("retry")}
         </Button>
         <Button
           size="sm"
@@ -120,7 +122,7 @@ export function TaskHumanActions({
           data-testid={`reassign-${taskId}`}
         >
           <Workflow className="mr-1 h-3.5 w-3.5" />
-          Reasignar con guía
+          {t("reassign")}
         </Button>
         <Button
           size="sm"
@@ -130,7 +132,7 @@ export function TaskHumanActions({
           data-testid={`block-${taskId}`}
         >
           <Ban className="mr-1 h-3.5 w-3.5" />
-          Bloquear con motivo
+          {t("block")}
         </Button>
         <Button
           size="sm"
@@ -139,7 +141,7 @@ export function TaskHumanActions({
           disabled={busy}
           data-testid={`cancel-${taskId}`}
         >
-          Cancelar
+          {t("cancel")}
         </Button>
       </div>
 
@@ -154,11 +156,11 @@ export function TaskHumanActions({
 
       <ReasonDialog
         open={dialog === "reassign"}
-        title="Reasignar con guía"
-        description="Devuelve la tarea al backlog con instrucciones específicas para el siguiente intento. La guía queda en el historial de la tarea."
-        label="Guía para el agente"
-        placeholder="Por ejemplo: 'Intenta otro enfoque usando la librería X en vez de Y.'"
-        submitLabel="Reasignar"
+        title={t("reassign")}
+        description={t("reassignDescription")}
+        label={t("reassignLabel")}
+        placeholder={t("reassignPlaceholder")}
+        submitLabel={t("reassignSubmit")}
         rows={5}
         inputTestId="reassign-guidance"
         submitTestId="reassign-submit"
@@ -171,11 +173,11 @@ export function TaskHumanActions({
 
       <ReasonDialog
         open={dialog === "block"}
-        title="Bloquear con motivo"
-        description="Marca la tarea como bloqueada por una causa externa (falta de acceso, dependencia pendiente, decisión de producto…). El motivo queda visible en el historial."
-        label="Motivo del bloqueo"
-        placeholder="Por ejemplo: 'Esperando credencial de la API del cliente.'"
-        submitLabel="Bloquear"
+        title={t("block")}
+        description={t("blockDescription")}
+        label={t("blockLabel")}
+        placeholder={t("blockPlaceholder")}
+        submitLabel={t("blockSubmit")}
         destructive
         rows={4}
         inputTestId="block-reason"
@@ -220,6 +222,7 @@ function ReasonDialog({
   onClose: () => void;
   onSubmit: (text: string) => void;
 }) {
+  const t = useT("taskActions");
   const [text, setText] = useState("");
 
   function close() {
@@ -253,7 +256,7 @@ function ReasonDialog({
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={close}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             variant={destructive ? "destructive" : "default"}

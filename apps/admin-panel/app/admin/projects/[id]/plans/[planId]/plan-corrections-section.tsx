@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import type { PlanResponse, PlanSpecification, PlanTaskSpec } from "./plan-spec-types";
 import type { ReviewSessionInfo } from "./plan-validation-section";
@@ -38,6 +39,7 @@ export function CorrectionsSection({
   status: string;
   spec: PlanSpecification;
 }) {
+  const t = useT("planDetail");
   const queryClient = useQueryClient();
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -118,7 +120,7 @@ export function CorrectionsSection({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <XCircle className="text-destructive h-5 w-5" />
-          Correcciones del rechazo
+          {t("correctionsTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -128,7 +130,7 @@ export function CorrectionsSection({
             data-testid="plan-corrections-reason"
           >
             <p className="text-muted-foreground mb-1 text-xs font-semibold uppercase">
-              Motivo del validador
+              {t("correctionsReasonLabel")}
             </p>
             {renderPlanDraft(reason)}
           </div>
@@ -137,28 +139,23 @@ export function CorrectionsSection({
             className="text-muted-foreground text-sm italic"
             data-testid="plan-corrections-no-reason"
           >
-            El plan fue rechazado sin sesión de review con motivo: no hay nada desde lo que generar
-            correcciones automáticas.
+            {t("correctionsNoReason")}
           </p>
         ) : null}
 
         {isRejected && proposed.length === 0 && !sessionQuery.isError ? (
           <div className="space-y-2">
-            <p className="text-muted-foreground text-sm">
-              Genera tareas correctivas a partir del motivo: se añaden al plan como propuestas y
-              podrás revisarlas antes de aceptarlas. Al aceptar, se crean en el Kanban y el plan
-              vuelve a estar en curso — mismo plan, misma rama git.
-            </p>
+            <p className="text-muted-foreground text-sm">{t("correctionsGenerateHelp")}</p>
             <Button
               onClick={() => generate.mutate()}
               disabled={generate.isPending || !reason}
               data-testid="plan-corrections-generate"
             >
-              {generate.isPending ? "Generando tareas correctivas…" : "Generar tareas correctivas"}
+              {generate.isPending ? t("correctionsGenerating") : t("correctionsGenerate")}
             </Button>
             {emptyGeneration ? (
               <p className="text-destructive text-xs" data-testid="plan-corrections-empty">
-                El modelo no propuso tareas usables. Reintenta o crea las tareas a mano.
+                {t("correctionsEmptyGeneration")}
               </p>
             ) : null}
           </div>
@@ -166,9 +163,7 @@ export function CorrectionsSection({
 
         {proposed.length > 0 ? (
           <div className="space-y-3">
-            <p className="text-muted-foreground text-sm">
-              Tareas correctivas propuestas — desmarca las que no quieras materializar:
-            </p>
+            <p className="text-muted-foreground text-sm">{t("correctionsProposedHelp")}</p>
             <ul className="space-y-2">
               {proposedIds.map((id) => {
                 const task = tasksById.get(id);
@@ -195,10 +190,13 @@ export function CorrectionsSection({
                         <p className="text-muted-foreground mt-0.5 text-xs">{task.description}</p>
                       ) : null}
                       <p className="text-muted-foreground mt-1 text-xs">
-                        {task.role ? <>rol: {task.role} · </> : null}
-                        complejidad: {task.complexity ?? "m"}
+                        {task.role ? <>{t("correctionsMetaRole", { role: task.role })} · </> : null}
+                        {t("correctionsMetaComplexity", { value: task.complexity ?? "m" })}
                         {task.depends_on && task.depends_on.length > 0 ? (
-                          <> · depende de: {task.depends_on.join(", ")}</>
+                          <>
+                            {" · "}
+                            {t("correctionsMetaDependsOn", { ids: task.depends_on.join(", ") })}
+                          </>
                         ) : null}
                       </p>
                       {task.acceptance_criteria && task.acceptance_criteria.length > 0 ? (
@@ -220,7 +218,9 @@ export function CorrectionsSection({
                 data-testid="plan-corrections-accept"
               >
                 <CheckCircle2 className="mr-1.5 h-4 w-4" />
-                {accept.isPending ? "Aceptando…" : `Aceptar correcciones (${selectedIds.length})`}
+                {accept.isPending
+                  ? t("correctionsAccepting")
+                  : t("correctionsAccept", { count: selectedIds.length })}
               </Button>
             ) : null}
           </div>
@@ -230,9 +230,9 @@ export function CorrectionsSection({
           <div className="space-y-1" data-testid="plan-corrections-accepted">
             {accepted.map((entry, i) => (
               <p key={i} className="text-muted-foreground flex items-center gap-2 text-xs">
-                <Badge variant="success">aceptada</Badge>
-                {(entry.accepted_task_ids ?? entry.task_ids ?? []).join(", ")} — las tareas están en
-                el Kanban y el plan sigue su ciclo.
+                <Badge variant="success">{t("correctionsAcceptedBadge")}</Badge>
+                {(entry.accepted_task_ids ?? entry.task_ids ?? []).join(", ")}{" "}
+                {t("correctionsAcceptedTail")}
               </p>
             ))}
           </div>

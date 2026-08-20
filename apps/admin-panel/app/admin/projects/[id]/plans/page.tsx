@@ -22,6 +22,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ViewToggle, type ViewMode } from "@/components/ui/view-toggle";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n";
+import { STATUS_LABEL, STATUS_VARIANT } from "./[planId]/plan-spec-types";
 
 // --------------------------------------------------------------------------
 // Types
@@ -54,36 +57,17 @@ const ALL_STATUSES = [
   "archived",
 ] as const;
 
-const STATUS_VARIANT: Record<string, BadgeVariant> = {
-  draft: "muted",
-  pending_approval: "warning",
-  approved: "success",
-  in_progress: "default",
-  blocked: "danger",
-  pending_human_validation: "warning",
-  completed: "success",
-  cancelled: "muted",
-  rejected: "danger",
-  archived: "muted",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  draft: "Borrador",
-  pending_approval: "Pendiente de aprobación",
-  approved: "Aprobado",
-  in_progress: "En progreso",
-  blocked: "Bloqueado",
-  pending_human_validation: "Pendiente validación humana",
-  completed: "Completado",
-  cancelled: "Cancelado",
-  rejected: "Rechazado",
-  archived: "Archivado",
-};
+// `STATUS_VARIANT` y `STATUS_LABEL` viven en `[planId]/plan-spec-types.ts` y se
+// importan (prod-16 `task_prod16_03`). Estaban copiados byte a byte en los dos
+// ficheros: al traducirlos, dos copias del mismo enum del backend son dos
+// oportunidades de divergir, así que se quedó una.
 
 // --------------------------------------------------------------------------
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectPlansPage() {
+  const t = useT("plansList");
+  const tStatus = useT("planStatus");
   const params = useParams<{ id: string }>();
   const projectId = params.id;
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -116,18 +100,18 @@ export default function ProjectPlansPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <ProjectBreadcrumb projectId={projectId} current="Planes" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
       <PageHeader
         icon={<ClipboardList className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Planes del proyecto"
-        description="Cada plan agrupa fases, tareas y dependencias listas para sincronizar al Kanban."
+        title={t("title")}
+        description={t("description")}
         actions={
           <div className="flex items-center gap-2">
             <ViewToggle value={view} onChange={setView} />
             <Link href={`/admin/projects/${projectId}/chat`}>
               <Button variant="outline" data-testid="open-chat-cta">
                 <Plus className="mr-2 h-4 w-4" />
-                Generar desde chat
+                {t("generateFromChat")}
               </Button>
             </Link>
           </div>
@@ -142,10 +126,10 @@ export default function ProjectPlansPage() {
         className="bg-muted mt-6 inline-flex flex-wrap gap-1 rounded-md p-1"
         data-testid="plans-status-filter"
         role="tablist"
-        aria-label="Filtrar planes por estado"
+        aria-label={t("filterAriaLabel")}
       >
         <FilterChip
-          label="Todos"
+          label={t("filterAll")}
           value="all"
           count={plans.length}
           active={statusFilter === "all"}
@@ -154,7 +138,7 @@ export default function ProjectPlansPage() {
         {ALL_STATUSES.map((s) => (
           <FilterChip
             key={s}
-            label={STATUS_LABEL[s]}
+            label={tStatus(STATUS_LABEL[s])}
             value={s}
             count={counts[s] ?? 0}
             active={statusFilter === s}
@@ -168,11 +152,11 @@ export default function ProjectPlansPage() {
          ---------------------------------------------------------------- */}
       <div className="mt-6">
         {plansQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm">Cargando planes…</p>
+          <p className="text-muted-foreground text-sm">{t("loading")}</p>
         ) : plansQuery.isError ? (
           <Card>
             <CardHeader>
-              <CardTitle>Error al cargar los planes</CardTitle>
+              <CardTitle>{t("errorTitle")}</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-destructive text-sm" data-testid="plans-error">
@@ -186,9 +170,7 @@ export default function ProjectPlansPage() {
           <Card>
             <CardContent className="py-8">
               <p className="text-muted-foreground text-sm" data-testid="plans-empty">
-                {plans.length === 0
-                  ? "Este proyecto aún no tiene planes. Empieza una conversación en el chat para generar uno."
-                  : "Ningún plan en este estado."}
+                {plans.length === 0 ? t("emptyNoPlans") : t("emptyFiltered")}
               </p>
             </CardContent>
           </Card>
@@ -201,7 +183,7 @@ export default function ProjectPlansPage() {
               <PlanKanbanColumn
                 key={s}
                 status={s}
-                label={STATUS_LABEL[s]}
+                label={tStatus(STATUS_LABEL[s])}
                 variant={STATUS_VARIANT[s] ?? "muted"}
                 plans={visible.filter((p) => p.status === s)}
                 projectId={projectId}
@@ -311,7 +293,10 @@ function PlanKanbanColumn({
 }
 
 function PlanRow({ projectId, plan }: { projectId: string; plan: Plan }) {
+  const t = useT("plansList");
+  const tStatus = useT("planStatus");
   const variant = STATUS_VARIANT[plan.status] ?? "muted";
+  const statusKey: MessageKey<"planStatus"> | undefined = STATUS_LABEL[plan.status];
   return (
     <Link
       href={`/admin/projects/${projectId}/plans/${plan.id}`}
@@ -326,14 +311,14 @@ function PlanRow({ projectId, plan }: { projectId: string; plan: Plan }) {
             data-testid={`plan-row-${plan.id}-badge`}
             data-status={plan.status}
           >
-            {STATUS_LABEL[plan.status] ?? plan.status}
+            {statusKey ? tStatus(statusKey) : plan.status}
           </Badge>
         </CardHeader>
         <CardContent>
           {plan.description ? (
             <p className="text-muted-foreground text-sm line-clamp-2">{plan.description}</p>
           ) : (
-            <p className="text-muted-foreground/60 text-xs italic">Sin descripción</p>
+            <p className="text-muted-foreground/60 text-xs italic">{t("noDescription")}</p>
           )}
         </CardContent>
       </Card>

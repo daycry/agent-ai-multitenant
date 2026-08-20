@@ -30,6 +30,7 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useT } from "@/lib/i18n";
 import { type McpCatalogEntry, type McpServerConfig } from "./mcp-server-types";
 
 export function McpAdvancedOptionsSection({
@@ -51,6 +52,8 @@ export function McpAdvancedOptionsSection({
   showRawAuth: boolean;
   onShowRawAuthChange: (next: boolean) => void;
 }) {
+  const t = useT("mcpServers");
+
   // Any manual edit of auth_ref breaks the "managed by template"
   // invariant — tell the dialog so it drops the appliedTemplate marker
   // and the raw input takes over again.
@@ -70,10 +73,11 @@ export function McpAdvancedOptionsSection({
       >
         <span className="flex items-center gap-1.5">
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-          Opciones avanzadas
+          {t("advancedTitle")}
         </span>
         <span className="text-xs opacity-60">
-          {state.auth_ref ? "credencial • " : ""}timeout {state.timeout_s}s
+          {state.auth_ref ? `${t("advancedHasCredential")} • ` : ""}
+          {t("advancedTimeoutSummary", { seconds: state.timeout_s })}
         </span>
       </button>
       {open && (
@@ -83,13 +87,14 @@ export function McpAdvancedOptionsSection({
               className="bg-success-soft text-success-soft-foreground rounded-md border border-success/30 p-3"
               data-testid="mcp-form-auth-managed"
             >
-              <p className="text-sm font-medium">🔒 Esta integración requiere credencial</p>
+              <p className="text-sm font-medium">{t("authManagedTitle")}</p>
               <p className="mt-1 text-xs">
-                El sistema ya sabe dónde guardar el secreto. Pide al{" "}
-                <strong>administrador del tenant</strong> que añada{" "}
-                <code>{appliedTemplate.secret_keys.join(", ") || "la credencial"}</code> en Vault
-                antes del primer uso. Mientras no esté, las llamadas a este MCP devolverán un error
-                de autenticación tipado (no se cae el sistema).
+                {t("authManagedIntro")} <strong>{t("authManagedRole")}</strong>{" "}
+                {t("authManagedAdd")}{" "}
+                <code>
+                  {appliedTemplate.secret_keys.join(", ") || t("authManagedFallbackKeys")}
+                </code>{" "}
+                {t("authManagedTail")}
               </p>
               <p className="mt-2 text-xs">
                 <a
@@ -98,7 +103,7 @@ export function McpAdvancedOptionsSection({
                   rel="noopener noreferrer"
                   className="text-primary underline-offset-2 hover:underline"
                 >
-                  Ver guía de configuración →
+                  {t("authGuideLink")}
                 </a>
                 {"  ·  "}
                 <button
@@ -107,7 +112,7 @@ export function McpAdvancedOptionsSection({
                   className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
                   data-testid="mcp-form-show-raw-auth"
                 >
-                  Detalles técnicos
+                  {t("authShowDetails")}
                 </button>
               </p>
             </div>
@@ -115,9 +120,7 @@ export function McpAdvancedOptionsSection({
             <div>
               <div className="flex items-center justify-between">
                 <Label htmlFor="mcp-form-auth-ref">
-                  {appliedTemplate?.requires_auth
-                    ? "Ruta del secreto en Vault"
-                    : "Credencial del servidor (opcional)"}
+                  {appliedTemplate?.requires_auth ? t("authRefLabelTemplate") : t("authRefLabel")}
                 </Label>
                 {appliedTemplate?.requires_auth && showRawAuth && (
                   <button
@@ -126,7 +129,7 @@ export function McpAdvancedOptionsSection({
                     className="text-muted-foreground hover:text-foreground text-xs underline-offset-2 hover:underline"
                     data-testid="mcp-form-hide-raw-auth"
                   >
-                    ← Ocultar detalles técnicos
+                    {t("authHideDetails")}
                   </button>
                 )}
               </div>
@@ -135,18 +138,16 @@ export function McpAdvancedOptionsSection({
                 data-testid="mcp-form-auth-ref"
                 value={state.auth_ref ?? ""}
                 onChange={(e) => setAuthRefManual(e.target.value)}
-                placeholder="vault:secret/data/mcp/<servicio>/<proyecto>"
+                placeholder={t("authRefPlaceholder")}
               />
               <p className="text-muted-foreground mt-1 text-xs">
-                {appliedTemplate?.requires_auth
-                  ? "El sistema rellena esta ruta automáticamente al aplicar una plantilla. Solo edítala si tu Vault tiene una convención distinta."
-                  : "Solo para MCPs que necesitan API key / token. El admin del tenant guarda el secreto en Vault y aquí solo se referencia con la ruta vault:…"}
+                {appliedTemplate?.requires_auth ? t("authRefHelpTemplate") : t("authRefHelp")}
               </p>
             </div>
           )}
 
           <div>
-            <Label htmlFor="mcp-form-timeout">Timeout (segundos)</Label>
+            <Label htmlFor="mcp-form-timeout">{t("timeoutLabel")}</Label>
             <Input
               id="mcp-form-timeout"
               data-testid="mcp-form-timeout"
@@ -156,10 +157,7 @@ export function McpAdvancedOptionsSection({
               value={state.timeout_s}
               onChange={(e) => onChange({ ...state, timeout_s: Number(e.target.value) || 30 })}
             />
-            <p className="text-muted-foreground mt-1 text-xs">
-              Tiempo máximo por llamada. 30s va bien para la mayoría; sube a 120s para MCPs lentos
-              como Docling o Puppeteer.
-            </p>
+            <p className="text-muted-foreground mt-1 text-xs">{t("timeoutHelp")}</p>
           </div>
         </div>
       )}

@@ -21,9 +21,14 @@ test("el enrolamiento TOTP muestra QR, clave manual y códigos de recuperación"
   await page.goto("/login");
   await page.getByLabel("Email").fill(ADMIN_EMAIL);
   await page.getByLabel(/^(password|contraseña)$/i).fill(ADMIN_PASSWORD);
-  // `exact`: en dev conviven el submit "Sign in" y los botones SSO
-  // "Sign in with …" (multi-provider) — el regex laxo resuelve a ambos.
-  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  // Regex ANCLADO, no `exact` sobre un literal inglés: en dev conviven el
+  // submit del formulario y los botones SSO ("… con Microsoft"), y un nombre
+  // laxo resuelve a los dos. El literal "Sign in" dejó de valer el 2026-08-01,
+  // cuando el login pasó al diccionario: el panel arranca en ES —es el idioma
+  // por defecto— y el botón dice "Iniciar sesión", así que este `click()`
+  // llevaba desde entonces sin poder encontrar nada. Anclado y bilingüe cubre
+  // los dos idiomas sin volver a atarse a uno.
+  await page.getByRole("button", { name: /^(iniciar sesión|sign in)$/i }).click();
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 
   await page.goto("/admin/settings/security");

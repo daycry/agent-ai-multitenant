@@ -13,6 +13,7 @@
 
 import React, { useMemo } from "react";
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export interface PlanDAGTask {
@@ -104,6 +105,7 @@ export function PlanDAG({
   colGap = DEFAULT_COL_GAP,
   rowGap = DEFAULT_ROW_GAP,
 }: PlanDAGProps) {
+  const t = useT("planDetail");
   const layout = useMemo(() => {
     if (tasks.length === 0) {
       return { nodes: [] as LayoutNode[], edges: [] as LayoutEdge[], width: 0, height: 0 };
@@ -153,7 +155,7 @@ export function PlanDAG({
   if (tasks.length === 0) {
     return (
       <p className="text-muted-foreground text-sm italic" data-testid="plan-dag-empty">
-        Sin tareas para representar.
+        {t("diagramEmpty")}
       </p>
     );
   }
@@ -164,7 +166,7 @@ export function PlanDAG({
     <svg
       data-testid="plan-dag-svg"
       role="img"
-      aria-label="Grafo DAG de tareas del plan"
+      aria-label={t("dagAriaLabel")}
       width={Math.max(layout.width, 200)}
       height={Math.max(layout.height + 8, 60)}
       viewBox={`0 0 ${Math.max(layout.width, 200)} ${Math.max(layout.height + 8, 60)}`}

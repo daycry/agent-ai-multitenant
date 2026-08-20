@@ -225,6 +225,63 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     correr `npm --prefix apps/admin-panel run e2e -- e2e/lang-switcher.spec.ts`
     (el nombre real; el del enunciado nunca existió). Es la ÚNICA razón por la que
     sigue abierta — no queda trabajo de código en ella.
+  - ❌ **2026-08-20 — la nota de arriba era FALSA, y el fallo que tapaba era el
+    del propio enunciado.** «No queda trabajo de código en ella» se comprobó
+    sobre `app/login/page.tsx`, que efectivamente no tiene ni un literal. Pero la
+    pantalla de login no es ese fichero: son ese fichero **más los tres que
+    monta**, y los tres estaban sin migrar:
+    - **`components/login/mfa-challenge.tsx` estaba ENTERO en castellano
+      cableado** — la ayuda, la etiqueta «Código de verificación», el botón
+      «Verificar» y los tres mensajes de error. Con el toggle en EN, quien tiene
+      TOTP activado leía castellano en el paso del segundo factor, que es donde
+      más se lee. No aparece nunca en `app/login/i18n.test.tsx` porque ese test
+      sólo renderiza el formulario de password: el desafío sólo existe con
+      `mfa_required`.
+    - **`components/login/provider-buttons.tsx`** escribía el separador
+      «o continúa con» en castellano fijo… y el test que ya existía lo
+      **mockeaba a `null`**, así que ese texto no llegó nunca a una aserción. Es
+      la variante de «un módulo migrado que importa un componente sin migrar no
+      está migrado» de la ola 7, aquí con el test como cómplice.
+    - **`components/login/provider-brand.tsx` tenía el mismo defecto en el otro
+      sentido**: los cinco textos de respaldo de marca en INGLÉS fijo («Sign in
+      with Microsoft»). Con el panel en castellano —que es el idioma por
+      defecto— el botón de SSO salía en inglés desde el día 1, y «Sign in» es
+      literalmente el literal que denuncia el enunciado de esta casilla. Ahora el
+      spec de marca guarda la CLAVE (`defaultLabelKey`) y no el texto; la
+      etiqueta que escribe el OPERADOR sigue mandando sobre el respaldo, porque
+      la redactó una persona para su IdP.
+      Ninguna de las dos guardas de `check-i18n.mjs` podía verlo: no hay ternario
+      de idioma y el castellano de `MfaChallenge` vive en texto JSX suelto, no en
+      atributos. **Séptimo ejemplo del aviso que este plan lleva anotado cuatro
+      veces: el contador mide su patrón, no la deuda.**
+      **Y dos specs de Playwright que llevaban meses sin poder pasar, arreglados de
+      paso** (los dos son el mismo error de premisa, no consecuencia de este
+      cambio):
+    - `e2e/mfa-enrollment.spec.ts:26` hacía
+      `getByRole("button", { name: "Sign in", exact: true })`. El literal dejó de
+      existir el 2026-08-01, cuando el login pasó al diccionario: el panel arranca
+      en ES y el botón dice «Iniciar sesión». Pasa a un regex ANCLADO y bilingüe
+      (`/^(iniciar sesión|sign in)$/i`), que además no colisiona con los botones
+      SSO «… con Microsoft» — que era la razón de usar `exact`.
+    - `e2e/login-providers.spec.ts:129` esperaba «Sign in with Google» del
+      respaldo de marca; con el respaldo traducido, en el idioma por defecto se
+      lee en castellano.
+      **Cobertura nueva y ejecutada:** `components/login/i18n.test.tsx` (nuevo, 11
+      casos) — los dos idiomas del segundo factor con sus dos errores tipados, el
+      separador SSO, las cinco marcas y la precedencia de la etiqueta del operador.
+      **Ejecutado antes de implementar: 6 rojos y 5 verdes**; los 5 verdes eran los
+      ES, que son la mitad que hace que el rojo signifique algo. Con
+      `app/login/i18n.test.tsx` (6), la pantalla de login tiene ahora **17 casos en
+      los dos idiomas**. Rotura comprobada: devolver `Código de verificación` fijo
+      al desafío → cae **1** caso y sólo ése.
+      **La casilla sigue sin marcarse `[x]`, y ahora por la razón correcta.** El
+      código de login sí está completo —esta vez comprobado sobre la PANTALLA y no
+      sobre un fichero—, pero su test declarado (`auto_prod16_02_a`) es Playwright
+      y **`e2e/lang-switcher.spec.ts` hace un login real**: necesita el stack
+      levantado y el usuario semilla. No es ejecutable desde este carril, y
+      marcarla sin ejecutarlo sería justo lo que prohíbe la regla dura de
+      `CLAUDE.md`. Lo que le falta a un humano no ha cambiado; lo que ha cambiado es
+      que ya no es lo único que falta**ba**.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
   ```yaml
@@ -495,6 +552,271 @@ scripts/check-i18n.test.ts scripts/check-component-size.test.ts` →
        de webhook y los cuatro stacks de los presets. Ese invariante existe justo
        para que esa lista no se llene de traducciones pendientes: si crece con
        algo que sí se traduce, deja de servir.
+  - ⏳ **Pendiente (2026-08-20, segundo carril del día) — el HUB del proyecto,
+    entero.** Es la pantalla que la nota de arriba dejaba fuera diciendo que «NO
+    entra a trozos», y no entró a trozos: van juntos
+    `app/admin/projects/[id]/page.tsx` (namespace `projectHub`), sus **seis**
+    piezas de `components/projects/` —`projectGit`, `projectReviewPreview`,
+    `projectRuntimeServices`, `projectGovernance`, `previewLauncher`— y
+    `lib/project-governance.ts`, que guardaba los cinco nombres de presupuesto,
+    los tres catálogos y los diez mensajes de validación. Con ellos entran dos
+    cosas que el enunciado no nombra y sin las cuales la pantalla seguía
+    mitad-y-mitad: **`components/ui/markdown-textarea.tsx`** (namespace
+    `markdownTextarea`) y la línea de `plans/[planId]/page.tsx` que pasaba el
+    título castellano al lanzador de preview.
+    **Contadores medidos ejecutando, y separando lo que es de este carril:** de
+    las **119 marcas en 45 ficheros** con las que empezó el día, este carril se
+    lleva **14 atributos en 6 ficheros** de la `ATTR_ALLOWLIST`
+    (`projects/[id]/page.tsx` 1, `plans/[planId]/page.tsx` 1, git-config 2,
+    governance 2, runtime-services 6, markdown-textarea 2). Los seis miden
+    **cero** al terminar. El resto de la bajada es del otro carril, que migraba
+    `plans/*`, `mcp-servers/*` y `login/*` **en el mismo árbol de trabajo**;
+    sumar las dos cifras en un número haría irreproducible cualquiera de las dos.
+    **Tests: 19 casos nuevos en `app/admin/projects/[id]/i18n.test.tsx`, los 19
+    ejecutados antes de implementar y 15 en ROJO** — los 4 verdes eran los ES,
+    que fijan que no se rompe el castellano, y son la mitad que hace que el rojo
+    signifique algo. `lib/project-governance.test.ts` sube de 10 a 12 (los dos
+    nuevos son las caras inglesas, y salieron rojos). Casi todos los casos rinden
+    la **página entera** y no las piezas sueltas: es el único render que
+    demuestra que las seis secciones traducen a la vez, que es exactamente lo que
+    no se puede comprobar por trozos.
+    **Cinco cosas que enseñó la pasada, y valen más que el contador:**
+    1. **Un componente COMPARTIDO no lo migra nadie porque no es de nadie.**
+       `markdown-textarea` valía 2 atributos en el mapa y lo montan **22
+       pantallas**, entre ellas `knowledge-bases`, `teams`, `memories`,
+       `projects/new` y `agents/*`, todas dadas por migradas. Su barra de
+       pestañas («Editar» / «Vista previa»), su ayuda de sintaxis y su estado
+       vacío salían en castellano dentro de diálogos por lo demás ingleses. Es la
+       variante de la ola 7 en su forma más pura: **el guard mira ficheros, no
+       pantallas**, así que esa deuda no se la cargaba ninguna de las 22 y por eso
+       llevaba ahí desde el principio. Migrarlo arregla las 22 de una vez.
+    2. **Cuando el castellano vive en el LLAMANTE, migrar el componente no
+       traduce nada.** `PreviewLauncher` recibía `title?: string` y sus **dos**
+       llamantes le pasaban su literal (`"Preview de la app (proyecto)"` y
+       `"…(este plan)"`). Traducir el componente entero habría dejado las dos
+       pantallas igual. El prop se ha **retirado**: el título y la descripción
+       salen del diccionario elegidos por `scope`, que es el dato que ya
+       distinguía los dos casos. Un prop de texto es una puerta abierta a la
+       deuda; quitarlo la cierra en el tipo, no en la disciplina.
+    3. **Otro módulo puro invisible a las dos guardas**, el mismo caso que
+       `lib/assistant.ts` de la casilla 04: `lib/project-governance.ts` tenía los
+       cinco nombres de presupuesto, los tres catálogos (periodos, modos de
+       revisión, presupuestos) y **diez** mensajes de validación en castellano
+       fijo. Ahora guarda la CLAVE y `governanceProblems(form, lang)` recibe el
+       idioma como parámetro **obligatorio y sin default** — con default, el
+       próximo llamante reintroduce el fallo sin enterarse (misma decisión que
+       `conversationLabel`).
+    4. **La fecha y el número también tienen idioma, y el arreglo obvio está
+       prohibido.** Había nueve `toLocaleString("es-ES")` cableados en el panel;
+       dos de ellos en este lote (la fecha del último sync de git y el techo de
+       tokens de plataforma). El arreglo natural —`lang === "es" ? "es-ES" :
+"en-GB"`— es justo el ternario que `check-i18n` prohíbe, y con razón: es la
+       misma decisión repetida en nueve sitios. Va al diccionario como
+       `common.dateLocale`, que no es texto de UI pero sí un dato por idioma.
+       Quedan siete llamantes en ficheros de otros carriles.
+    5. **Y nueve fugas más del cuerpo crudo del backend** (`task_prod16_05`, que
+       iba por 17 sitios y va por **26**): seis pintaban `.body` a pelo
+       —git-config ×2, governance, runtime-services, review-preview y
+       preview-launcher, las cuatro últimas con el `e instanceof ApiError ? e.body
+: String(e)` escrito en línea que no sale al buscar por nombre de función—
+       y **tres más por una vía que el enunciado no contempla**: el hub usaba
+       `error?.message`, y `ApiError.message` es `api {status}: {body}`, o sea el
+       cuerpo crudo con un prefijo. Todas a `useErrorText()`, y hay un caso que lo
+       fija: un 500 con `<html>nginx traceback</html>` NO debe aparecer en
+       pantalla.
+       **Un error propio que conviene dejar escrito**, porque lo caza el toolchain y
+       no el ojo: sustituir la clave `saveError` de `projectGit` con un
+       `str.replace` global sobre un diccionario de 6.000 líneas se llevó **también**
+       las de `agents` y `projectCommands`, que tienen el mismo texto palabra por
+       palabra. Lo cazó `tsc --noEmit` en dos líneas exactas. En un diccionario
+       grande, un reemplazo por texto no es una operación local: o se ancla al
+       namespace o se comprueba con el compilador antes de creerse el diff.
+       **Lo que queda de esta casilla**, contado en ficheros: `plans/`,
+       `plans/[planId]/*`, `mcp-servers/*` y `tasks/page.tsx` con
+       `components/tasks/*` —el otro carril de esta misma ola— y
+       `agent-kbs-section.tsx` de `agents/*`. **No se marca `[x]`.**
+       **Verificación ejecutada, toda desde `apps/admin-panel`:** `npx vitest run`
+       (suite completa) → **1.354 passed / 156 ficheros, 1 fallo** que NO es de este
+       carril: el invariante `identicalOnPurpose` de `lib/i18n/i18n.test.ts` le
+       faltan 20 claves de los namespaces `planCost`, `agentRole`, `mcpServers` y
+       `planDetail`, del otro carril, que las añadirá con su lote (las 8 de este
+       carril sí están). `npx tsc --noEmit` **limpio**; `npx next lint
+--max-warnings=0` sin avisos; `npx prettier --check` de lo tocado OK;
+       `node scripts/check-component-size.mjs` en verde.
+       **Roturas comprobadas, cada una con su rojo y sólo el suyo:** devolver
+       `placeholder="••• (vacío = conservar)"` a git-config → `check-i18n` sale
+       **exit 1 nombrando el fichero** (o sea que el trinquete que acaba de soltar
+       esas seis entradas MUERDE); volver la pestaña del editor markdown a «Vista
+       previa» fija → cae **1** caso y sólo ése; y hacer que
+       `executionBudgetLabel` resuelva siempre en castellano → caen **3**, los tres
+       que afirman la cara inglesa del módulo puro.
+       **Aviso de coordinación (no es de este carril y bloquea `check:i18n`):**
+       `components/login/i18n.test.tsx`, nuevo hoy, tiene `lang === "es"` **dentro
+       de un comentario en prosa** (línea 21), y el trinquete de ternarios —a
+       diferencia del de atributos— no exime los `.test.tsx`. `node
+scripts/check-i18n.mjs` sale **exit 1** por eso, más un segundo ternario vivo
+       en `plan-spec-types.ts`. No se toca desde aquí ni se afloja la guarda por
+       ello: lo arregla su carril reescribiendo el comentario. Y quedan tres
+       entradas de `mcp-servers` en la `ATTR_ALLOWLIST` ya a cero (avisos, no
+       errores), que también son suyas.
+       **Una excepción que se añadió a mano y conviene auditar:** 8 claves de estos
+       namespaces tienen `es === en` y están anotadas en el `identicalOnPurpose` de
+       `lib/i18n/i18n.test.ts` — los cuatro nombres de sub-sección que la UI
+       castellana YA escribía en inglés («Chat», «Tasks», «Knowledge Bases», «MCP
+       servers»), «irreversible», y las siglas del formulario de git y de servicios
+       («PAT (HTTPS)», «Token (PAT)», «Alias (hostname)»), que son lo que el
+       operador copia de la consola de su proveedor.
+  - ⏳ **Pendiente (2026-08-20, tercer carril del día) — `plans/*`,
+    `mcp-servers/*` y `tasks/*` de `projects/`, los tres COMPLETOS.** Con el hub
+    del carril anterior, `projects/*` queda migrado salvo lo que nunca fue suyo.
+    Entran **32 ficheros** y diez namespaces nuevos:
+    - **`projects/[id]/plans/` + `plans/[planId]/*`** (16 ficheros): el listado y
+      el detalle con sus quince piezas —cabecera de estado, preflight, ciclo de
+      vida, validación humana con su diálogo de rechazo, retro, deep links,
+      correcciones del rechazo, sincronización al Kanban con su diálogo, diff de
+      código, comentarios, secciones presentacionales y el editor del spec.
+      Namespaces `plansList`, `planDetail` y `planStatus`. Arrastran
+      `lib/plan-dag.tsx`, `lib/plan-gantt.tsx` y `lib/plan-spec-edit.ts` (los
+      mensajes de validación del editor, en un módulo puro).
+    - **`projects/[id]/mcp-servers/`** (9 ficheros): la pantalla, la ficha, el
+      diálogo con sus opciones avanzadas, «Probar conexión» con la importación
+      selectiva de tools, el flujo OAuth y la política rol→tool. Namespaces
+      `mcpServers` y `agentRole`.
+    - **`projects/[id]/tasks/page.tsx` con la ficha COMPARTIDA de
+      `components/tasks/*`** (3 ficheros) y `components/ui/view-toggle.tsx`.
+      Namespaces `projectTasks`, `taskStatus`, `taskDetail`, `taskActions` y
+      `viewToggle`.
+      **Contadores medidos ejecutando, y separando lo que es de este carril:** de
+      las **119 marcas en 45 ficheros** con las que empezó el día, este carril se
+      lleva **28 atributos en 11 entradas** de la `ATTR_ALLOWLIST` (14 de `plans/*`
+    * `mcp-servers/*` + los dos diagramas de `lib/`, y 14 de `tasks/*` +
+      `components/tasks/*`). La guarda cerró el día en **77 atributos / 28
+      ficheros**; el resto de la bajada es de los otros dos carriles, que migraban
+      el hub del proyecto y `marketplace`/`docs`/`assistant` **en el mismo árbol de
+      trabajo** — sumar las cifras en un solo número haría irreproducible
+      cualquiera de las tres.
+      **Tests: 4 ficheros `i18n.test.tsx` nuevos con 54 casos, los 54 ejecutados
+      antes de implementar y 42 en ROJO.** Los 12 verdes eran los ES, que fijan que
+      no se rompe el castellano: son la mitad que hace que el rojo signifique algo.
+      `components/login/i18n.test.tsx` (11), `mcp-servers/i18n.test.tsx` (17),
+      `plans/i18n.test.tsx` (13) y `tasks/i18n.test.tsx` (13). Además
+      `plan-status-header.test.tsx` sube de 9 a 10 casos y
+      `lib/plan-spec-edit.test.ts` de 8 a 10 (los nuevos son las caras inglesas, y
+      los tres salieron rojos).
+      **Siete cosas que enseñó la pasada, y valen más que el contador:**
+    1. **Un fichero a MEDIO migrar es indistinguible de uno migrado para las dos
+       guardas, y es el peor caso visto hasta ahora.** `plan-cost-section.tsx` ya
+       usaba `useT("planCost")` y no tenía ni un atributo con castellano —o sea,
+       limpio para las dos señales y fuera de las dos allowlists— y seguía
+       pintando el título de la tarjeta (dos veces), el texto de carga, el estado
+       vacío, las **dos** cabeceras de tabla y los dos totales en castellano
+       fijo. Los tres avisos anteriores del plan eran sobre ficheros SIN migrar
+       que la guarda no veía; éste es sobre uno que la guarda daba por hecho.
+    2. **`STATUS_LABEL` de plan existía DOS veces, copiado byte a byte** en
+       `plans/page.tsx` y en `plans/[planId]/plan-spec-types.ts`. Traducir dos
+       copias del mismo enum del backend es garantizar que divergen en cuanto
+       alguien añada un estado, así que se quedó una: el mapa guarda la CLAVE y
+       el listado lo importa. Lo mismo obligó a hacer el catálogo de estados de
+       TAREA un namespace compartido (`taskStatus`), porque `app/admin/board`
+       tiene hoy su tercera copia — ese fichero es de otro lote, pero ya no
+       tendrá que volver a escribir el texto.
+    3. **`ROLE_LABEL` repitió el caso de `MEMORY_SCOPE_OPTIONS` al pie de la
+       letra.** Vive en `mcp-server-types.ts` (módulo puro, invisible a las dos
+       guardas) y lo consume también
+       `components/marketplace/deployment-config-form.tsx`, que estaba **dado por
+       migrado** desde su propia ola y aun así pintaba los diez roles de agente
+       en castellano con el toggle en EN. Namespace compartido `agentRole` y la
+       constante guardando la clave: arregla las dos pantallas y la cara inglesa
+       ya no puede quedarse sin llamante.
+    4. **`components/ui/view-toggle.tsx` nunca tuvo entrada en la allowlist**, y
+       llevaba «Cambiar vista» y «Lista» cableados desde el principio: ninguna de
+       las dos palabras lleva tilde ni está en `SPANISH_WORDS`, así que el
+       detector le veía **cero**. Lo montan exactamente las dos pantallas de este
+       lote. Y lo importante: al comprobarlo por mutación, devolverlo a
+       `label="Lista"` **no rompe `check-i18n`** — sólo lo caza el assert que se
+       añadió a `tasks/i18n.test.tsx` a raíz de esa comprobación. Sin la
+       mutación, ese test habría quedado siendo una guarda que no puede fallar
+       (§4 de `verificar-antes-de-implementar`).
+    5. **Tres helpers PUROS con castellano fijo, y `lang` obligatorio sin default
+       en los tres.** `lib/plan-spec-edit.ts` (los mensajes de validación del
+       editor del spec, incluido el ciclo del DAG), `phaseLabel()` (el rótulo
+       «Fase 3») y `describeTaskMoveError()` (por qué se revierte un arrastre del
+       Kanban). Ninguno lo veía ninguna de las dos guardas. Con default, el
+       próximo llamante reintroduce el fallo sin enterarse — misma decisión que
+       `conversationLabel()` y `governanceProblems()`.
+    6. **El separador decimal también es del idioma.** `formatTokens()` y
+       `formatCostRange()` tenían `"es-ES"` cableado, así que el panel en inglés
+       escribía «812,3k» donde un lector inglés lee «812.3k». Se resuelven con
+       `common.dateLocale` —el mecanismo que el carril del hub introdujo el mismo
+       día— y **no** con un mapa propio: dos mecanismos para el mismo dato
+       divergen. Dos de los siete llamantes que aquella nota dejaba pendientes en
+       «ficheros de otros carriles» eran éstos.
+    7. **La advertencia del plan sobre `tasks/page.tsx` era exacta, y la
+       respuesta fue migrar lo que arrastra.** Su texto no es suyo: está
+       repartido con `components/tasks/*`, que montan además `app/admin/board` y
+       `app/admin/plans/[id]/escalated`. Migrar sólo el `page.tsx` habría dejado
+       el Kanban del proyecto abriendo una ficha en castellano. **Lo que este
+       lote NO se lleva, dicho en ficheros:** el texto PROPIO de `board/page.tsx`
+       (4 atributos) y de `escalated/page.tsx` (2) — sus cabeceras, columnas y
+       estados vacíos. Lo que les deja es la ficha de tarea ya bilingüe.
+       **Verificación ejecutada, toda desde `apps/admin-panel`:** `npx tsc --noEmit`
+       **limpio**; `npx next lint --max-warnings=0` sin avisos; `npx prettier
+--check` de lo tocado OK; `node scripts/check-i18n.mjs` y
+       `node scripts/check-component-size.mjs` **en verde**; `npm run test --
+i18n.test` —el `command:` declarado— pasa de 26 ficheros/246 tests a **31
+       ficheros / 319 tests, todos en verde**; y la suite completa `npx vitest run`
+       → **157 ficheros / 1368 tests, todos en verde**.
+       **Roturas comprobadas, cada una con su rojo y sólo el suyo:** reintroducir
+       `title="MCP servers del proyecto"` en `mcp-servers/page.tsx` → `check-i18n`
+       sale **exit 1** nombrando el fichero; devolver `Código de verificación` fijo
+       al desafío MFA → cae **1** caso de `components/login/i18n.test.tsx`; volver a
+       `{ROLE_LABEL[role]}` en el formulario del marketplace → lo caza `tsc`
+       (`TS6133`: el traductor deja de usarse); y forzar «En curso» en una columna
+       del Kanban de tareas → cae **1** caso y sólo ése.
+       **Y un rojo de e2e que NO era de este cambio, con su diagnóstico y su
+       arreglo.** El plan exige correr `e2e/mcp-test-connection.spec.ts` y
+       `e2e/mcp-config-ui.spec.ts` juntos y en ese orden al tocar `mcp-servers/*`
+       (por el 401 que cerraba la sesión, arreglado el 08-20). Se corrieron: **7 de
+       11 en rojo**, y los 7 son EXACTAMENTE los que pulsan `mcp-add-button`
+       —tres de `mcp-config-ui` y los cuatro de `mcp-test-connection`—; el que abre
+       el MISMO diálogo por el lápiz de edición pasa. La correlación es la causa:
+       `mcp-add-button` sale en el PRIMER render (vive en la cabecera, antes de que
+       resuelva la consulta del proyecto), así que Playwright lo encuentra y lo
+       pulsa **antes de que React haya hidratado** y el click no llega a ningún
+       handler; el lápiz sólo existe después de que la consulta pinte la ficha, o
+       sea después de la hidratación, y por eso ése pasa. Bajo `next start`
+       —precompilado, como en CI— la hidratación gana la carrera y el spec pasaba;
+       bajo `next dev` en una máquina con cinco agentes trabajando, no. Es la misma
+       trampa que `playwright.config.ts` ya tiene anotada para CI.
+       **El arreglo no afloja ninguna aserción**: los cinco sitios esperan ahora el
+       estado vacío de la lista —que sí depende de la consulta— antes de pulsar.
+       **Y la comprobación, ejecutada**: `NEXT_PUBLIC_API_URL=http://localhost:8001
+npx next build` (construye, 65 páginas) y después
+       `E2E_WEBSERVER_CMD="npm run start" npx playwright test
+e2e/mcp-test-connection.spec.ts e2e/mcp-config-ui.spec.ts` →
+       **11 de 11 en verde (1,1 min)**, en el orden que el plan exige. O sea que los
+       7 rojos eran latencia de `next dev`, no una regresión — y ahora tampoco
+       dependen de ella.
+       Y la primera de las tres pasadas hay que descartarla entera: se lanzó con un
+       `next build` en paralelo escribiendo el mismo `.next`, y ahí el fallo fue
+       `net::ERR_ABORTED` en el propio `page.goto`. **Dos specs de Playwright no se
+       pueden correr contra un servidor de desarrollo que otro proceso está
+       reconstruyendo**, y confundir eso con un rojo del código cuesta media hora.
+       Corolario para quien venga: si estos dos specs salen rojos, **antes de mirar
+       el código, córrelos sobre `next start`**.
+       **Una excepción que se añadió a mano y conviene auditar:** 26 claves de estos
+       namespaces tienen `es === en` y están anotadas en el `identicalOnPurpose` de
+       `lib/i18n/i18n.test.ts` — ocho nombres de rol de agente que la UI castellana
+       ya escribía en inglés (los otros dos, «Arquitecto» y «Especialista», SÍ se
+       traducen), la jerga del dominio («tool», «Runs», «Backlog», «Ready»,
+       «Tasks», «Plan», «Kanban»), «Pull request» y «Gantt» como nombres propios, y
+       «ID»/«Total»/«est.», que coinciden. Ese invariante existe justo para que esa
+       lista no se llene de traducciones pendientes.
+       **`[x]` que no se pone, y con qué falta exactamente:** el enunciado nombra
+       `agents/*`, y de ahí sigue faltando `agent-kbs-section.tsx` (1 atributo), que
+       es de otro carril. Con `projects/*` cerrado, es lo ÚNICO que le queda a esta
+       casilla de lo que enumera — así que la marca quien cierre ese fichero, no
+       este carril.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
@@ -509,7 +831,10 @@ scripts/check-i18n.test.ts scripts/check-component-size.test.ts` →
   # Ejecutado antes de escribirlo aquí, que es la mitad que faltaba las otras
   # dos veces: 17 ficheros, 142 tests, todos en verde (2026-08-19). Tras el lote
   # de settings + tres pantallas de projects del mismo día: **18 ficheros, 160
-  # tests**, también ejecutado.
+  # tests**, también ejecutado. Tras los tres carriles del 08-20 (el hub del
+  # proyecto, marketplace/docs/assistant, y plans+mcp-servers+tasks): **31
+  # ficheros, 319 tests**, ejecutado también — y la suite completa
+  # (`npx vitest run`) en 157 ficheros / 1368 tests, toda en verde.
   - id: auto_prod16_03_a
     runtime: node-vitest
     command: "npm --prefix apps/admin-panel run test -- i18n.test"

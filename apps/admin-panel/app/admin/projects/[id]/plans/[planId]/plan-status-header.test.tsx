@@ -41,15 +41,27 @@ describe("formatMoney", () => {
 
 describe("formatTokens", () => {
   it("reads big counts as magnitudes", () => {
-    expect(formatTokens(812_345)).toBe("812,3k");
+    expect(formatTokens(812_345, "es")).toBe("812,3k");
+  });
+
+  /*
+   * El separador decimal es del IDIOMA, no del fichero (prod-16
+   * `task_prod16_03`). Estaba `"es-ES"` cableado, así que con el panel en
+   * inglés la cifra salía «812,3k» donde un lector inglés lee «812.3k». `lang`
+   * es obligatorio y sin default a propósito: con default, el próximo llamante
+   * reintroduce el fallo sin enterarse.
+   */
+  it("usa el separador del idioma activo, no el del fichero", () => {
+    expect(formatTokens(812_345, "en")).toBe("812.3k");
   });
 
   it("keeps small counts exact", () => {
-    expect(formatTokens(999)).toBe("999");
+    expect(formatTokens(999, "es")).toBe("999");
+    expect(formatTokens(999, "en")).toBe("999");
   });
 
   it("shows a plan that never ran as 0", () => {
-    expect(formatTokens(0)).toBe("0");
-    expect(formatTokens(null)).toBe("0");
+    expect(formatTokens(0, "es")).toBe("0");
+    expect(formatTokens(null, "es")).toBe("0");
   });
 });

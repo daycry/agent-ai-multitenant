@@ -9,6 +9,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Test connection — result shape + panel (task_05_07)
@@ -46,12 +47,13 @@ export function TestResultPanel({
   importError: string | null;
   importedCount: number | null;
 }) {
+  const t = useT("mcpServers");
   return (
     <div className="mt-2 space-y-2" data-testid="mcp-form-test-result">
       <p className="text-xs">
-        Conectado a{" "}
+        {t("testConnectedTo")}{" "}
         <strong data-testid="mcp-form-test-server-name">
-          {result.server_name || "(sin nombre)"}
+          {result.server_name || t("testNoName")}
         </strong>
         {result.server_version ? (
           <>
@@ -60,8 +62,8 @@ export function TestResultPanel({
           </>
         ) : null}
         {" — "}
-        <span data-testid="mcp-form-test-tool-count">{result.tools.length}</span> tool
-        {result.tools.length === 1 ? "" : "s"}.
+        <span data-testid="mcp-form-test-tool-count">{result.tools.length}</span>{" "}
+        {result.tools.length === 1 ? t("testToolOne") : t("testToolMany")}.
       </p>
       {result.tools.length > 0 ? (
         <ul
@@ -81,7 +83,7 @@ export function TestResultPanel({
                 checked={selected.has(tool.name)}
                 onChange={() => onToggle(tool.name)}
                 data-testid={`mcp-form-import-select-${tool.name}`}
-                aria-label={`Seleccionar ${tool.name}`}
+                aria-label={t("testSelectTool", { tool: tool.name })}
               />
               <span className="min-w-0">
                 {/* Faceta Origen=MCP: el server como prefijo/badge para que
@@ -108,12 +110,14 @@ export function TestResultPanel({
             data-testid="mcp-form-import-button"
           >
             {importing
-              ? "Importando…"
-              : `Importar ${selected.size} tool${selected.size === 1 ? "" : "s"} al catálogo`}
+              ? t("importing")
+              : selected.size === 1
+                ? t("importButtonOne", { count: selected.size })
+                : t("importButtonMany", { count: selected.size })}
           </Button>
           {importedCount !== null ? (
             <span className="text-success text-xs" data-testid="mcp-form-import-success">
-              Importadas {importedCount} al catálogo (Origen MCP, nivel “Aislada”).
+              {t("importSuccess", { count: importedCount })}
             </span>
           ) : null}
         </div>

@@ -43,6 +43,9 @@ import { ViewToggle, type ViewMode } from "@/components/ui/view-toggle";
 import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { translate, useT } from "@/lib/i18n";
+import type { Lang, MessageKey } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 
 interface Task {
   id: string;
@@ -61,23 +64,33 @@ interface Plan {
   status: string;
 }
 
-const COLUMNS: Array<{ id: string; label: string; variant: BadgeVariant }> = [
-  { id: "backlog", label: "Backlog", variant: "muted" },
-  { id: "ready", label: "Ready", variant: "info" },
-  { id: "in_progress", label: "En curso", variant: "primary" },
-  { id: "awaiting_human_approval", label: "Pendiente aprobación", variant: "warning" },
-  { id: "in_review", label: "Revisión", variant: "warning" },
-  { id: "blocked", label: "Bloqueada", variant: "danger" },
-  { id: "done", label: "Hecho", variant: "success" },
-  { id: "cancelled", label: "Cancelada", variant: "muted" },
+/**
+ * Las ocho columnas del Kanban, con la CLAVE de su rótulo y no el texto
+ * (prod-16 `task_prod16_03`). El catálogo `taskStatus` es compartido a
+ * propósito: `app/admin/board` tiene hoy su propia copia de esta lista, y con
+ * el texto aquí traducir una pantalla dejaba la otra a medias.
+ */
+const COLUMNS: Array<{
+  id: string;
+  labelKey: MessageKey<"taskStatus">;
+  variant: BadgeVariant;
+}> = [
+  { id: "backlog", labelKey: "backlog", variant: "muted" },
+  { id: "ready", labelKey: "ready", variant: "info" },
+  { id: "in_progress", labelKey: "inProgress", variant: "primary" },
+  { id: "awaiting_human_approval", labelKey: "awaitingHumanApproval", variant: "warning" },
+  { id: "in_review", labelKey: "inReview", variant: "warning" },
+  { id: "blocked", labelKey: "blocked", variant: "danger" },
+  { id: "done", labelKey: "done", variant: "success" },
+  { id: "cancelled", labelKey: "cancelled", variant: "muted" },
 ];
 
 const STATUS_VARIANT: Record<string, BadgeVariant> = Object.fromEntries(
   COLUMNS.map((c) => [c.id, c.variant]),
 );
 
-const STATUS_LABEL: Record<string, string> = Object.fromEntries(
-  COLUMNS.map((c) => [c.id, c.label]),
+const STATUS_LABEL_KEY: Record<string, MessageKey<"taskStatus">> = Object.fromEntries(
+  COLUMNS.map((c) => [c.id, c.labelKey]),
 );
 
 const PRIORITY_VARIANT: Record<string, BadgeVariant> = {
@@ -92,7 +105,11 @@ const PLAN_FILTER_NULL = "null";
 
 // Turn a failed Kanban move into a human message: the server replies 422
 // `dependencies_not_done` (DAG) or 409 `illegal_transition` (state machine, c1/T2).
-function describeTaskMoveError(err: unknown): string {
+//
+// `lang` es obligatorio y sin default (prod-16 `task_prod16_03`): este helper es
+// puro, así que su castellano no lo veía ninguna de las dos guardas, y con un
+// default el próximo llamante lo reintroduce sin enterarse.
+function describeTaskMoveError(err: unknown, lang: Lang): string {
   if (err instanceof ApiError) {
     try {
       const parsed = JSON.parse(err.body) as {
@@ -100,10 +117,12 @@ function describeTaskMoveError(err: unknown): string {
       };
       if (parsed.detail?.error === "dependencies_not_done") {
         const n = parsed.detail.pending?.length ?? 0;
-        return `No se puede mover: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+        return translate(lang, "projectTasks", n === 1 ? "moveErrorDepsOne" : "moveErrorDepsMany", {
+          count: n,
+        });
       }
       if (parsed.detail?.error === "illegal_transition") {
-        return "Movimiento no permitido: no es una transición válida desde el estado actual.";
+        return translate(lang, "projectTasks", "moveErrorIllegal");
       }
     } catch {
       // body wasn't the structured error — fall through to the raw text.
@@ -114,6 +133,9 @@ function describeTaskMoveError(err: unknown): string {
 }
 
 export default function ProjectTasksPage() {
+  const t = useT("projectTasks");
+  const tStatus = useT("taskStatus");
+  const lang = useLangOptional();
   const params = useParams<{ id: string }>();
   const projectId = params?.id ?? "";
   const queryClient = useQueryClient();
@@ -184,7 +206,7 @@ export default function ProjectTasksPage() {
       if (context?.prev) {
         queryClient.setQueryData(["project-tasks", projectId], context.prev);
       }
-      setDragError(describeTaskMoveError(err));
+      setDragError(describeTaskMoveError(err, lang));
     },
     onSuccess: () => setDragError(null),
   });
@@ -200,11 +222,11 @@ export default function ProjectTasksPage() {
       className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="project-tasks-page"
     >
-      <ProjectBreadcrumb projectId={projectId} current="Tasks" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
       <PageHeader
         icon={<ListTodo className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Tasks del proyecto"
-        description="Todas las tareas — incluyendo las que no están asociadas a un plan. Filtra por plan para evitar mezclar contextos."
+        title={t("title")}
+        description={t("description")}
         actions={
           <div className="flex items-center gap-2">
             <ViewToggle value={view} onChange={setView} />
@@ -215,7 +237,7 @@ export default function ProjectTasksPage() {
               data-testid="tasks-create-button"
             >
               <Plus className="mr-1 h-4 w-4" />
-              Crear tarea
+              {t("createButton")}
             </Button>
           </div>
         }
@@ -226,17 +248,17 @@ export default function ProjectTasksPage() {
         className="bg-muted mt-6 inline-flex flex-wrap gap-1 rounded-md p-1"
         data-testid="tasks-plan-filter"
         role="tablist"
-        aria-label="Filtrar tareas por plan"
+        aria-label={t("filterAriaLabel")}
       >
         <FilterChip
-          label="Todas"
+          label={t("filterAll")}
           value={PLAN_FILTER_ALL}
           count={counts[PLAN_FILTER_ALL] ?? 0}
           active={planFilter === PLAN_FILTER_ALL}
           onClick={() => setPlanFilter(PLAN_FILTER_ALL)}
         />
         <FilterChip
-          label="Sin plan"
+          label={t("filterNoPlan")}
           value={PLAN_FILTER_NULL}
           count={counts[PLAN_FILTER_NULL] ?? 0}
           active={planFilter === PLAN_FILTER_NULL}
@@ -265,11 +287,11 @@ export default function ProjectTasksPage() {
 
       <div className="mt-6">
         {tasksQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm">Cargando tareas…</p>
+          <p className="text-muted-foreground text-sm">{t("loading")}</p>
         ) : tasksQuery.isError ? (
           <Card>
             <CardHeader>
-              <CardTitle>Error al cargar las tareas</CardTitle>
+              <CardTitle>{t("errorTitle")}</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-destructive text-sm" data-testid="tasks-error">
@@ -283,9 +305,7 @@ export default function ProjectTasksPage() {
           <Card>
             <CardContent className="py-8">
               <p className="text-muted-foreground text-sm" data-testid="tasks-empty">
-                {tasks.length === 0
-                  ? "Este proyecto no tiene tareas todavía."
-                  : "Ninguna tarea coincide con el filtro."}
+                {tasks.length === 0 ? t("emptyNoTasks") : t("emptyFiltered")}
               </p>
             </CardContent>
           </Card>
@@ -298,7 +318,7 @@ export default function ProjectTasksPage() {
               <KanbanColumn
                 key={col.id}
                 status={col.id}
-                label={col.label}
+                label={tStatus(col.labelKey)}
                 variant={col.variant}
                 tasks={visible.filter((t) => t.status === col.id)}
                 onDrop={onDrop}
@@ -366,7 +386,10 @@ function FilterChip({ label, value, count, active, onClick }: FilterChipProps) {
 }
 
 function TaskRow({ projectId, task }: { projectId: string; task: Task }) {
+  const t = useT("projectTasks");
+  const tStatus = useT("taskStatus");
   const statusVariant = STATUS_VARIANT[task.status] ?? "muted";
+  const statusKey = STATUS_LABEL_KEY[task.status];
   const priorityVariant = PRIORITY_VARIANT[task.priority] ?? "muted";
   const linkHref = task.plan_id ? `/admin/projects/${projectId}/plans/${task.plan_id}` : null;
   return (
@@ -387,7 +410,7 @@ function TaskRow({ projectId, task }: { projectId: string; task: Task }) {
             )}
           </CardTitle>
           {task.plan_id === null && (
-            <p className="text-muted-foreground/70 mt-1 text-xs italic">Sin plan asignado</p>
+            <p className="text-muted-foreground/70 mt-1 text-xs italic">{t("rowNoPlan")}</p>
           )}
         </div>
         <div className="flex flex-row items-center gap-2">
@@ -399,7 +422,7 @@ function TaskRow({ projectId, task }: { projectId: string; task: Task }) {
             data-testid={`task-row-${task.id}-status`}
             data-status={task.status}
           >
-            {STATUS_LABEL[task.status] ?? task.status}
+            {statusKey ? tStatus(statusKey) : task.status}
           </Badge>
         </div>
       </CardHeader>
@@ -425,6 +448,7 @@ function KanbanColumn({
   tasks: Task[];
   onDrop: (status: string, taskId: string) => void;
 }) {
+  const t = useT("projectTasks");
   const [over, setOver] = useState(false);
 
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
@@ -471,7 +495,7 @@ function KanbanColumn({
           className="text-muted-foreground p-2 text-xs italic"
           data-testid={`tasks-col-empty-${status}`}
         >
-          Sin tareas
+          {t("colEmpty")}
         </p>
       ) : (
         tasks.map((t) => <TaskCard key={t.id} task={t} />)
@@ -481,6 +505,7 @@ function KanbanColumn({
 }
 
 function TaskCard({ task }: { task: Task }) {
+  const t = useT("projectTasks");
   const [detailOpen, setDetailOpen] = useState(false);
   // A drag fires dragstart (not click), but guard so a drag that ends on the same
   // card never opens the detail (click-vs-drag).
@@ -515,7 +540,7 @@ function TaskCard({ task }: { task: Task }) {
         <div className="mt-1.5 flex items-center justify-between gap-2">
           <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
           {task.plan_id === null && (
-            <span className="text-muted-foreground/70 text-[10px] italic">sin plan</span>
+            <span className="text-muted-foreground/70 text-[10px] italic">{t("cardNoPlan")}</span>
           )}
         </div>
       </div>
@@ -558,6 +583,7 @@ function TaskCreateDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const t = useT("projectTasks");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   // null = "sin plan". Otherwise a plan UUID.
@@ -594,15 +620,12 @@ function TaskCreateDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Crear tarea</DialogTitle>
-          <DialogDescription>
-            Las tareas pueden colgar de un plan existente o vivir como tareas libres del proyecto
-            (sin plan).
-          </DialogDescription>
+          <DialogTitle>{t("createButton")}</DialogTitle>
+          <DialogDescription>{t("createDialogDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="task-title">Título</Label>
+            <Label htmlFor="task-title">{t("fieldTitle")}</Label>
             <Input
               id="task-title"
               value={title}
@@ -614,7 +637,7 @@ function TaskCreateDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
+            <Label>{t("fieldDescription")}</Label>
             <MarkdownTextarea
               value={description}
               onChange={setDescription}
@@ -624,7 +647,7 @@ function TaskCreateDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="task-plan">Plan</Label>
+            <Label htmlFor="task-plan">{t("fieldPlan")}</Label>
             <select
               id="task-plan"
               value={planId ?? PLAN_FILTER_NULL}
@@ -634,7 +657,7 @@ function TaskCreateDialog({
               className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
               data-testid="create-task-plan"
             >
-              <option value={PLAN_FILTER_NULL}>Sin plan (tarea libre)</option>
+              <option value={PLAN_FILTER_NULL}>{t("planNoneOption")}</option>
               {plans.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.title}
@@ -644,7 +667,7 @@ function TaskCreateDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="task-priority">Prioridad</Label>
+            <Label htmlFor="task-priority">{t("fieldPriority")}</Label>
             <select
               id="task-priority"
               value={priority}
@@ -652,10 +675,10 @@ function TaskCreateDialog({
               className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
               data-testid="create-task-priority"
             >
-              <option value="low">Baja</option>
-              <option value="medium">Media</option>
-              <option value="high">Alta</option>
-              <option value="critical">Crítica</option>
+              <option value="low">{t("priorityLow")}</option>
+              <option value="medium">{t("priorityMedium")}</option>
+              <option value="high">{t("priorityHigh")}</option>
+              <option value="critical">{t("priorityCritical")}</option>
             </select>
           </div>
 
@@ -664,13 +687,13 @@ function TaskCreateDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="create-task-error"
             >
-              {mutation.error?.message ?? "Error al crear la tarea"}
+              {mutation.error?.message ?? t("createError")}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={!title.trim() || mutation.isPending}
@@ -684,7 +707,7 @@ function TaskCreateDialog({
             }
             data-testid="create-task-submit"
           >
-            {mutation.isPending ? "Creando…" : "Crear tarea"}
+            {mutation.isPending ? t("creating") : t("createButton")}
           </Button>
         </DialogFooter>
       </DialogContent>

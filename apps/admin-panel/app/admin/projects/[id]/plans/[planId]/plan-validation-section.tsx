@@ -20,6 +20,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
+import { numberLocale } from "./plan-spec-types";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 
 // --------------------------------------------------------------------------
@@ -39,6 +42,8 @@ export interface ReviewSessionInfo {
 }
 
 export function HumanValidationSection({ planId, status }: { planId: string; status: string }) {
+  const t = useT("planDetail");
+  const lang = useLangOptional();
   const queryClient = useQueryClient();
   const [verdictMsg, setVerdictMsg] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -62,7 +67,7 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
   // usa MarkdownTextarea (preferencia del operador: todo textarea con preview).
   const submitVerdict = async (verdict: "approved" | "rejected", reason = "") => {
     if (!rs?.verdict_url) return;
-    const rejectionReason = reason.trim() || "Rechazado desde el panel de validación (sin motivo).";
+    const rejectionReason = reason.trim() || t("rejectDefaultReason");
     setSubmitting(true);
     setVerdictMsg(null);
     try {
@@ -76,9 +81,9 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
       setVerdictMsg(
         res.ok
           ? verdict === "approved"
-            ? "Plan aprobado ✓"
-            : "Plan rechazado"
-          : "Error al registrar el veredicto",
+            ? t("validationMsgApproved")
+            : t("validationMsgRejected")
+          : t("validationMsgError"),
       );
       queryClient.invalidateQueries({ queryKey: ["plan", planId] });
       queryClient.invalidateQueries({ queryKey: ["plan-review-session", planId] });
@@ -92,25 +97,25 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Rocket className="text-primary h-5 w-5" />
-          Validación humana — probar la app
+          {t("validationTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-muted-foreground text-sm">
-          El plan está en <code>pending_human_validation</code>: los agentes han terminado y la
-          aplicación se ha <b>levantado en un contenedor de revisión</b>. Ábrela para probarla y, si
-          todo está bien, aprueba el plan.
+          {t("validationIntroBefore")} <code>pending_human_validation</code>
+          {t("validationIntroMiddle")} <b>{t("validationIntroStrong")}</b>
+          {t("validationIntroAfter")}
         </p>
 
         {reviewQuery.isLoading && (
-          <p className="text-muted-foreground text-sm">Buscando la sesión de revisión…</p>
+          <p className="text-muted-foreground text-sm">{t("validationSearching")}</p>
         )}
         {reviewQuery.isError && (
           <p
             className="text-muted-foreground text-sm italic"
             data-testid="plan-human-validation-none"
           >
-            Aún no hay una sesión de revisión levantada para este plan.
+            {t("validationNone")}
           </p>
         )}
 
@@ -125,7 +130,7 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
                 className="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold"
               >
                 <Rocket className="h-4 w-4" />
-                Abrir app para probar
+                {t("validationOpenApp")}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
               <a
@@ -136,15 +141,17 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
                 className="hover:bg-muted/40 inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-semibold"
               >
                 <ClipboardList className="h-4 w-4" />
-                Consola de revisión (terminal + logs + checklist)
+                {t("validationOpenConsole")}
                 <ExternalLink className="h-3.5 w-3.5" />
               </a>
             </div>
 
             <p className="text-muted-foreground text-xs">
-              El enlace abre la app servida por el review-runtime a través del proxy firmado del
-              api-server (no se publica ningún puerto). La sesión caduca el{" "}
-              {rs.expires_at ? new Date(rs.expires_at).toLocaleString("es-ES") : "—"}.
+              {t("validationProxyNote", {
+                date: rs.expires_at
+                  ? new Date(rs.expires_at).toLocaleString(numberLocale(lang))
+                  : "—",
+              })}
             </p>
 
             <div className="flex items-center gap-3 border-t pt-4">
@@ -154,7 +161,7 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
                 data-testid="plan-verdict-approve"
               >
                 <CheckCircle2 className="mr-1.5 h-4 w-4" />
-                Aprobar plan
+                {t("lifecycleApprove")}
               </Button>
               <Button
                 variant="outline"
@@ -163,7 +170,7 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
                 data-testid="plan-verdict-reject"
               >
                 <XCircle className="mr-1.5 h-4 w-4" />
-                Rechazar
+                {t("validationReject")}
               </Button>
               {verdictMsg && (
                 <span className="text-sm" data-testid="plan-verdict-msg">
@@ -172,7 +179,9 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
               )}
               {rs.verdict && (
                 <Badge variant={rs.verdict === "approved" ? "success" : "danger"}>
-                  {rs.verdict === "approved" ? "Aprobado" : "Rechazado"}
+                  {rs.verdict === "approved"
+                    ? t("validationVerdictApproved")
+                    : t("validationVerdictRejected")}
                 </Badge>
               )}
             </div>
@@ -180,19 +189,14 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
             <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
               <DialogContent data-testid="plan-reject-dialog">
                 <DialogHeader>
-                  <DialogTitle>Rechazar plan</DialogTitle>
+                  <DialogTitle>{t("rejectDialogTitle")}</DialogTitle>
                 </DialogHeader>
                 <DialogBody className="space-y-3">
-                  <p className="text-muted-foreground text-sm">
-                    El motivo llega a los agentes como feedback del rework — cuanto más concreto
-                    (qué está mal, dónde y qué se espera), mejor corrige el equipo. Tras rechazar
-                    podrás generar tareas correctivas desde el motivo y aceptarlas en este mismo
-                    plan.
-                  </p>
+                  <p className="text-muted-foreground text-sm">{t("rejectDialogHelp")}</p>
                   <MarkdownTextarea
                     value={rejectReason}
                     onChange={setRejectReason}
-                    placeholder="P. ej.: El filtro de Content-Type application/json es global; debe acotarse al grupo api/v1…"
+                    placeholder={t("rejectPlaceholder")}
                     rows={6}
                     data-testid="plan-reject-reason"
                   />
@@ -203,7 +207,7 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
                     onClick={() => setRejectOpen(false)}
                     disabled={submitting}
                   >
-                    Cancelar
+                    {t("cancel")}
                   </Button>
                   <Button
                     variant="destructive"
@@ -215,7 +219,7 @@ export function HumanValidationSection({ planId, status }: { planId: string; sta
                     }}
                   >
                     <XCircle className="mr-1.5 h-4 w-4" />
-                    Rechazar plan
+                    {t("rejectDialogTitle")}
                   </Button>
                 </DialogFooter>
               </DialogContent>
