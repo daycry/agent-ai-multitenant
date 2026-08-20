@@ -38,6 +38,26 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 const NO_REDIRECT_ON_401 = ["/auth/login", "/auth/mfa/"];
 
 /**
+ * Lo mismo, para rutas cuyo id va en medio y no se puede casar por prefijo.
+ *
+ * Los dos endpoints de MCP (`test-connection` e `import-tools`) contestan 401
+ * con `error_code: AUTH_ERROR` cuando el **`auth_ref` del servidor de terceros**
+ * no se resuelve — Vault no está o lo rechaza. Ese 401 no habla de quién llama:
+ * habla de la credencial que el operador acaba de teclear en el formulario.
+ *
+ * Tratarlo como sesión muerta tiene un precio concreto y medido: el operador que
+ * prueba un servidor MCP mal configurado se queda SIN sesión, sin tenant y en
+ * `/login`, perdiendo el formulario a medio llenar — y sin llegar a leer el
+ * mensaje que le dice qué credencial falla, que es justo lo que fue a buscar.
+ *
+ * Cómo se encontró (2026-08-20): `mcp-test-connection.spec.ts` afirmaba que el
+ * panel de error aparece, y **pasaba por una carrera** — el `expect` ganaba a la
+ * navegación cuando el spec corría solo, y la perdía cuando corría detrás de
+ * otro. O sea que el e2e no estaba flaky: estaba tapando esto.
+ */
+const NO_REDIRECT_ON_401_PATTERNS = [/^\/projects\/[^/]+\/mcp\//];
+
+/**
  * Absolute URL on the api-server for a relative `path`.
  *
  * `apiFetch` is for JSON round-trips; this helper is for the cases where
@@ -88,6 +108,7 @@ function currentRoute(): string {
 
 function handleUnauthorized(path: string): void {
   if (NO_REDIRECT_ON_401.some((prefix) => path.startsWith(prefix))) return;
+  if (NO_REDIRECT_ON_401_PATTERNS.some((re) => re.test(path))) return;
   // Drop BOTH: a surviving tenant choice would be re-sent as the acting
   // tenant of whoever logs in next in the same tab.
   clearClientSession();

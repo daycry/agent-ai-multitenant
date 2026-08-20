@@ -142,6 +142,38 @@ describe("global 401 handling (frontend-3)", () => {
     expect(fired).toBe(0);
   });
 
+  it("does NOT fire when the 401 is about a THIRD-PARTY credential (MCP)", async () => {
+    // `POST /projects/{id}/mcp/test-connection` contesta 401 con
+    // `error_code: AUTH_ERROR` cuando el `auth_ref` del SERVIDOR MCP no se
+    // resuelve. Ese 401 no habla de quien llama: habla de la credencial que el
+    // operador acaba de teclear. Tratarlo como sesion muerta le vacia la sesion,
+    // le borra el tenant y le tira a /login con el formulario a medio llenar —
+    // y sin llegar a leer que credencial falla, que es a lo que fue.
+    setTenant("22222222-2222-2222-2222-222222222222");
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ detail: { error_code: "AUTH_ERROR" } }), { status: 401 }),
+    );
+    const { ApiError, apiFetch, setUnauthorizedHandler } = await load();
+
+    let fired = 0;
+    setUnauthorizedHandler(() => {
+      fired += 1;
+    });
+
+    await expect(
+      apiFetch("/projects/11111111-0000-0000-0000-000000000001/mcp/test-connection", {
+        method: "POST",
+        body: {},
+      }),
+    ).rejects.toBeInstanceOf(ApiError);
+
+    expect(fired).toBe(0);
+    // Y la sesion sigue en pie: el operador no ha perdido nada.
+    expect(window.localStorage.getItem("admin-panel.tenant-id")).toBe(
+      "22222222-2222-2222-2222-222222222222",
+    );
+  });
+
   it("does not fire on a 403", async () => {
     fetchMock.mockResolvedValue(new Response("forbidden", { status: 403 }));
     const { apiFetch, setUnauthorizedHandler } = await load();
