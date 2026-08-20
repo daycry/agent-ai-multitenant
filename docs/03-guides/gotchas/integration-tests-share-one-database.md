@@ -131,6 +131,70 @@ depend on execution order, e.g. `test_migrations.py`»), y aun así se cayó en 
 trampa al armar un lote ordenado alfabéticamente. De ahí que quede escrito aquí,
 donde se busca cuando algo falla, y no solo donde se explica el diseño.
 
+## Y el cuarto caso, el que no se ve: las tres tablas SIN `tenant_id` (2026-08-20)
+
+Los tres de arriba dan un error. Éste no: da **verde hasta que cambia el orden**.
+
+CI reparte los ~547 ficheros de integración entre **cuatro shards por
+round-robin** (`find | sort` + módulo, ver `tests/unit/test_ci_integration_shards.py`),
+y los ~137 de cada shard corren en **un solo proceso** contra la misma BD. Casi
+todo aguanta porque casi todo lleva `tenant_id` y cada fichero siembra su tenant.
+Tres tablas no:
+
+| Tabla               | Qué deja el fichero anterior                                               |
+| ------------------- | -------------------------------------------------------------------------- |
+| `platform_settings` | un ajuste con un valor no-default… y su copia en la caché Redis (TTL 30 s) |
+| `llm_providers`     | una fila `ollama` **activa**, que gana al doble de LLM que el test inyecta |
+| `model_prices`      | precios que hacen que un cálculo de coste dé otro número                   |
+
+El síntoma es siempre el mismo y siempre engaña: **pasa en solitario, falla en
+lote**, y el shard donde cae depende de cuántos ficheros haya en el árbol — o
+sea, que **añadir un test en cualquier parte reordena los cuatro shards** y
+enciende un rojo en un fichero que nadie tocó.
+
+Dos casos reales, los dos del 2026-08-19:
+
+- cuatro rojos de `test_memory_skip_reason`: `_select_distiller` elige destilador
+  en tres escalones (provider del agente → fila ACTIVA del catálogo → factoría
+  inyectada), así que el `ollama` que dejaban `test_cortex_model_settings` y
+  `test_assistant_provider_teardown` ganaba al doble. El memorizer salía a
+  `http://ollama:11434` y los cuatro tests morían en `llm_error`;
+- seis rojos de memoria: el `TRUNCATE platform_settings` del seed borraba la
+  fila pero no la **entrada cacheada**, así que la lectura seguía sirviendo lo
+  del fichero anterior.
+
+Y el modo de fallo de fondo es peor que cualquiera de los dos: **un `_seed` que
+trunca doce tablas y se deja una es indistinguible de uno correcto** hasta que
+cambia el reparto.
+
+### El arreglo: el estado conocido lo garantiza el conftest, no el recuerdo de cada fichero
+
+`tests/integration/conftest.py` monta dos fixtures automáticas, con dos
+granularidades distintas a propósito:
+
+- **`_global_tables_baseline`** (scope de **módulo**) — `TRUNCATE
+platform_settings, model_prices, llm_providers` al empezar cada FICHERO. Vacías
+  es exactamente el estado tras `alembic upgrade head`: ninguna migración ni seed
+  de arranque las siembra, así que no se borra la semilla de nadie (lo ancla
+  `tests/unit/test_integration_global_baseline.py`). Por módulo y no por test
+  porque la fuga invisible es la que cruza ficheros —dentro de un fichero el
+  orden es fijo y el rojo se reproduce en local—, y truncar por test rompería a
+  quien siembre un proveedor en un test y lo lea en el siguiente.
+- **`_platform_setting_cache_baseline`** (scope de **función**) — borra las
+  claves `psetting:*` de la Redis del arnés al empezar cada TEST. Ésta sí muerde
+  entre tests del mismo fichero, y purgar cuesta un `DEL`.
+
+Los módulos que no tocan la BD (`test_egress_proxy`, `test_container_isolation`,
+`test_no_docker_socket`… — Docker puro) quedan fuera y siguen corriendo sin
+PostgreSQL: lo decide `_module_uses_the_database`, mirando si algún test del
+módulo pide una fixture de BD.
+
+**Lo que esto NO te ahorra**: escribir un ajuste por SQL crudo **y releerlo en el
+mismo test** sigue leyendo lo que se cacheó al principio del test. Para eso, la
+regla del otro gotcha sigue en pie — invalida como haría la escritura real
+(`invalidate_platform_setting_cache`), ver
+[arreglar-la-cache-rompe-tests-que-vivian-de-su-fallo.md](arreglar-la-cache-rompe-tests-que-vivian-de-su-fallo.md).
+
 ## Cómo verificar el fix
 
 Dos sesiones simultáneas con nombres distintos terminan las dos en verde:

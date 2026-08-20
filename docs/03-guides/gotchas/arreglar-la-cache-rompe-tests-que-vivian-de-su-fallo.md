@@ -70,6 +70,18 @@ async with sm() as s, s.begin():
 await invalidate_platform_setting_cache(CLAVE)   # lo que hace set_platform_setting
 ```
 
+**Lo que el arnés ya hace por ti desde el 2026-08-20** — y lo que sigue siendo
+tuyo. `tests/integration/conftest.py` purga las claves `psetting:*` de la Redis
+de test **al empezar cada test** (`_platform_setting_cache_baseline`), así que un
+valor que dejó cacheado el test o el fichero ANTERIOR ya no te llega. Eso cubre
+el caso frecuente: sembrar por SQL al principio del test y leer después.
+
+Lo que NO cubre, porque es imposible de cubrir desde fuera: **escribir por SQL
+crudo y releer dentro del MISMO test**, después de que una lectura anterior de
+ese test ya cacheara el valor. Ahí sigue haciendo falta la invalidación explícita
+de arriba. La firma de ese fallo es un test cuya segunda mitad afirma exactamente
+lo que afirmaba la primera — y que por eso no puede fallar.
+
 ## Lo que NO hay que hacer
 
 - **Subir el TTL a 0 o borrar la caché** para que los tests pasen: revierte un

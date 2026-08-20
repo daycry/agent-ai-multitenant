@@ -19,9 +19,11 @@ Env overrides (defaults match docker/.env.example):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import asyncpg
 import pytest
@@ -290,3 +292,180 @@ def configured_app(
         reset_engine_cache()
         reset_redis_cache()
         get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# El estado que NO tiene tenant_id y por eso cruza de un fichero al siguiente
+# ---------------------------------------------------------------------------
+# Toda la suite de integración comparte UNA base de datos de sesión, y el job de
+# CI reparte los ~547 ficheros entre cuatro shards por round-robin
+# (`.github/workflows/ci.yml`; el reparto lo fija `tests/unit/
+# test_ci_integration_shards.py`). Dentro de un shard, los ~137 ficheros corren
+# en UN solo proceso y en un orden que depende de cuántos ficheros haya en el
+# árbol: añadir un test en cualquier parte reordena los cuatro shards enteros.
+#
+# Para casi todo eso da igual, porque casi todo lleva `tenant_id` y cada fichero
+# siembra su propio tenant. Las tres tablas de abajo son la excepción: son
+# PLATFORM-GLOBAL, no tienen `tenant_id` y nadie las aísla. Lo que un fichero
+# deja escrito ahí lo lee el siguiente del mismo shard.
+#
+# Ya costó dos tandas de rojos:
+#
+#  · 2026-08-19, cuatro rojos de `test_memory_skip_reason`: una fila `ollama`
+#    ACTIVA que dejaban `test_cortex_model_settings` y
+#    `test_assistant_provider_teardown` ganaba al doble de LLM que el test
+#    inyectaba, porque `_select_distiller` mira el catálogo ANTES que la
+#    factoría. El memorizer salía a una red que no existe.
+#  · 2026-08-19, seis rojos de memoria: el valor de `platform_settings` que
+#    dejaba el fichero anterior seguía SERVIDO DESDE LA CACHÉ Redis aunque su
+#    fila ya no existiera.
+#
+# El modo de fallo de fondo es peor que cualquiera de los dos rojos: un `_seed`
+# que trunca doce tablas y se deja una es INDISTINGUIBLE de uno correcto hasta
+# que cambia el reparto. Por eso el estado conocido se garantiza aquí, una vez,
+# y no en el recuerdo de cada fichero.
+#
+# Dos piezas, con dos granularidades distintas a propósito:
+#
+#  1. **Las filas** (`_global_tables_baseline`, scope de MÓDULO). La fuga que no
+#     se ve es la que cruza ficheros: dentro de un fichero el orden es fijo, el
+#     rojo es determinista y se reproduce en local. Truncar por TEST además
+#     rompería a cualquier fichero que siembre un proveedor en un test y lo lea
+#     en el siguiente, y costaría una conexión por test en vez de una por
+#     fichero (~547 frente a varios miles).
+#  2. **La caché** (`_platform_setting_cache_baseline`, scope de FUNCIÓN). Ésta
+#     sí muerde entre tests del MISMO fichero: `get_platform_setting` cachea 30 s
+#     y sólo `set_platform_setting` —la vía del System Admin— invalida, así que
+#     un test que siembra por SQL directo lee lo que cacheó el test anterior.
+#     Purgarla cuesta un DEL y es lo que hace la escritura real.
+#
+# Purgar la caché ANTES del test no tapa ningún defecto de producción: un test
+# que escriba por la API y relea sigue ejerciendo la invalidación de verdad.
+_GLOBAL_TABLES: tuple[str, ...] = ("platform_settings", "model_prices", "llm_providers")
+
+#: Fixtures de este conftest que implican hablar con PostgreSQL. Se usan para NO
+#: exigir base de datos a los ficheros que no la tocan (los de Docker puro:
+#: `test_egress_proxy`, `test_container_isolation`, `test_no_docker_socket`…),
+#: que hoy corren sin PostgreSQL levantado y tienen que seguir haciéndolo.
+#: `tests/unit/test_integration_global_baseline.py` falla si aparece una fixture
+#: de BD nueva que no esté en esta lista.
+_DB_FIXTURES: frozenset[str] = frozenset(
+    {
+        "admin_database_url",
+        "admin_pg_dsn",
+        "alembic_config",
+        "app_database_url",
+        "configured_app",
+        "migrations_pg_dsn",
+        "test_database_url",
+    }
+)
+
+
+def _module_uses_the_database(request: pytest.FixtureRequest) -> bool:
+    """¿Algún test de este módulo pide una fixture de BD?
+
+    `item.fixturenames` es el cierre COMPLETO (incluye las transitivas), así que
+    un test que pida `configured_app` cuenta aunque no nombre `alembic_config`.
+    """
+    module = request.module
+    return any(
+        _DB_FIXTURES & set(item.fixturenames)
+        for item in request.session.items
+        if getattr(item, "module", None) is module
+    )
+
+
+async def _reset_global_tables() -> None:
+    """Deja las tres tablas platform-global como las deja `alembic upgrade head`.
+
+    Vacías, que es exactamente su estado tras migrar: ninguna migración y ningún
+    seed de arranque escribe en ellas (lo comprueba
+    `tests/unit/test_integration_global_baseline.py`). O sea que esto no borra
+    semillas de nadie — sólo restos del fichero anterior.
+
+    Tolera que las tablas no existan: el primer módulo de la sesión corre antes
+    de la primera migración, y `test_migrations.py` baja el esquema a `base`.
+    """
+    conn = await asyncpg.connect(_admin_dsn(db=PG_TEST_DB))
+    try:
+        present = [
+            t
+            for t in _GLOBAL_TABLES
+            if await conn.fetchval("SELECT to_regclass($1)", f"public.{t}") is not None
+        ]
+        if present:
+            # Nombres de una constante de módulo, no de entrada de usuario.
+            await conn.execute(f"TRUNCATE {', '.join(present)} RESTART IDENTITY CASCADE")
+    finally:
+        await conn.close()
+
+
+#: Cliente Redis SÍNCRONO reutilizado por la purga de caché, en un hueco de
+#: módulo. Reutilizarlo no es micro-optimización: medido en esta máquina, abrir
+#: uno nuevo cuesta **73 ms** (TCP + AUTH sobre el loopback de Docker Desktop) y
+#: el `SCAN`+`DEL` sobre el cliente ya abierto cuesta **10-30 ms**. A una purga
+#: por test y ~1.100 tests por shard, la diferencia entre reutilizar y no son
+#: ~80 s por shard de reloj de CI gastados en volver a abrir el mismo socket.
+_PURGE_CLIENT: dict[str, Any] = {"redis": None}
+
+
+def _purge_platform_setting_cache() -> None:
+    """Borra las claves `psetting:*` de la Redis del arnés.
+
+    Cliente SÍNCRONO a propósito: la caché de producción es async y su cliente
+    queda atado al event loop de la primera llamada (ver el comentario largo en
+    `db/platform_settings.py`), así que purgar por ahí desde una fixture pediría
+    un `asyncio.run` y volvería a pisar ese binding. Aquí no hay loop.
+
+    Se barre por PREFIJO y no por una lista de claves conocidas: la lista
+    envejecería en silencio el día que alguien añada un ajuste con otro nombre, y
+    una purga que se deja una clave es indistinguible de una correcta —que es
+    exactamente el modo de fallo que estas fixtures vienen a cerrar—.
+
+    Sólo se toca `TEST_REDIS_URL`. Si `API_SERVER_REDIS_URL` apunta a otro sitio
+    —su default de producción es `redis://localhost:6379/0`— es que la caché no
+    está hablando con la Redis del arnés, y el arnés no borra claves de un
+    servidor que no es suyo.
+    """
+    import redis
+    from api_server.db.platform_settings import _CACHE_PREFIX
+
+    client = _PURGE_CLIENT["redis"]
+    if client is None:
+        client = redis.Redis.from_url(TEST_REDIS_URL, socket_connect_timeout=3, socket_timeout=3)
+        _PURGE_CLIENT["redis"] = client
+    try:
+        # `count` alto para que el barrido quepa en un round-trip: el coste de
+        # `SCAN` crece con el TAMAÑO DEL KEYSPACE, no con las claves que casan.
+        keys = list(client.scan_iter(match=f"{_CACHE_PREFIX}*", count=2000))
+        if keys:
+            client.delete(*keys)
+    except redis.RedisError:
+        # La caché real degrada en silencio si Redis no contesta (`_cached_read`
+        # captura y cae a la BD): sin Redis no hay caché que purgar. Se tira el
+        # cliente para que el próximo test lo reconstruya en vez de arrastrar una
+        # conexión rota el resto de la sesión. Cualquier otro error sí sube.
+        _PURGE_CLIENT["redis"] = None
+        with contextlib.suppress(Exception):
+            client.close()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _global_tables_baseline(request: pytest.FixtureRequest) -> Iterator[bool]:
+    """Las tres tablas platform-global, vacías al empezar cada FICHERO."""
+    if not _module_uses_the_database(request):
+        yield False
+        return
+    # Fuerza la creación de la BD de sesión antes de conectarse a ella.
+    request.getfixturevalue("test_database_url")
+    asyncio.run(_reset_global_tables())
+    yield True
+
+
+@pytest.fixture(autouse=True)
+def _platform_setting_cache_baseline(_global_tables_baseline: bool) -> Iterator[None]:
+    """La caché de `platform_settings`, vacía al empezar cada TEST."""
+    if _global_tables_baseline:
+        _purge_platform_setting_cache()
+    yield

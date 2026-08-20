@@ -50,9 +50,12 @@ _PATRONES = ("redis://localhost", "redis://127.0.0.1")
 # Ficheros exentos, con el motivo. La regla para entrar aquí es UNA: el literal
 # no puede acabar en una conexión a Redis.
 _ALLOWLIST: dict[str, str] = {
-    # La fuente de verdad. Aquí es donde la URL se construye (con credencial), y
-    # el docstring cita el literal roto para explicar por qué existe el módulo.
-    "_redis_url.py": ("es el módulo que resuelve la URL: el único sitio donde puede escribirse"),
+    # `_redis_url.py` NO está aquí, y conviene decir por qué: es la fuente de
+    # verdad, pero construye la URL con un f-string —que es un `JoinedStr`, no un
+    # `Constant`— y sus únicas menciones literales viven en docstrings, que desde
+    # el 2026-08-20 esta guarda ya no confunde con código. O sea que no necesita
+    # exención. Si algún día apareciera ahí un literal de verdad, esta guarda lo
+    # señalaría, y ESO merece una mirada aunque el fichero sea el sitio legítimo.
     # Los cinco de abajo comparten forma: construyen un `Settings(...)` de
     # workers y se lo pasan a `build_celery_app()`, que solo RELLENA la config
     # del app de Celery. Ninguno publica una tarea ni abre el broker — lo que
@@ -92,13 +95,51 @@ _ALLOWLIST: dict[str, str] = {
 }
 
 
+def _docstrings(arbol: ast.AST) -> set[int]:
+    """Los ``id()`` de los nodos que son docstring, para no confundirlos con código.
+
+    El encabezado de este fichero fija el criterio —«un comentario que cite la
+    URL para explicar la trampa es documentación, no una conexión»— y se cumplía
+    solo a medias: un comentario ``#`` no llega al AST, pero un docstring **sí**
+    es un ``ast.Constant``, así que la guarda lo leía como si alguien fuera a
+    conectarse con él. Saltaba justo donde más aparece el literal: en la prosa
+    que explica por qué no debe escribirse.
+
+    El caso que lo destapó (2026-08-20): el docstring de
+    ``_purge_platform_setting_cache`` en ``tests/integration/conftest.py`` cita
+    ``redis://localhost:6379/0`` para decir que si la caché apunta AHÍ, el arnés
+    no debe borrar nada. La función usa ``TEST_REDIS_URL``. Un falso positivo en
+    una guarda no es gratis: es lo que hace que alguien la mande a la allowlist
+    entera —y con ella el fichero donde una URL cableada haría más daño—.
+    """
+    marcados: set[int] = set()
+    for nodo in ast.walk(arbol):
+        if not isinstance(nodo, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        cuerpo = getattr(nodo, "body", None)
+        if not cuerpo:
+            continue
+        primero = cuerpo[0]
+        if (
+            isinstance(primero, ast.Expr)
+            and isinstance(primero.value, ast.Constant)
+            and isinstance(primero.value.value, str)
+        ):
+            marcados.add(id(primero.value))
+    return marcados
+
+
 def _literales_de_redis(ruta: Path) -> list[tuple[int, str]]:
-    """Los literales de cadena del fichero que contienen una URL de Redis local."""
+    """Los literales de cadena del fichero que contienen una URL de Redis local.
+
+    Se excluyen los docstrings: son documentación, igual que los comentarios.
+    """
     arbol = ast.parse(ruta.read_text(encoding="utf-8"), filename=str(ruta))
+    prosa = _docstrings(arbol)
     hallazgos: list[tuple[int, str]] = []
     for nodo in ast.walk(arbol):
         es_cadena = isinstance(nodo, ast.Constant) and isinstance(nodo.value, str)
-        if es_cadena and any(p in nodo.value for p in _PATRONES):
+        if es_cadena and id(nodo) not in prosa and any(p in nodo.value for p in _PATRONES):
             hallazgos.append((nodo.lineno, nodo.value.strip().splitlines()[0][:80]))
     return hallazgos
 
