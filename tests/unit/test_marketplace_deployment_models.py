@@ -155,16 +155,46 @@ def test_deployment_fk_ondelete(column: str, ondelete: str) -> None:
     assert fks[0].ondelete == ondelete
 
 
-def test_deployment_tenant_fk_lives_in_the_migration_only() -> None:
-    """`TenantScopedMixin` no declara FK en `tenant_id`, y aquí tampoco.
+def test_deployment_declares_the_tenant_fk_the_migration_created() -> None:
+    """La FK de `tenant_id` que creó la 0128, declarada en el modelo.
 
-    Es la convención de la casa (todas las tablas tenant-scoped): la FK a
-    `organizations` la pone la migración, y el ORM se queda con la columna. Este
-    test existe para que quien lea el modelo y no vea la FK no la añada «para
-    arreglarlo» — la comprobación de que EXISTE en la BD vive en
-    `tests/integration/test_marketplace_v2_migration.py`.
+    Hasta el 2026-08-20 este test afirmaba lo contrario —«la FK la pone la
+    migración y el ORM se queda con la columna, es la convención de la casa»— y
+    hasta pedía por escrito que nadie la añadiera «para arreglarlo». La premisa
+    era falsa cuando se escribió: sus dos tablas hermanas de este mismo módulo,
+    `marketplace_installations` y `marketplace_audit_entries`, sí la declaran, y
+    lo que la 0128 creó de verdad es una constraint que ningún modelo nombraba.
+    El precio de creerlo era concreto: `alembic check` proponía
+    `DROP CONSTRAINT marketplace_deployments_tenant_id_fkey`, o sea perder el
+    borrado en cascada de los despliegues al eliminar un tenant, sin un error
+    que lo delatase.
+
+    Va a nivel de `__table_args__` y no en la columna a propósito, para no
+    reescribir el `tenant_id` de `TenantScopedMixin`.
     """
-    assert list(MarketplaceDeployment.__table__.c.tenant_id.foreign_keys) == []
+    from sqlalchemy import ForeignKeyConstraint
+
+    tenant_fks = [
+        c
+        for c in MarketplaceDeployment.__table__.constraints
+        if isinstance(c, ForeignKeyConstraint) and [col.name for col in c.columns] == ["tenant_id"]
+    ]
+    assert len(tenant_fks) == 1, "falta (o sobra) la FK de tenant_id en el modelo"
+    fk = tenant_fks[0]
+    assert [e.target_fullname for e in fk.elements] == ["organizations.id"]
+    assert fk.ondelete == "CASCADE"
+    # SIN nombre a propósito: la 0128 la creó dentro del `create_table` sin
+    # nombrarla, así que la lleva el default de PostgreSQL
+    # (`marketplace_deployments_tenant_id_fkey`). Alembic empareja FK por firma
+    # sin nombre, así que declararlo aquí sería copiar a mano un default.
+    assert fk.name is None
+    # Declararla a nivel de tabla la deja igualmente colgada de la columna
+    # (SQLAlchemy propaga la constraint a `Column.foreign_keys`), y por eso la
+    # aserción antigua rompió. Lo que se gana es no reescribir el `mapped_column`
+    # del mixin, cuyo `index=True` aquí acierta (`ix_marketplace_deployments_tenant_id`
+    # existe, lo creó la propia 0128).
+    assert list(MarketplaceDeployment.__table__.c.tenant_id.foreign_keys) != []
+    assert MarketplaceDeployment.__table__.c.tenant_id.nullable is False
 
 
 # ---------------------------------------------------------------------------

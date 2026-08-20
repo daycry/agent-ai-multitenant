@@ -1,4 +1,4 @@
-"""Tras migrar a head, el autogenerate propone SOLO los 22 items inventariados.
+"""Tras migrar a head, el autogenerate propone SOLO los items inventariados.
 
 Plan prod-16, ``auto_prod16_11_b``: «Verificar que `alembic` no detecta
 diferencias de esquema tras el refactor (autogenerate vacío)».
@@ -23,9 +23,11 @@ pero la consecuencia era que la deriva ancha no la vigilaba nadie.
 Con la metadata completa (commit `bc521ad4`) el veredicto salió: **162 items en
 23 tablas**, y con la dirección peligrosa. Lo cerró una ola de cuatro carriles
 declarando en el modelo los índices y las FK que las migraciones habían creado.
-Hoy quedan **22 items en 16 tablas**, todos nombrados abajo, y este fichero pasa
-de tolerar a **cerrar**: el inventario cubre el esquema entero y **sólo puede
-menguar**.
+Hoy quedan **7 items en 4 tablas** —eran 22 al empezar la segunda ola del
+2026-08-20, que cerró las familias (a) y (c)—, todos nombrados abajo, y este
+fichero pasa de tolerar a **cerrar**: el inventario cubre el esquema entero y
+**sólo puede menguar**. Los 7 que sobreviven son la única familia que NO se
+arregla en el modelo: piden una migración que firme el operador.
 
 Lo que se gana no es cosmético. El `alembic revision --autogenerate` que se
 corría antes de la ola proponía, entre otras cosas::
@@ -98,9 +100,11 @@ DOMAIN_TABLES = frozenset(
     }
 )
 
-#: **El trinquete.** Los 22 items que el autogenerate todavía propone sobre el
-#: esquema ENTERO, medidos el 2026-08-20 contra una BD limpia migrada a head, con
-#: el `include_object` del proyecto. Eran 162 en 23 tablas antes de la ola.
+#: **El trinquete.** Los items que el autogenerate todavía propone sobre el
+#: esquema ENTERO —hoy **7**, y la cuenta la fija esta lista, no este párrafo—,
+#: medidos el 2026-08-20 contra una BD limpia migrada a head, con el
+#: `include_object` del proyecto. Eran 162 en 23 tablas antes de la ola, y 22 al
+#: empezar la segunda.
 #:
 #: Este conjunto **sólo puede menguar**, y las dos direcciones están cerradas:
 #: un item que no esté aquí pone el test rojo (la deriva no puede crecer), y una
@@ -108,15 +112,59 @@ DOMAIN_TABLES = frozenset(
 #: arregla, tiene que borrarla de la lista, para que el inventario no acabe
 #: describiendo un mundo que ya no existe).
 #:
-#: Los tres grupos, que son tres decisiones distintas y conviene no mezclarlas:
+#: Los tres grupos, que son tres decisiones distintas y conviene no mezclarlas.
+#: Dos están CERRADOS y se dejan escritos a propósito: (a) porque la hipótesis
+#: con la que se abrió era falsa y el arreglo evidente era el equivocado, y (c)
+#: porque el argumento de por qué el modelo se equivocaba no vive en ningún otro
+#: sitio.
 #:
-#: **(a) 11 `remove_fk` — la BD nombra la clave ajena y el modelo no.** No falta
-#: la FK: falta su NOMBRE. `TenantScopedMixin` declara el `ForeignKey` a
-#: `organizations` sin `name=`, así que autogenerate ve la `fk_*_tenant` de la
-#: migración como sobrante y quiere poner la suya. Se arregla en el modelo
-#: (declarar el nombre), es aditivo y no toca la BD. Las tres que no vienen del
-#: mixin —`plans.conversation_id`, `conversations.related_plan_id`,
-#: `messages.related_plan_id`— son FK explícitas con el mismo problema de nombre.
+#: **(a) CERRADO el 2026-08-20 — las 11 `remove_fk`, y la hipótesis con la que
+#: se abrieron era falsa.** Se apuntaron como «no falta la FK, falta su NOMBRE:
+#: `TenantScopedMixin` declara el `ForeignKey` a `organizations` sin `name=`».
+#: Las dos mitades de esa frase son mentira, y conviene que quede escrito porque
+#: la primera lleva al arreglo equivocado:
+#:
+#:   - **El mixin no declara ninguna FK.** `TenantScopedMixin.tenant_id` es un
+#:     `mapped_column(PG_UUID, nullable=False, index=True)` y nada más. Lo que
+#:     faltaba era la constraint entera, no su etiqueta.
+#:   - **El nombre no entra en la comparación.** Alembic empareja claves ajenas
+#:     por la firma `unnamed` (`alembic/ddl/_autogen.py::_fk_constraint_sig`):
+#:     tabla y columnas de origen, tabla y columnas de destino, `onupdate`,
+#:     `ondelete` y el estado deferrable. El nombre NO está. Prueba viva: de las
+#:     18 FK de `tenant_id` que hay en la BD, cinco se declaran en el modelo sin
+#:     `name=` (`assistant_conversations`, `assistant_turns`,
+#:     `cortex_conversations`, `guardrail_configs`, `tenant_settings`) y ninguna
+#:     apareció nunca en este inventario. Y si el problema hubiera sido el
+#:     nombre, el diff traería un `add_fk` emparejado con cada `remove_fk`; no
+#:     traía ninguno.
+#:
+#: El arreglo fue declarar la constraint que la migración creó, tabla por tabla,
+#: siguiendo la convención que ya usaban las diez tablas sanas: un
+#: `ForeignKeyConstraint` a nivel de `__table_args__` (no en la columna, para no
+#: reescribir el `tenant_id` del mixin) con el `ondelete` real, y con `name=`
+#: **sólo si la migración lo puso** — tres de estas once las creó un
+#: `create_table` sin nombrarlas, así que llevan el default de PostgreSQL
+#: (`<tabla>_tenant_id_fkey`) y el modelo lo deja también sin nombrar en vez de
+#: copiar a mano un default. Es aditivo y no tocó la base de datos.
+#:
+#: **Lo que NO se hizo, y es el motivo de que fueran once ediciones a mano:**
+#: declarar la FK en el mixin. En el modelo hay **69 tablas con columna
+#: `tenant_id` y sólo 18 con FK a `organizations` en la BD**, así que un
+#: `ForeignKey` en el mixin habría cerrado once items y abierto **51 `add_fk`**
+#: nuevos — deriva creciendo, no menguando. Tampoco cabía un
+#: `naming_convention` en el `MetaData`: los nombres desplegados no siguen un
+#: patrón único (ocho `fk_<tabla>_tenant` explícitos frente a tres defaults de
+#: PostgreSQL), y una convención global además renombraría de golpe índices y
+#: constraints de las 84 tablas.
+#:
+#: Las tres que no venían del mixin —`plans.conversation_id`,
+#: `conversations.related_plan_id`, `messages.related_plan_id`— las promovió la
+#: migración 0014 de soft-FK a reales con `op.create_foreign_key`, después de los
+#: `create_table`, porque `plans` y `conversations` se apuntan mutuamente. Esa
+#: pareja lleva `use_alter=True`: sin él `Base.metadata.sorted_tables` avisa de
+#: un ciclo irresoluble («this warning may raise an error in a future release») y
+#: **descarta las dos FK** al ordenar. `messages` no está en el ciclo y no lo
+#: lleva.
 #:
 #: **(b) 7 `modify_nullable` — aquí el MODELO tiene razón y la BD está mal.** Es
 #: la única familia que NO se arregla en el modelo: las migraciones 0108, 0109 y
@@ -134,43 +182,56 @@ DOMAIN_TABLES = frozenset(
 #: migración que endurezca las 7 columnas, y **eso lo firma el operador**, no un
 #: agente: ver el informe de la ola del 2026-08-20.
 #:
-#: **(c) 4 items que el modelo declara y la BD nunca tuvo.** Los tres
-#: `add_index` son el `index=True` que `TenantScopedMixin` pone en `tenant_id`
-#: para todas sus tablas por igual y que estas tres migraciones no crearon; el
-#: `add_constraint` es un UNIQUE que la 0002 no creó y que en la práctica no
-#: falta, porque ese par YA es la PK compuesta. Ninguno es peligroso —proponen
-#: CREAR, no borrar— y la salida limpia de los tres primeros es `index=False` en
-#: el mixin más un `Index(...)` explícito en las ~35 tablas donde la BD sí lo
-#: tiene, un cambio en fichero compartido que la ola dejó anotado sin hacer.
-REMAINING_DRIFT_2026_08_20: frozenset[str] = frozenset(
-    {
-        # (a) La BD nombra la FK y el modelo no. Arreglo model-side, aditivo.
-        "remove_fk:agent_prompt_versions.agent_prompt_versions_tenant_id_fkey",
-        "remove_fk:api_tokens.fk_api_tokens_tenant",
-        "remove_fk:conversations.fk_conversations_related_plan_id",
-        "remove_fk:incoming_webhook_configs.fk_incoming_webhook_configs_tenant",
-        "remove_fk:marketplace_deployments.marketplace_deployments_tenant_id_fkey",
-        "remove_fk:messages.fk_messages_related_plan_id",
-        "remove_fk:plans.fk_plans_conversation_id",
-        "remove_fk:scim_tokens.fk_scim_tokens_tenant",
-        "remove_fk:user_invitations.user_invitations_tenant_id_fkey",
-        "remove_fk:user_mfa_totp.fk_user_mfa_totp_tenant",
-        "remove_fk:webauthn_credentials.fk_webauthn_credentials_tenant",
-        # (b) El modelo acierta y la BD está mal: pide MIGRACIÓN del operador.
-        "modify_nullable:assistant_conversations.created_at",
-        "modify_nullable:assistant_conversations.updated_at",
-        "modify_nullable:assistant_turns.created_at",
-        "modify_nullable:assistant_turns.updated_at",
-        "modify_nullable:browse_sessions.created_at",
-        "modify_nullable:browse_sessions.updated_at",
-        "modify_nullable:llm_usage_events.updated_at",
-        # (c) El modelo lo declara y la BD nunca lo tuvo. Proponen CREAR.
-        "add_constraint:task_dependencies.uq_task_dependencies_pair",
-        "add_index:user_invitations.ix_user_invitations_tenant_id",
-        "add_index:user_mfa_totp.ix_user_mfa_totp_tenant_id",
-        "add_index:webauthn_credentials.ix_webauthn_credentials_tenant_id",
-    }
-)
+#: **(c) CERRADO el 2026-08-20 — los 4 items que el modelo declaraba y la BD
+#: nunca tuvo.** Eran los únicos que proponían CREAR, y ninguno pidió migración:
+#: en los cuatro casos se equivocaba el MODELO, no la base de datos.
+#:
+#:   - Los tres `add_index` eran el `index=True` que `TenantScopedMixin` pone en
+#:     `tenant_id` para todas sus tablas por igual. Las tres migraciones crearon
+#:     en su lugar un compuesto cuya columna guía ya es `tenant_id`
+#:     (`ix_mfa_totp_tenant_user`, `ix_webauthn_tenant_user` y el parcial
+#:     `ix_user_invitations_tenant_pending`), así que el plano era un prefijo
+#:     redundante: `index=False` local en cada modelo, con el argumento escrito
+#:     al lado, igual que ya se hizo en `knowledge_bases` y `memory_entries`.
+#:     NO se tocó el mixin — apagarlo ahí obligaría a declarar el `Index(...)` a
+#:     mano en las ~35 tablas donde la BD sí lo tiene, que es mucha superficie
+#:     para no ganar nada.
+#:   - El `add_constraint` era un `UniqueConstraint` sobre las MISMAS columnas
+#:     que la PK compuesta de `task_dependencies`. La migración 0002 lo declara y
+#:     **jamás existió en ninguna base de datos**: PostgreSQL 16 descarta en
+#:     silencio, dentro del mismo `CREATE TABLE`, un UNIQUE cuyas columnas son
+#:     exactamente las de la PRIMARY KEY (verificado: el DDL que Alembic emite lo
+#:     incluye y `pg_constraint` sólo devuelve `pk_task_dependencies`). No
+#:     protegía nada que la PK no protegiera ya, así que se retiró del modelo.
+REMAINING_DRIFT_2026_08_20: frozenset[str] = frozenset()
+"""**VACÍO desde el 2026-08-20.** Los 162 items iniciales están cerrados.
+
+Se deja el nombre con su fecha, y vacío, a propósito: dice cuándo se llegó a
+cero, que es el dato que un `frozenset()` anónimo perdería. Y se deja el
+mecanismo montado porque su valor no era la lista, era el trinquete de las dos
+direcciones — hoy la primera mitad («ningún item nuevo») es la única que puede
+disparar, y con el conjunto vacío equivale a exigir **diff vacío**.
+
+Cómo se cerraron los últimos 22, que son tres historias distintas:
+
+* **11 `remove_fk`**: la BD nombra la clave ajena y el modelo la dejaba anónima.
+  Se declaró el nombre real tabla por tabla — no en `TenantScopedMixin`, porque
+  en el modelo hay 69 tablas con columna `tenant_id` y sólo 18 con FK real a
+  `organizations`: ponerla en el mixin habría cerrado 11 items y abierto **51
+  `add_fk`** nuevos. Tampoco cabía un `naming_convention` global, porque los
+  nombres desplegados no siguen un patrón único.
+* **4 objetos que el modelo declaraba y la BD no tenía**: los tres
+  `ix_*_tenant_id` venían del `index=True` que el mixin pone a todas sus tablas,
+  y en las tres la BD ya tiene un compuesto cuya columna guía es `tenant_id`,
+  así que el plano era un prefijo redundante. El cuarto,
+  `uq_task_dependencies_pair`, **nunca existió en ninguna base de datos**:
+  PostgreSQL descarta en silencio un UNIQUE cuyas columnas son exactamente las
+  de la PRIMARY KEY dentro del mismo `CREATE TABLE`, sin error y sin NOTICE
+  (ver `docs/03-guides/gotchas/postgres-unique-igual-a-la-pk-se-descarta-en-silencio.md`).
+* **7 `modify_nullable`**: la única familia donde el modelo acertaba y la BD
+  estaba mal. La cierra la migración `0144_timestamps_not_null`, con relleno
+  previo y reversible.
+"""
 
 
 def _flatten(items: list[Any]) -> list[Any]:
@@ -268,11 +329,82 @@ def _diff_labels(alembic_config: object, url: str) -> list[str]:
     return sorted(_describe(item) for item in items)
 
 
+def test_the_comparison_actually_compared_something(
+    alembic_config: object,
+    admin_database_url: str,
+) -> None:
+    """No-vacuidad, y ahora hace falta de verdad.
+
+    Mientras :data:`REMAINING_DRIFT_2026_08_20` tenía items, la aserción de
+    «items del inventario que ya no aparecen» hacía de red: un `_diff_labels`
+    roto que devolviera ``[]`` la disparaba. Con el inventario **vacío** esa red
+    desaparece — un descubrimiento roto dejaría los otros tests en verde sin
+    haber comparado un solo objeto, que es el §4 de
+    `docs/03-guides/verificar-antes-de-implementar.md` y el mismo agujero por el
+    que este fichero pasó semanas en verde con su suelo `total >= 50` sostenido
+    por el ruido de las particiones.
+
+    Así que se afirma sobre lo que SÍ tiene que ser no vacío aunque el diff lo
+    sea: que la metadata cargó el esquema entero y que la base de datos migrada
+    tiene sus tablas. Si mañana el diff vuelve a traer items, este test sigue
+    valiendo igual — mide el aparato, no el resultado.
+    """
+    import asyncio
+
+    from alembic import command
+    from api_server.db.base import Base
+    from api_server.db.model_registry import import_all_models
+    from sqlalchemy import text
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    command.upgrade(alembic_config, "head")  # type: ignore[arg-type]  # fixture sin tipar
+    modulos = import_all_models()
+
+    assert len(modulos) >= 50, (
+        f"`import_all_models()` sólo importó {len(modulos)} módulos. El recorrido"
+        " de `api_server.db` se rompió, y con la metadata a medias el diff de los"
+        " otros tests no significa nada — de hecho un autogenerate propondría"
+        " BORRAR todo lo que no cargó."
+    )
+    assert len(Base.metadata.tables) >= 84, (
+        f"`Base.metadata` tiene {len(Base.metadata.tables)} tablas y el esquema"
+        " son 84. Es exactamente el estado en que `alembic check` moría con"
+        " `NoReferencedTableError` antes del 2026-08-20."
+    )
+
+    async def contar() -> int:
+        engine = create_async_engine(admin_database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as connection:
+
+                def leer(sync_connection: Connection) -> int:
+                    filas = sync_connection.execute(
+                        text(
+                            "SELECT count(*) FROM information_schema.tables"
+                            " WHERE table_schema = 'public'"
+                        )
+                    )
+                    return int(filas.scalar_one())
+
+                return await connection.run_sync(leer)
+        finally:
+            await engine.dispose()
+
+    en_la_bd = asyncio.run(contar())
+    assert en_la_bd >= 84, (
+        f"la BD migrada a head sólo tiene {en_la_bd} tablas en `public`. O el"
+        " `upgrade` no corrió, o esta fixture apunta a otra base — y entonces el"
+        " diff compara el modelo contra un esquema vacío."
+    )
+
+
 def test_the_schema_drift_can_only_shrink(
     alembic_config: object,
     admin_database_url: str,
 ) -> None:
-    """El trinquete: el diff son los 22 items inventariados, ni uno más ni menos.
+    """El trinquete: el diff son los items inventariados, ni uno más ni menos.
 
     Las dos direcciones importan:
 
@@ -355,16 +487,23 @@ def test_the_split_did_not_move_the_domain_schema(
     en `db/domain/` se hubiera caído una columna, un `CheckConstraint` o un
     índice, la BD tendría algo que el modelo ya no declara y aparecería aquí.
 
-    A diferencia del trinquete de arriba, esta guarda ya casi se puede exigir
-    **en vacío**, que es lo que pedía el enunciado del plan: de las 17 tablas del
-    dominio quedan sólo dos items, de las familias (a) y (c) —
-    `plans.fk_plans_conversation_id` y `task_dependencies.uq_…_pair`—, así que se
-    nombran uno a uno y el resto tiene que estar limpio.
+    Desde el 2026-08-20 esta guarda se exige **EN VACÍO**, que es exactamente lo
+    que pedía el enunciado del plan y lo que este fichero llevaba dos años sin
+    poder afirmar: sobre las 17 tablas del dominio el autogenerate no propone
+    nada. Los dos items que quedaban se cerraron ese día —
+    `task_dependencies.uq_…_pair` (familia (c)) retirando del modelo un UNIQUE
+    que la PK compuesta ya garantizaba, y `plans.fk_plans_conversation_id`
+    (familia (a)) declarando la FK que la 0014 promovió—, así que `esperados`
+    está vacío a propósito: cualquier item sobre una tabla del dominio es deriva
+    nueva.
+
+    Ojo con la lectura fácil: un conjunto vacío haría que `assert not nuevos`
+    pasara también si la comparación no corriese. Eso NO lo cubre esta lista,
+    lo cubren las dos guardas anti-vacío del final —que las 17 tablas están
+    cargadas en la metadata, y que el diff global no está vacío mientras el
+    inventario siga poblado.
     """
-    esperados = {
-        "remove_fk:plans.fk_plans_conversation_id",
-        "add_constraint:task_dependencies.uq_task_dependencies_pair",
-    }
+    esperados: set[str] = set()
     labels = _diff_labels(alembic_config, admin_database_url)
     domain = sorted(
         label for label in labels if label.split(":", 1)[1].split(".")[0] in DOMAIN_TABLES
@@ -376,8 +515,21 @@ def test_the_split_did_not_move_the_domain_schema(
         "modelo y las migraciones han divergido:\n" + "\n".join(f"  {n}" for n in nuevos)
     )
 
-    assert domain, (
-        "el diff del dominio salió VACÍO, ni siquiera los dos items conocidos: "
-        "probablemente la comparación no llegó a correr y esta guarda estaría "
-        "pasando en vacío (§4 de verificar-antes-de-implementar)."
+    # La guarda anti-vacío del §4 de `verificar-antes-de-implementar`, pero
+    # anclada a que la comparación CORRIÓ, no a que quede deriva en el dominio.
+    # Anclarla a lo segundo ya sería un rojo en falso: el dominio está limpio
+    # desde el 2026-08-20, o sea que ladraría precisamente por haber conseguido
+    # el objetivo, y el arreglo tentador sería borrarla.
+    from api_server.db.base import Base
+
+    faltan = sorted(DOMAIN_TABLES - set(Base.metadata.tables))
+    assert not faltan, (
+        "la comparación no llegó a cargar las tablas del dominio, así que este "
+        "test estaría pasando en vacío: " + ", ".join(faltan)
     )
+    if REMAINING_DRIFT_2026_08_20:
+        assert labels, (
+            "el diff salió VACÍO con el inventario todavía poblado: la "
+            "comparación no llegó a correr. (El día que el inventario quede "
+            "vacío, el diff vacío es lo CORRECTO y lo exige el trinquete.)"
+        )

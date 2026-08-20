@@ -770,6 +770,17 @@ class MarketplaceDeployment(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timest
         # "Where is this installation deployed?" — the installation-side read
         # (includes retired rows: the ficha shows history).
         Index("ix_marketplace_deployments_installation", "installation_id"),
+        # La FK de `tenant_id` que creó la migración 0128 — la misma que ya
+        # declaran `MarketplaceInstallation` y `MarketplaceAuditEntry`, y por el
+        # mismo motivo: `TenantScopedMixin` no declara ninguna, así que sin esto
+        # un autogenerate propone BORRARLA y con ella el borrado en cascada de
+        # los despliegues al eliminar un tenant.
+        #
+        # SIN `name=` a propósito, al contrario que sus dos hermanas: la 0128 la
+        # creó sin nombrarla dentro del `create_table`, así que la lleva el
+        # default de PostgreSQL (`marketplace_deployments_tenant_id_fkey`). El
+        # modelo declara lo que declaró la migración.
+        ForeignKeyConstraint(["tenant_id"], ["organizations.id"], ondelete="CASCADE"),
     )
 
     installation_id: Mapped[UUID] = mapped_column(

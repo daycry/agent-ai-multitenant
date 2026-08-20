@@ -29,6 +29,7 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -83,6 +84,18 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin,
             " OR (current_mode <> 'custom' AND custom_mode_name IS NULL)",
             name="ck_conversations_custom_mode_name_consistency",
         ),
+        # La otra mitad del ciclo con `plans.conversation_id`: la 0014 promovió
+        # las dos soft-FK a reales con `op.create_foreign_key` después de crear
+        # ambas tablas. Sin declararla, un autogenerate propone BORRARLA.
+        # `use_alter=True` por el ciclo — ver el comentario gemelo en
+        # `db/domain/plans_tasks.py`.
+        ForeignKeyConstraint(
+            ["related_plan_id"],
+            ["plans.id"],
+            name="fk_conversations_related_plan_id",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
     )
 
     project_id: Mapped[UUID] = mapped_column(
@@ -101,9 +114,11 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin,
     )
     custom_mode_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
-    # Soft FK — promoted to a real FK in the migration once both tables
-    # exist (avoids the chicken-and-egg between plans.conversation_id and
-    # conversations.related_plan_id).
+    # Soft FK in the Plan 01 migration, promoted to a real one by 0014 once both
+    # tables existed (avoids the chicken-and-egg between plans.conversation_id
+    # and conversations.related_plan_id). The constraint is declared at table
+    # level in ``__table_args__`` above, not here, because breaking the cycle
+    # needs ``use_alter``, which only exists on ForeignKeyConstraint.
     related_plan_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     created_by: Mapped[UUID | None] = mapped_column(
@@ -158,6 +173,19 @@ class Message(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
             "                             AND author_agent_id IS NULL)",
             name="ck_messages_author_kind_consistency",
         ),
+        # La tercera FK que promovió la 0014. Sin declararla, un autogenerate
+        # propone BORRARLA y con ella el `SET NULL` que conserva el mensaje
+        # («Plan generado») cuando se borra el plan al que apunta.
+        #
+        # Aquí NO va `use_alter=True`: `messages` no participa en ningún ciclo
+        # (nadie la referencia), así que marcarla sería copiar el remedio del
+        # ciclo donde no hay ciclo.
+        ForeignKeyConstraint(
+            ["related_plan_id"],
+            ["plans.id"],
+            name="fk_messages_related_plan_id",
+            ondelete="SET NULL",
+        ),
     )
 
     conversation_id: Mapped[UUID] = mapped_column(
@@ -190,9 +218,10 @@ class Message(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
 
-    # Soft-FK to a plan the message references (e.g. system message
-    # "Plan generated" or user message "I refined the plan"). NULL for
-    # most messages.
+    # The plan this message references (e.g. system message "Plan generated" or
+    # user message "I refined the plan"). NULL for most messages. Soft-FK when
+    # the table was created, real FK since 0014 — declared at table level in
+    # ``__table_args__`` above, next to its two siblings from the same migration.
     related_plan_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     # Compression rollup (Plan 03 task_03_04): when a window of old

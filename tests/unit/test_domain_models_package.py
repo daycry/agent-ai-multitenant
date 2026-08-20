@@ -266,6 +266,17 @@ PUBLIC_API_BEFORE_THE_SPLIT: tuple[str, ...] = (
 #:   - `executions`: se declara `ix_executions_prompt_version` (0119/0137).
 #:   - `skills` / `tools`: se declara `ix_*_source_installation` (0111).
 #:
+#: **Y un quinto, `task_dependencies`, re-capturado el mismo día por el motivo
+#: CONTRARIO**: no se declaró algo que faltaba, se RETIRÓ un
+#: `UniqueConstraint("task_id", "depends_on_task_id")` que sobraba. Sus columnas
+#: son exactamente las de la PK compuesta, y PostgreSQL 16 descarta en silencio
+#: un UNIQUE así dentro del mismo `CREATE TABLE` — verificado: el DDL que Alembic
+#: emite en la migración 0002 lo incluye y `pg_constraint` sólo devuelve
+#: `pk_task_dependencies`. O sea que jamás existió en ninguna base de datos, y
+#: declararlo sólo hacía que `alembic check` propusiera crearlo para siempre. La
+#: unicidad del par no se ha perdido: la sigue garantizando la PK, que es a la
+#: que ya apuntaba el mapa de conflictos de `routers/_integrity.py`.
+#:
 #: Si vuelve a fallar sin que nadie haya tocado esas declaraciones a mano, es un
 #: hallazgo de verdad: el modelo se movió solo.
 DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -533,7 +544,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "task_dependencies": (
-        "8a56ef40ef65a783",
+        "5a066b6a630c0107",
         ("depends_on_task_id", "task_id", "tenant_id"),
     ),
     "teams": (

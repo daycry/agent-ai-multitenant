@@ -676,6 +676,17 @@ class ScimToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
             "tenant_id",
             postgresql_where=text("revoked_at IS NULL"),
         ),
+        # La FK de `tenant_id` que creó la migración 0036; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de los tokens SCIM al eliminar un tenant.
+        # A nivel de tabla (no en la columna) para no reescribir el `tenant_id`
+        # del mixin, cuyo `index=True` aquí acierta.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_scim_tokens_tenant",
+            ondelete="CASCADE",
+        ),
     )
 
     # SHA-256 hex digest (64 chars) of the bearer token. Never the token.
@@ -749,6 +760,17 @@ class ApiToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
             "ix_api_tokens_tenant_active",
             "tenant_id",
             postgresql_where=text("revoked_at IS NULL"),
+        ),
+        # La FK de `tenant_id` que creó la migración 0054; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de los tokens al eliminar un tenant.
+        # A nivel de tabla (no en la columna) para no reescribir el `tenant_id`
+        # del mixin, cuyo `index=True` aquí acierta.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_api_tokens_tenant",
+            ondelete="CASCADE",
         ),
     )
 
@@ -833,7 +855,29 @@ class UserMfaTotp(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("tenant_id", "user_id", name="uq_mfa_totp_tenant_user"),
         Index("ix_mfa_totp_tenant_user", "tenant_id", "user_id"),
+        # La FK de `tenant_id` que creó la migración 0037; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada del segundo factor al eliminar un tenant.
+        # A nivel de tabla y no en la columna: el `index=True` del mixin es otro
+        # asunto y se resuelve en el `tenant_id` de abajo, así que mezclar las dos
+        # cosas en un solo `mapped_column` haría que ninguna se leyera sola.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_user_mfa_totp_tenant",
+            ondelete="CASCADE",
+        ),
     )
+
+    # `TenantScopedMixin` pone `index=True` en `tenant_id` para todas sus tablas
+    # por igual, y aquí ese índice PLANO no existe en la base de datos ni hace
+    # falta: la migración creó en su lugar DOS objetos cuya columna guía ya es
+    # `tenant_id` —`uq_mfa_totp_tenant_user (tenant_id, user_id)` y su gemelo no
+    # único `ix_mfa_totp_tenant_user`—, ninguno parcial, así que cualquier
+    # búsqueda por `tenant_id` los usa como prefijo. Un tercer índice sobre la
+    # misma columna guía sólo añadiría escritura en cada alta de MFA. Declararlo
+    # dejaba `alembic check` proponiendo CREAR un índice que nadie quiere.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -895,7 +939,28 @@ class WebauthnCredential(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timestamp
         # and prevents the same authenticator registering twice.
         UniqueConstraint("credential_id", name="uq_webauthn_credential_id"),
         Index("ix_webauthn_tenant_user", "tenant_id", "user_id"),
+        # La FK de `tenant_id` que creó la migración 0038; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de las passkeys al eliminar un tenant.
+        # Mismo caso que `user_mfa_totp`: a nivel de tabla, porque el
+        # `index=True` del mixin es otro asunto y lo resuelve el `tenant_id` de
+        # abajo.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_webauthn_credentials_tenant",
+            ondelete="CASCADE",
+        ),
     )
+
+    # Mismo caso que :class:`UserMfaTotp`: el `index=True` que
+    # `TenantScopedMixin` pone en `tenant_id` no existe en la base de datos
+    # porque la migración creó `ix_webauthn_tenant_user (tenant_id, user_id)`,
+    # NO parcial y con `tenant_id` como columna guía, que ya sirve toda lectura
+    # por tenant (y las de esta tabla siempre llegan por `(tenant_id, user_id)`:
+    # el reto MFA parte del usuario que acaba de autenticarse). El índice plano
+    # sería un prefijo redundante.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -1128,6 +1193,17 @@ class IncomingWebhookConfig(
         CheckConstraint(
             "origin IN ('github', 'gitlab', 'jira', 'sentry', 'linear', 'generic')",
             name="ck_incoming_webhook_configs_origin",
+        ),
+        # La FK de `tenant_id` que creó la migración 0055 — la misma que ya
+        # declara `IncomingWebhookEvent` unas líneas más abajo, y por el mismo
+        # motivo: `TenantScopedMixin` no declara ninguna, así que sin esto un
+        # autogenerate propone BORRARLA y con ella el borrado en cascada de las
+        # configuraciones (y de sus secretos Fernet) al eliminar un tenant.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_incoming_webhook_configs_tenant",
+            ondelete="CASCADE",
         ),
     )
 

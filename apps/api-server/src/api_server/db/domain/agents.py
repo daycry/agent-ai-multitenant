@@ -16,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     PrimaryKeyConstraint,
@@ -411,6 +412,14 @@ class AgentPromptVersion(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
         # (`ORDER BY version DESC LIMIT 1`) como recorrido hacia atrás, sin Sort.
         UniqueConstraint("agent_id", "version", name="uq_agent_prompt_versions_agent_version"),
         CheckConstraint("version >= 1", name="ck_agent_prompt_versions_version_positive"),
+        # La FK de `tenant_id` que creó la migración 0143; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada del historial al eliminar un tenant.
+        # SIN `name=` a propósito: la 0143 la creó sin nombrarla dentro del
+        # `create_table`, así que la lleva el default de PostgreSQL
+        # (`agent_prompt_versions_tenant_id_fkey`). El modelo mira lo que hizo la
+        # migración; escribir aquí ese nombre sería copiar a mano un default.
+        ForeignKeyConstraint(["tenant_id"], ["organizations.id"], ondelete="CASCADE"),
     )
 
     agent_id: Mapped[UUID] = mapped_column(

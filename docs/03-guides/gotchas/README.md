@@ -110,6 +110,13 @@ el problema ya esté documentado.
   la BD» son lo mismo, así que un `--autogenerate` con la metadata a medias
   propone `DROP INDEX` sobre el HNSW del RAG — y aplicarlo no da error: la
   búsqueda pasa a secuencial en silencio.
+- [postgres-unique-igual-a-la-pk-se-descarta-en-silencio.md](./postgres-unique-igual-a-la-pk-se-descarta-en-silencio.md)
+  — un `UniqueConstraint` con las MISMAS columnas que la PRIMARY KEY no se crea:
+  PostgreSQL lo descarta dentro del `CREATE TABLE`, sin error ni `NOTICE`, aunque
+  el DDL que Alembic emite lo incluya. El objeto nunca existió, así que
+  `alembic check` propone crearlo para siempre y la migración «obvia» añade un
+  índice único redundante. `pg_constraint` es la autoridad, no el fichero de
+  migración.
 - [alembic-revision-id-32-chars.md](./alembic-revision-id-32-chars.md)
   — `alembic_version.version_num` es `varchar(32)`: un revision id > 32
   chars revienta con `StringDataRightTruncationError`.

@@ -14,12 +14,12 @@ from uuid import UUID
 from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     PrimaryKeyConstraint,
     String,
     Text,
-    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
@@ -48,6 +48,24 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
             "status",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # La FK que la migración 0014 promovió desde la soft-FK de la 0001, una
+        # vez existían las dos tablas. Sin declararla aquí, un autogenerate
+        # propone BORRARLA, y con ella el `SET NULL` que deja el plan huérfano en
+        # vez de bloquear el borrado de la conversación.
+        #
+        # `use_alter=True` porque ésta y `conversations.related_plan_id` se
+        # apuntan mutuamente: es el ciclo que la 0014 resolvió creando ambas con
+        # `op.create_foreign_key` DESPUÉS de los dos `create_table`, y es lo que
+        # aquí le dice a SQLAlchemy que puede romperlo al ordenar las tablas. Sin
+        # él, `Base.metadata.sorted_tables` avisa de un ciclo irresoluble («this
+        # warning may raise an error in a future release») y descarta las dos FK.
+        ForeignKeyConstraint(
+            ["conversation_id"],
+            ["conversations.id"],
+            name="fk_plans_conversation_id",
+            ondelete="SET NULL",
+            use_alter=True,
+        ),
     )
 
     project_id: Mapped[UUID] = mapped_column(
@@ -74,7 +92,9 @@ class Plan(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'draft'"))
 
     # Was a soft-FK in the Plan 01 migration; promoted to a real FK in
-    # migration 0014 once the conversations table existed.
+    # migration 0014 once the conversations table existed. The constraint is
+    # declared at table level in ``__table_args__`` above (it needs
+    # ``use_alter`` for the cycle, which only ForeignKeyConstraint has).
     conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     # The canonical-template specification (Plan 03 §8.5). JSONB so the
@@ -201,7 +221,23 @@ class TaskDependency(Base, TenantScopedMixin):
             "task_id <> depends_on_task_id",
             name="ck_task_dependencies_no_self_loop",
         ),
-        UniqueConstraint("task_id", "depends_on_task_id", name="uq_task_dependencies_pair"),
+        # AQUÍ NO VA un `UniqueConstraint("task_id", "depends_on_task_id")`.
+        #
+        # La unicidad del par ya la garantiza la PK compuesta de arriba, y el
+        # UNIQUE extra que la migración 0002 declaraba (`uq_task_dependencies_pair`)
+        # NUNCA existió en ninguna base de datos: PostgreSQL descarta en silencio,
+        # dentro del mismo `CREATE TABLE`, una constraint UNIQUE cuyas columnas
+        # son exactamente las de la PRIMARY KEY. Verificado en PostgreSQL 16.13 —
+        # el DDL que Alembic emite la incluye y `pg_constraint` sólo devuelve
+        # `pk_task_dependencies`.
+        #
+        # Declararla en el modelo, por tanto, no protegía nada: hacía que
+        # `alembic check` propusiera CREARLA para siempre, y una migración que la
+        # añadiera de verdad (con `CREATE UNIQUE INDEX`, el único camino que
+        # PostgreSQL no deduplica) sería un segundo índice idéntico al de la PK,
+        # todo coste de escritura y cero garantía nueva. El mapa de conflictos ya
+        # nombra a la PK, no al UNIQUE: ver `pk_task_dependencies` en
+        # `routers/_integrity.py` («Esa dependencia entre tareas ya existe»).
     )
 
     task_id: Mapped[UUID] = mapped_column(

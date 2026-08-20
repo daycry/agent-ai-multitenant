@@ -38,7 +38,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -68,7 +75,40 @@ class UserInvitation(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixi
             "email",
             postgresql_where=text("redeemed_at IS NULL AND revoked_at IS NULL"),
         ),
+        # La FK de `tenant_id` que creó la migración 0127; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de las invitaciones al eliminar un
+        # tenant, que es lo que impide que un token emitido siga canjeándose
+        # contra un tenant que ya no existe.
+        #
+        # SIN `name=` a propósito: la 0127 la creó sin nombrarla dentro del
+        # `create_table`, así que la lleva el default de PostgreSQL
+        # (`user_invitations_tenant_id_fkey`). El modelo declara lo que declaró la
+        # migración; escribir aquí ese nombre a mano sería copiar un default.
+        ForeignKeyConstraint(["tenant_id"], ["organizations.id"], ondelete="CASCADE"),
     )
+
+    # `TenantScopedMixin` declara `index=True` en `tenant_id` para todas sus
+    # tablas por igual; aquí ese índice PLANO no existe en la base de datos,
+    # porque la migración 0127 creó en su lugar el parcial de arriba
+    # (`ix_user_invitations_tenant_pending`), cuya columna guía ya es
+    # `tenant_id`.
+    #
+    # A diferencia de `knowledge_bases` y `memory_entries` —donde ninguna
+    # consulta mira fuera del predicado—, aquí SÍ hay una que se queda fuera:
+    # `GET /admin/invitations?tenant_id=…` (`routers/invitations.py`) lista
+    # TAMBIÉN las canjeadas, revocadas y caducadas, para el rastro. Aun así el
+    # índice plano no paga su coste: es una pantalla de administración, la tabla
+    # crece a ritmo de altas de personas (0 filas en el stack de referencia) y
+    # ese listado devuelve el tenant ENTERO ordenado por `created_at DESC`, así
+    # que un índice por `tenant_id` no le ahorraría ni el sort ni la lectura de
+    # casi todas las filas — mientras que sí cobraría escritura en cada emisión,
+    # canje y revocación.
+    #
+    # Si algún día esa tabla crece de verdad, el índice que hace falta NO es el
+    # plano sino `(tenant_id, created_at DESC)`, y eso es una migración, no un
+    # cambio de modelo.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     # Email al que se emitió. El canje EXIGE que coincida con el email que se
     # registra: si no, una invitación filtrada dejaría entrar a cualquiera con
