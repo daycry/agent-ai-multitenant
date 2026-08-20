@@ -85,6 +85,14 @@ jobs:
           # shared-llm is a path dep (ADR 0021); install it first so the
           # api-server editable install resolves the local wheel.
           python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
+          # shared-domain: mismo motivo que en ci.yml (fuente única del
+          # vocabulario canónico, ADR 0048 / Plan 06.18). Aquí hace falta desde
+          # que `api_server.evals.__init__` expone el gate de edición de prompt
+          # (`task_gov_05`), que lee los presets de aprobación y con ellos entra
+          # `shared_domain.approval_categories`. Sin esta línea, `ci_run
+          # --dry-run` muere con `ModuleNotFoundError` ANTES de decidir nada —
+          # que es lo que pasó el 2026-08-20 (run 32320504352).
+          python -m pip install -e "packages/shared-domain[dev]" -c constraints.txt
           python -m pip install -e "apps/api-server[dev]" -c constraints.txt
 
       # Decide once whether the live gate CAN run. Two conditions, not one:
