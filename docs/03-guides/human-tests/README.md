@@ -48,6 +48,16 @@ mirar en la UI, criterios de pass/fail.
 | Plan 15 — Instalador + producción       | 5 (`human_15_01..05`)             | [`15-instalador-produccion.md`](./15-instalador-produccion.md)                 |
 | Plan 16 — Human agents                  | 6 (`human_16_01..06`)             | [`16-human-agents.md`](./16-human-agents.md)                                   |
 | Marketplace v2 — despliegue             | 3 (`human_mkt2_01..03`)           | [`marketplace-v2-despliegue.md`](./marketplace-v2-despliegue.md)               |
+| Córtex F2 — modelo afectivo             | 1 (sin `human_*` declarado)       | [`cortex-f2-afectivo.md`](./cortex-f2-afectivo.md)                             |
+| Córtex F5 — voz y avatar                | 1 (sin `human_*` declarado)       | [`cortex-f5-voz-avatar.md`](./cortex-f5-voz-avatar.md)                         |
+
+> **Las dos guías del córtex no declaran ids `human_*`** porque sus planes
+> tampoco los declaran: F2 y F5 escribieron sus criterios humanos dentro de la
+> casilla de cierre, en prosa. Se documentan igual porque el problema era el
+> contrario al habitual — las casillas decían «bloqueada por un humano» cuando
+> **la mitad de lo que las bloqueaba era ejecutable**, y eso hace creer al
+> operador que le toca a él más trabajo del que le toca. Cada guía separa, con
+> números medidos, lo que ya acredita una máquina de lo que necesita ojos.
 
 > El antiguo `docs/03-guides/run-demo-human-tests.md` acumulaba los
 > Plans 02 / 04 / 04.5 en un único documento. La migración a la

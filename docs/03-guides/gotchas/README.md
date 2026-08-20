@@ -295,6 +295,12 @@ el problema ya esté documentado.
   — `page.route("**/X")` en Playwright 1.60 intercepta también la navegación
   `page.goto(".../X")` (misma cola de path) → la página recibe el JSON del mock
   como documento. Usar predicado por `pathname` exacto, no glob desnudo.
+- [playwright-next-dev-compila-la-ruta-y-agota-el-test.md](./playwright-next-dev-compila-la-ruta-y-agota-el-test.md)
+  — una e2e falla en «Cargando…» y la captura del fallo muestra la página
+  perfecta: `next dev` compila la ruta en la primera petición (27,8 s medidos en
+  una máquina cargada, contra 30 s de presupuesto por test). CI no lo sufre
+  porque sirve un build de producción; la receta está en el gotcha. No se
+  arregla subiendo el timeout.
 
 ### tests (patrones que engañan)
 
