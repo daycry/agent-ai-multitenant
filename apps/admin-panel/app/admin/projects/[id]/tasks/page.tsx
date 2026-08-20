@@ -46,6 +46,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { translate, useT } from "@/lib/i18n";
 import type { Lang, MessageKey } from "@/lib/i18n";
 import { useLangOptional } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface Task {
   id: string;
@@ -133,6 +134,7 @@ function describeTaskMoveError(err: unknown, lang: Lang): string {
 }
 
 export default function ProjectTasksPage() {
+  const errorText = useErrorText();
   const t = useT("projectTasks");
   const tStatus = useT("taskStatus");
   const lang = useLangOptional();
@@ -295,9 +297,7 @@ export default function ProjectTasksPage() {
             </CardHeader>
             <CardContent>
               <p className="text-destructive text-sm" data-testid="tasks-error">
-                {tasksQuery.error instanceof ApiError
-                  ? tasksQuery.error.body
-                  : String(tasksQuery.error)}
+                {errorText(tasksQuery.error)}
               </p>
             </CardContent>
           </Card>
@@ -583,7 +583,9 @@ function TaskCreateDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("projectTasks");
+  const tPriority = useT("taskPriority");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   // null = "sin plan". Otherwise a plan UUID.
@@ -675,10 +677,10 @@ function TaskCreateDialog({
               className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
               data-testid="create-task-priority"
             >
-              <option value="low">{t("priorityLow")}</option>
-              <option value="medium">{t("priorityMedium")}</option>
-              <option value="high">{t("priorityHigh")}</option>
-              <option value="critical">{t("priorityCritical")}</option>
+              <option value="low">{tPriority("low")}</option>
+              <option value="medium">{tPriority("medium")}</option>
+              <option value="high">{tPriority("high")}</option>
+              <option value="critical">{tPriority("critical")}</option>
             </select>
           </div>
 
@@ -687,7 +689,7 @@ function TaskCreateDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="create-task-error"
             >
-              {mutation.error?.message ?? t("createError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

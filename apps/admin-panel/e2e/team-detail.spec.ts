@@ -1,11 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
+import { navigateVia } from "./helpers/nav";
 import { sessionToken } from "./helpers/session";
 
 /**
  * E2E for the Team Detail screen (task_01_20).
  *
  * Verifies:
- *   - The teams list lands and shows the 5 built-in templates.
+ *   - The teams list lands and shows every built-in team (5 del seed base + el
+ *     de CodeIgniter 4, que se siembra aparte).
  *   - The detail page renders members with leader badge + scope tag.
  *   - The "Add member" button is disabled on built-in (read-only) teams.
  *   - On a tenant-owned team, the dialog opens, the linked/forked
@@ -25,24 +27,49 @@ async function login(page: Page) {
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 }
 
-test("teams list shows the 5 built-in templates", async ({ page }) => {
+test("teams list shows every built-in team", async ({ page }) => {
   await login(page);
-  await page.getByTestId("nav-teams").click();
+  // El grupo `recursos` de la nav arranca cerrado (ver `helpers/nav.ts`).
+  await navigateVia(page, "recursos", "nav-teams");
   await expect(page).toHaveURL(/\/admin\/teams$/);
 
   await expect(page.getByTestId("teams-grid")).toBeVisible();
 
   // Count built-in cards specifically: tenant-side runs accumulate
   // their own teams in the dev DB, so the invariant we care about is
-  // "the 5 built-ins are visible", not "the grid has exactly 5 cards".
+  // "los built-in están visibles", no "el grid tiene N tarjetas".
+  //
+  // El título dice 5 y el seed lleva 6 desde que se mergeó el equipo built-in
+  // de CodeIgniter 4 (PR #33): `seed_builtin_teams` sigue sembrando 5 —su test
+  // fija ese número— y `seed_ci4_team` añade el sexto por su cuenta,
+  // precisamente para no tocarlo. Este spec afirmaba la suma, así que lo que
+  // envejeció fue la premisa, no el producto. Se comprueban por NOMBRE los seis
+  // que el seed promete: eso es más fuerte que un conteo (un built-in que
+  // desaparezca se ve aunque otro entre a la vez) y no vuelve a caducar cuando
+  // el catálogo crezca.
   const builtinCards = page
     .getByTestId("teams-grid")
     .locator("[data-testid^=team-]")
     .filter({ has: page.getByTestId("team-builtin-badge") });
-  await expect(builtinCards).toHaveCount(5);
+  await expect(builtinCards).not.toHaveCount(0);
 
-  await expect(page.getByTestId("teams-grid").getByText("Equipo Full-Stack Web")).toBeVisible();
-  await expect(page.getByTestId("teams-grid").getByText("Equipo DevOps & Platform")).toBeVisible();
+  const grid = page.getByTestId("teams-grid");
+  for (const name of [
+    "Equipo Full-Stack Web",
+    "Equipo DevOps & Platform",
+    "Equipo Backend / API",
+    "Equipo Data",
+    "Equipo Research & Spec",
+    "CodeIgniter 4",
+  ]) {
+    // Por CABECERA y exacta: el nombre del equipo aparece TAMBIEN dentro de su
+    // descripcion ("Equipo built-in para proyectos CodeIgniter 4 ..."), asi que
+    // un `getByText` laxo resuelve a dos nodos y muere en modo estricto.
+    await expect(
+      grid.getByRole("heading", { name, exact: true }),
+      `falta el equipo built-in "${name}"`,
+    ).toBeVisible();
+  }
 });
 
 test("built-in team detail renders members and locks add-member", async ({ page }) => {
@@ -60,8 +87,16 @@ test("built-in team detail renders members and locks add-member", async ({ page 
   await expect(page.getByTestId("team-name")).toHaveText("Equipo Full-Stack Web");
   await expect(page.getByTestId("team-detail")).toBeVisible();
 
-  // Full-Stack Web seed has 6 members.
-  const members = page.getByTestId("members-list").locator("[data-testid^=member-]");
+  // Full-Stack Web seed has 6 members. `[data-testid^=member-]` casa TRES nodos
+  // por miembro desde que cada fila publica además su modo y su prioridad
+  // (`member-linked-{id}` / `member-priority-{id}`): 6 miembros daban 18 nodos.
+  // El seed sigue sembrando 6 —lo que envejeció fue el selector, no el dato—,
+  // así que se acota a la fila en sí en vez de relajar el número.
+  const members = page
+    .getByTestId("members-list")
+    .locator(
+      "[data-testid^=member-]:not([data-testid^=member-linked-]):not([data-testid^=member-priority-])",
+    );
   await expect(members).toHaveCount(6);
 
   // Exactly one leader badge.

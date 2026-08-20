@@ -24,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { Agent } from "./agent-detail-types";
 
@@ -38,6 +39,7 @@ export function AgentDeleteDialog({
   onOpenChange: (v: boolean) => void;
   onDeleted: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("agents");
   const [typed, setTyped] = useState("");
   const matches = typed === agent.name;
@@ -98,7 +100,7 @@ export function AgentDeleteDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="delete-agent-error"
             >
-              {mutation.error?.message ?? t("deleteError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

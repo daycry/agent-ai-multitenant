@@ -6173,6 +6173,27 @@ export const dictionary = {
     cancelled: { es: "Cancelada", en: "Cancelled" },
   },
 
+  /**
+   * Catálogo COMPARTIDO de prioridad, hermano de `taskStatus`.
+   *
+   * Nació el 2026-08-20 porque el tablero pintaba `{task.priority}` crudo —
+   * `medium`, `high`— como texto de UI en los dos idiomas, y las dos salidas
+   * fáciles eran peores que ésta: importar `projectTasks.priority*` desde el
+   * tablero mete el vocabulario de una pantalla dentro de otra, y escribir los
+   * cuatro textos otra vez en `board` deja DOS copias del mismo vocabulario. Eso
+   * segundo es la forma exacta del hallazgo g6 de este repo: dos copias que
+   * dejan de coincidir, y nadie se entera hasta que una gatea y la otra no.
+   *
+   * Las claves son los valores del enum del backend, para que el llamante no
+   * tenga que mantener un mapa aparte.
+   */
+  taskPriority: {
+    low: { es: "Baja", en: "Low" },
+    medium: { es: "Media", en: "Medium" },
+    high: { es: "Alta", en: "High" },
+    critical: { es: "Crítica", en: "Critical" },
+  },
+
   /** `projects/[id]/tasks/page.tsx` — el Kanban de tareas del proyecto. */
   projectTasks: {
     // «Tasks» es el rótulo que la UI castellana ya usaba en inglés, igual que
@@ -6224,10 +6245,6 @@ export const dictionary = {
     fieldPlan: { es: "Plan", en: "Plan" },
     planNoneOption: { es: "Sin plan (tarea libre)", en: "No plan (free task)" },
     fieldPriority: { es: "Prioridad", en: "Priority" },
-    priorityLow: { es: "Baja", en: "Low" },
-    priorityMedium: { es: "Media", en: "Medium" },
-    priorityHigh: { es: "Alta", en: "High" },
-    priorityCritical: { es: "Crítica", en: "Critical" },
     createError: { es: "Error al crear la tarea", en: "Could not create the task" },
     cancel: { es: "Cancelar", en: "Cancel" },
     creating: { es: "Creando…", en: "Creating…" },
@@ -6339,6 +6356,224 @@ export const dictionary = {
       en: "For example: “Waiting for the customer API credential.”",
     },
     blockSubmit: { es: "Bloquear", en: "Block" },
+  },
+  /**
+   * `components/shared/state-block.tsx` — el triple estado (cargando / error /
+   * vacío) que montan **21 ficheros** de `app/`.
+   *
+   * Estaba sin migrar y ninguna de las dos guardas lo veía, por dos razones a la
+   * vez: los tres literales eran valores por defecto de props
+   * (`loadingLabel = "Cargando…"`), no atributos JSX, así que `check-i18n` le
+   * contaba CERO; y el guard mira ficheros, no pantallas, así que las 21
+   * pantallas que lo montan —varias de ellas ya «migradas»— tampoco cargaban con
+   * esa deuda. Con el toggle en EN veintiuna pantallas seguían diciendo
+   * «Cargando…».
+   */
+  stateBlock: {
+    loading: { es: "Cargando…", en: "Loading…" },
+    empty: { es: "Sin resultados", en: "No results" },
+    errorTitle: { es: "No se pudo cargar", en: "Could not load" },
+  },
+
+  /**
+   * `components/shared/data-table.tsx` — la fila de «no hay nada» de la tabla
+   * declarativa. Mismo escondite que `stateBlock`: valor por defecto de una
+   * prop, invisible para las dos guardas, y encima sin entrada en la allowlist,
+   * o sea deuda que no figuraba ni como pendiente.
+   */
+  dataTable: {
+    empty: { es: "Sin resultados.", en: "No results." },
+  },
+
+  /**
+   * `components/shared/list-toolbar.tsx` — el buscador de la cabecera de lista.
+   *
+   * Su `searchPlaceholder = "Buscar…"` tampoco lo veía `check-i18n`, y por un
+   * motivo que conviene dejar escrito: el patrón de atributos es
+   * SENSIBLE A LA CAJA, así que `searchPlaceholder="…"` no casa con
+   * `placeholder="…"`. Cualquier prop compuesta (`searchPlaceholder`,
+   * `emptyPlaceholder`, `filterLabel`…) es un punto ciego del detector.
+   */
+  listToolbar: {
+    searchPlaceholder: { es: "Buscar…", en: "Search…" },
+  },
+
+  /**
+   * `components/layout/tenant-picker.tsx` — el selector de tenant de la
+   * cabecera (prod-16 `task_prod16_03`).
+   *
+   * Este namespace es la respuesta a la mitad `tenants` del enunciado de la
+   * casilla, y corrige una nota anterior del plan. El 2026-08-01 se escribió
+   * que «`tenants` NO existe como pantalla … esa casilla del enunciado no tiene
+   * destino»: la primera mitad es cierta (no hay `app/admin/tenants/`), la
+   * segunda no. La gestión de tenants tiene DOS superficies —las memberships,
+   * en el diálogo de `users`, y este picker, que lista los tenants, cambia el
+   * activo y **crea el primero**, que es la única vía de UI para arrancar un
+   * tenant desde cero.
+   *
+   * Y es el caso de libro del aviso que el plan repite: la `ATTR_ALLOWLIST` le
+   * veía **1 atributo**, y lo monta `AdminHeader`, o sea TODAS las pantallas del
+   * System Admin. Su desplegable y su diálogo de alta enteros salían en
+   * castellano dentro de pantallas por lo demás inglesas.
+   */
+  tenantPicker: {
+    allTenants: { es: "Todos los tenants", en: "All tenants" },
+    // «portfolio» es el término con el que el propio código nombra la vista sin
+    // tenant activo (`portfolio view`), y el panel ya lo escribía en inglés.
+    portfolioHint: { es: "(portfolio)", en: "(portfolio)" },
+    empty: {
+      es: "Aún no hay tenants. Crea el primero abajo.",
+      en: "There are no tenants yet. Create the first one below.",
+    },
+    create: { es: "Crear tenant", en: "Create tenant" },
+    createDescription: {
+      es: "Un tenant es el espacio aislado de un equipo o departamento. Tras crearlo quedará seleccionado como tenant activo.",
+      en: "A tenant is the isolated space of a team or a department. Once created it becomes the active tenant.",
+    },
+    nameLabel: { es: "Nombre", en: "Name" },
+    namePlaceholder: { es: "Equipo de Plataforma", en: "Platform team" },
+    // «Slug» es el nombre del campo del backend y lo que el operador teclea.
+    slugLabel: { es: "Slug", en: "Slug" },
+    slugHelp: {
+      es: "Identificador en minúsculas, sólo letras, números y guiones.",
+      en: "Lowercase identifier: letters, numbers and hyphens only.",
+    },
+    slugInvalid: {
+      es: "Formato inválido: empieza por letra/número, sin espacios.",
+      en: "Invalid format: start with a letter or a number, no spaces.",
+    },
+    slugTaken: {
+      es: "Ese slug ya existe, elige otro.",
+      en: "That slug already exists, pick another one.",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    creating: { es: "Creando…", en: "Creating…" },
+  },
+
+  /**
+   * `app/admin/board` — el doble Kanban gerencial (prod-16 `task_prod16_03`).
+   *
+   * La `ATTR_ALLOWLIST` le veía **4 atributos** en 643 líneas y ninguno de los
+   * cuatro era lo que se lee. Las ocho columnas NO viven aquí: salen del
+   * catálogo compartido `taskStatus`, que es el mismo que usa
+   * `projects/[id]/tasks`. El board tenía la tercera copia de esa lista con el
+   * texto dentro; con el texto en un solo sitio, traducir una pantalla ya no
+   * deja la otra a medias.
+   *
+   * Los dos mensajes de arrastre rechazado dicen casi lo mismo que
+   * `projectTasks.moveError*` y **no se comparten a propósito**: los de aquí
+   * nombran la columna de destino («No se puede mover a «Ready»…»), que es
+   * información que el otro no da. Unificarlos significa decidir si el Kanban
+   * del proyecto gana el nombre de la columna, y eso toca un fichero de otro
+   * carril: queda anotado en el plan, no resuelto a medias.
+   */
+  board: {
+    title: { es: "Tablero", en: "Board" },
+    description: {
+      es: "Planes (gerencial) arriba, tareas (operativa) abajo. Arrastra una tarea entre columnas para cambiar su estado.",
+      en: "Plans (management) on top, tasks (operational) below. Drag a task between columns to change its status.",
+    },
+    truncated: {
+      es: "El tablero muestra un máximo de 2000 filas por listado; hay más elementos que no se están mostrando. Usa los filtros por proyecto/estado para acotar.",
+      en: "The board shows at most 2000 rows per listing; there are more items that are not being shown. Use the project/status filters to narrow it down.",
+    },
+    plansHeading: { es: "Planes", en: "Plans" },
+    plansCountOne: { es: "{count} plan", en: "{count} plan" },
+    plansCountMany: { es: "{count} planes", en: "{count} plans" },
+    plansLoading: { es: "Cargando planes…", en: "Loading plans…" },
+    plansError: { es: "No se pudieron cargar los planes:", en: "The plans could not be loaded:" },
+    plansEmpty: {
+      es: "Este tenant aún no tiene planes. Crea un plan desde el chat de planning de un proyecto para empezar.",
+      en: "This tenant has no plans yet. Create one from a project's planning chat to get started.",
+    },
+    unblockPlan: { es: "Desbloquear", en: "Unblock" },
+    // «Tareas» / «Tasks»: aquí es el rótulo de la sección inferior, no el de la
+    // sub-sección del proyecto (que la UI castellana ya escribía en inglés).
+    tasksHeading: { es: "Tareas", en: "Tasks" },
+    tasksCountOne: { es: "{count} tarea", en: "{count} task" },
+    tasksCountMany: { es: "{count} tareas", en: "{count} tasks" },
+    live: { es: "Tiempo real", en: "Live" },
+    noSelection: {
+      es: "Selecciona un plan para ver sus tareas.",
+      en: "Select a plan to see its tasks.",
+    },
+    colLoading: { es: "Cargando…", en: "Loading…" },
+    colEmpty: { es: "Sin tareas", en: "No tasks" },
+    lockedOne: {
+      es: "Bloqueada por 1 dependencia sin completar",
+      en: "Blocked by 1 unfinished dependency",
+    },
+    lockedMany: {
+      es: "Bloqueada por {count} dependencias sin completar",
+      en: "Blocked by {count} unfinished dependencies",
+    },
+    lockedAria: { es: "Bloqueada por dependencias", en: "Blocked by dependencies" },
+    unlocked: { es: "Todas las dependencias completadas", en: "All dependencies completed" },
+    unlockedAria: { es: "Dependencias completadas", en: "Dependencies completed" },
+    moveDepsOne: {
+      es: "No se puede mover a «{status}»: 1 dependencia sin completar.",
+      en: "Cannot move it to “{status}”: 1 dependency is not done.",
+    },
+    moveDepsMany: {
+      es: "No se puede mover a «{status}»: {count} dependencias sin completar.",
+      en: "Cannot move it to “{status}”: {count} dependencies are not done.",
+    },
+    moveIllegal: {
+      es: "Movimiento no permitido a «{status}»: no es una transición válida desde el estado actual de la tarea.",
+      en: "Move to “{status}” is not allowed: it is not a valid transition from the task's current state.",
+    },
+  },
+
+  /**
+   * `app/admin/plans/[id]/escalated` — el panel de tareas escaladas de un plan
+   * (prod-16 `task_prod16_03`).
+   *
+   * La `ATTR_ALLOWLIST` le veía **2 atributos** en 346 líneas. Las cinco
+   * acciones humanas de cada fila ya eran bilingües (`taskActions`, migrado con
+   * el lote de `tasks/*`): lo que faltaba era el marco que las rodea, o sea la
+   * pantalla entera menos los botones.
+   *
+   * **`title` lleva «del plan» y `breadcrumbCurrent` no**, igual que en
+   * `plansList`, `projectTasks`, `projectKbs`, `mcpServers` e
+   * `incomingWebhooks`: la miga de pan nombra la pantalla en corto y el `h1` la
+   * nombra con su ámbito. Aquí no es sólo estilo — el borrador de este
+   * namespace daba el MISMO texto a las dos, y la pantalla pinta las dos a la
+   * vez, así que «Tareas escaladas» salía dos veces y no había forma de
+   * referirse a una sola (`getByText` encuentra dos elementos). El ámbito es el
+   * PLAN y no el proyecto porque la miga de pan de encima ya lleva su título.
+   */
+  escalatedTasks: {
+    breadcrumbProject: { es: "Proyecto", en: "Project" },
+    breadcrumbCurrent: { es: "Tareas escaladas", en: "Escalated tasks" },
+    title: { es: "Tareas escaladas del plan", en: "Escalated tasks of the plan" },
+    description: {
+      es: "Tareas del plan que llegaron al límite de reintentos del revisor automático y esperan decisión humana.",
+      en: "Tasks of this plan that reached the automatic reviewer's retry limit and are waiting for a human decision.",
+    },
+    unblockPlan: { es: "Desbloquear plan", en: "Unblock plan" },
+    addFreeTask: { es: "Añadir tarea libre", en: "Add a free task" },
+    loading: { es: "Cargando tareas escaladas…", en: "Loading escalated tasks…" },
+    empty: {
+      es: "Sin tareas escaladas en este plan.",
+      en: "No escalated tasks in this plan.",
+    },
+    retriesOne: { es: "{count} reintento", en: "{count} retry" },
+    retriesMany: { es: "{count} reintentos", en: "{count} retries" },
+    historyOne: { es: "Ver historial ({count} evento)", en: "View history ({count} event)" },
+    historyMany: { es: "Ver historial ({count} eventos)", en: "View history ({count} events)" },
+    dialogTitle: {
+      es: "Añadir tarea libre al plan",
+      en: "Add a free task to the plan",
+    },
+    dialogDescription: {
+      es: "Crea una tarea plan-scoped que no esté atada a ningún checkbox de la spec. Útil cuando el humano detecta trabajo nuevo durante la validación del plan.",
+      en: "Creates a plan-scoped task that is not tied to any checkbox of the spec. Useful when a human spots new work during the plan's validation.",
+    },
+    fieldTitle: { es: "Título", en: "Title" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    creating: { es: "Creando…", en: "Creating…" },
+    submit: { es: "Añadir tarea", en: "Add task" },
   },
 } as const satisfies Dictionary;
 

@@ -34,11 +34,12 @@ import { Input } from "@/components/ui/input";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { cleanCriteria, criterionText, type CriterionDraft } from "@/lib/acceptance-criteria";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { fetchAllPages } from "@/lib/paginate";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
+import { useErrorText } from "@/lib/use-error-text";
 
 const PLAN_TASK_SPEC_ID_KEY = "plan_task_spec_id";
 
@@ -290,6 +291,7 @@ function CriteriaSection({
   taskId: string;
   criteria: unknown[];
 }) {
+  const errorText = useErrorText();
   const t = useT("taskDetail");
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -391,10 +393,7 @@ function CriteriaSection({
         )}
         {generateMutation.isError ? (
           <p className="text-destructive mt-1 text-sm" data-testid="task-criteria-generate-error">
-            {t("criteriaGenerateError")}{" "}
-            {generateMutation.error instanceof ApiError
-              ? generateMutation.error.body
-              : String(generateMutation.error)}
+            {t("criteriaGenerateError")} {errorText(generateMutation.error)}
           </p>
         ) : null}
         <CriteriaCompareDialog
@@ -474,8 +473,7 @@ function CriteriaSection({
       </div>
       {mutation.isError ? (
         <p className="text-destructive mt-1 text-sm">
-          {t("criteriaSaveError")}{" "}
-          {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+          {t("criteriaSaveError")} {errorText(mutation.error)}
         </p>
       ) : null}
     </section>
@@ -555,6 +553,7 @@ function CriteriaCompareDialog({
 }
 
 function TaskComments({ planId, specId }: { planId: string; specId: string }) {
+  const errorText = useErrorText();
   const t = useT("taskDetail");
   const queryClient = useQueryClient();
   const [content, setContent] = useState("");
@@ -592,10 +591,7 @@ function TaskComments({ planId, specId }: { planId: string; specId: string }) {
       </h4>
       {commentsQuery.isError ? (
         <p className="text-destructive text-sm">
-          {t("commentsLoadError")}{" "}
-          {commentsQuery.error instanceof ApiError
-            ? commentsQuery.error.body
-            : String(commentsQuery.error)}
+          {t("commentsLoadError")} {errorText(commentsQuery.error)}
         </p>
       ) : null}
       <ul className="mb-3 space-y-2" data-testid="task-comments-list">

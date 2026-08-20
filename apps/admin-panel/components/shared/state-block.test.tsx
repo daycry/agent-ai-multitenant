@@ -15,6 +15,7 @@ import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { StateBlock } from "@/components/shared/state-block";
+import { ApiError } from "@/lib/api";
 
 afterEach(cleanup);
 
@@ -110,18 +111,40 @@ describe("StateBlock — el estado de carga se anuncia a un lector de pantalla",
 });
 
 describe("StateBlock — el error dice QUÉ pasó", () => {
-  it("prefiere el `body` de un ApiError sobre el message genérico", () => {
-    // ApiError.message es "api 404: <body>"; el body es el texto útil.
-    const apiError = { body: "plan no encontrado", message: "api 404: plan no encontrado" };
+  /**
+   * Estas tres aserciones cambiaron el 2026-08-20 (prod-16, `task_prod16_05`), y
+   * conviene decir por qué: las dos primeras **fijaban el defecto**.
+   *
+   * Afirmaban que `StateBlock` «prefiere el `body` de un ApiError», es decir, que
+   * pinta el cuerpo crudo de la respuesta. El enunciado del describe —«el error
+   * dice QUÉ pasó»— es correcto y se mantiene; lo que estaba mal era el medio.
+   * `StateBlock` tenía su propia copia del helper que `task_prod16_05` retiró de
+   * otros dieciséis sitios, y siendo el componente que montan 21 pantallas, era
+   * la copia con más alcance del panel: un 502 de nginx enseñaba HTML y un 500
+   * podía enseñar un traceback.
+   *
+   * Ahora el cuerpo se LEE (se le extrae el `detail`) y nunca se muestra tal
+   * cual. Lo cubre `components/shared/i18n.test.tsx`, incluido el caso del HTML
+   * de nginx y el de `ApiError.message`, que es el cuerpo crudo con prefijo.
+   */
+  it("enseña el `detail` legible de un ApiError, no su cuerpo crudo", () => {
     render(
-      <StateBlock isError error={apiError} errorTestId="e">
+      <StateBlock
+        isError
+        error={new ApiError(404, JSON.stringify({ detail: "plan no encontrado" }))}
+        errorTestId="e"
+      >
         {children()}
       </StateBlock>,
     );
-    expect(screen.getByTestId("e").textContent).toContain("plan no encontrado");
+    const text = screen.getByTestId("e").textContent ?? "";
+    expect(text).toContain("plan no encontrado");
+    // Y el JSON de alrededor NO sale: es la mitad que antes se colaba.
+    expect(text).not.toContain("detail");
+    expect(text).not.toContain("{");
   });
 
-  it("cae al message cuando no hay body", () => {
+  it("cae al message cuando el error no es de API", () => {
     render(
       <StateBlock isError error={new Error("network down")} errorTestId="e">
         {children()}
@@ -136,7 +159,7 @@ describe("StateBlock — el error dice QUÉ pasó", () => {
         {children()}
       </StateBlock>,
     );
-    expect(screen.getByTestId("e").textContent).toContain("Error desconocido");
+    expect(screen.getByTestId("e").textContent).toContain("Ha ocurrido un error inesperado");
   });
 
   it("el bloque de error es un role=alert (se anuncia solo)", () => {

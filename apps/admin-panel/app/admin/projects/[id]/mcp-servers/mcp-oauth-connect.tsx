@@ -32,8 +32,9 @@ import { KeyRound, Link2, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 export interface OAuthStatus {
   connected: boolean;
@@ -65,6 +66,7 @@ export function McpOAuthConnect({
   providerLabel?: string;
   onAuthorize?: (url: string) => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("mcpServers");
 
   const statusQuery = useQuery({
@@ -154,9 +156,7 @@ export function McpOAuthConnect({
           className="text-destructive mt-2 whitespace-pre-wrap text-xs"
           data-testid={`mcp-oauth-connect-error-${serverName}`}
         >
-          {connectMutation.error instanceof ApiError
-            ? connectMutation.error.body
-            : String(connectMutation.error)}
+          {errorText(connectMutation.error)}
         </p>
       ) : statusUnavailable && !statusQuery.isLoading ? (
         <p

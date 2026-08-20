@@ -1,3 +1,5 @@
+"use client";
+
 import * as React from "react";
 
 import {
@@ -8,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -26,9 +29,9 @@ import { cn } from "@/lib/utils";
  *     rowProps={(r) => ({ "data-runtime": r.id })}
  *     columns={[
  *       { key: "name", header: "Runtime", cell: (r) => r.label },
- *       { key: "actions", header: "Acciones", cell: (r) => <Button…/> },
+ *       { key: "actions", header: t("colActions"), cell: (r) => <Button…/> },
  *     ]}
- *     emptyMessage="No hay runtimes."
+ *     emptyMessage={t("noRuntimes")}
  *   />
  */
 export interface DataTableColumn<T> {
@@ -54,7 +57,12 @@ interface DataTableProps<T> extends React.TableHTMLAttributes<HTMLTableElement> 
     row: T,
     index: number,
   ) => React.HTMLAttributes<HTMLTableRowElement> & Record<`data-${string}`, string | undefined>;
-  /** Shown as a single full-width row when `data` is empty. */
+  /**
+   * Shown as a single full-width row when `data` is empty. Defaults to the
+   * translated `dataTable.empty` — it used to default to a hard-wired Spanish
+   * string, which no i18n guard could see because a prop default is not a JSX
+   * attribute.
+   */
   emptyMessage?: React.ReactNode;
   /** Class for the wrapper scroll container (forwarded to Table). */
   wrapperClassName?: string;
@@ -65,11 +73,16 @@ export function DataTable<T>({
   columns,
   getRowKey,
   rowProps,
-  emptyMessage = "Sin resultados.",
+  emptyMessage,
   className,
   wrapperClassName,
   ...tableProps
 }: DataTableProps<T>) {
+  const t = useT("dataTable");
+  // `=== undefined` y no `??`: es lo que hacía el default de la prop, y un
+  // llamante puede querer una fila vacía SIN texto.
+  const empty = emptyMessage === undefined ? t("empty") : emptyMessage;
+
   return (
     <Table className={className} wrapperClassName={wrapperClassName} {...tableProps}>
       <TableHeader>
@@ -88,7 +101,7 @@ export function DataTable<T>({
               colSpan={columns.length}
               className="text-muted-foreground py-6 text-center text-sm"
             >
-              {emptyMessage}
+              {empty}
             </TableCell>
           </TableRow>
         ) : (

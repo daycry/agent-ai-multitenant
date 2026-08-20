@@ -426,12 +426,32 @@ export function looksSpanish(value) {
  *     ya «migradas»: su barra de pestañas salía en castellano dentro de diálogos
  *     por lo demás ingleses. El mapa mira FICHEROS, no PANTALLAS, así que esa
  *     deuda no se la cargaba ninguna de las 22.
+ *
+ * **2026-08-20, `app/admin/board`** — el tablero sale de este mapa Y del de
+ * texto JSX: era la mitad de la deuda que la pasada anterior dejó anotada dos
+ * párrafos más arriba (queda `plans/[id]/escalated`, que es la otra mitad). Y es
+ * la SEXTA demostración del mismo aviso, en la forma más barata de todas: este
+ * mapa le veía **4 atributos** en 677 líneas, y lo que se lee de esa pantalla
+ * —la cabecera, las dos secciones, las ocho columnas, los cuatro estados vacíos,
+ * el aviso de truncado, «Desbloquear» y los dos motivos de arrastre revertido—
+ * no era ninguno de los cuatro. Los dos motivos de arrastre vivían además en
+ * `describeMoveError`, una función PURA del propio fichero: mismo caso que
+ * `lib/assistant.ts`, pero sin salir del `.tsx`.
+ *
+ * **2026-08-20, `plans/[id]/escalated`** — la otra mitad que el párrafo de
+ * arriba dejaba pendiente sale también de los DOS mapas, y con ella se cierra el
+ * lote que empezó el tablero. Este mapa le veía **2 atributos** —el `title=` y
+ * el `description=` de su cabecera— en 346 líneas; el resto de lo que se lee
+ * (los dos botones de acción, los tres estados de la lista, el contador de
+ * reintentos, el desplegable del historial y el diálogo de «tarea libre»
+ * completo) no era ninguno de los dos. Es la pantalla donde más caro sale el
+ * hueco: quien la abre está decidiendo sobre trabajo que el revisor automático
+ * rechazó tres veces.
  */
 const ATTR_ALLOWLIST = {
   "app/admin/agents/[id]/agent-kbs-section.tsx": 1,
   "app/admin/approval-policy/page.tsx": 2,
   "app/admin/approvals/page.tsx": 3,
-  "app/admin/board/page.tsx": 4,
   // El córtex baja de 20 a 9 al cerrarse las dos casillas de UI (F2 «MindPanel»
   // y F3.6 «IdentityCard»): el Panel de Mente (`mind/page.tsx` 3 +
   // `mind/affect-panel.tsx` 1) y la identidad (`identity/page.tsx` 7) están a
@@ -450,7 +470,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/inbox/page.tsx": 2,
   "app/admin/inbox/submit-dialog.tsx": 3,
   "app/admin/office/page.tsx": 6,
-  "app/admin/plans/[id]/escalated/page.tsx": 2,
   "app/developers/api-reference/page.tsx": 3,
   "app/developers/sdks/page.tsx": 1,
   "app/developers/tutorials/page.tsx": 3,
@@ -459,9 +478,175 @@ const ATTR_ALLOWLIST = {
   "components/evals/launch-eval-run.tsx": 1,
   "components/executions/execution-guidance.tsx": 1,
   "components/executions/replay-bar.tsx": 2,
-  "components/layout/tenant-picker.tsx": 1,
-  "components/shared/form-section.tsx": 4,
-  "components/shared/list-toolbar.tsx": 1,
+};
+
+/**
+ * Tercer trinquete: **texto JSX suelto** entre dos etiquetas (2026-08-20).
+ *
+ * ## Por qué hacía falta un tercero
+ *
+ * Los dos de arriba miran ATRIBUTOS y TERNARIOS. La deuda que se encontró a mano
+ * siete veces en la semana del 2026-08-20 no vivía en ninguno de los dos: vivía
+ * en el texto que hay ENTRE etiquetas, que es el que más lee el usuario.
+ * `components/login/mfa-challenge.tsx` estaba entero en castellano cableado —la
+ * ayuda, la etiqueta, el botón «Verificar» y los tres errores— y las dos guardas
+ * decían CERO. Con el toggle en EN, quien tiene TOTP activado leía castellano en
+ * el paso del segundo factor.
+ *
+ * ## El criterio que lo hace fiable: se juzga una POSICIÓN RENDERIZADA
+ *
+ * Lo que da confianza a esta señal no es la lista de palabras (es la misma
+ * `looksSpanish` de los atributos, con sus mismos filtros) sino DÓNDE mira. El
+ * texto entre dos etiquetas se renderiza por construcción, igual que el valor de
+ * un `placeholder`: juzgar su idioma siempre significa algo.
+ *
+ * Ése es el criterio para quien venga a ampliar esto: **ampliar por posiciones
+ * que se renderizan, no por formas sintácticas que a veces se renderizan.** Se
+ * midió la alternativa —marcar CUALQUIER literal de cadena que parezca
+ * castellano— y da 370 aciertos en 60 ficheros con dos familias de falso
+ * positivo que la descalifican:
+ *
+ *   1. **Valores internos del dominio**: `type CapabilityLevel = "rol" | "stack"
+ *      | "plataforma" | "equipo"`. «equipo» no es copy, es un valor.
+ *   2. **El par bilingüe `{ es, en }`** que consume `pickLang` — o sea, LA
+ *      SOLUCIÓN. `lib/cortex-curiosity.ts` está bien traducido y el detector
+ *      amplio le marcaba cuatro cadenas. Un guard que castiga el arreglo se
+ *      desactiva el primer día, y entonces no mide nada.
+ *
+ * Por eso este detector mira sólo `.tsx` (en un `.ts` no hay JSX) y sólo el
+ * hueco entre etiquetas.
+ *
+ * ## Los filtros, y por qué cada uno existe
+ *
+ * - **Los comentarios se quitan antes de mirar.** Es el riesgo nº1 en este
+ *   repositorio: el código está comentado EN CASTELLANO y un comentario que
+ *   mencione `<Input>` y `<Field>` casaría con el patrón. Sin esto la guarda
+ *   sería inservible aquí.
+ * - **`{…}` no es texto.** Lo que va entre llaves es una expresión: un valor, o
+ *   una llamada a `t(...)` que YA está traducida.
+ * - **El `>` de apertura y el `<` de cierre van anclados** a lo que cierra y
+ *   abre una etiqueta. Es lo que distingue `<p>Hola</p>` de `a > b && c < d` y
+ *   de `Record<string, X> | Map<string, Y>`; y como `=>` deja el `>` precedido
+ *   de `=`, borra de golpe las funciones flecha.
+ *
+ * El `<` de cierre se comprueba con un **lookahead**, no consumiéndolo, y esto
+ * no es un detalle de estilo: consumirlo se come la etiqueta que abre el
+ * siguiente texto. Con `<div>\n  <p>Hola</p>`, la primera coincidencia es el
+ * hueco en blanco entre `<div>` y `<p>` —que se descarta al quedar vacío— y si
+ * esa coincidencia se hubiera comido el `<p`, «Hola» ya no tendría delante una
+ * etiqueta que abrir y el fichero saldría a CERO. Se vio en el primer rojo de
+ * este detector: el fixture de `mfa-challenge` daba 0 y sólo veía «Verificar»,
+ * el único texto cuya etiqueta no iba precedida de un salto de línea.
+ *
+ * Y **la comilla recta corta el texto**, que es el único falso positivo que dio
+ * esta señal al medirla contra el árbol entero. `app/developers/webhooks/page.tsx`
+ * tiene filas de datos como `["github", "X-Hub-Signature-256: sha256=<hex>", …]`:
+ * ese `<hex>` DENTRO de una cadena parece una etiqueta, así que la coincidencia
+ * saltaba de una fila a la siguiente y se tragaba el array. Eran 5 aciertos, los
+ * 5 del mismo defecto, y ninguno de los 202 restantes lleva una comilla recta
+ * dentro —la prosa del panel usa « »—, así que el filtro no cuesta un solo
+ * acierto verdadero.
+ */
+const JSX_TEXT_PATTERN = /[A-Za-z0-9_"'}/\]]>([^<>{}"]+)(?=<[A-Za-z/])/g;
+
+/**
+ * Muestra de control del detector de texto JSX, con el mismo papel que
+ * `PATTERN_PROBE`: si el patrón deja de reconocer su propio ejemplo, la guarda
+ * falla en vez de pasar en vacío.
+ */
+const JSX_PROBE = "<p>Cargando la ejecución…</p>";
+
+/** Quita comentarios de bloque y de línea sin tocar los `//` de una URL ni los de dentro de una cadena. */
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .map((line) => {
+      let quote = null;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (quote) {
+          if (char === "\\") i += 1;
+          else if (char === quote) quote = null;
+          continue;
+        }
+        if (char === '"' || char === "'" || char === "`") quote = char;
+        else if (char === "/" && line[i + 1] === "/" && line[i - 1] !== ":") {
+          return line.slice(0, i);
+        }
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+/**
+ * Deuda de texto JSX medida el 2026-08-20 con `--print-current`. **Sólo puede
+ * MENGUAR**, igual que las otras dos.
+ *
+ * Son 85 textos en 30 ficheros, y merece la pena leer QUÉ son: los seis estados
+ * de carga y error de cada panel del córtex, las cabeceras de tabla de
+ * `human-agents` y `eval-quality`, los vacíos de `inbox`, y las cuatro frases
+ * partidas de `developers/*` (una oración castellana cortada por `<code>`, que
+ * el detector ve como fragmentos: `. Un`, `; sobre presupuesto →`). Ninguno de
+ * los 85 lo veía ninguna de las dos guardas anteriores.
+ *
+ * Los ficheros que NO están aquí están a cero y el trinquete los mantiene ahí —
+ * incluidos los tres de `components/login/` que motivaron el detector.
+ *
+ * **2026-08-20** — `app/admin/board/page.tsx` sale del mapa (eran 6, y son la
+ * cabecera de las dos secciones, «Tiempo real», el estado vacío de columna y los
+ * dos estados vacíos del tablero). Es la pantalla donde mejor se ve por qué hizo
+ * falta ESTE detector y no bastaba el de atributos: de los diez textos que se
+ * leen ahí, el de atributos veía cuatro.
+ *
+ * **2026-08-20** — `app/admin/plans/[id]/escalated/page.tsx` sale del mapa
+ * (eran 8: el botón de tarea libre, el estado de carga, el vacío y los cinco
+ * textos del diálogo). Repite la lección del tablero y añade una propia: de esos
+ * ocho **ninguno** era el contador de reintentos («3 reintentos») ni el
+ * desplegable del historial («Ver historial (1 eventos)»), porque los dos parten
+ * la frase con `{…}` y el patrón exige un tramo de texto sin llaves. Cero en
+ * este mapa no es cero deuda: es cero de la forma que este detector sabe ver.
+ */
+const JSX_ALLOWLIST = {
+  "app/admin/agents/[id]/agent-kbs-section.tsx": 5,
+  "app/admin/agents/[id]/agent-skills-section.tsx": 2,
+  "app/admin/approval-policy/page.tsx": 9,
+  "app/admin/approvals/page.tsx": 1,
+  "app/admin/approvals/prior-approvals-notice.tsx": 1,
+  "app/admin/assistant/settings/page.tsx": 1,
+  "app/admin/cortex/mind/autonomy-panel.tsx": 5,
+  "app/admin/cortex/mind/browse-inbox-panel.tsx": 6,
+  "app/admin/cortex/mind/journal-panel.tsx": 4,
+  "app/admin/cortex/page.tsx": 4,
+  "app/admin/documents/[id]/citations/page.tsx": 1,
+  "app/admin/documents/page.tsx": 1,
+  "app/admin/eval-quality/page.tsx": 10,
+  "app/admin/executions/[id]/page.tsx": 4,
+  "app/admin/human-agents/human-agent-form-dialog.tsx": 13,
+  "app/admin/human-agents/page.tsx": 6,
+  "app/admin/human-queue/page.tsx": 3,
+  "app/admin/inbox/history-tab.tsx": 6,
+  "app/admin/inbox/justify-dialog.tsx": 1,
+  "app/admin/inbox/page.tsx": 4,
+  "app/admin/inbox/submit-dialog.tsx": 8,
+  "app/admin/leaderboard/page.tsx": 5,
+  "app/admin/model-prices/price-history-dialog.tsx": 2,
+  "app/admin/office/page.tsx": 7,
+  "app/admin/review/[id]/page.tsx": 1,
+  "app/admin/review/active/page.tsx": 7,
+  "app/developers/api-reference/page.tsx": 9,
+  "app/developers/layout.tsx": 1,
+  "app/developers/page.tsx": 7,
+  "app/developers/sdks/page.tsx": 13,
+  "app/developers/tutorials/page.tsx": 6,
+  "app/developers/webhooks/page.tsx": 2,
+  "components/evals/eval-run-results.tsx": 2,
+  "components/evals/launch-eval-run.tsx": 10,
+  "components/evals/promote-to-dataset.tsx": 5,
+  "components/executions/execution-guidance.tsx": 4,
+  "components/layout/error-boundary.tsx": 1,
+  "lib/plan-gantt.tsx": 2,
 };
 
 /** Mínimo de ficheros que el recorrido DEBE ver para creerse a sí mismo. */
@@ -482,7 +667,8 @@ function parseArgs(argv) {
 }
 
 /**
- * La deuda medida: `[ternarios, atributos]`, cada uno `Map<fichero, nº>`.
+ * La deuda medida: `[ternarios, atributos, textoJSX]`, cada uno
+ * `Map<fichero, nº>`.
  *
  * Una sola función para los dos consumidores —la comprobación y
  * `--print-current`— porque si midieran distinto, re-basar el trinquete lo
@@ -491,15 +677,29 @@ function parseArgs(argv) {
 function measure(files, root) {
   const counts = new Map();
   const attrCounts = new Map();
+  const jsxCounts = new Map();
   for (const rel of files) {
     if (EXEMPT_PREFIXES.some((prefix) => rel.startsWith(prefix))) continue;
     const source = readFileSync(join(root, rel), "utf8");
 
-    const hits = (source.match(PATTERN) ?? []).length;
+    // `stripComments` a proposito, igual que el detector de texto JSX de abajo:
+    // un comentario que CITE `lang === "es"` para explicar por que no debe
+    // usarse es documentacion, no deuda. El caso que lo destapo (2026-08-20) es
+    // el mas claro posible: el docstring de `components/shared/i18n.test.tsx`
+    // decia «no hay ni un `lang === "es"`»… y la guarda lo contaba como uno.
+    // Un falso positivo en un trinquete que ya esta a cero es peor que en
+    // cualquier otro sitio: rompe el build por un texto que dice la verdad, y
+    // el arreglo intuitivo es meter el fichero en la allowlist — o sea, abrir
+    // la puerta que este contador acaba de cerrar.
+    // Los tests llevan castellano en sus fixtures a propósito: no es UI. Va
+    // ANTES de los tres contadores, no en medio: un test de i18n compara las dos
+    // caras y puede nombrar el patrón en un fixture, así que la asimetría que
+    // había —los atributos se saltaban y los ternarios no— era un descuido.
+    if (/\.test\.tsx?$/.test(rel)) continue;
+
+    const hits = (stripComments(source).match(PATTERN) ?? []).length;
     if (hits > 0) counts.set(rel, hits);
 
-    // Los tests llevan castellano en sus fixtures a propósito: no es UI.
-    if (/\.test\.tsx?$/.test(rel)) continue;
     // Se juzga el VALOR del atributo, no la línea: `looksSpanish` necesita ver
     // el texto suelto para contar palabras sin que el nombre del atributo ni el
     // JSX de alrededor le sumen coincidencias.
@@ -508,8 +708,22 @@ function measure(files, root) {
       if (looksSpanish(match[1])) attrHits += 1;
     }
     if (attrHits > 0) attrCounts.set(rel, attrHits);
+
+    // Texto JSX: sólo `.tsx` (en un `.ts` no hay JSX, y mirar ahí sólo añadiría
+    // comparaciones `a > b && c < d` como falsos positivos) y sin comentarios,
+    // que en este repo están en castellano.
+    if (!rel.endsWith(".tsx")) continue;
+    let jsxHits = 0;
+    for (const match of stripComments(source).matchAll(JSX_TEXT_PATTERN)) {
+      // El hueco entre dos etiquetas (`<div>\n  <p>`) casa y es sólo blancos:
+      // no es texto. Y el texto que prettier ha partido en varias líneas se
+      // normaliza para poder juzgarlo como la frase que el usuario lee.
+      const text = match[1].replace(/\s+/g, " ").trim();
+      if (text && looksSpanish(text)) jsxHits += 1;
+    }
+    if (jsxHits > 0) jsxCounts.set(rel, jsxHits);
   }
-  return [counts, attrCounts];
+  return [counts, attrCounts, jsxCounts];
 }
 
 /** Rutas relativas (con `/`) de todos los .ts/.tsx bajo `root`. */
@@ -547,7 +761,9 @@ function main() {
   // 2026-08-01, cuando `llm-providers` se partió de verdad. Leerlo de aquí hace
   // que el test siga a la deuda en vez de a un nombre.
   if (printAllowlist) {
-    process.stdout.write(JSON.stringify({ ternaries: ALLOWLIST, attrs: ATTR_ALLOWLIST }));
+    process.stdout.write(
+      JSON.stringify({ ternaries: ALLOWLIST, attrs: ATTR_ALLOWLIST, jsx: JSX_ALLOWLIST }),
+    );
     return;
   }
 
@@ -557,11 +773,12 @@ function main() {
   // entradas a mano, que es como se acaba aflojando una allowlist por cansancio.
   // NO relaja nada: la allowlist sigue siendo la que manda al comprobar.
   if (printCurrent) {
-    const [ternaries, attrs] = measure(collectFiles(root), root);
+    const [ternaries, attrs, jsx] = measure(collectFiles(root), root);
     process.stdout.write(
       JSON.stringify({
         ternaries: Object.fromEntries([...ternaries].sort()),
         attrs: Object.fromEntries([...attrs].sort()),
+        jsx: Object.fromEntries([...jsx].sort()),
       }),
     );
     return;
@@ -570,7 +787,7 @@ function main() {
   const files = collectFiles(root);
   const isFixture = root !== APP_ROOT;
 
-  const [counts, attrCounts] = measure(files, root);
+  const [counts, attrCounts, jsxCounts] = measure(files, root);
 
   const errors = [];
   const notes = [];
@@ -603,6 +820,21 @@ function main() {
     }
   }
 
+  for (const [rel, hits] of jsxCounts) {
+    const allowed = strict ? 0 : (JSX_ALLOWLIST[rel] ?? 0);
+    if (hits > allowed) {
+      errors.push(
+        allowed === 0
+          ? `${rel}: ${hits} texto(s) JSX con castellano fijo entre etiquetas. Usa useT() de @/lib/i18n.`
+          : `${rel}: ${hits} texto(s) JSX en castellano, la allowlist permite ${allowed}. La deuda no puede crecer.`,
+      );
+    } else if (hits < allowed) {
+      notes.push(
+        `${rel}: ${hits} < ${allowed} textos JSX permitidos — baja el número en la allowlist.`,
+      );
+    }
+  }
+
   if (!strict) {
     for (const rel of Object.keys(ALLOWLIST)) {
       if (!counts.has(rel) && !isFixture) {
@@ -612,6 +844,11 @@ function main() {
     for (const rel of Object.keys(ATTR_ALLOWLIST)) {
       if (!attrCounts.has(rel) && !isFixture) {
         notes.push(`${rel}: ya no tiene atributos en castellano — bórralo de la allowlist.`);
+      }
+    }
+    for (const rel of Object.keys(JSX_ALLOWLIST)) {
+      if (!jsxCounts.has(rel) && !isFixture) {
+        notes.push(`${rel}: ya no tiene texto JSX en castellano — bórralo de la allowlist.`);
       }
     }
   }
@@ -645,13 +882,30 @@ function main() {
           "ATTR_PATTERN dejó de funcionar (o la migración terminó y toca --strict).",
       );
     }
+    if (!strict && jsxCounts.size === 0 && Object.keys(JSX_ALLOWLIST).length > 0) {
+      errors.push(
+        "no se encontró NINGÚN texto JSX en castellano y su allowlist no está vacía: " +
+          "JSX_TEXT_PATTERN dejó de funcionar (o la migración terminó y toca --strict).",
+      );
+    }
+    // La muestra de control: el patrón de texto JSX se busca a sí mismo. Es lo
+    // único que impide que un refactor del literal (comillas, anclas) lo deje
+    // sin casar nada y la guarda pase en vacío para siempre.
+    if ((JSX_PROBE.match(JSX_TEXT_PATTERN) ?? []).length !== 1) {
+      errors.push(
+        "el detector de texto JSX no reconoce su propia muestra de control: " +
+          "JSX_TEXT_PATTERN dejó de funcionar y la guarda estaría pasando en vacío.",
+      );
+    }
   }
 
   const pending = [...counts.values()].reduce((a, b) => a + b, 0);
   const attrPending = [...attrCounts.values()].reduce((a, b) => a + b, 0);
+  const jsxPending = [...jsxCounts.values()].reduce((a, b) => a + b, 0);
   console.log(
     `check-i18n: ${files.length} ficheros, ${pending} ternario(s) pendientes en ${counts.size} fichero(s), ` +
-      `${attrPending} atributo(s) pendientes en ${attrCounts.size} fichero(s)` +
+      `${attrPending} atributo(s) pendientes en ${attrCounts.size} fichero(s), ` +
+      `${jsxPending} texto(s) JSX pendientes en ${jsxCounts.size} fichero(s)` +
       `${strict ? " [strict]" : ""}`,
   );
   for (const note of notes) console.log(`  aviso: ${note}`);

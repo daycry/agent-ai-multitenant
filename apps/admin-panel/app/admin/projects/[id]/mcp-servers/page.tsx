@@ -32,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { McpServerCard } from "./mcp-server-card";
 import { McpServerDialog } from "./mcp-server-dialog";
@@ -48,6 +49,7 @@ import {
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectMcpServersPage() {
+  const errorText = useErrorText();
   const t = useT("mcpServers");
   const tCommon = useT("common");
   const params = useParams<{ id: string }>();
@@ -188,9 +190,7 @@ export default function ProjectMcpServersPage() {
         <p className="text-muted-foreground mt-6 text-sm">{tCommon("loading")}</p>
       ) : projectQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="project-mcp-error">
-          {projectQuery.error instanceof ApiError
-            ? projectQuery.error.body
-            : String(projectQuery.error)}
+          {errorText(projectQuery.error)}
         </p>
       ) : servers.length === 0 ? (
         <Card className="mt-6">
@@ -219,9 +219,7 @@ export default function ProjectMcpServersPage() {
 
       {saveMutation.isError ? (
         <p className="text-destructive mt-3 text-xs" data-testid="project-mcp-save-error">
-          {saveMutation.error instanceof ApiError
-            ? saveMutation.error.body
-            : String(saveMutation.error)}
+          {errorText(saveMutation.error)}
         </p>
       ) : null}
 

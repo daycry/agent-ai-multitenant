@@ -63,8 +63,10 @@ import {
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 export default function CortexChatPage() {
+  const errorText = useErrorText();
   const { isSystemOwner, isLoading: userLoading } = useCurrentUser();
   const queryClient = useQueryClient();
 
@@ -321,9 +323,7 @@ export default function CortexChatPage() {
 
               {mutation.isError && !forbidden ? (
                 <p className="text-destructive text-sm" data-testid="cortex-chat-error">
-                  {mutation.error instanceof ApiError
-                    ? mutation.error.body
-                    : String(mutation.error)}
+                  {errorText(mutation.error)}
                 </p>
               ) : null}
 

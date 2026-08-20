@@ -36,6 +36,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { pickLang, useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { memoryDetectorState } from "@/lib/memory/honesty";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface RegistrySettingDef {
   type: "float" | "int" | "string" | "bool";
@@ -84,6 +85,7 @@ interface MemoryEmbeddingProbe {
 const CATEGORY = "memories";
 
 export default function MemoriesSettingsPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const t = useT("settingsMemories");
   const { lang } = useLang();
@@ -150,7 +152,7 @@ export default function MemoriesSettingsPage() {
       ]);
       setStatus({ kind: "saved" });
     } catch (err) {
-      setStatus({ kind: "error", detail: err instanceof Error ? err.message : "" });
+      setStatus({ kind: "error", detail: errorText(err) });
     }
   };
 

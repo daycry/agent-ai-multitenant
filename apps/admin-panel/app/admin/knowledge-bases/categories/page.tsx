@@ -51,8 +51,8 @@ interface KbCategory {
 const DEFAULT_COLOR = "#64748b";
 
 export default function KbCategoriesPage() {
-  const t = useT("kbCategories");
   const errorText = useErrorText();
+  const t = useT("kbCategories");
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<KbCategory | null>(null);
@@ -270,6 +270,7 @@ function CategoryCreateDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("kbCategories");
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
@@ -349,7 +350,7 @@ function CategoryCreateDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="kb-cat-error"
             >
-              {mutation.error?.message ?? t("createError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
@@ -383,6 +384,7 @@ function CategoryEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("kbCategories");
   const [name, setName] = useState(category.name);
   const [color, setColor] = useState(category.color ?? DEFAULT_COLOR);
@@ -435,7 +437,7 @@ function CategoryEditDialog({
           </div>
           {mutation.isError && (
             <p className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs">
-              {mutation.error?.message ?? t("saveError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
@@ -469,6 +471,7 @@ function CategoryDeleteDialog({
   onOpenChange: (v: boolean) => void;
   onDeleted: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("kbCategories");
   const mutation = useMutation<void, ApiError, void>({
     mutationFn: async () => {
@@ -491,7 +494,7 @@ function CategoryDeleteDialog({
           </p>
           {mutation.isError && (
             <p className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs">
-              {mutation.error?.message ?? t("deleteError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

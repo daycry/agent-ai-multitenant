@@ -28,6 +28,7 @@ import { Label } from "@/components/ui/label";
 import { ProjectCombobox } from "@/components/ui/project-combobox";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { type KnowledgeBase } from "./kb-types";
 
@@ -40,6 +41,7 @@ export function KbDeleteDialog({
   onOpenChange: (v: boolean) => void;
   onDeleted: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("knowledgeBases");
   const [typed, setTyped] = useState("");
   const matches = typed === kb.name;
@@ -100,7 +102,7 @@ export function KbDeleteDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="kb-delete-error"
             >
-              {mutation.error?.message ?? t("deleteError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
@@ -131,6 +133,7 @@ export function KbGrantDialog({
   onOpenChange: (v: boolean) => void;
   onGranted: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("knowledgeBases");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
@@ -198,7 +201,7 @@ export function KbGrantDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="kb-grant-error"
             >
-              {mutation.error?.message ?? t("grantError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

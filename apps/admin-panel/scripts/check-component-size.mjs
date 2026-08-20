@@ -100,12 +100,19 @@ const SECTION_MAX_LINES = 500;
  *   siguiente que lea esta lista: una entrada bien argumentada tampoco es
  *   permanente — merece que alguien vuelva a mirarla con el corte en la mano.
  *
- * · `agent-tools-section.tsx` (691) sigue igual: el mismo caso del tramo #9,
+ * · `agent-tools-section.tsx` (693) sigue igual: el mismo caso del tramo #9,
  *   pendiente de una pasada propia. Es ya la ÚNICA entrada, así que el día que
  *   caiga esta lista queda vacía y `--strict` deja de tener a quién perdonar.
+ *
+ *   Subió de 691 a 693 el 2026-08-20, y la subida se anota en vez de esconderse:
+ *   son las DOS líneas de `useErrorText()` —el import y la declaración— que
+ *   retiran de esta pantalla el cuerpo crudo del backend (`task_prod16_05`).
+ *   Pagar dos líneas de tamaño por dejar de filtrar un traceback a la cara del
+ *   operador es un cambio bueno; lo que no valdría es que el número subiera sin
+ *   que nadie dijera por qué, que es exactamente lo que esta guarda impide.
  */
 const SECTION_ALLOWLIST = {
-  "app/admin/agents/[id]/agent-tools-section.tsx": 691,
+  "app/admin/agents/[id]/agent-tools-section.tsx": 693,
 };
 
 /**

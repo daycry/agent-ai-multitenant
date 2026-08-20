@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { WebhookDialog } from "./webhook-dialog";
 import {
@@ -55,6 +56,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectIncomingWebhooksPage() {
+  const errorText = useErrorText();
   const t = useT("incomingWebhooks");
   const params = useParams<{ id: string }>();
   const projectId = params.id;
@@ -196,7 +198,7 @@ export default function ProjectIncomingWebhooksPage() {
           <p className="text-muted-foreground mt-6 text-sm">{t("loading")}</p>
         ) : listQuery.isError ? (
           <p className="text-destructive mt-6 text-sm" data-testid="incoming-webhooks-error">
-            {listQuery.error instanceof ApiError ? listQuery.error.body : String(listQuery.error)}
+            {errorText(listQuery.error)}
           </p>
         ) : configs.length === 0 ? (
           <Card className="mt-6">
@@ -229,7 +231,7 @@ export default function ProjectIncomingWebhooksPage() {
           <p className="text-destructive mt-3 text-xs" data-testid="incoming-webhooks-save-error">
             {(() => {
               const err = createMutation.error ?? updateMutation.error ?? rotateMutation.error;
-              return err instanceof ApiError ? err.body : String(err);
+              return errorText(err);
             })()}
           </p>
         )}
@@ -436,6 +438,7 @@ function WebhookCard({
 // Recent deliveries panel
 // --------------------------------------------------------------------------
 function DeliveriesPanel({ projectId, configId }: { projectId: string; configId: string }) {
+  const errorText = useErrorText();
   const t = useT("incomingWebhooks");
   const query = useQuery({
     queryKey: ["incoming-webhook-deliveries", projectId, configId],
@@ -455,7 +458,7 @@ function DeliveriesPanel({ projectId, configId }: { projectId: string; configId:
         className="text-destructive mt-2 text-xs"
         data-testid={`webhook-deliveries-error-${configId}`}
       >
-        {query.error instanceof ApiError ? query.error.body : String(query.error)}
+        {errorText(query.error)}
       </p>
     );
   }

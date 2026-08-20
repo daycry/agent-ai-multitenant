@@ -17,9 +17,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useLangOptional } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import { type PlanPhaseSpec, phaseLabel } from "./plan-spec-types";
 
 // --------------------------------------------------------------------------
@@ -44,6 +45,7 @@ export function SyncToKanbanSection({
   phases: PlanPhaseSpec[];
   taskIds: string[];
 }) {
+  const errorText = useErrorText();
   const t = useT("planDetail");
   const lang = useLangOptional();
   const [open, setOpen] = useState(false);
@@ -78,7 +80,7 @@ export function SyncToKanbanSection({
     },
     onError: (err) => {
       setLastResult(null);
-      setErrorMsg(err instanceof ApiError ? err.body : String(err));
+      setErrorMsg(errorText(err));
     },
   });
 

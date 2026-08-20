@@ -18,7 +18,8 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 export interface CriterionScore {
   name?: string;
@@ -64,6 +65,7 @@ export function truncateOutput(text: string | null, max = 160): string {
 }
 
 export function EvalRunResults({ runId }: { runId: string }) {
+  const errorText = useErrorText();
   const query = useQuery({
     queryKey: ["eval-run-results", runId],
     queryFn: () => apiFetch<EvalResult[]>(`/eval-runs/${runId}/results`),
@@ -82,8 +84,7 @@ export function EvalRunResults({ runId }: { runId: string }) {
   if (query.isError) {
     return (
       <p className="text-destructive py-3 text-sm" data-testid="eval-run-results-error">
-        No se pudo cargar el desglose:{" "}
-        {query.error instanceof ApiError ? query.error.body : String(query.error)}
+        No se pudo cargar el desglose: {errorText(query.error)}
       </p>
     );
   }

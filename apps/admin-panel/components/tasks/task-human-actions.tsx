@@ -41,9 +41,10 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useErrorText } from "@/lib/use-error-text";
 
 export type HumanAction =
   "approve_manual" | "reassign_with_guidance" | "block_with_reason" | "cancel" | "retry";
@@ -76,6 +77,7 @@ export function TaskHumanActions({
   onApplied?: () => void;
   className?: string;
 }) {
+  const errorText = useErrorText();
   const t = useT("taskActions");
   const [dialog, setDialog] = useState<"reassign" | "block" | null>(null);
 
@@ -150,7 +152,7 @@ export function TaskHumanActions({
           className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
           data-testid="action-error"
         >
-          {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+          {errorText(mutation.error)}
         </p>
       )}
 

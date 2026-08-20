@@ -16,10 +16,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { runtimeLabel, useRuntimeTemplates } from "@/lib/runtime-templates";
+import { useErrorText } from "@/lib/use-error-text";
 import type { DeploymentDraft } from "@/components/marketplace/deployment-types";
 
 import {
@@ -58,6 +59,7 @@ function suggestedName(template: Project): string {
 }
 
 export default function NewProjectWizardPage() {
+  const errorText = useErrorText();
   const router = useRouter();
   const queryClient = useQueryClient();
   const { lang } = useLang();
@@ -167,11 +169,11 @@ export default function NewProjectWizardPage() {
       // entre se enseña. Redirigir sin mirar convertiría un despliegue fallido
       // en un éxito silencioso, que es el modo de fallo que este plan cierra.
       setCreatedProjectId(created.id);
-      const results = await deployCapabilities(created.id, capabilities, drafts);
+      const results = await deployCapabilities(created.id, capabilities, drafts, errorText);
       setDeployResults(results);
     },
     onError: (err: unknown) => {
-      setSubmitError(err instanceof ApiError ? err.body : String(err));
+      setSubmitError(errorText(err));
     },
   });
 
@@ -234,10 +236,7 @@ export default function NewProjectWizardPage() {
           {templatesQuery.isError && (
             <Card className="border-destructive p-4">
               <p className="text-destructive text-sm">
-                {tWizard("templatesError")}{" "}
-                {templatesQuery.error instanceof ApiError
-                  ? templatesQuery.error.body
-                  : String(templatesQuery.error)}
+                {tWizard("templatesError")} {errorText(templatesQuery.error)}
               </p>
             </Card>
           )}

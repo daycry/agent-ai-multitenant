@@ -27,9 +27,10 @@ import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
 import { PreviewLauncher } from "@/components/projects/preview-launcher";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
+import { useErrorText } from "@/lib/use-error-text";
 import { type PlanResponse, STATUS_LABEL, STATUS_VARIANT } from "./plan-spec-types";
 import {
   DAGSection,
@@ -55,6 +56,7 @@ import { HumanValidationSection } from "./plan-validation-section";
 // Page
 // --------------------------------------------------------------------------
 export default function PlanDetailPage() {
+  const errorText = useErrorText();
   const t = useT("planDetail");
   const tStatus = useT("planStatus");
   const params = useParams<{ id: string; planId: string }>();
@@ -84,7 +86,7 @@ export default function PlanDetailPage() {
           </CardHeader>
           <CardContent>
             <p className="text-destructive text-sm" data-testid="plan-detail-error">
-              {planQuery.error instanceof ApiError ? planQuery.error.body : String(planQuery.error)}
+              {errorText(planQuery.error)}
             </p>
           </CardContent>
         </Card>

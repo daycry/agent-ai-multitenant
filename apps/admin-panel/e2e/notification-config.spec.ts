@@ -70,7 +70,21 @@ test("tenant admin mutes budget_alert on a channel via the preference matrix", a
   // the create test above). The change persists via the upsert endpoint.
   const cell = page.getByTestId("preference-budget_alert-telegram");
   await expect(cell).toBeVisible();
-  await cell.uncheck();
+  // NO `uncheck()`: la casilla es CONTROLADA (`checked={enabled}`, con `enabled`
+  // saliendo de `GET /notifications/preferences`) y sólo cambia cuando el PUT
+  // vuelve y la query se invalida. `uncheck()` pincha y comprueba el estado
+  // ACTO SEGUIDO, sin reintentar, así que ve la casilla todavía marcada y muere
+  // con «Clicking the checkbox did not change its state» — un fallo del arnés
+  // que se lee como un fallo de producto. Verificado el 2026-08-20: el PUT
+  // responde 200 y la matriz refleja el cambio; lo que faltaba era esperarlo.
+  //
+  // El `if` reproduce lo único que `uncheck()` aportaba —no pinchar si ya está
+  // desmarcada— y de paso hace el test RE-EJECUTABLE contra la misma base de
+  // datos, que es como se corre en dev: la preferencia queda persistida, así
+  // que en la segunda pasada la casilla ya viene desmarcada.
+  if (await cell.isChecked()) {
+    await cell.click();
+  }
   await expect(cell).not.toBeChecked();
 });
 

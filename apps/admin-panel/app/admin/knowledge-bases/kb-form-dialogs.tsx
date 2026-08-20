@@ -27,6 +27,7 @@ import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { CategoryCreateInlineDialog, CategorySelect } from "./kb-category-select";
 import type { KbCategory, KnowledgeBase } from "./kb-types";
@@ -50,6 +51,7 @@ export function KbCreateDialog({
   onCategoriesChanged: () => void;
   onCreated: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("knowledgeBases");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -128,7 +130,7 @@ export function KbCreateDialog({
                 className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
                 data-testid="kb-create-error"
               >
-                {mutation.error?.message ?? t("createError")}
+                {errorText(mutation.error)}
               </p>
             )}
           </DialogBody>
@@ -181,6 +183,7 @@ export function KbEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("knowledgeBases");
   const [name, setName] = useState(kb.name);
   const [description, setDescription] = useState(kb.description ?? "");
@@ -269,7 +272,7 @@ export function KbEditDialog({
                 className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
                 data-testid="kb-edit-error"
               >
-                {mutation.error?.message ?? t("saveError")}
+                {errorText(mutation.error)}
               </p>
             )}
           </DialogBody>

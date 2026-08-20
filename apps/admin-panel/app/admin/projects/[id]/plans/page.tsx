@@ -21,9 +21,10 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ViewToggle, type ViewMode } from "@/components/ui/view-toggle";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { STATUS_LABEL, STATUS_VARIANT } from "./[planId]/plan-spec-types";
 
 // --------------------------------------------------------------------------
@@ -66,6 +67,7 @@ const ALL_STATUSES = [
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectPlansPage() {
+  const errorText = useErrorText();
   const t = useT("plansList");
   const tStatus = useT("planStatus");
   const params = useParams<{ id: string }>();
@@ -160,9 +162,7 @@ export default function ProjectPlansPage() {
             </CardHeader>
             <CardContent>
               <p className="text-destructive text-sm" data-testid="plans-error">
-                {plansQuery.error instanceof ApiError
-                  ? plansQuery.error.body
-                  : String(plansQuery.error)}
+                {errorText(plansQuery.error)}
               </p>
             </CardContent>
           </Card>

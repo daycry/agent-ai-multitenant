@@ -26,7 +26,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Domain
@@ -118,6 +119,7 @@ const DECISION_BADGE: Record<Decision, { label: string; variant: "success" | "wa
 // Page
 // --------------------------------------------------------------------------
 export default function ApprovalPolicyPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const policiesQuery = useQuery({
@@ -245,7 +247,7 @@ export default function ApprovalPolicyPage() {
     },
     onError: (err: unknown) => {
       setSubmitOk(false);
-      setSubmitError(err instanceof ApiError ? err.body : String(err));
+      setSubmitError(errorText(err));
     },
   });
 
@@ -264,10 +266,7 @@ export default function ApprovalPolicyPage() {
       {policiesQuery.isError && (
         <Card className="border-destructive p-4">
           <p className="text-destructive text-sm">
-            Could not load policies:{" "}
-            {policiesQuery.error instanceof ApiError
-              ? policiesQuery.error.body
-              : String(policiesQuery.error)}
+            Could not load policies: {errorText(policiesQuery.error)}
           </p>
         </Card>
       )}

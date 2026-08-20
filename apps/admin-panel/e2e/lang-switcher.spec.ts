@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { navigateVia } from "./helpers/nav";
+
 /**
  * E2E for the top header language switcher.
  *
@@ -34,8 +36,9 @@ test("the lang switcher is visible on all admin screens and defaults to ES", asy
   await expect(page.getByTestId("lang-es")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("lang-en")).toHaveAttribute("aria-pressed", "false");
 
-  // Navigate to a different screen; the switcher must still be there.
-  await page.getByTestId("nav-agents").click();
+  // Navigate to a different screen; the switcher must still be there. El grupo
+  // `recursos` de la nav arranca cerrado en el dashboard (ver `helpers/nav.ts`).
+  await navigateVia(page, "recursos", "nav-agents");
   await expect(page).toHaveURL(/\/admin\/agents$/);
   await expect(page.getByTestId("lang-switcher")).toBeVisible();
 });
@@ -47,7 +50,7 @@ test("switching to EN re-renders the agent prompts and persists across reload", 
   // Start from a clean storage so the default ES is what we observe.
   await context.clearCookies();
   await login(page);
-  await page.getByTestId("nav-agents").click();
+  await navigateVia(page, "recursos", "nav-agents");
   await expect(page).toHaveURL(/\/admin\/agents$/);
 
   // Wait for the agents grid to mount before snapshotting prompt locales.

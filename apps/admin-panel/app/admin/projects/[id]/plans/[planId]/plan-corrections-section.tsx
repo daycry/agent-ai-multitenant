@@ -11,9 +11,10 @@ import { CheckCircle2, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
+import { useErrorText } from "@/lib/use-error-text";
 import type { PlanResponse, PlanSpecification, PlanTaskSpec } from "./plan-spec-types";
 import type { ReviewSessionInfo } from "./plan-validation-section";
 
@@ -39,6 +40,7 @@ export function CorrectionsSection({
   status: string;
   spec: PlanSpecification;
 }) {
+  const errorText = useErrorText();
   const t = useT("planDetail");
   const queryClient = useQueryClient();
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
@@ -64,7 +66,7 @@ export function CorrectionsSection({
     queryClient.invalidateQueries({ queryKey: ["plan", planId] });
     queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
   };
-  const onErr = (e: unknown) => setErrorMsg(e instanceof ApiError ? e.body : String(e));
+  const onErr = (e: unknown) => setErrorMsg(errorText(e));
 
   const generate = useMutation({
     mutationFn: () =>

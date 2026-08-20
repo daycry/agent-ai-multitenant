@@ -32,6 +32,7 @@ import { PersonaModelFields } from "@/components/capability/persona-section";
 import { ApiError, apiFetch } from "@/lib/api";
 import { pickLang, useT, type MessageKey } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   buildModelConfig,
   DEFAULT_MODEL_CONFIG,
@@ -372,6 +373,7 @@ function NewAgentDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("agents");
   const { lang } = useLang();
   const [name, setName] = useState("");
@@ -526,7 +528,7 @@ function NewAgentDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="new-agent-error"
             >
-              {mutation.error?.message ?? t("createError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

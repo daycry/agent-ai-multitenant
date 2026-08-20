@@ -1,3 +1,5 @@
+"use client";
+
 import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 
@@ -5,6 +7,8 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,7 +27,7 @@ import { cn } from "@/lib/utils";
  *     loadingTestId="teams-loading"
  *     errorTestId="teams-error"
  *     emptyTestId="teams-empty"
- *     emptyTitle="No hay equipos"
+ *     emptyTitle={t("noTeams")}
  *   >
  *     {/* rows / grid go here, rendered only when there's data *\/}
  *   </StateBlock>
@@ -32,17 +36,6 @@ import { cn } from "@/lib/utils";
  * flags is set it renders `children` untouched, so it is safe to wrap a
  * whole list region.
  */
-
-/** Pull a human string out of whatever a query throws. */
-function errorMessage(error: unknown): string {
-  if (!error) return "Error desconocido.";
-  // ApiError (and most Error subclasses) expose `.body` / `.message`;
-  // read them structurally to avoid importing the type here.
-  const e = error as { body?: unknown; message?: unknown };
-  if (typeof e.body === "string" && e.body.length > 0) return e.body;
-  if (typeof e.message === "string" && e.message.length > 0) return e.message;
-  return String(error);
-}
 
 interface StateBlockProps {
   isLoading?: boolean;
@@ -83,21 +76,31 @@ export function StateBlock({
   isError,
   error,
   isEmpty,
-  loadingLabel = "Cargando…",
+  loadingLabel,
   loadingSkeleton = false,
   skeletonRows = 3,
   emptyIcon,
-  emptyTitle = "Sin resultados",
+  emptyTitle,
   emptyDescription,
   emptyAction,
   empty,
-  errorTitle = "No se pudo cargar",
+  errorTitle,
   loadingTestId,
   errorTestId,
   emptyTestId,
   className,
   children,
 }: StateBlockProps) {
+  const t = useT("stateBlock");
+  const errorText = useErrorText();
+
+  // `x === undefined ? t(…) : x` y no `x ?? t(…)`: el default de una prop se
+  // aplica sólo ante `undefined`, y el heading de error se podía SUPRIMIR
+  // pasando algo falsy. Con `??` un `errorTitle=""` volvería a pintar título.
+  const loadingText = loadingLabel === undefined ? t("loading") : loadingLabel;
+  const emptyHeading = emptyTitle === undefined ? t("empty") : emptyTitle;
+  const errorHeading = errorTitle === undefined ? t("errorTitle") : errorTitle;
+
   if (isLoading) {
     if (loadingSkeleton) {
       return (
@@ -121,7 +124,7 @@ export function StateBlock({
         aria-live="polite"
       >
         <Spinner />
-        {loadingLabel}
+        {loadingText}
       </p>
     );
   }
@@ -129,8 +132,10 @@ export function StateBlock({
   if (isError) {
     return (
       <Card className={cn("p-4", className)} data-testid={errorTestId} role="alert">
-        {errorTitle ? <p className="text-foreground text-sm font-semibold">{errorTitle}</p> : null}
-        <p className="text-danger-soft-foreground text-sm">{errorMessage(error)}</p>
+        {errorHeading ? (
+          <p className="text-foreground text-sm font-semibold">{errorHeading}</p>
+        ) : null}
+        <p className="text-danger-soft-foreground text-sm">{errorText(error)}</p>
       </Card>
     );
   }
@@ -148,7 +153,7 @@ export function StateBlock({
         className={className}
         data-testid={emptyTestId}
         icon={emptyIcon}
-        title={emptyTitle}
+        title={emptyHeading}
         description={emptyDescription}
         action={emptyAction}
       />

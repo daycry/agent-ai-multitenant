@@ -61,6 +61,7 @@ import {
 import type { CortexOnboardingResult } from "@/lib/cortex-identity";
 import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 export default function CortexIdentityPage() {
   const { isSystemOwner, isLoading: userLoading } = useCurrentUser();
@@ -87,6 +88,7 @@ export default function CortexIdentityPage() {
 }
 
 function CortexIdentityBody() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const t = useT("cortexIdentity");
   const [forbidden, setForbidden] = useState(false);
@@ -366,9 +368,7 @@ function CortexIdentityBody() {
 
           {saveMutation.isError ? (
             <p className="text-destructive text-sm" data-testid="cortex-identity-error">
-              {saveMutation.error instanceof ApiError
-                ? saveMutation.error.body
-                : String(saveMutation.error)}
+              {errorText(saveMutation.error)}
             </p>
           ) : null}
           {saveMutation.isSuccess ? (

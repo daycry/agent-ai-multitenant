@@ -323,6 +323,16 @@ describe("dictionary — invariantes", () => {
       "projectTasks.breadcrumbCurrent",
       "projectTasks.fieldPlan",
       "taskDetail.runsHeading",
+      // prod-16 `task_prod16_03` — picker de tenants y tablero. «Slug» es el
+      // nombre del campo del backend y lo que el operador teclea (igual que en
+      // `knowledgeBases` y `kbCategories`); «(portfolio)» es el término con el
+      // que el propio código nombra la vista sin tenant activo y que el panel ya
+      // escribía en inglés; y «{count} plan» coincide porque el singular de
+      // «plan» es el mismo en los dos idiomas — el plural (`plansCountMany`) sí
+      // difiere.
+      "tenantPicker.slugLabel",
+      "tenantPicker.portfolioHint",
+      "board.plansCountOne",
     ]);
 
     const identical = new Set(

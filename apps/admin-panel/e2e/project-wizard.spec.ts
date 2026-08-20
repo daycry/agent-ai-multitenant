@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { navigateVia } from "./helpers/nav";
+
 /**
  * E2E for the project-from-template wizard (task_01_21).
  *
@@ -27,9 +29,10 @@ async function login(page: Page) {
   await expect(page).toHaveURL(/\/admin\/dashboard$/);
 }
 
-test("wizard step 1 lists the 8 built-in templates", async ({ page }) => {
+test("wizard step 1 lists every built-in template", async ({ page }) => {
   await login(page);
-  await page.getByTestId("nav-projects").click();
+  // El grupo `recursos` de la nav arranca cerrado (ver `helpers/nav.ts`).
+  await navigateVia(page, "recursos", "nav-projects");
   await expect(page).toHaveURL(/\/admin\/projects$/);
 
   // Click "Crear proyecto" -- works both from the header button and
@@ -37,17 +40,36 @@ test("wizard step 1 lists the 8 built-in templates", async ({ page }) => {
   await page.getByTestId("new-project-button").click();
   await expect(page).toHaveURL(/\/admin\/projects\/new$/);
 
-  // Step 1 visible with all 8 templates. Exclude the inner
-  // template-pick-... buttons that share the testid prefix.
+  // Step 1 visible. Exclude the inner template-pick-... buttons that share the
+  // testid prefix.
   await expect(page.getByTestId("wizard-step-1")).toBeVisible();
   const allTemplateNodes = page
     .getByTestId("templates-grid")
     .locator("[data-testid^=template-]:not([data-testid^=template-pick-])");
-  await expect(allTemplateNodes).toHaveCount(8);
+  await expect(allTemplateNodes).not.toHaveCount(0);
 
-  // Spot-check a couple of names from the seed.
-  await expect(page.getByText("Plantilla: API REST")).toBeVisible();
-  await expect(page.getByText("Plantilla: Suite E2E")).toBeVisible();
+  // El título decía 8 y el seed lleva 9 desde que se mergeó la plantilla
+  // built-in de CodeIgniter 4 (PR #33): `BUILTIN_PROJECT_TEMPLATES` sigue
+  // teniendo 8 —su test fija ese número— y `seed_ci4_project_template` añade la
+  // novena por su cuenta, justamente para no tocarlo. Se comprueban las NUEVE
+  // por nombre en vez de contarlas: una plantilla que desaparezca se ve aunque
+  // otra entre a la vez, y esto no vuelve a caducar cuando el catálogo crezca.
+  for (const name of [
+    "Plantilla: API REST",
+    "Plantilla: Webapp Full-Stack",
+    "Plantilla: Data Pipeline",
+    "Plantilla: Migración Legacy",
+    "Plantilla: Investigación + Especificación",
+    "Plantilla: DevOps Bootstrap",
+    "Plantilla: Suite E2E",
+    "Plantilla: Modernización de Documentación",
+    "Plantilla: App CodeIgniter 4",
+  ]) {
+    await expect(
+      page.getByTestId("templates-grid").getByText(name),
+      `falta la plantilla built-in "${name}"`,
+    ).toBeVisible();
+  }
 });
 
 test("picking a template advances to step 2 with prefilled fields", async ({ page }) => {

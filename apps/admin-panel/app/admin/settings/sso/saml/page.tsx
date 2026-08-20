@@ -43,6 +43,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { SamlConfigCard } from "./saml-config-section";
 import { SamlConfigDialog } from "./saml-config-dialog";
@@ -52,6 +53,7 @@ import { SpMetadataCard } from "./sp-metadata-section";
 // Page
 // --------------------------------------------------------------------------
 export default function SamlConfigPage() {
+  const errorText = useErrorText();
   const t = useT("ssoSaml");
   const queryClient = useQueryClient();
 
@@ -170,9 +172,7 @@ export default function SamlConfigPage() {
         </p>
       ) : configQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="saml-load-error">
-          {configQuery.error instanceof ApiError
-            ? configQuery.error.body
-            : String(configQuery.error)}
+          {errorText(configQuery.error)}
         </p>
       ) : config === null ? (
         <Card className="mt-6">
@@ -194,9 +194,7 @@ export default function SamlConfigPage() {
 
       {deleteMutation.isError ? (
         <p className="text-destructive mt-3 text-xs" data-testid="saml-delete-error">
-          {deleteMutation.error instanceof ApiError
-            ? deleteMutation.error.body
-            : String(deleteMutation.error)}
+          {errorText(deleteMutation.error)}
         </p>
       ) : null}
 

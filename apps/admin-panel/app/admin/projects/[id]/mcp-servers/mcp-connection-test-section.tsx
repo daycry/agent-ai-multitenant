@@ -20,8 +20,9 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { TestResultPanel, type TestConnectionResult } from "./mcp-test-result-panel";
 import { type McpServerConfig } from "./mcp-server-types";
 
@@ -34,6 +35,7 @@ export function McpConnectionTestSection({
   buildPayload: () => McpServerConfig;
   disabled: boolean;
 }) {
+  const errorText = useErrorText();
   const t = useT("mcpServers");
   const [testResult, setTestResult] = useState<TestConnectionResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function McpConnectionTestSection({
       // desmarcar las que no quiera importar (multiselección configurable).
       setSelectedTools(new Set(result.tools.map((t) => t.name)));
     } catch (err) {
-      setTestError(err instanceof ApiError ? err.body : String(err));
+      setTestError(errorText(err));
     } finally {
       setTesting(false);
     }
@@ -98,7 +100,7 @@ export function McpConnectionTestSection({
       );
       setImportedCount(result.tools.length);
     } catch (err) {
-      setImportError(err instanceof ApiError ? err.body : String(err));
+      setImportError(errorText(err));
     } finally {
       setImporting(false);
     }

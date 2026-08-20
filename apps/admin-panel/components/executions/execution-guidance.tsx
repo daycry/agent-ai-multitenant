@@ -29,9 +29,11 @@ import {
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 export function ExecutionGuidance({ executionId }: { executionId: string }) {
+  const errorText = useErrorText();
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [sent, setSent] = useState(false);
@@ -95,7 +97,7 @@ export function ExecutionGuidance({ executionId }: { executionId: string }) {
                 className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
                 data-testid="execution-guidance-error"
               >
-                {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+                {errorText(mutation.error)}
               </p>
             ) : null}
           </DialogBody>

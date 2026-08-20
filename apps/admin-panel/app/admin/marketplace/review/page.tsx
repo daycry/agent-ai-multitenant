@@ -44,6 +44,7 @@ import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { statusLabel, useReviewT } from "./review-i18n";
 import {
@@ -126,6 +127,7 @@ export default function MarketplaceReviewPage() {
 // Una fila de la cola
 // ---------------------------------------------------------------------------
 function ReviewCard({ listing, filter }: { listing: ReviewListing; filter: string }) {
+  const errorText = useErrorText();
   const t = useReviewT();
   const qc = useQueryClient();
   const [rejecting, setRejecting] = useState(false);
@@ -158,7 +160,7 @@ function ReviewCard({ listing, filter }: { listing: ReviewListing; filter: strin
       setReason("");
       invalidate();
     },
-    onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+    onError: (err: unknown) => setError(errorText(err)),
   });
 
   const previous = previousVersion(versions.data ?? [], listing.version);

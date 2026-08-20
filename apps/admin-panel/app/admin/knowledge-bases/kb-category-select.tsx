@@ -28,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { type KbCategory } from "./kb-types";
 
@@ -101,6 +102,7 @@ export function CategoryCreateInlineDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: (id: string) => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("knowledgeBases");
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
@@ -178,7 +180,7 @@ export function CategoryCreateInlineDialog({
           </div>
           {mutation.isError && (
             <p className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs">
-              {mutation.error?.message ?? t("inlineCatError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

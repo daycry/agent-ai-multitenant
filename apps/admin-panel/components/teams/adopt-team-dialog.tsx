@@ -30,6 +30,7 @@ import { PersonaModelFields } from "@/components/capability/persona-section";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   buildModelConfig,
   validateDraft,
@@ -61,6 +62,7 @@ export function AdoptTeamDialog({
   onOpenChange: (v: boolean) => void;
   onAdopted: (newId: string) => void;
 }) {
+  const errorText = useErrorText();
   const { lang } = useLang();
   const t = useT("teams");
 
@@ -216,7 +218,7 @@ export function AdoptTeamDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="adopt-team-error"
             >
-              {mutation.error?.message ?? t("adoptError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

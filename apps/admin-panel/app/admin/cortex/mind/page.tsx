@@ -53,6 +53,7 @@ import {
 } from "@/lib/cortex";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { useWebSocket, wsUrl } from "@/lib/ws";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { EpisodesPanel, MoodChart } from "./affect-panel";
 import { AutonomyPanel } from "./autonomy-panel";
@@ -86,6 +87,7 @@ export default function CortexMindPage() {
 }
 
 function CortexMindBody() {
+  const errorText = useErrorText();
   // Estado vivo de los diales: arranca del último /mind y se pisa con cada frame
   // WS. El polling re-sincroniza /mind por si el WS cae o pierde un frame.
   const [live, setLive] = useState<CortexMind | null>(null);
@@ -176,10 +178,7 @@ function CortexMindBody() {
         <Card className="mt-6">
           <CardContent className="text-destructive pt-5 text-sm" data-testid="cortex-mind-error">
             {t("loadError", {
-              detail:
-                mindQuery.error instanceof ApiError
-                  ? mindQuery.error.body
-                  : String(mindQuery.error),
+              detail: errorText(mindQuery.error),
             })}
           </CardContent>
         </Card>

@@ -36,6 +36,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { InboxAssignment } from "./page";
 
@@ -94,6 +95,7 @@ export function InboxSubmitDialog({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const errorText = useErrorText();
   const [output, setOutput] = useState("");
   const [hours, setHours] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
@@ -312,7 +314,7 @@ export function InboxSubmitDialog({
                   className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
                   data-testid="submit-error"
                 >
-                  {mutation.error?.body ?? mutation.error?.message ?? "Error al entregar la tarea"}
+                  {mutation.error?.body ?? errorText(mutation.error)}
                 </p>
               )}
             </DialogBody>

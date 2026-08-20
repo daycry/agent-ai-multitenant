@@ -51,6 +51,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { HistoryTab } from "./history-tab";
 import { InboxJustifyDialog } from "./justify-dialog";
@@ -95,10 +96,6 @@ const TASK_STATUS_VARIANT: Record<string, BadgeVariant> = {
   in_progress: "info",
   in_review: "primary",
 };
-
-function apiErrorBody(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 /** Human-friendly relative deadline ("en 5 h", "vencida") for a pending row. */
 function deadlineLabel(deadline: string | null): { text: string; overdue: boolean } | null {
@@ -253,6 +250,7 @@ type DialogMode = "reject" | "escalate";
 // Page
 // ---------------------------------------------------------------------------
 export default function InboxPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<{ mode: DialogMode; item: InboxAssignment } | null>(null);
   // The full delivery form (task_16_09) — its own modal, separate from the
@@ -297,7 +295,7 @@ export default function InboxPage() {
       refresh();
     },
     onError: (err, { item }) => {
-      setActionErrors((prev) => ({ ...prev, [item.assignment_id]: apiErrorBody(err) }));
+      setActionErrors((prev) => ({ ...prev, [item.assignment_id]: errorText(err) }));
     },
   });
 
@@ -363,7 +361,7 @@ export default function InboxPage() {
           {query.isError && (
             <Card className="border-destructive p-4" data-testid="inbox-error">
               <p className="text-destructive text-sm">
-                No se pudieron cargar tus tareas: {apiErrorBody(query.error)}
+                No se pudieron cargar tus tareas: {errorText(query.error)}
               </p>
             </Card>
           )}

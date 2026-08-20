@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { HumanAgentFormDialog } from "./human-agent-form-dialog";
 
@@ -153,6 +154,7 @@ function HumanAgentCard({
 // Global template card (clone-and-fork)
 // ---------------------------------------------------------------------------
 function TemplateCard({ template, onForked }: { template: HumanAgent; onForked: () => void }) {
+  const errorText = useErrorText();
   const mutation = useMutation<HumanAgent, ApiError, void>({
     mutationFn: () =>
       apiFetch<HumanAgent>(`/human-agents/templates/${template.id}/clone`, {
@@ -194,7 +196,7 @@ function TemplateCard({ template, onForked }: { template: HumanAgent; onForked: 
           </RoleGuard>
           {mutation.isError && (
             <p className="text-destructive text-xs" data-testid={`ha-clone-error-${template.id}`}>
-              {mutation.error?.message ?? "Error al clonar"}
+              {errorText(mutation.error)}
             </p>
           )}
         </div>
@@ -207,6 +209,7 @@ function TemplateCard({ template, onForked }: { template: HumanAgent; onForked: 
 // Page
 // ---------------------------------------------------------------------------
 export default function HumanAgentsPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<HumanAgent | null>(null);
@@ -299,10 +302,7 @@ export default function HumanAgentsPage() {
           {agentsQuery.isError && (
             <Card className="border-destructive p-4" data-testid="human-agents-error">
               <p className="text-destructive text-sm">
-                No se pudieron cargar los agentes:{" "}
-                {agentsQuery.error instanceof ApiError
-                  ? agentsQuery.error.body
-                  : String(agentsQuery.error)}
+                No se pudieron cargar los agentes: {errorText(agentsQuery.error)}
               </p>
             </Card>
           )}

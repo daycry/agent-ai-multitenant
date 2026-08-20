@@ -103,6 +103,17 @@ export async function deployCapabilities(
   projectId: string,
   capabilities: AvailableCapability[],
   drafts: Record<string, DeploymentDraft>,
+  /**
+   * El formateador de errores del LLAMANTE, obligatorio y sin default.
+   *
+   * Esta funcion no es un componente ni un hook, asi que no puede llamar a
+   * `useErrorText()` (`react-hooks/rules-of-hooks` lo caza). Y con un default
+   * volveria a colarse el cuerpo crudo del backend en la tarjeta de resultados,
+   * que es el fallo que `task_prod16_05` cierra: el proximo llamante lo
+   * reintroduciria sin enterarse. Mismo criterio que `describeMoveError` en
+   * `app/admin/board/page.tsx`.
+   */
+  errorText: (err: unknown) => string,
   fetcher: typeof apiFetch = apiFetch,
 ): Promise<CapabilityDeployResult[]> {
   const out: CapabilityDeployResult[] = [];
@@ -128,7 +139,7 @@ export async function deployCapabilities(
         outcome: "failed",
         warnings: [],
         oauthPending: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorText(err),
       });
     }
   }

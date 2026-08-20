@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { AssignableUser, HumanAgent } from "./page";
 
@@ -118,6 +119,7 @@ export function HumanAgentFormDialog({
   users: AssignableUser[];
   onSaved: () => void;
 }) {
+  const errorText = useErrorText();
   const isEdit = editing !== null;
 
   const [name, setName] = useState("");
@@ -382,7 +384,7 @@ export function HumanAgentFormDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="ha-form-error"
             >
-              {mutation.error?.message ?? "Error al guardar"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>

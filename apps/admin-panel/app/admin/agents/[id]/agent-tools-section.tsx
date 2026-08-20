@@ -53,12 +53,13 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { pickLang, useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
 import { resolveCategory, resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { cn } from "@/lib/utils";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types (mirror api_server.schemas.catalog.ToolResponse +
@@ -167,6 +168,7 @@ function isMcp(tool: { implementation_type: string; category: string }): boolean
 }
 
 export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentToolsSectionProps) {
+  const errorText = useErrorText();
   const t = useT("agents");
   const queryClient = useQueryClient();
   const { lang } = useLang();
@@ -220,7 +222,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
       void queryClient.invalidateQueries({ queryKey: ["agent-tools", agentId] });
     },
     onError: (err) => {
-      setSaveError(err instanceof ApiError ? err.body : String(err));
+      setSaveError(errorText(err));
     },
   });
 

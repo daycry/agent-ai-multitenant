@@ -33,9 +33,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types (mirror the backend responses)
@@ -112,6 +113,7 @@ function formatBytes(bytes: number): string {
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectKnowledgeBasesPage() {
+  const errorText = useErrorText();
   const t = useT("projectKbs");
   const params = useParams<{ id: string }>();
   const projectId = params.id;
@@ -160,7 +162,7 @@ export default function ProjectKnowledgeBasesPage() {
         <p className="text-muted-foreground mt-6 text-sm">{t("loading")}</p>
       ) : kbsQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="project-kbs-error">
-          {kbsQuery.error instanceof ApiError ? kbsQuery.error.body : String(kbsQuery.error)}
+          {errorText(kbsQuery.error)}
         </p>
       ) : (kbsQuery.data ?? []).length === 0 ? (
         <Card className="mt-6">
@@ -207,6 +209,7 @@ function AddKnowledgeSection({
   grantedKbs: KnowledgeBase[];
   onDone: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("projectKbs");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -263,7 +266,7 @@ function AddKnowledgeSection({
     },
     onError: (err) => {
       setStatus(null);
-      setError(err instanceof ApiError ? err.body : String(err));
+      setError(errorText(err));
     },
   });
 
@@ -319,6 +322,7 @@ function KbCatalogSection({
   catalog: KnowledgeBase[];
   granted: Set<string>;
 }) {
+  const errorText = useErrorText();
   const t = useT("projectKbs");
   const queryClient = useQueryClient();
   const toggle = useMutation({
@@ -348,7 +352,7 @@ function KbCatalogSection({
         <p className="text-muted-foreground mt-1 text-sm">{t("catalogHint")}</p>
         {toggle.isError ? (
           <p className="text-destructive mt-2 text-sm" data-testid="kb-catalog-error">
-            {toggle.error instanceof ApiError ? toggle.error.body : String(toggle.error)}
+            {errorText(toggle.error)}
           </p>
         ) : null}
         <ul className="mt-3 divide-y">
@@ -570,6 +574,7 @@ function UploadDialog({
   kbId: string;
   onUploaded: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("projectKbs");
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
@@ -606,7 +611,7 @@ function UploadDialog({
       onOpenChange(false);
     },
     onError: (err) => {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(errorText(err));
     },
   });
 

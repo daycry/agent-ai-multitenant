@@ -17,12 +17,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { ApiPathPrefix, PublicBaseUrl } from "./sso-types";
 
 export function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolean }) {
+  const errorText = useErrorText();
   const t = useT("ssoOidc");
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
@@ -53,7 +55,7 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
       void queryClient.invalidateQueries({ queryKey: ["sso-public-base-url"] });
       void queryClient.invalidateQueries({ queryKey: ["sso-callback-url"] });
     },
-    onError: (err) => setSaveError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setSaveError(errorText(err)),
   });
 
   // ADR 0069: prefijo de API (origen + prefijo + path SSO), editable por separado.
@@ -74,7 +76,7 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
       void queryClient.invalidateQueries({ queryKey: ["sso-api-path-prefix"] });
       void queryClient.invalidateQueries({ queryKey: ["sso-callback-url"] });
     },
-    onError: (err) => setPrefixSaveError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setPrefixSaveError(errorText(err)),
   });
 
   const baseData = baseQuery.data;

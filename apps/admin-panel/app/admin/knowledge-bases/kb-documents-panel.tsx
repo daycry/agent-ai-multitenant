@@ -36,6 +36,7 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
 import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
 import { useT, type MessageKey } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 type DocumentStatus = "pending" | "processing" | "indexed" | "indexed_empty" | "failed";
 
@@ -250,6 +251,7 @@ function UploadDialog({
   kbId: string;
   onUploaded: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("knowledgeBases");
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
@@ -285,7 +287,7 @@ function UploadDialog({
       onUploaded();
       onOpenChange(false);
     },
-    onError: (err) => setErrorMsg(err instanceof Error ? err.message : String(err)),
+    onError: (err) => setErrorMsg(errorText(err)),
   });
 
   return (

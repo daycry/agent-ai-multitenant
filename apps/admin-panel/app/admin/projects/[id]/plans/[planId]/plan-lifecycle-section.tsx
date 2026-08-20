@@ -9,8 +9,9 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Plan lifecycle — explicit state transitions (draft → approval → in_progress)
@@ -40,6 +41,7 @@ export function lifecycleActions(status: string) {
 }
 
 export function PlanLifecycleSection({ planId, status }: { planId: string; status: string }) {
+  const errorText = useErrorText();
   const t = useT("planDetail");
   const queryClient = useQueryClient();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export function PlanLifecycleSection({ planId, status }: { planId: string; statu
     queryClient.invalidateQueries({ queryKey: ["plan", planId] });
     queryClient.invalidateQueries({ queryKey: ["project-tasks"] });
   };
-  const onErr = (e: unknown) => setErrorMsg(e instanceof ApiError ? e.body : String(e));
+  const onErr = (e: unknown) => setErrorMsg(errorText(e));
 
   const sendToApproval = useMutation({
     mutationFn: () =>

@@ -363,6 +363,206 @@ describe("check-i18n — castellano sin tildes en atributos", () => {
   });
 });
 
+/**
+ * Cuarto bloque: **texto JSX suelto** (2026-08-20).
+ *
+ * Los dos detectores anteriores miran ATRIBUTOS y TERNARIOS. La deuda que se
+ * encontró a mano siete veces esta semana no vivía en ninguno de los dos: vivía
+ * en el texto que hay ENTRE etiquetas, que es justamente el que más lee el
+ * usuario. `components/login/mfa-challenge.tsx` estaba entero en castellano
+ * cableado —la ayuda, el botón «Verificar», los tres errores— y las dos guardas
+ * decían cero.
+ *
+ * Lo que hace fiable a esta señal es la POSICIÓN, no la lista de palabras: el
+ * texto entre dos etiquetas se renderiza por construcción, así que juzgar su
+ * idioma siempre significa algo. Es la diferencia con un literal de cadena
+ * cualquiera, que puede ser un valor de enum o la mitad de un par bilingüe — y
+ * por eso el detector amplio se descartó (ver el bloque siguiente).
+ */
+describe("check-i18n — texto JSX suelto entre etiquetas", () => {
+  it("el caso real de esta semana: MfaChallenge, entero en castellano suelto", () => {
+    const root = fixture({
+      "components/login/mfa-challenge.tsx": [
+        "export function MfaChallenge() {",
+        "  return (",
+        "    <div>",
+        "      <p>Introduce el código de verificación de tu aplicación</p>",
+        "      <Button>Verificar</Button>",
+        "    </div>",
+        "  );",
+        "}",
+      ].join("\n"),
+    });
+
+    const { code, output } = run(["--root", root]);
+
+    expect(code).toBe(1);
+    expect(output).toContain("components/login/mfa-challenge.tsx");
+    expect(output).toContain("texto(s) JSX");
+  });
+
+  it("una pantalla YA migrada que reintroduce texto suelto salta (es el trinquete)", () => {
+    // `users` está migrada y fuera de las tres allowlists. Este es el caso que
+    // da valor a la guarda: proteger el trabajo que se acaba de hacer.
+    const root = fixture({
+      "app/admin/users/page.tsx": "<p>No se pudo cargar la lista de usuarios.</p>\n",
+    });
+
+    expect(run(["--root", root]).code).toBe(1);
+  });
+
+  it("cuenta ocurrencias, no ficheros", () => {
+    const root = fixture({
+      "app/x.tsx": "<p>Cargando ejecución…</p>\n<span>Sin hilos todavía</span>\n",
+    });
+
+    expect(run(["--root", root]).output).toContain("2 texto(s) JSX");
+  });
+
+  it("texto JSX en inglés no cuenta", () => {
+    const root = fixture({
+      "app/x.tsx": "<p>Could not load the user list.</p>\n<Button>Save</Button>\n",
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("lib/i18n/ sigue exento y los .ts puros no se miran (no hay JSX en ellos)", () => {
+    const root = fixture({
+      "lib/i18n/dictionary.ts": "<p>Cargando ejecución…</p>\n",
+      "lib/api.ts": "const q = a > b && c < d;\n",
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+});
+
+/**
+ * Y los falsos positivos que el detector de texto JSX tiene que NO dar.
+ *
+ * Un guard con falsos positivos se desactiva a la tercera y entonces no mide
+ * nada: le pasó a la guarda de tests declarados, que perdió autoridad con
+ * cuatro. Estos casos son la mitad del arreglo que impide que esto acabe en una
+ * allowlist de excusas.
+ */
+describe("check-i18n — el texto JSX no da falsos positivos", () => {
+  it("los COMENTARIOS de este repo están en castellano y no son UI", () => {
+    // El riesgo nº1: todo el código está comentado en castellano, y un
+    // comentario que mencione etiquetas casaría con el patrón. Si esto saltara,
+    // la guarda sería inservible en este repositorio.
+    const root = fixture({
+      "app/x.tsx": [
+        "// Pasa de <Input> a <Field> cuando la selección está vacía.",
+        "/* El <Button> lleva su propio título de sección. */",
+        "/**",
+        " * Envuelve <Foo> en <Bar> para que la validación herede el año.",
+        " */",
+        "export const x = 1;",
+      ].join("\n"),
+    });
+
+    const { code, output } = run(["--root", root]);
+
+    expect(code).toBe(0);
+    expect(output).toContain("0 texto(s) JSX");
+  });
+
+  it("comparaciones y genéricos de TypeScript no son texto JSX", () => {
+    const root = fixture({
+      "app/x.tsx": [
+        "const visible = total > minimo && contador < maximo;",
+        "const m: Record<string, Ejecucion> | Map<string, Categoria> = load();",
+        "const f = (a: Fila) => a.numeroDeAgentes < 5;",
+        "export { visible, m, f };",
+      ].join("\n"),
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("una expresión entre llaves no es texto suelto (es un valor, no copy)", () => {
+    const root = fixture({
+      "app/x.tsx": '<p>{estadoDeLaEjecucion}</p>\n<span>{t("plan.cargando")}</span>\n',
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("NO castiga el par bilingüe `{es, en}`, que es la solución y no la deuda", () => {
+    // `lib/cortex-curiosity.ts` es exactamente esto y está BIEN: el texto llega
+    // en datos y lo resuelve `pickLang`. Un detector de literales de cadena a
+    // secas lo marcaba como deuda — castigar la solución es peor que no medir.
+    const root = fixture({
+      "lib/cortex-curiosity.ts": [
+        "const LABELS = {",
+        '  searching: { es: "investigando", en: "researching" },',
+        '  failed: { es: "falló", en: "failed" },',
+        "};",
+        "export default LABELS;",
+      ].join("\n"),
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("un tipo unión con valores internos en castellano no es copy de UI", () => {
+    // `CapabilityLevel = "rol" | "stack" | "plataforma" | "equipo"` son valores
+    // del dominio, no texto que se traduzca.
+    const root = fixture({
+      "lib/capability/hub.ts": 'export type Nivel = "rol" | "plataforma" | "equipo";\n',
+    });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+});
+
+/**
+ * Y la asimetría que tenía el detector de TERNARIOS, encontrada al añadir el de
+ * texto JSX (2026-08-20).
+ *
+ * El de atributos salta los ficheros de test y ninguno de los dos quitaba
+ * comentarios. Consecuencia: **documentar el patrón contaba como cometerlo**. Se
+ * vio en vivo — un `components/shared/i18n.test.tsx` recién escrito por el carril
+ * de migración decía en su cabecera «no hay ni un `lang === "es"`» y la guarda lo
+ * marcó como deuda. Es el falso positivo más caro que puede tener un trinquete:
+ * castiga a quien lo está saldando, y con eso se gana que lo desactiven.
+ */
+describe("check-i18n — mencionar el patrón no es usarlo", () => {
+  it("un ternario dentro de un COMENTARIO no es deuda", () => {
+    const root = fixture({
+      "components/x.tsx": [
+        "/**",
+        ' * Esta pantalla ya no usa `lang === "es"`: pasó al diccionario.',
+        " */",
+        'export const x = 1; // ni un lang === "es" por aquí',
+      ].join("\n"),
+    });
+
+    const { code, output } = run(["--root", root]);
+
+    expect(code).toBe(0);
+    expect(output).toContain("0 ternario(s)");
+  });
+
+  it("los ficheros de test se saltan también para ternarios (como para atributos)", () => {
+    // Un test de i18n compara las dos caras y puede nombrar el patrón en su
+    // prosa o en un fixture. No es UI: la asimetría con los atributos era un
+    // descuido, no una decisión.
+    const root = fixture({ "components/shared/i18n.test.tsx": TERNARY });
+
+    expect(run(["--root", root]).code).toBe(0);
+  });
+
+  it("pero un ternario de VERDAD en código sigue siendo deuda", () => {
+    // La otra mitad: que quitar comentarios no haya abierto un agujero.
+    const root = fixture({
+      "components/x.tsx": ["// Comentario inocente.", TERNARY.trim()].join("\n"),
+    });
+
+    expect(run(["--root", root]).code).toBe(1);
+  });
+});
+
 describe("check-i18n --strict", () => {
   it("no perdona ni lo que la allowlist permitía", () => {
     // El fichero sale de la allowlist REAL (`anAllowlisted`), no clavado a mano.

@@ -15,8 +15,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   AGENT_ROLES,
   ROLE_LABEL,
@@ -39,6 +40,7 @@ import {
 // `{}` borra la política y vuelve al default "todos los agentes, todas las MCP".
 // --------------------------------------------------------------------------
 export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
+  const errorText = useErrorText();
   const t = useT("mcpServers");
   const tRole = useT("agentRole");
   const tCommon = useT("common");
@@ -184,9 +186,7 @@ export function McpToolRolePolicySection({ projectId }: { projectId: string }) {
             className="bg-danger-soft text-danger-soft-foreground mb-3 rounded p-2 text-xs"
             data-testid="mcp-tool-roles-save-error"
           >
-            {saveMutation.error instanceof ApiError
-              ? saveMutation.error.body
-              : String(saveMutation.error)}
+            {errorText(saveMutation.error)}
           </p>
         ) : null}
 

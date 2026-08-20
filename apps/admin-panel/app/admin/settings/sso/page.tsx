@@ -43,6 +43,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { CallbackUrlCard } from "./callback-url-section";
 import { SsoConfigCard } from "./sso-config-section";
@@ -53,6 +54,7 @@ import type { CallbackUrl, SsoConfig, UpsertBody } from "./sso-types";
 // Page
 // --------------------------------------------------------------------------
 export default function SsoConfigPage() {
+  const errorText = useErrorText();
   const t = useT("ssoOidc");
   const queryClient = useQueryClient();
 
@@ -168,9 +170,7 @@ export default function SsoConfigPage() {
         </p>
       ) : configQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="sso-load-error">
-          {configQuery.error instanceof ApiError
-            ? configQuery.error.body
-            : String(configQuery.error)}
+          {errorText(configQuery.error)}
         </p>
       ) : config === null ? (
         <Card className="mt-6">
@@ -192,9 +192,7 @@ export default function SsoConfigPage() {
 
       {deleteMutation.isError ? (
         <p className="text-destructive mt-3 text-xs" data-testid="sso-delete-error">
-          {deleteMutation.error instanceof ApiError
-            ? deleteMutation.error.body
-            : String(deleteMutation.error)}
+          {errorText(deleteMutation.error)}
         </p>
       ) : null}
 

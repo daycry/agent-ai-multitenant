@@ -19,7 +19,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { PriorApprovalsNotice } from "./prior-approvals-notice";
 
@@ -84,6 +85,7 @@ export default function ApprovalsPage() {
 }
 
 function ApprovalCard({ request }: { request: ApprovalRequest }) {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +114,7 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
       // an unhandled rejection (frontend-admin-panel-7).
       await queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setError(errorText(err)),
   });
 
   return (

@@ -21,8 +21,8 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ApiError } from "@/lib/api";
 import { useLang } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   fmtRunDuration,
   fmtRunMoney,
@@ -100,6 +100,7 @@ const COPY = {
 } as const;
 
 export default function RunsPage() {
+  const errorText = useErrorText();
   const router = useRouter();
   const { lang } = useLang();
   const t = COPY[lang];
@@ -155,8 +156,7 @@ export default function RunsPage() {
       {runsQuery.isError && (
         <Card className="border-destructive p-4" data-testid="runs-error">
           <p className="text-destructive text-sm">
-            {t.loadError}{" "}
-            {runsQuery.error instanceof ApiError ? runsQuery.error.body : String(runsQuery.error)}
+            {t.loadError} {errorText(runsQuery.error)}
           </p>
         </Card>
       )}

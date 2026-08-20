@@ -34,9 +34,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { useT } from "@/lib/i18n";
 import { useTenantContext } from "@/lib/tenant-context";
+import { useErrorText } from "@/lib/use-error-text";
 import { cn } from "@/lib/utils";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 // The platform tenant is reserved for built-in catalogs (CLAUDE.md
 // §1). It must never appear as a selectable "acting tenant".
@@ -59,6 +61,16 @@ function slugify(name: string): string {
 }
 
 export function TenantPicker() {
+  /*
+   * El traductor NO puede llamarse `t` aquí: `t` es ya el nombre del tenant en
+   * cuatro callbacks de este mismo cuerpo (`filter`, `find`, dos `map`), y una
+   * llamada a `t("clave")` dentro de cualquiera de ellos invocaría al objeto
+   * tenant. El compilador no lo caza —un objeto tampoco es invocable, pero el
+   * error saldría en runtime— y ya pasó una vez en el wizard de proyectos
+   * (prod-16 `task_prod16_03`).
+   */
+  const tPicker = useT("tenantPicker");
+  const tCommon = useT("common");
   const {
     isSuperadmin,
     tenantId,
@@ -74,7 +86,7 @@ export function TenantPicker() {
 
   const tenants = allTenants.filter((t) => t.id !== PLATFORM_TENANT_ID);
   const current = tenants.find((t) => t.id === tenantId) ?? null;
-  const label = current?.name ?? "Todos los tenants";
+  const label = current?.name ?? tPicker("allTenants");
 
   return (
     <div className="relative">
@@ -119,19 +131,21 @@ export function TenantPicker() {
             >
               <span className="flex items-center gap-2">
                 <Globe className="h-3.5 w-3.5" />
-                <span>Todos los tenants</span>
-                <span className="text-muted-foreground text-xs">(portfolio)</span>
+                <span>{tPicker("allTenants")}</span>
+                <span className="text-muted-foreground text-xs">{tPicker("portfolioHint")}</span>
               </span>
               {tenantId === null && <Check className="text-primary h-3.5 w-3.5" />}
             </button>
             <div className="my-1 border-t" />
-            {tenantsLoading && <p className="text-muted-foreground px-3 py-2 text-xs">Cargando…</p>}
+            {tenantsLoading && (
+              <p className="text-muted-foreground px-3 py-2 text-xs">{tCommon("loading")}</p>
+            )}
             {!tenantsLoading && tenants.length === 0 && (
               <p
                 className="text-muted-foreground px-3 py-2 text-xs"
                 data-testid="tenant-picker-empty"
               >
-                Aún no hay tenants. Crea el primero abajo.
+                {tPicker("empty")}
               </p>
             )}
             {tenants.map((t) => {
@@ -174,7 +188,7 @@ export function TenantPicker() {
               )}
             >
               <Plus className="h-3.5 w-3.5" />
-              Crear tenant
+              {tPicker("create")}
             </button>
           </div>
         </>
@@ -207,6 +221,8 @@ function CreateTenantDialog({
   existingSlugs: string[];
   onCreated: (tenant: TenantSummary) => void;
 }) {
+  const t = useT("tenantPicker");
+  const errorText = useErrorText();
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   // Track whether the user hand-edited the slug; until then it
@@ -236,8 +252,10 @@ function CreateTenantDialog({
       onOpenChange(false);
       reset();
     },
+    // prod-16 `task_prod16_05`: `err.body` pintaba el cuerpo crudo del backend
+    // —el HTML de un gateway, el traceback de un 500— en la cabecera del panel.
     onError: (err: unknown) => {
-      setError(err instanceof ApiError ? err.body : String(err));
+      setError(errorText(err));
     },
   });
 
@@ -253,15 +271,12 @@ function CreateTenantDialog({
     >
       <DialogContent data-testid="create-tenant-dialog">
         <DialogHeader>
-          <DialogTitle>Crear tenant</DialogTitle>
-          <DialogDescription>
-            Un tenant es el espacio aislado de un equipo o departamento. Tras crearlo quedará
-            seleccionado como tenant activo.
-          </DialogDescription>
+          <DialogTitle>{t("create")}</DialogTitle>
+          <DialogDescription>{t("createDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="tenant-name">Nombre</Label>
+            <Label htmlFor="tenant-name">{t("nameLabel")}</Label>
             <Input
               id="tenant-name"
               value={name}
@@ -269,13 +284,13 @@ function CreateTenantDialog({
                 setName(e.target.value);
                 setError(null);
               }}
-              placeholder="Equipo de Plataforma"
+              placeholder={t("namePlaceholder")}
               data-testid="create-tenant-name"
               autoFocus
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="tenant-slug">Slug</Label>
+            <Label htmlFor="tenant-slug">{t("slugLabel")}</Label>
             <Input
               id="tenant-slug"
               value={effectiveSlug}
@@ -287,16 +302,12 @@ function CreateTenantDialog({
               placeholder="equipo-plataforma"
               data-testid="create-tenant-slug"
             />
-            <p className="text-muted-foreground text-xs">
-              Identificador en minúsculas, sólo letras, números y guiones.
-            </p>
+            <p className="text-muted-foreground text-xs">{t("slugHelp")}</p>
             {effectiveSlug.length > 0 && !slugValid && (
-              <p className="text-danger-soft-foreground text-xs">
-                Formato inválido: empieza por letra/número, sin espacios.
-              </p>
+              <p className="text-danger-soft-foreground text-xs">{t("slugInvalid")}</p>
             )}
             {slugValid && slugTaken && (
-              <p className="text-danger-soft-foreground text-xs">Ese slug ya existe, elige otro.</p>
+              <p className="text-danger-soft-foreground text-xs">{t("slugTaken")}</p>
             )}
           </div>
           {error && (
@@ -314,7 +325,7 @@ function CreateTenantDialog({
             onClick={() => onOpenChange(false)}
             data-testid="create-tenant-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => create.mutate()}
@@ -322,7 +333,7 @@ function CreateTenantDialog({
             data-testid="create-tenant-submit"
           >
             {create.isPending && <Spinner className="mr-2 h-4 w-4" />}
-            {create.isPending ? "Creando…" : "Crear tenant"}
+            {create.isPending ? t("creating") : t("create")}
           </Button>
         </DialogFooter>
       </DialogContent>

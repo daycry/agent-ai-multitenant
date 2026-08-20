@@ -43,6 +43,7 @@ import { ApiError, apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { runtimeLabel, useRuntimeTemplates } from "@/lib/runtime-templates";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types (mirror api_server.schemas.projects)
@@ -153,6 +154,7 @@ export default function ProjectCommandsPage() {
 // Editor — chips + presets + runtime selector + save
 // --------------------------------------------------------------------------
 function CommandsEditor({ project }: { project: Project }) {
+  const errorText = useErrorText();
   const t = useT("projectCommands");
   const queryClient = useQueryClient();
   const { lang } = useLang();
@@ -533,7 +535,7 @@ function CommandsEditor({ project }: { project: Project }) {
           )}
           {mutation.isError && (
             <span className="text-danger-soft-foreground text-sm" data-testid="commands-save-error">
-              {mutation.error?.body ?? mutation.error?.message ?? t("saveError")}
+              {mutation.error?.body ?? errorText(mutation.error)}
             </span>
           )}
         </div>

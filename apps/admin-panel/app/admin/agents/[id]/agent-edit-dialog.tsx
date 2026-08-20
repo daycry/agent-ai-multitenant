@@ -35,6 +35,7 @@ import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { MEMORY_SCOPE_OPTIONS } from "@/lib/memory/constants";
 import { privateScopeMemoryWarning } from "@/lib/memory/honesty";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   buildModelConfig,
   draftFromConfig,
@@ -56,6 +57,7 @@ export function AgentEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const errorText = useErrorText();
   const t = useT("agents");
   // Namespace aparte porque el catálogo de scopes lo comparten esta ficha y la
   // del equipo (`lib/memory/constants.ts`): la clave viene de la constante.
@@ -220,7 +222,7 @@ export function AgentEditDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="edit-agent-error"
             >
-              {mutation.error?.message ?? t("saveError")}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
