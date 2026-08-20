@@ -87,6 +87,27 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_01` — Integración OIDC con authlib
 
 - [x] **Título**: Integración OIDC con authlib
+  - ✅ **Cerrada SOBRE EL DISEÑO VIGENTE (2026-08-20) — lo que esta casilla entregó ya no
+    existe, y las dos veces por decisión escrita.** `tests/integration/test_oidc_generic.py`
+    nunca existió. El comando apunta ahora al test del diseño que SÍ corre:
+    `test_sso_global_login.py` levanta un OpenID Provider falso completo
+    (`httpx.MockTransport`) y recorre el flujo entero offline (verde 12/12). Pero repuntar sin
+    más habría escondido que **el sujeto cambió dos veces**:
+    1. **Per-tenant → GLOBAL.** Esta casilla implementó SSO por tenant
+       (`/auth/sso/{tenant_id}/oidc/login`, `_load_enabled_oidc_config(tenant_id)`,
+       `UniqueConstraint(tenant_id, provider)`) y lo formalizó en el ADR 0031. El
+       [ADR 0047](../05-architecture-decisions/0047-sso-auth-global-platform-membership-access.md)
+       (`accepted`, 2026-06-02) lo **supersede**: los providers son platform-global, el login
+       es por `provider_id`, la sesión emitida prueba IDENTIDAD sin tenant y el acceso lo dan
+       las memberships. Las rutas per-tenant **se retiraron sin redirección** — hay un test que
+       exige que devuelvan 404 (`test_old_per_tenant_login_routes_are_gone`).
+    2. **`authlib` ya no conduce nada.** La reescritura global dejó el flujo OIDC en
+       `api_server/auth/sso/oidc.py` sobre **httpx + joserfc** (discovery, JWKS, token,
+       userinfo y validación del ID token, a mano). Comprobado el 2026-08-20: **cero imports de
+       `authlib` en todo el árbol** (`apps/`, `packages/`, `tests/`, `docker/`). Sigue
+       declarada en `apps/api-server/pyproject.toml` con un comentario que dice «Authlib drives
+       the OIDC authorization-code flow», que es falso desde junio: es una **dependencia
+       huérfana**, y su retirada no se hace desde aquí (toca `constraints.txt` y `uv.lock`).
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -94,10 +115,10 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 - **Tests automáticos**:
   ```yaml
   - id: auto_08_01_a
-    description: "Integración OIDC con authlib"
+    description: "Flujo OIDC completo contra un IdP falso: login por provider, callback, sesión de identidad"
     check_type: automated
     runtime: python-pytest
-    command: "pytest tests/integration/test_oidc_generic.py -v"
+    command: "pytest tests/integration/test_sso_global_login.py -v"
     expected_signal: "exit_code == 0"
   ```
 
@@ -383,6 +404,30 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 #### `task_08_12` — Login discovery: email → tenant
 
 - [x] **Título**: Login discovery: email → tenant
+  - ✅ **Test ESCRITO (2026-08-20)** — el endpoint existe desde el 2026-05-30 y **no había ni un
+    test de lo que responde**. `GET /auth/discover?email=…` vive en
+    `routers/sso/discovery.py` (que cita `task_08_12` en su cabecera) y lo único que lo
+    cubría era `tests/unit/test_sso_router_package.py`, que comprueba que la RUTA existe y que
+    cuelga de `/auth` y no de `/auth/sso`. Eso no dice nada del comportamiento, y el
+    comportamiento es **la decisión de seguridad de este endpoint: es público y sin
+    autenticar.** El fichero nuevo fija las tres propiedades que lo hacen publicable: enruta
+    al provider que reclama el dominio (OIDC y SAML, `login_url` per-provider-id,
+    case-insensitive), **no enumera usuarios** —se compara la respuesta con y sin cuenta
+    existente, byte a byte, que es lo que vería un atacante— y falla al lado seguro (config
+    deshabilitada, soft-borrada o email malformado → `password`, nunca un error sondeable).
+    Más la colisión de dominios: dos configs reclamando el mismo resuelven **siempre a la más
+    antigua**, sin delatar que hubo dos. Verde 14/14, y **verificado en rojo con cuatro
+    mutaciones** (quitar el filtro `enabled`, quitar el de `deleted_at`, invertir el
+    `order_by` y dejar de normalizar a minúsculas): 5 rojos, cada uno en su test.
+  - ⚠️ **La mitad «→ tenant» del título quedó SIN OBJETO.** El
+    [ADR 0047](../05-architecture-decisions/0047-sso-auth-global-platform-membership-access.md)
+    (punto 3) descartó expresamente el claiming por dominio de email y el `default_tenant_id`
+    a favor de la asignación explícita por el administrador, así que el descubrimiento **ya no
+    puede decir a qué tenant pertenece un email**: responde qué provider usar, y el tenant se
+    resuelve por membership DESPUÉS del login. El campo `tenant_id` sigue en
+    `LoginDiscoveryResponse` por compatibilidad del contrato público y llega siempre `null`;
+    eso está pineado en el test (`test_the_answer_never_carries_a_tenant_anymore`) para que
+    nadie vuelva a poblarlo sin releer el ADR.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -390,7 +435,7 @@ El auth básica de Fase 0 (user+password local) es suficiente para arrancar. Est
 - **Tests automáticos**:
   ```yaml
   - id: auto_08_12_a
-    description: "Login discovery: email → tenant"
+    description: "GET /auth/discover: enruta por dominio, no enumera usuarios, falla al lado seguro"
     check_type: automated
     runtime: python-pytest
     command: "pytest tests/integration/test_login_discovery.py -v"

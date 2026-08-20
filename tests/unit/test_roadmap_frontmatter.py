@@ -446,6 +446,13 @@ def test_changelog_debt_has_not_grown() -> None:
 #: que no existe; desmarcarlas deja el plan `completed` con seis huecos. Las dos
 #: cosas son incoherentes, y la segunda al menos lo es **a la vista**.
 #:
+#: **2026-08-20: son siete.** `task_06_07` (el modo testcontainers) se desmarcó
+#: por lo MISMO y por el MISMO commit — `7959cdcb` se llevó también
+#: `TestcontainersMode`, el proxy DinD y `test_testcontainers_mode.py`, que la
+#: casilla declaraba. La entrada de este inventario no cambia (es por plan, no
+#: por casilla), pero la decisión pendiente del operador crece: el recorte de
+#: alcance del plan `06` son dos fases, no una.
+#:
 #: Por qué no se arregla cambiando el `status:`: pasar `06` a otro estado es
 #: aceptar un recorte de alcance o partir la fase, y las dos salidas están
 #: escritas en sus Criterios de Cierre esperando una decisión humana. CLAUDE.md

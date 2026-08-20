@@ -203,22 +203,34 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
     expected_signal: "exit_code == 0"
   ```
 
-#### `task_06_07` — Testcontainers opt-in con DinD proxy controlado
+#### `task_06_07` — Testcontainers opt-in con DinD proxy controlado — **RETIRADA**
 
-- [x] **Título**: Testcontainers opt-in con DinD proxy controlado
+- [ ] **RETIRADA (2026-08-20)** — el modo entero se fue del repo en el commit
+      [`7959cdcb`](../../) (2026-07-26, `Task-Id: task_wf_57`), el MISMO que se llevó el pool
+      elástico de la Fase E2: fuera `TestcontainersMode`, `build_dind_proxy_run_kwargs`,
+      `_start_dind_proxy`, el campo del spec, el `DOCKER_HOST` inyectado, los ajustes
+      `dind_proxy_*` y `tests/integration/test_testcontainers_mode.py` (181 líneas), que es
+      justamente el fichero que esta casilla declaraba. El motivo escrito allí: era **el único
+      camino del sistema que montaba el socket de Docker** en algún sitio, nunca se ejercitó
+      en producción, y «una vía de escape que nadie usa no compensa por muy endurecida que
+      esté». Enunciado original, conservado como historia del diseño:
+      Testcontainers opt-in con DinD proxy controlado
 - **Tiempo estimado**: 10 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev + security
 - **Dependencias**: `task_06_06`
-- **Tests automáticos**:
-  ```yaml
-  - id: auto_06_07_a
-    description: "Testcontainers opt-in con DinD proxy controlado"
-    check_type: automated
-    runtime: python-pytest
-    command: "pytest tests/integration/test_testcontainers_mode.py -v"
-    expected_signal: "exit_code == 0"
-  ```
+- **Tests automáticos**: ninguno, y esta vez el hueco es doble. El test que declaraba se borró
+  con la funcionalidad, y **el de seguridad que lo cubría se sustituyó por uno más fuerte**: el
+  que comprobaba que el proxy DinD dropeaba capacidades se quedó sin sujeto, y en su lugar está
+  el invariante de que ningún módulo del worker ni del agent-runtime puede volver a nombrar
+  `/var/run/docker.sock`
+  (`tests/security/test_pentest_findings.py::test_no_worker_path_mounts_the_docker_socket`, que
+  cita `task_wf_57` en su docstring), más el tripwire `assert_no_docker_socket` en cada
+  lanzamiento (`tests/integration/test_no_docker_socket.py`). Si el modo vuelve algún día,
+  vuelve con ADR.
+  - **Residuo detectado al cerrar esto (2026-08-20)**: `workers/test_runtime.py:792` conserva
+    la cabecera `# --- DinD proxy ---` sin nada debajo. No hace daño, pero anuncia una sección
+    que no existe: quien busque el proxy la encuentra y cree que sigue habiendo algo.
 
 ### Fase C — Caché de Dependencias
 
@@ -819,6 +831,22 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 #### `task_06_34` — Cap por tenant configurable + cola cuando se llega al cap
 
 - [x] **Título**: Cap por tenant configurable + cola cuando se llega al cap
+  - ✅ **Comando corregido (2026-08-20), y de las tres cosas del título sólo existe una.**
+    `tests/integration/test_review_cap.py` se borró en
+    [`7959cdcb`](../../) (2026-07-26, `task_wf_57`) junto al `ReviewRuntimeManager` en memoria
+    que medía. **La capacidad no se fue con la clase**: hoy el cap lo aplica la tarea Celery
+    `workers.compose_review_runtime` contando sesiones activas EN BD y rechazando la N+1-ésima
+    **antes** de crear fila o contenedor (`review_runtime_task.py:131`). Ese camino —el que
+    corre en producción, que el manager muerto nunca ejerció— lo cubre
+    `test_review_runtime_compose.py`, cuyo propio docstring dice que hasta él «el conteo en BD
+    y el retorno temprano NO estaban integration-tested».
+  - ⚠️ **Lo que el título promete y no está**: (a) el cap **no es configurable** —es la
+    constante `DEFAULT_TENANT_CAP = 5` de `workers/review_runtime.py`, sin setting ni columna
+    por tenant ni por proyecto—; y (b) **no hay cola**: al llegar al cap la petición se
+    RECHAZA (`status: "tenant_cap_exceeded"`), no se encola. Comprobado también contra el test
+    borrado: tampoco él probaba una cola, así que la mitad de encolado **nunca se construyó**,
+    no es que se haya perdido. La casilla se queda `[x]` por el cap, que sí está y sí está
+    probado; las dos mitades que faltan quedan escritas aquí para que se vean.
 - **Tiempo estimado**: 6 h
 - **Complejidad**: m
 - **Rol sugerido**: backend-dev
@@ -826,10 +854,16 @@ Esta es la fase más crítica del MVP. Sin ella, los agentes producen código pe
 - **Tests automáticos**:
   ```yaml
   - id: auto_06_34_a
-    description: "Cap por tenant configurable + cola cuando se llega al cap"
+    description: "El cap por tenant rechaza la N+1-ésima sesión SIN crear fila ni contenedor"
     check_type: automated
     runtime: python-pytest
-    command: "pytest tests/integration/test_review_cap.py -v"
+    command: "pytest tests/integration/test_review_runtime_compose.py -v -k tenant"
+    expected_signal: "exit_code == 0"
+  - id: auto_06_34_b
+    description: "La decisión pura del cap (frontera N/N+1 y default 5)"
+    check_type: automated
+    runtime: python-pytest
+    command: "pytest tests/unit/test_review_tenant_cap.py -v"
     expected_signal: "exit_code == 0"
   ```
 

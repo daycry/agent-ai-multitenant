@@ -387,11 +387,18 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       asignación de tools en seeds/catálogo para que el operador no pueda asignar una
       tool muerta.
 - **Tiempo**: 1 día · **Complejidad**: m
+- ✅ **Comando corregido (2026-08-20)**: el test **existe y pasa**, sólo que en otro árbol. La
+  tool corre DENTRO del sandbox, así que su test vive junto al código, en
+  `docker/agent-runtimes/agent-runtime/tests/` — la nota de cierre de la Fase D (arriba, del
+  2026-07-08) ya lo nombraba como `tests/test_docker_command_tool_retired.py`, que es su ruta
+  **relativa al agent-runtime**, y el bloque `command:` la copió como si fuera relativa a la
+  raíz del repo. Es el mismo desplazamiento que ya se corrigió en `task_prod03_12` y
+  `task_prod12_ssrf_02`. Verde 2/2 desde la raíz.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod12_docker_01_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_docker_command_tool_retired.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_docker_command_tool_retired.py -v"
   ```
 
 ### Fase E — Marketplace y antivirus (quality-4, api-1)

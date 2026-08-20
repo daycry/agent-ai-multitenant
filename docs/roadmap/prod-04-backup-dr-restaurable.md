@@ -251,13 +251,22 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 #### `task_prod_04_08` — GRANTs y ownership tras `pg_restore`
 
 - [x] **Título**: Re-concesión idempotente post-restore y validación del rol de conexión
+  - ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_restore_grants.py` nunca
+    existió; los cuatro tests que esta casilla pedía viven en
+    `tests/integration/test_restore_full.py`, bajo una cabecera que dice literalmente
+    «prod-04 task_prod_04_08 — GRANTs y rol de conexión». Cubren las dos mitades y el ORDEN,
+    que es lo que importa: los GRANTs se re-conceden **después** del `pg_restore` (antes no
+    habría tablas), con `ON_ERROR_STOP=1` para que un GRANT fallido no salga con rc=0, un
+    fallo del paso es fail-stopped, y restaurar con el DSN de `app_user` se **rechaza antes**
+    de tocar nada. El `-k` es necesario porque el fichero cubre además `task_12_10`,
+    `task_prod_04_05` y `task_prod_04_06`. Verde 4/4 (23 deseleccionados).
 - **Descripción**: El dump/restore descartan ownership y ACLs (`backup.py:369-376`, `restore.py:440-448`) y nada recrea los GRANTs de `app_user` (rol NOBYPASSRLS del que depende TODO el stack con FORCE RLS). Añadir al final del restore un paso idempotente: `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;` y `REASSIGN OWNED` / `ALTER TABLE ... OWNER TO migrations_user` cuando el rol de conexión no sea `migrations_user`. Validar en el motor que la URL de restore conecta como `migrations_user` (fail-closed con mensaje claro si no; `config.py:255-259` hoy solo pide «admin-grade»). Añadir al runbook la comprobación post-restore: conectar como `app_user`, SELECT/INSERT sobre una tabla con RLS, y `alembic upgrade head` como `migrations_user`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod_04_08_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_restore_grants.py -v"
+    command: "pytest tests/integration/test_restore_full.py -v -k 'grant or role'"
   ```
 
 ### Fase E — Defaults de producción y vías secundarias

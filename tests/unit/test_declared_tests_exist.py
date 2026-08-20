@@ -99,14 +99,77 @@ dieron **12 rojos** al correrlos juntos mientras cinco agentes usaban el mismo
 stack, y **21/21 verdes** al correrlos de uno en uno. Antes de apuntar un rojo de
 integracion en ningun sitio, correlo solo.
 
-Lo que queda (15) ya no es mecanico, y por eso se para aqui: son casillas de
-los planes viejos (06, 06.5, 07, 08) **sin nota de cierre**, donde no hay nada
-escrito que diga que test las cubre. Varias huelen a una tercera forma distinta
-—la casilla describe un diseño que un ADR posterior sustituyo: el ``task_08_01``
-pide OIDC por tenant y el SSO se rehizo global (ADR 0047)—, y esa se arregla
-sincerando la casilla, no repuntando el comando. Requiere leer el codigo y
-decidir caso por caso; hacerlo por parecido de nombre seria cambiar una mentira
-por otra.
+Tercera cosecha, 2026-08-20: **-15 entradas (el inventario queda VACÍO)**. Eran
+las que la segunda dejó por no mecanizables: casillas de planes viejos (06, 06.5,
+07, 08, prod-01, prod-04, prod-05, prod-12, prod-13, prod-17, prod-18) **sin nota
+de cierre**, o sea sin nada escrito que dijera qué test las cubría. Se reparten
+así, y cuatro de las cinco formas ya estaban catalogadas:
+
+* **forma 1** (el test existe con otro nombre o en otro árbol), **10**: las diez
+  se identificaron LEYENDO el fichero candidato, y en siete el propio docstring
+  nombra la tarea. Ocho piden `-k` porque el fichero cubre varias casillas.
+* **forma 8** (el fichero se fue con la funcionalidad), **1**: ``task_06_07``, el
+  modo testcontainers, borrado en ``7959cdcb`` — el MISMO commit de las ocho de
+  ``task_06_20b*`` y de ``task_prod_02_12``. Tres cosechas y sigue apareciendo:
+  ese commit se llevó 2.200 líneas y **nadie repasó las casillas que las
+  declaraban**. Casilla DESMARCADA: no hay dos maneras de cerrar en ``[x]`` código
+  que no existe.
+* **forma 9, NUEVA** (la casilla describe un diseño que un ADR posterior
+  sustituyó), **1**: ``task_08_01`` implementó OIDC *per-tenant* y el ADR 0047
+  rehízo el SSO GLOBAL, retirando esas rutas sin redirección. El comando pasa a
+  apuntar al test del diseño VIGENTE y la casilla lo dice. Aquí repuntar a secas
+  habría sido lo peor de todo: dejaría el plan afirmando un diseño derogado, y con
+  un test en verde debajo.
+* **forma 10, NUEVA** (el test no existía y hacía falta: se escribe), **2**:
+  ``task_06_5_01`` (migración ``review_sessions``) y ``task_08_12``
+  (``GET /auth/discover``). Los dos llevan más de dos años en producción y de los
+  dos había lo mismo: una guarda genérica que los cubría *por descubrimiento* y
+  ni un test de su comportamiento propio. 22 tests nuevos.
+* **forma 11, NUEVA** (la medida es automática pero NO es un pytest), **1**:
+  ``task_prod01_01`` declaraba ``tests/smoke/test_app_images_build.py``, o sea
+  cuatro ``docker build`` de imágenes pesadas dentro de la suite. Eso es el job
+  ``build-images`` de CI. La orden pasa a las dos guardas que sí son pytest y que
+  cubren el modo de fallo real —que el job y el workflow de publicación **no se
+  dejen una app atrás**, derivando la lista de los Dockerfiles—. Distinta de la
+  forma 2: allí la medida no podía ser automática; aquí puede, pero no aquí.
+
+**Lo que enseña esta cosecha, y no se veía desde el inventario:** en dos casos el
+comando roto era el síntoma menor. ``task_06_34`` promete «cap por tenant
+**configurable** + **cola** cuando se llega al cap»; existe el cap, es la
+constante ``DEFAULT_TENANT_CAP = 5`` y la N+1 se **rechaza**, no se encola. Ni el
+test borrado probaba una cola: esa mitad **nunca se construyó**. Y el título de
+``task_08_12`` dice «email → tenant», mitad que el ADR 0047 descartó
+expresamente. O sea: **un ``command:`` que apunta a un fichero inexistente es
+además el sitio donde se esconde un enunciado que nadie ha releído**, porque es lo
+único del bloque que una máquina puede comprobar. Buscar el test obliga a leer el
+código, y ahí salen las promesas que sobran.
+
+Dos trampas para quien añada órdenes con ``-k``, las dos pagadas aquí:
+
+* **``-k`` casa contra el node id COMPLETO, nombre de fichero incluido.**
+  ``test_redis_cache_and_chat_rate_limit.py -k 'rate_limit or …'`` selecciona los
+  8 tests del fichero, no los 4 de la casilla — el ``rate_limit`` del NOMBRE casa
+  siempre. Se comprueba con ``--collect-only`` antes de escribir la orden; así se
+  detectó.
+* **Un test puede pasar por el motivo equivocado.** El primer test de la
+  invariante ``plan_id NULL ⇒ kind='preview'`` insertaba con un ``tenant_id``
+  inventado: habría pasado por la violación de la FK del tenant, y habría seguido
+  verde el día que el CHECK desapareciera. Lleva ahora el nombre de la constraint
+  en el assert y su control al lado (la misma fila como ``preview`` SÍ entra).
+
+Las 15 correcciones se CORRIERON, una a una y los ficheros de integración en
+solitario (la máquina llevaba cinco agentes): 22 tests nuevos en verde, 55 de
+integración y 51 unit sobre los repuntes. Y con rojos deliberados, para que no
+sean asserts decorativos: cuatro mutaciones del router de discovery (filtro
+``enabled``, filtro ``deleted_at``, ``order_by`` invertido, sin normalizar a
+minúsculas) dieron 5 rojos, cada uno en su test, y quitar ``review_sessions`` de
+la migración 0125 puso en rojo el assert del ``FORCE``.
+
+**El inventario queda vacío, y ése es el estado bueno**: los dos tests de abajo
+siguen vigilando las dos direcciones — que no aparezca una casilla marcada nueva
+con un test que no existe, y que nadie vuelva a meter aquí una entrada muerta. El
+por qué de cada caso NO vive en este fichero: vive en la nota de cierre de su
+casilla, que es donde mira quien va a implementarla.
 """
 
 from __future__ import annotations
@@ -123,115 +186,21 @@ _TAREA = re.compile(r"^#{2,5}\s+`?(task_[\w.]+)`?")
 _CASILLA = re.compile(r"^\s*-\s+\[([ xX])\]")
 
 #: Inventario CONGELADO el 2026-08-19: (fichero del plan, tarea, camino que falta).
-#: No crece. Al arreglar una entrada, borrala de aqui: hay un test que se pone
-#: rojo si sobra.
-_DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
-    [
-        (
-            "06-testing-revision-git.md",
-            "task_06_07",
-            "tests/integration/test_testcontainers_mode.py",
-        ),
-        # Las OCHO entradas de `task_06_20b1`..`b6` (el pool elastico de runtime) salieron
-        # el 2026-08-19: no eran comandos desfasados sino casillas `[x]` describiendo
-        # codigo BORRADO en el commit 7959cdcb (2026-07-26), que se llevo por delante
-        # `workers/runtime_pool.py` y esos mismos ocho ficheros de test. Las seis casillas
-        # estan hoy desmarcadas y con el enunciado reescrito en
-        # docs/roadmap/06-testing-revision-git.md.
-        ("06-testing-revision-git.md", "task_06_34", "tests/integration/test_review_cap.py"),
-        (
-            "06.5-orchestrator-wiring.md",
-            "task_06_5_01",
-            "tests/integration/test_migration_review_sessions.py",
-        ),
-        ("07-documentacion-visor.md", "task_07_18", "tests/integration/test_docs_rbac.py"),
-        ("08-sso-empresarial.md", "task_08_01", "tests/integration/test_oidc_generic.py"),
-        ("08-sso-empresarial.md", "task_08_12", "tests/integration/test_login_discovery.py"),
-        (
-            "prod-01-despliegue-ejecutable.md",
-            "task_prod01_01",
-            "tests/smoke/test_app_images_build.py",
-        ),
-        # `task_prod03_12` salio el 2026-08-19: los cuatro hooks corren DENTRO del sandbox,
-        # asi que sus tests viven en docker/agent-runtimes/agent-runtime/tests/
-        # (test_llm_guardrail_hooks / test_guardrails_enforce / test_act_guardrail_wiring /
-        # test_guardrails_seam), no en tests/integration/.
-        (
-            "prod-04-backup-dr-restaurable.md",
-            "task_prod_04_08",
-            "tests/integration/test_restore_grants.py",
-        ),
-        # Cuatro entradas de prod-05 salieron el 2026-08-19 (`task_prod05_01`, `_05`, `_06`
-        # y `_08`): las cuatro declaraban un test de INTEGRACION que nunca existio, y las
-        # cuatro propiedades estan probadas en `tests/unit/` porque no necesitan BD — lo
-        # que verifican es el anillo de claves, el ORDEN de las operaciones y la cabecera
-        # del blob. El `_06` lo decia ya su propia prosa («vive en tests/unit/ porque no
-        # necesita Postgres ni Redis») sin que nadie bajara a corregir el `command:`.
-        (
-            "prod-05-rotacion-claves.md",
-            "task_prod05_03",
-            "tests/integration/test_mfa_key_rotation_story.py",
-        ),
-        # `task_prod06_evento_01` salio el 2026-08-19: el resweep de tareas `ready` varadas
-        # lo cubre el beat de dag_02 (test_dag_promotion.py + test_dag_promotion_beat.py),
-        # como la propia casilla ya decia («no se duplica»).
-        # `task_prod06_zombi_03` NO lo retira este carril: otro de la misma ola escribio
-        # `tests/unit/test_celery_broker_options.py` (sin comitear todavia) y dejo la
-        # entrada atras, con lo que `test_the_inventory_has_no_dead_entries` se ponia rojo
-        # por una razon ajena. Se borra aqui para no dejar la suite en rojo; si aquel
-        # carril intenta borrarla tambien, su edicion fallara en limpio (no encontrara el
-        # texto) en vez de duplicar nada.
-        # `task_prod10_06` salio el 2026-08-19: su `auto_..._b` se RETIRA en vez de
-        # repuntarse. Afirmaba una propiedad del contenedor DESPLEGADO, no del codigo, y
-        # eso es `human_prod10_02`, que ya la lleva en su checklist.
-        # `task_prod10_11` salio el 2026-08-19, y era el peor de los 76: el fichero no solo
-        # faltaba, es que habria verificado la MIGRACION A VAULT — la opcion A, la que el
-        # ADR 0146 descarto. El bloque yaml declara ahora lo que de verdad hay que
-        # comprobar: que la salvaguarda de la opcion B se cumple y que la excepcion
-        # Fernet-en-columna no ha crecido (tests/unit/test_backup_column_secrets.py).
-        (
-            "prod-12-hardening-tools-agentes.md",
-            "task_prod12_docker_01",
-            "tests/unit/test_docker_command_tool_retired.py",
-        ),
-        # `task_prod12_ssrf_02` salio el 2026-08-19: el anclaje de DNS y el
-        # `follow_redirects=False` los prueba
-        # docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py,
-        # al lado del codigo. Ojo: las entradas de `task_prod12_ssrf_01` de aqui arriba
-        # apuntan a `tests/unit/` con ESE MISMO nombre de fichero y siguen vivas — son otra
-        # casilla y no las toca este arreglo.
-        # `task_prod13_10` salio el 2026-08-19: el indice y la unificacion de configuracion
-        # FTS los prueba tests/integration/test_bm25_search.py.
-        # `task_prod13_17` salio el 2026-08-19: lo cubre tests/unit/test_row_lock_and_pagination.py,
-        # que nombra la tarea en su primera linea y es unit a proposito (verifica la FIRMA
-        # que FastAPI publica y el SQL emitido; ninguna de las dos necesita Postgres).
-        (
-            "prod-13-rendimiento-y-datos.md",
-            "task_prod13_20",
-            "tests/integration/test_assistant_chat_rate_limit.py",
-        ),
-        (
-            "prod-17-bucle-ai-reviewer.md",
-            "task_prod17_loop_02",
-            "tests/unit/test_review_spec_builder.py",
-        ),
-        (
-            "prod-17-bucle-ai-reviewer.md",
-            "task_prod17_test_01",
-            "tests/integration/test_test_runtime_wiring.py",
-        ),
-        (
-            "prod-18-worktree-en-ejecucion.md",
-            "task_prod18_commit_01",
-            "tests/integration/test_execution_commits_to_worktree.py",
-        ),
-        (
-            "prod-18-worktree-en-ejecucion.md",
-            "task_prod18_test_01",
-            "tests/integration/test_test_runtime_wiring.py",
-        ),
-    ]
-)
+#: Nacio con **76** entradas y esta **VACIO desde el 2026-08-20** (tres cosechas:
+#: -20, -39, -15). Se queda aquí, vacío y con su nombre y su fecha, porque su
+#: trabajo no era la lista: es el par de tests de abajo, que ahora vigilan un
+#: suelo de cero. Al inventario NO se vuelve a añadir nada — una casilla nueva que
+#: declare un test inexistente rompe `test_no_new_marked_task_declares_a_test_that
+#: _does_not_exist`, y la respuesta es escribir el test o corregir el comando, no
+#: apuntarlo aquí.
+#:
+#: Por qué no se borra el símbolo: un `frozenset()` vacío con nombre fechado dice
+#: «esto se midió, se saldó y sigue medido». Sin él, `_declarados_que_faltan()`
+#: quedaría comparándose contra nada y el día que alguien reintrodujese deuda no
+#: habría dónde ver que un día hubo 76 ni que se cerraron una por una. El relato
+#: de las tres cosechas está en el docstring del módulo; el por-qué de cada caso,
+#: en la nota de cierre de su casilla del roadmap.
+_DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset()
 
 
 #: Prefijos contra los que se resuelve un camino declarado, en el orden en que

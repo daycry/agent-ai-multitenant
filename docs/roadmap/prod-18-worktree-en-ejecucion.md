@@ -169,11 +169,19 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
       es error). Lo hace el worker (el sandbox no tiene credenciales).
 - **Tiempo**: 2,5 días · **Complejidad**: m
 - **Depende de**: task_prod18_provision_01
+- ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_execution_commits_to_worktree.py`
+  nunca existió; los dos tests que esta casilla pedía están en
+  `tests/integration/test_conduct_execution_worktree.py`, el mismo fichero que declara
+  `task_prod18_provision_01` (de ahí el `-k`: cada orden verifica su fase). Cubren las **dos**
+  ramas del enunciado con git de verdad en `tmp_path`: el fichero que escribe el agente llega
+  al bare con los tres trailers (`Plan-Id`, `Task-Id`, `Execution-Id`), y el **árbol limpio no
+  es un error** —`commit_task` lanza «worktree is clean», se traga, no se empuja nada y la
+  rama se queda en el commit semilla vacío. Verde 2/2 (7/7 el fichero entero).
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod18_commit_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_execution_commits_to_worktree.py -v"
+    command: "pytest tests/integration/test_conduct_execution_worktree.py -v -k commit_and_push"
   ```
 
 ### Fase D — Encadenar el test-runtime (cierra prod-17 test_01)
@@ -188,11 +196,23 @@ task_id, branch=make_plan_branch_name(plan))` + `sync_to_head` antes de lanzar e
       Decidir el orden tests↔in_review (los tests deben estar antes de la review).
 - **Tiempo**: 2,5 días · **Complejidad**: m
 - **Depende de**: task_prod18_commit_01
+- ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_test_runtime_wiring.py` nunca
+  existió, ni aquí ni en prod-17 `task_prod17_test_01`, que declaraba **el mismo camino
+  inexistente**. Los tests están en `tests/integration/test_conduct_execution_worktree.py`
+  (`-k run_task_tests`): la petición al test-runtime lleva el `worktree_host_path` del
+  implementador y **filtra** los criterios de aceptación —sólo los automáticos; sin ninguno no
+  se despacha nada—. El segundo comando cubre dónde corre eso hoy: `task_wf_22` movió la fase
+  de la cola `default` a la cola `test` con espera acotada, así que lo que aquel test fijaba
+  (qué request se construye) sigue valiendo, pero el seam cambió. Las dos casillas apuntan
+  ahora al mismo par de órdenes, que es lo correcto: es un cableado, no dos. Verde 2/2 + 11/11.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod18_test_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_test_runtime_wiring.py -v"
+    command: "pytest tests/integration/test_conduct_execution_worktree.py -v -k run_task_tests"
+  - id: auto_prod18_test_01_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_test_phase_queue.py -v"
   ```
 
 ### Fase E — e2e, hardening y cierre

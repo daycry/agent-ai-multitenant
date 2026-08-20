@@ -1187,12 +1187,24 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
       `RateLimiter.check_with_headers` (`auth/rate_limit.py:51`) con budget
       configurable en platform_settings. **Coordinación**: prod-07 añade los
       budgets/contabilidad LLM — este límite es la válvula de QPS, no de coste.
+  - ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_assistant_chat_rate_limit.py`
+    nunca existió; la válvula la prueba `tests/integration/test_redis_cache_and_chat_rate_limit.py`,
+    cuya primera línea dice «prod-13 · task_prod13_20 + task_prod13_21». Cubre las dos mitades
+    del título —429 pasado el presupuesto **por usuario** y el **cap por tenant que muerde
+    aunque cada usuario individual vaya por debajo del suyo**— más los headers
+    `X-RateLimit-*` copiados al endpoint de stream y el fallback a default de un setting
+    corrupto (que si no, apagaría la válvula en silencio). Contra Redis de verdad, porque una
+    ventana deslizante vive dentro de un `ZSET`. Verde 4/4.
+  - ⚠️ **El `-k` no puede nombrar `rate_limit`**, y esto es una trampa que conviene dejar
+    escrita: `-k` casa contra el **node id completo**, y el nombre del FICHERO ya contiene
+    `rate_limit`, así que `-k 'rate_limit or …'` selecciona los 8 tests, incluidos los 4 de
+    la caché de `platform_settings` que son de `task_prod13_21`. De ahí el `429`.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod13_20_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_assistant_chat_rate_limit.py -v"
+    command: "pytest tests/integration/test_redis_cache_and_chat_rate_limit.py -v -k '429 or tenant_cap or valve or stream_endpoint'"
   ```
 
 #### `task_prod13_21` — Caché Redis para membership y platform_settings

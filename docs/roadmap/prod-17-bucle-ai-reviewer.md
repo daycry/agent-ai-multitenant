@@ -189,11 +189,28 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
       sepa aplicar el veredicto al terminar.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Depende de**: task_prod17_loop_01
+- ✅ **Comando corregido (2026-08-20)**: `tests/unit/test_review_spec_builder.py` nunca existió,
+  y el builder tampoco es una función suelta llamada así — es `_build_review_request` en
+  `orchestrator/dispatch.py`. Las **dos** mitades del título están probadas, en dos ficheros
+  porque son dos cosas distintas y se rompen por separado:
+  - **el contexto que se arma** (criterios de aceptación reales, salida del implementador,
+    `<test-report>` si lo hay, envoltorio de presupuesto) →
+    `tests/integration/test_in_review_dispatch.py`, cuyo docstring dice «prod-17
+    task_prod17_loop_01 + loop_02». El `-k review_request` separa lo de esta casilla de lo de
+    `loop_01`, que declara el fichero entero. Verde 3/3;
+  - **la marca de «esto es una review»** que el worker necesita para aplicar el veredicto al
+    terminar → `tests/unit/test_agent_spec_review_context.py`, que nació de un hallazgo de
+    auditoría (C1/F51): el orquestador construía `review_context` y **el worker no lo
+    reenviaba al contenedor**, así que el reviewer trabajaba a ciegas y rechazaba por defecto
+    todas las tareas. Verde 3/3.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod17_loop_02_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_review_spec_builder.py -v"
+    command: "pytest tests/integration/test_in_review_dispatch.py -v -k review_request"
+  - id: auto_prod17_loop_02_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_agent_spec_review_context.py -v"
   ```
 
 #### `task_prod17_loop_03` — Aplicación del veredicto al terminar la ejecución de review
@@ -224,11 +241,23 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
       `task_audit_events`. Coordinar con prod-06 (la tarea ya pasa a `in_review`); el
       TestReport debe estar disponible antes de la review. > **BLOQUEO descubierto (2026-06-26):** `conduct_execution` NO fija > `ContainerSpec.workspace_host_path` — el agente implementador corre **sin el repo > del proyecto montado** ("la pool con reuso de worktree llega en Plan 06", ver > `container.py`). Sin un worktree con el código del implementador, el test-runtime no > tiene QUÉ testear. Es el subsistema de **git-worktrees / ejecución en worktree** > (CLAUDE.md principios 4/5), separado y mayor que esta tarea. test_01 espera ese > cableado; mientras tanto no se produce TestReport y test_02 (consumidor) degrada > elegantemente (revisa el diff). Candidato a un plan dedicado de worktree-execution.
 - **Tiempo**: 2 días · **Complejidad**: m
+- ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_test_runtime_wiring.py` nunca
+  existió. El cableado que desbloqueó esta casilla lo entregó **prod-18 Fase D**, y sus tests
+  se escribieron allí, con el nombre del fichero de aquel plan: `_run_task_tests` recibe el
+  `worktree_host_path` y **sólo** los criterios de aceptación automáticos (los `human` se
+  descartan) → `tests/integration/test_conduct_execution_worktree.py -k run_task_tests`, cuyo
+  docstring dice «prod-18 test_01». El segundo comando cubre el cambio de sitio que vino
+  después (`task_wf_22`): la fase de tests **sale del worker `default`** y se despacha a la
+  cola `test`, siguiendo esperando el resultado a propósito, porque el reviewer se despacha
+  detrás y necesita encontrar un `<test-report>` real. Verde 2/2 + 11/11.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod17_test_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_test_runtime_wiring.py -v"
+    command: "pytest tests/integration/test_conduct_execution_worktree.py -v -k run_task_tests"
+  - id: auto_prod17_test_01_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_test_phase_queue.py -v"
   ```
 
 #### `task_prod17_test_02` — Inyección de `<test-report>` en el prompt del reviewer

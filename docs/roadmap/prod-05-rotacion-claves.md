@@ -236,11 +236,31 @@ verificaciones el código realmente cumple.
   `config.py:155-158`) en el runbook de `task_prod05_09`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Dependencias**: `task_prod05_01`, `task_prod05_02`
+- ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_mfa_key_rotation_story.py` nunca
+  existió, y no hacía falta que existiera **en `integration/`**: lo que esta casilla entrega no
+  necesita Postgres. Los tres entregables están cubiertos y cada uno en su sitio:
+  - el **ADR** se firmó — [ADR 0143](../05-architecture-decisions/0143-clave-de-cifrado-mfa-propia.md),
+    `accepted` 2026-07-31, con `task: task_prod05_03` en el frontmatter y **opción A**
+    (clave propia `API_SERVER_MFA_ENCRYPTION_KEY(S)` con herencia del anillo SSO si no está
+    configurada);
+  - la **implementación** la fija `tests/unit/test_multifernet_builders.py` §4 («MFA gets its
+    own ring, ADR 0143»): hereda el anillo SSO sin clave propia, se desacopla con ella, y la
+    variable singular también cuenta como dedicada — más el caso parametrizado del anillo
+    (token escrito con la clave vieja que sigue leyéndose). Verde 4/4;
+  - el **break-glass** del lockout admin lo vigila
+    `test_runbook_key_rotation_lint.py::test_the_mfa_break_glass_is_documented_with_the_exact_setting`,
+    que además exige que el runbook diga cómo **volver a poner** `ADMIN_REQUIRE_MFA=true`
+    («the step people forget»). Verde 1/1.
+    El re-cifrado de `user_mfa_totp` con su propia familia lo ejerce, en integración,
+    `tests/integration/test_reencrypt_secrets_command.py`.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod05_03_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_mfa_key_rotation_story.py -v"
+    command: "pytest tests/unit/test_multifernet_builders.py -v -k mfa"
+  - id: auto_prod05_03_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_runbook_key_rotation_lint.py -v -k break_glass"
   ```
 
 ### Fase B — Aceptación dual JWT (gap2-7)
