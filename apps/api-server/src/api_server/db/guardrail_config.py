@@ -51,7 +51,7 @@ from shared_guardrails.layers import (
     ResolvedConfig,
     resolve_config,
 )
-from sqlalchemy import Integer, String, select
+from sqlalchemy import Integer, String, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,9 +84,13 @@ class GuardrailConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     project_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     #: Contador de escrituras, para invalidar caché sin releer el JSONB entero.
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     updated_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
 

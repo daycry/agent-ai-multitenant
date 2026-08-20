@@ -46,10 +46,14 @@ class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     provider_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
-    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
 
     # PARTE DE LA CLAVE PRIMARIA desde part-01 (ADR 0151, migración 0135), lo que
     # OBLIGA a redeclararla aquí pisando la de `TimestampMixin`: PostgreSQL exige

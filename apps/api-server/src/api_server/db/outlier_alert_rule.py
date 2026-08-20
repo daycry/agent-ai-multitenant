@@ -206,7 +206,9 @@ class OutlierAlertRule(
     # --- lifecycle -----------------------------------------------------------
     # A disabled rule is never evaluated (kept for re-enabling without losing
     # its config / history).
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     # Debounce anchor: when the rule last fired an alert. The evaluator
     # suppresses a re-fire until a full window has elapsed since this, so a
     # sustained outlier yields at most ONE alert per rule per window. NULL =
