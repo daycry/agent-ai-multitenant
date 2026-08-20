@@ -177,10 +177,10 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   ```yaml
   - id: auto_prod12_ssrf_01_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_ssrf_guard.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_ssrf_guard.py -v"
   - id: auto_prod12_ssrf_01_b
     runtime: python-pytest
-    command: "pytest tests/unit/test_http_tools_destination_validation.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py -v"
   ```
 
 #### `task_prod12_ssrf_02` — Anclaje de DNS y `follow_redirects=False` explícito
@@ -244,7 +244,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   ```yaml
   - id: auto_prod12_allow_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_execution_request_allowed_domains.py -v"
+    command: "pytest tests/unit/test_execution_request_allowed_domains.py -v"
   ```
 
 #### `task_prod12_allow_02` — Test e2e de la cadena de allowlist + documentación
@@ -295,7 +295,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   ```yaml
   - id: auto_prod12_net_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_network_policy_open_egress.py -v"
+    command: "pytest tests/integration/test_install_sandbox.py -v"
   ```
 
 #### `task_prod12_img_01` — Imágenes de test-runtime no-root y dep-cache escribible

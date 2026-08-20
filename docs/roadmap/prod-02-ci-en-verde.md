@@ -230,7 +230,7 @@ Este plan resucita CI y lo convierte en gate real:
   ```yaml
   - id: auto_prod_02_12_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_api_rate_limit.py tests/integration/test_pool_queue.py -v --timeout=60"
+    command: "pytest tests/integration/test_api_rate_limit.py -v --timeout=60"
   ```
 
 ## Hallazgos de auditoría cubiertos

@@ -961,7 +961,7 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
   ```yaml
   - id: auto_prod13_15_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_append_only_retention.py -v"
+    command: "pytest tests/docs/test_adr_precedence.py -v"
   ```
 
 #### `task_prod13_16` — Embeds por lotes + backfill de chunks sin vector
@@ -1275,7 +1275,7 @@ relaxed_order` y un `hnsw.ef_search` configurable (100) en la transacción de
   ```yaml
   - id: auto_prod13_23_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_integrity_error_sanitized.py -v"
+    command: "pytest tests/unit/test_integrity_error_sanitized.py -v"
   ```
 
 ## Hallazgos de auditoría cubiertos

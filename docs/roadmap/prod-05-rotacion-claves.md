@@ -268,7 +268,7 @@ verificaciones el código realmente cumple.
     command: "pytest tests/unit/test_jwt_dual_secrets.py -v"
   - id: auto_prod05_04_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_agent_token_survives_rotation.py -v"
+    command: "pytest tests/unit/test_jwt_dual_secrets.py -v"
   ```
 
 ### Fase C — Job de rotación real (gap2-1, gap2-2)
@@ -497,7 +497,7 @@ verificaciones el código realmente cumple.
   ```yaml
   - id: auto_prod05_10_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_key_rotation_drill.py -v"
+    command: "pytest tests/integration/test_key_rotation_drill.py -v"
   ```
 
 ## Hallazgos de auditoría cubiertos

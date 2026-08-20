@@ -372,8 +372,8 @@ Este plan cierra **toda** la superficie de sesión y autorización en 5 frentes:
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod09_12_a
-    runtime: python-pytest
-    command: "pytest tests/integration/test_ws_ticket_auth.py -v"
+    runtime: node-vitest
+    command: "npm --prefix apps/admin-panel run test -- lib/ws.test.ts"
   ```
 
 #### `task_prod09_13` — Re-validación periódica de sesiones WS

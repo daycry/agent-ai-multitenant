@@ -161,7 +161,7 @@ converja a un estado terminal visible.
     command: "pytest tests/integration/test_dag_promotion.py -v"
   - id: auto_prod06_dag_02_b
     runtime: python-pytest
-    command: "pytest tests/e2e/test_plan_autonomous_lifecycle.py -v"
+    command: "pytest tests/integration/test_autonomous_cycle.py -v"
   ```
 
 #### `task_prod06_dag_03` — Cablear el reviewer bridge al flujo post-ejecución
@@ -232,7 +232,7 @@ converja a un estado terminal visible.
   ```yaml
   - id: auto_prod06_zombi_02_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_worker_lost_redelivery.py -v"
+    command: "pytest tests/unit/test_worker_lost_redelivery.py -v"
   ```
 
 #### `task_prod06_zombi_03` — visibility_timeout coherente con el hard limit

@@ -49,6 +49,64 @@ entradas (``task_06_20b1``..``b6``) no eran comandos desfasados sino casillas
 elastico de runtime). El fichero que falta era la sombra de un modulo que
 tampoco esta. Este test detecta el sintoma; distinguirlo del resto exige mirar
 el ``git log``.
+
+Segunda cosecha, 2026-08-20: **-39 entradas** (de 54 a 15), en cinco formas
+que no coinciden con las tres de arriba:
+
+4. **La guarda se equivocaba** (4). Los comandos
+   ``npm --prefix apps/admin-panel run e2e -- agent-persona.spec.ts`` CORREN:
+   Playwright resuelve ese argumento contra su ``testDir``, y este fichero lo
+   resolvia contra la raiz del repo. Cuatro falsos positivos en un inventario de
+   54 no son un detalle cosmetico: **un inventario con ruido pierde la autoridad
+   para señalar los verdaderos**, que es justo lo que hace util a esta guarda. El
+   arreglo esta en ``_PREFIJOS``, atado al ``testDir`` real por
+   ``test_the_playwright_test_dir_is_still_e2e``.
+5. **La carpeta declarada no es donde acabo el test** (10). El plan escribio
+   ``tests/e2e/`` o ``tests/integration/`` cuando se diseño la tarea, y el test
+   acabo en ``tests/integration/`` o ``tests/unit/``. Varias notas de cierre lo
+   DICEN con todas las letras —``tests/e2e/`` pide runner Docker y CI no lo
+   corre, «un test que no se ejecuta no vigila»— pero nadie volvio al bloque
+   ``command:``.
+6. **El nombre declarado no existio nunca** (13, todas de prod-03 y prod-08). El
+   plan escribio el nombre que la tarea imaginaba y el implementador escribio
+   otro. Se identifico el fichero real LEYENDOLO, no por parecido: varios lo
+   dicen en su propio docstring («coordinado con prod-03 ``task_prod03_02``»,
+   «prod-08 Fase B, task 07»). Dos casillas resultaron necesitar DOS ficheros
+   —el unit del mapeo y el de integracion de la persistencia—, y una un ``-k``,
+   porque un fichero cubre dos casillas y cada orden debe verificar la suya.
+
+7. **La casilla estaba cerrada EN NEGATIVO** (1, ``task_prod13_15``): el
+   ADR 0151 descarto la task que pedia, asi que el test que declaraba no existe
+   y no debe existir. Su orden pasa a ser la guarda de gobernanza que pinea ese
+   cierre (``rejects: [task_prod13_15]`` en el frontmatter del ADR). Y una
+   septima (``task_prod12_net_01``) tenia el test nombrado en su propia nota de
+   cierre, tres parrafos mas abajo del bloque ``command:`` que lo contradecia.
+
+8. **El fichero se BORRO con la funcionalidad** (1, ``task_prod_02_12``).
+   ``test_pool_queue.py`` desaparecio en ``7959cdcb`` (2026-07-26) junto al pool
+   elastico de runtime — el mismo commit que ya explicaba las ocho de
+   ``task_06_20b*``. La orden se queda con la mitad viva (el rate-limiter). Aqui
+   NO basta con repuntar: hay que mirar el ``git log``, porque un fichero que se
+   fue con su feature y uno que se renombro se ven igual desde aqui.
+
+**Las 39 correcciones se corrigieron y se CORRIERON**, todas en verde: 354 tests
+unit, 108 de integracion y las 8 de la guarda de gobernanza. Cambiar la ruta sin
+correr el test habria sustituido una orden imposible por una orden sin comprobar,
+que es la misma clase de mentira una capa mas arriba.
+
+Un aviso para la tercera cosecha, aprendido aqui: tres ficheros de integracion
+dieron **12 rojos** al correrlos juntos mientras cinco agentes usaban el mismo
+stack, y **21/21 verdes** al correrlos de uno en uno. Antes de apuntar un rojo de
+integracion en ningun sitio, correlo solo.
+
+Lo que queda (15) ya no es mecanico, y por eso se para aqui: son casillas de
+los planes viejos (06, 06.5, 07, 08) **sin nota de cierre**, donde no hay nada
+escrito que diga que test las cubre. Varias huelen a una tercera forma distinta
+—la casilla describe un diseño que un ADR posterior sustituyo: el ``task_08_01``
+pide OIDC por tenant y el SSO se rehizo global (ADR 0047)—, y esa se arregla
+sincerando la casilla, no repuntando el comando. Requiere leer el codigo y
+decidir caso por caso; hacerlo por parecido de nombre seria cambiar una mentira
+por otra.
 """
 
 from __future__ import annotations
@@ -81,10 +139,6 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
         # estan hoy desmarcadas y con el enunciado reescrito en
         # docs/roadmap/06-testing-revision-git.md.
         ("06-testing-revision-git.md", "task_06_34", "tests/integration/test_review_cap.py"),
-        ("06.17-capacitacion-agentes.md", "task_06_17_11", "agent-persona.spec.ts"),
-        ("06.17-capacitacion-agentes.md", "task_06_17_16", "capability-hub.spec.ts"),
-        ("06.18-tools-overhaul.md", "task_06_18_09", "tools-affordance.spec.ts"),
-        ("06.18-tools-overhaul.md", "task_06_18_11", "tools-catalog.spec.ts"),
         (
             "06.5-orchestrator-wiring.md",
             "task_06_5_01",
@@ -93,63 +147,15 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
         ("07-documentacion-visor.md", "task_07_18", "tests/integration/test_docs_rbac.py"),
         ("08-sso-empresarial.md", "task_08_01", "tests/integration/test_oidc_generic.py"),
         ("08-sso-empresarial.md", "task_08_12", "tests/integration/test_login_discovery.py"),
-        ("09-marketplace.md", "task_09_10", "tests/unit/test_tool_format.py"),
-        ("09-marketplace.md", "task_09_13", "e2e/playwright-tool-config.spec.ts"),
         (
             "prod-01-despliegue-ejecutable.md",
             "task_prod01_01",
             "tests/smoke/test_app_images_build.py",
         ),
-        ("prod-02-ci-en-verde.md", "task_prod_02_12", "tests/integration/test_pool_queue.py"),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_01",
-            "tests/integration/test_approval_gate_presets.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_01",
-            "tests/unit/test_approval_categories_contract.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_02",
-            "tests/integration/test_mcp_tool_gating.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_02",
-            "tests/unit/test_tool_category_coverage.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_03",
-            "tests/integration/test_approval_default_policy.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_05",
-            "tests/unit/test_beat_schedule.py",
-        ),
         # `task_prod03_12` salio el 2026-08-19: los cuatro hooks corren DENTRO del sandbox,
         # asi que sus tests viven en docker/agent-runtimes/agent-runtime/tests/
         # (test_llm_guardrail_hooks / test_guardrails_enforce / test_act_guardrail_wiring /
         # test_guardrails_seam), no en tests/integration/.
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_13",
-            "tests/integration/test_guardrail_events_from_worker.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_14",
-            "tests/e2e/test_planning_guardrails_route.py",
-        ),
-        (
-            "prod-03-guardrails-validacion-humana.md",
-            "task_prod03_15",
-            "tests/e2e/test_customer_external_preset_gates.py",
-        ),
         (
             "prod-04-backup-dr-restaurable.md",
             "task_prod_04_08",
@@ -166,94 +172,18 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod05_03",
             "tests/integration/test_mfa_key_rotation_story.py",
         ),
-        (
-            "prod-05-rotacion-claves.md",
-            "task_prod05_04",
-            "tests/integration/test_agent_token_survives_rotation.py",
-        ),
-        ("prod-05-rotacion-claves.md", "task_prod05_10", "tests/e2e/test_key_rotation_drill.py"),
-        (
-            "prod-06-ciclo-vida-ejecucion.md",
-            "task_prod06_dag_02",
-            "tests/e2e/test_plan_autonomous_lifecycle.py",
-        ),
         # `task_prod06_evento_01` salio el 2026-08-19: el resweep de tareas `ready` varadas
         # lo cubre el beat de dag_02 (test_dag_promotion.py + test_dag_promotion_beat.py),
         # como la propia casilla ya decia («no se duplica»).
-        (
-            "prod-06-ciclo-vida-ejecucion.md",
-            "task_prod06_zombi_02",
-            "tests/integration/test_worker_lost_redelivery.py",
-        ),
         # `task_prod06_zombi_03` NO lo retira este carril: otro de la misma ola escribio
         # `tests/unit/test_celery_broker_options.py` (sin comitear todavia) y dejo la
         # entrada atras, con lo que `test_the_inventory_has_no_dead_entries` se ponia rojo
         # por una razon ajena. Se borra aqui para no dejar la suite en rojo; si aquel
         # carril intenta borrarla tambien, su edicion fallara en limpio (no encontrara el
         # texto) en vez de duplicar nada.
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_celery_logging_09",
-            "apps/notification-dispatcher/tests/test_logging_pipeline.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_celery_logging_09",
-            "apps/workers/tests/test_logging_pipeline.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_dashboards_07",
-            "tests/unit/test_grafana_dashboards_valid_json.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_loki_deploy_12",
-            "tests/integration/test_monitoring_compose_loki.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_metrics_api_04",
-            "tests/integration/test_metrics_endpoint.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_metrics_workers_05",
-            "apps/workers/tests/test_metrics_exporter.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_request_id_10",
-            "tests/integration/test_request_id_propagation.py",
-        ),
-        (
-            "prod-08-observabilidad-alertas.md",
-            "task_prod08_scrape_rules_06",
-            "tests/integration/test_prometheus_rules_lint.py",
-        ),
-        (
-            "prod-09-sesiones-autorizacion-frontend.md",
-            "task_prod09_12",
-            "tests/integration/test_ws_ticket_auth.py",
-        ),
-        (
-            "prod-10-vault-secretos-operables.md",
-            "task_prod10_02",
-            "tests/integration/test_init_vault_script.py",
-        ),
         # `task_prod10_06` salio el 2026-08-19: su `auto_..._b` se RETIRA en vez de
         # repuntarse. Afirmaba una propiedad del contenedor DESPLEGADO, no del codigo, y
         # eso es `human_prod10_02`, que ya la lleva en su checklist.
-        (
-            "prod-10-vault-secretos-operables.md",
-            "task_prod10_07",
-            "tests/integration/test_vault_token_renewal.py",
-        ),
-        (
-            "prod-10-vault-secretos-operables.md",
-            "task_prod10_08",
-            "tests/integration/test_vault_service_tokens.py",
-        ),
         # `task_prod10_11` salio el 2026-08-19, y era el peor de los 76: el fichero no solo
         # faltaba, es que habria verificado la MIGRACION A VAULT — la opcion A, la que el
         # ADR 0146 descarto. El bloque yaml declara ahora lo que de verdad hay que
@@ -261,28 +191,8 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
         # Fernet-en-columna no ha crecido (tests/unit/test_backup_column_secrets.py).
         (
             "prod-12-hardening-tools-agentes.md",
-            "task_prod12_allow_01",
-            "tests/integration/test_execution_request_allowed_domains.py",
-        ),
-        (
-            "prod-12-hardening-tools-agentes.md",
             "task_prod12_docker_01",
             "tests/unit/test_docker_command_tool_retired.py",
-        ),
-        (
-            "prod-12-hardening-tools-agentes.md",
-            "task_prod12_net_01",
-            "tests/integration/test_network_policy_open_egress.py",
-        ),
-        (
-            "prod-12-hardening-tools-agentes.md",
-            "task_prod12_ssrf_01",
-            "tests/unit/test_http_tools_destination_validation.py",
-        ),
-        (
-            "prod-12-hardening-tools-agentes.md",
-            "task_prod12_ssrf_01",
-            "tests/unit/test_ssrf_guard.py",
         ),
         # `task_prod12_ssrf_02` salio el 2026-08-19: el anclaje de DNS y el
         # `follow_redirects=False` los prueba
@@ -292,11 +202,6 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
         # casilla y no las toca este arreglo.
         # `task_prod13_10` salio el 2026-08-19: el indice y la unificacion de configuracion
         # FTS los prueba tests/integration/test_bm25_search.py.
-        (
-            "prod-13-rendimiento-y-datos.md",
-            "task_prod13_15",
-            "tests/integration/test_append_only_retention.py",
-        ),
         # `task_prod13_17` salio el 2026-08-19: lo cubre tests/unit/test_row_lock_and_pagination.py,
         # que nombra la tarea en su primera linea y es unit a proposito (verifica la FIRMA
         # que FastAPI publica y el SQL emitido; ninguna de las dos necesita Postgres).
@@ -304,11 +209,6 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "prod-13-rendimiento-y-datos.md",
             "task_prod13_20",
             "tests/integration/test_assistant_chat_rate_limit.py",
-        ),
-        (
-            "prod-13-rendimiento-y-datos.md",
-            "task_prod13_23",
-            "tests/integration/test_integrity_error_sanitized.py",
         ),
         (
             "prod-17-bucle-ai-reviewer.md",
@@ -330,22 +230,51 @@ _DECLARED_TEST_DEBT_2026_08_19: frozenset[tuple[str, str, str]] = frozenset(
             "task_prod18_test_01",
             "tests/integration/test_test_runtime_wiring.py",
         ),
-        (
-            "remediacion-auditoria-integral-2026-07-14.md",
-            "task_audit14_06",
-            "tests/docs/test_worker_db_factory_contract.py",
-        ),
     ]
+)
+
+
+#: Prefijos contra los que se resuelve un camino declarado, en el orden en que
+#: lo haría quien ejecuta el comando desde la raíz del repo.
+#:
+#: `apps/admin-panel/e2e/` no es un prefijo más: es el `testDir` de
+#: `apps/admin-panel/playwright.config.ts`, y por eso un comando como
+#: `npm --prefix apps/admin-panel run e2e -- agent-persona.spec.ts` CORRE aunque
+#: el token no sea un camino desde la raíz. Sin esta entrada, la guarda marcaba
+#: como inexistentes cuatro specs que existen y pasan — un falso positivo en una
+#: guarda es exactamente lo que le quita autoridad para señalar los verdaderos.
+#: Que siga siendo `e2e` lo comprueba `test_the_playwright_test_dir_is_still_e2e`.
+_PREFIJOS = (
+    "",
+    "apps/admin-panel/",
+    "apps/admin-panel/e2e/",
+    "apps/api-server/",
+    "apps/installer/",
 )
 
 
 def _existe(token: str) -> bool:
     base = token.split("::", maxsplit=1)[0]
-    for pref in ("", "apps/admin-panel/", "apps/api-server/", "apps/installer/"):
+    for pref in _PREFIJOS:
         for t in (token, base):
             if (_RAIZ / (pref + t)).exists():
                 return True
     return False
+
+
+def test_the_playwright_test_dir_is_still_e2e() -> None:
+    """`_PREFIJOS` copia el `testDir` de Playwright; si cambia, aquí se entera.
+
+    Sin esto, el día que alguien mueva los specs la guarda seguiría resolviendo
+    contra un directorio que ya no existe y volvería a marcar como inexistente
+    todo spec nombrado a secas — sin que nada explique por qué.
+    """
+    config = _RAIZ / "apps" / "admin-panel" / "playwright.config.ts"
+    assert config.is_file(), f"no encuentro {config}"
+    assert 'testDir: "./e2e"' in config.read_text(encoding="utf-8"), (
+        "el `testDir` de Playwright ya no es `./e2e`. Actualiza `_PREFIJOS` o la"
+        " guarda volverá a dar falsos positivos con los specs nombrados a secas."
+    )
 
 
 def _declarados_que_faltan() -> set[tuple[str, str, str]]:

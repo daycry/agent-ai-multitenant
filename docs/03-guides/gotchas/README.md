@@ -152,6 +152,11 @@ el problema ya esté documentado.
 
 ### pre-commit / mypy / ruff
 
+- [pre-commit-revierte-el-arbol-de-los-agentes-en-paralelo.md](./pre-commit-revierte-el-arbol-de-los-agentes-en-paralelo.md)
+  — un agente ve sus ediciones borradas sin haber tocado git: `pre-commit`
+  **aparta los unstaged a un patch** mientras corren los hooks, y con el hook de
+  mypy sobre el árbol entero esa ventana dura minutos. No comitees mientras haya
+  agentes escribiendo.
 - [pre-commit-python-version-pin.md](./pre-commit-python-version-pin.md)
   — pin `python3.12` rompe en host 3.13.
 - [pre-commit-checkyaml-compose-tags.md](./pre-commit-checkyaml-compose-tags.md)
@@ -249,6 +254,12 @@ el problema ya esté documentado.
   sirve `DBSIZE 0` sin un solo error. Un backup/restore basado en `BGSAVE` +
   `dump.rdb` restaura sesiones, broker de Celery y rate limits VACÍOS y nadie se
   entera. Se captura el `appendonlydir` tras un `BGREWRITEAOF`.
+- [celery-defaults-del-api-server-ignoran-redis-port.md](./celery-defaults-del-api-server-ignoran-redis-port.md)
+  — con `REDIS_PORT=6380` en `docker/.env`, los defaults de Celery del api-server
+  siguen apuntando al 6379, donde hay algo que **acepta la conexión y no
+  contesta**: cada enqueue desde un proceso del host cuesta ~110 s antes de
+  rendirse, y el turno del córtex se los come enteros. Hay que redirigir DOS
+  variables, no una: la que revienta es `API_SERVER_RESULT_BACKEND`.
 - [auth-rate-limit-dev-loop.md](./auth-rate-limit-dev-loop.md)
   — el rate limit de `/auth/login` se acumula entre runs del E2E
   y trips 429; limpia `rl:login:*` antes de probar.

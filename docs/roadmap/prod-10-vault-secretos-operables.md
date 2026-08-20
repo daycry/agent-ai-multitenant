@@ -122,7 +122,7 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
   ```yaml
   - id: auto_prod10_02_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_init_vault_script.py -v"
+    command: "pytest tests/unit/test_init_vault_script.py -v"
   ```
 
 #### `task_prod10_03` — Guard de CI/pre-commit + `.dockerignore` ampliado
@@ -283,7 +283,7 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
     command: "pytest tests/unit/test_vault_token_manager.py -v"
   - id: auto_prod10_07_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_vault_token_renewal.py -v"
+    command: "pytest tests/unit/test_worker_vault_token_renewal.py tests/unit/test_vault_token_manager.py -v"
   ```
 
 #### `task_prod10_08` — Minteo de tokens por servicio contra las políticas existentes
@@ -304,7 +304,7 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
     por servicio» (tabla variable→política) y la rotación del token de servicio en
     `docs/06-runbooks/05-key-rotation.md` §10.
   - **Desviación del plan**: el test se llamaba
-    `tests/integration/test_vault_service_tokens.py`; vive en `tests/unit/` porque
+    `tests/unit/test_vault_service_tokens.py`; vive en `tests/unit/` porque
     con el shim no necesita ni Vault ni base de datos.
 - **Descripción**: `vault_bootstrap.py:303` escribe políticas por servicio pero nadie mintea tokens contra ellas (no hay `create_token`); `init-vault.sh` delega en el operador. Añadir a `scripts/` (o al bootstrap del installer, coordinado con prod-01) el paso que crea tokens periódicos por servicio (`vault token create -policy=<svc> -period=72h -orphan`) y los entrega vía `.env` prefijado por servicio, eliminando el uso del root token en configs (en dev se mantiene `dev-root-token`). Documentar la rotación del token de servicio en `docs/06-runbooks/05-key-rotation.md`.
 - **Tiempo**: 1,5 días · **Complejidad**: m
@@ -313,7 +313,7 @@ root-token.txt,unseal-keys.txt}`, dos con material `hvs.`, en disco desde el
   ```yaml
   - id: auto_prod10_08_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_vault_service_tokens.py -v"
+    command: "pytest tests/unit/test_vault_service_tokens.py -v"
   ```
 
 #### `task_prod10_09` — Unseal post-reinicio: ADR + healthcheck honesto + alerta "Vault sealed"

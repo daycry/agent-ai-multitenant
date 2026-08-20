@@ -170,10 +170,10 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
   ```yaml
   - id: auto_prod03_01_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_approval_categories_contract.py -v"
+    command: "pytest tests/unit/test_seeded_approval_policies_contract.py -v"
   - id: auto_prod03_01_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_approval_gate_presets.py -v"
+    command: "pytest tests/unit/test_approval_gate_categories.py -v"
   ```
   El test `_b` verifica end-to-end de datos: con el preset
   `customer-external`, `ApprovalGate.review("http_post")` devuelve categoría
@@ -197,10 +197,10 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
   ```yaml
   - id: auto_prod03_02_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_tool_category_coverage.py -v"
+    command: "pytest tests/unit/test_approval_gate_categories.py -v"
   - id: auto_prod03_02_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_mcp_tool_gating.py -v"
+    command: "pytest tests/unit/test_mcp_tool_approval_category.py -v"
   ```
 
 #### `task_prod03_03` — Default de plataforma y política para categoría no listada
@@ -224,7 +224,7 @@ candados, definiendo de paso la política fail-open/fail-closed del motor.
   ```yaml
   - id: auto_prod03_03_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_approval_default_policy.py -v"
+    command: "pytest tests/unit/test_default_approval_policy.py tests/unit/test_unlisted_approval_category.py -v"
   ```
 
 ### Fase B — Ciclo de vida de aprobaciones
@@ -274,7 +274,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
     command: "pytest tests/integration/test_approval_expiry_job.py -v"
   - id: auto_prod03_05_b
     runtime: python-pytest
-    command: "pytest tests/unit/test_beat_schedule.py -k approval -v"
+    command: "pytest tests/unit/test_approval_expiry_beat.py -v"
   ```
 
 #### `task_prod03_06` — Aprobar autoriza la acción (fin del bucle ADR 0020)
@@ -483,7 +483,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
   ```yaml
   - id: auto_prod03_13_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_guardrail_events_from_worker.py -v"
+    command: "pytest tests/unit/test_persist_guardrail_events.py tests/integration/test_guardrail_events.py -v"
   ```
 
 #### `task_prod03_14` — Cablear el chat de planning y «Generar Plan» por la RUTA
@@ -510,7 +510,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
   ```yaml
   - id: auto_prod03_14_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_planning_guardrails_route.py -v"
+    command: "pytest tests/integration/test_planning_guardrails_route.py -v"
   ```
 
 ### Fase E — Verificación integral y documentación
@@ -530,7 +530,7 @@ status='pending'` (o `SELECT ... FOR UPDATE` + re-check en la misma
   ```yaml
   - id: auto_prod03_15_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_customer_external_preset_gates.py -v"
+    command: "pytest tests/integration/test_customer_external_preset_gates.py -v"
   ```
 
 #### `task_prod03_16` — Documentación y ADRs

@@ -321,7 +321,7 @@ tests/docs/test_new_gotchas_documented.py tests/unit/test_docs_governance.py`
     command: "pytest tests/integration/test_worker_tenant_boundary.py tests/integration/test_autonomous_cycle.py -v"
   - id: auto_audit14_06_c
     runtime: python-pytest
-    command: "pytest tests/docs/test_worker_db_factory_contract.py -v"
+    command: "pytest tests/unit/test_worker_engines_nullpool.py tests/unit/test_worker_db_factory.py -v"
   ```
 
 #### `task_audit14_07` — Backpressure y timeout de envío WebSocket

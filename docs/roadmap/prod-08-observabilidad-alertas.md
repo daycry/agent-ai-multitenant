@@ -362,7 +362,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_04_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_metrics_endpoint.py -v"
+    command: "pytest tests/unit/test_metrics_endpoint_wired.py -v"
   ```
 
 #### `task_prod08_metrics_workers_05` — `/metrics` en workers + PoolMetrics
@@ -389,7 +389,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_05_a
     runtime: python-pytest
-    command: "pytest apps/workers/tests/test_metrics_exporter.py -v"
+    command: "pytest tests/unit/test_metrics_exporter.py -v"
   ```
 
 #### `task_prod08_scrape_rules_06` — Scrape configs + reglas de alerta de servicio
@@ -406,7 +406,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_06_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_prometheus_rules_lint.py -v  # promtool check rules vía subprocess"
+    command: "pytest tests/unit/test_prometheus_rules_and_scrape.py -v  # promtool check rules vía subprocess"
   ```
 
 #### `task_prod08_dashboards_07` — Dashboards Grafana de aplicación
@@ -421,7 +421,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_07_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_grafana_dashboards_valid_json.py -v"
+    command: "pytest tests/unit/test_grafana_dashboards.py -v"
   ```
 
 ### Fase C — Logging uniforme y correlación (observability-3, observability-7)
@@ -463,7 +463,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_09_a
     runtime: python-pytest
-    command: "pytest apps/workers/tests/test_logging_pipeline.py apps/notification-dispatcher/tests/test_logging_pipeline.py -v"
+    command: "pytest tests/unit/test_celery_logging_pipeline.py -v"
   ```
 
 #### `task_prod08_request_id_10` — `request_id` a través de la frontera Celery
@@ -481,7 +481,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_10_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_request_id_propagation.py -v"
+    command: "pytest tests/unit/test_celery_logging_pipeline.py -k request_id -v"
   ```
 
 ### Fase D — Decisiones de stack: Loki y OTEL (observability-4, observability-5)
@@ -524,7 +524,7 @@ alertmanager` → verde). Lo único nuevo es que **las otras dos casillas de est
   ```yaml
   - id: auto_prod08_12_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_monitoring_compose_loki.py -v  # compose config + query LogQL smoke"
+    command: "pytest tests/unit/test_monitoring_compose_loki.py -v  # compose config + query LogQL smoke"
   ```
 
 #### `task_prod08_otel_cleanup_13` — Implementar la opción aprobada del ADR-OTEL
