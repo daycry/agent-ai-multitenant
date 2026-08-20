@@ -284,6 +284,7 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
       que ya no es lo único que falta**ba**.
 - **Tiempo**: 1 día · **Complejidad**: m · **Depende de**: `task_prod16_01`
 - **Tests automáticos**:
+
   ```yaml
   # CORREGIDO el 2026-08-19: el comando nombraba `e2e/lang-toggle.spec.ts`, que
   # NUNCA ha existido. Playwright con un fichero que no casa no pasa en verde —
@@ -295,6 +296,28 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
     runtime: node-jest
     command: "npm --prefix apps/admin-panel run e2e -- e2e/lang-switcher.spec.ts"
   ```
+
+  - 📏 **Qué la bloquea EXACTAMENTE (2026-08-20, medido).** Las notas anteriores
+    decían «levantar el stack y correr `lang-switcher.spec.ts`». Se intentó, y esa
+    frase esconde dos requisitos que no son lo mismo:
+    1. **Un api-server en `localhost:8001`.** El spec **no mockea nada**
+       (`grep -c 'page.route' e2e/lang-switcher.spec.ts` → 0), así que no entra en
+       el subset que corre CI y necesita backend vivo. El stack desplegado NO
+       sirve: su contenedor publica `8000/tcp` hacia dentro y nada al host
+       (`docker ps` lo confirma), y el gateway del 8080 contesta 404 en esa ruta.
+       Lo que el arnés espera es el `uvicorn api_server.main:app --port 8001` que
+       documenta el encabezado de `playwright.config.ts`.
+    2. **Un usuario con contraseña.** El spec hace login REAL con
+       `E2E_ADMIN_EMAIL`/`E2E_ADMIN_PASSWORD` (defaults `root@example.com` /
+       `longenoughpw`) y espera llegar a `/admin/dashboard`.
+       Con el 1 sin cumplir, los tres tests caen en el MISMO sitio —
+       `expect(page).toHaveURL(/\/admin\/dashboard$/)` en la línea 26, el login que
+       no completa—, así que **el rojo no dice nada sobre el idioma**: no es evidencia
+       ni a favor ni en contra de esta casilla.
+       **Y una advertencia para quien lo monte:** los specs no mockeados crean y
+       borran proyectos, agentes y equipos. Apuntar ese api-server a la BD del stack
+       vivo le escribe encima. Se levanta contra una **BD desechable**, como hizo el
+       carril del córtex con `agentic_cortex_f2`.
 
 #### `task_prod16_03` — Migrar módulos núcleo de administración
 
