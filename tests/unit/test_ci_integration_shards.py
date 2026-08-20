@@ -139,11 +139,51 @@ def test_the_workflow_still_uses_this_formula() -> None:
         f" {_SHARDS}. Cambia `_SHARDS` aquí."
     )
 
-    matriz = re.search(r"shard:\s*\[([0-9,\s]+)\]", texto)
+    matriz = re.search(r"shard:\s*\[([0-9a-z,\s]+)\]", texto)
     assert matriz, "no encuentro la matriz `shard:` en el workflow"
-    valores = [int(v) for v in matriz.group(1).split(",")]
+    entradas = [v.strip() for v in matriz.group(1).split(",")]
+    valores = [int(v) for v in entradas if v.isdigit()]
     assert valores == list(range(_SHARDS)), (
-        f"la matriz del workflow es {valores}; con `i % {_SHARDS}` los índices"
-        f" tienen que ser exactamente {list(range(_SHARDS))} o hay ficheros que"
-        " no corre nadie"
+        f"los shards numéricos de la matriz son {valores}; con `i % {_SHARDS}`"
+        f" los índices tienen que ser exactamente {list(range(_SHARDS))} o hay"
+        " ficheros que no corre nadie"
+    )
+    assert "gate" in entradas, (
+        "la matriz ya no trae la entrada `gate`. No es un quinto shard: es el"
+        " job que corre la puerta cross-tenant y tests/migrations. Si vuelve a"
+        " colgar del shard 0, vuelve el acoplamiento que la dejó `skipped`"
+        " (ver test_the_gate_does_not_hang_off_a_shard)"
+    )
+
+
+def test_the_gate_does_not_hang_off_a_shard() -> None:
+    """La puerta y las migraciones corren en su job, no detrás de un cuarto.
+
+    Vivieron colgadas del shard 0 hasta el 2026-08-20, y el run 32306122292
+    enseñó lo que eso cuesta: el cuarto de la suite agotó el reloj del job, y
+    los 33 tests de ``tests/migrations`` —que corrían DESPUÉS— quedaron
+    ``skipped`` sin que nada lo dijera. Una puerta que sólo habla cuando su
+    vecino acaba bien se calla justo cuando hace falta.
+
+    Este test fija esa separación. Si alguien devuelve cualquiera de los dos
+    pasos a ``matrix.shard == 0``, aquí se entera.
+    """
+    texto = _WORKFLOW.read_text(encoding="utf-8")
+
+    for paso in ("pytest cross-tenant isolation gate", "pytest tests/migrations"):
+        i = texto.find(f"- name: {paso}")
+        assert i != -1, f"no encuentro el paso «{paso}» en el workflow"
+        condicion = texto[i : i + 400]
+        assert "matrix.shard == 'gate'" in condicion, (
+            f"«{paso}» ya no está condicionado a `matrix.shard == 'gate'`."
+            " Si vuelve a un shard numérico, hereda sus fallos: el día que ese"
+            " shard agote el reloj, este paso no corre y el job no lo dice."
+        )
+
+    j = texto.find("- name: pytest tests/integration (shard")
+    assert j != -1, "no encuentro el paso del cuarto de la suite"
+    assert "matrix.shard != 'gate'" in texto[j : j + 400], (
+        "el cuarto de la suite ya no excluye al job `gate`: correría un quinto"
+        " reparto que ningún índice de `i % 4` produce, o sea nada, gastando un"
+        " stack entero para no probar ni un fichero"
     )
