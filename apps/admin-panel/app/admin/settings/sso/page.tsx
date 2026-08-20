@@ -42,6 +42,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 import { CallbackUrlCard } from "./callback-url-section";
 import { SsoConfigCard } from "./sso-config-section";
@@ -52,6 +53,7 @@ import type { CallbackUrl, SsoConfig, UpsertBody } from "./sso-types";
 // Page
 // --------------------------------------------------------------------------
 export default function SsoConfigPage() {
+  const t = useT("ssoOidc");
   const queryClient = useQueryClient();
 
   const configQuery = useQuery({
@@ -121,7 +123,7 @@ export default function SsoConfigPage() {
 
   function handleDelete() {
     if (config === null) return;
-    if (!window.confirm("¿Borrar la configuración OIDC de este tenant?")) return;
+    if (!window.confirm(t("confirmDelete"))) return;
     deleteMutation.mutate(config.id);
   }
 
@@ -132,15 +134,15 @@ export default function SsoConfigPage() {
     >
       <PageHeader
         icon={<Shield className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="SSO empresarial (OIDC)"
-        description="Inicio de sesión único por tenant. Se añade junto al login local — activarlo no lo reemplaza ni lo desactiva."
+        title={t("title")}
+        description={t("description")}
         data-testid="sso-config-header"
         actions={
           config === null ? (
             <RoleGuard min="tenant_admin">
               <Button onClick={handleCreate} data-testid="sso-create-button">
                 <Plus className="mr-1 h-3.5 w-3.5" />
-                Configurar OIDC
+                {t("configure")}
               </Button>
             </RoleGuard>
           ) : null
@@ -148,9 +150,9 @@ export default function SsoConfigPage() {
       />
 
       <p className="text-muted-foreground mt-2 text-sm" data-testid="sso-saml-link">
-        ¿Tu IdP habla SAML 2.0 en lugar de OIDC?{" "}
+        {t("samlLinkQuestion")}{" "}
         <Link href="/admin/settings/sso/saml" className="text-primary underline">
-          Configura SAML aquí
+          {t("samlLinkText")}
         </Link>
         .
       </p>
@@ -162,7 +164,7 @@ export default function SsoConfigPage() {
 
       {configQuery.isLoading ? (
         <p className="text-muted-foreground mt-6 text-sm" data-testid="sso-loading">
-          Cargando…
+          {t("loading")}
         </p>
       ) : configQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="sso-load-error">
@@ -174,8 +176,7 @@ export default function SsoConfigPage() {
         <Card className="mt-6">
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="sso-empty">
-              Este tenant aún no tiene SSO configurado. Pulsa <strong>“Configurar OIDC”</strong>{" "}
-              para conectarlo con tu proveedor de identidad.
+              {t("emptyBefore")} <strong>“{t("configure")}”</strong> {t("emptyAfter")}
             </p>
           </CardContent>
         </Card>

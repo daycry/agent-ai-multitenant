@@ -15,11 +15,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 import { type PlatformChannelTypes } from "./notification-types";
 
 export function PlatformTab() {
+  const t = useT("notifications");
+  const tCommon = useT("common");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const query = useQuery({
@@ -43,7 +46,7 @@ export function PlatformTab() {
   });
 
   if (query.isLoading) {
-    return <p className="text-muted-foreground mt-4 text-sm">Cargando…</p>;
+    return <p className="text-muted-foreground mt-4 text-sm">{tCommon("loading")}</p>;
   }
   if (query.isError || !query.data || draft === null) {
     return (
@@ -65,12 +68,10 @@ export function PlatformTab() {
   return (
     <Card className="mt-4" data-testid="platform-channel-types">
       <CardHeader>
-        <CardTitle className="text-base">Transportes habilitados globalmente</CardTitle>
+        <CardTitle className="text-base">{t("platformTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="text-muted-foreground mb-4 text-sm">
-          Un tenant solo puede configurar canales de los transportes habilitados aquí.
-        </p>
+        <p className="text-muted-foreground mb-4 text-sm">{t("platformHint")}</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {query.data.available.map((type) => (
             <label
@@ -97,7 +98,7 @@ export function PlatformTab() {
               disabled={saveMutation.isPending}
               data-testid="platform-save"
             >
-              {saveMutation.isPending ? "Guardando…" : "Guardar"}
+              {saveMutation.isPending ? t("saving") : t("save")}
             </Button>
             {saveMutation.isError ? (
               <span className="text-destructive text-xs" data-testid="platform-save-error">

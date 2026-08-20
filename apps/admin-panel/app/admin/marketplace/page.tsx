@@ -73,7 +73,7 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
-import { useT } from "@/lib/i18n";
+import { useT, type Translator } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
@@ -136,10 +136,19 @@ const TRUST_BADGE: Record<string, BadgeVariant> = {
   experimental: "warning",
 };
 
-const STATUS_BADGE: Record<string, { variant: BadgeVariant; label: string }> = {
-  enabled: { variant: "success", label: "Habilitada" },
-  disabled: { variant: "warning", label: "Deshabilitada" },
-  revoked: { variant: "muted", label: "Revocada" },
+/**
+ * Variante + CLAVE del diccionario por estado de instalacion.
+ *
+ * El mapa se conserva para que TypeScript siga exigiendo una entrada por
+ * estado; lo que cambia es que lleva la clave y no el texto.
+ */
+const STATUS_BADGE: Record<
+  string,
+  { variant: BadgeVariant; labelKey: Parameters<Translator<"marketplace">>[0] }
+> = {
+  enabled: { variant: "success", labelKey: "installStatusEnabled" },
+  disabled: { variant: "warning", labelKey: "installStatusDisabled" },
+  revoked: { variant: "muted", labelKey: "installStatusRevoked" },
 };
 
 /** Listings carrying a non-null tenant_id are the caller tenant's PRIVATE rows. */
@@ -151,6 +160,7 @@ function isPrivate(listing: MarketplaceListing): boolean {
 // Page
 // ===========================================================================
 export default function MarketplaceAdminPage() {
+  const t = useT("marketplace");
   return (
     <div
       className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8"
@@ -158,22 +168,22 @@ export default function MarketplaceAdminPage() {
     >
       <PageHeader
         icon={<Store className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Marketplace"
-        description="Explora el catálogo, gestiona lo instalado, tus listings privados y los recursos compartidos entre tenants."
+        title={t("title")}
+        description={t("description")}
         data-testid="marketplace-admin-header"
         actions={
           <>
             <Button asChild variant="outline" size="sm" data-testid="marketplace-private-link">
               <Link href="/admin/marketplace/private">
                 <Store className="mr-1 h-3.5 w-3.5" />
-                Privadas
+                {t("privateLink")}
               </Link>
             </Button>
             <RoleGuard min="tenant_admin">
               <Button asChild size="sm" data-testid="marketplace-publish-cta">
                 <Link href="/admin/marketplace/private">
                   <PackagePlus className="mr-1 h-3.5 w-3.5" />
-                  Publicar
+                  {t("publish")}
                 </Link>
               </Button>
             </RoleGuard>
@@ -189,13 +199,13 @@ export default function MarketplaceAdminPage() {
       <Tabs defaultValue="catalog" className="mt-6" data-testid="marketplace-tabs">
         <TabsList data-testid="marketplace-tablist">
           <TabsTrigger value="catalog" data-testid="marketplace-tab-catalog">
-            Catálogo
+            {t("tabCatalog")}
           </TabsTrigger>
           <TabsTrigger value="installed" data-testid="marketplace-tab-installed">
-            Instaladas
+            {t("tabInstalled")}
           </TabsTrigger>
           <TabsTrigger value="shares" data-testid="marketplace-tab-shares">
-            Compartir
+            {t("tabShares")}
           </TabsTrigger>
         </TabsList>
 
@@ -217,6 +227,8 @@ export default function MarketplaceAdminPage() {
 // Catalog — browse global + own private listings
 // ===========================================================================
 function CatalogTab() {
+  const t = useT("marketplace");
+  const tCommon = useT("common");
   const errorText = useErrorText();
   // El estado de actualización de lo instalado, indexado por listing: es lo que
   // convierte una tarjeta del catálogo en «ésta la tienes atrasada». Comparte
@@ -232,7 +244,7 @@ function CatalogTab() {
   if (listingsQuery.isLoading) {
     return (
       <p className="text-muted-foreground text-sm" data-testid="catalog-loading">
-        Cargando…
+        {tCommon("loading")}
       </p>
     );
   }
@@ -252,7 +264,7 @@ function CatalogTab() {
         <Card>
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="catalog-empty">
-              El catálogo está vacío. Publica tu primera skill o tool interna para empezar.
+              {t("catalogEmpty")}
             </p>
           </CardContent>
         </Card>
@@ -284,11 +296,11 @@ function CatalogTab() {
                       </Badge>
                       {isPrivate(listing) ? (
                         <Badge variant="warning" data-testid={`catalog-private-${listing.id}`}>
-                          privado
+                          {t("badgePrivate")}
                         </Badge>
                       ) : (
                         <Badge variant="default" data-testid={`catalog-global-${listing.id}`}>
-                          global
+                          {t("badgeGlobal")}
                         </Badge>
                       )}
                       {/* `task_mkt2_10`: si esta fila NO está publicada es que
@@ -337,6 +349,7 @@ function CatalogTab() {
  */
 function PublishCallout() {
   const t = useT("marketplaceReview");
+  const tMkt = useT("marketplace");
   return (
     <RoleGuard min="tenant_admin">
       <Card
@@ -349,11 +362,8 @@ function PublishCallout() {
               <PackagePlus className="h-5 w-5" />
             </span>
             <div className="space-y-0.5">
-              <p className="text-sm font-semibold">¿Tienes una skill o tool interna?</p>
-              <p className="text-muted-foreground text-xs">
-                Publícala como listing privado de tu tenant. Solo tu organización la verá; el
-                manifest se valida al publicar.
-              </p>
+              <p className="text-sm font-semibold">{tMkt("calloutTitle")}</p>
+              <p className="text-muted-foreground text-xs">{tMkt("calloutBody")}</p>
               {/* La otra mitad, que faltaba: publicar deja el listing EN COLA.
                   Decirlo aquí —antes de que nadie pulse— evita que la sorpresa
                   llegue después, cuando el listing ya está esperando y su autor
@@ -369,7 +379,7 @@ function PublishCallout() {
           <Button asChild size="sm" data-testid="catalog-publish-cta">
             <Link href="/admin/marketplace/private">
               <PackagePlus className="mr-1 h-3.5 w-3.5" />
-              Publicar en el marketplace
+              {tMkt("calloutCta")}
             </Link>
           </Button>
         </CardContent>
@@ -382,6 +392,8 @@ function PublishCallout() {
 // Installed — consent / revoke / uninstall
 // ===========================================================================
 function InstalledTab() {
+  const t = useT("marketplace");
+  const tCommon = useT("common");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
 
@@ -415,7 +427,7 @@ function InstalledTab() {
   if (installedQuery.isLoading) {
     return (
       <p className="text-muted-foreground text-sm" data-testid="installed-loading">
-        Cargando…
+        {tCommon("loading")}
       </p>
     );
   }
@@ -433,7 +445,7 @@ function InstalledTab() {
       <Card>
         <CardContent className="py-10 text-center">
           <p className="text-muted-foreground text-sm italic" data-testid="installed-empty">
-            Este tenant no tiene nada instalado todavía.
+            {t("installedEmpty")}
           </p>
         </CardContent>
       </Card>
@@ -443,10 +455,12 @@ function InstalledTab() {
   return (
     <div className="space-y-3" data-testid="installed-list">
       {installations.map((install) => {
-        const statusBadge = STATUS_BADGE[install.status] ?? {
-          variant: "muted" as BadgeVariant,
-          label: install.status,
-        };
+        const known = STATUS_BADGE[install.status];
+        // Un estado que este mapa no conoce se muestra CRUDO a proposito: es el
+        // valor del backend, y traducirlo a un texto inventado esconderia la
+        // divergencia en vez de enseniarla.
+        const statusVariant = known?.variant ?? ("muted" as BadgeVariant);
+        const statusLabel = known ? t(known.labelKey) : install.status;
         const isRevoked = install.status === "revoked";
         return (
           <Card key={install.id} data-testid={`installed-${install.id}`}>
@@ -455,11 +469,8 @@ function InstalledTab() {
                 <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                   <span className="truncate font-mono text-sm">{install.listing_id}</span>
                   <Badge variant="muted">{install.version}</Badge>
-                  <Badge
-                    variant={statusBadge.variant}
-                    data-testid={`installed-status-${install.id}`}
-                  >
-                    {statusBadge.label}
+                  <Badge variant={statusVariant} data-testid={`installed-status-${install.id}`}>
+                    {statusLabel}
                   </Badge>
                 </CardTitle>
               </div>
@@ -472,7 +483,7 @@ function InstalledTab() {
                 >
                   <Link href={`/admin/marketplace/installations/${install.id}/permissions`}>
                     <ShieldCheck className="mr-1 h-3.5 w-3.5" />
-                    Permisos
+                    {t("permissions")}
                   </Link>
                 </Button>
                 <RoleGuard min="tenant_admin">
@@ -482,10 +493,10 @@ function InstalledTab() {
                     onClick={() => revokeMutation.mutate(install.id)}
                     disabled={isRevoked || revokeMutation.isPending}
                     data-testid={`installed-revoke-${install.id}`}
-                    aria-label="Revocar"
+                    aria-label={t("revoke")}
                   >
                     <Ban className="mr-1 h-3.5 w-3.5" />
-                    Revocar
+                    {t("revoke")}
                   </Button>
                   <Button
                     variant="destructive"
@@ -493,10 +504,10 @@ function InstalledTab() {
                     onClick={() => uninstallMutation.mutate(install.id)}
                     disabled={uninstallMutation.isPending}
                     data-testid={`installed-uninstall-${install.id}`}
-                    aria-label="Desinstalar"
+                    aria-label={t("uninstall")}
                   >
                     <Trash2 className="mr-1 h-3.5 w-3.5" />
-                    Desinstalar
+                    {t("uninstall")}
                   </Button>
                 </RoleGuard>
               </div>
@@ -523,6 +534,8 @@ function InstalledTab() {
 // Shares — cross-tenant sharing (opt-in, explicit grant, System-Admin audited)
 // ===========================================================================
 function SharesTab() {
+  const t = useT("marketplace");
+  const tCommon = useT("common");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
 
@@ -581,25 +594,23 @@ function SharesTab() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Share2 className="h-4 w-4" />
-              Compartir un listing privado con otro tenant
+              {t("shareCardTitle")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-muted-foreground text-xs" data-testid="share-explainer">
-              Compartir es opt-in y explícito: el tenant destino ve e instala el listing solo
-              mediante este grant, y el System Admin audita cada acción. Revocar retira la
-              visibilidad de inmediato.
+              {t("shareExplainer")}
             </p>
 
             <div className="space-y-1">
-              <Label htmlFor="share-listing">Listing privado</Label>
+              <Label htmlFor="share-listing">{t("shareListingLabel")}</Label>
               <Select
                 id="share-listing"
                 value={listingId}
                 onChange={(e) => setListingId(e.target.value)}
                 data-testid="share-listing-select"
               >
-                <option value="">Selecciona un listing…</option>
+                <option value="">{t("sharePickListing")}</option>
                 {privateListings.map((listing) => (
                   <option key={listing.id} value={listing.id}>
                     {listing.name} {listing.version}
@@ -608,9 +619,9 @@ function SharesTab() {
               </Select>
               {privateListings.length === 0 ? (
                 <p className="text-muted-foreground text-xs" data-testid="share-no-private">
-                  No tienes listings privados que compartir. Publica uno en{" "}
+                  {t("shareNoPrivateBefore")}{" "}
                   <Link href="/admin/marketplace/private" className="underline">
-                    Marketplace privado
+                    {t("shareNoPrivateLink")}
                   </Link>
                   .
                 </p>
@@ -618,7 +629,7 @@ function SharesTab() {
             </div>
 
             <div className="space-y-1">
-              <Label htmlFor="share-target">Tenant destino (UUID)</Label>
+              <Label htmlFor="share-target">{t("shareTargetLabel")}</Label>
               <Input
                 id="share-target"
                 placeholder="00000000-0000-0000-0000-000000000000"
@@ -636,7 +647,7 @@ function SharesTab() {
                 }
                 data-testid="share-submit"
               >
-                {shareMutation.isPending ? "Compartiendo…" : "Compartir"}
+                {shareMutation.isPending ? t("shareSubmitting") : t("shareSubmit")}
               </Button>
             </div>
 
@@ -652,12 +663,12 @@ function SharesTab() {
       {/* The tenant's outgoing share grants */}
       <div>
         <h2 className="mb-3 text-sm font-semibold" data-testid="shares-title">
-          Grants activos creados por tu tenant
+          {t("sharesTitle")}
         </h2>
 
         {sharesQuery.isLoading ? (
           <p className="text-muted-foreground text-sm" data-testid="shares-loading">
-            Cargando…
+            {tCommon("loading")}
           </p>
         ) : sharesQuery.isError ? (
           <p className="text-destructive text-sm" data-testid="shares-error">
@@ -667,8 +678,7 @@ function SharesTab() {
           <Card>
             <CardContent className="py-10 text-center">
               <p className="text-muted-foreground text-sm italic" data-testid="shares-empty">
-                Por defecto no compartes nada. Crea un grant arriba para compartir un listing
-                privado.
+                {t("sharesEmpty")}
               </p>
             </CardContent>
           </Card>
@@ -694,10 +704,10 @@ function SharesTab() {
                         onClick={() => revokeShareMutation.mutate(share.id)}
                         disabled={revokeShareMutation.isPending}
                         data-testid={`share-revoke-${share.id}`}
-                        aria-label="Revocar share"
+                        aria-label={t("revokeShare")}
                       >
                         <Ban className="mr-1 h-3.5 w-3.5" />
-                        Revocar
+                        {t("revoke")}
                       </Button>
                     </RoleGuard>
                   </CardHeader>

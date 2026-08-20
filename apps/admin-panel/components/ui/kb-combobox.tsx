@@ -26,6 +26,8 @@
 
 import { Library } from "lucide-react";
 
+import { useT } from "@/lib/i18n";
+
 import { EntityCombobox, type EntityOption } from "./entity-combobox";
 
 /** Embed `KbCategorySummary` de la respuesta del backend. */
@@ -74,11 +76,12 @@ export function KbCombobox({
   value,
   onChange,
   initialLabel,
-  placeholder = "Busca una knowledge base por nombre…",
+  placeholder,
   disabled,
   className,
   ...props
 }: KbComboboxProps) {
+  const t = useT("combobox");
   return (
     <EntityCombobox
       endpoint="/knowledge-bases"
@@ -86,8 +89,8 @@ export function KbCombobox({
       value={value}
       onChange={(id, opt) => onChange(id, opt?.label)}
       initialLabel={initialLabel}
-      placeholder={placeholder}
-      searchPlaceholder="Buscar por nombre…"
+      placeholder={placeholder ?? t("kbPlaceholder")}
+      searchPlaceholder={t("searchByName")}
       icon={Library}
       disabled={disabled}
       className={className}

@@ -36,8 +36,9 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
-import { useT } from "@/lib/i18n";
+import { apiFetch } from "@/lib/api";
+import { useT, type Translator } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.marketplace (consent)
@@ -60,33 +61,34 @@ interface InstallationPermissions {
   permissions: PermissionStateItem[];
 }
 
-const PERMISSION_LABEL: Record<string, string> = {
-  allowed_domains: "Dominios permitidos",
-  allowed_paths: "Rutas permitidas",
-  network_policy: "Política de red",
+/** Las claves del namespace `marketplaceConsent`. */
+type ConsentKey = Parameters<Translator<"marketplaceConsent">>[0];
+
+const PERMISSION_LABEL: Record<string, ConsentKey> = {
+  allowed_domains: "permAllowedDomains",
+  allowed_paths: "permAllowedPaths",
+  network_policy: "permNetworkPolicy",
 };
 
 // Ayuda inline por tipo de permiso — el riesgo real que se está aprobando.
 // `network_policy` refleja la semántica endurecida (ADR 0094 /
 // task_prod12_net_01): 'open' ya NO es internet crudo.
-const PERMISSION_HELP: Record<string, string> = {
-  allowed_domains:
-    "La tool solo podrá hacer peticiones HTTP a estos dominios, siempre a través del proxy de salida de la plataforma.",
-  allowed_paths: "Rutas del workspace a las que la tool tendrá acceso.",
-  network_policy:
-    "none = sin red. restricted = red interna sin salida. open = salida a internet SOLO a través del proxy con allowlist de la plataforma (registries públicos de paquetes y git) — nunca internet crudo; cada uso queda registrado en el audit log.",
+const PERMISSION_HELP: Record<string, ConsentKey> = {
+  allowed_domains: "helpAllowedDomains",
+  allowed_paths: "helpAllowedPaths",
+  network_policy: "helpNetworkPolicy",
 };
 
-const STATE_BADGE: Record<ConsentState, { variant: BadgeVariant; label: string }> = {
-  granted: { variant: "success", label: "Concedido" },
-  denied: { variant: "danger", label: "Denegado" },
-  pending: { variant: "warning", label: "Pendiente" },
+const STATE_BADGE: Record<ConsentState, { variant: BadgeVariant; labelKey: ConsentKey }> = {
+  granted: { variant: "success", labelKey: "stateGranted" },
+  denied: { variant: "danger", labelKey: "stateDenied" },
+  pending: { variant: "warning", labelKey: "statePending" },
 };
 
-const STATUS_BADGE: Record<string, { variant: BadgeVariant; label: string }> = {
-  enabled: { variant: "success", label: "Habilitada" },
-  disabled: { variant: "warning", label: "Deshabilitada (pendiente de consentimiento)" },
-  revoked: { variant: "muted", label: "Revocada" },
+const STATUS_BADGE: Record<string, { variant: BadgeVariant; labelKey: ConsentKey }> = {
+  enabled: { variant: "success", labelKey: "installStatusEnabled" },
+  disabled: { variant: "warning", labelKey: "installStatusDisabled" },
+  revoked: { variant: "muted", labelKey: "installStatusRevoked" },
 };
 
 /** Render a permission descriptor's value as readable text. */
@@ -105,6 +107,9 @@ export default function InstallationPermissionsPage() {
   const installationId = params.id;
   const queryClient = useQueryClient();
   const t = useT("marketplaceDeploy");
+  const tc = useT("marketplaceConsent");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
 
   const permsQuery = useQuery({
     queryKey: ["installation-permissions", installationId],
@@ -158,8 +163,8 @@ export default function InstallationPermissionsPage() {
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8" data-testid="consent-page">
       <PageHeader
         icon={<ShieldCheck className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Consentimiento de permisos"
-        description="Aprueba o deniega cada permiso que esta tool/skill solicita. La instalación no se habilita hasta que todos los permisos requeridos estén concedidos."
+        title={tc("title")}
+        description={tc("description")}
         data-testid="consent-header"
         actions={
           <>
@@ -168,7 +173,9 @@ export default function InstallationPermissionsPage() {
                 variant={STATUS_BADGE[data.status]?.variant ?? "muted"}
                 data-testid="consent-install-status"
               >
-                {STATUS_BADGE[data.status]?.label ?? data.status}
+                {/* Un estado desconocido se muestra CRUDO: es el valor del
+                    backend, y un texto inventado esconderia la divergencia. */}
+                {STATUS_BADGE[data.status] ? tc(STATUS_BADGE[data.status].labelKey) : data.status}
               </Badge>
             ) : null}
             {/* ADR 0142: consentir es la mitad; la otra —dónde está desplegada—
@@ -185,19 +192,19 @@ export default function InstallationPermissionsPage() {
 
       {permsQuery.isLoading ? (
         <p className="text-muted-foreground mt-6 text-sm" data-testid="consent-loading">
-          Cargando…
+          {tCommon("loading")}
         </p>
       ) : permsQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="consent-error">
-          {permsQuery.error instanceof ApiError ? permsQuery.error.body : String(permsQuery.error)}
+          {errorText(permsQuery.error)}
         </p>
       ) : data ? (
         <div className="mt-6 space-y-4">
           {!data.consent_required ? (
             <Card data-testid="consent-not-required">
               <CardContent className="py-6 text-sm">
-                Este listing es <strong>verified</strong>: no requiere consentimiento granular
-                (fricción mínima). Los permisos se aplican según la política de confianza.
+                {tc("notRequiredBefore")} <strong>verified</strong>
+                {tc("notRequiredAfter")}
               </CardContent>
             </Card>
           ) : null}
@@ -206,7 +213,7 @@ export default function InstallationPermissionsPage() {
             <Card>
               <CardContent className="py-10 text-center">
                 <p className="text-muted-foreground text-sm italic" data-testid="consent-empty">
-                  Este listing no solicita ningún permiso.
+                  {tc("empty")}
                 </p>
               </CardContent>
             </Card>
@@ -223,13 +230,15 @@ export default function InstallationPermissionsPage() {
                         <div className="min-w-0">
                           <CardTitle className="flex items-center gap-2 text-base">
                             <span className="truncate">
-                              {PERMISSION_LABEL[perm.type] ?? perm.type}
+                              {PERMISSION_LABEL[perm.type]
+                                ? tc(PERMISSION_LABEL[perm.type])
+                                : perm.type}
                             </span>
                             <Badge
                               variant={badge.variant}
                               data-testid={`consent-state-${perm.type}`}
                             >
-                              {badge.label}
+                              {tc(badge.labelKey)}
                               {isStaged ? " *" : ""}
                             </Badge>
                           </CardTitle>
@@ -244,7 +253,7 @@ export default function InstallationPermissionsPage() {
                               className="text-muted-foreground mt-1 text-xs"
                               data-testid={`consent-help-${perm.type}`}
                             >
-                              {PERMISSION_HELP[perm.type]}
+                              {tc(PERMISSION_HELP[perm.type])}
                             </p>
                           ) : null}
                         </div>
@@ -256,10 +265,10 @@ export default function InstallationPermissionsPage() {
                               onClick={() => setDecision(perm.type, "grant")}
                               disabled={consentMutation.isPending}
                               data-testid={`consent-grant-${perm.type}`}
-                              aria-label="Aprobar"
+                              aria-label={tc("approve")}
                             >
                               <Check className="mr-1 h-3.5 w-3.5" />
-                              Aprobar
+                              {tc("approve")}
                             </Button>
                             <Button
                               variant="outline"
@@ -267,10 +276,10 @@ export default function InstallationPermissionsPage() {
                               onClick={() => setDecision(perm.type, "deny")}
                               disabled={consentMutation.isPending}
                               data-testid={`consent-deny-${perm.type}`}
-                              aria-label="Denegar"
+                              aria-label={tc("deny")}
                             >
                               <X className="mr-1 h-3.5 w-3.5" />
-                              Denegar
+                              {tc("deny")}
                             </Button>
                           </div>
                         </RoleGuard>
@@ -286,16 +295,14 @@ export default function InstallationPermissionsPage() {
             <RoleGuard min="tenant_admin">
               <div className="flex items-center justify-between gap-3 border-t pt-4">
                 <p className="text-muted-foreground text-xs" data-testid="consent-pending-hint">
-                  {stagedCount === 0
-                    ? "Selecciona Aprobar/Denegar en cada permiso y guarda las decisiones."
-                    : `${stagedCount} decisión(es) sin guardar (marcadas con *).`}
+                  {stagedCount === 0 ? tc("hintNone") : tc("hintStaged", { n: stagedCount })}
                 </p>
                 <Button
                   onClick={submit}
                   disabled={stagedCount === 0 || consentMutation.isPending}
                   data-testid="consent-submit"
                 >
-                  {consentMutation.isPending ? "Guardando…" : "Guardar decisiones"}
+                  {consentMutation.isPending ? tc("saving") : tc("submit")}
                 </Button>
               </div>
             </RoleGuard>
@@ -303,9 +310,7 @@ export default function InstallationPermissionsPage() {
 
           {consentMutation.isError ? (
             <p className="text-destructive text-xs" data-testid="consent-submit-error">
-              {consentMutation.error instanceof ApiError
-                ? consentMutation.error.body
-                : String(consentMutation.error)}
+              {errorText(consentMutation.error)}
             </p>
           ) : null}
         </div>

@@ -48,7 +48,10 @@ import {
   type AssistantIdentityFormValues,
   type AssistantToggleState,
 } from "@/lib/assistant";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 import { AssistantModelCard, PlatformDefaultModelCard } from "./model-cards";
 
@@ -62,6 +65,9 @@ const EMPTY_VALUES: AssistantIdentityFormValues = {
 };
 
 export default function AssistantSettingsPage() {
+  const t = useT("assistant");
+  const lang = useLangOptional();
+  const errorText = useErrorText();
   const { isTenantAdmin, isSystemAdmin, isLoading: userLoading } = useCurrentUser();
   const queryClient = useQueryClient();
 
@@ -133,7 +139,7 @@ export default function AssistantSettingsPage() {
     return <AssistantNoAccess />;
   }
 
-  const errors: AssistantIdentityFormErrors = validateAssistantIdentity(values);
+  const errors: AssistantIdentityFormErrors = validateAssistantIdentity(values, lang);
   const hasErrors = Object.keys(errors).length > 0;
 
   const update = <K extends keyof AssistantIdentityFormValues>(
@@ -155,13 +161,13 @@ export default function AssistantSettingsPage() {
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Identidad del asistente"
-        description="Personaliza el nombre, el tono, el idioma y las herramientas de tu asistente personal."
+        title={t("settingsTitle")}
+        description={t("settingsDescription")}
         actions={
           <Button variant="outline" asChild>
             <Link href="/admin/assistant">
               <MessageSquare className="mr-2 h-4 w-4" />
-              Ir al chat
+              {t("goToChat")}
             </Link>
           </Button>
         }
@@ -174,12 +180,9 @@ export default function AssistantSettingsPage() {
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 space-y-1">
               <Label htmlFor="assistant-enabled-toggle" className="text-base">
-                Asistente habilitado
+                {t("enabledLabel")}
               </Label>
-              <p className="text-muted-foreground text-sm">
-                Activa el asistente personal para tu organización. Mientras esté desactivado, nadie
-                de tu tenant podrá usarlo y esta configuración permanece bloqueada.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("enabledHelp")}</p>
             </div>
             <label
               htmlFor="assistant-enabled-toggle"
@@ -194,16 +197,12 @@ export default function AssistantSettingsPage() {
                   onChange={(e) => toggleMutation.mutate(e.target.checked)}
                 />
               </span>
-              <span className="text-sm font-medium">
-                {assistantEnabled ? "Activado" : "Desactivado"}
-              </span>
+              <span className="text-sm font-medium">{assistantEnabled ? t("on") : t("off")}</span>
             </label>
           </div>
           {toggleMutation.isError ? (
             <p className="text-destructive mt-3 text-sm" data-testid="assistant-enabled-error">
-              {toggleMutation.error instanceof ApiError
-                ? toggleMutation.error.body
-                : String(toggleMutation.error)}
+              {errorText(toggleMutation.error)}
             </p>
           ) : null}
         </CardContent>
@@ -211,17 +210,17 @@ export default function AssistantSettingsPage() {
 
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Configuración</CardTitle>
+          <CardTitle>{t("configTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           {userLoading || toggleQuery.isLoading || identityQuery.isLoading ? (
             <p className="text-muted-foreground flex items-center gap-2 text-sm">
               <Spinner />
-              Cargando identidad…
+              {t("loadingIdentity")}
             </p>
           ) : !assistantEnabled ? (
             <p className="text-muted-foreground text-sm" data-testid="assistant-identity-locked">
-              Habilita el asistente para configurarlo.
+              {t("locked")}
             </p>
           ) : (
             <form
@@ -236,14 +235,14 @@ export default function AssistantSettingsPage() {
             >
               {/* Nombre — el objetivo principal del operador */}
               <div className="space-y-1.5">
-                <Label htmlFor="assistant-name">Nombre</Label>
+                <Label htmlFor="assistant-name">{t("fieldName")}</Label>
                 <Input
                   id="assistant-name"
                   data-testid="assistant-name"
                   value={values.name}
                   maxLength={ASSISTANT_LIMITS.name.max}
                   onChange={(e) => update("name", e.target.value)}
-                  placeholder="Asistente"
+                  placeholder={t("namePlaceholder")}
                   aria-invalid={touched && Boolean(errors.name)}
                 />
                 {touched && errors.name ? (
@@ -255,7 +254,7 @@ export default function AssistantSettingsPage() {
 
               {/* Avatar */}
               <div className="space-y-1.5">
-                <Label htmlFor="assistant-avatar">URL del avatar (opcional)</Label>
+                <Label htmlFor="assistant-avatar">{t("fieldAvatar")}</Label>
                 <Input
                   id="assistant-avatar"
                   data-testid="assistant-avatar"
@@ -275,14 +274,14 @@ export default function AssistantSettingsPage() {
 
               {/* Tono */}
               <div className="space-y-1.5">
-                <Label htmlFor="assistant-tone">Tono</Label>
+                <Label htmlFor="assistant-tone">{t("fieldTone")}</Label>
                 <Input
                   id="assistant-tone"
                   data-testid="assistant-tone"
                   value={values.tone}
                   maxLength={ASSISTANT_LIMITS.tone.max}
                   onChange={(e) => update("tone", e.target.value)}
-                  placeholder="profesional y conciso"
+                  placeholder={t("tonePlaceholder")}
                   aria-invalid={touched && Boolean(errors.tone)}
                 />
                 {touched && errors.tone ? (
@@ -294,7 +293,7 @@ export default function AssistantSettingsPage() {
 
               {/* Idioma — <select> con opciones es/en */}
               <div className="space-y-1.5">
-                <Label htmlFor="assistant-language">Idioma</Label>
+                <Label htmlFor="assistant-language">{t("fieldLanguage")}</Label>
                 <Select
                   id="assistant-language"
                   data-testid="assistant-language"
@@ -308,7 +307,7 @@ export default function AssistantSettingsPage() {
 
               {/* System prompt override */}
               <div className="space-y-1.5">
-                <Label>Instrucciones adicionales (opcional)</Label>
+                <Label>{t("fieldSystemPrompt")}</Label>
                 <MarkdownTextarea
                   data-testid="assistant-system-prompt"
                   value={values.systemPrompt}
@@ -317,7 +316,7 @@ export default function AssistantSettingsPage() {
                     update("systemPrompt", v.slice(0, ASSISTANT_LIMITS.systemPrompt.max))
                   }
                   rows={5}
-                  placeholder="Sustituye el cuerpo del prompt por defecto. La identidad (nombre, tono, idioma) se conserva."
+                  placeholder={t("systemPromptPlaceholder")}
                 />
                 <p className="text-muted-foreground text-xs">
                   {values.systemPrompt.trim().length}/{ASSISTANT_LIMITS.systemPrompt.max}
@@ -334,10 +333,8 @@ export default function AssistantSettingsPage() {
 
               {/* Herramientas habilitadas — catálogo amigable */}
               <fieldset className="space-y-3" data-testid="assistant-tools">
-                <legend className="text-sm font-medium">Herramientas disponibles</legend>
-                <p className="text-muted-foreground text-xs">
-                  Datos de solo lectura que el asistente puede consultar para responderte.
-                </p>
+                <legend className="text-sm font-medium">{t("toolsLegend")}</legend>
+                <p className="text-muted-foreground text-xs">{t("toolsHelp")}</p>
                 <div className="space-y-2">
                   {ASSISTANT_TOOL_CATALOGUE.map((tool) => {
                     const checked = values.enabledTools.includes(tool.name);
@@ -357,9 +354,9 @@ export default function AssistantSettingsPage() {
                           />
                         </span>
                         <span className="min-w-0">
-                          <span className="text-sm font-medium">{tool.label}</span>
+                          <span className="text-sm font-medium">{t(tool.labelKey)}</span>
                           <span className="text-muted-foreground block text-xs">
-                            {tool.description}
+                            {t(tool.descriptionKey)}
                           </span>
                         </span>
                       </label>
@@ -371,9 +368,7 @@ export default function AssistantSettingsPage() {
               {/* Feedback */}
               {mutation.isError ? (
                 <p className="text-destructive text-sm" data-testid="assistant-identity-error">
-                  {mutation.error instanceof ApiError
-                    ? mutation.error.body
-                    : String(mutation.error)}
+                  {errorText(mutation.error)}
                 </p>
               ) : mutation.isSuccess ? (
                 <p
@@ -381,7 +376,7 @@ export default function AssistantSettingsPage() {
                   data-testid="assistant-identity-saved"
                   role="status"
                 >
-                  Identidad guardada.
+                  {t("identitySaved")}
                 </p>
               ) : null}
 
@@ -391,7 +386,7 @@ export default function AssistantSettingsPage() {
                   data-testid="assistant-identity-save"
                   disabled={mutation.isPending || (touched && hasErrors)}
                 >
-                  {mutation.isPending ? "Guardando…" : "Guardar"}
+                  {mutation.isPending ? t("saving") : t("save")}
                 </Button>
               </div>
             </form>
@@ -411,18 +406,19 @@ export default function AssistantSettingsPage() {
 }
 
 function AssistantNoAccess() {
+  const t = useT("assistant");
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Asistente personal"
+        title={t("title")}
         data-testid="assistant-settings-header"
       />
       <EmptyState
         data-testid="assistant-no-access"
         icon={Bot}
-        title="Asistente no disponible"
-        description="El asistente personal es exclusivo para administradores del tenant y debe estar habilitado para tu organización."
+        title={t("noAccessTitle")}
+        description={t("noAccessMember")}
       />
     </div>
   );

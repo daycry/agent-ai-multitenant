@@ -64,9 +64,19 @@ export interface PreferenceUpsertBody {
   enabled: boolean;
 }
 
-export const SECRET_SOURCE_LABEL: Record<SecretSource, string> = {
-  vault: "Vault",
-  encrypted: "cifrado en reposo",
+/**
+ * Clave del diccionario por origen del secreto, no el texto.
+ *
+ * El mapa se conserva para que TypeScript siga exigiendo una entrada por
+ * cada valor de `SecretSource`: con un `t("secretSource" + x)` se podria
+ * anadir un origen en el backend y pintar la clave cruda en pantalla.
+ */
+export const SECRET_SOURCE_KEY: Record<
+  SecretSource,
+  "secretSourceVault" | "secretSourceEncrypted"
+> = {
+  vault: "secretSourceVault",
+  encrypted: "secretSourceEncrypted",
 };
 
 // NOTIF-3: el catálogo de eventos se sirve desde el backend

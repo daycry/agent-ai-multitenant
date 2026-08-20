@@ -10,6 +10,7 @@
 import { useState } from "react";
 
 import { summaryFoldedCount } from "@/lib/chat-feed";
+import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 
@@ -21,13 +22,15 @@ interface MessageFeedProps {
 }
 
 export function MessageFeed({ messages, loading }: MessageFeedProps) {
+  const t = useT("projectChat");
+
   if (loading) {
-    return <p className="text-muted-foreground text-sm">Cargando mensajes…</p>;
+    return <p className="text-muted-foreground text-sm">{t("feedLoading")}</p>;
   }
   if (messages.length === 0) {
     return (
       <p className="text-muted-foreground text-sm" data-testid="chat-feed-empty">
-        La conversación está vacía. Empieza a escribir para comenzar.
+        {t("feedEmpty")}
       </p>
     );
   }
@@ -56,6 +59,7 @@ export function MessageFeed({ messages, loading }: MessageFeedProps) {
  * context the model reads.
  */
 function SummaryRow({ message, folded }: { message: Message; folded: number }) {
+  const t = useT("projectChat");
   const [open, setOpen] = useState(false);
   return (
     <div
@@ -71,19 +75,16 @@ function SummaryRow({ message, folded }: { message: Message; folded: number }) {
         data-testid="chat-summary-toggle"
       >
         <span className="text-xs font-medium">
-          🗂️ Resumen de {folded} {folded === 1 ? "mensaje anterior" : "mensajes anteriores"}
+          {folded === 1 ? t("summaryTitleOne") : t("summaryTitleMany", { n: folded })}
         </span>
         <span className="text-muted-foreground text-[10px] uppercase tracking-wide">
-          {open ? "ocultar" : "ver resumen"}
+          {open ? t("summaryHide") : t("summaryShow")}
         </span>
       </button>
       {open ? (
         <div className="mt-2 border-t border-amber-500/20 pt-2" data-testid="chat-summary-body">
           {renderPlanDraft(message.content)}
-          <p className="text-muted-foreground mt-2 text-[10px]">
-            El equipo lee este resumen en lugar de esos mensajes. Los originales siguen más arriba
-            en la conversación.
-          </p>
+          <p className="text-muted-foreground mt-2 text-[10px]">{t("summaryNote")}</p>
         </div>
       ) : null}
     </div>

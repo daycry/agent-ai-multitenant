@@ -20,6 +20,7 @@ import { ChevronDown, X, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 export interface EntityOption {
   id: string;
@@ -40,6 +41,14 @@ interface EntityComboboxProps {
   onChange: (id: string | null, option?: EntityOption) => void;
   /** Initial label when value is set but the list hasn't been fetched yet. */
   initialLabel?: string;
+  /**
+   * Texto del estado cerrado. Sin valor cae al del diccionario.
+   *
+   * Antes era un **valor por defecto de parametro** en castellano fijo
+   * (`placeholder = "Selecciona…"`). Un default no puede llamar a un hook,
+   * asi que el idioma se resuelve dentro del componente: por eso la prop es
+   * opcional y el fallback vive en el cuerpo, no en la firma.
+   */
   placeholder?: string;
   searchPlaceholder?: string;
   icon?: LucideIcon;
@@ -56,13 +65,15 @@ export function EntityCombobox({
   value,
   onChange,
   initialLabel,
-  placeholder = "Selecciona…",
-  searchPlaceholder = "Buscar…",
+  placeholder,
+  searchPlaceholder,
   icon: Icon,
   disabled,
   className,
   ...props
 }: EntityComboboxProps) {
+  const t = useT("combobox");
+  const tCommon = useT("common");
   const testid = props["data-testid"] ?? "entity-combobox";
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -134,14 +145,14 @@ export function EntityCombobox({
               <span className="truncate">{displayLabel}</span>
             </>
           ) : (
-            <span className="text-muted-foreground">{placeholder}</span>
+            <span className="text-muted-foreground">{placeholder ?? t("select")}</span>
           )}
         </span>
         <span className="flex items-center gap-1">
           {value && !disabled && (
             <span
               role="button"
-              aria-label="Quitar selección"
+              aria-label={t("clear")}
               onClick={(e) => {
                 e.stopPropagation();
                 clearSelection();
@@ -165,17 +176,17 @@ export function EntityCombobox({
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={searchPlaceholder}
+            placeholder={searchPlaceholder ?? t("search")}
             className="bg-background w-full border-b px-3 py-2 text-sm focus:outline-none"
             data-testid={`${testid}-search`}
           />
           <div className="max-h-60 overflow-y-auto">
             {searchQuery.isLoading && (
-              <p className="text-muted-foreground p-3 text-xs italic">Cargando…</p>
+              <p className="text-muted-foreground p-3 text-xs italic">{tCommon("loading")}</p>
             )}
             {searchQuery.isError && (
               <p className="text-destructive p-3 text-xs" data-testid={`${testid}-error`}>
-                Error al buscar
+                {t("searchError")}
               </p>
             )}
             {!searchQuery.isLoading &&
@@ -185,7 +196,7 @@ export function EntityCombobox({
                   className="text-muted-foreground p-3 text-xs italic"
                   data-testid={`${testid}-empty`}
                 >
-                  {debounced ? `Nada coincide con "${debounced}".` : "Sin resultados."}
+                  {debounced ? t("noMatch", { query: debounced }) : t("empty")}
                 </p>
               )}
             <ul className="py-1">

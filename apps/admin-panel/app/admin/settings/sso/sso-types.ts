@@ -52,9 +52,17 @@ export interface UpsertBody {
   claim_mappings: Record<string, string>;
 }
 
-export const SECRET_SOURCE_LABEL: Record<SecretSource, string> = {
-  vault: "Vault",
-  encrypted: "cifrado en reposo",
+/**
+ * De dónde sale el secreto, como CLAVE del diccionario y no como texto.
+ *
+ * El módulo se migró a `lib/i18n` en `task_prod16_03`: guardar aquí el
+ * castellano dejaría la ficha en castellano con el toggle en EN, y guardar las
+ * dos caras duplicaría el diccionario en una constante que nadie mira. La ficha
+ * la resuelve con `useT("ssoOidc")`.
+ */
+export const SECRET_SOURCE_KEY: Record<SecretSource, "sourceVault" | "sourceEncrypted"> = {
+  vault: "sourceVault",
+  encrypted: "sourceEncrypted",
 };
 
 // --------------------------------------------------------------------------

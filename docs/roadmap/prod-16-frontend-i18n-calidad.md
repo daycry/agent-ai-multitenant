@@ -38,14 +38,14 @@ de producción de 2026-06-10. Cierra los hallazgos **frontend-9**,
 > observable de este plan, así que sus números viven aquí y no en la prosa de
 > cada tarea:
 >
-> | Métrica                            | Al escribirse el plan | 2026-08-01 | 2026-08-10 | 2026-08-12 | **2026-08-19** |
-> | ---------------------------------- | --------------------: | ---------: | ---------: | ---------: | -------------: |
-> | Pantallas `page.tsx` > 800 líneas  |                    10 |          5 |          0 |          0 |          **0** |
-> | Piezas del troceado > 500 líneas   |                     — |          2 |          2 |          2 |          **1** |
-> | Ternarios de idioma (`check-i18n`) |                    63 |         34 |          9 |          0 |          **0** |
-> | Ficheros con ternarios             |                    12 |          8 |          4 |          0 |          **0** |
-> | Atributos con castellano fijo      |                     — |        232 |        232 |        211 |        **188** |
-> | Ficheros con atributos             |                     — |          — |         85 |         80 |         **71** |
+> | Métrica                            | Al escribirse el plan | 2026-08-01 | 2026-08-10 | 2026-08-12 | 2026-08-19 | **2026-08-20** |
+> | ---------------------------------- | --------------------: | ---------: | ---------: | ---------: | ---------: | -------------: |
+> | Pantallas `page.tsx` > 800 líneas  |                    10 |          5 |          0 |          0 |          0 |          **0** |
+> | Piezas del troceado > 500 líneas   |                     — |          2 |          2 |          2 |          1 |          **1** |
+> | Ternarios de idioma (`check-i18n`) |                    63 |         34 |          9 |          0 |          0 |          **0** |
+> | Ficheros con ternarios             |                    12 |          8 |          4 |          0 |          0 |          **0** |
+> | Atributos con castellano fijo      |                     — |        232 |        232 |        211 |        188 |        **119** |
+> | Ficheros con atributos             |                     — |          — |         85 |         80 |         71 |         **45** |
 >
 > Cuatro lecturas honestas de esa tabla:
 >
@@ -392,6 +392,109 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
        `aria-label="Configuración del tenant"` en `settings/page.tsx` → `check-i18n`
        sale **exit 1** nombrando el fichero, o sea que el trinquete que acaba de
        protegerlas MUERDE.
+  - ⏳ **Pendiente (2026-08-20) — `settings/` CERRADO del todo, y cinco pantallas
+    más de `projects/*`.** Seis módulos enteros, con su test en los dos idiomas y
+    fuera de la `ATTR_ALLOWLIST`:
+    - **`settings/sso/` COMPLETO** (8 ficheros): las dos pantallas —OIDC y
+      SAML— con sus tarjetas, sus fichas y sus **dos diálogos**, más los tres
+      catálogos que vivían como texto en las constantes (`SECRET_SOURCE_LABEL`,
+      `KEY_SOURCE_LABEL`, `NAME_ID_FORMATS`), que ahora guardan la CLAVE.
+      Namespaces `ssoOidc` + `ssoSaml`. Con esto **el módulo `settings/` no tiene
+      ya ninguna pantalla sin migrar**, que era lo que dejaba abierto la nota
+      anterior.
+    - **`projects/[id]/incoming-webhooks`** (`incomingWebhooks`),
+      **`projects/[id]/commands`** (`projectCommands`),
+      **`projects/[id]/knowledge-bases`** (`projectKbs`), **`projects/new`**
+      (`projectWizard`) y **`projects/[id]/chat` COMPLETO** (`projectChat`: la
+      pantalla, el selector de modo, el feed, el composer y el botón de generar
+      plan).
+      **Contadores medidos ejecutando, y separando lo que es de este carril:**
+      de las **188 marcas en 71 ficheros** con las que empezó el día, este carril
+      se lleva **34 atributos en 11 ficheros** de la `ATTR_ALLOWLIST` (16 de
+      `settings/sso`, 18 de `projects/*`). El resto de la bajada —la guarda
+      cerró el día en 119/45— es del otro carril, que migraba `marketplace`,
+      `docs`, `assistant`, `notifications` y `memories` **en el mismo árbol de
+      trabajo**; mezclar las dos cifras en un solo número haría irreproducible
+      cualquiera de las dos.
+      **Tests: 28 casos nuevos, todos ejecutados y todos en ROJO antes de
+      implementar** (los ES, que fijan que no se rompe el castellano, ya pasaban:
+      ésa es la mitad que hace que el rojo signifique algo).
+      `app/admin/settings/sso/i18n.test.tsx` (nuevo, 10 casos),
+      `app/admin/projects/[id]/chat/i18n.test.tsx` (nuevo, 5) y
+      `app/admin/projects/i18n.test.tsx` pasa de 7 a **20**.
+      `npm --prefix apps/admin-panel run test -- i18n.test` —el `command:`
+      declarado— pasa de 18 ficheros/160 tests a **26 ficheros/246 tests, todos en
+      verde**; de esa subida, **2 ficheros y 28 casos** son de este carril y el
+      resto del otro, por la misma razón que los contadores de arriba.
+      **Seis cosas que enseñó la pasada, y valen más que el contador:**
+    1. **La traducción existía y el render la tiraba.** `BUILT_IN_MODES` del chat
+       declaraba `labelEs` **y `labelEn`** para los tres modos… y el selector
+       pintaba siempre `labelEs`. No es deuda por escribir: es trabajo ya hecho
+       que no llegaba a pantalla, y **ninguna de las dos guardas puede verlo**
+       (no hay ternario ni atributo). Cuarto ejemplo del mismo aviso. Al pasar el
+       catálogo a claves, la cara inglesa deja de poder quedarse sin llamante.
+    2. **La pantalla mitad-y-mitad también existe en el otro sentido.** El wizard
+       de alta de proyecto tenía `"Could not load templates:"` cableado en
+       **inglés**: con el panel en castellano —que es el idioma por defecto— ese
+       error salía en inglés desde el día 1. Se ve sólo cuando falla la carga de
+       plantillas, así que llevaba ahí sin que nadie lo mirase.
+    3. **Un literal que NO se traduce, y por qué.** La KB implícita del proyecto
+       se llama «Documentos de {proyecto}», y ese nombre es la **clave del
+       find-or-create**: traducirlo haría que subir con el toggle en inglés
+       creara una KB nueva en vez de reutilizar la del castellano, y los
+       documentos acabarían repartidos en dos. Se extrajo a `implicitKbName()`
+       —lo usaban la mutación y el texto de ayuda por separado— y hay un test que
+       afirma que en inglés el nombre sigue saliendo en castellano.
+    4. **Migrar cambió el tamaño de una pantalla y la otra guarda mordió.**
+       `incoming-webhooks/page.tsx` pasó de 797 a **811 líneas** al sustituir
+       literales por llamadas, y `check-component-size` falló (límite 800, con la
+       `ALLOWLIST` de pantallas VACÍA desde `task_prod16_08`). No se tocó el
+       umbral: se troceó con el patrón del propio plan → `webhook-types.ts` (104)
+       - `webhook-dialog.tsx` (264) + `page.tsx` (**489**). Las dos guardas
+         tirando en direcciones distintas sobre el mismo fichero es una señal, no
+         un estorbo: la pantalla ya estaba en el límite.
+    5. **Un default silencioso es una regresión futura.** `conversationLabel()`
+       (helper puro de `lib/conversation-history.ts`) pintaba dos textos
+       castellanos fijos en el selector del historial. Ahora recibe `lang` como
+       parámetro **obligatorio, sin default**: con default, el próximo llamante
+       reintroduce el fallo sin enterarse. Su test sube de 3 a 5 casos (los dos
+       nuevos son las caras inglesas).
+    6. **`useT` se llama `t` y `t` es el nombre favorito de los `.map()`.** En el
+       wizard, `templatesQuery.data.map((t) => …)` sombreaba el traductor: dentro
+       del map, `t("useTemplate")` llamaba al objeto plantilla y la pantalla
+       reventaba con «t2 is not a function». Lo cazaron los tests nuevos, no el
+       compilador —`t` sigue siendo invocable— y por eso el traductor de ese
+       fichero se llama `tWizard`.
+       **Lo que queda de esta casilla, contado en ficheros y no en adjetivos:**
+       el hub `projects/[id]/page.tsx` **con sus seis piezas de
+       `components/projects/`** y `lib/project-governance.ts` (que guarda sus
+       etiquetas y sus mensajes de error en castellano), `plans/` y
+       `plans/[planId]/*` (14 ficheros), `mcp-servers/*` (8), `tasks/page.tsx`
+       —que reparte su texto con `components/tasks/*`, compartido con `board` y
+       con `plans/[id]/escalated`, o sea que no es de este módulo solo—, y
+       `agent-kbs-section.tsx` de `agents/*`, que es de otro carril. **No se
+       marca `[x]`**: `projects/*` no está migrado mientras el hub siga en
+       castellano.
+       **Verificación ejecutada, toda desde `apps/admin-panel`:** `npx tsc
+--noEmit` **limpio**; `npx next lint --max-warnings=0` sin avisos; `npx
+prettier --check` de lo tocado OK; `node scripts/check-i18n.mjs` y
+       `node scripts/check-component-size.mjs` **en verde**; `npx vitest run
+app/admin/projects app/admin/settings lib/conversation-history.test.ts
+scripts/check-i18n.test.ts scripts/check-component-size.test.ts` →
+       **33 ficheros / 254 tests, todos pasan**.
+       **Roturas comprobadas, cada una con su rojo y sólo el suyo:** reintroducir
+       `title="Añadir configuración"` en `incoming-webhooks/page.tsx` → `check-i18n`
+       sale **exit 1** nombrando el fichero; y devolver el selector de modo del
+       chat a `"Discusión"` fijo → cae **1** caso de `chat/i18n.test.tsx` y sólo
+       ése.
+       **Una excepción que se añadió a mano y conviene auditar:** 20 claves de
+       estos namespaces tienen `es === en` y están anotadas en el
+       `identicalOnPurpose` de `lib/i18n/i18n.test.ts` — nombre de producto
+       (Vault), términos del estándar SAML que el operador copia literales de su
+       IdP («Entity ID»), los tres sufijos de URN de `NameID`, los cinco emisores
+       de webhook y los cuatro stacks de los presets. Ese invariante existe justo
+       para que esa lista no se llene de traducciones pendientes: si crece con
+       algo que sí se traduce, deja de servir.
 - **Tiempo**: 2 días · **Complejidad**: l · **Depende de**: `task_prod16_02`
 - **Tests automáticos**:
   ```yaml
@@ -498,6 +601,86 @@ decisión D4 — **parte los 6 ficheros Python** señalados.
        techo de 800 hay que contar con trocearlo en el mismo movimiento.
        Siguen sin migrar: marketplace, notifications, docs, assistant, memories, y el
        grueso de `projects/*`.
+  - ⏳ **Pendiente (2026-08-19, cuarta pasada). Los CINCO módulos que enumeraba
+    el enunciado entran ENTEROS; lo que queda ya no es de esta tarea.**
+    Migrados al completo, de menor a mayor: **`memories`** (1 fichero),
+    **`assistant`** (3 + su `lib/assistant.ts`), **`notifications`** (6, las tres
+    pestañas + la bandeja), **`docs`** (12) y las tres pantallas que le faltaban a
+    **`marketplace`** (catálogo, marketplace privado y consentimiento de
+    permisos). Más dos piezas compartidas que el enunciado no nombra pero que
+    rompían la migración de otros: los **cuatro comboboxes**
+    (`entity-combobox` + los wrappers de proyecto, equipo y KB) y la **shell de
+    videollamada** (`voice-call-shell`, el modo voz del asistente).
+    Doce namespaces nuevos (`memories`, `combobox`, `assistant`,
+    `assistantModel`, `voiceCall`, `notifications`, `notificationsInbox`, `docs`,
+    `docFacets`, `marketplace`, `marketplacePrivate`, `marketplaceConsent`) y
+    **seis ficheros de test nuevos con 58 casos**, cada uno rindiendo su pantalla
+    en los DOS idiomas y afirmando en ambos sentidos:
+    `app/admin/memories/i18n.test.tsx` (10),
+    `app/admin/assistant/i18n.test.tsx` (11),
+    `app/admin/notifications/i18n.test.tsx` (11),
+    `app/admin/docs/i18n.test.tsx` (12),
+    `app/admin/marketplace/i18n.test.tsx` (12) y
+    `components/voice/i18n.test.tsx` (2).
+    **Contadores, y la mitad honesta del dato**: la allowlist de atributos pasa
+    de **188 en 71 ficheros a 119 en 45**. De esa bajada, **35 atributos en 15
+    ficheros son de este carril** (los otros 34 en 11 son del carril de
+    `settings/` + `projects/`, que corría en paralelo el mismo día): el contador
+    es COMPARTIDO y leerlo como si fuera de una sola tanda infla el trabajo
+    propio. `--strict` sigue saliendo 1.
+    **Lo que enseñó esta pasada, que vale más que el contador:**
+    1. **`docs` es el caso extremo del aviso que las tres notas anteriores
+       venían dando.** Doce ficheros, ~2.300 líneas, y las dos guardas le veían
+       **ocho atributos en cinco ficheros y cero ternarios**. Su deuda entera
+       vivía en texto JSX suelto: los seis estados que tiene cada panel (idle,
+       hint, cargando, error, vacío, resultados). Ninguna de las dos señales mira
+       ahí. Migrar «lo marcado» habría dejado un visor con la cabecera en inglés
+       y los seis estados en castellano.
+    2. **`assistant` escondía 30 textos en un módulo PURO.** Las ocho etiquetas y
+       ocho descripciones del catálogo de herramientas y los cinco mensajes de
+       validación del formulario estaban cableados en `lib/assistant.ts`, que no
+       es una pantalla. `ASSISTANT_TOOL_CATALOGUE` lleva ahora la CLAVE del
+       diccionario y `validateAssistantIdentity` recibe `lang` —el mismo patrón
+       que ya usaba `memoryDetectorState`—, con su test afirmando el mismo fallo
+       en los dos idiomas.
+    3. **Y un tercer escondite nuevo: el TIPO.** `VoiceOption.gender` era la
+       unión de literales `"Mujer" | "Hombre"`, castellano cableado en la firma
+       de un tipo, así que el selector de voz decía «Mujer · Dora» con el toggle
+       en EN. Cuarta forma de deuda que ninguna guarda ve, después del atributo
+       sin tilde, el diccionario privado por fichero y el texto JSX suelto.
+    4. **Un bug de traducción que NO era un literal**: la matriz de preferencias
+       de notificaciones leía siempre `label_es` del catálogo de eventos, que el
+       backend sirve BILINGÜE desde NOTIF-3 (`label_es` + `label_en`). El campo
+       `label_en` existía y no lo usaba nadie —el patrón «mecanismo entregado,
+       cero llamantes» del §5 de `verificar-antes-de-implementar`—. Resuelto con
+       `pickLang`, que además cae al otro idioma si el pedido viene vacío.
+    5. **Diecisiete fugas más de `task_prod16_05`** (`error.body` crudo en
+       pantalla): tres en `assistant` (chat, toggle e identidad), dos en
+       `memories` (la query y el alta), dos en la bandeja de notificaciones —que
+       tenía su PROPIA copia de `apiErrorBody`, distinta de la que ya se retiró
+       en la pasada de agosto: la 16.ª—, cinco en `docs` (barra lateral ×2,
+       buscador, visor y diff) y cinco en `marketplace` (listado privado,
+       despublicar, permisos, consentimiento y `publishErrorMessage`, que era
+       `errorText` reescrito peor: extraía el `detail` y, si no lo había, pintaba
+       el cuerpo crudo). **Van 39 sitios**, y sigue valiendo lo que dijo la
+       pasada anterior: la única búsqueda que los encuentra es la de lo que hace
+       el código (`instanceof ApiError ? … .body`), no la del nombre.
+    6. **Lo único que se deja fuera a propósito, y por qué**:
+       `app/admin/marketplace/review/` tiene un diccionario LOCAL
+       (`review-i18n.ts`) que ya es bilingüe y correcto. NO es deuda de
+       traducción: es el patrón «diccionario privado por fichero» que las notas
+       anteriores señalaron como enfermedad. Mudarlo al diccionario global es un
+       refactor sin cambio de comportamiento y con conflicto de merge garantizado
+       mientras dos carriles escriben en `dictionary.ts`, así que queda anotado y
+       sin tocar.
+    7. **Del enunciado de esta casilla no queda ningún módulo.** Las 45 entradas
+       que siguen en la allowlist de atributos son de otras casillas o de otro
+       carril: `cortex`, `inbox`, `approvals`, `approval-policy`, `board`,
+       `office`, `dashboard`, `documents`, `eval-quality`, `executions`,
+       `human-agents`, `plans`, `agents/[id]`, `developers/*`, el resto de
+       `projects/*` y los componentes compartidos de `components/` (tasks,
+       projects, evals, executions, shared, layout, cortex, ui) más
+       `lib/plan-dag` y `lib/plan-gantt`.
 - **Tiempo**: 3 días · **Complejidad**: l · **Depende de**: `task_prod16_03`
 - **Tests automáticos**:
   ```yaml

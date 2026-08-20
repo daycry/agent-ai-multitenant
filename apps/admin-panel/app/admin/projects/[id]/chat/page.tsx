@@ -38,6 +38,8 @@ import { Select } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
 import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
 import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { useErrorText } from "@/lib/use-error-text";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
@@ -51,6 +53,8 @@ import { MessageFeed } from "./message-feed";
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectChatPage() {
+  const t = useT("projectChat");
+  const lang = useLangOptional();
   const params = useParams<{ id: string }>();
   const projectId = params.id;
   const queryClient = useQueryClient();
@@ -251,8 +255,8 @@ export default function ProjectChatPage() {
   if (conversationsQuery.isLoading) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <ProjectBreadcrumb projectId={projectId} current="Chat" />
-        <p className="text-muted-foreground text-sm">Cargando chat…</p>
+        <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
+        <p className="text-muted-foreground text-sm">{t("loading")}</p>
       </div>
     );
   }
@@ -261,10 +265,10 @@ export default function ProjectChatPage() {
     const err = conversationsQuery.error;
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <ProjectBreadcrumb projectId={projectId} current="Chat" />
+        <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
         <Card>
           <CardHeader>
-            <CardTitle>Error cargando conversaciones</CardTitle>
+            <CardTitle>{t("errorTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
             {/* prod-16 `task_prod16_05`: aquí se pintaba `err.body` CRUDO. */}
@@ -281,10 +285,10 @@ export default function ProjectChatPage() {
   if (conversations.length === 0) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <ProjectBreadcrumb projectId={projectId} current="Chat" />
+        <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
         <Card>
           <CardHeader>
-            <CardTitle>No hay conversaciones en este proyecto</CardTitle>
+            <CardTitle>{t("noConversationsTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
             <Button
@@ -292,7 +296,7 @@ export default function ProjectChatPage() {
               onClick={() => createConversation.mutate()}
               disabled={createConversation.isPending}
             >
-              Empezar una conversación
+              {t("startConversation")}
             </Button>
           </CardContent>
         </Card>
@@ -302,11 +306,11 @@ export default function ProjectChatPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <ProjectBreadcrumb projectId={projectId} current="Chat" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
       <PageHeader
         icon={<MessagesSquare className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Chat del proyecto"
-        description={activeConversation?.title ?? "Conversación con el equipo del proyecto"}
+        title={t("title")}
+        description={activeConversation?.title ?? t("defaultDescription")}
         actions={
           activeConversation ? (
             <div className="flex items-center gap-2">
@@ -327,7 +331,7 @@ export default function ProjectChatPage() {
                 disabled={clearMessages.isPending}
                 onClick={() => setConfirmClearOpen(true)}
               >
-                Vaciar chat
+                {t("clearChat")}
               </Button>
             </div>
           ) : null
@@ -342,7 +346,7 @@ export default function ProjectChatPage() {
         data-testid="conversation-history-bar"
       >
         <label htmlFor="conversation-picker" className="text-muted-foreground text-sm">
-          Conversación:
+          {t("conversationPickerLabel")}
         </label>
         <div className="w-full min-w-0 sm:w-72">
           <Select
@@ -353,7 +357,7 @@ export default function ProjectChatPage() {
           >
             {conversations.map((c) => (
               <option key={c.id} value={c.id}>
-                {conversationLabel(c)} · {c.current_mode}
+                {conversationLabel(c, lang)} · {c.current_mode}
               </option>
             ))}
           </Select>
@@ -365,7 +369,7 @@ export default function ProjectChatPage() {
           disabled={createConversation.isPending}
           onClick={() => createConversation.mutate()}
         >
-          Nueva conversación
+          {t("newConversation")}
         </Button>
         {activeConversation ? (
           <Button
@@ -375,7 +379,7 @@ export default function ProjectChatPage() {
             disabled={deleteConversation.isPending}
             onClick={() => setConfirmDeleteOpen(true)}
           >
-            Eliminar conversación
+            {t("deleteConversation")}
           </Button>
         ) : null}
       </div>
@@ -383,7 +387,7 @@ export default function ProjectChatPage() {
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>
-            Modo activo:{" "}
+            {t("activeMode")}{" "}
             <span data-testid="chat-current-mode">{activeConversation?.current_mode}</span>
           </CardTitle>
         </CardHeader>
@@ -398,7 +402,7 @@ export default function ProjectChatPage() {
                 className="text-muted-foreground mt-3 animate-pulse text-sm"
                 data-testid="chat-team-thinking"
               >
-                El equipo está pensando… <span className="opacity-60">(esto puede tardar)</span>
+                {t("thinking")} <span className="opacity-60">{t("thinkingHint")}</span>
               </p>
             ) : null;
           })()}
@@ -428,9 +432,9 @@ export default function ProjectChatPage() {
         <ConfirmDialog
           open={confirmClearOpen}
           onOpenChange={setConfirmClearOpen}
-          title="Vaciar chat"
-          description="Se borrarán todos los mensajes de esta conversación. No se puede deshacer."
-          confirmLabel="Vaciar"
+          title={t("clearChat")}
+          description={t("confirmClearDescription")}
+          confirmLabel={t("confirmClearLabel")}
           destructive
           pending={clearMessages.isPending}
           onConfirm={() =>
@@ -445,9 +449,9 @@ export default function ProjectChatPage() {
         <ConfirmDialog
           open={confirmDeleteOpen}
           onOpenChange={setConfirmDeleteOpen}
-          title="Eliminar conversación"
-          description="Se eliminará esta conversación y todos sus mensajes. No se puede deshacer."
-          confirmLabel="Eliminar"
+          title={t("deleteConversation")}
+          description={t("confirmDeleteDescription")}
+          confirmLabel={t("confirmDeleteLabel")}
           destructive
           pending={deleteConversation.isPending}
           onConfirm={() =>

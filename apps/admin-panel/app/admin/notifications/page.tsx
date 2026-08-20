@@ -42,6 +42,7 @@ import { Bell } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
 
 import { ChannelsTab } from "./channels-tab";
@@ -49,6 +50,7 @@ import { PlatformTab } from "./platform-tab";
 import { PreferencesTab } from "./preferences-tab";
 
 export default function NotificationConfigPage() {
+  const t = useT("notifications");
   const { isSystemAdmin } = useCurrentUser();
 
   return (
@@ -58,22 +60,22 @@ export default function NotificationConfigPage() {
     >
       <PageHeader
         icon={<Bell className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Notificaciones"
-        description="Configuración de canales y preferencias en 3 capas: plataforma, tenant y usuario."
+        title={t("title")}
+        description={t("description")}
         data-testid="notification-config-header"
       />
 
       <Tabs defaultValue="channels" className="mt-6">
         <TabsList data-testid="notification-tabs">
           <TabsTrigger value="channels" data-testid="tab-channels">
-            Canales
+            {t("tabChannels")}
           </TabsTrigger>
           <TabsTrigger value="preferences" data-testid="tab-preferences">
-            Preferencias
+            {t("tabPreferences")}
           </TabsTrigger>
           {isSystemAdmin ? (
             <TabsTrigger value="platform" data-testid="tab-platform">
-              Plataforma
+              {t("tabPlatform")}
             </TabsTrigger>
           ) : null}
         </TabsList>

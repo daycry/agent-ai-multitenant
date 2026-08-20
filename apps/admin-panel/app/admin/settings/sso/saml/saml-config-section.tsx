@@ -11,8 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { useT } from "@/lib/i18n";
 
-import { KEY_SOURCE_LABEL, type SamlConfig } from "./saml-types";
+import { KEY_SOURCE_KEY, type SamlConfig } from "./saml-types";
 
 // --------------------------------------------------------------------------
 // Config card — the single SAML config
@@ -30,6 +31,8 @@ export function SamlConfigCard({
   onToggle: (enabled: boolean) => void;
   busy: boolean;
 }) {
+  const t = useT("ssoSaml");
+
   return (
     <Card className="mt-6" data-testid="saml-config-card">
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -37,21 +40,23 @@ export function SamlConfigCard({
           <CardTitle className="flex flex-wrap items-center gap-2">
             <span className="truncate">{config.display_name || "SAML"}</span>
             <Badge variant={config.enabled ? "success" : "muted"} data-testid="saml-enabled-badge">
-              {config.enabled ? "activo" : "inactivo"}
+              {config.enabled ? t("badgeEnabled") : t("badgeDisabled")}
             </Badge>
             {config.has_sp_private_key ? (
               <Badge variant="info" data-testid="saml-key-badge">
                 <KeyRound className="mr-1 h-3 w-3" />
-                clave SP: {KEY_SOURCE_LABEL[config.sp_private_key_source ?? "encrypted"]}
+                {t("badgeKey", {
+                  source: t(KEY_SOURCE_KEY[config.sp_private_key_source ?? "encrypted"]),
+                })}
               </Badge>
             ) : (
               <Badge variant="muted" data-testid="saml-no-key-badge">
-                sin clave SP
+                {t("badgeNoKey")}
               </Badge>
             )}
             {config.authn_requests_signed ? (
               <Badge variant="info" data-testid="saml-signed-badge">
-                AuthnRequest firmado
+                {t("badgeSigned")}
               </Badge>
             ) : null}
           </CardTitle>
@@ -85,7 +90,7 @@ export function SamlConfigCard({
               disabled={busy}
               data-testid="saml-toggle-enabled"
             >
-              {config.enabled ? "Desactivar" : "Activar"}
+              {config.enabled ? t("disable") : t("enable")}
             </Button>
             <Button
               variant="outline"
@@ -93,7 +98,7 @@ export function SamlConfigCard({
               onClick={onEdit}
               disabled={busy}
               data-testid="saml-edit-button"
-              aria-label="Editar"
+              aria-label={t("edit")}
             >
               <Pencil className="h-3.5 w-3.5" />
             </Button>
@@ -103,7 +108,7 @@ export function SamlConfigCard({
               onClick={onDelete}
               disabled={busy}
               data-testid="saml-delete-button"
-              aria-label="Eliminar"
+              aria-label={t("delete")}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>

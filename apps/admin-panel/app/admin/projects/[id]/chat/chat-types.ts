@@ -40,32 +40,26 @@ export interface Message {
 // diez turnos completos. El endpoint devuelve LOS MÁS RECIENTES.
 export const MESSAGE_WINDOW = 100;
 
+/**
+ * Un modo del chat: su `value` (enum del backend, viaja en la API) y las CLAVES
+ * del diccionario con las que se pinta.
+ *
+ * Antes de prod-16 `task_prod16_03` este tipo llevaba `labelEs` + `labelEn` +
+ * `description`, y el selector pintaba SIEMPRE `labelEs`: la cara inglesa
+ * existía, estaba escrita y no llegaba a pantalla; la descripción ni siquiera
+ * tenía cara inglesa. Con claves, las dos caras las exige el tipo del
+ * diccionario y el render sólo puede pedir la del idioma activo.
+ */
 export interface ModeOption {
   value: string;
-  labelEs: string;
-  labelEn: string;
-  description: string;
+  labelKey: "modePlanning" | "modeDiscussion" | "modeExecution";
+  descriptionKey: "modePlanningHint" | "modeDiscussionHint" | "modeExecutionHint";
 }
 
 // Built-in modes; ``custom`` is reachable via a separate creation flow
 // in task_03_08, not from this base selector.
 export const BUILT_IN_MODES: ModeOption[] = [
-  {
-    value: "planning",
-    labelEs: "Planning",
-    labelEn: "Planning",
-    description: "El equipo construye un plan estructurado",
-  },
-  {
-    value: "discussion",
-    labelEs: "Discusión",
-    labelEn: "Discussion",
-    description: "Ronda abierta de ideas y opiniones",
-  },
-  {
-    value: "execution",
-    labelEs: "Ejecución",
-    labelEn: "Execution",
-    description: "El equipo ejecuta tareas del plan aprobado",
-  },
+  { value: "planning", labelKey: "modePlanning", descriptionKey: "modePlanningHint" },
+  { value: "discussion", labelKey: "modeDiscussion", descriptionKey: "modeDiscussionHint" },
+  { value: "execution", labelKey: "modeExecution", descriptionKey: "modeExecutionHint" },
 ];

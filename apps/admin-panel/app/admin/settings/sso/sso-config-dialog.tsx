@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 import type { FormState, OidcTemplate, SsoConfig, UpsertBody } from "./sso-types";
 
@@ -71,6 +72,7 @@ export function SsoConfigDialog({
   onSubmit: (body: UpsertBody) => void;
   backendError: string | null;
 }) {
+  const t = useT("ssoOidc");
   const isCreate = initial === null;
   const [state, setState] = useState<FormState>(() => configToForm(initial));
   // claim_mappings carries over verbatim on edit; templates pre-fill it
@@ -164,13 +166,13 @@ export function SsoConfigDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="sso-config-dialog">
         <DialogHeader>
-          <DialogTitle>{isCreate ? "Configurar OIDC" : "Editar configuración OIDC"}</DialogTitle>
+          <DialogTitle>{isCreate ? t("configure") : t("dialogEditTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div className="space-y-4">
             {/* Template picker */}
             <div className="bg-muted/30 -mx-2 rounded-md border p-3">
-              <Label htmlFor="sso-form-template">Plantilla de proveedor</Label>
+              <Label htmlFor="sso-form-template">{t("templateLabel")}</Label>
               <Select
                 id="sso-form-template"
                 data-testid="sso-form-template"
@@ -180,9 +182,7 @@ export function SsoConfigDialog({
                 disabled={templatesQuery.isLoading}
               >
                 <option value="">
-                  {templatesQuery.isLoading
-                    ? "Cargando plantillas…"
-                    : "— Elige un proveedor (opcional) —"}
+                  {templatesQuery.isLoading ? t("templateLoading") : t("templateNone")}
                 </option>
                 {(templatesQuery.data ?? []).map((tpl) => (
                   <option key={tpl.template_id} value={tpl.template_id}>
@@ -190,10 +190,7 @@ export function SsoConfigDialog({
                   </option>
                 ))}
               </Select>
-              <p className="text-muted-foreground mt-1.5 text-xs">
-                Pre-rellena issuer, scopes y mapeo de claims con valores verificados. Después puedes
-                ajustarlos manualmente.
-              </p>
+              <p className="text-muted-foreground mt-1.5 text-xs">{t("templateHelp")}</p>
               {selectedTemplate?.notes ? (
                 <p
                   className="text-muted-foreground mt-2 text-xs italic"
@@ -209,7 +206,7 @@ export function SsoConfigDialog({
               <div className="space-y-3" data-testid="sso-form-params">
                 {selectedTemplate.required_params.map((name) => (
                   <div key={name}>
-                    <Label htmlFor={`sso-form-param-${name}`}>Parámetro: {name}</Label>
+                    <Label htmlFor={`sso-form-param-${name}`}>{t("paramLabel", { name })}</Label>
                     <Input
                       id={`sso-form-param-${name}`}
                       data-testid={`sso-form-param-${name}`}
@@ -224,7 +221,7 @@ export function SsoConfigDialog({
 
             {/* Display name */}
             <div>
-              <Label htmlFor="sso-form-display-name">Nombre visible (opcional)</Label>
+              <Label htmlFor="sso-form-display-name">{t("displayNameLabel")}</Label>
               <Input
                 id="sso-form-display-name"
                 data-testid="sso-form-display-name"
@@ -245,8 +242,7 @@ export function SsoConfigDialog({
                 placeholder="https://login.microsoftonline.com/<tenant>/v2.0"
               />
               <p className="text-muted-foreground mt-1 text-xs">
-                El descubrimiento OIDC consulta{" "}
-                <code>&lt;issuer&gt;/.well-known/openid-configuration</code>.
+                {t("issuerHelp")} <code>&lt;issuer&gt;/.well-known/openid-configuration</code>.
               </p>
             </div>
 
@@ -265,7 +261,7 @@ export function SsoConfigDialog({
             {/* Client secret */}
             <div>
               <Label htmlFor="sso-form-client-secret">
-                Client secret{isCreate ? "" : " (dejar vacío para conservar el actual)"}
+                Client secret{isCreate ? "" : t("secretKeepHint")}
               </Label>
               <Input
                 id="sso-form-client-secret"
@@ -274,16 +270,14 @@ export function SsoConfigDialog({
                 autoComplete="new-password"
                 value={state.client_secret}
                 onChange={(e) => setState({ ...state, client_secret: e.target.value })}
-                placeholder={isCreate ? "secreto del cliente OIDC" : "••••••••"}
+                placeholder={isCreate ? t("secretPlaceholder") : "••••••••"}
               />
-              <p className="text-muted-foreground mt-1 text-xs">
-                Se cifra en reposo antes de guardarse; el sistema nunca lo devuelve en claro.
-              </p>
+              <p className="text-muted-foreground mt-1 text-xs">{t("secretHelp")}</p>
             </div>
 
             {/* Scopes */}
             <div>
-              <Label htmlFor="sso-form-scopes">Scopes (separados por espacios)</Label>
+              <Label htmlFor="sso-form-scopes">{t("scopesLabel")}</Label>
               <Input
                 id="sso-form-scopes"
                 data-testid="sso-form-scopes"
@@ -301,9 +295,7 @@ export function SsoConfigDialog({
                 checked={state.enabled}
                 onChange={(e) => setState({ ...state, enabled: e.target.checked })}
               />
-              <span>
-                Activar este proveedor en el login (añadido al login local, no lo reemplaza)
-              </span>
+              <span>{t("enabledLabel")}</span>
             </label>
 
             {backendError ? (
@@ -323,14 +315,14 @@ export function SsoConfigDialog({
             disabled={submitting}
             data-testid="sso-form-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => onSubmit(buildBody())}
             disabled={submitting || !canSubmit}
             data-testid="sso-form-submit"
           >
-            {submitting ? "Guardando…" : isCreate ? "Crear" : "Guardar cambios"}
+            {submitting ? t("saving") : isCreate ? t("create") : t("saveChanges")}
           </Button>
         </DialogFooter>
       </DialogContent>

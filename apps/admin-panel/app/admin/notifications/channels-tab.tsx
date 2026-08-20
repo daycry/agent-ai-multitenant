@@ -28,11 +28,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 import {
   channelToForm,
-  SECRET_SOURCE_LABEL,
+  SECRET_SOURCE_KEY,
   type ChannelCreateBody,
   type ChannelFormState,
   type ChannelScope,
@@ -42,6 +43,8 @@ import {
 } from "./notification-types";
 
 export function ChannelsTab() {
+  const t = useT("notifications");
+  const tCommon = useT("common");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const channelsQuery = useQuery({
@@ -98,7 +101,7 @@ export function ChannelsTab() {
   }
 
   function handleDelete(channel: NotificationChannel) {
-    if (!window.confirm(`¿Eliminar el canal “${channel.name}”?`)) return;
+    if (!window.confirm(t("confirmDelete", { name: channel.name }))) return;
     deleteMutation.mutate(channel.id);
   }
 
@@ -108,14 +111,14 @@ export function ChannelsTab() {
         <RoleGuard min="tenant_admin">
           <Button onClick={handleCreate} data-testid="channel-create-button">
             <Plus className="mr-1 h-3.5 w-3.5" />
-            Nuevo canal
+            {t("newChannel")}
           </Button>
         </RoleGuard>
       </div>
 
       {channelsQuery.isLoading ? (
         <p className="text-muted-foreground text-sm" data-testid="channels-loading">
-          Cargando…
+          {tCommon("loading")}
         </p>
       ) : channelsQuery.isError ? (
         <p className="text-destructive text-sm" data-testid="channels-error">
@@ -125,7 +128,7 @@ export function ChannelsTab() {
         <Card>
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="channels-empty">
-              Aún no hay canales configurados. Pulsa <strong>“Nuevo canal”</strong> para añadir uno.
+              {t("channelsEmpty")}
             </p>
           </CardContent>
         </Card>
@@ -171,6 +174,7 @@ function ChannelCard({
   onDelete: () => void;
   busy: boolean;
 }) {
+  const t = useT("notifications");
   return (
     <Card data-testid={`channel-card-${channel.id}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -182,15 +186,17 @@ function ChannelCard({
             </Badge>
             <Badge variant="muted">{channel.scope}</Badge>
             <Badge variant={channel.enabled ? "success" : "muted"}>
-              {channel.enabled ? "activo" : "inactivo"}
+              {channel.enabled ? t("channelActive") : t("channelInactive")}
             </Badge>
             {channel.has_secret ? (
               <Badge variant="info" data-testid={`channel-secret-${channel.id}`}>
                 <KeyRound className="mr-1 h-3 w-3" />
-                secreto: {SECRET_SOURCE_LABEL[channel.secret_source ?? "encrypted"]}
+                {t("secretPrefix", {
+                  source: t(SECRET_SOURCE_KEY[channel.secret_source ?? "encrypted"]),
+                })}
               </Badge>
             ) : (
-              <Badge variant="warning">sin secreto</Badge>
+              <Badge variant="warning">{t("noSecret")}</Badge>
             )}
           </CardTitle>
         </div>
@@ -202,7 +208,7 @@ function ChannelCard({
               onClick={onEdit}
               disabled={busy}
               data-testid={`channel-edit-${channel.id}`}
-              aria-label="Editar canal"
+              aria-label={t("editChannel")}
             >
               <Pencil className="h-3.5 w-3.5" />
             </Button>
@@ -212,7 +218,7 @@ function ChannelCard({
               onClick={onDelete}
               disabled={busy}
               data-testid={`channel-delete-${channel.id}`}
-              aria-label="Eliminar canal"
+              aria-label={t("deleteChannel")}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
@@ -240,6 +246,7 @@ function ChannelDialog({
   onSubmit: (body: ChannelCreateBody | ChannelUpdateBody) => void;
   backendError: string | null;
 }) {
+  const t = useT("notifications");
   const isCreate = initial === null;
   const [state, setState] = useState<ChannelFormState>(() => channelToForm(initial, enabledTypes));
   const [configError, setConfigError] = useState<string | null>(null);
@@ -249,12 +256,14 @@ function ChannelDialog({
     setConfigError(null);
   }, [initial, enabledTypes]);
 
+  // `t` viaja como argumento porque `buildBody` se llama desde un handler y
+  // no durante el render: capturarla del cierre es lo correcto aqui.
   function buildBody(): ChannelCreateBody | ChannelUpdateBody | null {
     let parsedConfig: Record<string, unknown> = {};
     try {
       parsedConfig = state.config.trim() === "" ? {} : JSON.parse(state.config);
     } catch {
-      setConfigError("El config no es un JSON válido.");
+      setConfigError(t("configInvalid"));
       return null;
     }
     if (isCreate) {
@@ -283,14 +292,14 @@ function ChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="channel-dialog">
         <DialogHeader>
-          <DialogTitle>{isCreate ? "Nuevo canal" : "Editar canal"}</DialogTitle>
+          <DialogTitle>{isCreate ? t("newChannel") : t("editChannel")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div className="space-y-4">
             {isCreate ? (
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="channel-form-scope">Ámbito</Label>
+                  <Label htmlFor="channel-form-scope">{t("fieldScope")}</Label>
                   <select
                     id="channel-form-scope"
                     data-testid="channel-form-scope"
@@ -298,12 +307,12 @@ function ChannelDialog({
                     value={state.scope}
                     onChange={(e) => setState({ ...state, scope: e.target.value as ChannelScope })}
                   >
-                    <option value="tenant">Tenant (compartido)</option>
-                    <option value="user">Usuario (solo yo)</option>
+                    <option value="tenant">{t("scopeTenant")}</option>
+                    <option value="user">{t("scopeUser")}</option>
                   </select>
                 </div>
                 <div>
-                  <Label htmlFor="channel-form-type">Transporte</Label>
+                  <Label htmlFor="channel-form-type">{t("fieldTransport")}</Label>
                   <select
                     id="channel-form-type"
                     data-testid="channel-form-type"
@@ -322,7 +331,7 @@ function ChannelDialog({
             ) : null}
 
             <div>
-              <Label htmlFor="channel-form-name">Nombre</Label>
+              <Label htmlFor="channel-form-name">{t("fieldName")}</Label>
               <Input
                 id="channel-form-name"
                 data-testid="channel-form-name"
@@ -333,7 +342,7 @@ function ChannelDialog({
             </div>
 
             <div>
-              <Label htmlFor="channel-form-config">Config (JSON, sin secretos)</Label>
+              <Label htmlFor="channel-form-config">{t("fieldConfig")}</Label>
               <textarea
                 id="channel-form-config"
                 data-testid="channel-form-config"
@@ -354,7 +363,7 @@ function ChannelDialog({
 
             <div>
               <Label htmlFor="channel-form-secret">
-                Secreto{isCreate ? " (opcional)" : " (dejar vacío para conservar el actual)"}
+                {isCreate ? t("fieldSecretCreate") : t("fieldSecretEdit")}
               </Label>
               <Input
                 id="channel-form-secret"
@@ -363,11 +372,9 @@ function ChannelDialog({
                 autoComplete="new-password"
                 value={state.secret}
                 onChange={(e) => setState({ ...state, secret: e.target.value })}
-                placeholder={isCreate ? "token del bot / contraseña / clave" : "••••••••"}
+                placeholder={isCreate ? t("secretPlaceholder") : "••••••••"}
               />
-              <p className="text-muted-foreground mt-1 text-xs">
-                Se cifra en reposo antes de guardarse; el sistema nunca lo devuelve en claro.
-              </p>
+              <p className="text-muted-foreground mt-1 text-xs">{t("secretHint")}</p>
             </div>
 
             <label className="flex items-center gap-2 text-sm" htmlFor="channel-form-enabled">
@@ -379,7 +386,7 @@ function ChannelDialog({
                 checked={state.enabled}
                 onChange={(e) => setState({ ...state, enabled: e.target.checked })}
               />
-              <span>Canal activo</span>
+              <span>{t("enabledLabel")}</span>
             </label>
 
             {backendError ? (
@@ -399,7 +406,7 @@ function ChannelDialog({
             disabled={submitting}
             data-testid="channel-form-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => {
@@ -409,7 +416,7 @@ function ChannelDialog({
             disabled={submitting || !canSubmit}
             data-testid="channel-form-submit"
           >
-            {submitting ? "Guardando…" : isCreate ? "Crear" : "Guardar"}
+            {submitting ? t("saving") : isCreate ? t("create") : t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

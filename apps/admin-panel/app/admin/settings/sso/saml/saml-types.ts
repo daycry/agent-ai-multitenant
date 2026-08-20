@@ -58,29 +58,43 @@ export interface UpsertBody {
   want_name_id_encrypted: boolean;
 }
 
-export const KEY_SOURCE_LABEL: Record<KeySource, string> = {
-  vault: "Vault",
-  encrypted: "cifrado en reposo",
+/**
+ * De dónde sale la clave privada del SP, como CLAVE del diccionario.
+ *
+ * Mismo criterio que `SECRET_SOURCE_KEY` en la mitad OIDC: la constante guarda
+ * la clave y la ficha la resuelve con `useT("ssoSaml")`, para que el catálogo
+ * no se quede en castellano con el toggle en EN (prod-16 `task_prod16_03`).
+ */
+export const KEY_SOURCE_KEY: Record<KeySource, "sourceVault" | "sourceEncrypted"> = {
+  vault: "sourceVault",
+  encrypted: "sourceEncrypted",
 };
 
 // The closed NameID-format picker the UI offers (the API accepts any
 // non-empty URN, but these cover the overwhelming majority of IdPs).
-export const NAME_ID_FORMATS: { value: string; label: string }[] = [
+//
+// El `value` es el URN del estándar y NO se traduce: viaja en la aserción y se
+// copia literal de la consola del IdP. Lo que se traduce es sólo la etiqueta, y
+// por eso aquí vive su CLAVE del diccionario (`ssoSaml`) y no su texto.
+export const NAME_ID_FORMATS: {
+  value: string;
+  labelKey: "nameIdEmail" | "nameIdPersistent" | "nameIdTransient" | "nameIdUnspecified";
+}[] = [
   {
     value: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
-    label: "emailAddress (recomendado)",
+    labelKey: "nameIdEmail",
   },
   {
     value: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent",
-    label: "persistent",
+    labelKey: "nameIdPersistent",
   },
   {
     value: "urn:oasis:names:tc:SAML:2.0:nameid-format:transient",
-    label: "transient",
+    labelKey: "nameIdTransient",
   },
   {
     value: "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
-    label: "unspecified",
+    labelKey: "nameIdUnspecified",
   },
 ];
 

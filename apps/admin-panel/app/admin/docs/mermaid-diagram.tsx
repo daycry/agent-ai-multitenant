@@ -16,6 +16,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Spinner } from "@/components/ui/spinner";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // Mermaid's API surface we touch — typed locally so we don't pull mermaid's
@@ -44,6 +45,7 @@ function loadMermaid(): Promise<MermaidModule> {
 }
 
 export function MermaidDiagram({ code }: { code: string }) {
+  const t = useT("docs");
   const reactId = useId();
   // Mermaid ids must be valid CSS selectors; `useId()` contains ':' so strip it.
   const renderId = `mermaid-${reactId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
@@ -94,7 +96,7 @@ export function MermaidDiagram({ code }: { code: string }) {
         data-testid="docs-mermaid-loading"
       >
         <Spinner className="h-4 w-4" />
-        Renderizando diagrama…
+        {t("mermaidLoading")}
       </div>
     );
   }

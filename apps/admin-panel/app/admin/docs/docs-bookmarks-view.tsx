@@ -18,16 +18,27 @@
 import { useMemo, useState } from "react";
 import { BookmarkX, FileText, Star } from "lucide-react";
 
+import { useT, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { categoryOf, DOC_CATEGORY_LABELS } from "@/lib/docs-filters";
+import { categoryOf, DOC_CATEGORY_KEYS } from "@/lib/docs-filters";
 import type { DocBookmark } from "@/lib/docs-bookmarks";
 
-/** Recency windows for the bookmarks filter (days, or null = all time). */
-const RECENCY_OPTIONS: { value: string; label: string; days: number | null }[] = [
-  { value: "all", label: "Todos", days: null },
-  { value: "1", label: "Hoy", days: 1 },
-  { value: "7", label: "7 días", days: 7 },
-  { value: "30", label: "30 días", days: 30 },
+/**
+ * Ventanas de recencia del filtro de marcadores (dias, o null = siempre).
+ *
+ * Llevan la CLAVE del diccionario, no la etiqueta: eran cuatro literales
+ * castellanos en una constante de modulo, que es la forma que ninguna de las
+ * dos guardas ve.
+ */
+const RECENCY_OPTIONS: {
+  value: string;
+  labelKey: Parameters<Translator<"docs">>[0];
+  days: number | null;
+}[] = [
+  { value: "all", labelKey: "recencyAll", days: null },
+  { value: "1", labelKey: "recencyToday", days: 1 },
+  { value: "7", labelKey: "recency7", days: 7 },
+  { value: "30", labelKey: "recency30", days: 30 },
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -47,6 +58,7 @@ export function DocsBookmarksView({
   onOpenDoc,
   onRemove,
 }: DocsBookmarksViewProps) {
+  const t = useT("docs");
   const [recency, setRecency] = useState("all");
 
   const days = RECENCY_OPTIONS.find((o) => o.value === recency)?.days ?? null;
@@ -76,7 +88,7 @@ export function DocsBookmarksView({
               )}
               data-testid={`docs-bookmarks-recency-${opt.value}`}
             >
-              {opt.label}
+              {t(opt.labelKey)}
             </button>
           );
         })}
@@ -87,14 +99,14 @@ export function DocsBookmarksView({
           className="text-muted-foreground px-1 py-6 text-center text-xs italic"
           data-testid="docs-bookmarks-empty"
         >
-          Aún no has marcado documentos. Usa la estrella junto a un documento para guardarlo aquí.
+          {t("bookmarksEmpty")}
         </p>
       ) : visible.length === 0 ? (
         <p
           className="text-muted-foreground px-1 py-6 text-center text-xs italic"
           data-testid="docs-bookmarks-empty-window"
         >
-          Ningún documento marcado en este periodo.
+          {t("bookmarksEmptyWindow")}
         </p>
       ) : (
         <ul className="flex flex-col gap-2" data-testid="docs-bookmarks-list">
@@ -127,8 +139,10 @@ function BookmarkRow({
   onOpen: () => void;
   onRemove: () => void;
 }) {
+  const t = useT("docs");
+  const tFacets = useT("docFacets");
   const filename = bookmark.relpath.split("/").filter(Boolean).pop() ?? bookmark.relpath;
-  const category = DOC_CATEGORY_LABELS[categoryOf(bookmark.relpath)];
+  const category = tFacets(DOC_CATEGORY_KEYS[categoryOf(bookmark.relpath)]);
 
   return (
     <div
@@ -158,8 +172,8 @@ function BookmarkRow({
         type="button"
         onClick={onRemove}
         className="text-muted-foreground hover:text-destructive shrink-0 rounded p-1 transition-colors"
-        aria-label="Quitar de marcadores"
-        title="Quitar de marcadores"
+        aria-label={t("bookmarkRemove")}
+        title={t("bookmarkRemove")}
         data-testid="docs-bookmark-remove"
       >
         <BookmarkX className="h-4 w-4" aria-hidden="true" />
@@ -180,6 +194,7 @@ export function BookmarkStar({
   className?: string;
   testid?: string;
 }) {
+  const t = useT("docs");
   return (
     <button
       type="button"
@@ -188,8 +203,8 @@ export function BookmarkStar({
         onToggle();
       }}
       aria-pressed={bookmarked}
-      aria-label={bookmarked ? "Quitar de marcadores" : "Marcar documento"}
-      title={bookmarked ? "Quitar de marcadores" : "Marcar documento"}
+      aria-label={bookmarked ? t("bookmarkRemove") : t("bookmarkAdd")}
+      title={bookmarked ? t("bookmarkRemove") : t("bookmarkAdd")}
       className={cn(
         "shrink-0 rounded p-1 transition-colors",
         bookmarked ? "text-warning-soft-foreground" : "text-muted-foreground hover:text-foreground",

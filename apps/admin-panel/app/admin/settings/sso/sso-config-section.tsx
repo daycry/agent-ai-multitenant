@@ -11,8 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
+import { useT } from "@/lib/i18n";
 
-import { SECRET_SOURCE_LABEL, type SsoConfig } from "./sso-types";
+import { SECRET_SOURCE_KEY, type SsoConfig } from "./sso-types";
 
 // --------------------------------------------------------------------------
 // Config card — the single OIDC config
@@ -30,6 +31,8 @@ export function SsoConfigCard({
   onToggle: (enabled: boolean) => void;
   busy: boolean;
 }) {
+  const t = useT("ssoOidc");
+
   return (
     <Card className="mt-6" data-testid="sso-config-card">
       <CardHeader className="flex flex-row items-start justify-between gap-4">
@@ -37,16 +40,18 @@ export function SsoConfigCard({
           <CardTitle className="flex items-center gap-2">
             <span className="truncate">{config.display_name || "OIDC"}</span>
             <Badge variant={config.enabled ? "success" : "muted"} data-testid="sso-enabled-badge">
-              {config.enabled ? "activo" : "inactivo"}
+              {config.enabled ? t("badgeEnabled") : t("badgeDisabled")}
             </Badge>
             {config.has_client_secret ? (
               <Badge variant="info" data-testid="sso-secret-badge">
                 <KeyRound className="mr-1 h-3 w-3" />
-                secreto: {SECRET_SOURCE_LABEL[config.client_secret_source ?? "encrypted"]}
+                {t("badgeSecret", {
+                  source: t(SECRET_SOURCE_KEY[config.client_secret_source ?? "encrypted"]),
+                })}
               </Badge>
             ) : (
               <Badge variant="warning" data-testid="sso-no-secret-badge">
-                sin secreto
+                {t("badgeNoSecret")}
               </Badge>
             )}
           </CardTitle>
@@ -80,7 +85,7 @@ export function SsoConfigCard({
               disabled={busy}
               data-testid="sso-toggle-enabled"
             >
-              {config.enabled ? "Desactivar" : "Activar"}
+              {config.enabled ? t("disable") : t("enable")}
             </Button>
             <Button
               variant="outline"
@@ -88,7 +93,7 @@ export function SsoConfigCard({
               onClick={onEdit}
               disabled={busy}
               data-testid="sso-edit-button"
-              aria-label="Editar"
+              aria-label={t("edit")}
             >
               <Pencil className="h-3.5 w-3.5" />
             </Button>
@@ -98,7 +103,7 @@ export function SsoConfigCard({
               onClick={onDelete}
               disabled={busy}
               data-testid="sso-delete-button"
-              aria-label="Eliminar"
+              aria-label={t("delete")}
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>

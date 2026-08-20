@@ -18,10 +18,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 import type { ApiPathPrefix, PublicBaseUrl } from "./sso-types";
 
 export function CallbackUrlCard({ url, loading }: { url: string | null; loading: boolean }) {
+  const t = useT("ssoOidc");
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
@@ -100,14 +102,13 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
   return (
     <Card className="mt-6" data-testid="sso-callback-card">
       <CardHeader>
-        <CardTitle className="text-base">URL base pública de la aplicación</CardTitle>
+        <CardTitle className="text-base">{t("cbTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-muted-foreground text-sm">
-          La URL pública única de la plataforma (p. ej.{" "}
-          <span className="font-mono">https://agentic-orchestrator.com</span>). De ella se derivan
-          la <strong>callback de SSO</strong> y el <strong>ACS de SAML</strong> como rutas — el
-          puerto queda detrás de tu gateway en producción. Es global (una para toda la plataforma).
+          {t("cbIntro1")} <span className="font-mono">https://agentic-orchestrator.com</span>
+          {t("cbIntro2")} <strong>{t("cbIntroSsoCallback")}</strong> {t("cbIntro3")}{" "}
+          <strong>{t("cbIntroSamlAcs")}</strong> {t("cbIntro4")}
         </p>
 
         {/* Editable base URL — System Admin only (the backend gates the PUT). */}
@@ -115,7 +116,7 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
           min="system_admin"
           fallback={
             <p className="text-muted-foreground text-xs" data-testid="sso-redirect-base">
-              Base pública actual:{" "}
+              {t("cbCurrentBase")}{" "}
               <span className="font-mono">
                 {baseQuery.isLoading ? "…" : (baseData?.base_url ?? "—")}
               </span>
@@ -123,13 +124,13 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
           }
         >
           <div className="space-y-1.5">
-            <Label htmlFor="public-base-url">URL base pública</Label>
+            <Label htmlFor="public-base-url">{t("cbBaseLabel")}</Label>
             <div className="flex items-center gap-2">
               <Input
                 id="public-base-url"
                 value={fieldValue}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="https://tu-dominio.com"
+                placeholder={t("cbBasePlaceholder")}
                 data-testid="sso-public-base-url-input"
                 disabled={baseQuery.isLoading || saveMutation.isPending}
               />
@@ -140,7 +141,7 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
                 disabled={!dirty || saveMutation.isPending}
                 data-testid="sso-public-base-url-save"
               >
-                {saveMutation.isPending ? "Guardando…" : "Guardar"}
+                {saveMutation.isPending ? t("saving") : t("save")}
               </Button>
             </div>
             {saveError && (
@@ -155,13 +156,13 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
 
           {/* ADR 0069: prefijo de API bajo el reverse proxy single-origin. */}
           <div className="space-y-1.5">
-            <Label htmlFor="api-path-prefix">Prefijo de API (reverse proxy)</Label>
+            <Label htmlFor="api-path-prefix">{t("cbPrefixLabel")}</Label>
             <div className="flex items-center gap-2">
               <Input
                 id="api-path-prefix"
                 value={prefixValue}
                 onChange={(e) => setPrefixDraft(e.target.value)}
-                placeholder="/api  (vacío si el API cuelga de la raíz)"
+                placeholder={t("cbPrefixPlaceholder")}
                 data-testid="sso-api-path-prefix-input"
                 disabled={prefixQuery.isLoading || prefixSaveMutation.isPending}
               />
@@ -172,14 +173,14 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
                 disabled={!prefixDirty || prefixSaveMutation.isPending}
                 data-testid="sso-api-path-prefix-save"
               >
-                {prefixSaveMutation.isPending ? "Guardando…" : "Guardar"}
+                {prefixSaveMutation.isPending ? t("saving") : t("save")}
               </Button>
             </div>
             <p className="text-muted-foreground text-xs">
-              Si publicas single-origin (SPA en <span className="font-mono">/</span> y API bajo{" "}
-              <span className="font-mono">/api</span> tras Caddy/nginx), pon{" "}
-              <span className="font-mono">/api</span>. Vacío si el api-server cuelga de la raíz del
-              dominio. Se inserta entre el origen y la ruta del callback.
+              {t("cbPrefixHelp1")} <span className="font-mono">/</span> {t("cbPrefixHelp2")}{" "}
+              <span className="font-mono">/api</span> {t("cbPrefixHelp3")}{" "}
+              <span className="font-mono">/api</span>
+              {t("cbPrefixHelp4")}
             </p>
             {prefixSaveError && (
               <p
@@ -194,13 +195,13 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
 
         {/* The derived callback URL the operator registers at the IdP. */}
         <div>
-          <Label className="text-xs">URL de callback / redirect (a registrar en el IdP)</Label>
+          <Label className="text-xs">{t("cbCallbackLabel")}</Label>
           <div className="mt-1 flex items-center gap-2">
             <code
               className="bg-muted/40 flex-1 break-all rounded-md border px-3 py-2 font-mono text-xs"
               data-testid="sso-callback-url"
             >
-              {loading ? "Cargando…" : (url ?? "—")}
+              {loading ? t("loading") : (url ?? "—")}
             </code>
             <Button
               type="button"
@@ -209,10 +210,10 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
               onClick={copy}
               disabled={url === null}
               data-testid="sso-callback-copy"
-              aria-label="Copiar URL de callback"
+              aria-label={t("cbCopyAria")}
             >
               <Copy className="h-3.5 w-3.5" />
-              {copied ? "Copiado" : "Copiar"}
+              {copied ? t("copied") : t("copy")}
             </Button>
           </div>
         </div>
@@ -223,10 +224,8 @@ export function CallbackUrlCard({ url, loading }: { url: string | null; loading:
             data-testid="sso-redirect-base-warning"
             role="alert"
           >
-            Sigue usando el valor de arranque{" "}
-            <span className="font-mono">{baseData?.env_default}</span> (apunta al api-server local,
-            no a tu dominio público). Pon arriba tu URL pública real antes de registrar la callback
-            en el IdP.
+            {t("cbWarnBefore")} <span className="font-mono">{baseData?.env_default}</span>{" "}
+            {t("cbWarnAfter")}
           </p>
         )}
       </CardContent>

@@ -356,19 +356,39 @@ export function looksSpanish(value) {
  *     `projects/[id]/dep-cache/page.tsx`, tres pantallas autocontenidas del
  *     módulo de proyectos.
  *
+ * **2026-08-20** — salen las SEIS entradas de `settings/sso/` (16 atributos:
+ * 188 → 172, 71 → 65 ficheros), y con ellas el módulo `settings/` queda entero
+ * salvo lo que nunca tuvo deuda. Entra COMPLETO —las dos pantallas, OIDC y
+ * SAML, con sus tarjetas, sus fichas y sus DOS diálogos— porque el mapa sólo
+ * veía 16 atributos de un módulo de ~2.000 líneas: los dos diálogos, que son
+ * más de la mitad del texto, sumaban 8 de esos 16 y contenían otras 60 cadenas
+ * que ninguna de las tres señales sabe ver. Migrar lo marcado habría dejado al
+ * operador rellenando en castellano el formulario que decide quién entra al
+ * tenant.
+ *
  * Y una que NO cuenta el mapa porque nunca tuvo entrada: `ProjectBreadcrumb`
  * escribía "Proyectos" fijo, así que la miga de pan de las DIEZ sub-pantallas
  * del proyecto seguía en castellano con el toggle en EN. El literal no está en
  * un atributo —es una propiedad de un objeto— y por eso ninguna de las dos
  * señales lo veía. Tercer ejemplo del mismo aviso: el contador mide su patrón,
  * no la deuda.
+ *
+ * **2026-08-19, cuarta pasada** — salen QUINCE entradas más (35 atributos) al
+ * migrar enteros `memories`, `assistant`, `notifications`, `docs` y las tres
+ * pantallas que le faltaban a `marketplace`, más los cuatro comboboxes
+ * compartidos.
+ *
+ * Y con ellas, la cuarta demostración del mismo aviso: `docs` son DOCE ficheros
+ * y ~2.300 líneas, y este mapa sólo le veía **ocho atributos en cinco ficheros**
+ * porque su deuda vivía en texto JSX suelto —los seis estados de cada panel—,
+ * no en atributos. `assistant` era peor todavía: sus ocho etiquetas de
+ * herramienta y sus cinco mensajes de validación estaban en `lib/assistant.ts`,
+ * un módulo PURO, donde ni este mapa ni el de ternarios miran.
  */
 const ATTR_ALLOWLIST = {
   "app/admin/agents/[id]/agent-kbs-section.tsx": 1,
   "app/admin/approval-policy/page.tsx": 2,
   "app/admin/approvals/page.tsx": 3,
-  "app/admin/assistant/page.tsx": 5,
-  "app/admin/assistant/settings/page.tsx": 5,
   "app/admin/board/page.tsx": 4,
   // El córtex baja de 20 a 9 al cerrarse las dos casillas de UI (F2 «MindPanel»
   // y F3.6 «IdentityCard»): el Panel de Mente (`mind/page.tsx` 3 +
@@ -378,11 +398,6 @@ const ATTR_ALLOWLIST = {
   // Queda el chat (`cortex/page.tsx`), que es de la fase F1 y no de estas dos.
   "app/admin/cortex/page.tsx": 9,
   "app/admin/dashboard/page.tsx": 3,
-  "app/admin/docs/doc-diff-view.tsx": 2,
-  "app/admin/docs/docs-bookmarks-view.tsx": 2,
-  "app/admin/docs/docs-search-panel.tsx": 1,
-  "app/admin/docs/docs-sidebar.tsx": 1,
-  "app/admin/docs/page.tsx": 2,
   "app/admin/documents/[id]/citations/page.tsx": 2,
   "app/admin/documents/[id]/ingestion/page.tsx": 2,
   "app/admin/documents/page.tsx": 2,
@@ -392,23 +407,11 @@ const ATTR_ALLOWLIST = {
   "app/admin/inbox/history-tab.tsx": 3,
   "app/admin/inbox/page.tsx": 2,
   "app/admin/inbox/submit-dialog.tsx": 3,
-  "app/admin/marketplace/installations/[id]/permissions/page.tsx": 2,
-  "app/admin/marketplace/page.tsx": 1,
-  "app/admin/marketplace/private/page.tsx": 2,
-  "app/admin/memories/page.tsx": 4,
-  "app/admin/notifications/channels-tab.tsx": 2,
-  "app/admin/notifications/inbox/page.tsx": 3,
-  "app/admin/notifications/page.tsx": 2,
   "app/admin/office/page.tsx": 6,
   "app/admin/plans/[id]/escalated/page.tsx": 2,
   // El troceo de la pantalla (prod-16 `task_prod16_08`) repartió esta deuda
   // entre el `page.tsx` y la pieza que se llevó el `placeholder` del textarea.
   // 5 = 4 + 1: no crece, cambia de fichero.
-  "app/admin/projects/[id]/chat/chat-composer.tsx": 1,
-  "app/admin/projects/[id]/chat/page.tsx": 4,
-  "app/admin/projects/[id]/commands/page.tsx": 1,
-  "app/admin/projects/[id]/incoming-webhooks/page.tsx": 7,
-  "app/admin/projects/[id]/knowledge-bases/page.tsx": 5,
   // El troceo de prod-16 `task_prod16_08` repartió `mcp-server-sections.tsx`
   // (1125 líneas) en cuatro piezas. La deuda de atributos se reparte con él:
   // 3 = 2 + 1, mismo total, dos ficheros.
@@ -421,12 +424,6 @@ const ATTR_ALLOWLIST = {
   "app/admin/projects/[id]/plans/[planId]/plan-validation-section.tsx": 1,
   "app/admin/projects/[id]/plans/page.tsx": 4,
   "app/admin/projects/[id]/tasks/page.tsx": 4,
-  "app/admin/settings/sso/callback-url-section.tsx": 2,
-  "app/admin/settings/sso/page.tsx": 1,
-  "app/admin/settings/sso/saml/page.tsx": 1,
-  "app/admin/settings/sso/saml/saml-config-dialog.tsx": 8,
-  "app/admin/settings/sso/saml/saml-config-section.tsx": 2,
-  "app/admin/settings/sso/sso-config-section.tsx": 2,
   "app/developers/api-reference/page.tsx": 3,
   "app/developers/sdks/page.tsx": 1,
   "app/developers/tutorials/page.tsx": 3,
@@ -443,7 +440,6 @@ const ATTR_ALLOWLIST = {
   "components/shared/list-toolbar.tsx": 1,
   "components/tasks/task-detail-sheet.tsx": 3,
   "components/tasks/task-human-actions.tsx": 7,
-  "components/ui/entity-combobox.tsx": 1,
   "components/ui/markdown-textarea.tsx": 2,
   "lib/plan-dag.tsx": 1,
   "lib/plan-gantt.tsx": 1,

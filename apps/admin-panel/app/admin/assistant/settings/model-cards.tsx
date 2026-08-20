@@ -25,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
+import { useT, type Translator } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 import {
   clearAssistantDefaultModel,
@@ -48,8 +49,16 @@ function modelsFor(providers: AssistantModelOption[], providerId: string): strin
 /** Shared provider + model selects. ``providerId === ""`` means "none picked".
  * The model list comes from the provider's catalogue + synced models; a System
  * Admin populates it from "Proveedores LLM" → "Sincronizar modelos". */
-function reasoningLabel(opt: string): string {
-  return opt === "off" ? "Desactivado" : opt; // low / medium / high / xhigh / max
+
+/**
+ * Etiqueta de un nivel de razonamiento.
+ *
+ * Solo `off` se traduce: `low`/`medium`/`high`/`xhigh`/`max` son los valores
+ * del enum que viajan a la API y que el operador ve en los logs, igual que los
+ * `guardrail_type` de `guardrails`.
+ */
+function reasoningLabel(opt: string, t: Translator<"assistantModel">): string {
+  return opt === "off" ? t("reasoningOff") : opt;
 }
 
 function ProviderModelSelects({
@@ -75,6 +84,7 @@ function ProviderModelSelects({
   onReasoningChange: (next: string) => void;
   disabled: boolean;
 }) {
+  const t = useT("assistantModel");
   const models = providerId ? modelsFor(providers, providerId) : [];
   // Opciones de razonamiento del kind del proveedor elegido (ADR 0070).
   const kind = providers.find((p) => p.provider_id === providerId)?.kind;
@@ -86,7 +96,7 @@ function ProviderModelSelects({
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefix}-provider`}>Proveedor</Label>
+        <Label htmlFor={`${idPrefix}-provider`}>{t("fieldProvider")}</Label>
         <Select
           id={`${idPrefix}-provider`}
           data-testid={`${idPrefix}-provider`}
@@ -94,7 +104,7 @@ function ProviderModelSelects({
           disabled={disabled}
           onChange={(e) => onProviderChange(e.target.value)}
         >
-          <option value="">— Selecciona un proveedor —</option>
+          <option value="">{t("pickProvider")}</option>
           {providers.map((p) => (
             <option key={p.provider_id} value={p.provider_id}>
               {p.display_name} ({p.slug})
@@ -103,7 +113,7 @@ function ProviderModelSelects({
         </Select>
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefix}-model`}>Modelo</Label>
+        <Label htmlFor={`${idPrefix}-model`}>{t("fieldModel")}</Label>
         <Select
           id={`${idPrefix}-model`}
           data-testid={`${idPrefix}-model`}
@@ -113,10 +123,10 @@ function ProviderModelSelects({
         >
           <option value="">
             {!providerId
-              ? "— Elige primero un proveedor —"
+              ? t("pickProviderFirst")
               : models.length === 0
-                ? "— Sin modelos (sincronízalos en Proveedores LLM) —"
-                : "— Selecciona un modelo —"}
+                ? t("noModels")
+                : t("pickModel")}
           </option>
           {models.map((m) => (
             <option key={m} value={m}>
@@ -127,7 +137,7 @@ function ProviderModelSelects({
       </div>
       {reasoningOptions.length > 0 ? (
         <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-reasoning`}>Razonamiento</Label>
+          <Label htmlFor={`${idPrefix}-reasoning`}>{t("fieldReasoning")}</Label>
           <Select
             id={`${idPrefix}-reasoning`}
             data-testid={`${idPrefix}-reasoning`}
@@ -137,7 +147,7 @@ function ProviderModelSelects({
           >
             {reasoningSelectable.map((o) => (
               <option key={o} value={o}>
-                {reasoningLabel(o)}
+                {reasoningLabel(o, t)}
               </option>
             ))}
           </Select>
@@ -151,6 +161,7 @@ function ProviderModelSelects({
 // Tenant Admin — the assistant's model (override → inherits platform default)
 // ---------------------------------------------------------------------------
 export function AssistantModelCard({ enabled }: { enabled: boolean }) {
+  const t = useT("assistantModel");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
@@ -213,45 +224,41 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Cpu className="h-5 w-5" />
-          Modelo LLM
+          {t("tenantTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         {!enabled ? (
-          <p className="text-muted-foreground text-sm">
-            Habilita el asistente para elegir su modelo.
-          </p>
+          <p className="text-muted-foreground text-sm">{t("tenantLocked")}</p>
         ) : optionsQuery.isLoading || currentQuery.isLoading ? (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <Spinner />
-            Cargando modelo…
+            {t("loading")}
           </p>
         ) : (
           <>
             <p className="text-muted-foreground text-sm" data-testid="assistant-model-effective">
               {current?.source === "tenant_override" ? (
                 <>
-                  Modelo actual (override del tenant):{" "}
+                  {t("effectiveOverride")}{" "}
                   <strong>
                     {current.provider_display_name} · {current.model_id}
                   </strong>
                 </>
               ) : current?.source === "platform_default" ? (
                 <>
-                  Heredando el modelo por defecto de la plataforma:{" "}
+                  {t("effectiveInherited")}{" "}
                   <strong>
                     {current.provider_display_name} · {current.model_id}
                   </strong>
                 </>
               ) : (
-                "No hay modelo configurado. El asistente no responderá hasta que elijas uno o el System Admin configure un modelo por defecto."
+                t("effectiveNone")
               )}
             </p>
 
             {providers.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No hay proveedores LLM activos. Pide a un System Admin que configure uno.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("noProvidersTenant")}</p>
             ) : (
               <>
                 <ProviderModelSelects
@@ -284,7 +291,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
                   </p>
                 ) : saveMutation.isSuccess ? (
                   <p className="text-sm text-emerald-600" role="status">
-                    Modelo guardado.
+                    {t("saved")}
                   </p>
                 ) : null}
 
@@ -297,7 +304,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
                       disabled={busy}
                       onClick={() => clearMutation.mutate()}
                     >
-                      Volver al modelo por defecto
+                      {t("backToDefault")}
                     </Button>
                   ) : null}
                   <Button
@@ -306,7 +313,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
                     disabled={busy || !providerId || !modelId}
                     onClick={() => saveMutation.mutate()}
                   >
-                    {saveMutation.isPending ? "Guardando…" : "Guardar modelo"}
+                    {saveMutation.isPending ? t("saving") : t("saveModel")}
                   </Button>
                 </div>
               </>
@@ -322,6 +329,7 @@ export function AssistantModelCard({ enabled }: { enabled: boolean }) {
 // System Admin — the platform default model (inherited by tenants)
 // ---------------------------------------------------------------------------
 export function PlatformDefaultModelCard() {
+  const t = useT("assistantModel");
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [providerId, setProviderId] = useState("");
@@ -378,19 +386,16 @@ export function PlatformDefaultModelCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Globe className="h-5 w-5" />
-          Modelo por defecto de la plataforma
+          {t("platformTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-muted-foreground text-sm">
-          El modelo que usan los asistentes de los tenants que no han elegido uno propio. Solo lo
-          configura un System Admin.
-        </p>
+        <p className="text-muted-foreground text-sm">{t("platformDescription")}</p>
 
         {optionsQuery.isLoading || currentQuery.isLoading ? (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
             <Spinner />
-            Cargando…
+            {t("loading")}
           </p>
         ) : (
           <>
@@ -400,26 +405,21 @@ export function PlatformDefaultModelCard() {
             >
               {hasDefault ? (
                 <>
-                  Default actual:{" "}
+                  {t("platformCurrent")}{" "}
                   <strong>
                     {current?.provider_display_name} · {current?.model_id}
                   </strong>
                   {current && !current.is_valid ? (
-                    <span className="text-destructive">
-                      {" "}
-                      (no válido: el proveedor o el modelo ya no existen)
-                    </span>
+                    <span className="text-destructive">{t("platformInvalid")}</span>
                   ) : null}
                 </>
               ) : (
-                "Sin modelo por defecto configurado."
+                t("platformNone")
               )}
             </p>
 
             {providers.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No hay proveedores LLM activos. Configura uno antes de fijar un modelo por defecto.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("noProvidersPlatform")}</p>
             ) : (
               <>
                 <ProviderModelSelects
@@ -455,7 +455,7 @@ export function PlatformDefaultModelCard() {
                   </p>
                 ) : saveMutation.isSuccess ? (
                   <p className="text-sm text-emerald-600" role="status">
-                    Modelo por defecto guardado.
+                    {t("platformSaved")}
                   </p>
                 ) : null}
 
@@ -468,7 +468,7 @@ export function PlatformDefaultModelCard() {
                       disabled={busy}
                       onClick={() => clearMutation.mutate()}
                     >
-                      Quitar default
+                      {t("clearDefault")}
                     </Button>
                   ) : null}
                   <Button
@@ -477,7 +477,7 @@ export function PlatformDefaultModelCard() {
                     disabled={busy || !providerId || !modelId}
                     onClick={() => saveMutation.mutate()}
                   >
-                    {saveMutation.isPending ? "Guardando…" : "Guardar default"}
+                    {saveMutation.isPending ? t("saving") : t("saveDefault")}
                   </Button>
                 </div>
               </>

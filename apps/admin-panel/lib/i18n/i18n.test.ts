@@ -195,6 +195,76 @@ describe("dictionary — invariantes", () => {
       // el operador ve en la BD y en los logs.
       "projectMemories.badgeEmbedding",
       "depCache.colRuntime",
+      // prod-16 `task_prod16_04` — memories. "Global" y "Scope" son el valor y
+      // el nombre del enum `MemoryScope` del backend: el operador los ve así en
+      // la API y en la BD, y el resto del catálogo (`memoryScope.*`) ya los
+      // trata igual. "1 similar" coincide porque en castellano «similar» es
+      // invariable en singular; el plural (`similarBadgeMany`) sí difiere.
+      "memories.scopeGlobal",
+      "memories.fieldScope",
+      "memories.similarBadgeOne",
+      // prod-16 `task_prod16_04` — la videollamada de voz. «Error» se escribe
+      // igual en los dos idiomas.
+      "voiceCall.statusError",
+      // prod-16 `task_prod16_03` — `settings/sso` (OIDC + SAML). Cuatro
+      // familias, ninguna traducible: el nombre de un producto (Vault), los
+      // términos del estándar SAML que el operador copia literales de la
+      // consola de su IdP («Entity ID»), y los tres valores de `NameID` que son
+      // el sufijo del URN (`persistent`, `transient`, `unspecified`) — no
+      // etiquetas, sino el identificador que viaja en la aserción.
+      "ssoOidc.sourceVault",
+      "ssoSaml.sourceVault",
+      "ssoSaml.spIntroEntityId",
+      "ssoSaml.entityIdLabel",
+      "ssoSaml.nameIdPersistent",
+      "ssoSaml.nameIdTransient",
+      "ssoSaml.nameIdUnspecified",
+      // prod-16 `task_prod16_03` — webhooks entrantes y comandos del proyecto.
+      // Los dos catálogos son nombres propios: los cinco emisores soportados y
+      // los cuatro stacks de los presets. El quinto preset («Lectura» →
+      // «Read-only») SÍ se traduce, que es justo por lo que el catálogo pasó a
+      // guardar claves. «Runtime template» es el término que la UI castellana
+      // ya usaba en inglés, igual que en `depCache`.
+      "incomingWebhooks.originGithub",
+      "incomingWebhooks.originGitlab",
+      "incomingWebhooks.originJira",
+      "incomingWebhooks.originSentry",
+      "incomingWebhooks.originLinear",
+      "projectCommands.presetPhp",
+      "projectCommands.presetNode",
+      "projectCommands.presetDotnet",
+      "projectCommands.presetPython",
+      "projectCommands.runtimeTemplateLabel",
+      // prod-16 `task_prod16_03` — «Knowledge Bases», «Chat» y «Planning» son
+      // los nombres que la UI castellana ya escribía en inglés (los dos
+      // primeros son además el rótulo de su sección en el menú).
+      "projectKbs.breadcrumbCurrent",
+      "projectChat.breadcrumbCurrent",
+      "projectChat.modePlanning",
+      // prod-16 `task_prod16_04` — notificaciones. «Vault» es un nombre de
+      // producto, «Tenant» la palabra que la UI castellana ya usaba en inglés
+      // (igual que en `knowledgeBases`), y «no» se escribe igual en los dos.
+      "notifications.secretSourceVault",
+      "notifications.ruleNo",
+      "notificationsInbox.scopeTenant",
+      // prod-16 `task_prod16_04` — docs. Las cinco coincidencias son nombres de
+      // las carpetas canónicas del repo y de los tipos que se derivan de ellas
+      // («Runbooks», «Changelog», «ADR»): traducirlos alejaría la faceta del
+      // nombre de la carpeta que el usuario ve en el árbol.
+      "docFacets.categoryRunbooks",
+      "docFacets.categoryChangelog",
+      "docFacets.typeAdr",
+      "docFacets.typeChangelog",
+      "docFacets.typeRunbook",
+      // prod-16 `task_prod16_04` — marketplace. «Marketplace», «global»,
+      // «Manifest», «Skill (SKILL.md)» y «version (semver)» son el nombre del
+      // módulo, el enum del backend y nombres de campo del propio manifest: se
+      // escriben igual en los dos idiomas porque son lo que hay que teclear.
+      "marketplace.title",
+      "marketplace.badgeGlobal",
+      "marketplacePrivate.manifestLabel",
+      "marketplacePrivate.kindSkill",
+      "marketplacePrivate.fieldVersionShort",
     ]);
 
     const identical = new Set(

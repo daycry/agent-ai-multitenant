@@ -19,6 +19,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useErrorText } from "@/lib/use-error-text";
 
 import type { Message } from "./chat-types";
@@ -34,6 +35,7 @@ export function GeneratePlanButton({
   projectId,
   conversationId,
 }: GeneratePlanButtonProps) {
+  const t = useT("projectChat");
   const queryClient = useQueryClient();
   const router = useRouter();
   const errorText = useErrorText();
@@ -63,7 +65,7 @@ export function GeneratePlanButton({
         disabled={mutation.isPending}
         onClick={() => mutation.mutate()}
       >
-        Generar Plan
+        {t("generatePlan")}
       </Button>
       {mutation.isError ? (
         <p className="text-destructive mt-2 text-xs" data-testid="generate-plan-error">

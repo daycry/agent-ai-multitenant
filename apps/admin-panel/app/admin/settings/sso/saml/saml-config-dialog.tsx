@@ -27,6 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 import {
   DEFAULT_NAME_ID,
@@ -89,6 +90,7 @@ export function SamlConfigDialog({
   onSubmit: (body: UpsertBody) => void;
   backendError: string | null;
 }) {
+  const t = useT("ssoSaml");
   const isCreate = initial === null;
   const [state, setState] = useState<FormState>(() => configToForm(initial));
   const [metadataXml, setMetadataXml] = useState("");
@@ -156,20 +158,20 @@ export function SamlConfigDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-testid="saml-config-dialog">
         <DialogHeader>
-          <DialogTitle>{isCreate ? "Configurar SAML" : "Editar configuración SAML"}</DialogTitle>
+          <DialogTitle>{isCreate ? t("configure") : t("dialogEditTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div className="space-y-4">
             {/* IdP metadata upload / paste */}
             <div className="bg-muted/30 -mx-2 rounded-md border p-3">
-              <Label htmlFor="saml-form-metadata">Metadatos del IdP (XML)</Label>
+              <Label htmlFor="saml-form-metadata">{t("metadataLabel")}</Label>
               <textarea
                 id="saml-form-metadata"
                 data-testid="saml-form-metadata"
                 className="border-input bg-background mt-1 h-28 w-full resize-y rounded-md border px-3 py-2 font-mono text-xs"
                 value={metadataXml}
                 onChange={(e) => setMetadataXml(e.target.value)}
-                placeholder="Pega aquí el EntityDescriptor del IdP, o sube el archivo de metadatos…"
+                placeholder={t("metadataPlaceholder")}
               />
               <div className="mt-2 flex items-center gap-2">
                 <input
@@ -193,7 +195,7 @@ export function SamlConfigDialog({
                   onClick={() => document.getElementById("saml-form-metadata-file")?.click()}
                 >
                   <Upload className="mr-1 h-3.5 w-3.5" />
-                  Subir XML
+                  {t("metadataUpload")}
                 </Button>
                 <Button
                   type="button"
@@ -203,23 +205,20 @@ export function SamlConfigDialog({
                   disabled={metadataXml.trim() === "" || parseMutation.isPending}
                   onClick={() => parseMutation.mutate(metadataXml)}
                 >
-                  {parseMutation.isPending ? "Analizando…" : "Extraer datos"}
+                  {parseMutation.isPending ? t("metadataParsing") : t("metadataParse")}
                 </Button>
               </div>
-              <p className="text-muted-foreground mt-1.5 text-xs">
-                Extrae automáticamente Entity ID, URL de SSO y certificado del IdP. Después puedes
-                ajustarlos manualmente.
-              </p>
+              <p className="text-muted-foreground mt-1.5 text-xs">{t("metadataHelp")}</p>
               {parseError ? (
                 <p className="text-destructive mt-2 text-xs" data-testid="saml-form-parse-error">
-                  No se pudieron extraer los metadatos: {parseError}
+                  {t("metadataParseError", { detail: parseError })}
                 </p>
               ) : null}
             </div>
 
             {/* Display name */}
             <div>
-              <Label htmlFor="saml-form-display-name">Nombre visible (opcional)</Label>
+              <Label htmlFor="saml-form-display-name">{t("displayNameLabel")}</Label>
               <Input
                 id="saml-form-display-name"
                 data-testid="saml-form-display-name"
@@ -231,7 +230,7 @@ export function SamlConfigDialog({
 
             {/* IdP Entity ID */}
             <div>
-              <Label htmlFor="saml-form-entity-id">IdP Entity ID</Label>
+              <Label htmlFor="saml-form-entity-id">{t("entityIdLabel")}</Label>
               <Input
                 id="saml-form-entity-id"
                 data-testid="saml-form-entity-id"
@@ -243,7 +242,7 @@ export function SamlConfigDialog({
 
             {/* IdP SSO URL */}
             <div>
-              <Label htmlFor="saml-form-sso-url">URL de SSO del IdP</Label>
+              <Label htmlFor="saml-form-sso-url">{t("ssoUrlLabel")}</Label>
               <Input
                 id="saml-form-sso-url"
                 data-testid="saml-form-sso-url"
@@ -255,23 +254,21 @@ export function SamlConfigDialog({
 
             {/* IdP signing cert */}
             <div>
-              <Label htmlFor="saml-form-cert">Certificado de firma del IdP (X.509)</Label>
+              <Label htmlFor="saml-form-cert">{t("certLabel")}</Label>
               <textarea
                 id="saml-form-cert"
                 data-testid="saml-form-cert"
                 className="border-input bg-background mt-1 h-24 w-full resize-y rounded-md border px-3 py-2 font-mono text-xs"
                 value={state.idp_x509_cert}
                 onChange={(e) => setState({ ...state, idp_x509_cert: e.target.value })}
-                placeholder="MIID… (cuerpo base64 del certificado o PEM completo)"
+                placeholder={t("certPlaceholder")}
               />
-              <p className="text-muted-foreground mt-1 text-xs">
-                Con este certificado se verifica la firma de las aserciones del IdP.
-              </p>
+              <p className="text-muted-foreground mt-1 text-xs">{t("certHelp")}</p>
             </div>
 
             {/* NameID format */}
             <div>
-              <Label htmlFor="saml-form-name-id">Formato de NameID</Label>
+              <Label htmlFor="saml-form-name-id">{t("nameIdLabel")}</Label>
               <select
                 id="saml-form-name-id"
                 data-testid="saml-form-name-id"
@@ -281,7 +278,7 @@ export function SamlConfigDialog({
               >
                 {NAME_ID_FORMATS.map((fmt) => (
                   <option key={fmt.value} value={fmt.value}>
-                    {fmt.label}
+                    {t(fmt.labelKey)}
                   </option>
                 ))}
               </select>
@@ -290,7 +287,7 @@ export function SamlConfigDialog({
             {/* Attribute mappings */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
-                <Label htmlFor="saml-form-attr-email">Atributo de email (opcional)</Label>
+                <Label htmlFor="saml-form-attr-email">{t("attrEmailLabel")}</Label>
                 <Input
                   id="saml-form-attr-email"
                   data-testid="saml-form-attr-email"
@@ -300,7 +297,7 @@ export function SamlConfigDialog({
                 />
               </div>
               <div>
-                <Label htmlFor="saml-form-attr-full-name">Atributo de nombre (opcional)</Label>
+                <Label htmlFor="saml-form-attr-full-name">{t("attrFullNameLabel")}</Label>
                 <Input
                   id="saml-form-attr-full-name"
                   data-testid="saml-form-attr-full-name"
@@ -313,24 +310,22 @@ export function SamlConfigDialog({
 
             {/* SP cert + private key (optional, for signing/encryption) */}
             <div className="space-y-3 rounded-md border p-3">
-              <p className="text-muted-foreground text-xs">
-                Clave del SP — solo necesaria si firmas el AuthnRequest o cifras las aserciones.
-              </p>
+              <p className="text-muted-foreground text-xs">{t("spKeyIntro")}</p>
               <div>
-                <Label htmlFor="saml-form-sp-cert">Certificado público del SP (X.509)</Label>
+                <Label htmlFor="saml-form-sp-cert">{t("spCertLabel")}</Label>
                 <textarea
                   id="saml-form-sp-cert"
                   data-testid="saml-form-sp-cert"
                   className="border-input bg-background mt-1 h-20 w-full resize-y rounded-md border px-3 py-2 font-mono text-xs"
                   value={state.sp_x509_cert}
                   onChange={(e) => setState({ ...state, sp_x509_cert: e.target.value })}
-                  placeholder="MIID… (certificado público del SP)"
+                  placeholder={t("spCertPlaceholder")}
                 />
               </div>
               <div>
                 <Label htmlFor="saml-form-sp-key">
-                  Clave privada del SP (PEM)
-                  {isCreate ? "" : " (dejar vacío para conservar la actual)"}
+                  {t("spKeyLabel")}
+                  {isCreate ? "" : t("spKeyKeepHint")}
                 </Label>
                 <textarea
                   id="saml-form-sp-key"
@@ -338,13 +333,9 @@ export function SamlConfigDialog({
                   className="border-input bg-background mt-1 h-20 w-full resize-y rounded-md border px-3 py-2 font-mono text-xs"
                   value={state.sp_private_key}
                   onChange={(e) => setState({ ...state, sp_private_key: e.target.value })}
-                  placeholder={
-                    isCreate ? "Pega aquí la clave privada del SP en formato PEM…" : "••••••••"
-                  }
+                  placeholder={isCreate ? t("spKeyPlaceholder") : "••••••••"}
                 />
-                <p className="text-muted-foreground mt-1 text-xs">
-                  Se cifra en reposo antes de guardarse; el sistema nunca la devuelve en claro.
-                </p>
+                <p className="text-muted-foreground mt-1 text-xs">{t("spKeyHelp")}</p>
               </div>
             </div>
 
@@ -354,25 +345,25 @@ export function SamlConfigDialog({
                 id="saml-form-authn-signed"
                 checked={state.authn_requests_signed}
                 onChange={(v) => setState({ ...state, authn_requests_signed: v })}
-                label="Firmar el AuthnRequest saliente (requiere clave del SP)"
+                label={t("flagAuthnSigned")}
               />
               <CheckboxRow
                 id="saml-form-want-assertions-signed"
                 checked={state.want_assertions_signed}
                 onChange={(v) => setState({ ...state, want_assertions_signed: v })}
-                label="Exigir aserciones firmadas por el IdP (recomendado)"
+                label={t("flagAssertionsSigned")}
               />
               <CheckboxRow
                 id="saml-form-want-assertions-encrypted"
                 checked={state.want_assertions_encrypted}
                 onChange={(v) => setState({ ...state, want_assertions_encrypted: v })}
-                label="Exigir aserciones cifradas (requiere clave del SP)"
+                label={t("flagAssertionsEncrypted")}
               />
               <CheckboxRow
                 id="saml-form-want-name-id-encrypted"
                 checked={state.want_name_id_encrypted}
                 onChange={(v) => setState({ ...state, want_name_id_encrypted: v })}
-                label="Exigir NameID cifrado (requiere clave del SP)"
+                label={t("flagNameIdEncrypted")}
               />
             </div>
 
@@ -381,7 +372,7 @@ export function SamlConfigDialog({
               id="saml-form-enabled"
               checked={state.enabled}
               onChange={(v) => setState({ ...state, enabled: v })}
-              label="Activar este proveedor en el login (añadido al login local y a OIDC, no los reemplaza)"
+              label={t("enabledLabel")}
             />
 
             {backendError ? (
@@ -401,14 +392,14 @@ export function SamlConfigDialog({
             disabled={submitting}
             data-testid="saml-form-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => onSubmit(buildBody())}
             disabled={submitting || !canSubmit}
             data-testid="saml-form-submit"
           >
-            {submitting ? "Guardando…" : isCreate ? "Crear" : "Guardar cambios"}
+            {submitting ? t("saving") : isCreate ? t("create") : t("saveChanges")}
           </Button>
         </DialogFooter>
       </DialogContent>

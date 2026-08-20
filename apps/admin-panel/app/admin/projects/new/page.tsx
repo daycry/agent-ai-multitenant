@@ -61,6 +61,7 @@ export default function NewProjectWizardPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { lang } = useLang();
+  const tWizard = useT("projectWizard");
   const tDeploy = useT("marketplaceDeploy");
 
   // Step 1: pick a template (or start blank). Step 2: customize. Step 3
@@ -181,17 +182,17 @@ export default function NewProjectWizardPage() {
         title={
           <span data-testid="wizard-title">
             {step === 1
-              ? "Crear proyecto — elige plantilla"
+              ? tWizard("titleStep1")
               : step === 2
-                ? "Crear proyecto — personaliza"
-                : `Crear proyecto — ${tDeploy("wizardStepTitle")}`}
+                ? tWizard("titleStep2")
+                : `${tWizard("titleStep3Prefix")}${tDeploy("wizardStepTitle")}`}
           </span>
         }
-        description={`Paso ${step} de ${totalSteps}.`}
+        description={tWizard("stepOf", { step, total: totalSteps })}
         actions={
           <Button variant="outline" asChild>
             <Link href="/admin/projects">
-              <ArrowLeft className="mr-1 h-4 w-4" /> Cancelar
+              <ArrowLeft className="mr-1 h-4 w-4" /> {tWizard("cancel")}
             </Link>
           </Button>
         }
@@ -210,10 +211,8 @@ export default function NewProjectWizardPage() {
             <div className="flex items-center gap-3">
               <FilePlus2 className="text-muted-foreground h-6 w-6" />
               <div>
-                <p className="font-semibold">Proyecto en blanco</p>
-                <p className="text-muted-foreground text-sm">
-                  Empieza sin plantilla. No se concede ninguna base de conocimiento por defecto.
-                </p>
+                <p className="font-semibold">{tWizard("blankTitle")}</p>
+                <p className="text-muted-foreground text-sm">{tWizard("blankHint")}</p>
               </div>
             </div>
             <Button
@@ -225,17 +224,17 @@ export default function NewProjectWizardPage() {
               }}
               data-testid="wizard-blank-project-pick"
             >
-              Empezar en blanco <ArrowRight className="ml-1 h-3.5 w-3.5" />
+              {tWizard("blankStart")} <ArrowRight className="ml-1 h-3.5 w-3.5" />
             </Button>
           </Card>
 
           {templatesQuery.isLoading && (
-            <p className="text-muted-foreground text-sm">Cargando plantillas…</p>
+            <p className="text-muted-foreground text-sm">{tWizard("loadingTemplates")}</p>
           )}
           {templatesQuery.isError && (
             <Card className="border-destructive p-4">
               <p className="text-destructive text-sm">
-                Could not load templates:{" "}
+                {tWizard("templatesError")}{" "}
                 {templatesQuery.error instanceof ApiError
                   ? templatesQuery.error.body
                   : String(templatesQuery.error)}
@@ -277,7 +276,7 @@ export default function NewProjectWizardPage() {
                         }}
                         data-testid={`template-pick-${t.id}`}
                       >
-                        Usar plantilla <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                        {tWizard("useTemplate")} <ArrowRight className="ml-1 h-3.5 w-3.5" />
                       </Button>
                     </CardContent>
                   </Card>
@@ -293,11 +292,11 @@ export default function NewProjectWizardPage() {
         <section data-testid="wizard-step-2" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle className="text-base">Detalles del proyecto</CardTitle>
+              <CardTitle className="text-base">{tWizard("detailsTitle")}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="name">Nombre</Label>
+                <Label htmlFor="name">{tWizard("nameLabel")}</Label>
                 <Input
                   id="name"
                   value={name}
@@ -307,7 +306,7 @@ export default function NewProjectWizardPage() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label>Descripción</Label>
+                <Label>{tWizard("descriptionLabel")}</Label>
                 <MarkdownTextarea
                   value={description}
                   onChange={setDescription}
@@ -318,7 +317,7 @@ export default function NewProjectWizardPage() {
 
               {/* Runtime por defecto del stack (06.18 GET /runtime-templates). */}
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="wizard-runtime">Runtime por defecto</Label>
+                <Label htmlFor="wizard-runtime">{tWizard("runtimeLabel")}</Label>
                 <Select
                   id="wizard-runtime"
                   value={runtime}
@@ -326,7 +325,7 @@ export default function NewProjectWizardPage() {
                   onChange={(e) => setRuntime(e.target.value)}
                   data-testid="wizard-runtime-select"
                 >
-                  <option value="">— Sin runtime por defecto (defaults por-tool) —</option>
+                  <option value="">— {tWizard("runtimeNone")} —</option>
                   {runtimeTemplates.map((rt) => (
                     <option key={rt.id} value={rt.id}>
                       {runtimeLabel(rt, lang)}
@@ -338,7 +337,7 @@ export default function NewProjectWizardPage() {
                     className="text-danger-soft-foreground text-xs"
                     data-testid="wizard-runtime-error"
                   >
-                    No se pudo cargar el catálogo de runtimes.
+                    {tWizard("runtimeError")}
                   </p>
                 )}
               </div>
@@ -347,24 +346,21 @@ export default function NewProjectWizardPage() {
                   la plantilla — se muestra abajo). ADR 0071. */}
               {!selected && (
                 <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="wizard-team">Equipo</Label>
+                  <Label htmlFor="wizard-team">{tWizard("teamLabel")}</Label>
                   <Select
                     id="wizard-team"
                     value={teamId}
                     onChange={(e) => setTeamId(e.target.value)}
                     data-testid="wizard-team-select"
                   >
-                    <option value="">Sin equipo</option>
+                    <option value="">{tWizard("teamNone")}</option>
                     {(teamsQuery.data ?? []).map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name}
                       </option>
                     ))}
                   </Select>
-                  <p className="text-muted-foreground text-xs">
-                    El equipo gobierna qué agentes ejecutan las tareas y la política de memoria.
-                    También puedes asignarlo/cambiarlo luego desde la ficha del proyecto.
-                  </p>
+                  <p className="text-muted-foreground text-xs">{tWizard("teamHint")}</p>
                 </div>
               )}
 
@@ -380,10 +376,9 @@ export default function NewProjectWizardPage() {
                     data-testid="wizard-apply-kb-grants"
                   />
                   <span>
-                    Conceder las bases de conocimiento de la plantilla
+                    {tWizard("applyKbGrants")}
                     <span className="text-muted-foreground block text-xs">
-                      Si lo desmarcas, el proyecto adopta la plantilla pero no recibe ninguna KB por
-                      defecto.
+                      {tWizard("applyKbGrantsHint")}
                     </span>
                   </span>
                 </label>
@@ -399,7 +394,7 @@ export default function NewProjectWizardPage() {
               )}
               <div className="mt-2 flex items-center justify-between">
                 <Button variant="outline" onClick={() => setStep(1)} data-testid="wizard-back">
-                  ← {selected ? "Cambiar plantilla" : "Volver"}
+                  ← {selected ? tWizard("changeTemplate") : tWizard("back")}
                 </Button>
                 {/* Con capacidades instaladas el wizard gana un paso (ADR 0142
                     D3); sin ellas se crea desde aquí, como antes. */}
@@ -414,7 +409,7 @@ export default function NewProjectWizardPage() {
                     data-testid="wizard-submit"
                   >
                     {createProject.isPending && <Spinner className="mr-2 h-4 w-4" />}
-                    {createProject.isPending ? "Creando…" : "Crear proyecto"}
+                    {createProject.isPending ? tWizard("creating") : tWizard("create")}
                   </Button>
                 )}
               </div>
@@ -424,18 +419,22 @@ export default function NewProjectWizardPage() {
           {/* Preview pane: what the template ships with (o "en blanco"). */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Preview</CardTitle>
+              <CardTitle className="text-base">{tWizard("previewTitle")}</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3 text-sm">
               <div>
-                <span className="text-muted-foreground text-xs uppercase">Plantilla</span>
+                <span className="text-muted-foreground text-xs uppercase">
+                  {tWizard("previewTemplate")}
+                </span>
                 <p className="font-medium" data-testid="wizard-preview-template">
-                  {selected ? selected.name : "Proyecto en blanco (sin plantilla)"}
+                  {selected ? selected.name : tWizard("previewBlank")}
                 </p>
               </div>
               {selected?.team_id && (
                 <div>
-                  <span className="text-muted-foreground text-xs uppercase">Equipo</span>
+                  <span className="text-muted-foreground text-xs uppercase">
+                    {tWizard("teamLabel")}
+                  </span>
                   <p>{teamsById.get(selected.team_id)?.name ?? selected.team_id}</p>
                 </div>
               )}
@@ -447,17 +446,18 @@ export default function NewProjectWizardPage() {
                     data-testid="wizard-fork-team-checkbox"
                   />
                   <span>
-                    Personalizar el equipo para este proyecto
+                    {tWizard("forkTeam")}
                     <span className="text-muted-foreground block text-xs">
-                      Crea una copia editable del equipo (agentes propios del proyecto). Si no, se
-                      referencia el equipo de la plantilla (compartido; no editable si es built-in).
+                      {tWizard("forkTeamHint")}
                     </span>
                   </span>
                 </label>
               )}
               {selected?.human_approval_policy?.preset != null && (
                 <div>
-                  <span className="text-muted-foreground text-xs uppercase">Política humana</span>
+                  <span className="text-muted-foreground text-xs uppercase">
+                    {tWizard("previewPolicy")}
+                  </span>
                   <p>
                     <Badge variant="warning">{String(selected.human_approval_policy.preset)}</Badge>
                   </p>
@@ -465,7 +465,9 @@ export default function NewProjectWizardPage() {
               )}
               {selected?.repository_config && (
                 <div>
-                  <span className="text-muted-foreground text-xs uppercase">Repositorio</span>
+                  <span className="text-muted-foreground text-xs uppercase">
+                    {tWizard("previewRepository")}
+                  </span>
                   <pre className="bg-muted text-muted-foreground overflow-auto rounded p-2 text-xs">
                     {JSON.stringify(selected.repository_config, null, 2)}
                   </pre>
@@ -563,7 +565,7 @@ export default function NewProjectWizardPage() {
                 data-testid="wizard-submit"
               >
                 {createProject.isPending && <Spinner className="mr-2 h-4 w-4" />}
-                {createProject.isPending ? "Creando…" : "Crear proyecto"}
+                {createProject.isPending ? tWizard("creating") : tWizard("create")}
               </Button>
             )}
           </div>

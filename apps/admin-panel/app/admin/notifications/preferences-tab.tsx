@@ -15,6 +15,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { apiFetch } from "@/lib/api";
+import { pickLang, useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { useErrorText } from "@/lib/use-error-text";
 
 import {
@@ -26,6 +28,9 @@ import {
 } from "./notification-types";
 
 export function PreferencesTab() {
+  const t = useT("notifications");
+  const tCommon = useT("common");
+  const lang = useLangOptional();
   const errorText = useErrorText();
   const queryClient = useQueryClient();
   const prefsQuery = useQuery({
@@ -71,7 +76,7 @@ export function PreferencesTab() {
   }, [prefsQuery.data]);
 
   if (prefsQuery.isLoading || channelsQuery.isLoading) {
-    return <p className="text-muted-foreground mt-4 text-sm">Cargando…</p>;
+    return <p className="text-muted-foreground mt-4 text-sm">{tCommon("loading")}</p>;
   }
   if (prefsQuery.isError) {
     return (
@@ -84,19 +89,19 @@ export function PreferencesTab() {
   return (
     <Card className="mt-4" data-testid="preferences-tab">
       <CardHeader>
-        <CardTitle className="text-base">Reglas de enrutado</CardTitle>
+        <CardTitle className="text-base">{t("routingTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         {channelTypes.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="preferences-empty">
-            Configura al menos un canal para ajustar qué eventos llegan por qué transporte.
+            {t("routingEmpty")}
           </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm" data-testid="preferences-matrix">
               <thead>
                 <tr className="text-muted-foreground text-left">
-                  <th className="py-2 pr-4 font-medium">Evento</th>
+                  <th className="py-2 pr-4 font-medium">{t("colEvent")}</th>
                   {channelTypes.map((type) => (
                     <th key={type} className="px-3 py-2 font-medium capitalize">
                       {type}
@@ -105,10 +110,19 @@ export function PreferencesTab() {
                 </tr>
               </thead>
               <tbody>
-                {eventCatalog.map(({ event_type: event, label_es }) => (
+                {/*
+                  El catalogo llega BILINGUE del backend (`label_es` +
+                  `label_en`, NOTIF-3) y hasta prod-16 esta tabla pintaba
+                  siempre la cara castellana. `pickLang` ademas cae al otro
+                  idioma si la pedida viene vacia, que es lo que puede pasar
+                  con un evento recien anadido al registry.
+                */}
+                {eventCatalog.map(({ event_type: event, label_es, label_en }) => (
                   <tr key={event} className="border-t" data-testid={`preferences-row-${event}`}>
                     <td className="py-2 pr-4">
-                      <span className="block text-xs">{label_es}</span>
+                      <span className="block text-xs">
+                        {pickLang(lang, { es: label_es, en: label_en })}
+                      </span>
                       <span className="text-muted-foreground block font-mono text-[10px]">
                         {event}
                       </span>
@@ -122,7 +136,7 @@ export function PreferencesTab() {
                             min="tenant_admin"
                             fallback={
                               <span className="text-muted-foreground text-xs">
-                                {enabled ? "sí" : "no"}
+                                {enabled ? t("ruleYes") : t("ruleNo")}
                               </span>
                             }
                           >

@@ -31,6 +31,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { fetchDocDiff, type DocDiff } from "@/lib/docs-api";
 
 import { DocDiffRenderer } from "./doc-diff-renderer";
@@ -44,6 +46,7 @@ interface DocDiffViewProps {
 }
 
 export function DocDiffView({ projectId, path }: DocDiffViewProps) {
+  const t = useT("docs");
   const [base, setBase] = useState(DEFAULT_BASE);
   const [head, setHead] = useState(DEFAULT_HEAD);
   // The refs we last *submitted* — the query keys off these, not the live
@@ -83,9 +86,7 @@ export function DocDiffView({ projectId, path }: DocDiffViewProps) {
         data-testid="docs-diff-empty"
       >
         <GitCompare className="text-muted-foreground/50 mb-3 h-10 w-10" aria-hidden="true" />
-        <p className="text-muted-foreground text-sm">
-          Selecciona un documento para comparar dos versiones.
-        </p>
+        <p className="text-muted-foreground text-sm">{t("diffEmpty")}</p>
       </div>
     );
   }
@@ -106,14 +107,14 @@ export function DocDiffView({ projectId, path }: DocDiffViewProps) {
         data-testid="docs-diff-form"
       >
         <div className="flex flex-1 flex-col gap-1">
-          <Label htmlFor="docs-diff-base">Versión base</Label>
+          <Label htmlFor="docs-diff-base">{t("diffBaseLabel")}</Label>
           <Input
             id="docs-diff-base"
             value={base}
             onChange={(event) => setBase(event.target.value)}
             placeholder={DEFAULT_BASE}
             className="font-mono text-xs"
-            aria-label="Ref git de la versión base"
+            aria-label={t("diffBaseAria")}
             data-testid="docs-diff-base-input"
           />
         </div>
@@ -122,14 +123,14 @@ export function DocDiffView({ projectId, path }: DocDiffViewProps) {
           aria-hidden="true"
         />
         <div className="flex flex-1 flex-col gap-1">
-          <Label htmlFor="docs-diff-head">Versión nueva</Label>
+          <Label htmlFor="docs-diff-head">{t("diffHeadLabel")}</Label>
           <Input
             id="docs-diff-head"
             value={head}
             onChange={(event) => setHead(event.target.value)}
             placeholder={DEFAULT_HEAD}
             className="font-mono text-xs"
-            aria-label="Ref git de la versión nueva"
+            aria-label={t("diffHeadAria")}
             data-testid="docs-diff-head-input"
           />
         </div>
@@ -139,7 +140,7 @@ export function DocDiffView({ projectId, path }: DocDiffViewProps) {
           data-testid="docs-diff-submit"
         >
           <GitCompare className="mr-1.5 h-4 w-4" aria-hidden="true" />
-          Comparar
+          {t("diffSubmit")}
         </Button>
       </form>
 
@@ -167,13 +168,15 @@ function DiffResult({
   error: unknown;
   data: DocDiff | undefined;
 }) {
+  const t = useT("docs");
+  const errorText = useErrorText();
   if (!enabled) {
     return (
       <p
         className="text-muted-foreground rounded-lg border border-dashed px-4 py-6 text-center text-sm"
         data-testid="docs-diff-idle"
       >
-        Introduce dos referencias git y pulsa «Comparar» para ver los cambios.
+        {t("diffIdle")}
       </p>
     );
   }
@@ -185,7 +188,7 @@ function DiffResult({
         data-testid="docs-diff-loading"
       >
         <Spinner className="h-4 w-4" />
-        Calculando diferencias…
+        {t("diffLoading")}
       </div>
     );
   }
@@ -196,11 +199,7 @@ function DiffResult({
         className="border-destructive/40 bg-destructive/5 text-destructive rounded-lg border p-4 text-sm"
         data-testid="docs-diff-error"
       >
-        {error instanceof ApiError && error.status === 404
-          ? "El documento no existe o no es accesible."
-          : error instanceof ApiError
-            ? error.body
-            : "No se pudieron calcular las diferencias."}
+        {error instanceof ApiError && error.status === 404 ? t("docNotFound") : errorText(error)}
       </div>
     );
   }
@@ -213,7 +212,8 @@ function DiffResult({
         className="text-muted-foreground rounded-lg border px-4 py-6 text-center text-sm"
         data-testid="docs-diff-unchanged"
       >
-        No hay diferencias entre <code className="font-mono text-xs">{data.base_ref}</code> y{" "}
+        {t("diffUnchanged")} <code className="font-mono text-xs">{data.base_ref}</code>
+        {" \u2192 "}
         <code className="font-mono text-xs">{data.head_ref}</code>.
       </p>
     );

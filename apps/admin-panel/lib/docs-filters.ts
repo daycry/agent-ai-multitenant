@@ -19,6 +19,8 @@
  * function of the input — trivially unit-testable and safe to run in render.
  */
 
+import type { Translator } from "@/lib/i18n";
+
 import type { DocTree, DocTreeFile, DocTreeFolder } from "@/lib/docs-api";
 
 // ---------------------------------------------------------------------------
@@ -42,15 +44,25 @@ export type DocCategory = (typeof DOC_CATEGORIES)[number];
 const CANONICAL_SET = new Set<string>(DOC_CATEGORIES);
 
 /** Human labels for the category facet (ES). */
-export const DOC_CATEGORY_LABELS: Record<DocCategory, string> = {
-  "01-overview": "Visión general",
-  "02-getting-started": "Primeros pasos",
-  "03-guides": "Guías",
-  "04-reference": "Referencia",
-  "05-architecture-decisions": "Decisiones (ADR)",
-  "06-runbooks": "Runbooks",
-  "07-changelog": "Changelog",
-  other: "Otros",
+/** Las claves del namespace `docFacets`, para tipar los dos mapas. */
+export type DocFacetKey = Parameters<Translator<"docFacets">>[0];
+
+/**
+ * Clave del diccionario por categoria, no el texto (prod-16 `task_prod16_04`).
+ *
+ * El mapa se conserva para que TypeScript siga exigiendo una entrada por cada
+ * carpeta canonica: es la misma garantia que daba el `Record<DocCategory,
+ * string>` de antes, sin el castellano cableado en un modulo puro.
+ */
+export const DOC_CATEGORY_KEYS: Record<DocCategory, DocFacetKey> = {
+  "01-overview": "categoryOverview",
+  "02-getting-started": "categoryGettingStarted",
+  "03-guides": "categoryGuides",
+  "04-reference": "categoryReference",
+  "05-architecture-decisions": "categoryAdr",
+  "06-runbooks": "categoryRunbooks",
+  "07-changelog": "categoryChangelog",
+  other: "categoryOther",
 };
 
 /**
@@ -80,12 +92,12 @@ export const DOC_TYPES = ["adr", "changelog", "runbook", "readme", "doc"] as con
 
 export type DocType = (typeof DOC_TYPES)[number];
 
-export const DOC_TYPE_LABELS: Record<DocType, string> = {
-  adr: "ADR",
-  changelog: "Changelog",
-  runbook: "Runbook",
-  readme: "README / índice",
-  doc: "Documento",
+export const DOC_TYPE_KEYS: Record<DocType, DocFacetKey> = {
+  adr: "typeAdr",
+  changelog: "typeChangelog",
+  runbook: "typeRunbook",
+  readme: "typeReadme",
+  doc: "typeDoc",
 };
 
 const ADR_FILENAME_RE = /^\d{3,4}-/; // e.g. 0021-llm-providers.md

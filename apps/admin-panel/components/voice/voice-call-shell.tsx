@@ -35,40 +35,55 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Loader2, Mic, PhoneOff, Video } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useT, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { wsUrl } from "@/lib/ws";
 
 export type CallStatus =
   "lobby" | "connecting" | "ready" | "recording" | "thinking" | "speaking" | "error";
 
+/** Las claves del namespace `voiceCall`, para tipar los mapas de etiquetas. */
+type VoiceKey = Parameters<Translator<"voiceCall">>[0];
+
 export type VoiceOption = {
   id: string;
-  /** «Mujer», «Hombre» — el criterio que pidió el operador. */
-  gender: "Mujer" | "Hombre";
-  language: string;
+  /**
+   * Mujer / hombre — el criterio que pidió el operador, ahora como CLAVE.
+   *
+   * Era la union de literales `"Mujer" | "Hombre"`, es decir, castellano
+   * cableado en el propio TIPO: con el toggle en EN el selector de voz decía
+   * «Mujer · Dora». Ninguna de las dos guardas podía verlo — no es un atributo
+   * ni un ternario, es un tipo.
+   */
+  gender: VoiceKey;
+  /** Clave del idioma de la voz, que agrupa el `<optgroup>` del selector. */
+  language: VoiceKey;
   name: string;
 };
 
 /** Voces Kokoro curadas (el servidor valida el id contra su allowlist). */
 export const VOICE_OPTIONS: VoiceOption[] = [
-  { id: "ef_dora", gender: "Mujer", language: "Español", name: "Dora" },
-  { id: "em_alex", gender: "Hombre", language: "Español", name: "Alex" },
-  { id: "af_heart", gender: "Mujer", language: "English (US)", name: "Heart" },
-  { id: "am_michael", gender: "Hombre", language: "English (US)", name: "Michael" },
-  { id: "bf_emma", gender: "Mujer", language: "English (UK)", name: "Emma" },
-  { id: "bm_george", gender: "Hombre", language: "English (UK)", name: "George" },
+  { id: "ef_dora", gender: "genderFemale", language: "langSpanish", name: "Dora" },
+  { id: "em_alex", gender: "genderMale", language: "langSpanish", name: "Alex" },
+  { id: "af_heart", gender: "genderFemale", language: "langEnglishUs", name: "Heart" },
+  { id: "am_michael", gender: "genderMale", language: "langEnglishUs", name: "Michael" },
+  { id: "bf_emma", gender: "genderFemale", language: "langEnglishUk", name: "Emma" },
+  { id: "bm_george", gender: "genderMale", language: "langEnglishUk", name: "George" },
 ];
+
+/** Los tres grupos del selector, en el orden en que se muestran. */
+const VOICE_LANGUAGES: VoiceKey[] = ["langSpanish", "langEnglishUs", "langEnglishUk"];
 
 const VOICE_IDS = new Set(VOICE_OPTIONS.map((v) => v.id));
 
-const STATUS_LABEL: Record<CallStatus, string> = {
-  lobby: "Listo para llamar",
-  connecting: "Conectando…",
-  ready: "En llamada — mantén pulsado el micro para hablar",
-  recording: "Escuchándote…",
-  thinking: "Pensando…",
-  speaking: "Hablando…",
-  error: "Error",
+const STATUS_KEY: Record<CallStatus, VoiceKey> = {
+  lobby: "statusLobby",
+  connecting: "statusConnecting",
+  ready: "statusReady",
+  recording: "statusRecording",
+  thinking: "statusThinking",
+  speaking: "statusSpeaking",
+  error: "statusError",
 };
 
 const RING_CLASS: Record<CallStatus, string> = {
@@ -119,6 +134,7 @@ export function VoiceCallShell({
   /** Cerrar la videollamada (vuelve a la página). */
   onClose: () => void;
 }) {
+  const t = useT("voiceCall");
   const [status, setStatus] = useState<CallStatus>("lobby");
   const [voice, setVoiceState] = useState(defaultVoice);
   const [transcript, setTranscript] = useState("");
@@ -312,11 +328,11 @@ export function VoiceCallShell({
     };
     audio.onended = done;
     audio.onerror = () => {
-      setError("No se pudo reproducir la respuesta de voz.");
+      setError(t("errorPlayback"));
       done();
     };
     void audio.play().catch(() => {
-      setError("El navegador bloqueó la reproducción — pulsa «Iniciar llamada» de nuevo.");
+      setError(t("errorAutoplay"));
       done();
     });
   };
@@ -429,7 +445,7 @@ export function VoiceCallShell({
       setStatus("recording");
     } catch {
       recordIntentRef.current = false;
-      setError("Micrófono no disponible o permiso denegado.");
+      setError(t("errorMic"));
       setStatus("ready");
     }
   };
@@ -471,7 +487,7 @@ export function VoiceCallShell({
             className="rounded-full bg-white/10 px-3 py-1 text-xs font-medium"
             data-testid={`${testidPrefix}-status`}
           >
-            {STATUS_LABEL[status]}
+            {t(STATUS_KEY[status])}
           </span>
           {inCall ? (
             <span className="font-mono text-xs tabular-nums text-slate-300">
@@ -494,7 +510,7 @@ export function VoiceCallShell({
             <span className="text-sm font-medium">{title}</span>
             {activeVoice ? (
               <span className="text-xs text-slate-400">
-                {activeVoice.gender} · {activeVoice.language}
+                {t(activeVoice.gender)} · {t(activeVoice.language)}
               </span>
             ) : null}
           </div>
@@ -507,14 +523,14 @@ export function VoiceCallShell({
               className="max-w-full truncate rounded-2xl bg-white/8 px-4 py-1.5 text-sm text-slate-300"
               data-testid={`${testidPrefix}-transcript`}
             >
-              <span className="mr-1.5 text-xs font-semibold text-slate-500">Tú</span>
+              <span className="mr-1.5 text-xs font-semibold text-slate-500">{t("you")}</span>
               {transcript}
             </p>
           ) : null}
           {status === "thinking" ? (
             <p className="rounded-2xl bg-white/8 px-4 py-1.5 text-sm text-slate-400">
               <Loader2 className="mr-1.5 inline h-3.5 w-3.5 animate-spin" />
-              {title} está pensando…
+              {t("thinkingOf", { name: title })}
             </p>
           ) : null}
           {answer ? (
@@ -552,7 +568,7 @@ export function VoiceCallShell({
               />
             ))}
           </div>
-          <span className="text-xs text-slate-400">Tú</span>
+          <span className="text-xs text-slate-400">{t("you")}</span>
         </div>
       ) : null}
 
@@ -572,7 +588,7 @@ export function VoiceCallShell({
               ) : (
                 <Video className="mr-2 h-5 w-5" />
               )}
-              Iniciar llamada
+              {t("start")}
             </Button>
             <Button
               variant="outline"
@@ -581,7 +597,7 @@ export function VoiceCallShell({
               data-testid={`${testidPrefix}-close`}
               className="rounded-full border-white/20 bg-white/5 text-slate-200 hover:bg-white/10"
             >
-              Volver
+              {t("back")}
             </Button>
           </>
         ) : (
@@ -603,9 +619,7 @@ export function VoiceCallShell({
                   ? "scale-110 bg-rose-600 hover:bg-rose-600"
                   : "bg-sky-600 hover:bg-sky-500",
               )}
-              aria-label={
-                status === "recording" ? "Suelta para enviar" : "Mantén pulsado para hablar"
-              }
+              aria-label={status === "recording" ? t("talkRelease") : t("talkHold")}
             >
               <Mic className="h-7 w-7" />
             </Button>
@@ -613,15 +627,15 @@ export function VoiceCallShell({
             <select
               value={voice}
               onChange={(e) => setVoice(e.target.value)}
-              aria-label="Voz"
+              aria-label={t("voiceAria")}
               data-testid={`${testidPrefix}-select`}
               className="h-11 rounded-full border border-white/15 bg-white/10 px-4 text-sm text-slate-100 outline-none backdrop-blur-sm [&>optgroup]:bg-slate-900 [&>option]:bg-slate-900"
             >
-              {["Español", "English (US)", "English (UK)"].map((lang) => (
-                <optgroup key={lang} label={lang}>
-                  {VOICE_OPTIONS.filter((v) => v.language === lang).map((v) => (
+              {VOICE_LANGUAGES.map((langKey) => (
+                <optgroup key={langKey} label={t(langKey)}>
+                  {VOICE_OPTIONS.filter((v) => v.language === langKey).map((v) => (
                     <option key={v.id} value={v.id}>
-                      {v.gender} · {v.name}
+                      {t(v.gender)} · {v.name}
                     </option>
                   ))}
                 </optgroup>
@@ -636,7 +650,7 @@ export function VoiceCallShell({
               }}
               data-testid={`${testidPrefix}-hangup`}
               className="h-16 w-16 rounded-full bg-rose-600 p-0 text-white shadow-lg hover:bg-rose-500"
-              aria-label="Colgar"
+              aria-label={t("hangup")}
             >
               <PhoneOff className="h-7 w-7" />
             </Button>

@@ -13,6 +13,7 @@
  */
 
 import type { TocEntry } from "@/lib/docs-api";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 // Indent each level off the shallowest heading present, capped so deep docs
@@ -21,10 +22,11 @@ const INDENT_REM = 0.75;
 const MAX_INDENT_STEPS = 3;
 
 export function DocToc({ entries }: { entries: TocEntry[] }) {
+  const t = useT("docs");
   if (entries.length === 0) {
     return (
       <p className="text-muted-foreground px-2 py-1 text-xs italic" data-testid="docs-toc-empty">
-        Sin secciones.
+        {t("tocEmpty")}
       </p>
     );
   }
@@ -32,9 +34,9 @@ export function DocToc({ entries }: { entries: TocEntry[] }) {
   const minLevel = entries.reduce((min, e) => Math.min(min, e.level), 6);
 
   return (
-    <nav aria-label="Tabla de contenidos" data-testid="docs-toc">
+    <nav aria-label={t("tocAria")} data-testid="docs-toc">
       <p className="text-muted-foreground mb-2 px-2 text-xs font-semibold uppercase tracking-wider">
-        En esta página
+        {t("tocHeading")}
       </p>
       <ul className="space-y-0.5">
         {entries.map((entry, index) => {

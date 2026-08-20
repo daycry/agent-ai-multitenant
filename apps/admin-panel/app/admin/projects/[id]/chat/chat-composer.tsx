@@ -8,6 +8,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ interface ChatComposerProps {
 }
 
 export function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
+  const t = useT("projectChat");
   const [value, setValue] = useState("");
   // Markdown preview toggle. The edit view keeps the raw <textarea> so @-mention
   // tracking (cursor/onChange) stays intact; preview renders the same markdown
@@ -65,7 +67,7 @@ export function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
             !preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
           )}
         >
-          Editar
+          {t("composerEdit")}
         </button>
         <button
           type="button"
@@ -78,7 +80,7 @@ export function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
             preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
           )}
         >
-          Vista previa
+          {t("composerPreview")}
         </button>
       </div>
       {preview ? (
@@ -88,7 +90,7 @@ export function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
         >
           {value.trim().length === 0 ? (
             <p className="text-muted-foreground/60 text-xs italic">
-              Sin contenido para previsualizar.
+              {t("composerNothingToPreview")}
             </p>
           ) : (
             renderPlanDraft(value)
@@ -98,7 +100,7 @@ export function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
         <textarea
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="Escribe un mensaje. Usa @ para mencionar a un agente. Soporta markdown."
+          placeholder={t("composerPlaceholder")}
           rows={3}
           disabled={disabled}
           data-testid="chat-input"
@@ -136,7 +138,7 @@ export function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
           disabled={disabled || value.trim().length === 0}
           data-testid="chat-send"
         >
-          Enviar
+          {t("send")}
         </Button>
       </div>
     </form>

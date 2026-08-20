@@ -19,7 +19,9 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, FolderKanban } from "lucide-react";
 
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { cn } from "@/lib/utils";
 import { fetchDocsTree } from "@/lib/docs-api";
 import { filterTree, isFilterActive, type DocsFilter } from "@/lib/docs-filters";
@@ -59,6 +61,8 @@ export function DocsSidebar({
   filter,
   bookmarks,
 }: DocsSidebarProps) {
+  const t = useT("docs");
+  const errorText = useErrorText();
   const projectsQuery = useQuery({
     queryKey: ["projects", "for-docs"],
     queryFn: () => apiFetch<ProjectSummary[]>("/projects"),
@@ -68,11 +72,11 @@ export function DocsSidebar({
   return (
     <nav
       className="flex h-full flex-col overflow-y-auto p-3"
-      aria-label="Árbol de documentación"
+      aria-label={t("sidebarAria")}
       data-testid="docs-sidebar"
     >
       <p className="text-sidebar-muted-foreground mb-2 px-2 text-xs font-semibold uppercase tracking-wider">
-        Proyectos
+        {t("projectsHeading")}
       </p>
 
       {projectsQuery.isLoading && (
@@ -81,15 +85,13 @@ export function DocsSidebar({
           data-testid="docs-projects-loading"
         >
           <Spinner className="h-3.5 w-3.5" />
-          Cargando proyectos…
+          {t("projectsLoading")}
         </p>
       )}
 
       {projectsQuery.isError && (
         <p className="text-destructive px-2 py-1 text-xs" data-testid="docs-projects-error">
-          {projectsQuery.error instanceof ApiError
-            ? projectsQuery.error.body
-            : "No se pudieron cargar los proyectos."}
+          {errorText(projectsQuery.error)}
         </p>
       )}
 
@@ -98,7 +100,7 @@ export function DocsSidebar({
           className="text-sidebar-muted-foreground px-2 py-1 text-xs italic"
           data-testid="docs-projects-empty"
         >
-          No tienes proyectos accesibles.
+          {t("projectsEmpty")}
         </p>
       )}
 
@@ -140,6 +142,8 @@ function ProjectSection({
   filter: DocsFilter;
   bookmarks: SidebarBookmarkControls;
 }) {
+  const t = useT("docs");
+  const errorText = useErrorText();
   // A project section opens lazily; once opened we fetch its tree. A deep-link
   // (selectedProjectId === this) starts open so the file is reachable.
   const [open, setOpen] = useState(forceOpen);
@@ -198,7 +202,7 @@ function ProjectSection({
               data-testid={`docs-tree-loading-${project.id}`}
             >
               <Spinner className="h-3.5 w-3.5" />
-              Cargando árbol…
+              {t("treeLoading")}
             </p>
           )}
           {treeQuery.isError && (
@@ -206,9 +210,7 @@ function ProjectSection({
               className="text-destructive px-2 py-1 text-xs"
               data-testid={`docs-tree-error-${project.id}`}
             >
-              {treeQuery.error instanceof ApiError
-                ? treeQuery.error.body
-                : "No se pudo cargar el árbol."}
+              {errorText(treeQuery.error)}
             </p>
           )}
           {prunedToEmpty && (
@@ -216,7 +218,7 @@ function ProjectSection({
               className="text-sidebar-muted-foreground px-2 py-1 text-xs italic"
               data-testid={`docs-tree-filtered-empty-${project.id}`}
             >
-              Ningún documento coincide con los filtros.
+              {t("treeFilteredEmpty")}
             </p>
           )}
           {filtered && !prunedToEmpty && (

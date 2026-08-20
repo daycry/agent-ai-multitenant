@@ -3151,6 +3151,1659 @@ export const dictionary = {
     projectShared: { es: "Compartida con proyecto", en: "Shared with project" },
     global: { es: "Global del tenant", en: "Tenant-wide" },
   },
+  /**
+   * `components/ui/entity-combobox.tsx` y sus tres wrappers (proyecto, equipo,
+   * KB).
+   *
+   * Namespace propio y COMPARTIDO porque el componente lo consumen cuatro
+   * módulos distintos (`memories`, `agents`, `knowledge-bases` y el grant de
+   * KB): duplicar «Buscar por nombre…» en cada uno sería la divergencia que
+   * este diccionario existe para evitar.
+   *
+   * Estos textos eran **valores por defecto de parámetro**
+   * (`placeholder = "Selecciona…"`), no atributos JSX, así que el guard de
+   * atributos sólo veía UNO de los siete. Con el toggle en EN, tres pantallas ya
+   * migradas seguían pintando «Busca un equipo por nombre…» dentro del
+   * formulario. Es el mismo aviso de siempre: el contador mide su patrón, no la
+   * deuda.
+   */
+  combobox: {
+    select: { es: "Selecciona…", en: "Select…" },
+    search: { es: "Buscar…", en: "Search…" },
+    searchByName: { es: "Buscar por nombre…", en: "Search by name…" },
+    clear: { es: "Quitar selección", en: "Clear selection" },
+    searchError: { es: "Error al buscar", en: "Search failed" },
+    noMatch: { es: 'Nada coincide con "{query}".', en: 'Nothing matches "{query}".' },
+    empty: { es: "Sin resultados.", en: "No results." },
+    projectPlaceholder: {
+      es: "Busca un proyecto por nombre…",
+      en: "Search for a project by name…",
+    },
+    teamPlaceholder: { es: "Busca un equipo por nombre…", en: "Search for a team by name…" },
+    kbPlaceholder: {
+      es: "Busca una knowledge base por nombre…",
+      en: "Search for a knowledge base by name…",
+    },
+    teamMembers: { es: "{n} miembros", en: "{n} members" },
+  },
+  /**
+   * `app/admin/memories/page.tsx` — la memoria del equipo.
+   *
+   * Las etiquetas cortas de scope (`Todas`, `Equipo`) NO reutilizan el
+   * namespace `memoryScope`: aquél es el catálogo largo de la política de un
+   * agente («Compartida con equipo») y aquí son las pestañas de un filtro
+   * segmentado, donde el texto largo no cabe. Son dos textos distintos para el
+   * mismo enum, no una duplicación.
+   *
+   * El badge `embedding` no está aquí: es la misma palabra en los dos idiomas y
+   * además nombra una columna de la BD.
+   */
+  memories: {
+    title: { es: "Memoria del equipo", en: "Team memory" },
+    description: {
+      es: "Lo que el Memorizer y los humanos persisten para futuros agentes. Filtrable por scope; las globales sólo las edita un tenant_admin.",
+      en: "What the Memorizer and humans persist for future agents. Filterable by scope; only a tenant_admin can edit the global ones.",
+    },
+    scopeAll: { es: "Todas", en: "All" },
+    scopePrivate: { es: "Privada", en: "Private" },
+    scopeTeam: { es: "Equipo", en: "Team" },
+    scopeProject: { es: "Proyecto", en: "Project" },
+    scopeGlobal: { es: "Global", en: "Global" },
+    typeEpisodic: { es: "Episódica", en: "Episodic" },
+    typeSemantic: { es: "Semántica", en: "Semantic" },
+    empty: { es: "No hay memorias en este filtro.", en: "No memories match this filter." },
+    delete: { es: "Eliminar", en: "Delete" },
+    similarAria: {
+      es: "Ver {count} memorias similares",
+      en: "See {count} similar memories",
+    },
+    similarBadgeOne: { es: "1 similar", en: "1 similar" },
+    similarBadgeMany: { es: "{count} similares", en: "{count} similar" },
+    similarTitle: { es: "Memorias similares", en: "Similar memories" },
+    similarDescription: {
+      es: "Candidatos a duplicado encontrados por similitud coseno del embedding. “Fusionar” combina el contenido del candidato en esta memoria (la actual sobrevive). “Descartar” hace soft-delete del candidato.",
+      en: "Duplicate candidates found by cosine similarity of the embedding. “Merge” folds the candidate’s content into this memory (the current one survives). “Discard” soft-deletes the candidate.",
+    },
+    similarTarget: { es: "Memoria actual (target)", en: "Current memory (target)" },
+    similarLoading: { es: "Buscando candidatos…", en: "Searching for candidates…" },
+    similarEmpty: {
+      es: "No hay candidatos por encima del umbral configurado.",
+      en: "No candidates above the configured threshold.",
+    },
+    similarPercent: { es: "{pct}% similitud", en: "{pct}% similarity" },
+    merge: { es: "Fusionar", en: "Merge" },
+    discard: { es: "Descartar", en: "Discard" },
+    createTitle: { es: "Nueva memoria manual", en: "New manual memory" },
+    fieldContent: { es: "Contenido", en: "Content" },
+    fieldScope: { es: "Scope", en: "Scope" },
+    fieldType: { es: "Tipo", en: "Type" },
+    fieldTeam: { es: "Equipo", en: "Team" },
+    fieldProject: { es: "Proyecto", en: "Project" },
+    fieldTags: { es: "Etiquetas", en: "Tags" },
+    tagsPlaceholder: { es: "separadas por comas", en: "comma-separated" },
+    submit: { es: "Guardar memoria", en: "Save memory" },
+  },
+  /**
+   * SSO empresarial OIDC (`settings/sso/`): la pantalla, la tarjeta de la URL
+   * base pública, la ficha de la config y el diálogo de alta/edición.
+   *
+   * Un namespace para las CUATRO piezas y no uno por fichero: son una sola
+   * pantalla partida por `task_prod16_08`, y separar las claves obligaría a
+   * decidir en cuál vive «Guardar» cada vez que el troceo se mueva.
+   *
+   * Los términos del protocolo NO se traducen y por eso no están aquí:
+   * `Issuer`, `Client ID`, `Scopes`, `NameID`, `ACS`. Traducirlos sería peor
+   * ayuda — el operador los busca literalmente en la consola de su IdP.
+   */
+  ssoOidc: {
+    title: { es: "SSO empresarial (OIDC)", en: "Enterprise SSO (OIDC)" },
+    description: {
+      es: "Inicio de sesión único por tenant. Se añade junto al login local — activarlo no lo reemplaza ni lo desactiva.",
+      en: "Single sign-on per tenant. It is added alongside local login — enabling it neither replaces nor disables it.",
+    },
+    configure: { es: "Configurar OIDC", en: "Configure OIDC" },
+    samlLinkQuestion: {
+      es: "¿Tu IdP habla SAML 2.0 en lugar de OIDC?",
+      en: "Does your IdP speak SAML 2.0 instead of OIDC?",
+    },
+    samlLinkText: { es: "Configura SAML aquí", en: "Configure SAML here" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    emptyBefore: {
+      es: "Este tenant aún no tiene SSO configurado. Pulsa",
+      en: "This tenant has no SSO configured yet. Press",
+    },
+    emptyAfter: {
+      es: "para conectarlo con tu proveedor de identidad.",
+      en: "to connect it to your identity provider.",
+    },
+    confirmDelete: {
+      es: "¿Borrar la configuración OIDC de este tenant?",
+      en: "Delete this tenant’s OIDC configuration?",
+    },
+    // --- ficha de la configuración ---
+    badgeEnabled: { es: "activo", en: "active" },
+    badgeDisabled: { es: "inactivo", en: "inactive" },
+    badgeSecret: { es: "secreto: {source}", en: "secret: {source}" },
+    badgeNoSecret: { es: "sin secreto", en: "no secret" },
+    sourceVault: { es: "Vault", en: "Vault" },
+    sourceEncrypted: { es: "cifrado en reposo", en: "encrypted at rest" },
+    enable: { es: "Activar", en: "Enable" },
+    disable: { es: "Desactivar", en: "Disable" },
+    edit: { es: "Editar", en: "Edit" },
+    delete: { es: "Eliminar", en: "Delete" },
+    // --- tarjeta de la URL base pública y la callback derivada ---
+    cbTitle: {
+      es: "URL base pública de la aplicación",
+      en: "Application public base URL",
+    },
+    cbIntro1: {
+      es: "La URL pública única de la plataforma (p. ej.",
+      en: "The single public URL of the platform (e.g.",
+    },
+    cbIntro2: { es: "). De ella se derivan la", en: "). From it the" },
+    cbIntroSsoCallback: { es: "callback de SSO", en: "SSO callback" },
+    cbIntro3: { es: "y el", en: "and the" },
+    cbIntroSamlAcs: { es: "ACS de SAML", en: "SAML ACS" },
+    cbIntro4: {
+      es: "como rutas — el puerto queda detrás de tu gateway en producción. Es global (una para toda la plataforma).",
+      en: "are derived as paths — the port stays behind your gateway in production. It is global (one for the whole platform).",
+    },
+    cbCurrentBase: { es: "Base pública actual:", en: "Current public base:" },
+    cbBaseLabel: { es: "URL base pública", en: "Public base URL" },
+    cbBasePlaceholder: { es: "https://tu-dominio.com", en: "https://your-domain.com" },
+    cbPrefixLabel: {
+      es: "Prefijo de API (reverse proxy)",
+      en: "API path prefix (reverse proxy)",
+    },
+    cbPrefixPlaceholder: {
+      es: "/api  (vacío si el API cuelga de la raíz)",
+      en: "/api  (empty if the API hangs from the root)",
+    },
+    cbPrefixHelp1: {
+      es: "Si publicas single-origin (SPA en",
+      en: "If you publish single-origin (SPA at",
+    },
+    cbPrefixHelp2: { es: "y API bajo", en: "and API under" },
+    cbPrefixHelp3: { es: "tras Caddy/nginx), pon", en: "behind Caddy/nginx), set" },
+    cbPrefixHelp4: {
+      es: ". Vacío si el api-server cuelga de la raíz del dominio. Se inserta entre el origen y la ruta del callback.",
+      en: ". Leave it empty if the api-server hangs from the domain root. It is inserted between the origin and the callback path.",
+    },
+    cbCallbackLabel: {
+      es: "URL de callback / redirect (a registrar en el IdP)",
+      en: "Callback / redirect URL (to register at the IdP)",
+    },
+    cbCopyAria: { es: "Copiar URL de callback", en: "Copy callback URL" },
+    cbWarnBefore: {
+      es: "Sigue usando el valor de arranque",
+      en: "It is still using the bootstrap value",
+    },
+    cbWarnAfter: {
+      es: "(apunta al api-server local, no a tu dominio público). Pon arriba tu URL pública real antes de registrar la callback en el IdP.",
+      en: "(it points at the local api-server, not at your public domain). Set your real public URL above before registering the callback at the IdP.",
+    },
+    copy: { es: "Copiar", en: "Copy" },
+    copied: { es: "Copiado", en: "Copied" },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    // --- diálogo de alta / edición ---
+    dialogEditTitle: {
+      es: "Editar configuración OIDC",
+      en: "Edit OIDC configuration",
+    },
+    templateLabel: { es: "Plantilla de proveedor", en: "Provider template" },
+    templateLoading: { es: "Cargando plantillas…", en: "Loading templates…" },
+    templateNone: {
+      es: "— Elige un proveedor (opcional) —",
+      en: "— Pick a provider (optional) —",
+    },
+    templateHelp: {
+      es: "Pre-rellena issuer, scopes y mapeo de claims con valores verificados. Después puedes ajustarlos manualmente.",
+      en: "Pre-fills issuer, scopes and claim mappings with verified values. You can adjust them by hand afterwards.",
+    },
+    paramLabel: { es: "Parámetro: {name}", en: "Parameter: {name}" },
+    displayNameLabel: { es: "Nombre visible (opcional)", en: "Display name (optional)" },
+    issuerHelp: {
+      es: "El descubrimiento OIDC consulta",
+      en: "OIDC discovery queries",
+    },
+    secretKeepHint: {
+      es: " (dejar vacío para conservar el actual)",
+      en: " (leave empty to keep the current one)",
+    },
+    secretPlaceholder: {
+      es: "secreto del cliente OIDC",
+      en: "OIDC client secret",
+    },
+    secretHelp: {
+      es: "Se cifra en reposo antes de guardarse; el sistema nunca lo devuelve en claro.",
+      en: "It is encrypted at rest before being stored; the system never returns it in clear.",
+    },
+    scopesLabel: {
+      es: "Scopes (separados por espacios)",
+      en: "Scopes (space-separated)",
+    },
+    enabledLabel: {
+      es: "Activar este proveedor en el login (añadido al login local, no lo reemplaza)",
+      en: "Enable this provider at login (added to local login, it does not replace it)",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    create: { es: "Crear", en: "Create" },
+    saveChanges: { es: "Guardar cambios", en: "Save changes" },
+  },
+  /**
+   * SSO empresarial SAML 2.0 (`settings/sso/saml/`): pantalla, metadatos del
+   * SP, ficha y diálogo, con el mismo criterio que `ssoOidc`.
+   *
+   * Namespace aparte y no una rama de `ssoOidc` porque son dos pantallas con
+   * rutas distintas: compartir namespace obligaría a prefijar cada clave para
+   * saber a cuál pertenece, que es tener dos namespaces con más ruido.
+   */
+  ssoSaml: {
+    title: { es: "SSO empresarial (SAML 2.0)", en: "Enterprise SSO (SAML 2.0)" },
+    description: {
+      es: "Inicio de sesión único SAML por tenant. Se añade junto al login local y al SSO OIDC — activarlo no reemplaza ni desactiva ninguno.",
+      en: "SAML single sign-on per tenant. It is added alongside local login and OIDC SSO — enabling it neither replaces nor disables either.",
+    },
+    configure: { es: "Configurar SAML", en: "Configure SAML" },
+    oidcLinkQuestion: {
+      es: "¿Tu IdP habla OIDC en lugar de SAML?",
+      en: "Does your IdP speak OIDC instead of SAML?",
+    },
+    oidcLinkText: { es: "Configura OIDC aquí", en: "Configure OIDC here" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    emptyBefore: {
+      es: "Este tenant aún no tiene SAML configurado. Pulsa",
+      en: "This tenant has no SAML configured yet. Press",
+    },
+    emptyAfter: {
+      es: "para conectarlo con tu proveedor de identidad.",
+      en: "to connect it to your identity provider.",
+    },
+    confirmDelete: {
+      es: "¿Borrar la configuración SAML de este tenant?",
+      en: "Delete this tenant’s SAML configuration?",
+    },
+    // --- ficha de la configuración ---
+    badgeEnabled: { es: "activo", en: "active" },
+    badgeDisabled: { es: "inactivo", en: "inactive" },
+    badgeKey: { es: "clave SP: {source}", en: "SP key: {source}" },
+    badgeNoKey: { es: "sin clave SP", en: "no SP key" },
+    badgeSigned: { es: "AuthnRequest firmado", en: "Signed AuthnRequest" },
+    sourceVault: { es: "Vault", en: "Vault" },
+    sourceEncrypted: { es: "cifrado en reposo", en: "encrypted at rest" },
+    enable: { es: "Activar", en: "Enable" },
+    disable: { es: "Desactivar", en: "Disable" },
+    edit: { es: "Editar", en: "Edit" },
+    delete: { es: "Eliminar", en: "Delete" },
+    // --- metadatos del SP ---
+    spTitle: { es: "Metadatos del SP (este sistema)", en: "SP metadata (this system)" },
+    spIntro1: { es: "Estos valores son", en: "These values are" },
+    spIntroGlobal: { es: "globales", en: "global" },
+    spIntro2: {
+      es: "(una sola identidad de SP para toda la plataforma). Regístralos en tu proveedor de identidad SAML: la",
+      en: "(a single SP identity for the whole platform). Register them at your SAML identity provider: the SP",
+    },
+    spIntroEntityId: { es: "Entity ID", en: "Entity ID" },
+    spIntro3: { es: "del SP y la", en: "and the" },
+    spIntroAcs: { es: "URL de ACS", en: "ACS URL" },
+    spIntro4: {
+      es: "(Assertion Consumer Service) a la que el IdP enviará la respuesta.",
+      en: "(Assertion Consumer Service) the IdP will post its response to.",
+    },
+    spConfiguredBase: { es: "Base pública configurada:", en: "Configured public base:" },
+    spWarnBefore: {
+      es: "Sigue usando la base por defecto",
+      en: "It is still using the default base",
+    },
+    spWarnMiddle: {
+      es: "(un marcador de posición, ni siquiera coincide con el api-server de desarrollo). Configura",
+      en: "(a placeholder that does not even match the development api-server). Set",
+    },
+    spWarnAfter: {
+      es: "con tu URL pública antes de registrar el ACS en el IdP.",
+      en: "to your public URL before registering the ACS at the IdP.",
+    },
+    copy: { es: "Copiar", en: "Copy" },
+    copied: { es: "Copiado", en: "Copied" },
+    copyAria: { es: "Copiar {label}", en: "Copy {label}" },
+    loadingValue: { es: "Cargando…", en: "Loading…" },
+    // --- diálogo de alta / edición ---
+    dialogEditTitle: { es: "Editar configuración SAML", en: "Edit SAML configuration" },
+    metadataLabel: { es: "Metadatos del IdP (XML)", en: "IdP metadata (XML)" },
+    metadataPlaceholder: {
+      es: "Pega aquí el EntityDescriptor del IdP, o sube el archivo de metadatos…",
+      en: "Paste the IdP EntityDescriptor here, or upload the metadata file…",
+    },
+    metadataUpload: { es: "Subir XML", en: "Upload XML" },
+    metadataParse: { es: "Extraer datos", en: "Extract data" },
+    metadataParsing: { es: "Analizando…", en: "Parsing…" },
+    metadataHelp: {
+      es: "Extrae automáticamente Entity ID, URL de SSO y certificado del IdP. Después puedes ajustarlos manualmente.",
+      en: "Automatically extracts the Entity ID, SSO URL and certificate of the IdP. You can adjust them by hand afterwards.",
+    },
+    metadataParseError: {
+      es: "No se pudieron extraer los metadatos: {detail}",
+      en: "The metadata could not be extracted: {detail}",
+    },
+    displayNameLabel: { es: "Nombre visible (opcional)", en: "Display name (optional)" },
+    entityIdLabel: { es: "IdP Entity ID", en: "IdP Entity ID" },
+    ssoUrlLabel: { es: "URL de SSO del IdP", en: "IdP SSO URL" },
+    certLabel: {
+      es: "Certificado de firma del IdP (X.509)",
+      en: "IdP signing certificate (X.509)",
+    },
+    certPlaceholder: {
+      es: "MIID… (cuerpo base64 del certificado o PEM completo)",
+      en: "MIID… (base64 certificate body or full PEM)",
+    },
+    certHelp: {
+      es: "Con este certificado se verifica la firma de las aserciones del IdP.",
+      en: "This certificate verifies the signature of the assertions from the IdP.",
+    },
+    nameIdLabel: { es: "Formato de NameID", en: "NameID format" },
+    nameIdEmail: { es: "emailAddress (recomendado)", en: "emailAddress (recommended)" },
+    nameIdPersistent: { es: "persistent", en: "persistent" },
+    nameIdTransient: { es: "transient", en: "transient" },
+    nameIdUnspecified: { es: "unspecified", en: "unspecified" },
+    attrEmailLabel: { es: "Atributo de email (opcional)", en: "Email attribute (optional)" },
+    attrFullNameLabel: { es: "Atributo de nombre (opcional)", en: "Name attribute (optional)" },
+    spKeyIntro: {
+      es: "Clave del SP — solo necesaria si firmas el AuthnRequest o cifras las aserciones.",
+      en: "SP key — only needed if you sign the AuthnRequest or encrypt the assertions.",
+    },
+    spCertLabel: {
+      es: "Certificado público del SP (X.509)",
+      en: "SP public certificate (X.509)",
+    },
+    spCertPlaceholder: {
+      es: "MIID… (certificado público del SP)",
+      en: "MIID… (SP public certificate)",
+    },
+    spKeyLabel: { es: "Clave privada del SP (PEM)", en: "SP private key (PEM)" },
+    spKeyKeepHint: {
+      es: " (dejar vacío para conservar la actual)",
+      en: " (leave empty to keep the current one)",
+    },
+    spKeyPlaceholder: {
+      es: "Pega aquí la clave privada del SP en formato PEM…",
+      en: "Paste the SP private key in PEM format here…",
+    },
+    spKeyHelp: {
+      es: "Se cifra en reposo antes de guardarse; el sistema nunca la devuelve en claro.",
+      en: "It is encrypted at rest before being stored; the system never returns it in clear.",
+    },
+    flagAuthnSigned: {
+      es: "Firmar el AuthnRequest saliente (requiere clave del SP)",
+      en: "Sign the outgoing AuthnRequest (requires the SP key)",
+    },
+    flagAssertionsSigned: {
+      es: "Exigir aserciones firmadas por el IdP (recomendado)",
+      en: "Require assertions signed by the IdP (recommended)",
+    },
+    flagAssertionsEncrypted: {
+      es: "Exigir aserciones cifradas (requiere clave del SP)",
+      en: "Require encrypted assertions (requires the SP key)",
+    },
+    flagNameIdEncrypted: {
+      es: "Exigir NameID cifrado (requiere clave del SP)",
+      en: "Require an encrypted NameID (requires the SP key)",
+    },
+    enabledLabel: {
+      es: "Activar este proveedor en el login (añadido al login local y a OIDC, no los reemplaza)",
+      en: "Enable this provider at login (added to local login and OIDC, it does not replace them)",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    create: { es: "Crear", en: "Create" },
+    saveChanges: { es: "Guardar cambios", en: "Save changes" },
+    saving: { es: "Guardando…", en: "Saving…" },
+  },
+  /**
+   * Webhooks ENTRANTES del proyecto (`projects/[id]/incoming-webhooks`).
+   *
+   * Los dos catálogos de la pantalla —orígenes y acciones— viven aquí y no en
+   * las constantes del fichero: el `value` (`github`, `create_task`) es el enum
+   * del backend y no se traduce, la etiqueta sí. Las constantes guardan la
+   * CLAVE, que es lo que hace que añadir un origen nuevo no pueda olvidarse el
+   * inglés (no compila).
+   */
+  incomingWebhooks: {
+    breadcrumbCurrent: { es: "Webhooks entrantes", en: "Incoming webhooks" },
+    title: {
+      es: "Webhooks entrantes del proyecto",
+      en: "Project incoming webhooks",
+    },
+    description: {
+      es: "Eventos que herramientas externas (GitHub, Jira, Sentry…) envían a este proyecto. Se verifica la firma HMAC antes de actuar.",
+      en: "Events that external tools (GitHub, Jira, Sentry…) send to this project. The HMAC signature is verified before acting.",
+    },
+    forbiddenBefore: { es: "Necesitas rol", en: "You need the" },
+    forbiddenAfter: {
+      es: "para gestionar webhooks entrantes.",
+      en: "role to manage incoming webhooks.",
+    },
+    add: { es: "Añadir webhook", en: "Add webhook" },
+    loading: { es: "Cargando…", en: "Loading…" },
+    emptyBefore: {
+      es: "Este proyecto aún no acepta webhooks entrantes. Pulsa",
+      en: "This project does not accept incoming webhooks yet. Press",
+    },
+    emptyAfter: {
+      es: "para configurar el primero.",
+      en: "to set up the first one.",
+    },
+    confirmDelete: {
+      es: "¿Borrar esta configuración de webhook entrante?",
+      en: "Delete this incoming webhook configuration?",
+    },
+    confirmRotate: {
+      es: "Rotar el secreto invalida el actual de inmediato. Tendrás que actualizar el proveedor externo con el nuevo valor. ¿Continuar?",
+      en: "Rotating the secret invalidates the current one immediately. You will have to update the external provider with the new value. Continue?",
+    },
+    // --- catálogo de orígenes (el `value` es el enum del backend) ---
+    originGithub: { es: "GitHub", en: "GitHub" },
+    originGitlab: { es: "GitLab", en: "GitLab" },
+    originJira: { es: "Jira", en: "Jira" },
+    originSentry: { es: "Sentry", en: "Sentry" },
+    originLinear: { es: "Linear", en: "Linear" },
+    originGeneric: { es: "Genérico (HMAC bare-hex)", en: "Generic (bare-hex HMAC)" },
+    // --- catálogo de acciones ---
+    actionCreateTask: { es: "Crear tarea", en: "Create task" },
+    actionComment: { es: "Comentar tarea", en: "Comment on a task" },
+    actionEscalate: { es: "Escalar tarea", en: "Escalate a task" },
+    // --- banner del secreto, que se enseña UNA vez ---
+    secretTitle: {
+      es: "🔑 Secreto de firma para «{name}»",
+      en: "🔑 Signing secret for “{name}”",
+    },
+    secretHintBefore: { es: "Cópialo ahora —", en: "Copy it now —" },
+    secretHintStrong: { es: "no se volverá a mostrar", en: "it will not be shown again" },
+    secretHintAfter: {
+      es: ". Pégalo en el secreto del webhook del proveedor externo para que firme sus eventos.",
+      en: ". Paste it into the webhook secret at the external provider so that it signs its events.",
+    },
+    close: { es: "Cerrar", en: "Close" },
+    copy: { es: "Copiar", en: "Copy" },
+    copied: { es: "Copiado", en: "Copied" },
+    // --- ficha de una configuración ---
+    badgeEnabled: { es: "activo", en: "active" },
+    badgeDisabled: { es: "desactivado", en: "disabled" },
+    mappingCountOne: { es: "1 mapeo", en: "1 mapping" },
+    mappingCountMany: { es: "{n} mapeos", en: "{n} mappings" },
+    lastDelivery: { es: "última entrega:", en: "last delivery:" },
+    never: { es: "nunca", en: "never" },
+    edit: { es: "Editar", en: "Edit" },
+    rotate: { es: "Rotar secreto", en: "Rotate secret" },
+    delete: { es: "Eliminar", en: "Delete" },
+    showDeliveries: { es: "Ver entregas recientes", en: "Show recent deliveries" },
+    hideDeliveries: { es: "Ocultar entregas recientes", en: "Hide recent deliveries" },
+    // --- panel de entregas recientes ---
+    loadingDeliveries: { es: "Cargando entregas…", en: "Loading deliveries…" },
+    deliveriesEmpty: { es: "Sin entregas todavía.", en: "No deliveries yet." },
+    verified: { es: "verificado", en: "verified" },
+    rejected: { es: "rechazado", en: "rejected" },
+    noEventType: { es: "(sin tipo)", en: "(no type)" },
+    // --- diálogo de alta / edición ---
+    dialogCreateTitle: { es: "Nuevo webhook entrante", en: "New incoming webhook" },
+    dialogEditTitle: { es: "Editar webhook entrante", en: "Edit incoming webhook" },
+    originLabel: { es: "Origen", en: "Origin" },
+    originLockedHint: {
+      es: "El origen no se puede cambiar tras crear (la URL pública lo incluye).",
+      en: "The origin cannot be changed after creation (the public URL includes it).",
+    },
+    nameLabel: { es: "Nombre", en: "Name" },
+    namePlaceholder: { es: "CI en acme/api", en: "CI on acme/api" },
+    enabledLabel: {
+      es: "Activo (un webhook desactivado rechaza todos los eventos)",
+      en: "Active (a disabled webhook rejects every event)",
+    },
+    mappingsLabel: { es: "Mapeos evento → acción", en: "Event → action mappings" },
+    addMapping: { es: "Añadir mapeo", en: "Add mapping" },
+    mappingsEmpty: {
+      es: "Sin mapeos. Los eventos verificados se registran pero no disparan ninguna acción.",
+      en: "No mappings. Verified events are recorded but trigger no action.",
+    },
+    removeMapping: { es: "Quitar mapeo", en: "Remove mapping" },
+    targetTaskPlaceholder: {
+      es: "UUID de la tarea destino",
+      en: "UUID of the target task",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    create: { es: "Crear", en: "Create" },
+    saveChanges: { es: "Guardar cambios", en: "Save changes" },
+  },
+  /**
+   * Comandos & runtime del proyecto (`projects/[id]/commands`).
+   *
+   * Dos allowlists deny-by-default —binarios de `shell_exec` y FQDN de las
+   * tools HTTP— más el runtime por defecto. El texto explica en qué consiste
+   * «deny-by-default», así que traducirlo a medias es peor que no traducirlo:
+   * quien lee la mitad en su idioma da por entendida la otra mitad.
+   *
+   * `Deny-by-default`, `shell_exec`, `run_*`, `FQDN` y `Allowlist` NO están
+   * aquí: son términos del sistema que se escriben igual en los dos idiomas y
+   * que el operador busca literales en la documentación.
+   */
+  projectCommands: {
+    breadcrumbCurrent: { es: "Comandos & runtime", en: "Commands & runtime" },
+    title: { es: "Comandos & runtime", en: "Commands & runtime" },
+    description: {
+      es: "Autoriza qué comandos del stack pueden lanzar los agentes y elige el runtime de ejecución.",
+      en: "Authorise which stack commands the agents may run, and pick the execution runtime.",
+    },
+    loadError: {
+      es: "No se pudo cargar la configuración del proyecto",
+      en: "The project configuration could not be loaded",
+    },
+    // --- allowlist de comandos ---
+    commandsTitle: { es: "Comandos autorizados", en: "Allowed commands" },
+    privilegedBadge: { es: "Privilegiada", en: "Privileged" },
+    commandsHint: {
+      es: "solo ejecuta los binarios de esta lista. Una lista vacía significa que no puede ejecutar nada. Usa los presets por stack o añade comandos uno a uno.",
+      en: "only runs the binaries in this list. An empty list means it can run nothing at all. Use the stack presets, or add commands one by one.",
+    },
+    presetsLabel: { es: "Presets por stack", en: "Stack presets" },
+    presetPhp: { es: "PHP", en: "PHP" },
+    presetNode: { es: "Node", en: "Node" },
+    presetDotnet: { es: ".NET", en: ".NET" },
+    presetPython: { es: "Python", en: "Python" },
+    presetRead: { es: "Lectura", en: "Read-only" },
+    commandsEmptyBefore: {
+      es: "Sin comandos autorizados.",
+      en: "No allowed commands.",
+    },
+    commandsEmptyAfter: {
+      es: "no podrá ejecutar nada hasta que añadas alguno.",
+      en: "will not be able to run anything until you add one.",
+    },
+    removeChip: { es: "Quitar {name}", en: "Remove {name}" },
+    addCommandLabel: { es: "Añadir comando", en: "Add command" },
+    addCommandPlaceholder: { es: "p. ej. composer", en: "e.g. composer" },
+    add: { es: "Añadir", en: "Add" },
+    addCommandHintBefore: {
+      es: "Usa el basename del binario (",
+      en: "Use the basename of the binary (",
+    },
+    addCommandHintAfter: {
+      es: ") o una ruta relativa al workspace (",
+      en: ") or a path relative to the workspace (",
+    },
+    // --- allowlist de dominios ---
+    domainsTitle: { es: "Dominios de red autorizados", en: "Allowed network domains" },
+    domainsHintBefore: {
+      es: "las tools HTTP del agente (",
+      en: "the agent HTTP tools (",
+    },
+    domainsHintAfter: {
+      es: ", descargas) solo alcanzan estos FQDN. Una lista vacía significa que el agente no puede salir a la red.",
+      en: ", downloads) can only reach these FQDNs. An empty list means the agent cannot reach the network at all.",
+    },
+    domainsAllowlistLabel: { es: "Allowlist de dominios", en: "Domain allowlist" },
+    domainsEmpty: {
+      es: "Sin dominios autorizados: las tools HTTP no pueden salir a la red.",
+      en: "No allowed domains: the HTTP tools cannot reach the network.",
+    },
+    addDomainLabel: { es: "Añadir dominio", en: "Add domain" },
+    addDomainPlaceholder: { es: "p. ej. api.github.com", en: "e.g. api.github.com" },
+    addDomainHintBefore: { es: "FQDN exacto (", en: "Exact FQDN (" },
+    addDomainHintAfter: {
+      es: "), sin esquema ni ruta.",
+      en: "), with no scheme and no path.",
+    },
+    // --- runtime por defecto ---
+    runtimeTitle: { es: "Runtime por defecto", en: "Default runtime" },
+    runtimeHintBefore: {
+      es: "El runtime template en el que se ejecutan los",
+      en: "The runtime template in which the",
+    },
+    runtimeHintMiddle: {
+      es: "(tests, lint, build…). Déjalo",
+      en: "run (tests, lint, build…). Leave it",
+    },
+    runtimeHintEmphasis: { es: "vacío", en: "empty" },
+    runtimeHintAfter: {
+      es: "para usar el runtime por defecto de cada tool (backward-compatible).",
+      en: "to use the default runtime of each tool (backward-compatible).",
+    },
+    runtimeTemplateLabel: { es: "Runtime template", en: "Runtime template" },
+    runtimeNone: {
+      es: "Sin runtime por defecto (defaults por-tool)",
+      en: "No default runtime (per-tool defaults)",
+    },
+    runtimeCatalogError: {
+      es: "No se pudo cargar el catálogo de runtimes.",
+      en: "The runtime catalog could not be loaded.",
+    },
+    // --- guardado ---
+    saving: { es: "Guardando…", en: "Saving…" },
+    saveChanges: { es: "Guardar cambios", en: "Save changes" },
+    saved: { es: "Guardado", en: "Saved" },
+    saveError: { es: "Error al guardar", en: "Could not save" },
+  },
+  /**
+   * `app/admin/assistant/*` — el asistente personal (chat + identidad).
+   *
+   * Aqui vive tambien lo que estaba cableado en `lib/assistant.ts`, un modulo
+   * PURO: las ocho etiquetas y descripciones del catalogo de herramientas y los
+   * cinco mensajes de validacion del formulario. Ninguno de los dos grupos
+   * estaba en un atributo ni en un ternario, asi que las dos guardas veian el
+   * modulo a cero teniendo ~30 textos sin traducir.
+   *
+   * El NOMBRE del asistente no esta aqui: lo elige el operador y viaja en la
+   * identidad (`AssistantIdentity.name`).
+   */
+  assistant: {
+    title: { es: "Asistente personal", en: "Personal assistant" },
+    description: {
+      es: "Pregunta por el estado global de tu tenant: proyectos, planes, actividad, presupuesto y carga de agentes.",
+      en: "Ask about your tenant at a glance: projects, plans, activity, budget and agent workload.",
+    },
+    voiceMode: { es: "Modo voz", en: "Voice mode" },
+    voiceClose: { es: "Cerrar voz", en: "Close voice" },
+    identityLink: { es: "Identidad", en: "Identity" },
+    threadLabel: { es: "Hilo:", en: "Thread:" },
+    threadNew: { es: "Nuevo hilo", en: "New thread" },
+    emptyTitle: { es: "Empieza una conversación", en: "Start a conversation" },
+    emptyDescription: {
+      es: "Por ejemplo: «¿Qué planes tengo pendientes de aprobación?»",
+      en: "For example: \u201CWhich plans are waiting for my approval?\u201D",
+    },
+    thinking: { es: "Pensando…", en: "Thinking…" },
+    thinkingWith: { es: "Pensando… ({note})", en: "Thinking… ({note})" },
+    progressRound: { es: "ronda {n}{tools}", en: "round {n}{tools}" },
+    inputAria: { es: "Mensaje para el asistente", en: "Message for the assistant" },
+    inputPlaceholder: { es: "Escribe tu pregunta…", en: "Type your question…" },
+    send: { es: "Enviar", en: "Send" },
+    roundsOne: { es: "1 ronda", en: "1 round" },
+    roundsMany: { es: "{n} rondas", en: "{n} rounds" },
+    noAccessTitle: { es: "Asistente no disponible", en: "Assistant not available" },
+    noAccessMember: {
+      es: "El asistente personal es exclusivo para administradores del tenant y debe estar habilitado para tu organización.",
+      en: "The personal assistant is only for tenant administrators, and it must be enabled for your organization.",
+    },
+    noAccessDisabled: {
+      es: "El asistente está deshabilitado para tu organización. Como administrador del tenant puedes habilitarlo en Ajustes.",
+      en: "The assistant is disabled for your organization. As a tenant administrator you can enable it in settings.",
+    },
+    goToSettings: { es: "Ir a Ajustes", en: "Go to settings" },
+    settingsTitle: { es: "Identidad del asistente", en: "Assistant identity" },
+    settingsDescription: {
+      es: "Personaliza el nombre, el tono, el idioma y las herramientas de tu asistente personal.",
+      en: "Customize your personal assistant\u2019s name, tone, language and tools.",
+    },
+    goToChat: { es: "Ir al chat", en: "Go to chat" },
+    enabledLabel: { es: "Asistente habilitado", en: "Assistant enabled" },
+    enabledHelp: {
+      es: "Activa el asistente personal para tu organización. Mientras esté desactivado, nadie de tu tenant podrá usarlo y esta configuración permanece bloqueada.",
+      en: "Turn the personal assistant on for your organization. While it is off nobody in your tenant can use it and this configuration stays locked.",
+    },
+    on: { es: "Activado", en: "On" },
+    off: { es: "Desactivado", en: "Off" },
+    configTitle: { es: "Configuración", en: "Configuration" },
+    loadingIdentity: { es: "Cargando identidad…", en: "Loading identity…" },
+    locked: {
+      es: "Habilita el asistente para configurarlo.",
+      en: "Enable the assistant to configure it.",
+    },
+    fieldName: { es: "Nombre", en: "Name" },
+    namePlaceholder: { es: "Asistente", en: "Assistant" },
+    fieldAvatar: { es: "URL del avatar (opcional)", en: "Avatar URL (optional)" },
+    fieldTone: { es: "Tono", en: "Tone" },
+    tonePlaceholder: { es: "profesional y conciso", en: "professional and concise" },
+    fieldLanguage: { es: "Idioma", en: "Language" },
+    fieldSystemPrompt: {
+      es: "Instrucciones adicionales (opcional)",
+      en: "Extra instructions (optional)",
+    },
+    systemPromptPlaceholder: {
+      es: "Sustituye el cuerpo del prompt por defecto. La identidad (nombre, tono, idioma) se conserva.",
+      en: "Replaces the body of the default prompt. The identity (name, tone, language) is kept.",
+    },
+    toolsLegend: { es: "Herramientas disponibles", en: "Available tools" },
+    toolsHelp: {
+      es: "Datos de solo lectura que el asistente puede consultar para responderte.",
+      en: "Read-only data the assistant may look up in order to answer you.",
+    },
+    identitySaved: { es: "Identidad guardada.", en: "Identity saved." },
+    saving: { es: "Guardando…", en: "Saving…" },
+    save: { es: "Guardar", en: "Save" },
+    /* Validación del formulario — antes literales de `lib/assistant.ts`. */
+    errorNameRequired: { es: "El nombre es obligatorio.", en: "The name is required." },
+    errorNameTooLong: {
+      es: "El nombre no puede superar {max} caracteres.",
+      en: "The name cannot be longer than {max} characters.",
+    },
+    errorToneRequired: { es: "El tono es obligatorio.", en: "The tone is required." },
+    errorToneTooLong: {
+      es: "El tono no puede superar {max} caracteres.",
+      en: "The tone cannot be longer than {max} characters.",
+    },
+    errorAvatarTooLong: {
+      es: "La URL no puede superar {max} caracteres.",
+      en: "The URL cannot be longer than {max} characters.",
+    },
+    errorPromptTooLong: {
+      es: "El prompt no puede superar {max} caracteres.",
+      en: "The prompt cannot be longer than {max} characters.",
+    },
+    errorLanguage: { es: "Idioma no soportado.", en: "Unsupported language." },
+    /* Catálogo de herramientas — antes literales de `lib/assistant.ts`. */
+    toolProjectsLabel: { es: "Estado de proyectos", en: "Project status" },
+    toolProjectsDescription: {
+      es: "Conteo y estado consolidado de todos los proyectos del tenant.",
+      en: "Counts and consolidated status of every project in the tenant.",
+    },
+    toolPlansLabel: { es: "Resumen de planes", en: "Plan summary" },
+    toolPlansDescription: {
+      es: "Planes cross-proyecto agrupados por estado, incluyendo los pendientes de aprobación.",
+      en: "Cross-project plans grouped by status, including those awaiting approval.",
+    },
+    toolActivityLabel: { es: "Actividad reciente", en: "Recent activity" },
+    toolActivityDescription: {
+      es: "Tareas no terminales más recientes y total de tareas abiertas del tenant.",
+      en: "Most recent non-terminal tasks and the tenant\u2019s total of open tasks.",
+    },
+    toolBudgetLabel: { es: "Estado de presupuesto", en: "Budget status" },
+    toolBudgetDescription: {
+      es: "Gasto del periodo actual frente al presupuesto del tenant y sus proyectos.",
+      en: "Current-period spend against the budget of the tenant and its projects.",
+    },
+    toolWorkloadLabel: { es: "Carga de agentes humanos", en: "Human agent workload" },
+    toolWorkloadDescription: {
+      es: "Tareas humanas activas y sesiones de trabajo de un usuario esta semana.",
+      en: "Active human tasks and a user\u2019s work sessions this week.",
+    },
+    toolPendingLabel: {
+      es: "Asignaciones humanas pendientes",
+      en: "Pending human assignments",
+    },
+    toolPendingDescription: {
+      es: "Tareas humanas sin aceptar desde hace más de N horas (por defecto 24h).",
+      en: "Human tasks unaccepted for more than N hours (24h by default).",
+    },
+    toolKnowledgeLabel: { es: "Buscar en el conocimiento", en: "Search the knowledge" },
+    toolKnowledgeDescription: {
+      es: "Busca pasajes relevantes en las bases de conocimiento del tenant (documentación, guías).",
+      en: "Finds relevant passages in the tenant\u2019s knowledge bases (documentation, guides).",
+    },
+    toolRememberLabel: { es: "Recordar sobre ti", en: "Remember about you" },
+    toolRememberDescription: {
+      es: "Deja que el asistente guarde datos personales duraderos (tu nombre, preferencias, gustos) y los recuerde en futuras conversaciones.",
+      en: "Lets the assistant store durable personal facts (your name, preferences, tastes) and recall them in later conversations.",
+    },
+  },
+  /**
+   * `app/admin/assistant/settings/model-cards.tsx` — las dos tarjetas de modelo.
+   *
+   * Namespace aparte del de `assistant` porque son DOS superficies con dueños
+   * distintos: la de arriba la administra un Tenant Admin y la de abajo sólo un
+   * System Admin. Los nombres de proveedor y de modelo NO estan aqui: son
+   * identificadores del catalogo (mismo criterio que `ollama`).
+   */
+  assistantModel: {
+    tenantTitle: { es: "Modelo LLM", en: "LLM model" },
+    tenantLocked: {
+      es: "Habilita el asistente para elegir su modelo.",
+      en: "Enable the assistant to choose its model.",
+    },
+    loading: { es: "Cargando modelo…", en: "Loading model…" },
+    effectiveOverride: {
+      es: "Modelo actual (override del tenant):",
+      en: "Current model (tenant override):",
+    },
+    effectiveInherited: {
+      es: "Heredando el modelo por defecto de la plataforma:",
+      en: "Inheriting the platform default model:",
+    },
+    effectiveNone: {
+      es: "No hay modelo configurado. El asistente no responderá hasta que elijas uno o el System Admin configure un modelo por defecto.",
+      en: "No model configured. The assistant will not answer until you pick one or a System Admin sets a default.",
+    },
+    noProvidersTenant: {
+      es: "No hay proveedores LLM activos. Pide a un System Admin que configure uno.",
+      en: "There are no active LLM providers. Ask a System Admin to configure one.",
+    },
+    noProvidersPlatform: {
+      es: "No hay proveedores LLM activos. Configura uno antes de fijar un modelo por defecto.",
+      en: "There are no active LLM providers. Configure one before setting a default model.",
+    },
+    saved: { es: "Modelo guardado.", en: "Model saved." },
+    backToDefault: { es: "Volver al modelo por defecto", en: "Back to the default model" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    saveModel: { es: "Guardar modelo", en: "Save model" },
+    platformTitle: {
+      es: "Modelo por defecto de la plataforma",
+      en: "Platform default model",
+    },
+    platformDescription: {
+      es: "El modelo que usan los asistentes de los tenants que no han elegido uno propio. Solo lo configura un System Admin.",
+      en: "The model used by the assistants of tenants that have not picked their own. Only a System Admin configures it.",
+    },
+    platformCurrent: { es: "Default actual:", en: "Current default:" },
+    platformInvalid: {
+      es: " (no válido: el proveedor o el modelo ya no existen)",
+      en: " (invalid: the provider or the model no longer exists)",
+    },
+    platformNone: {
+      es: "Sin modelo por defecto configurado.",
+      en: "No default model configured.",
+    },
+    platformSaved: { es: "Modelo por defecto guardado.", en: "Default model saved." },
+    clearDefault: { es: "Quitar default", en: "Clear default" },
+    saveDefault: { es: "Guardar default", en: "Save default" },
+    fieldProvider: { es: "Proveedor", en: "Provider" },
+    pickProvider: { es: "— Selecciona un proveedor —", en: "— Select a provider —" },
+    fieldModel: { es: "Modelo", en: "Model" },
+    pickProviderFirst: {
+      es: "— Elige primero un proveedor —",
+      en: "— Choose a provider first —",
+    },
+    noModels: {
+      es: "— Sin modelos (sincronízalos en Proveedores LLM) —",
+      en: "— No models (sync them in LLM providers) —",
+    },
+    pickModel: { es: "— Selecciona un modelo —", en: "— Select a model —" },
+    fieldReasoning: { es: "Razonamiento", en: "Reasoning" },
+    reasoningOff: { es: "Desactivado", en: "Off" },
+  },
+  /**
+   * Knowledge Bases del proyecto (`projects/[id]/knowledge-bases`).
+   *
+   * Una cosa que NO está aquí y no es un olvido: el nombre de la KB implícita
+   * («Documentos de {proyecto}») es un DATO que se persiste y con el que se
+   * hace find-or-create. Traducirlo partiría la idempotencia — quien subiese
+   * con el toggle en inglés crearía una KB nueva en vez de reutilizar la del
+   * castellano —, así que vive en `implicitKbName()` y se enseña literal.
+   */
+  projectKbs: {
+    breadcrumbCurrent: { es: "Knowledge Bases", en: "Knowledge Bases" },
+    title: { es: "Knowledge Bases del proyecto", en: "Project knowledge bases" },
+    description: {
+      es: "Las KBs granted al proyecto, sus documentos y el progreso de la ingestión.",
+      en: "The KBs granted to the project, their documents and the ingestion progress.",
+    },
+    loading: { es: "Cargando…", en: "Loading…" },
+    emptyBefore: {
+      es: "Ninguna KB está granted a este proyecto todavía. Concede una desde el",
+      en: "No KB is granted to this project yet. Grant one from the",
+    },
+    emptyLink: { es: "panel de Knowledge Bases", en: "Knowledge Bases panel" },
+    emptyParenBefore: { es: "(botón", en: "(the" },
+    emptyParenAfter: {
+      es: ") — o súbele documentos directamente allí desplegando la KB.",
+      en: "button) — or upload documents there directly by expanding the KB.",
+    },
+    // --- «Añadir conocimiento» en un paso ---
+    addKnowledge: { es: "Añadir conocimiento", en: "Add knowledge" },
+    addKnowledgeHint: {
+      es: "Sube documentos en un paso: van a la KB «{name}» (se crea sola la primera vez, ya activada para este proyecto).",
+      en: "Upload documents in one step: they go to the “{name}” KB (created on first use, already enabled for this project).",
+    },
+    uploadProgress: {
+      es: "Subiendo {index}/{total}: {file}",
+      en: "Uploading {index}/{total}: {file}",
+    },
+    ingestingOne: { es: "1 documento en ingesta.", en: "1 document being ingested." },
+    ingestingMany: { es: "{n} documentos en ingesta.", en: "{n} documents being ingested." },
+    // --- catálogo del tenant con toggle ---
+    catalogTitle: { es: "Catálogo de conocimiento", en: "Knowledge catalog" },
+    catalogHint: {
+      es: "Activa una KB para que este proyecto (y sus agentes) puedan leerla; desactívala para revocar el acceso.",
+      en: "Enable a KB so this project (and its agents) can read it; disable it to revoke access.",
+    },
+    enable: { es: "Activar", en: "Enable" },
+    disable: { es: "Desactivar", en: "Disable" },
+    // --- ficha de una KB y sus documentos ---
+    staleReindex: {
+      es: "· reindexado pendiente (plataforma: {model})",
+      en: "· reindex pending (platform: {model})",
+    },
+    uploadDocument: { es: "Subir documento", en: "Upload document" },
+    loadingDocuments: { es: "Cargando documentos…", en: "Loading documents…" },
+    documentsEmpty: {
+      es: "Esta KB aún no tiene documentos.",
+      en: "This KB has no documents yet.",
+    },
+    statusPending: { es: "Pendiente", en: "Pending" },
+    statusProcessing: { es: "Procesando", en: "Processing" },
+    statusIndexed: { es: "Indexado", en: "Indexed" },
+    statusFailed: { es: "Fallido", en: "Failed" },
+    progress: { es: "Progreso", en: "Progress" },
+    reindexTitle: {
+      es: "Reindexar (vuelve a procesar el documento)",
+      en: "Reindex (processes the document again)",
+    },
+    delete: { es: "Eliminar", en: "Delete" },
+    // --- diálogo de subida ---
+    dialogTitle: { es: "Subir documento a la KB", en: "Upload a document to the KB" },
+    fileLabel: { es: "Archivo", en: "File" },
+    titleLabel: { es: "Título (opcional)", en: "Title (optional)" },
+    titlePlaceholder: {
+      es: "Por defecto: nombre del archivo",
+      en: "Defaults to the file name",
+    },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    uploading: { es: "Subiendo…", en: "Uploading…" },
+    upload: { es: "Subir", en: "Upload" },
+  },
+  /**
+   * Wizard de alta de proyecto (`projects/new`).
+   *
+   * El paso 3 («Capacidades») NO tiene claves aquí: ya se traducía con
+   * `marketplaceDeploy`, que es de quien es el paso. Duplicar sus textos para
+   * «tenerlos juntos» sería crear la divergencia que el namespace evita.
+   *
+   * Una de estas claves nació al revés que las demás: el error de carga de
+   * plantillas estaba cableado en INGLÉS («Could not load templates»), o sea
+   * que la pantalla ya estaba mitad y mitad antes de tocarla — y en el sentido
+   * que nadie mira, porque el idioma por defecto es el castellano.
+   */
+  projectWizard: {
+    titleStep1: {
+      es: "Crear proyecto — elige plantilla",
+      en: "New project — pick a template",
+    },
+    titleStep2: { es: "Crear proyecto — personaliza", en: "New project — customise" },
+    titleStep3Prefix: { es: "Crear proyecto — ", en: "New project — " },
+    stepOf: { es: "Paso {step} de {total}.", en: "Step {step} of {total}." },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    // --- paso 1: plantilla ---
+    blankTitle: { es: "Proyecto en blanco", en: "Blank project" },
+    blankHint: {
+      es: "Empieza sin plantilla. No se concede ninguna base de conocimiento por defecto.",
+      en: "Start with no template. No knowledge base is granted by default.",
+    },
+    blankStart: { es: "Empezar en blanco", en: "Start blank" },
+    loadingTemplates: { es: "Cargando plantillas…", en: "Loading templates…" },
+    templatesError: {
+      es: "No se pudieron cargar las plantillas:",
+      en: "Could not load templates:",
+    },
+    useTemplate: { es: "Usar plantilla", en: "Use template" },
+    // --- paso 2: detalles ---
+    detailsTitle: { es: "Detalles del proyecto", en: "Project details" },
+    nameLabel: { es: "Nombre", en: "Name" },
+    descriptionLabel: { es: "Descripción", en: "Description" },
+    runtimeLabel: { es: "Runtime por defecto", en: "Default runtime" },
+    runtimeNone: {
+      es: "Sin runtime por defecto (defaults por-tool)",
+      en: "No default runtime (per-tool defaults)",
+    },
+    runtimeError: {
+      es: "No se pudo cargar el catálogo de runtimes.",
+      en: "The runtime catalog could not be loaded.",
+    },
+    teamLabel: { es: "Equipo", en: "Team" },
+    teamNone: { es: "Sin equipo", en: "No team" },
+    teamHint: {
+      es: "El equipo gobierna qué agentes ejecutan las tareas y la política de memoria. También puedes asignarlo/cambiarlo luego desde la ficha del proyecto.",
+      en: "The team governs which agents run the tasks, and the memory policy. You can also assign or change it later from the project page.",
+    },
+    applyKbGrants: {
+      es: "Conceder las bases de conocimiento de la plantilla",
+      en: "Grant the knowledge bases of the template",
+    },
+    applyKbGrantsHint: {
+      es: "Si lo desmarcas, el proyecto adopta la plantilla pero no recibe ninguna KB por defecto.",
+      en: "If you clear it, the project adopts the template but receives no KB by default.",
+    },
+    changeTemplate: { es: "Cambiar plantilla", en: "Change template" },
+    back: { es: "Volver", en: "Back" },
+    creating: { es: "Creando…", en: "Creating…" },
+    create: { es: "Crear proyecto", en: "Create project" },
+    // --- panel de vista previa ---
+    previewTitle: { es: "Vista previa", en: "Preview" },
+    previewTemplate: { es: "Plantilla", en: "Template" },
+    previewBlank: {
+      es: "Proyecto en blanco (sin plantilla)",
+      en: "Blank project (no template)",
+    },
+    forkTeam: {
+      es: "Personalizar el equipo para este proyecto",
+      en: "Customise the team for this project",
+    },
+    forkTeamHint: {
+      es: "Crea una copia editable del equipo (agentes propios del proyecto). Si no, se referencia el equipo de la plantilla (compartido; no editable si es built-in).",
+      en: "Creates an editable copy of the team (agents owned by the project). Otherwise the team of the template is referenced (shared; not editable if it is built-in).",
+    },
+    previewPolicy: { es: "Política humana", en: "Human policy" },
+    previewRepository: { es: "Repositorio", en: "Repository" },
+  },
+  /**
+   * `components/voice/voice-call-shell.tsx` — la videollamada de voz.
+   *
+   * Namespace propio y no dentro de `assistant` porque la shell la comparten el
+   * asistente personal y el córtex: meterlo en `assistant` obligaría al córtex a
+   * pedir textos de un módulo que no es el suyo.
+   *
+   * Dos textos de aquí no estaban en un atributo ni en un ternario, sino en un
+   * TIPO: `gender: "Mujer" | "Hombre"` era castellano cableado en la union de
+   * literales de `VoiceOption`, y el selector de voz decía «Mujer · Dora» con el
+   * toggle en EN. Cuarto ejemplo del mismo aviso del plan: las guardas miden su
+   * patrón, no la deuda.
+   *
+   * Los NOMBRES de las voces (Dora, Alex, Heart…) no están aquí: son los ids del
+   * catálogo de Kokoro que el servidor valida contra su allowlist.
+   */
+  voiceCall: {
+    statusLobby: { es: "Listo para llamar", en: "Ready to call" },
+    statusConnecting: { es: "Conectando…", en: "Connecting…" },
+    statusReady: {
+      es: "En llamada — mantén pulsado el micro para hablar",
+      en: "In call — press and hold the mic to talk",
+    },
+    statusRecording: { es: "Escuchándote…", en: "Listening…" },
+    statusThinking: { es: "Pensando…", en: "Thinking…" },
+    statusSpeaking: { es: "Hablando…", en: "Speaking…" },
+    statusError: { es: "Error", en: "Error" },
+    genderFemale: { es: "Mujer", en: "Female" },
+    genderMale: { es: "Hombre", en: "Male" },
+    langSpanish: { es: "Español", en: "Spanish" },
+    langEnglishUs: { es: "Inglés (EE. UU.)", en: "English (US)" },
+    langEnglishUk: { es: "Inglés (Reino Unido)", en: "English (UK)" },
+    errorPlayback: {
+      es: "No se pudo reproducir la respuesta de voz.",
+      en: "The voice answer could not be played.",
+    },
+    errorAutoplay: {
+      es: "El navegador bloqueó la reproducción — pulsa «Iniciar llamada» de nuevo.",
+      en: "The browser blocked playback — press “Start call” again.",
+    },
+    errorMic: {
+      es: "Micrófono no disponible o permiso denegado.",
+      en: "Microphone unavailable or permission denied.",
+    },
+    you: { es: "Tú", en: "You" },
+    thinkingOf: { es: "{name} está pensando…", en: "{name} is thinking…" },
+    start: { es: "Iniciar llamada", en: "Start call" },
+    back: { es: "Volver", en: "Back" },
+    talkRelease: { es: "Suelta para enviar", en: "Release to send" },
+    talkHold: { es: "Mantén pulsado para hablar", en: "Press and hold to talk" },
+    voiceAria: { es: "Voz", en: "Voice" },
+    hangup: { es: "Colgar", en: "Hang up" },
+  },
+  /**
+   * Chat del proyecto (`projects/[id]/chat`): la pantalla, el selector de modo,
+   * el feed, el composer y el botón de generar plan.
+   *
+   * Los tres modos built-in traían YA sus dos caras (`labelEs`/`labelEn` en
+   * `chat-types.ts`)… y el selector pintaba siempre `labelEs`. Es el peor caso
+   * de los que este plan busca: la traducción existía, estaba escrita, y el
+   * render la ignoraba — ninguna de las dos guardas puede ver eso, porque no hay
+   * ni ternario ni atributo. Al pasar el catálogo a claves, la cara inglesa deja
+   * de poder quedarse sin llamante.
+   */
+  projectChat: {
+    breadcrumbCurrent: { es: "Chat", en: "Chat" },
+    loading: { es: "Cargando chat…", en: "Loading chat…" },
+    errorTitle: { es: "Error cargando conversaciones", en: "Error loading conversations" },
+    noConversationsTitle: {
+      es: "No hay conversaciones en este proyecto",
+      en: "This project has no conversations",
+    },
+    startConversation: { es: "Empezar una conversación", en: "Start a conversation" },
+    title: { es: "Chat del proyecto", en: "Project chat" },
+    defaultDescription: {
+      es: "Conversación con el equipo del proyecto",
+      en: "A conversation with the project team",
+    },
+    clearChat: { es: "Vaciar chat", en: "Clear chat" },
+    conversationPickerLabel: { es: "Conversación:", en: "Conversation:" },
+    newConversation: { es: "Nueva conversación", en: "New conversation" },
+    deleteConversation: { es: "Eliminar conversación", en: "Delete conversation" },
+    activeMode: { es: "Modo activo:", en: "Active mode:" },
+    thinking: { es: "El equipo está pensando…", en: "The team is thinking…" },
+    thinkingHint: { es: "(esto puede tardar)", en: "(this may take a while)" },
+    confirmClearDescription: {
+      es: "Se borrarán todos los mensajes de esta conversación. No se puede deshacer.",
+      en: "Every message in this conversation will be deleted. This cannot be undone.",
+    },
+    confirmClearLabel: { es: "Vaciar", en: "Clear" },
+    confirmDeleteDescription: {
+      es: "Se eliminará esta conversación y todos sus mensajes. No se puede deshacer.",
+      en: "This conversation and all its messages will be deleted. This cannot be undone.",
+    },
+    confirmDeleteLabel: { es: "Eliminar", en: "Delete" },
+    // --- etiquetas del historial (helper puro `lib/conversation-history`) ---
+    untitledConversation: { es: "Conversación sin título", en: "Untitled conversation" },
+    untitledConversationAt: {
+      es: "Conversación · {stamp}",
+      en: "Conversation · {stamp}",
+    },
+    // --- selector de modo ---
+    modeSelectorAria: { es: "Modo de chat", en: "Chat mode" },
+    modePlanning: { es: "Planning", en: "Planning" },
+    modePlanningHint: {
+      es: "El equipo construye un plan estructurado",
+      en: "The team builds a structured plan",
+    },
+    modeDiscussion: { es: "Discusión", en: "Discussion" },
+    modeDiscussionHint: {
+      es: "Ronda abierta de ideas y opiniones",
+      en: "An open round of ideas and opinions",
+    },
+    modeExecution: { es: "Ejecución", en: "Execution" },
+    modeExecutionHint: {
+      es: "El equipo ejecuta tareas del plan aprobado",
+      en: "The team runs the tasks of the approved plan",
+    },
+    // --- feed ---
+    feedLoading: { es: "Cargando mensajes…", en: "Loading messages…" },
+    feedEmpty: {
+      es: "La conversación está vacía. Empieza a escribir para comenzar.",
+      en: "The conversation is empty. Start typing to begin.",
+    },
+    summaryTitleOne: {
+      es: "🗂️ Resumen de 1 mensaje anterior",
+      en: "🗂️ Summary of 1 earlier message",
+    },
+    summaryTitleMany: {
+      es: "🗂️ Resumen de {n} mensajes anteriores",
+      en: "🗂️ Summary of {n} earlier messages",
+    },
+    summaryHide: { es: "ocultar", en: "hide" },
+    summaryShow: { es: "ver resumen", en: "show summary" },
+    summaryNote: {
+      es: "El equipo lee este resumen en lugar de esos mensajes. Los originales siguen más arriba en la conversación.",
+      en: "The team reads this summary instead of those messages. The originals are still further up in the conversation.",
+    },
+    // --- generar plan y composer ---
+    generatePlan: { es: "Generar Plan", en: "Generate plan" },
+    composerEdit: { es: "Editar", en: "Edit" },
+    composerPreview: { es: "Vista previa", en: "Preview" },
+    composerNothingToPreview: {
+      es: "Sin contenido para previsualizar.",
+      en: "Nothing to preview.",
+    },
+    composerPlaceholder: {
+      es: "Escribe un mensaje. Usa @ para mencionar a un agente. Soporta markdown.",
+      en: "Type a message. Use @ to mention an agent. Markdown is supported.",
+    },
+    send: { es: "Enviar", en: "Send" },
+  },
+  /**
+   * `app/admin/notifications/*` — las tres pestañas de configuración.
+   *
+   * **Lo que NO entra, y es deliberado**: los nombres de transporte
+   * (`telegram`, `slack`, `email`) y los `event_type` (`task_blocked`) son el
+   * enum del backend, viajan en la API y son lo que el operador busca en los
+   * logs. Y las ETIQUETAS de los eventos tampoco están aquí: el backend sirve el
+   * catálogo bilingüe (`label_es`/`label_en`, NOTIF-3) y se resuelve con
+   * `pickLang`, que es el mismo criterio del ADR 0049 para la taxonomía de
+   * tools. Duplicarlas como claves reabriría la divergencia que ese endpoint
+   * cerró — y era peor todavía: la matriz leía SIEMPRE `label_es`.
+   */
+  notifications: {
+    title: { es: "Notificaciones", en: "Notifications" },
+    description: {
+      es: "Configuración de canales y preferencias en 3 capas: plataforma, tenant y usuario.",
+      en: "Channel and preference configuration in 3 layers: platform, tenant and user.",
+    },
+    tabChannels: { es: "Canales", en: "Channels" },
+    tabPreferences: { es: "Preferencias", en: "Preferences" },
+    tabPlatform: { es: "Plataforma", en: "Platform" },
+    /* Pestaña «Plataforma» */
+    platformTitle: {
+      es: "Transportes habilitados globalmente",
+      en: "Globally enabled transports",
+    },
+    platformHint: {
+      es: "Un tenant solo puede configurar canales de los transportes habilitados aquí.",
+      en: "A tenant can only configure channels of the transports enabled here.",
+    },
+    /* Pestaña «Canales» */
+    newChannel: { es: "Nuevo canal", en: "New channel" },
+    editChannel: { es: "Editar canal", en: "Edit channel" },
+    deleteChannel: { es: "Eliminar canal", en: "Delete channel" },
+    channelsEmpty: {
+      es: "Aún no hay canales configurados. Pulsa «Nuevo canal» para añadir uno.",
+      en: "No channels configured yet. Press “New channel” to add one.",
+    },
+    confirmDelete: {
+      es: "¿Eliminar el canal «{name}»?",
+      en: "Delete the channel “{name}”?",
+    },
+    channelActive: { es: "activo", en: "active" },
+    channelInactive: { es: "inactivo", en: "inactive" },
+    secretPrefix: { es: "secreto: {source}", en: "secret: {source}" },
+    noSecret: { es: "sin secreto", en: "no secret" },
+    secretSourceVault: { es: "Vault", en: "Vault" },
+    secretSourceEncrypted: { es: "cifrado en reposo", en: "encrypted at rest" },
+    /* Diálogo de canal */
+    fieldScope: { es: "Ámbito", en: "Scope" },
+    scopeTenant: { es: "Tenant (compartido)", en: "Tenant (shared)" },
+    scopeUser: { es: "Usuario (solo yo)", en: "User (only me)" },
+    fieldTransport: { es: "Transporte", en: "Transport" },
+    fieldName: { es: "Nombre", en: "Name" },
+    fieldConfig: { es: "Config (JSON, sin secretos)", en: "Config (JSON, no secrets)" },
+    configInvalid: {
+      es: "El config no es un JSON válido.",
+      en: "The config is not valid JSON.",
+    },
+    fieldSecretCreate: { es: "Secreto (opcional)", en: "Secret (optional)" },
+    fieldSecretEdit: {
+      es: "Secreto (dejar vacío para conservar el actual)",
+      en: "Secret (leave empty to keep the current one)",
+    },
+    secretPlaceholder: {
+      es: "token del bot / contraseña / clave",
+      en: "bot token / password / key",
+    },
+    secretHint: {
+      es: "Se cifra en reposo antes de guardarse; el sistema nunca lo devuelve en claro.",
+      en: "It is encrypted at rest before being stored; the system never returns it in the clear.",
+    },
+    enabledLabel: { es: "Canal activo", en: "Channel active" },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    create: { es: "Crear", en: "Create" },
+    save: { es: "Guardar", en: "Save" },
+    saving: { es: "Guardando…", en: "Saving…" },
+    /* Pestaña «Preferencias» */
+    routingTitle: { es: "Reglas de enrutado", en: "Routing rules" },
+    routingEmpty: {
+      es: "Configura al menos un canal para ajustar qué eventos llegan por qué transporte.",
+      en: "Configure at least one channel to choose which events arrive through which transport.",
+    },
+    colEvent: { es: "Evento", en: "Event" },
+    ruleYes: { es: "sí", en: "yes" },
+    ruleNo: { es: "no", en: "no" },
+  },
+  /**
+   * `app/admin/notifications/inbox/page.tsx` — el histórico de envíos.
+   *
+   * Namespace aparte porque es otra pantalla con otra ruta, no una pestaña más.
+   * Los `status` (`queued`, `dead_letter`…) no se traducen: son el enum del
+   * backend y lo que el operador filtra y busca en los logs.
+   */
+  notificationsInbox: {
+    title: { es: "Bandeja de notificaciones", en: "Notification inbox" },
+    description: {
+      es: "Histórico de notificaciones enviadas a tus canales, con estado y reintento manual.",
+      en: "History of the notifications sent to your channels, with status and manual retry.",
+    },
+    scopeGroupAria: { es: "Ámbito del inbox", en: "Inbox scope" },
+    scopeTenant: { es: "Tenant", en: "Tenant" },
+    scopePlatform: { es: "Plataforma", en: "Platform" },
+    unreadBadge: { es: "{n} sin leer", en: "{n} unread" },
+    statusLabel: { es: "Estado", en: "Status" },
+    statusAll: { es: "Todos", en: "All" },
+    unreadOnly: { es: "Solo sin leer", en: "Unread only" },
+    markAllRead: { es: "Marcar todo como leído", en: "Mark all as read" },
+    empty: {
+      es: "No hay notificaciones que coincidan con el filtro.",
+      en: "No notifications match the filter.",
+    },
+    unreadDot: { es: "sin leer", en: "unread" },
+    attempt: { es: "intento {n}", en: "attempt {n}" },
+    retry: { es: "Reintentar", en: "Retry" },
+    markRead: { es: "Marcar leído", en: "Mark read" },
+    range: { es: "{range} de {total}", en: "{range} of {total}" },
+    prev: { es: "Anterior", en: "Previous" },
+    next: { es: "Siguiente", en: "Next" },
+  },
+  /**
+   * `app/admin/docs/*` — el visor de documentación cross-proyecto.
+   *
+   * Doce ficheros y ninguno aparecía en la allowlist de ternarios: aquí no había
+   * ni uno. La deuda estaba en texto JSX suelto —los seis estados de cada panel
+   * (idle, hint, loading, error, vacío, resultados)—, que es la forma que las
+   * dos guardas no ven y la que más pesa en una pantalla de este tipo.
+   *
+   * Los nombres de carpeta canónica (`05-architecture-decisions`) y las refs git
+   * (`HEAD~1`) no están aquí: son identificadores del repo.
+   */
+  docs: {
+    breadcrumbHome: { es: "Inicio", en: "Home" },
+    title: { es: "Documentación", en: "Documentation" },
+    description: {
+      es: "Explora la documentación de cada proyecto. Filtra por categoría o tipo, busca en el texto y marca documentos para encontrarlos rápido.",
+      en: "Browse each project’s documentation. Filter by category or type, search the text and star docs to find them fast.",
+    },
+    tabExplore: { es: "Explorar", en: "Explore" },
+    tabBookmarks: { es: "Marcadores", en: "Bookmarks" },
+    /* Barra lateral */
+    sidebarAria: { es: "Árbol de documentación", en: "Documentation tree" },
+    projectsHeading: { es: "Proyectos", en: "Projects" },
+    projectsLoading: { es: "Cargando proyectos…", en: "Loading projects…" },
+    projectsError: {
+      es: "No se pudieron cargar los proyectos.",
+      en: "The projects could not be loaded.",
+    },
+    projectsEmpty: {
+      es: "No tienes proyectos accesibles.",
+      en: "You have no accessible projects.",
+    },
+    treeLoading: { es: "Cargando árbol…", en: "Loading tree…" },
+    treeError: { es: "No se pudo cargar el árbol.", en: "The tree could not be loaded." },
+    treeFilteredEmpty: {
+      es: "Ningún documento coincide con los filtros.",
+      en: "No document matches the filters.",
+    },
+    treeEmpty: {
+      es: "Sin documentos en este proyecto.",
+      en: "No documents in this project.",
+    },
+    /* Buscador */
+    searchTabFulltext: { es: "Texto", en: "Text" },
+    searchTabSemantic: { es: "Semántica", en: "Semantic" },
+    searchPlaceholderFulltext: {
+      es: "Buscar en la documentación…",
+      en: "Search the documentation…",
+    },
+    searchPlaceholderSemantic: { es: "Búsqueda semántica…", en: "Semantic search…" },
+    searchPlaceholderNoProject: {
+      es: "Selecciona un proyecto para buscar",
+      en: "Select a project to search",
+    },
+    searchAria: { es: "Buscar en la documentación", en: "Search the documentation" },
+    searchIdle: {
+      es: "Selecciona un proyecto en el árbol para buscar en su documentación.",
+      en: "Select a project in the tree to search its documentation.",
+    },
+    searchHint: {
+      es: "Escribe al menos {n} caracteres para buscar.",
+      en: "Type at least {n} characters to search.",
+    },
+    searchLoading: { es: "Buscando…", en: "Searching…" },
+    searchError: {
+      es: "No se pudo completar la búsqueda.",
+      en: "The search could not be completed.",
+    },
+    searchEmpty: {
+      es: "Nada coincide con «{query}».",
+      en: "Nothing matches “{query}”.",
+    },
+    hitScoreTitle: { es: "Similitud coseno", en: "Cosine similarity" },
+    /* Filtros por faceta */
+    filtersHeading: { es: "Filtros", en: "Filters" },
+    filtersClear: { es: "Limpiar", en: "Clear" },
+    facetCategory: { es: "Categoría", en: "Category" },
+    facetType: { es: "Tipo", en: "Type" },
+    /* Marcadores */
+    recencyAll: { es: "Todos", en: "All" },
+    recencyToday: { es: "Hoy", en: "Today" },
+    recency7: { es: "7 días", en: "7 days" },
+    recency30: { es: "30 días", en: "30 days" },
+    bookmarksEmpty: {
+      es: "Aún no has marcado documentos. Usa la estrella junto a un documento para guardarlo aquí.",
+      en: "You have not starred any document yet. Use the star next to a document to keep it here.",
+    },
+    bookmarksEmptyWindow: {
+      es: "Ningún documento marcado en este periodo.",
+      en: "No document starred in this period.",
+    },
+    bookmarkRemove: { es: "Quitar de marcadores", en: "Remove from bookmarks" },
+    bookmarkAdd: { es: "Marcar documento", en: "Star document" },
+    /* Panel de lectura */
+    viewerEmpty: {
+      es: "Selecciona un documento en el árbol de la izquierda para empezar.",
+      en: "Select a document in the tree on the left to start.",
+    },
+    modeRead: { es: "Documento", en: "Document" },
+    modeDiff: { es: "Comparar", en: "Compare" },
+    contentLoading: { es: "Cargando documento…", en: "Loading document…" },
+    docNotFound: {
+      es: "El documento no existe o no es accesible.",
+      en: "The document does not exist or is not accessible.",
+    },
+    contentError: {
+      es: "No se pudo cargar el documento.",
+      en: "The document could not be loaded.",
+    },
+    tocAria: { es: "Tabla de contenidos", en: "Table of contents" },
+    tocHeading: { es: "En esta página", en: "On this page" },
+    tocEmpty: { es: "Sin secciones.", en: "No sections." },
+    mermaidLoading: { es: "Renderizando diagrama…", en: "Rendering diagram…" },
+    /* Comparar versiones */
+    diffEmpty: {
+      es: "Selecciona un documento para comparar dos versiones.",
+      en: "Select a document to compare two versions.",
+    },
+    diffBaseLabel: { es: "Versión base", en: "Base version" },
+    diffBaseAria: { es: "Ref git de la versión base", en: "Git ref of the base version" },
+    diffHeadLabel: { es: "Versión nueva", en: "New version" },
+    diffHeadAria: { es: "Ref git de la versión nueva", en: "Git ref of the new version" },
+    diffSubmit: { es: "Comparar", en: "Compare" },
+    diffIdle: {
+      es: "Introduce dos referencias git y pulsa «Comparar» para ver los cambios.",
+      en: "Enter two git refs and press “Compare” to see the changes.",
+    },
+    diffLoading: { es: "Calculando diferencias…", en: "Computing the diff…" },
+    diffError: {
+      es: "No se pudieron calcular las diferencias.",
+      en: "The diff could not be computed.",
+    },
+    diffUnchanged: { es: "No hay diferencias entre", en: "There are no differences between" },
+  },
+  /**
+   * Catálogo de categorías y tipos de documento (`lib/docs-filters.ts`).
+   *
+   * Namespace propio y COMPARTIDO: lo consumen el panel de facetas y la lista de
+   * marcadores desde una constante única. Los VALORES (`05-architecture-decisions`,
+   * `adr`) no están aquí — son las carpetas canónicas del repo, no texto.
+   */
+  docFacets: {
+    categoryOverview: { es: "Visión general", en: "Overview" },
+    categoryGettingStarted: { es: "Primeros pasos", en: "Getting started" },
+    categoryGuides: { es: "Guías", en: "Guides" },
+    categoryReference: { es: "Referencia", en: "Reference" },
+    categoryAdr: { es: "Decisiones (ADR)", en: "Decisions (ADR)" },
+    categoryRunbooks: { es: "Runbooks", en: "Runbooks" },
+    categoryChangelog: { es: "Changelog", en: "Changelog" },
+    categoryOther: { es: "Otros", en: "Other" },
+    typeAdr: { es: "ADR", en: "ADR" },
+    typeChangelog: { es: "Changelog", en: "Changelog" },
+    typeRunbook: { es: "Runbook", en: "Runbook" },
+    typeReadme: { es: "README / índice", en: "README / index" },
+    typeDoc: { es: "Documento", en: "Document" },
+  },
+  /**
+   * `app/admin/marketplace/page.tsx` — catálogo, instaladas y compartir.
+   *
+   * Los `kind`, `trust_level` y `status` de un LISTING no están aquí: son el
+   * enum del backend, se muestran tal cual y es lo que el operador ve en la API.
+   * Sí lo están las etiquetas de estado de una INSTALACIÓN, porque ahí el panel
+   * ya escribía «Habilitada» y no `enabled`.
+   */
+  marketplace: {
+    title: { es: "Marketplace", en: "Marketplace" },
+    description: {
+      es: "Explora el catálogo, gestiona lo instalado, tus listings privados y los recursos compartidos entre tenants.",
+      en: "Browse the catalog, manage what is installed, your private listings and what is shared across tenants.",
+    },
+    privateLink: { es: "Privadas", en: "Private" },
+    publish: { es: "Publicar", en: "Publish" },
+    tabCatalog: { es: "Catálogo", en: "Catalog" },
+    tabInstalled: { es: "Instaladas", en: "Installed" },
+    tabShares: { es: "Compartir", en: "Sharing" },
+    catalogEmpty: {
+      es: "El catálogo está vacío. Publica tu primera skill o tool interna para empezar.",
+      en: "The catalog is empty. Publish your first internal skill or tool to get started.",
+    },
+    badgePrivate: { es: "privado", en: "private" },
+    badgeGlobal: { es: "global", en: "global" },
+    calloutTitle: {
+      es: "\u00bfTienes una skill o tool interna?",
+      en: "Do you have an internal skill or tool?",
+    },
+    calloutBody: {
+      es: "Publícala como listing privado de tu tenant. Solo tu organización la verá; el manifest se valida al publicar.",
+      en: "Publish it as a private listing of your tenant. Only your organization will see it; the manifest is validated on publish.",
+    },
+    calloutCta: { es: "Publicar en el marketplace", en: "Publish to the marketplace" },
+    installedEmpty: {
+      es: "Este tenant no tiene nada instalado todavía.",
+      en: "This tenant has nothing installed yet.",
+    },
+    installStatusEnabled: { es: "Habilitada", en: "Enabled" },
+    installStatusDisabled: { es: "Deshabilitada", en: "Disabled" },
+    installStatusRevoked: { es: "Revocada", en: "Revoked" },
+    permissions: { es: "Permisos", en: "Permissions" },
+    revoke: { es: "Revocar", en: "Revoke" },
+    uninstall: { es: "Desinstalar", en: "Uninstall" },
+    shareCardTitle: {
+      es: "Compartir un listing privado con otro tenant",
+      en: "Share a private listing with another tenant",
+    },
+    shareExplainer: {
+      es: "Compartir es opt-in y explícito: el tenant destino ve e instala el listing solo mediante este grant, y el System Admin audita cada acción. Revocar retira la visibilidad de inmediato.",
+      en: "Sharing is opt-in and explicit: the target tenant sees and installs the listing only through this grant, and a System Admin audits every action. Revoking removes visibility immediately.",
+    },
+    shareListingLabel: { es: "Listing privado", en: "Private listing" },
+    sharePickListing: { es: "Selecciona un listing…", en: "Select a listing…" },
+    shareNoPrivateBefore: {
+      es: "No tienes listings privados que compartir. Publica uno en",
+      en: "You have no private listings to share. Publish one in",
+    },
+    shareNoPrivateLink: { es: "Marketplace privado", en: "Private marketplace" },
+    shareTargetLabel: { es: "Tenant destino (UUID)", en: "Target tenant (UUID)" },
+    shareSubmit: { es: "Compartir", en: "Share" },
+    shareSubmitting: { es: "Compartiendo…", en: "Sharing…" },
+    sharesTitle: {
+      es: "Grants activos creados por tu tenant",
+      en: "Active grants created by your tenant",
+    },
+    sharesEmpty: {
+      es: "Por defecto no compartes nada. Crea un grant arriba para compartir un listing privado.",
+      en: "By default you share nothing. Create a grant above to share a private listing.",
+    },
+    revokeShare: { es: "Revocar share", en: "Revoke share" },
+  },
+  /**
+   * `app/admin/marketplace/private/page.tsx` — publicar un listing del tenant.
+   *
+   * Los manifests de EJEMPLO no están aquí y es deliberado: son contenido que el
+   * operador pega y edita —YAML que el backend parsea—, no texto de UI. Y la
+   * ayuda de formato lista NOMBRES DE CAMPO del manifest (`entrypoint`,
+   * `network_policy`): sólo se traduce la glosa entre paréntesis.
+   */
+  marketplacePrivate: {
+    title: { es: "Marketplace privado", en: "Private marketplace" },
+    description: {
+      es: "Publica las skills y tools internas de tu tenant como listings privados. Solo tu tenant las ve; el manifest se valida al publicar.",
+      en: "Publish your tenant\u2019s internal skills and tools as private listings. Only your tenant sees them; the manifest is validated on publish.",
+    },
+    backToCatalog: { es: "Volver al catálogo", en: "Back to the catalog" },
+    publishCardTitle: { es: "Publicar listing privado", en: "Publish a private listing" },
+    kindLabel: { es: "Tipo", en: "Kind" },
+    kindSkill: { es: "Skill (SKILL.md)", en: "Skill (SKILL.md)" },
+    kindTool: { es: "Tool (manifest YAML)", en: "Tool (YAML manifest)" },
+    kindMcp: { es: "MCP server (manifest YAML)", en: "MCP server (YAML manifest)" },
+    helpSkillSummary: {
+      es: "Un SKILL.md es Markdown con un frontmatter YAML (entre líneas ---) seguido del cuerpo en prosa.",
+      en: "A SKILL.md is Markdown with a YAML frontmatter (between --- lines) followed by the prose body.",
+    },
+    helpToolSummary: {
+      es: "Un tool es un documento YAML plano (sin cuerpo Markdown).",
+      en: "A tool is a flat YAML document (no Markdown body).",
+    },
+    helpMcpSummary: {
+      es: "Un MCP server usa el mismo YAML que un tool, con kind: mcp_server (debe coincidir con el tipo elegido).",
+      en: "An MCP server uses the same YAML as a tool, with kind: mcp_server (it must match the kind you chose).",
+    },
+    fieldsRequired: { es: "Campos obligatorios", en: "Required fields" },
+    fieldsOptional: { es: "Opcionales", en: "Optional" },
+    fieldVersion: { es: "version (semver, p. ej. 1.0.0)", en: "version (semver, e.g. 1.0.0)" },
+    fieldVersionShort: { es: "version (semver)", en: "version (semver)" },
+    fieldEntrypoint: { es: "entrypoint (módulo:función)", en: "entrypoint (module:function)" },
+    fieldDependencies: { es: "dependencies (lista)", en: "dependencies (list)" },
+    fieldExamples: {
+      es: "examples (lista de { title, prompt })",
+      en: "examples (list of { title, prompt })",
+    },
+    fieldKindDefault: { es: "kind (por defecto tool)", en: "kind (defaults to tool)" },
+    helpDoubtsBefore: {
+      es: "\u00bfDudas con el formato? Consulta la",
+      en: "Unsure about the format? See the",
+    },
+    helpDoubtsLink: { es: "guía de publicación", en: "publishing guide" },
+    authorLabel: { es: "Autor (opcional)", en: "Author (optional)" },
+    authorPlaceholder: { es: "Equipo Plataforma", en: "Platform Team" },
+    manifestLabel: { es: "Manifest", en: "Manifest" },
+    useExample: { es: "Usar ejemplo", en: "Use example" },
+    exampleHint: {
+      es: "Pulsa «Usar ejemplo» para insertar un manifest {kind} válido y editarlo desde ahí.",
+      en: "Press \u201CUse example\u201D to insert a valid {kind} manifest and edit from there.",
+    },
+    versionHint: {
+      es: "El nombre y la versión se leen del manifest. Una versión duplicada se rechaza.",
+      en: "The name and version are read from the manifest. A duplicate version is rejected.",
+    },
+    publish: { es: "Publicar", en: "Publish" },
+    publishing: { es: "Publicando…", en: "Publishing…" },
+    publishFailedTitle: { es: "No se pudo publicar", en: "Could not publish" },
+    publishFailedHint: {
+      es: "Corrige el manifest según el mensaje y vuelve a publicar. No se ha creado ningún listing.",
+      en: "Fix the manifest per the message and publish again. No listing was created.",
+    },
+    listTitle: { es: "Catálogo privado del tenant", en: "The tenant\u2019s private catalog" },
+    listEmpty: {
+      es: "Este tenant todavía no ha publicado ningún listing privado.",
+      en: "This tenant has not published any private listing yet.",
+    },
+    startWithExample: { es: "Empezar con un ejemplo", en: "Start from an example" },
+    unpublish: { es: "Despublicar", en: "Unpublish" },
+  },
+  /**
+   * `app/admin/marketplace/installations/[id]/permissions/page.tsx`.
+   *
+   * Los VALORES de `network_policy` (`none`, `restricted`, `open`) van sin
+   * traducir dentro de la ayuda porque son el enum que se guarda y que el
+   * operador ve en el audit log — el mismo criterio que `guardrail_type`.
+   */
+  marketplaceConsent: {
+    title: { es: "Consentimiento de permisos", en: "Permission consent" },
+    description: {
+      es: "Aprueba o deniega cada permiso que esta tool/skill solicita. La instalación no se habilita hasta que todos los permisos requeridos estén concedidos.",
+      en: "Approve or deny each permission this tool/skill requests. The installation is not enabled until every required permission is granted.",
+    },
+    installStatusEnabled: { es: "Habilitada", en: "Enabled" },
+    installStatusDisabled: {
+      es: "Deshabilitada (pendiente de consentimiento)",
+      en: "Disabled (awaiting consent)",
+    },
+    installStatusRevoked: { es: "Revocada", en: "Revoked" },
+    permAllowedDomains: { es: "Dominios permitidos", en: "Allowed domains" },
+    permAllowedPaths: { es: "Rutas permitidas", en: "Allowed paths" },
+    permNetworkPolicy: { es: "Política de red", en: "Network policy" },
+    helpAllowedDomains: {
+      es: "La tool solo podrá hacer peticiones HTTP a estos dominios, siempre a través del proxy de salida de la plataforma.",
+      en: "The tool will only be able to make HTTP requests to these domains, always through the platform egress proxy.",
+    },
+    helpAllowedPaths: {
+      es: "Rutas del workspace a las que la tool tendrá acceso.",
+      en: "Workspace paths the tool will have access to.",
+    },
+    helpNetworkPolicy: {
+      es: "none = sin red. restricted = red interna sin salida. open = salida a internet SOLO a través del proxy con allowlist de la plataforma (registries públicos de paquetes y git) — nunca internet crudo; cada uso queda registrado en el audit log.",
+      en: "none = no network. restricted = internal network with no egress. open = internet egress ONLY through the platform\u2019s allowlisted proxy (public package registries and git) \u2014 never raw internet; every use is recorded in the audit log.",
+    },
+    stateGranted: { es: "Concedido", en: "Granted" },
+    stateDenied: { es: "Denegado", en: "Denied" },
+    statePending: { es: "Pendiente", en: "Pending" },
+    notRequiredBefore: { es: "Este listing es", en: "This listing is" },
+    notRequiredAfter: {
+      es: ": no requiere consentimiento granular (fricción mínima). Los permisos se aplican según la política de confianza.",
+      en: ": it needs no granular consent (minimum friction). Permissions are applied per the trust policy.",
+    },
+    empty: {
+      es: "Este listing no solicita ningún permiso.",
+      en: "This listing requests no permissions.",
+    },
+    approve: { es: "Aprobar", en: "Approve" },
+    deny: { es: "Denegar", en: "Deny" },
+    hintNone: {
+      es: "Selecciona Aprobar/Denegar en cada permiso y guarda las decisiones.",
+      en: "Choose Approve/Deny on each permission and save the decisions.",
+    },
+    hintStaged: {
+      es: "{n} decisión(es) sin guardar (marcadas con *).",
+      en: "{n} unsaved decision(s) (marked with *).",
+    },
+    saving: { es: "Guardando…", en: "Saving…" },
+    submit: { es: "Guardar decisiones", en: "Save decisions" },
+  },
 } as const satisfies Dictionary;
 
 /** La forma exacta del diccionario, para derivar las claves válidas. */

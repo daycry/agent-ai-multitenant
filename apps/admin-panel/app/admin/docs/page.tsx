@@ -31,6 +31,7 @@ import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { PageHeader } from "@/components/layout/page-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { EMPTY_FILTER, type DocsFilter } from "@/lib/docs-filters";
 import {
   getBookmarks,
@@ -53,6 +54,7 @@ interface ProjectSummary {
 }
 
 function DocsVisor() {
+  const t = useT("docs");
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -141,11 +143,11 @@ function DocsVisor() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-testid="docs-visor">
-      <Breadcrumb items={[{ label: "Inicio", href: "/admin" }, { label: "Documentación" }]} />
+      <Breadcrumb items={[{ label: t("breadcrumbHome"), href: "/admin" }, { label: t("title") }]} />
       <PageHeader
         icon={<BookOpen className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Documentación"
-        description="Explora la documentación de cada proyecto. Filtra por categoría o tipo, busca en el texto y marca documentos para encontrarlos rápido."
+        title={t("title")}
+        description={t("description")}
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[20rem_1fr]">
@@ -155,7 +157,7 @@ function DocsVisor() {
             <TabsList className="w-full" data-testid="docs-rail-tabs">
               <TabsTrigger value="explore" className="flex-1" data-testid="docs-rail-tab-explore">
                 <FolderTree className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
-                Explorar
+                {t("tabExplore")}
               </TabsTrigger>
               <TabsTrigger
                 value="bookmarks"
@@ -163,7 +165,7 @@ function DocsVisor() {
                 data-testid="docs-rail-tab-bookmarks"
               >
                 <Bookmark className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
-                Marcadores
+                {t("tabBookmarks")}
                 {bookmarks.length > 0 && (
                   <span
                     className="bg-primary/10 text-primary ml-1.5 rounded-full px-1.5 text-[10px] font-medium tabular-nums"

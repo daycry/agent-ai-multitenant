@@ -5,6 +5,7 @@
  * (task_03_05, troceado en prod-16 `task_prod16_08`).
  */
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 import { BUILT_IN_MODES } from "./chat-types";
@@ -16,10 +17,12 @@ interface ChatModeSelectorProps {
 }
 
 export function ChatModeSelector({ current, pending, onChange }: ChatModeSelectorProps) {
+  const t = useT("projectChat");
+
   return (
     <div
       role="group"
-      aria-label="Modo de chat"
+      aria-label={t("modeSelectorAria")}
       data-testid="chat-mode-selector"
       className="bg-muted inline-flex rounded-md p-0.5"
     >
@@ -33,7 +36,7 @@ export function ChatModeSelector({ current, pending, onChange }: ChatModeSelecto
             data-testid={`chat-mode-${mode.value}`}
             data-active={active ? "true" : "false"}
             aria-pressed={active}
-            title={mode.description}
+            title={t(mode.descriptionKey)}
             onClick={() => {
               if (!active && !pending) onChange(mode.value);
             }}
@@ -45,7 +48,7 @@ export function ChatModeSelector({ current, pending, onChange }: ChatModeSelecto
               pending && "cursor-wait opacity-60",
             )}
           >
-            {mode.labelEs}
+            {t(mode.labelKey)}
           </button>
         );
       })}

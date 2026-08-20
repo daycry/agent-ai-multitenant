@@ -21,12 +21,13 @@
 
 import { FilterX } from "lucide-react";
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   DOC_CATEGORIES,
-  DOC_CATEGORY_LABELS,
+  DOC_CATEGORY_KEYS,
   DOC_TYPES,
-  DOC_TYPE_LABELS,
+  DOC_TYPE_KEYS,
   isFilterActive,
   type DocCategory,
   type DocsFilter,
@@ -51,6 +52,8 @@ function toggleInSet<T>(set: ReadonlySet<T>, value: T): Set<T> {
 }
 
 export function DocsFiltersPanel({ filter, onChange, disabled = false }: DocsFiltersPanelProps) {
+  const t = useT("docs");
+  const tFacets = useT("docFacets");
   const active = isFilterActive(filter);
 
   const toggleCategory = (category: DocCategory) => {
@@ -67,7 +70,7 @@ export function DocsFiltersPanel({ filter, onChange, disabled = false }: DocsFil
     <div className="flex flex-col gap-3" data-testid="docs-filters-panel">
       <div className="flex items-center justify-between">
         <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
-          Filtros
+          {t("filtersHeading")}
         </p>
         {active && (
           <button
@@ -77,26 +80,26 @@ export function DocsFiltersPanel({ filter, onChange, disabled = false }: DocsFil
             data-testid="docs-filters-clear"
           >
             <FilterX className="h-3.5 w-3.5" aria-hidden="true" />
-            Limpiar
+            {t("filtersClear")}
           </button>
         )}
       </div>
 
       <FacetGroup
-        legend="Categoría"
+        legend={t("facetCategory")}
         testid="docs-filter-categories"
         disabled={disabled}
-        options={DOC_CATEGORIES.map((c) => ({ value: c, label: DOC_CATEGORY_LABELS[c] }))}
+        options={DOC_CATEGORIES.map((c) => ({ value: c, label: tFacets(DOC_CATEGORY_KEYS[c]) }))}
         selected={filter.categories}
         onToggle={toggleCategory}
         chipTestid={(value) => `docs-filter-category-${value}`}
       />
 
       <FacetGroup
-        legend="Tipo"
+        legend={t("facetType")}
         testid="docs-filter-types"
         disabled={disabled}
-        options={DOC_TYPES.map((t) => ({ value: t, label: DOC_TYPE_LABELS[t] }))}
+        options={DOC_TYPES.map((type) => ({ value: type, label: tFacets(DOC_TYPE_KEYS[type]) }))}
         selected={filter.types}
         onToggle={toggleType}
         chipTestid={(value) => `docs-filter-type-${value}`}
