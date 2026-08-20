@@ -251,6 +251,23 @@ PUBLIC_API_BEFORE_THE_SPLIT: tuple[str, ...] = (
 #: `server_default`, `ForeignKey`, `CheckConstraint`, `UniqueConstraint`,
 #: `PrimaryKeyConstraint` y los índices con sus `postgresql_where`. La lista de
 #: nombres está para que el fallo sea legible.
+#:
+#: **Cuatro digests re-capturados el 2026-08-20**, no del monolito: al arreglar
+#: la deriva modelo↔BD que este mismo fichero documenta (§«`TEXT` frente a
+#: `String(n)`» de `test_alembic_autogenerate_clean`), el DDL de `executions`,
+#: `projects`, `skills` y `tools` cambió A PROPÓSITO. Ninguna columna se movió
+#: —las listas de nombres son las del monolito y el test las compara ANTES del
+#: digest, así que una pérdida seguiría saliendo—; lo que cambió es:
+#:
+#:   - `projects`: `allowed_commands` y `default_kb_grants` pasan a `ARRAY(Text)`,
+#:     `default_runtime_template` y `human_task_review_mode` a `Text` (es lo que
+#:     crearon las migraciones 0027/0072/0073), y se declaran los índices
+#:     `ix_projects_team_id` (0031) y `uq_projects_tenant_slug_live` (0114).
+#:   - `executions`: se declara `ix_executions_prompt_version` (0119/0137).
+#:   - `skills` / `tools`: se declara `ix_*_source_installation` (0111).
+#:
+#: Si vuelve a fallar sin que nadie haya tocado esas declaraciones a mano, es un
+#: hallazgo de verdad: el modelo se movió solo.
 DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
     "agents": (
         "de8dfea7867f89f4",
@@ -320,7 +337,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "executions": (
-        "e88fb406e3a56984",
+        "3bf37ad1221f14c7",
         (
             "abort_code",
             "agent_id",
@@ -433,7 +450,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "projects": (
-        "c372f30096c94446",
+        "12c86d26cf01198c",
         (
             "allowed_commands",
             "allowed_domains",
@@ -473,7 +490,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "skills": (
-        "02fb2f86b2f74201",
+        "a06f68ce80305cfd",
         (
             "category",
             "created_at",
@@ -552,7 +569,7 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     "tools": (
-        "5cd4555d02316537",
+        "bb2d3d5848f79faf",
         (
             "category",
             "created_at",

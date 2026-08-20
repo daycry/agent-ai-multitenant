@@ -51,7 +51,7 @@ from shared_guardrails.layers import (
     ResolvedConfig,
     resolve_config,
 )
-from sqlalchemy import Integer, String, select, text
+from sqlalchemy import ForeignKey, Index, Integer, String, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,10 +80,48 @@ class GuardrailConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "guardrail_configs"
+    # Los cuatro índices de la migración 0132. Los tres únicos son PARCIALES
+    # porque el scope decide qué columna participa en la clave: un UNIQUE plano
+    # sobre (scope, tenant_id, project_id) admitiría infinitas filas de
+    # plataforma, porque en PostgreSQL NULL != NULL. Una config de seguridad
+    # ambigua se resuelve mal, así que el predicado ES la garantía.
+    __table_args__ = (
+        Index(
+            "uq_guardrail_configs_platform",
+            "scope",
+            unique=True,
+            postgresql_where=text("scope = 'platform'"),
+        ),
+        Index(
+            "uq_guardrail_configs_tenant",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("scope = 'tenant'"),
+        ),
+        Index(
+            "uq_guardrail_configs_project",
+            "project_id",
+            unique=True,
+            postgresql_where=text("scope = 'project'"),
+        ),
+        # El camino caliente: «dame las capas de este tenant», en cada dispatch.
+        Index("ix_guardrail_configs_tenant_scope", "tenant_id", "scope"),
+    )
 
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
-    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    project_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    # Las tres FK van SIN nombre igual que en la 0132, para que el nombre que
+    # SQLAlchemy no pone y el que PostgreSQL genera
+    # (`guardrail_configs_<col>_fkey`) sigan siendo el mismo.
+    tenant_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
@@ -91,7 +129,11 @@ class GuardrailConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default=text("1")
     )
-    updated_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    updated_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 # Reexportado para que los llamantes no tengan que importar de dos sitios.

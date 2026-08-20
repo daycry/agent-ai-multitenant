@@ -52,6 +52,27 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
             "is_template",
             postgresql_where=text("is_template = true"),
         ),
+        # Índice de soporte de la FK `team_id -> teams.id ON DELETE SET NULL`
+        # (migración 0031). Sin él, borrar un team obliga a escanear `projects`
+        # entera buscando hijos. Parcial sobre las filas vivas y con team: los
+        # proyectos sin team no aportan nada al índice.
+        Index(
+            "ix_projects_team_id",
+            "team_id",
+            postgresql_where=text("team_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
+        # Backstop del layout de bare repos `/repos/{tenant}/{project_slug}`
+        # (migración 0114): dos proyectos VIVOS del mismo tenant con el mismo
+        # slug operarían sobre el MISMO repo git. El router ya deduplica al
+        # crear; este único parcial cubre las carreras y las escrituras que no
+        # pasan por el router. Parcial porque un slug soft-borrado sí se reusa.
+        Index(
+            "uq_projects_tenant_slug_live",
+            "tenant_id",
+            "slug",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         CheckConstraint(
             "budget_amount IS NULL OR budget_amount >= 0",
             name="ck_projects_budget_non_negative",
@@ -95,8 +116,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     # Plan 06.9 task_06_9_07: KBs (by slug) that the wizard should
     # auto-grant when a tenant creates a project from this template.
     # Only meaningful on `is_template=true` rows; ignored otherwise.
+    # `ARRAY(Text)`, no `ARRAY(String)`: la migración 0027 la creó como
+    # `sa.ARRAY(sa.Text())` y en PostgreSQL `text[]` y `varchar[]` son tipos
+    # DISTINTOS aunque se comporten igual. Declararla con `String` dejaba a
+    # `alembic check` proponiendo un `ALTER COLUMN ... TYPE varchar[]` sobre la
+    # tabla de proyectos cada vez que alguien autogenerase una migración.
     default_kb_grants: Mapped[list[str]] = mapped_column(
-        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
     )
     worker_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
@@ -141,10 +167,17 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     # runtime template id (`php-phpunit`, `node-jest`, …) the `run_*`
     # tools resolve against; NULL = keep each tool's current default
     # (backward-compatible).
+    # `ARRAY(Text)` + `Text`: así las creó la migración 0072 (`sa.ARRAY(sa.Text())`
+    # y `sa.Text()`), y es lo que dice el comentario de arriba. El cap de 64
+    # caracteres de `default_runtime_template` NUNCA existió en la BD; lo aplica
+    # el borde HTTP (`schemas/projects.py`, `max_length=64` + validador contra el
+    # catálogo de runtime templates), que es donde se puede devolver un 422.
+    # Declarar `String(64)` aquí hacía que autogenerate propusiera estrechar una
+    # columna de producción a 64 caracteres.
     allowed_commands: Mapped[list[str]] = mapped_column(
-        ARRAY(String), nullable=False, server_default=text("'{}'::text[]")
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
     )
-    default_runtime_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    default_runtime_template: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # prod-12 Fase B (gap4-2): per-project deny-by-default allowlist of FQDNs
     # the HTTP tools (`http_request` + http_endpoint) may reach; `[]` = las
@@ -187,8 +220,13 @@ class Project(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Soft
     # string-backed-enum convention as `status`. DEFAULT 'auto_approve' so
     # existing projects keep the MVP behaviour (submit -> in_review -> done,
     # no extra review step). DB-constrained by ck_projects_human_task_review_mode.
+    # `Text`, como la creó la migración 0073 y como dice el comentario de arriba.
+    # El value set NO lo guarda la longitud sino
+    # `ck_projects_human_task_review_mode` (arriba), que es la restricción de
+    # verdad; `String(32)` sólo servía para que autogenerate propusiera un
+    # `ALTER COLUMN` inútil.
     human_task_review_mode: Mapped[str] = mapped_column(
-        String(32), nullable=False, server_default=text("'auto_approve'")
+        Text, nullable=False, server_default=text("'auto_approve'")
     )
 
     # --- Budget: fold human cost in? (Plan 16 task_16_12) -----------------

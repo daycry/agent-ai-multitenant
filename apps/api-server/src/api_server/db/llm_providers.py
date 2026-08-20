@@ -47,7 +47,7 @@ import re
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, String, Text, UniqueConstraint, text
+from sqlalchemy import Boolean, CheckConstraint, Index, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -157,6 +157,19 @@ class LlmProvider(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # disambiguates providers of the same kind (e.g. ``ollama-local`` vs
         # ``ollama-cloud``) — platform-global, so unique across the whole table.
         UniqueConstraint("slug", name="uq_llm_providers_slug"),
+        # El camino de lectura de `list_active_llm_providers_by_kind`: los
+        # proveedores ACTIVOS de un `kind`, que es como la factoría de selección
+        # del runtime resuelve `agents.llm_provider`. Parcial sobre las filas
+        # activas —las únicas que ese camino mira— para no pagar por las
+        # desactivadas. Sin índice por `tenant_id`: la tabla es global de
+        # plataforma (ADR 0028). Lo crea la migración 0070; se declara aquí
+        # porque estaba SOLO en la migración y `alembic check` lo leía como
+        # deriva, o sea que un autogenerate proponía borrarlo.
+        Index(
+            "ix_llm_providers_kind_active",
+            "kind",
+            postgresql_where=text("is_active = true"),
+        ),
     )
 
     # One of the four ADR-0021 provider paths (an LLMProviderKind value).

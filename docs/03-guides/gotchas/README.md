@@ -103,6 +103,13 @@ el problema ya esté documentado.
   — `SET LOCAL x = $1` falla; usar `set_config('x', $1, true)`.
 - [asyncpg-no-multistatement.md](./asyncpg-no-multistatement.md)
   — `op.execute` no acepta múltiples sentencias separadas por `;`.
+- [alembic-metadata-a-medias-propone-borrar-lo-que-no-ve.md](./alembic-metadata-a-medias-propone-borrar-lo-que-no-ve.md)
+  — `alembic check` que muere con `NoReferencedTableError` NO es un problema
+  local: `env.py` importaba un solo módulo de la capa de datos y `Base.metadata`
+  veía 34 tablas de 84. Para autogenerate, «no está en la metadata» y «bórralo de
+  la BD» son lo mismo, así que un `--autogenerate` con la metadata a medias
+  propone `DROP INDEX` sobre el HNSW del RAG — y aplicarlo no da error: la
+  búsqueda pasa a secuencial en silencio.
 - [alembic-revision-id-32-chars.md](./alembic-revision-id-32-chars.md)
   — `alembic_version.version_num` es `varchar(32)`: un revision id > 32
   chars revienta con `StringDataRightTruncationError`.

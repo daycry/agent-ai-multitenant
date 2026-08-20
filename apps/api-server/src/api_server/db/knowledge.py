@@ -45,6 +45,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    literal_column,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
@@ -85,7 +86,28 @@ class KnowledgeBase(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Lado «muchos» del FK a `kb_categories` (migración 0028): sin él,
+        # borrar una categoría (ON DELETE SET NULL) escanea la tabla entera.
+        Index("ix_knowledge_bases_category_id", "category_id"),
+        # Sirve la policy `knowledge_bases_builtin_read` y el listado del
+        # catálogo (migración 0029). Parcial: los built-in son un puñado de
+        # filas frente a las KB de los tenants.
+        Index(
+            "ix_knowledge_bases_is_builtin",
+            "is_builtin",
+            postgresql_where=text("is_builtin = true"),
+        ),
     )
+
+    # `TenantScopedMixin` trae `index=True`, pero la BD desplegada NO tiene
+    # `ix_knowledge_bases_tenant_id` y nunca lo tuvo: la migración 0022 creó en
+    # su lugar `ix_knowledge_bases_tenant_name (tenant_id, name) WHERE
+    # deleted_at IS NULL`, que ya sirve las búsquedas por tenant al ser
+    # `tenant_id` su columna guía. Declarar aquí un índice que no existe dejaba
+    # `alembic check` en rojo por un item que no describe nada real.
+    # Si alguna vez hiciera falta de verdad (una consulta por tenant que mire
+    # filas soft-borradas), es una migración, no un cambio de modelo.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -140,6 +162,14 @@ class Document(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Sof
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index("ix_documents_tenant_id", "tenant_id"),
+        # Lease de encolado de la ingesta (migración 0097): el barrido del beat
+        # reclama documentos `pending` cuyo lease venció. Parcial a propósito —
+        # así no crece con los `indexed` / `failed`, que son la mayoría.
+        Index(
+            "ix_documents_pending_enqueued_at",
+            "enqueued_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
         CheckConstraint(
             "status IN ('pending', 'processing', 'indexed', 'indexed_empty', 'failed')",
             name="ck_documents_status",
@@ -209,6 +239,34 @@ class Chunk(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_chunks_document_id_ordinal", "document_id", "ordinal"),
         Index("ix_chunks_tenant_id", "tenant_id"),
+        # El índice vectorial del RAG (migración 0022). Va declarado aquí, y no
+        # sólo en la migración, porque mientras el modelo no lo conocía un
+        # `alembic revision --autogenerate` proponía `DROP INDEX
+        # ix_chunks_embedding_hnsw` de regalo en cualquier migración de columna:
+        # el RAG habría pasado a escaneo secuencial en silencio.
+        #
+        # Los tres kwargs son parte del índice, no adorno:
+        #   * `hnsw` es el método de acceso (sin él, btree, que no sirve).
+        #   * `vector_cosine_ops` es la clase de operador; un HNSW sin ella no
+        #     responde a `<=>` y la búsqueda por coseno no lo usa.
+        #   * `m` / `ef_construction` son los parámetros de construcción del
+        #     grafo con los que se creó en producción.
+        Index(
+            "ix_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": "16", "ef_construction": "64"},
+        ),
+        # Mitad BM25 de la búsqueda híbrida. Índice DE EXPRESIÓN: la consulta
+        # tiene que repetir el `to_tsvector` exacto para acertarlo, así que la
+        # configuración `es_unaccent` forma parte del índice (migración 0107,
+        # que reconstruyó el `'simple'` de la 0022 — ver `rag/search.py`).
+        Index(
+            "ix_chunks_content_fts",
+            literal_column("to_tsvector('es_unaccent'::regconfig, content)"),
+            postgresql_using="gin",
+        ),
         UniqueConstraint("document_id", "ordinal", name="uq_chunks_document_ordinal"),
         CheckConstraint("ordinal >= 0", name="ck_chunks_ordinal_non_negative"),
     )
@@ -367,6 +425,31 @@ class KbCategory(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     """
 
     __tablename__ = "kb_categories"
+    __table_args__ = (
+        # El unique per-scope que describe el docstring (migración 0028), que
+        # hasta ahora sólo vivía en la migración. Es de EXPRESIÓN: el
+        # `COALESCE` hace que los built-in históricos (`tenant_id IS NULL`)
+        # compartan scope entre sí, porque en un UNIQUE normal NULL nunca es
+        # igual a NULL y el slug se habría podido duplicar.
+        Index(
+            "ix_kb_categories_scope_slug",
+            literal_column("COALESCE(tenant_id::text, ''::text)"),
+            "slug",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Parcial, como en `knowledge_bases`: sirve el listado del catálogo
+        # built-in (migración 0030).
+        Index(
+            "ix_kb_categories_is_builtin",
+            "is_builtin",
+            postgresql_where=text("is_builtin = true"),
+        ),
+        # Esta tabla NO usa `TenantScopedMixin` (ver la nota de `tenant_id`), así
+        # que su índice de tenant no lo pone ningún mixin: lo creó la migración
+        # 0028 y se declara aquí.
+        Index("ix_kb_categories_tenant_id", "tenant_id"),
+    )
 
     # Plan 06.12 (ADR 0029): patrón (A). Built-ins viven bajo
     # PLATFORM_TENANT_ID con is_builtin=true; custom bajo el tenant con

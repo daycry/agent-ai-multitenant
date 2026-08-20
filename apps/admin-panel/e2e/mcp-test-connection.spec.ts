@@ -115,7 +115,16 @@ test("Probar surfaces AUTH_ERROR when the resolver rejects", async ({ page }) =>
   await page.getByTestId("mcp-form-test").click();
 
   await expect(page.getByTestId("mcp-form-test-error")).toBeVisible();
-  await expect(page.getByTestId("mcp-form-test-error")).toContainText("AUTH_ERROR");
+  // El panel pinta el `message`, no el `error_code`. Hasta el 2026-08-20
+  // afirmabamos `AUTH_ERROR`, y eso pasaba porque la pantalla enseñaba el JSON
+  // CRUDO de la respuesta: o sea que la asercion estaba fijando el defecto que
+  // `task_prod16_05` cierra. El codigo tipado sigue siendo lo que enruta el
+  // error; lo que el operador lee es la frase.
+  await expect(page.getByTestId("mcp-form-test-error")).toContainText(
+    "no VaultResolver was supplied",
+  );
+  // Y el cuerpo crudo NO llega a pantalla: ni las llaves del JSON ni la clave.
+  await expect(page.getByTestId("mcp-form-test-error")).not.toContainText("error_code");
 
   // Success panel must NOT appear when an error came back.
   await expect(page.getByTestId("mcp-form-test-result")).toHaveCount(0);
@@ -143,7 +152,11 @@ test("Probar surfaces TRANSPORT_ERROR on a 502", async ({ page }) => {
   await page.getByTestId("mcp-form-test").click();
 
   await expect(page.getByTestId("mcp-form-test-error")).toBeVisible();
-  await expect(page.getByTestId("mcp-form-test-error")).toContainText("TRANSPORT_ERROR");
+  // Igual que el de AUTH_ERROR: lo que se lee es la frase, no el codigo.
+  await expect(page.getByTestId("mcp-form-test-error")).toContainText(
+    "connection refused: localhost:8123",
+  );
+  await expect(page.getByTestId("mcp-form-test-error")).not.toContainText("error_code");
   await expect(page.getByTestId("mcp-form-test-result")).toHaveCount(0);
 });
 

@@ -171,6 +171,14 @@ class Skill(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDe
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
         ),
+        # Migración 0111 (ADR 0100): la des-materialización de un uninstall /
+        # revoke del marketplace busca «las skills de esta instalación». Parcial
+        # porque la inmensa mayoría de filas son nativas (`NULL`) y no aportan.
+        Index(
+            "ix_skills_source_installation",
+            "source_installation_id",
+            postgresql_where=text("source_installation_id IS NOT NULL"),
+        ),
         # Cerramos `category` al conjunto del seed (ADR 0050, migración 0078).
         # El value set se deriva de `SkillCategory`, la única declaración.
         CheckConstraint(
@@ -226,6 +234,13 @@ class Tool(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, SoftDel
             "ix_tools_is_builtin",
             "is_builtin",
             postgresql_where=text("is_builtin = true"),
+        ),
+        # Igual que `ix_skills_source_installation`: misma migración 0111, misma
+        # consulta de des-materialización, mismo índice parcial.
+        Index(
+            "ix_tools_source_installation",
+            "source_installation_id",
+            postgresql_where=text("source_installation_id IS NOT NULL"),
         ),
         # No two LIVE tools of the same tenant may share a name (a soft-deleted
         # name may be reused). Partial unique index because PostgreSQL UNIQUE

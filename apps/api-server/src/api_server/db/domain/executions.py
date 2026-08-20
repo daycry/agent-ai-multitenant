@@ -60,6 +60,11 @@ class Execution(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
         # runs y el sweep de presupuestos: igualdad por tenant + rango por
         # fecha. Migración 0126. El orden NO es intercambiable.
         Index("ix_executions_tenant_created_at", "tenant_id", "created_at"),
+        # El dashboard de calidad agrupa el histórico de un tenant por etiqueta
+        # de prompts (migración 0119, recreado por la 0137 al particionar).
+        # `executions` es la tabla que más crece del sistema: sin este índice el
+        # filtro es un scan completo.
+        Index("ix_executions_prompt_version", "tenant_id", "prompt_version"),
         CheckConstraint("iterations >= 0", name="ck_executions_iterations_non_negative"),
         CheckConstraint("total_tokens >= 0", name="ck_executions_total_tokens_non_negative"),
         CheckConstraint("total_cost_usd >= 0", name="ck_executions_total_cost_non_negative"),

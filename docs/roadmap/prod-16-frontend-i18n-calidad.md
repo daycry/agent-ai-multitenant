@@ -1495,6 +1495,41 @@ e2e/mcp-test-connection.spec.ts e2e/mcp-config-ui.spec.ts` →
     genera la herramienta de migraciones para todo el mundo: **merece su propio
     cambio**. El test lo rodea cargando el modelo completo y deja una aserción que
     se pondrá roja el día que alguien lo arregle, para que venga a quitar el apaño.
+  - ✅ **Cerrado el 2026-08-20, y el «autogenerate vacío» del enunciado ya casi se
+    puede exigir de verdad.** Las dos notas de arriba describen un mundo que duró
+    un día; se dejan porque son el diagnóstico correcto, pero esto es lo que hay
+    ahora. El hallazgo de `env.py` **tuvo su propio cambio** (commit `bc521ad4`):
+    recorre el paquete en vez de listar imports —**53 módulos, 84 tablas**— y con
+    la metadata completa `alembic check` dejó de morir con `NoReferencedTableError`
+    y por fin dio veredicto: **162 items de deriva en 23 tablas**. Una ola de
+    cuatro carriles lo bajó a **22 items en 16 tablas** declarando en el MODELO los
+    índices y las FK que las migraciones habían creado (las migraciones son la
+    verdad desplegada; no se escribió ninguna nueva). Lo que eso compró, y era el
+    riesgo real: el `--autogenerate` de hoy **no propone ni un solo `drop_index`**,
+    donde el de ayer proponía borrar el HNSW del RAG.
+    - Sobre las **17 tablas del dominio**, las 11 congeladas de la nota anterior
+      son hoy **2**: `remove_fk:plans.fk_plans_conversation_id` y
+      `add_constraint:task_dependencies.uq_task_dependencies_pair`, las dos de la
+      familia «nombre que la migración puso y el modelo no declara» y **ninguna
+      una columna perdida**, que es lo que esta tarea tenía que sostener. Las dos
+      se nombran una a una en el test, así que el resto del dominio ya se exige en
+      vacío.
+    - El test pasó de **tolerar a cerrar**: la banda `50 <= total <= 250` era una
+      guarda que no podía fallar (§4 de `verificar-antes-de-implementar`) porque
+      comparaba **sin** el `include_object` del proyecto y **97 de sus 119 items
+      eran particiones mensuales del ADR 0151** — ruido que nadie puede cerrar y
+      que sostenía el suelo. Ahora compara con la política real, mide lo mismo que
+      imprime `alembic check`, y el inventario cubre el esquema **entero** y sólo
+      puede menguar en las dos direcciones (item nuevo → rojo; item arreglado que
+      sigue en la lista → rojo).
+    - **`auto_prod16_11_b` sigue sin marcarse**, y ahora por un motivo concreto en
+      vez de por una deuda difusa: de los 22 items restantes, **7 son
+      `modify_nullable` donde el modelo tiene razón y la BD está mal** (las
+      migraciones 0108/0109/0112 crearon `created_at`/`updated_at` sin
+      `nullable=False`; hay 163 columnas NOT NULL en 95 tablas y sólo estas 7
+      nullables). Cerrarlos pide **una migración que endurezca el esquema de
+      producción, y eso lo firma el operador**, no un agente. Los otros 15 sí son
+      model-side y aditivos.
   - **Verificación ejecutada (2026-08-19)**: `pytest tests/unit tests/security
 tests/docs` → **5016 passed** (los 3 rojos son de otros carriles: el
     inventario de `test_declared_tests_exist` y dos de rotación de Vault que pasan

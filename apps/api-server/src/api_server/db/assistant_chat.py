@@ -16,7 +16,16 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,6 +46,7 @@ class AssistantConversation(
 
     __tablename__ = "assistant_conversations"
     __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["organizations.id"], ondelete="CASCADE"),
         Index("ix_assistant_conversations_user", "tenant_id", "user_id", "updated_at"),
     )
 
@@ -58,6 +68,7 @@ class AssistantTurn(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin
 
     __tablename__ = "assistant_turns"
     __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["organizations.id"], ondelete="CASCADE"),
         Index("ix_assistant_turns_conversation", "conversation_id", "created_at"),
         CheckConstraint("role IN ('user', 'assistant')", name="ck_assistant_turns_role"),
     )

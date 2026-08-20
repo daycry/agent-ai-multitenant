@@ -60,6 +60,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -380,6 +381,12 @@ class MarketplaceListing(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMi
             "review_status",
             postgresql_where=text("review_status <> 'published' AND deleted_at IS NULL"),
         ),
+        # FK index for the source FK (no unindexed FKs: the CASCADE from
+        # marketplace_sources would seq-scan the catalog without it). Created
+        # by migration 0041; declared here because it lived ONLY in the
+        # migration, so ``alembic check`` read it as drift and an autogenerate
+        # proposed dropping it.
+        Index("ix_marketplace_listings_source_id", "source_id"),
     )
 
     source_id: Mapped[UUID] = mapped_column(
@@ -498,6 +505,39 @@ class MarketplaceInstallation(
             "tenant_id",
             "status",
             postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # ``tenant_id`` comes from :class:`TenantScopedMixin`, which declares
+        # the column and its index but NOT the FK to ``organizations``. The FK
+        # is real in the DB (migration 0041) and is what makes deleting a
+        # tenant cascade its installs away, so it is declared here as a table
+        # constraint — the mixin cannot name it per-table, and the DB names are
+        # not uniform across the tables that use the mixin.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_marketplace_installations_tenant",
+            ondelete="CASCADE",
+        ),
+        # FK indexes for the joinable FK columns, partial on the rows that can
+        # actually match (the three nullable ones). Created by migration 0041;
+        # declared here because they lived ONLY in the migration, so
+        # ``alembic check`` read them as drift and an autogenerate proposed
+        # dropping them.
+        Index("ix_marketplace_installations_listing_id", "listing_id"),
+        Index(
+            "ix_marketplace_installations_project_id",
+            "project_id",
+            postgresql_where=text("project_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_marketplace_installations_installed_by",
+            "installed_by",
+            postgresql_where=text("installed_by IS NOT NULL"),
+        ),
+        Index(
+            "ix_marketplace_installations_revoked_by",
+            "revoked_by",
+            postgresql_where=text("revoked_by IS NOT NULL"),
         ),
     )
 
@@ -859,6 +899,20 @@ class MarketplaceShare(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixi
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index("ix_marketplace_shares_listing_id", "listing_id"),
+        # FK indexes for the two grantor FKs, partial on the rows that can
+        # match. Created by migration 0044; declared here because they lived
+        # ONLY in the migration, so ``alembic check`` read them as drift and an
+        # autogenerate proposed dropping them.
+        Index(
+            "ix_marketplace_shares_granted_by",
+            "granted_by",
+            postgresql_where=text("granted_by IS NOT NULL"),
+        ),
+        Index(
+            "ix_marketplace_shares_revoked_by",
+            "revoked_by",
+            postgresql_where=text("revoked_by IS NOT NULL"),
+        ),
     )
 
     listing_id: Mapped[UUID] = mapped_column(
@@ -866,10 +920,29 @@ class MarketplaceShare(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixi
         ForeignKey("marketplace_listings.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # The tenant that owns the listing and created the grant.
-    owner_tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    # The tenant that owns the listing and created the grant. Both tenant FKs
+    # CASCADE (migration 0044): deleting either side of the grant deletes the
+    # grant — a share whose owner or target no longer exists would leave the
+    # listing visible to nobody, or visible through a dangling reference.
+    owner_tenant_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "organizations.id",
+            ondelete="CASCADE",
+            name="fk_marketplace_shares_owner_tenant",
+        ),
+        nullable=False,
+    )
     # The single tenant the listing is shared WITH.
-    target_tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    target_tenant_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "organizations.id",
+            ondelete="CASCADE",
+            name="fk_marketplace_shares_target_tenant",
+        ),
+        nullable=False,
+    )
 
     granted_by: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -915,9 +988,31 @@ class MarketplaceAuditEntry(Base, UUIDPrimaryKeyMixin):
             "installation_id",
             postgresql_where=text("installation_id IS NOT NULL"),
         ),
+        # The sibling of ix_marketplace_audit_installation for the listing FK,
+        # same partial shape. Created by migration 0041; declared here because
+        # it lived ONLY in the migration — its twin was in the model and this
+        # one was not, so ``alembic check`` read it as drift and an autogenerate
+        # proposed dropping it.
+        Index(
+            "ix_marketplace_audit_listing",
+            "listing_id",
+            postgresql_where=text("listing_id IS NOT NULL"),
+        ),
     )
 
-    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    # CASCADE, unlike the listing/installation FKs below: an audit trail
+    # belongs to its tenant and goes away with it (migration 0041). The two
+    # targets SET NULL instead, so the row survives a soft-deleted listing.
+    tenant_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "organizations.id",
+            ondelete="CASCADE",
+            name="fk_marketplace_audit_entries_tenant",
+        ),
+        nullable=False,
+        index=True,
+    )
     # Who performed the action. Free-form so it can name a user
     # ("user:<uuid>"), the System Admin, or a system actor — mirrors
     # TaskAuditEvent.actor.

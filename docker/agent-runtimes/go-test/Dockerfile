@@ -73,12 +73,22 @@ RUN set -eux; \
 # El binario publicado quedaría vulnerable por una indirecta que upstream aún no
 # ha subido. Construyéndolo desde un módulo propio podemos elevar esa indirecta
 # sin tocar la versión de la herramienta —que sigue pineada— ni suprimir nada.
+#
+# 2026-08-20: la misma maniobra, para una indirecta más. `golang.org/x/mod`
+# v0.38.0 arrastra CVE-2026-56864 y CVE-2026-56865 (las dos HIGH: un GOSUMDB
+# malicioso podía servir contenido de módulo arbitrario), con fix en 0.40.0.
+# Trivy las localizó **sólo en `/usr/local/bin/gotestsum`** —los doce gobinary
+# del toolchain salen a 0—, así que NO es deriva de la imagen base y refrescar su
+# digest no habría servido: se comprobó escaneando los dos que ni el 1.26.6
+# pineado ni el 1.26.7 más reciente traen esas CVE. La causa es la indirecta del
+# módulo, y el arreglo va donde está la causa.
 RUN set -eux; \
     mkdir -p /tmp/gotestsum-build; \
     cd /tmp/gotestsum-build; \
     go mod init gotestsum-build; \
     go get -tool gotest.tools/gotestsum@v1.13.0; \
     go get golang.org/x/text@v0.41.0; \
+    go get golang.org/x/mod@v0.40.0; \
     go build -o /usr/local/bin/gotestsum gotest.tools/gotestsum; \
     /usr/local/bin/gotestsum --version; \
     cd /; rm -rf /tmp/gotestsum-build; \

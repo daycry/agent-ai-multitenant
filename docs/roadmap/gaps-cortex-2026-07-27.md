@@ -34,6 +34,8 @@ Falta el test de INTEGRACIÓN que el plan exige: tests/integration/test*cortex_d
 
 No existe verificación automática de drift: `alembic check` no aparece en ningún test ni en .github/workflows/ci.yml, y tampoco hay un assert directo sobre `__tablename__` / columnas / pertenencia a `Base.metadata`. El mapeo 1:1 solo queda probado de forma indirecta.
 
+> ↑ **Superado el 2026-08-20** (la constatación de arriba se deja como estaba: es lo que había el 2026-07-27). Hoy sí existe verificación automática de drift, y en dos capas: `tests/unit/test_alembic_metadata_is_complete.py` vigila que ninguna tabla se caiga de `Base.metadata` —el fallo que hacía que `alembic check` muriese con `NoReferencedTableError` en vez de dar veredicto, arreglado en el commit `bc521ad4`— y `tests/integration/test_alembic_autogenerate_clean.py` compara el modelo contra la BD migrada a head con el `include_object` del proyecto, con un inventario que **sólo puede menguar**. El drift sobre las tablas `cortex_*` es **0**; el diff global bajó de 162 items a 22, y los 22 están nombrados uno a uno en `REMAINING_DRIFT_2026_08_20`.
+
 ### `partial` — Suite de calibración (interacciones canónicas → rangos PAD esperados)
 
 El plan pide ~8 escenarios canónicos; hay 3 que realmente ejercitan apply_event+update_mood (el cuarto, `test_calibration_cold_farewell_lowers_bonding`:309-313, solo llama a decay_drives, ya cubierto por el test de drives). Faltan ~5 escenarios y el fichero dedicado de regresión.

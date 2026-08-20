@@ -36,6 +36,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    literal_column,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -118,6 +119,39 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
                 "source_human_work_session_id IS NOT NULL AND deleted_at IS NULL"
             ),
         ),
+        # Mitad vectorial del recall híbrido (migración 0020). Declarado aquí
+        # además de en la migración porque, mientras el modelo no lo conocía,
+        # un `alembic revision --autogenerate` proponía `DROP INDEX
+        # ix_memory_entries_embedding_hnsw` dentro de cualquier migración de
+        # columna, y el recall habría pasado a escaneo secuencial sin avisar.
+        # Los kwargs son parte del índice: `hnsw` es el método de acceso,
+        # `vector_cosine_ops` la clase de operador que hace que `<=>` lo use, y
+        # `m` / `ef_construction` los parámetros con los que se construyó.
+        Index(
+            "ix_memory_entries_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": "16", "ef_construction": "64"},
+        ),
+        # Mitad BM25 del recall. Índice DE EXPRESIÓN y PARCIAL: la consulta
+        # tiene que repetir el mismo `to_tsvector` para acertarlo, y el
+        # `WHERE deleted_at IS NULL` lo mantiene del tamaño de la memoria viva.
+        # La configuración `es_unaccent` la puso la migración 0079 sobre el
+        # `'simple'` original de la 0021 (acentos e inflexiones del castellano).
+        Index(
+            "ix_memory_entries_content_fts",
+            literal_column("to_tsvector('es_unaccent'::regconfig, content)"),
+            postgresql_using="gin",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Tercera señal del recall (entity-match, ADR 0059): GIN sobre el JSONB
+        # para el `?|` de solapamiento (migración 0084).
+        Index(
+            "ix_memory_entries_entities_gin",
+            "entities",
+            postgresql_using="gin",
+        ),
         # A memory cites at most ONE source — an Execution XOR a
         # HumanWorkSession (or neither, for human-curated entries). Plan 16
         # task_16_15: forbid both being set so the citation is unambiguous.
@@ -141,6 +175,17 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             name="ck_memory_entries_scope",
         ),
     )
+
+    # `TenantScopedMixin` trae `index=True`, pero la BD desplegada NO tiene
+    # `ix_memory_entries_tenant_id` y nunca lo tuvo: la migración 0020 creó en
+    # su lugar `ix_memory_entries_tenant_scope_type (tenant_id, scope, type)
+    # WHERE deleted_at IS NULL`, cuya columna guía es `tenant_id`, así que ya
+    # sirve las lecturas por tenant. Y no hay ninguna que mire filas
+    # soft-borradas: `memory_entries` está excluida de la purga a propósito
+    # (`workers.maintenance.purge`), de modo que el índice plano no cubriría
+    # ninguna consulta real. Declararlo dejaba `alembic check` en rojo por un
+    # item que no describe nada. Crearlo de verdad sería una migración.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'private'"))
     type: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'episodic'"))
