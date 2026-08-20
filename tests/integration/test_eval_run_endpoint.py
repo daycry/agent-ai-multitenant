@@ -89,9 +89,20 @@ def _install_seams(mp: pytest.MonkeyPatch, judge: Any, subject: Any) -> None:
     Vía `monkeypatch` y no asignando el atributo a pelo: una mutación de módulo
     sin restaurar se filtra al resto de la sesión de tests y produce fallos
     fantasma en ficheros que no la pidieron.
+
+    ``subject_system_prompt`` es el prompt del agente que la corrida evalúa
+    (`task_gov_05`): el doble lo acepta y lo ignora, pero la firma tiene que
+    seguir a la real — un doble con una firma vieja hace que el test pase
+    probando una llamada que ya nadie hace.
     """
 
-    async def _fake(_session: Any, _judge_model: str, _subject_model: str) -> tuple[Any, Any]:
+    async def _fake(
+        _session: Any,
+        _judge_model: str,
+        _subject_model: str,
+        *,
+        subject_system_prompt: str | None = None,
+    ) -> tuple[Any, Any]:
         return judge, subject
 
     mp.setattr(evals_router, "_build_eval_seams", _fake)

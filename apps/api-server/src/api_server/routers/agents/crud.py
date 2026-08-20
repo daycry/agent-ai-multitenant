@@ -31,6 +31,11 @@ from api_server.db.agent_prompt_version_repo import (
     record_prompt_change,
 )
 from api_server.db.domain import Agent, AgentScope
+from api_server.evals.prompt_edit_enforce import (
+    enforce_prompt_edit_gate,
+    get_prompt_eval_probe,
+)
+from api_server.evals.prompt_edit_gate import PromptEvalProbe
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -49,6 +54,7 @@ from api_server.schemas.agents import (
     AgentProviderOptionsResponse,
     AgentResponse,
     AgentUpdateRequest,
+    EvalGateNoticeResponse,
     to_agent_response,
 )
 
@@ -241,6 +247,7 @@ async def update_agent(
     payload: AgentUpdateRequest,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
+    probe: PromptEvalProbe = Depends(get_prompt_eval_probe),
 ) -> AgentResponse:
     tenant_id = require_tenant_id(principal)
     agent = await get_writable_or_404(
@@ -260,14 +267,46 @@ async def update_agent(
         payload,
         enum_fields=("agent_type", "role", "memory_scope"),
         rename={"llm_config": "model_config"},
+        # `eval_gate_override` es una directiva de la petición, no una columna:
+        # sin excluirla acabaría como un atributo fantasma sobre la fila ORM.
+        exclude=("eval_gate_override",),
     )
 
+    prompt_changed = raw_prompt_snapshot(agent) != prompt_before
+
+    # El `flush` va ANTES del gate, y el orden NO es indiferente: el gate hace
+    # `SELECT`s sobre la misma sesión y el autoflush de SQLAlchemy escribiría el
+    # `UPDATE` pendiente desde dentro de ellos. Un `PUT` que renombra a un nombre
+    # ya usado Y toca el prompt saldría entonces como 500 con el mensaje crudo de
+    # PostgreSQL, en vez del 409 saneado que `flush_or_conflict` existe para dar.
+    # Nada se pierde por adelantarlo: si el gate rechaza, esta transacción se
+    # deshace entera igualmente.
     await flush_or_conflict(session, context="agent.update")
+
+    # `task_gov_05`: la eval corre ANTES de dar por buena la escritura, y con el
+    # prompt candidato ya puesto sobre el objeto (es lo que hay que medir). Bajo
+    # un preset estricto, una regresión medida levanta un 409 y esta transacción
+    # se deshace — por eso la auditoría de la decisión viaja en su propia sesión.
+    notice = None
+    if prompt_changed:
+        notice = await enforce_prompt_edit_gate(
+            session,
+            principal=principal,
+            agent=agent,
+            candidate_prompt=effective_prompt_text(agent),
+            probe=probe,
+            override_reason=(
+                payload.eval_gate_override.reason
+                if payload.eval_gate_override is not None
+                else None
+            ),
+        )
+
     # Sólo cuando el prompt cambió DE VERDAD. Un `PUT` que sube
     # `max_concurrent_tasks`, o que reenvía el mismo prompt, no abre una versión:
     # un historial con filas idénticas no se lee, y el diff de esas filas sale
     # vacío, que es la forma más rápida de que nadie vuelva a abrir la pantalla.
-    if raw_prompt_snapshot(agent) != prompt_before:
+    if prompt_changed:
         try:
             await record_prompt_change(
                 session,
@@ -286,7 +325,16 @@ async def update_agent(
             await session.rollback()
             raise integrity_conflict(exc, context="agent.prompt_version") from exc
     await session.refresh(agent)
-    return to_agent_response(agent)
+    response = to_agent_response(agent)
+    if notice is not None:
+        # El aviso viaja en la respuesta del PUT y sólo ahí: describe una
+        # decisión sobre ESTA edición, no un atributo del agente. Es la mitad
+        # «se avisa» del contrato; sin ella, en `development` el gate mediría y
+        # no se lo contaría a nadie.
+        response = response.model_copy(
+            update={"eval_gate": EvalGateNoticeResponse.model_validate(notice.to_json())}
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------

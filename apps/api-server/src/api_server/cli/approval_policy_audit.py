@@ -62,7 +62,7 @@ from api_server.db.approval_repo import (
     UNLISTED_DEFAULT_BY_PRESET,
     UNLISTED_FALLBACK_DECISION,
 )
-from api_server.seeds.builtin_approval_policies import BUILTIN_POLICIES
+from api_server.seeds.builtin_approval_policies import BUILTIN_POLICIES, STRICT_PRESETS
 
 _log = structlog.get_logger("api_server.cli.approval_policy_audit")
 
@@ -74,12 +74,11 @@ _DECISIONS = frozenset({AUTO, HUMAN_REQUIRED})
 #: Los cuatro presets sembrados.
 PRESET_SLUGS: tuple[str, ...] = tuple(policy.slug for policy in BUILTIN_POLICIES)
 
-#: Los únicos dos presets donde lo ausente se escribe con el criterio ESTRICTO
-#: del preset. En los otros dos se escribe `auto`: gatear `external_http_post`
-#: en desarrollo pararía los runs autónomos constantemente, y una cola de
-#: aprobaciones que nadie atiende es PEOR que no tener gate — enseña a aprobar
-#: sin leer.
-STRICT_PRESETS: frozenset[str] = frozenset({"production", "customer-external"})
+# `STRICT_PRESETS` (production + customer-external) se IMPORTA de
+# `seeds.builtin_approval_policies` desde `task_gov_05` en vez de redefinirse
+# aquí: el gate de edición de prompts necesita la misma lista, y una segunda
+# copia de un vocabulario compartido es exactamente cómo nació el hallazgo g6.
+# Sigue exportándose desde este módulo (`__all__`) para no romper a sus lectores.
 
 #: Etiqueta de una política que NO declara `preset`.
 UNDECLARED_PRESET_LABEL = "(sin preset declarado)"

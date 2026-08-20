@@ -158,6 +158,20 @@ BUILTIN_POLICIES: tuple[BuiltinPolicy, ...] = (
 # runtime via the ``default_approval_policy_preset`` platform setting.
 DEFAULT_APPROVAL_POLICY_PRESET = "development"
 
+#: Los presets ESTRICTOS: los dos en los que el operador pidió supervisión
+#: estrecha. Dos consumidores hoy, y por eso la definición vive aquí y no en
+#: cada uno — el hallazgo g6 nació justo de dos copias de un vocabulario que
+#: dejaron de coincidir:
+#:
+#:   * ``api_server.cli.approval_policy_audit`` — con qué decisión se escribe una
+#:     categoría ausente (ADR 0153);
+#:   * ``api_server.evals.prompt_edit_gate`` — en qué presets la eval RECHAZA la
+#:     edición de un prompt en vez de sólo avisar (`task_gov_05`).
+#:
+#: La migración 0133 lleva su propia copia a propósito: una migración no importa
+#: código vivo, o dejaría de describir el esquema del día en que corrió.
+STRICT_PRESETS: frozenset[str] = frozenset({"production", "customer-external"})
+
 _POLICIES_BY_SLUG: dict[str, BuiltinPolicy] = {p.slug: p for p in BUILTIN_POLICIES}
 
 

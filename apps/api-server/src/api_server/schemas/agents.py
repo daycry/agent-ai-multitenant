@@ -23,6 +23,7 @@ from api_server.db.domain import (
     AgentType,
     MemoryScope,
 )
+from api_server.evals.prompt_edit_gate import OVERRIDE_MIN_REASON_CHARS
 
 _BASE_CONFIG = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
@@ -113,6 +114,40 @@ class AgentCreateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Update — all fields optional; only sent values are touched
 # ---------------------------------------------------------------------------
+class EvalGateOverrideRequest(BaseModel):
+    """La válvula de escape del gate de evals (`task_gov_05`).
+
+    Es una DIRECTIVA de la petición, no un campo del agente: no se persiste en
+    ninguna columna y no tiene efecto sobre nada que no sea el resultado
+    ``inconclusive`` de esta misma edición. Sobre una regresión MEDIDA no hace
+    nada — si la abriera, el gate sería opcional justo cuando funciona.
+
+    El motivo es obligatorio y largo a propósito: es el mismo listón que
+    `CLAUDE.md` §«La excepción al gate» le pone al ``gate_override`` del roadmap,
+    y por la misma razón — una excepción sin justificación auditable es la forma
+    barata de saltarse la regla. Queda **verbatim** en `audit_log`.
+    """
+
+    model_config = _BASE_CONFIG
+
+    # SIN `min_length` en el `Field`, a propósito: con `str_strip_whitespace` ya
+    # puesto en `_BASE_CONFIG`, esa restricción cubriría exactamente el mismo caso
+    # que el validador de abajo y le quitaría el mensaje — dejándolo como código
+    # muerto que parece una guarda. Una sola comprobación, y la que explica.
+    reason: str
+
+    @model_validator(mode="after")
+    def _explain_the_bar(self) -> EvalGateOverrideRequest:
+        if len(self.reason.strip()) < OVERRIDE_MIN_REASON_CHARS:
+            raise ValueError(
+                "el motivo del override debe tener al menos "
+                f"{OVERRIDE_MIN_REASON_CHARS} caracteres con contenido: queda "
+                "auditado a tu nombre y alguien tiene que poder entenderlo dentro "
+                "de seis meses"
+            )
+        return self
+
+
 class AgentUpdateRequest(BaseModel):
     model_config = _BASE_CONFIG
 
@@ -131,6 +166,10 @@ class AgentUpdateRequest(BaseModel):
     # the linked-vs-forked invariants; do it via a separate "fork" endpoint
     # (task_01_15).
     anchored_version: str | None = Field(default=None, max_length=32)
+    #: Directiva de petición, NO un campo del agente. `update_agent` la saca
+    #: antes de aplicar el resto (`apply_partial_update(..., exclude=...)`):
+    #: escribirla sobre la fila dejaría un atributo fantasma en el ORM.
+    eval_gate_override: EvalGateOverrideRequest | None = None
 
     @model_validator(mode="after")
     def _validate_model_config(self) -> AgentUpdateRequest:
@@ -185,6 +224,31 @@ class AgentTeamRef(BaseModel):
     name: str
 
 
+class EvalGateNoticeResponse(BaseModel):
+    """Lo que el gate de evals tiene que decir sobre una edición (`task_gov_05`).
+
+    Sólo viaja en la respuesta del `PUT` que tocó el prompt; es ``None`` en el
+    resto (GET, listado, POST), porque describe una decisión sobre UNA edición y
+    no un atributo del agente.
+
+    Existe porque el enunciado dice «en desarrollo y sandbox **se guarda y se
+    avisa**»: un aviso que no llega a ninguna pantalla no avisa. Es el modo de
+    fallo dominante de esta base (`verificar-antes-de-implementar.md` §5) —
+    mecanismo entregado, cero consumidores.
+    """
+
+    model_config = _BASE_CONFIG
+
+    outcome: str
+    preset: str
+    blocking: bool
+    message: str
+    scenarios: list[str] = Field(default_factory=list)
+    dataset_id: UUID | None = None
+    baseline_run_id: UUID | None = None
+    overridden: bool = False
+
+
 class AgentResponse(BaseModel):
     model_config = _BASE_CONFIG
 
@@ -212,6 +276,9 @@ class AgentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    #: Sólo lo rellena el `PUT` que tocó el prompt (`task_gov_05`). Ver
+    #: :class:`EvalGateNoticeResponse`.
+    eval_gate: EvalGateNoticeResponse | None = None
 
 
 # ---------------------------------------------------------------------------

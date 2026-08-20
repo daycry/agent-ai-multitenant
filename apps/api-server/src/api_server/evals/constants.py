@@ -60,6 +60,16 @@ DEFAULT_DRIFT_DROP_THRESHOLD: Decimal = Decimal("0.1")
 DRIFT_WINDOW_ENV_VAR = "EVAL_DRIFT_WINDOW"
 DRIFT_DROP_THRESHOLD_ENV_VAR = "EVAL_DRIFT_DROP_THRESHOLD"
 
+# --- Corridas SÍNCRONAS (dentro de una petición HTTP) ------------------------
+# Techo de llamadas a modelo de UNA corrida lanzada dentro de un request:
+# `POST /eval-runs` y el gate de edición de prompt (`task_gov_05`), que corre el
+# golden set con el prompt candidato antes de dejar guardar. La corrida es
+# síncrona, así que el límite real no es el dinero sino el timeout del gateway:
+# por encima, morir a la mitad deja al operador con un 504 y sin explicación.
+# Vive aquí desde `task_gov_05` —antes era un literal en `routers/evals`— porque
+# ahora lo leen DOS caminos y una segunda copia acabaría divergiendo.
+MAX_SYNC_EVAL_CALLS = 200
+
 
 __all__ = [
     "DEFAULT_DRIFT_DROP_THRESHOLD",
@@ -68,6 +78,7 @@ __all__ = [
     "DEFAULT_SHADOW_SAMPLE_RATE",
     "DRIFT_DROP_THRESHOLD_ENV_VAR",
     "DRIFT_WINDOW_ENV_VAR",
+    "MAX_SYNC_EVAL_CALLS",
     "REGRESSION_THRESHOLD_ENV_VAR",
     "SHADOW_SAMPLE_RATE_ENV_VAR",
 ]

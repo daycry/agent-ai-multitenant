@@ -105,8 +105,43 @@ async def test_each_seam_uses_its_own_model_name() -> None:
 async def test_the_subject_prompt_carries_the_item_input() -> None:
     provider = _Provider()
     await LLMSubjectModel(provider=provider, model="s").produce({"titulo": "añadir login"})
-    prompt = provider.calls[0]["messages"][0].content
+    prompt = provider.calls[0]["messages"][-1].content
     assert "añadir login" in prompt
+
+
+@pytest.mark.asyncio
+async def test_the_subject_runs_WITH_the_prompt_under_evaluation() -> None:
+    """El defecto que hacía imposible medir un cambio de prompt (`task_gov_05`).
+
+    Hasta esa tarea este adaptador no mandaba NINGÚN mensaje ``system``: el
+    sujeto nunca veía el prompt del agente, así que dos corridas del mismo
+    dataset con prompts distintos salían estadísticamente iguales. Es decir,
+    todo el subsistema medía el modelo y no al agente, y «esta edición del
+    prompt empeora la calidad» era una pregunta incontestable por construcción
+    — con las tablas llenas y el dashboard pintando.
+    """
+    provider = _Provider()
+    await LLMSubjectModel(
+        provider=provider, model="s", system_prompt="Eres el backend de banca."
+    ).produce({"titulo": "añadir login"})
+
+    messages = provider.calls[0]["messages"]
+    assert [m.role for m in messages] == ["system", "user"]
+    assert messages[0].content == "Eres el backend de banca."
+
+
+@pytest.mark.asyncio
+async def test_a_subject_without_persona_sends_no_empty_system_message() -> None:
+    """Un agente sin persona no tiene nada que prepender.
+
+    Mandar un ``system`` vacío no es neutro: algunos proveedores lo rechazan y
+    otros lo cuentan como turno, así que cambiaría la medición del caso que
+    precisamente no debía cambiar.
+    """
+    for empty in (None, "", "   "):
+        provider = _Provider()
+        await LLMSubjectModel(provider=provider, model="s", system_prompt=empty).produce({})
+        assert [m.role for m in provider.calls[0]["messages"]] == ["user"]
 
 
 # ---------------------------------------------------------------------------

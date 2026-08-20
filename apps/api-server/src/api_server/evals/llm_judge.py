@@ -89,10 +89,25 @@ class LLMJudgeModel:
 
 @dataclass
 class LLMSubjectModel:
-    """Adaptador al seam `SubjectModel`: produce lo que el juez comparará."""
+    """Adaptador al seam `SubjectModel`: produce lo que el juez comparará.
+
+    ``system_prompt`` es **el prompt bajo evaluación** — el del agente, o el
+    candidato cuando el gate de `task_gov_05` está midiendo una edición. Antes
+    de esa tarea este adaptador no mandaba ningún mensaje ``system``, y la
+    consecuencia era silenciosa y grave: dos corridas del MISMO dataset con
+    prompts distintos salían estadísticamente iguales, porque el sujeto nunca
+    veía el prompt. Es decir, todo el subsistema medía el modelo, no al agente,
+    y «esta edición del prompt empeora la calidad» era una pregunta que no se
+    podía contestar por construcción.
+
+    ``None`` (o vacío) mantiene el comportamiento anterior — un agente sin
+    persona no tiene nada que prepender — en vez de inventarse un system vacío,
+    que algunos proveedores rechazan y otros cuentan como turno.
+    """
 
     provider: Any
     model: str
+    system_prompt: str | None = None
 
     async def produce(self, item_input: dict[str, Any]) -> SubjectOutput:
         started = time.monotonic()
@@ -101,8 +116,12 @@ class LLMSubjectModel:
             "Resuelve la siguiente tarea y devuelve ÚNICAMENTE el entregable, "
             "sin preámbulo ni explicación:" + chr(10) + chr(10) + body
         )
+        messages: list[Message] = []
+        if self.system_prompt and self.system_prompt.strip():
+            messages.append(Message(role="system", content=self.system_prompt))
+        messages.append(Message(role="user", content=prompt))
         response = await self.provider.complete(
-            [Message(role="user", content=prompt)],
+            messages,
             model=self.model,
             max_tokens=_SUBJECT_MAX_TOKENS,
             temperature=_SUBJECT_TEMPERATURE,

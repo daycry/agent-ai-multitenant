@@ -85,6 +85,37 @@ Dos tablas auxiliares más (también tenant-owned + RLS):
   CLI en `--dry-run` y hace **skip-with-notice**; el merge-gate real solo se
   ejercita con un proveedor configurado.
 
+## La otra mitad del gate: `PUT /agents/{id}` (`task_gov_05`)
+
+El workflow de arriba vigila **dos ficheros del repo**. La vía por la que un
+tenant cambia un prompt de verdad —la pantalla de Agentes— no pasa por ningún
+fichero versionado, así que tiene su propio gate en el api-server
+(`evals/prompt_edit_gate.py` + `evals/prompt_edit_enforce.py`).
+
+- **Se dispara sólo si el prompt CAMBIA** (campo plano o `model_config.system_prompts`,
+  comparados en crudo — mismo criterio que el historial de `task_gov_02`).
+- **Cuatro resultados**: `passed` / `blocked` / `inconclusive` —los mismos tres
+  valores que `GateOutcome` en CI, para que las dos mitades se lean juntas— más
+  `not_gated`, que es «este agente no tiene golden set: no hay nada que medir».
+- **Qué se hace con el resultado depende del preset de validación humana del
+  proyecto**: `production` / `customer-external` **rechazan la escritura** con
+  `409` (`error: prompt_eval_regression`) y el mensaje NOMBRA los escenarios que
+  empeoraron; `development` / `sandbox` guardan y devuelven el aviso en
+  `AgentResponse.eval_gate`.
+- **Preset de una plantilla de tenant**: el más estricto de los proyectos de sus
+  equipos, para que editar la plantilla no esquive el gate del proyecto estricto.
+- **La corrida candidata se persiste en su propia transacción**, así que
+  sobrevive al rechazo y se puede abrir en el dashboard de calidad. El juez es el
+  MISMO que el de la corrida base (con otro, el diff mediría al juez).
+- **Válvula de escape**: `eval_gate_override.reason` (≥ 80 caracteres) en el
+  cuerpo del `PUT`. Abre **sólo** un `inconclusive`, nunca una regresión medida, y
+  deja una fila en `audit_log` con `action='prompt_eval_gate'` y el motivo
+  verbatim. Detalle operativo en
+  [`03-guides/persona-y-system-prompt.md`](../03-guides/persona-y-system-prompt.md).
+- Usa el mismo `EVAL_REGRESSION_THRESHOLD` que el merge-gate de CI, y el mismo
+  techo `MAX_SYNC_EVAL_CALLS` = 200 que `POST /eval-runs` (por encima, el
+  resultado es `inconclusive` con el número concreto).
+
 ## Shadow evals y drift
 
 - **Shadow** (`evals/shadow.py`): muestra aleatoria (5% default,

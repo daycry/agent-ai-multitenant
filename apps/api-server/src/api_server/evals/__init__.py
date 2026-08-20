@@ -29,6 +29,7 @@ from api_server.evals.constants import (
     DEFAULT_SHADOW_SAMPLE_RATE,
     DRIFT_DROP_THRESHOLD_ENV_VAR,
     DRIFT_WINDOW_ENV_VAR,
+    MAX_SYNC_EVAL_CALLS,
     REGRESSION_THRESHOLD_ENV_VAR,
     SHADOW_SAMPLE_RATE_ENV_VAR,
 )
@@ -76,6 +77,23 @@ from api_server.evals.metrics import (
     pass_rate,
     percentile,
 )
+
+# `prompt_edit_gate` sí; `prompt_edit_enforce` NO, y es deliberado: aquél es la
+# parte pura (vocabulario, presets, etiquetas, mensajes) y éste arrastra FastAPI y
+# `auth.deps`, que no tienen por qué entrar al importar el motor de evals — un
+# worker que sólo mide no debería cargar el árbol del servidor web.
+from api_server.evals.prompt_edit_gate import (
+    OVERRIDE_MIN_REASON_CHARS,
+    EvalUnavailableError,
+    GateNotice,
+    GateScope,
+    PromptEvalProbe,
+    PromptEvalRequest,
+    PromptGateOutcome,
+    evaluate_prompt_edit,
+    resolve_gate_scope,
+    scenario_label,
+)
 from api_server.evals.shadow import (
     DeterministicSampler,
     FixedSampler,
@@ -96,6 +114,8 @@ __all__ = [
     "EXIT_GATE_BLOCKED",
     "EXIT_GATE_INCONCLUSIVE",
     "EXIT_GATE_PASSED",
+    "MAX_SYNC_EVAL_CALLS",
+    "OVERRIDE_MIN_REASON_CHARS",
     "QUALITY_DRIFT_ALERT_EVENT_TYPE",
     "REGRESSION_THRESHOLD_ENV_VAR",
     "SHADOW_SAMPLE_RATE_ENV_VAR",
@@ -110,14 +130,20 @@ __all__ = [
     "DriftDecision",
     "DriftDispatcher",
     "DriftEvaluationResult",
+    "EvalUnavailableError",
     "FixedSampler",
     "GateDecision",
+    "GateNotice",
     "GateOutcome",
+    "GateScope",
     "ItemChange",
     "JudgeModel",
     "JudgeResponseError",
     "JudgedItem",
     "MetricDelta",
+    "PromptEvalProbe",
+    "PromptEvalRequest",
+    "PromptGateOutcome",
     "RunDiff",
     "RunMetrics",
     "SameModelJudgeError",
@@ -132,6 +158,7 @@ __all__ = [
     "detect_drift",
     "diff_metrics",
     "diff_runs",
+    "evaluate_prompt_edit",
     "evaluate_quality_drift",
     "gate_decision",
     "inconclusive_gate",
@@ -143,8 +170,10 @@ __all__ = [
     "percentile",
     "record_shadow_eval",
     "resolve_drift_config",
+    "resolve_gate_scope",
     "resolve_sample_rate",
     "resolve_threshold",
     "run_eval",
+    "scenario_label",
     "select_shadow_sample",
 ]

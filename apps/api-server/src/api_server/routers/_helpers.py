@@ -126,12 +126,19 @@ def apply_partial_update(
     enum_fields: tuple[str, ...] = (),
     rename: dict[str, str] | None = None,
     transform: dict[str, Any] | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> None:
     """Mutate `obj` in place with the values the client actually sent.
 
     Behavior:
       - `model_dump(exclude_unset=True)` so a missing key is left alone
         but an explicit `null` clears the column.
+      - `exclude`: campos del payload que NO son del recurso y que el
+        endpoint maneja por su cuenta (`task_gov_05`:
+        `eval_gate_override` es una directiva de la petición). Sin esto
+        acabarían como `setattr` sobre la fila ORM — que no falla, porque
+        una instancia declarativa acepta atributos arbitrarios, y por eso
+        hace falta un test que lo vigile en vez de confiar en que reviente.
       - `enum_fields`: Pydantic stores StrEnum values as Enum members by
         default; the SA column expects the string. Call `.value` on
         these before assignment.
@@ -142,6 +149,9 @@ def apply_partial_update(
         before assignment. Used for list[UUID] -> list[str] coercion.
     """
     changes = payload.model_dump(exclude_unset=True)
+
+    for field in exclude:
+        changes.pop(field, None)
 
     if rename:
         for src, dst in rename.items():

@@ -58,7 +58,18 @@ agente dentro de `executions.prompt_version`). Con eso queda **desbloqueada la
 fase 2** —el aviso nº2 de más abajo decía que sin versionado una eval que bloquea
 no tiene contra qué comparar— y también uno de los dos disparadores escritos de
 `task_gov_11`, que se reabre cuando existan `task_gov_02` **y** `task_gov_05`: la
-primera mitad ya está. El `status` del plan sigue en `approved`: quedan casillas
+primera mitad ya está.
+
+**Tercera pasada (2026-08-20): `task_gov_05`.** El `PUT /agents/{id}` corre la
+eval contra el golden set y rechaza la escritura bajo preset estricto, con el
+mensaje nombrando los escenarios y una válvula de escape acotada al caso
+`inconclusive`. Con eso **las dos condiciones escritas de `task_gov_11` están
+cumplidas** —`task_gov_02` y `task_gov_05`—, así que esa casilla ya sólo depende
+de escribir la nota de reapertura. De la fase 2 queda `task_gov_04`, cuyo resto
+es del operador (secreto, dataset, variables de repositorio) más el productor de
+diff vivo de CI — que esta casilla NO cubre: aquí el productor vive en el
+api-server, con sesión tenant-bound, y en CI no la hay. El `status` del plan
+sigue en `approved`. El `status` del plan sigue en `approved`: quedan casillas
 abiertas y `marketplace-v2-despliegue` está `in_progress`.
 
 **Los ids de test se renombraron a `auto_govp_*` / `human_govp_*`.** Los
@@ -504,7 +515,96 @@ Decisión del operador: **bloquean, pero solo en `production` y
 
 ### `task_gov_05` — La eval bloquea al editar un prompt, según el preset
 
-- [ ] **Título**: `PUT /agents/{id}` corre la eval y bloquea en `production` / `customer-external`
+- [x] **Título**: `PUT /agents/{id}` corre la eval y bloquea en `production` / `customer-external`
+  - ✅ **Cerrada (2026-08-20).** Recon primero, y encontró que **el enunciado no
+    se podía cumplir con el código tal cual**: `LLMSubjectModel.produce` mandaba
+    UN solo mensaje `user`, sin `system`. O sea que el sujeto **nunca veía el
+    prompt del agente**, y dos corridas del mismo dataset con prompts distintos
+    salían estadísticamente iguales. «¿Esta edición del prompt empeora la
+    calidad?» era una pregunta incontestable por construcción — con las tablas
+    llenas y el dashboard pintando. Arreglado (`system_prompt` opcional en el
+    adaptador, `subject_system_prompt` en `_build_eval_seams`) y **`POST
+/eval-runs` lo pasa cuando la corrida declara `subject_agent_id`**, para que
+    la corrida base y la candidata sean comparables. Sin esa mitad, esta casilla
+    habría entregado un gate que mide ruido.
+  - **Los cuatro estados, no dos.** `PromptGateOutcome` reusa los tres valores de
+    `GateOutcome` (`task_gov_04`) —para que las dos mitades del gate se lean en el
+    mismo informe sin traducir; hay un test que lo ata— y añade `not_gated`: el
+    agente **no tiene golden set**, así que no hay nada que medir. Llamarlo
+    `passed` repetiría el verde no ganado que la casilla anterior acaba de
+    quitar; llamarlo `blocked` congelaría los prompts de todo tenant que aún no
+    haya sembrado un dataset, que es la vía más rápida a que alguien apague el
+    gate entero.
+  - **La válvula de escape, y por qué no es un agujero.** Va en el cuerpo del
+    `PUT` (`eval_gate_override.reason`) y **sólo abre un `INCONCLUSIVE`** — una
+    regresión MEDIDA se rechaza con override o sin él, y el mensaje lo dice, para
+    que el siguiente paso del usuario no sea bajar el preset del proyecto (el
+    agujero grande, permanente y sin auditar). **Quién**: el mismo `tenant_admin`
+    que ya autoriza el `PUT`; el argumento es que la válvula es _estrictamente
+    más pequeña_ que el bypass que esa persona ya tiene, y a diferencia de aquél
+    deja una fila con su nombre. **Motivo obligatorio de ≥ 80 caracteres**, el
+    mismo listón que `CLAUDE.md` §«La excepción al gate» le pone al
+    `gate_override` del roadmap. **Auditada** en `audit_log`
+    (`action='prompt_eval_gate'`) con el motivo **verbatim** — y también cuando
+    el override venía y NO hacía falta, para que «adjuntarlo siempre» sea un
+    patrón visible en vez de una costumbre invisible.
+  - **La auditoría va en su PROPIA sesión** (`open_tenant_session`), y es la
+    decisión que casi se cuela mal: al rechazar, la transacción del request se
+    deshace ENTERA, así que una fila escrita en ella se iría con el prompt y el
+    409 no dejaría rastro. Igual la corrida candidata de la sonda viva, que se
+    persiste aparte para que el operador pueda abrirla en el dashboard y ver por
+    qué se le dijo que no.
+  - **La puerta trasera cerrada**: un agente `global_tenant_template` no tiene
+    proyecto, pero **se ejecuta en los de sus equipos**. El preset que lo juzga es
+    el más estricto de ésos (desempate determinista por id). Con el camino cómodo
+    —«sin `project_id` ⇒ sólo avisa»— bastaba editar la plantilla para saltarse el
+    gate del proyecto de producción.
+  - **Sin copias nuevas de vocabulario compartido**: `STRICT_PRESETS` pasa a
+    definirse una sola vez en `seeds/builtin_approval_policies.py` (la copia de
+    `cli/approval_policy_audit.py` se retira y se importa); `MAX_SYNC_EVAL_CALLS`
+    baja a `evals/constants.py` porque ahora lo leen dos caminos. El hallazgo g6
+    nació justo de dos copias de un vocabulario que dejaron de coincidir.
+  - **Rojos verificados uno a uno**, no de adorno: (1) gate que nunca bloquea →
+    caen **5**; (2) plantilla resuelta al default de plataforma → cae la de la
+    puerta trasera; (3) gate cableado a «el PUT se ejecutó» en vez de «el prompt
+    cambió» → cae la suya; (4) sonda viva sin pasar el prompt candidato → cae la
+    de la sonda; (5) auditoría dentro de la transacción del request → caen **3**;
+    (6) aviso que no llega a la respuesta → caen **2**; (7) `exclude` de
+    `apply_partial_update` retirado, (8) mensaje que dice «la eval falló» y (9)
+    valor de `BLOCKED` cambiado → **4** rojos en los unitarios.
+  - **Un defecto que casi se cuela por el orden, y el test que lo fija**: el gate
+    hace `SELECT`s sobre la sesión del request, así que el **autoflush** de
+    SQLAlchemy escribía el `UPDATE` pendiente desde dentro de ellos. Con el gate
+    por delante del `flush_or_conflict`, un `PUT` que renombra a un nombre ya
+    usado **y** toca el prompt sacaba la `IntegrityError` por un camino que no
+    pasa por el traductor: **500 con el mensaje crudo de PostgreSQL**, que nombra
+    la constraint y trae el `tenant_id` en el `DETAIL:` — la misma fuga que
+    `routers/_integrity.py` existe para evitar. Se invirtió el orden (`flush` →
+    gate) y se dejó el rojo comprobado en
+    `test_a_duplicate_name_still_gets_the_sanitised_conflict_not_a_raw_500`.
+  - **Un aviso que alguien LEE**, que es la mitad que esta base se deja sin hacer
+    (`verificar-antes-de-implementar.md` §5): el rechazo sale con
+    `detail.message`, que es exactamente lo que `apps/admin-panel/lib/api-error.ts`
+    ya extrae y pinta — el operador ve los escenarios por su nombre **sin tocar
+    el frontend**. El aviso del camino no bloqueante viaja en `AgentResponse.eval_gate`.
+  - **Documentado** para el operador en
+    [`03-guides/persona-y-system-prompt.md`](../03-guides/persona-y-system-prompt.md)
+    §«Guardar un prompt puede rechazarse»: la tabla preset→efecto, cómo activar
+    el gate (dataset + corrida base) y la válvula con sus tres condiciones. Y en
+    [`04-reference/evals-stats.md`](../04-reference/evals-stats.md) §«La otra
+    mitad del gate», junto al merge-gate de CI, porque quien lea uno tiene que
+    encontrar el otro. `human_govp_02` lleva ahora escritas sus
+    **precondiciones**: sin golden set el gate contesta `not_gated` y sin corrida
+    base `inconclusive` — las dos correctas, ninguna la que ese test viene a ver.
+  - **Lo que NO queda hecho, y es de código**: (a) el panel no pinta todavía el
+    aviso del camino no bloqueante (`eval_gate` en la respuesta del `PUT`) ni
+    ofrece un campo para el motivo del override — hoy la válvula se usa por API;
+    (b) la corrida corre **dentro** del `PUT`, con el techo de
+    `MAX_SYNC_EVAL_CALLS`: por encima el resultado es `INCONCLUSIVE` con el
+    número concreto, que es honesto pero deja al dataset grande dependiendo de la
+    válvula hasta que la corrida se mueva a un worker; (c) `shadow_evals.py`
+    sigue construyendo su `LLMSubjectModel` sin prompt — mismo defecto que se
+    acaba de arreglar aquí, pero es otro carril.
 - **Tiempo**: 2 días · **Complejidad**: m
 - **Descripción**: Al cambiar `system_prompt`, se lanza la eval contra el golden
   set. En un proyecto `production` o `customer-external`, un resultado peor que
@@ -518,13 +618,44 @@ Decisión del operador: **bloquean, pero solo en `production` y
   un incentivo a apagar el gate.
 
 - **Tests automáticos**:
+
   ```yaml
   - id: auto_govp_05_a
     runtime: python-pytest
     command: "pytest tests/integration/test_prompt_edit_eval_gate.py -q -p no:randomly"
   ```
+
   Nodos irrenunciables: bloquea en `production`, NO bloquea en `development`, y
   el mensaje de rechazo nombra los escenarios que empeoraron.
+
+  Ejecutado el 2026-08-20 contra la base `agentic_gov05` (`TEST_PG_DB_NAME`
+  propio: [gotcha](../03-guides/gotchas/integration-tests-share-one-database.md)):
+  `auto_govp_05_a` → **13 passed** (los tres nodos del enunciado, más la válvula
+  en sus cuatro caminos, la puerta trasera de la plantilla, el `PUT` que no toca
+  el prompt, el agente sin golden set, el orden `flush`→gate y la **sonda viva**,
+  que corre el dataset de verdad con juez y sujeto guionizados y comprueba que la
+  corrida candidata queda persistida).
+
+  **Un rojo que NO se reprodujo, anotado en vez de tapado**: en una de las cuatro
+  pasadas completas cayó `test_a_duplicate_name_still_gets_the_sanitised_conflict_not_a_raw_500`,
+  y sólo en la que corrió **a la vez que otros dos procesos de pytest** en la
+  misma máquina. Ese mismo test pasa en solitario y en las otras tres pasadas
+  completas (13/13). Su camino de código es determinista —`flush_or_conflict`
+  traduce y hace `rollback`, no hay orden ni reloj de por medio—, así que la
+  hipótesis es contención de máquina, no el test. Queda escrito porque un flaky
+  que nadie apunta se convierte en «re-córrelo y ya», que es como se pierde el
+  siguiente fallo de verdad; si vuelve a caer, hay que capturar la traza (esa vez
+  sólo quedó la cola del informe).
+
+  Tres suites más que este cambio toca, todas en verde el mismo día:
+  `tests/unit/test_prompt_edit_gate.py` → **11 passed** (las piezas puras + el
+  `exclude` de `apply_partial_update`, que necesita guarda propia porque una
+  instancia declarativa acepta atributos arbitrarios y su ausencia NO falla);
+  `tests/unit/test_llm_judge_seams.py` → **11 passed** (con los dos casos nuevos
+  del `system` del sujeto); `tests/integration/test_eval_run_endpoint.py` →
+  **10 passed** tras actualizar la firma de su doble de `_build_eval_seams` — un
+  doble con la firma vieja habría dejado el test verde probando una llamada que
+  ya nadie hace.
 
 ---
 
@@ -849,9 +980,17 @@ incorrect` no dice qué regla le falta al reviewer de CI4. **Si el operador
 - id: human_govp_02
   title: Editar un prompt en producción y ver que la eval te para
   steps: >-
-    En un proyecto `production`, edita el `system_prompt` de un agente
-    empeorándolo a propósito. Debe rechazarse Y decir QUÉ escenarios empeoraron.
-    Repite en un proyecto `development`: debe guardar y avisar.
+    ANTES: el agente necesita (a) un golden set que lo apunte
+    (`eval_datasets.target_agent_id`) con items promocionados de tareas
+    aprobadas, y (b) una corrida BASE completada (`POST /eval-runs` con
+    `subject_agent_id`). Sin (a) el gate responde `not_gated` y sin (b)
+    `inconclusive` — las dos son la respuesta correcta, pero ninguna es la que
+    este test viene a ver. Luego: en un proyecto `production`, edita el
+    `system_prompt` de un agente empeorándolo a propósito. Debe rechazarse Y
+    decir QUÉ escenarios empeoraron. Repite en un proyecto `development`: debe
+    guardar y avisar. Y con la eval caída (proveedor apagado), comprueba la
+    válvula: sin `eval_gate_override` te para; con un motivo de 80+ caracteres
+    pasa y aparece la fila en `audit_log` con `action='prompt_eval_gate'`.
 - id: human_govp_03
   title: El número del detector de Goodhart, leído
   steps: >-
