@@ -305,6 +305,12 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
 
 ### ci / github actions
 
+- [expresion-anidada-en-actions-es-texto-literal.md](./expresion-anidada-en-actions-es-texto-literal.md)
+  — `invalid tag "ghcr.io/${{ github.repository_owner }}/..."` con **actionlint
+  en verde**: una expresión dentro de otra ya abierta es una CADENA, no se
+  evalúa. El valor va como argumento de `format(...)`, y `env` no está
+  disponible en un `env:` de nivel job (`github` sí). Duele el doble en un
+  camino que sólo corre en `master`: el merge es su primera ejecución.
 - [ci-github-actions-node-deprecation.md](./ci-github-actions-node-deprecation.md)
   — Node 20 deprecado; `actions/checkout@v4 → v5`, etc.
 - [ci-no-tiene-docker-env-y-el-compose-lo-exige.md](./ci-no-tiene-docker-env-y-el-compose-lo-exige.md)
