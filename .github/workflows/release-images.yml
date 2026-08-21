@@ -78,7 +78,7 @@ jobs:
       # `needs: api-server` impide que se publiquen los tres backends que
       # heredan esta base. Convertirlo en gate previo al push es follow-up.
       - name: Trivy — api-server publicada (HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ env.REGISTRY }}/api-server:${{ needs.prep.outputs.tag }}
@@ -126,7 +126,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy — ${{ matrix.app }} publicada (HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ env.REGISTRY }}/${{ matrix.app }}:${{ needs.prep.outputs.tag }}
@@ -169,7 +169,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy — admin-panel publicada (HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: ${{ env.REGISTRY }}/admin-panel:${{ needs.prep.outputs.tag }}
