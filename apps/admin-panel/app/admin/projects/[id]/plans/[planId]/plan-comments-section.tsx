@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
@@ -27,6 +28,7 @@ interface PlanCommentResponse {
 }
 
 export function CommentsSection({ planId, taskIds }: { planId: string; taskIds: string[] }) {
+  const t = useT("planDetail");
   const queryClient = useQueryClient();
   const [targetKind, setTargetKind] = useState<"plan" | "task">("plan");
   const [targetRef, setTargetRef] = useState<string>("");
@@ -63,7 +65,7 @@ export function CommentsSection({ planId, taskIds }: { planId: string; taskIds: 
   return (
     <Card className="mt-6" data-testid="plan-comments">
       <CardHeader>
-        <CardTitle>Comentarios</CardTitle>
+        <CardTitle>{t("commentsTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         <ul className="mb-4 space-y-2" data-testid="plan-comments-list">
@@ -78,12 +80,12 @@ export function CommentsSection({ planId, taskIds }: { planId: string; taskIds: 
               <p className="text-muted-foreground mb-1 text-[10px] uppercase tracking-wide">
                 {c.target_kind === "task" ? (
                   <>
-                    Sobre tarea <span className="font-mono">{c.target_ref}</span>
+                    {t("commentOnTask")} <span className="font-mono">{c.target_ref}</span>
                   </>
                 ) : c.target_kind === "phase" ? (
-                  <>Sobre fase {c.target_ref}</>
+                  <>{t("commentOnPhase", { ref: c.target_ref ?? "" })}</>
                 ) : (
-                  <>Sobre el plan</>
+                  <>{t("commentOnPlan")}</>
                 )}
               </p>
               <div>{renderPlanDraft(c.content)}</div>
@@ -91,7 +93,7 @@ export function CommentsSection({ planId, taskIds }: { planId: string; taskIds: 
           ))}
           {(commentsQuery.data ?? []).length === 0 ? (
             <p className="text-muted-foreground text-xs italic" data-testid="plan-comments-empty">
-              Aún no hay comentarios.
+              {t("commentsEmpty")}
             </p>
           ) : null}
         </ul>
@@ -117,9 +119,9 @@ export function CommentsSection({ planId, taskIds }: { planId: string; taskIds: 
               data-testid="plan-comment-target-kind"
               className="bg-background border-muted rounded border px-2 py-1 text-sm"
             >
-              <option value="plan">Sobre el plan</option>
+              <option value="plan">{t("commentOnPlan")}</option>
               <option value="task" disabled={taskIds.length === 0}>
-                Sobre una tarea
+                {t("commentOnATask")}
               </option>
             </select>
             {targetKind === "task" ? (
@@ -140,13 +142,13 @@ export function CommentsSection({ planId, taskIds }: { planId: string; taskIds: 
           <MarkdownTextarea
             value={content}
             onChange={setContent}
-            placeholder="Escribe tu comentario…"
+            placeholder={t("commentPlaceholder")}
             rows={4}
             data-testid="plan-comment-content"
           />
           <div className="flex justify-end">
             <Button type="submit" disabled={!canSubmit} data-testid="plan-comment-submit">
-              Comentar
+              {t("commentSubmit")}
             </Button>
           </div>
         </form>

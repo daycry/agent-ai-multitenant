@@ -13,13 +13,15 @@
 
 import { RealisticAvatar } from "@/components/voice/realistic-avatar";
 import { VoiceCallShell } from "@/components/voice/voice-call-shell";
+import { useT } from "@/lib/i18n";
 
 export function VoiceCall({ title = "Aria", onClose }: { title?: string; onClose: () => void }) {
+  const t = useT("assistant");
   return (
     <VoiceCallShell
       wsPath="/ws/assistant/voice"
       title={title}
-      subtitle="Asistente personal"
+      subtitle={t("title")}
       storageKey="agentic.voice.assistant"
       defaultVoice="ef_dora"
       testidPrefix="voice"

@@ -217,12 +217,12 @@ def test_no_rls_no_policy(alembic_config: object, admin_pg_dsn: str) -> None:
     access is gated by the system_admin endpoints, not by row security."""
     command.upgrade(alembic_config, "head")  # type: ignore[arg-type]
 
-    assert (
-        _rls_enabled(admin_pg_dsn, "llm_providers") is False
-    ), "llm_providers must NOT have RLS enabled (ADR 0028)"
-    assert (
-        _policy_count(admin_pg_dsn, "llm_providers") == 0
-    ), "llm_providers must have no RLS policy (ADR 0028)"
+    assert _rls_enabled(admin_pg_dsn, "llm_providers") is False, (
+        "llm_providers must NOT have RLS enabled (ADR 0028)"
+    )
+    assert _policy_count(admin_pg_dsn, "llm_providers") == 0, (
+        "llm_providers must have no RLS policy (ADR 0028)"
+    )
 
 
 def test_defaults_apply(alembic_config: object, admin_pg_dsn: str, migrations_pg_dsn: str) -> None:

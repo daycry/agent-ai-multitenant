@@ -204,14 +204,14 @@ class InMemoryLLMProviderVaultStore:
 
 
 __all__ = [
-    "HvacLLMProviderVaultStore",
-    "InMemoryLLMProviderVaultStore",
-    "LLMProviderVaultError",
-    "LLMProviderVaultStore",
     "PLATFORM_KV_MOUNT",
     "PROVIDER_SECRET_PREFIX",
     "SECRET_FIELD_API_KEY",
     "SECRET_FIELD_BEARER_TOKEN",
     "SECRET_FIELD_OAUTH_TOKEN",
+    "HvacLLMProviderVaultStore",
+    "InMemoryLLMProviderVaultStore",
+    "LLMProviderVaultError",
+    "LLMProviderVaultStore",
     "provider_secret_path",
 ]

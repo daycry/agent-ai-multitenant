@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -74,6 +75,12 @@ _SIGNING_KEY = RSAKey.generate_key(2048, parameters={"kid": _KID}, private=True)
 
 
 def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID) -> str:
+    # `exp`/`iat` de verdad: el IdP falso acuñaba tokens SIN caducidad, y el
+    # verificador tampoco la miraba (gotcha joserfc-decode-no-valida-exp). Al
+    # cerrar ese hueco en `auth/sso/oidc.py` estos dobles tenían que dejar de
+    # emitir tokens inmortales: un fake que no puede caducar no ejercita el
+    # camino real.
+    now = int(time.time())
     header = {"alg": "RS256", "kid": _KID}
     claims = {
         "iss": _ISSUER,
@@ -82,6 +89,8 @@ def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID
         "nonce": nonce,
         "email": "Worker@Acme.test",  # mixed case -> flow lowercases it
         "name": "Worker Person",
+        "iat": now,
+        "exp": now + 3600,
     }
     return joserfc_jwt.encode(header, claims, _SIGNING_KEY)
 
@@ -431,14 +440,17 @@ async def test_callback_resolves_provider_and_mints_identity_session(
         resp = await client.get(
             "/auth/sso/oidc/callback",
             params={"code": "fake-auth-code", "state": state},
+            follow_redirects=False,
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["token_type"] == "bearer"
-        token = body["access_token"]
+        # ADR 0133 / task_prod09_09: the callback no longer answers a
+        # `LoginResponse` JSON (frontend-1 — the user landed on raw JSON with no
+        # session). It sets the session cookie and 303s to the panel; the
+        # redirect contract itself is pinned in test_sso_callback_redirect.py.
+        assert resp.status_code == 303, resp.text
+        token = client.cookies.get("agentic_session")
         assert token
 
-        # The JWT is accepted; the session proves identity WITHOUT a tenant.
+        # The session is accepted; it proves identity WITHOUT a tenant.
         me = await client.get("/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200, me.text
         me_body = me.json()
@@ -476,8 +488,11 @@ async def test_callback_state_is_single_use(
         first = await client.get(
             "/auth/sso/oidc/callback",
             params={"code": "fake-auth-code", "state": state},
+            follow_redirects=False,
         )
-        assert first.status_code == 200, first.text
+        # 303 since ADR 0133 — the state being single-use is what this test is
+        # about; the status only has to say "the first one worked".
+        assert first.status_code == 303, first.text
         replay = await client.get(
             "/auth/sso/oidc/callback",
             params={"code": "fake-auth-code", "state": state},
@@ -578,9 +593,12 @@ async def test_identity_session_has_no_tenant_access(
         resp = await client.get(
             "/auth/sso/oidc/callback",
             params={"code": "fake-auth-code", "state": state},
+            follow_redirects=False,
         )
-        assert resp.status_code == 200, resp.text
-        token = resp.json()["access_token"]
+        # 303 + Set-Cookie since ADR 0133 (see the note above).
+        assert resp.status_code == 303, resp.text
+        token = client.cookies.get("agentic_session")
+        assert token
 
         me = await client.get("/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200, me.text

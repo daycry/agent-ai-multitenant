@@ -8,10 +8,15 @@ import { cn } from "@/lib/utils";
  * spacing rhythm so multi-section settings & edit pages stop hand-rolling
  * `<h*>` + helper-text markup.
  *
- *   <FormSection title="Identidad" description="Nombre y descripción visibles.">
- *     <Field label="Nombre">…</Field>
- *     <Field label="Descripción">…</Field>
+ *   <FormSection title={t("identity")} description={t("identityHelp")}>
+ *     <Field label={t("name")}>…</Field>
+ *     <Field label={t("description")}>…</Field>
  *   </FormSection>
+ *
+ * The example goes through `useT()` on purpose: `check-i18n.mjs` does not tell
+ * comments from code, so a JSDoc with Spanish literals is counted as UI debt.
+ * This file was carrying **4 of the guard's pending attributes** without a
+ * single translatable string in its code.
  *
  * Presentation only — it renders a plain `<section>` and forwards
  * `className` + `data-testid`. The title is associated to the region via

@@ -32,7 +32,8 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.human_inbox
@@ -64,10 +65,6 @@ interface InboxHistoryEntry {
 }
 
 const NO_DATA = "Sin datos aún";
-
-function apiErrorBody(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 /** Format a duration in seconds as a compact human string ("2 h 30 min"). */
 function formatDuration(seconds: number | null): string {
@@ -192,6 +189,7 @@ function HistoryCard({ item }: { item: InboxHistoryEntry }) {
 // History tab
 // ---------------------------------------------------------------------------
 export function HistoryTab() {
+  const errorText = useErrorText();
   const metricsQuery = useQuery({
     queryKey: ["inbox", "metrics"],
     queryFn: () => apiFetch<InboxMetrics>("/inbox/metrics"),
@@ -223,7 +221,7 @@ export function HistoryTab() {
         {metricsQuery.isError && (
           <Card className="border-destructive p-4" data-testid="metrics-error">
             <p className="text-destructive text-sm">
-              No se pudieron cargar tus métricas: {apiErrorBody(metricsQuery.error)}
+              No se pudieron cargar tus métricas: {errorText(metricsQuery.error)}
             </p>
           </Card>
         )}
@@ -275,7 +273,7 @@ export function HistoryTab() {
         {historyQuery.isError && (
           <Card className="border-destructive p-4" data-testid="history-error">
             <p className="text-destructive text-sm">
-              No se pudo cargar tu histórico: {apiErrorBody(historyQuery.error)}
+              No se pudo cargar tu histórico: {errorText(historyQuery.error)}
             </p>
           </Card>
         )}

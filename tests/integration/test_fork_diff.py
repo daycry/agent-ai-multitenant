@@ -142,7 +142,7 @@ async def _bump_source(migrations_dsn: str, source_id: UUID) -> None:
     conn = await asyncpg.connect(migrations_dsn)
     try:
         await conn.execute(
-            "UPDATE agents SET name = $1, system_prompt = $2, updated_at = $3" " WHERE id = $4",
+            "UPDATE agents SET name = $1, system_prompt = $2, updated_at = $3 WHERE id = $4",
             "Built-in PM v2",
             "Prompt v2.",
             datetime.now(tz=UTC),

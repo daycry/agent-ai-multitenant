@@ -1,15 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const apiFetchMock = vi.fn();
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
+});
 
 import {
   affectFrameToMind,
   avatarStyleFromAffect,
   browseStepSummary,
   driveToPercent,
+  getCortexPursuits,
   PAD_RANGES,
   padToPercent,
   parseVoiceAffectFrame,
+  type CortexPursuit,
   type PadDimension,
 } from "./cortex";
+
+afterEach(() => {
+  apiFetchMock.mockReset();
+});
 
 describe("browseStepSummary (ADR 0080 — inbox de aprobación)", () => {
   it("describe cada acción del catálogo cerrado en lenguaje del owner", () => {
@@ -229,5 +241,114 @@ describe("avatarStyleFromAffect", () => {
     expect(over.intensity).toBe(1);
     expect(under.hue).toBe(0);
     expect(under.intensity).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Hueco C1 de la auditoría 2026-07-27: al retorno le faltaban `blinkRate`
+  // (parpadeo gobernado por la activación — hasta ahora era un intervalo
+  // aleatorio fijo, así que un córtex excitado parpadeaba igual que uno
+  // apagado), `mouthBias` (la curvatura de la boca en reposo, que el avatar
+  // recalculaba inline) y `label` (qué etiqueta pinta el avatar).
+  // -------------------------------------------------------------------------
+  it("el parpadeo se acelera con la activación (y nunca se detiene)", () => {
+    const calm = avatarStyleFromAffect({ valence: 0, arousal: 0 });
+    const excited = avatarStyleFromAffect({ valence: 0, arousal: 1 });
+    expect(excited.blinkRate).toBeGreaterThan(calm.blinkRate);
+    // Un blinkRate 0 dejaría los ojos abiertos para siempre (o dividiría por
+    // cero al calcular el intervalo): el suelo tiene que ser humano.
+    expect(calm.blinkRate).toBeGreaterThan(0);
+    expect(excited.blinkRate).toBeLessThan(120); // ni un tic nervioso imposible
+  });
+
+  it("el sesgo de la boca sigue la valencia: +1 sonríe, -1 hace mueca", () => {
+    expect(avatarStyleFromAffect({ valence: 1, arousal: 0.3 }).mouthBias).toBe(1);
+    expect(avatarStyleFromAffect({ valence: -1, arousal: 0.3 }).mouthBias).toBe(-1);
+    expect(avatarStyleFromAffect({ valence: 0, arousal: 0.3 }).mouthBias).toBe(0);
+    // Clampado: un valence 5 no dobla la boca fuera de la cara.
+    expect(avatarStyleFromAffect({ valence: 5, arousal: 0.3 }).mouthBias).toBe(1);
+    expect(avatarStyleFromAffect({ valence: -5, arousal: 0.3 }).mouthBias).toBe(-1);
+  });
+
+  it("`label` es la etiqueta que pinta el avatar: la del backend, ya recortada", () => {
+    // NO se deriva del PAD: la etiqueta bilingüe es del backend
+    // (derive_mood_label) y duplicar ese mapeo aquí crearía dos verdades.
+    expect(
+      avatarStyleFromAffect({ valence: 0.5, arousal: 0.5, mood_label: " alegría " }).label,
+    ).toBe("alegría");
+  });
+
+  it("sin `mood_label` el label queda VACÍO (no se inventa un estado de ánimo)", () => {
+    // El defecto que atrapa: pintar "neutral" cuando el servidor aún no ha
+    // mandado ningún frame afectivo. Vacío ⇒ el avatar no enseña chip.
+    expect(avatarStyleFromAffect({ valence: 0, arousal: 0.3 }).label).toBe("");
+    expect(avatarStyleFromAffect({ valence: 0, arousal: 0.3, mood_label: "   " }).label).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCortexPursuits — el fetcher de "Lo que está aprendiendo" (ADR 0078).
+//
+// La tarjeta del Panel de Mente lee este historial de curiosidad. El endpoint
+// vive bajo el router `/owner/cortex` (gated por `require_system_owner`), así
+// que lo que hay que clavar es (a) que el prefijo del router NO se pierde —un
+// `/curiosity/pursuits` sin prefijo devuelve 404 y la tarjeta se queda vacía
+// sin decir por qué— y (b) que los filtros opcionales solo viajan cuando se
+// piden (un `?status=undefined` es un 422 del backend, no un "sin filtro").
+// ---------------------------------------------------------------------------
+
+function pursuit(overrides: Partial<CortexPursuit> = {}): CortexPursuit {
+  return {
+    id: "p1",
+    topic: "compilación incremental en Rust",
+    status: "digested",
+    created_at: "2026-07-20T10:00:00Z",
+    surfaced_at: null,
+    learning_memory_id: null,
+    search_count: 3,
+    ...overrides,
+  };
+}
+
+describe("getCortexPursuits (ADR 0078 — historial de curiosidad)", () => {
+  it("pega al endpoint del router del córtex, con su prefijo owner-only", async () => {
+    apiFetchMock.mockResolvedValue([pursuit()]);
+    const rows = await getCortexPursuits();
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    expect(apiFetchMock.mock.calls[0][0]).toBe("/owner/cortex/curiosity/pursuits");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].topic).toBe("compilación incremental en Rust");
+  });
+
+  it("no añade query-string cuando no se pide ningún filtro", async () => {
+    apiFetchMock.mockResolvedValue([]);
+    await getCortexPursuits();
+    // Un `?status=undefined&limit=undefined` NO es "sin filtro": el backend lo
+    // rechaza con 422 y la tarjeta se quedaría vacía.
+    expect(apiFetchMock.mock.calls[0][0]).not.toContain("?");
+  });
+
+  it("propaga status y limit como query-params cuando se piden", async () => {
+    apiFetchMock.mockResolvedValue([]);
+    await getCortexPursuits({ status: "surfaced", limit: 20 });
+    const path = apiFetchMock.mock.calls[0][0] as string;
+    expect(path.startsWith("/owner/cortex/curiosity/pursuits?")).toBe(true);
+    const qs = new URLSearchParams(path.split("?")[1]);
+    expect(qs.get("status")).toBe("surfaced");
+    expect(qs.get("limit")).toBe("20");
+  });
+
+  it("manda limit=0 como filtro real y no lo confunde con 'sin límite'", async () => {
+    // `if (opts.limit)` habría tragado el 0 (falsy) y pedido la lista entera;
+    // el helper compara contra undefined a propósito.
+    apiFetchMock.mockResolvedValue([]);
+    await getCortexPursuits({ limit: 0 });
+    expect(apiFetchMock.mock.calls[0][0]).toContain("limit=0");
+  });
+
+  it("deja subir el error de la API en vez de devolver una lista vacía", async () => {
+    // Un 403 (dejaste de ser owner) debe distinguirse de "no hay temas": la
+    // tarjeta pinta un mensaje de error, no el estado vacío.
+    apiFetchMock.mockRejectedValue(new Error("api 403: forbidden"));
+    await expect(getCortexPursuits()).rejects.toThrow("403");
   });
 });

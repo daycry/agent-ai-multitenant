@@ -18,16 +18,22 @@ import { ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
+import { clearClientSession, hasSession } from "@/lib/auth";
+import { purgeSessionCache } from "@/lib/session-cache";
+import { useT } from "@/lib/i18n";
 import { clearTenantId } from "@/lib/tenant-storage";
 
 export default function NoAccessPage() {
+  const t = useT("noAccess");
+  const tShell = useT("shell");
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
-  // A direct hit with no token is meaningless — bounce to login.
+  // `middleware.ts` already bounces a session-less visitor before this page
+  // is served; this is the belt-and-braces case where the session died between
+  // the navigation and the render.
   useEffect(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       router.replace("/login");
     }
   }, [router]);
@@ -39,8 +45,9 @@ export default function NoAccessPage() {
     } catch (err) {
       if (!(err instanceof ApiError)) console.error(err);
     } finally {
-      clearToken();
+      clearClientSession();
       clearTenantId();
+      purgeSessionCache();
       router.replace("/login");
     }
   }
@@ -58,13 +65,10 @@ export default function NoAccessPage() {
           >
             <ShieldAlert className="h-7 w-7" />
           </span>
-          <CardTitle>Sin acceso a la plataforma</CardTitle>
+          <CardTitle>{t("title")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          <p className="text-muted-foreground text-center text-sm">
-            No tienes permisos asignados en la plataforma. Contacta con el administrador para que te
-            asigne acceso a un espacio de trabajo.
-          </p>
+          <p className="text-muted-foreground text-center text-sm">{t("body")}</p>
           <Button
             variant="outline"
             className="w-full"
@@ -72,7 +76,7 @@ export default function NoAccessPage() {
             disabled={loggingOut}
             data-testid="no-access-logout"
           >
-            {loggingOut ? "Cerrando sesión…" : "Cerrar sesión"}
+            {loggingOut ? tShell("loggingOut") : tShell("logout")}
           </Button>
         </CardContent>
       </Card>

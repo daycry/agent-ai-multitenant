@@ -15,6 +15,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlanDAG } from "@/lib/plan-dag";
 import { PlanGantt } from "@/lib/plan-gantt";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 
 import { type PlanSpecification, formatCostRange, phaseLabel } from "./plan-spec-types";
 
@@ -22,11 +24,12 @@ import { type PlanSpecification, formatCostRange, phaseLabel } from "./plan-spec
 // Gantt visualisation with critical path (task_03_20)
 // --------------------------------------------------------------------------
 export function GanttSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined }) {
+  const t = useT("planDetail");
   if (!tasks || tasks.length === 0) return null;
   return (
     <Card className="mt-6" data-testid="plan-gantt">
       <CardHeader>
-        <CardTitle>Gantt</CardTitle>
+        <CardTitle>{t("ganttTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         <PlanGantt tasks={tasks} />
@@ -39,11 +42,12 @@ export function GanttSection({ tasks }: { tasks: PlanSpecification["tasks"] | un
 // DAG visualisation (task_03_19)
 // --------------------------------------------------------------------------
 export function DAGSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined }) {
+  const t = useT("planDetail");
   if (!tasks || tasks.length === 0) return null;
   return (
     <Card className="mt-6" data-testid="plan-dag">
       <CardHeader>
-        <CardTitle>Grafo de dependencias</CardTitle>
+        <CardTitle>{t("dagTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
@@ -58,16 +62,16 @@ export function DAGSection({ tasks }: { tasks: PlanSpecification["tasks"] | unde
 // Sections
 // --------------------------------------------------------------------------
 export function SummarySection({ summary }: { summary: PlanSpecification["summary"] | undefined }) {
+  const t = useT("planDetail");
   if (!summary || Object.keys(summary).length === 0) {
     return (
       <Card className="mt-6">
         <CardHeader>
-          <CardTitle>Resumen</CardTitle>
+          <CardTitle>{t("summaryTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground text-sm italic" data-testid="plan-summary-empty">
-            Este plan aún no tiene resumen. La sección se rellenará cuando el equipo termine la
-            conversación de planning.
+            {t("summaryEmpty")}
           </p>
         </CardContent>
       </Card>
@@ -77,22 +81,22 @@ export function SummarySection({ summary }: { summary: PlanSpecification["summar
   return (
     <Card className="mt-6" data-testid="plan-summary">
       <CardHeader>
-        <CardTitle>Resumen</CardTitle>
+        <CardTitle>{t("summaryTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {summary.description ? <div>{renderPlanDraft(summary.description)}</div> : null}
         {summary.scope_in && summary.scope_in.length > 0 ? (
-          <ScopeList label="En alcance" items={summary.scope_in} testId="plan-scope-in" />
+          <ScopeList label={t("scopeIn")} items={summary.scope_in} testId="plan-scope-in" />
         ) : null}
         {summary.scope_out && summary.scope_out.length > 0 ? (
-          <ScopeList label="Fuera de alcance" items={summary.scope_out} testId="plan-scope-out" />
+          <ScopeList label={t("scopeOut")} items={summary.scope_out} testId="plan-scope-out" />
         ) : null}
         {summary.decisions && summary.decisions.length > 0 ? (
-          <ScopeList label="Decisiones" items={summary.decisions} testId="plan-decisions" />
+          <ScopeList label={t("decisions")} items={summary.decisions} testId="plan-decisions" />
         ) : null}
         {summary.risks && summary.risks.length > 0 ? (
           <div data-testid="plan-risks">
-            <p className="font-semibold">Riesgos</p>
+            <p className="font-semibold">{t("risks")}</p>
             <ul className="list-disc pl-5">
               {summary.risks.map((risk, i) => {
                 if (typeof risk === "string") return <li key={i}>{risk}</li>;
@@ -131,24 +135,26 @@ export function EstimatesSection({
 }: {
   estimates: PlanSpecification["estimates"] | undefined;
 }) {
+  const t = useT("planDetail");
+  const lang = useLangOptional();
   if (!estimates || Object.keys(estimates).length === 0) return null;
-  const humanCost = formatCostRange(estimates.cost_human_eur);
-  const aiCost = formatCostRange(estimates.cost_ai_eur);
+  const humanCost = formatCostRange(estimates.cost_human_eur, lang);
+  const aiCost = formatCostRange(estimates.cost_ai_eur, lang);
 
   return (
     <Card className="mt-6" data-testid="plan-estimates">
       <CardHeader>
-        <CardTitle>Estimaciones</CardTitle>
+        <CardTitle>{t("estimatesTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <EstimateCell
-            label="Duración"
+            label={t("estimateDuration")}
             value={estimates.duration_calendar}
             testId="estimate-duration"
           />
           <EstimateCell
-            label="Esfuerzo (persona-días)"
+            label={t("estimateEffort")}
             value={
               estimates.effort_person_days !== undefined
                 ? String(estimates.effort_person_days)
@@ -156,8 +162,12 @@ export function EstimatesSection({
             }
             testId="estimate-effort"
           />
-          <EstimateCell label="Coste humano" value={humanCost} testId="estimate-cost-human" />
-          <EstimateCell label="Coste IA" value={aiCost} testId="estimate-cost-ai" />
+          <EstimateCell
+            label={t("estimateCostHuman")}
+            value={humanCost}
+            testId="estimate-cost-human"
+          />
+          <EstimateCell label={t("estimateCostAi")} value={aiCost} testId="estimate-cost-ai" />
         </dl>
       </CardContent>
     </Card>
@@ -188,18 +198,20 @@ export function PhasesSection({
   phases: PlanSpecification["phases"] | undefined;
   tasks: PlanSpecification["tasks"] | undefined;
 }) {
+  const tr = useT("planDetail");
+  const lang = useLangOptional();
   if (!phases || phases.length === 0) return null;
   const titleById = new Map<string, string>((tasks ?? []).map((t) => [t.id, t.title]));
   return (
     <Card className="mt-6" data-testid="plan-phases">
       <CardHeader>
-        <CardTitle>Fases</CardTitle>
+        <CardTitle>{tr("phasesTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         <ol className="space-y-3 list-decimal pl-5">
           {phases.map((phase, i) => (
             <li key={i} data-testid={`plan-phase-${i}`}>
-              <p className="font-medium">{phaseLabel(phase, i)}</p>
+              <p className="font-medium">{phaseLabel(phase, i, lang)}</p>
               {phase.description ? (
                 <p className="text-muted-foreground text-xs">{phase.description}</p>
               ) : null}
@@ -224,22 +236,23 @@ export function PhasesSection({
 }
 
 export function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | undefined }) {
+  const t = useT("planDetail");
   if (!tasks || tasks.length === 0) return null;
   return (
     <Card className="mt-6" data-testid="plan-tasks">
       <CardHeader>
-        <CardTitle>Tareas ({tasks.length})</CardTitle>
+        <CardTitle>{t("tasksTitle", { count: tasks.length })}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="text-left">
               <tr className="border-muted border-b">
-                <th className="py-1 pr-2 font-semibold">ID</th>
-                <th className="py-1 pr-2 font-semibold">Título</th>
-                <th className="py-1 pr-2 font-semibold">Rol</th>
-                <th className="py-1 pr-2 font-semibold">Compl.</th>
-                <th className="py-1 pr-2 font-semibold">Depende de</th>
+                <th className="py-1 pr-2 font-semibold">{t("colId")}</th>
+                <th className="py-1 pr-2 font-semibold">{t("colTitle")}</th>
+                <th className="py-1 pr-2 font-semibold">{t("colRole")}</th>
+                <th className="py-1 pr-2 font-semibold">{t("colComplexity")}</th>
+                <th className="py-1 pr-2 font-semibold">{t("colDependsOn")}</th>
               </tr>
             </thead>
             <tbody>
@@ -258,7 +271,7 @@ export function TasksSection({ tasks }: { tasks: PlanSpecification["tasks"] | un
                         className="ml-1.5"
                         data-testid={`plan-task-origin-${task.id}`}
                       >
-                        corrección
+                        {t("taskOriginCorrection")}
                       </Badge>
                     ) : null}
                   </td>

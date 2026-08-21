@@ -12,7 +12,21 @@
  *   2. **Los invariantes del periodo de gasto** se comprueban antes de enviar,
  *      porque el 422 del backend llega como una lista de pydantic y es peor
  *      leerlo que evitarlo.
+ *
+ * i18n (prod-16 `task_prod16_03`): los tres catálogos guardan la **clave** del
+ * namespace `projectGovernance`, no su texto. Este módulo es PURO —no puede
+ * llamar a un hook—, así que hasta ahora la sección pintaba «Tokens por run» y
+ * «tiene que ser mayor que cero» con el toggle en EN aunque el resto de la
+ * pantalla tradujese. Ninguna de las dos guardas de `check-i18n` lo veía: los
+ * textos no estaban en un atributo ni detrás de un ternario, estaban en un
+ * módulo de `lib/`. Quien necesita el texto lo resuelve con el idioma activo
+ * (`useT("projectGovernance")` desde el componente, `translate` desde aquí).
  */
+
+import { translate, type Lang, type MessageKey } from "@/lib/i18n";
+
+/** Una clave del namespace de esta sección. */
+type GovernanceKey = MessageKey<"projectGovernance">;
 
 /** Techos de plataforma (`budgets/envelope.py: EXECUTION_BUDGET_CEILING`). Un
  * valor por encima NO es un error: el resolver lo recorta, y eso está
@@ -27,36 +41,40 @@ export const EXECUTION_BUDGET_CEILING = {
 
 export type ExecutionBudgetKey = keyof typeof EXECUTION_BUDGET_CEILING;
 
-export const EXECUTION_BUDGET_LABEL: Record<ExecutionBudgetKey, string> = {
-  max_iterations: "Iteraciones por run",
-  max_tokens: "Tokens por run",
-  max_cost_usd: "Coste por run (USD)",
-  max_wall_clock_s: "Tiempo de reloj por run (s)",
-  max_tool_calls: "Llamadas a tools por run",
-};
+/** La clave de diccionario que nombra cada presupuesto por run. */
+export const EXECUTION_BUDGET_LABEL_KEY = {
+  max_iterations: "budgetMaxIterations",
+  max_tokens: "budgetMaxTokens",
+  max_cost_usd: "budgetMaxCostUsd",
+  max_wall_clock_s: "budgetMaxWallClock",
+  max_tool_calls: "budgetMaxToolCalls",
+} as const satisfies Record<ExecutionBudgetKey, GovernanceKey>;
+
+/**
+ * La etiqueta de un presupuesto en el idioma pedido.
+ *
+ * `lang` es OBLIGATORIO y sin default, por la misma razón que en
+ * `conversationLabel`: un default silencioso deja que el próximo llamante se
+ * olvide y vuelva a pintar castellano en el panel inglés.
+ */
+export function executionBudgetLabel(key: ExecutionBudgetKey, lang: Lang): string {
+  return translate(lang, "projectGovernance", EXECUTION_BUDGET_LABEL_KEY[key]);
+}
 
 export const EXECUTION_BUDGET_KEYS = Object.keys(EXECUTION_BUDGET_CEILING) as ExecutionBudgetKey[];
 
 export const HUMAN_TASK_REVIEW_MODES = [
-  {
-    value: "auto_approve",
-    label: "Auto-aprobar al entregar",
-    hint: "Entregar la tarea la da por hecha. Adecuado para tareas de «firma».",
-  },
-  {
-    value: "peer_human_reviewer",
-    label: "Revisión de otra persona",
-    hint: "La tarea queda en revisión y se asigna a un segundo humano, que aprueba o rechaza.",
-  },
-] as const;
+  { value: "auto_approve", labelKey: "reviewAutoApprove", hintKey: "reviewAutoApproveHint" },
+  { value: "peer_human_reviewer", labelKey: "reviewPeer", hintKey: "reviewPeerHint" },
+] as const satisfies readonly { value: string; labelKey: GovernanceKey; hintKey: GovernanceKey }[];
 
 export const BUDGET_PERIODS = [
-  { value: "", label: "Sin límite de gasto" },
-  { value: "daily", label: "Diario" },
-  { value: "weekly", label: "Semanal" },
-  { value: "monthly", label: "Mensual" },
-  { value: "custom", label: "Personalizado" },
-] as const;
+  { value: "", labelKey: "periodNone" },
+  { value: "daily", labelKey: "periodDaily" },
+  { value: "weekly", labelKey: "periodWeekly" },
+  { value: "monthly", labelKey: "periodMonthly" },
+  { value: "custom", labelKey: "periodCustom" },
+] as const satisfies readonly { value: string; labelKey: GovernanceKey }[];
 
 /** El estado del formulario: todo texto, que es lo que un `<input>` sostiene
  * mientras se escribe (incluido el estado intermedio inválido). */
@@ -111,21 +129,27 @@ function numberOrNull(raw: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** Problemas que se ven sin preguntar al servidor. La lista vacía NO garantiza
- * un 200 — el backend valida igual, y es él quien manda. */
-export function governanceProblems(form: GovernanceForm): string[] {
+/** Problemas que se ven sin preguntar al servidor, redactados en `lang`. La
+ * lista vacía NO garantiza un 200 — el backend valida igual, y es él quien
+ * manda.
+ *
+ * `lang` es OBLIGATORIO: ver `executionBudgetLabel`. */
+export function governanceProblems(form: GovernanceForm, lang: Lang): string[] {
   const problems: string[] = [];
+  const say = (key: GovernanceKey, vars?: Record<string, string | number>) =>
+    problems.push(translate(lang, "projectGovernance", key, vars));
 
   for (const key of EXECUTION_BUDGET_KEYS) {
     const raw = form.budgets[key].trim();
     if (!raw) continue;
     const parsed = Number(raw);
+    const field = executionBudgetLabel(key, lang);
     if (!Number.isFinite(parsed)) {
-      problems.push(`«${EXECUTION_BUDGET_LABEL[key]}» tiene que ser un número.`);
+      say("problemNotANumber", { field });
     } else if (parsed <= 0) {
       // El resolver DESCARTA un presupuesto ≤ 0 sin decir nada: el operador
       // creería haber capado el gasto y no habría capado nada.
-      problems.push(`«${EXECUTION_BUDGET_LABEL[key]}» tiene que ser mayor que cero.`);
+      say("problemNotPositive", { field });
     }
   }
 
@@ -133,31 +157,31 @@ export function governanceProblems(form: GovernanceForm): string[] {
     try {
       const parsed: unknown = JSON.parse(form.guardrailsJson);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        problems.push("Los guardrails tienen que ser un objeto JSON.");
+        say("problemGuardrailsNotObject");
       }
     } catch {
-      problems.push("Los guardrails no son JSON válido.");
+      say("problemGuardrailsNotJson");
     }
   }
 
   const amount = numberOrNull(form.budgetAmount);
   if (form.budgetAmount.trim() && amount === null) {
-    problems.push("El importe del presupuesto tiene que ser un número.");
+    say("problemAmountNotANumber");
   } else if (amount !== null && amount < 0) {
-    problems.push("El importe del presupuesto no puede ser negativo.");
+    say("problemAmountNegative");
   }
   if (amount !== null && !form.budgetCurrency.trim()) {
-    problems.push("Un importe necesita moneda (código de 3 letras).");
+    say("problemAmountNeedsCurrency");
   }
   if (form.budgetCurrency.trim() && form.budgetCurrency.trim().length !== 3) {
-    problems.push("La moneda es un código de 3 letras (EUR, USD…).");
+    say("problemCurrencyLength");
   }
   if (form.budgetPeriod === "custom") {
     if (!form.budgetPeriodStartDay.trim() || !form.budgetPeriodLengthDays.trim()) {
-      problems.push("Un periodo personalizado necesita día de inicio y duración.");
+      say("problemCustomNeedsBoth");
     }
   } else if (form.budgetPeriodStartDay.trim() || form.budgetPeriodLengthDays.trim()) {
-    problems.push("El día de inicio y la duración solo aplican a un periodo personalizado.");
+    say("problemCustomOnly");
   }
 
   return problems;

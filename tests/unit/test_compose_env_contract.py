@@ -151,3 +151,109 @@ def test_every_prod_compose_env_ref_is_written_to_the_dotenv() -> None:
         "compose references ${VAR}s with no matching .env key from "
         f"build_env_vars (prod would resolve them to empty): {missing}"
     )
+
+
+@pytest.mark.parametrize("env_profile", list(Environment))
+def test_compose_emits_an_environment_value_the_runtime_accepts(env_profile: Environment) -> None:
+    """El valor de ``<PREFIX>ENVIRONMENT`` que emite el compose tiene que estar en
+    el enum cerrado que valida el runtime, para los TRES perfiles.
+
+    Este test nace de un fallo con dos generadores y una sola mitad arreglada.
+    `config_generators.py` (el `.env`) traduce el enum del instalador al del
+    runtime con `_RUNTIME_ENVIRONMENT` — `production` -> `prod`. El compose no lo
+    hacía: emitía `cfg.system.environment.value` en crudo, o sea `production`.
+    Mientras el guard de `environment` era fail-OPEN eso pasaba desapercibido (un
+    valor desconocido se trataba como dev, que es justo el agujero que prod-09
+    task_02 cerró). Al volverlo fail-CLOSED, el api-server generado por el
+    instalador dejó de arrancar: `API_SERVER_ENVIRONMENT='production' is not a
+    known environment`.
+
+    Se parametriza por los tres perfiles a propósito: con solo `production` el
+    test pasaría el día que alguien "arreglase" el mapeo con un `if prod`.
+    """
+    cfg = _prod_config()
+    cfg.system.environment = env_profile
+    compose = generate_compose(cfg, monitoring=False)
+
+    accepted = {"dev", "staging", "prod"}
+    seen: dict[str, str] = {}
+    for name, service in compose["services"].items():
+        for key, value in (service.get("environment") or {}).items():
+            if key.endswith("ENVIRONMENT") and isinstance(value, str):
+                seen[f"{name}:{key}"] = value
+
+    assert seen, "el compose dejó de emitir ENVIRONMENT: el test se quedó sin objeto"
+    bad = {k: v for k, v in seen.items() if v not in accepted}
+    assert not bad, (
+        f"el compose emite valores de ENVIRONMENT que el runtime RECHAZA al arrancar: {bad}. "
+        f"Aceptados: {sorted(accepted)}. Traduce el enum del instalador como hace "
+        "config_generators._RUNTIME_ENVIRONMENT."
+    )
+
+
+def test_internal_token_secret_reaches_api_server_and_workers() -> None:
+    """`API_SERVER_INTERNAL_TOKEN_SECRET` llega a los DOS servicios que lo usan.
+
+    El ADR 0136 separó el secreto que firma los tokens internos del sandbox del
+    que firma las sesiones humanas: comprometer el worker ya no permite forjar la
+    sesión de un System Admin. Pero quien MINTEA el token del sandbox es el
+    **worker**, que importa `mint_agent_token` del paquete del api-server y por
+    tanto lee la variable con el prefijo `API_SERVER_`. Es la excepción que el
+    contrato de prefijos no puede expresar (el worker corre dos clases de
+    Settings), así que se fija aquí a mano.
+
+    Sin esta guarda el instalador no lo emitía en ninguno de los tres sitios y,
+    con el guard fail-closed de `environment`, el api-server generado NO ARRANCA:
+    `environment='prod' but these settings still use dev defaults`.
+    """
+    cfg = _prod_config()
+    compose = generate_compose(cfg, monitoring=False)
+    key = "API_SERVER_INTERNAL_TOKEN_SECRET"
+
+    for service in ("api-server", "workers"):
+        env = compose["services"][service]["environment"]
+        assert key in env, (
+            f"{service} no recibe {key}: el api-server no arranca en prod, y el "
+            "worker no puede mintear el token del sandbox"
+        )
+
+    dotenv = build_env_vars(cfg, generate_secrets(), monitoring=False)
+    assert key in dotenv, f"{key} no se escribe en el .env: el compose lo resolvería a vacío"
+
+
+def test_internal_token_secret_differs_from_the_jwt_secret() -> None:
+    """Los dos secretos tienen que ser DISTINTOS, y no por higiene: `config.py`
+    tiene una guarda que rechaza el arranque si coinciden. Emitir el mismo valor
+    en las dos variables reproduciría el agujero que el ADR 0136 cerró —
+    comprometer el worker volvería a permitir firmar sesiones— sin que nada
+    avisara, así que el instalador debe generar material independiente."""
+    dotenv = build_env_vars(_prod_config(), generate_secrets(), monitoring=False)
+    assert dotenv["API_SERVER_INTERNAL_TOKEN_SECRET"] != dotenv["API_SERVER_JWT_SECRET"], (
+        "el instalador emite el MISMO secreto para sesiones y tokens internos"
+    )
+
+
+@pytest.mark.parametrize("env_profile", list(Environment))
+def test_workers_get_the_api_server_environment_so_its_guards_fire(
+    env_profile: Environment,
+) -> None:
+    """El worker recibe `API_SERVER_ENVIRONMENT`, y con un valor que el enum acepta.
+
+    El worker corre DOS clases de `Settings`: las suyas (`WORKERS_*`) y las del
+    api-server, porque mintea el token del sandbox importando `mint_agent_token`.
+    Sin `API_SERVER_ENVIRONMENT`, esa segunda instancia se cree en `dev`: los
+    guards anti-defaults NO disparan dentro del worker, así que un secreto que
+    falte se degrada a su default de dev EN SILENCIO en vez de impedir el arranque.
+    Es un fail-OPEN que sobrevivía al endurecimiento de `prod-09 task_02`, porque
+    ese cerró el enum pero nadie emitía la variable en este servicio.
+    """
+    cfg = _prod_config()
+    cfg.system.environment = env_profile
+    compose = generate_compose(cfg, monitoring=False)
+    env = compose["services"]["workers"]["environment"]
+
+    assert "API_SERVER_ENVIRONMENT" in env, (
+        "el worker no recibe API_SERVER_ENVIRONMENT: sus Settings de api-server se "
+        "creen en dev y los guards anti-defaults no disparan"
+    )
+    assert env["API_SERVER_ENVIRONMENT"] in {"dev", "staging", "prod"}

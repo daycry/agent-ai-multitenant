@@ -37,6 +37,23 @@ export default defineConfig({
   // mocked subset timed out under `next dev`; CI now builds + serves prod).
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? "github" : "list",
+  // El presupuesto de cada `expect(...)`, **5 s por defecto para no cambiar
+  // nada** en el subset mockeado que corre CI: ahí 5 s es señal, porque no hay
+  // backend al que esperar y un click que tarda más ya ha fallado.
+  //
+  // Existe la variable porque los 12 specs que NO mockean sí tienen a quién
+  // esperar, y medido el 2026-08-20 con el arnés de backend vivo delante: el
+  // `services-grid` del dashboard aparece a los ~12 s, no porque el panel sea
+  // lento sino porque `/admin/system-health` **abre una petición a cada
+  // servicio** —vault, docling, ollama, minio, clamav— y es la última llamada
+  // de la carga. Con el presupuesto en 5 s, veintiuno de esos specs fallan por
+  // el reloj y ni uno dice nada del producto: el rojo no informa.
+  //
+  // Subirlo aquí para todos habría sido cambiar una guarda que hoy funciona por
+  // comodidad de otra; de ahí la variable y el default intacto.
+  expect: {
+    timeout: Number(process.env.E2E_EXPECT_TIMEOUT ?? 5_000),
+  },
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",

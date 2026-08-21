@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * Panel de Mente — página `/admin/cortex/mind` (System-Owner-only, Córtex F2).
@@ -117,9 +118,7 @@ function json(route: Route, body: unknown, status = 200) {
 }
 
 async function mockMe(page: Page, me: unknown) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/me", (route) => json(route, me));
 }
 

@@ -18,6 +18,11 @@ Operaciones:
 - :func:`update_identity` — reescribe el ``identity_state`` (bump ``version``) Y
   **append** a ``cortex_identity_history`` con ``diff`` + ``reason``. La identidad
   **NUNCA se borra** (ADR 0077) — solo se versiona.
+- :func:`list_history` — el timeline de versiones (más reciente primero) **con su
+  ``diff``**, para que el owner pueda auditar qué tocó cada reflexión.
+- :func:`propose_identity` — helper PURO del onboarding co-diseñado: extrae del
+  turno del córtex el nombre/valores que se propone a sí mismo, SIN dejarle tocar
+  lo que solo la reflexión deriva (guardrail ADR 0074).
 - :func:`identity_preamble` — helper PURO que inyecta nombre/valores/narrativa AL
   INICIO del system prompt con el MISMO blindaje anti-inyección de los marcadores de
   datos del asistente (``<<<DATOS>>>`` / ``<<<FIN DATOS>>>``).
@@ -27,6 +32,7 @@ Operaciones:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
@@ -35,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.assistant.config import SUPPORTED_LANGUAGES
 from api_server.cortex.affective import (
     BASELINE_MAX_DELTA_PER_REFLECTION,
     BASELINE_PAD,
@@ -212,6 +219,37 @@ async def update_identity(
     return identity
 
 
+async def list_history(
+    session: AsyncSession, owner_user_id: UUID, limit: int = 50
+) -> list[CortexIdentityHistory]:
+    """El timeline de versiones del owner, **más reciente primero**, con su ``diff``.
+
+    La lectura que faltaba: hasta ahora el único lector de
+    ``cortex_identity_history`` era la query inline de ``GET /owner/cortex/journal``,
+    que aplana narrativas y **descarta el ``diff``** — es decir, la traza de QUÉ tocó
+    cada reflexión no se podía consultar desde ningún sitio. Devuelve las filas ORM
+    completas (``version``, ``identity_state``, ``diff``, ``updated_by``, ``reason``,
+    ``created_at``) para que el endpoint decida qué proyectar.
+
+    Orden **DESC por ``version``** (apoyado en ``ix_cortex_identity_history_owner_
+    version``): con ``limit`` el caller quiere las N ÚLTIMAS versiones, no las N
+    primeras. Un ``limit`` no positivo devuelve ``[]`` sin tocar la BD (un ``LIMIT``
+    negativo es un error de PostgreSQL, no un caso a propagar como 500).
+
+    Aislamiento (ADR 0074): filtro ``owner_user_id`` EXPLÍCITO — estas tablas son
+    tenant-less y no hay RLS de respaldo. El ``session`` debe ser admin/BYPASSRLS.
+    """
+    if limit <= 0:
+        return []
+    stmt = (
+        select(CortexIdentityHistory)
+        .where(CortexIdentityHistory.owner_user_id == owner_user_id)
+        .order_by(CortexIdentityHistory.version.desc())
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
 def compute_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     """``{campo: {before, after}}`` solo de los campos que cambiaron.
 
@@ -304,6 +342,125 @@ def editable_owner_state(
     if learning_goals is not None:
         out["learning_goals"] = _str_list(learning_goals)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Onboarding co-diseñado — la parte PURA (el córtex se propone una identidad)
+# ---------------------------------------------------------------------------
+#: Cap del nombre propuesto: aterriza en el system prompt de CADA turno.
+PROPOSED_NAME_MAX_LEN: int = 60
+#: Cap de valores propuestos (el preámbulo los concatena en una línea).
+PROPOSED_CORE_VALUES_MAX: int = 7
+#: Cap de metas de aprendizaje propuestas.
+PROPOSED_LEARNING_GOALS_MAX: int = 5
+#: Cap de la narrativa inicial propuesta (la reflexión la reescribe luego).
+PROPOSED_NARRATIVE_MAX_LEN: int = 600
+
+
+def _first_json_object(content: str) -> str | None:
+    """El primer objeto JSON balanceado ``{...}`` del texto, o ``None``.
+
+    Mismo criterio que el parser de la reflexión: algunos modelos locales envuelven
+    el JSON en prosa, y un ``json.loads`` del turno entero fallaría."""
+    start = content.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(content)):
+        ch = content[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return content[start : i + 1]
+    return None
+
+
+def _turn_content(turn_result: object) -> str:
+    """El texto de un turno: acepta el ``AssistantTurnResult``, un str, o nada.
+
+    Fail-open: un objeto sin ``content`` (o con ``content=None``) da ``""`` en vez
+    de un ``AttributeError`` que tumbaría el onboarding."""
+    if isinstance(turn_result, str):
+        return turn_result
+    content = getattr(turn_result, "content", None)
+    return content if isinstance(content, str) else ""
+
+
+def propose_identity(
+    turn_result: object, current_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """El ``identity_state`` que el córtex **se propone a sí mismo** (puro, no persiste).
+
+    Parte pura del onboarding co-diseñado (F3.3): el córtex genera un turno en el que
+    se autonombra y propone valores, esta función lo traduce a un ``identity_state``
+    candidato, y el owner lo confirma (o lo edita) antes de que se escriba. Devolver
+    el estado COMPLETO —y no solo los campos propuestos— permite al caller sacar el
+    ``compute_diff`` contra el actual y enseñarle al owner exactamente qué cambiaría.
+
+    Contrato del turno: un objeto JSON (posiblemente envuelto en prosa) con
+    ``name`` / ``core_values`` / ``narrative`` / ``learning_goals`` / ``language``.
+
+    **Guardrail de auto-modificación (ADR 0074)**: la propuesta pasa por
+    :func:`editable_owner_state`, así que SOLO puede tocar
+    :data:`OWNER_EDITABLE_FIELDS`. ``traits`` / ``mood_baseline`` /
+    ``relationship_model`` / ``affect_params`` se PRESERVAN aunque el turno los
+    incluya: los deriva la reflexión de forma acotada y versionada, y este texto
+    viene de un LLM al que el owner puede haber inducido en el chat.
+
+    Además: caps de longitud (el nombre y los valores viven en el system prompt de
+    cada turno), ``language`` restringido al catálogo ES+EN (principio 12), y
+    **fail-open honesto** — un turno sin JSON, malformado o sin ningún campo del
+    contrato devuelve el estado ACTUAL sin cambios, nunca una identidad inventada.
+    """
+    current = dict(current_state) if current_state else default_identity_state()
+
+    raw = _first_json_object(_turn_content(turn_result))
+    if raw is None:
+        return editable_owner_state(current)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return editable_owner_state(current)
+    if not isinstance(data, dict):
+        return editable_owner_state(current)
+
+    raw_name = data.get("name")
+    name = (
+        str(raw_name).strip()[:PROPOSED_NAME_MAX_LEN].strip() if isinstance(raw_name, str) else ""
+    )
+
+    raw_narrative = data.get("narrative")
+    narrative = (
+        str(raw_narrative).strip()[:PROPOSED_NARRATIVE_MAX_LEN].strip()
+        if isinstance(raw_narrative, str)
+        else ""
+    )
+
+    values = (
+        _str_list(data.get("core_values"))[:PROPOSED_CORE_VALUES_MAX]
+        if isinstance(data.get("core_values"), list)
+        else []
+    )
+    goals = (
+        _str_list(data.get("learning_goals"))[:PROPOSED_LEARNING_GOALS_MAX]
+        if isinstance(data.get("learning_goals"), list)
+        else []
+    )
+
+    raw_lang = data.get("language")
+    lang = str(raw_lang).strip().lower() if isinstance(raw_lang, str) else ""
+    language = lang if lang in SUPPORTED_LANGUAGES else ""
+
+    return editable_owner_state(
+        current,
+        name=name or None,
+        core_values=values or None,
+        narrative=narrative or None,
+        language=language or None,
+        learning_goals=goals or None,
+    )
 
 
 def apply_reflection_delta(
@@ -485,6 +642,10 @@ __all__ = [
     "OWNER_EDITABLE_FIELDS",
     "OWNER_MODEL_MAX_KEYS",
     "OWNER_MODEL_MAX_VALUE_LEN",
+    "PROPOSED_CORE_VALUES_MAX",
+    "PROPOSED_LEARNING_GOALS_MAX",
+    "PROPOSED_NAME_MAX_LEN",
+    "PROPOSED_NARRATIVE_MAX_LEN",
     "apply_owner_model_delta",
     "apply_reflection_delta",
     "bounded_update",
@@ -497,5 +658,7 @@ __all__ = [
     "ensure_identity",
     "get_identity",
     "identity_preamble",
+    "list_history",
+    "propose_identity",
     "update_identity",
 ]

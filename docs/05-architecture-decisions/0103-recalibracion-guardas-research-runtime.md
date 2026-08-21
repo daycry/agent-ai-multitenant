@@ -194,7 +194,7 @@ rompen tests que pinean ese diseño.
   catálogo al spec del runtime), coordinado con tools-y-cierre g4; no lo bloquea ningún ADR.
 - Las GATED (G8/G9/G1) no se implementan hasta ratificación; G8 y G9 se recomiendan en su variante quirúrgica
   (B) que preserva los pines/ADR; G1 se recomienda rechazar.
-- ADR 0097 (sesión SDK persistente) sigue `proposed` y es ortogonal: atacaría la causa raíz de la relectura
+- ADR 0097 (sesión SDK persistente) era `proposed` al escribir esto —`accepted` desde el 2026-07-13— y es ortogonal: atacaría la causa raíz de la relectura
   (memoria conversacional) sólo para claude_sdk; estas recalibraciones son provider-agnósticas y no dependen de
   él.
 

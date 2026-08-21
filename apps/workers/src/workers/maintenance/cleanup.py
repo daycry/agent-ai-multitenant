@@ -18,6 +18,7 @@ import structlog
 
 from workers.celery_app import app
 from workers.config import get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -88,11 +89,11 @@ async def _prunable_plan_branches(settings: Any) -> set[str]:
     se abrió (``pr_url``) — su copia vive en el remoto; la local es podable."""
     from api_server.db.domain import Plan
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from workers.plan_git import make_plan_branch_name
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
@@ -215,10 +216,10 @@ async def _build_worktree_policy(settings: Any) -> dict[str, str]:
     """
     from api_server.db.domain import Plan, Task
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     closed = ("completed", "cancelled", "archived")
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:

@@ -13,13 +13,22 @@ browser WebSocket API cannot set an Authorization header, so the JWT
 travels as a `?token=` query parameter.
 
 Authorization (Plan 06.14 task_06_14_01): a socket is accepted only when
-the token (a) decodes, (b) maps to a *live* server-side session in Redis
-(so logout/revocation closes existing sockets), and (c) the requested
-resource exists **within the caller's tenant** under PostgreSQL RLS. Any
-failure closes the socket with 1008 (policy violation) — we never leak
-whether the resource exists in another tenant. This closes the
+the token (a) decodes, (b) maps to a *live* server-side session in Redis,
+and (c) the requested resource exists **within the caller's tenant** under
+PostgreSQL RLS. Any failure closes the socket with 1008 (policy violation) —
+we never leak whether the resource exists in another tenant. This closes the
 cross-tenant real-time leak where any valid JWT could tail any tenant's
 streams by guessing a UUID.
+
+CONTINUOUS re-validation (prod-09 task_prod09_13, authz-3). The parenthetical
+above used to read "so logout/revocation closes existing sockets", and that was
+FALSE: the session lookup ran ONCE, at accept. An already-open socket outlived
+logout, SCIM deprovisioning and even its own token's expiry, streaming events for
+as long as the tab stayed open — exactly the sockets a revocation is meant to
+kill. :func:`_pump` now re-checks the session (and re-verifies the token,
+expiry included) every ``ws_session_revalidate_seconds`` (30 s by default) and
+closes with 1008 the moment either fails. The guarantee is now true, with a
+bounded delay instead of "never".
 
 Los streams POR-RECURSO (execution/conversation/document) se leen desde el
 principio (`0`): su backlog ES el estado que el cliente necesita (p. ej. los
@@ -35,6 +44,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -42,6 +53,7 @@ import structlog
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from redis.asyncio import Redis
 
+from api_server.auth.cookies import SESSION_COOKIE_NAME
 from api_server.auth.deps import (
     AuthPrincipal,
     get_redis,
@@ -50,15 +62,16 @@ from api_server.auth.deps import (
 )
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.auth.sessions import SessionStore
+from api_server.config import get_settings
 from api_server.db.conversation import Conversation
 from api_server.db.domain import Execution, Project
 from api_server.db.knowledge import Document
 from api_server.events import (
-    EVENTS_STREAM,
     PLANS_STREAM,
     conversation_stream_key,
     document_stream_key,
     execution_stream_key,
+    project_task_events_stream,
 )
 
 _log = structlog.get_logger("api_server.ws")
@@ -75,12 +88,90 @@ _READ_COUNT = 64
 # pierde) sin re-reproducir el histórico completo del stream global.
 _KANBAN_REPLAY_WINDOW_MS = 15_000
 
-# Close codes (RFC 6455 1008 = policy violation).
+# Close codes. 1008 = policy violation (RFC 6455 §7.4.1); 1013 = «Try Again
+# Later» (registro IANA de códigos de cierre WebSocket) y 1011 = internal error.
+#
+# El 1013 es el del CONSUMIDOR LENTO (task_audit14_07) y la elección es
+# deliberada: 1008 le diría al cliente que violó una política —no lo hizo, sólo
+# no drenaba— y 1011 le diría que el servidor se rompió, y ninguna de las dos
+# invita a reconectar. 1013 dice justo lo que pasa: vuelve a intentarlo.
 _CLOSE_POLICY = 1008
+_CLOSE_SLOW_CONSUMER = 1013
+_CLOSE_INTERNAL = 1011
 
 
 def _decode(value: object) -> str:
     return value.decode() if isinstance(value, bytes) else str(value)
+
+
+# ---------------------------------------------------------------------------
+# Origin gate (ADR 0133, condición 2) — anti Cross-Site WebSocket Hijacking
+# ---------------------------------------------------------------------------
+def _normalise_origin(value: str) -> str:
+    """Lowercase + drop a trailing slash. An env var written
+    ``https://panel.example.com/`` is a typo, not a different site, and a
+    mismatch there locks the real panel out — the loudest possible failure for
+    the least interesting reason."""
+    return value.strip().rstrip("/").lower()
+
+
+def derive_self_origin(ws: Any) -> str | None:
+    """The api-server's OWN public origin, as the browser addressed it.
+
+    In production panel and API are the SAME origin behind Caddy (panel on
+    ``/``, api on ``/api/*``), so the legitimate ``Origin`` of a socket IS this
+    value — deriving it means a correct deployment needs no extra env var.
+
+    The scheme comes from ``X-Forwarded-Proto`` when the request arrived through
+    a proxy (the upstream hop is plain http, so trusting the socket scheme would
+    derive ``http://`` for an ``https://`` page and reject the real panel), and
+    from the socket scheme otherwise. Not forgeable by an attacker: a page on
+    evil.com sends ``Origin: https://evil.com`` with OUR ``Host``, so the two
+    disagree and the socket is rejected.
+    """
+    host = ws.headers.get("host")
+    if not host:
+        return None
+    forwarded = ws.headers.get("x-forwarded-proto")
+    if forwarded:
+        proto = forwarded.split(",")[0].strip().lower()
+    else:
+        proto = "https" if ws.url.scheme == "wss" else "http"
+    if proto not in ("http", "https"):
+        return None
+    return _normalise_origin(f"{proto}://{host}")
+
+
+def origin_is_allowed(
+    origin: str | None,
+    *,
+    allowlist: Sequence[str],
+    self_origin: str | None,
+    require_origin: bool = False,
+) -> bool:
+    """Whether a handshake claiming ``origin`` may open a socket.
+
+    The WebSocket handshake does NOT honour CORS, so this is the only thing
+    standing between a cookie-authenticated socket and any page on the internet
+    (the browser attaches the session cookie to a handshake from ANY origin).
+    While the credential was a ``?token=`` query param the attack was impossible
+    by construction — which is exactly why the check never existed and why
+    adding cookies WITHOUT it would leave the system worse than before.
+
+    ``require_origin`` is the subtle half: an absent ``Origin`` is normal for a
+    non-browser client (which carries no ambient credential), but a browser
+    ALWAYS sends one, so a COOKIE-authenticated socket without it is not a
+    browser doing the normal thing — reject.
+    """
+    if origin is None:
+        return not require_origin
+    candidate = _normalise_origin(origin)
+    if not candidate:
+        return False
+    allowed = {_normalise_origin(o) for o in allowlist if o}
+    if self_origin:
+        allowed.add(_normalise_origin(self_origin))
+    return candidate in allowed
 
 
 def _to_event(entry_id: object, fields: dict[Any, Any]) -> dict[str, Any]:
@@ -152,6 +243,52 @@ async def _resolve_principal(
     )
 
 
+async def _authenticate_socket(
+    ws: WebSocket,
+    token: str | None,
+    sessions: SessionStore,
+    tenant_id_override: str | None = None,
+) -> tuple[AuthPrincipal, str] | None:
+    """Origin gate + credential resolution for an already-accepted socket.
+
+    Returns ``(principal, credential)`` — the credential is handed back so the
+    pump can keep re-validating it (task_prod09_13) whichever channel it came
+    from — or ``None`` after closing the socket with 1008.
+
+    SINGLE entry point on purpose: an endpoint that resolved the principal on
+    its own would silently skip the ``Origin`` check, and a missing CSWSH gate
+    is invisible until someone exploits it. Every ``/ws/*`` handler in this
+    module (and in ``cortex_ws`` / ``cortex_voice``) goes through here, which
+    ``tests/unit/test_ws_origin_gate_wired.py`` verifies statically.
+
+    Credential precedence mirrors REST (:func:`auth.deps.read_credential`): an
+    explicit ``?token=`` wins, the session cookie is the fallback. The cookie is
+    what the panel uses since ADR 0133 — same-origin means the browser sends it
+    in the handshake, so the JWT no longer travels in a URL that ends up in
+    access logs, proxies and Loki.
+    """
+    cookie_token = ws.cookies.get(SESSION_COOKIE_NAME)
+    credential = token or cookie_token
+    from_cookie = not token and bool(cookie_token)
+
+    settings = get_settings()
+    if not origin_is_allowed(
+        ws.headers.get("origin"),
+        allowlist=settings.cors_allowed_origins,
+        self_origin=derive_self_origin(ws),
+        require_origin=from_cookie,
+    ):
+        _log.warning("api_server.ws_origin_rejected", origin=ws.headers.get("origin"))
+        await _reject(ws, "origin not allowed")
+        return None
+
+    principal = await _resolve_principal(credential, sessions, tenant_id_override)
+    if principal is None or credential is None:
+        await _reject(ws, "unauthenticated")
+        return None
+    return principal, credential
+
+
 async def _owns_resource(principal: AuthPrincipal, model: type[Any], resource_id: str) -> bool:
     """True if `resource_id` resolves to a row of `model` visible to the
     caller under RLS (i.e. in their tenant). A malformed UUID, a missing
@@ -184,12 +321,95 @@ async def _initial_stream_id(redis: Redis, replay_window_ms: int | None) -> str:
     return f"{start_ms}-0"
 
 
+async def _credential_still_valid(
+    sessions: SessionStore, principal: AuthPrincipal, token: str | None
+) -> bool:
+    """Re-run the accept-time authentication checks on an OPEN socket (authz-3).
+
+    Deliberately calls the SAME primitives as :func:`_resolve_principal` — the
+    Redis session lookup and :func:`decode_jwt` — rather than re-deriving "is it
+    expired?" from a cached claim. A second implementation of the expiry rule
+    would be a second thing to get wrong, and ``decode_jwt`` already enforces
+    signature + ``exp`` in one call.
+
+    ``token`` is ``None`` only if a future caller resolves the principal some
+    other way (e.g. the one-shot ticket of task_prod09_12); the session check
+    still applies, which is the leg that logout and SCIM deprovisioning trip.
+    """
+    if not await sessions.get(principal.session_id):
+        return False
+    if token is not None:
+        try:
+            decode_jwt(token)
+        except InvalidTokenError:
+            return False
+    return True
+
+
+async def _settle(task: asyncio.Future[Any] | None) -> None:
+    """Cancela una tarea Y LA ESPERA (`task_audit14_07`).
+
+    `cancel()` sólo PIDE la cancelación: hasta que alguien hace `await`, la
+    corrutina sigue viva con su frame, y en el caso del `xread` con el cierre de
+    conexión de redis-py a medias. El pump cancelaba `reader` y `xread` sin
+    esperarlos, así que cada socket que se iba dejaba dos corrutinas en el aire
+    —visibles como `Task was destroyed but it is pending!` cuando el loop se
+    desmonta— y una conexión de Redis devuelta al pool en estado dudoso.
+
+    Esperar a una tarea ya terminada es barato y además RECOGE su excepción, que
+    si no queda sin recuperar y ensucia el log al recolectarse.
+    """
+    if task is None:
+        return
+    task.cancel()
+    # `CancelledError` hereda de BaseException, así que necesita su propia
+    # entrada: `suppress(Exception)` no la atraparía.
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+
+
+async def _close(ws: WebSocket, code: int, reason: str, *, timeout: float) -> None:
+    """Cierra el socket con deadline.
+
+    El cierre TAMBIÉN puede colgarse: el frame de CLOSE viaja por el mismo
+    socket cuya ventana está llena, que es exactamente la situación en la que se
+    cierra a un consumidor lento. Un `close()` sin tope convertiría el arreglo
+    del envío en el mismo cuelgue una línea más abajo.
+    """
+    with contextlib.suppress(Exception):
+        if timeout > 0:
+            await asyncio.wait_for(ws.close(code=code, reason=reason), timeout)
+        else:
+            await ws.close(code=code, reason=reason)
+
+
+async def _send_event(ws: WebSocket, event: dict[str, Any], *, timeout: float, stream: str) -> bool:
+    """Envía un evento con deadline. `False` si el cliente es lento (ya cerrado).
+
+    `timeout <= 0` desactiva el deadline (asa de escape del setting), y en ese
+    caso vuelve el comportamiento viejo: el envío puede tardar lo que quiera.
+    """
+    if timeout <= 0:
+        await ws.send_json(event)
+        return True
+    try:
+        await asyncio.wait_for(ws.send_json(event), timeout)
+    except TimeoutError:
+        _log.warning("api_server.ws_slow_consumer", stream=stream, timeout_seconds=timeout)
+        await _close(ws, _CLOSE_SLOW_CONSUMER, "slow consumer", timeout=timeout)
+        return False
+    return True
+
+
 async def _pump(
     ws: WebSocket,
     redis: Redis,
     stream: str,
     *,
     project_filter: str | None,
+    sessions: SessionStore,
+    principal: AuthPrincipal,
+    token: str | None,
     tenant_filter: str | None = None,
     replay_window_ms: int | None = None,
 ) -> None:
@@ -203,11 +423,46 @@ async def _pump(
     A single `ws.receive()` runs alongside the Redis read so a client
     that closes while the stream is idle is noticed at once — no leaked
     task blocked on `xread`.
+
+    Backpressure (`task_audit14_07`, hallazgo AUD14-05). Cada envío lleva
+    deadline (``ws_send_timeout_seconds``): un cliente que deja de drenar llena
+    la ventana TCP y un ``send_json`` sin tope NO VUELVE nunca, lo que dejaba
+    este bucle colgado con su `receive()` y su `xread` detrás, reteniendo una
+    conexión de Redis y —lo más grave— sin volver al principio del bucle, o sea
+    sin re-validar la credencial. Al agotarse se cierra con 1013 y se sale.
+    Y en TODOS los caminos de salida las dos tareas se cancelan **y se
+    esperan** (:func:`_settle`): cancelar sin esperar no las mata, sólo se lo
+    pide.
+
+    Every ``ws_session_revalidate_seconds`` the loop re-checks the caller's
+    credential (:func:`_credential_still_valid`) and closes with 1008 if it has
+    been revoked or has expired (task_prod09_13). The check sits at the TOP of the
+    iteration, before the blocking read is scheduled, so there is no pending
+    future to unwind on the revocation path — and since the read blocks for at
+    most ``_BLOCK_MS``, an idle socket is still checked on schedule instead of
+    only when an event happens to arrive. ``sessions``/``principal``/``token`` are
+    keyword-REQUIRED so a new endpoint cannot mount a pump that never re-checks.
     """
+    settings = get_settings()
+    revalidate_every = float(settings.ws_session_revalidate_seconds)
+    send_timeout = float(settings.ws_send_timeout_seconds)
+    last_check = time.monotonic()
     last_id = await _initial_stream_id(redis, replay_window_ms)
     reader = asyncio.ensure_future(ws.receive())
+    xread: asyncio.Future[Any] | None = None
     try:
         while True:
+            if revalidate_every > 0 and (time.monotonic() - last_check) >= revalidate_every:
+                last_check = time.monotonic()
+                if not await _credential_still_valid(sessions, principal, token):
+                    _log.info(
+                        "api_server.ws_credential_revoked",
+                        stream=stream,
+                        user_id=str(principal.user_id),
+                        session_id=str(principal.session_id),
+                    )
+                    await _reject(ws, "session revoked or expired")
+                    return
             xread = asyncio.ensure_future(
                 redis.xread({stream: last_id}, count=_READ_COUNT, block=_BLOCK_MS)
             )
@@ -215,9 +470,9 @@ async def _pump(
                 {reader, xread}, return_when=asyncio.FIRST_COMPLETED
             )
             if reader in done:
-                xread.cancel()
-                return  # client disconnected
+                return  # client disconnected — el `finally` desmonta el xread
             entries: Any = xread.result()
+            xread = None  # ya consumido: no hay nada que desmontar
             for _stream_name, items in entries or []:
                 for entry_id, fields in items:
                     last_id = _decode(entry_id)
@@ -226,20 +481,28 @@ async def _pump(
                         continue
                     if tenant_filter is not None and event.get("tenant_id") != tenant_filter:
                         continue
-                    await ws.send_json(event)
+                    if not await _send_event(ws, event, timeout=send_timeout, stream=stream):
+                        return  # consumidor lento: ya cerrado con 1013
     except WebSocketDisconnect:
         return
     except Exception as exc:  # a Redis blip must not leave the socket dangling
         _log.warning("api_server.ws_pump_error", stream=stream, error=str(exc))
-        with contextlib.suppress(Exception):
-            await ws.close(code=1011)
+        await _close(ws, _CLOSE_INTERNAL, "internal error", timeout=send_timeout)
     finally:
-        reader.cancel()
+        # Los DOS bordes, en TODOS los caminos: return normal, desconexión,
+        # revocación, consumidor lento, excepción y cancelación externa.
+        await _settle(reader)
+        await _settle(xread)
 
 
 async def _reject(ws: WebSocket, reason: str) -> None:
-    with contextlib.suppress(Exception):
-        await ws.close(code=_CLOSE_POLICY, reason=reason)
+    """Cierra con 1008 (policy violation) y con el mismo deadline que el envío.
+
+    El deadline importa aquí igual que en :func:`_send_event`: la revocación de
+    una sesión cierra sockets que pueden estar precisamente atascados, y un
+    `close()` que no vuelve deja colgada la corrutina que intentaba echarlos.
+    """
+    await _close(ws, _CLOSE_POLICY, reason, timeout=float(get_settings().ws_send_timeout_seconds))
 
 
 @router.websocket("/ws/executions/{execution_id}")
@@ -253,14 +516,22 @@ async def execution_stream(
 ) -> None:
     """Stream one execution's step events — only to a member of its tenant."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Execution, execution_id):
         await _reject(ws, "forbidden")
         return
-    await _pump(ws, redis, execution_stream_key(execution_id), project_filter=None)
+    await _pump(
+        ws,
+        redis,
+        execution_stream_key(execution_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )
 
 
 @router.websocket("/ws/kanban/{project_id}")
@@ -274,15 +545,21 @@ async def kanban_stream(
 ) -> None:
     """Stream a project's task transitions — only to a member of its tenant.
 
-    The kanban stream is the single global EVENTS_STREAM, so it is scoped
-    both by `project_id` and by the caller's `tenant_id` (defence in depth;
-    project ids are globally-unique UUIDs already).
+    Lee el stream POR PROYECTO (`events:tasks:{project_id}`, task_prod13_19) y
+    ya no el global: antes cada socket del tablero recibía por la red los
+    eventos de todos los proyectos de la plataforma para descartar en Python los
+    que no eran suyos, de modo que el tráfico de un tablero crecía con la
+    actividad ajena (perf-5).
+
+    El filtro por `tenant_id` se mantiene aunque el stream ya sea de un solo
+    proyecto: es defensa en profundidad barata sobre la ÚNICA propiedad que
+    importa aquí, y sobrevive a que alguien publique en la clave equivocada.
     """
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Project, project_id):
         await _reject(ws, "forbidden")
         return
@@ -290,8 +567,11 @@ async def kanban_stream(
     await _pump(
         ws,
         redis,
-        EVENTS_STREAM,
-        project_filter=project_id,
+        project_task_events_stream(project_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
         tenant_filter=tenant_filter,
         # El estado inicial del tablero es el fetch HTTP; el socket solo aporta
         # lo nuevo (+ una ventana corta de solape). Ver _initial_stream_id.
@@ -322,10 +602,10 @@ async def plans_stream(
     escaparate de toda la plataforma.
     """
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if principal.tenant_id is None:
         await _reject(ws, "forbidden")
         return
@@ -334,6 +614,9 @@ async def plans_stream(
         redis,
         PLANS_STREAM,
         project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
         tenant_filter=str(principal.tenant_id),
         # Mismo criterio que el kanban: el estado inicial es el fetch HTTP y el
         # socket solo aporta lo nuevo. Re-reproducir el histórico resucitaría
@@ -355,14 +638,22 @@ async def conversation_stream(
     only to a member of its tenant. The REST endpoint
     POST /conversations/{id}/messages is the sole producer."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Conversation, conversation_id):
         await _reject(ws, "forbidden")
         return
-    await _pump(ws, redis, conversation_stream_key(conversation_id), project_filter=None)
+    await _pump(
+        ws,
+        redis,
+        conversation_stream_key(conversation_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )
 
 
 @router.websocket("/ws/documents/{document_id}")
@@ -380,11 +671,19 @@ async def document_stream(
     events to the per-document Redis stream as it walks scan → parse →
     embed → persist."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions, tenant_id)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions, tenant_id)
+    if authenticated is None:
         return
+    principal, token = authenticated
     if not await _owns_resource(principal, Document, document_id):
         await _reject(ws, "forbidden")
         return
-    await _pump(ws, redis, document_stream_key(document_id), project_filter=None)
+    await _pump(
+        ws,
+        redis,
+        document_stream_key(document_id),
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )

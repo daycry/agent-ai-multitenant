@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/documents/{id}/citations (Plan 04 task_04_25).
@@ -56,9 +57,7 @@ const PAYLOAD = {
 };
 
 async function setup(page: Page, payload = PAYLOAD): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/documents/${DOCUMENT_ID}/citations`, (route) =>
     route.fulfill({
       status: 200,

@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `01-dominio-minimo`                       |
-| **Estado**                         | `pending_approval`                        |
 | **Bloqueado por**                  | `00-fundaciones`                          |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                               |
 | **Tiempo estimado (persona-días)** | 75-95                                     |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/01-dominio-minimo`                  |
 | **Secciones del .docx**            | [3, 5, 6, 7]                              |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

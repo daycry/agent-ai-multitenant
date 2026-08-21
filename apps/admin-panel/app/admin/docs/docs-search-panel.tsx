@@ -28,7 +28,8 @@ import { FileText, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ApiError } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { cn } from "@/lib/utils";
 import {
   fetchDocSearch,
@@ -71,6 +72,7 @@ export function DocsSearchPanel({
   filter,
   bookmarks,
 }: DocsSearchPanelProps) {
+  const t = useT("docs");
   const [mode, setMode] = useState<SearchMode>("fulltext");
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -112,10 +114,10 @@ export function DocsSearchPanel({
       <Tabs defaultValue="fulltext" value={mode} onValueChange={(v) => setMode(v as SearchMode)}>
         <TabsList data-testid="docs-search-tabs">
           <TabsTrigger value="fulltext" data-testid="docs-search-tab-fulltext">
-            Texto
+            {t("searchTabFulltext")}
           </TabsTrigger>
           <TabsTrigger value="semantic" data-testid="docs-search-tab-semantic">
-            Semántica
+            {t("searchTabSemantic")}
           </TabsTrigger>
         </TabsList>
       </Tabs>
@@ -132,13 +134,13 @@ export function DocsSearchPanel({
           placeholder={
             projectId
               ? mode === "semantic"
-                ? "Búsqueda semántica…"
-                : "Buscar en la documentación…"
-              : "Selecciona un proyecto para buscar"
+                ? t("searchPlaceholderSemantic")
+                : t("searchPlaceholderFulltext")
+              : t("searchPlaceholderNoProject")
           }
           disabled={!projectId}
           className="pl-9"
-          aria-label="Buscar en la documentación"
+          aria-label={t("searchAria")}
           data-testid="docs-search-input"
         />
       </div>
@@ -188,10 +190,12 @@ function SearchResults({
   onOpenDoc: (projectId: string, relpath: string) => void;
   bookmarks: SearchBookmarkControls;
 }) {
+  const t = useT("docs");
+  const errorText = useErrorText();
   if (!projectId) {
     return (
       <p className="text-muted-foreground px-1 py-2 text-xs italic" data-testid="docs-search-idle">
-        Selecciona un proyecto en el árbol para buscar en su documentación.
+        {t("searchIdle")}
       </p>
     );
   }
@@ -199,7 +203,7 @@ function SearchResults({
   if (!enabled) {
     return (
       <p className="text-muted-foreground px-1 py-2 text-xs italic" data-testid="docs-search-hint">
-        Escribe al menos {MIN_QUERY_LEN} caracteres para buscar.
+        {t("searchHint", { n: MIN_QUERY_LEN })}
       </p>
     );
   }
@@ -211,7 +215,7 @@ function SearchResults({
         data-testid="docs-search-loading"
       >
         <Spinner className="h-3.5 w-3.5" />
-        Buscando…
+        {t("searchLoading")}
       </p>
     );
   }
@@ -219,7 +223,7 @@ function SearchResults({
   if (isError) {
     return (
       <p className="text-destructive px-1 py-2 text-xs" data-testid="docs-search-error">
-        {error instanceof ApiError ? error.body : "No se pudo completar la búsqueda."}
+        {errorText(error)}
       </p>
     );
   }
@@ -227,7 +231,7 @@ function SearchResults({
   if (hits.length === 0) {
     return (
       <p className="text-muted-foreground px-1 py-2 text-xs italic" data-testid="docs-search-empty">
-        Nada coincide con &quot;{debounced}&quot;.
+        {t("searchEmpty", { query: debounced })}
       </p>
     );
   }
@@ -268,6 +272,7 @@ function SearchHitRow({
   bookmarked: boolean;
   onToggleBookmark: () => void;
 }) {
+  const t = useT("docs");
   const score = mode === "semantic" && "score" in hit ? hit.score : null;
 
   return (
@@ -300,7 +305,7 @@ function SearchHitRow({
             <span
               className="bg-muted text-muted-foreground shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium tabular-nums"
               data-testid="docs-search-hit-score"
-              title="Similitud coseno"
+              title={t("hitScoreTitle")}
             >
               {(score * 100).toFixed(0)}%
             </span>

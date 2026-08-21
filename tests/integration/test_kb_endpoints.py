@@ -215,7 +215,12 @@ async def test_kb_crud_round_trip(configured_app, migrations_pg_dsn: str) -> Non
         )
         assert create.status_code == 201, create.text
         kb_id = create.json()["id"]
-        assert create.json()["embedding_model_id"] == "nomic-embed-text-v1.5"
+        # ADR 0155: la plataforma sella su modelo ACTIVO, no la etiqueta
+        # heredada `-v1.5` (que no es un tag válido de Ollama y que ningún
+        # embedder envió nunca), y la respuesta dice cuál es el activo.
+        assert create.json()["embedding_model_id"] == "nomic-embed-text"
+        assert create.json()["platform_embedding_model"] == "nomic-embed-text"
+        assert create.json()["embedding_model_stale"] is False
 
         # List.
         listed = await client.get("/knowledge-bases", headers=headers)
@@ -535,9 +540,18 @@ async def test_reindex_missing_document_404(configured_app, migrations_pg_dsn: s
 
 
 @pytest.mark.asyncio
-async def test_delete_document_drops_blob_and_soft_deletes_row(
+async def test_delete_document_soft_deletes_the_row_and_leaves_the_blob_to_the_gc(
     configured_app, migrations_pg_dsn: str
 ) -> None:
+    """prod-04 task_prod_04_11 — este test AFIRMABA lo contrario («drops blob»).
+
+    Cambió el comportamiento, no la comodidad del test: borrar el objeto de MinIO
+    ANTES del commit del `soft_delete` significaba que un commit fallido dejaba
+    un documento vivo sin fuente, irrecuperable. Ahora el blob sobrevive a la
+    ventana de gracia y lo reclama `workers.collect_knowledge_garbage`.
+    La cadena completa (borrado → blob vivo → GC lo purga) está en
+    `tests/integration/test_document_delete_ordering.py`.
+    """
     app, storage = configured_app
     seeded = await _seed(migrations_pg_dsn)
     token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
@@ -562,8 +576,8 @@ async def test_delete_document_drops_blob_and_soft_deletes_row(
         )
         assert deleted.status_code == 204
 
-        # Blob is gone.
-        assert await storage.object_exists(key=storage_key) is False
+        # La FUENTE sigue ahí: el borrado es reversible hasta que pase el GC.
+        assert await storage.object_exists(key=storage_key) is True
         # Row is soft-deleted — listing skips it.
         listed = await client.get(f"/knowledge-bases/{kb_id}/documents", headers=headers)
         assert doc_id not in [d["id"] for d in listed.json()]

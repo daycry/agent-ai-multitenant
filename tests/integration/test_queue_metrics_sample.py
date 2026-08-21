@@ -17,9 +17,9 @@ import pytest
 from alembic import command
 from redis.asyncio import Redis
 
-pytestmark = pytest.mark.integration
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
@@ -107,3 +107,61 @@ async def test_sample_writes_queue_and_status_metrics(
     assert 'agentic_celery_queue_depth{queue="default"} 2' in body
     assert 'agentic_tasks_by_status{status="in_review"} 2' in body
     assert 'agentic_tasks_by_status{status="backlog"} 1' in body
+
+
+@pytest.mark.asyncio
+async def test_sample_publishes_the_celery_outcome_counters(
+    schema_at_head: None, migrations_pg_dsn: str, workers_settings: Any
+) -> None:
+    """prod-08 task_prod08_metrics_workers_05, contra Redis de verdad.
+
+    Las señales de Celery corren en los N procesos hijos del pool prefork, así
+    que acumulan en Redis y el sampler los publica una vez por pasada. Este test
+    recorre ese camino entero con el cliente síncrono que usan las señales y el
+    async que usa el sampler — que son clientes distintos sobre las mismas
+    claves, justo donde un cambio de nombre de clave pasaría desapercibido en un
+    unitario con dobles.
+    """
+    from redis import Redis as SyncRedis
+    from workers.task_metrics import DURATION_HASH_KEY, TASKS_HASH_KEY, record_task_outcome
+
+    writer = SyncRedis.from_url(TEST_REDIS_URL)
+    writer.delete(TASKS_HASH_KEY, DURATION_HASH_KEY)
+    record_task_outcome(writer, queue="default", status="success", duration_s=2.0)
+    record_task_outcome(writer, queue="review", status="failure", duration_s=1.5)
+
+    try:
+        from workers.maintenance import _sample_queue_metrics_async
+
+        await _sample_queue_metrics_async(workers_settings)
+    finally:
+        writer.delete(TASKS_HASH_KEY, DURATION_HASH_KEY)
+        writer.close()
+
+    body = Path(workers_settings.queue_metrics_textfile_path).read_text(encoding="utf-8")
+    assert 'agentic_celery_tasks_total{queue="default",status="success"} 1' in body
+    assert 'agentic_celery_tasks_total{queue="review",status="failure"} 1' in body
+    assert 'agentic_celery_task_duration_seconds_total{queue="default"} 2' in body
+    # Y el colector nuevo declara que corrió bien: sin esto, un fallo suyo sería
+    # una familia ausente y muda.
+    assert 'agentic_sampler_collector_up{collector="celery_tasks"} 1' in body
+
+
+@pytest.mark.asyncio
+async def test_sample_publishes_pending_human_approvals(
+    schema_at_head: None, migrations_pg_dsn: str, workers_settings: Any
+) -> None:
+    """El gauge sale SIEMPRE, también valiendo cero.
+
+    Cero pendientes es el estado sano y es un dato: omitirlo dejaría a Prometheus
+    sin poder distinguirlo de «el colector se cayó», y `HumanApprovalsStale`
+    dejaría de evaluarse en silencio.
+    """
+    from workers.maintenance import _sample_queue_metrics_async
+
+    await _sample_queue_metrics_async(workers_settings)
+
+    body = Path(workers_settings.queue_metrics_textfile_path).read_text(encoding="utf-8")
+    assert "agentic_human_approvals_pending 0" in body
+    assert "agentic_human_approvals_oldest_age_seconds 0" in body
+    assert 'agentic_sampler_collector_up{collector="approvals"} 1' in body

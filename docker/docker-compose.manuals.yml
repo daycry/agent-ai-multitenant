@@ -24,11 +24,20 @@ services:
   api-server:
     image: agentic-platform/api-server:manuals
     environment:
+      # prod-10 task_prod10_04 (secrets-3). ERA la única de las cinco imágenes
+      # que ejecutan `api_server.config` sin declararla: workers, workers-aux,
+      # workers-backup, orchestrator, cortex-beat y notification-dispatcher la
+      # llevan desde el ADR 0136, y el api-server —el servicio cuyo prefijo ES
+      # `API_SERVER_`— se quedó fuera. Con `environment` cayendo a su default y
+      # el DSN apuntando a `postgres:5432`, el guard anti-defaults ya no puede
+      # distinguir «esto es el portátil de alguien» de «esto es producción». Aquí
+      # es dev de verdad, y ahora lo dice.
+      API_SERVER_ENVIRONMENT: dev
       API_SERVER_DATABASE_URL: postgresql+asyncpg://app_user:changeme-app-dev-only@postgres:5432/agentic_platform
       API_SERVER_ADMIN_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      API_SERVER_REDIS_URL: redis://redis:6379/0
-      API_SERVER_BROKER_URL: redis://redis:6379/1
-      API_SERVER_RESULT_BACKEND: redis://redis:6379/2
+      API_SERVER_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
+      API_SERVER_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      API_SERVER_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
       API_SERVER_JWT_SECRET: dev-only-jwt-secret-change-me
       # NOTIF-2: debe coincidir con el Bearer de alertmanager.yml (dev).
       API_SERVER_ALERTS_INGEST_TOKEN: dev-alerts-ingest-token
@@ -161,9 +170,19 @@ services:
     image: agentic-platform/orchestrator:manuals
     environment:
       ORCHESTRATOR_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       ORCHESTRATOR_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      ORCHESTRATOR_REDIS_URL: redis://redis:6379/0
-      ORCHESTRATOR_BROKER_URL: redis://redis:6379/1
+      ORCHESTRATOR_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
+      ORCHESTRATOR_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -235,10 +254,20 @@ services:
       ]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      WORKERS_BROKER_URL: redis://redis:6379/1
-      WORKERS_RESULT_BACKEND: redis://redis:6379/2
-      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0 # MUST match ORCHESTRATOR_REDIS_URL / API_SERVER_REDIS_URL (events:tasks stream); /3 has no consumer so dispatch stalls
+      WORKERS_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0 # MUST match ORCHESTRATOR_REDIS_URL / API_SERVER_REDIS_URL (events:tasks stream); /3 has no consumer so dispatch stalls
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
@@ -347,10 +376,20 @@ services:
       ]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      WORKERS_BROKER_URL: redis://redis:6379/1
-      WORKERS_RESULT_BACKEND: redis://redis:6379/2
-      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0
+      WORKERS_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_AGENT_INTERNAL_API_URL: http://api-server:8000
       WORKERS_AGENT_RUNTIME_IMAGE: agent-runtime:v1
@@ -413,6 +452,79 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
+  # workers-marketplace — pool DEDICADO de la cola `marketplace` (prod-13
+  # task_prod13_01). Las puertas de seguridad de una instalación —bandit y semgrep
+  # por subprocess, 120 s de plazo CADA UNO, más la prueba de humo del sandbox—
+  # corrían DENTRO del request del api-server. `asyncio.to_thread` ya evitaba que
+  # congelasen el event loop, pero no las saca del HTTP: el request seguía durando
+  # cuatro minutos, que es lo que corta un proxy.
+  #
+  # Pool propio, y no `--queues=...,marketplace` en uno de los tres que ya había,
+  # porque los tres tienen su forma documentada de romperse con un trabajo de
+  # cuatro minutos: `workers` y `workers-aux` van a --concurrency=2 y drenan
+  # `test`, la cola por la que un agent-run BLOQUEADO espera su stack_exec (la
+  # auto-inanición que motivó workers-aux: run 019f252e, ReadTimeout a los 300 s),
+  # y `workers-backup` va a --concurrency=1 detrás del backup nocturno.
+  # --concurrency=1: un análisis a la vez basta —instalar es una acción humana y
+  # rara— y así dos instalaciones simultáneas no se pelean por la CPU.
+  #
+  # DOCKER_HOST está a propósito: la puerta 5 (prueba de humo en sandbox) usa el
+  # SDK de Docker, que es justo lo que el api-server NO puede hacer (no tiene
+  # socket Docker, principio 2). Esta lane es el "sandbox out-of-process" que el
+  # ADR 0081 pedía para poder cerrar la Fase B/C.
+  # ---------------------------------------------------------------------------
+  workers-marketplace:
+    image: agentic-platform/workers:ci
+    command:
+      [
+        "celery",
+        "-A",
+        "workers.celery_app",
+        "worker",
+        "--queues=marketplace",
+        "--concurrency=1",
+        "--loglevel=info",
+      ]
+    environment:
+      WORKERS_ENVIRONMENT: dev
+      # Este contenedor ejecuta código de api_server (las puertas viven en
+      # `api_server.marketplace.install`), y ese código lee sus Settings con
+      # prefijo API_SERVER_. Mismo motivo que en los otros pools.
+      API_SERVER_ENVIRONMENT: dev
+      WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
+      API_SERVER_DATABASE_URL: postgresql+asyncpg://app_user:changeme-app-dev-only@postgres:5432/agentic_platform
+      WORKERS_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
+      API_SERVER_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
+      WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
+      API_SERVER_JWT_SECRET: dev-only-jwt-secret-change-me
+      WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
+      # La puerta 5 lanza un contenedor efímero de prueba de humo.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      WORKERS_SECCOMP_PROFILE_PATH: ${WORKERS_SECCOMP_PROFILE_PATH-/etc/agentic/seccomp/agent-runtime.json}
+      WORKERS_APPARMOR_PROFILE: ${WORKERS_APPARMOR_PROFILE-}
+    volumes:
+      - agent_data:/var/lib/docker/volumes/agentic-platform-agent-data/_data
+      - ./seccomp:/etc/agentic/seccomp:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      docker-socket-proxy: { condition: service_started }
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+        ]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 60s
+    networks: [agentic-net, agentic-agents, agentic-docker]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
   # workers-backup — pool DEDICADO de la cola `privileged` (backup diario Plan 12
   # + restores). Corre como ROOT dentro de su contenedor (WORKERS_RUN_AS_ROOT):
   # el paso volume-tar lee los _data de redis (uid 999) y vault (uid 100), ambos
@@ -437,10 +549,20 @@ services:
       ]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      WORKERS_BROKER_URL: redis://redis:6379/1
-      WORKERS_RESULT_BACKEND: redis://redis:6379/2
-      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0
+      WORKERS_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
       WORKERS_DATA_ROOT: /var/lib/docker/volumes/agentic-platform-agent-data/_data
       WORKERS_RUN_AS_ROOT: "1"
@@ -497,10 +619,20 @@ services:
     command: ["celery", "-A", "workers.celery_app", "beat", "--loglevel=info"]
     environment:
       WORKERS_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       WORKERS_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      WORKERS_BROKER_URL: redis://redis:6379/1
-      WORKERS_RESULT_BACKEND: redis://redis:6379/2
-      WORKERS_EVENTS_REDIS_URL: redis://redis:6379/0 # MUST match ORCHESTRATOR_REDIS_URL / API_SERVER_REDIS_URL (events:tasks stream); /3 has no consumer so dispatch stalls
+      WORKERS_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      WORKERS_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+      WORKERS_EVENTS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0 # MUST match ORCHESTRATOR_REDIS_URL / API_SERVER_REDIS_URL (events:tasks stream); /3 has no consumer so dispatch stalls
       WORKERS_JWT_SECRET: dev-only-jwt-secret-change-me
     depends_on:
       redis: { condition: service_healthy }
@@ -585,10 +717,20 @@ services:
     image: agentic-platform/notification-dispatcher:manuals
     environment:
       NOTIFY_ENVIRONMENT: dev
+      # API_SERVER_ENVIRONMENT: este contenedor NO es la api-server, pero SÍ
+      # ejecuta código suyo (importa `api_server.*`), y ese código lee sus
+      # Settings del entorno con prefijo `API_SERVER_`. Sin esta variable,
+      # `api_server.config.get_settings().environment` cae a su default "dev"
+      # DENTRO de este contenedor, aunque el despliegue sea de producción, y los
+      # guards anti-defaults de la api-server (secretos de dev, suelo de longitud
+      # HMAC, «los dos secretos difieren») no disparan aquí. Verificado el
+      # 2026-07-30 en el contenedor vivo. Debe llevar el MISMO valor que
+      # `<PREFIX>ENVIRONMENT` de este servicio.
+      API_SERVER_ENVIRONMENT: dev
       NOTIFY_DATABASE_URL: postgresql+asyncpg://migrations_user:changeme-migrations-dev-only@postgres:5432/agentic_platform
-      NOTIFY_BROKER_URL: redis://redis:6379/1
-      NOTIFY_RESULT_BACKEND: redis://redis:6379/2
-      NOTIFY_EVENTS_REDIS_URL: redis://redis:6379/0
+      NOTIFY_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      NOTIFY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+      NOTIFY_EVENTS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
     healthcheck:
       # -A = el módulo real de la app (el del CMD del Dockerfile); `-d
       # celery@$$HOSTNAME` pinga ESTE nodo (el broker /1 es compartido con los

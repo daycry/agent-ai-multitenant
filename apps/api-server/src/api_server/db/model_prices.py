@@ -198,6 +198,24 @@ class ModelPrice(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         # Defence in depth: the catalog is USD-only. The column default
         # already pins it; this rejects a stray non-USD write at the DB.
         CheckConstraint("currency = 'USD'", name="ck_model_prices_currency_usd"),
+        # Los dos índices de las claves ajenas nullable, parciales sobre las
+        # filas ASOCIADAS (las únicas que se buscan por ese lado): sostienen
+        # «filtrar precios por proveedor» del endpoint de lectura + la UI de
+        # admin y evitan una FK sin índice, que en un `ON DELETE SET NULL`
+        # obliga a un seq scan de la tabla entera al borrar el padre.
+        # Los crean las migraciones 0049 (`updated_by`) y 0071
+        # (`provider_id`); se declaran aquí porque vivían SOLO en la migración
+        # y `alembic check` los leía como deriva.
+        Index(
+            "ix_model_prices_provider_id",
+            "provider_id",
+            postgresql_where=text("provider_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_model_prices_updated_by",
+            "updated_by",
+            postgresql_where=text("updated_by IS NOT NULL"),
+        ),
     )
 
     # --- catalog key -------------------------------------------------------

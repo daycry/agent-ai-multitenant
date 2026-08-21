@@ -20,6 +20,15 @@ Invariantes (espejo de :mod:`workers.cortex_reflection`):
 
   * **Kill-switch** (ADR 0078): si ``cortex.autonomy_enabled`` está OFF (default) →
     no-op total (no toca BD). El beat tickea, la tarea sale.
+  * **Circuit-breaker por owner** (ADR 0078, gobierno de F4 en
+    :mod:`api_server.cortex.autonomy`): un owner cuyo mantenimiento falla en bucle
+    (BD saturada, embeddings corruptos) deja de barrerse durante el cooldown en vez
+    de reintentar cada noche. Usa un ``kind`` PROPIO (:data:`MAINTENANCE_KIND`), no
+    el de la curiosidad: una racha de fallos de las búsquedas web no debe dejar la
+    memoria del owner sin barrer. El breaker es **fail-safe** (Redis inalcanzable ⇒
+    se trata como abierto): el mantenimiento es diferible, así que ante la duda no
+    se toca la memoria del owner.
+  * **Sin budget** — decisión consciente, ver :data:`MAINTENANCE_KIND`.
   * **Fail-open**: cualquier excepción se captura y loguea; la tarea jamás propaga
     al worker (es mantenimiento de fondo, best-effort).
   * **BYPASSRLS + filtro owner explícito** (ADR 0074): tablas tenant-less sin RLS.
@@ -36,10 +45,11 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.cortex_maintenance")
 
@@ -54,6 +64,28 @@ _SNAPSHOT_RETENTION = timedelta(days=90)
 #: Tope de filas episódicas escaneadas por pasada (acota el coste; la próxima pasada
 #: continúa — el soft-delete es idempotente).
 _FORGET_SCAN_LIMIT = 500
+
+#: ``kind`` propio en el gobierno de F4 (``cortex:cb:{owner}:maintenance``). Separar
+#: el breaker del de la curiosidad es deliberado: son subsistemas independientes y
+#: compartir clave los acoplaría (una racha de fallos de egress dejaría además la
+#: memoria sin barrer).
+#:
+#: **Por qué NO hay budget aquí** (excepción razonada al criterio literal de D2): el
+#: budget de F4 (``check_searches_budget``/``record_searches``) cuenta BÚSQUEDAS WEB
+#: de la curiosidad — está hardcodeado a su ``kind`` y su unidad es el egress de
+#: pago. El mantenimiento no gasta LLM ni red: es un barrido local de Postgres cuyo
+#: coste ya está acotado por :data:`_FORGET_SCAN_LIMIT`, ``_CONSOLIDATE_SCAN_LIMIT``
+#: y su cadencia diaria. Contabilizarlo en el mismo contador consumiría el
+#: presupuesto de búsquedas del owner sin haber buscado nada. El freno que sí aplica
+#: —dejar de insistir cuando falla— es el circuit-breaker, y ese sí está cableado.
+MAINTENANCE_KIND = "maintenance"
+
+#: Fallos CONSECUTIVOS de mantenimiento que abren el breaker de un owner.
+MAINTENANCE_CB_FAILS = 3
+
+#: Cooldown (s) que el breaker permanece abierto. 12 h: con cadencia diaria, un
+#: fallo transitorio no se salta más de una pasada.
+MAINTENANCE_CB_COOLDOWN_S = 12 * 3600
 
 
 @app.task(name="workers.cortex_maintenance")  # type: ignore[untyped-decorator]
@@ -71,7 +103,7 @@ async def _run_maintenance(settings: Settings, *, now: datetime | None = None) -
     Corre BYPASSRLS (sin ``set_config app.tenant_id``); TODO acceso filtra
     ``owner_user_id`` explícito."""
     now = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         # (1) Kill-switch global (ADR 0078): OFF (default) ⇒ no-op total.
@@ -86,9 +118,10 @@ async def _run_maintenance(settings: Settings, *, now: datetime | None = None) -
         if not owners:
             return {"skipped": "no_owner"}
 
+        redis = _get_redis()
         results: list[dict[str, Any]] = []
         for owner_id in owners:
-            results.append(await _maintain_owner(sessionmaker, owner_id, now=now))
+            results.append(await _maintain_owner(sessionmaker, redis, owner_id, now=now))
         _log.info("cortex_maintenance.done", owners=len(owners))
         return {"owners": len(owners), "results": results}
     except Exception as exc:  # best-effort: jamás propaga al worker
@@ -112,25 +145,83 @@ async def _resolve_owners(sessionmaker: async_sessionmaker[Any]) -> list[UUID]:
         return [r[0] for r in rows.all()]
 
 
+def _get_redis() -> Any:
+    """Cliente Redis del api-server (mismo DB que el gobierno de F4 y la caché afectiva).
+
+    Mismo seam que :mod:`workers.cortex_curiosity`: el namespace ``cortex:*`` es
+    compartido, así que no se abre infra nueva."""
+    from api_server.auth.deps import get_redis
+
+    return get_redis()
+
+
 async def _maintain_owner(
-    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+    sessionmaker: async_sessionmaker[Any], redis: Any, owner_id: UUID, *, now: datetime
 ) -> dict[str, Any]:
-    """Las tres acciones de mantenimiento para UN owner (aislado por owner_id)."""
-    snapshotted = await _decay_snapshot(sessionmaker, owner_id, now=now)
-    forgotten = await _forget_low_retention(sessionmaker, owner_id, now=now)
-    consolidated = await _consolidate_similar(sessionmaker, owner_id, now=now)
-    pruned = await _prune_old_snapshots(sessionmaker, owner_id, now=now)
+    """Las cuatro acciones de mantenimiento para UN owner (aislado por owner_id).
+
+    Gated por el **circuit-breaker de F4** de este owner+kind: abierto ⇒ no se toca
+    NADA suyo (ni olvido, ni snapshot, ni poda) durante el cooldown. Al terminar,
+    el resultado se reporta al gobierno: una pasada limpia resetea la racha de
+    fallos (:func:`record_success`) y una con errores la incrementa
+    (:func:`record_failure`), que es lo que permite al breaker abrirse. Sin ese
+    reporte el gate sería un mecanismo que nunca se dispara."""
+    from api_server.cortex.autonomy import is_circuit_open, record_failure, record_success
+
+    if await is_circuit_open(redis, owner_user_id=str(owner_id), kind=MAINTENANCE_KIND):
+        _log.info("cortex_maintenance.circuit_open", owner=str(owner_id))
+        return {"owner_user_id": str(owner_id), "skipped": "circuit_open"}
+
+    # Cada paso es best-effort y traga su excepción (el mantenimiento nunca debe
+    # tumbar el beat), así que el fallo tiene que viajar hasta aquí explícitamente:
+    # esta lista es ese canal.
+    errors: list[str] = []
+    snapshotted, forgotten, consolidated, pruned = False, 0, 0, 0
+    try:
+        snapshotted = await _decay_snapshot(sessionmaker, owner_id, now=now, errors=errors)
+        forgotten = await _forget_low_retention(sessionmaker, owner_id, now=now, errors=errors)
+        consolidated = await _consolidate_similar(sessionmaker, owner_id, now=now, errors=errors)
+        pruned = await _prune_old_snapshots(sessionmaker, owner_id, now=now, errors=errors)
+    except Exception as exc:  # belt+braces: un paso que se salte su propia guarda
+        # No basta con el try/except global de _run_maintenance: si la excepción
+        # llegase allí, este owner no reportaría nada al breaker y la racha nunca
+        # se contaría — el gate quedaría inerte justo en el caso que debe frenar.
+        errors.append(f"unhandled: {exc}")
+        _log.exception("cortex_maintenance.owner_unhandled", owner=str(owner_id), error=str(exc))
+
+    if errors:
+        opened = await record_failure(
+            redis,
+            owner_user_id=str(owner_id),
+            threshold=MAINTENANCE_CB_FAILS,
+            cooldown_s=MAINTENANCE_CB_COOLDOWN_S,
+            kind=MAINTENANCE_KIND,
+        )
+        _log.warning(
+            "cortex_maintenance.owner_failed",
+            owner=str(owner_id),
+            errors=errors,
+            circuit_opened=opened,
+        )
+    else:
+        await record_success(redis, owner_user_id=str(owner_id), kind=MAINTENANCE_KIND)
+
     return {
         "owner_user_id": str(owner_id),
         "decay_snapshot_written": snapshotted,
         "forgotten": forgotten,
         "consolidated_groups": consolidated,
         "pruned_snapshots": pruned,
+        "errors": errors,
     }
 
 
 async def _decay_snapshot(
-    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+    sessionmaker: async_sessionmaker[Any],
+    owner_id: UUID,
+    *,
+    now: datetime,
+    errors: list[str],
 ) -> bool:
     """Escribe un snapshot del estado decaído si el último es viejo (idempotente).
 
@@ -170,7 +261,8 @@ async def _decay_snapshot(
                 language="es",
             )
         return True
-    except Exception as exc:  # best-effort
+    except Exception as exc:  # best-effort (el fallo viaja al breaker vía `errors`)
+        errors.append(f"decay_snapshot: {exc}")
         _log.warning(
             "cortex_maintenance.decay_snapshot_failed", owner=str(owner_id), error=str(exc)
         )
@@ -178,7 +270,11 @@ async def _decay_snapshot(
 
 
 async def _forget_low_retention(
-    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+    sessionmaker: async_sessionmaker[Any],
+    owner_id: UUID,
+    *,
+    now: datetime,
+    errors: list[str],
 ) -> int:
     """Soft-delete (reversible) de la episódica del córtex de BAJA retención.
 
@@ -232,7 +328,8 @@ async def _forget_low_retention(
                     }
                     row.metadata_ = meta
                     forgotten += 1
-    except Exception as exc:  # best-effort
+    except Exception as exc:  # best-effort (el fallo viaja al breaker vía `errors`)
+        errors.append(f"forget: {exc}")
         _log.warning("cortex_maintenance.forget_failed", owner=str(owner_id), error=str(exc))
         return forgotten
     return forgotten
@@ -245,7 +342,11 @@ _CONSOLIDATE_SCAN_LIMIT = 200
 
 
 async def _consolidate_similar(
-    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+    sessionmaker: async_sessionmaker[Any],
+    owner_id: UUID,
+    *,
+    now: datetime,
+    errors: list[str],
 ) -> int:
     """Merge-into de la episódica REPETIDA del córtex (ADR 0077).
 
@@ -343,14 +444,19 @@ async def _consolidate_similar(
                     meta["consolidated_into"] = str(merged.id)
                     member.metadata_ = meta
                 consolidated += 1
-    except Exception as exc:  # best-effort
+    except Exception as exc:  # best-effort (el fallo viaja al breaker vía `errors`)
+        errors.append(f"consolidate: {exc}")
         _log.warning("cortex_maintenance.consolidate_failed", owner=str(owner_id), error=str(exc))
         return consolidated
     return consolidated
 
 
 async def _prune_old_snapshots(
-    sessionmaker: async_sessionmaker[Any], owner_id: UUID, *, now: datetime
+    sessionmaker: async_sessionmaker[Any],
+    owner_id: UUID,
+    *,
+    now: datetime,
+    errors: list[str],
 ) -> int:
     """Poda los snapshots afectivos del owner más antiguos que la ventana de retención.
 
@@ -370,7 +476,8 @@ async def _prune_old_snapshots(
                 )
             )
             return int(result.rowcount or 0)
-    except Exception as exc:  # best-effort
+    except Exception as exc:  # best-effort (el fallo viaja al breaker vía `errors`)
+        errors.append(f"prune: {exc}")
         _log.warning("cortex_maintenance.prune_failed", owner=str(owner_id), error=str(exc))
         return 0
 
@@ -390,4 +497,10 @@ def trigger_cortex_maintenance() -> bool:
     return True
 
 
-__all__ = ["cortex_maintenance", "trigger_cortex_maintenance"]
+__all__ = [
+    "MAINTENANCE_CB_COOLDOWN_S",
+    "MAINTENANCE_CB_FAILS",
+    "MAINTENANCE_KIND",
+    "cortex_maintenance",
+    "trigger_cortex_maintenance",
+]

@@ -18,6 +18,7 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { apiFetch, type ApiError } from "@/lib/api";
+import { pickLang } from "@/lib/i18n";
 import type { Lang } from "@/lib/lang-context";
 
 /** ES + EN display names for a runtime template (served, never invented). */
@@ -39,7 +40,7 @@ export interface RuntimeTemplateDto {
 
 /** The bilingual label for a runtime template in the active language. */
 export function runtimeLabel(template: RuntimeTemplateDto, lang: Lang): string {
-  return lang === "es" ? template.label.es : template.label.en;
+  return pickLang(lang, template.label);
 }
 
 /**

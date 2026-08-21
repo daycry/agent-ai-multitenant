@@ -40,6 +40,8 @@ import pytest
 from alembic import command
 from httpx import ASGITransport, AsyncClient
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 
@@ -148,6 +150,11 @@ async def _seed_execution(
     created_at: datetime,
 ) -> UUID:
     execution_id = uuid4()
+    # Los llamantes siembran en días fijos de mayo de 2026 (DAY_A/DAY_B, para casar
+    # con las tasas de cambio): `executions` está particionada por mes y SIN DEFAULT
+    # (ADR 0151), y ese mes no existe en una base recién migrada. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", created_at)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(

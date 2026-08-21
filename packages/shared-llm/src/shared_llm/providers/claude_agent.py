@@ -18,6 +18,7 @@ so a deployment without Claude doesn't drag the SDK + the Node CLI in.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -34,6 +35,20 @@ from shared_llm.types import (
 # In-process MCP server name used to advertise host tool schemas to the SDK.
 # The SDK namespaces these tools as ``mcp__{_HOST_TOOLS_SERVER}__{tool}``.
 _HOST_TOOLS_SERVER = "host_tools"
+
+# prod-07 task_prod07_09 (c): presupuesto de pared para UN mensaje del SDK.
+#
+# El SDK no habla HTTP: arranca el CLI de Claude Code como SUBPROCESO de Node y
+# lee sus mensajes. Los otros tres providers están protegidos por el timeout de
+# httpx; este camino no tenía ninguno, así que un CLI encasquillado (sin salida y
+# sin cerrar el stream) dejaba el `async for` esperando PARA SIEMPRE y con él la
+# request del asistente — sin forma de que el usuario la rescatase.
+#
+# El presupuesto es POR MENSAJE, no por llamada: un modelo con extended thinking
+# tarda minutos legítimos pero va emitiendo, así que el progreso reinicia el
+# reloj. Un tope por-llamada obligaría a subirlo tanto (para no matar runs
+# largos buenos) que dejaría de proteger de nada.
+_DEFAULT_SDK_MESSAGE_TIMEOUT_S = 600.0
 
 # The Claude Agent SDK exposes its full native toolset (Claude Code's tools) to
 # the model by default. When we advertise the platform's HOST tools (MCP,
@@ -176,7 +191,14 @@ def _run_error(exc: Exception, collected: list[Any]) -> LLMError:
     """Map a failed SDK run to a typed error, preferring the CLI's real reason over
     the SDK's cryptic 'error result: <subtype>'. Auth failures become ``AuthError``
     (so the assistant's handler tells the operator to fix the provider credential —
-    ADR 0064); everything else is a ``ProviderError`` carrying the real text."""
+    ADR 0064); everything else is a ``ProviderError`` carrying the real text.
+
+    prod-07 task_prod07_09: un error YA tipado por esta capa pasa INTACTO. Antes se
+    re-envolvía en un ``ProviderError`` nuevo, que perdía los campos del original —
+    el `transient=True` del timeout del CLI entre ellos, así que la política de
+    reintentos lo veía como permanente y no lo reintentaba nunca."""
+    if isinstance(exc, LLMError):
+        return exc
     surfaced = _surface_result_error(collected)
     message = surfaced or str(exc)
     if surfaced and any(marker in surfaced.lower() for marker in _AUTH_RESULT_MARKERS):
@@ -204,6 +226,10 @@ class ClaudeAgentProvider:
         # Injectable for tests: a callable with the same shape as
         # claude_agent_sdk.query. None -> real SDK is loaded lazily.
         query_fn: Any | None = None,
+        # prod-07 task_prod07_09 (c): segundos de espera máxima por MENSAJE del
+        # SDK antes de dar el CLI por encasquillado. Ver
+        # `_DEFAULT_SDK_MESSAGE_TIMEOUT_S`.
+        timeout: float = _DEFAULT_SDK_MESSAGE_TIMEOUT_S,
     ) -> None:
         # ADR 0076 (prerequisito de seguridad): la credencial vive en la
         # INSTANCIA, nunca en `os.environ`. Escribirla en el entorno del proceso
@@ -223,6 +249,36 @@ class ClaudeAgentProvider:
         self._default_allowed_tools = default_allowed_tools or []
         self._default_system_prompt = default_system_prompt
         self._query_fn = query_fn
+        self._timeout = timeout
+
+    async def _timed(self, stream: Any) -> AsyncIterator[Any]:
+        """Drena el stream del SDK con un tope de espera POR MENSAJE.
+
+        prod-07 task_prod07_09 (c). Envuelve cada ``__anext__`` en
+        ``asyncio.wait_for``: mientras el CLI emita algo, el reloj se reinicia; si
+        deja de emitir durante ``self._timeout`` segundos, el CLI está
+        encasquillado y se corta con un `ProviderError` **transitorio** — un
+        subproceso colgado suele arreglarse relanzándolo, así que la política de
+        reintentos de `shared_llm.retry` puede darle otra oportunidad en vez de
+        tumbar el run.
+
+        Envolver cada mensaje (y no la recolección entera) tiene una segunda
+        virtud: el caller conserva los mensajes YA recogidos, así que el camino
+        con tools todavía puede cosechar una tool-call que llegó antes del cuelgue.
+        """
+        iterator = stream.__aiter__()
+        while True:
+            try:
+                message = await asyncio.wait_for(iterator.__anext__(), timeout=self._timeout)
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                raise ProviderError(
+                    f"{self.name}: el CLI del SDK no emitió nada en "
+                    f"{self._timeout:.0f}s — se da por encasquillado",
+                    transient=True,
+                ) from exc
+            yield message
 
     # ------------------------------------------------------------------
     # Internals — lazy import keeps the SDK optional
@@ -238,7 +294,7 @@ class ClaudeAgentProvider:
             from claude_agent_sdk import query
         except ImportError as exc:
             raise ImportError(
-                "claude-agent-sdk is not installed. " "Run `pip install 'shared-llm[claude]'`."
+                "claude-agent-sdk is not installed. Run `pip install 'shared-llm[claude]'`."
             ) from exc
         return query
 
@@ -258,7 +314,7 @@ class ClaudeAgentProvider:
             from claude_agent_sdk import ClaudeAgentOptions
         except ImportError as exc:
             raise ImportError(
-                "claude-agent-sdk is not installed. " "Run `pip install 'shared-llm[claude]'`."
+                "claude-agent-sdk is not installed. Run `pip install 'shared-llm[claude]'`."
             ) from exc
         # ADR 0070: extended-thinking effort (EffortLevel: low/medium/high/xhigh/max).
         # Solo se pasa cuando hay valor — así seguimos compatibles con SDKs sin el
@@ -445,7 +501,7 @@ class ClaudeAgentProvider:
         query_fn = self._query()
         collected: list[Any] = []
         try:
-            async for msg in query_fn(prompt=prompt, options=options):
+            async for msg in self._timed(query_fn(prompt=prompt, options=options)):
                 collected.append(msg)
         except Exception as exc:  # — surface the CLI's real reason, typed
             raise _run_error(exc, collected) from exc
@@ -502,7 +558,7 @@ class ClaudeAgentProvider:
             prompt_arg = _single_user_prompt_stream(prompt)
         collected: list[Any] = []
         try:
-            async for msg in query_fn(prompt=prompt_arg, options=options):
+            async for msg in self._timed(query_fn(prompt=prompt_arg, options=options)):
                 collected.append(msg)
         except Exception as exc:
             # `can_use_tool(interrupt=True)` puede cerrar el stream con una señal;
@@ -651,7 +707,7 @@ class ClaudeAgentProvider:
         last_usage: Usage | None = None
         collected: list[Any] = []
         try:
-            async for msg in query_fn(prompt=prompt, options=options):
+            async for msg in self._timed(query_fn(prompt=prompt, options=options)):
                 collected.append(msg)
                 content = getattr(msg, "content", None)
                 if isinstance(content, list):
@@ -701,7 +757,7 @@ class ClaudeAgentProvider:
             effort=effort,
         )
         query_fn = self._query()
-        async for msg in query_fn(prompt=prompt, options=options):
+        async for msg in self._timed(query_fn(prompt=prompt, options=options)):
             yield _to_agent_event(msg)
 
     async def aclose(self) -> None:

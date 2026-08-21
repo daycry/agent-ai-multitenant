@@ -45,6 +45,8 @@ from pathlib import Path
 
 import structlog
 
+from workers.git_identity import git_identity_env
+
 _log = structlog.get_logger("workers.git_repos")
 
 # Default TTL after which an idle worktree gets pruned. Matches Plan 06
@@ -60,9 +62,6 @@ _EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # el perdedor espera a que el ganador termine de inicializarlo (ventana de ms).
 _INIT_RACE_WAIT_ATTEMPTS = 20
 _INIT_RACE_WAIT_DELAY_S = 0.25
-# Identity for platform-authored git ops with no human author (the seed commit).
-_PLATFORM_GIT_NAME = "Agentic Platform"
-_PLATFORM_GIT_EMAIL = "platform@agentic.local"
 
 
 # ---------------------------------------------------------------------------
@@ -291,12 +290,9 @@ class BareRepoManager:
         # the born ref matches what alignment + the PR guard target.
         if default_branch:
             _run_git("-C", str(path), "symbolic-ref", "HEAD", f"refs/heads/{default_branch}")
-        ident = {
-            "GIT_AUTHOR_NAME": _PLATFORM_GIT_NAME,
-            "GIT_AUTHOR_EMAIL": _PLATFORM_GIT_EMAIL,
-            "GIT_COMMITTER_NAME": _PLATFORM_GIT_NAME,
-            "GIT_COMMITTER_EMAIL": _PLATFORM_GIT_EMAIL,
-        }
+        # Identidad de fuente única (causa raíz A): el commit raíz sintético lo firma
+        # el MISMO autor que los commits de tarea; antes usaba un email distinto.
+        ident = git_identity_env()
         sha = _run_git(
             "-C", str(path), "commit-tree", _EMPTY_TREE_SHA, "-m", "Initial commit", env_extra=ident
         ).strip()
@@ -705,9 +701,9 @@ class WorktreeManager:
 
 
 __all__ = [
+    "DEFAULT_WORKTREE_TTL_S",
     "BareRepoLayout",
     "BareRepoManager",
-    "DEFAULT_WORKTREE_TTL_S",
     "GitCommandError",
     "WorktreeInfo",
     "WorktreeManager",

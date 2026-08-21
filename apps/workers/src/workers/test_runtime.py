@@ -46,11 +46,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
+from docker.types import Mount
 from shared_test_runtimes.catalog import get as get_template
+from shared_test_runtimes.images import pinned_pull_reference
 from shared_test_runtimes.types import RuntimeTemplate
 
 import docker
-from docker.types import Mount
 from workers.config import Settings
 from workers.isolation import (
     AGENT_HOME,
@@ -88,6 +89,70 @@ _GIT_HTTPS_ENV: dict[str, str] = {
 # always indicate a hung process, not legitimate work; the project can
 # override per task via ``acceptance_criteria[*].timeout_s``.
 DEFAULT_TIMEOUT_S = 600
+
+
+# ---------------------------------------------------------------------------
+# ADR 0148 — procedencia de la imagen de runtime
+# ---------------------------------------------------------------------------
+
+
+class RuntimeImageUnavailableError(RuntimeError):
+    """No se pudo obtener la imagen fijada por digest, y NO hay plan B.
+
+    Existe para que el fallo sea explícito. La alternativa —seguir adelante con
+    lo que hubiera en el daemon local bajo ese nombre— produce un run verde
+    ejecutado sobre una imagen que nadie puede identificar, que es exactamente
+    el problema que el ADR 0148 vino a cerrar. Ver su condición 2.
+    """
+
+
+def ensure_runtime_image(client: Any, image_reference: str) -> str:
+    """Garantizar la procedencia de la imagen y devolver con qué lanzarla.
+
+    * Referencia **con digest** (el catálogo tras una release): se descarga por
+      digest y se devuelve la forma canónica ``repo@sha256:…``, que es la que se
+      pasa a ``containers.run``. Si el pull falla, se ABORTA.
+    * Referencia **sin digest** (el catálogo mientras no haya release publicada,
+      o la imagen propia de un proyecto del ADR 0129, construida en el host): se
+      devuelve tal cual. No hay procedencia que verificar y exigir un pull la
+      rompería.
+
+    El atajo de «ya está en local» solo aplica al caso fijado por digest, y es
+    seguro justo por eso: un digest es direccionable por contenido, así que una
+    imagen presente bajo ese digest **es** la imagen correcta. Sin él cada
+    lanzamiento pagaría una ida al registry.
+    """
+    pull_reference = pinned_pull_reference(image_reference)
+    if pull_reference is None:
+        return image_reference
+
+    try:
+        client.images.get(pull_reference)
+    except Exception:  # no está en local (o el daemon protesta): manda el pull
+        pass
+    else:
+        return pull_reference
+
+    try:
+        client.images.pull(pull_reference)
+    except Exception as exc:
+        _log.error(
+            "runtime_image_pull_failed",
+            image=image_reference,
+            pull_reference=pull_reference,
+            error=str(exc),
+        )
+        raise RuntimeImageUnavailableError(
+            f"no se pudo obtener la imagen de runtime fijada por digest "
+            f"{image_reference!r}: {exc}. La tarea se ABORTA: caer a una imagen "
+            f"local con el mismo tag ejecutaría código no confiable en una imagen "
+            f"que nadie puede identificar (ADR 0148, condición 2). Comprueba el "
+            f"acceso del host al registry, o apunta RUNTIME_IMAGE_REGISTRY a un "
+            f"mirror que sirva ese digest."
+        ) from exc
+    _log.info("runtime_image_pulled", pull_reference=pull_reference)
+    return pull_reference
+
 
 # ---------------------------------------------------------------------------
 # task_06_04 — Grouping
@@ -321,9 +386,45 @@ class AuxServiceSpec:
 # Curated defaults for the two stacks every project asks for. The
 # worker accepts user-provided AuxServiceSpec lists; these are just
 # the names we register by default through `default_aux_services()`.
+#
+# ---------------------------------------------------------------------------
+# FIJADAS POR DIGEST (prod-11 task_digest_pin_11 / gap5-3), 2026-08-19.
+#
+# Las 22 bases externas bajo `docker/` llevan `@sha256:` desde el 2026-07-31.
+# Estas dos se quedaron fuera porque no viven en un Dockerfile sino aquí, en
+# constantes de módulo, y la guarda que recorría Dockerfiles no las veía.
+#
+# No es un hueco de inventario. Son los ÚNICOS contenedores del sistema que
+# comparten la red per-tarea con código no confiable: el agente escribe los
+# tests que se ejecutan al lado de este postgres. Con un tag rodante, la
+# pregunta que se hace después de un incidente —«¿qué binario corrió en ese
+# run?»— no tiene respuesta.
+#
+# LA REGLA DURA DE LA FASE ES «sin refresco automático, no se pinea», y aquí el
+# vehículo NO es Dependabot: su ecosistema `docker` parsea Dockerfiles y ficheros
+# compose, no fuentes Python. El plan dejó cuatro salidas abiertas; se toma la
+# (b) —pinear y revisar a mano, con la fecha escrita— y se descarta la (a)
+# (mover las referencias a un fichero que exista sólo para que un bot lo lea) y
+# la (c) (dejarlas por tag), porque «sidecar efímero» describe su ciclo de vida,
+# no su vecindario: comparten red con el código del agente.
+# El coste de (b) es honesto y está acotado: dos líneas cada revisión.
+# Procedimiento y calendario en docs/06-runbooks/triage-vulnerabilidades.md.
+#
+# El tag legible va DENTRO de la referencia (`postgres:16-alpine@sha256:…`), no
+# en un comentario al lado: así el operador que lee un `docker ps` sabe qué
+# versión es, y el día que se cambie el digest sin cambiar el tag se ve en el
+# diff. Ambos resueltos contra el registry con `docker buildx imagetools
+# inspect` (digest del ÍNDICE multi-arch, no el del manifest de una plataforma:
+# fijar el de amd64 rompería el arranque en un host arm64).
+#
+# review: 2026-11-19
+# ---------------------------------------------------------------------------
 DEFAULT_POSTGRES = AuxServiceSpec(
     name="postgres-test",
-    image="postgres:16-alpine",
+    # postgres:16-alpine == 16.15-alpine3.24 (resuelto 2026-08-19)
+    image=(
+        "postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685"
+    ),
     env={
         "POSTGRES_USER": "test",
         "POSTGRES_PASSWORD": "test",
@@ -337,7 +438,11 @@ DEFAULT_POSTGRES = AuxServiceSpec(
 
 DEFAULT_REDIS = AuxServiceSpec(
     name="redis-test",
-    image="redis:7-alpine",
+    # redis:7-alpine == 7.4.10-alpine (resuelto 2026-08-19). Ver el bloque de
+    # DEFAULT_POSTGRES para el porqué del pin y su calendario de revisión.
+    image=(
+        "redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
+    ),
     healthcheck_cmd=("redis-cli", "ping"),
     mem_limit="128m",
 )
@@ -648,7 +753,17 @@ class TestRuntimeRunner:
         started: list[Any] = []
         for aux in spec.aux_services:
             run_kwargs = build_aux_run_kwargs(self._settings, aux, network_name)
-            container = self.client.containers.run(aux.image, **run_kwargs)
+            # ADR 0148 (condición 2) + prod-11 task_digest_pin_11: se lanza la
+            # referencia CANÓNICA por digest, no el tag del que salió. Pasar el
+            # tag aquí después de haber descargado el digest deja al daemon
+            # elegir otra vez, y puede elegir distinto — el pin quedaría en
+            # decoración. Si el pull falla se ABORTA: levantar «un postgres
+            # cualquiera» bajo el nombre correcto, al lado del código no
+            # confiable que el agente escribe, daría un run verde que nadie
+            # puede auditar. Una referencia sin digest (aux declarada por un
+            # proyecto, ADR 0129) pasa intacta.
+            image = ensure_runtime_image(self.client, aux.image)
+            container = self.client.containers.run(image, **run_kwargs)
             started.append(container)
             if aux.healthcheck_cmd is not None:
                 self._wait_healthy(container, aux)
@@ -690,7 +805,10 @@ class TestRuntimeRunner:
         template = spec.plan.template
         run_kwargs = self._build_test_kwargs(spec, network_name, egress=egress)
         assert_no_docker_socket(run_kwargs)
-        return self.client.containers.run(template.docker_image, **run_kwargs)
+        # ADR 0148: se lanza la MISMA referencia que se acaba de resolver por
+        # digest, no el tag del catálogo — o el daemon podría elegir otra cosa.
+        image = ensure_runtime_image(self.client, template.docker_image)
+        return self.client.containers.run(image, **run_kwargs)
 
     def _run_pre_install(
         self,
@@ -729,7 +847,7 @@ class TestRuntimeRunner:
             budget = check.timeout_s or DEFAULT_TIMEOUT_S
             exec_rc, exec_logs = self._exec(container, check.command, timeout_s=budget)
             all_logs.append(
-                f"--- check {check.id or check.description!r}: {check.command}\n" f"{exec_logs}\n"
+                f"--- check {check.id or check.description!r}: {check.command}\n{exec_logs}\n"
             )
             exit_codes.append(exec_rc)
             if exec_rc == 124:
@@ -942,11 +1060,13 @@ def _apply_cwd(command: str, cwd: str | None) -> str:
 
 
 __all__ = [
-    "AcceptanceCheck",
-    "AuxServiceSpec",
     "DEFAULT_POSTGRES",
     "DEFAULT_REDIS",
     "DEFAULT_RUN_RUNTIME_ID",
+    "AcceptanceCheck",
+    "AuxServiceSpec",
+    # Re-exported for tests
+    "DockerSocketLeakError",
     "RuntimePlan",
     "RuntimeResolutionError",
     "TestRuntimeResult",
@@ -958,6 +1078,4 @@ __all__ = [
     "resolve_run_runtime",
     "resolve_run_runtime_id",
     "resolve_run_runtime_image",
-    # Re-exported for tests
-    "DockerSocketLeakError",
 ]

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the Gantt view with critical path (Plan 03 task_03_20).
@@ -40,9 +41,7 @@ const PLAN_FIXTURE = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) =>
     route.fulfill({
       status: 200,

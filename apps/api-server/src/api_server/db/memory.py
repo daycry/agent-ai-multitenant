@@ -36,6 +36,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    literal_column,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -90,6 +91,25 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             "user_id",
             postgresql_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
         ),
+        # Write path of the cortex's forgetting sweep (Cortex F5 D3, ADR 0077):
+        # `workers.cortex_maintenance` scans the owner's LIVE, private, episodic
+        # cortex memories ordered by `created_at` and stops at a limit. Without
+        # this index the plan sorts the owner's whole private memory before the
+        # limit applies — and that saco includes the assistant's memories too,
+        # because the only usable index is keyed on `user_id` alone. The four
+        # fixed conditions live in the predicate; `created_at` is the sort key.
+        # NOTE: the DB column behind `metadata_` is named `metadata`.
+        Index(
+            "ix_memory_entries_cortex_sweep",
+            "user_id",
+            "created_at",
+            postgresql_where=text(
+                "deleted_at IS NULL"
+                " AND scope = 'private'"
+                " AND type = 'episodic'"
+                " AND (metadata ->> 'cortex') = 'true'"
+            ),
+        ),
         # Read path: "the memories distilled from this human work session"
         # (Plan 16 task_16_15). Partial — only set on human-distilled rows.
         Index(
@@ -98,6 +118,39 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             postgresql_where=text(
                 "source_human_work_session_id IS NOT NULL AND deleted_at IS NULL"
             ),
+        ),
+        # Mitad vectorial del recall híbrido (migración 0020). Declarado aquí
+        # además de en la migración porque, mientras el modelo no lo conocía,
+        # un `alembic revision --autogenerate` proponía `DROP INDEX
+        # ix_memory_entries_embedding_hnsw` dentro de cualquier migración de
+        # columna, y el recall habría pasado a escaneo secuencial sin avisar.
+        # Los kwargs son parte del índice: `hnsw` es el método de acceso,
+        # `vector_cosine_ops` la clase de operador que hace que `<=>` lo use, y
+        # `m` / `ef_construction` los parámetros con los que se construyó.
+        Index(
+            "ix_memory_entries_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": "16", "ef_construction": "64"},
+        ),
+        # Mitad BM25 del recall. Índice DE EXPRESIÓN y PARCIAL: la consulta
+        # tiene que repetir el mismo `to_tsvector` para acertarlo, y el
+        # `WHERE deleted_at IS NULL` lo mantiene del tamaño de la memoria viva.
+        # La configuración `es_unaccent` la puso la migración 0079 sobre el
+        # `'simple'` original de la 0021 (acentos e inflexiones del castellano).
+        Index(
+            "ix_memory_entries_content_fts",
+            literal_column("to_tsvector('es_unaccent'::regconfig, content)"),
+            postgresql_using="gin",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Tercera señal del recall (entity-match, ADR 0059): GIN sobre el JSONB
+        # para el `?|` de solapamiento (migración 0084).
+        Index(
+            "ix_memory_entries_entities_gin",
+            "entities",
+            postgresql_using="gin",
         ),
         # A memory cites at most ONE source — an Execution XOR a
         # HumanWorkSession (or neither, for human-curated entries). Plan 16
@@ -122,6 +175,17 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
             name="ck_memory_entries_scope",
         ),
     )
+
+    # `TenantScopedMixin` trae `index=True`, pero la BD desplegada NO tiene
+    # `ix_memory_entries_tenant_id` y nunca lo tuvo: la migración 0020 creó en
+    # su lugar `ix_memory_entries_tenant_scope_type (tenant_id, scope, type)
+    # WHERE deleted_at IS NULL`, cuya columna guía es `tenant_id`, así que ya
+    # sirve las lecturas por tenant. Y no hay ninguna que mire filas
+    # soft-borradas: `memory_entries` está excluida de la purga a propósito
+    # (`workers.maintenance.purge`), de modo que el índice plano no cubriría
+    # ninguna consulta real. Declararlo dejaba `alembic check` en rojo por un
+    # item que no describe nada. Crearlo de verdad sería una migración.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     scope: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'private'"))
     type: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'episodic'"))
@@ -156,9 +220,14 @@ class MemoryEntry(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, 
     # Back-link to the Execution this memory was distilled from. NULL
     # when the entry came from `memory_store` (human-curated) or from a
     # human work session (see source_human_work_session_id).
+    # NO foreign key since part-01 / ADR 0154 (migration 0137): ``executions`` is
+    # partitioned by month, so its PK is ``(id, created_at)`` and a FK cannot
+    # reference it without carrying both columns. The column stays as a loose
+    # reference — it was already nullable and nothing assumes the run still
+    # exists, which is the same shape ``guardrail_events.execution_id`` has had
+    # on purpose since Plan 11.
     source_execution_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("executions.id", ondelete="SET NULL"),
         nullable=True,
     )
 

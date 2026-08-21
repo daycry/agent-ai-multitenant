@@ -33,7 +33,10 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { CSRF_HEADER, getCsrfToken } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types (mirror the backend responses)
@@ -43,7 +46,10 @@ interface KnowledgeBase {
   tenant_id: string;
   name: string;
   description: string | null;
+  /** ADR 0155: sello del modelo con el que se generaron los vectores. */
   embedding_model_id: string;
+  platform_embedding_model: string;
+  embedding_model_stale: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -73,12 +79,29 @@ const STATUS_VARIANT: Record<DocumentStatus, BadgeVariant> = {
   failed: "danger",
 };
 
-const STATUS_LABEL: Record<DocumentStatus, string> = {
-  pending: "Pendiente",
-  processing: "Procesando",
-  indexed: "Indexado",
-  failed: "Fallido",
+const STATUS_LABEL_KEY: Record<
+  DocumentStatus,
+  "statusPending" | "statusProcessing" | "statusIndexed" | "statusFailed"
+> = {
+  pending: "statusPending",
+  processing: "statusProcessing",
+  indexed: "statusIndexed",
+  failed: "statusFailed",
 };
+
+/**
+ * Nombre de la KB implícita del proyecto. **Es un DATO, no texto de UI.**
+ *
+ * Se persiste al crearla y es la clave del find-or-create de más abajo, así que
+ * NO se traduce: con el toggle en inglés, un nombre traducido no encontraría la
+ * KB creada en castellano y subiría los documentos a una KB nueva. Vive en una
+ * función porque lo usan dos sitios —la mutación y el texto de ayuda— y si
+ * divergen el síntoma es justo ése, invisible hasta que alguien busca sus
+ * documentos.
+ */
+function implicitKbName(projectName: string): string {
+  return `Documentos de ${projectName}`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -90,6 +113,8 @@ function formatBytes(bytes: number): string {
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectKnowledgeBasesPage() {
+  const errorText = useErrorText();
+  const t = useT("projectKbs");
   const params = useParams<{ id: string }>();
   const projectId = params.id;
 
@@ -113,11 +138,11 @@ export default function ProjectKnowledgeBasesPage() {
       className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="project-kbs-page"
     >
-      <ProjectBreadcrumb projectId={projectId} current="Knowledge Bases" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
       <PageHeader
         icon={<Library className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Knowledge Bases del proyecto"
-        description="Las KBs granted al proyecto, sus documentos y el progreso de la ingestión."
+        title={t("title")}
+        description={t("description")}
         data-testid="project-kbs-header"
       />
 
@@ -134,21 +159,21 @@ export default function ProjectKnowledgeBasesPage() {
       />
 
       {kbsQuery.isLoading ? (
-        <p className="text-muted-foreground mt-6 text-sm">Cargando…</p>
+        <p className="text-muted-foreground mt-6 text-sm">{t("loading")}</p>
       ) : kbsQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="project-kbs-error">
-          {kbsQuery.error instanceof ApiError ? kbsQuery.error.body : String(kbsQuery.error)}
+          {errorText(kbsQuery.error)}
         </p>
       ) : (kbsQuery.data ?? []).length === 0 ? (
         <Card className="mt-6">
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="project-kbs-empty">
-              Ninguna KB está granted a este proyecto todavía. Concede una desde el{" "}
+              {t("emptyBefore")}{" "}
               <Link href="/admin/knowledge-bases" className="text-foreground underline not-italic">
-                panel de Knowledge Bases
+                {t("emptyLink")}
               </Link>{" "}
-              (botón <span className="not-italic">Grant</span>) — o súbele documentos directamente
-              allí desplegando la KB.
+              {t("emptyParenBefore")} <span className="not-italic">Grant</span>
+              {t("emptyParenAfter")}
             </p>
           </CardContent>
         </Card>
@@ -184,6 +209,8 @@ function AddKnowledgeSection({
   grantedKbs: KnowledgeBase[];
   onDone: () => void;
 }) {
+  const errorText = useErrorText();
+  const t = useT("projectKbs");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const projectQuery = useQuery({
@@ -195,7 +222,7 @@ function AddKnowledgeSection({
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
       const projectName = projectQuery.data?.name ?? "proyecto";
-      const implicitName = `Documentos de ${projectName}`;
+      const implicitName = implicitKbName(projectName);
       // find-or-create idempotente: si la KB implícita ya existe (por nombre,
       // entre las granteadas al proyecto), se reutiliza; si no, se crea con
       // project_id → auto-grant (Q1).
@@ -211,14 +238,18 @@ function AddKnowledgeSection({
         });
       }
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-      const token = localStorage.getItem("agentic.token");
+      // Multipart upload, so it cannot go through `apiFetch` (which JSON-encodes
+      // the body). It repeats the same session contract by hand: cookie via
+      // `credentials` + the CSRF proof, since this is a POST (ADR 0133).
+      const csrf = getCsrfToken();
       for (const [index, file] of files.entries()) {
-        setStatus(`Subiendo ${index + 1}/${files.length}: ${file.name}`);
+        setStatus(t("uploadProgress", { index: index + 1, total: files.length, file: file.name }));
         const formData = new FormData();
         formData.append("file", file);
         const response = await fetch(`${apiUrl}/knowledge-bases/${kb.id}/documents`, {
           method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: "include",
+          headers: csrf ? { [CSRF_HEADER]: csrf } : {},
           body: formData,
         });
         if (!response.ok) {
@@ -229,13 +260,13 @@ function AddKnowledgeSection({
       return files.length;
     },
     onSuccess: (count) => {
-      setStatus(`${count} documento(s) en ingesta.`);
+      setStatus(count === 1 ? t("ingestingOne") : t("ingestingMany", { n: count }));
       setError(null);
       onDone();
     },
     onError: (err) => {
       setStatus(null);
-      setError(err instanceof ApiError ? err.body : String(err));
+      setError(errorText(err));
     },
   });
 
@@ -247,7 +278,7 @@ function AddKnowledgeSection({
           data-testid="add-knowledge-button"
         >
           <Library className="h-4 w-4" />
-          Añadir conocimiento
+          {t("addKnowledge")}
           <input
             type="file"
             multiple
@@ -262,8 +293,7 @@ function AddKnowledgeSection({
           />
         </label>
         <span className="text-muted-foreground text-xs">
-          Sube documentos en un paso: van a la KB «Documentos de {projectQuery.data?.name ?? "…"}»
-          (se crea sola la primera vez, ya activada para este proyecto).
+          {t("addKnowledgeHint", { name: implicitKbName(projectQuery.data?.name ?? "…") })}
         </span>
         {status && (
           <span className="text-xs" data-testid="add-knowledge-status">
@@ -292,6 +322,8 @@ function KbCatalogSection({
   catalog: KnowledgeBase[];
   granted: Set<string>;
 }) {
+  const errorText = useErrorText();
+  const t = useT("projectKbs");
   const queryClient = useQueryClient();
   const toggle = useMutation({
     mutationFn: async ({ kbId, enable }: { kbId: string; enable: boolean }) => {
@@ -316,14 +348,11 @@ function KbCatalogSection({
   return (
     <Card className="mt-6" data-testid="kb-catalog-section">
       <CardContent className="pt-5">
-        <h2 className="text-base font-semibold">Catálogo de conocimiento</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Activa una KB para que este proyecto (y sus agentes) puedan leerla; desactívala para
-          revocar el acceso.
-        </p>
+        <h2 className="text-base font-semibold">{t("catalogTitle")}</h2>
+        <p className="text-muted-foreground mt-1 text-sm">{t("catalogHint")}</p>
         {toggle.isError ? (
           <p className="text-destructive mt-2 text-sm" data-testid="kb-catalog-error">
-            {toggle.error instanceof ApiError ? toggle.error.body : String(toggle.error)}
+            {errorText(toggle.error)}
           </p>
         ) : null}
         <ul className="mt-3 divide-y">
@@ -346,7 +375,7 @@ function KbCatalogSection({
                   onClick={() => toggle.mutate({ kbId: kb.id, enable: !isGranted })}
                   data-testid={`kb-catalog-toggle-${kb.id}`}
                 >
-                  {isGranted ? "Desactivar" : "Activar"}
+                  {isGranted ? t("disable") : t("enable")}
                 </Button>
               </li>
             );
@@ -361,6 +390,7 @@ function KbCatalogSection({
 // Per-KB card with its documents
 // --------------------------------------------------------------------------
 function KnowledgeBaseCard({ kb }: { kb: KnowledgeBase }) {
+  const t = useT("projectKbs");
   const queryClient = useQueryClient();
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -382,22 +412,34 @@ function KnowledgeBaseCard({ kb }: { kb: KnowledgeBase }) {
           ) : null}
           <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
             Embedding: <span className="font-mono">{kb.embedding_model_id}</span>
+            {kb.embedding_model_stale ? (
+              // ADR 0155: sello ≠ modelo activo → esta KB no aporta al camino
+              // vectorial y rechaza documentos nuevos. Decirlo aquí, que es
+              // donde el usuario sube documentos, evita el «se subió y no pasa
+              // nada» que no se explica en ningún sitio.
+              <span
+                className="text-danger-soft-foreground ml-2"
+                data-testid={`kb-embedding-stale-${kb.id}`}
+              >
+                {t("staleReindex", { model: kb.platform_embedding_model })}
+              </span>
+            ) : null}
           </p>
         </div>
         <Button onClick={() => setUploadOpen(true)} data-testid={`kb-upload-open-${kb.id}`}>
           <UploadCloud className="mr-1 h-3.5 w-3.5" />
-          Subir documento
+          {t("uploadDocument")}
         </Button>
       </CardHeader>
       <CardContent>
         {docsQuery.isLoading ? (
-          <p className="text-muted-foreground text-sm">Cargando documentos…</p>
+          <p className="text-muted-foreground text-sm">{t("loadingDocuments")}</p>
         ) : (docsQuery.data ?? []).length === 0 ? (
           <p
             className="text-muted-foreground text-sm italic"
             data-testid={`kb-docs-empty-${kb.id}`}
           >
-            Esta KB aún no tiene documentos.
+            {t("documentsEmpty")}
           </p>
         ) : (
           <DocumentList kbId={kb.id} documents={docsQuery.data ?? []} onChanged={invalidate} />
@@ -444,6 +486,7 @@ function DocumentRow({
   doc: KBDocument;
   onChanged: () => void;
 }) {
+  const t = useT("projectKbs");
   const deleteMutation = useMutation({
     mutationFn: () =>
       apiFetch<void>(`/knowledge-bases/${kbId}/documents/${doc.id}`, {
@@ -470,7 +513,7 @@ function DocumentRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide">
           <Badge variant={variant} data-testid={`kb-doc-status-${doc.id}`}>
-            {STATUS_LABEL[doc.status]}
+            {t(STATUS_LABEL_KEY[doc.status])}
           </Badge>
           <span className="text-muted-foreground">
             {doc.source_mime_type} · {formatBytes(doc.source_size_bytes)}
@@ -488,7 +531,7 @@ function DocumentRow({
           data-testid={`kb-doc-ingestion-link-${doc.id}`}
           className="text-muted-foreground hover:text-foreground text-xs underline"
         >
-          Progreso
+          {t("progress")}
         </Link>
         {canReindex ? (
           <Button
@@ -497,7 +540,7 @@ function DocumentRow({
             onClick={() => reindexMutation.mutate()}
             disabled={reindexMutation.isPending}
             data-testid={`kb-doc-reindex-${doc.id}`}
-            title="Reindexar (vuelve a procesar el documento)"
+            title={t("reindexTitle")}
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </Button>
@@ -508,7 +551,7 @@ function DocumentRow({
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
           data-testid={`kb-doc-delete-${doc.id}`}
-          aria-label="Eliminar"
+          aria-label={t("delete")}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
@@ -531,6 +574,8 @@ function UploadDialog({
   kbId: string;
   onUploaded: () => void;
 }) {
+  const errorText = useErrorText();
+  const t = useT("projectKbs");
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -542,10 +587,14 @@ function UploadDialog({
       formData.append("file", file);
       if (title.trim()) formData.append("title", title.trim());
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8001";
-      const token = localStorage.getItem("agentic.token");
+      // Multipart upload, so it cannot go through `apiFetch` (which JSON-encodes
+      // the body). It repeats the same session contract by hand: cookie via
+      // `credentials` + the CSRF proof, since this is a POST (ADR 0133).
+      const csrf = getCsrfToken();
       const response = await fetch(`${apiUrl}/knowledge-bases/${kbId}/documents`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
+        headers: csrf ? { [CSRF_HEADER]: csrf } : {},
         body: formData,
       });
       if (!response.ok) {
@@ -562,7 +611,7 @@ function UploadDialog({
       onOpenChange(false);
     },
     onError: (err) => {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      setErrorMsg(errorText(err));
     },
   });
 
@@ -575,11 +624,11 @@ function UploadDialog({
     >
       <DialogContent data-testid="kb-upload-dialog">
         <DialogHeader>
-          <DialogTitle>Subir documento a la KB</DialogTitle>
+          <DialogTitle>{t("dialogTitle")}</DialogTitle>
         </DialogHeader>
         <DialogBody>
           <div>
-            <Label htmlFor="kb-upload-file">Archivo</Label>
+            <Label htmlFor="kb-upload-file">{t("fileLabel")}</Label>
             <Input
               id="kb-upload-file"
               data-testid="kb-upload-file"
@@ -589,13 +638,13 @@ function UploadDialog({
             />
           </div>
           <div>
-            <Label htmlFor="kb-upload-title">Título (opcional)</Label>
+            <Label htmlFor="kb-upload-title">{t("titleLabel")}</Label>
             <Input
               id="kb-upload-title"
               data-testid="kb-upload-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Por defecto: nombre del archivo"
+              placeholder={t("titlePlaceholder")}
             />
           </div>
           {errorMsg ? (
@@ -611,14 +660,14 @@ function UploadDialog({
             disabled={mutation.isPending}
             data-testid="kb-upload-cancel"
           >
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             onClick={() => mutation.mutate()}
             disabled={!file || mutation.isPending}
             data-testid="kb-upload-submit"
           >
-            {mutation.isPending ? "Subiendo…" : "Subir"}
+            {mutation.isPending ? t("uploading") : t("upload")}
           </Button>
         </DialogFooter>
       </DialogContent>

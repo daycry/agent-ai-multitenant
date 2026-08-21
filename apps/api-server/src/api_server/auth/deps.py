@@ -20,17 +20,24 @@ from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
 
-import structlog
 from fastapi import Depends, Header, HTTPException, Request, status
 from redis.asyncio import Redis
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.auth.cookies import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    SESSION_COOKIE_NAME,
+    csrf_required_for_method,
+    csrf_token_matches,
+)
 from api_server.auth.jwt import InvalidTokenError, decode_jwt
 from api_server.auth.mfa.challenge_store import MfaChallengeStore
 from api_server.auth.mfa.webauthn_challenge_store import WebauthnChallengeStore
 from api_server.auth.rate_limit import RateLimiter
 from api_server.auth.sessions import SessionStore
+from api_server.cache.membership import cached_membership_role
 from api_server.config import get_settings
 from api_server.db.models import User, UserOrganizationMembership, UserRole
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
@@ -67,6 +74,50 @@ def _parse_bearer(authorization: str | None) -> str:
             headers={"WWW-Authenticate": "Bearer"},
         )
     return token
+
+
+def read_credential(authorization: str | None, session_cookie: str | None) -> tuple[str, bool]:
+    """Return ``(jwt, came_from_cookie)`` for the request (ADR 0133).
+
+    TWO legs on purpose, and the ORDER matters: an explicit ``Authorization``
+    header always wins. A browser that happens to hold a stale session cookie
+    must never override the credential an API client sent deliberately — that is
+    how "it works in my browser, 401 from the script" bugs are born.
+
+    Only the cookie leg is subject to CSRF (see :func:`_enforce_csrf`): a
+    cross-site page cannot add an ``Authorization`` header, which is exactly why
+    the Bearer scheme never needed the protection.
+    """
+    if authorization:
+        return _parse_bearer(authorization), False
+    if session_cookie:
+        return session_cookie, True
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="missing session cookie or Authorization header",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _enforce_csrf(request: Request) -> None:
+    """403 unless the double-submit token in the header matches the cookie.
+
+    Called ONLY for cookie-authenticated state-changing requests. Moving the
+    session into a cookie is what created this surface: the browser attaches
+    cookies to cross-site requests on its own, so without this check any page on
+    the internet could make a logged-in operator POST to the API. A third-party
+    page can neither read our cookie (same-origin policy) nor set a custom
+    header cross-origin without a CORS preflight we do not grant, so echoing the
+    cookie back in ``X-CSRF-Token`` proves the request came from our own origin.
+    """
+    if csrf_token_matches(
+        request.cookies.get(CSRF_COOKIE_NAME), request.headers.get(CSRF_HEADER_NAME)
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="missing or invalid CSRF token",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +168,20 @@ def get_webauthn_challenge_store(redis: Redis = Depends(get_redis)) -> WebauthnC
 # Principal dependency — JWT + Redis session check
 # ---------------------------------------------------------------------------
 async def get_principal(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
     sessions: SessionStore = Depends(get_session_store),
 ) -> AuthPrincipal:
     """Decode the JWT, verify the session id still exists in Redis,
     return the principal. 401 on any failure.
+
+    TWO credential channels since ADR 0133 (task_prod09_07): the panel sends an
+    httpOnly ``agentic_session`` cookie, API clients keep sending
+    ``Authorization: Bearer``. :func:`read_credential` picks one, and a
+    cookie-authenticated MUTATION must additionally carry a matching
+    ``X-CSRF-Token`` — the price of cookies, paid here so no individual router
+    has to remember it.
 
     For users with `is_system_admin=true`, an `X-Tenant-Id` request
     header overrides the JWT's `tid` claim. This lets a superadmin
@@ -132,7 +191,9 @@ async def get_principal(
     (the JWT is the only source of truth so tenants can't escape
     their own scope).
     """
-    token = _parse_bearer(authorization)
+    token, from_cookie = read_credential(authorization, request.cookies.get(SESSION_COOKIE_NAME))
+    if from_cookie and csrf_required_for_method(request.method):
+        _enforce_csrf(request)
     try:
         claims = decode_jwt(token)
     except InvalidTokenError as exc:
@@ -194,14 +255,55 @@ async def get_principal(
     )
 
 
-def require_system_admin(
+async def _is_db_system_admin(user_id: UUID) -> bool:
+    """Authoritative System Admin check against the DB (prod-09 task_prod09_04).
+
+    The ``sys`` JWT claim is fixed at LOGIN and the session TTL is 24 h, so
+    ``UPDATE users SET is_system_admin = false`` used to leave the degraded
+    admin with a full cross-tenant, BYPASSRLS session for up to a day — with no
+    way to end it (see the note in :meth:`SessionStore.revoke_user_sessions`:
+    the per-user index only covers TENANT-scoped sessions, and an admin's
+    session is tenant-less). Re-reading the flag per request is what makes the
+    revocation immediate.
+
+    Cheap: one indexed read by primary key on a global (un-RLSed) table, the
+    same query ``/auth/me`` already runs on every page load. Uses the BYPASSRLS
+    admin engine because ``users`` carries no ``tenant_id``.
+    """
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        result = await session.execute(
+            select(User.is_system_admin).where(User.id == user_id, User.deleted_at.is_(None))
+        )
+        return bool(result.scalar_one_or_none())
+
+
+async def require_system_admin(
     principal: AuthPrincipal = Depends(get_principal),
 ) -> AuthPrincipal:
-    """Gate an endpoint to System Admin only. 403 otherwise."""
+    """Gate an endpoint to System Admin only. 403 otherwise.
+
+    TWO checks, in this order (task_prod09_04, authz-4):
+
+      1. the ``sys`` claim — cheap, and it keeps a regular tenant user from ever
+         causing a DB round-trip on the admin surface;
+      2. ``users.is_system_admin`` re-read from the DB — the AUTHORITATIVE one.
+         Without it a privilege retired in the database stayed alive inside every
+         session already issued (24 h TTL), which is precisely the window an
+         off-boarding is meant to close.
+
+    Mirrors :func:`require_system_owner`, which has re-verified against the DB
+    since ADR 0074 — the admin gate was the one left trusting its claim.
+    """
     if not principal.is_system_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="system admin role required",
+        )
+    if not await _is_db_system_admin(principal.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system admin privileges have been revoked",
         )
     return principal
 
@@ -233,41 +335,40 @@ async def require_system_owner(
     return principal
 
 
-async def require_admin_or_owner(
-    principal: AuthPrincipal = Depends(get_principal),
-) -> AuthPrincipal:
-    """Gate to System Admin OR System Owner (ADR 0074). Composite so neither
-    primitive (``require_system_admin`` / ``require_system_owner``) is overloaded
-    in-place."""
-    if principal.is_system_admin:
-        return principal
-    if await _is_db_system_owner(principal.user_id):
-        return principal
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="system admin or system owner role required",
-    )
+# RETIRADA: `require_admin_or_owner` (2026-07-30)
+# -----------------------------------------------
+# La dependencia compuesta «System Admin OR System Owner» que el ADR 0074
+# (decisión 4) previó para las superficies admin del owner existió desde
+# entonces con CERO llamantes: ni un `Depends(require_admin_or_owner)` en todo
+# `apps/`. Solo la referenciaban su propia definición, una línea de
+# `tests/integration/test_cortex_f0_ownership.py` y la documentación.
+#
+# Código muerto en la superficie de AUTORIZACIÓN es el peor sitio para tenerlo:
+# venía con test verde y docstring convincente, así que el siguiente que
+# necesitase «admin o owner» lo habría cableado creyendo que estaba en uso y
+# probado en producción.
+#
+# Y no hacía falta: el System Owner se crea en el bootstrap del PRIMER usuario
+# junto con el flag de admin (`routers/auth.py`: `is_system_admin=is_first_user`
+# **y** `is_system_owner=is_first_user`, con índice único parcial que lo hace
+# singleton), así que el owner YA pasa por `require_system_admin`. La única
+# situación que la compuesta cubría —owner sin ser admin— solo se alcanza con un
+# UPDATE a mano en la base de datos.
+#
+# Si alguna vez hace falta de verdad, se reconstruye en cuatro líneas sobre
+# `_is_db_system_admin` / `_is_db_system_owner`, que siguen aquí y sí tienen
+# llamantes. Lo que no se debe reponer es una puerta sin endpoint.
 
 
 # ---------------------------------------------------------------------------
 # Tenant-scoped session dependency
 # ---------------------------------------------------------------------------
-_log = structlog.get_logger("api_server.auth.deps")
-
-_AFTER_COMMIT_KEY = "_after_commit"
-
-
-def schedule_after_commit(session: AsyncSession, factory: Callable[[], Awaitable[None]]) -> None:
-    """Register a zero-arg coroutine factory to run AFTER this request's tenant
-    session commits (see :func:`open_tenant_session`).
-
-    Domain events must be published only once their triggering row is durable:
-    publishing inline (before ``open_tenant_session`` commits on return) lets a
-    fast consumer — the orchestrator — read the not-yet-committed row in
-    ``_dispatch`` and silently skip it (root cause of the "consumer se atasca"
-    symptom). Registering the publish here guarantees it fires post-commit.
-    """
-    session.info.setdefault(_AFTER_COMMIT_KEY, []).append(factory)
+# `schedule_after_commit` YA NO VIVE AQUÍ: se mudó a `api_server.db.after_commit`,
+# junto a la sesión que lo DRENA, y la mudanza ES el arreglo. Mientras el registro
+# estaba en este módulo y el único consumidor era `open_tenant_session`, toda ruta
+# que abriese su propia sesión admin —las nueve que escriben platform settings—
+# registraba callbacks que no ejecutaba nadie. No se deja un re-export: importarlo
+# de `auth.deps` es justo lo que hacía pensar que el drenaje era cosa del request.
 
 
 @asynccontextmanager
@@ -306,29 +407,22 @@ async def open_tenant_session(
     else:
         sessionmaker = get_sessionmaker()
 
-    async with sessionmaker() as session:
-        async with session.begin():
+    async with sessionmaker() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.user_id', :uid, true)"),
+            {"uid": str(principal.user_id)},
+        )
+        if principal.tenant_id is not None:
             await session.execute(
-                text("SELECT set_config('app.user_id', :uid, true)"),
-                {"uid": str(principal.user_id)},
+                text("SELECT set_config('app.tenant_id', :tid, true)"),
+                {"tid": str(principal.tenant_id)},
             )
-            if principal.tenant_id is not None:
-                await session.execute(
-                    text("SELECT set_config('app.tenant_id', :tid, true)"),
-                    {"tid": str(principal.tenant_id)},
-                )
-            yield session
-        # The request transaction has COMMITTED here (the `session.begin()`
-        # block exited without an exception — a route that raised would
-        # propagate past this point and skip the callbacks). Run anything
-        # registered via `schedule_after_commit` now, post-commit, so domain
-        # events are published only once their row is durable. Best-effort: a
-        # publish blip must never break the already-committed request.
-        for factory in session.info.get(_AFTER_COMMIT_KEY, ()):
-            try:
-                await factory()
-            except Exception as exc:  # - best-effort, never fail the request
-                _log.warning("api_server.after_commit_failed", error=str(exc))
+        yield session
+    # Lo registrado con `schedule_after_commit` lo ejecuta la propia sesión al
+    # cerrarse (`AfterCommitSession.close`), post-commit y best-effort. Aquí había
+    # antes una copia del bucle, y ser el ÚNICO sitio que drenaba era el bug: las
+    # rutas de System Admin abren su sesión por su cuenta y no pasan por aquí.
+    # Ver `api_server.db.after_commit`.
 
 
 async def get_tenant_session(
@@ -351,6 +445,11 @@ async def get_admin_session(
     Used by /admin/* endpoints: System Admin sees and writes
     everything cross-tenant, including audit_log rows with
     tenant_id IS NULL.
+
+    Lo registrado con `schedule_after_commit` durante el request lo ejecuta la
+    sesión al cerrarse — ver `api_server.db.after_commit`. Hasta 2026-08-20 no lo
+    ejecutaba NADIE por esta vía, que es justo la de las siete rutas de settings
+    con `Depends(get_admin_session)`.
     """
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session, session.begin():
@@ -384,20 +483,36 @@ async def get_admin_session(
 # the same principal in one request.
 
 
-async def _load_active_membership(
+async def _active_membership_role(
     session: AsyncSession, user_id: UUID, tenant_id: UUID
-) -> UserOrganizationMembership | None:
-    """Return the active, non-deleted membership of `user_id` in
-    `tenant_id`, or None."""
-    result = await session.execute(
-        select(UserOrganizationMembership).where(
-            UserOrganizationMembership.user_id == user_id,
-            UserOrganizationMembership.tenant_id == tenant_id,
-            UserOrganizationMembership.is_active.is_(True),
-            UserOrganizationMembership.deleted_at.is_(None),
+) -> str | None:
+    """Role of the active, non-deleted membership of `user_id` in
+    `tenant_id`, or None when there is no such membership.
+
+    Served from the Redis membership cache (prod-13 task_prod13_21): this
+    runs on EVERY request of every tenant-scoped endpoint. The cache has a
+    30 s TTL and is invalidated on write by ORM events — see
+    :mod:`api_server.cache.membership` for why the invalidation does not
+    live in the write endpoints. With Redis down this is exactly the query
+    it always was.
+
+    Only the ROLE is cached, not the ORM row: every caller of this helper
+    needs the role and whether the membership exists, nothing else, and an
+    attached ORM object has no business surviving its session.
+    """
+
+    async def _load() -> str | None:
+        result = await session.execute(
+            select(UserOrganizationMembership.role).where(
+                UserOrganizationMembership.user_id == user_id,
+                UserOrganizationMembership.tenant_id == tenant_id,
+                UserOrganizationMembership.is_active.is_(True),
+                UserOrganizationMembership.deleted_at.is_(None),
+            )
         )
-    )
-    return result.scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+    return await cached_membership_role(user_id=user_id, tenant_id=tenant_id, loader=_load)
 
 
 async def require_tenant_member(
@@ -422,8 +537,8 @@ async def require_tenant_member(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="no active tenant context",
         )
-    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
-    if membership is None:
+    role = await _active_membership_role(session, principal.user_id, principal.tenant_id)
+    if role is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="user is not a member of this tenant",
@@ -448,8 +563,8 @@ async def require_tenant_admin(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="no active tenant context",
         )
-    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
-    if membership is None or membership.role != UserRole.TENANT_ADMIN.value:
+    role = await _active_membership_role(session, principal.user_id, principal.tenant_id)
+    if role != UserRole.TENANT_ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="tenant_admin role required",
@@ -465,8 +580,8 @@ async def principal_is_tenant_admin(session: AsyncSession, principal: AuthPrinci
         return True
     if principal.tenant_id is None:
         return False
-    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
-    return membership is not None and membership.role == UserRole.TENANT_ADMIN.value
+    role = await _active_membership_role(session, principal.user_id, principal.tenant_id)
+    return role == UserRole.TENANT_ADMIN.value
 
 
 async def require_can_approve_plan(
@@ -487,9 +602,9 @@ async def require_can_approve_plan(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="no active tenant context",
         )
-    membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
+    role = await _active_membership_role(session, principal.user_id, principal.tenant_id)
     allowed = {UserRole.TENANT_ADMIN.value, UserRole.PLAN_APPROVER.value}
-    if membership is None or membership.role not in allowed:
+    if role not in allowed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="tenant_admin or plan_approver role required",
@@ -521,8 +636,8 @@ def require_tenant_role(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="no active tenant context",
             )
-        membership = await _load_active_membership(session, principal.user_id, principal.tenant_id)
-        if membership is None or membership.role != role.value:
+        actual = await _active_membership_role(session, principal.user_id, principal.tenant_id)
+        if actual != role.value:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"{role.value} role required",

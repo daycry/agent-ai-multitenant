@@ -7,8 +7,13 @@ task_02_03), moves the task to `in_progress`, and enqueues the worker's
 `run_execution` Celery task — the muscle built in task_02_30.
 
 Tests 1-4 need only Postgres + Redis (no container). The last test
-drives the enqueued worker task for real and so also needs Docker; it
-carries its own `requires_docker` marker.
+drives the enqueued worker task for real and so needs Docker, the
+`agent-runtime:v1` image AND the api-server reachable on the
+`agentic-agents` network: its task carries an assigned agent, so the
+worker mints `AGENTIC_INTERNAL_TOKEN` and the runtime refuses to boot
+without `/internal/agent/*` answering (prod-01 task_11). Las tres
+precondiciones se comprueban antes de correr — skip honesto en local,
+FAIL bajo CI.
 """
 
 from __future__ import annotations
@@ -34,14 +39,15 @@ from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
 from workers.config import reset_settings_cache
 
-import docker
-
-from ._docker_helpers import docker_client, requires_docker
+from ._docker_helpers import requires_docker
+from ._pipeline_helpers import (
+    require_agent_runtime_image,
+    require_internal_api_reachable,
+    why_the_run_failed,
+)
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
 pytestmark = pytest.mark.integration
-
-_IMAGE = "agent-runtime:v1"
-TEST_REDIS_URL = "redis://localhost:6379/15"
 
 # A one-step scripted model: the agent carries its ModelClient spec in
 # `model_config`; the dispatcher forwards it verbatim into the payload.
@@ -125,7 +131,9 @@ def _ready_event(ids: dict[str, UUID], *, new_status: str = "ready") -> TaskEven
 
 
 def _dispatcher(sm: async_sessionmaker, *, redis: Redis | None = None) -> TaskDispatcher:
-    celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
+    celery_app = build_celery_app(
+        WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+    )
     return TaskDispatcher(
         sessionmaker=sm,
         celery_app=celery_app,
@@ -172,10 +180,13 @@ async def test_dispatch_moves_task_to_in_progress_and_assigns_an_agent(
 async def test_dispatch_publishes_in_progress_status_event(
     _migrated: None, admin_database_url: str
 ) -> None:
-    """The board's ``/ws/kanban`` tails ``events:tasks``. The dispatcher is the
-    ONLY place a task goes ``ready`` -> ``in_progress``, so it must publish that
-    transition — otherwise the Kanban shows the task as ready until a manual
-    refresh (the reported symptom)."""
+    """El despachador es el ÚNICO sitio donde una tarea pasa de ``ready`` a
+    ``in_progress``, así que tiene que publicar esa transición o el tablero la
+    muestra en ``ready`` hasta un refresco manual (el síntoma reportado).
+
+    Aserta sobre ``events:tasks`` porque es el stream que consume el
+    orchestrator; desde task_prod13_19 el publicador hace dual-write y el socket
+    del tablero lee el de su proyecto (``events:tasks:{project_id}``)."""
     engine = create_async_engine(admin_database_url)
     redis: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
     try:
@@ -406,14 +417,21 @@ async def test_dispatch_skips_a_task_not_in_ready_state(
 # ---------------------------------------------------------------------------
 @pytest.fixture()
 def _agent_runtime_image() -> None:
-    """Skip cleanly if agent-runtime:v1 has not been built on this host."""
-    client = docker_client()
-    try:
-        client.images.get(_IMAGE)
-    except docker.errors.ImageNotFound:  # pragma: no cover - env-dependent
-        pytest.skip(f"{_IMAGE} not built — run: docker build -t {_IMAGE} ...")
-    finally:
-        client.close()
+    """Skip local si `agent-runtime:v1` no está construida; FAIL bajo CI.
+
+    Delega en el helper compartido a propósito: esta fixture llevaba un
+    `pytest.skip` propio, y un skip bajo CI es justo cómo desaparece una puerta
+    Docker sin que nadie lo note (finding tests-6). El helper distingue las dos
+    situaciones.
+    """
+    require_agent_runtime_image()
+
+
+@pytest.fixture()
+def _internal_api() -> None:
+    """El api-server alcanzable desde la red del sandbox — ver el docstring del
+    módulo. Skip local, FAIL bajo CI (allí el job lo levanta)."""
+    require_internal_api_reachable()
 
 
 async def _seed_via(url: str) -> dict[str, UUID]:
@@ -446,8 +464,11 @@ async def _execution_statuses(url: str, task_id: UUID) -> list[str]:
 
 @requires_docker
 def test_run_execution_celery_task_conducts_the_execution(
-    _migrated: None,
+    # Precondiciones antes de `_migrated` (que corre las migraciones enteras): un
+    # stack incompleto se dice en segundos, no tras minutos de alembic.
     _agent_runtime_image: None,
+    _internal_api: None,
+    _migrated: None,
     admin_database_url: str,
 ) -> None:
     """`workers.run_execution` — the dispatch target — builds its DB and
@@ -479,7 +500,9 @@ def test_run_execution_celery_task_conducts_the_execution(
         os.environ.pop("WORKERS_EVENTS_REDIS_URL", None)
         reset_settings_cache()
 
-    assert outcome["status"] == ExecutionStatus.DONE
+    assert outcome["status"] == ExecutionStatus.DONE, why_the_run_failed(
+        admin_database_url, ids["task"], outcome
+    )
     assert json.loads(json.dumps(outcome)) == outcome  # JSON-safe result
 
     statuses = asyncio.run(_execution_statuses(admin_database_url, ids["task"]))

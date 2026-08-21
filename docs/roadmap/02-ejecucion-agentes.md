@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `02-ejecucion-agentes`                    |
-| **Estado**                         | `completed`                               |
 | **Bloqueado por**                  | `01-dominio-minimo`                       |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                               |
 | **Tiempo estimado (persona-días)** | 80-100                                    |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/02-ejecucion-agentes`               |
 | **Secciones del .docx**            | [5.5, 12, 12.5, 12.6, 13, 21]             |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -770,7 +771,7 @@ Tests que se ejecutan UNA sola vez al finalizar todas las tareas del plan, cuand
 
 - id: human_02_04
   description: "Validación humana pausa correctamente"
-  hint: "Configurar proyecto con policy 'code_execution: human_required' y disparar una tarea que la requiera (ver scripts/demo_human_02_04.py). ADR 0020 fija la semántica."
+  hint: "Configurar proyecto con policy 'code_execution: human_required' y disparar una tarea que la requiera (ver scripts/demos/demo_human_02_04.py). ADR 0020 fija la semántica."
   checklist:
     - "La tarea pasa a awaiting_human_approval (columna 'Pendiente de aprobación' del board); el agente queda libre (assigned_agent_id NULL)"
     - "Aparece notificación in-app al project_owner / aparece la solicitud pendiente en la pantalla Aprobaciones"

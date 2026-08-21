@@ -59,7 +59,7 @@ async def _wait_until_listening(port: int, timeout_s: float = 10.0) -> None:
     deadline = asyncio.get_event_loop().time() + timeout_s
     while asyncio.get_event_loop().time() < deadline:
         try:
-            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            _reader, writer = await asyncio.open_connection("127.0.0.1", port)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()

@@ -7,9 +7,18 @@ BYPASSRLS (excepción consciente al Principio 1), así que TODO ``SELECT`` filtr
 ``user_id=owner`` (ahí sí hay RLS, pero el filtro explícito es defensa en
 profundidad y la prueba de mérito es el test cross-owner).
 
-  GET /owner/cortex/mind                estado vivo (Redis con decay lazy → BD).
-  GET /owner/cortex/affect/timeseries   snapshots del owner (gráfico de mood + 2D).
-  GET /owner/cortex/episodes            episódicas emocionales (mapa, hover=razón).
+  GET  /owner/cortex/mind                estado vivo (Redis con decay lazy → BD).
+  GET  /owner/cortex/affect/timeseries   snapshots del owner (gráfico de mood + 2D).
+  GET  /owner/cortex/episodes            episódicas emocionales (mapa, hover=razón).
+  GET  /owner/cortex/identity/history    timeline de versiones CON su diff (F3).
+  POST /owner/cortex/identity/onboarding onboarding co-diseñado: el córtex se
+                                         autonombra y el owner confirma (F3.3).
+  GET  /owner/cortex/curiosity/pursuits  temas que el córtex ha investigado (F4).
+  POST /owner/cortex/curiosity/pursuits/{id}/approve
+                                         owner-approval gate de la curiosidad (F4).
+  GET  /owner/cortex/autonomy            kill-switch + gates + budget del día en
+                                         sus DOS dimensiones: búsquedas y dólares.
+  PUT  /owner/cortex/autonomy            flipa el kill-switch y los gates (F4).
 
 > Honestidad (ADR 0075 §6): ``/mind`` devuelve un bloque ``honesty`` con el copy
 > "modelo computacional de afecto, NO sentimientos reales" que la UI rotula
@@ -23,8 +32,10 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from shared_llm.exceptions import AuthError, LLMError, RateLimitError
 from sqlalchemy import select
 
+from api_server.assistant.graph import AssistantModelClient
 from api_server.auth.deps import AuthPrincipal, get_redis, require_system_owner
 from api_server.cortex.affect_cache import read_affect_state
 from api_server.cortex.affect_store import load_affect_state
@@ -32,26 +43,34 @@ from api_server.cortex.affective import AffectState
 from api_server.cortex.identity import (
     clamp_baseline,
     clamp_traits,
+    compute_diff,
     editable_owner_state,
     ensure_identity,
     update_identity,
 )
+from api_server.cortex.onboarding import apply_onboarding, propose_onboarding
+from api_server.cortex.threads import CortexNoTenantError, resolve_cortex_tenant_id
+from api_server.cortex.tools import CortexToolContext
 from api_server.db.cortex_affect import CortexAffectSnapshot
 from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 from api_server.db.memory import MemoryEntry
 from api_server.db.models import User
 from api_server.db.platform_settings import PlatformSettingForbiddenError
 from api_server.db.session import get_admin_sessionmaker
+from api_server.routers.cortex import get_cortex_model
 from api_server.schemas.cortex_autonomy import (
     CortexAutonomyBudget,
     CortexAutonomyResponse,
     CortexAutonomyUpdateRequest,
 )
-from api_server.schemas.cortex_curiosity import CortexPursuitItem
+from api_server.schemas.cortex_curiosity import CortexPursuitDecisionRequest, CortexPursuitItem
 from api_server.schemas.cortex_identity import (
     CortexBaseline,
     CortexIdentityResponse,
     CortexIdentityUpdateRequest,
+    CortexIdentityVersionItem,
+    CortexOnboardingRequest,
+    CortexOnboardingResponse,
     CortexReflectResponse,
     CortexTraits,
 )
@@ -333,18 +352,112 @@ async def list_curiosity_pursuits(
     sessionmaker = get_admin_sessionmaker()
     async with sessionmaker() as session:
         pursuits = (await session.execute(stmt)).scalars().all()
-    return [
-        CortexPursuitItem(
-            id=p.id,
-            topic=p.topic,
-            status=p.status,
-            created_at=p.created_at,
-            surfaced_at=p.surfaced_at,
-            learning_memory_id=p.learning_memory_id,
-            search_count=int(p.search_count),
-        )
-        for p in pursuits
-    ]
+    return [_pursuit_item(p) for p in pursuits]
+
+
+def _pursuit_item(p: CortexCuriosityPursuit) -> CortexPursuitItem:
+    """Proyecta una fila de pursuit al schema de respuesta.
+
+    Los dos ``Numeric`` de la tabla llegan como ``Decimal`` y hay que convertirlos a
+    mano: ``search_count`` es ``Numeric(10,0)`` (debió ser ``Integer``, divergencia
+    conocida) y ``cost_usd`` es ``Numeric(12,6)``. Sin el ``float()``, Pydantic
+    serializaría el ``Decimal`` y el cliente TypeScript recibiría un string donde su
+    tipo dice ``number``."""
+    return CortexPursuitItem(
+        id=p.id,
+        topic=p.topic,
+        status=p.status,
+        created_at=p.created_at,
+        surfaced_at=p.surfaced_at,
+        learning_memory_id=p.learning_memory_id,
+        search_count=int(p.search_count),
+        approved=p.approved,
+        cost_usd=float(p.cost_usd or 0.0),
+    )
+
+
+@router.post("/curiosity/pursuits/{pursuit_id}/approve", response_model=CortexPursuitItem)
+async def decide_curiosity_pursuit(
+    pursuit_id: UUID,
+    payload: CortexPursuitDecisionRequest,
+    principal: AuthPrincipal = Depends(require_system_owner),
+) -> CortexPursuitItem:
+    """**Owner-approval gate** de la curiosidad autónoma (paso 7 del bucle, ADR 0078).
+
+    Con ``cortex.curiosity_approval_gate`` ON (default), el bucle elige un tema, deja
+    el pursuit en ``selected`` con ``approved IS NULL`` y **NO sale a Internet**. Este
+    endpoint es la ÚNICA vía por la que ese veredicto se escribe.
+
+    Efecto de cada decisión, y por qué son asimétricas:
+
+    * **Aprobar** ⇒ ``approved=true`` y el ``status`` se queda en ``selected``. NO lo
+      adelanta a ``searching``: el que sale a buscar es el bucle, y su consulta de
+      reanudación (``workers/cortex_curiosity.py::_find_resumable_pursuit``) exige
+      ``status='selected' AND approved IS NOT FALSE``. Escribir ``searching`` aquí
+      dejaría el pursuit aprobado fuera de esa consulta y nadie lo investigaría nunca.
+    * **Rechazar** ⇒ ``approved=false`` **y** ``status='skipped'``. El ``false`` lo saca
+      de la consulta del bucle; el ``skipped`` lo cierra para el panel (en ``selected``
+      seguiría apareciendo como "esperando decisión" ya decidido). La razón queda en
+      ``metadata.reason``, la misma clave que usa el bucle.
+
+    Solo un pursuit PENDIENTE es decidible (``status='selected'`` y ``approved IS
+    NULL``). Exigir las dos condiciones importa: las filas anteriores a la migración
+    0123 quedaron en ``approved IS NULL`` a propósito, así que ``approved IS NULL`` a
+    solas dejaría "aprobar" una persecución de hace meses ya terminada.
+
+    Códigos: **404** si el pursuit no existe *o no es del owner* (un 403 confirmaría
+    que el id existe, y la tabla es tenant-less sin RLS de respaldo — el aislamiento es
+    el filtro ``owner_user_id`` explícito de este UPDATE); **409** si ya estaba decidido
+    al contrario o no está pendiente. Repetir la MISMA decisión es un no-op 200
+    (idempotente: el doble clic del panel no debe ser un error)."""
+    owner_id = principal.user_id
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        # Filtro por (id, owner) en el MISMO SELECT: nunca se carga una fila ajena
+        # para decidir después si se puede tocar.
+        #
+        # ``with_for_update()`` porque esto es un read-modify-write sobre una fila que
+        # el bucle de fondo también muta (``_mark_pursuit_searching``): sin el lock,
+        # decidir y avanzar a la vez podrían leer el mismo estado previo y la última
+        # escritura ganaría. NO cierra la ventana entera —si el bucle ya salió a buscar,
+        # un rechazo posterior no deshace la búsqueda ya pagada—, pero sí garantiza que
+        # el veredicto no se pierda ni se aplique sobre un estado rancio.
+        row = (
+            await session.execute(
+                select(CortexCuriosityPursuit)
+                .where(
+                    CortexCuriosityPursuit.id == pursuit_id,
+                    CortexCuriosityPursuit.owner_user_id == owner_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="pursuit not found")
+
+        if row.approved == payload.approved:
+            # Misma decisión otra vez: no-op idempotente (doble clic / reintento).
+            return _pursuit_item(row)
+        if row.approved is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "pursuit already decided: no se puede invertir un veredicto ya"
+                    " dictado (la búsqueda pudo haberse hecho y el gasto no se deshace)"
+                ),
+            )
+        if row.status != "selected":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"pursuit not awaiting approval (status={row.status})",
+            )
+
+        row.approved = payload.approved
+        if not payload.approved:
+            row.status = "skipped"
+            row.metadata_ = {**(row.metadata_ or {}), "reason": "owner_rejected"}
+        await session.flush()
+        return _pursuit_item(row)
 
 
 def _identity_response(
@@ -442,6 +555,188 @@ async def put_identity_endpoint(
         )
 
 
+@router.post("/identity/onboarding", response_model=CortexOnboardingResponse)
+async def post_identity_onboarding(
+    payload: CortexOnboardingRequest | None = None,
+    principal: AuthPrincipal = Depends(require_system_owner),
+    model: AssistantModelClient = Depends(get_cortex_model),
+) -> CortexOnboardingResponse:
+    """Onboarding **co-diseñado**: el córtex se autonombra y el owner confirma (F3.3).
+
+    Hasta aquí el «autonombrado» del plan no existía: ``propose_identity`` estaba
+    escrita y probada, pero nadie generaba el turno, así que el owner rellenaba el
+    formulario de ``PUT /identity`` a mano. Este endpoint es el llamante que
+    faltaba, en DOS pasos sobre la misma ruta:
+
+    * **sin ``confirm``** — corre UN turno con el grafo del córtex de F1
+      (``run_cortex_turn``, sin duplicar el turn-loop) y devuelve el
+      ``identity_state`` candidato + el ``diff`` contra el vigente + el texto
+      literal del turno. **No persiste** la propuesta: ``onboarded_at`` sigue nulo.
+    * **``confirm=true``** — persiste lo que el owner acepta (``apply_onboarding``:
+      ``updated_by='onboarding'``, ``onboarded_at=now``, versión en
+      ``cortex_identity_history``).
+
+    **Idempotente**: con ``onboarded_at`` ya puesto devuelve ``already_onboarded``
+    sin gastar un turno de LLM ni reescribir la identidad — que la UI se recargue no
+    puede costar dinero ni borrar el nombre que el owner eligió. A partir de ahí el
+    camino de edición es ``PUT /identity`` (``owner_override``, ADR 0157).
+
+    El turno corre con **cero tools** (autonombrarse no necesita memoria, web ni
+    navegador; con el catálogo puesto, ``cortex_remember`` escribiría memoria
+    durante una propuesta aún no confirmada) y sin modulación afectiva: es un turno
+    de arranque, no una conversación.
+
+    Guardrail ADR 0074 por las DOS puertas: ``traits``/``mood_baseline`` los
+    descarta ``propose_identity`` si los propone el modelo, y los rechaza con 422 el
+    schema (``extra='forbid'``) si los manda el owner. Los deriva la reflexión.
+
+    El paso de propuesta necesita el modelo del córtex (503 si no hay
+    ``cortex.default_model``); ``PUT /identity`` sigue siendo el camino sin LLM.
+    Aislamiento (ADR 0074/0156): sesión admin/BYPASSRLS con filtro ``owner_user_id``
+    explícito en todo el acceso.
+    """
+    body = payload or CortexOnboardingRequest()
+    owner_id = principal.user_id
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session, session.begin():
+        identity = await ensure_identity(session, owner_id)
+        current = dict(identity.identity_state or {})
+
+        if identity.onboarded_at is not None:
+            # Ya onboardado: ni turno LLM ni reescritura (idempotencia barata; la
+            # dura vive dentro de ``apply_onboarding``).
+            return CortexOnboardingResponse(
+                already_onboarded=True,
+                applied=False,
+                identity=_identity_response(
+                    current,
+                    version=identity.version,
+                    updated_by=identity.updated_by,
+                    onboarded_at=identity.onboarded_at,
+                ),
+            )
+
+        if body.confirm:
+            updated, applied = await apply_onboarding(
+                session,
+                owner_id,
+                {
+                    "name": body.name,
+                    "core_values": body.core_values,
+                    "narrative": body.narrative,
+                    "language": body.language,
+                    "learning_goals": body.learning_goals,
+                },
+            )
+            confirmed = dict(updated.identity_state or {})
+            return CortexOnboardingResponse(
+                already_onboarded=not applied,
+                applied=applied,
+                identity=_identity_response(
+                    confirmed,
+                    version=updated.version,
+                    updated_by=updated.updated_by,
+                    onboarded_at=updated.onboarded_at,
+                ),
+                diff=compute_diff(current, confirmed),
+            )
+
+        # Paso de propuesta: el córtex habla. El tenant es el discriminante físico
+        # de la memoria del owner (Decisión D1); aquí queda inerte porque el turno
+        # no despacha ninguna tool, pero se resuelve igual que en el chat para no
+        # tener dos reglas distintas sobre qué necesita el córtex para hablar.
+        try:
+            tenant_id = await resolve_cortex_tenant_id(session, owner_id)
+        except CortexNoTenantError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+        try:
+            proposal = await propose_onboarding(
+                model,
+                current_state=current,
+                tool_ctx=CortexToolContext(
+                    session=session, owner_user_id=owner_id, tenant_id=tenant_id
+                ),
+            )
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"el proveedor LLM rechazó las credenciales (auth): {exc}",
+            ) from exc
+        except RateLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"el proveedor LLM está limitando las peticiones: {exc}",
+            ) from exc
+        except LLMError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"el proveedor LLM del córtex falló: {exc}",
+            ) from exc
+
+        # ADR 0116: el turno de onboarding también quema tokens del owner y también
+        # se contabiliza (best-effort; tenant_id=None — es consumo de plataforma).
+        from api_server.llm_usage import record_llm_usage
+
+        await record_llm_usage(
+            session, source="cortex", model_client=model, tenant_id=None, user_id=owner_id
+        )
+
+        return CortexOnboardingResponse(
+            already_onboarded=False,
+            applied=False,
+            proposal=proposal.text,
+            identity=_identity_response(
+                proposal.state,
+                version=identity.version,
+                updated_by=identity.updated_by,
+                onboarded_at=None,
+            ),
+            diff=proposal.diff,
+        )
+
+
+@router.get("/identity/history", response_model=list[CortexIdentityVersionItem])
+async def get_identity_history_endpoint(
+    principal: AuthPrincipal = Depends(require_system_owner),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[CortexIdentityVersionItem]:
+    """El **timeline de versiones** de la identidad del owner (más reciente primero).
+
+    Cada entrada trae su ``diff`` (``{campo:{before,after}}``, solo lo que cambió),
+    quién la escribió (``updated_by``) y por qué (``reason``). Es la lectura que
+    faltaba: ``GET /owner/cortex/journal`` también recorre
+    ``cortex_identity_history``, pero deduplica narrativas y **descarta el diff**, así
+    que la traza de qué tocó cada reflexión no era consultable desde ningún sitio y el
+    timeline del panel era inconstruible (auditoría 2026-07-27).
+
+    Un córtex sin ningún override todavía devuelve ``[]``, no 404:
+    ``ensure_identity`` crea la identidad en ``version=0`` SIN fila de histórico (el
+    versionado arranca en la primera reescritura real), así que "vacío" es un estado
+    legítimo que la UI debe poder pintar.
+
+    Aislamiento: ``list_history`` filtra ``owner_user_id`` explícito sobre la sesión
+    BYPASSRLS (ADR 0074) y, desde el ADR 0156 + migración 0140, la tabla lleva ADEMÁS
+    RLS de eje owner (``ENABLE`` + ``FORCE`` + policy ``owner_user_id = app.user_id``):
+    son dos capas, no una. Este docstring decía «sin RLS de respaldo», que era cierto
+    hasta el 2026-08-19 y dejó de serlo."""
+    from api_server.cortex.identity import list_history
+
+    sessionmaker = get_admin_sessionmaker()
+    async with sessionmaker() as session:
+        versions = await list_history(session, principal.user_id, limit)
+    return [
+        CortexIdentityVersionItem(
+            version=v.version,
+            created_at=v.created_at,
+            updated_by=v.updated_by,
+            reason=v.reason,
+            diff=dict(v.diff or {}),
+        )
+        for v in versions
+    ]
+
+
 @router.post("/reflect", response_model=CortexReflectResponse)
 async def reflect_now_endpoint(
     principal: AuthPrincipal = Depends(require_system_owner),
@@ -464,21 +759,23 @@ async def reflect_now_endpoint(
 # Autonomía: kill-switch global de los bucles cognitivos de fondo (F4, ADR 0078)
 # ===========================================================================
 # El owner ve/activa el KILL-SWITCH global de la autonomía (curiosidad + reflexión
-# programada + mantenimiento) y consulta el budget de búsquedas consumido hoy vs el
-# cap. Default OFF: ningún bucle hace trabajo hasta que el owner lo enciende
-# explícitamente. Copy honesto: la curiosidad es un comportamiento PROGRAMADO con
-# límites de coste auditables, no curiosidad consciente.
+# programada + mantenimiento) y consulta el budget consumido hoy vs el cap en sus DOS
+# dimensiones: búsquedas (egress) y dólares (dinero). Default OFF: ningún bucle
+# hace trabajo hasta que el owner lo enciende explícitamente. Copy honesto: la
+# curiosidad es un comportamiento PROGRAMADO con límites de coste auditables, no
+# curiosidad consciente.
 async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
     """Estado vivo de la autonomía: settings (BD) + budget/breaker (Redis)."""
     from api_server.cortex.autonomy import (
         CURIOSITY_KIND,
         circuit_key,
-        daily_budget_key,
+        read_budget_usage,
     )
     from api_server.db.platform_settings import (
         get_cortex_autonomy_enabled,
         get_cortex_browser_enabled,
         get_cortex_curiosity_daily_searches_cap,
+        get_cortex_curiosity_daily_usd_cap,
         get_cortex_curiosity_drive_threshold,
         get_cortex_web_enabled,
     )
@@ -489,18 +786,25 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
         web = await get_cortex_web_enabled(session)
         browser = await get_cortex_browser_enabled(session)
         cap = await get_cortex_curiosity_daily_searches_cap(session)
+        usd_cap = await get_cortex_curiosity_daily_usd_cap(session)
         threshold = await get_cortex_curiosity_drive_threshold(session)
 
     now = datetime.now(UTC)
     redis = get_redis()
     searches_today = 0
+    cost_usd_today = 0.0
     breaker_open = False
     try:
-        raw = await redis.get(daily_budget_key(str(owner_id), CURIOSITY_KIND, now=now))
-        searches_today = int(raw) if raw is not None else 0
+        # Las DOS dimensiones del budget por el MISMO lector que usa el gate
+        # (`read_budget_usage`), no un `GET` a mano: si la clave del gasto cambia
+        # de forma, el panel y el gate se mueven juntos en vez de divergir.
+        searches_today, cost_usd_today = await read_budget_usage(
+            redis, owner_user_id=str(owner_id), now=now
+        )
         breaker_open = bool(await redis.exists(circuit_key(str(owner_id), CURIOSITY_KIND)))
     except Exception:  # estado vivo best-effort; la BD es la fuente de verdad
         searches_today = 0
+        cost_usd_today = 0.0
         breaker_open = False
 
     return CortexAutonomyResponse(
@@ -509,7 +813,12 @@ async def _autonomy_snapshot(owner_id: UUID) -> CortexAutonomyResponse:
         browser_enabled=browser,
         curiosity_drive_threshold=threshold,
         circuit_breaker_open=breaker_open,
-        budget=CortexAutonomyBudget(searches_today=searches_today, searches_cap=cap),
+        budget=CortexAutonomyBudget(
+            searches_today=searches_today,
+            searches_cap=cap,
+            cost_usd_today=cost_usd_today,
+            cost_usd_cap=usd_cap,
+        ),
     )
 
 

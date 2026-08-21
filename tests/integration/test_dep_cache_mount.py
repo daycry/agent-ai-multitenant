@@ -73,9 +73,9 @@ def test_mount_path_matches_template_per_runtime(tmp_path: Path) -> None:
     for template_id, expected_mount in cases:
         entry = mgr.mount_for(_template(template_id), "h")
         assert entry is not None
-        assert (
-            entry.container_mount == expected_mount
-        ), f"{template_id}: expected {expected_mount}, got {entry.container_mount}"
+        assert entry.container_mount == expected_mount, (
+            f"{template_id}: expected {expected_mount}, got {entry.container_mount}"
+        )
 
 
 def test_warm_cache_skips_pre_install_intent(tmp_path: Path) -> None:

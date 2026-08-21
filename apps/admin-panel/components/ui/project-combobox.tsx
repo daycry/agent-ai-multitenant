@@ -8,6 +8,8 @@
 
 import { FolderKanban } from "lucide-react";
 
+import { useT } from "@/lib/i18n";
+
 import { EntityCombobox, type EntityOption } from "./entity-combobox";
 
 interface ProjectRaw {
@@ -35,11 +37,12 @@ export function ProjectCombobox({
   value,
   onChange,
   initialLabel,
-  placeholder = "Busca un proyecto por nombre…",
+  placeholder,
   disabled,
   className,
   ...props
 }: ProjectComboboxProps) {
+  const t = useT("combobox");
   return (
     <EntityCombobox
       endpoint="/projects"
@@ -47,8 +50,8 @@ export function ProjectCombobox({
       value={value}
       onChange={(id, opt) => onChange(id, opt?.label)}
       initialLabel={initialLabel}
-      placeholder={placeholder}
-      searchPlaceholder="Buscar por nombre…"
+      placeholder={placeholder ?? t("projectPlaceholder")}
+      searchPlaceholder={t("searchByName")}
       icon={FolderKanban}
       disabled={disabled}
       className={className}

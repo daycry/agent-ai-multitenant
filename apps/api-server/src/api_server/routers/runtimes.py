@@ -124,4 +124,4 @@ async def list_runtime_templates(
     return [_to_dto(t) for t in CATALOG.values()]
 
 
-__all__ = ["router", "RuntimeTemplateDto", "RuntimeLabel"]
+__all__ = ["RuntimeLabel", "RuntimeTemplateDto", "router"]

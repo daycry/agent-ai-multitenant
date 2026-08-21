@@ -18,6 +18,8 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = pytest.mark.integration
 
 
@@ -62,7 +64,7 @@ def workers_settings(monkeypatch: pytest.MonkeyPatch, alembic_config, migrations
     command.upgrade(alembic_config, "head")
     async_dsn = migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
     monkeypatch.setenv("WORKERS_DATABASE_URL", async_dsn)
-    monkeypatch.setenv("WORKERS_EVENTS_REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("WORKERS_EVENTS_REDIS_URL", TEST_REDIS_URL)
     from workers.config import get_settings, reset_settings_cache
 
     reset_settings_cache()
@@ -119,6 +121,6 @@ async def test_soft_timeout_with_cancel_flag_is_cancelled_no_dlq(
     was_cancel = await _finalize_soft_timeout(workers_settings, request)  # type: ignore[arg-type]
 
     assert was_cancel is True  # → el caller NO manda al DLQ (fue un cancel)
-    status, abort_code, done = await _status(migrations_pg_dsn, ids["exec"])
+    status, _abort_code, done = await _status(migrations_pg_dsn, ids["exec"])
     assert status == "cancelled"
     assert done is True

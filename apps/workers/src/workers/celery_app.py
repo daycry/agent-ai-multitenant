@@ -13,6 +13,9 @@ Queues (spec §12, Plan 02 Fase A; trimmed by ADR 0083 / prod-06 colas_02):
   review       review-runtime execution.
   privileged   tasks touching secrets / infra — drained by a worker
                with a tighter security profile.
+  marketplace  las puertas de seguridad de una instalación del marketplace
+               (prod-13 task_prod13_01): análisis estático + sandbox, minutos
+               de CPU que no caben en un request HTTP.
 
 The ``heavy`` and ``gpu`` lanes were REMOVED (ADR 0083, Option B): they were
 declared but had no producer (the dispatcher always uses ``dispatch_queue`` =
@@ -28,10 +31,40 @@ unrouted tasks fall through to `default`.
 
 from __future__ import annotations
 
+from api_server.logging.celery_pipeline import install_celery_logging
 from celery import Celery
 from kombu import Queue
 
 from workers.config import Settings, get_settings
+from workers.task_metrics import install_task_metrics
+
+# prod-08 Fase C (observability-3 / observability-7). Hasta 2026-07-31 los
+# workers NUNCA configuraban el logging: sus líneas salían con el formato por
+# defecto de Celery — texto plano, sin campo `service` y **sin el enmascarado
+# PII** que el api-server sí aplica. Un email o un JWT logueado desde un task
+# aterrizaba en claro en `docker logs`.
+#
+# Se instala AL IMPORTAR el módulo porque eso es exactamente lo que hace el CLI
+# (`celery -A workers.celery_app`) antes de arrancar nada: así la señal
+# `setup_logging` ya está conectada cuando Celery intenta imponer su propio
+# handler, y `task_prerun` bindea el `request_id` que viajó en las cabeceras
+# del mensaje desde la petición HTTP que lo encoló.
+#
+# El import de `api_server` no cruza una frontera de despliegue: el Dockerfile
+# de workers se construye SOBRE la imagen de api-server (`ARG BASE_IMAGE`), y
+# este paquete ya importa `api_server` en ~50 sitios más (db, memorizer,
+# cortex, ingestion). Ver ADR 0141.
+install_celery_logging(service="workers")
+
+# prod-08 task_prod08_metrics_workers_05. `agentic_celery_queue_depth` dice
+# cuántos mensajes ESPERAN; no dice cuántas tareas terminaron ni cuántas
+# fallaron. Un worker que drena la cola fallando el 100% de lo que saca presenta
+# la misma profundidad (cero) que uno sano. Estas señales acumulan el resultado
+# en Redis y el sampler de beat lo publica por el textfile-collector — el
+# exporter HTTP por proceso que el plan proponía no funciona con el pool prefork
+# (ADR 0141). Se conecta al importar, por el mismo motivo que el logging: es lo
+# que hace el CLI antes de arrancar nada.
+install_task_metrics()
 
 # Canonical queue names. Order is informational only. ``heavy``/``gpu`` removed
 # by ADR 0083 (prod-06 colas_02): dead lanes with no producer/consumer on a
@@ -42,6 +75,20 @@ QUEUE_NAMES: tuple[str, ...] = (
     "test",
     "review",
     "privileged",
+    # prod-13 `task_prod13_01`: las puertas de seguridad del marketplace
+    # (bandit + semgrep + prueba de humo del sandbox, hasta ~4 min). Lane PROPIA
+    # porque ninguna de las cinco de arriba puede absorberla sin un riesgo ya
+    # documentado en este repo: `default`/`test`/`review` los drenan pools de
+    # `--concurrency=2` que también atienden agent-runs y `stack_exec` (la
+    # auto-inanición que motivó `workers-aux`), y `privileged` va a
+    # `--concurrency=1` detrás del backup nocturno.
+    #
+    # Nace CON consumidor, que es la condición que puso el ADR 0083 al retirar
+    # `heavy` y `gpu`: el servicio `workers-marketplace` la drena en el compose de
+    # dev y en el que genera el instalador, y
+    # `tests/unit/test_compose_generator.py` compara las colas drenadas con esta
+    # tupla, así que una lane huérfana se pone roja sola.
+    "marketplace",
 )
 
 DEFAULT_QUEUE = "default"
@@ -90,14 +137,25 @@ def build_celery_app(settings: Settings | None = None) -> Celery:
             "workers.ingestion",
             "workers.price_sync",
             "workers.backup_task",
+            # prod-15 task_gov_app_boundary_11: las sondas de destino remoto
+            # (probar conectividad / listar bundles) que el api-server ejecutaba
+            # EN SU PROPIO PROCESO, donde no están las `WORKERS_BACKUP_*`.
+            "workers.backup_probe_task",
             "workers.restore_task",
             "workers.credential_rotation_task",
             "workers.fx_fetcher",
             "workers.git_remote_sweep",
             "workers.human_escalation",
+            "workers.approval_expiry",
             "workers.repo_clone",
             "workers.plan_pr",
             "workers.plan_docs",
+            # prod-13 task_prod13_01: las puertas de seguridad del marketplace,
+            # que el api-server ejecutaba DENTRO del request (hasta 4 min de
+            # escáner + sandbox). Sin este import el worker arranca sin
+            # registrar la task y los mensajes de la cola `marketplace` mueren
+            # con NotRegistered mientras el endpoint sigue devolviendo 202.
+            "workers.marketplace_gates",
         ),
         # Agent runs are long; ack only after completion so a worker
         # crash re-queues the job instead of losing it.

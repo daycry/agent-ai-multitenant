@@ -266,9 +266,9 @@ async def test_unsupported_number_triggers_hallucination_check(
 
     assert decision.triggered
     fired = {o.type for o in decision.triggered_outcomes}
-    assert (
-        "factuality_citations" in fired
-    ), "an unsupported number must trip the hallucination check"
+    assert "factuality_citations" in fired, (
+        "an unsupported number must trip the hallucination check"
+    )
 
     events = await _fetch_events(migrations_pg_dsn, tenant_a)
     types = {e["guardrail_type"] for e in events}

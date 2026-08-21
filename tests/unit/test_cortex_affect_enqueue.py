@@ -25,7 +25,7 @@ async def test_enqueue_sends_named_task(monkeypatch: pytest.MonkeyPatch) -> None
             captured["args"] = args
             captured["queue"] = queue
 
-    monkeypatch.setattr(celery_client, "get_celery_client", lambda: _FakeClient())
+    monkeypatch.setattr(celery_client, "get_celery_client", _FakeClient)
 
     turn_id = uuid4()
     ok = await celery_client.enqueue_cortex_distill_affect(turn_id)
@@ -43,6 +43,6 @@ async def test_enqueue_swallows_broker_errors(monkeypatch: pytest.MonkeyPatch) -
         def send_task(self, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("broker down")
 
-    monkeypatch.setattr(celery_client, "get_celery_client", lambda: _BoomClient())
+    monkeypatch.setattr(celery_client, "get_celery_client", _BoomClient)
     ok = await celery_client.enqueue_cortex_distill_affect(uuid4())
     assert ok is False

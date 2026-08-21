@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the price-sync DIFF + mandatory confirmation flow (Plan 11 task_11_16).
@@ -135,13 +136,7 @@ const DIFF_NO_SPIKE = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({

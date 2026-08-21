@@ -222,3 +222,50 @@ def test_full_template_with_all_fields() -> None:
     assert t.default_resources.memory_mb == 2048
     assert t.output_parsers == ("junit_xml", "raw_text")
     assert t.network_policy == "restricted"
+
+
+# ---------------------------------------------------------------------------
+# ADR 0148 — el digest, derivado de la referencia
+# ---------------------------------------------------------------------------
+
+
+def test_digest_is_derived_from_the_reference() -> None:
+    """``digest`` no es un campo propio: se lee de ``docker_image``.
+
+    Guardarlo aparte permitiría que discrepen, y la forma de conseguirlo está a
+    una línea de distancia: ``dataclasses.replace(template, docker_image=…)`` es
+    como el ADR 0129 inyecta la imagen propia de un proyecto. Un `digest`
+    heredado apuntando a otra imagen es peor que no tener digest, porque
+    responde con seguridad a la pregunta que el ADR 0148 vino a contestar — y
+    responde mal.
+    """
+    mod = _import_module()
+    digest = "sha256:" + "ab" * 32
+    t = mod.RuntimeTemplate(
+        id="php-phpunit",
+        docker_image=f"ghcr.io/agentic-platform/agent-runtime-php-phpunit:v1@{digest}",
+    )
+    assert t.digest == digest
+    assert t.is_pinned is True
+
+    propia = dataclasses.replace(t, docker_image="proyecto-x-runtime:latest")
+    assert propia.digest is None
+    assert propia.is_pinned is False
+
+
+def test_a_reference_without_digest_is_not_pinned() -> None:
+    mod = _import_module()
+    t = mod.RuntimeTemplate(id="php-phpunit", docker_image="agent-runtime-php-phpunit:v1")
+    assert t.digest is None
+    assert t.is_pinned is False
+
+
+def test_a_malformed_digest_is_rejected_at_construction() -> None:
+    """Un digest truncado o de otro algoritmo no lo resuelve ningún daemon.
+
+    Descubrirlo al construir el catálogo (al importar) es barato; descubrirlo
+    en el `docker pull` de una tarea de un tenant, no.
+    """
+    mod = _import_module()
+    with pytest.raises(ValueError, match="digest"):
+        mod.RuntimeTemplate(id="php-phpunit", docker_image="agent-runtime-php-phpunit:v1@sha256:ab")

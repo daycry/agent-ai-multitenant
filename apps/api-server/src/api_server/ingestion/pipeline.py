@@ -7,7 +7,7 @@ client, embedder) into one async function:
   2. read bytes from storage,
   3. AV scan — fail fast on `INFECTED`,
   4. docling-serve parse + chunk,
-  5. embed chunks in one batch,
+  5. embed chunks in bounded batches (:data:`EMBED_BATCH_SIZE`),
   6. persist `chunks` rows and update `documents` (`indexed_at`,
      `page_count`, `status`),
   7. emit a final `document.status` event with the count.
@@ -39,7 +39,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_server.db.knowledge import Chunk, Document
+from api_server.db.knowledge import Chunk, Document, KnowledgeBase
 from api_server.events import (
     EVENT_DOCUMENT_PROGRESS,
     EVENT_DOCUMENT_STATUS,
@@ -47,10 +47,30 @@ from api_server.events import (
 )
 from api_server.ingestion.antivirus import AntivirusScanner, AntivirusVerdict
 from api_server.ingestion.docling import DoclingClient, DoclingParseError
+from api_server.ingestion.embedding_contract import (
+    EmbeddingModelMismatchError,
+    active_embedding_model,
+    require_matching_model,
+)
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
 from api_server.storage import ObjectStorage
 
 logger = structlog.get_logger(__name__)
+
+# Chunks por petición al embedder (prod-13 task_prod13_16, hallazgo perf-4).
+#
+# La ingesta embebía TODOS los chunks del documento en una sola llamada. Con un
+# manual de cientos de páginas eso son miles de textos en una petición: tarda
+# minutos, carga el cuerpo entero en memoria a los dos lados y, si revienta, deja
+# el documento COMPLETO sin vector — el hueco "verde en la UI, invisible para el
+# RAG vectorial". Troceando, el fallo se acota al lote y el resto del documento
+# queda recuperable por vector desde ya; el backfill
+# (``workers.backfill_chunk_embeddings``) rellena los NULL que queden.
+#
+# 64 es el valor que fija el plan: suficientemente grande para no convertir un
+# documento normal en decenas de round-trips, suficientemente pequeño para que un
+# lote quepa holgado en la petición de Ollama.
+EMBED_BATCH_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -78,21 +98,61 @@ async def ingest_document(
     embedder: Embedder,
     redis: Redis | None = None,
     av_failure_mode: str = "fail_closed",
+    platform_embedding_model: str | None = None,
 ) -> IngestionResult:
     """End-to-end ingestion. The session is the tenant-scoped one the
     Celery wrapper opens; we own the lifecycle of the row but commit
-    at the very end so a failure mid-flight rolls everything back."""
+    at the very end so a failure mid-flight rolls everything back.
+
+    ``platform_embedding_model`` es el modelo ACTIVO de la plataforma; ``None``
+    lo resuelve del setting (que es de donde lo saca también el embedder real,
+    ver :class:`~api_server.ingestion.embeddings.OllamaEmbedder`). Se acepta
+    como parámetro para poder ejercitar el mismatch sin tocar el entorno.
+    """
     doc = await _load_document(session, document_id)
 
     await _set_status(session, doc, "processing", error=None, redis=redis)
 
+    # 0. ADR 0155 regla 4: el sello de la KB gobierna. Si la KB se indexó con
+    #    otro modelo, negarse ANTES de bajar bytes, escanear y embeber: seguir
+    #    metería en la KB vectores de otro espacio semántico — misma dimensión,
+    #    ningún error, recall degradado sin rastro.
+    active_model = (
+        platform_embedding_model
+        if platform_embedding_model is not None
+        else active_embedding_model()
+    )
+    kb_model = await _load_kb_embedding_model(session, doc.kb_id)
+    try:
+        require_matching_model(kb_model=kb_model, active_model=active_model)
+    except EmbeddingModelMismatchError as exc:
+        # Nombre de evento ESTABLE: es el gancho sobre el que prod-08 monta el
+        # contador y la alerta (este plan excluye exporters por escrito).
+        logger.error(
+            "kb.embedding_model_mismatch",
+            stage="ingestion",
+            document_id=str(doc.id),
+            kb_id=str(doc.kb_id),
+            kb_model=exc.kb_model,
+            active_model=exc.active_model,
+        )
+        return await _fail(session, doc, str(exc), redis)
+
     # 1. fetch bytes
     try:
         data = await storage.get_object(key=doc.source_storage_key)
-    except KeyError:
-        return await _fail(session, doc, "source object missing in storage", redis)
     except Exception as exc:
-        return await _fail(session, doc, f"storage read failed: {exc}", redis)
+        # Dos motivos, una sola salida: `KeyError` es "el objeto no está" y
+        # cualquier otra cosa es un fallo de lectura. Iban en dos `except` con
+        # su propio `return` hasta que la guarda de modelo (ADR 0155) sumó una
+        # salida más de las que el linter tolera; el mensaje de cada caso se
+        # conserva íntegro, que es lo que lee el operador en la ficha.
+        reason = (
+            "source object missing in storage"
+            if isinstance(exc, KeyError)
+            else f"storage read failed: {exc}"
+        )
+        return await _fail(session, doc, reason, redis)
 
     # 2. antivirus scan
     av_report = await antivirus.scan(filename=doc.source_filename, data=data)
@@ -138,24 +198,8 @@ async def ingest_document(
 
     await _emit_progress(redis, doc.id, stage="chunked", detail=f"{len(docling_chunks)} chunks")
 
-    # 4. embed in one batch (empty list = nothing to embed)
-    embeddings: list[list[float] | None]
-    if docling_chunks:
-        try:
-            vectors = await embedder.embed([c.content for c in docling_chunks])
-            embeddings = list(vectors)
-        except EmbeddingError as exc:
-            # Embeddings are nice-to-have — BM25 still works without them.
-            # Log + persist with NULL embeddings; the back-fill job
-            # (Plan 04 Fase D follow-up) can retry later.
-            logger.warning(
-                "ingestion.embedder_failed",
-                document_id=str(doc.id),
-                error=str(exc),
-            )
-            embeddings = [None] * len(docling_chunks)
-    else:
-        embeddings = []
+    # 4. embed TROCEADO en lotes (lista vacía = nada que embeber)
+    embeddings = await _embed_in_batches([c.content for c in docling_chunks], embedder, doc.id)
 
     await _emit_progress(
         redis,
@@ -207,6 +251,70 @@ async def ingest_document(
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+async def _embed_in_batches(
+    contents: list[str], embedder: Embedder, document_id: UUID
+) -> list[list[float] | None]:
+    """Embebe `contents` en lotes de :data:`EMBED_BATCH_SIZE`, en orden.
+
+    Devuelve SIEMPRE una lista de la misma longitud que `contents`, alineada
+    posición a posición: el elemento *i* es el vector del texto *i*, o ``None``.
+
+    Dos degradaciones, ambas acotadas al LOTE y no al documento:
+
+      * ``EmbeddingError`` (Ollama caído/lento) → ese lote va a ``None``. Los
+        embeddings son un nice-to-have: BM25 sigue funcionando sin ellos y el
+        backfill los rellenará. Cortar la ingesta entera sería peor.
+      * el embedder devuelve un número de vectores DISTINTO del pedido → el lote
+        entero va a ``None``. Emparejar por posición una respuesta corta cruzaría
+        vectores con chunks ajenos, un daño silencioso que envenena el RAG sin
+        que nada falle. Es el mismo criterio que ya aplica
+        ``workers.maintenance.chunk_backfill``. Antes de esta tarea el desajuste
+        levantaba ``ValueError`` desde el ``zip(strict=True)`` de más abajo, que
+        escapaba a Celery pese a que este pipeline promete no levantar nunca.
+    """
+    embeddings: list[list[float] | None] = []
+    for start in range(0, len(contents), EMBED_BATCH_SIZE):
+        batch = contents[start : start + EMBED_BATCH_SIZE]
+        try:
+            vectors = list(await embedder.embed(batch))
+        except EmbeddingError as exc:
+            logger.warning(
+                "ingestion.embedder_failed",
+                document_id=str(document_id),
+                error=str(exc),
+                batch_start=start,
+                batch_size=len(batch),
+            )
+            embeddings.extend([None] * len(batch))
+            continue
+        if len(vectors) != len(batch):
+            logger.warning(
+                "ingestion.embedder_count_mismatch",
+                document_id=str(document_id),
+                expected=len(batch),
+                got=len(vectors),
+                batch_start=start,
+            )
+            embeddings.extend([None] * len(batch))
+            continue
+        embeddings.extend(vectors)
+    return embeddings
+
+
+async def _load_kb_embedding_model(session: AsyncSession, kb_id: UUID) -> str:
+    """El sello de embeddings de la KB del documento, o cadena vacía.
+
+    Vacía se trata como mismatch a propósito (ver `require_matching_model`): una
+    KB sin sello no puede afirmar con qué modelo son sus vectores, y adivinar
+    «pues el activo» es exactamente la suposición que produjo el hallazgo
+    AUD14-03."""
+    result = await session.execute(
+        select(KnowledgeBase.embedding_model_id).where(KnowledgeBase.id == kb_id)
+    )
+    stamp = result.scalar_one_or_none()
+    return stamp if isinstance(stamp, str) else ""
+
+
 async def _load_document(session: AsyncSession, document_id: UUID) -> Document:
     result = await session.execute(
         select(Document).where(Document.id == document_id, Document.deleted_at.is_(None))

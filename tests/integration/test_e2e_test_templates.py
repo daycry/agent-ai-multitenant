@@ -74,9 +74,9 @@ def test_each_template_declares_its_parameters() -> None:
         names = template.parameter_names
         assert len(names) == len(set(names)), f"{name!r} has duplicate parameter names"
         # Validation guarantees declared == referenced; assert the agreement.
-        assert template.placeholders() == set(
-            names
-        ), f"{name!r} declared/referenced parameter mismatch"
+        assert template.placeholders() == set(names), (
+            f"{name!r} declared/referenced parameter mismatch"
+        )
         for param in template.parameters:
             assert param.name and param.name.strip()
             assert param.description and param.description.strip()

@@ -27,9 +27,9 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.chat.dag_enforcement import DependenciesNotDoneError, assert_dependencies_done
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Plan, Task, TaskDependency
 from api_server.db.task_audit_repo import append_audit_event, list_history, to_dict
 from api_server.events import publish_task_status_changed
@@ -222,7 +222,14 @@ async def apply_human_action(
     tenant_id = require_tenant_id(principal)
     await _assert_task_visible(session, task_id)
 
-    task_row = (await session.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
+    # `FOR UPDATE` (prod-13 task_prod13_22, api-10): la decisión de abajo depende
+    # del `status` que se acaba de leer. Sin el bloqueo, dos admins aplicando una
+    # acción humana a la vez leían los dos `awaiting_human_approval`, los dos
+    # pasaban la guarda del 409 y los dos escribían — con `retry` eso además
+    # incrementaba `retry_count` dos veces y emitía dos eventos de re-dispatch.
+    task_row = (
+        await session.execute(select(Task).where(Task.id == task_id).with_for_update())
+    ).scalar_one_or_none()
     if task_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task not found")
 

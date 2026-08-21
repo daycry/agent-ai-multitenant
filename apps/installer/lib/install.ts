@@ -13,11 +13,7 @@ import { INSTALLER_API_BASE } from "./prereqs";
 
 /** The ordered install pipeline steps (mirrors the backend enum). */
 export type InstallStepId =
-  | "generate_config"
-  | "pull_images"
-  | "start_stack"
-  | "bootstrap_vault"
-  | "seed_tenant";
+  "generate_config" | "pull_images" | "start_stack" | "bootstrap_vault" | "seed_tenant";
 
 /** Per-step lifecycle status (mirrors the backend StepStatus). */
 export type InstallStepStatus = "pending" | "running" | "ok" | "failed";

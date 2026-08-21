@@ -34,6 +34,8 @@ Falta el test de INTEGRACIÓN que el plan exige: tests/integration/test*cortex_d
 
 No existe verificación automática de drift: `alembic check` no aparece en ningún test ni en .github/workflows/ci.yml, y tampoco hay un assert directo sobre `__tablename__` / columnas / pertenencia a `Base.metadata`. El mapeo 1:1 solo queda probado de forma indirecta.
 
+> ↑ **Superado el 2026-08-20** (la constatación de arriba se deja como estaba: es lo que había el 2026-07-27). Hoy sí existe verificación automática de drift, y en dos capas: `tests/unit/test_alembic_metadata_is_complete.py` vigila que ninguna tabla se caiga de `Base.metadata` —el fallo que hacía que `alembic check` muriese con `NoReferencedTableError` en vez de dar veredicto, arreglado en el commit `bc521ad4`— y `tests/integration/test_alembic_autogenerate_clean.py` compara el modelo contra la BD migrada a head con el `include_object` del proyecto, con un inventario que **sólo puede menguar**. El drift sobre las tablas `cortex_*` es **0**; el diff global bajó de 162 items a 22, y los 22 están nombrados uno a uno en `REMAINING_DRIFT_2026_08_20`.
+
 ### `partial` — Suite de calibración (interacciones canónicas → rangos PAD esperados)
 
 El plan pide ~8 escenarios canónicos; hay 3 que realmente ejercitan apply_event+update_mood (el cuarto, `test_calibration_cold_farewell_lowers_bonding`:309-313, solo llama a decay_drives, ya cubierto por el test de drives). Faltan ~5 escenarios y el fichero dedicado de regresión.
@@ -92,6 +94,14 @@ Cinco huecos frente al enunciado: (a) paso (2) a medias — NO hay chequeo de bu
 
 ### `partial` — Router cortex_identity.py (gated)
 
+> **✅ RESUELTO el 2026-08-19** (casilla F3.5 marcada). (a) `GET /owner/cortex/identity/history`
+> existe (`routers/cortex_mind.py:543`) y la UI lo pinta; (b) la contradicción de diseño la
+> decidió el [ADR 0157](../05-architecture-decisions/0157-quien-reescribe-la-narrativa-del-cortex.md)
+> a favor del código —la frontera es lo ACOTADO (traits/mood_baseline/relationship_model/
+> affect_params → 422), no lo autobiográfico— y hay test en los dos sentidos; (c) las rutas
+> distintas se recogen en el enunciado reescrito del plan. Texto original abajo, como registro
+> de lo que se midió aquel día.
+
 (a) Falta el endpoint `GET /owner/cortex/identity/history?limit=` — no existe ningún endpoint que devuelva el timeline de versiones con su diff (los 10 verbos del router son mind, affect/timeseries, episodes, journal, curiosity/pursuits, identity GET/PUT, reflect, autonomy GET/PUT); el /journal (:212) lee cortex_identity_history pero deduplica narrativas y descarta el diff. Sin este endpoint el timeline de F3.6 es inconstruible. (b) Contradice el plan en un punto de diseño: el plan exigía 422 al tocar `narrative` (solo la reflexión la muta) y la implementación la hace editable por el owner a propósito (cortex/identity.py:78-84 OWNER_EDITABLE_FIELDS incluye 'narrative'); solo traits/mood_baseline dan 422. (c) Rutas distintas a las diseñadas: PUT /identity en vez de POST /identity/onboarding + PATCH /identity, y POST /owner/cortex/reflect en vez de /identity/reflect-now.
 
 ### `partial` — Componente IdentityCard (radar Big-Five + narrativa Markdown + copy honesto)
@@ -99,6 +109,12 @@ Cinco huecos frente al enunciado: (a) paso (2) a medias — NO hay chequeo de bu
 (a) NO existe apps/admin-panel/app/admin/cortex/identity-timeline.tsx ni ninguna UI de timeline de versiones — ni podría existir: no hay endpoint GET /identity/history que la alimente (ver F3.5). (b) NO existe el helper puro `identityDiffSummary(diff)` (grep en todo apps/admin-panel: 0 resultados) ni su test vitest, que era el único test que esta tarea exigía por nombre. (c) Los rasgos se pintan como barras horizontales (:305-311), no como el radar Big-Five pedido. (d) No es un componente integrado en la segunda columna de apps/admin-panel/app/admin/cortex/page.tsx (la página de F1): es una ruta hermana separada, /admin/cortex/identity.
 
 ### `partial` — Promover ADRs y registrar cambios
+
+> **✅ RESUELTO el 2026-08-19** (casilla F3.7 marcada). El changelog de F3 existe y se reescribió
+> entero contra el código; 0074 y 0078 llevan su sección de F3 con evidencia `fichero:línea`;
+> `cortex-system-owner.md` tiene el párrafo de la Fase 3 actualizado. Lo único que NO se hizo del
+> enunciado es promover 0078 a `accepted-f3`: el corpus no usa estados por fase y el ADR se queda
+> `accepted` (razonado en su propia sección). Texto original abajo.
 
 No hay entrada de changelog de F3: docs/07-changelog/ tiene 43 ficheros y ninguno cubre esta fase (grep de 'Córtex F3'/'cortex-f3' en docs/07-changelog/: 0 resultados); el más próximo, docs/07-changelog/cortex-identidad-real.md:1-8, es el plan POSTERIOR del 2026-07-06 (self-model unificado), no el cierre de F3. Faltan por tanto: promover 0078 a accepted-f3 y arreglar su banner 'proposed', anotar F3 implementada en 0074 (y su banner F1-F5 gated), marcar la Fase 3 en cortex-system-owner.md, corregir mejoras-2026-06-chat-coste-cortex.md, y crear docs/07-changelog/ de F3. El criterio 'estado de los docs coherente con el código' no se cumple: hoy tres documentos afirman que F3 no existe mientras el código está desplegado.
 

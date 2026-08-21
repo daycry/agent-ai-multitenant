@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface LoginResponse {
   access_token: string;
@@ -33,6 +34,10 @@ interface MfaChallengeProps {
  * formulario para reintentar; un challenge caducado devuelve al login.
  */
 export function MfaChallenge({ mfaToken, onSuccess }: MfaChallengeProps) {
+  // i18n vía diccionario (prod-16 `task_prod16_02`). Este paso quedó fuera de
+  // la migración del login del 08-01 porque el test de la pantalla no lo
+  // renderiza nunca: sólo aparece con `mfa_required`, o sea con TOTP activado.
+  const t = useT("login");
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -49,11 +54,11 @@ export function MfaChallenge({ mfaToken, onSuccess }: MfaChallengeProps) {
       onSuccess(session);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setError("Código incorrecto. Prueba de nuevo o usa un código de recuperación.");
+        setError(t("mfaErrorInvalidCode"));
       } else if (err instanceof ApiError && (err.status === 400 || err.status === 410)) {
-        setError("El desafío ha caducado. Vuelve a iniciar sesión.");
+        setError(t("mfaErrorExpired"));
       } else {
-        setError("No se pudo contactar con el servidor.");
+        setError(t("errorUnreachable"));
       }
     } finally {
       setLoading(false);
@@ -64,12 +69,10 @@ export function MfaChallenge({ mfaToken, onSuccess }: MfaChallengeProps) {
     <form onSubmit={onSubmit} className="space-y-4" data-testid="mfa-form">
       <div className="flex items-center gap-2">
         <ShieldCheck className="text-muted-foreground h-5 w-5" aria-hidden="true" />
-        <p className="text-muted-foreground text-sm">
-          Introduce el código de tu app de autenticación (o un código de recuperación).
-        </p>
+        <p className="text-muted-foreground text-sm">{t("mfaHelp")}</p>
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="mfa-code">Código de verificación</Label>
+        <Label htmlFor="mfa-code">{t("mfaCodeLabel")}</Label>
         <Input
           id="mfa-code"
           data-testid="mfa-code-input"
@@ -89,7 +92,7 @@ export function MfaChallenge({ mfaToken, onSuccess }: MfaChallengeProps) {
       )}
       <Button type="submit" className="w-full" disabled={loading || code.trim().length === 0}>
         {loading && <Spinner className="mr-2 h-4 w-4" />}
-        {loading ? "Verificando…" : "Verificar"}
+        {loading ? t("mfaSubmitting") : t("mfaSubmit")}
       </Button>
     </form>
   );

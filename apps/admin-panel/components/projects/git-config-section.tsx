@@ -5,6 +5,11 @@
  * credenciales (PAT/SSH). El secreto se guarda en Vault (PUT /projects/{id}/git)
  * y NUNCA se devuelve; al guardar se encola el clone. Dejar la credencial vacía
  * conserva la ya guardada.
+ *
+ * i18n (prod-16 `task_prod16_03`): el catálogo de alineación de la rama guarda
+ * la CLAVE del namespace `projectGit`, no el texto. Es el aviso que explica un
+ * PR fallido por «no history in common», y era de lo peor que quedaba sin
+ * traducir: se lee justo cuando algo se ha roto.
  */
 
 import { useEffect, useState } from "react";
@@ -17,6 +22,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT, type MessageKey } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 export interface GitConfig {
   provider: string;
@@ -34,18 +41,12 @@ export interface LastGitSync {
   error?: string;
 }
 
-const ALIGNMENT_COPY: Record<string, { warn: boolean; text: string }> = {
-  created: { warn: false, text: "Rama por defecto local creada desde el remoto." },
-  fast_forwarded: { warn: false, text: "Rama por defecto local actualizada al remoto." },
-  up_to_date: { warn: false, text: "Rama por defecto local al día con el remoto." },
-  remote_empty: {
-    warn: true,
-    text: "El remoto no tiene la rama por defecto (repo vacío). Haz un push inicial; hasta entonces el PR del plan no podrá abrirse.",
-  },
-  diverged: {
-    warn: true,
-    text: "La base local NO comparte historia con la rama por defecto del remoto — el PR del plan fallará con «no history in common». Reconcilia el repo (rebasa la rama del plan sobre el remoto) o revisa la rama por defecto configurada.",
-  },
+const ALIGNMENT_COPY: Record<string, { warn: boolean; key: MessageKey<"projectGit"> }> = {
+  created: { warn: false, key: "alignmentCreated" },
+  fast_forwarded: { warn: false, key: "alignmentFastForwarded" },
+  up_to_date: { warn: false, key: "alignmentUpToDate" },
+  remote_empty: { warn: true, key: "alignmentRemoteEmpty" },
+  diverged: { warn: true, key: "alignmentDiverged" },
 };
 
 /** Políticas del flujo git del plan (worker_config.git_policies, ADR 0072 fase 2). */
@@ -69,6 +70,9 @@ export function GitConfigSection({
   isReadOnly?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const t = useT("projectGit");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
   const [provider, setProvider] = useState(value?.provider ?? "generic");
   const [remoteUrl, setRemoteUrl] = useState(value?.remote_url ?? "");
   const [branch, setBranch] = useState(value?.default_branch ?? "main");
@@ -134,22 +138,23 @@ export function GitConfigSection({
     },
   });
 
+  const alignment = lastSync?.default_branch_alignment
+    ? ALIGNMENT_COPY[lastSync.default_branch_alignment]
+    : undefined;
+
   return (
     <Card className="space-y-3 p-4" data-testid="project-git-section">
       <div>
         <h3 className="flex items-center gap-2 text-sm font-medium">
           <GitBranch className="h-4 w-4" />
-          Repositorio Git
+          {t("title")}
         </h3>
-        <p className="text-muted-foreground mt-1 text-xs">
-          Remoto + credenciales (PAT/SSH). El secreto se guarda en Vault y nunca se muestra; al
-          guardar se encola el clone. Deja la credencial vacía para conservar la ya guardada.
-        </p>
+        <p className="text-muted-foreground mt-1 text-xs">{t("description")}</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor="git-provider">Proveedor</Label>
+          <Label htmlFor="git-provider">{t("providerLabel")}</Label>
           <Select
             id="git-provider"
             value={provider}
@@ -157,14 +162,15 @@ export function GitConfigSection({
             onChange={(e) => setProvider(e.target.value)}
             data-testid="git-provider"
           >
+            {/* Los tres primeros son nombres propios: no se traducen. */}
             <option value="github">GitHub</option>
             <option value="gitlab">GitLab</option>
             <option value="azure_devops">Azure DevOps</option>
-            <option value="generic">Genérico</option>
+            <option value="generic">{t("providerGeneric")}</option>
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="git-branch">Rama por defecto</Label>
+          <Label htmlFor="git-branch">{t("branchLabel")}</Label>
           <Input
             id="git-branch"
             value={branch}
@@ -176,7 +182,7 @@ export function GitConfigSection({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="git-remote-url">URL del remoto</Label>
+        <Label htmlFor="git-remote-url">{t("remoteUrlLabel")}</Label>
         <Input
           id="git-remote-url"
           value={remoteUrl}
@@ -188,7 +194,7 @@ export function GitConfigSection({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="git-auth-mode">Autenticación</Label>
+        <Label htmlFor="git-auth-mode">{t("authModeLabel")}</Label>
         <Select
           id="git-auth-mode"
           value={authMode}
@@ -196,16 +202,16 @@ export function GitConfigSection({
           onChange={(e) => setAuthMode(e.target.value)}
           data-testid="git-auth-mode"
         >
-          <option value="none">Sin auth (público / preconfigurado)</option>
-          <option value="pat">PAT (HTTPS)</option>
-          <option value="ssh">Clave SSH</option>
+          <option value="none">{t("authNone")}</option>
+          <option value="pat">{t("authPat")}</option>
+          <option value="ssh">{t("authSsh")}</option>
         </Select>
       </div>
 
       {authMode === "pat" && (
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="git-username">Usuario (opcional)</Label>
+            <Label htmlFor="git-username">{t("usernameLabel")}</Label>
             <Input
               id="git-username"
               value={username}
@@ -216,14 +222,14 @@ export function GitConfigSection({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="git-token">Token (PAT)</Label>
+            <Label htmlFor="git-token">{t("tokenLabel")}</Label>
             <Input
               id="git-token"
               type="password"
               value={token}
               disabled={isReadOnly}
               onChange={(e) => setToken(e.target.value)}
-              placeholder="••• (vacío = conservar)"
+              placeholder={t("tokenPlaceholder")}
               data-testid="git-token"
             />
           </div>
@@ -232,7 +238,7 @@ export function GitConfigSection({
 
       {authMode === "ssh" && (
         <div className="space-y-1.5">
-          <Label htmlFor="git-ssh-key">Clave SSH privada</Label>
+          <Label htmlFor="git-ssh-key">{t("sshKeyLabel")}</Label>
           <textarea
             id="git-ssh-key"
             value={sshKey}
@@ -240,22 +246,18 @@ export function GitConfigSection({
             onChange={(e) => setSshKey(e.target.value)}
             rows={4}
             className="border-input bg-background w-full rounded-md border px-3 py-2 font-mono text-xs"
-            placeholder="(pegar clave privada; vacío = conservar la guardada)"
+            placeholder={t("sshKeyPlaceholder")}
             data-testid="git-ssh-key"
           />
         </div>
       )}
 
       <div className="border-t pt-3">
-        <h4 className="text-sm font-medium">Flujo git del plan</h4>
-        <p className="text-muted-foreground mt-1 text-xs">
-          Cómo se publican las ramas y qué pasa al cerrar el plan. Por defecto: los agentes empujan
-          la rama del plan tarea a tarea, el humano valida al cerrar y se abre un PR (sin merge
-          directo).
-        </p>
+        <h4 className="text-sm font-medium">{t("flowHeading")}</h4>
+        <p className="text-muted-foreground mt-1 text-xs">{t("flowDescription")}</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <div className="space-y-1.5">
-            <Label htmlFor="git-branch-push-mode">Push de la rama</Label>
+            <Label htmlFor="git-branch-push-mode">{t("branchPushLabel")}</Label>
             <Select
               id="git-branch-push-mode"
               value={branchPushMode}
@@ -263,12 +265,12 @@ export function GitConfigSection({
               onChange={(e) => setBranchPushMode(e.target.value)}
               data-testid="git-branch-push-mode"
             >
-              <option value="incremental">Incremental (cada tarea)</option>
-              <option value="final_only">Solo al cerrar el plan</option>
+              <option value="incremental">{t("branchPushIncremental")}</option>
+              <option value="final_only">{t("branchPushFinal")}</option>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="git-plan-validation-mode">Validación del plan</Label>
+            <Label htmlFor="git-plan-validation-mode">{t("planValidationLabel")}</Label>
             <Select
               id="git-plan-validation-mode"
               value={planValidationMode}
@@ -276,12 +278,12 @@ export function GitConfigSection({
               onChange={(e) => setPlanValidationMode(e.target.value)}
               data-testid="git-plan-validation-mode"
             >
-              <option value="human_required">Validación humana</option>
-              <option value="auto_approve">Auto-aprobar</option>
+              <option value="human_required">{t("planValidationHuman")}</option>
+              <option value="auto_approve">{t("planValidationAuto")}</option>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="git-push-policy">Al cerrar el plan</Label>
+            <Label htmlFor="git-push-policy">{t("pushPolicyLabel")}</Label>
             <Select
               id="git-push-policy"
               value={pushPolicy}
@@ -289,8 +291,8 @@ export function GitConfigSection({
               onChange={(e) => setPushPolicy(e.target.value)}
               data-testid="git-push-policy"
             >
-              <option value="forbidden">No hacer nada</option>
-              <option value="branch_only_pr_required">Abrir PR (revisión humana)</option>
+              <option value="forbidden">{t("pushPolicyForbidden")}</option>
+              <option value="branch_only_pr_required">{t("pushPolicyPr")}</option>
               {/* "Merge directo a la rama base" (direct_to_default_allowed) retirado
                   (cadena-pr T5 / P4, auditoría 2026-07-03): apply_push_policy no tiene
                   caller de producción, así que la opción se comportaba IDÉNTICA a "Abrir
@@ -303,23 +305,22 @@ export function GitConfigSection({
 
       {save.isError && (
         <p className="text-destructive text-sm" data-testid="git-error">
-          {save.error?.body ?? "Error al guardar"}
+          {errorText(save.error)}
         </p>
       )}
       {save.isSuccess && (
         <p className="text-sm text-emerald-600" role="status">
-          Guardado. Sincronización con el remoto encolada — el resultado aparece abajo en unos
-          segundos.
+          {t("saveOk")}
         </p>
       )}
       {sync.isSuccess && !save.isSuccess && (
         <p className="text-sm text-emerald-600" role="status">
-          Sincronización encolada.
+          {t("syncQueued")}
         </p>
       )}
       {sync.isError && (
         <p className="text-destructive text-sm" data-testid="git-sync-error">
-          {sync.error?.body ?? "Error al encolar la sincronización"}
+          {errorText(sync.error)}
         </p>
       )}
 
@@ -328,27 +329,24 @@ export function GitConfigSection({
       {lastSync?.at ? (
         <div className="bg-muted/30 space-y-1 rounded-md border p-3" data-testid="git-last-sync">
           <p className="text-xs">
-            <span className="text-muted-foreground">Última sincronización:</span>{" "}
-            {new Date(lastSync.at).toLocaleString("es-ES")} ·{" "}
+            <span className="text-muted-foreground">{t("lastSyncLabel")}</span>{" "}
+            {new Date(lastSync.at).toLocaleString(tCommon("dateLocale"))} ·{" "}
             <span className={lastSync.status === "ok" ? "text-emerald-600" : "text-destructive"}>
-              {lastSync.status === "ok" ? "correcta" : "con error"}
+              {lastSync.status === "ok" ? t("lastSyncOk") : t("lastSyncFailed")}
             </span>
           </p>
           {lastSync.error ? <p className="text-destructive text-xs">{lastSync.error}</p> : null}
-          {lastSync.default_branch_alignment &&
-          ALIGNMENT_COPY[lastSync.default_branch_alignment] ? (
+          {alignment ? (
             <p
               className={
-                ALIGNMENT_COPY[lastSync.default_branch_alignment].warn
+                alignment.warn
                   ? "text-warning-soft-foreground flex items-start gap-1.5 text-xs"
                   : "text-muted-foreground text-xs"
               }
               data-testid="git-alignment"
             >
-              {ALIGNMENT_COPY[lastSync.default_branch_alignment].warn ? (
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              ) : null}
-              {ALIGNMENT_COPY[lastSync.default_branch_alignment].text}
+              {alignment.warn ? <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : null}
+              {t(alignment.key)}
             </p>
           ) : null}
         </div>
@@ -363,14 +361,14 @@ export function GitConfigSection({
             data-testid="git-sync"
           >
             <RefreshCw className={`mr-1.5 h-4 w-4 ${sync.isPending ? "animate-spin" : ""}`} />
-            {sync.isPending ? "Sincronizando…" : "Sincronizar"}
+            {sync.isPending ? t("syncing") : t("sync")}
           </Button>
           <Button
             disabled={!remoteUrl.trim() || save.isPending}
             onClick={() => save.mutate()}
             data-testid="git-save"
           >
-            {save.isPending ? "Guardando…" : "Guardar repositorio"}
+            {save.isPending ? t("saving") : t("save")}
           </Button>
         </div>
       )}

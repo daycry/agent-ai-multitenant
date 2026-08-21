@@ -10,13 +10,7 @@
  */
 
 export type AgentVisualState =
-  | "idle"
-  | "working"
-  | "reviewing"
-  | "waiting_human"
-  | "dizzy"
-  | "aborted"
-  | "done";
+  "idle" | "working" | "reviewing" | "waiting_human" | "dizzy" | "aborted" | "done";
 
 export interface ExecutionLike {
   id: string;

@@ -151,6 +151,27 @@ class CI4Agent:
     def id(self) -> UUID:
         return _ci4_agent_id(self.slug)
 
+    @property
+    def effective_prompt_es(self) -> str:
+        """El prompt ES tal y como lo recibe el agente: persona + higiene.
+
+        Fuente ÚNICA del texto ES. La higiene de stack (fix 2026-07-24) se
+        añadió en su día sólo dentro de ``to_model_config``, y eso rompió el
+        invariante que comparten todos los seeds de agentes: «el texto ES vive
+        en ``agents.system_prompt`` y las dos versiones viajan además en
+        ``model_config.system_prompts``» (ver
+        :mod:`api_server.seeds.builtin_agents`). El resultado era una columna
+        plana que ya no decía lo mismo que el prompt efectivo, justo en la
+        parte que evita que el agente gire sin converger. Con la propiedad, las
+        dos escrituras salen del mismo sitio y no pueden volver a divergir.
+        """
+        return self.system_prompt_es + _CI4_STACK_HYGIENE_ES
+
+    @property
+    def effective_prompt_en(self) -> str:
+        """El prompt EN efectivo: persona + higiene (ver ``effective_prompt_es``)."""
+        return self.system_prompt_en + _CI4_STACK_HYGIENE_EN
+
     def to_model_config(self) -> dict[str, Any]:
         """model_config SIN provider/model: sólo prompts bilingües.
 
@@ -159,8 +180,8 @@ class CI4Agent:
         """
         return {
             "system_prompts": {
-                "es": self.system_prompt_es + _CI4_STACK_HYGIENE_ES,
-                "en": self.system_prompt_en + _CI4_STACK_HYGIENE_EN,
+                "es": self.effective_prompt_es,
+                "en": self.effective_prompt_en,
             }
         }
 
@@ -682,7 +703,7 @@ async def seed_ci4_agents(session: AsyncSession) -> int:
                 "name": agent.name,
                 "description": agent.description,
                 "role": agent.role,
-                "system_prompt": agent.system_prompt_es,
+                "system_prompt": agent.effective_prompt_es,
                 "model_config": json.dumps(agent.to_model_config()),
                 "memory_scope": agent.memory_scope,
                 "review_capability": agent.review_capability,
@@ -695,41 +716,33 @@ async def seed_ci4_agents(session: AsyncSession) -> int:
 # ---------------------------------------------------------------------------
 # Seed: tools por agente (junction agent_tools)
 # ---------------------------------------------------------------------------
-# La tabla agent_tools NO restringe scope (db/domain.py), así que SÍ se puede
+# La tabla agent_tools NO restringe scope (db/domain/agents.py), así que SÍ se puede
 # cablear tools a agentes global_builtin. Debe correr DESPUÉS de
 # seed_builtin_tools (FK agent_tools.tool_id) y de seed_ci4_agents
 # (FK agent_tools.agent_id).
-_UPSERT_AGENT_TOOL_SQL = text(
-    """
+_UPSERT_AGENT_TOOL_SQL = text("""
     INSERT INTO agent_tools (agent_id, tool_id)
     VALUES (:agent_id, :tool_id)
     ON CONFLICT (agent_id, tool_id) DO UPDATE SET updated_at = now()
-    """
-)
+    """)
 
-_DELETE_STALE_AGENT_TOOLS_SQL = text(
-    """
+_DELETE_STALE_AGENT_TOOLS_SQL = text("""
     DELETE FROM agent_tools
      WHERE agent_id = :agent_id
        AND tool_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
-_UPSERT_AGENT_SKILL_SQL = text(
-    """
+_UPSERT_AGENT_SKILL_SQL = text("""
     INSERT INTO agent_skills (agent_id, skill_id)
     VALUES (:agent_id, :skill_id)
     ON CONFLICT (agent_id, skill_id) DO UPDATE SET updated_at = now()
-    """
-)
-_DELETE_STALE_AGENT_SKILLS_SQL = text(
-    """
+    """)
+_DELETE_STALE_AGENT_SKILLS_SQL = text("""
     DELETE FROM agent_skills
      WHERE agent_id = :agent_id
        AND skill_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
 async def seed_ci4_agent_skills(session: AsyncSession) -> int:

@@ -14,6 +14,17 @@ moment the worker launches the container:
   - exp:    24 h after issue (the sandbox's lifetime is far shorter
             but giving extra headroom avoids races at the boundary)
 
+SIGNING KEY (prod-09 task_prod09_03, secrets-9). These tokens are signed with
+``settings.internal_token_secret`` — a secret DEDICATED to the worker→api
+channel, NOT the ``jwt_secret`` that signs human sessions. They used to share one
+key, which meant the workers container (which legitimately holds the minting
+secret) could also mint a System-Admin session for any user id: the `kind=agent`
+claim separated the two families only as long as every verifier remembered to
+check it. Separate keys make cross-domain forgery impossible by construction
+rather than by discipline. Operationally the workers container must receive
+``API_SERVER_INTERNAL_TOKEN_SECRET`` (same value as the api-server) and no longer
+needs ``API_SERVER_JWT_SECRET`` at all.
+
 The middleware in this module validates the token, refuses any
 non-`"agent"` JWT, loads the active `Agent` row to confirm it still
 exists / isn't soft-deleted, and binds `agent_id` + `tenant_id` on
@@ -32,11 +43,11 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
-from jose import JWTError, jwt
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import _parse_bearer
+from api_server.auth.jwt import InvalidTokenError, sign_claims, verify_claims_any
 from api_server.config import get_settings
 from api_server.db.domain import Agent, Project
 from api_server.db.session import get_admin_sessionmaker, get_sessionmaker
@@ -107,12 +118,14 @@ def mint_agent_token(
     }
     if task_id is not None:
         claims["task"] = str(task_id)
-    encoded: str = jwt.encode(
+    return sign_claims(
         claims,
-        settings.jwt_secret.get_secret_value(),
+        # DEDICATED key, never `jwt_secret` (task_prod09_03 / secrets-9), and the
+        # HEAD of its ring (prod-05 task_prod05_04) so a token minted after the
+        # rotation deploy is already on the key that outlives it.
+        secret=settings.internal_token_secret_ring[0],
         algorithm=settings.jwt_algorithm,
     )
-    return encoded
 
 
 # ---------------------------------------------------------------------------
@@ -130,15 +143,31 @@ def decode_agent_token(token: str) -> AgentPrincipal:
     distinction: a token that decodes correctly but lacks the
     ``kind=agent`` claim is rejected — humans must not be able to
     use their JWTs against `/internal/agent/*`.
+
+    Since task_prod09_03 a human JWT does not even reach that claim check: it is
+    signed with ``jwt_secret`` and verified here against
+    ``internal_token_secret``, so it fails at the SIGNATURE. The ``kind`` check
+    stays as defence in depth (and to keep the error message honest).
+
+    prod-05 task_prod05_04: verification runs over the WHOLE
+    ``API_SERVER_INTERNAL_TOKEN_SECRET(S)`` ring. This is the half of the dual
+    accept that protects work in progress rather than sessions: an
+    ``AGENTIC_INTERNAL_TOKEN`` is injected into an agent-runtime container ONCE at
+    launch (``workers/execution.py``) and cannot be refreshed, so a single-secret
+    verifier turned every rotation into "every plan executing right now starts
+    getting 401s from ``/internal/agent/*``". The rings stay disjoint from the
+    session ring — the config guard rejects any overlap — so widening the accept
+    here does not widen what a compromised worker can forge.
     """
     settings = get_settings()
     try:
-        claims = jwt.decode(
+        claims = verify_claims_any(
             token,
-            settings.jwt_secret.get_secret_value(),
-            algorithms=[settings.jwt_algorithm],
+            # DEDICATED ring, never `jwt_secret` (task_prod09_03 / secrets-9).
+            secrets=settings.internal_token_secret_ring,
+            algorithm=settings.jwt_algorithm,
         )
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         raise InvalidAgentTokenError(str(exc)) from exc
 
     if claims.get("kind") != _AGENT_KIND_CLAIM:

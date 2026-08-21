@@ -40,5 +40,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_chunks_content_fts")
     op.execute(
-        "CREATE INDEX ix_chunks_content_fts" " ON chunks USING GIN (to_tsvector('simple', content))"
+        "CREATE INDEX ix_chunks_content_fts ON chunks USING GIN (to_tsvector('simple', content))"
     )

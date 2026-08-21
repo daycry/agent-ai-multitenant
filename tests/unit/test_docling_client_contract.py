@@ -118,6 +118,6 @@ async def test_route_constant_matches_pinned_openapi_snapshot() -> None:
         .parent.joinpath("fixtures", "docling_serve_openapi_paths.json")
         .read_text(encoding="utf-8")
     )
-    assert (
-        DOCLING_CHUNK_ROUTE in snapshot["paths"]
-    ), f"la ruta {DOCLING_CHUNK_ROUTE} no existe en el openapi pineado de docling-serve"
+    assert DOCLING_CHUNK_ROUTE in snapshot["paths"], (
+        f"la ruta {DOCLING_CHUNK_ROUTE} no existe en el openapi pineado de docling-serve"
+    )

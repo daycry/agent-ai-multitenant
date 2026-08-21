@@ -40,10 +40,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.human_escalation")
 
@@ -114,7 +115,7 @@ async def _escalate_human_assignments(
     from api_server.db.platform_settings import get_human_escalation_enabled
     from api_server.human_agents import sweep_acceptance_timeouts
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 

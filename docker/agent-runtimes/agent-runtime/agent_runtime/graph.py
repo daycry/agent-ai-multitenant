@@ -854,8 +854,12 @@ class _AgentLoop:
                 return result
 
             # Approval gate: a sensitive tool is parked *before* it runs.
+            # ADR 0135: los ARGS viajan con la llamada — lo que un humano
+            # autoriza es la acción exacta (tool + args verbatim), no la tool.
             category = (
-                self.deps.approval.review(decision.tool) if self.deps.approval is not None else None
+                self.deps.approval.review(decision.tool, decision.tool_args)
+                if self.deps.approval is not None
+                else None
             )
             if category is not None:
                 steps.append(
@@ -996,7 +1000,7 @@ class _AgentLoop:
             node_step(
                 base + len(steps),
                 "plan",
-                "Safeguard tripped: reflection_stalled (model self-reported " "no progress twice)",
+                "Safeguard tripped: reflection_stalled (model self-reported no progress twice)",
                 status="aborted" if trip_status == STATUS_ABORTED else trip_status,
             )
         )
@@ -1217,8 +1221,7 @@ class _AgentLoop:
                         result=extra_result.as_dict(),
                         status="ok" if extra_result.ok else "error",
                         summary=(
-                            f"Tool '{extra_tool}' (batch) → "
-                            f"{'ok' if extra_result.ok else 'error'}"
+                            f"Tool '{extra_tool}' (batch) → {'ok' if extra_result.ok else 'error'}"
                         ),
                     )
                 )
@@ -1599,8 +1602,7 @@ class _AgentLoop:
             approval = state["approval"] or {}
             action = approval.get("action", {})
             output = (
-                f"Awaiting human approval for '{action.get('tool')}' "
-                f"({approval.get('category')})."
+                f"Awaiting human approval for '{action.get('tool')}' ({approval.get('category')})."
             )
             step = node_step(
                 base,
@@ -1894,6 +1896,7 @@ def run_agent(
     clock: Callable[[], float] | None = None,
     on_step: Callable[[dict[str, Any]], None] | None = None,
     system_preamble: str | None = None,
+    agent_seal: str | None = None,
 ) -> ExecutionResult:
     """Run one execution of the agent loop end to end.
 
@@ -1905,6 +1908,13 @@ def run_agent(
     `system_preamble` (Plan 06.18 task_06_18_13) carries the assigned skills'
     prompt fragments to prepend to the model's system prompt; `None` keeps the
     historical prompt untouched (backward-compat).
+
+    `agent_seal` (`task_gov_03`) is the seal of the AGENT's own prompt, resolved by
+    the entrypoint from the run spec (`prompt_version.agent_prompt_seal`). It rides
+    in as an argument rather than being derived here because this function has the
+    graph, not the spec — and the whole point of `prompt_version` is that it is
+    computed from what actually ran, at the end, not handed down from outside.
+    `None` yields the pre-`task_gov_03` label, unchanged.
     """
     budgets = budgets or Budgets()
     tracker = SafeguardTracker(budgets, clock=clock or time.monotonic)
@@ -1946,6 +1956,8 @@ def run_agent(
         guardrail_events=final.get("guardrail_events") or [],
         # `task_wf_52`: se calcula al CERRAR el run, del código que acaba de
         # correr — no se pasa desde fuera, que es como se acaba etiquetando un
-        # run con la versión de otra imagen.
-        prompt_version=prompt_version(),
+        # run con la versión de otra imagen. `task_gov_03`: mezclando el sello del
+        # prompt del AGENTE, sin el cual dos runs con personas distintas
+        # compartían etiqueta y la atribución no era posible.
+        prompt_version=prompt_version(agent_seal),
     )

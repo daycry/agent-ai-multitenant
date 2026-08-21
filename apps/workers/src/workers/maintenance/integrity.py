@@ -33,8 +33,7 @@ _log = structlog.get_logger("workers.maintenance.integrity")
 
 # FKs single-column de tablas de `public` (multi-column: no hay ninguna hoy;
 # si aparece una, queda excluida y avisada por el WARNING de abajo).
-_FK_QUERY = text(
-    """
+_FK_QUERY = text("""
     SELECT
         child.relname   AS child_table,
         att_child.attname  AS child_col,
@@ -52,8 +51,7 @@ _FK_QUERY = text(
         ON att_parent.attrelid = parent.oid AND att_parent.attnum = con.confkey[1]
     WHERE con.contype = 'f' AND ns.nspname = 'public' AND pns.nspname = 'public'
     ORDER BY child.relname, con.conname
-    """
-)
+    """)
 
 # Tope de pasadas del sweep: cada pasada solo borra hijos directos de un padre
 # ausente; una cadena huérfana de N niveles necesita N pasadas. 10 cubre
@@ -62,14 +60,12 @@ _MAX_PASSES = 10
 
 # Tablas de `public` con columna tenant_id (relación lógica a organizations,
 # sin FK física). `organizations` misma queda fuera, obviamente.
-_TENANT_TABLES_QUERY = text(
-    """
+_TENANT_TABLES_QUERY = text("""
     SELECT table_name FROM information_schema.columns
     WHERE table_schema = 'public' AND column_name = 'tenant_id'
       AND table_name <> 'organizations'
     ORDER BY table_name
-    """
-)
+    """)
 
 # Tablas hijas directas de organizations que el reconciler vigila (los
 # hallazgos vivos de la auditoría: proyectos/agentes/equipos de tenants

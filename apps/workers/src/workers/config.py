@@ -8,12 +8,22 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Substrings flagging a known dev-only default — forbidden in staging/prod
 # (Plan 06.14 task_06_14_03 / secrets-config-5).
 _DEV_SECRET_MARKERS = ("changeme", "dev-only")
+
+# The CLOSED set of deployment environments, and the fail-CLOSED predicate — the
+# same posture `api_server.config` adopted in prod-09 task_prod09_02 (authz-2) and
+# that this service was left without. Written as "everything except dev" rather
+# than "in {staging, prod}" on purpose: the old shape meant any UNRECOGNISED value
+# (`production`, an empty var, `prod ` with a trailing space) silently meant dev
+# and skipped the guard below. A typo downgraded the posture with no log line —
+# and the installer's own enum says `production`, so it was not hypothetical.
+_KNOWN_ENVIRONMENTS = frozenset({"dev", "staging", "prod"})
+_DEV_ENVIRONMENT = "dev"
 
 
 class Settings(BaseSettings):
@@ -33,10 +43,15 @@ class Settings(BaseSettings):
 
     # ----- Execution persistence + live stream (Plan 02 Fase G) -----
     database_url: str = Field(
-        default="postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
+        default="postgresql+asyncpg://service_user:changeme-service-dev-only"
         "@localhost:5432/agentic_platform",
         description="PostgreSQL URL the worker persists `executions` rows to. "
-        "A BYPASSRLS role — the worker writes execution records across tenants.",
+        "`service_user`: BYPASSRLS but NO DDL (prod-14 task_05 / tenancy-2). "
+        "BYPASSRLS is required — the worker writes execution records across "
+        "tenants with no request-scoped `app.tenant_id` to bind to. What it does "
+        "NOT need, and used to have as `migrations_user` (schema owner, GRANT "
+        "ALL), is the ability to run `ALTER TABLE ... DISABLE ROW LEVEL "
+        "SECURITY` and switch off multi-tenant isolation platform-wide.",
     )
     events_redis_url: str = Field(
         default="redis://localhost:6379/0",
@@ -145,7 +160,7 @@ class Settings(BaseSettings):
     )
     container_pids_limit: int = Field(
         default=256,
-        description="Max process count inside an agent container — caps " "fork bombs.",
+        description="Max process count inside an agent container — caps fork bombs.",
     )
     test_runtime_pids_limit: int = Field(
         default=1024,
@@ -323,6 +338,17 @@ class Settings(BaseSettings):
         "profile at docker/seccomp/agent-runtime.json (Plan 15 task_15_15); "
         "point WORKERS_SECCOMP_PROFILE at its in-container path to pin it. The "
         "worker forwards the file CONTENT to the daemon (isolation.py).",
+    )
+    model_credential_file: bool = Field(
+        default=True,
+        description="prod-07 task_prod07_10: entregar la credencial del proveedor "
+        "LLM en un fichero read-only bajo /run/secrets en vez de dentro de "
+        "AGENT_TASK_SPEC (donde la ve cualquier `docker inspect`). El env sólo "
+        "lleva el puntero. VÁLVULA DE ESCAPE: ponlo a false si el stack corre una "
+        "imagen agent-runtime ANTERIOR a este cambio — esa imagen ignora el "
+        "puntero y el run arranca sin credencial (401 dentro del sandbox). El "
+        "orden de despliegue seguro es imagen primero, worker después: la imagen "
+        "nueva entiende los DOS formatos.",
     )
     apparmor_profile: str = Field(
         default="",
@@ -594,6 +620,142 @@ class Settings(BaseSettings):
         "backup y se perdieron en el wipe del bind del 2026-07-02 (auditoría "
         "F0.4). Vacíala para excluirlos.",
     )
+    # prod-04 task_prod_04_05 — los bare repos son EL PRODUCTO de la plataforma
+    # (principios rectores 4 y 5): cada proyecto tiene su repo en
+    # `{data_root}/projects/{tenant}/{project}/repos/{repo}.git` y cada plan una
+    # rama `plan/{id}-{slug}` dentro. Hasta prod-04 solo entraban de rebote en el
+    # tar del bind `/data/agent-platform` — con los worktrees dentro (transitorios,
+    # enormes, y en escritura activa) y, peor, sin que el RESTORE los extrajese
+    # nunca (`_restore_volumes` filtraba `kind == "volume_tar"`). Ahora son un
+    # artefacto propio, verificado y restaurado.
+    backup_projects_root: str = Field(
+        default="/data/agent-platform/projects",
+        description="Raíz de los bare repos por tenant/proyecto que entra en el "
+        "bundle como artefacto `projects_tar` (verificado y restaurado). Debe "
+        "coincidir con `{data_root}/projects` (workers.git_repos.RepoLayout). "
+        "Vacía = no capturar los repos (no recomendado: se pierde el código).",
+    )
+    backup_transient_excludes: list[str] = Field(
+        default_factory=lambda: ["worktrees", "dep-cache"],
+        description="Nombres de directorio EXCLUIDOS de los tar de `projects_tar` "
+        "y de los bind paths porque son regenerables: los worktrees por tarea "
+        "(`git worktree add` los recrea desde el bare) y la cache de dependencias. "
+        "Además evitan el rc≠0 de tar por «file changed as we read it» sobre un "
+        "worktree que un agente está escribiendo. Vacía = capturarlo todo.",
+    )
+    # ----- Coherencia de la captura (prod-04 task_prod_04_06) -----
+    # Redis alojaba su estado en el bundle DE REBOTE, dentro del tar del bind del
+    # data-root: un `appendonlydir` en escritura activa, acumulado durante días,
+    # copiado mientras el servidor le escribía. Ahora es un artefacto propio
+    # precedido de un `BGREWRITEAOF` completado.
+    # OJO con la trampa que esto esquiva, medida contra redis:7-alpine el
+    # 2026-07-31: capturar SOLO el `dump.rdb` (que era la letra del plan) restaura
+    # una base VACÍA, porque con `--appendonly yes` un Redis que encuentra un RDB y
+    # ningún `appendonlydir` no lee el RDB — crea un AOF nuevo vacío y sirve
+    # DBSIZE 0, sin un solo error. Se captura el directorio (AOF + RDB).
+    backup_redis_dir: str = Field(
+        default="",
+        description="Ruta del host con el directorio de datos de Redis "
+        "(`appendonlydir/` + `dump.rdb`), capturada como artefacto `redis_tar` tras "
+        "un BGREWRITEAOF completado. Vacía = no respaldar Redis, que es una opción "
+        "legítima si se declara recreable (sesiones caídas, colas re-encoladas) "
+        "pero es una DECISIÓN, no un descuido: el ADR de consistencia del bundle la "
+        "plantea explícitamente.",
+    )
+    backup_redis_url: str = Field(
+        default="",
+        description="URL con la que el backup le pide a Redis el BGREWRITEAOF. "
+        "Vacía = usar `broker_url`, que el worker ya tiene y apunta al MISMO "
+        "servidor (el rewrite es global, no por-db).",
+    )
+    backup_stable_snapshot_paths: list[str] = Field(
+        default_factory=list,
+        description="Bind paths cuya captura se VERIFICA estable: huella del árbol "
+        "(ruta, tamaño, mtime) antes y después del tar; si cambió, se reintenta "
+        "`backup_snapshot_retries` veces y, si no converge, el backup falla. Para el "
+        "file backend de Vault, cuya copia rota no da ninguna señal hasta que "
+        "alguien intenta desellar el Vault restaurado en pleno DR. "
+        "Deliberadamente NO para MinIO: se escribe todo el rato por diseño y "
+        "exigirle estabilidad convertiría el backup nocturno en un fallo nocturno.",
+    )
+    backup_snapshot_retries: int = Field(
+        default=2,
+        description="Reintentos de una captura verificada antes de fallar el run. "
+        "Una escritura suelta no debe tirar el backup; un árbol que no se queda "
+        "quieto sí, porque la copia no sería coherente.",
+    )
+    # ----- Salvaguarda de secretos de columna (ADR 0146) -----
+    # El ADR 0146 bendice que tres familias de secretos vivan cifradas con Fernet
+    # en columnas de Postgres en vez de en Vault, PERO con una condición que
+    # llama no opcional: un dump robado no puede bastar. Hoy quien tiene el
+    # bundle y la variable `API_SERVER_*_ENCRYPTION_KEY` tiene los secretos, y el
+    # bundle viaja a MinIO y a destinos externos. Se excluyen los DATOS de esas
+    # tablas del dump (su DEFINICIÓN sí viaja: el restore las recrea vacías).
+    # El precio, documentado en 06-runbooks/04-disaster-recovery.md: tras un DR
+    # hay que reconfigurar SSO, canales de notificación y webhooks entrantes.
+    backup_column_secret_tables: list[str] = Field(
+        default_factory=lambda: [
+            "sso_configurations",
+            "notification_channels",
+            "incoming_webhook_configs",
+        ],
+        description="Tablas cuyos DATOS quedan fuera del `pg_dump` porque llevan "
+        "secretos que un TENANT configura para terceros, cifrados con Fernet y una "
+        "clave que vive en una variable de entorno (ADR 0146). Vacía = viajan, o "
+        "sea el comportamiento anterior al ADR: sólo tiene sentido si el bundle se "
+        "cifra con una clave que NO es la de esas columnas y está en custodia. La "
+        "frontera del ADR es estricta: aquí sólo entra el secreto tenant→tercero; "
+        "las credenciales de PLATAFORMA siguen en Vault sin excepción.",
+    )
+    # ----- Quiesce de escritores durante la captura (ADR 0149, opción A) -----
+    # El ADR se firmó el 2026-08-01: se paran los escritores mientras dura la
+    # captura, PERO con un plazo que degrada. Si no paran a tiempo el backup
+    # sigue adelante con los que queden en pie y el acta lo registra
+    # (`quiesce: partial`), porque un quiesce que se cuelga convierte el backup
+    # nocturno en una caída y a las 03:00 no hay nadie mirando.
+    backup_quiesce_services: list[str] = Field(
+        # Los mismos escritores de PostgreSQL que para el restore
+        # (`restore_app_services`, vetada en task_prod_04_03), MENOS la lane que
+        # corre el propio backup — que además queda bloqueada por
+        # `backup_quiesce_never_stop`, porque una lista de servicios la escribe
+        # un operador y la guarda no puede ser «no lo pongas».
+        # `workers-marketplace` entra por la misma regla que en
+        # `restore_app_services`: escribe en PostgreSQL (estado de instalación,
+        # auditoría, materialización), así que dejarla en pie durante la captura
+        # es justo el skew que el ADR 0149 vino a cerrar. Su task es idempotente
+        # (`task_acks_late` + guarda de `status != ANALYZING`), así que la pausa
+        # no pierde la instalación: el mensaje se re-entrega al volver.
+        default_factory=lambda: [
+            "api-server",
+            "orchestrator",
+            "workers",
+            "workers-marketplace",
+            "cortex-beat",
+            "notification-dispatcher",
+            "admin-panel",
+        ],
+        description="Servicios de aplicación que se PARAN mientras dura la captura "
+        "del bundle (ADR 0149, opción A), para que ningún artefacto retrate un "
+        "fichero a medio escribir. PostgreSQL, MinIO, Redis y Vault NO se paran: "
+        "son los que se leen. Vacía = no parar nada (el comportamiento anterior al "
+        "ADR, o sea aceptar el skew de la opción C). Cada nombre tiene que estar "
+        "declarado en `restore_compose_file`.",
+    )
+    backup_quiesce_never_stop: list[str] = Field(
+        default_factory=lambda: ["workers-privileged"],
+        description="Servicios que NUNCA se paran aunque estén en "
+        "`backup_quiesce_services`: la lane `workers-privileged` drena la cola "
+        "`privileged`, o sea que ahí corre ESTE backup. Pararla lo mata a mitad de "
+        "la captura y deja el resto del stack parado hasta que alguien lo note.",
+    )
+    backup_quiesce_timeout_seconds: int = Field(
+        default=180,
+        description="Plazo máximo (segundos) que el backup espera a que los "
+        "escritores paren (ADR 0149, punto 1). Vencido, el backup SIGUE ADELANTE "
+        "con los que queden en pie y el manifest registra `quiesce: partial` con "
+        "quién no paró. Un backup con skew registrado es mucho mejor que un backup "
+        "que no existe.",
+    )
     backup_cron: str = Field(
         default="0 3 * * *",
         description="Cron (minute hour day-of-month month day-of-week) for the "
@@ -644,6 +806,29 @@ class Settings(BaseSettings):
         description="Name of the secret the workers' Vault/secret provider "
         "resolves for the AES-256 backup key (never plaintext, never logged). "
         "Only consulted when `backup_encryption_enabled` is true.",
+    )
+    # ----- Custodia offsite de la clave (prod-04 task_prod_04_07) -----
+    # LA CIRCULARIDAD (hallazgo gap1-1). La clave que descifra el bundle vive en
+    # `WORKERS_BACKUP_ENCRYPTION_KEY`, o sea en el entorno de LA MISMA MÁQUINA que
+    # se está respaldando — y el Vault viaja DENTRO del blob cifrado. Ante pérdida
+    # total del host, el backup es matemáticamente irrecuperable: las unseal keys
+    # custodiadas NO descifran AES-GCM, solo abren un Vault que está dentro del
+    # blob que no se puede abrir.
+    # El control técnico no puede garantizar la custodia humana; solo puede
+    # verificar que la clave ACTIVA es la que alguien declaró haber depositado.
+    # Eso es lo que hace este fingerprint, y por eso el backup falla en cuanto
+    # deja de coincidir: una rotación de clave sin actualizar la custodia deja
+    # bundles nuevos que nadie podrá abrir, y es preferible enterarse esa noche.
+    backup_key_custody_fingerprint: str = Field(
+        default="",
+        description="Huella SHA-256 (hex) de la clave de cifrado del backup que "
+        "está DEPOSITADA EN CUSTODIA OFFSITE (gestor corporativo / sobre sellado, "
+        "junto a las unseal keys pero diferenciada). Si "
+        "`backup_encryption_enabled` es true y esta huella no coincide con la de "
+        "la clave activa, el backup FALLA. Vacía: fuera de dev también falla — un "
+        "bundle cifrado cuya clave no está custodiada es un bundle irrecuperable. "
+        "Obtén la huella del log del primer backup o del manifest "
+        "(`key_fingerprint`). NUNCA pongas aquí la clave.",
     )
 
     # ----- Remote backup destinations — S3 (Plan 12 task_12_05) -----
@@ -795,9 +980,23 @@ class Settings(BaseSettings):
         "running stack so a restore never drives the wrong project.",
     )
     restore_compose_file: str = Field(
-        default="docker/docker-compose.yml",
+        # prod-04 task_prod_04_03: el default era `docker/docker-compose.yml`, el
+        # compose VERSIONADO — que a propósito NO declara los servicios de
+        # aplicación («The app services … are not yet declared in this compose
+        # file», cabecera del fichero). Con ese default, `docker compose stop
+        # api-server` devuelve != 0 y el restore aborta en el primer paso
+        # destructivo. El compose que corre en producción lo escribe el
+        # instalador en `{data_root}/docker-compose.yml` (compose_dir = data_root,
+        # cli.py:793), y ese es el único que declara api-server/workers/…
+        # Además era una ruta RELATIVA: dependía del cwd del proceso.
+        default="/data/agent-platform/docker-compose.yml",
         description="Path to the compose file the restore stack-control commands "
-        "use (`docker compose --file <this>`).",
+        "use (`docker compose --file <this>`). Debe ser el compose que corre de "
+        "verdad — el que genera el instalador en `{data_root}/docker-compose.yml`, "
+        "no el `docker/docker-compose.yml` versionado (que no declara los "
+        "servicios de aplicación). `scripts/restore.sh` lo pasa explícito. El "
+        "motor comprueba en preflight que cada servicio a parar está declarado "
+        "aquí y aborta ANTES de tocar nada si falta alguno.",
     )
     restore_app_services: list[str] = Field(
         # ADR 0117 (c): `web-app` estuvo aquí y **no existe en ningún compose**
@@ -806,22 +1005,81 @@ class Settings(BaseSettings):
         # ese caso: la restauración completa abortaba en el paso 3, ANTES de
         # restaurar nada. Un fantasma en esta lista no es cosmética, es el
         # simulacro de recuperación roto.
+        # prod-04 task_prod_04_03: faltaban TRES escritores de la base de datos.
+        # `workers-privileged` (la lane de backups/rotación), `cortex-beat` (el
+        # beat del córtex) y `notification-dispatcher` siguen conectados a
+        # PostgreSQL, que a propósito NO se para. Con ellos vivos, un
+        # `pg_restore --clean` compite contra escrituras concurrentes: el DROP de
+        # una tabla que otro proceso está usando falla o deja filas nuevas encima
+        # del dump restaurado. Detener «los servicios de aplicación» tiene que
+        # significar TODOS los que escriben, no los cuatro más visibles.
+        # `caddy` queda fuera a propósito: es el proxy y no escribe; pararlo solo
+        # añadiría un corte de red innecesario. `migrations` es one-shot.
+        # prod-13 task_prod13_01: `workers-marketplace` es el CUARTO escritor que
+        # se cuela sin entrar aquí. Drena la cola `marketplace`, y sus
+        # puertas de seguridad escriben de verdad: mueven
+        # `marketplace_installations.status` fuera de `analyzing`, insertan
+        # entradas de auditoría (`_block`) y materializan agentes/equipos al
+        # aprobar. Con la lane viva durante un `pg_restore --clean`, una puerta
+        # en vuelo escribe encima del dump recién restaurado o hace fallar el
+        # DROP. Pararla es seguro además de necesario: la task es idempotente por
+        # diseño (`task_acks_late` + la guarda de `status != ANALYZING`), así que
+        # el mensaje se re-entrega y la instalación se reanuda al levantar.
         default_factory=lambda: [
             "api-server",
             "orchestrator",
             "workers",
+            "workers-privileged",
+            "workers-marketplace",
+            "cortex-beat",
+            "notification-dispatcher",
             "admin-panel",
         ],
         description="The APP services stopped (and brought back up) around a full "
-        "restore. PostgreSQL is deliberately ABSENT — it must stay reachable for "
-        "pg_restore. The volume-backing services are stopped separately around the "
-        "volume restore (`restore_volume_services`).",
+        "restore — every service that WRITES to PostgreSQL, since Postgres itself "
+        "is deliberately ABSENT (it must stay reachable for pg_restore). The "
+        "volume-backing services are stopped separately around the volume restore "
+        "(`restore_volume_services`). Every name here MUST be declared in the "
+        "compose file `restore_compose_file` points at: `docker compose stop` "
+        "exits != 0 on an unknown service and the restore aborts before restoring "
+        "anything (ADR 0117 c). El motor lo comprueba en preflight.",
     )
     restore_volume_services: list[str] = Field(
         default_factory=lambda: ["minio", "redis", "vault"],
         description="The services backing the data volumes restored from the tar "
         "archives. Stopped while each volume's _data tree is wiped + re-extracted, "
         "then started again with the rest of the stack.",
+    )
+    # prod-04 task_prod_04_04 — el motor tenía un `finally: docker compose up -d`
+    # que arrancaba la aplicación incluso tras fallar a mitad, sobre datos
+    # inconsistentes. Los dos runbooks de DR ordenan lo contrario. Ahora el
+    # arranque tras un fallo es OPT-IN y por defecto el stack queda parado (solo
+    # PostgreSQL sigue alcanzable, porque nunca se para).
+    restore_autostart_on_failure: bool = Field(
+        default=False,
+        description="Si un paso de la fase destructiva del restore falla, ¿arrancar "
+        "el stack igualmente? FALSE por defecto (fail-stopped): un stack sirviendo "
+        "datos a medio restaurar es peor que un stack parado. Ponlo a true solo en "
+        "un laboratorio donde la disponibilidad importe más que la corrección.",
+    )
+    # prod-04 task_prod_04_08 — `pg_dump`/`pg_restore` corren con
+    # `--no-owner --no-privileges`, así que el restore recrea los objetos SIN
+    # ownership ni ACLs: `app_user` (el rol NOBYPASSRLS del runtime) se queda sin
+    # GRANTs y la aplicación arranca para fallar con «permission denied for table».
+    restore_required_db_role: str = Field(
+        default="migrations_user",
+        description="Rol con el que el DSN de restore DEBE conectar (el dueño del "
+        "DDL). `pg_restore --clean` recrea todos los objetos y el ownership queda "
+        "en el rol que conecta: hacerlo como app_user deja el esquema inservible "
+        "para las migraciones. Vacío = no comprobarlo (no recomendado).",
+    )
+    restore_grant_app_role: str = Field(
+        default="app_user",
+        description="Rol de runtime al que el restore re-concede permisos "
+        "(idempotente) al terminar el pg_restore: USAGE en el esquema, "
+        "SELECT/INSERT/UPDATE/DELETE en todas las tablas, USAGE/SELECT en las "
+        "secuencias y los DEFAULT PRIVILEGES equivalentes. Vacío = no re-conceder "
+        "(la aplicación no podrá leer sus propias tablas tras un DR).",
     )
 
     # ----- Selective per-tenant restore (Plan 12 task_12_11) -----
@@ -905,6 +1163,33 @@ class Settings(BaseSettings):
         "rotated VALUES are high-entropy material generated + written by Vault, "
         "NEVER logged and NEVER in this config.",
     )
+    # ----- MinIO admin credential for the rotation (prod-05 task_prod05_07) -----
+    # Rotating `minio` used to mean "write a new value into KV v2", which rotates
+    # NOTHING: MinIO keeps accepting the old credential and the services keep
+    # using theirs (gap2-2). The cycle now mints a MinIO SERVICE ACCOUNT through
+    # the admin API before it writes KV, and that needs an admin credential.
+    #
+    # Service accounts (not a new root user) so a botched rotation can never lock
+    # the platform out of its own object storage: the root credential below is
+    # never changed by the rotation, only used to mint and revoke children.
+    #
+    # Unset (the default) = the MinIO step FAILS LOUDLY rather than writing a KV
+    # entry naming a credential MinIO never issued.
+    cred_rotation_minio_url: str = Field(
+        default="http://minio:9000",
+        description="MinIO endpoint the rotation's admin client dials. A scheme is "
+        "accepted and stripped (MinioAdmin takes host:port). NOT a secret.",
+    )
+    cred_rotation_minio_root_user: str = Field(
+        default="",
+        description="MinIO admin user used ONLY to create/delete rotation service "
+        "accounts. Empty = the MinIO rotation step is not wired and fails loudly.",
+    )
+    cred_rotation_minio_root_password: SecretStr = Field(
+        default=SecretStr(""),
+        description="Password of `cred_rotation_minio_root_user`. Secreto — nunca "
+        "se loguea ni aparece en una auditoría de rotación.",
+    )
 
     # ----- Acceptance-timeout escalation sweep (Plan 16 task_16_06) -----
     # The escalation beat job (workers.escalate_human_assignments) sweeps the
@@ -929,20 +1214,64 @@ class Settings(BaseSettings):
 
     # ----- Misc -----
     environment: str = Field(
-        default="dev", description="Tag emitted in logs: dev | staging | prod."
+        default="dev",
+        description=(
+            "Deployment environment — a CLOSED set: dev | staging | prod. Any "
+            "other value fails startup: an unrecognised tag used to be treated as "
+            "`dev`, silently disabling the dev-credential guard below."
+        ),
     )
+
+    @field_validator("environment")
+    @classmethod
+    def _validate_environment(cls, value: str) -> str:
+        """Reject any environment tag outside ``{dev, staging, prod}``.
+
+        A FIELD validator (not a model one) so it runs BEFORE
+        :meth:`_forbid_dev_secrets_outside_dev`, which branches on this value: the
+        credential guard must never decide anything from an unvalidated tag.
+
+        Whitespace and case are normalised (``" PROD "`` -> ``"prod"``) because a
+        trailing newline in a compose/`.env` file is a configuration accident, not
+        an intent to run unguarded. Anything else is a hard failure naming the
+        accepted values, so the operator fixes it in seconds instead of running
+        publicly-known BYPASSRLS credentials in production for months.
+        """
+        normalised = value.strip().lower()
+        if normalised not in _KNOWN_ENVIRONMENTS:
+            raise ValueError(
+                f"WORKERS_ENVIRONMENT={value!r} is not a known environment. "
+                f"Accepted values: {', '.join(sorted(_KNOWN_ENVIRONMENTS))}. "
+                "An unrecognised value used to be treated as 'dev', which "
+                "disabled the dev-credential guard."
+            )
+        return normalised
 
     @model_validator(mode="after")
     def _forbid_dev_secrets_outside_dev(self) -> Settings:
         """Reject the dev-default `database_url` (BYPASSRLS credentials) in
-        staging/prod (secrets-config-5)."""
-        if self.environment not in {"staging", "prod"}:
+        anything that is not dev (secrets-config-5).
+
+        FAIL-CLOSED: the predicate is ``environment == "dev"`` (skip), never
+        ``environment in {staging, prod}`` (enforce). The enum above already closes
+        today's hole; writing the guard as "everything except dev" is what keeps a
+        FUTURE fourth environment guarded by default instead of by remembering to
+        update a set literal.
+        """
+        if self.environment == _DEV_ENVIRONMENT:
             return self
         if any(marker in self.database_url.lower() for marker in _DEV_SECRET_MARKERS):
             raise ValueError(
                 f"environment={self.environment!r} but WORKERS_DATABASE_URL still uses "
                 "dev-default credentials. Set it to a real secret (Vault-backed in production)."
             )
+        # El DSN del backup (`backup_database_url`) es una SEGUNDA credencial con
+        # su propio default de dev, y también hay que rechazarlo fuera de dev —
+        # pero NO aquí: eso convertiría «el backup nocturno no correría» en «la
+        # flota de workers entera no arranca», que es un radio de explosión mayor
+        # que el problema. Se comprueba en `workers.backup.BackupConfig.from_settings`,
+        # que falla el run del backup con un mensaje accionable antes de gastar una
+        # hora en el pg_dump (prod-04 task_prod_04_09).
         return self
 
     model_config = SettingsConfigDict(

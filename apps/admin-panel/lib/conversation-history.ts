@@ -7,6 +7,8 @@
  * tested without rendering React.
  */
 
+import { translate, type Lang } from "@/lib/i18n";
+
 export interface ConversationLike {
   id: string;
   title: string | null;
@@ -32,13 +34,19 @@ export function nextActiveAfterDelete<T extends { id: string }>(
  * Human label for a conversation in the history selector. Prefers the title;
  * falls back to a date-stamped label so untitled conversations stay
  * distinguishable instead of all reading "Conversación".
+ *
+ * `lang` es OBLIGATORIO y no tiene default (prod-16 `task_prod16_03`): un
+ * default silencioso deja al llamante que se olvide pintando castellano en el
+ * panel en inglés, que es exactamente el fallo que este plan cierra. Al no ser
+ * un componente, resuelve con `translate()` en vez de con `useT()`.
  */
-export function conversationLabel(c: ConversationLike): string {
+export function conversationLabel(c: ConversationLike, lang: Lang): string {
   if (c.title && c.title.trim()) return c.title.trim();
   const d = new Date(c.created_at);
-  if (Number.isNaN(d.getTime())) return "Conversación sin título";
-  return `Conversación · ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {
+  if (Number.isNaN(d.getTime())) return translate(lang, "projectChat", "untitledConversation");
+  const stamp = `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
+  return translate(lang, "projectChat", "untitledConversationAt", { stamp });
 }

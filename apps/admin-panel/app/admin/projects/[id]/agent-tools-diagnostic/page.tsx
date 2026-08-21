@@ -31,11 +31,19 @@ import { Bot, Eye, Plug, Wrench } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { ProjectBreadcrumb } from "@/components/layout/breadcrumb";
+import { AvailableCapabilitiesSection } from "@/components/marketplace/available-capabilities-section";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT, type Translator } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
-import { resolveCategory, resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
+import {
+  label as taxonomyLabel,
+  resolveCategory,
+  resolveImpl,
+  resolveSecurity,
+} from "@/lib/tools/taxonomy";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types — project snapshot (mirror api_server.routers.tools_diagnostic)
@@ -103,6 +111,9 @@ export default function AgentToolsDiagnosticPage() {
   const params = useParams<{ id: string }>();
   const projectId = params.id;
   const { lang } = useLang();
+  const t = useT("agentToolsDiagnostic");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
 
   const diagnosticQuery = useQuery({
     queryKey: ["project-agent-tools-diagnostic", projectId],
@@ -136,30 +147,35 @@ export default function AgentToolsDiagnosticPage() {
       className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="agent-tools-diagnostic-page"
     >
-      <ProjectBreadcrumb projectId={projectId} current="Tools por agente" />
+      <ProjectBreadcrumb projectId={projectId} current={t("crumb")} />
       <PageHeader
         icon={<Wrench className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Diagnóstico de tools por agente"
-        description="Lectura read-only de qué tools (builtin, MCP, http_endpoint, python_function, docker_command) ejecuta de verdad cada agente del proyecto."
+        title={t("title")}
+        description={t("description")}
         data-testid="agent-tools-diagnostic-header"
       />
 
       <ReadOnlyBanner />
 
       {diagnosticQuery.isLoading ? (
-        <p className="text-muted-foreground mt-6 text-sm">Cargando…</p>
+        <p className="text-muted-foreground mt-6 text-sm">{tCommon("loading")}</p>
       ) : diagnosticQuery.isError ? (
+        // `errorText` (prod-16 `task_prod16_05`): esto pintaba `error.body` CRUDO,
+        // o sea el cuerpo del backend tal cual en pantalla.
         <p className="text-destructive mt-6 text-sm" data-testid="agent-tools-diagnostic-error">
-          {diagnosticQuery.error instanceof ApiError
-            ? diagnosticQuery.error.body
-            : String(diagnosticQuery.error)}
+          {errorText(diagnosticQuery.error)}
         </p>
       ) : (
         <div className="mt-6 space-y-6">
-          <McpServersCard servers={diagnosticQuery.data?.mcp_servers ?? []} />
-          <AgentsSection agents={agents} effectiveByAgent={effectiveByAgent} lang={lang} />
+          <McpServersCard servers={diagnosticQuery.data?.mcp_servers ?? []} t={t} />
+          <AgentsSection agents={agents} effectiveByAgent={effectiveByAgent} lang={lang} t={t} />
         </div>
       )}
+
+      {/* ADR 0142 (D4): la ÚNICA parte de esta pantalla que escribe. Va debajo
+          del diagnóstico y con su propia cabecera para que no se confunda con
+          él; el banner de arriba acota su «solo lectura» a lo diagnóstico. */}
+      <AvailableCapabilitiesSection projectId={projectId} kinds={["tool", "skill"]} />
     </div>
   );
 }
@@ -168,6 +184,7 @@ export default function AgentToolsDiagnosticPage() {
 // Read-only verification banner
 // --------------------------------------------------------------------------
 function ReadOnlyBanner() {
+  const t = useT("agentToolsDiagnostic");
   return (
     <div
       role="note"
@@ -176,9 +193,8 @@ function ReadOnlyBanner() {
     >
       <Eye aria-hidden="true" className="h-4 w-4 shrink-0" />
       <span>
-        <span className="font-medium">Solo lectura — verificación.</span> Esta vista refleja lo que
-        el runtime ejecuta de verdad; para cambiar asignaciones edita las tools en la ficha del
-        agente.
+        <span className="font-medium">{t("bannerStrong")}</span>
+        {t("bannerBody")}
       </span>
     </div>
   );
@@ -187,19 +203,25 @@ function ReadOnlyBanner() {
 // --------------------------------------------------------------------------
 // MCP servers — one shared card at the top
 // --------------------------------------------------------------------------
-function McpServersCard({ servers }: { servers: McpServerDiagnostic[] }) {
+function McpServersCard({
+  servers,
+  t,
+}: {
+  servers: McpServerDiagnostic[];
+  t: Translator<"agentToolsDiagnostic">;
+}) {
   return (
     <Card data-testid="diagnostic-mcp-servers-card">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Plug className="h-4 w-4" />
-          MCP servers del proyecto
+          {t("mcpTitle")}
         </CardTitle>
       </CardHeader>
       <CardContent>
         {servers.length === 0 ? (
           <p className="text-muted-foreground text-sm italic" data-testid="diagnostic-mcp-empty">
-            Este proyecto no tiene MCP servers configurados.
+            {t("mcpEmpty")}
           </p>
         ) : (
           <ul className="space-y-1.5" data-testid="diagnostic-mcp-list">
@@ -230,18 +252,19 @@ function AgentsSection({
   agents,
   effectiveByAgent,
   lang,
+  t,
 }: {
   agents: AgentDiagnostic[];
   effectiveByAgent: Map<string, EffectiveToolsResponse>;
   lang: Lang;
+  t: Translator<"agentToolsDiagnostic">;
 }) {
   if (agents.length === 0) {
     return (
       <Card>
         <CardContent className="py-10 text-center">
           <p className="text-muted-foreground text-sm italic" data-testid="diagnostic-agents-empty">
-            Este proyecto no tiene agentes project-scoped declarados. Los agentes globales del
-            tenant se pueden usar pero no aparecen aquí.
+            {t("agentsEmpty")}
           </p>
         </CardContent>
       </Card>
@@ -255,6 +278,7 @@ function AgentsSection({
           agent={agent}
           effective={effectiveByAgent.get(agent.id)}
           lang={lang}
+          t={t}
         />
       ))}
     </div>
@@ -265,10 +289,12 @@ function AgentCard({
   agent,
   effective,
   lang,
+  t,
 }: {
   agent: AgentDiagnostic;
   effective: EffectiveToolsResponse | undefined;
   lang: Lang;
+  t: Translator<"agentToolsDiagnostic">;
 }) {
   // Prefer the honest effective-tools entries; fall back to the project
   // snapshot until that per-agent call resolves.
@@ -312,23 +338,23 @@ function AgentCard({
             className="text-muted-foreground text-sm italic"
             data-testid={`diagnostic-agent-unrestricted-${agent.id}`}
           >
-            Este agente no tiene tools asignadas vía <code>agent_tools</code>. Sin asignaciones, el
-            agente conserva el comportamiento por defecto del runtime (sin restricción por agente);
-            no significa que ejecute todo el catálogo.
+            {t("noAssignmentsPrefix")}
+            <code>agent_tools</code>
+            {t("noAssignmentsSuffix")}
           </p>
         ) : entries.length === 0 ? (
           <p
             className="text-muted-foreground text-sm italic"
             data-testid={`diagnostic-agent-tools-empty-${agent.id}`}
           >
-            Este agente no tiene tools asignadas vía <code>agent_tools</code>. Sin asignaciones, el
-            agente conserva el comportamiento por defecto del runtime (sin restricción por agente);
-            no significa que ejecute todo el catálogo.
+            {t("noAssignmentsPrefix")}
+            <code>agent_tools</code>
+            {t("noAssignmentsSuffix")}
           </p>
         ) : (
           <ul className="space-y-1.5" data-testid={`diagnostic-agent-tools-list-${agent.id}`}>
             {entries.map((tool) => (
-              <ToolRow key={tool.id} tool={tool} lang={lang} />
+              <ToolRow key={tool.id} tool={tool} lang={lang} t={t} />
             ))}
           </ul>
         )}
@@ -351,16 +377,24 @@ function AgentCard({
   );
 }
 
-function ToolRow({ tool, lang }: { tool: ToolDiagnostic; lang: Lang }) {
+function ToolRow({
+  tool,
+  lang,
+  t,
+}: {
+  tool: ToolDiagnostic;
+  lang: Lang;
+  t: Translator<"agentToolsDiagnostic">;
+}) {
   // SINGLE source of truth (ADR 0049): same resolvers as the assignment
   // screen, so the same tool shows identical label/variant in both — and the
   // raw enum is NEVER rendered.
   const impl = resolveImpl(tool.implementation_type, lang);
   const sec = resolveSecurity(tool.security_level, lang);
   const cat = resolveCategory(tool.category, lang);
-  const implLabel = lang === "es" ? impl.labelEs : impl.labelEn;
-  const secLabel = lang === "es" ? sec.labelEs : sec.labelEn;
-  const catLabel = lang === "es" ? cat.labelEs : cat.labelEn;
+  const implLabel = taxonomyLabel(impl, lang);
+  const secLabel = taxonomyLabel(sec, lang);
+  const catLabel = taxonomyLabel(cat, lang);
   return (
     <li
       className="border-muted flex items-center justify-between gap-3 rounded border px-3 py-2 text-sm"
@@ -377,7 +411,7 @@ function ToolRow({ tool, lang }: { tool: ToolDiagnostic; lang: Lang }) {
           </Badge>
           {tool.executable_in_runtime ? null : (
             <Badge variant="warning" data-testid={`diagnostic-tool-not-wired-${tool.id}`}>
-              No disponible aún
+              {t("notWiredBadge")}
             </Badge>
           )}
           {tool.timeout_seconds > 0 ? (

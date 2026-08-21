@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface CodeDiffFile {
   path: string;
@@ -31,6 +32,7 @@ interface CodeDiffResponse {
 }
 
 export function PlanCodeDiffSection({ projectId, planId }: { projectId: string; planId: string }) {
+  const t = useT("planDetail");
   const [open, setOpen] = useState(false);
   const diffQuery = useQuery<CodeDiffResponse, ApiError>({
     queryKey: ["plan-code-diff", planId],
@@ -51,27 +53,27 @@ export function PlanCodeDiffSection({ projectId, planId }: { projectId: string; 
         >
           {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           <GitBranch className="h-4 w-4" />
-          <CardTitle className="flex-1">Diff de código de la rama</CardTitle>
+          <CardTitle className="flex-1">{t("codeDiffTitle")}</CardTitle>
         </button>
       </CardHeader>
       {open && (
         <CardContent className="space-y-3">
           {diffQuery.isLoading && (
             <p className="text-muted-foreground flex items-center gap-2 text-sm">
-              <Spinner /> Calculando diff…
+              <Spinner /> {t("codeDiffCalculating")}
             </p>
           )}
           {diffQuery.isError && (
             <p className="text-muted-foreground text-sm" data-testid="plan-code-diff-empty">
               {diffQuery.error.status === 404
-                ? "El plan aún no tiene rama materializada (ningún commit todavía)."
+                ? t("codeDiffNoBranch")
                 : String(diffQuery.error.body ?? diffQuery.error)}
             </p>
           )}
           {diffQuery.data && diffQuery.data.unchanged && (
             <p className="text-muted-foreground text-sm" data-testid="plan-code-diff-unchanged">
-              La rama <code>{diffQuery.data.plan_branch}</code> no aporta cambios sobre{" "}
-              <code>{diffQuery.data.default_branch}</code>.
+              {t("codeDiffUnchangedBefore")} <code>{diffQuery.data.plan_branch}</code>{" "}
+              {t("codeDiffUnchangedMiddle")} <code>{diffQuery.data.default_branch}</code>.
             </p>
           )}
           {diffQuery.data && !diffQuery.data.unchanged && (
@@ -80,10 +82,12 @@ export function PlanCodeDiffSection({ projectId, planId }: { projectId: string; 
                 <Badge variant="muted">
                   {diffQuery.data.plan_branch} → {diffQuery.data.default_branch}
                 </Badge>
-                <Badge variant="info">{diffQuery.data.files.length} fichero(s)</Badge>
+                <Badge variant="info">
+                  {t("codeDiffFiles", { count: diffQuery.data.files.length })}
+                </Badge>
                 {diffQuery.data.truncated && (
                   <Badge variant="warning" data-testid="plan-code-diff-truncated">
-                    diff truncado para esta vista — el resumen por fichero es completo
+                    {t("codeDiffTruncated")}
                   </Badge>
                 )}
               </div>

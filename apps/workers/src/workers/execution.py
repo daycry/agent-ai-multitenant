@@ -23,15 +23,17 @@ import contextlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
 import structlog
 from api_server.auth.internal_agent import mint_agent_token
-from api_server.db.approval_repo import request_approval_if_needed
+from api_server.db.approval_repo import read_approved_actions, request_approval_if_needed
 from api_server.db.domain import Plan, Project, Task, TaskStatus
 from api_server.db.execution_repo import (
+    apply_steps_rollup,
     create_running_execution,
     finalize_execution,
     get_execution,
@@ -52,6 +54,11 @@ from workers.model_resolver import (
     resolve_model_spec,
     safe_spec_summary,
 )
+from workers.model_secret import (
+    STAGING_SUBDIR,
+    split_model_credentials,
+    stage_model_credentials,
+)
 from workers.review_diff import compute_task_review_diff
 from workers.run_contract import (
     CrossTenantExecutionError,
@@ -70,24 +77,25 @@ from workers.run_spec import (
     _agent_spec,
     _resolve_tool_spec_images,
 )
+from workers.secrets import StagedSecrets
 
 # Re-exports EXPLÍCITOS: la casa histórica de estos símbolos es este módulo —
 # tasks/maintenance/tests siguen importando de workers.execution. `__all__`
 # marca el re-export para mypy (no_implicit_reexport) y para ruff F401.
 __all__ = [
+    "_EMPTY_USAGE",
+    "_SDK_BASE_SHELL_COMMANDS",
     "CrossTenantExecutionError",
     "ExecutionOutcome",
     "ExecutionRequest",
-    "conduct_execution",
-    "transition_task_after_run",
-    "_EMPTY_USAGE",
     "_RuntimeResult",
-    "_SDK_BASE_SHELL_COMMANDS",
     "_agent_spec",
     "_assemble_result",
     "_parse_line",
     "_resolve_tool_spec_images",
     "_scan_logs_for_terminal",
+    "conduct_execution",
+    "transition_task_after_run",
 ]
 
 _log = structlog.get_logger("workers.execution")
@@ -100,6 +108,15 @@ _AWAITING_APPROVAL = "awaiting_human_approval"
 # How often the run polls `cancel_requested_at` while the container runs, to
 # kill it cooperatively on an operator cancel (POST /executions/{id}/cancel).
 _CANCEL_POLL_INTERVAL_S = 3.0
+
+#: `kind` del evento de auditoría que lleva la métrica de contaminación del
+#: revisor (`task_gov_06`). Kind propio, y no un campo dentro de
+#: `review_comment`, porque un APPROVE sin desglose de criterios no emite
+#: `review_comment`: colgar la métrica de ahí la perdería justo en la mitad de
+#: los casos que interesa medir. El front filtra por `kind`
+#: (`components/tasks/task-review-criteria.tsx`), así que uno nuevo es inerte
+#: para la UI.
+REVIEW_CONTAMINATION_EVENT_KIND = "review_contamination"
 
 
 # Eligibility (R5): the task status the orchestrator sets right before enqueueing
@@ -136,6 +153,7 @@ def _build_runtime_env(
     conversation_thread: bool = False,
     reflection_assess: bool = False,
     code_diff: str | None = None,
+    approved_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     """El env del contenedor `agent-runtime` para una ejecución (función PURA).
 
@@ -160,23 +178,27 @@ def _build_runtime_env(
     (backward-compat, el comportamiento actual). El runtime también degrada con
     gracia si el token expira o el api-server no responde.
     """
-    env: dict[str, str] = {
-        "AGENT_TASK_SPEC": json.dumps(
-            _agent_spec(
-                request,
-                approval_policy,
-                model_spec=model_spec,
-                acceptance_criteria=acceptance_criteria,
-                wall_clock_budget_s=wall_clock_budget_s,
-                max_iterations_budget=max_iterations_budget,
-                max_tokens_budget=max_tokens_budget,
-                guardrails=guardrails,
-                conversation_thread=conversation_thread,
-                reflection_assess=reflection_assess,
-                code_diff=code_diff,
-            )
-        ),
-    }
+    spec = _agent_spec(
+        request,
+        approval_policy,
+        model_spec=model_spec,
+        acceptance_criteria=acceptance_criteria,
+        wall_clock_budget_s=wall_clock_budget_s,
+        max_iterations_budget=max_iterations_budget,
+        max_tokens_budget=max_tokens_budget,
+        guardrails=guardrails,
+        conversation_thread=conversation_thread,
+        reflection_assess=reflection_assess,
+        code_diff=code_diff,
+    )
+    # ADR 0135: las acciones que un humano YA aprobó en esta task. Sin esto,
+    # aprobar no autorizaba nada — el gate del sandbox, que no tiene BD ni
+    # memoria entre runs, volvía a aparcar la MISMA acción y el bucle no tenía
+    # techo. Solo se emite la clave cuando hay algo autorizado: «sin clave» es
+    # el comportamiento de siempre para un primer despacho.
+    if approved_actions:
+        spec["approved_actions"] = approved_actions
+    env: dict[str, str] = {"AGENT_TASK_SPEC": json.dumps(spec)}
     # Sin agente asignado no hay sujeto para el token: lo dejamos fuera y el
     # runtime mantiene su comportamiento sin API interna (backward-compat).
     if request.agent_id:
@@ -212,43 +234,30 @@ def _build_runtime_env(
 async def _resolve_effective_guardrails(
     session: AsyncSession, project: Project | None
 ) -> dict[str, Any] | None:
-    """La config de guardrails EFECTIVA del run (ADR 0102 D3).
+    """La config de guardrails EFECTIVA del run (ADR 0102 D3 + prod-03 task_prod03_11).
 
-    Fusiona la capa PLATAFORMA (platform_settings.guardrails_config) con la
-    capa PROYECTO (projects.guardrails_config) via resolve_config — los checks
-    ``locked`` de plataforma no pueden relajarse. ``None`` cuando no hay capas
-    (el runtime cae a su baseline LOG). Best-effort: un error aqui degrada a
-    None (baseline), jamas rompe el dispatch. Cap 64KB (D3): si el resultado
-    excede, se degrada a la capa plataforma sola con warning."""
+    Delega en ``api_server.db.guardrail_config.get_effective_guardrail_config``,
+    que fusiona las TRES capas —plataforma → tenant → proyecto— con
+    ``resolve_config``: los checks ``locked`` de plataforma no pueden relajarse
+    ni eliminarse abajo. Antes esta función fusionaba solo dos, porque la capa
+    TENANT no existía en ninguna parte hasta la migración 0132.
+
+    ``None`` cuando no hay capas (el runtime cae a su baseline LOG). El
+    resultado lleva una clave ``version`` hermana de ``guardrails`` para
+    invalidación/trazabilidad; el runtime la ignora (``parse_config`` solo mira
+    ``guardrails``).
+
+    Best-effort: un error aquí degrada a ``None`` (baseline), jamás rompe el
+    dispatch. El cap de tamaño y la degradación a plataforma-sola viven en el
+    servicio, que es donde vive la resolución."""
     try:
-        import json as _json
+        from api_server.db.guardrail_config import get_effective_guardrail_config
 
-        from api_server.db import platform_settings
-        from shared_guardrails.layers import LayerConfig, resolve_config
-
-        platform_raw = await platform_settings.get_guardrails_config(session)
-        project_raw = (
-            dict(project.guardrails_config)
-            if project is not None and project.guardrails_config
-            else None
-        )
-        if not platform_raw and not project_raw:
+        if project is None:
             return None
-        resolved = resolve_config(
-            LayerConfig.from_dict("platform", platform_raw or None),
-            None,
-            LayerConfig.from_dict("project", project_raw) if project_raw else None,
+        return await get_effective_guardrail_config(
+            session, tenant_id=project.tenant_id, project_id=project.id
         )
-        if resolved.config.is_empty:
-            return None
-        out = resolved.config.to_dict()
-        if len(_json.dumps(out)) > 64_000:
-            _log.warning("workers.guardrails_config_over_cap", dropped_layer="project")
-            platform_only = resolve_config(LayerConfig.from_dict("platform", platform_raw or None))
-            out = platform_only.config.to_dict()
-            if len(_json.dumps(out)) > 64_000:
-                return None
-        return out
     except Exception as exc:  # baseline del runtime como red de seguridad
         _log.warning("workers.guardrails_resolve_failed", error=str(exc))
         return None
@@ -307,10 +316,17 @@ def _default_vault_store() -> Any:
     settings = get_settings()
     if not settings.vault_token:
         return None
-    import hvac
     from api_server.llm_providers.vault import HvacLLMProviderVaultStore
 
-    client = hvac.Client(url=settings.vault_url, token=settings.vault_token)
+    # prod-10 task_prod10_07: por la fábrica compartida, que mantiene vivo el
+    # token del worker. Con el `hvac.Client` construido aquí a mano, el día que
+    # el token caducase TODA ejecución volvería a correr con
+    # `has_credential=False` — sin un cambio de configuración que lo explicase.
+    from workers.vault_client import build_worker_vault_client
+
+    client = build_worker_vault_client(settings)
+    if client is None:
+        return None
     return HvacLLMProviderVaultStore(client=client)
 
 
@@ -475,6 +491,98 @@ async def _apply_review_verdict(
     if task.status == old_status:
         return None
     return (task, old_status, task.status)
+
+
+async def _record_review_contamination(
+    session: AsyncSession,
+    *,
+    task_id: UUID,
+    tenant_id: UUID,
+    review_execution_id: UUID,
+    reviewer_agent_id: UUID | None,
+    reviewer_output: str,
+) -> None:
+    """Mide cuánto del veredicto venía ya en el relato del autor (`task_gov_06`).
+
+    El detector de Goodhart del plan `gov-01`: el revisor ve los tres últimos
+    intentos del implementador —el último verbatim— y resuelve el mismo modelo,
+    así que hereda su encuadre antes de opinar. En vez de pagar de entrada la
+    pasada de review ciega (4-6 días y un ADR), se **mide** cada review y la
+    decisión se toma con el número delante. El resultado es un dato: no bloquea,
+    no avisa y no cambia el veredicto, que ya está aplicado cuando esto corre.
+
+    Cuál es «el relato del autor»: la ejecución más reciente de la misma task que
+    NO sea ésta ni de este mismo agente revisor. Excluir sólo `review_execution_id`
+    no basta — un review no concluyente se re-despacha (ADR 0095 D3), así que la
+    ejecución anterior puede ser otra pasada del propio revisor, y compararlo
+    consigo mismo daría contaminación altísima por construcción.
+
+    Best-effort dentro de un SAVEPOINT, igual que `_persist_guardrail_events`:
+    esto es instrumentación, y romper aquí anularía un veredicto correcto por un
+    fallo de medición.
+    """
+    try:
+        from api_server.db.domain import Execution
+        from api_server.db.task_audit_repo import append_audit_event
+        from api_server.review_contamination import measure_review_contamination
+        from api_server.reviewer_bridge import parse_reviewer_output
+
+        async with session.begin_nested():
+            author_filter = [
+                Execution.task_id == task_id,
+                Execution.tenant_id == tenant_id,
+                Execution.id != review_execution_id,
+            ]
+            if reviewer_agent_id is not None:
+                author_filter.append(Execution.agent_id.is_distinct_from(reviewer_agent_id))
+            author = (
+                await session.execute(
+                    select(Execution.id, Execution.output, Execution.finish_status)
+                    .where(*author_filter)
+                    .order_by(Execution.created_at.desc())
+                    .limit(1)
+                )
+            ).first()
+            if author is None:
+                # Sin run del implementador no hay nada con lo que comparar (una
+                # task cuyo único run es el review). No se emite fila: un cero
+                # aquí contaría como «revisor limpio» en el agregado.
+                return
+            author_id, author_output, author_finish_status = author
+            metric = measure_review_contamination(
+                reviewer_text=reviewer_output or "",
+                author_text=str(author_output or ""),
+                verdict=parse_reviewer_output(reviewer_output or "").label,
+                author_finish_status=author_finish_status,
+            )
+            payload = {
+                **metric.as_payload(),
+                "review_execution_id": str(review_execution_id),
+                "author_execution_id": str(author_id),
+            }
+            await append_audit_event(
+                session,
+                tenant_id=tenant_id,
+                task_id=task_id,
+                kind=REVIEW_CONTAMINATION_EVENT_KIND,
+                actor="platform:goodhart-detector",
+                payload=payload,
+            )
+        # El log estructurado va a Loki (ADR 0139), que es donde se lee la
+        # ventana de «una semana de runs» del test humano `human_gov_03` sin
+        # tener que escribir SQL contra `task_audit_events`.
+        _log.info(
+            "workers.review_contamination",
+            task_id=str(task_id),
+            review_execution_id=str(review_execution_id),
+            **{k: v for k, v in payload.items() if k != "review_execution_id"},
+        )
+    except Exception:
+        _log.warning(
+            "workers.review_contamination_failed",
+            task_id=str(task_id),
+            review_execution_id=str(review_execution_id),
+        )
 
 
 class RepoHistoryLostError(RuntimeError):
@@ -690,8 +798,10 @@ async def _commit_and_push_worktree(
     The WORKER does this — the sandbox has no git credentials (principle 2). When
     ``escalated`` the run did not certify the output (``needs_human_review``); the
     commit is labelled WIP so the human validator can tell it apart from a clean
-    ``done`` (P2.3/F26). The bare→remote push stays with the existing ``open_plan_pr``
-    path (final_only at plan close).
+    ``done`` (P2.3/F26). The bare→remote push follows immediately via
+    ``push_plan_branch_to_remote`` when the project's ``branch_push_mode`` is
+    ``incremental`` (the default, T3/P3); ``final_only`` defers it to plan close,
+    where ``open_plan_pr`` pushes the tip regardless of mode.
 
     Returns the ``abort_code`` when a REAL git error prevented the commit/push —
     ``"rebase_conflict"`` when a sibling task changed the same lines (needs human
@@ -848,6 +958,15 @@ async def _mark_commit_failed(
                 # Anticipo ADR 0099: el contexto estructurado viaja en steps_log
                 # (JSONB ya renderizado por el visor y consultable por SQL).
                 execution.steps_log = [*(execution.steps_log or []), conflict_step]
+                # Este es el SEGUNDO escritor de `steps_log` (el otro es
+                # `db/execution_repo.py`), y las columnas `last_model` /
+                # `tokens_in` / `tokens_out` son una proyección suya: sin esto
+                # describirían un log que ya no existe. Hoy el paso anexado es
+                # `kind: node` y el rollup lo ignora, así que no cambia ningún
+                # número — se llama igual porque la garantía que el diseño invoca
+                # tiene que ser cierta por construcción, no por casualidad del
+                # `kind` que hoy usa `_conflict_note`.
+                apply_steps_rollup(execution, execution.steps_log)
     except Exception as exc:  # pragma: no cover - defensive best-effort
         _log.warning(
             "workers.commit_failed_marker_error", execution_id=str(execution_id), error=str(exc)
@@ -886,9 +1005,11 @@ async def _run_task_tests(
     try:
         from api_server.db.domain import Project, Task
         from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
-        engine = create_async_engine(settings.database_url)
+        from workers.db import worker_engine
+
+        engine = worker_engine(settings)
         try:
             sm = async_sessionmaker(engine, expire_on_commit=False)
             async with sm() as session:
@@ -1009,6 +1130,9 @@ class _PreparedRun:
 
     execution_id: UUID
     approval_policy: dict[str, Any] | None
+    # ADR 0135: las acciones que un humano ya aprobó en ESTA task, por huella
+    # canónica — el gate del sandbox las canjea en vez de re-aparcarlas.
+    approved_actions: list[dict[str, Any]]
     # ADR 0102 D3: config de guardrails resuelta (plataforma+proyecto) o None.
     guardrails: dict[str, Any] | None
     # (tenant_slug, project_slug, project_id, plan_id, plan_slug) del worktree RW
@@ -1021,6 +1145,11 @@ class _PreparedRun:
     plan_has_prior_work: bool
     resolved_model: dict[str, Any] | None
     resolution_error: str | None
+    # El abort_code que trae la ModelResolutionError (prod-07 task_prod07_07):
+    # `model_unresolved` (catálogo) o `vault_unavailable` (Vault caído). Estaba
+    # fijado a mano en el fail-fast, así que un fallo de Vault se reportaba como
+    # problema de catálogo y mandaba a mirar al sitio equivocado.
+    resolution_abort_code: str = "model_unresolved"
 
 
 async def _prepare_run(
@@ -1087,6 +1216,15 @@ async def _prepare_run(
     project = await session.get(Project, task.project_id)
     approval_policy = await _resolve_effective_approval_policy(session, project)
     guardrails_config = await _resolve_effective_guardrails(session, project)
+    # ADR 0135: lo que un humano ya autorizó en esta task viaja al run siguiente.
+    # SOLO al implementador: un run de REVIEW propone sus propias acciones y
+    # nadie aprobó ninguna para él — canjearle las del implementador sería darle
+    # una capacidad que ningún revisor leyó.
+    approved_actions: list[dict[str, Any]] = []
+    if not request.review:
+        approved_actions = await read_approved_actions(
+            session, task_id=task_id, tenant_id=tenant_id
+        )
     # prod-18 task_prod18_provision_01: gather the (stable) slugs needed to
     # materialise the task's git worktree. An IMPLEMENTER run gets a fresh RW
     # worktree; a REVIEW run mounts the implementer's existing worktree READ-ONLY
@@ -1131,6 +1269,7 @@ async def _prepare_run(
     # ejecución se finaliza como fallida con motivo explícito.
     resolved_model: dict[str, Any] | None = None
     resolution_error: str | None = None
+    resolution_abort_code = "model_unresolved"
     try:
         resolved_model = await resolve_model_spec(
             session,
@@ -1139,9 +1278,11 @@ async def _prepare_run(
         )
     except ModelResolutionError as exc:
         resolution_error = str(exc)
+        resolution_abort_code = exc.abort_code
     return _PreparedRun(
         execution_id=execution.id,
         approval_policy=approval_policy,
+        approved_actions=approved_actions,
         guardrails=guardrails_config,
         worktree_inputs=worktree_inputs,
         review_worktree=review_worktree,
@@ -1149,6 +1290,7 @@ async def _prepare_run(
         plan_has_prior_work=plan_has_prior_work,
         resolved_model=resolved_model,
         resolution_error=resolution_error,
+        resolution_abort_code=resolution_abort_code,
     )
 
 
@@ -1225,6 +1367,47 @@ async def _provision_workspace(
     return ws
 
 
+def _stage_model_credentials(
+    resolved_model: dict[str, Any] | None,
+    *,
+    settings: Settings,
+) -> tuple[dict[str, Any] | None, StagedSecrets | None]:
+    """Saca la credencial del spec y la deja en un mount read-only (prod-07 task_prod07_10).
+
+    Devuelve ``(spec público, staging)``. El staging es ``None`` —y no hay mount—
+    en los tres casos en que no hay nada que esconder: el flag apagado, un modelo
+    sin credencial (ollama local, kind ``scripted``) y un ``resolved_model``
+    vacío. Quien lo reciba **debe** llamar a ``cleanup()`` en un ``finally``.
+
+    Falla en abierto a propósito: si el staging no se puede escribir —disco
+    lleno, permisos, ``data_root`` no montado— se vuelve al formato en línea con
+    un aviso en vez de tumbar el run. La alternativa (abortar) convertiría un
+    problema de disco del worker en «ninguna tarea del tenant se ejecuta», que es
+    un fallo mucho peor que el que esta tarea previene.
+    """
+    if not settings.model_credential_file:
+        return resolved_model, None
+    public_model, secrets = split_model_credentials(resolved_model)
+    if not secrets:
+        return resolved_model, None
+    staging_root = Path(settings.data_root) / STAGING_SUBDIR
+    try:
+        staging_root.mkdir(parents=True, exist_ok=True)
+        staged = stage_model_credentials(secrets, base_dir=str(staging_root))
+    except OSError as exc:
+        _log.warning(
+            "workers.model_credential_staging_failed",
+            error=str(exc),
+            staging_root=str(staging_root),
+            detail=(
+                "no se pudo escribir el fichero de credencial del modelo; el run "
+                "sigue con el formato antiguo (credencial en AGENT_TASK_SPEC)"
+            ),
+        )
+        return resolved_model, None
+    return public_model, staged
+
+
 async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll de cancelación
     request: ExecutionRequest,
     *,
@@ -1294,6 +1477,13 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
     container_timeout = settings.container_timeout_with_grace_for_kind(
         resolved_kind, is_review=request.review
     )
+    # prod-07 task_prod07_10: la credencial sale del env y entra por un mount
+    # read-only; `public_model` es el mismo spec con el PUNTERO en su lugar. Sin
+    # credencial que mover (ollama local, kind scripted) no se monta nada y el
+    # spec sale idéntico — no se paga por lo que no se usa.
+    public_model, staged_credentials = _stage_model_credentials(
+        prepared.resolved_model, settings=settings
+    )
     container_spec = ContainerSpec(
         image=settings.agent_runtime_image,
         env=_build_runtime_env(
@@ -1301,7 +1491,7 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             prepared.approval_policy,
             agent_internal_api_url=settings.agent_internal_api_url,
             # El spec RESUELTO (kind + endpoint + credencial) — ADR 0057 F1.
-            model_spec=prepared.resolved_model,
+            model_spec=public_model,
             # La definición de "hecho" de la tarea → al prompt de decisión,
             # para que el comportamiento (leer/escribir/test) lo dicte la tarea.
             acceptance_criteria=prepared.task_acceptance_criteria,
@@ -1329,10 +1519,14 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             max_tokens_budget=settings.agent_max_tokens_for_kind(
                 resolved_kind, is_review=request.review
             ),
+            # ADR 0135: lo que un humano ya aprobó en esta task — el gate del
+            # sandbox lo canjea en vez de volver a aparcar la misma acción.
+            approved_actions=prepared.approved_actions,
         ),
         labels={"com.agentic-platform.execution-id": exec_id},
         workspace_host_path=workspace.host_path,
         workspace_read_only=workspace.read_only,
+        extra_mounts=tuple(staged_credentials.mounts) if staged_credentials else (),
     )
     active_runner = runner or AgentContainerRunner(settings)
     cancel_seen = False
@@ -1370,6 +1564,12 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
+        # El staging del secreto se borra SIEMPRE — timeout, cancelación,
+        # excepción del daemon. Un `finally` y no el camino feliz porque el
+        # camino feliz es justo el que no deja ficheros olvidados; los deja el
+        # otro (prod-07 task_prod07_10).
+        if staged_credentials is not None:
+            staged_credentials.cleanup()
     await queue.put(None)
     await drainer
 
@@ -1456,6 +1656,18 @@ async def _finalize_and_transition(
             # the task. Apply its parsed verdict (approve -> done, reject ->
             # backlog/blocked) instead of the normal post-run transition.
             task_event = await _apply_review_verdict(session, task_id, tenant_id, result)
+            # `task_gov_06`: y, con el veredicto YA aplicado, se mide cuánto de
+            # él venía en el relato del implementador. Post-proceso puro (cero
+            # tokens, cero llamadas al modelo) y best-effort — ver
+            # `_record_review_contamination`.
+            await _record_review_contamination(
+                session,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                review_execution_id=execution_id,
+                reviewer_agent_id=UUID(request.agent_id) if request.agent_id else None,
+                reviewer_output=result.output or "",
+            )
         elif result.status == _AWAITING_APPROVAL and approval:
             execution = await get_execution(session, execution_id)
             project = await _load_project(session, task_id)
@@ -1716,8 +1928,12 @@ async def conduct_execution(
             "workers.model_resolution_failed",
             execution_id=exec_id,
             error=prepared.resolution_error,
+            abort_code=prepared.resolution_abort_code,
         )
-        failfast = ("model_unresolved", prepared.resolution_error)
+        # El código VIENE del error (task_prod07_07): `vault_unavailable` manda a
+        # revisar Vault, `model_unresolved` a revisar el catálogo. Fijarlo aquí
+        # borraba esa distinción justo en el sitio donde el operador la lee.
+        failfast = (prepared.resolution_abort_code, prepared.resolution_error)
     elif workspace.error is not None:
         # Fail-fast (F0.2): sin workspace NO se lanza el contenedor. El código
         # distingue el data_root inaccesible (`workspace_unavailable`) del

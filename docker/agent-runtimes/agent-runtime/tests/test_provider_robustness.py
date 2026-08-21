@@ -271,7 +271,10 @@ def test_run_with_retry_backoff_is_invoked_between_attempts() -> None:
         raise RateLimitError("429")
 
     with pytest.raises(RateLimitError):
-        _run_with_retry(_always_rl, attempts=3, backoff=1.0, sleep=slept.append)
-    # Backoff between attempts only (not after the last): 2 sleeps for 3 attempts,
-    # exponential: 1.0, 2.0.
+        # `jitter` pinned to its maximum (prod-07 task_prod07_01): the wait is now
+        # jittered into [d/2, d] so N parallel agents don't all come back to a
+        # rate-limited provider at the same instant. Pinning it keeps THIS test's
+        # original point exact — 2 sleeps for 3 attempts, growing exponentially,
+        # none after the last attempt.
+        _run_with_retry(_always_rl, attempts=3, backoff=1.0, sleep=slept.append, jitter=lambda: 1.0)
     assert slept == [1.0, 2.0]

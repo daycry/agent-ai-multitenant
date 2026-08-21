@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the "Probar conexión" button inside the MCP server editor
@@ -20,9 +21,7 @@ import { expect, test, type Page } from "@playwright/test";
 const PROJECT_ID = "11111111-0000-0000-0000-000000000001";
 
 async function loadPageWithStubbedProject(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`http://localhost:8001/projects/${PROJECT_ID}`, (route) => {
     if (route.request().method() === "GET") {
@@ -44,6 +43,15 @@ async function openCreateDialog(page: Page): Promise<void> {
   await page.goto(`/admin/projects/${PROJECT_ID}/mcp-servers`, {
     waitUntil: "domcontentloaded",
   });
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
   await expect(page.getByTestId("mcp-server-dialog")).toBeVisible();
 
@@ -107,7 +115,16 @@ test("Probar surfaces AUTH_ERROR when the resolver rejects", async ({ page }) =>
   await page.getByTestId("mcp-form-test").click();
 
   await expect(page.getByTestId("mcp-form-test-error")).toBeVisible();
-  await expect(page.getByTestId("mcp-form-test-error")).toContainText("AUTH_ERROR");
+  // El panel pinta el `message`, no el `error_code`. Hasta el 2026-08-20
+  // afirmabamos `AUTH_ERROR`, y eso pasaba porque la pantalla enseñaba el JSON
+  // CRUDO de la respuesta: o sea que la asercion estaba fijando el defecto que
+  // `task_prod16_05` cierra. El codigo tipado sigue siendo lo que enruta el
+  // error; lo que el operador lee es la frase.
+  await expect(page.getByTestId("mcp-form-test-error")).toContainText(
+    "no VaultResolver was supplied",
+  );
+  // Y el cuerpo crudo NO llega a pantalla: ni las llaves del JSON ni la clave.
+  await expect(page.getByTestId("mcp-form-test-error")).not.toContainText("error_code");
 
   // Success panel must NOT appear when an error came back.
   await expect(page.getByTestId("mcp-form-test-result")).toHaveCount(0);
@@ -135,7 +152,11 @@ test("Probar surfaces TRANSPORT_ERROR on a 502", async ({ page }) => {
   await page.getByTestId("mcp-form-test").click();
 
   await expect(page.getByTestId("mcp-form-test-error")).toBeVisible();
-  await expect(page.getByTestId("mcp-form-test-error")).toContainText("TRANSPORT_ERROR");
+  // Igual que el de AUTH_ERROR: lo que se lee es la frase, no el codigo.
+  await expect(page.getByTestId("mcp-form-test-error")).toContainText(
+    "connection refused: localhost:8123",
+  );
+  await expect(page.getByTestId("mcp-form-test-error")).not.toContainText("error_code");
   await expect(page.getByTestId("mcp-form-test-result")).toHaveCount(0);
 });
 
@@ -147,6 +168,15 @@ test("Probar button is disabled until name is filled", async ({ page }) => {
   await page.goto(`/admin/projects/${PROJECT_ID}/mcp-servers`, {
     waitUntil: "domcontentloaded",
   });
+  // Espera a que la lista del proyecto haya RENDERIZADO en cliente antes de
+  // pulsar (prod-16 `task_prod16_03`). `mcp-add-button` sale ya en el primer
+  // render —está en la cabecera, antes de que resuelva la consulta—, así que
+  // Playwright lo encontraba y lo pulsaba ANTES de que React hubiese
+  // hidratado: el click no llegaba a ningún handler y el diálogo no se abría.
+  // Bajo `next start` (precompilado) la hidratación gana la carrera y el spec
+  // pasaba; bajo `next dev` en una máquina cargada, no. El estado vacío sí
+  // depende de la consulta, así que esperarlo es esperar a la hidratación.
+  await expect(page.getByTestId("project-mcp-empty")).toBeVisible();
   await page.getByTestId("mcp-add-button").click();
 
   // Fresh form: name empty → button disabled.

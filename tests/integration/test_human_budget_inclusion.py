@@ -49,6 +49,8 @@ from api_server.db.budget_alert_state import BudgetScope
 from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 # A fixed evaluation moment inside a monthly period; spend + sessions are seeded
@@ -203,6 +205,10 @@ async def _seed_execution(
     dsn: str, *, tenant: UUID, task_id: UUID, total_cost_usd: Decimal, created_at: datetime = _NOW
 ) -> UUID:
     execution_id = uuid4()
+    # El default es `_NOW` (mayo de 2026, fijo): `executions` está particionada por
+    # mes y SIN DEFAULT (ADR 0151), y ese mes no existe en una base recién migrada.
+    # Ver docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", created_at)
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(

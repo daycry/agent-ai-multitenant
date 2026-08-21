@@ -1,25 +1,31 @@
 "use client";
 
 /**
- * task_03_05 — Selector de modo persistente en la cabecera del chat.
+ * Chat del proyecto — pantalla (task_03_05 y siguientes).
  *
- * Scaffold for the project chat surface. Loads the project's
- * conversations, picks the most recent one (or creates one on demand),
- * and exposes the chat-mode selector (Planning / Discusión / Ejecución
- * / Custom) in the header.
+ * Carga las conversaciones del proyecto, elige la más reciente (o crea una a
+ * demanda) y monta la cabecera con el selector de modo (Planning / Discusión /
+ * Ejecución / Custom).
  *
- * Changing the active mode does a PUT /conversations/{id} with
- * `current_mode`, which the backend persists and announces via a
- * system "modo cambiado" message + a `conversation.mode_changed`
- * WebSocket event. The UI optimistically updates while the request is
- * in flight so the click feels instant; on failure we revert.
+ * Cambiar el modo activo hace `PUT /conversations/{id}` con `current_mode`, que
+ * el backend persiste y anuncia con un mensaje de sistema "modo cambiado" + un
+ * evento WebSocket `conversation.mode_changed`. La UI se actualiza de forma
+ * optimista mientras la petición vuela para que el clic se sienta instantáneo;
+ * si falla, revierte.
  *
- * This page only ships the *selector* in this task. The message feed,
- * @-mentions, etc. come from task_03_07..12.
+ * **Troceada en prod-16 `task_prod16_08`** (926 líneas): esta pantalla se queda
+ * con el ESTADO —queries, mutaciones, WebSocket y composición— y las piezas
+ * viven al lado, colocadas:
+ *
+ *   · `chat-types.ts`          — `Conversation`/`Message` y los modos incorporados
+ *   · `chat-mode-selector.tsx` — el control segmentado de la cabecera
+ *   · `message-feed.tsx`       — la lista, la fila y el resumen plegable
+ *   · `generate-plan-button.tsx` — el CTA que materializa el plan
+ *   · `chat-composer.tsx`      — el textarea con @-menciones y vista previa
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessagesSquare } from "lucide-react";
 
@@ -29,131 +35,30 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
-import { ApiError, apiFetch } from "@/lib/api";
-import { chatRefetchInterval, isReplyInFlight, summaryFoldedCount } from "@/lib/chat-feed";
+import { apiFetch } from "@/lib/api";
+import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
 import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
-import { renderPlanDraft } from "@/lib/plan-draft-md";
-import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
-// --------------------------------------------------------------------------
-// Types
-// --------------------------------------------------------------------------
-interface Conversation {
-  id: string;
-  tenant_id: string;
-  project_id: string;
-  title: string | null;
-  current_mode: string;
-  custom_mode_name: string | null;
-  related_plan_id: string | null;
-  created_at: string;
-}
-
-interface Message {
-  id: string;
-  tenant_id: string;
-  conversation_id: string;
-  author_kind: "user" | "agent" | "system";
-  author_user_id: string | null;
-  author_agent_id: string | null;
-  content: string;
-  mode: string;
-  attachments: Array<Record<string, unknown>>;
-  related_plan_id: string | null;
-  is_summary: boolean;
-  created_at: string;
-}
-
-// A-01: cuántos mensajes carga el feed. Un turno de planning emite entre 6 y 10
-// (framing del PM → un especialista por rol → síntesis), así que 100 cubre unos
-// diez turnos completos. El endpoint devuelve LOS MÁS RECIENTES.
-const MESSAGE_WINDOW = 100;
-
-interface ModeOption {
-  value: string;
-  labelEs: string;
-  labelEn: string;
-  description: string;
-}
-
-// Built-in modes; ``custom`` is reachable via a separate creation flow
-// in task_03_08, not from this base selector.
-const BUILT_IN_MODES: ModeOption[] = [
-  {
-    value: "planning",
-    labelEs: "Planning",
-    labelEn: "Planning",
-    description: "El equipo construye un plan estructurado",
-  },
-  {
-    value: "discussion",
-    labelEs: "Discusión",
-    labelEn: "Discussion",
-    description: "Ronda abierta de ideas y opiniones",
-  },
-  {
-    value: "execution",
-    labelEs: "Ejecución",
-    labelEn: "Execution",
-    description: "El equipo ejecuta tareas del plan aprobado",
-  },
-];
-
-// --------------------------------------------------------------------------
-// Mode selector — three pill buttons in a segmented control.
-// --------------------------------------------------------------------------
-interface ChatModeSelectorProps {
-  current: string;
-  pending: boolean;
-  onChange: (next: string) => void;
-}
-
-export function ChatModeSelector({ current, pending, onChange }: ChatModeSelectorProps) {
-  return (
-    <div
-      role="group"
-      aria-label="Modo de chat"
-      data-testid="chat-mode-selector"
-      className="bg-muted inline-flex rounded-md p-0.5"
-    >
-      {BUILT_IN_MODES.map((mode) => {
-        const active = mode.value === current;
-        return (
-          <button
-            key={mode.value}
-            type="button"
-            disabled={pending}
-            data-testid={`chat-mode-${mode.value}`}
-            data-active={active ? "true" : "false"}
-            aria-pressed={active}
-            title={mode.description}
-            onClick={() => {
-              if (!active && !pending) onChange(mode.value);
-            }}
-            className={cn(
-              "px-3 py-1.5 text-sm font-medium rounded transition-colors",
-              active
-                ? "bg-background text-foreground shadow"
-                : "text-muted-foreground hover:text-foreground",
-              pending && "cursor-wait opacity-60",
-            )}
-          >
-            {mode.labelEs}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+import { ChatComposer } from "./chat-composer";
+import { ChatModeSelector } from "./chat-mode-selector";
+import { MESSAGE_WINDOW, type Conversation, type Message } from "./chat-types";
+import { GeneratePlanButton } from "./generate-plan-button";
+import { MessageFeed } from "./message-feed";
 
 // --------------------------------------------------------------------------
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectChatPage() {
+  const t = useT("projectChat");
+  const lang = useLangOptional();
   const params = useParams<{ id: string }>();
   const projectId = params.id;
   const queryClient = useQueryClient();
+  const errorText = useErrorText();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -350,8 +255,8 @@ export default function ProjectChatPage() {
   if (conversationsQuery.isLoading) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <ProjectBreadcrumb projectId={projectId} current="Chat" />
-        <p className="text-muted-foreground text-sm">Cargando chat…</p>
+        <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
+        <p className="text-muted-foreground text-sm">{t("loading")}</p>
       </div>
     );
   }
@@ -360,14 +265,15 @@ export default function ProjectChatPage() {
     const err = conversationsQuery.error;
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <ProjectBreadcrumb projectId={projectId} current="Chat" />
+        <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
         <Card>
           <CardHeader>
-            <CardTitle>Error cargando conversaciones</CardTitle>
+            <CardTitle>{t("errorTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
+            {/* prod-16 `task_prod16_05`: aquí se pintaba `err.body` CRUDO. */}
             <p className="text-destructive text-sm" data-testid="chat-error">
-              {err instanceof ApiError ? err.body : String(err)}
+              {errorText(err)}
             </p>
           </CardContent>
         </Card>
@@ -379,10 +285,10 @@ export default function ProjectChatPage() {
   if (conversations.length === 0) {
     return (
       <div className="mx-auto w-full max-w-7xl px-4 py-8">
-        <ProjectBreadcrumb projectId={projectId} current="Chat" />
+        <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
         <Card>
           <CardHeader>
-            <CardTitle>No hay conversaciones en este proyecto</CardTitle>
+            <CardTitle>{t("noConversationsTitle")}</CardTitle>
           </CardHeader>
           <CardContent>
             <Button
@@ -390,7 +296,7 @@ export default function ProjectChatPage() {
               onClick={() => createConversation.mutate()}
               disabled={createConversation.isPending}
             >
-              Empezar una conversación
+              {t("startConversation")}
             </Button>
           </CardContent>
         </Card>
@@ -400,11 +306,11 @@ export default function ProjectChatPage() {
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <ProjectBreadcrumb projectId={projectId} current="Chat" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
       <PageHeader
         icon={<MessagesSquare className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Chat del proyecto"
-        description={activeConversation?.title ?? "Conversación con el equipo del proyecto"}
+        title={t("title")}
+        description={activeConversation?.title ?? t("defaultDescription")}
         actions={
           activeConversation ? (
             <div className="flex items-center gap-2">
@@ -425,7 +331,7 @@ export default function ProjectChatPage() {
                 disabled={clearMessages.isPending}
                 onClick={() => setConfirmClearOpen(true)}
               >
-                Vaciar chat
+                {t("clearChat")}
               </Button>
             </div>
           ) : null
@@ -440,7 +346,7 @@ export default function ProjectChatPage() {
         data-testid="conversation-history-bar"
       >
         <label htmlFor="conversation-picker" className="text-muted-foreground text-sm">
-          Conversación:
+          {t("conversationPickerLabel")}
         </label>
         <div className="w-full min-w-0 sm:w-72">
           <Select
@@ -451,7 +357,7 @@ export default function ProjectChatPage() {
           >
             {conversations.map((c) => (
               <option key={c.id} value={c.id}>
-                {conversationLabel(c)} · {c.current_mode}
+                {conversationLabel(c, lang)} · {c.current_mode}
               </option>
             ))}
           </Select>
@@ -463,7 +369,7 @@ export default function ProjectChatPage() {
           disabled={createConversation.isPending}
           onClick={() => createConversation.mutate()}
         >
-          Nueva conversación
+          {t("newConversation")}
         </Button>
         {activeConversation ? (
           <Button
@@ -473,7 +379,7 @@ export default function ProjectChatPage() {
             disabled={deleteConversation.isPending}
             onClick={() => setConfirmDeleteOpen(true)}
           >
-            Eliminar conversación
+            {t("deleteConversation")}
           </Button>
         ) : null}
       </div>
@@ -481,7 +387,7 @@ export default function ProjectChatPage() {
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>
-            Modo activo:{" "}
+            {t("activeMode")}{" "}
             <span data-testid="chat-current-mode">{activeConversation?.current_mode}</span>
           </CardTitle>
         </CardHeader>
@@ -496,7 +402,7 @@ export default function ProjectChatPage() {
                 className="text-muted-foreground mt-3 animate-pulse text-sm"
                 data-testid="chat-team-thinking"
               >
-                El equipo está pensando… <span className="opacity-60">(esto puede tardar)</span>
+                {t("thinking")} <span className="opacity-60">{t("thinkingHint")}</span>
               </p>
             ) : null;
           })()}
@@ -526,9 +432,9 @@ export default function ProjectChatPage() {
         <ConfirmDialog
           open={confirmClearOpen}
           onOpenChange={setConfirmClearOpen}
-          title="Vaciar chat"
-          description="Se borrarán todos los mensajes de esta conversación. No se puede deshacer."
-          confirmLabel="Vaciar"
+          title={t("clearChat")}
+          description={t("confirmClearDescription")}
+          confirmLabel={t("confirmClearLabel")}
           destructive
           pending={clearMessages.isPending}
           onConfirm={() =>
@@ -543,9 +449,9 @@ export default function ProjectChatPage() {
         <ConfirmDialog
           open={confirmDeleteOpen}
           onOpenChange={setConfirmDeleteOpen}
-          title="Eliminar conversación"
-          description="Se eliminará esta conversación y todos sus mensajes. No se puede deshacer."
-          confirmLabel="Eliminar"
+          title={t("deleteConversation")}
+          description={t("confirmDeleteDescription")}
+          confirmLabel={t("confirmDeleteLabel")}
           destructive
           pending={deleteConversation.isPending}
           onConfirm={() =>
@@ -557,370 +463,4 @@ export default function ProjectChatPage() {
       ) : null}
     </div>
   );
-}
-
-// --------------------------------------------------------------------------
-// "Generar Plan" button (task_03_13)
-//
-// Visibility rule: only shown when the LAST agent message in the feed
-// carries an attachment of the shape
-//   {"kind": "planning_directive", "intent": "finish_planning"}.
-// That attachment is appended by the chat endpoint (Fase G wiring)
-// whenever the planning sub-graph returns PMIntent.FINISH_PLANNING.
-//
-// Clicking the button POSTs `/projects/{id}/plans` with the
-// conversation id — the backend (task_03_14) materialises the
-// canonical-template Plan row from the chat history. We optimistic-
-// disable the button while the POST is in flight and surface any
-// error inline.
-// --------------------------------------------------------------------------
-interface GeneratePlanButtonProps {
-  messages: Message[];
-  projectId: string;
-  conversationId: string;
-}
-
-function GeneratePlanButton({ messages, projectId, conversationId }: GeneratePlanButtonProps) {
-  const queryClient = useQueryClient();
-  const router = useRouter();
-
-  const ready = isFinishPlanningReady(messages);
-
-  const mutation = useMutation({
-    mutationFn: () =>
-      apiFetch<{ id: string }>(`/projects/${projectId}/plans`, {
-        method: "POST",
-        body: { conversation_id: conversationId },
-      }),
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ["plans", projectId] });
-      router.push(`/admin/projects/${projectId}/plans/${created.id}`);
-    },
-  });
-
-  if (!ready) {
-    return null;
-  }
-
-  return (
-    <div className="mt-4" data-testid="generate-plan-cta">
-      <Button
-        data-testid="generate-plan-button"
-        disabled={mutation.isPending}
-        onClick={() => mutation.mutate()}
-      >
-        Generar Plan
-      </Button>
-      {mutation.isError ? (
-        <p className="text-destructive mt-2 text-xs" data-testid="generate-plan-error">
-          {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Returns true when the most recent `agent` message in the feed has
- * an attachment that signals the planning sub-graph wants to finish.
- *
- * The structure is intentionally permissive — Fase G may add more
- * keys (rationale, estimated_phase_count, ...) but only `kind` and
- * `intent` drive visibility.
- */
-export function isFinishPlanningReady(messages: Message[]): boolean {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i];
-    if (msg.author_kind !== "agent") continue;
-    for (const att of msg.attachments) {
-      if (
-        att &&
-        typeof att === "object" &&
-        (att as Record<string, unknown>).kind === "planning_directive" &&
-        (att as Record<string, unknown>).intent === "finish_planning"
-      ) {
-        return true;
-      }
-    }
-    return false; // most recent agent message had no FINISH directive
-  }
-  return false;
-}
-
-// --------------------------------------------------------------------------
-// Message feed
-// --------------------------------------------------------------------------
-interface MessageFeedProps {
-  messages: Message[];
-  loading: boolean;
-}
-
-function MessageFeed({ messages, loading }: MessageFeedProps) {
-  if (loading) {
-    return <p className="text-muted-foreground text-sm">Cargando mensajes…</p>;
-  }
-  if (messages.length === 0) {
-    return (
-      <p className="text-muted-foreground text-sm" data-testid="chat-feed-empty">
-        La conversación está vacía. Empieza a escribir para comenzar.
-      </p>
-    );
-  }
-  return (
-    <ol className="space-y-3" data-testid="chat-feed">
-      {messages.map((m) => (
-        <li key={m.id}>
-          <MessageRow message={m} />
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-/**
- * A folded-history summary (task_wf_06 d).
- *
- * Summaries are `system`-authored, so without this they rendered as the tiny
- * italic centred banner used for "modo cambiado" — a multi-paragraph digest of
- * a dozen messages squeezed into a notice the eye skips. The reader could not
- * tell the team's memory had been rewritten, nor how much history sat behind it.
- *
- * Collapsed by default (it stands in for history the reader already scrolled
- * past) and expandable. The originals are NOT hidden: `GET /messages` still
- * returns them, so they remain above in the feed — folding only affects the
- * context the model reads.
- */
-function SummaryRow({ message, folded }: { message: Message; folded: number }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div
-      className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm"
-      data-testid="chat-message-summary"
-      data-message-id={message.id}
-    >
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-2 text-left"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        data-testid="chat-summary-toggle"
-      >
-        <span className="text-xs font-medium">
-          🗂️ Resumen de {folded} {folded === 1 ? "mensaje anterior" : "mensajes anteriores"}
-        </span>
-        <span className="text-muted-foreground text-[10px] uppercase tracking-wide">
-          {open ? "ocultar" : "ver resumen"}
-        </span>
-      </button>
-      {open ? (
-        <div className="mt-2 border-t border-amber-500/20 pt-2" data-testid="chat-summary-body">
-          {renderPlanDraft(message.content)}
-          <p className="text-muted-foreground mt-2 text-[10px]">
-            El equipo lee este resumen en lugar de esos mensajes. Los originales siguen más arriba
-            en la conversación.
-          </p>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function MessageRow({ message }: { message: Message }) {
-  const folded = summaryFoldedCount(message.attachments);
-  if (message.is_summary && folded > 0) {
-    return <SummaryRow message={message} folded={folded} />;
-  }
-  if (message.author_kind === "system") {
-    return (
-      <div
-        className={cn(
-          "border-muted-foreground/40 rounded border border-dashed",
-          "bg-muted/40 text-muted-foreground px-3 py-2 text-center text-xs italic",
-        )}
-        data-testid="chat-system-banner"
-        data-message-id={message.id}
-      >
-        {message.content}
-      </div>
-    );
-  }
-  const tone =
-    message.author_kind === "agent"
-      ? "border-indigo-500/40 bg-indigo-500/5"
-      : "border-emerald-500/40 bg-emerald-500/5";
-  // Agents may emit structured plan drafts as markdown (tables, lists,
-  // headings). Users type plain text so we only run the renderer for
-  // agent turns; user messages stay verbatim.
-  const body =
-    message.author_kind === "agent" ? (
-      renderPlanDraft(message.content)
-    ) : (
-      <p className="whitespace-pre-wrap">{message.content}</p>
-    );
-  return (
-    <div
-      className={cn("rounded border px-3 py-2 text-sm", tone)}
-      data-testid={`chat-message-${message.author_kind}`}
-    >
-      {body}
-      <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
-        {message.author_kind} · {message.mode}
-      </p>
-    </div>
-  );
-}
-
-// --------------------------------------------------------------------------
-// Composer with @-mention autocomplete (task_03_12)
-// --------------------------------------------------------------------------
-interface ChatComposerProps {
-  disabled: boolean;
-  /** Roles del equipo REAL del proyecto (`GET /projects/{id}/planning-roles`).
-   * Vacío mientras carga o si el proyecto no tiene equipo: sin sugerencias es
-   * preferible a sugerir a alguien que no va a contestar. */
-  roles: readonly string[];
-  onSubmit: (content: string) => void;
-}
-
-function ChatComposer({ disabled, roles, onSubmit }: ChatComposerProps) {
-  const [value, setValue] = useState("");
-  // Markdown preview toggle. The edit view keeps the raw <textarea> so @-mention
-  // tracking (cursor/onChange) stays intact; preview renders the same markdown
-  // renderer the chat messages use.
-  const [preview, setPreview] = useState(false);
-  // The @-trigger is open when the cursor sits in the middle of a
-  // partial mention token ("@" followed by 0+ word-chars, no space).
-  const mention = parsePendingMention(value);
-
-  const suggestions = mention ? roles.filter((r) => r.startsWith(mention.query.toLowerCase())) : [];
-
-  // Take the text+mention to operate on as explicit args rather than
-  // relying on the enclosing closure (frontend-admin-panel-4): the click
-  // handler then always splices into exactly the text that produced the
-  // visible suggestion list, with no chance of reading a stale `value`.
-  const pickMention = (role: string, currentValue: string, target = mention) => {
-    if (!target) return;
-    const before = currentValue.slice(0, target.start);
-    const after = currentValue.slice(target.start + target.length);
-    setValue(`${before}@${role} ${after}`);
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = value.trim();
-    if (!trimmed || disabled) return;
-    onSubmit(trimmed);
-    setValue("");
-  };
-
-  return (
-    <form className="mt-4 relative" onSubmit={handleSubmit} data-testid="chat-composer">
-      <div className="bg-muted mb-1.5 inline-flex w-fit rounded-md p-0.5" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={!preview}
-          onClick={() => setPreview(false)}
-          data-testid="chat-input-tab-edit"
-          className={cn(
-            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-            !preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
-          )}
-        >
-          Editar
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={preview}
-          onClick={() => setPreview(true)}
-          data-testid="chat-input-tab-preview"
-          className={cn(
-            "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
-            preview ? "bg-background text-foreground shadow" : "text-muted-foreground",
-          )}
-        >
-          Vista previa
-        </button>
-      </div>
-      {preview ? (
-        <div
-          data-testid="chat-input-preview"
-          className="bg-muted/30 min-h-[5.5rem] w-full rounded border px-3 py-2 text-sm"
-        >
-          {value.trim().length === 0 ? (
-            <p className="text-muted-foreground/60 text-xs italic">
-              Sin contenido para previsualizar.
-            </p>
-          ) : (
-            renderPlanDraft(value)
-          )}
-        </div>
-      ) : (
-        <textarea
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="Escribe un mensaje. Usa @ para mencionar a un agente. Soporta markdown."
-          rows={3}
-          disabled={disabled}
-          data-testid="chat-input"
-          className={cn(
-            "w-full resize-none rounded border px-3 py-2 text-sm",
-            "bg-background focus:outline-none focus:ring-2 focus:ring-indigo-500/40",
-          )}
-        />
-      )}
-      {suggestions.length > 0 ? (
-        <ul
-          data-testid="mention-suggestions"
-          className={cn(
-            "bg-popover border-muted absolute left-0 z-10 -mt-2 rounded border",
-            "max-h-48 w-64 overflow-y-auto py-1 shadow-md",
-          )}
-        >
-          {suggestions.map((role) => (
-            <li key={role}>
-              <button
-                type="button"
-                data-testid={`mention-suggestion-${role}`}
-                onClick={() => pickMention(role, value, mention)}
-                className="hover:bg-muted w-full px-3 py-1 text-left text-sm"
-              >
-                @{role}
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <div className="mt-2 flex justify-end">
-        <Button
-          type="submit"
-          disabled={disabled || value.trim().length === 0}
-          data-testid="chat-send"
-        >
-          Enviar
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-/**
- * Returns metadata about the @-mention the user is currently typing
- * (the token immediately before the cursor / value end), or null if
- * there isn't one.
- */
-export function parsePendingMention(
-  value: string,
-): { start: number; length: number; query: string } | null {
-  // Match `@word` at the end of the buffer (we don't track caret
-  // position here — a simple end-of-text match is good enough for the
-  // common "type @ and pick" flow).
-  const match = /@(\w*)$/.exec(value);
-  if (!match) return null;
-  return {
-    start: match.index,
-    length: match[0].length,
-    query: match[1],
-  };
 }

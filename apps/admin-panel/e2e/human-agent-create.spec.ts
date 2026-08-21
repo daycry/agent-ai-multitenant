@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the Human Agents gallery — CREATE flow (Plan 16 task_16_07).
@@ -52,17 +54,11 @@ async function setup(
   page: Page,
   opts: { onCreate?: (body: Record<string, unknown>) => void } = {},
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   let created = false;
 
-  await page.route("**/me", (route) =>
+  await page.route(apiRoute("/me"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -70,11 +66,11 @@ async function setup(
     }),
   );
 
-  await page.route("**/human-agents/templates**", (route) =>
+  await page.route(apiRoute("/human-agents/templates**"), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
 
-  await page.route("**/human-agents/assignable-users**", (route) =>
+  await page.route(apiRoute("/human-agents/assignable-users**"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -84,7 +80,7 @@ async function setup(
 
   // The bare list endpoint (GET list / POST create). Keep this AFTER the more
   // specific /templates + /assignable-users routes so they win.
-  await page.route("**/human-agents", async (route) => {
+  await page.route(apiRoute("/human-agents"), async (route) => {
     const method = route.request().method();
     if (method === "GET") {
       const body = created

@@ -22,7 +22,7 @@ O lanzas un script Python directo (sin invocar el Python del venv) y
 no ves nada:
 
 ```
-PS C:\...> .\scripts\demo_human_04_5_01.py
+PS C:\...> .\scripts\demos\demo_human_04_5_01.py
 PS C:\...>   # ← se cierra sin imprimir
 ```
 
@@ -58,7 +58,7 @@ disponibles.
 ## Cómo verificar el fix
 
 ```powershell
-.\.venv\Scripts\python.exe .\scripts\demo_human_04_5_01.py
+.\.venv\Scripts\python.exe .\scripts\demos\demo_human_04_5_01.py
 # →  ========================================================================
 # →    demo human_04_5_01 — Memory replay end-to-end
 # →  ========================================================================

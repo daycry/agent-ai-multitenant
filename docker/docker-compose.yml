@@ -102,12 +102,20 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-dev-only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
       POSTGRES_DB: ${POSTGRES_DB:-agentic_platform}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
       # Consumed by docker/postgres/init/02-roles.sh on first start.
-      MIGRATIONS_USER_PASSWORD: ${MIGRATIONS_USER_PASSWORD:-changeme-migrations-dev-only}
-      APP_USER_PASSWORD: ${APP_USER_PASSWORD:-changeme-app-dev-only}
+      MIGRATIONS_USER_PASSWORD: ${MIGRATIONS_USER_PASSWORD:?set MIGRATIONS_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD:?set APP_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
+      # prod-14 task_prod14_04/05: la contraseña de `service_user`, el rol
+      # BYPASSRLS SIN DDL con el que corren workers/orchestrator/dispatcher
+      # (docker/postgres/init/04-service-role.sql + 05-service-role-password.sh).
+      # Faltaba aquí, así que el init caía SIEMPRE al literal de desarrollo que
+      # está escrito en este repositorio — y es la llave que se salta la RLS de
+      # todos los tenants. Lo avisaba por el stderr del contenedor, donde nadie
+      # mira. Guardado por tests/security/test_service_user_password_is_wired.py.
+      SERVICE_USER_PASSWORD: ${SERVICE_USER_PASSWORD:?set SERVICE_USER_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -135,6 +143,13 @@ services:
     image: redis:7-alpine
     command:
       - redis-server
+      # prod-10 task_prod10_06 (secrets-7). Redis NO es una caché de resultados:
+      # aloja las SESIONES de servidor, el broker de Celery (o sea, la capacidad
+      # de encolar trabajo para los workers) y los contadores de rate limit.
+      # Corría sin autenticación. Obligatoria y sin default: un despliegue que
+      # olvide la variable debe abortar, no quedarse abierto.
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
       - --appendonly
       - "yes"
       - --appendfsync
@@ -145,10 +160,17 @@ services:
       - ${REDIS_MAX_MEM:-512mb}
       - --maxmemory-policy
       - allkeys-lru
+    environment:
+      # Sólo para que el healthcheck de abajo pueda autenticarse dentro del
+      # contenedor. redis-server no lee REDIS_PASSWORD del entorno.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Con `requirepass`, un `redis-cli ping` pelado responde NOAUTH y sale != 0:
+      # el contenedor se quedaría unhealthy para siempre y cualquier
+      # `depends_on: service_healthy` bloquearía el stack entero.
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 10s
       timeout: 3s
       retries: 5
@@ -170,7 +192,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-dev-only}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       - minio_data:/data
     healthcheck:
@@ -383,11 +405,30 @@ services:
   egress-proxy:
     build: ./egress-proxy
     container_name: agentic-egress-proxy
+    # prod-08 / deploy-9: el test terminaba en `|| true`, así que SIEMPRE
+    # devolvía 0 y el contenedor salía `healthy` con tinyproxy muerto. Como
+    # este proxy es la ÚNICA salida de los agent-runtimes hacia los LLM
+    # (ADR 0019), los agentes se quedaban sin red y el stack no delataba la
+    # causa. `|| exit 1` hace que el estado sea honesto y que `ServiceDown` /
+    # el watchdog puedan actuar. Guardado por
+    # tests/unit/test_compose_healthchecks_honest.py.
+    # `-Y off` y no `--no-proxy`: la imagen lleva el wget de BusyBox, que NO
+    # reconoce esa opción — salía por usage con rc≠0, así que este healthcheck
+    # **nunca fue válido**. Con el `|| true` que llevaba delante daba igual: el
+    # check siempre pasaba. Al retirarlo (task_prod08_egress_health_15, «un
+    # healthcheck que no puede fallar no vigila nada») los dos proxies salieron
+    # `unhealthy` en el primer despliegue, y lo que estaba roto era la
+    # comprobación, no el proxy.
+    #
+    # Se afirma el **403**: tinyproxy contesta «Access denied» a una petición
+    # DIRECTA porque solo sirve peticiones proxificadas. O sea que un 403 es la
+    # señal de que el demonio escucha y aplica su política; si estuviera caído,
+    # wget diría «Connection refused» y no habría 403 que encontrar.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+          "wget -q -O- -Y off http://127.0.0.1:8888/ 2>&1 | grep -q '403 Access denied' || exit 1",
         ]
       interval: 30s
       timeout: 5s
@@ -413,11 +454,27 @@ services:
   registry-proxy:
     build: ./registry-proxy
     container_name: agentic-registry-proxy
+    # prod-08 / deploy-9: mismo `|| true` que el egress-proxy (misma imagen
+    # tinyproxy, mismo copy-paste). Aquí un proxy muerto se manifiesta como
+    # builds/instalaciones de dependencias que fallan dentro de los
+    # runtime-templates sin causa aparente.
+    # `-Y off` y no `--no-proxy`: la imagen lleva el wget de BusyBox, que NO
+    # reconoce esa opción — salía por usage con rc≠0, así que este healthcheck
+    # **nunca fue válido**. Con el `|| true` que llevaba delante daba igual: el
+    # check siempre pasaba. Al retirarlo (task_prod08_egress_health_15, «un
+    # healthcheck que no puede fallar no vigila nada») los dos proxies salieron
+    # `unhealthy` en el primer despliegue, y lo que estaba roto era la
+    # comprobación, no el proxy.
+    #
+    # Se afirma el **403**: tinyproxy contesta «Access denied» a una petición
+    # DIRECTA porque solo sirve peticiones proxificadas. O sea que un 403 es la
+    # señal de que el demonio escucha y aplica su política; si estuviera caído,
+    # wget diría «Connection refused» y no habría 403 que encontrar.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
+          "wget -q -O- -Y off http://127.0.0.1:8888/ 2>&1 | grep -q '403 Access denied' || exit 1",
         ]
       interval: 30s
       timeout: 5s
@@ -448,7 +505,7 @@ services:
       SEARXNG_BASE_URL: http://searxng:8080/
       # Clave para firmar las URLs de imagen/respuesta; en dev un default, en
       # prod el instalador la inyecta desde Vault/env.
-      SEARXNG_SECRET: ${SEARXNG_SECRET:-changeme-searxng-dev-only}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in docker/.env (cp docker/.env.example docker/.env)}
     volumes:
       # Config con `search.formats: [html, json]` para que el córtex reciba JSON.
       - ./searxng:/etc/searxng:ro
@@ -522,6 +579,65 @@ services:
     # 0056) — tests/security/test_{apparmor,seccomp_profiles}.py flag the gap.
     <<: [*default-logging, *default-seccomp]
 
+  # ---------------------------------------------------------------------------
+  # watchdog — vigila la salud de los servicios de ESTE fichero y los reinicia
+  # con backoff exponencial; al agotarlo, avisa a un humano.
+  # (prod-08 task_prod08_watchdog_14 / observability-6 + deploy-10.)
+  #
+  # Hasta aquí `apps/watchdog` era código escrito, probado y NO DESPLEGADO: no
+  # aparecía en ningún compose ni en el generador del instalador, así que la
+  # "recuperación automática" de la plataforma no existía en ningún entorno.
+  #
+  # Tres decisiones que van juntas y conviene no separar:
+  #
+  #  * **Sin socket Docker.** El plan pedía montarlo; el principio rector 2 y
+  #    `tests/security/test_pentest_findings.py` lo prohíben, y con razón (un
+  #    contenedor con el socket escapa al host de forma trivial). Habla con el
+  #    daemon por `DOCKER_HOST` a través del `docker-socket-proxy` del ADR 0060,
+  #    al que le basta `CONTAINERS=1` + `POST=1`. El proxy lo aporta el stack de
+  #    despliegue (instalador / docker-compose.manuals.yml), no este fichero.
+  #  * **Bajo `profiles:`**, porque este compose es la capa de INFRAESTRUCTURA y
+  #    el watchdog es una app: sin el perfil, `docker compose up` se comporta
+  #    exactamente como antes y no exige una imagen que este fichero no
+  #    construye. Se levanta con `--profile watchdog`.
+  #  * **La alerta terminal sale del contenedor.** `WATCHDOG_ALERTS_INGEST_URL`
+  #    + `WATCHDOG_ALERTS_INGEST_TOKEN` (el mismo `API_SERVER_ALERTS_INGEST_TOKEN`
+  #    que valida el endpoint) llevan el aviso al fan-out del System Admin. Si
+  #    faltan, el watchdog arranca igual y lo dice en el log — degradación
+  #    deliberada, nunca un arranque fallido por una alerta.
+  #
+  # Imagen: `docker build -f apps/watchdog/Dockerfile -t agentic-platform/watchdog:latest .`
+  # (contexto = raíz del repo; se basa en la imagen de la api-server).
+  # ---------------------------------------------------------------------------
+  watchdog:
+    image: ${IMAGE_WATCHDOG:-agentic-platform/watchdog:latest}
+    profiles: [watchdog]
+    environment:
+      # ADR 0060: la pasarela de mínimo privilegio, NUNCA /var/run/docker.sock.
+      DOCKER_HOST: ${WATCHDOG_DOCKER_HOST:-tcp://docker-socket-proxy:2375}
+      WATCHDOG_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-agentic-platform}
+      WATCHDOG_POLL_INTERVAL: ${WATCHDOG_POLL_INTERVAL:-30}
+      WATCHDOG_ALERTS_INGEST_URL: ${WATCHDOG_ALERTS_INGEST_URL:-http://api-server:8000/internal/alerts/ingest}
+      # Obligatoria, sin default: es el MISMO secreto compartido que valida el
+      # endpoint (`API_SERVER_ALERTS_INGEST_TOKEN`). Un default silencioso aquí
+      # sería un watchdog que cree avisar y se come un 401 en cada alerta —
+      # peor que no tenerlo, porque nadie mira. Guardado por
+      # tests/unit/test_compose_no_default_credentials.py.
+      WATCHDOG_ALERTS_INGEST_TOKEN: ${API_SERVER_ALERTS_INGEST_TOKEN:?set API_SERVER_ALERTS_INGEST_TOKEN in docker/.env (cp docker/.env.example docker/.env)}
+    # DOS redes, y las dos hacen falta:
+    #   · agentic-net    → para POSTear la alerta al api-server. Sin ella, la
+    #                      alerta terminal vuelve a ser una línea de log local,
+    #                      que es el defecto que esta tarea vino a cerrar.
+    #   · agentic-docker → para RESOLVER `docker-socket-proxy`. Es la red
+    #                      `internal` dedicada al tráfico contra el daemon
+    #                      (ADR 0060), la misma en la que están los workers.
+    # Declarado solo en `agentic-net`, el watchdog arrancaba sano, no resolvía
+    # el proxy y **no veía ningún contenedor** — que se parece muchísimo a un
+    # stack sano: no reinicia nada porque cree que no hace falta. Guardado por
+    # tests/security/test_watchdog_service_declaration.py.
+    networks: [agentic-net, agentic-docker]
+    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+
 volumes:
   postgres_data:
   redis_data:
@@ -548,3 +664,16 @@ networks:
     internal: true
     driver_opts:
       com.docker.network.bridge.enable_icc: "true"
+  # Red INTERNA dedicada al tráfico contra el daemon Docker vía
+  # `docker-socket-proxy` (ADR 0060). El proxy en sí lo declara quien trae las
+  # apps —el overlay `docker-compose.manuals.yml` en dev, el compose que genera
+  # el instalador en producción—, porque este fichero es la capa de
+  # infraestructura y no construye imágenes de aplicación. Se declara aquí
+  # porque el servicio `watchdog` (perfil `watchdog`) la necesita para resolver
+  # el proxy, y una red referenciada y no declarada rompe `docker compose up`.
+  # Definición IDÉNTICA a la de los otros dos ficheros para que el merge de
+  # `-f` sea consistente.
+  agentic-docker:
+    name: agentic-docker
+    driver: bridge
+    internal: true

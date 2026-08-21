@@ -25,43 +25,123 @@ log fields (names / lease-ids / counts), never a credential value.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
 from workers.credential_rotation import (
     CeleryRotationNotifier,
-    FakeVaultRotationClient,
+    RotationAudit,
     RotationNotifier,
+    RotationStatus,
     VaultRotationClient,
     build_db_role,
     configure_db_secrets_engine_role,
     rotate_credentials,
 )
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.credential_rotation_task")
 
+#: Why a cycle was skipped. Recorded in the audit's ``error`` field (the audit has
+#: no dedicated reason column) so the alert an operator receives says WHAT is
+#: missing rather than just "skipped".
+_SKIP_NO_VAULT = (
+    "no live Vault is configured (WORKERS_VAULT_URL / WORKERS_VAULT_TOKEN are "
+    "unset), so nothing could be rotated. This cycle rotated NO credential."
+)
 
-def _build_vault_client(settings: Settings) -> VaultRotationClient:
-    """Resolve the Vault rotation client for a real run.
 
-    The real binding is an ``hvac.Client`` adapter wired at install time (Tests
-    Humanos) — it will read the Vault address + token from ``settings`` / the
-    process env (the platform's standard Vault → env injection, never logged).
-    Until that lands the worker has no live Vault, so we fall back to the
-    in-memory fake: a scheduled run in an env without Vault is then a safe
-    no-op-shaped cycle rather than a crash. Tests inject the fake directly into
-    :func:`_rotate_credentials`, never going through this resolver.
+def _build_vault_client(settings: Settings) -> VaultRotationClient | None:
+    """Resolve the REAL Vault rotation client, or ``None`` when Vault is absent.
+
+    This function used to return :class:`FakeVaultRotationClient` unconditionally
+    — an in-memory dict — which is how the scheduled job wrote
+    ``status=SUCCEEDED`` every week without touching anything (gap2-1, critical;
+    the runbook pointed EMERGENCY REVOCATION at it). The fake is no longer
+    importable here: a ``SUCCEEDED`` audit can now only come from an hvac client
+    talking to a real Vault.
+
+    ``None`` (no Vault wired) is NOT an error and NOT a success — the caller turns
+    it into a ``SKIPPED`` cycle with an operator alert. A dev machine without
+    Vault therefore gets a loud, honest no-op instead of a silent lie.
+
+    Secrets are never logged: only the URL's presence and the mount name.
     """
-    # The mount is the one settings-derived knob the resolver needs to log; the
-    # secret material (token) is resolved by the adapter from env, never here.
-    _log.debug(
-        "credential_rotation.vault_client.fake_fallback", db_mount=settings.cred_rotation_db_mount
+    if not settings.vault_url or not settings.vault_token:
+        _log.warning(
+            "credential_rotation.vault_client.absent",
+            has_url=bool(settings.vault_url),
+            has_token=bool(settings.vault_token),
+        )
+        return None
+
+    # prod-10 task_prod10_07: el cliente sale de la fábrica compartida del
+    # worker, que además arranca la renovación del token en segundo plano. Antes
+    # se construía aquí un `hvac.Client` con el token estático: el job semanal
+    # habría dejado de rotar nada el día que el token caducase, que es
+    # exactamente la avería que este job existe para evitar.
+    from workers.vault_client import build_worker_vault_client
+
+    hvac_client = build_worker_vault_client(settings)
+    if hvac_client is None:  # pragma: no cover - hvac is a declared dependency
+        _log.warning("credential_rotation.vault_client.hvac_missing")
+        return None
+
+    from workers.credential_rotation_hvac import (
+        HvacVaultRotationClient,
+        MinioServiceAccountRotator,
     )
-    return FakeVaultRotationClient()
+
+    # The MinIO admin binding is OPTIONAL at construction and mandatory at use:
+    # without it, rotating `minio` raises instead of writing a KV entry for a
+    # credential MinIO never issued (task_prod05_07).
+    minio_rotator = None
+    if settings.cred_rotation_minio_root_user:
+        minio_rotator = MinioServiceAccountRotator(
+            endpoint=settings.cred_rotation_minio_url,
+            root_user=settings.cred_rotation_minio_root_user,
+            root_password=settings.cred_rotation_minio_root_password.get_secret_value(),
+        )
+
+    _log.info(
+        "credential_rotation.vault_client.hvac",
+        db_mount=settings.cred_rotation_db_mount,
+        minio_wired=minio_rotator is not None,
+    )
+    return HvacVaultRotationClient(hvac_client, minio_rotator=minio_rotator)
+
+
+def _skipped_summary(notifier: RotationNotifier | None, reason: str) -> dict[str, Any]:
+    """Audit + alert a cycle that rotated nothing, and say so in the return value.
+
+    ``ok`` is False and the status is ``skipped``: the two fields an operator (or
+    a dashboard) reads must BOTH refuse to look like success. The alert reuses the
+    Plan 10 failure lane — "the weekly rotation did not run" is exactly the kind
+    of thing that must not sit unnoticed in a log file for a quarter.
+    """
+    audit = RotationAudit(
+        rotated_at=datetime.now(UTC),
+        status=RotationStatus.SKIPPED,
+        static_secrets=(),
+        new_lease_id=None,
+        renewed_lease_id=None,
+        revoked_lease_id=None,
+        error=reason,
+    )
+    _log.warning("credential_rotation.skipped", **audit.as_log_fields())
+    alerted = False
+    if notifier is not None:
+        try:
+            notifier.alert_failure(audit)
+            alerted = True
+        except Exception as exc:  # pragma: no cover - defensive: beat must not die
+            _log.warning("credential_rotation.alert_failed", error=str(exc))
+    return {"enabled": True, "ok": False, "alerted": alerted, **audit.as_log_fields()}
 
 
 @app.task(name="workers.rotate_credentials")  # type: ignore[untyped-decorator]
@@ -85,7 +165,7 @@ def rotate_credentials_task() -> dict[str, Any]:
 async def _rotate_credentials(
     settings: Settings,
     *,
-    client: VaultRotationClient,
+    client: VaultRotationClient | None,
     notifier: RotationNotifier | None,
     previous_lease_id: str | None = None,
 ) -> dict[str, Any]:
@@ -94,12 +174,18 @@ async def _rotate_credentials(
     The ``client`` + ``notifier`` are injected so tests drive the whole cycle
     against the in-memory fakes with NO real Vault and NO real broker. A real
     run resolves both from settings (see :func:`rotate_credentials_task`).
+
+    ``client is None`` means the resolver found no live Vault: the cycle is
+    SKIPPED with an alert (prod-05 task_prod05_05). It is deliberately NOT
+    treated as a failure of the platform and deliberately NOT treated as success:
+    the previous behaviour — falling back to an in-memory fake and auditing
+    SUCCEEDED — is the bug this whole task exists to remove.
     """
     # Lazy import — avoids paying the api_server import cost on workers that
     # never route the beat schedule (mirrors workers.maintenance / backup_task).
     from api_server.db.platform_settings import get_cred_rotation_enabled
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as db:
@@ -115,6 +201,11 @@ async def _rotate_credentials(
     if not enabled:
         _log.info("credential_rotation.skipped", reason="disabled")
         return {"enabled": False, "skipped": True}
+
+    # No Vault -> SKIPPED + alert. Checked AFTER the enable flag so an operator
+    # who deliberately turned rotation off does not get paged about it.
+    if client is None:
+        return _skipped_summary(notifier, _SKIP_NO_VAULT)
 
     # Configure (idempotently) the database secrets-engine role so a service
     # can read short-TTL dynamic creds, then run one rotation cycle. Both are

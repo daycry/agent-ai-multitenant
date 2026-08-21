@@ -62,6 +62,14 @@ _M_LAST_RUN_TS = "agentic_backup_last_run_timestamp_seconds"
 # cuando alguna vez hubo offsite (ts > 0): un host sin destino no alerta.
 _M_OFFSITE_UPLOADED = "agentic_backup_offsite_uploaded"
 _M_OFFSITE_LAST_TS = "agentic_backup_offsite_last_success_timestamp_seconds"
+# ADR 0149 — el quiesce de escritores. La duración es lo que el ADR pide medir
+# («una métrica de la duración del quiesce»): es el corte de servicio diario que
+# el operador aceptó, y sin medirlo nadie sabe si los 1-3 min estimados son
+# ciertos. `degraded` es la señal de que ESA noche el bundle se capturó con
+# escritores en pie: no es un fallo del backup —el ADR lo prevé— pero varias
+# noches seguidas dicen que algo no atiende la señal de parada.
+_M_QUIESCE_SECONDS = "agentic_backup_quiesce_seconds"
+_M_QUIESCE_DEGRADED = "agentic_backup_quiesce_degraded"
 
 
 def render_backup_metrics(
@@ -71,6 +79,8 @@ def render_backup_metrics(
     last_success_ts: float,
     offsite_uploaded: int = 0,
     offsite_last_success_ts: float = 0.0,
+    quiesce_seconds: float = 0.0,
+    quiesce_degraded: bool = False,
 ) -> str:
     """Render the Prometheus text-exposition body for a backup run.
 
@@ -96,6 +106,12 @@ def render_backup_metrics(
         f"# HELP {_M_OFFSITE_LAST_TS} Unix time of the most recent offsite upload (0 = never).",
         f"# TYPE {_M_OFFSITE_LAST_TS} gauge",
         f"{_M_OFFSITE_LAST_TS} {offsite_last_success_ts:.0f}",
+        f"# HELP {_M_QUIESCE_SECONDS} Seconds the app writers were stopped for the capture.",
+        f"# TYPE {_M_QUIESCE_SECONDS} gauge",
+        f"{_M_QUIESCE_SECONDS} {max(0.0, quiesce_seconds):.3f}",
+        f"# HELP {_M_QUIESCE_DEGRADED} 1 if some writer did not stop in time (ADR 0149).",
+        f"# TYPE {_M_QUIESCE_DEGRADED} gauge",
+        f"{_M_QUIESCE_DEGRADED} {1 if quiesce_degraded else 0}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -117,7 +133,12 @@ def _read_published_ts(path: Path, metric: str) -> float:
 
 
 def write_backup_metrics(
-    path: str | os.PathLike[str], *, success: bool, offsite_uploaded: int = 0
+    path: str | os.PathLike[str],
+    *,
+    success: bool,
+    offsite_uploaded: int = 0,
+    quiesce_seconds: float = 0.0,
+    quiesce_degraded: bool = False,
 ) -> bool:
     """Atomically write the backup health metrics file.
 
@@ -145,6 +166,8 @@ def write_backup_metrics(
             last_success_ts=last_success_ts,
             offsite_uploaded=offsite_uploaded,
             offsite_last_success_ts=offsite_last_ts,
+            quiesce_seconds=quiesce_seconds,
+            quiesce_degraded=quiesce_degraded,
         )
 
     ok = write_textfile_metric(target, _render, event_prefix="backup.metrics")
@@ -154,5 +177,7 @@ def write_backup_metrics(
             path=str(target),
             success=success,
             offsite_uploaded=offsite_uploaded,
+            quiesce_seconds=round(quiesce_seconds, 3),
+            quiesce_degraded=quiesce_degraded,
         )
     return ok

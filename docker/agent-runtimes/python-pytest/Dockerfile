@@ -6,7 +6,16 @@
 # default_pre_install commands; the dep-cache mount at /root/.cache/pip keeps
 # them warm across runs.
 
-FROM python:3.12-slim AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+# 2026-08-14: digest refrescado (era `57cd7c3a…`), el mismo salto que agent-runtime
+# y whatsapp-neonize: `libexpat1` 2.7.1-2 acumulaba cuatro CVE HIGH con fix ya
+# publicado en Debian (2.8.2-1~deb13u1). Esta plantilla pasaba Trivy en verde el
+# 13-08 y dejó de pasarlo sin que cambiara una línea: es deriva de CVE, no una
+# regresión nuestra, y por eso el arreglo es refrescar el pin, no relajarlo.
+FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-python-pytest" \
       org.opencontainers.image.version="v1" \
@@ -16,6 +25,23 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=0
+
+# Parches de seguridad del SO. Las bases `-slim` se reconstruyen cada pocas
+# semanas, asi que entre reconstrucciones arrastran los paquetes de Debian sin
+# los parches YA publicados: el 2026-08-18 el gate cayo con CVE-2026-53615
+# (nueve paquetes de la familia util-linux; fix `2.41.5-0+deb13u1` disponible en
+# `trixie-security` y ausente todavia de la imagen oficial).
+#
+# Esta capa NO se puede dejar cachear, y no es una precaucion teorica: el
+# template `rust-cargo` YA tenia este mismo `apt-get -y upgrade` y aun asi
+# entrego los paquetes viejos, porque buildx la sirvio del cache de GHA
+# (`#12 [2/5] RUN apt-get update && apt-get -y upgrade` -> `CACHED` en el log).
+# Por eso los workflows que construyen estas imagenes pasan
+# `no-cache-filters: runtime`. Ver
+# `docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md`.
+RUN apt-get update \
+ && apt-get -y upgrade \
+ && rm -rf /var/lib/apt/lists/*
 
 # pytest is the floor. Anything richer (pytest-cov, pytest-xdist, plugins)
 # is installed from the project's own requirements at task start.

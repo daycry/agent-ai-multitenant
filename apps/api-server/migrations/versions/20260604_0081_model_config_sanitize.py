@@ -57,24 +57,20 @@ def upgrade() -> None:
     # specs incompletos no vacíos — esos los resuelve el default seguro en
     # dispatch). ``model_config = '{}'::jsonb`` compara el valor JSONB, no el
     # texto, así que es robusto frente al formato.
-    op.execute(
-        f"""
+    op.execute(f"""
         UPDATE agents
         SET model_config = '{_DEFAULT_JSON}'::jsonb
         WHERE model_config = '{{}}'::jsonb
-        """
-    )
+        """)
 
 
 def downgrade() -> None:
     # Restaura {} en las filas que el upgrade saneó (las que coinciden bit a bit
     # con el default que escribimos). ``@>`` + ``<@`` comprueba igualdad de
     # contenido JSONB independientemente del orden de claves.
-    op.execute(
-        f"""
+    op.execute(f"""
         UPDATE agents
         SET model_config = '{{}}'::jsonb
         WHERE model_config @> '{_DEFAULT_JSON}'::jsonb
           AND model_config <@ '{_DEFAULT_JSON}'::jsonb
-        """
-    )
+        """)

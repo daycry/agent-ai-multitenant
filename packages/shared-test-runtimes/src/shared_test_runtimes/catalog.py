@@ -16,29 +16,32 @@ Adding a new template ⇒
   2. Register the :class:`RuntimeTemplate` in :data:`CATALOG`.
   3. Add the build line in CI (task_06_03 workflow).
 
-The image references use the local prefix ``agent-runtime-`` (matching
-the existing ``agent-runtime`` image from Plan 02). A future registry
-push step (task_06_03) will rewrite the prefix to something like
-``ghcr.io/agent-ai/agent-runtime-...``.
+**Referencia de las imágenes (ADR 0148).** Hasta el 2026-08-01 esto era
+``_IMAGE_TAG = "v1"`` y un nombre local: cada host construía su propia
+variante de las 14 imágenes donde corre el código NO confiable, y el
+sistema no podía responder «¿qué imagen exacta ejecutó el código de este
+tenant?». Ahora la referencia la compone el **manifiesto de release**
+(:mod:`shared_test_runtimes.images`), que reescribe el pipeline: cuando
+hay release publicada es ``<registry>/agent-runtime-<slug>:<version>@<digest>``
+y el worker resuelve por digest o aborta; mientras no la haya, el nombre
+local de siempre. Aquí no se escribe ningún digest a mano.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
+from shared_test_runtimes.images import ReleaseManifest, RuntimeImageManifestError, load_manifest
 from shared_test_runtimes.types import Resources, RuntimeTemplate
 
-_IMAGE_TAG = "v1"
+# Resultado de la última release publicada. Se lee UNA vez al importar: la
+# referencia de una imagen no puede cambiar a mitad de la vida del proceso.
+MANIFEST: ReleaseManifest = load_manifest()
 
 
 def _image(slug: str) -> str:
-    """Build the local image reference for a template id.
-
-    Mirrors the convention introduced by Plan 02's ``agent-runtime:v1``.
-    Local builds and CI builds use the same prefix; the registry push
-    step (task_06_03) reassigns the prefix to ``ghcr.io/...``.
-    """
-    return f"agent-runtime-{slug}:{_IMAGE_TAG}"
+    """Referencia de la imagen de una plantilla, según el manifiesto de release."""
+    return MANIFEST.reference(slug)
 
 
 # --- Python ---------------------------------------------------------
@@ -241,6 +244,27 @@ CATALOG: Mapping[str, RuntimeTemplate] = {
 }
 
 
+def assert_manifest_covers_catalog(manifest: ReleaseManifest) -> None:
+    """Un pin a medias es peor que ninguno: aborta si falta alguna plantilla.
+
+    Si el pipeline publica trece de catorce y la que falta se queda con tag
+    mutable, la pregunta que el ADR 0148 vino a contestar sigue sin respuesta
+    justo en la plantilla que nadie está mirando — y con la apariencia de que sí
+    la tiene. Fallar al importar es ruidoso a propósito.
+    """
+    if not manifest.is_pinned:
+        return
+    missing = sorted(tid for tid in CATALOG if manifest.digest_for(tid) is None)
+    if missing:
+        raise RuntimeImageManifestError(
+            "el manifiesto de release trae digests pero deja plantillas sin fijar: "
+            + ", ".join(missing)
+        )
+
+
+assert_manifest_covers_catalog(MANIFEST)
+
+
 def get(template_id: str) -> RuntimeTemplate:
     """Resolve a runtime template by id.
 
@@ -276,13 +300,13 @@ def dependency_dirs() -> tuple[str, ...]:
 
 __all__ = [
     "CATALOG",
-    "dependency_dirs",
     "DOTNET_TEST",
     "GENERIC_HTTP",
     "GENERIC_SHELL",
     "GO_TEST",
     "JAVA_GRADLE",
     "JAVA_MAVEN",
+    "MANIFEST",
     "NODE_JEST",
     "NODE_PLAYWRIGHT",
     "NODE_VITEST",
@@ -291,6 +315,8 @@ __all__ = [
     "PYTHON_PYTEST",
     "RUBY_RSPEC",
     "RUST_CARGO",
+    "assert_manifest_covers_catalog",
+    "dependency_dirs",
     "get",
     "list_ids",
 ]

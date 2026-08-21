@@ -36,70 +36,45 @@
  *   POST   /admin/model-prices          — crear periodo vigente (System Admin)
  *   PATCH  /admin/model-prices/{id}     — editar campos mutables (System Admin)
  *   DELETE /admin/model-prices/{id}     — superseder (cerrar) periodo (System Admin)
+ *
+ * **Partición** (prod-16 `task_prod16_06`): esta pantalla tenía 514 líneas y el
+ * objetivo del plan son < 400, con ninguna sección por encima de 500. Los
+ * filtros viven ahora en `price-filters.tsx` y la tabla en `price-table.tsx`;
+ * los tres diálogos, que compartían un solo fichero de 686 líneas, están en
+ * `sync-diff-dialog.tsx`, `price-form-dialog.tsx` y `price-history-dialog.tsx`.
+ * Aquí quedan la cabecera, el aviso de alcance del sync y el cableado.
  */
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Coins, History, Info, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Coins, Info, Plus, RefreshCw } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
-import { StateBlock } from "@/components/shared/state-block";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { Select } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
 
-import { PriceFormDialog, PriceHistoryDialog, SyncDiffDialog } from "./model-price-dialogs";
-import {
-  MODALITIES,
-  SOURCE_BADGE,
-  UNIT_LABEL,
-  activeFamilies,
-  errorText,
-  fmtDate,
-  fmtUsd,
-  type LlmProvider,
-  type Modality,
-  type ModelPrice,
-} from "./model-price-types";
+import { activeFamilies, type LlmProvider, type ModelPrice } from "./model-price-types";
+import { EMPTY_FILTERS, PriceFilters, type AppliedPriceFilters } from "./price-filters";
+import { PriceFormDialog } from "./price-form-dialog";
+import { PriceHistoryDialog } from "./price-history-dialog";
+import { PriceTable, type HistoryTarget } from "./price-table";
+import { SyncDiffDialog } from "./sync-diff-dialog";
 
 // ===========================================================================
 // Page
 // ===========================================================================
 export default function ModelPricesPage() {
+  const t = useT("modelPrices");
   const queryClient = useQueryClient();
   const { isSystemAdmin } = useCurrentUser();
 
-  const [provider, setProvider] = useState("");
-  const [modelId, setModelId] = useState("");
-  const [modality, setModality] = useState<"" | Modality>("");
-  const [providerId, setProviderId] = useState("");
-  const [currentOnly, setCurrentOnly] = useState(true);
-
-  // Effective filter values (applied on submit so typing doesn't refetch
-  // on every keystroke).
-  const [applied, setApplied] = useState<{
-    provider: string;
-    modelId: string;
-    modality: "" | Modality;
-    providerId: string;
-    currentOnly: boolean;
-  }>({ provider: "", modelId: "", modality: "", providerId: "", currentOnly: true });
+  // Sólo los filtros YA aplicados: el estado del formulario vive en
+  // `PriceFilters` para que teclear no refetchee en cada pulsación.
+  const [applied, setApplied] = useState<AppliedPriceFilters>(EMPTY_FILTERS);
 
   // task_11_2_06 — platform providers, read only when the viewer is a
   // System Admin (the /admin/llm-providers surface is System-Admin only;
@@ -129,11 +104,7 @@ export default function ModelPricesPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ModelPrice | null>(null);
-  const [historyTarget, setHistoryTarget] = useState<{
-    provider: string;
-    model_id: string;
-    modality: string;
-  } | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<HistoryTarget | null>(null);
 
   const queryKey = useMemo(() => ["model-prices", applied] as const, [applied]);
 
@@ -152,33 +123,6 @@ export default function ModelPricesPage() {
     refetchOnWindowFocus: false,
   });
 
-  const supersedeMutation = useMutation({
-    mutationFn: (id: string) =>
-      apiFetch<ModelPrice>(`/admin/model-prices/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["model-prices"] });
-    },
-  });
-
-  function applyFilters() {
-    setApplied({
-      provider: provider.trim(),
-      modelId: modelId.trim(),
-      modality,
-      providerId,
-      currentOnly,
-    });
-  }
-
-  function resetFilters() {
-    setProvider("");
-    setModelId("");
-    setModality("");
-    setProviderId("");
-    setCurrentOnly(true);
-    setApplied({ provider: "", modelId: "", modality: "", providerId: "", currentOnly: true });
-  }
-
   const rows = listQuery.data ?? [];
 
   return (
@@ -188,8 +132,8 @@ export default function ModelPricesPage() {
     >
       <PageHeader
         icon={<Coins className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Modelos & Precios"
-        description="Catálogo global de precios de modelos (USD canónico, con soporte de prompt caching). Lectura abierta; edición solo System Admin."
+        title={t("title")}
+        description={t("description")}
         data-testid="model-prices-header"
         actions={
           <RoleGuard min="system_admin">
@@ -201,11 +145,11 @@ export default function ModelPricesPage() {
                 data-testid="price-sync-open"
               >
                 <RefreshCw className="mr-1 h-3.5 w-3.5" />
-                Sincronizar precios
+                {t("syncOpen")}
               </Button>
               <Button size="sm" onClick={() => setCreateOpen(true)} data-testid="price-create-open">
                 <Plus className="mr-1 h-3.5 w-3.5" />
-                Nuevo precio
+                {t("create")}
               </Button>
             </div>
           </RoleGuard>
@@ -227,13 +171,11 @@ export default function ModelPricesPage() {
           >
             <Info className="text-primary mt-0.5 h-4 w-4 shrink-0" />
             <p>
-              Sincronizando solo:{" "}
+              {t("scopeLead")}{" "}
               <span className="text-foreground font-medium" data-testid="sync-scope-families">
                 {syncFamilies.join(", ")}
               </span>{" "}
-              <span className="text-xs">
-                (familias de los proveedores LLM activos — ADR 0028). El resto del feed se omite.
-              </span>
+              <span className="text-xs">{t("scopeTail")}</span>
             </p>
           </div>
         ) : (
@@ -243,231 +185,27 @@ export default function ModelPricesPage() {
           >
             <AlertTriangle className="text-warning mt-0.5 h-4 w-4 shrink-0" />
             <p className="text-foreground">
-              No hay proveedores LLM activos; nada que sincronizar. Activa al menos un proveedor en{" "}
+              {t("scopeEmptyLead")}{" "}
               <Link href="/admin/llm-providers" className="text-primary underline">
                 /admin/llm-providers
               </Link>{" "}
-              para que el sync de precios traiga sus familias.
+              {t("scopeEmptyTail")}
             </p>
           </div>
         )
       ) : null}
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Filters */}
-      {/* ---------------------------------------------------------------- */}
-      <Card className="mt-6" data-testid="price-filters">
-        <CardContent className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 lg:grid-cols-6 lg:items-end">
-          <div className="space-y-1">
-            <Label htmlFor="filter-provider">Familia (provider)</Label>
-            <Input
-              id="filter-provider"
-              placeholder="anthropic"
-              value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-              data-testid="filter-provider"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="filter-model">Modelo</Label>
-            <Input
-              id="filter-model"
-              placeholder="claude-sonnet-4-5"
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              data-testid="filter-model"
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="filter-modality">Modalidad</Label>
-            <Select
-              id="filter-modality"
-              value={modality}
-              onChange={(e) => setModality(e.target.value as "" | Modality)}
-              data-testid="filter-modality"
-            >
-              <option value="">Todas</option>
-              {MODALITIES.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </Select>
-          </div>
-          {/* task_11_2_06 — filter by associated platform provider. Only
-              the System Admin can read the providers list, so this select
-              is shown to them; a tenant reader still has the other filters. */}
-          {isSystemAdmin ? (
-            <div className="space-y-1">
-              <Label htmlFor="filter-provider-id">Proveedor (plataforma)</Label>
-              <Select
-                id="filter-provider-id"
-                value={providerId}
-                onChange={(e) => setProviderId(e.target.value)}
-                data-testid="filter-provider-id"
-              >
-                <option value="">Todos</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.display_name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          ) : null}
-          <div className="flex items-center gap-2 pb-2">
-            <Checkbox
-              id="filter-current-only"
-              checked={currentOnly}
-              onChange={(e) => setCurrentOnly(e.target.checked)}
-              data-testid="filter-current-only"
-            />
-            <Label htmlFor="filter-current-only">Solo vigentes</Label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={applyFilters} data-testid="filter-apply">
-              Filtrar
-            </Button>
-            <Button size="sm" variant="outline" onClick={resetFilters} data-testid="filter-reset">
-              Limpiar
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      <PriceFilters providers={providers} isSystemAdmin={isSystemAdmin} onApply={setApplied} />
 
-      {/* ---------------------------------------------------------------- */}
-      {/* List */}
-      {/* ---------------------------------------------------------------- */}
-      <div className="mt-6">
-        <StateBlock
-          isLoading={listQuery.isLoading}
-          isError={listQuery.isError}
-          error={listQuery.error}
-          isEmpty={rows.length === 0}
-          loadingLabel="Cargando catálogo…"
-          loadingTestId="prices-loading"
-          errorTitle="No se pudo cargar el catálogo"
-          errorTestId="prices-error"
-          emptyIcon={Coins}
-          emptyTitle="Catálogo vacío"
-          emptyDescription="El catálogo está vacío para estos filtros."
-          emptyTestId="prices-empty"
-        >
-          <div className="overflow-hidden rounded-xl border">
-            <Table data-testid="prices-table" className="text-sm">
-              <TableHeader className="bg-muted normal-case">
-                <TableRow>
-                  <TableHead className="px-3 py-2">Familia</TableHead>
-                  <TableHead className="px-3 py-2">Modelo</TableHead>
-                  <TableHead className="px-3 py-2">Modalidad</TableHead>
-                  <TableHead className="px-3 py-2">Proveedor</TableHead>
-                  <TableHead className="px-3 py-2">Input</TableHead>
-                  <TableHead className="px-3 py-2">Output</TableHead>
-                  <TableHead className="px-3 py-2">Cache</TableHead>
-                  <TableHead className="px-3 py-2">Unidad</TableHead>
-                  <TableHead className="px-3 py-2">Fuente</TableHead>
-                  <TableHead className="px-3 py-2">Vigencia</TableHead>
-                  <TableHead className="px-3 py-2 text-right">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((p) => {
-                  const open = p.effective_to === null;
-                  return (
-                    <TableRow key={p.id} data-testid={`price-row-${p.id}`}>
-                      <TableCell className="px-3 py-2">{p.provider}</TableCell>
-                      <TableCell className="px-3 py-2 font-mono text-xs">{p.model_id}</TableCell>
-                      <TableCell className="px-3 py-2">
-                        <Badge variant="muted">{p.modality}</Badge>
-                      </TableCell>
-                      {/* task_11_2_06 — associated platform provider (read). */}
-                      <TableCell className="px-3 py-2" data-testid={`price-provider-${p.id}`}>
-                        {p.provider_id === null ? (
-                          <span className="text-muted-foreground text-xs italic">sin asociar</span>
-                        ) : (
-                          <Badge variant="info">
-                            {providerLabel.get(p.provider_id) ?? p.provider_id}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-3 py-2" data-testid={`price-input-${p.id}`}>
-                        {fmtUsd(p.input_price)}
-                      </TableCell>
-                      <TableCell className="px-3 py-2">{fmtUsd(p.output_price)}</TableCell>
-                      <TableCell className="px-3 py-2" data-testid={`price-cached-${p.id}`}>
-                        {fmtUsd(p.cached_input_price)}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-xs">
-                        {UNIT_LABEL[p.unit] ?? p.unit}
-                      </TableCell>
-                      <TableCell className="px-3 py-2">
-                        <Badge variant={SOURCE_BADGE[p.source] ?? "muted"}>{p.source}</Badge>
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-xs">
-                        {open ? (
-                          <Badge variant="success" data-testid={`price-current-${p.id}`}>
-                            vigente
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">
-                            {fmtDate(p.effective_from)} → {fmtDate(p.effective_to)}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-3 py-2">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              setHistoryTarget({
-                                provider: p.provider,
-                                model_id: p.model_id,
-                                modality: p.modality,
-                              })
-                            }
-                            data-testid={`price-history-${p.id}`}
-                            aria-label="Histórico"
-                          >
-                            <History className="h-3.5 w-3.5" />
-                          </Button>
-                          <RoleGuard min="system_admin">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setEditTarget(p)}
-                              data-testid={`price-edit-${p.id}`}
-                              aria-label="Editar"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => supersedeMutation.mutate(p.id)}
-                              disabled={!open || supersedeMutation.isPending}
-                              data-testid={`price-supersede-${p.id}`}
-                              aria-label="Superseder"
-                            >
-                              <Trash2 className="text-destructive h-3.5 w-3.5" />
-                            </Button>
-                          </RoleGuard>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </StateBlock>
-
-        {supersedeMutation.isError ? (
-          <p className="text-destructive mt-3 text-xs" data-testid="price-supersede-error">
-            {errorText(supersedeMutation.error)}
-          </p>
-        ) : null}
-      </div>
+      <PriceTable
+        rows={rows}
+        providerLabel={providerLabel}
+        isLoading={listQuery.isLoading}
+        isError={listQuery.isError}
+        error={listQuery.error}
+        onHistory={setHistoryTarget}
+        onEdit={setEditTarget}
+      />
 
       {createOpen ? (
         <PriceFormDialog

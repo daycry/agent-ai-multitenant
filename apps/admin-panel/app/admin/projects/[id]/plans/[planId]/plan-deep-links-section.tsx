@@ -8,17 +8,19 @@
 import Link from "next/link";
 import { AlertTriangle, ClipboardList, ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useT } from "@/lib/i18n";
 
 // --------------------------------------------------------------------------
 // Deep links to per-plan panels (Plan 06.6 task_06_6_12)
 // --------------------------------------------------------------------------
 
 export function PlanDeepLinksSection({ planId, status }: { planId: string; status: string }) {
+  const t = useT("planDetail");
   const inValidation = status === "pending_human_validation";
   return (
     <Card className="mt-6" data-testid="plan-deep-links">
       <CardHeader>
-        <CardTitle>Paneles del plan</CardTitle>
+        <CardTitle>{t("deepLinksTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -32,13 +34,10 @@ export function PlanDeepLinksSection({ planId, status }: { planId: string; statu
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-1.5 text-sm font-semibold">
-                Tareas escaladas y bloqueadas
+                {t("deepLinkEscalatedTitle")}
                 <ExternalLink className="text-muted-foreground h-3.5 w-3.5" />
               </div>
-              <p className="text-muted-foreground mt-0.5 text-xs">
-                Tareas esperando una acción humana (aprobar, reintentar, desbloquear) — incluye las
-                bloqueadas por reintentos agotados y el desbloqueo del plan.
-              </p>
+              <p className="text-muted-foreground mt-0.5 text-xs">{t("deepLinkEscalatedHelp")}</p>
             </div>
           </Link>
 
@@ -53,12 +52,10 @@ export function PlanDeepLinksSection({ planId, status }: { planId: string; statu
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-1.5 text-sm font-semibold">
-                  Sesión de review
+                  {t("deepLinkReviewTitle")}
                   <ExternalLink className="text-muted-foreground h-3.5 w-3.5" />
                 </div>
-                <p className="text-muted-foreground mt-0.5 text-xs">
-                  El plan está en validación humana — abre la review-runtime con stack + tests.
-                </p>
+                <p className="text-muted-foreground mt-0.5 text-xs">{t("deepLinkReviewHelp")}</p>
               </div>
             </Link>
           )}
@@ -66,8 +63,7 @@ export function PlanDeepLinksSection({ planId, status }: { planId: string; statu
 
         {!inValidation && (
           <p className="text-muted-foreground text-xs italic">
-            La sesión de review aparecerá aquí cuando el plan pase a{" "}
-            <code>pending_human_validation</code>.
+            {t("deepLinkReviewPending")} <code>pending_human_validation</code>.
           </p>
         )}
       </CardContent>

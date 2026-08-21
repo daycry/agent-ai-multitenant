@@ -178,7 +178,7 @@ async def test_apply_template_grants_creates_kb_projects_rows(
             tenant,
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash)" " VALUES ($1, 'a@tadopt.test', 'h')",
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, 'a@tadopt.test', 'h')",
             granter,
         )
         await conn.execute(
@@ -205,7 +205,7 @@ async def test_apply_template_grants_creates_kb_projects_rows(
         async with sm() as session:
             rows = (
                 await session.execute(
-                    text("SELECT kb_id FROM kb_projects WHERE project_id = :pid" " ORDER BY kb_id"),
+                    text("SELECT kb_id FROM kb_projects WHERE project_id = :pid ORDER BY kb_id"),
                     {"pid": str(new_project)},
                 )
             ).all()

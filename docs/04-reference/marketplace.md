@@ -2,28 +2,156 @@
 title: Marketplace de skills y tools — Referencia de endpoints y seguridad
 audience: backend-dev, architect, security
 phase: 09-marketplace
-updated: 2026-06-01
+updated: 2026-08-01
 ---
 
 # Marketplace de skills y tools — Referencia
 
-Esta página documenta el marketplace del Plan 09: el catálogo de skills,
-tools y MCP servers instalables, los niveles de confianza, el pipeline de
-instalación gated, el formato SKILL.md / manifest de tool, y el modelo de
-catálogo híbrido global/privado + compartir cross-tenant. Para la matriz de
-roles general ver [`rbac.md`](./rbac.md); para el ADR de fondo ver
+Esta página documenta el marketplace: el catálogo de skills, tools y MCP
+servers, los niveles de confianza, el pipeline de instalación gated, el
+**despliegue en proyectos**, la revisión de lo publicado, las versiones, el
+formato SKILL.md / manifest de tool y el modelo de catálogo híbrido
+global/privado + compartir cross-tenant. Para la matriz de roles general ver
+[`rbac.md`](./rbac.md); para los ADR de fondo,
 [ADR 0032](../05-architecture-decisions/0032-marketplace-confianza-catalogo-hibrido-instalacion-gated.md)
-y [ADR 0001](../05-architecture-decisions/0001-postgres-rls-from-day-one.md).
+(confianza),
+[ADR 0100](../05-architecture-decisions/0100-materializacion-marketplace.md)
+(materialización),
+[ADR 0142](../05-architecture-decisions/0142-marketplace-despliegue-tres-capas.md)
+(despliegue y tres capas) y
+[ADR 0001](../05-architecture-decisions/0001-postgres-rls-from-day-one.md) (RLS).
+
+> **Qué cambió con el ADR 0142 (v2).** Antes, instalar era «comprar sin
+> recibir»: la instalación no escribía ni una fila `agent_tools`, no
+> configuraba ningún servidor MCP en ningún proyecto, y la config guiada se
+> pedía **al instalar** y se guardaba a nivel de tenant — con lo que dos
+> proyectos no podían apuntar a URLs distintas. El modelo v2 parte la
+> configuración en **tres capas** (§Las tres capas) e introduce el
+> **despliegue** como entidad: instalar añade la capacidad al fondo del tenant,
+> desplegar la entrega a un proyecto concreto.
 
 ## Modelo de datos (resumen)
 
-| Tabla                       | Tenancy                                                                            |
-| --------------------------- | ---------------------------------------------------------------------------------- |
-| `marketplace_sources`       | Tenant-agnóstica (sin RLS). `owner_tenant_id` nullable marca una fuente privada    |
-| `marketplace_listings`      | **Híbrida**: `tenant_id` NULL = global público; no-NULL = privado del tenant (RLS) |
-| `marketplace_installations` | Tenant-owned (`tenant_id NOT NULL`, RLS)                                           |
-| `marketplace_audit_entries` | Tenant-owned, **append-only a nivel de BD** (RLS `FOR SELECT` + `FOR INSERT`)      |
-| `marketplace_shares`        | Grant cross-tenant; RLS dual-scope (owner gestiona, target solo lee)               |
+| Tabla                          | Tenancy                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------- |
+| `marketplace_sources`          | Tenant-agnóstica (sin RLS). `owner_tenant_id` nullable marca una fuente privada    |
+| `marketplace_listings`         | **Híbrida**: `tenant_id` NULL = global público; no-NULL = privado del tenant (RLS) |
+| `marketplace_listing_versions` | **Híbrida, espejo del listing** (mismas tres policies): una fila por versión       |
+| `marketplace_installations`    | Tenant-owned (`tenant_id NOT NULL`, RLS)                                           |
+| `marketplace_deployments`      | Tenant-owned, RLS **ENABLE + FORCE** con policy `tenant_isolation`                 |
+| `marketplace_audit_entries`    | Tenant-owned, **append-only a nivel de BD** (RLS `FOR SELECT` + `FOR INSERT`)      |
+| `marketplace_shares`           | Grant cross-tenant; RLS dual-scope (owner gestiona, target solo lee)               |
+
+Las tres columnas que sostienen la trazabilidad de v2 (migraciones `0128`,
+`0129` y `0130`):
+
+- `marketplace_installations.pinned_version_id` — la fila de versión que este
+  tenant **consintió**. El delta de permisos de una actualización se calcula
+  contra ella. Nullable a conciencia: `deploy.ensure_listing_version`
+  la crea y la pina en el primer despliegue (un `NOT NULL` cuyo escritor llega
+  dos fases más tarde convierte cada instalación nueva en un 500).
+- `marketplace_deployments.created_refs` (JSONB) — **exactamente** las filas que
+  este despliegue creó. Retirar deshace eso y nada más: una tool que el operador
+  asignó a mano al mismo agente sobrevive a la retirada.
+- `marketplace_deployments.disabled_reason` — por qué un refresco de versión
+  dejó el despliegue `disabled` en vez de aplicarlo a medias.
+
+Un despliegue vive en tres estados: `active`, `disabled` y `retired`. La fila
+**nunca se borra** (es el rastro de auditoría); retirar la marca `retired` y
+sella `retired_at` / `retired_by`. Un índice UNIQUE parcial
+`(installation_id, project_id) WHERE status = 'active'` es lo que hace el
+re-despliegue idempotente en la BD y no solo en el código.
+
+## Las tres capas de configuración (ADR 0142 D8)
+
+Quién guarda qué, y cuándo se pregunta. Es la distinción que hace posible que
+el proyecto A pruebe `app-a.example` y el B `app-b.example` con la MISMA
+capacidad instalada una sola vez:
+
+| Capa            | Qué guarda                                                                          | Cuándo se pide                |
+| --------------- | ----------------------------------------------------------------------------------- | ----------------------------- |
+| **Listing**     | qué ES la cosa: manifest, permisos declarados, `config_schema`, defaults, `targets` | al publicar                   |
+| **Instalación** | el consentimiento de permisos del tenant — **nada más**                             | al instalar                   |
+| **Despliegue**  | los VALORES por proyecto (`config` JSONB), validados contra el `config_schema`      | al desplegar en cada proyecto |
+
+El manifest ganó dos campos **opcionales** (`marketplace/_format_common.py`):
+
+- `targets: [rol, …]` — los roles de agente que el manifest **sugiere**; quien
+  despliega confirma o ajusta (D5). Se validan contra el vocabulario cerrado
+  `AgentRole`: un `backend-dev` mal escrito no casaría con ningún agente y el
+  despliegue «funcionaría» sin entregar nada.
+- `config_schema` — el descriptor del formulario guiado.
+
+Un manifest **sin** los dos campos sigue siendo válido (hay catálogo
+publicado): sin `targets` no se pre-marca nada, sin `config_schema` el
+despliegue no muestra formulario.
+
+### El dialecto de `config_schema` y su válvula tipada
+
+`marketplace/config_schema.py::validate_deployment_config` valida los valores
+contra el esquema: tipos (`string` / `integer` / `number` / `boolean` / `array`
+/ `object`, con `bool` NO colando como entero), requeridos, `enum`,
+`items.enum`, `minItems`, `minimum` / `maximum`, y **campos desconocidos
+rechazados, no ignorados** (un `base_ur1` ignorado en silencio da un despliegue
+que apunta a otro sitio). Devuelve una **lista** de errores, no una excepción,
+para que el formulario los pinte todos a la vez.
+
+Un campo `secret: true` **solo admite un puntero a Vault** (prefijo `vault:`, el
+mismo contrato que `MCPServerConfigModel.auth_ref`), y su mensaje de error
+**nunca ecoa el valor**: un error de validación que imprime la contraseña la
+copia al log.
+
+Para las reglas que el dialecto no sabe expresar, el esquema **nombra** su
+validador tipado con `x-typed-validator` y `validate_deployment_config` lo
+invoca tras validar la estructura. Es **fail-closed**: un validador declarado y
+no registrado es un error, nunca un «pues no valido». La tool Playwright es su
+primer usuario (§Playwright).
+
+## Despliegue: instalar deja de ser comprar sin recibir
+
+| Endpoint                                      | Método | Rol mínimo     |
+| --------------------------------------------- | ------ | -------------- |
+| `/marketplace/installations/{id}/deployments` | POST   | `tenant_admin` |
+| `/marketplace/installations/{id}/deployments` | GET    | `tenant_user`  |
+| `/marketplace/deployments/{id}/retire`        | POST   | `tenant_admin` |
+| `/projects/{id}/marketplace/available`        | GET    | `tenant_user`  |
+
+Viven en `routers/marketplace_deployments.py` (fichero propio: `marketplace.py`
+pasa de 1.700 líneas). El servicio es `marketplace/deploy.py`.
+
+**Qué materializa, por tipo de listing:**
+
+- `mcp_server` → una entrada en `projects.mcp_servers` **más** la política
+  rol→tool en `projects.mcp_tool_roles`. **Sin política paralela**: el
+  `role_map` del despliegue rellena la política del ADR 0128 que ya existía, no
+  un mecanismo competidor. Si el manifest declara OAuth, la entrada nace
+  pendiente de conexión y el flujo «Conectar» del ADR 0127 la completa.
+- `tool` / `skill` → filas `agent_tools` / `agent_skills` para los agentes del
+  equipo del proyecto cuyo rol esté en el `role_map`, **reutilizando** la fila
+  `Tool`/`Skill` que la materialización del ADR 0100 creó al instalar. Si esa
+  fila no existe (tipo diferido por el sandbox del ADR 0081), no se escribe nada
+  y el despliegue **lo dice en un `warning`** en vez de fingir que entregó algo.
+
+**Garantías que llevan test:** aislamiento cross-tenant (una instalación del
+tenant A sobre un proyecto de B es un 404, y sus despliegues son invisibles);
+idempotencia (re-desplegar sobre el mismo par devuelve 201 con
+`already_deployed: true` y no duplica); retirada exacta (lo asignado a mano
+sobrevive); y config inválida → **nada escrito**, la transacción entera fuera.
+
+### Las tres puertas de UI (D4)
+
+Las tres escriben la MISMA entidad, que es lo que impide que diverjan:
+
+| Puerta                  | Dónde                                                                |
+| ----------------------- | -------------------------------------------------------------------- |
+| Ficha de la instalación | `app/admin/marketplace/installations/[id]/deployments-section.tsx`   |
+| Wizard de proyecto      | `app/admin/projects/new/capabilities-step.tsx`                       |
+| Pestañas del proyecto   | `app/admin/projects/[id]/mcp-servers` y `.../agent-tools-diagnostic` |
+
+El formulario guiado es uno solo —
+`components/marketplace/deployment-config-form.tsx` — y lo abren las tres.
+Deriva los campos del `config_schema`, así que cualquier listing que declare uno
+tiene formulario sin escribir una línea.
 
 ## Niveles de confianza
 
@@ -114,12 +242,80 @@ los privados de otro tenant. Filtros opcionales `kind`
 (`skill`/`tool`/`mcp_server`) y `trust_level` (422 si el valor es
 desconocido); paginación `limit`/`offset` con orden determinista.
 
+**Encima de la RLS**, desde el ADR 0142 D6 se aplica el filtro de revisión
+(`marketplace/review.py::catalog_visibility_clause`): solo se ve lo
+`published`, más lo propio del tenant en cualquier estado (el autor necesita
+leer el motivo de su rechazo). Un `pending_review` ajeno es un **404**, no un
+403 — un 403 confirmaría que existe.
+
+## Publicar pasa por revisión (ADR 0142 D6)
+
+La máquina de estados del listing vive en `marketplace/review.py` y es la
+**única** puerta por la que `marketplace_listings.review_status` cambia:
+
+```
+draft → pending_review → published | rejected
+published → (promoción de trust_level por el System Admin)
+```
+
+Cada transición comprueba la arista contra un vocabulario cerrado, **exige
+actor** (obligatorio en la firma, no un `None` por defecto) y escribe
+auditoría por partida doble: una fila `marketplace_audit_entries` para que el
+tenant autor vea el veredicto en su propio rastro, y una fila `audit_log` de
+plataforma —cuyo `tenant_id` sí es nullable— para que revisar un listing GLOBAL
+también deje huella.
+
+| Endpoint                                    | Método | Rol mínimo     |
+| ------------------------------------------- | ------ | -------------- |
+| `/admin/marketplace/review-queue`           | GET    | `system_admin` |
+| `/admin/marketplace/listings/{id}/versions` | GET    | `system_admin` |
+| `/admin/marketplace/listings/{id}/approve`  | POST   | `system_admin` |
+| `/admin/marketplace/listings/{id}/reject`   | POST   | `system_admin` |
+| `/admin/marketplace/listings/{id}/promote`  | POST   | `system_admin` |
+
+Van sobre la sesión BYPASSRLS porque revisar es, por definición, mirar lo de
+otro tenant. Un **rechazo sin motivo escrito es un 422**: un rechazo mudo es
+indistinguible de un borrado y no se puede recurrir. `promote` exige que el
+listing esté ya `published` y admite **bajar** además de subir (degradar un
+`verified` estropeado sin despublicarlo, porque despublicar rompería las
+instalaciones vivas). La cola del admin es
+`app/admin/marketplace/review/page.tsx`.
+
+## Versiones y actualización explícita (ADR 0142 D7)
+
+Cada publicación deja una fila en `marketplace_listing_versions`
+(`marketplace/listing_versions.py::snapshot_version`) con el manifest, los
+permisos y el `config_schema` **tal como se publicaron**. La instalación pina la
+versión que consintió; **nada se actualiza solo**.
+
+`POST /marketplace/installations/{id}/update` (`tenant_admin`) hace, en este
+orden:
+
+1. resuelve el destino (semver, `marketplace/versioning.py`) — un salto MAJOR
+   exige `allow_major` explícito;
+2. calcula el **delta de permisos** contra la versión pinada
+   (`listing_versions.permission_diff` → `added` / `removed` / `changed`) y
+   aplica el re-consentimiento **solo del delta**
+   (`marketplace/update_consent.py`): lo ya concedido no se vuelve a preguntar;
+3. re-ejecuta las puertas del install contra el artefacto nuevo (un fallo
+   aborta con 422 y la instalación se queda en su versión vieja);
+4. re-pina la versión y **refresca cada despliegue**
+   (`marketplace/deployment_refresh.py`): campos nuevos toman su default, los
+   retirados se limpian y, si el esquema nuevo exige un campo que no existe ni
+   tiene default, ese despliegue queda `disabled` **con el motivo escrito** en
+   `disabled_reason` — nunca aplicado a medias, y sin arrastrar a los demás;
+5. escribe un audit `refresh` con el informe.
+
+**Rollback = el mismo endpoint** apuntando a una versión anterior del histórico:
+mismo mecanismo de refresco, misma auditoría (el audit marca `rollback: true`).
+
 ## Instalación, consentimiento, updates y revocación
 
 | Endpoint                                       | Método | Rol mínimo      |
 | ---------------------------------------------- | ------ | --------------- |
 | `/marketplace/installations`                   | GET    | `tenant_member` |
 | `/marketplace/installations`                   | POST   | `tenant_admin`  |
+| `/marketplace/installations/{id}`              | GET    | `tenant_member` |
 | `/marketplace/installations/{id}/permissions`  | GET    | `tenant_member` |
 | `/marketplace/installations/{id}/consent`      | POST   | `tenant_admin`  |
 | `/marketplace/installations/{id}/update-check` | GET    | `tenant_member` |
@@ -128,7 +324,10 @@ desconocido); paginación `limit`/`offset` con orden determinista.
 | `/marketplace/installations/{id}`              | DELETE | `tenant_admin`  |
 
 - **`POST /installations`** instala un listing en el tenant del caller
-  (opcionalmente en un proyecto). Un `community`/`experimental` nace
+  (opcionalmente en un proyecto). **No captura configuración alguna** (ADR 0142
+  D2/D8): el cuerpo admite `listing_id`, `project_id` y `granted_permissions`, y
+  la tabla `marketplace_installations` no tiene columna donde guardarla. Los
+  valores se piden al desplegar. Un `community`/`experimental` nace
   `disabled` (sin permisos concedidos); un `verified` instala `enabled`. El
   guard de duplicado-vivo (índice parcial único
   `uq_marketplace_installations_live`) devuelve 409. Desde prod-12
@@ -141,6 +340,25 @@ desconocido); paginación `limit`/`offset` con orden determinista.
   skip honesto (`skipped_reason=no_artifact`) — el hueco pre-registry que
   ADR 0081 documenta. Firma y sandbox en el install fresco siguen diferidos
   a la Fase B/C (ADR 0081).
+- **`async_gates: true` → 202 en vez de 201** (prod-13 `task_prod13_01`). Las dos
+  puertas caras —análisis estático y prueba de humo en sandbox— duran hasta
+  ~4 minutos (120 s de plazo por escáner). `asyncio.to_thread` ya impedía que
+  congelasen el event loop del api-server, pero el REQUEST seguía durando lo
+  mismo, y eso lo corta el timeout de un proxy inverso mientras el cliente
+  reintenta sobre una instalación cuyo estado no conoce. Con `async_gates` el
+  endpoint persiste la instalación en el estado transitorio **`analyzing`**,
+  encola `workers.marketplace_run_install_gates` en la cola **`marketplace`** y
+  responde **202** con `Location: /marketplace/installations/{id}` — el cuerpo ya
+  ES ese recurso. El worker corre las puertas y cierra la instalación con la
+  MISMA política que el camino síncrono (`marketplace/finalize.py`:
+  consentimiento → estado → materialización → auditoría); una puerta que rechaza
+  la deja **`blocked`** con su audit row de aborto enlazado a la instalación.
+  Es **opt-in**: sin el campo, el 201 síncrono no cambia.
+- **`GET /installations/{id}`** es ese recurso de estado (`tenant_member` — es una
+  lectura). Estados que puede devolver: `analyzing` (puertas en cola o
+  corriendo), `blocked` (una puerta rechazó; el motivo está en el audit row),
+  `enabled` / `disabled` (cerrada según el consentimiento que exige su nivel de
+  confianza) y `revoked`. Una instalación de otro tenant es 404, no 403.
 - **`GET .../permissions`** lista los permisos solicitados + su estado
   (GRANTED / DENIED / PENDING) para la UI de consentimiento.
 - **`POST .../consent`** registra la decisión grant/deny por permiso. Cuando
@@ -153,7 +371,9 @@ desconocido); paginación `limit`/`offset` con orden determinista.
 - **`POST .../update`** actualiza a una versión compatible más nueva
   re-ejecutando TODAS las puertas del install (firma / análisis / sandbox)
   contra el artefacto nuevo; un fallo de puerta aborta (422) dejando el
-  install en su versión vieja. Un MAJOR exige `allow_major=true`.
+  install en su versión vieja. Un MAJOR exige `allow_major=true`. Desde el ADR
+  0142 también re-consiente el **delta** de permisos y refresca los despliegues
+  — detalle en §Versiones y actualización explícita.
 - **`DELETE .../{id}`** (uninstall, intent operador) y **`POST .../revoke`**
   (revocación de seguridad) flipean el install a `revoked`, lo deshabilitan,
   soft-deletean (liberan el slot live) y SIEMPRE escriben un audit. Difieren
@@ -281,6 +501,29 @@ la UI renderiza. El agente plantilla GLOBAL **QA E2E Automator**
 `marketplace/e2e_templates.py` aporta plantillas `.spec.ts` parametrizadas
 (login, signup, checkout, search, form-submit).
 
+**Su config es del despliegue, no de la instalación** (`task_mkt2_13`). Era el
+anti-patrón que motivó el ADR 0142: la `base_url` del sitio bajo prueba es del
+proyecto, y al instalar los proyectos que la usarán aún no existen. La pantalla
+`/admin/marketplace/listings/[id]/playwright-config` **ya no existe** y el
+catálogo no ofrece «Configurar»; el formulario que se rinde hoy es el genérico
+del despliegue, una vez por proyecto.
+
+`PlaywrightToolConfig` no se retiró con el formulario: pasó de guardar la config
+a **validarla**. `config_schema()` declara `x-typed-validator: playwright` y
+`validate_deployment_config` invoca `validate_playwright_config` en cada
+despliegue, así que lo que el dialecto genérico no sabe expresar —una `base_url`
+de solo espacios es un `type: string` perfectamente válido y una URL inútil—
+se sigue rechazando.
+
+> **Limitación honesta, hoy.** El listing de Playwright declara
+> `implementation_type: docker_command`, que la materialización del ADR 0100
+> deja **diferida** hasta el sandbox out-of-process (ADR 0081 Fase B/C). Así
+> que instalarlo NO crea fila en el catálogo `tools` del tenant y desplegarlo
+> registra config + auditoría pero **no asigna la tool a ningún agente**: el
+> despliegue devuelve un `warning` que lo dice. Hasta `task_mkt2_13` el manifest
+> no declaraba `implementation_type` en absoluto y el listing destacado
+> **no se podía instalar** (422 en `POST /marketplace/installations`).
+
 ## Variables de configuración
 
 | Variable                         | Para qué                                                                                                                                               |
@@ -295,14 +538,29 @@ dependencias del proyecto.
 ## Tests que pinean estos endpoints
 
 ```bash
+# Plan 09 — catálogo, consentimiento, instalación, privado, compartir
 pytest tests/integration/test_marketplace_endpoints.py tests/integration/test_consent.py
 pytest tests/integration/test_revocation.py tests/integration/test_install_flow.py
 pytest tests/integration/test_marketplace_versioning.py tests/integration/test_private_marketplace.py
 pytest tests/integration/test_cross_tenant_sharing.py
+
+# ADR 0142 — despliegue, revisión, versiones, actualización
+pytest tests/unit/test_marketplace_config_schema.py -q
+pytest tests/integration/test_marketplace_v2_chain.py -q -p no:randomly       # la cadena entera
+pytest tests/integration/test_marketplace_deploy_service.py -q -p no:randomly
+pytest tests/integration/test_marketplace_deployments_api.py -q -p no:randomly
+pytest tests/integration/test_marketplace_review_flow.py -q -p no:randomly
+pytest tests/integration/test_marketplace_update_flow.py -q -p no:randomly
+pytest tests/integration/test_playwright_deploy_config.py -q -p no:randomly   # dos base_url
 ```
 
+> Un solo pytest de integración a la vez, o dale a cada proceso su
+> `TEST_PG_DB_NAME` y su `TEST_REDIS_URL`
+> ([gotcha](../03-guides/gotchas/integration-tests-share-one-database.md)).
+
 Los e2e Playwright de las UIs del marketplace (`permission-consent.spec.ts`,
-`playwright-tool-config.spec.ts`, `playwright-templates.spec.ts`,
-`private-marketplace.spec.ts`, `marketplace-admin.spec.ts`) están escritos
+`playwright-templates.spec.ts`, `private-marketplace.spec.ts`,
+`marketplace-admin.spec.ts`, `marketplace-deploy.spec.ts`) están escritos
 pero **pendientes de verificación humana** (el runtime node-playwright de este
-entorno no tiene navegador).
+entorno no tiene navegador). El de la pantalla de config guiada
+(`playwright-tool-config.spec.ts`) se retiró con la pantalla.

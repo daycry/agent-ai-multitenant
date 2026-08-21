@@ -23,6 +23,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Lock, LockOpen } from "lucide-react";
 
+import { STATUS_LABEL as PLAN_STATUS_KEY } from "@/app/admin/projects/[id]/plans/[planId]/plan-spec-types";
 import { PageHeader } from "@/components/layout/page-header";
 import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -30,8 +31,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
+import { translate, useT, type Lang, type MessageKey } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { fetchAllPages, type PaginatedResult } from "@/lib/paginate";
 import { computeDepState } from "@/lib/task-deps";
+import { useErrorText } from "@/lib/use-error-text";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
 // --------------------------------------------------------------------------
@@ -84,21 +88,28 @@ const PLAN_STATUS_VARIANT: Record<string, BadgeVariant> = {
 // --------------------------------------------------------------------------
 // Status columns. Keep cancelled at the end — it's terminal-but-rare.
 // --------------------------------------------------------------------------
+/**
+ * Las ocho columnas, con la CLAVE de su rótulo y no el texto (prod-16
+ * `task_prod16_03`). El catálogo `taskStatus` es COMPARTIDO con
+ * `projects/[id]/tasks`: éste era su tercer ejemplar con el texto dentro, y
+ * mientras el texto vivía aquí traducir una de las dos pantallas dejaba la otra
+ * a medias.
+ */
 const COLUMNS: Array<{
   id: Task["status"];
-  label: string;
+  labelKey: MessageKey<"taskStatus">;
   variant: BadgeVariant;
 }> = [
-  { id: "backlog", label: "Backlog", variant: "muted" },
-  { id: "ready", label: "Ready", variant: "info" },
-  { id: "in_progress", label: "En curso", variant: "primary" },
+  { id: "backlog", labelKey: "backlog", variant: "muted" },
+  { id: "ready", labelKey: "ready", variant: "info" },
+  { id: "in_progress", labelKey: "inProgress", variant: "primary" },
   // ADR 0020 — el agente queda libre; al aprobar la tarea vuelve a backlog,
   // al rechazar pasa a blocked.
-  { id: "awaiting_human_approval", label: "Pendiente de aprobación", variant: "warning" },
-  { id: "in_review", label: "Revisión", variant: "warning" },
-  { id: "blocked", label: "Bloqueada", variant: "danger" },
-  { id: "done", label: "Hecho", variant: "success" },
-  { id: "cancelled", label: "Cancelada", variant: "muted" },
+  { id: "awaiting_human_approval", labelKey: "awaitingHumanApproval", variant: "warning" },
+  { id: "in_review", labelKey: "inReview", variant: "warning" },
+  { id: "blocked", labelKey: "blocked", variant: "danger" },
+  { id: "done", labelKey: "done", variant: "success" },
+  { id: "cancelled", labelKey: "cancelled", variant: "muted" },
 ];
 
 const PRIORITY_VARIANT: Record<string, BadgeVariant> = {
@@ -109,38 +120,74 @@ const PRIORITY_VARIANT: Record<string, BadgeVariant> = {
 };
 
 /**
+ * Si el valor que manda el backend es una de las cuatro prioridades conocidas.
+ *
+ * Las claves se leen de `PRIORITY_VARIANT`, no de una lista escrita a mano: son
+ * el mismo vocabulario y una copia se desincronizaria. El `task.priority` llega
+ * como `string` del API, asi que el dia que el backend añada una quinta
+ * prioridad esto la deja pasar en crudo —feo pero legible— en vez de romper.
+ */
+function isTaskPriority(value: string): value is MessageKey<"taskPriority"> {
+  return value in PRIORITY_VARIANT;
+}
+
+/** El rótulo traducido de una columna, o el enum crudo si no está en el mapa. */
+function columnLabel(status: Task["status"], lang: Lang): string {
+  const key = COLUMNS.find((c) => c.id === status)?.labelKey;
+  return key ? translate(lang, "taskStatus", key) : status;
+}
+
+/**
  * Turn a failed move into a human message. The server gates DAG-forward moves
  * (ready / in_progress / …) and replies 422 `dependencies_not_done`; surface
- * that as a friendly Spanish line instead of the raw JSON body.
+ * that instead of the raw JSON body.
+ *
+ * `lang` y `fallback` son obligatorios y sin default (prod-16
+ * `task_prod16_03`): la función es pura, así que su castellano no lo veía
+ * ninguna de las dos guardas, y con un default el próximo llamante reintroduce
+ * el fallo sin enterarse. `fallback` es `errorText` del llamante, para que el
+ * cuerpo crudo del backend tampoco salga por la rama de "no era el error
+ * estructurado" (`task_prod16_05`).
  */
-function describeMoveError(err: unknown, target: Task["status"]): string {
+function describeMoveError(
+  err: unknown,
+  target: Task["status"],
+  lang: Lang,
+  fallback: (err: unknown) => string,
+): string {
   if (err instanceof ApiError) {
     try {
       const parsed = JSON.parse(err.body) as {
         detail?: { error?: string; pending?: unknown[]; from?: string; to?: string };
       };
+      const status = columnLabel(target, lang);
       if (parsed.detail?.error === "dependencies_not_done") {
-        const n = parsed.detail.pending?.length ?? 0;
-        const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
-        return `No se puede mover a «${label}»: ${n} dependencia${n === 1 ? "" : "s"} sin completar.`;
+        const count = parsed.detail.pending?.length ?? 0;
+        return translate(lang, "board", count === 1 ? "moveDepsOne" : "moveDepsMany", {
+          status,
+          count,
+        });
       }
       // c1/T2: the state machine rejected this move (409 illegal_transition).
       if (parsed.detail?.error === "illegal_transition") {
-        const label = COLUMNS.find((c) => c.id === target)?.label ?? target;
-        return `Movimiento no permitido a «${label}»: no es una transición válida desde el estado actual de la tarea.`;
+        return translate(lang, "board", "moveIllegal", { status });
       }
     } catch {
-      // body wasn't the structured DAG error — fall back to the raw text.
+      // body wasn't the structured DAG error — fall back to the shared text.
     }
-    return err.body;
   }
-  return String(err);
+  return fallback(err);
 }
 
 // --------------------------------------------------------------------------
 // Page
 // --------------------------------------------------------------------------
 export default function BoardPage() {
+  const errorText = useErrorText();
+  const lang = useLangOptional();
+  const t = useT("taskStatus");
+  const tPlan = useT("planStatus");
+  const tBoard = useT("board");
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
@@ -222,7 +269,7 @@ export default function BoardPage() {
       if (context?.prev) {
         queryClient.setQueryData(["tasks", "by-plan", effectiveSelected], context.prev);
       }
-      setDragError(describeMoveError(err, vars.newStatus));
+      setDragError(describeMoveError(err, vars.newStatus, lang, errorText));
     },
     onSuccess: () => setDragError(null),
   });
@@ -236,9 +283,16 @@ export default function BoardPage() {
     if (newStatus === "ready") {
       const dep = computeDepState(task.depends_on, statusById);
       if (dep.blocked) {
+        // Mismo texto que la rama `dependencies_not_done` de `describeMoveError`
+        // (prod-16 `task_prod16_03`): el motivo es el mismo, así que decirlo con
+        // dos redacciones sólo servía para traducir una y olvidar la otra. El
+        // mensaje nombra la COLUMNA de destino y no el título de la tarjeta, que
+        // es lo que el usuario acaba de arrastrar y tiene delante.
         setDragError(
-          `No se puede mover «${task.title}» a Ready: ${dep.pendingCount} ` +
-            `dependencia${dep.pendingCount === 1 ? "" : "s"} sin completar.`,
+          tBoard(dep.pendingCount === 1 ? "moveDepsOne" : "moveDepsMany", {
+            status: columnLabel(newStatus, lang),
+            count: dep.pendingCount,
+          }),
         );
         return;
       }
@@ -314,50 +368,45 @@ export default function BoardPage() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<LayoutGrid className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Tablero"
-        description="Planes (gerencial) arriba, tareas (operativa) abajo. Arrastra una tarea entre columnas para cambiar su estado."
+        title={tBoard("title")}
+        description={tBoard("description")}
       />
 
       {/* PROY2-08: si se tocó el tope de paginación, decirlo en vez de callar. */}
       {boardTruncated && (
         <Card className="mb-4 border-amber-500 p-3" data-testid="board-truncated-warning">
-          <p className="text-sm text-amber-600 dark:text-amber-400">
-            El tablero muestra un máximo de 2000 filas por listado; hay más elementos que no se
-            están mostrando. Usa los filtros por proyecto/estado para acotar.
-          </p>
+          <p className="text-sm text-amber-600 dark:text-amber-400">{tBoard("truncated")}</p>
         </Card>
       )}
 
       {/* ============ Plans row ============ */}
       <section data-testid="plans-row" className="mb-8">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Planes</h2>
+          <h2 className="text-lg font-semibold">{tBoard("plansHeading")}</h2>
           {plans.length > 0 && (
             <p className="text-muted-foreground text-xs">
-              {plans.length} {plans.length === 1 ? "plan" : "planes"}
+              {tBoard(plans.length === 1 ? "plansCountOne" : "plansCountMany", {
+                count: plans.length,
+              })}
             </p>
           )}
         </div>
 
-        {plansQuery.isLoading && <p className="text-muted-foreground text-sm">Cargando planes…</p>}
+        {plansQuery.isLoading && (
+          <p className="text-muted-foreground text-sm">{tBoard("plansLoading")}</p>
+        )}
 
         {plansQuery.isError && (
           <Card className="border-destructive p-4">
             <p className="text-destructive text-sm">
-              No se pudieron cargar los planes:{" "}
-              {plansQuery.error instanceof ApiError
-                ? plansQuery.error.body
-                : String(plansQuery.error)}
+              {tBoard("plansError")} {errorText(plansQuery.error)}
             </p>
           </Card>
         )}
 
         {plansQuery.data && plans.length === 0 && (
           <Card className="p-8 text-center" data-testid="plans-empty">
-            <p className="text-muted-foreground text-sm">
-              Este tenant aún no tiene planes. Crea un plan desde el chat de planning de un proyecto
-              para empezar.
-            </p>
+            <p className="text-muted-foreground text-sm">{tBoard("plansEmpty")}</p>
           </Card>
         )}
 
@@ -400,10 +449,12 @@ export default function BoardPage() {
                           unblockPlan.mutate(p.id);
                         }}
                       >
-                        Desbloquear
+                        {tBoard("unblockPlan")}
                       </Button>
                     )}
-                    <Badge variant={PLAN_STATUS_VARIANT[p.status] ?? "muted"}>{p.status}</Badge>
+                    <Badge variant={PLAN_STATUS_VARIANT[p.status] ?? "muted"}>
+                      {PLAN_STATUS_KEY[p.status] ? tPlan(PLAN_STATUS_KEY[p.status]) : p.status}
+                    </Badge>
                   </CardContent>
                 </Card>
               );
@@ -416,7 +467,7 @@ export default function BoardPage() {
       <section data-testid="tasks-board">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold">
-            Tareas{" "}
+            {tBoard("tasksHeading")}{" "}
             {effectiveSelected && (
               <span
                 className="text-muted-foreground text-sm font-normal"
@@ -429,12 +480,14 @@ export default function BoardPage() {
           <div className="flex items-center gap-3">
             {effectiveSelected && (
               <Badge variant="success" data-testid="board-live-indicator">
-                Tiempo real
+                {tBoard("live")}
               </Badge>
             )}
             {tasksQuery.data && (
               <p className="text-muted-foreground text-xs">
-                {tasks.length} {tasks.length === 1 ? "tarea" : "tareas"}
+                {tBoard(tasks.length === 1 ? "tasksCountOne" : "tasksCountMany", {
+                  count: tasks.length,
+                })}
               </p>
             )}
           </div>
@@ -451,7 +504,7 @@ export default function BoardPage() {
 
         {!effectiveSelected ? (
           <Card className="p-8 text-center" data-testid="board-no-selection">
-            <p className="text-muted-foreground text-sm">Selecciona un plan para ver sus tareas.</p>
+            <p className="text-muted-foreground text-sm">{tBoard("noSelection")}</p>
           </Card>
         ) : (
           <div
@@ -464,7 +517,7 @@ export default function BoardPage() {
                 <KanbanColumn
                   key={col.id}
                   status={col.id}
-                  label={col.label}
+                  label={t(col.labelKey)}
                   variant={col.variant}
                   tasks={colTasks}
                   loading={tasksQuery.isLoading}
@@ -500,6 +553,7 @@ function KanbanColumn({
   onDrop: (status: Task["status"], taskId: string) => void;
   statusById: ReadonlyMap<string, string>;
 }) {
+  const tBoard = useT("board");
   const [over, setOver] = useState(false);
 
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
@@ -543,12 +597,12 @@ function KanbanColumn({
       </div>
 
       {loading && tasks.length === 0 && (
-        <p className="text-muted-foreground p-2 text-xs">Cargando…</p>
+        <p className="text-muted-foreground p-2 text-xs">{tBoard("colLoading")}</p>
       )}
 
       {!loading && tasks.length === 0 && (
         <p className="text-muted-foreground p-2 text-xs italic" data-testid={`col-empty-${status}`}>
-          Sin tareas
+          {tBoard("colEmpty")}
         </p>
       )}
 
@@ -560,6 +614,8 @@ function KanbanColumn({
 }
 
 function TaskCard({ task, statusById }: { task: Task; statusById: ReadonlyMap<string, string> }) {
+  const tBoard = useT("board");
+  const tPriority = useT("taskPriority");
   const dep = computeDepState(task.depends_on, statusById);
   const [runsOpen, setRunsOpen] = useState(false);
   // A drag fires dragstart (not click), but guard anyway so a drag that ends on
@@ -603,31 +659,33 @@ function TaskCard({ task, statusById }: { task: Task; statusById: ReadonlyMap<st
           <p className="font-medium leading-tight">{task.title}</p>
           {dep.blocked ? (
             <span
-              title={`Bloqueada por ${dep.pendingCount} dependencia${
-                dep.pendingCount === 1 ? "" : "s"
-              } sin completar`}
+              title={tBoard(dep.pendingCount === 1 ? "lockedOne" : "lockedMany", {
+                count: dep.pendingCount,
+              })}
               data-testid={`task-lock-${task.id}`}
               className="mt-0.5 shrink-0"
             >
-              <Lock className="text-danger h-3.5 w-3.5" aria-label="Bloqueada por dependencias" />
+              <Lock className="text-danger h-3.5 w-3.5" aria-label={tBoard("lockedAria")} />
             </span>
           ) : (
             dep.hasDeps && (
               <span
-                title="Todas las dependencias completadas"
+                title={tBoard("unlocked")}
                 data-testid={`task-lock-open-${task.id}`}
                 className="mt-0.5 shrink-0"
               >
                 <LockOpen
                   className="text-muted-foreground h-3.5 w-3.5"
-                  aria-label="Dependencias completadas"
+                  aria-label={tBoard("unlockedAria")}
                 />
               </span>
             )
           )}
         </div>
         <div className="mt-1.5 flex items-center justify-between gap-2">
-          <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>{task.priority}</Badge>
+          <Badge variant={PRIORITY_VARIANT[task.priority] ?? "muted"}>
+            {isTaskPriority(task.priority) ? tPriority(task.priority) : task.priority}
+          </Badge>
           {task.description && (
             <span className="text-muted-foreground line-clamp-1 text-xs">{task.description}</span>
           )}

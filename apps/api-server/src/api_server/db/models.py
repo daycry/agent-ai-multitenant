@@ -25,6 +25,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -35,7 +36,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from uuid6 import uuid7
 
 # Córtex F1 (ADR 0074): import the córtex models so they register on
 # ``Base.metadata``. The Alembic env imports this module, so this guarantees the
@@ -63,6 +66,11 @@ from api_server.db.cortex_curiosity import CortexCuriosityPursuit
 # Córtex F3 (ADR 0074/0077): import the identity models so they register on
 # ``Base.metadata`` (same reason as the F1/F2 models above).
 from api_server.db.cortex_identity import CortexIdentity, CortexIdentityHistory
+
+# Alta por invitación (ADR 0134): import the invitation model so it registers on
+# ``Base.metadata`` (same reason as the córtex models above) — el Alembic env
+# importa este módulo, así que el autogenerate no la vería si no.
+from api_server.db.invitation import UserInvitation
 from api_server.db.llm_usage import LLMUsageEvent
 
 # Marketplace (ADR 0100): import the marketplace models so they register on
@@ -73,8 +81,10 @@ from api_server.db.llm_usage import LLMUsageEvent
 # — without it, importing db.models in isolation raised NoReferencedTableError.
 from api_server.db.marketplace import (
     MarketplaceAuditEntry,
+    MarketplaceDeployment,
     MarketplaceInstallation,
     MarketplaceListing,
+    MarketplaceListingVersion,
     MarketplaceShare,
     MarketplaceSource,
 )
@@ -369,6 +379,11 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
     __table_args__ = (
         Index("ix_audit_log_tenant_created", "tenant_id", "created_at"),
         Index("ix_audit_log_action_created", "action", "created_at"),
+        # part-01 / ADR 0151: monthly RANGE partitioning on ``created_at``
+        # (migration 0136). Declared on the model too because the guard in
+        # ``tests/unit/test_partition_planner.py`` discovers the partitioned
+        # tables from here and demands the maintenance job knows about them.
+        {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
     tenant_id: Mapped[UUID | None] = mapped_column(nullable=True, index=True)
@@ -386,8 +401,13 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
     ip_address: Mapped[str | None] = mapped_column(INET, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # PART OF THE PRIMARY KEY since part-01 (ADR 0151, migration 0136):
+    # PostgreSQL requires the primary key of a partitioned table to include the
+    # partition key, so the PK is ``(id, created_at)``. No foreign key points at
+    # ``audit_log.id``, so nothing depended on ``id`` alone being unique.
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
+        primary_key=True,
         nullable=False,
         server_default=text("now()"),
     )
@@ -656,6 +676,17 @@ class ScimToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
             "tenant_id",
             postgresql_where=text("revoked_at IS NULL"),
         ),
+        # La FK de `tenant_id` que creó la migración 0036; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de los tokens SCIM al eliminar un tenant.
+        # A nivel de tabla (no en la columna) para no reescribir el `tenant_id`
+        # del mixin, cuyo `index=True` aquí acierta.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_scim_tokens_tenant",
+            ondelete="CASCADE",
+        ),
     )
 
     # SHA-256 hex digest (64 chars) of the bearer token. Never the token.
@@ -729,6 +760,17 @@ class ApiToken(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
             "ix_api_tokens_tenant_active",
             "tenant_id",
             postgresql_where=text("revoked_at IS NULL"),
+        ),
+        # La FK de `tenant_id` que creó la migración 0054; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de los tokens al eliminar un tenant.
+        # A nivel de tabla (no en la columna) para no reescribir el `tenant_id`
+        # del mixin, cuyo `index=True` aquí acierta.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_api_tokens_tenant",
+            ondelete="CASCADE",
         ),
     )
 
@@ -813,7 +855,29 @@ class UserMfaTotp(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("tenant_id", "user_id", name="uq_mfa_totp_tenant_user"),
         Index("ix_mfa_totp_tenant_user", "tenant_id", "user_id"),
+        # La FK de `tenant_id` que creó la migración 0037; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada del segundo factor al eliminar un tenant.
+        # A nivel de tabla y no en la columna: el `index=True` del mixin es otro
+        # asunto y se resuelve en el `tenant_id` de abajo, así que mezclar las dos
+        # cosas en un solo `mapped_column` haría que ninguna se leyera sola.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_user_mfa_totp_tenant",
+            ondelete="CASCADE",
+        ),
     )
+
+    # `TenantScopedMixin` pone `index=True` en `tenant_id` para todas sus tablas
+    # por igual, y aquí ese índice PLANO no existe en la base de datos ni hace
+    # falta: la migración creó en su lugar DOS objetos cuya columna guía ya es
+    # `tenant_id` —`uq_mfa_totp_tenant_user (tenant_id, user_id)` y su gemelo no
+    # único `ix_mfa_totp_tenant_user`—, ninguno parcial, así que cualquier
+    # búsqueda por `tenant_id` los usa como prefijo. Un tercer índice sobre la
+    # misma columna guía sólo añadiría escritura en cada alta de MFA. Declararlo
+    # dejaba `alembic check` proponiendo CREAR un índice que nadie quiere.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -875,7 +939,28 @@ class WebauthnCredential(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timestamp
         # and prevents the same authenticator registering twice.
         UniqueConstraint("credential_id", name="uq_webauthn_credential_id"),
         Index("ix_webauthn_tenant_user", "tenant_id", "user_id"),
+        # La FK de `tenant_id` que creó la migración 0038; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de las passkeys al eliminar un tenant.
+        # Mismo caso que `user_mfa_totp`: a nivel de tabla, porque el
+        # `index=True` del mixin es otro asunto y lo resuelve el `tenant_id` de
+        # abajo.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_webauthn_credentials_tenant",
+            ondelete="CASCADE",
+        ),
     )
+
+    # Mismo caso que :class:`UserMfaTotp`: el `index=True` que
+    # `TenantScopedMixin` pone en `tenant_id` no existe en la base de datos
+    # porque la migración creó `ix_webauthn_tenant_user (tenant_id, user_id)`,
+    # NO parcial y con `tenant_id` como columna guía, que ya sirve toda lectura
+    # por tenant (y las de esta tabla siempre llegan por `(tenant_id, user_id)`:
+    # el reto MFA parte del usuario que acaba de autenticarse). El índice plano
+    # sería un prefijo redundante.
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=False)
 
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -923,11 +1008,55 @@ class WebauthnCredential(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, Timestamp
 class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     __tablename__ = "review_sessions"
 
+    # Los índices son PARCIALES sobre filas vivas (migraciones 0024 y 0031) y el
+    # predicado es parte de la definición, no un detalle: un índice total sirve
+    # la misma consulta y cuesta más en cada escritura. Lo fija
+    # `tests/integration/test_migration_review_sessions.py`.
+    #
+    # Falta uno a propósito: `ix_review_sessions_tenant_id` lo declara
+    # `TenantScopedMixin` con `index=True`, o sea SIN el `WHERE deleted_at IS
+    # NULL` que la 0024 sí le puso. Alembic no compara predicados parciales, así
+    # que no sale en el veredicto; arreglarlo pide tocar el mixin, que es de
+    # todas las tablas tenant-scoped y no de esta.
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_review_sessions_tenant",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_review_sessions_plan_id",
+            "plan_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # 0031: compuesto (plan_id, status); complementa al simple, no lo sustituye.
+        Index(
+            "ix_review_sessions_plan_status",
+            "plan_id",
+            "status",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Los dos barridos (`expire_overdue` / `suspend_idle`) sólo miran filas
+        # `running` y vivas.
+        Index(
+            "ix_review_sessions_running_by_expiry",
+            "expires_at",
+            postgresql_where=text("status = 'running' AND deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_review_sessions_running_by_activity",
+            "last_activity_at",
+            postgresql_where=text("status = 'running' AND deleted_at IS NULL"),
+        ),
+    )
+
     # NULLABLE since ADR 0130: an on-demand PROJECT preview has no plan (a plan
     # preview / human-validation session still carries one). Invariant enforced
     # by ck_review_sessions_plan_or_preview: plan_id NULL ⇒ kind='preview'.
     plan_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("plans.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("plans.id", name="fk_review_sessions_plan", ondelete="CASCADE"),
+        nullable=True,
     )
     # ADR 0130 discriminator: 'plan' = human-validation review (verdict writes
     # back to the plan); 'preview' = on-demand app-preview (24h, no verdict).
@@ -944,7 +1073,7 @@ class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
     verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    rejection_reason: Mapped[str | None] = mapped_column(nullable=True)
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     rerun_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
@@ -970,6 +1099,38 @@ class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
 # ---------------------------------------------------------------------------
 class TaskAuditEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     __tablename__ = "task_audit_events"
+    __table_args__ = (
+        # Camino caliente: `GET /api/v1/tasks/{id}/history` es
+        # `WHERE task_id = ? ORDER BY at`. Índice de cobertura exacto (0025).
+        Index("ix_task_audit_events_task_at", "task_id", "at"),
+        # Vistas de auditoría cross-task de un tenant (0025). Al empezar por
+        # `tenant_id` sirve además a la RLS, y por eso esta tabla NO tiene el
+        # índice simple de `tenant_id` que declara `TenantScopedMixin`: sería
+        # un prefijo redundante de éste (ver el override de `tenant_id` abajo).
+        Index("ix_task_audit_events_tenant_at", "tenant_id", "at"),
+    )
+
+    # Override del `id` de `UUIDPrimaryKeyMixin` SÓLO para declarar el
+    # `server_default` que la migración 0025 dejó en la BD. El default de Python
+    # (UUID v7, ordenable por creación) sigue ganando en cualquier INSERT del
+    # ORM; el de la BD es la red para un INSERT en SQL crudo que omita la
+    # columna. Sin declararlo, un autogenerate propone `DROP DEFAULT` sobre
+    # producción.
+    id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid7,
+        server_default=text("gen_random_uuid()"),
+    )
+    # Override del `tenant_id` de `TenantScopedMixin`: la FK a `organizations`
+    # que la 0025 creó (el mixin no declara ninguna), y SIN `index=True` porque
+    # el índice simple no existe en la BD — `ix_task_audit_events_tenant_at` ya
+    # empieza por `tenant_id`, así que un btree suelto sobre la columna sería
+    # peso muerto en la tabla de auditoría, que sólo crece.
+    tenant_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE", name="fk_task_audit_events_tenant"),
+        nullable=False,
+    )
 
     task_id: Mapped[UUID] = mapped_column(
         ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
@@ -1032,6 +1193,17 @@ class IncomingWebhookConfig(
         CheckConstraint(
             "origin IN ('github', 'gitlab', 'jira', 'sentry', 'linear', 'generic')",
             name="ck_incoming_webhook_configs_origin",
+        ),
+        # La FK de `tenant_id` que creó la migración 0055 — la misma que ya
+        # declara `IncomingWebhookEvent` unas líneas más abajo, y por el mismo
+        # motivo: `TenantScopedMixin` no declara ninguna, así que sin esto un
+        # autogenerate propone BORRARLA y con ella el borrado en cascada de las
+        # configuraciones (y de sus secretos Fernet) al eliminar un tenant.
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_incoming_webhook_configs_tenant",
+            ondelete="CASCADE",
         ),
     )
 
@@ -1100,6 +1272,26 @@ class IncomingWebhookEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
             postgresql_where=text("delivery_id IS NOT NULL"),
         ),
         Index("ix_incoming_webhook_events_config", "config_id", "received_at"),
+        # «Los replays del evento X» (auditoría, migración 0057). Parcial: sólo
+        # las filas que SON un replay, que son una minoría frente a las entregas
+        # genuinas (`replayed_from_event_id IS NULL`).
+        Index(
+            "ix_incoming_webhook_events_replayed_from",
+            "replayed_from_event_id",
+            postgresql_where=text("replayed_from_event_id IS NOT NULL"),
+        ),
+        # La FK de `tenant_id` que creó la migración 0055; `TenantScopedMixin` no
+        # declara ninguna, así que sin esto un autogenerate propone BORRARLA — y
+        # con ella el borrado en cascada de los eventos al eliminar un tenant.
+        # A nivel de tabla (no en la columna) para no tocar el mixin, que aquí sí
+        # acierta con el `index=True` (`ix_incoming_webhook_events_tenant_id`
+        # existe, lo creó la propia 0055).
+        ForeignKeyConstraint(
+            ["tenant_id"],
+            ["organizations.id"],
+            name="fk_incoming_webhook_events_tenant",
+            ondelete="CASCADE",
+        ),
     )
 
     config_id: Mapped[UUID] = mapped_column(
@@ -1149,18 +1341,12 @@ class IncomingWebhookEvent(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
 __all__ = [
     "ApiToken",
     "ApiTokenScope",
+    "AssistantConversation",
+    "AssistantTurn",
     "AuditAction",
     "AuditLog",
     "BrowseSession",
     "CortexAffectSnapshot",
-    "AssistantConversation",
-    "LLMUsageEvent",
-    "MarketplaceAuditEntry",
-    "MarketplaceInstallation",
-    "MarketplaceListing",
-    "MarketplaceShare",
-    "MarketplaceSource",
-    "AssistantTurn",
     "CortexConversation",
     "CortexCuriosityPursuit",
     "CortexIdentity",
@@ -1168,6 +1354,14 @@ __all__ = [
     "CortexTurn",
     "IncomingWebhookConfig",
     "IncomingWebhookEvent",
+    "LLMUsageEvent",
+    "MarketplaceAuditEntry",
+    "MarketplaceDeployment",
+    "MarketplaceInstallation",
+    "MarketplaceListing",
+    "MarketplaceListingVersion",
+    "MarketplaceShare",
+    "MarketplaceSource",
     "Organization",
     "PlatformSetting",
     "ReviewSession",
@@ -1178,6 +1372,7 @@ __all__ = [
     "TaskAuditEvent",
     "TenantSetting",
     "User",
+    "UserInvitation",
     "UserOrganizationMembership",
     "UserRole",
 ]

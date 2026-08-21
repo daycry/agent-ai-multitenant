@@ -386,8 +386,8 @@ class TaskLifecycle:
 
 
 __all__ = [
-    "AuditEvent",
     "DEFAULT_MAX_REVIEW_RETRIES",
+    "AuditEvent",
     "HumanAction",
     "InMemoryTaskStore",
     "Notifier",

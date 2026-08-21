@@ -103,19 +103,64 @@ API nunca las devuelve (write-only).
 
 #### `llm_providers.py` (Plan 11.2)
 
-| Endpoint                         | Método | Rol mínimo     |
-| -------------------------------- | ------ | -------------- |
-| `/admin/llm-providers`           | GET    | `system_admin` |
-| `/admin/llm-providers`           | POST   | `system_admin` |
-| `/admin/llm-providers/{id}`      | GET    | `system_admin` |
-| `/admin/llm-providers/{id}`      | PUT    | `system_admin` |
-| `/admin/llm-providers/{id}`      | DELETE | `system_admin` |
-| `/admin/llm-providers/{id}/test` | POST   | `system_admin` |
+| Endpoint                                | Método | Rol mínimo     |
+| --------------------------------------- | ------ | -------------- |
+| `/admin/llm-providers`                  | GET    | `system_admin` |
+| `/admin/llm-providers`                  | POST   | `system_admin` |
+| `/admin/llm-providers/{id}`             | GET    | `system_admin` |
+| `/admin/llm-providers/{id}`             | PUT    | `system_admin` |
+| `/admin/llm-providers/{id}`             | DELETE | `system_admin` |
+| `/admin/llm-providers/{id}/test`        | POST   | `system_admin` |
+| `/admin/llm-providers/{id}/sync-models` | POST   | `system_admin` |
 
 > `POST` recibe la credencial como `SecretStr` y la escribe en Vault; la
 > BD guarda sólo `secret_vault_path`. `PUT` rota la credencial si se
 > envía. `DELETE` borra también el secreto de Vault. `/test` hace un
 > liveness probe clasificado leyendo el secreto de Vault, sin echo-arlo.
+> `/sync-models` refresca el catálogo de modelos del provider.
+
+#### `platform_settings.py` — ajustes de plataforma (añadido tras Plan 06.8)
+
+| Endpoint                                 | Método | Rol mínimo     |
+| ---------------------------------------- | ------ | -------------- |
+| `/admin/platform-settings`               | GET    | `system_admin` |
+| `/admin/platform-settings/_registry`     | GET    | `system_admin` |
+| `/admin/platform-settings/model-options` | GET    | `system_admin` |
+| `/admin/platform-settings/{key}`         | PUT    | `system_admin` |
+
+> Los cuatro llevan `require_system_admin` sobre la sesión BYPASSRLS
+> (`get_admin_session`): los ajustes son **platform-global**, sin
+> `tenant_id` ni RLS. `_registry` devuelve el catálogo de claves
+> permitidas (`PUT` de una clave fuera del registry es 4xx, no un
+> ajuste nuevo); `model-options` alimenta los selectores de modelo del
+> panel. `PUT` deja `audit_log`.
+>
+> **No estaba en esta matriz hasta prod-15** (hallazgo docsroadmap-5).
+> La guardia que lo evita en adelante es
+> `tests/unit/test_rbac_matrix_drift.py`, que falla si aparece un prefijo
+> o una ruta `/admin/*` sin fila aquí.
+
+#### `ollama.py` — gestión de modelos Ollama (ADR 0056)
+
+| Endpoint                    | Método | Rol mínimo     |
+| --------------------------- | ------ | -------------- |
+| `/admin/ollama/models`      | GET    | `system_admin` |
+| `/admin/ollama/models/pull` | POST   | `system_admin` |
+| `/admin/ollama/models`      | DELETE | `system_admin` |
+
+> Reutiliza a propósito la auth de la plataforma (`require_system_admin`)
+> en vez de montar una auth paralela no-tenant-aware contra el Ollama del
+> stack. `pull` y `delete` mutan el host: nunca `tenant_admin`.
+> Tampoco estaba en la matriz hasta prod-15.
+
+#### `embeddings.py` — catálogo de modelos de embedding
+
+| Endpoint                             | Método | Rol mínimo     |
+| ------------------------------------ | ------ | -------------- |
+| `/admin/embeddings/available-models` | GET    | `system_admin` |
+
+> Hallazgo **nuevo** de prod-15, que la auditoría 2026-06 no listó: este
+> router tampoco figuraba en la matriz. Sólo lee el catálogo disponible.
 
 #### `copilot_device_flow.py` — Device Flow de GitHub Copilot (Plan 11.2)
 
@@ -130,16 +175,19 @@ API nunca las devuelve (write-only).
 
 #### `model_prices.py` (catálogo global — Plan 11, asociación a provider en 11.2)
 
-| Endpoint                   | Método | Rol mínimo     |
-| -------------------------- | ------ | -------------- |
-| `/model-prices`            | GET    | `tenant_user`  |
-| `/model-prices/current`    | GET    | `tenant_user`  |
-| `/model-prices/{id}`       | GET    | `tenant_user`  |
-| `/admin/model-prices`      | GET    | `system_admin` |
-| `/admin/model-prices`      | POST   | `system_admin` |
-| `/admin/model-prices/{id}` | PATCH  | `system_admin` |
-| `/admin/model-prices/{id}` | DELETE | `system_admin` |
-| `/admin/model-prices/sync` | POST   | `system_admin` |
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/model-prices`                  | GET    | `tenant_user`  |
+| `/model-prices/current`          | GET    | `tenant_user`  |
+| `/model-prices/{id}`             | GET    | `tenant_user`  |
+| `/admin/model-prices`            | GET    | `system_admin` |
+| `/admin/model-prices`            | POST   | `system_admin` |
+| `/admin/model-prices/{id}`       | PATCH  | `system_admin` |
+| `/admin/model-prices/{id}`       | DELETE | `system_admin` |
+| `/admin/model-prices/sync`       | POST   | `system_admin` |
+| `/admin/model-prices/sync/diff`  | POST   | `system_admin` |
+| `/admin/model-prices/sync/apply` | POST   | `system_admin` |
+| `/admin/model-prices/sync/audit` | GET    | `system_admin` |
 
 > El catálogo de lectura (`/model-prices`) es read-open para cualquier
 > member (RLS de lectura global, espeja `exchange_rates`); las mutaciones
@@ -445,6 +493,52 @@ catálogo oficial) corre sobre el engine BYPASSRLS.
 | `/marketplace/shares/{id}`           | DELETE | `tenant_admin` |
 | `/admin/marketplace/*`               | GET    | `system_admin` |
 
+**Visibilidad del catálogo (ADR 0142 D6).** `GET /marketplace/listings` y
+`GET /marketplace/listings/{id}` aplican, **encima de la RLS**, el filtro de
+revisión: solo se ve lo `published`, más lo propio del tenant en cualquier
+estado (el autor necesita leer el motivo de su rechazo). Un listing en
+`pending_review` ajeno es un **404**, no un 403 — un 403 confirmaría que existe.
+
+#### Cola de revisión — System Admin (ADR 0142 D6)
+
+Sobre la sesión BYPASSRLS, porque revisar es por definición mirar lo de otro
+tenant: un `pending_review` es invisible para cualquier sesión que no sea la de
+su autor, así que la cola no se puede servir desde una sesión de tenant.
+
+| Endpoint                                    | Método | Rol mínimo     |
+| ------------------------------------------- | ------ | -------------- |
+| `/admin/marketplace/review-queue`           | GET    | `system_admin` |
+| `/admin/marketplace/listings/{id}/versions` | GET    | `system_admin` |
+| `/admin/marketplace/listings/{id}/approve`  | POST   | `system_admin` |
+| `/admin/marketplace/listings/{id}/reject`   | POST   | `system_admin` |
+| `/admin/marketplace/listings/{id}/promote`  | POST   | `system_admin` |
+
+Un rechazo **sin motivo escrito es un 422** (`ListingRejectRequest.reason`
+tiene `min_length=1` y `review.reject_listing` lo vuelve a comprobar tras el
+`strip()`): un rechazo mudo es indistinguible de un borrado y no se puede
+recurrir. `promote` exige que el listing esté ya `published`, y admite **bajar**
+además de subir — degradar un `verified` estropeado sin despublicarlo, porque
+despublicar rompería las instalaciones vivas.
+
+### `marketplace_deployments.py` (ADR 0142, plan marketplace-v2-despliegue)
+
+El despliegue de una instalación en un proyecto concreto —la entidad que el
+[ADR 0142](../05-architecture-decisions/0142-marketplace-despliegue-tres-capas.md)
+introduce— vive en su propio router porque `marketplace.py` ya sostiene toda la
+superficie del plan 09. Mismo reparto de siempre: **mutaciones `tenant_admin`,
+lecturas `tenant_member`**.
+
+Un id de otro tenant devuelve **404**, no 403: la RLS de
+`marketplace_deployments` (ENABLE + FORCE + `tenant_isolation`) lo esconde, y un
+403 confirmaría que existe.
+
+| Endpoint                                      | Método | Rol mínimo     |
+| --------------------------------------------- | ------ | -------------- |
+| `/marketplace/installations/{id}/deployments` | POST   | `tenant_admin` |
+| `/marketplace/installations/{id}/deployments` | GET    | `tenant_user`  |
+| `/marketplace/deployments/{id}/retire`        | POST   | `tenant_admin` |
+| `/projects/{id}/marketplace/available`        | GET    | `tenant_user`  |
+
 ### `auth/api-tokens`, SSO, MFA, SCIM (Plan 08 / Plan 13 / ADR 0047)
 
 Contratos completos en [auth-sso.md](./auth-sso.md) (SSO/MFA/SCIM) y
@@ -579,16 +673,40 @@ son `tenant_admin`. Detalle en [evals-stats.md](./evals-stats.md).
 
 ### `backup.py` (Plan 12)
 
-| Endpoint                                | Método           | Rol mínimo                                        |
-| --------------------------------------- | ---------------- | ------------------------------------------------- |
-| `/admin/backup/schedule`                | GET              | `tenant_member`                                   |
-| `/admin/backup/schedule`                | PUT              | `system_admin`                                    |
-| `/admin/backup/destinations` (+`/test`) | GET / PUT / POST | `tenant_member` (GET) · `system_admin` (mutación) |
-| `/admin/backup/restore/*`               | \*               | `system_admin`                                    |
+| Endpoint                                 | Método | Rol mínimo      |
+| ---------------------------------------- | ------ | --------------- |
+| `/admin/backup/schedule`                 | GET    | `tenant_member` |
+| `/admin/backup/schedule`                 | PUT    | `system_admin`  |
+| `/admin/backup/destinations`             | GET    | `tenant_member` |
+| `/admin/backup/destinations`             | PUT    | `system_admin`  |
+| `/admin/backup/destinations/{name}/test` | POST   | `system_admin`  |
+| `/admin/backup/restore/*`                | \*     | `system_admin`  |
 
 > Restaurar es estrictamente `system_admin` (corre sobre BYPASSRLS). Ver
 > [backup-restore.md](./backup-restore.md) +
 > [runbooks de DR](../06-runbooks/dr-full-restore.md).
+
+### `invitations.py` — invitaciones de registro (ADR 0134)
+
+| Endpoint                         | Método | Rol mínimo     |
+| -------------------------------- | ------ | -------------- |
+| `/admin/invitations`             | POST   | `system_admin` |
+| `/admin/invitations`             | GET    | `system_admin` |
+| `/admin/invitations/{id}/revoke` | POST   | `system_admin` |
+
+> El operador cerró el registro público en el
+> [ADR 0134](../05-architecture-decisions/0134-auto-registro-en-produccion.md)
+> (opción C): se entra con un token de invitación. Emitir uno es, en la práctica,
+> **conceder acceso a la plataforma**, así que los tres verbos son
+> `system_admin` — no `tenant_admin`.
+>
+> El token se guarda **hasheado**, nunca en claro, y solo se muestra una vez al
+> emitirlo (mismo trato que `api_tokens` y `scim_tokens`).
+>
+> **La excepción de arranque**: si la tabla `users` está vacía, `POST /auth/register`
+> acepta sin invitación y promociona a ese primer usuario — si no, una instalación
+> nueva quedaría inaccesible para siempre, y con ella el rol System Owner, que es
+> el único que abre el córtex.
 
 ### `docs_viewer.py` — visor de docs por proyecto (Plan 15)
 

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from docker.types import Mount
+
 from workers.config import Settings
 
 # The two filesystem locations the Docker daemon socket lives at, plus

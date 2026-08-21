@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/marketplace — the cohesive Tenant-Admin marketplace
@@ -135,13 +136,7 @@ const SHARE = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ME) }),
@@ -179,9 +174,9 @@ async function setup(page: Page): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Catalog — browse + Playwright config link
+// Catalog — browse, y NADA de configuración (task_mkt2_13 / ADR 0142)
 // ---------------------------------------------------------------------------
-test("catalog tab lists global + private listings and links Playwright config", async ({
+test("catalog tab lists global + private listings and offers no install-time config", async ({
   page,
 }) => {
   await setup(page);
@@ -194,11 +189,11 @@ test("catalog tab lists global + private listings and links Playwright config", 
   // private vs global badges
   await expect(page.getByTestId(`catalog-private-${PRIVATE_ID}`)).toBeVisible();
   await expect(page.getByTestId(`catalog-global-${GLOBAL_ID}`)).toBeVisible();
-  // Playwright tool exposes the guided-config link
-  await expect(page.getByTestId(`catalog-playwright-config-${PLAYWRIGHT_ID}`)).toHaveAttribute(
-    "href",
-    `/admin/marketplace/listings/${PLAYWRIGHT_ID}/playwright-config`,
-  );
+  // El catálogo ya NO ofrece configurar Playwright: con las tres capas del ADR
+  // 0142 la config es del despliegue (por proyecto), no de la instalación. La
+  // aserción es en negativo a propósito — es la que se pondría roja si alguien
+  // reintrodujera el formulario en el flujo de instalación.
+  await expect(page.getByTestId(`catalog-playwright-config-${PLAYWRIGHT_ID}`)).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

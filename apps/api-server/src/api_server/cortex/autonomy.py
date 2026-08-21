@@ -10,7 +10,12 @@ salvaguardas NO negociables (ADR 0078, parte del MVP del bucle — no un fast-fo
      trabajo.
   2. **Budget caps** por ventana DIARIA en Redis (``cortex:budget:{owner}:{kind}:
      {yyyymmdd}`` con ``INCR`` + cap). Al superar el cap → no-op + log. La clave
-     expira a medianoche UTC (ventana diaria que se autolimpia).
+     expira a medianoche UTC (ventana diaria que se autolimpia). Hay **dos
+     dimensiones** y se aplican como AND (:func:`check_and_reserve`): nº de
+     **búsquedas** (acota el egress) y **gasto en USD** (acota el dinero). Son
+     independientes porque una pasada con razonamiento profundo (``claude_sdk`` +
+     WebSearch nativa, ADR 0076) puede costar más que veinte búsquedas baratas: un
+     tope de búsquedas NO es un tope de coste.
   3. **Circuit-breaker** por owner+kind (``cortex:cb:{owner}:{kind}``): tras N
      fallos consecutivos se ABRE durante ``cooldown_s`` y el bucle deja de
      intentar; un éxito resetea el contador.
@@ -39,6 +44,9 @@ _FAIL_SUFFIX = "fails"
 
 #: Kinds de budget/breaker conocidos (auditoría; un kind nuevo no requiere cambio).
 CURIOSITY_KIND = "curiosity"
+#: Dimensión de COSTE de la curiosidad (dólares del día). Clave SEPARADA de la de
+#: búsquedas a propósito: mezclarlas haría que 3 búsquedas contasen como 3 dólares.
+CURIOSITY_USD_KIND = "curiosity_usd"
 
 
 def _yyyymmdd(now: datetime) -> str:
@@ -80,13 +88,23 @@ def seconds_until_utc_midnight(now: datetime) -> int:
 class BudgetDecision:
     """El veredicto del budget gate: ``allowed`` + la ``reason`` legible + el uso.
 
-    ``used`` es el contador actual de la ventana; ``cap`` el tope; ``allowed`` es
-    ``used < cap`` (con cap ≤ 0 ⇒ nunca permitido — curiosidad apagada de facto)."""
+    ``used``/``cap`` son la dimensión de **búsquedas** (contador de la ventana y
+    tope); ``used_usd``/``cap_usd`` la de **gasto**. ``allowed`` exige estar por
+    debajo de AMBOS (con cualquier cap ≤ 0 ⇒ nunca permitido — esa dimensión apaga
+    la curiosidad de facto).
+
+    Las dos dimensiones viajan en el mismo veredicto para que el panel pueda
+    enseñar «0.12 USD de 0.50» y el pursuit ``skipped`` pueda decir CUÁL de los dos
+    topes lo paró (el ``reason`` las distingue). Los campos de coste llevan default
+    para que :func:`check_searches_budget` —que solo mira búsquedas— siga
+    construyendo la decisión sin ellos."""
 
     allowed: bool
     reason: str
     used: int
     cap: int
+    used_usd: float = 0.0
+    cap_usd: float = 0.0
 
 
 async def check_searches_budget(
@@ -139,6 +157,132 @@ async def record_searches(
         return new_total
     except Exception:  # contabilidad best-effort; el trabajo ya se hizo
         return 0
+
+
+def _as_float(raw: Any) -> float:
+    """Lee un contador de dólares de Redis tolerando basura (devuelve 0.0).
+
+    El bucle corre sin nadie mirando: una clave pisada por otro proceso (o un ``SET``
+    manual de operador) no puede convertirse en una excepción dentro de beat. Se lee
+    0 —el lado que NO bloquea la curiosidad legítima— porque el cap de búsquedas
+    sigue ahí como segunda barrera."""
+    if raw is None:
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def read_budget_usage(
+    redis: Any,
+    *,
+    owner_user_id: str,
+    now: datetime,
+) -> tuple[int, float]:
+    """El uso de la ventana del día: ``(búsquedas, dólares)``. Sin efectos.
+
+    Lo usan el gate y el panel («consumido vs cap»). Propaga los errores de Redis al
+    caller (:func:`check_and_reserve` los traduce a ``redis_error``): un lector que
+    los tapase devolvería «0 gastado» ante un Redis caído, que es el lado peligroso."""
+    searches_raw = await redis.get(daily_budget_key(owner_user_id, CURIOSITY_KIND, now=now))
+    usd_raw = await redis.get(daily_budget_key(owner_user_id, CURIOSITY_USD_KIND, now=now))
+    searches = int(searches_raw) if searches_raw is not None else 0
+    return searches, _as_float(usd_raw)
+
+
+async def check_and_reserve(
+    redis: Any,
+    *,
+    owner_user_id: str,
+    usd_cap: float,
+    searches_cap: int,
+    now: datetime,
+) -> BudgetDecision:
+    """¿Hay budget para una pasada de curiosidad, en búsquedas **y** en dólares?
+
+    Las dos dimensiones son AND: agotar cualquiera de las dos bloquea la pasada. El
+    ``reason`` dice cuál (``budget_exhausted`` / ``usd_budget_exhausted`` /
+    ``cap_zero`` / ``usd_cap_zero`` / ``redis_error``), porque el pursuit ``skipped``
+    que se escribe a continuación es la única explicación que verá el owner.
+
+    **NO reserva nada** (el nombre viene del plan): el consumo real se registra
+    DESPUÉS de investigar, con :func:`record_spend`. Si consultar incrementase, cada
+    pasada que muere más adelante —drive gate, sin tema, approval gate— quemaría
+    budget que nunca se usó y la curiosidad se apagaría sola.
+
+    Fail-safe del coste: un fallo de Redis ⇒ ``allowed=False`` (ante la duda NO
+    gastamos)."""
+    if searches_cap <= 0:
+        return BudgetDecision(
+            allowed=False, reason="cap_zero", used=0, cap=searches_cap, cap_usd=usd_cap
+        )
+    if usd_cap <= 0:
+        # Misma semántica que la dimensión hermana: "no gastes" se lee como "no
+        # actúes", NO como "sin tope". Se niega sin tocar Redis (fail-safe barato).
+        return BudgetDecision(
+            allowed=False, reason="usd_cap_zero", used=0, cap=searches_cap, cap_usd=usd_cap
+        )
+    try:
+        searches, usd = await read_budget_usage(redis, owner_user_id=owner_user_id, now=now)
+    except Exception:  # Redis caído ⇒ fail-safe del coste (no autorizamos gasto)
+        return BudgetDecision(
+            allowed=False, reason="redis_error", used=0, cap=searches_cap, cap_usd=usd_cap
+        )
+    if searches >= searches_cap:
+        return BudgetDecision(
+            allowed=False,
+            reason="budget_exhausted",
+            used=searches,
+            cap=searches_cap,
+            used_usd=usd,
+            cap_usd=usd_cap,
+        )
+    if usd >= usd_cap:
+        return BudgetDecision(
+            allowed=False,
+            reason="usd_budget_exhausted",
+            used=searches,
+            cap=searches_cap,
+            used_usd=usd,
+            cap_usd=usd_cap,
+        )
+    return BudgetDecision(
+        allowed=True,
+        reason="ok",
+        used=searches,
+        cap=searches_cap,
+        used_usd=usd,
+        cap_usd=usd_cap,
+    )
+
+
+async def record_spend(
+    redis: Any,
+    *,
+    owner_user_id: str,
+    cost_usd: float,
+    searches: int,
+    now: datetime,
+) -> None:
+    """Acumula el consumo REAL de una pasada en la ventana del día (ambas dimensiones).
+
+    ``INCRBYFLOAT`` para los dólares + :func:`record_searches` para las búsquedas,
+    cada uno con ``EXPIRE`` hasta medianoche UTC. Un coste 0 (Ollama local: sin
+    factura de API, ADR 0021) NO crea la clave de dólares — no queremos claves a 0
+    por owners que nunca gastaron.
+
+    Best-effort: corre DESPUÉS de investigar, así que un fallo de Redis se traga (el
+    trabajo ya se hizo y no vamos a tirar la pasada por no poder contarla)."""
+    await record_searches(redis, owner_user_id=owner_user_id, count=searches, now=now)
+    if cost_usd <= 0:
+        return
+    key = daily_budget_key(owner_user_id, CURIOSITY_USD_KIND, now=now)
+    try:
+        await redis.incrbyfloat(key, float(cost_usd))
+        await redis.expire(key, seconds_until_utc_midnight(now))
+    except Exception:  # contabilidad best-effort; el gasto ya ocurrió
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -199,14 +343,18 @@ async def record_success(redis: Any, *, owner_user_id: str, kind: str = CURIOSIT
 
 __all__ = [
     "CURIOSITY_KIND",
+    "CURIOSITY_USD_KIND",
     "BudgetDecision",
+    "check_and_reserve",
     "check_searches_budget",
     "circuit_fails_key",
     "circuit_key",
     "daily_budget_key",
     "is_circuit_open",
+    "read_budget_usage",
     "record_failure",
     "record_searches",
+    "record_spend",
     "record_success",
     "seconds_until_utc_midnight",
 ]

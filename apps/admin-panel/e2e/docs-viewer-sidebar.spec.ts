@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the docs visor sidebar (Plan 07 Fase D, task_07_11).
@@ -45,9 +46,7 @@ const TREE_A = {
 const EMPTY_TREE = { project_id: PROJECT_B, folders: [], files: [] };
 
 async function setup(page: Page, projects: object[]): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/projects", (route) =>
     route.fulfill({
       status: 200,

@@ -130,8 +130,7 @@ class TopicRestrictionGuardrail:
         self._forbidden = _coerce_topics(config.get("forbidden_topics"), field="forbidden_topics")
         if not self._allowed and not self._forbidden:
             raise GuardrailConfigError(
-                "topic_restriction guardrail requires 'allowed_topics' and/or "
-                "'forbidden_topics'."
+                "topic_restriction guardrail requires 'allowed_topics' and/or 'forbidden_topics'."
             )
         injected = config.get("matcher")
         if injected is not None and not isinstance(injected, TopicMatcher):

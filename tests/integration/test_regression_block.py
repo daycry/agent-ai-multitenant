@@ -16,8 +16,9 @@ INJECTED scripted ``diff_provider`` that returns a canned diff. We assert:
   * a drop WITHIN tolerance -> PASS (a configurable threshold flips the decision
     on the SAME diff inputs);
   * an IMPROVED and an UNCHANGED diff -> PASS;
-  * the CLI exit code reflects the gate (block -> non-zero, pass -> 0; and
-    ``--dry-run`` short-circuits to 0 without a provider);
+  * the CLI exit code reflects the gate (block -> 1, pass -> 0, and a gate that
+    could NOT measure -> 2 INCONCLUSIVE, never 0; ``--dry-run`` short-circuits
+    to 0 without a provider, which is the declared no-provider CI path);
   * cross_tenant: a diff is only meaningful within ONE dataset — a cross-dataset
     (hence cross-tenant) run pair is rejected before any verdict, so it can never
     reach the gate.
@@ -38,6 +39,7 @@ from api_server.db import domain as _domain  # noqa: F401
 from api_server.db.evals import EvalResult, EvalResultVerdict, EvalRun
 from api_server.evals.ci_run import (
     EXIT_GATE_BLOCKED,
+    EXIT_GATE_INCONCLUSIVE,
     EXIT_GATE_PASSED,
     CiRunArgs,
     gate_decision,
@@ -240,11 +242,33 @@ def test_cli_dry_run_passes_without_a_provider() -> None:
     assert exit_code == EXIT_GATE_PASSED
 
 
-def test_cli_without_provider_does_not_block() -> None:
-    # No --dry-run but also no live diff provider wired: no regression signal to
-    # act on -> do NOT block (gate failure must mean a real regression).
+def test_cli_without_provider_is_inconclusive_never_a_pass() -> None:
+    """Sin `--dry-run` y sin productor: INCONCLUSIVE (exit 2), nunca PASS.
+
+    **Este test afirmaba lo contrario** (`test_cli_without_provider_does_not_block`,
+    «no regression signal to act on -> do NOT block»), y por eso se reescribe en
+    vez de adaptarse: era la trampa nº2 de
+    `docs/03-guides/verificar-antes-de-implementar.md` —un test que documenta el
+    comportamiento observado sin preguntarse si es el correcto convierte el fallo
+    en contrato y encima lo protege de futuros arreglos—. Aqui protegia el
+    unico camino que la rama viva del workflow podia tomar, porque en el repo no
+    hay ni un productor de diff en produccion. O sea que el merge-gate de
+    regresion no podia bloquear NADA, en verde.
+
+    Su razonamiento («que el gate falle debe significar una regresion de verdad»)
+    era bueno y se conserva: por eso el codigo de salida NO es el 1 de una
+    regresion, es un 2 propio. Lo que no se sostiene es el salto de ahi a «luego
+    sale 0»: entre «hay regresion» y «no hay regresion» falta «no lo se», que es
+    lo que pasa cuando no se ha medido.
+
+    La forma legitima de salir en 0 sin medir sigue siendo `--dry-run`
+    (ADR 0038, decision 3), que es una declaracion explicita del invocante y
+    tiene su propio test justo debajo.
+    """
     exit_code = main(["--agent", "a", "--dataset", "d", "--baseline-run", "b"])
-    assert exit_code == EXIT_GATE_PASSED
+    assert exit_code == EXIT_GATE_INCONCLUSIVE
+    assert exit_code != EXIT_GATE_PASSED
+    assert exit_code != EXIT_GATE_BLOCKED
 
 
 # ===========================================================================

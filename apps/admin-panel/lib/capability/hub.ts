@@ -19,6 +19,7 @@
  * `lib/tools/taxonomy.ts`.
  */
 
+import { pickLang, translate } from "@/lib/i18n";
 import type { Lang } from "@/lib/lang-context";
 
 // ---------------------------------------------------------------------------
@@ -87,9 +88,15 @@ export interface CapabilityWarning {
 /** Código del aviso de agente global (ADR 0054); espeja `WARN_GLOBAL_AGENT`. */
 export const WARN_GLOBAL_AGENT = "global_agent_no_project_context";
 
-/** Texto de un aviso bilingüe en el idioma activo. */
+/**
+ * Texto de un aviso bilingüe en el idioma activo.
+ *
+ * El aviso lo redacta el BACKEND (`{code, es, en}`), así que no hay clave de
+ * diccionario que valga: se resuelve con `pickLang`, que además cae al otro
+ * idioma si el pedido viene vacío.
+ */
 export function warningText(warning: CapabilityWarning, lang: Lang): string {
-  return lang === "es" ? warning.es : warning.en;
+  return pickLang(lang, warning);
 }
 
 export interface CapabilitiesResponse {
@@ -204,15 +211,12 @@ export function saberStatus(saber: CapabilitySaber, lang: Lang): SectionStatus {
   const n = saber.knowledge_bases.length;
   if (n === 0) {
     return {
-      badge: lang === "es" ? "Sin conocimiento asignado" : "No knowledge assigned",
+      badge: translate(lang, "capabilityHub", "saberEmpty"),
       tone: "muted",
       active: false,
     };
   }
-  const badge =
-    lang === "es"
-      ? `${n} ${n === 1 ? "KB asignada" : "KBs asignadas"}`
-      : `${n} ${n === 1 ? "KB assigned" : "KBs assigned"}`;
+  const badge = translate(lang, "capabilityHub", n === 1 ? "saberOne" : "saberMany", { n });
   return { badge, tone: "success", active: true };
 }
 
@@ -226,7 +230,7 @@ export function recordarStatus(recordar: CapabilityRecordar, lang: Lang): Sectio
   // private silencioso (solo en agente): la sección NO está realmente activa.
   if (recordar.memory_scope === "private") {
     return {
-      badge: lang === "es" ? "Privada: no memoriza" : "Private: not remembering",
+      badge: translate(lang, "capabilityHub", "recordarPrivate"),
       tone: "warning",
       active: false,
     };
@@ -234,23 +238,21 @@ export function recordarStatus(recordar: CapabilityRecordar, lang: Lang): Sectio
   const hasProject = recordar.memory.some((m) => m.scope === "project_shared" && m.count > 0);
   if (total === 0) {
     return {
-      badge: lang === "es" ? "Sin memoria todavía" : "No memory yet",
+      badge: translate(lang, "capabilityHub", "recordarEmpty"),
       tone: "muted",
       active: false,
     };
   }
   if (!hasProject) {
     return {
-      badge:
-        lang === "es" ? `${total} en memoria · sin proyecto` : `${total} in memory · no project`,
+      badge: translate(lang, "capabilityHub", "recordarNoProject", { n: total }),
       tone: "info",
       active: true,
     };
   }
-  const badge =
-    lang === "es"
-      ? `${total} ${total === 1 ? "memoria" : "memorias"}`
-      : `${total} ${total === 1 ? "memory" : "memories"}`;
+  const badge = translate(lang, "capabilityHub", total === 1 ? "recordarOne" : "recordarMany", {
+    n: total,
+  });
   return { badge, tone: "success", active: true };
 }
 
@@ -262,14 +264,14 @@ export function recordarStatus(recordar: CapabilityRecordar, lang: Lang): Sectio
 export function serStatus(ser: CapabilitySer | null, lang: Lang): SectionStatus {
   if (ser === null) {
     return {
-      badge: lang === "es" ? "No aplica" : "Not applicable",
+      badge: translate(lang, "capabilityHub", "serNotApplicable"),
       tone: "muted",
       active: false,
     };
   }
   if (!ser.model_configured) {
     return {
-      badge: lang === "es" ? "Modelo no configurado" : "Model not configured",
+      badge: translate(lang, "capabilityHub", "serUnconfigured"),
       tone: "warning",
       active: false,
     };
@@ -277,7 +279,7 @@ export function serStatus(ser: CapabilitySer | null, lang: Lang): SectionStatus 
   const model = ser.model ?? "";
   const badge = ser.provider ? `${ser.provider} · ${model}`.trim() : model;
   return {
-    badge: badge || (lang === "es" ? "Modelo configurado" : "Model configured"),
+    badge: badge || translate(lang, "capabilityHub", "serConfigured"),
     tone: "success",
     active: true,
   };
@@ -291,7 +293,7 @@ export function serStatus(ser: CapabilitySer | null, lang: Lang): SectionStatus 
 export function hacerStatus(hacer: CapabilityHacer, lang: Lang): SectionStatus {
   if (hacer.unrestricted) {
     return {
-      badge: lang === "es" ? "Sin restricción por agente" : "No per-agent restriction",
+      badge: translate(lang, "capabilityHub", "hacerUnrestricted"),
       tone: "info",
       active: true,
     };
@@ -299,15 +301,12 @@ export function hacerStatus(hacer: CapabilityHacer, lang: Lang): SectionStatus {
   const n = hacer.effective.length;
   if (n === 0) {
     return {
-      badge: lang === "es" ? "Sin acciones efectivas" : "No effective actions",
+      badge: translate(lang, "capabilityHub", "hacerEmpty"),
       tone: "muted",
       active: false,
     };
   }
-  const badge =
-    lang === "es"
-      ? `${n} ${n === 1 ? "acción efectiva" : "acciones efectivas"}`
-      : `${n} ${n === 1 ? "effective action" : "effective actions"}`;
+  const badge = translate(lang, "capabilityHub", n === 1 ? "hacerOne" : "hacerMany", { n });
   return { badge, tone: "success", active: true };
 }
 
@@ -370,6 +369,31 @@ export function globalAgentNotice(caps: CapabilitiesResponse, lang: Lang): strin
   const warning = caps.warnings.find((w) => w.code === WARN_GLOBAL_AGENT);
   if (warning) return warningText(warning, lang);
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Aviso de linaje compartido (`task_gov_07`, plan gov-01).
+//
+// El backend compara la FAMILIA de modelo del agente con la del revisor de su
+// equipo y emite este aviso cuando coinciden. Aquí solo se selecciona y se
+// traduce: toda la lógica de familias vive en `api_server/capabilities.py`
+// sobre `KIND_TO_LITELLM_FAMILIES`, que es la fuente única — replicar el mapa en
+// TypeScript lo dejaría desincronizado a la primera vez que cambie el catálogo.
+// ---------------------------------------------------------------------------
+
+/** Código del aviso de linaje compartido; espeja `WARN_SHARED_MODEL_LINEAGE`. */
+export const WARN_SHARED_LINEAGE = "shared_model_lineage";
+
+/**
+ * Texto BILINGÜE del aviso de linaje compartido, o `null` si no aplica.
+ *
+ * Se empareja por `code` y NUNCA por el texto: buscar prosa castellana es lo que
+ * dejó muerta la rama EN antes del follow-up bilingüe de 06.17.
+ */
+export function sharedLineageNotice(caps: CapabilitiesResponse, lang: Lang): string | null {
+  if (caps.entity_type !== "agent") return null;
+  const warning = caps.warnings.find((w) => w.code === WARN_SHARED_LINEAGE);
+  return warning ? warningText(warning, lang) : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@
 
 import React, { useMemo } from "react";
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export interface PlanGanttTask {
@@ -126,12 +127,13 @@ function computeSchedule(tasks: PlanGanttTask[]): ComputedTask[] {
 }
 
 export function PlanGantt({ tasks }: { tasks: PlanGanttTask[] }) {
+  const t = useT("planDetail");
   const computed = useMemo(() => computeSchedule(tasks), [tasks]);
 
   if (computed.length === 0) {
     return (
       <p className="text-muted-foreground text-sm italic" data-testid="plan-gantt-empty">
-        Sin tareas para representar.
+        {t("diagramEmpty")}
       </p>
     );
   }
@@ -145,7 +147,7 @@ export function PlanGantt({ tasks }: { tasks: PlanGanttTask[] }) {
       <svg
         data-testid="plan-gantt-svg"
         role="img"
-        aria-label="Diagrama de Gantt con línea crítica"
+        aria-label={t("ganttAriaLabel")}
         width={totalWidth}
         height={totalHeight}
         viewBox={`0 0 ${totalWidth} ${totalHeight}`}

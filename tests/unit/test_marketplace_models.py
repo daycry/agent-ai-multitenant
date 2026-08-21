@@ -58,7 +58,18 @@ def test_trust_level_enum_values() -> None:
 
 
 def test_installation_status_enum_values() -> None:
+    # `analyzing` y `blocked` entraron el 2026-08-19 (prod-13 task_prod13_01): la
+    # instalacion es el RECURSO DE ESTADO del 202 que devuelve el endpoint cuando
+    # las puertas de seguridad corren en la cola `marketplace`, asi que necesita
+    # decir «esperando veredicto» y «rechazada por una puerta».
+    #
+    # Los dos son valores TRANSITORIOS y NO necesitaron migracion: la columna es
+    # `varchar(16)` sin CHECK (migracion 0041), o sea que el conjunto valido se
+    # aplica aqui en Python y en ningun sitio del DDL — este test ES la guarda.
+    # Ambos caben en 16 caracteres.
     assert {s.value for s in InstallationStatus} == {
+        "analyzing",
+        "blocked",
         "enabled",
         "disabled",
         "revoked",
@@ -392,15 +403,34 @@ def test_relationship_round_trip_in_memory() -> None:
 # ---------------------------------------------------------------------------
 # Sanity: no stray CheckConstraints we didn't intend (documentation guard)
 # ---------------------------------------------------------------------------
+#: Los CHECK que SÍ queremos, por tabla. Lo que no esté aquí es un descuido.
+#:
+#: Nació como «ninguno»: la fase A dejaba la validación de estado en la capa de
+#: servicio y el propio docstring anticipaba que algún día serían CHECKs. Ese día
+#: llegó con la migración 0129 (máquina de estados de revisión del ADR 0142), y
+#: entonces el guard tenía dos salidas: borrarlo —perdiendo lo que de verdad
+#: vigila, que es el CHECK que alguien añade sin pensar— o pasar a lista de
+#: permitidos. Es lo segundo: añadir uno nuevo obliga a escribirlo aquí, que es
+#: exactamente la fricción que se busca.
+_INTENDED_CHECKS: dict[str, set[str]] = {
+    "marketplace_listings": {"ck_marketplace_listings_review_status"},
+}
+
+
 def test_no_unexpected_check_constraints() -> None:
-    """Phase A keeps it simple — no CHECK constraints on these tables yet
-    (status/kind/trust validation is enum-enforced in the service layer
-    and may become CHECKs in task_09_02's migration)."""
+    """Ningún CHECK fuera de los declarados arriba (guard de documentación)."""
     for model in (
         MarketplaceSource,
         MarketplaceListing,
         MarketplaceInstallation,
         MarketplaceAuditEntry,
     ):
-        checks = [c for c in model.__table__.constraints if isinstance(c, CheckConstraint)]
-        assert checks == [], f"{model.__name__} has unexpected CHECK constraints"
+        table = model.__table__
+        found = {c.name for c in table.constraints if isinstance(c, CheckConstraint) and c.name}
+        expected = _INTENDED_CHECKS.get(table.name, set())
+        unexpected = found - expected
+        assert not unexpected, f"{model.__name__} tiene CHECKs no declarados: {sorted(unexpected)}"
+        missing = expected - found
+        assert not missing, (
+            f"{model.__name__} ha PERDIDO CHECKs que se daban por puestos: {sorted(missing)}"
+        )

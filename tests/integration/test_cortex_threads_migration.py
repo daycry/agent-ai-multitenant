@@ -112,8 +112,7 @@ async def test_cortex_tables_and_check_and_reversible(
             "h",
         )
         await conn.execute(
-            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id)"
-            " VALUES ($1, $2, $3)",
+            "INSERT INTO cortex_conversations (id, owner_user_id, tenant_id) VALUES ($1, $2, $3)",
             conv_id,
             owner_id,
             tenant_id,

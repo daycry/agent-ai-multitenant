@@ -207,7 +207,7 @@ def test_upload_maps_client_error_to_destination_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="upload_file")
     bundle = _bundle(tmp_path)
 
-    with pytest.raises(DestinationError, match="S3 upload to .* failed"):
+    with pytest.raises(DestinationError, match=r"S3 upload to .* failed"):
         dest.upload(bundle)
 
 
@@ -238,7 +238,7 @@ def test_list_remote_paginates_and_strips_prefix(tmp_path: Path) -> None:
 def test_list_remote_maps_client_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="list_objects_v2")
 
-    with pytest.raises(DestinationError, match="S3 list of .* failed"):
+    with pytest.raises(DestinationError, match=r"S3 list of .* failed"):
         dest.list_remote()
 
 
@@ -268,7 +268,7 @@ def test_download_fetches_prefix_joined_key_to_dest(tmp_path: Path) -> None:
 def test_download_maps_client_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="download_file")
 
-    with pytest.raises(DestinationError, match="S3 download of .* failed"):
+    with pytest.raises(DestinationError, match=r"S3 download of .* failed"):
         dest.download("missing.tar.enc", tmp_path)
 
 
@@ -336,7 +336,7 @@ def test_missing_credentials_map_to_destination_error_on_upload(tmp_path: Path) 
         client_factory=lambda **_kw: MockS3Client(build_kwargs={}),
     )
 
-    with pytest.raises(DestinationError, match="missing S3 credentials|no value for S3"):
+    with pytest.raises(DestinationError, match=r"missing S3 credentials|no value for S3"):
         dest.upload(_bundle(tmp_path))
 
 

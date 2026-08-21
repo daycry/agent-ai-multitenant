@@ -107,24 +107,24 @@ def test_human_actions_reset_or_close_task() -> None:
         return TaskLifecycle(store=store), store
 
     # approve_manual → done + manual_approval=True
-    lc, store = fresh_lc()
+    lc, _store = fresh_lc()
     t = lc.apply_human_action("t", "approve_manual", actor="alice")
     assert t.status == "done" and t.manual_approval
 
     # reassign_with_guidance → backlog + retry_count=0
-    lc, store = fresh_lc()
+    lc, _store = fresh_lc()
     t = lc.apply_human_action(
         "t", "reassign_with_guidance", actor="alice", guidance="try X instead"
     )
     assert t.status == "backlog" and t.retry_count == 0
 
     # block_with_reason → blocked
-    lc, store = fresh_lc()
+    lc, _store = fresh_lc()
     t = lc.apply_human_action("t", "block_with_reason", actor="alice", reason="waiting on API")
     assert t.status == "blocked"
 
     # cancel → cancelled
-    lc, store = fresh_lc()
+    lc, _store = fresh_lc()
     t = lc.apply_human_action("t", "cancel", actor="alice")
     assert t.status == "cancelled"
 

@@ -52,11 +52,16 @@ KNOWN_EMBEDDING_MODELS: dict[str, int] = {
 
 
 def _normalise(name: str) -> str:
-    """Strip a trailing ``:latest`` so ``/api/tags`` names match catalog keys.
+    """Canonical form of a model ref (``:latest`` stripped, legacy alias mapped).
 
     Ollama reports installed models as ``nomic-embed-text:latest``; the catalog
-    keys the family without that implicit tag."""
-    return name[:-7] if name.endswith(":latest") else name
+    keys the family without that implicit tag. Delegates to the ADR 0155
+    contract so the catalog and the KB stamp agree on what «the same model»
+    means — before, ``nomic-embed-text-v1.5`` (the label sealed on every KB) was
+    NOT recognised as an embedder at all."""
+    from api_server.ingestion.embedding_contract import canonical_model_ref
+
+    return canonical_model_ref(name)
 
 
 def known_dim(name: str) -> int | None:

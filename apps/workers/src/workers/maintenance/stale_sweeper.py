@@ -11,10 +11,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
@@ -163,7 +164,7 @@ async def _sweep_stale_executions_async(
     moment = now or datetime.now(UTC)
     cutoff = moment - stale_after
     orphan_cutoff = moment - _ORPHAN_CONTAINER_GRACE
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     swept = 0
     reaped = 0
     containers_removed = 0

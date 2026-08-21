@@ -53,7 +53,7 @@ def upgrade() -> None:
     )
     # Backfill: las KB sembradas bajo el platform tenant son el catálogo.
     op.execute(
-        "UPDATE knowledge_bases SET is_builtin = true" f" WHERE tenant_id = '{_PLATFORM_TENANT_ID}'"
+        f"UPDATE knowledge_bases SET is_builtin = true WHERE tenant_id = '{_PLATFORM_TENANT_ID}'"
     )
     # Catálogo legible por toda sesión de tenant (keya por la bandera, no
     # por tenant_id). Convive con knowledge_bases_tenant_isolation (FOR

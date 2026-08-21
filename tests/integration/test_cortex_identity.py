@@ -1,14 +1,15 @@
 """Córtex F3 (bloque 1) — cortex_identity (singleton) + cortex_identity_history.
 
 Ejercita (a) la migración 0094: ``alembic upgrade head`` crea ``cortex_identity``
-+ ``cortex_identity_history`` + sus índices, NO les pone RLS (tenant-less sobre
-BYPASSRLS, ADR 0074), el UNIQUE singleton ``uq_cortex_identity_owner`` rechaza un
++ ``cortex_identity_history`` + sus índices; desde la migración ``0140`` (ADR 0156)
+las dos llevan RLS de eje OWNER, el UNIQUE singleton ``uq_cortex_identity_owner`` rechaza un
 segundo identity del MISMO owner, y ``alembic downgrade 0093_cortex_affect`` las
 elimina (reversible); (b) la capa de persistencia owner-scoped:
 ``ensure_identity`` crea una default idempotente (singleton), ``update_identity``
 versiona en history (v1, v2…) con diff+reason y ``get_identity`` devuelve el
 último estado; (c) **cross-owner**: un owner ajeno NUNCA ve/edita la identidad de
-otro (filtro ``owner_user_id`` explícito; no hay RLS de respaldo).
+otro (filtro ``owner_user_id`` explícito **y**, desde la migración ``0140`` /
+ADR 0156, RLS de eje owner por debajo).
 
 Patrón de fixtures + admin sessionmaker BYPASSRLS tomado de
 ``test_cortex_affect_store.py``.
@@ -105,7 +106,8 @@ async def _seed_two_owners(dsn: str) -> dict[str, UUID]:
 
 
 # ---------------------------------------------------------------------------
-# Migración 0094: tablas + índices + UNIQUE singleton + NO RLS + reversible
+# Migración 0094: tablas + índices + UNIQUE singleton + reversible
+# (+ RLS de eje owner desde la 0140 — ADR 0156)
 # ---------------------------------------------------------------------------
 async def _table_exists(conn: asyncpg.Connection, name: str) -> bool:
     return bool(
@@ -128,7 +130,7 @@ async def _index_exists(conn: asyncpg.Connection, name: str) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_identity_migration_indexes_no_rls_singleton_and_reversible(
+async def test_identity_migration_indexes_rls_singleton_and_reversible(
     configured_app, migrations_pg_dsn: str, alembic_config
 ) -> None:
     seed = await _seed_two_owners(migrations_pg_dsn)
@@ -141,12 +143,40 @@ async def test_identity_migration_indexes_no_rls_singleton_and_reversible(
         assert await _index_exists(conn, "ix_cortex_identity_history_owner_version")
         assert await _index_exists(conn, "uq_cortex_identity_history_owner_version")
 
-        # tenant-less BYPASSRLS: ninguna tabla debe llevar RLS activada.
+        # RLS de eje OWNER (ADR 0156, migración 0140). Esta aserción decía lo
+        # CONTRARIO hasta el 2026-08-19 —«ninguna tabla debe llevar RLS
+        # activada»— y no era un descuido: venía del ADR 0074, que leyó
+        # «tenant-less» como «sin eje que defender». El ADR 0156 corrige la
+        # inferencia: que el eje no sea el tenant no exime de RLS, obliga a
+        # defender el eje que sí hay. Aquí vive la identidad del System Owner,
+        # y `app_user` (NOBYPASSRLS) tiene DML sobre estas tablas por los
+        # default privileges, así que lo único que las separaba de una sesión
+        # de tenant era que cada query recordase su filtro.
         for tname in ("cortex_identity", "cortex_identity_history"):
             relrowsecurity = await conn.fetchval(
                 "SELECT relrowsecurity FROM pg_class WHERE relname = $1", tname
             )
-            assert relrowsecurity is False, tname
+            assert relrowsecurity is True, (
+                f"{tname} se quedó sin RLS: la migración 0140 la protege por"
+                " `owner_user_id = app.user_id` (ADR 0156)"
+            )
+            relforcerowsecurity = await conn.fetchval(
+                "SELECT relforcerowsecurity FROM pg_class WHERE relname = $1", tname
+            )
+            assert relforcerowsecurity is True, (
+                f"{tname} tiene RLS pero sin FORCE: el dueño de la tabla se la"
+                " saltaría, que es justo el rol de las migraciones"
+            )
+            policies = await conn.fetch(
+                "SELECT polname, pg_get_expr(polqual, polrelid) AS qual FROM pg_policy"
+                " WHERE polrelid = $1::regclass",
+                tname,
+            )
+            assert len(policies) == 1, f"{tname}: esperaba UNA policy, vi {len(policies)}"
+            qual = policies[0]["qual"] or ""
+            assert "app.user_id" in qual, (
+                f"{tname}: la policy no cuelga de `app.user_id` sino de {qual!r}"
+            )
 
         # Singleton: un segundo identity para el MISMO owner viola el UNIQUE.
         await conn.execute(
@@ -376,3 +406,140 @@ async def test_identity_is_owner_scoped_cross_owner(
         assert len(b_versions) == 1
     finally:
         await conn.close()
+
+
+# ---------------------------------------------------------------------------
+# list_history — el timeline de versiones CON su diff (F3.2)
+# ---------------------------------------------------------------------------
+# Por qué existe: hasta la auditoría del 2026-07-27 no había NINGUNA función de
+# lectura del histórico. El único lector era una query inline dentro de
+# ``GET /owner/cortex/journal`` que aplana narrativas y **descarta el ``diff``**,
+# así que el timeline de versiones ("qué tocó cada reflexión") era inconstruible.
+# Estos tests fijan las tres propiedades que un timeline necesita y que una
+# implementación descuidada rompe sin que nadie lo note: orden DESCENDENTE (el
+# ``limit`` debe recortar por lo VIEJO, no por lo nuevo), presencia del ``diff``, y
+# aislamiento por owner (estas tablas no tienen RLS de respaldo).
+@pytest.mark.asyncio
+async def test_list_history_returns_versions_newest_first_with_diff(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    from api_server.cortex.identity import ensure_identity, list_history, update_identity
+
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+    sessionmaker = _admin_sessionmaker(admin_database_url)
+
+    async with sessionmaker() as session:
+        base = await ensure_identity(session, owner_id)
+        state = dict(base.identity_state)
+        await session.commit()
+
+    # Tres reescrituras, cada una tocando UN campo distinto.
+    steps = [
+        ({"name": "Atlas"}, "onboarding: autonombrado"),
+        ({"core_values": ["rigor"]}, "reflexión 1: fija un valor"),
+        ({"narrative": "Aprendo del owner."}, "reflexión 2: narrativa"),
+    ]
+    for delta, reason in steps:
+        state = {**state, **delta}
+        async with sessionmaker() as session:
+            await update_identity(session, owner_id, new_state=state, reason=reason)
+            await session.commit()
+
+    async with sessionmaker() as session:
+        rows = await list_history(session, owner_id, 10)
+
+    # Las tres versiones, MÁS RECIENTE PRIMERO (el índice del timeline es DESC).
+    assert [r.version for r in rows] == [3, 2, 1]
+    # El ``diff`` viaja (lo que el /journal descartaba) y es SOLO lo que cambió.
+    assert set(rows[0].diff) == {"narrative"}
+    assert rows[0].diff["narrative"]["after"] == "Aprendo del owner."
+    assert set(rows[1].diff) == {"core_values"}
+    assert set(rows[2].diff) == {"name"}
+    # Y el resto de la fila de auditoría: reason + quién escribió.
+    assert rows[0].reason == "reflexión 2: narrativa"
+    assert rows[2].reason == "onboarding: autonombrado"
+    assert rows[0].updated_by == "reflection"
+    # El snapshot completo también, para poder reconstruir cualquier versión.
+    assert rows[2].identity_state["name"] == "Atlas"
+
+
+@pytest.mark.asyncio
+async def test_list_history_limit_keeps_the_latest_versions(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    """El defecto que atrapa: ordenar ASC y recortar con ``limit`` devolvería las N
+    versiones MÁS ANTIGUAS — un timeline que nunca enseña lo último. Con 3 versiones
+    y ``limit=2`` la respuesta correcta es [3, 2], no [1, 2]."""
+    from api_server.cortex.identity import ensure_identity, list_history, update_identity
+
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+    sessionmaker = _admin_sessionmaker(admin_database_url)
+
+    async with sessionmaker() as session:
+        base = await ensure_identity(session, owner_id)
+        state = dict(base.identity_state)
+        await session.commit()
+    for i in (1, 2, 3):
+        state = {**state, "narrative": f"v{i}"}
+        async with sessionmaker() as session:
+            await update_identity(session, owner_id, new_state=state, reason=f"r{i}")
+            await session.commit()
+
+    async with sessionmaker() as session:
+        latest_two = await list_history(session, owner_id, 2)
+        assert [r.version for r in latest_two] == [3, 2]
+        # limit=1 → solo la última.
+        assert [r.version for r in await list_history(session, owner_id, 1)] == [3]
+        # limit no positivo → lista vacía, no un LIMIT negativo que reventaría en SQL.
+        assert await list_history(session, owner_id, 0) == []
+        assert await list_history(session, owner_id, -5) == []
+
+
+@pytest.mark.asyncio
+async def test_list_history_is_owner_scoped(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    """Cross-owner OBLIGATORIO: el filtro explícito es la primera línea, y desde
+    la migración 0140 (ADR 0156) hay RLS de eje owner detrás. Este test vigila la
+    primera; el catálogo de `test_cortex_owner_rls.py` vigila la segunda."""
+    from api_server.cortex.identity import ensure_identity, list_history, update_identity
+
+    seed = await _seed_two_owners(migrations_pg_dsn)
+    owner_id = seed["owner_id"]
+    other_id = seed["other_id"]
+    sessionmaker = _admin_sessionmaker(admin_database_url)
+
+    async with sessionmaker() as session:
+        a = await ensure_identity(session, owner_id)
+        await update_identity(
+            session,
+            owner_id,
+            new_state={**dict(a.identity_state), "name": "Atlas"},
+            reason="onboarding A",
+        )
+        await session.commit()
+
+    # Owner B sin identidad: su histórico está VACÍO (no ve el de A).
+    async with sessionmaker() as session:
+        assert await list_history(session, other_id, 50) == []
+
+    # Y con histórico propio, sigue viendo SOLO el suyo.
+    async with sessionmaker() as session:
+        b = await ensure_identity(session, other_id)
+        await update_identity(
+            session,
+            other_id,
+            new_state={**dict(b.identity_state), "name": "Eco"},
+            reason="onboarding B",
+        )
+        await session.commit()
+
+    async with sessionmaker() as session:
+        b_rows = await list_history(session, other_id, 50)
+        a_rows = await list_history(session, owner_id, 50)
+    assert [r.identity_state["name"] for r in b_rows] == ["Eco"]
+    assert [r.identity_state["name"] for r in a_rows] == ["Atlas"]
+    assert all(r.owner_user_id == other_id for r in b_rows)
+    assert all(r.owner_user_id == owner_id for r in a_rows)

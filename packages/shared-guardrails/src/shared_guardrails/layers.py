@@ -56,8 +56,7 @@ class LockedFieldOverrideError(GuardrailConfigError):
 
     def __init__(self, *, hook: HookPoint, key: str, layer: LayerName) -> None:
         super().__init__(
-            f"Layer {layer!r} cannot override platform-locked guardrail "
-            f"{key!r} at hook {hook!r}."
+            f"Layer {layer!r} cannot override platform-locked guardrail {key!r} at hook {hook!r}."
         )
         self.hook = hook
         self.key = key

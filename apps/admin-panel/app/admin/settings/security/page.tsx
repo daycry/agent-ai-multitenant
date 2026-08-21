@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface MfaStatus {
   enrolled: boolean;
@@ -34,6 +35,7 @@ interface MfaEnrollment {
  * sola vez (el backend solo persiste sus hashes).
  */
 export default function SecuritySettingsPage() {
+  const t = useT("settingsSecurity");
   const queryClient = useQueryClient();
   const [enrollment, setEnrollment] = useState<MfaEnrollment | null>(null);
   const [confirmCode, setConfirmCode] = useState("");
@@ -57,7 +59,7 @@ export default function SecuritySettingsPage() {
       setConfirmError(null);
       queryClient.setQueryData(["mfa-totp-status"], data);
     },
-    onError: () => setConfirmError("Código incorrecto — comprueba la app e inténtalo de nuevo."),
+    onError: () => setConfirmError(t("confirmError")),
   });
 
   const disable = useMutation({
@@ -70,17 +72,15 @@ export default function SecuritySettingsPage() {
   return (
     <main className="mx-auto w-full max-w-3xl space-y-6 p-6">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Seguridad</h1>
-        <p className="text-muted-foreground text-sm">
-          Verificación en dos pasos para tu cuenta (TOTP — Google Authenticator, 1Password, Authy…).
-        </p>
+        <h1 className="text-xl font-semibold tracking-tight">{t("title")}</h1>
+        <p className="text-muted-foreground text-sm">{t("description")}</p>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <KeyRound className="h-5 w-5" aria-hidden="true" />
-            Verificación en dos pasos
+            {t("cardTitle")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -90,10 +90,10 @@ export default function SecuritySettingsPage() {
             <div className="space-y-4" data-testid="mfa-status-on">
               <p className="flex items-center gap-2 text-sm">
                 <ShieldCheck className="h-5 w-5 text-emerald-600" aria-hidden="true" />
-                Activada. Te pediremos un código al iniciar sesión.
+                {t("on")}
               </p>
               <p className="text-muted-foreground text-sm">
-                Códigos de recuperación sin usar: {status.data?.recovery_codes_remaining ?? 0}
+                {t("recoveryLeft", { n: status.data?.recovery_codes_remaining ?? 0 })}
               </p>
               <Button
                 variant="destructive"
@@ -102,7 +102,7 @@ export default function SecuritySettingsPage() {
                 onClick={() => disable.mutate()}
               >
                 {disable.isPending && <Spinner className="mr-2 h-4 w-4" />}
-                Desactivar
+                {t("disable")}
               </Button>
             </div>
           )}
@@ -111,8 +111,7 @@ export default function SecuritySettingsPage() {
             <div className="space-y-4" data-testid="mfa-status-off">
               <p className="flex items-center gap-2 text-sm">
                 <ShieldOff className="text-muted-foreground h-5 w-5" aria-hidden="true" />
-                No activada. Con la plataforma expuesta a internet, actívala: protege tu cuenta
-                aunque la contraseña se filtre.
+                {t("off")}
               </p>
               <Button
                 data-testid="mfa-enroll-button"
@@ -120,7 +119,7 @@ export default function SecuritySettingsPage() {
                 onClick={() => enroll.mutate()}
               >
                 {enroll.isPending && <Spinner className="mr-2 h-4 w-4" />}
-                Activar verificación en dos pasos
+                {t("enroll")}
               </Button>
             </div>
           )}
@@ -128,20 +127,17 @@ export default function SecuritySettingsPage() {
           {enrollment && (
             <div className="space-y-5" data-testid="mfa-enrollment">
               <div className="space-y-2">
-                <p className="text-sm font-medium">1 · Escanea el QR con tu app de autenticación</p>
+                <p className="text-sm font-medium">{t("step1")}</p>
                 <div className="bg-white inline-block rounded-lg p-3" data-testid="mfa-qr">
                   <QRCodeSVG value={enrollment.provisioning_uri} size={168} />
                 </div>
                 <p className="text-muted-foreground text-xs">
-                  ¿No puedes escanear? Introduce la clave a mano:{" "}
-                  <code className="font-mono">{enrollment.secret}</code>
+                  {t("manualKey")} <code className="font-mono">{enrollment.secret}</code>
                 </p>
               </div>
 
               <div className="space-y-2">
-                <p className="text-sm font-medium">
-                  2 · Guarda los códigos de recuperación (solo se muestran esta vez)
-                </p>
+                <p className="text-sm font-medium">{t("step2")}</p>
                 <ul className="grid grid-cols-2 gap-1 font-mono text-sm" data-testid="mfa-recovery">
                   {enrollment.recovery_codes.map((code) => (
                     <li key={code}>{code}</li>
@@ -150,10 +146,10 @@ export default function SecuritySettingsPage() {
               </div>
 
               <div className="space-y-2">
-                <p className="text-sm font-medium">3 · Confirma con el código de la app</p>
+                <p className="text-sm font-medium">{t("step3")}</p>
                 <div className="flex items-end gap-2">
                   <div className="space-y-1.5">
-                    <Label htmlFor="mfa-confirm">Código</Label>
+                    <Label htmlFor="mfa-confirm">{t("codeLabel")}</Label>
                     <Input
                       id="mfa-confirm"
                       data-testid="mfa-confirm-input"
@@ -170,7 +166,7 @@ export default function SecuritySettingsPage() {
                     onClick={() => confirm.mutate(confirmCode.trim())}
                   >
                     {confirm.isPending && <Spinner className="mr-2 h-4 w-4" />}
-                    Confirmar
+                    {t("confirm")}
                   </Button>
                 </div>
                 {confirmError && (

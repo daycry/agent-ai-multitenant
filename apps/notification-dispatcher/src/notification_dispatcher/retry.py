@@ -58,8 +58,7 @@ def compute_backoff(
     The result is non-negative and monotonically non-decreasing in expectation
     until it saturates at ``max_backoff_s``.
     """
-    if retries < 0:
-        retries = 0
+    retries = max(retries, 0)
     # base * 2**retries, guarding against an absurd exponent blowing up math.
     # Clamp the exponent so 2**retries can't overflow before the min() clamp.
     safe_exponent = min(retries, 32)

@@ -40,8 +40,10 @@ import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { StateBlock } from "@/components/shared/state-block";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { runtimeLabel, useRuntimeTemplates } from "@/lib/runtime-templates";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types (mirror api_server.schemas.projects)
@@ -75,14 +77,25 @@ interface ProjectUpdate {
 // allowlist es deny-by-default por diseño (principio 2), y conceder siete
 // binarios en silencio a todo proyecto —incluidos los que el operador cerró a
 // conciencia— es una decisión suya, no de la plataforma. Un clic.
-const STACK_PRESETS: { key: string; label: string; commands: string[] }[] = [
-  { key: "php", label: "PHP", commands: ["php", "composer", "vendor/bin/phpunit", "pest"] },
-  { key: "node", label: "Node", commands: ["npm", "npx", "node"] },
-  { key: "dotnet", label: ".NET", commands: ["dotnet"] },
-  { key: "python", label: "Python", commands: ["python", "pytest"] },
+const STACK_PRESETS: {
+  key: string;
+  // La etiqueta es su CLAVE del diccionario y no su texto: cuatro presets son
+  // nombres propios que no se traducen, pero el quinto («Lectura») sí, y
+  // mezclar texto y clave en el mismo catálogo es cómo se cuela el que falta.
+  labelKey: "presetPhp" | "presetNode" | "presetDotnet" | "presetPython" | "presetRead";
+  commands: string[];
+}[] = [
+  {
+    key: "php",
+    labelKey: "presetPhp",
+    commands: ["php", "composer", "vendor/bin/phpunit", "pest"],
+  },
+  { key: "node", labelKey: "presetNode", commands: ["npm", "npx", "node"] },
+  { key: "dotnet", labelKey: "presetDotnet", commands: ["dotnet"] },
+  { key: "python", labelKey: "presetPython", commands: ["python", "pytest"] },
   {
     key: "read",
-    label: "Lectura",
+    labelKey: "presetRead",
     commands: ["sed", "awk", "sort", "uniq", "cut", "tr", "head", "tail", "grep", "wc"],
   },
 ];
@@ -97,6 +110,7 @@ const STACK_PRESETS: { key: string; label: string; commands: string[] }[] = [
 // Page
 // --------------------------------------------------------------------------
 export default function ProjectCommandsPage() {
+  const t = useT("projectCommands");
   const params = useParams<{ id: string }>();
   const projectId = params.id;
 
@@ -112,11 +126,11 @@ export default function ProjectCommandsPage() {
       className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="project-commands-page"
     >
-      <ProjectBreadcrumb projectId={projectId} current="Comandos & runtime" />
+      <ProjectBreadcrumb projectId={projectId} current={t("breadcrumbCurrent")} />
       <PageHeader
         icon={<Terminal className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Comandos & runtime"
-        description="Autoriza qué comandos del stack pueden lanzar los agentes y elige el runtime de ejecución."
+        title={t("title")}
+        description={t("description")}
       />
 
       <StateBlock
@@ -127,7 +141,7 @@ export default function ProjectCommandsPage() {
         loadingTestId="project-commands-loading"
         isError={projectQuery.isError}
         error={projectQuery.error}
-        errorTitle="No se pudo cargar la configuración del proyecto"
+        errorTitle={t("loadError")}
         errorTestId="project-commands-error"
       >
         {projectQuery.data ? <CommandsEditor project={projectQuery.data} /> : null}
@@ -140,6 +154,8 @@ export default function ProjectCommandsPage() {
 // Editor — chips + presets + runtime selector + save
 // --------------------------------------------------------------------------
 function CommandsEditor({ project }: { project: Project }) {
+  const errorText = useErrorText();
+  const t = useT("projectCommands");
   const queryClient = useQueryClient();
   const { lang } = useLang();
   const runtimesQuery = useRuntimeTemplates();
@@ -252,22 +268,20 @@ function CommandsEditor({ project }: { project: Project }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            Comandos autorizados
+            {t("commandsTitle")}
             <Badge variant="warning" data-testid="commands-privileged-badge">
-              Privilegiada
+              {t("privilegedBadge")}
             </Badge>
           </CardTitle>
           <p className="text-muted-foreground text-sm" data-testid="commands-deny-by-default-hint">
-            <strong>Deny-by-default</strong>: <code>shell_exec</code> solo ejecuta los binarios de
-            esta lista. Una lista vacía significa que no puede ejecutar nada. Usa los presets por
-            stack o añade comandos uno a uno.
+            <strong>Deny-by-default</strong>: <code>shell_exec</code> {t("commandsHint")}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Presets — admin only */}
           <RoleGuard min="tenant_admin">
             <div className="space-y-1.5">
-              <Label>Presets por stack</Label>
+              <Label>{t("presetsLabel")}</Label>
               <div className="flex flex-wrap gap-2" data-testid="commands-presets">
                 {STACK_PRESETS.map((preset) => (
                   <Button
@@ -279,7 +293,7 @@ function CommandsEditor({ project }: { project: Project }) {
                     data-testid={`commands-preset-${preset.key}`}
                     title={preset.commands.join(", ")}
                   >
-                    {preset.label}
+                    {t(preset.labelKey)}
                   </Button>
                 ))}
               </div>
@@ -291,8 +305,7 @@ function CommandsEditor({ project }: { project: Project }) {
             <Label>Allowlist</Label>
             {commands.length === 0 ? (
               <p className="text-muted-foreground text-sm italic" data-testid="commands-empty">
-                Sin comandos autorizados. <code>shell_exec</code> no podrá ejecutar nada hasta que
-                añadas alguno.
+                {t("commandsEmptyBefore")} <code>shell_exec</code> {t("commandsEmptyAfter")}
               </p>
             ) : (
               <ul className="flex flex-wrap gap-2" data-testid="commands-chips">
@@ -308,7 +321,7 @@ function CommandsEditor({ project }: { project: Project }) {
                         type="button"
                         onClick={() => removeCommand(cmd)}
                         className="text-muted-foreground hover:text-destructive rounded-full transition-colors"
-                        aria-label={`Quitar ${cmd}`}
+                        aria-label={t("removeChip", { name: cmd })}
                         data-testid={`command-chip-remove-${cmd}`}
                       >
                         <X className="h-3.5 w-3.5" />
@@ -323,7 +336,7 @@ function CommandsEditor({ project }: { project: Project }) {
           {/* Add input — admin only */}
           <RoleGuard min="tenant_admin">
             <div className="space-y-1.5">
-              <Label htmlFor="commands-add-input">Añadir comando</Label>
+              <Label htmlFor="commands-add-input">{t("addCommandLabel")}</Label>
               <div className="flex gap-2">
                 <Input
                   id="commands-add-input"
@@ -335,7 +348,7 @@ function CommandsEditor({ project }: { project: Project }) {
                       handleAddFromDraft();
                     }
                   }}
-                  placeholder="p. ej. composer"
+                  placeholder={t("addCommandPlaceholder")}
                   data-testid="commands-add-input"
                 />
                 <Button
@@ -346,12 +359,14 @@ function CommandsEditor({ project }: { project: Project }) {
                   data-testid="commands-add-button"
                 >
                   <Plus className="mr-1 h-4 w-4" />
-                  Añadir
+                  {t("add")}
                 </Button>
               </div>
               <p className="text-muted-foreground text-xs">
-                Usa el basename del binario (<code>php</code>, <code>composer</code>) o una ruta
-                relativa al workspace (<code>vendor/bin/phpunit</code>).
+                {t("addCommandHintBefore")}
+                <code>php</code>, <code>composer</code>
+                {t("addCommandHintAfter")}
+                <code>vendor/bin/phpunit</code>).
               </p>
             </div>
           </RoleGuard>
@@ -361,19 +376,19 @@ function CommandsEditor({ project }: { project: Project }) {
       {/* ---- allowed_domains (P1-03) ---- */}
       <Card>
         <CardHeader>
-          <CardTitle>Dominios de red autorizados</CardTitle>
+          <CardTitle>{t("domainsTitle")}</CardTitle>
           <p className="text-muted-foreground text-sm" data-testid="domains-deny-by-default-hint">
-            <strong>Deny-by-default</strong>: las tools HTTP del agente (<code>http_request</code>,
-            descargas) solo alcanzan estos FQDN. Una lista vacía significa que el agente no puede
-            salir a la red.
+            <strong>Deny-by-default</strong>: {t("domainsHintBefore")}
+            <code>http_request</code>
+            {t("domainsHintAfter")}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Allowlist de dominios</Label>
+            <Label>{t("domainsAllowlistLabel")}</Label>
             {domains.length === 0 ? (
               <p className="text-muted-foreground text-sm italic" data-testid="domains-empty">
-                Sin dominios autorizados: las tools HTTP no pueden salir a la red.
+                {t("domainsEmpty")}
               </p>
             ) : (
               <ul className="flex flex-wrap gap-2" data-testid="domains-chips">
@@ -389,7 +404,7 @@ function CommandsEditor({ project }: { project: Project }) {
                         type="button"
                         onClick={() => removeDomain(domain)}
                         className="text-muted-foreground hover:text-destructive rounded-full transition-colors"
-                        aria-label={`Quitar ${domain}`}
+                        aria-label={t("removeChip", { name: domain })}
                         data-testid={`domain-chip-remove-${domain}`}
                       >
                         <X className="h-3.5 w-3.5" />
@@ -402,7 +417,7 @@ function CommandsEditor({ project }: { project: Project }) {
           </div>
           <RoleGuard min="tenant_admin">
             <div className="space-y-1.5">
-              <Label htmlFor="domains-add-input">Añadir dominio</Label>
+              <Label htmlFor="domains-add-input">{t("addDomainLabel")}</Label>
               <div className="flex gap-2">
                 <Input
                   id="domains-add-input"
@@ -415,7 +430,7 @@ function CommandsEditor({ project }: { project: Project }) {
                       setDomainDraft("");
                     }
                   }}
-                  placeholder="p. ej. api.github.com"
+                  placeholder={t("addDomainPlaceholder")}
                   data-testid="domains-add-input"
                 />
                 <Button
@@ -429,11 +444,13 @@ function CommandsEditor({ project }: { project: Project }) {
                   data-testid="domains-add-button"
                 >
                   <Plus className="mr-1 h-4 w-4" />
-                  Añadir
+                  {t("add")}
                 </Button>
               </div>
               <p className="text-muted-foreground text-xs">
-                FQDN exacto (<code>api.github.com</code>), sin esquema ni ruta.
+                {t("addDomainHintBefore")}
+                <code>api.github.com</code>
+                {t("addDomainHintAfter")}
               </p>
             </div>
           </RoleGuard>
@@ -443,16 +460,15 @@ function CommandsEditor({ project }: { project: Project }) {
       {/* ---- default_runtime_template ---- */}
       <Card>
         <CardHeader>
-          <CardTitle>Runtime por defecto</CardTitle>
+          <CardTitle>{t("runtimeTitle")}</CardTitle>
           <p className="text-muted-foreground text-sm">
-            El runtime template en el que se ejecutan los <code>run_*</code> (tests, lint, build…).
-            Déjalo <em>vacío</em> para usar el runtime por defecto de cada tool
-            (backward-compatible).
+            {t("runtimeHintBefore")} <code>run_*</code> {t("runtimeHintMiddle")}{" "}
+            <em>{t("runtimeHintEmphasis")}</em> {t("runtimeHintAfter")}
           </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-1.5">
-            <Label htmlFor="commands-runtime">Runtime template</Label>
+            <Label htmlFor="commands-runtime">{t("runtimeTemplateLabel")}</Label>
             <RoleGuard
               min="tenant_admin"
               fallback={
@@ -460,9 +476,7 @@ function CommandsEditor({ project }: { project: Project }) {
                   {runtime ? (
                     <span>{runtimeDisplay}</span>
                   ) : (
-                    <span className="text-muted-foreground italic">
-                      Sin runtime por defecto (defaults por-tool)
-                    </span>
+                    <span className="text-muted-foreground italic">{t("runtimeNone")}</span>
                   )}
                 </p>
               }
@@ -478,7 +492,7 @@ function CommandsEditor({ project }: { project: Project }) {
                   }}
                   data-testid="commands-runtime-select"
                 >
-                  <option value="">— Sin runtime por defecto (defaults por-tool) —</option>
+                  <option value="">— {t("runtimeNone")} —</option>
                   {runtimeTemplates.map((rt) => (
                     <option key={rt.id} value={rt.id}>
                       {runtimeLabel(rt, lang)}
@@ -490,7 +504,7 @@ function CommandsEditor({ project }: { project: Project }) {
                     className="text-danger-soft-foreground mt-1.5 text-xs"
                     data-testid="commands-runtime-error"
                   >
-                    No se pudo cargar el catálogo de runtimes.
+                    {t("runtimeCatalogError")}
                   </p>
                 )}
               </div>
@@ -508,7 +522,7 @@ function CommandsEditor({ project }: { project: Project }) {
             disabled={!dirty || mutation.isPending}
             data-testid="commands-save-button"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar cambios"}
+            {mutation.isPending ? t("saving") : t("saveChanges")}
           </Button>
           {!mutation.isPending && savedAt !== null && !dirty && (
             <span
@@ -516,12 +530,12 @@ function CommandsEditor({ project }: { project: Project }) {
               data-testid="commands-saved"
             >
               <Check className="h-4 w-4" />
-              Guardado
+              {t("saved")}
             </span>
           )}
           {mutation.isError && (
             <span className="text-danger-soft-foreground text-sm" data-testid="commands-save-error">
-              {mutation.error?.body ?? mutation.error?.message ?? "Error al guardar"}
+              {mutation.error?.body ?? errorText(mutation.error)}
             </span>
           )}
         </div>

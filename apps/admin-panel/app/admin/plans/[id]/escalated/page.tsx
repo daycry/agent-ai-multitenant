@@ -15,6 +15,13 @@
  * Endpoints:
  *   GET  /plans/{id}/escalated-tasks
  *   POST /plans/{id}/free-task      { title, description }
+ *
+ * Bilingüe desde prod-16 `task_prod16_03` (namespace `escalatedTasks`, más
+ * `nav.projects` para la primera miga de pan y `common.dateLocale` para la fecha
+ * del historial). Es una pantalla de DECISIÓN —quien la abre está desatascando
+ * trabajo que el revisor automático rechazó tres veces—, así que leerla a medias
+ * en otro idioma era el peor sitio donde dejar la deuda. Contrato en
+ * `i18n.test.tsx`.
  */
 
 import { useState } from "react";
@@ -41,6 +48,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface EscalatedTask {
   id: string;
@@ -62,6 +71,12 @@ interface PlanBreadcrumb {
 }
 
 export default function EscalatedPage() {
+  const t = useT("escalatedTasks");
+  // La primera miga de pan es el MISMO destino que el ítem de la sidebar, así
+  // que reusa su clave (`nav.projects`) en vez de duplicar el texto: es lo que
+  // hace `ProjectBreadcrumb`, y dos claves para un enlace acaban divergiendo.
+  const tNav = useT("nav");
+  const errorText = useErrorText();
   const params = useParams<{ id: string }>();
   const planId = params?.id ?? "";
   const queryClient = useQueryClient();
@@ -110,31 +125,41 @@ export default function EscalatedPage() {
       className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8"
       data-testid="escalated-page"
     >
-      <Breadcrumb
-        items={[
-          { label: "Proyectos", href: "/admin/projects", icon: <Home className="h-3.5 w-3.5" /> },
-          ...(plan
-            ? [
-                {
-                  label: "Proyecto",
-                  href: `/admin/projects/${plan.project_id}`,
-                  icon: <FolderKanban className="h-3.5 w-3.5" />,
-                },
-                {
-                  label: plan.title,
-                  href: `/admin/projects/${plan.project_id}/plans/${plan.id}`,
-                  icon: <Workflow className="h-3.5 w-3.5" />,
-                },
-              ]
-            : []),
-          { label: "Tareas escaladas" },
-        ]}
-      />
+      {/*
+        La miga de pan entera espera al plan, en vez de pintar los dos extremos
+        y colar el medio al llegar. No es cosmética: sin el plan, el rastro que
+        se pintaba era «Proyectos › Tareas escaladas», que AFIRMA que esta vista
+        cuelga del listado de proyectos. Es falso —cuelga del plan, que cuelga
+        del proyecto—, así que durante la carga la miga de pan mentía y además
+        saltaba de dos a cuatro eslabones al resolverse la query.
+      */}
+      {plan && (
+        <Breadcrumb
+          items={[
+            {
+              label: tNav("projects"),
+              href: "/admin/projects",
+              icon: <Home className="h-3.5 w-3.5" />,
+            },
+            {
+              label: t("breadcrumbProject"),
+              href: `/admin/projects/${plan.project_id}`,
+              icon: <FolderKanban className="h-3.5 w-3.5" />,
+            },
+            {
+              label: plan.title,
+              href: `/admin/projects/${plan.project_id}/plans/${plan.id}`,
+              icon: <Workflow className="h-3.5 w-3.5" />,
+            },
+            { label: t("breadcrumbCurrent") },
+          ]}
+        />
+      )}
 
       <PageHeader
         icon={<AlertTriangle className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Tareas escaladas"
-        description="Tareas del plan que llegaron al límite de reintentos del revisor automático y esperan decisión humana."
+        title={t("title")}
+        description={t("description")}
         actions={
           <div className="flex items-center gap-2">
             {plan?.status === "blocked" && (
@@ -146,7 +171,7 @@ export default function EscalatedPage() {
                 data-testid="plan-unblock"
               >
                 <RotateCcw className="mr-1 h-4 w-4" />
-                Desbloquear plan
+                {t("unblockPlan")}
               </Button>
             )}
             <Button
@@ -156,23 +181,19 @@ export default function EscalatedPage() {
               data-testid="free-task-open"
             >
               <Plus className="mr-1 h-4 w-4" />
-              Añadir tarea libre
+              {t("addFreeTask")}
             </Button>
           </div>
         }
       />
 
       <section data-testid="escalated-list" className="mt-6 space-y-3">
-        {tasksQuery.isLoading && (
-          <p className="text-muted-foreground text-sm">Cargando tareas escaladas…</p>
-        )}
+        {tasksQuery.isLoading && <p className="text-muted-foreground text-sm">{t("loading")}</p>}
         {tasksQuery.isError && (
           <Card>
             <CardContent className="py-6">
               <p className="text-destructive text-sm" data-testid="escalated-error">
-                {tasksQuery.error instanceof ApiError
-                  ? tasksQuery.error.body
-                  : String(tasksQuery.error)}
+                {errorText(tasksQuery.error)}
               </p>
             </CardContent>
           </Card>
@@ -181,7 +202,7 @@ export default function EscalatedPage() {
           <Card>
             <CardContent className="py-8 text-center">
               <p className="text-muted-foreground text-sm" data-testid="escalated-empty">
-                Sin tareas escaladas en este plan.
+                {t("empty")}
               </p>
             </CardContent>
           </Card>
@@ -209,6 +230,15 @@ export default function EscalatedPage() {
 // ---------------------------------------------------------------------------
 
 function EscalatedTaskRow({ task, onApplied }: { task: EscalatedTask; onApplied: () => void }) {
+  const t = useT("escalatedTasks");
+  // El locale con el que formatear la fecha del historial sale del diccionario
+  // (`common.dateLocale`) y no de un `lang === "es" ? "es-ES" : "en-GB"`, que es
+  // justo el ternario que `check-i18n` prohíbe. Antes estaba cableado a
+  // `"es-ES"`, así que con el toggle en inglés la fecha seguía en formato
+  // castellano.
+  const tCommon = useT("common");
+  const events = task.history.length;
+
   return (
     <Card data-testid={`escalated-${task.id}`}>
       <CardHeader className="flex flex-row items-start justify-between gap-3 pb-2">
@@ -219,22 +249,22 @@ function EscalatedTaskRow({ task, onApplied }: { task: EscalatedTask; onApplied:
           )}
         </div>
         <Badge variant="warning" data-testid={`escalated-${task.id}-retries`}>
-          {task.retry_count} {task.retry_count === 1 ? "reintento" : "reintentos"}
+          {t(task.retry_count === 1 ? "retriesOne" : "retriesMany", { count: task.retry_count })}
         </Badge>
       </CardHeader>
       <CardContent className="space-y-3">
         <TaskHumanActions taskId={task.id} onApplied={onApplied} />
 
-        {task.history.length > 0 && (
-          <details className="text-xs">
+        {events > 0 && (
+          <details className="text-xs" data-testid={`escalated-${task.id}-history`}>
             <summary className="text-muted-foreground hover:text-foreground cursor-pointer">
-              Ver historial ({task.history.length} eventos)
+              {t(events === 1 ? "historyOne" : "historyMany", { count: events })}
             </summary>
             <ul className="mt-2 space-y-1 pl-4">
               {task.history.map((event, idx) => (
                 <li key={idx} className="text-muted-foreground">
                   <span className="font-mono text-[10px]">
-                    {new Date(event.at * 1000).toLocaleString("es-ES")}
+                    {new Date(event.at * 1000).toLocaleString(tCommon("dateLocale"))}
                   </span>{" "}
                   · <span className="font-medium">{event.kind}</span>
                 </li>
@@ -262,6 +292,8 @@ function FreeTaskDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const t = useT("escalatedTasks");
+  const errorText = useErrorText();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
@@ -286,17 +318,14 @@ function FreeTaskDialog({
         }
       }}
     >
-      <DialogContent>
+      <DialogContent data-testid="free-task-dialog">
         <DialogHeader>
-          <DialogTitle>Añadir tarea libre al plan</DialogTitle>
-          <DialogDescription>
-            Crea una tarea plan-scoped que no esté atada a ningún checkbox de la spec. Útil cuando
-            el humano detecta trabajo nuevo durante la validación del plan.
-          </DialogDescription>
+          <DialogTitle>{t("dialogTitle")}</DialogTitle>
+          <DialogDescription>{t("dialogDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="free-task-title">Título</Label>
+            <Label htmlFor="free-task-title">{t("fieldTitle")}</Label>
             <Input
               id="free-task-title"
               value={title}
@@ -306,7 +335,7 @@ function FreeTaskDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
+            <Label>{t("fieldDescription")}</Label>
             <MarkdownTextarea
               value={description}
               onChange={setDescription}
@@ -319,13 +348,13 @@ function FreeTaskDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="free-task-error"
             >
-              {mutation.error?.message ?? "Error al crear la tarea libre"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Cancelar
+          <Button variant="outline" onClick={onClose} data-testid="free-task-cancel">
+            {t("cancel")}
           </Button>
           <Button
             disabled={!title.trim() || mutation.isPending}
@@ -337,7 +366,7 @@ function FreeTaskDialog({
             }
             data-testid="free-task-submit"
           >
-            {mutation.isPending ? "Creando…" : "Añadir tarea"}
+            {mutation.isPending ? t("creating") : t("submit")}
           </Button>
         </DialogFooter>
       </DialogContent>

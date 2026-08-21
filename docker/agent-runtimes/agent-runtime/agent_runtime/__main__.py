@@ -24,6 +24,7 @@ from typing import Any, Literal, cast
 
 from agent_runtime.review_contract import (
     CRITERIA_INSTRUCTION,
+    REJECT_TAXONOMY_INSTRUCTION,
     VERDICT_APPROVE,
     VERDICT_REJECT,
 )
@@ -88,13 +89,24 @@ def _emit(event: dict[str, Any]) -> None:
 
 
 def _load_spec() -> dict[str, Any] | None:
-    """The task spec from AGENT_TASK_SPEC, or the workspace file, or None."""
+    """The task spec from AGENT_TASK_SPEC, or the workspace file, or None.
+
+    prod-07 task_prod07_10: the provider credential no longer travels inside the
+    spec — the worker stages it in a read-only mount and the spec carries only a
+    pointer. Hydrating HERE, at the single door every spec comes through, is what
+    keeps the change invisible downstream: `model_from_spec`,
+    `build_provider_client` and the four adapters keep seeing the same dict.
+    A spec WITHOUT the pointer is returned untouched, so this image still runs
+    against an older worker that inlines the credential.
+    """
+    from agent_runtime.spec_secrets import hydrate_model_credentials
+
     raw = os.environ.get("AGENT_TASK_SPEC")
     if raw and raw.strip():
-        return json.loads(raw)  # type: ignore[no-any-return]
+        return hydrate_model_credentials(json.loads(raw))
     path = Path(_TASK_SPEC_FILE)
     if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+        return hydrate_model_credentials(json.loads(path.read_text(encoding="utf-8")))
     return None
 
 
@@ -498,6 +510,13 @@ _REVIEW_VERDICT_INSTRUCTION = (
     "<what_to_fix>...</what_to_fix></rejection>\n"
     "The verdict tag is MANDATORY — without it the review cannot be applied.\n"
     + CRITERIA_INSTRUCTION
+    # `task_gov_10`: la taxonomía del rechazo. Se anuncia AQUÍ y no solo en el
+    # system prompt del reviewer porque este preámbulo viaja en TODO run de
+    # review (el system prompt del agente lo puede haber editado un tenant), y
+    # sin el anuncio nadie emite el par: el dato que la casilla produce se
+    # quedaría en cero para siempre.
+    + "\n"
+    + REJECT_TAXONOMY_INSTRUCTION
 )
 
 # Hallazgo H1 (refactor 2026-07-07): los preámbulos pliegan texto que un adversario
@@ -926,6 +945,7 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
     from agent_runtime.graph import AgentDeps, run_agent
     from agent_runtime.guardrails import build_pipeline
     from agent_runtime.model import model_from_spec
+    from agent_runtime.prompt_version import agent_prompt_seal
     from agent_runtime.safeguards import Budgets
     from agent_runtime.shell_exec import ShellExecTool
     from agent_runtime.tools import default_registry
@@ -1032,8 +1052,16 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             # que un `<server>.<tool>` —el nombre que un mapa estático no puede
             # contener— también es gateable. Sin esto, ni el preset «Cliente
             # Externo» detenía una integración externa.
+            # ADR 0135: `approved_actions` son las acciones que un humano YA
+            # aprobó en ESTA task (huella canónica de tool+args). Sin pasarlas,
+            # aprobar no autoriza nada: el gate vuelve a aparcar la misma acción
+            # y el bucle del ADR 0020 sigue vivo, ahora con coste por vuelta.
             approval=(
-                ApprovalGate(policy, tool_categories_from_specs(spec.get("tool_specs")))
+                ApprovalGate(
+                    policy,
+                    tool_categories_from_specs(spec.get("tool_specs")),
+                    approved_actions=spec.get("approved_actions"),
+                )
                 if policy
                 else None
             ),
@@ -1079,6 +1107,10 @@ def run_task(spec: dict[str, Any]) -> int:  # - linear boot orchestration
             budgets=budgets,
             on_step=lambda step: _emit({"event": "step", "step": step}),
             system_preamble=system_preamble,
+            # `task_gov_03`: el sello del prompt del AGENTE entra en
+            # `executions.prompt_version`. Se resuelve AQUÍ, que es donde está el
+            # spec; `run_agent` sólo tiene el grafo.
+            agent_seal=agent_prompt_seal(spec),
         )
     finally:
         # Always tear down the MCP sessions (background loop + open transports),

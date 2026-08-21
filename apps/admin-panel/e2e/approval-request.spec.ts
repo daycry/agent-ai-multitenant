@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the approval-request notification (task_02_25).
@@ -20,9 +21,7 @@ const REQUEST = {
 };
 
 async function setup(page: Page, body: unknown) {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   // Exact origin — a `**/approvals` glob would also catch the
   // `/admin/approvals` page navigation.
   await page.route("http://localhost:8001/approvals", (route) =>

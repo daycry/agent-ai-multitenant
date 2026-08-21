@@ -148,9 +148,9 @@ def test_implementation_types_and_security_levels_are_valid(
     rows = asyncio.run(_fetch())
     impl_seen = {r["implementation_type"] for r in rows}
     sec_seen = {r["security_level"] for r in rows}
-    assert (
-        impl_seen <= EXPECTED_IMPL_TYPES
-    ), f"unknown implementation_type: {impl_seen - EXPECTED_IMPL_TYPES}"
+    assert impl_seen <= EXPECTED_IMPL_TYPES, (
+        f"unknown implementation_type: {impl_seen - EXPECTED_IMPL_TYPES}"
+    )
     assert sec_seen <= EXPECTED_SECURITY, f"unknown security_level: {sec_seen - EXPECTED_SECURITY}"
 
 
@@ -168,7 +168,7 @@ def test_seeded_tools_visible_to_tenant_sessions(alembic_config, migrations_pg_d
     )
 
     tenant_id = uuid4()
-    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
     async def _seed_tenant_and_count() -> int:
         conn = await asyncpg.connect(migrations_pg_dsn)

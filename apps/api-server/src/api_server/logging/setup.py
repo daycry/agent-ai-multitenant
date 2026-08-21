@@ -65,10 +65,30 @@ def configure_logging(
         structlog.processors.format_exc_info,
     ]
 
+    # El ÚLTIMO procesador de la cadena structlog es `wrap_for_formatter`, NO
+    # un JSONRenderer.
+    #
+    # prod-08 (2026-07-31): antes la cadena terminaba en `JSONRenderer()`, que
+    # devuelve un **string**. Ese string se le pasaba al logger de stdlib y el
+    # `ProcessorFormatter` del handler raíz lo trataba como un registro
+    # «foráneo» y lo volvía a envolver, produciendo JSON DOBLEMENTE CODIFICADO:
+    #
+    #   {"event": "{\"execution_id\": \"...\", \"event\": \"...\"}", "level": ...}
+    #
+    # En el nivel superior solo sobrevivían event/level/logger/timestamp/service
+    # (y lo que aportaran los contextvars, que el foreign_pre_chain volvía a
+    # añadir fuera). Todo campo de negocio pasado como kwarg —`execution_id`,
+    # `tenant_id`, `task_id`, `plan_id`— quedaba sepultado dentro de una cadena,
+    # invisible para `jq`, para LogQL y para cualquier agregador. Es decir: los
+    # logs eran «JSON» sin ser consultables, que es el único motivo por el que
+    # se emiten en JSON.
+    #
+    # `wrap_for_formatter` entrega el event_dict INTACTO al ProcessorFormatter,
+    # que renderiza una sola vez. Un nivel de JSON, campos promocionados.
     structlog.configure(
         processors=[
             *shared_processors,
-            structlog.processors.JSONRenderer(),
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -84,7 +104,16 @@ def configure_logging(
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
         structlog.stdlib.ProcessorFormatter(
-            processor=structlog.processors.JSONRenderer(),
+            # Registros NATIVOS de structlog: ya traen los shared_processors
+            # aplicados (corrieron en la cadena de arriba), así que aquí solo
+            # se limpian las claves internas y se renderiza.
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+            # Registros FORÁNEOS (uvicorn, sqlalchemy, celery): no pasaron por
+            # structlog, así que se les aplica aquí la misma cadena — incluido
+            # el enmascarado PII.
             foreign_pre_chain=shared_processors,
         )
     )

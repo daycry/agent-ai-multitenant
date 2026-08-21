@@ -17,13 +17,24 @@
  *   - Puede disparar una pasada de reflexión bajo demanda (best-effort).
  *
  * Honestidad de producto OBLIGATORIA: la identidad es un MODELO COMPUTACIONAL que
- * evoluciona, NO consciencia ni un "yo" real. El copy no insinúa lo contrario.
+ * evoluciona, NO consciencia ni un "yo" real. El copy no insinúa lo contrario, y
+ * desde el cierre de la casilla F3.6 sale del diccionario
+ * (`cortexIdentity.honestyNote`) en vez de ser un `const` en castellano: lo pide
+ * el principio rector 12 (ES+EN), y era el motivo exacto por el que la casilla
+ * seguía abierta. La MISMA clave la usa la tarjeta de la segunda columna del
+ * chat, para que no haya dos avisos que puedan divergir.
+ *
+ * Esta ruta NO desaparece con la llegada de esa tarjeta: la enlazan el NAV, su
+ * test de shell y una e2e, y aquí vive el formulario. La tarjeta es la vista
+ * mientras conversas; esto, el sitio donde se edita.
  */
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Brain, Info, RefreshCw, Save, Sparkles } from "lucide-react";
 
+import { IdentityTimeline } from "@/components/cortex/identity-timeline";
+import { TraitRadar } from "@/components/cortex/trait-radar";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -40,20 +51,21 @@ import {
   getCortexIdentity,
   joinLines,
   needsOnboarding,
+  proposeCortexOnboarding,
+  confirmCortexOnboarding,
   parseLines,
   reflectCortexIdentity,
-  TRAIT_LABELS_ES,
-  traitToPercent,
   updateCortexIdentity,
   type CortexIdentity,
 } from "@/lib/cortex-identity";
+import type { CortexOnboardingResult } from "@/lib/cortex-identity";
+import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
-
-const HONESTY_NOTE =
-  "La identidad del córtex es un modelo computacional que evoluciona — no es consciencia ni un “yo” real.";
+import { useErrorText } from "@/lib/use-error-text";
 
 export default function CortexIdentityPage() {
   const { isSystemOwner, isLoading: userLoading } = useCurrentUser();
+  const tCommon = useT("common");
 
   // Mientras no sabemos el rol, nada: nunca parpadear contenido owner-only.
   if (userLoading) {
@@ -61,7 +73,7 @@ export default function CortexIdentityPage() {
       <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
         <p className="text-muted-foreground flex items-center gap-2 text-sm">
           <Spinner />
-          Cargando…
+          {tCommon("loading")}
         </p>
       </div>
     );
@@ -76,7 +88,9 @@ export default function CortexIdentityPage() {
 }
 
 function CortexIdentityBody() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
+  const t = useT("cortexIdentity");
   const [forbidden, setForbidden] = useState(false);
 
   const identityQuery = useQuery<CortexIdentity, ApiError>({
@@ -133,6 +147,48 @@ function CortexIdentityBody() {
     mutationFn: reflectCortexIdentity,
   });
 
+  // Co-construcción (F3.3): el córtex se propone a sí mismo y el owner acepta.
+  //
+  // El endpoint existía desde el 2026-08-19 y NO tenía llamante: el owner sólo
+  // veía el formulario manual, o sea el mecanismo entregado sin la puerta por la
+  // que se usa. La propuesta NO persiste nada; siembra el formulario para que lo
+  // que se guarde al aceptar sea lo que el owner tenga delante, editado o no.
+  const [proposal, setProposal] = useState<CortexOnboardingResult | null>(null);
+
+  const proposeMutation = useMutation<CortexOnboardingResult, ApiError, void>({
+    mutationFn: proposeCortexOnboarding,
+    onSuccess: (result) => {
+      setProposal(result);
+      const candidate = result.identity;
+      setName(candidate.name ?? "");
+      setCoreValues(joinLines(candidate.core_values));
+      setNarrative(candidate.narrative);
+      setLanguage(candidate.language || "es");
+      setLearningGoals(joinLines(candidate.learning_goals));
+    },
+    onError: (error) => {
+      if (error.status === 403) setForbidden(true);
+    },
+  });
+
+  const acceptMutation = useMutation<CortexOnboardingResult, ApiError, void>({
+    mutationFn: () =>
+      confirmCortexOnboarding({
+        name: name.trim() || null,
+        core_values: parseLines(coreValues),
+        narrative,
+        language,
+        learning_goals: parseLines(learningGoals),
+      }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["cortex", "identity"], result.identity);
+      setProposal(null);
+    },
+    onError: (error) => {
+      if (error.status === 403) setForbidden(true);
+    },
+  });
+
   if (forbidden) return <CortexIdentityNoAccess />;
 
   if (identityQuery.isLoading) {
@@ -140,7 +196,7 @@ function CortexIdentityBody() {
       <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
         <p className="text-muted-foreground flex items-center gap-2 text-sm">
           <Spinner />
-          Cargando identidad…
+          {t("loading")}
         </p>
       </div>
     );
@@ -153,8 +209,8 @@ function CortexIdentityBody() {
     <div className="mx-auto flex w-full max-w-3xl flex-col px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Sparkles className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Identidad del córtex"
-        description="Co-diseña quién es tu córtex: su nombre, sus valores y su narrativa. Es un modelo computacional que evoluciona, no consciencia."
+        title={t("title")}
+        description={t("description")}
         data-testid="cortex-identity-header"
       />
 
@@ -167,11 +223,61 @@ function CortexIdentityBody() {
           <CardContent className="flex items-start gap-3 pt-5">
             <Brain className="text-primary mt-0.5 h-5 w-5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium">Aún no le has dado identidad a tu córtex</p>
-              <p className="text-muted-foreground mt-1">
-                Ponle un nombre y unos valores. A partir de ahí, la reflexión periódica irá puliendo
-                su narrativa y sus rasgos con el tiempo.
-              </p>
+              <p className="font-medium">{t("onboardingTitle")}</p>
+              <p className="text-muted-foreground mt-1">{t("onboardingBody")}</p>
+
+              {/* Co-construcción: la otra vía, y la que el plan pedía. */}
+              <p className="text-muted-foreground mt-3">{t("proposeHelp")}</p>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-2"
+                data-testid="cortex-identity-propose"
+                disabled={proposeMutation.isPending}
+                onClick={() => proposeMutation.mutate()}
+              >
+                {proposeMutation.isPending ? t("proposeRunning") : t("proposeCta")}
+              </Button>
+
+              {proposeMutation.isError ? (
+                <p className="text-destructive mt-2" data-testid="cortex-identity-propose-error">
+                  {t("proposalError")}
+                </p>
+              ) : null}
+
+              {proposal ? (
+                <div className="mt-4 flex flex-col gap-2" data-testid="cortex-identity-proposal">
+                  <p className="font-medium">{t("proposalTitle")}</p>
+                  {/* El turno literal: el owner acepta lo que ha LEÍDO. */}
+                  <p
+                    className="text-muted-foreground whitespace-pre-wrap"
+                    data-testid="cortex-identity-proposal-text"
+                  >
+                    {proposal.proposal}
+                  </p>
+                  <p className="text-muted-foreground text-xs">{t("proposalEditHint")}</p>
+                  <div className="mt-1 flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      data-testid="cortex-identity-proposal-accept"
+                      disabled={acceptMutation.isPending}
+                      onClick={() => acceptMutation.mutate()}
+                    >
+                      {acceptMutation.isPending ? t("proposalAccepting") : t("proposalAccept")}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      data-testid="cortex-identity-proposal-discard"
+                      onClick={() => setProposal(null)}
+                    >
+                      {t("proposalDiscard")}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -183,54 +289,51 @@ function CortexIdentityBody() {
         data-testid="cortex-identity-honesty"
       >
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        {HONESTY_NOTE}
+        {t("honestyNote")}
       </p>
 
       {/* Formulario de campos editables por el owner. */}
       <Card className="mt-6">
         <CardContent className="flex flex-col gap-5 pt-5">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cortex-identity-name">Nombre</Label>
+            <Label htmlFor="cortex-identity-name">{t("nameLabel")}</Label>
             <Input
               id="cortex-identity-name"
               data-testid="cortex-identity-name"
               value={name}
               maxLength={CORTEX_IDENTITY_LIMITS.name.max}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Cómo se llama tu córtex (p. ej. «Atlas»)"
+              placeholder={t("namePlaceholder")}
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cortex-identity-values">Valores (uno por línea)</Label>
+            <Label htmlFor="cortex-identity-values">{t("valuesLabel")}</Label>
             <textarea
               id="cortex-identity-values"
               data-testid="cortex-identity-values"
               value={coreValues}
               rows={4}
               onChange={(e) => setCoreValues(e.target.value)}
-              placeholder={"honestidad\ncuriosidad\nrigor"}
+              placeholder={t("valuesPlaceholder")}
               className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>Narrativa (en primera persona)</Label>
+            <Label>{t("narrativeLabel")}</Label>
             <MarkdownTextarea
               data-testid="cortex-identity-narrative"
               value={narrative}
               onChange={setNarrative}
               rows={5}
-              placeholder="Quién soy, qué me importa, cómo ayudo al owner…"
+              placeholder={t("narrativePlaceholder")}
             />
-            <p className="text-muted-foreground text-[11px]">
-              La reflexión periódica reescribe esta narrativa con el tiempo; aquí puedes darle un
-              punto de partida.
-            </p>
+            <p className="text-muted-foreground text-[11px]">{t("narrativeHint")}</p>
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cortex-identity-language">Idioma</Label>
+            <Label htmlFor="cortex-identity-language">{t("languageLabel")}</Label>
             <div className="w-40">
               <Select
                 id="cortex-identity-language"
@@ -238,6 +341,9 @@ function CortexIdentityBody() {
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
               >
+                {/* Los nombres de idioma van en SU propio idioma (endónimos), no
+                    traducidos al idioma del panel: es lo que hace reconocible la
+                    opción para quien busca la suya. Por eso no van al diccionario. */}
                 {CORTEX_LANGUAGES.map((lng) => (
                   <option key={lng} value={lng}>
                     {lng === "es" ? "Español" : "English"}
@@ -248,28 +354,26 @@ function CortexIdentityBody() {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cortex-identity-goals">Objetivos de aprendizaje (uno por línea)</Label>
+            <Label htmlFor="cortex-identity-goals">{t("goalsLabel")}</Label>
             <textarea
               id="cortex-identity-goals"
               data-testid="cortex-identity-goals"
               value={learningGoals}
               rows={3}
               onChange={(e) => setLearningGoals(e.target.value)}
-              placeholder={"entender mejor mis proyectos\nrecordar mis preferencias"}
+              placeholder={t("goalsPlaceholder")}
               className="border-input bg-background focus-visible:ring-ring rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2"
             />
           </div>
 
           {saveMutation.isError ? (
             <p className="text-destructive text-sm" data-testid="cortex-identity-error">
-              {saveMutation.error instanceof ApiError
-                ? saveMutation.error.body
-                : String(saveMutation.error)}
+              {errorText(saveMutation.error)}
             </p>
           ) : null}
           {saveMutation.isSuccess ? (
             <p className="text-sm text-emerald-600" data-testid="cortex-identity-saved">
-              Identidad guardada (versión {identity?.version}).
+              {t("saved", { n: identity?.version ?? 0 })}
             </p>
           ) : null}
 
@@ -280,7 +384,7 @@ function CortexIdentityBody() {
               onClick={() => saveMutation.mutate()}
             >
               <Save className="mr-2 h-4 w-4" />
-              {pendingOnboarding ? "Crear identidad" : "Guardar"}
+              {pendingOnboarding ? t("createIdentity") : t("save")}
             </Button>
           </div>
         </CardContent>
@@ -291,30 +395,15 @@ function CortexIdentityBody() {
         <Card className="mt-6" data-testid="cortex-identity-derived">
           <CardContent className="flex flex-col gap-4 pt-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Rasgos derivados por la reflexión</h2>
-              <span className="text-muted-foreground text-xs">versión {identity.version}</span>
+              <h2 className="text-sm font-semibold">{t("traitsTitle")}</h2>
+              <span className="text-muted-foreground text-xs">
+                {t("versionLabel", { n: identity.version })}
+              </span>
             </div>
-            <p className="text-muted-foreground text-xs">
-              Los rasgos Big-Five y el ánimo base los ajusta la reflexión periódica de forma
-              acotada; no se editan a mano.
-            </p>
-            <ul className="flex flex-col gap-2">
-              {(Object.keys(TRAIT_LABELS_ES) as (keyof typeof TRAIT_LABELS_ES)[]).map((key) => (
-                <li key={key} className="flex items-center gap-3 text-sm">
-                  <span className="w-32 shrink-0">{TRAIT_LABELS_ES[key]}</span>
-                  <span className="bg-muted relative h-2 flex-1 overflow-hidden rounded-full">
-                    <span
-                      className="bg-primary absolute inset-y-0 left-0 rounded-full"
-                      style={{ width: `${traitToPercent(identity.traits[key])}%` }}
-                      data-testid={`cortex-identity-trait-${key}`}
-                    />
-                  </span>
-                  <span className="text-muted-foreground w-10 text-right text-xs">
-                    {identity.traits[key].toFixed(2)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <p className="text-muted-foreground text-xs">{t("traitsHint")}</p>
+            {/* Radar Big-Five (F3.6): la forma del perfil, no cinco barras sueltas.
+                La geometría es pura y testeada (`traitRadarAxes`). */}
+            <TraitRadar traits={identity.traits} />
 
             <div className="flex items-center gap-2 pt-2">
               <Button
@@ -325,16 +414,14 @@ function CortexIdentityBody() {
                 onClick={() => reflectMutation.mutate()}
               >
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Reflexionar ahora
+                {t("reflectNow")}
               </Button>
               {reflectMutation.isSuccess ? (
                 <span
                   className="text-muted-foreground text-xs"
                   data-testid="cortex-identity-reflect-ok"
                 >
-                  {reflectMutation.data.enqueued
-                    ? "Reflexión en marcha; los cambios aparecerán en breve."
-                    : "No se pudo encolar la reflexión ahora mismo."}
+                  {reflectMutation.data.enqueued ? t("reflectQueued") : t("reflectFailed")}
                 </span>
               ) : null}
             </div>
@@ -347,18 +434,15 @@ function CortexIdentityBody() {
         <Card className="mt-6" data-testid="cortex-identity-relationship">
           <CardContent className="flex flex-col gap-3 pt-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Lo que sabe de ti</h2>
-              <span className="text-muted-foreground text-xs">
-                Modelo computacional del owner — lo deriva la reflexión, no se edita a mano
-              </span>
+              <h2 className="text-sm font-semibold">{t("ownerModelTitle")}</h2>
+              <span className="text-muted-foreground text-xs">{t("ownerModelHint")}</span>
             </div>
             {Object.keys(identity.relationship_model ?? {}).length === 0 ? (
               <p
                 className="text-muted-foreground text-sm"
                 data-testid="cortex-identity-relationship-empty"
               >
-                Aún no ha aprendido nada duradero sobre ti. Conversa con el córtex y pulsa
-                «Reflexionar ahora»: lo que destile aparecerá aquí (y lo usará en cada turno).
+                {t("ownerModelEmpty")}
               </p>
             ) : (
               <ul
@@ -376,23 +460,31 @@ function CortexIdentityBody() {
           </CardContent>
         </Card>
       ) : null}
+
+      {/* Timeline de versiones (F3.6): qué tocó cada reflexión, con su diff. */}
+      {identity ? (
+        <div className="mt-6">
+          <IdentityTimeline />
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function CortexIdentityNoAccess() {
+  const t = useT("cortexIdentity");
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Sparkles className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Identidad del córtex"
+        title={t("title")}
         data-testid="cortex-identity-header"
       />
       <EmptyState
         data-testid="cortex-identity-no-access"
         icon={Brain}
-        title="Identidad no disponible"
-        description="La identidad del córtex es exclusiva del System Owner (el dueño del despliegue). Tu cuenta no tiene ese rol."
+        title={t("noAccessTitle")}
+        description={t("noAccessDescription")}
       />
     </div>
   );

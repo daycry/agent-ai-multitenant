@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the "Tools del agente" section in /admin/agents/{id}
@@ -149,9 +150,7 @@ async function setup(
   const id = scope === "global_builtin" ? BUILTIN_AGENT_ID : AGENT_ID;
   const assigned = opts.assigned ?? [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/agents/${id}`, (route) => json(route, agentBody(scope)));
@@ -202,15 +201,25 @@ test("Avanzadas tab lists custom + executor tools with badges", async ({ page })
 
   await page.getByTestId("agent-tools-tab-advanced").click();
 
+  // ADR 0049: la taxonomía se pinta con etiquetas humanas bilingües
+  // (`lib/tools/taxonomy.ts`) y el enum crudo NO se renderiza nunca. El spec
+  // afirmaba los slugs (`http_endpoint`, `safe`, …), o sea justo lo contrario de
+  // lo decidido; ahora afirma la etiqueta Y la ausencia del slug, que es el
+  // contrato entero. El NOMBRE de la tool sigue siendo literal: es el
+  // identificador con el que el agente la invoca.
   const weather = page.getByTestId(`agent-tool-row-${WEATHER_ID}`);
   await expect(weather).toBeVisible();
   await expect(weather).toContainText("weather_lookup");
-  await expect(weather).toContainText("http_endpoint");
-  await expect(weather).toContainText("safe");
+  await expect(weather).toContainText("HTTP");
+  await expect(weather).toContainText("Segura");
+  await expect(weather.getByText("http_endpoint", { exact: true })).toHaveCount(0);
+  await expect(weather.getByText("safe", { exact: true })).toHaveCount(0);
 
   const lint = page.getByTestId(`agent-tool-row-${LINT_ID}`);
-  await expect(lint).toContainText("docker_command");
-  await expect(lint).toContainText("privileged");
+  await expect(lint).toContainText("Contenedor");
+  await expect(lint).toContainText("Privilegiada");
+  await expect(lint.getByText("docker_command", { exact: true })).toHaveCount(0);
+  await expect(lint.getByText("privileged", { exact: true })).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

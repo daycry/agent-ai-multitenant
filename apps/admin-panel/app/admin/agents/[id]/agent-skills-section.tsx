@@ -37,8 +37,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types (mirror api_server.schemas.catalog.SkillResponse +
@@ -104,6 +106,8 @@ function categoryRank(cat: string): number {
 }
 
 export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionProps) {
+  const errorText = useErrorText();
+  const t = useT("agents");
   const queryClient = useQueryClient();
   const { isTenantAdmin, isLoading: roleLoading } = useCurrentUser();
 
@@ -151,7 +155,7 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
       void queryClient.invalidateQueries({ queryKey: ["agent-skills", agentId] });
     },
     onError: (err) => {
-      setSaveError(err instanceof ApiError ? err.body : String(err));
+      setSaveError(errorText(err));
     },
   });
 
@@ -278,8 +282,8 @@ export function AgentSkillsSection({ agentId, isReadOnly }: AgentSkillsSectionPr
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Buscar skill por nombre, descripción o categoría…"
-                aria-label="Buscar skill por nombre, descripción o categoría"
+                placeholder={t("skillsSearchPlaceholder")}
+                aria-label={t("skillsSearchLabel")}
                 className="pl-9"
                 data-testid="agent-skills-search"
               />

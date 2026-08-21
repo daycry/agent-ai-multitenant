@@ -21,14 +21,15 @@ máquina** (no Kubernetes).
 
 El stack se compone por **capas** que se suman con `-f`:
 
-| Fichero                                    | Para qué                                                                                   |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `docker/docker-compose.yml`                | **Base** prod-shaped: define todos los servicios; sin puertos al host.                     |
-| `docker/docker-compose.dev.yml`            | **Dev**: expone los puertos al host + Vault en modo dev (token conocido).                  |
-| `docker/docker-compose.monitoring.yml`     | Overlay de **observabilidad**: Prometheus, Alertmanager, cAdvisor, Grafana, node-exporter. |
-| `docker/docker-compose.monitoring.dev.yml` | Expone al host las UIs de monitoring (Grafana/Prometheus/Alertmanager).                    |
-| `docker/docker-compose.gpu.yml`            | Overlay **GPU (CUDA)**: añade la reserva NVIDIA al servicio `ollama` (ADR 0056).           |
-| `docker/docker-compose.windows.yml`        | Override **solo Windows/WSL2**: arranca `node-exporter` (mount `rslave` no soportado).     |
+| Fichero                                     | Para qué                                                                                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `docker/docker-compose.yml`                 | **Base** prod-shaped: define todos los servicios; sin puertos al host.                                                                                 |
+| `docker/docker-compose.dev.yml`             | **Dev**: expone los puertos al host + Vault en modo dev (token conocido).                                                                              |
+| `docker/docker-compose.monitoring.yml`      | Overlay de **observabilidad**: Prometheus, Alertmanager, cAdvisor, Grafana, node-exporter.                                                             |
+| `docker/docker-compose.monitoring.apps.yml` | Lo que monitoriza a las **apps**: override de `workers` con el drop-dir del textfile collector. Solo si la capa de aplicaciones está en el mismo `-f`. |
+| `docker/docker-compose.monitoring.dev.yml`  | Expone al host las UIs de monitoring (Grafana/Prometheus/Alertmanager).                                                                                |
+| `docker/docker-compose.gpu.yml`             | Overlay **GPU (CUDA)**: añade la reserva NVIDIA al servicio `ollama` (ADR 0056).                                                                       |
+| `docker/docker-compose.windows.yml`         | Override **solo Windows/WSL2**: arranca `node-exporter` (mount `rslave` no soportado).                                                                 |
 
 ### Comandos de arranque
 
@@ -49,6 +50,27 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
   -f docker/docker-compose.gpu.yml up -d
 ```
+
+> **Por qué la monitorización son DOS ficheros.** `monitoring.yml` trae la
+> infraestructura observable y se apila sola: los comandos de arriba no levantan
+> las apps en Docker (api-server y admin-panel corren nativos desde el venv con
+> `scripts/dev/up.*`), así que ahí no hay contenedor `workers` que parchear.
+> `monitoring.apps.yml` trae el único override que necesita la capa de
+> aplicaciones, y **solo se añade cuando `docker-compose.manuals.yml` está en el
+> mismo `-f`**:
+>
+> ```bash
+> docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml \
+>   -f docker/docker-compose.manuals.yml \
+>   -f docker/docker-compose.monitoring.yml \
+>   -f docker/docker-compose.monitoring.apps.yml \
+>   -f docker/docker-compose.monitoring.dev.yml up -d
+> ```
+>
+> Añadirlo sin la capa de aplicaciones aborta el proyecto ENTERO —`up`, `ps`,
+> `logs` y `config`— con `service "workers" has neither an image nor a build
+context specified`. Cada combinación escrita aquí la valida
+> `tests/unit/test_compose_stacks_are_launchable.py`.
 
 Comprueba el estado con `docker compose ps` (espera 30-60 s a que estén
 `healthy`).
@@ -92,10 +114,57 @@ Todos viven en la red `agentic-net`. El puerto **host** es el que abre
 | `ollama`           | `ollama/ollama:0.31.1`                  | **Embeddings** (KBs + memoria) y LLMs locales opcionales (ADR 0056).                                 | **11434**                           | http://localhost:11434/api/tags                                            |
 | `ollama-bootstrap` | `ollama/ollama:0.31.1`                  | **One-shot**: hace `ollama pull` del modelo de embeddings y **termina** (`Exited (0)` es lo normal). | — (no escucha)                      | Ver logs: `docker logs agentic-platform-ollama-bootstrap-1`                |
 
+> **`docling-serve` decide qué formatos acepta la subida de documentos.** El
+> api-server le pregunta su enum `InputFormat` a `GET /openapi.json` **una vez, al
+> arrancar**, y lo cachea en proceso (`api_server/ingestion/formats.py`, prod-13
+> `task_prod13_04`); con eso, `POST /knowledge-bases/{id}/documents` rechaza con
+> **415** lo que docling no sabe parsear, en la puerta y sin almacenar nada.
+> Si `docling-serve` **no está listo al arrancar** el api-server, se usa una lista
+> fija de respaldo, deliberadamente ANCHA: la degradación tiene que errar
+> aceptando, nunca rechazando subidas legítimas. La única consecuencia es que un
+> formato añadido por un Docling posterior a esa lista se rechace hasta el
+> siguiente arranque con el servicio vivo — **un reinicio del api-server basta**,
+> no hace falta tocar código.
+
 > **`ollama-bootstrap` en `Exited (0)` no es un error** — es un init que descarga
 > el modelo (`nomic-embed-text`) en el volumen `ollama_data` y sale. En el
 > próximo `up` vuelve a correr y es un no-op si el modelo ya está. Ver
 > [runbook Ollama](../06-runbooks/ollama-gpu-setup.md).
+
+## Servicio bajo perfil: `watchdog`
+
+No arranca con un `docker compose up` normal — vive **bajo `profiles: [watchdog]`**
+a propósito, porque `docker-compose.yml` es la capa de infraestructura y el
+watchdog es una app: sin el perfil, un `up` de sólo infra intentaría levantar una
+imagen que ese fichero no construye.
+
+| Servicio   | Imagen                                       | Qué hace                                                                                          | Puerto host (dev) |
+| ---------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------- |
+| `watchdog` | `agentic-platform/watchdog:latest` (_build_) | Vigila la salud de los servicios y **reinicia con backoff exponencial** lo que salga `unhealthy`. | — (no escucha)    |
+
+```bash
+# Construir la imagen (contexto = raíz del repo; se apoya en la de api-server)
+docker build -f apps/watchdog/Dockerfile -t agentic-platform/watchdog:latest .
+
+# Arrancarlo: hay que nombrar el perfil explícitamente
+docker compose --profile watchdog -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d watchdog
+```
+
+Dos cosas que conviene saber antes de tocarlo:
+
+- **Habla con Docker por `docker-socket-proxy`** (`tecnativa/docker-socket-proxy`,
+  definido en `docker-compose.manuals.yml`), nunca con el socket crudo — ADR 0060.
+- **Cuando se rinde, la alerta sale del contenedor**: `WATCHDOG_ALERTS_INGEST_URL`
+  - `WATCHDOG_ALERTS_INGEST_TOKEN` (el mismo `API_SERVER_ALERTS_INGEST_TOKEN`)
+    publican `watchdog.alert` en el api-server, que la rutea. Un vigilante que sólo
+    escribiera en su propio log no vigila nada: nadie lee el log de lo que se
+    supone que te avisa.
+- **Por eso el healthcheck de contenedor del api-server apunta a `/healthz` y no
+  a `/readyz`.** Docker sólo admite uno, y el watchdog reinicia lo `unhealthy`:
+  con readiness ahí, «se cayó PostgreSQL» se convertiría en «la api-server se
+  reinicia en bucle». La readiness la consume el **proxy** (`health_uri /readyz`
+  en el Caddyfile), que es quien debe dejar de mandarle tráfico sin matarla. Ver
+  [gotcha](../03-guides/gotchas/readiness-en-el-healthcheck-del-contenedor-es-un-bucle.md).
 
 ## Servicios de monitoring (`docker-compose.monitoring.yml`)
 

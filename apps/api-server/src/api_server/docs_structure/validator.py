@@ -30,7 +30,7 @@ Design choices mirror :mod:`api_server.docs_structure.bootstrap`:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
@@ -44,7 +44,7 @@ from api_server.docs_structure.constants import (
 _log = structlog.get_logger("api_server.docs_structure.validator")
 
 
-class ViolationKind(str, Enum):
+class ViolationKind(StrEnum):
     """The categories of structural violation the validator can report.
 
     A ``str`` enum so the value serialises cleanly to JSON/logs while
@@ -182,7 +182,7 @@ def validate_docs_structure(repo_path: Path) -> list[Violation]:
                     kind=ViolationKind.CANONICAL_FOLDER_NOT_A_DIR,
                     path=target.as_posix(),
                     message=(
-                        f"canonical folder {folder.name!r} exists but is a file, " "not a directory"
+                        f"canonical folder {folder.name!r} exists but is a file, not a directory"
                     ),
                 )
             )

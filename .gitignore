@@ -74,12 +74,20 @@ playwright/.cache/
 .e2e-api-server.log
 .e2e-api-server.err.log
 
+# Estado del arnés de backend vivo (scripts/dev/e2e-live-harness.ps1). El .pid
+# es cómo `-Down` sabe a qué api-server parar sin adivinar por el puerto.
+.e2e-live-harness.log
+.e2e-live-harness.err.log
+.e2e-live-harness.pid
+
 # Detached dev stack state (scripts/dev/up.{ps1,sh} + down.{ps1,sh})
 .dev/
 
 # Estado del setup_demo_project.py (ids del proyecto y agente compartidos
-# entre los demos de los tests humanos — local, no versionar).
-scripts/.demo_state.json
+# entre los demos de los tests humanos — local, no versionar). Los escribe
+# `Path(__file__).parent`, o sea JUNTO al script: viven en scripts/demos/
+# desde prod-15 task_gov_higiene_10.
+scripts/demos/.demo_state.json
 
 # =============================================================================
 # Docker / Compose
@@ -144,14 +152,18 @@ temp/
 # to avoid accidentally committing local-only overrides if the convention changes.
 # (currently tracked — uncomment to ignore again)
 # .claude/settings.local.json
-scripts/.demo_state_05.json
-scripts/.demo_state_06.json
-scripts/.demo_06/
-scripts/.demo_state_06_8.json
-scripts/.demo_state_06_9.json
+scripts/demos/.demo_state_05.json
+scripts/demos/.demo_state_06.json
+scripts/demos/.demo_06/
+scripts/demos/.demo_state_06_8.json
+scripts/demos/.demo_state_06_9.json
 
 # Claude Code internal lockfile (per-session / per-machine).
 .claude/scheduled_tasks.lock
 
 # Bundles de backup locales (bind de workers-aux; durabilidad 2026-07-03)
 .backups/
+
+# Informe JSON de pip-audit (lo escribe el job security-scan y quien reproduzca
+# el SCA en local con el comando del runbook). Es un artefacto, no una fuente.
+pip-audit.json

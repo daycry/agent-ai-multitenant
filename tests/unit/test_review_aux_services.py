@@ -43,9 +43,26 @@ class _FakeDocker:
     def __init__(self) -> None:
         self.ran: list[tuple[str, dict[str, Any]]] = []
         self.networks_created: list[_FakeNetwork] = []
+        self.pulled: list[str] = []
         self._n = 0
 
         outer = self
+
+        # `client.images` lo necesita `ensure_runtime_image`, por el que pasan
+        # ahora los sidecars desde que sus imágenes van fijadas por digest
+        # (prod-11 task_digest_pin_11). Sin este doble, el fake se quedaba sin
+        # el atributo y el `except` best-effort de `_spawn_review_runtime` lo
+        # tragaba: el review salía SIN servicios y el test lo veía como «se
+        # levantó 1 contenedor en vez de 3». Que es, dicho de otro modo, el
+        # propio mecanismo de degradación funcionando — pero por una carencia
+        # del doble, no del código.
+        class _Images:
+            def get(self, reference: str) -> Any:
+                raise KeyError(reference)  # nunca en local: fuerza el pull
+
+            def pull(self, reference: str) -> Any:
+                outer.pulled.append(reference)
+                return object()
 
         class _Containers:
             def run(self, image: str, **kwargs: Any) -> _FakeContainer:
@@ -62,6 +79,7 @@ class _FakeDocker:
 
         self.containers = _Containers()
         self.networks = _Networks()
+        self.images = _Images()
 
 
 def _base_request(**overrides: Any) -> dict[str, Any]:
@@ -113,7 +131,18 @@ def test_services_spawn_aux_on_private_bridge_and_inject_env(
 
     # aux launched on the private bridge, labelled to the review session
     aux_runs = [r for r in client.ran if r[1].get("network") == bridge.name]
-    assert {r[0] for r in aux_runs} == {"mysql:8", "redis:7-alpine"}
+    # Del catálogo y en su forma CANÓNICA por digest: el review-runtime lanza la
+    # referencia que resolvió (`repo@sha256:…`), no el tag del que salió
+    # (prod-11 task_digest_pin_11). El literal `mysql:8` que había aquí fijaba una
+    # versión que este test no está comprobando.
+    from workers.runtime_services import SERVICE_CATALOG
+    from workers.test_runtime import ensure_runtime_image
+
+    expected = {
+        ensure_runtime_image(client, SERVICE_CATALOG[name].default_image)
+        for name in ("mysql", "redis")
+    }
+    assert {r[0] for r in aux_runs} == expected
     for _img, kw in aux_runs:
         assert kw["labels"]["com.agentic-platform.review-session-id"] == "sid-aux"
         assert kw["labels"]["com.agentic-platform.component"] == "review-runtime"

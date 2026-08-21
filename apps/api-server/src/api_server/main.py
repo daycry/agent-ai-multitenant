@@ -15,18 +15,22 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.auth.admin_hardening import require_hardened_system_admin
 from api_server.auth.deps import AuthPrincipal, get_principal, get_tenant_session
 from api_server.config import get_settings
 from api_server.db.models import Organization, User, UserOrganizationMembership
 from api_server.db.session import get_admin_sessionmaker
 from api_server.logging import configure_logging, get_logger
+from api_server.logging.celery_pipeline import install_request_id_propagation
 from api_server.logging.context import REQUEST_ID_HEADER, RequestContextMiddleware
+from api_server.metrics import install_metrics
+from api_server.middleware.security_headers import SecurityHeadersMiddleware
 from api_server.routers.admin import router as admin_router
 from api_server.routers.agents import router as agents_router
 from api_server.routers.api_tokens import router as api_tokens_router
@@ -59,7 +63,9 @@ from api_server.routers.eval_quality import router as eval_quality_router
 from api_server.routers.evals import router as evals_router
 from api_server.routers.executions import router as executions_router
 from api_server.routers.guardrail_alerts import router as guardrail_alerts_router
+from api_server.routers.guardrail_configs import router as guardrail_configs_router
 from api_server.routers.guardrail_events import router as guardrail_events_router
+from api_server.routers.health import router as health_router
 from api_server.routers.human_agents import router as human_agents_router
 from api_server.routers.human_inbox import router as human_inbox_router
 from api_server.routers.human_queue import router as human_queue_router
@@ -67,6 +73,7 @@ from api_server.routers.incoming_webhook_configs import router as incoming_webho
 from api_server.routers.incoming_webhooks import router as incoming_webhooks_router
 from api_server.routers.internal_agent import router as internal_agent_router
 from api_server.routers.internal_alerts import router as internal_alerts_router
+from api_server.routers.invitations import router as invitations_admin_router
 from api_server.routers.kb_categories import router as kb_categories_router
 from api_server.routers.knowledge_bases import (
     documents_router,
@@ -78,6 +85,12 @@ from api_server.routers.knowledge_bases import (
 from api_server.routers.llm_providers import admin_router as llm_providers_admin_router
 from api_server.routers.marketplace import admin_router as marketplace_admin_router
 from api_server.routers.marketplace import router as marketplace_router
+from api_server.routers.marketplace_deployments import (
+    project_router as marketplace_project_router,
+)
+from api_server.routers.marketplace_deployments import (
+    router as marketplace_deployments_router,
+)
 from api_server.routers.mcp import router as mcp_router
 from api_server.routers.mcp_catalog import router as mcp_catalog_router
 from api_server.routers.mcp_oauth import router as mcp_oauth_router
@@ -105,6 +118,7 @@ from api_server.routers.tenant_stats import router as tenant_stats_router
 from api_server.routers.tools import router as tools_router
 from api_server.routers.tools_diagnostic import router as tools_diagnostic_router
 from api_server.routers.ws import router as ws_router
+from api_server.routing_introspection import route_paths
 from api_server.telemetry import configure_tracing, instrument_fastapi
 from api_server.telemetry.setup import add_console_exporter
 
@@ -116,6 +130,16 @@ configure_tracing(service_name="api-server")
 if os.environ.get("API_SERVER_OTEL_CONSOLE") == "1":
     add_console_exporter()
 configure_logging(service="api-server")
+
+# prod-08 Fase C (observability-7): el api-server no CONSUME tasks Celery, solo
+# los produce — así que instala únicamente la mitad productora. Un handler de
+# `before_task_publish` copia el `request_id` del contextvar de la petición
+# HTTP a las cabeceras del mensaje; en el worker, `task_prerun` lo rebindea.
+# Sin esto la traza moría en la frontera Celery y no había forma de unir «el
+# usuario pulsó ejecutar» con «el worker falló» salvo por marcas de tiempo.
+# Vía señal, no vía call-site: cubre TODOS los productores (incluidos los que
+# alguien añada mañana) sin tocar un solo `apply_async`.
+install_request_id_propagation()
 
 _logger = get_logger(__name__)
 
@@ -129,7 +153,16 @@ _logger = get_logger(__name__)
 # preflight response is an explicit, auditable contract rather than a
 # reflect-everything wildcard.
 _CORS_ALLOW_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
-_CORS_ALLOW_HEADERS = ["Authorization", "Content-Type", "X-Tenant-Id", "X-Request-ID"]
+# `X-CSRF-Token` is the double-submit half of the cookie session (ADR 0133): in
+# dev the panel (:3000) and the api-server (:8001) are different ORIGINS, so
+# without it the preflight rejects every mutation the panel makes.
+_CORS_ALLOW_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "X-Tenant-Id",
+    "X-Request-ID",
+    "X-CSRF-Token",
+]
 
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -173,6 +206,45 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+# Every path under this prefix is the System-Admin surface and MUST carry the
+# admin hardening gate (MFA + IP allowlist + short session, staging/prod only).
+_ADMIN_PREFIX = "/admin"
+
+
+def _is_admin_surface(router: APIRouter) -> bool:
+    """True iff EVERY route of ``router`` lives under ``/admin`` (authz-1).
+
+    The mount in :func:`_register_routers` uses this to attach
+    :func:`require_hardened_system_admin` automatically, so a NEW admin router
+    is hardened by the mere fact of being mounted — nobody has to remember the
+    dependency (the historic failure mode: 9 of the 10 ``/admin/*`` routers,
+    ``/admin/backup`` among them with its destructive restore, shipped without
+    it).
+
+    A router that MIXES admin and non-admin paths is a wiring error we refuse
+    to guess about: hardening it would 403 the tenant routes, and not hardening
+    it would leave the admin routes open. It raises at import time — loudly, at
+    startup — instead of silently picking either failure.
+    """
+    # `route_paths`, no `router.routes` a pelo: desde FastAPI 0.141 un router
+    # compuesto de sub-routers presenta `_IncludedRouter` sin `.path`, así que
+    # el idioma directo vería la lista vacía, devolvería False y montaría el
+    # router administrativo SIN esta guarda. En silencio. Ver
+    # `routing_introspection` para el detalle.
+    paths = sorted(route_paths(router))
+    admin = [p for p in paths if p == _ADMIN_PREFIX or p.startswith(f"{_ADMIN_PREFIX}/")]
+    if not admin:
+        return False
+    if len(admin) != len(paths):
+        non_admin = sorted(set(paths) - set(admin))
+        raise RuntimeError(
+            "router mixes /admin paths with non-admin paths, so the admin "
+            f"hardening gate cannot be applied at mount time: {non_admin}. "
+            "Split it into an admin router and a tenant router."
+        )
+    return True
+
+
 def _register_routers(app: FastAPI) -> None:
     """Mount every API router on ``app``.
 
@@ -180,6 +252,12 @@ def _register_routers(app: FastAPI) -> None:
     statement-count lint threshold as routers keep being added (the list
     only grows). Order is not significant — FastAPI matches by path — so
     new routers can be appended freely.
+
+    Routers whose whole surface lives under ``/admin`` are mounted WITH the
+    hardening dependency (:func:`_is_admin_surface`), so the System-Admin
+    surface cannot regress by omission. ``tests/integration/
+    test_admin_hardening_surface.py`` is the contract test that fails if any
+    mounted ``/admin`` route ends up without the gate.
     """
     for router in (
         auth_router,
@@ -188,6 +266,9 @@ def _register_routers(app: FastAPI) -> None:
         scim_router,
         mfa_router,
         admin_router,
+        # ADR 0134: `/admin/invitations`. Va bajo `/admin`, así que
+        # `_is_admin_surface` le engancha el endurecimiento en el montaje.
+        invitations_admin_router,
         agents_router,
         human_agents_router,
         human_inbox_router,
@@ -224,6 +305,10 @@ def _register_routers(app: FastAPI) -> None:
         project_kb_router,
         marketplace_router,
         marketplace_admin_router,
+        # ADR 0142: el despliegue en proyectos. Router aparte (el de marketplace
+        # ya tiene ~1.500 líneas) + su lado proyecto.
+        marketplace_deployments_router,
+        marketplace_project_router,
         model_prices_router,
         model_prices_admin_router,
         llm_providers_admin_router,
@@ -243,6 +328,7 @@ def _register_routers(app: FastAPI) -> None:
         notifications_router,
         guardrail_events_router,
         guardrail_alerts_router,
+        guardrail_configs_router,
         incoming_webhooks_router,
         incoming_webhook_configs_router,
         assistant_router,
@@ -255,7 +341,10 @@ def _register_routers(app: FastAPI) -> None:
         budget_pause_router,
         ws_router,
     ):
-        app.include_router(router)
+        if _is_admin_surface(router):
+            app.include_router(router, dependencies=[Depends(require_hardened_system_admin)])
+        else:
+            app.include_router(router)
 
 
 @asynccontextmanager
@@ -267,13 +356,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: ARG001 — fi
     handlers eran dos funciones independientes cuyo orden dependía del registro;
     aquí el orden es explícito y legible.
 
-    Las dos son **best-effort por diseño**: ninguna puede impedir que el
-    api-server arranque. Un catálogo builtin incompleto o un barrido de chat que
-    falle son degradaciones, no motivos para dejar la plataforma caída — y si
-    reventaran aquí, el contenedor entraría en bucle de reinicio sin decir por qué.
+    Las tres son **best-effort por diseño**: ninguna puede impedir que el
+    api-server arranque. Un catálogo builtin incompleto, un barrido de chat que
+    falle o un docling-serve que aún no responda son degradaciones, no motivos
+    para dejar la plataforma caída — y si reventaran aquí, el contenedor entraría
+    en bucle de reinicio sin decir por qué.
     """
     await _ensure_builtin_catalog()
     await _resume_chat_replies()
+    await _prime_supported_formats()
     yield
 
 
@@ -310,22 +401,59 @@ async def _resume_chat_replies() -> None:
         _logger.warning("chat.resume_on_startup_failed", exc_info=True)
 
 
+async def _prime_supported_formats() -> None:
+    # prod-13 task_prod13_04: qué formatos acepta la subida de documentos se le
+    # PREGUNTA a docling-serve una vez, al arrancar, y se cachea en proceso. Si
+    # el servicio no está listo todavía se usa la lista fija de respaldo (ancha
+    # a propósito, ver `ingestion/formats.py`) y la única consecuencia es que un
+    # formato añadido por un Docling posterior a esa lista se rechazaría en la
+    # puerta hasta el siguiente arranque con docling-serve vivo.
+    try:
+        from api_server.ingestion.formats import refresh_supported_formats
+
+        await refresh_supported_formats(base_url=get_settings().docling_serve_url)
+    except Exception:  # pragma: no cover — `refresh_…` ya es best-effort
+        _logger.warning("startup.supported_formats_probe_failed", exc_info=True)
+
+
 def create_app() -> FastAPI:
+    settings = get_settings()
+
+    # `/docs` + `/openapi.json` are withdrawn outside dev (task_prod09_14,
+    # api-7): the full internal schema — `/admin/*`, `/internal/agent/*`, every
+    # tenant route — used to be served unauthenticated. Withdrawing the UI alone
+    # would be theatre, since `/openapi.json` IS the map, so BOTH go. The public
+    # `/api/v1` contract is a separate curated document and stays published.
+    docs_published = settings.api_docs_published
     app = FastAPI(
         title="agentic-platform / api-server",
         version="0.0.0",
-        docs_url="/docs",
+        docs_url="/docs" if docs_published else None,
+        openapi_url="/openapi.json" if docs_published else None,
         redoc_url=None,
         lifespan=_lifespan,
     )
 
-    settings = get_settings()
     # Request-context middleware binds request_id (+ user_id/tenant_id) to
     # every log line via structlog contextvars and echoes X-Request-ID back
     # (error-obs-logging-1). Added BEFORE CORS so CORS ends up the outermost
     # layer — its headers wrap even the generic 500 emitted by the global
     # exception handler below.
     app.add_middleware(RequestContextMiddleware)
+    # prod-08 Fase B (observability-2): exporter Prometheus. Registra el
+    # middleware que cuenta peticiones/latencia y la ruta GET /metrics.
+    # Añadido AQUÍ, por dentro de RequestContextMiddleware, para que mida el
+    # tiempo de la petición sin incluir el coste de CORS/headers de seguridad.
+    # Sin este target no existe la serie `up` del api-server y la regla
+    # ServiceDown es inescribible: hasta ahora, un api-server caído no
+    # disparaba ninguna alerta.
+    install_metrics(app)
+    # Baseline response headers (task_prod09_14, api-7): nosniff, frame-deny,
+    # Referrer-Policy and — only over TLS, only outside dev — HSTS. Added AFTER
+    # RequestContextMiddleware and BEFORE CORS so it ends up between them: it must
+    # wrap every response including the generic 500 the global handler emits, and
+    # CORS must stay outermost so its own headers are never shadowed.
+    app.add_middleware(SecurityHeadersMiddleware, environment=settings.environment)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
@@ -343,9 +471,11 @@ def create_app() -> FastAPI:
 
     instrument_fastapi(app)
 
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    # `/healthz` (liveness) y `/readyz` (readiness) viven juntos en
+    # `routers/health.py` desde `task_audit14_08`: son un PAR y la asimetría entre
+    # ellos —liveness no toca dependencias externas, readiness sí— sólo se
+    # entiende leyéndolos a la vez. El contrato de `/healthz` no cambió.
+    app.include_router(health_router)
 
     @app.get("/me", response_model=None)
     async def me(

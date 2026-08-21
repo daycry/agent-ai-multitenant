@@ -16,10 +16,11 @@ from uuid import UUID
 
 import structlog
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 from workers.docker_client import get_docker_client
 
 _log = structlog.get_logger("workers.tasks")
@@ -122,7 +123,7 @@ async def _compose_review_runtime(request: dict[str, Any], settings: Settings) -
     # C8 F41: enforce the per-tenant cap on the PRODUCTION path — the in-memory
     # ReviewRuntimeManager.create cap never ran here. We refuse the N+1-th BEFORE
     # creating a row or a container (so a runaway never piles up sessions).
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as session:
@@ -468,7 +469,7 @@ def _start_review_aux_services(
     reapers own it. Returns ``(bridge, aux_container_ids)``; on any failure it
     tears down whatever it created and returns ``(None, [])`` so the review still
     spawns main-only (a preview without its DB beats no preview)."""
-    from workers.test_runtime import build_aux_run_kwargs
+    from workers.test_runtime import build_aux_run_kwargs, ensure_runtime_image
 
     aux_specs = services.aux_services
     if not aux_specs:
@@ -488,7 +489,14 @@ def _start_review_aux_services(
             # Relabel from the test-runtime component to this review session so
             # the reapers associate + clean the sidecar with the session.
             run_kwargs["labels"] = {**labels, "com.agentic-platform.role": "aux-service"}
-            container = client.containers.run(aux.image, **run_kwargs)
+            # prod-11 task_digest_pin_11: los `default_image` del catálogo del ADR
+            # 0129 van fijados por digest, así que se lanza la referencia canónica
+            # `repo@sha256:…` y no el tag — si no, el daemon vuelve a elegir y el
+            # pin queda en decoración. Un digest irresoluble levanta la excepción
+            # que ya captura el `except` de abajo: aquí la degradación correcta es
+            # «preview sin su base de datos», no abortar (a diferencia del
+            # test-runtime, donde un sidecar impostor contaminaría un veredicto).
+            container = client.containers.run(ensure_runtime_image(client, aux.image), **run_kwargs)
             started.append(container)
             _wait_aux_healthy(container, aux)
         return bridge, [c.id for c in started]

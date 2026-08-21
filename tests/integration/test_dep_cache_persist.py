@@ -72,9 +72,9 @@ def test_ensure_entry_makes_dir_writable_by_nonroot_runtime(
     mgr = dep_cache.DepCacheManager(tmp_path)
     entry = mgr.ensure_entry(_python_pytest_template(), "wperm")
 
-    assert any(
-        p == str(entry.host_path) and (mode & 0o777) == 0o777 for p, mode in calls
-    ), f"cache dir not chmod'd world-writable; chmod calls={calls}"
+    assert any(p == str(entry.host_path) and (mode & 0o777) == 0o777 for p, mode in calls), (
+        f"cache dir not chmod'd world-writable; chmod calls={calls}"
+    )
 
 
 def test_ensure_entry_touches_mtime(tmp_path: Path) -> None:

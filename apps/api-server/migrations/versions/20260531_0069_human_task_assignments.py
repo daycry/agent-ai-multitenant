@@ -126,7 +126,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name="pk_human_task_assignments"),
         # The DB enforces the HumanTaskAssignmentStatus value set.
         sa.CheckConstraint(
-            "status IN ('pending_acceptance', 'accepted', 'reassigned'," " 'declined', 'expired')",
+            "status IN ('pending_acceptance', 'accepted', 'reassigned', 'declined', 'expired')",
             name="ck_human_task_assignments_status",
         ),
     )

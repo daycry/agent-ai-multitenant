@@ -4,7 +4,7 @@
 // moneda). Sin JSX ni hooks: módulo .ts importable desde page y dialogs.
 
 import { type BadgeVariant } from "@/components/ui/badge";
-import { ApiError } from "@/lib/api";
+import { type MessageKey } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.model_prices + db.model_prices enums.
@@ -128,12 +128,19 @@ export const DIFF_STATUS_BADGE: Record<DiffStatus, BadgeVariant> = {
   removed: "warning",
 };
 
-export const DIFF_STATUS_LABEL: Record<DiffStatus, string> = {
-  added: "nuevo",
-  updated: "actualizado",
-  unchanged: "sin cambios",
-  increased: "subida >10%",
-  removed: "descontinuado",
+/**
+ * `status` del diff -> clave del diccionario que lo etiqueta.
+ *
+ * El `status` en si NO se traduce: es el identificador que emite el backend y
+ * el que viaja en `data-status` (los e2e lo leen de ahi). Lo que se traduce es
+ * la etiqueta que se pinta.
+ */
+export const DIFF_STATUS_KEY: Record<DiffStatus, MessageKey<"modelPrices">> = {
+  added: "diffStatusAdded",
+  updated: "diffStatusUpdated",
+  unchanged: "diffStatusUnchanged",
+  increased: "diffStatusIncreased",
+  removed: "diffStatusRemoved",
 };
 
 /** Format a fractional change (0.067 -> "+6.7%"); null -> "—". */
@@ -144,9 +151,19 @@ export function fmtPct(value: number | null): string {
   return `${sign}${pct.toLocaleString("en-US", { maximumFractionDigits: 1 })}%`;
 }
 
-export const UNIT_LABEL: Record<string, string> = {
-  per_1m_tokens: "por 1M tokens",
-  per_1k_tokens: "por 1K tokens",
+/**
+ * `unit` -> clave del diccionario. Mismo criterio que `DIFF_STATUS_KEY`: el
+ * valor es del backend, la etiqueta es de presentacion. Una unidad que el
+ * backend estrene y aqui no este cae a mostrar el identificador crudo, que es
+ * mejor pista que un texto generico.
+ */
+export const UNIT_KEY: Record<string, MessageKey<"modelPrices">> = {
+  per_1m_tokens: "unitPer1mTokens",
+  per_1k_tokens: "unitPer1kTokens",
+  per_request: "unitPerRequest",
+  per_image: "unitPerImage",
+  per_second: "unitPerSecond",
+  per_minute: "unitPerMinute",
 };
 
 export const SOURCE_BADGE: Record<string, BadgeVariant> = {
@@ -154,10 +171,6 @@ export const SOURCE_BADGE: Record<string, BadgeVariant> = {
   litellm: "info",
   provider_api: "success",
 };
-
-export function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
 
 /** Canonical USD price formatting; the catalog stores `Numeric(18,10)` strings. */
 export function fmtUsd(value: string | null): string {

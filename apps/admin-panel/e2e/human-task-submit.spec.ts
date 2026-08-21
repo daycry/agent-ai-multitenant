@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the human-task delivery form — "Entregar tarea" (Plan 16 task_16_09).
@@ -54,13 +55,7 @@ async function setup(
   page: Page,
   opts: { onSubmit?: (body: Record<string, unknown>) => void } = {},
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("**/me", (route) =>
     route.fulfill({
@@ -103,6 +98,19 @@ async function setup(
   );
 }
 
+/**
+ * Las FILAS de adjunto, y sólo ellas.
+ *
+ * `[data-testid^="submit-attachment-"]` dejó de identificar una fila el día que
+ * el diálogo estrenó el contador `submit-attachment-count`: ese `<span>` va
+ * ANTES en el DOM, así que `.first()` lo devolvía a él y el `getByRole` de
+ * dentro no encontraba nada, con el fallo apareciendo como un timeout al
+ * rellenar. Anclar al `<li>` vuelve a hacer el selector unívoco (2026-08-19).
+ */
+function attachmentRows(page: Page) {
+  return page.locator('li[data-testid^="submit-attachment-"]');
+}
+
 test("opening the delivery form: submit is disabled until there is a deliverable", async ({
   page,
 }) => {
@@ -129,7 +137,8 @@ test("submitting posts output + attachments + hours", async ({ page }) => {
 
   // Add a URL attachment.
   await page.getByTestId("submit-add-url").click();
-  const urlRow = page.locator('[data-testid^="submit-attachment-"]').first();
+  await expect(attachmentRows(page)).toHaveCount(1);
+  const urlRow = attachmentRows(page).first();
   await urlRow.getByRole("textbox", { name: "Etiqueta del adjunto" }).fill("PR de cambios");
   await urlRow.getByRole("textbox", { name: "URL del adjunto" }).fill("https://example.test/pr/42");
 
@@ -163,7 +172,7 @@ test("an incomplete attachment is not counted as valid", async ({ page }) => {
   await expect(page.getByTestId("submit-confirm")).toBeDisabled();
 
   // A label without a target is still not usable.
-  const row = page.locator('[data-testid^="submit-attachment-"]').first();
+  const row = attachmentRows(page).first();
   await row.getByRole("textbox", { name: "Etiqueta del adjunto" }).fill("captura");
   await expect(page.getByTestId("submit-attachment-count")).toContainText("0");
   await expect(page.getByTestId("submit-confirm")).toBeDisabled();
@@ -187,8 +196,8 @@ test("an attachment can be removed", async ({ page }) => {
 
   await page.getByTestId(`inbox-complete-${ACCEPTED.assignment_id}`).click();
   await page.getByTestId("submit-add-file").click();
-  const row = page.locator('[data-testid^="submit-attachment-"]').first();
+  const row = attachmentRows(page).first();
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Quitar adjunto" }).click();
-  await expect(page.locator('[data-testid^="submit-attachment-"]')).toHaveCount(0);
+  await expect(attachmentRows(page)).toHaveCount(0);
 });

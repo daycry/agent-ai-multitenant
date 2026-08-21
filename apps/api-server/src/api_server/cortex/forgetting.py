@@ -12,8 +12,25 @@ Invariantes NO negociables (ADR 0077):
     el olvido autónomo de F4 se acota a la episódica de BAJA retención.
   * **Olvido reversible**: solo **soft-delete** (``deleted_at``, nunca delete
     físico — postura ADR 0059). El owner puede inspeccionar y restaurar.
-  * **Conservador**: ``retention_score = importance * recency * recall_frequency``;
-    empezamos con una ventana amplia para no enterrar long-tail útil.
+  * **Conservador**: ``retention_score = importance * recency * recall_frequency *
+    emotional_factor``; empezamos con una ventana amplia para no enterrar long-tail
+    útil.
+
+Las cuatro dimensiones y **quién produce cada dato** (importa para no inventar
+mecanismos sin productor):
+
+  * ``importance`` — ``metadata_.importance``, lo fija quien crea la memoria.
+  * ``recency`` — tiempo desde el ÚLTIMO ACCESO: ``metadata_.last_recalled_at`` si
+    está (lo escribe ``cortex.memory._bump_recall_counters`` en cada recall) y
+    ``created_at`` si no. Una memoria de hace dos años recordada ayer está VIVA.
+  * ``recall_frequency`` — ``metadata_.recall_count``, mismo productor.
+  * ``emotional_factor`` — refuerzo ``≥ 1`` derivado de
+    ``metadata_.emotion.intensity``, que escribe el distilador afectivo de F2
+    (``workers.cortex_affect._persist_emotional_episode``) en cada episódica del
+    córtex: lo que se vivió con más carga se olvida menos. Es un REFUERZO y no un
+    multiplicador crudo a propósito — con ``score *= intensity`` una intensidad 0
+    (el valor que deja el camino fail-open del distilador, y el de toda memoria sin
+    bloque ``emotion``) enterraría la memoria al primer barrido.
 
 El reloj entra como parámetro (``now``) para que el scoring sea 100% reproducible.
 """
@@ -48,6 +65,12 @@ RECALL_FREQUENCY_FLOOR: float = 0.5
 #: Nº de recalls a partir del cual el factor satura en 1.0 (uso real probado).
 RECALL_COUNT_SATURATION: int = 5
 
+#: Ganancia de la intensidad emocional: el factor va de 1.0 (sin carga o sin dato)
+#: a ``1 + GAIN`` (intensidad máxima). Con 1.0, una episódica vivida al máximo
+#: DUPLICA su retención — suficiente para cambiar el veredicto en la franja media,
+#: que es donde el olvido decide de verdad. Calibrable (ADR 0077: medir y ajustar).
+EMOTION_INTENSITY_GAIN: float = 1.0
+
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     if x < lo:
@@ -57,17 +80,53 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return x
 
 
+def _align_tz(a: datetime, b: datetime) -> tuple[datetime, datetime]:
+    """Los dos instantes comparables: si uno es naïve, hereda la tz del otro.
+
+    El córtex escribe siempre en UTC aware, pero una fila migrada o un JSONB
+    escrito a mano puede venir naïve, y comparar naïve con aware LANZA. El olvido
+    no puede romperse por eso."""
+    if a.tzinfo is not None and b.tzinfo is None:
+        return a, b.replace(tzinfo=a.tzinfo)
+    if a.tzinfo is None and b.tzinfo is not None:
+        return a.replace(tzinfo=b.tzinfo), b
+    return a, b
+
+
 def recency_factor(created_at: datetime, now: datetime) -> float:
     """Factor de recencia ∈ ``(0, 1]``: ``0.5 ** (edad_dias / half_life)``.
 
     Una memoria recién creada vale ~1.0; pierde la mitad cada
-    :data:`RECENCY_HALF_LIFE_DAYS`. Determinista; tolerante a tz naïve/aware."""
-    if created_at.tzinfo is not None and now.tzinfo is None:
-        now = now.replace(tzinfo=created_at.tzinfo)
-    elif created_at.tzinfo is None and now.tzinfo is not None:
-        created_at = created_at.replace(tzinfo=now.tzinfo)
+    :data:`RECENCY_HALF_LIFE_DAYS`. Determinista; tolerante a tz naïve/aware.
+    El primer argumento es el **ancla** de la recencia, que
+    :func:`retention_score` obtiene de :func:`retention_anchor` (último recall si
+    existe, creación si no), no necesariamente el ``created_at`` de la fila."""
+    created_at, now = _align_tz(created_at, now)
     age_days = max(0.0, (now - created_at).total_seconds() / 86400.0)
     return math.pow(0.5, age_days / RECENCY_HALF_LIFE_DAYS)
+
+
+def retention_anchor(created_at: datetime, metadata: dict[str, Any] | None) -> datetime:
+    """El instante desde el que se mide la recencia: último recall, o la creación.
+
+    ``metadata_.last_recalled_at`` (ISO-8601, lo escribe
+    ``cortex.memory._bump_recall_counters`` en cada recall) **ya se escribía y
+    nadie lo leía**: la recencia se calculaba sobre ``created_at``, así que una
+    memoria de hace dos años recordada ayer puntuaba como si nadie la hubiese
+    tocado nunca. Se prefiere la marca sólo cuando es POSTERIOR a la creación: una
+    marca corrupta o anterior no puede envejecer la memoria más de lo que ya está.
+
+    Puro, determinista y tolerante: un valor ausente, no-string o ilegible cae a
+    ``created_at`` sin lanzar."""
+    raw = (metadata or {}).get("last_recalled_at")
+    if not isinstance(raw, str):
+        return created_at
+    try:
+        recalled_at = datetime.fromisoformat(raw)
+    except ValueError:
+        return created_at
+    aligned_created, aligned_recalled = _align_tz(created_at, recalled_at)
+    return recalled_at if aligned_recalled > aligned_created else created_at
 
 
 def importance_of(metadata: dict[str, Any] | None) -> float:
@@ -100,6 +159,38 @@ def recall_frequency_factor(recall_count: Any) -> float:
     return RECALL_FREQUENCY_FLOOR + (1.0 - RECALL_FREQUENCY_FLOOR) * saturation
 
 
+def emotion_intensity_of(metadata: dict[str, Any] | None) -> float:
+    """La intensidad emocional de la memoria (``metadata_.emotion.intensity`` ∈ ``[0,1]``).
+
+    La escribe el distilador afectivo de F2 (``workers.cortex_affect``) en cada
+    episódica del córtex, dentro del bloque ``metadata_.emotion`` que también
+    alimenta ``GET /owner/cortex/episodes``. **Ausente ⇒ 0.0** (neutro, no
+    penalización): la mayoría de las memorias del córtex no nacen del distilador
+    y no deben cambiar de score por eso. Tolerante: un bloque que no es dict, un
+    booleano o basura caen a 0.0 sin lanzar (el barrido no puede romperse por un
+    JSONB sucio)."""
+    src = (metadata or {}).get("emotion")
+    if not isinstance(src, dict):
+        return 0.0
+    raw = src.get("intensity")
+    if isinstance(raw, bool) or raw is None:
+        return 0.0
+    try:
+        return _clamp(float(raw), 0.0, 1.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def emotional_factor(metadata: dict[str, Any] | None) -> float:
+    """Refuerzo de retención por carga emocional ∈ ``[1, 1+GAIN]``.
+
+    Monótono creciente en la intensidad; **nunca menor que 1**, de modo que
+    introducir esta dimensión no puede empeorar la retención de ninguna memoria
+    existente (las que no tienen bloque ``emotion`` puntúan exactamente igual que
+    antes). Puro."""
+    return 1.0 + EMOTION_INTENSITY_GAIN * emotion_intensity_of(metadata)
+
+
 def retention_score(
     *,
     created_at: datetime,
@@ -107,16 +198,26 @@ def retention_score(
     metadata: dict[str, Any] | None,
     recall_frequency: float = 1.0,
 ) -> float:
-    """``retention_score = importance * recency * recall_frequency`` (ADR 0077).
+    """``importance * recency * recall_frequency * emotional_factor`` (ADR 0077).
 
-    ``recall_frequency`` viene de :func:`recall_frequency_factor` sobre el
-    contador real ``metadata_.recall_count`` (instrumentado por ``cortex_recall``);
-    default 1.0 para callers que no lo pasen (compatibilidad). Resultado ∈
-    ``[0,1]``, determinista dado ``now``."""
+    Las cuatro dimensiones del criterio D1, con sus productores documentados en el
+    docstring del módulo:
+
+      * ``recency`` se mide desde :func:`retention_anchor` — el ÚLTIMO RECALL si
+        ``metadata_.last_recalled_at`` está escrito, y la creación si no;
+      * ``recall_frequency`` viene de :func:`recall_frequency_factor` sobre
+        ``metadata_.recall_count``; default 1.0 para callers que no lo pasen
+        (compatibilidad);
+      * ``emotional_factor`` es el refuerzo ``≥1`` de
+        ``metadata_.emotion.intensity``.
+
+    Resultado ∈ ``[0,1]`` (el refuerzo emocional puede empujar el producto por
+    encima de 1 y el clamp final lo recorta: eso significa "no olvidar"),
+    determinista dado ``now``."""
     importance = importance_of(metadata)
-    recency = recency_factor(created_at, now)
+    recency = recency_factor(retention_anchor(created_at, metadata), now)
     freq = _clamp(recall_frequency, 0.0, 1.0)
-    return _clamp(importance * recency * freq, 0.0, 1.0)
+    return _clamp(importance * recency * freq * emotional_factor(metadata), 0.0, 1.0)
 
 
 def is_protected(metadata: dict[str, Any] | None) -> bool:
@@ -169,15 +270,19 @@ def decide_forget(
 __all__ = [
     "DEFAULT_IMPORTANCE",
     "DEFAULT_RETENTION_FORGET_THRESHOLD",
+    "EMOTION_INTENSITY_GAIN",
     "PROTECTED_KINDS",
     "RECALL_COUNT_SATURATION",
     "RECALL_FREQUENCY_FLOOR",
     "RECENCY_HALF_LIFE_DAYS",
     "ForgetDecision",
     "decide_forget",
+    "emotion_intensity_of",
+    "emotional_factor",
     "importance_of",
     "is_protected",
     "recall_frequency_factor",
     "recency_factor",
+    "retention_anchor",
     "retention_score",
 ]

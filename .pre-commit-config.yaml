@@ -37,20 +37,33 @@ repos:
         exclude: \.(ps1|cmd|bat)$
 
   # -------------------- Python --------------------
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
-    hooks:
-      - id: black
-        # The generated Python SDK (Plan 13 task_13_13) follows the
-        # generator's own style. `tool.black.extend-exclude` in pyproject is
-        # IGNORED for files pre-commit passes explicitly (only force-exclude
-        # applies to those), so exclude the generated dir at the hook level.
-        exclude: ^packages/sdk-python/src/agentic_platform_sdk/.*$
-
+  # ---------------------------------------------------------------------------
+  # UN SOLO FORMATEADOR (2026-08-13). Aquí había también `psf/black`, y el repo
+  # corría los dos — lo cual sólo funciona mientras sus estilos coincidan.
+  #
+  # Al subir black a 26.3.1 (obligado: PYSEC-2026-2120 y PYSEC-2026-2121) y ruff
+  # a 0.16.3, dejaron de coincidir: black reformateaba 17 ficheros, ruff-format
+  # los devolvía, y así **sin converger jamás**. Un `git commit` no podía
+  # terminar, porque cada hook deshacía al otro.
+  #
+  # No es el gotcha conocido de `black-vs-ruff-format-chained-call-comment.md`
+  # (un comentario dentro de una llamada encadenada): ahí basta mover el
+  # comentario. Aquí son dos estilos distintos sobre el árbol entero, y ningún
+  # cambio en el código lo arregla.
+  #
+  # Se queda `ruff-format` y no black porque es el MISMO motor que el linter
+  # —una versión, una config, un caché— y nació explícitamente black-compatible.
+  # Bajar black no era opción: su versión vieja es la vulnerable.
+  #
+  # Si alguien vuelve a añadir black aquí, esto se repite. El día que se quiera,
+  # hay que fijar las dos versiones a un par que se sepa compatible y comprobarlo
+  # con `pre-commit run black --all-files` seguido de `ruff-format`: si el
+  # segundo toca un fichero, no son compatibles.
+  # ---------------------------------------------------------------------------
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.0
+    rev: v0.16.3
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
@@ -73,9 +86,65 @@ repos:
         pass_filenames: false
         require_serial: true
 
+  # -------------------- Git / trazabilidad --------------------
+  # Trailers de plan (prod-15 task_gov_trailers_09, decisión D2 opción B).
+  # SOLO exige `Plan-Id`/`Task-Id` cuando la rama actual es `plan/*`; en
+  # mantenimiento (master, work/*, hotfix/*, docs/*) son opcionales. Merges,
+  # reverts y fixup!/squash! están exentos siempre. La regla escrita en
+  # docs/context/conventions.md y la practicada coinciden por primera vez:
+  # medido el 2026-07-29, solo 643 de 1460 commits no-merge llevaban Plan-Id.
+  - repo: local
+    hooks:
+      - id: commit-trailers
+        name: trailers Plan-Id/Task-Id en ramas plan/*
+        entry: python scripts/check_commit_trailers.py
+        language: system
+        stages: [commit-msg]
+
   # -------------------- TypeScript / JavaScript --------------------
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
+  # El mirror es `rbubley/mirrors-prettier` y NO `pre-commit/mirrors-prettier`
+  # (archivado): aquél sigue publicando un tag por versión estable de prettier
+  # y su hook fija `prettier@3.9.6` EXACTO.
+  #
+  # Por qué se cambió (2026-08-13): con `pre-commit/mirrors-prettier` en
+  # `rev: v4.0.0-alpha.8` el pin era FALSO. Ese paquete de npm no trae
+  # formateador: es una cáscara cuya única dependencia es `@prettier/cli:
+  # ^0.3.0`, y el CLI se instala el `prettier` real como peer SIN fijar
+  # versión. O sea, el formateador que acababa corriendo era «el último
+  # prettier 3.x publicado el día que se creó el entorno del hook»:
+  #   · caché local (30-05-2026) → prettier 3.8.3
+  #   · runner de CI (13-08-2026, entorno nuevo cada run) → prettier 3.9.6
+  # y 3.9.x cambió el corte de los `type X = A | B | …` largos. Resultado:
+  # `pre-commit run --all-files` pasaba en local y reescribía 16 ficheros en
+  # CI, con el mismo `rev` en los dos lados. Un `rev` que no fija la versión
+  # de la herramienta es exactamente la trampa de
+  # docs/03-guides/gotchas/ci-tool-version-drift.md.
+  # markdownlint sobre docs/, con el MISMO pin que `.github/workflows/ci.yml`
+  # (`markdownlint-cli@0.48.0`). Que las dos versiones no se separen lo comprueba
+  # `tests/unit/test_markdownlint_pin_matches_ci.py`: un pin distinto en cada lado
+  # es la trampa de `docs/03-guides/gotchas/ci-tool-version-drift.md`, y aquí
+  # sería peor que no tener el hook — pasaría en local y rompería en CI.
+  #
+  # Por qué se añade (2026-08-20): la puerta existía SÓLO en CI, y prettier —que
+  # sí corre en local sobre markdown— formatea pero no aplica estas reglas. Un `*`
+  # a principio de línea, que markdownlint lee como viñeta de otro estilo, costaba
+  # un run completo de CI para enterarse. Dos veces en dos días.
+  #
+  # `docs/manuals/node_modules/` se excluye porque son READMEs de dependencias
+  # vendorizadas: en CI no existen (nadie instala ahí) y en local ensucian la
+  # salida con cientos de avisos ajenos.
+  - repo: local
+    hooks:
+      - id: markdownlint
+        name: markdownlint (docs, mismo pin que CI)
+        entry: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc
+        language: system
+        files: ^docs/.*\.md$
+        exclude: ^docs/manuals/node_modules/.*$
+        pass_filenames: true
+
+  - repo: https://github.com/rbubley/mirrors-prettier
+    rev: v3.9.6
     hooks:
       - id: prettier
         types_or: [javascript, jsx, ts, tsx, json, yaml, markdown]

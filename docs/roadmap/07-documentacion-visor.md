@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `07-documentacion-visor`                  |
-| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `06-testing-revision-git`                 |
 | **Tiempo estimado (calendario)**   | 3 semanas                                 |
 | **Tiempo estimado (persona-días)** | 55-65                                     |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/07-documentacion-visor`             |
 | **Secciones del .docx**            | [15, 16]                                  |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -383,6 +384,14 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
 #### `task_07_18` — Permisos RBAC respetados (filtro por proyecto accesible al usuario)
 
 - [x] **Título**: Permisos RBAC respetados (filtro por proyecto accesible al usuario)
+  - ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_docs_rbac.py` nunca existió.
+    El RBAC del visor **está probado** y lo está donde vive el resto de la superficie, en
+    `tests/integration/test_docs_viewer_api.py`, cuyo docstring lo dice con el número de la
+    tarea: «RBAC (task_07_18): a non-member / cross-tenant caller gets 404 for every surface
+    and search never leaks another tenant's docs». Son `test_non_member_is_denied` y
+    `test_cross_tenant_docs_are_not_visible` (éste con `@pytest.mark.cross_tenant`). El `-k`
+    no es cosmético: el fichero cubre también `task_07_D_api` (árbol, contenido, búsqueda,
+    path-traversal) y cada orden debe verificar la suya. Verde 2/2.
 - **Tiempo estimado**: 4 h
 - **Complejidad**: s
 - **Rol sugerido**: backend-dev
@@ -393,7 +402,7 @@ La documentación es entregable del plan, no afterthought. Esta fase la instituc
     description: "Permisos RBAC respetados (filtro por proyecto accesible al usuario)"
     check_type: automated
     runtime: python-pytest
-    command: "pytest tests/integration/test_docs_rbac.py -v"
+    command: "pytest tests/integration/test_docs_viewer_api.py -v -k 'non_member or cross_tenant'"
     expected_signal: "exit_code == 0"
   ```
 

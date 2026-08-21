@@ -35,6 +35,7 @@ from api_server.db.conversation import Conversation
 from api_server.db.domain import Plan, Project, Task, TaskDependency
 from api_server.db.knowledge import KnowledgeBase
 from api_server.db.models import ApiTokenScope
+from api_server.routers._kb_embedding import stamp_for_new_kb
 from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.routers.api_v1._deps import V1Session, require_scope
 from api_server.routers.api_v1._versioning import enforce_api_version
@@ -424,7 +425,9 @@ async def v1_create_kb(
         tenant_id=principal.tenant_id,
         name=payload.name,
         description=payload.description,
-        embedding_model_id=payload.embedding_model_id or "nomic-embed-text-v1.5",
+        # ADR 0155: mismo contrato que el router interactivo — el sello lo pone
+        # la plataforma y un modelo ajeno es 422.
+        embedding_model_id=stamp_for_new_kb(payload.embedding_model_id),
         created_by=None,
     )
     session.add(kb)

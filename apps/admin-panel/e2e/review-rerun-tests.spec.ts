@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the "Re-ejecutar tests" button (Plan 06 task_06_30).
@@ -11,9 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 const SESSION_ID = "sess-rerun-1";
 
 async function setup(page: Page, opts: { rerunStatus?: number } = {}): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/api/review/${SESSION_ID}`, (route) =>
     route.fulfill({
       status: 200,

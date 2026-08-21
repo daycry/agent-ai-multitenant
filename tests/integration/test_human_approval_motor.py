@@ -39,8 +39,20 @@ def test_auto_category_does_not_need_approval() -> None:
     assert requires_human_approval(_POLICY, "code_changes") is False
 
 
-def test_unlisted_category_defaults_to_auto() -> None:
-    assert requires_human_approval(_POLICY, "send_email") is False
+def test_unlisted_category_no_longer_defaults_to_auto() -> None:
+    """ADR 0153 (C): lo que la política no lista ya NO corre solo.
+
+    Este test afirmaba lo contrario —`is False`— y era la codificación del
+    defecto: `_POLICY` no declara `unlisted_category` ni un `preset`
+    reconocible, así que una categoría que no nombra es una política que no se
+    sabe interpretar, y ahí se para. La tabla completa de ramas (clave
+    explícita, derivación por preset, preset desconocido) vive en
+    `tests/unit/test_unlisted_approval_category.py`, que además compara los DOS
+    espejos.
+    """
+    assert requires_human_approval(_POLICY, "send_email") is True
+    # Y con la clave escrita, manda la política y no el fail-closed.
+    assert requires_human_approval({**_POLICY, "unlisted_category": "auto"}, "send_email") is False
 
 
 def test_absent_policy_needs_no_approval() -> None:

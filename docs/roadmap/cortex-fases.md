@@ -46,9 +46,43 @@ eso va tras F1 (memoria). Endpoints: `GET /owner/cortex/mind`, `/affect/timeseri
 `/episodes`, y WS `/ws/owner/cortex/telemetry`. Copy honesto obligatorio (es simulación, no
 se vende como conciencia).
 
-## Gating
+## Gating — histórico y estado actual
 
-Todas las fases F1-F5 siguen `proposed` en sus ADR; el operador autorizó implementarlas en
-cadena. Dentro de F1, la **búsqueda web** (egress vía `claude_sdk`, ADR 0076) queda
-**doblemente gated** hasta aprobar el ADR 0076 — el resto de F1 (memoria + deliberación)
-entrega valor sin ella.
+**El gate por fase ya no existe.** Comprobado ADR por ADR el 2026-07-30: **0073, 0075, 0076,
+0077, 0078 y 0080 están `accepted`** en su frontmatter, y **0074 está `accepted-f0`** — el único
+valor así del repo, conservado a propósito porque ese ADR se aprobó en dos tiempos (cimiento F0
+primero, excepción a RLS después); su banner, que hasta el 2026-07-30 seguía declarando
+«F1-F5 `proposed` (gated)» con el código desplegado, ya está corregido.
+
+> Esta sección decía «Todas las fases F1-F5 siguen `proposed` en sus ADR». Era cierto el
+> 2026-06-23 y dejó de serlo con las promociones del 2026-06-24 y el 2026-07-27. Se corrige el
+> 2026-07-30 — el mismo patrón que documenta
+> [`verificar-antes-de-implementar.md`](../03-guides/verificar-antes-de-implementar.md) §1.
+
+También decayó el doble gate de la **búsqueda web** de F1: el ADR 0076 está `accepted` y la web
+del córtex salió por el **camino degradado** de su punto 4 (tool propia provider-agnóstica con
+anti-SSRF obligatorio, ADR 0067), no por las WebSearch/WebFetch nativas de `claude_sdk` del punto
+3, porque el owner del stack de desarrollo usa Ollama. La divergencia está registrada en el propio
+0076 y en el changelog de F1.
+
+**Lo que sí sigue gated es la autonomía, y no por fase sino por interruptor**: el kill-switch
+`cortex.autonomy_enabled` arranca **OFF** (ADR 0078) y nadie lo ha encendido, así que las tres
+entradas del beat tickean y salen no-op. Encenderlo es una decisión explícita del operador, y
+antes de tomarla conviene leer el estado de F4: salió sin owner-approval gate ni tope de gasto en
+USD cableados al bucle (inventario en
+[gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md)).
+
+## Estado real por fase (no confundir «implementada» con «cerrada»)
+
+Las seis fases están implementadas y desplegadas; **ninguna está cerrada**. F2, F3, F4 y F5
+conservan casillas abiertas con hueco identificado. La autoridad sobre el estado de cada casilla
+son el plan de la fase y sus tests, no esta tabla:
+
+| Fase   | Implementada  | Cerrada                          | Changelog                                                                     |
+| ------ | ------------- | -------------------------------- | ----------------------------------------------------------------------------- |
+| **F0** | ✅ 2026-06-23 | pendiente de validación humana   | [mejoras-2026-06…](../07-changelog/mejoras-2026-06-chat-coste-cortex.md)      |
+| **F1** | ✅            | pendiente de validación humana   | [cortex-f1-memoria-cognitiva](../07-changelog/cortex-f1-memoria-cognitiva.md) |
+| **F2** | ✅            | ❌ casillas abiertas             | [cortex-f2-afectivo](../07-changelog/cortex-f2-afectivo.md)                   |
+| **F3** | ✅            | ❌ casillas abiertas             | [cortex-f3-identidad](../07-changelog/cortex-f3-identidad.md)                 |
+| **F4** | ✅            | ❌ casillas abiertas (seguridad) | [cortex-f4-autonomia](../07-changelog/cortex-f4-autonomia.md)                 |
+| **F5** | ✅            | ❌ casillas abiertas             | [cortex-f5-voz-avatar](../07-changelog/cortex-f5-voz-avatar.md)               |

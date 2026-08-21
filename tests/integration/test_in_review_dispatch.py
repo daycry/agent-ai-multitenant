@@ -25,9 +25,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = pytest.mark.integration
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
 _SCRIPTED = {"kind": "scripted", "decisions": [{"kind": "finish", "output": "verdict"}]}
 
 
@@ -44,11 +45,16 @@ async def _seed(
     acceptance_criteria: list | None = None,
     reviewer_model: dict | None = None,
     project_model: dict | None = None,
+    project_budgets: dict | None = None,
+    project_paused_by_budget: bool = False,
 ) -> dict[str, UUID]:
     """A task in ``in_review``; ``reviewer_type`` = 'ai' | 'human' | None decides
     whether a reviewer agent is attached and of which kind. ``reviewer_model``
     overrides the reviewer's own ``model_config`` (pass ``{}`` for a legacy agent
-    that must inherit); ``project_model`` pins the project level of the chain."""
+    that must inherit); ``project_model`` pins the project level of the chain.
+    ``project_budgets`` / ``project_paused_by_budget`` set the project's
+    ``execution_budgets`` override and its budget auto-pause flag (prod-06
+    budget_02 / Plan 11.1 task_11_1_06)."""
     ids = {"tenant": uuid4(), "project": uuid4(), "task": uuid4(), "reviewer": uuid4()}
     async with sm() as s, s.begin():
         await s.execute(
@@ -68,6 +74,8 @@ async def _seed(
                 is_template=False,
                 worker_config={},
                 model_config=project_model,
+                execution_budgets=project_budgets,
+                paused_by_budget=project_paused_by_budget,
             )
         )
         await s.flush()
@@ -119,7 +127,9 @@ async def _seed(
 def _dispatcher(sm: async_sessionmaker) -> TaskDispatcher:
     return TaskDispatcher(
         sessionmaker=sm,
-        celery_app=build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL)),
+        celery_app=build_celery_app(
+            WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+        ),
         settings=OrchestratorSettings(redis_url=TEST_REDIS_URL, dispatch_queue="default"),
     )
 
@@ -302,6 +312,65 @@ async def test_review_request_includes_test_report_when_present(
         assert "<test-report>" in block
         assert "runtime python-pytest: FAILED" in block
         assert "assert 1 == 2" in block
+    finally:
+        await redis.delete("default")
+        await redis.aclose()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_review_request_carries_the_resolved_budget_envelope(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """prod-17 `task_prod17_e2e_01`: la ejecución de review CUENTA contra el
+    budget del proyecto — reusa el envelope de prod-06 `budget_02`, no lo
+    reimplementa.
+
+    El código lo hace (`_build_review_request` delega en `_assemble_run_request`,
+    que resuelve plataforma←proyecto y clampa al techo), pero nada lo afirmaba: un
+    `grep budget` sobre este fichero daba 0. Si mañana la rama de review volviera
+    a montar su payload inline —como ya pasó con la cadena de herencia del modelo,
+    hallazgo H2— el review correría SIN techo de coste y ningún test se enteraría.
+
+    Se afirma sobre valores, no sobre la presencia de la clave: un `budgets: {}`
+    o un envelope de plataforma pasarían un `assert "budgets" in request`.
+      * `max_cost_usd` 0,25 se respeta (por debajo del techo de 5,0);
+      * `max_iterations` 999 se CLAMPA al techo del runtime (50);
+      * `max_review_retries` se DESCARTA: es límite duro de plataforma (ADR 0013),
+        no un budget que un proyecto pueda relajar.
+    """
+    engine = create_async_engine(admin_database_url)
+    redis = Redis.from_url(TEST_REDIS_URL)
+    await redis.delete("default")
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        ids = await _seed(
+            sm,
+            reviewer_type="ai",
+            project_budgets={
+                "max_cost_usd": 0.25,
+                "max_iterations": 999,
+                "max_review_retries": 42,
+            },
+        )
+
+        await _dispatcher(sm).handle(_in_review_event(ids))
+
+        request = _run_request(await _drain(redis, "default"))
+        assert request["review"] is True
+        budgets = request["budgets"]
+        assert budgets["max_cost_usd"] == 0.25, (
+            "el override de budget del proyecto no viajó en el run de review: la "
+            "ejecución del reviewer no contaría contra el budget del proyecto"
+        )
+        assert budgets["max_iterations"] == 50, (
+            "el override del proyecto no se clampó al techo del runtime en la "
+            f"rama de review (llegó {budgets.get('max_iterations')!r})"
+        )
+        assert "max_review_retries" not in budgets, (
+            "max_review_retries es un límite duro de plataforma (ADR 0013): un "
+            "override de proyecto no puede colarlo en el envelope del run"
+        )
     finally:
         await redis.delete("default")
         await redis.aclose()

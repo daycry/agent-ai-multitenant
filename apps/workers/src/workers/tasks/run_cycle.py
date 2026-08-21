@@ -18,11 +18,12 @@ import structlog
 from api_server.events import publish_task_status_changed
 from redis.asyncio import Redis
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import EXECUTION_VISIBILITY_TIMEOUT_S, app
 from workers.config import Settings, get_settings
 from workers.container import AgentContainerRunner, ContainerSpec
+from workers.db import worker_engine
 from workers.execution import ExecutionRequest, conduct_execution
 
 _log = structlog.get_logger("workers.tasks")
@@ -135,7 +136,7 @@ async def _finalize_soft_timeout(settings: Settings, request: dict[str, Any]) ->
     task_id_raw = str(request.get("task_id", ""))
     if not task_id_raw:
         return False
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     was_cancel = False
     exec_ids: list[str] = []
@@ -238,7 +239,7 @@ async def _run_execution(
     from workers.execution import ExecutionOutcome
     from workers.run_lock import acquire_run_lock, release_run_lock
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     redis: Redis = Redis.from_url(settings.events_redis_url, decode_responses=True)
     # prod-18 A6: a per-task lock so a re-delivered message (acks_late; the DooD
     # container survives a worker crash) can't spawn a SECOND run of the same task

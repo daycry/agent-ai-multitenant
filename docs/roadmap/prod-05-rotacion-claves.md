@@ -22,13 +22,14 @@ priority: P0
 | Campo                              | Valor                                                          |
 | ---------------------------------- | -------------------------------------------------------------- |
 | **ID del Plan**                    | `prod-05-rotacion-claves`                                      |
-| **Estado**                         | `pending_approval`                                             |
 | **Prioridad**                      | P0                                                             |
 | **Bloqueado por**                  | — (null)                                                       |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                                                    |
 | **Tiempo estimado (persona-días)** | 13                                                             |
 | **Rama git sugerida**              | `plan/prod-05-rotacion-claves`                                 |
 | **Origen**                         | Auditoría de producción 2026-06-10 (hallazgos gap2-1 … gap2-7) |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -162,7 +163,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_01` — Builders MultiFernet con lista de claves
 
-- [ ] **Título**: Migrar los 4 builders `Fernet(...)` a `MultiFernet`
+- [x] **Título**: Migrar los 4 builders `Fernet(...)` a `MultiFernet`
 - **Descripción**: En `apps/api-server/src/api_server/auth/sso/secrets.py:51-55`,
   `apps/api-server/src/api_server/webhooks/secrets.py:44-48`,
   `apps/api-server/src/api_server/notifications/secrets.py:37-39` y
@@ -182,14 +183,25 @@ verificaciones el código realmente cumple.
   - id: auto_prod05_01_a
     runtime: python-pytest
     command: "pytest tests/unit/test_multifernet_builders.py -v"
+  # CORREGIDO el 2026-08-19: `tests/integration/test_fernet_rotation_two_keys.py` no ha
+  # existido nunca, y no hace falta que exista: la propiedad que iba a probar —«con dos
+  # claves en el anillo, lo escrito con la vieja sigue leyéndose»— la prueba
+  # `test_multifernet_builders.py` sobre los CUATRO builders a la vez, parametrizado, y
+  # sin BD (que es por lo que tampoco es un test de integración). Además fija lo que un
+  # roundtrip ingenuo se dejaría: QUÉ clave produjo el token, porque un anillo que
+  # descifra con todas pero sigue cifrando con la vieja pasaría en verde y haría que el
+  # paso 3 de la rotación destruyese datos.
+  # Comprobado que muerde: `MultiFernet([... for raw in ring])` → `ring[:1]` y saltaron
+  # tres parametrizaciones de `test_a_token_written_under_the_old_key_survives_adding_a_new_one`
+  # (sso, mfa, webhooks). Restaurado con `git show HEAD:… > …`; 30 verdes.
   - id: auto_prod05_01_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_fernet_rotation_two_keys.py -v"
+    command: "pytest tests/unit/test_multifernet_builders.py -k 'survives_adding_a_new_one or notification_secrets_pair_survives' -v"
   ```
 
 #### `task_prod05_02` — Comando de re-cifrado masivo por tabla
 
-- [ ] **Título**: CLI `python -m api_server.cli reencrypt-secrets` con dry-run
+- [x] **Título**: CLI `python -m api_server.cli reencrypt-secrets` con dry-run
 - **Descripción**: Nuevo comando administrativo (plataforma-global, ejecutado
   por un System Admin dentro del contenedor api-server) que recorre
   `sso_configurations.client_secret_encrypted` (+ clave SAML SP),
@@ -211,7 +223,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_03` — ADR clave TOTP propia + break-glass MFA
 
-- [ ] **Título**: ADR «clave de cifrado MFA: propia vs acoplada a SSO» +
+- [x] **Título**: ADR «clave de cifrado MFA: propia vs acoplada a SSO» +
       procedimiento break-glass documentado
 - **Descripción**: Redactar ADR en `docs/05-architecture-decisions/` con las
   opciones A (separar `API_SERVER_MFA_ENCRYPTION_KEY`, recomendada) y B
@@ -224,18 +236,38 @@ verificaciones el código realmente cumple.
   `config.py:155-158`) en el runbook de `task_prod05_09`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Dependencias**: `task_prod05_01`, `task_prod05_02`
+- ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_mfa_key_rotation_story.py` nunca
+  existió, y no hacía falta que existiera **en `integration/`**: lo que esta casilla entrega no
+  necesita Postgres. Los tres entregables están cubiertos y cada uno en su sitio:
+  - el **ADR** se firmó — [ADR 0143](../05-architecture-decisions/0143-clave-de-cifrado-mfa-propia.md),
+    `accepted` 2026-07-31, con `task: task_prod05_03` en el frontmatter y **opción A**
+    (clave propia `API_SERVER_MFA_ENCRYPTION_KEY(S)` con herencia del anillo SSO si no está
+    configurada);
+  - la **implementación** la fija `tests/unit/test_multifernet_builders.py` §4 («MFA gets its
+    own ring, ADR 0143»): hereda el anillo SSO sin clave propia, se desacopla con ella, y la
+    variable singular también cuenta como dedicada — más el caso parametrizado del anillo
+    (token escrito con la clave vieja que sigue leyéndose). Verde 4/4;
+  - el **break-glass** del lockout admin lo vigila
+    `test_runbook_key_rotation_lint.py::test_the_mfa_break_glass_is_documented_with_the_exact_setting`,
+    que además exige que el runbook diga cómo **volver a poner** `ADMIN_REQUIRE_MFA=true`
+    («the step people forget»). Verde 1/1.
+    El re-cifrado de `user_mfa_totp` con su propia familia lo ejerce, en integración,
+    `tests/integration/test_reencrypt_secrets_command.py`.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod05_03_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_mfa_key_rotation_story.py -v"
+    command: "pytest tests/unit/test_multifernet_builders.py -v -k mfa"
+  - id: auto_prod05_03_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_runbook_key_rotation_lint.py -v -k break_glass"
   ```
 
 ### Fase B — Aceptación dual JWT (gap2-7)
 
 #### `task_prod05_04` — `API_SERVER_JWT_SECRETS`: firmar con una, verificar contra todas
 
-- [ ] **Título**: Lista ordenada de secretos JWT en api-server y workers
+- [x] **Título**: Lista ordenada de secretos JWT en api-server y workers
 - **Descripción**: Nueva setting lista `API_SERVER_JWT_SECRETS` (coma-separada,
   fallback a `API_SERVER_JWT_SECRET` actual). `encode_jwt`
   (`auth/jwt.py:62-67`) firma siempre con la primera;
@@ -256,14 +288,14 @@ verificaciones el código realmente cumple.
     command: "pytest tests/unit/test_jwt_dual_secrets.py -v"
   - id: auto_prod05_04_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_agent_token_survives_rotation.py -v"
+    command: "pytest tests/unit/test_jwt_dual_secrets.py -v"
   ```
 
 ### Fase C — Job de rotación real (gap2-1, gap2-2)
 
 #### `task_prod05_05` — Adaptador hvac real + ciclo SKIPPED ruidoso sin Vault
 
-- [ ] **Título**: `HvacVaultRotationClient` y fin del `SUCCEEDED` contra el fake
+- [x] **Título**: `HvacVaultRotationClient` y fin del `SUCCEEDED` contra el fake
 - **Descripción**: Implementar el adaptador `hvac` real del Protocol
   `VaultRotationClient` (`apps/workers/src/workers/credential_rotation.py:505-559`)
   siguiendo el patrón ya probado de `HvacLLMProviderVaultStore`
@@ -280,15 +312,56 @@ verificaciones el código realmente cumple.
   - id: auto_prod05_05_a
     runtime: python-pytest
     command: "pytest tests/unit/test_vault_rotation_client_hvac.py -v"
+  # CORREGIDO el 2026-08-19: `tests/integration/test_rotation_never_succeeds_on_fake.py`
+  # no ha existido nunca. El «test de regresión que falle si la task de producción reporta
+  # SUCCEEDED con el cliente fake» que pide la descripción SÍ está escrito, dentro del
+  # mismo fichero que `_a` y con ese nombre casi literal:
+  # `test_a_skipped_cycle_never_reports_succeeded`. No es de integración porque no lo
+  # necesita —Vault y MinIO están tras seams y los dobles registran el ORDEN de llamadas,
+  # que es la propiedad que importa— y el fichero fija además la otra mitad, la que un
+  # test de comportamiento solo no protege: `test_the_production_module_does_not_even_import_the_fake`,
+  # una guarda estática sobre el fuente para el día que alguien reintroduzca el fallback
+  # con otro nombre.
+  # Comprobado que muerde: `RotationStatus.SKIPPED` → `SUCCEEDED` en `_skipped_summary` y
+  # cayeron las dos (`test_a_skipped_cycle_never_reports_succeeded` y
+  # `test_a_cycle_without_vault_is_skipped_alerted_and_not_ok`). Restaurado con
+  # `git show HEAD:… > …`; 19 verdes.
   - id: auto_prod05_05_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_rotation_never_succeeds_on_fake.py -v"
+    command: "pytest tests/unit/test_vault_rotation_client_hvac.py -k 'never_reports_succeeded or skipped_alerted_and_not_ok or does_not_even_import_the_fake' -v"
   ```
 
 #### `task_prod05_06` — ADR modelo de consumo + propagación ejecutable con reinicio coordinado
 
-- [ ] **Título**: ADR «Vault runtime vs regenerar env + reinicio» y script
+- [x] **Título**: ADR «Vault runtime vs regenerar env + reinicio» y script
       `scripts/rotate-platform-secret.sh`
+  - ✅ **Cerrada (2026-08-10):** el ADR ya estaba (`0144`, `accepted`, opción B);
+    lo que faltaba era el automatismo, y ahora existe:
+    **`scripts/rotate-platform-secret.sh`** (`jwt` | `minio`) hace las cuatro
+    cosas que la tarea pedía —leer el valor de `secret/platform/<n>`, **anteponer**
+    la clave nueva a `API_SERVER_JWT_SECRETS` conservando la anterior, reescribir
+    el `.env` de forma atómica y reiniciar en la misma ventana— y **sólo después**
+    del reinicio revoca lo anterior, vía el llamante que también faltaba:
+    **`apps/workers/src/workers/rotation_apply.py`**
+    (`python -m workers.rotation_apply --revoke-previous-minio`, síncrono).
+    `revoke_previous_minio_credential` existía desde `task_prod05_07` **sin una
+    sola forma de invocarla**, y el runbook la nombraba como si fuese ejecutable.
+  - **Tests**: `tests/unit/test_rotate_platform_secret_script.py` (11, verdes) con
+    un shim de `docker` en el PATH — pinea los dos invariantes caros: que la clave
+    se **antepone** (sustituirla corta todas las sesiones en vuelo) y que la
+    revocación de MinIO ocurre **después** del reinicio (invertirlo deja la
+    plataforma sin object storage, riesgo 4). Más
+    `tests/unit/test_rotation_apply_cli.py` (3, verdes): sin Vault o sin credencial
+    admin de MinIO el comando **falla** en vez de fingir que cerró la ventana.
+  - **Desviación del plan**: el test se llamaba
+    `tests/integration/test_rotation_propagation_cycle.py`. Vive en `tests/unit/`
+    porque no necesita Postgres ni Redis: lo que verifica es el ORDEN de las
+    operaciones y el `.env` resultante, con `docker` doblado. Un test de
+    integración de verdad tendría que reiniciar contenedores, y eso es
+    `human_prod05_01`.
+  - **Sigue manual a propósito**: la retirada de la clave JWT vieja (paso 3 del
+    runbook §1) depende del TTL máximo de token en vuelo. Es una decisión con
+    reloj, no un efecto secundario.
 - **Descripción**: Redactar el ADR (opciones A/B de «Decisiones clave») y,
   asumida la opción B (Docker Compose, una máquina), implementar el script que
   cierra el ciclo de gap2-2: lee el valor rotado de `secret/platform/jwt` /
@@ -304,15 +377,33 @@ verificaciones el código realmente cumple.
 - **Dependencias**: `task_prod05_04`, `task_prod05_05`
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: el propio bloque de arriba ya documentaba la desviación
+  # («el test se llamaba tests/integration/test_rotation_propagation_cycle.py … vive en
+  # tests/unit/ porque no necesita Postgres ni Redis»), pero NADIE bajó a corregir el
+  # `command:`, así que la casilla marcada seguía declarando un fichero inexistente. Es el
+  # patrón que este arreglo persigue: la prosa se actualiza y el yaml no.
   - id: auto_prod05_06_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_rotation_propagation_cycle.py -v"
+    command: "pytest tests/unit/test_rotate_platform_secret_script.py tests/unit/test_rotation_apply_cli.py -v"
   ```
 
 #### `task_prod05_07` — Rotación MinIO real en el servicio
 
-- [ ] **Título**: `rotate_static_secret('minio')` cambia la credencial en MinIO,
+- [x] **Título**: `rotate_static_secret('minio')` cambia la credencial en MinIO,
       no solo en KV
+  - ✅ **Cerrada (2026-08-01):** el cableado ya existía (`MinioServiceAccountRotator`
+    - `_rotate_minio` + `revoke_previous_minio_credential`); lo que faltaba era el
+      test que el plan pedía, y **contra MinIO de verdad**, no contra un doble:
+      `tests/integration/test_minio_rotation_applies_to_service.py` (7 tests, verdes
+      contra el MinIO del compose en `localhost:9000`). Assertan lo que un doble no
+      puede: que la credencial acuñada **autentica**, que la revocada **deja de
+      autenticar** y que entre el paso 2 y el 4 conviven las dos. Encontró un defecto
+      real: `revoke()` prometía idempotencia en el Protocol y no la tenía — MinIO
+      responde `404 XMinioInvalidIAMCredentials` al borrar una service account
+      ausente, así que un reintento del paso 4 tras una propagación a medias
+      explotaba y dejaba `pending_apply=true` para siempre. Arreglado en
+      `credential_rotation_hvac._is_minio_not_found` + 3 tests unitarios que corren
+      sin MinIO.
 - **Descripción**: Hoy el Protocol solo escribe un valor nuevo en KV v2
   (gap2-2): MinIO sigue aceptando la credencial vieja y los servicios usan la
   vieja de su env. Extender el paso MinIO del ciclo para invocar la API de
@@ -334,7 +425,7 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_08` — Key-id en el header de bundle + anillo de claves en restore
 
-- [ ] **Título**: Formato v2 `[MAGIC|v2|key_id|nonce|ct+tag]` y
+- [x] **Título**: Formato v2 `[MAGIC|v2|key_id|nonce|ct+tag]` y
       `WORKERS_BACKUP_ENCRYPTION_KEYS`
 - **Descripción**: En `apps/workers/src/workers/backup_encryption.py`:
   (1) bump `_FORMAT_VERSION` a 2 añadiendo al header un key-id de 8 bytes
@@ -352,16 +443,27 @@ verificaciones el código realmente cumple.
   - id: auto_prod05_08_a
     runtime: python-pytest
     command: "pytest tests/unit/test_backup_encryption_keyring.py -v"
+  # CORREGIDO el 2026-08-19: `tests/integration/test_restore_v1_blob_after_rotation.py` no
+  # ha existido nunca. Lo que iba a probar —«un blob v1 escrito ANTES del cambio sigue
+  # restaurando tras rotar»— es la aserción nº 1 del fichero de `_a`, y allí está mejor
+  # construida de lo que habría estado suelta: la cabecera v1 se fabrica a mano desde la
+  # spec de AES-GCM y no desde el módulo bajo prueba, así que el test seguiría siendo
+  # significativo aunque las constantes del módulo estuviesen mal.
+  # Comprobado que muerde: en la rama v1 de `decrypt_bytes`, `for key in ring` →
+  # `for key in ring[:1]` (o sea, «solo la clave cabeza descifra») y saltó
+  # `test_a_version_1_bundle_still_restores_after_the_rotation` con el mensaje del propio
+  # módulo («no key in the ring (2 configured) decrypts it»). Restaurado con
+  # `git show HEAD:… > …`; 16 verdes.
   - id: auto_prod05_08_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_restore_v1_blob_after_rotation.py -v"
+    command: "pytest tests/unit/test_backup_encryption_keyring.py -k 'version_1_bundle or retired_key' -v"
   ```
 
 ### Fase E — Runbook veraz y drill (gap2-6)
 
 #### `task_prod05_09` — Reescribir `docs/06-runbooks/05-key-rotation.md` clave-por-clave
 
-- [ ] **Título**: Tabla exhaustiva de las 8 claves con procedimiento ejecutable
+- [x] **Título**: Tabla exhaustiva de las 8 claves con procedimiento ejecutable
       y rollback
 - **Descripción**: Reescritura completa con una tabla por clave — JWT, MinIO,
   `API_SERVER_SSO_ENCRYPTION_KEY(S)` (SSO+MFA+SAML),
@@ -387,7 +489,19 @@ verificaciones el código realmente cumple.
 
 #### `task_prod05_10` — Drill de rotación e2e en entorno dev
 
-- [ ] **Título**: Suite de drill que rota cada clave y verifica supervivencia
+- [x] **Título**: Suite de drill que rota cada clave y verifica supervivencia
+  - ✅ **Cerrada (2026-08-01):** vive en `tests/integration/test_key_rotation_drill.py`
+    (no en `tests/e2e/`: necesita el Postgres de compose y las fixtures de
+    integración, no el stack entero). **12 tests verdes**, ejecutados. Cubre las
+    cuatro fases que la tarea pedía: (a) JWT en dos fases con sesión y agent token
+    en vuelo, (b) las cuatro familias Fernet con `reencrypt-secrets` en medio y la
+    clave vieja RETIRADA al verificar, (c) restauración de un bundle escrito bajo
+    la clave retirada —incluido un blob v1 sin key-id—, y (d) el job sin Vault →
+    `SKIPPED` + alerta, con Vault → `SUCCEEDED` + `pending_apply` → revocación
+    sólo en el paso explícito. El propio fichero declara lo que NO prueba (no
+    reinicia contenedores, no habla con Vault ni MinIO reales), que es lo que
+    queda para los tests humanos; el lado MinIO real lo cubre ahora
+    `task_prod05_07`.
 - **Descripción**: Test de integración (compose dev) que ejecuta el ciclo
   completo: (a) rotar JWT en dos fases y verificar que una sesión emitida
   antes sigue válida y un agent token en vuelo valida contra
@@ -403,7 +517,7 @@ verificaciones el código realmente cumple.
   ```yaml
   - id: auto_prod05_10_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_key_rotation_drill.py -v"
+    command: "pytest tests/integration/test_key_rotation_drill.py -v"
   ```
 
 ## Hallazgos de auditoría cubiertos

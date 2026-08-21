@@ -51,6 +51,8 @@ from notification_dispatcher.tasks import (
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ._redis_url import TEST_REDIS_URL as _TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = pytest.mark.integration
 
 _PG_HOST = os.environ.get("TEST_PG_HOST", "localhost")
@@ -58,7 +60,6 @@ _PG_PORT = int(os.environ.get("TEST_PG_PORT", "15432"))
 _PG_MIG_USER = os.environ.get("TEST_PG_MIGRATIONS_USER", "migrations_user")
 _PG_MIG_PASSWORD = os.environ.get("TEST_PG_MIGRATIONS_PASSWORD", "changeme-migrations-dev-only")
 _PG_TEST_DB = os.environ.get("TEST_PG_DB_NAME", "agentic_platform_test")
-_TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15")
 
 
 def _migrations_async_url() -> str:
@@ -183,7 +184,7 @@ async def _count_logs(dsn: str, *, channel_id: UUID) -> list[asyncpg.Record]:
 
 
 def _sync_dsn() -> str:
-    return f"postgresql://{_PG_MIG_USER}:{_PG_MIG_PASSWORD}" f"@{_PG_HOST}:{_PG_PORT}/{_PG_TEST_DB}"
+    return f"postgresql://{_PG_MIG_USER}:{_PG_MIG_PASSWORD}@{_PG_HOST}:{_PG_PORT}/{_PG_TEST_DB}"
 
 
 # ===========================================================================

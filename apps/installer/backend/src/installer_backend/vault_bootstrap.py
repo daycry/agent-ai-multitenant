@@ -119,8 +119,7 @@ class VaultPolicy:
             blocks.append(f'path "{mount}/data/{rule.path}" {{\n  capabilities = [{caps}]\n}}')
             if "list" in rule.capabilities:
                 blocks.append(
-                    f'path "{mount}/metadata/{rule.path}" {{\n'
-                    '  capabilities = ["list", "read"]\n}'
+                    f'path "{mount}/metadata/{rule.path}" {{\n  capabilities = ["list", "read"]\n}}'
                 )
         return "\n\n".join(blocks) + "\n"
 
@@ -380,8 +379,7 @@ def _unseal_with(client: VaultClient, keys: tuple[str, ...], *, threshold: int) 
 
     if len(keys) < threshold:
         raise VaultBootstrapError(
-            "No hay suficientes unseal keys para alcanzar el umbral "
-            f"({len(keys)} < {threshold})."
+            f"No hay suficientes unseal keys para alcanzar el umbral ({len(keys)} < {threshold})."
         )
     for key in keys[:threshold]:
         if client.submit_unseal_key(key):

@@ -39,40 +39,108 @@ El sistema se opera como un stack **Docker Compose en una sola máquina** (no Ku
 
 12. **Idiomas soportados**: **ES + EN únicamente** en esta versión. No invertir esfuerzo en más idiomas.
 
-## Estructura del Repositorio (Esperada)
+## Qué manda cuando dos documentos se contradicen
+
+Decisión del operador del **2026-08-12** (plan
+[`gov-01`](docs/roadmap/gov-01-precedencia-prompts-y-rigor.md), `task_gov_01`).
+Existe porque durante agosto de 2026 pasó **tres veces** lo mismo: un plan pedía
+algo que un ADR posterior había rechazado, y se resolvió a ojo cada vez. Había
+precedencia escrita en cinco ADR, ninguna sobre este caso.
+
+**El orden, de más fuerte a más débil:**
+
+> `.docx` maestro **>** `CLAUDE.md` **>** decisión escrita del operador **>**
+> ADR `accepted` posterior **>** plan **>** código **>** intuición
+
+Se lee de izquierda a derecha y se para en el primer eslabón que se pronuncie
+sobre el caso. Dos lecturas que la cadena descarta expresamente: el código **no**
+gana por estar desplegado (un comportamiento vivo que contradice un ADR aceptado
+es una regresión, no una decisión), y la intuición no gana nunca — cuando no hay
+eslabón que se pronuncie, se abre un ADR, no se decide.
+
+**La regla fina, que es la que impide que esto envejezca:** un ADR que
+contradiga el `CLAUDE.md` está **obligado a actualizarlo en el mismo commit** en
+el que pasa a `accepted`. No gana por ser posterior: gana porque al aceptarse
+deja el `CLAUDE.md` diciendo la verdad. Sin esa obligación, la cadena se vuelve
+su contraria a los seis meses — `CLAUDE.md` manda, pero dice algo derogado.
+
+Hay precedente y conviene citarlo: la excepción Fernet del
+[ADR 0146](docs/05-architecture-decisions/0146-fernet-en-db-vs-vault.md) vive en
+este archivo (§«Dónde vive un secreto») precisamente porque **una excepción que
+no consta donde se busca no es una excepción**: es una discrepancia entre el
+principio y el código.
+
+**La mitad mecanizable: `rejects:` en el frontmatter del ADR.** Cuando una
+decisión invalida casillas concretas del roadmap, el ADR las lista:
+
+```yaml
+rejects: [task_prod07_09]
+```
+
+Es una lista de `plan_id` o `task_id` cuyas casillas quedan sin objeto por esta
+decisión. Antes esa relación existía sólo en prosa —el ADR 0150 retiró dos
+mitades de `task_prod07_09`, el 0141 descartó las premisas de dos tareas de
+prod-08, el 0133 dejó sin objeto `task_prod09_12`, el 0151 descartó
+`task_prod13_15`—, así que sólo la encontraba quien ya sabía que estaba. Con el
+campo, quien abre una casilla puede preguntar «¿la rechaza algún ADR?» de forma
+mecánica.
+
+Tres condiciones que comprueba
+[`tests/docs/test_adr_precedence.py`](tests/docs/test_adr_precedence.py), y que
+no son opcionales: el id apuntado **existe**; la casilla apuntada está **cerrada
+`[x]`** con su nota de cierre en negativo; y el documento rechazado **cita de
+vuelta al ADR**, porque un implementador abre el plan, no el corpus de ADR.
+
+## Estructura del Repositorio (Real)
+
+Este árbol describe el repo **como está hoy**, no como se planeó. Las carpetas
+marcadas `RESERVADA` contienen solo `.gitkeep`: la funcionalidad existe, pero
+vive integrada en otro servicio (ADR 0033 para asistente/memorizer). No las
+uses como punto de partida ni asumas que hay código dentro. El test
+`tests/unit/test_docs_governance.py::test_claude_md_tree_matches_repo` falla si
+este árbol y `apps/`/`packages/` divergen.
 
 ```
 agentic-platform/
 ├── CLAUDE.md                        # este archivo
 ├── apps/
 │   ├── api-server/                  # FastAPI + REST/WebSocket. Aloja además el
-│   │                                #   memorizer y el asistente personal
+│   │                                #   memorizer, el asistente y los webhooks
 │   ├── orchestrator/                # Asignación de tareas a workers
 │   ├── workers/                     # Celery workers (default/heavy/gpu/test/review).
 │   │                                #   Aloja además el despacho de webhooks
 │   ├── notification-dispatcher/     # Servicio propio
+│   ├── watchdog/                    # Vigilante de salud de contenedores
+│   │                                #   (reinicio con backoff exponencial)
 │   ├── memorizer/                   # RESERVADA (vacía) — vive en api_server/memorizer/
 │   ├── webhook-dispatcher/          # RESERVADA (vacía) — vive en los workers
 │   ├── personal-assistant/          # RESERVADA (vacía) — vive en api_server/assistant/
-│   ├── installer/                   # Wizard UI bootstrap
+│   ├── installer/                   # Wizard UI bootstrap (backend/ + frontend/)
 │   └── admin-panel/                 # Frontend ÚNICO: tenants + System Admin,
 │                                    #   separados por RBAC y rutas (ADR 0117 c)
 ├── packages/
-│   ├── shared-domain/               # Modelos Pydantic compartidos
-│   ├── shared-db/                   # SQLAlchemy + Alembic
-│   ├── shared-auth/                 # JWT + RBAC + Casbin
+│   ├── shared-domain/               # Enums y constantes de dominio compartidas
 │   ├── shared-llm/                  # Capa LLM async (Claude SDK + Copilot + Azure Foundry + Ollama) — ADR 0021
 │   ├── shared-mcp/                  # Cliente MCP genérico
 │   ├── shared-guardrails/           # Motor de guardrails
-│   └── shared-test-runtimes/        # Definiciones de runtime templates
+│   ├── shared-test-runtimes/        # Definiciones de runtime templates
+│   ├── sdk-python/                  # SDK público generado del OpenAPI v1 (Plan 13)
+│   ├── sdk-typescript/              # SDK público generado del OpenAPI v1 (Plan 13)
+│   ├── shared-db/                   # RESERVADA (vacía) — SQLAlchemy y Alembic
+│   │                                #   viven en api_server/db/ y api-server/migrations/
+│   └── shared-auth/                 # RESERVADA (vacía) — JWT y RBAC viven en
+│                                    #   api_server/auth/
 ├── docker/
 │   ├── docker-compose.yml           # Stack principal
 │   ├── docker-compose.dev.yml       # Overrides desarrollo
 │   ├── docker-compose.gpu.yml       # Overrides GPU (opcional)
+│   ├── docker-compose.monitoring.yml# Overlay de observabilidad
 │   └── agent-runtimes/              # Dockerfiles de runtime templates
 ├── docs/
 │   ├── context/                     # Contextualización para el desarrollo
-│   ├── roadmap/                     # Planes por fase (00 a 15)
+│   ├── roadmap/                     # Planes: numerados (00 a 16) + serie
+│   │                                #   correctiva prod-01…prod-18 + descriptivos
+│   ├── manuals/                     # Manuales de usuario (fuente + PDF generado)
 │   ├── 01-overview/                 # 7 carpetas canónicas del producto
 │   ├── 02-getting-started/
 │   ├── 03-guides/
@@ -81,13 +149,17 @@ agentic-platform/
 │   ├── 06-runbooks/
 │   └── 07-changelog/
 ├── scripts/
-│   ├── install.sh
+│   ├── install.sh                   # Tooling de plataforma
 │   ├── uninstall.sh
-│   └── backup.sh
+│   ├── backup.sh
+│   ├── dev/                         # Scripts de desarrollo (up/down/e2e/builds)
+│   └── demos/                       # Demos de tests humanos por fase
 └── tests/
     ├── unit/
     ├── integration/
-    └── e2e/
+    ├── e2e/
+    ├── security/
+    └── smoke/
 ```
 
 ## Stack Tecnológico (Resumen)
@@ -167,7 +239,8 @@ Solo cuando se cumplen TODOS los criterios de cierre del plan:
 2. Todos los tests automáticos en verde.
 3. Tests humanos del plan validados por un humano.
 4. Entrada generada en `docs/07-changelog/{plan_id}.md`.
-5. PR del plan mergeado a `main`.
+5. PR del plan mergeado a `master` (la rama por defecto de este repo es
+   `master`, no `main`).
 
 Edita el frontmatter:
 
@@ -185,6 +258,46 @@ Y a continuación, si procede, activa la siguiente fase (aquella cuyos plan_ids 
 - ❌ NUNCA tener dos fases en `status: in_progress` simultáneamente.
 - ❌ NUNCA empezar una fase si algún plan listado en su `blocking_plan` no está `completed`.
 - ❌ NUNCA editar el roadmap para "saltarse" pasos o reordenarlos sin que un humano apruebe el cambio.
+
+### La excepción al gate: `gate_override` (ADR 0138)
+
+La regla dura de arriba tiene UNA salida, y está reglada. Si una fase tiene que
+empezar con un `blocking_plan` sin `completed`, se declara en su frontmatter:
+
+```yaml
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: 11-guardrails-precios
+  reason: >-
+    Por qué se acepta empezar igualmente, con detalle suficiente para que alguien
+    lo audite dentro de seis meses.
+```
+
+**La justificación es obligatoria y la comprueba un test**
+(`test_gate_override_carries_a_written_justification`): un override sin `reason`
+escrito, o con uno de menos de 80 caracteres, rompe la suite. Sin esa exigencia el
+campo sería la forma barata de saltarse el protocolo, que es justo lo que el ADR
+0138 descartó.
+
+Dos cosas más que vigilan los tests:
+
+- **La deuda no crece a espaldas de nadie**: una fase nueva empezada con el gate
+  saltado y sin override rompe la suite (`test_gate_debt_inventory_has_not_grown`).
+- **El override caduca**: cuando su bloqueante llega de verdad a `completed`, hay
+  que retirarlo. Un override huérfano dice que hubo una excepción donde ya no la
+  hay (`test_gate_override_only_where_the_gate_is_actually_unmet`).
+
+El caso que motivó el mecanismo: seis fases arrancaron con el gate incumplido, y en
+dos de ellas **el override ya lo había escrito un humano**… en un campo duplicado de
+la tabla de cabecera que otra tarea venía a borrar por desincronizado. Sin un sitio
+previsto, la excepción se anota donde nadie la va a leer.
+
+Y la causa de fondo, que el ADR 0138 mide: el cuello de botella no es la
+indisciplina, es que **ninguna fase llega a `completed` porque eso exige validación
+humana**, así que toda fase que dependa de una ya terminada lee su gate como
+incumplido aunque el trabajo esté hecho.
 
 El campo `blocking_plan` es siempre una **lista YAML** de plan_ids (puede ser
 vacía representada como `null`, o tener uno o varios elementos). Una fase solo
@@ -222,14 +335,66 @@ tengan `status: completed`.
 - ❌ Escribir queries SQL sin filtro por `tenant_id` o sin middleware que lo inyecte.
 - ❌ Instalar lenguajes adicionales (PHP, Node, Go, Java) en la imagen de los workers. Eso vive en runtime templates separados.
 - ❌ Hacer `docker compose up -d --build` sin antes verificar que las migraciones Alembic son reversibles.
-- ❌ Pushear directamente a `main` del repo del propio sistema. Todo va por PR.
-- ❌ Comitear secretos. Vault es la única vía de credenciales.
+- ❌ Pushear directamente a la rama por defecto del repo del propio sistema, que
+  es `master` y no `main`. Todo va por PR.
+- ❌ Comitear secretos. Vault es la única vía de credenciales de **plataforma**, con la única excepción escrita más abajo (§«Dónde vive un secreto»).
 - ❌ Crear features nuevas no documentadas en el .docx sin pasar antes por ADR.
 - ❌ Asumir Kubernetes / multi-máquina. El alcance actual es Docker Compose en una sola máquina.
 - ❌ Confundir scopes de memoria: private (usuario humano — un agente IA ni la escribe ni la lee), team_shared (equipo), project_shared (proyecto), global (organización).
 
+## Dónde vive un secreto (y la única excepción a Vault)
+
+La regla sigue siendo **Vault**. La excepción está escrita aquí porque el
+[ADR 0146](docs/05-architecture-decisions/0146-fernet-en-db-vs-vault.md) la firmó
+el 2026-08-01, y una excepción que no consta en el sitio donde se busca no es una
+excepción: es una discrepancia entre el principio y el código, que deja a quien
+lea esto sin saber dónde buscar un secreto y a quien audite sin saber qué esperar.
+
+**El criterio, en una línea: si la plataforma no arranca sin ese secreto, va a
+Vault; si lo que se rompe es la integración de un tenant concreto, puede ir en
+columna.**
+
+| Familia                                                                                                                                                                             | Dónde vive                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Credenciales de **PLATAFORMA**: proveedores LLM, contraseñas de BD, claves de MinIO, tokens de servicio                                                                             | **Vault**, sin excepción. La BD guarda sólo el puntero (`secret_vault_path`)     |
+| Secretos que un **TENANT** configura para un **TERCERO**: client secrets OIDC, claves privadas SAML, credenciales de canal de notificación, secretos de firma de webhooks entrantes | Columna cifrada con Fernet (`API_SERVER_*_ENCRYPTION_KEY(S)`) — **la excepción** |
+
+**Por qué la excepción existe.** El [ADR 0145](docs/05-architecture-decisions/0145-vault-operable-tokens-y-unseal.md)
+decidió **desellado manual** de Vault. Encadenando: se reinicia el host → Vault
+arranca sellado → si el SSO leyera su client secret de Vault, nadie entraría por
+SSO hasta que un humano apareciese con su fragmento de Shamir. Una regla sin
+excepciones que esconde esa trampa no es más limpia: es la misma complejidad
+movida al peor momento posible.
+
+**Tres cosas que van con la excepción y no son negociables:**
+
+1. **La frontera no crece.** Añadir una familia a la lista de la derecha exige un
+   ADR nuevo que argumente por qué no es una credencial de plataforma. Un secreto
+   sin el cual la plataforma no arranca NO cabe aquí por definición.
+2. **No viajan en el backup.** Los datos de `sso_configurations`,
+   `notification_channels` e `incoming_webhook_configs` se excluyen del `pg_dump`
+   (`WORKERS_BACKUP_COLUMN_SECRET_TABLES`, `workers/backup_secrets.py`): con el
+   ciphertext dentro, quien robase el bundle **y** conociera la variable de
+   entorno tendría los secretos, y el bundle viaja a MinIO y a destinos externos.
+   El precio —reconfigurar esas integraciones tras un DR— está en
+   [06-runbooks/04-disaster-recovery.md](docs/06-runbooks/04-disaster-recovery.md).
+3. **La rotación es la de prod-05**, no una propia: anillos `*_ENCRYPTION_KEYS`
+   (cabeza + cola) y `api_server.cli.reencrypt_secrets`.
+
+**Y caduca sola.** El día que se adopte **auto-unseal** de Vault (opciones A o B
+de la decisión 2 del ADR 0145) desaparece la objeción de disponibilidad que la
+justifica, y el ADR 0146 debe reabrirse hacia la migración a Vault. Está anotado
+en los dos ADR para que se lea desde ambos lados: si estás leyendo esto en un
+stack con auto-unseal, esta sección está vencida.
+
 ## Contexto Adicional
 
+- `docs/context/memoria-del-asistente.md` — **léelo al arrancar en una máquina
+  nueva.** Las órdenes permanentes del operador, las constantes del proyecto que no
+  se deducen del código y la cola de pendientes que no vive en ningún plan. La
+  memoria de Claude Code se guarda fuera del repo (`~/.claude/projects/…/memory/`) y
+  se perdería al cambiar de ordenador: ese fichero explica cómo rehidratarla desde
+  el archivo verbatim de `docs/context/memoria-asistente/`.
 - `docs/context/architecture-overview.md` — visión arquitectónica resumida.
 - `docs/context/glossary.md` — términos del dominio.
 - `docs/context/tech-stack.md` — stack tecnológico detallado.
@@ -242,6 +407,6 @@ tengan `status: completed`.
 
 ## Sobre el Documento Maestro
 
-El `.docx` es la fuente de verdad. Si en algún momento Claude Code tiene una intuición que contradice el documento, **el documento gana**. El documento puede tener huecos en detalles concretos de implementación (eso es intencional, son decisiones técnicas a tomar durante el desarrollo), pero las decisiones de producto y arquitectura ya están cerradas.
+El `.docx` es la fuente de verdad, y por eso encabeza la cadena de §«Qué manda cuando dos documentos se contradicen». Si en algún momento Claude Code tiene una intuición que contradice el documento, **el documento gana**. El documento puede tener huecos en detalles concretos de implementación (eso es intencional, son decisiones técnicas a tomar durante el desarrollo), pero las decisiones de producto y arquitectura ya están cerradas.
 
 Cuando una fase remite a "ver sección X.Y", esa referencia es al .docx. Para no tener que abrirlo constantemente, cada fase en `docs/roadmap/` resume las secciones relevantes; el .docx es para consultas profundas.

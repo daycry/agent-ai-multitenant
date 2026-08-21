@@ -664,8 +664,7 @@ BUILTIN_SKILLS: tuple[BuiltinSkill, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO skills (
         id, tenant_id, name, category, description,
         prompt_fragment, required_tools, is_builtin
@@ -680,8 +679,7 @@ _UPSERT_SQL = text(
         description = EXCLUDED.description,
         prompt_fragment = EXCLUDED.prompt_fragment,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def seed_builtin_skills(session: AsyncSession) -> int:

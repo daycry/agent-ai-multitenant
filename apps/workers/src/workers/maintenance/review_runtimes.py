@@ -12,15 +12,19 @@ from typing import Any
 
 import structlog
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.maintenance")
 
-# Idle window after which a `running` review-runtime is suspended
-# (containers paused). Mirrors the in-memory manager default.
+# Idle window after which a `running` review-runtime is suspended.
+# NO coincide con `workers.review_runtime.DEFAULT_IDLE_SUSPEND_S` (4 h): esta
+# ventana de 24 h es la que manda, y es la que fija
+# `tests/integration/test_review_suspension.py`. Si algún día se unifican, que
+# sea por decisión explícita — no dando por hecho que ya son la misma.
 _SUSPEND_IDLE_AFTER = timedelta(hours=24)
 
 # Terminal review-session statuses — a session here no longer holds a runtime, so
@@ -213,7 +217,7 @@ async def _expire_review_runtimes(settings: Settings) -> dict[str, Any]:
     # task_wf_32: transiciones de plan ganadas en esta pasada, anunciadas al
     # tablero gerencial tras el commit (el mismo momento que la notificación).
     plan_moves: list[dict[str, Any]] = []
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         # 1. Overdue → expired + plan blocked + escalation notification.

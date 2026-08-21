@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the project hub page (Plan 06.6 task_06_6_01).
@@ -37,10 +39,8 @@ const PROJECT_FIXTURE = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route(`**/projects/${PROJECT_ID}`, (route) => {
+  await seedSession(page);
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({
       status: 200,
@@ -88,10 +88,8 @@ test("edit + delete buttons are visible when project loaded", async ({ page }) =
 });
 
 test("404 from backend shows error card with back link", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route(`**/projects/${PROJECT_ID}`, (route) =>
+  await seedSession(page);
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), (route) =>
     route.fulfill({
       status: 404,
       contentType: "application/json",

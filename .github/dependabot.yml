@@ -1,0 +1,143 @@
+# Dependabot — la vía REACTIVA de la cadena de suministro (plan prod-11,
+# task_dependabot_02, hallazgo gap5-2).
+#
+# Por qué existe y por qué va PRIMERO: este plan pinea las bases Docker por
+# `@sha256:` y las GitHub Actions por SHA de commit. Un digest pineado SIN
+# mecanismo de refresco es PEOR que un tag flotante — congela sus CVEs para
+# siempre (riesgo 3 de prod-11). Dependabot es ese mecanismo: mantiene los
+# digests, los SHAs de las actions y las versiones al día proponiendo PRs que
+# pasan por el mismo `security-scan` de ci.yml.
+#
+# Control de volumen (riesgo 1): 14 distribuciones Python + 2 superficies npm +
+# 19 directorios con Dockerfile + las actions pueden generar decenas de PRs
+# semanales y matar el gate por fatiga. Cada entrada agrupa minor+patch en UN
+# PR por ecosistema y limita los PRs abiertos a 5. Las MAJOR siguen viniendo
+# sueltas a propósito: son las que rompen y merecen revisión individual.
+#
+# Quién revisa estos PRs y con qué criterio: docs/06-runbooks/triage-vulnerabilidades.md
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------
+  # Python — las 14 distribuciones del monorepo.
+  # "/" cubre el pyproject.toml de la raíz Y requirements-dev.txt (el
+  # toolchain: black/ruff/mypy/pytest), que estaba fuera de todo control.
+  # ---------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directories:
+      - "/"
+      - "/apps/api-server"
+      - "/apps/installer/backend"
+      - "/apps/notification-dispatcher"
+      - "/apps/orchestrator"
+      - "/apps/watchdog"
+      - "/apps/workers"
+      - "/packages/*"
+      - "/docker/agent-runtimes/agent-runtime"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels:
+      - "dependencies"
+      - "python"
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------
+  # npm — las 2 superficies del repo. El frontend del installer no entra en
+  # el lint de CI (eso es alcance de prod-02), pero SÍ es superficie SCA:
+  # se despliega en el arranque y sirve HTML al operador.
+  # ---------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directories:
+      - "/apps/admin-panel"
+      - "/apps/installer"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels:
+      - "dependencies"
+      - "javascript"
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------
+  # Docker — los 19 directorios con Dockerfile bajo docker/. Es la entrada
+  # que hace sostenible el digest-pinning de task_digest_pin_11: Dependabot
+  # reescribe `@sha256:…` y el tag del comentario a la vez.
+  #
+  # Los Dockerfiles de apps/ (api-server, workers, …) NO entran aquí: su
+  # ciclo de vida lo gobierna prod-01-despliegue-ejecutable.
+  # ---------------------------------------------------------------------
+  - package-ecosystem: "docker"
+    directories:
+      - "/docker/agent-runtimes/*"
+      - "/docker/egress-proxy"
+      - "/docker/registry-proxy"
+      - "/docker/whatsapp-neonize"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+      - "docker"
+    groups:
+      docker-bases:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------
+  # GitHub Actions — mantiene al día los SHAs de commit que pinea
+  # task_actions_sha_03. Sin esta entrada, pinear por SHA sería congelar
+  # las actions (incluidas sus propias correcciones de seguridad).
+  # ---------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "05:00"
+      timezone: "Europe/Madrid"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

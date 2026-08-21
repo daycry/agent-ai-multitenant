@@ -25,8 +25,7 @@ async def soft_delete_kb_cascade(session: AsyncSession, *, kb_id: UUID) -> int:
         "CursorResult[Any]",
         await session.execute(
             text(
-                "UPDATE documents SET deleted_at = now()"
-                " WHERE kb_id = :kb AND deleted_at IS NULL"
+                "UPDATE documents SET deleted_at = now() WHERE kb_id = :kb AND deleted_at IS NULL"
             ),
             {"kb": kb_id},
         ),

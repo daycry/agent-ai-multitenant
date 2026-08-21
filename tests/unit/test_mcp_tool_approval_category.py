@@ -201,10 +201,36 @@ def test_production_stops_an_mcp_tool() -> None:
     assert _gate("production", _MCP_SPECS).review("docling.convert") == "external_http_post"
 
 
-def test_development_stops_an_mcp_tool() -> None:
-    """En `development` sólo `code_changes`/`git_commit`/`external_http_get` son
-    `auto`; una integración externa con efectos sigue pasando por humano."""
-    assert _gate("development", _MCP_SPECS).review("docling.convert") == "external_http_post"
+def test_development_lets_an_mcp_tool_through() -> None:
+    """En `development` una tool MCP NO se para. Es un cambio con historia.
+
+    Este test decía lo contrario, y su versión anterior era coherente con el
+    hallazgo **g6**: las tools MCP se enrutaron a `external_http_post`
+    precisamente porque la integración externa —la superficie con más alcance de
+    todas— era la única que **ningún preset podía detener**. Gatearlas bajo
+    `development` era parte de cerrar ese agujero.
+
+    El operador lo revirtió para `development` el 2026-08-02, sabiendo esto, y
+    la razón es de dosis y no de principio: `import_mcp_tools` da de alta las
+    tools con `security_level="sandboxed"`, así que gatear la categoría hace que
+    **cada** integración del proyecto pida aprobación desde el primer día. Una
+    cola así se despacha aprobando sin leer, y entonces el gate no protege: solo
+    entrena el reflejo de aceptar.
+
+    Lo que NO se revirtió, y es lo que mantiene cerrado el g6:
+
+      * `production` y `customer-external` siguen deteniendo la tool MCP (los
+        dos tests de arriba), así que la superficie no vuelve a ser
+        indetenible por ningún preset — que era el hallazgo literal;
+      * el opt-out sigue siendo por-herramienta y del operador
+        (`security_level="safe"`), o sea que quien quiera gatear sus
+        integraciones en desarrollo tiene la palanca fina: marcar `safe` las de
+        confianza y dejar el resto gateadas bajo el preset que elija.
+
+    Si se vuelve a cambiar, que sea pesando esas dos cosas y no por simetría con
+    los otros presets.
+    """
+    assert _gate("development", _MCP_SPECS).review("docling.convert") is None
 
 
 def test_sandbox_lets_an_mcp_tool_through() -> None:

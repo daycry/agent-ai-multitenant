@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for plan → escalated/review deep links (Plan 06.6 task_06_6_12).
@@ -26,22 +28,42 @@ function planFixture(status: string): object {
 }
 
 async function setup(page: Page, planStatus: string): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route(`**/plans/${PLAN_ID}`, (route) =>
+  await seedSession(page);
+  await page.route(apiRoute(`/plans/${PLAN_ID}`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(planFixture(planStatus)),
     }),
   );
-  // Cost breakdown sub-section fetches; mock it as empty.
-  await page.route(`**/plans/${PLAN_ID}/cost*`, (route) =>
+  // El desglose de coste (`GET /plans/{id}/cost-breakdown`) se mockeaba con un
+  // `{}`, un payload que ese endpoint no devuelve nunca: la sección hace
+  // `const { human, ai } = data` y `human.tasks.length` reventaba, el
+  // `AdminErrorBoundary` sustituía la PÁGINA ENTERA por "Algo ha fallado" y el
+  // test se quedaba sin enlaces que mirar. El fallo aparecía en el segundo
+  // `expect` del test, no en el primero, y por eso parecía "el link no existe".
+  // El mock ahora responde un desglose VACÍO pero bien formado (2026-08-19).
+  await page.route(apiRoute(`/plans/${PLAN_ID}/cost*`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        human: {
+          currency: "EUR",
+          hourly_rate: "0.00",
+          total_hours: "0.00",
+          total_cost: "0.00",
+          tasks: [],
+        },
+        ai: {
+          currency: "USD",
+          default_model_id: "claude-opus-4",
+          cost_min: "0.00",
+          cost_max: "0.00",
+          tasks: [],
+          missing_models: [],
+        },
+      }),
     }),
   );
 }

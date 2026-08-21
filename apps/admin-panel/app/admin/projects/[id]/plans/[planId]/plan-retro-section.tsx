@@ -19,6 +19,7 @@ import { GraduationCap } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 
 interface PlanRetro {
@@ -37,6 +38,7 @@ export function planHasRetro(status: string | null | undefined): boolean {
 }
 
 export function PlanRetroSection({ planId, status }: { planId: string; status: string }) {
+  const t = useT("planDetail");
   const retroQuery = useQuery({
     queryKey: ["plan-retro", planId],
     queryFn: () => apiFetch<PlanRetro>(`/plans/${planId}/retro`),
@@ -52,16 +54,13 @@ export function PlanRetroSection({ planId, status }: { planId: string; status: s
     <Card className="mt-6" data-testid="plan-retro">
       <CardHeader className="flex flex-row items-center gap-2">
         <GraduationCap className="text-muted-foreground h-5 w-5" />
-        <CardTitle>Retrospectiva</CardTitle>
+        <CardTitle>{t("retroTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         <div className="text-sm" data-testid="plan-retro-content">
           {renderPlanDraft(retroQuery.data.content)}
         </div>
-        <p className="text-muted-foreground text-xs">
-          Escrita automáticamente al cerrarse el plan y guardada en la memoria del proyecto: los
-          agentes del siguiente plan la recuerdan.
-        </p>
+        <p className="text-muted-foreground text-xs">{t("retroFootnote")}</p>
       </CardContent>
     </Card>
   );

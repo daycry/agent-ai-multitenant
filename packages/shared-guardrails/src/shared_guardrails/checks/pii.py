@@ -301,7 +301,7 @@ class PiiGuardrail:
         backend = str(config.get("backend", "auto")).lower()
         if backend not in _VALID_BACKENDS:
             raise GuardrailConfigError(
-                f"pii guardrail 'backend' must be one of {_VALID_BACKENDS}, " f"got {backend!r}."
+                f"pii guardrail 'backend' must be one of {_VALID_BACKENDS}, got {backend!r}."
             )
         self._backend = backend
 

@@ -22,7 +22,7 @@ El launcher:
 2. Lanza `setup_demo_05.py` que siembra un proyecto + 2 agentes +
    1 entrada `mcp_servers` + 2 Tool rows (`http_endpoint` y
    `docker_command`). Persiste los ids en
-   `scripts/.demo_state_05.json`.
+   `scripts/demos/.demo_state_05.json`.
 3. Corre los tres demos en orden. Cada uno **imprime las URLs
    concretas que tienes que abrir** y qué buscar en cada una.
 4. Termina con un resumen `PASS/FAIL/SKIP` + las dos URLs principales
@@ -30,13 +30,13 @@ El launcher:
 
 ## Opciones del launcher
 
-| Flag          | Para qué                                                      |
-| ------------- | ------------------------------------------------------------- |
-| `-Only 01`    | Solo el primer demo                                           |
-| `-Only 02`    | Solo el demo de docker_command (necesita Docker daemon)       |
-| `-Only 03`    | Solo el demo de http_endpoint allowlist                       |
-| `-SkipDocker` | Salta el 05_02 sin chequear el daemon                         |
-| `-SkipSetup`  | Reusa el `scripts/.demo_state_05.json` previo (no re-siembra) |
+| Flag          | Para qué                                                            |
+| ------------- | ------------------------------------------------------------------- |
+| `-Only 01`    | Solo el primer demo                                                 |
+| `-Only 02`    | Solo el demo de docker_command (necesita Docker daemon)             |
+| `-Only 03`    | Solo el demo de http_endpoint allowlist                             |
+| `-SkipDocker` | Salta el 05_02 sin chequear el daemon                               |
+| `-SkipSetup`  | Reusa el `scripts/demos/.demo_state_05.json` previo (no re-siembra) |
 
 ## Pre-requisitos
 
@@ -64,7 +64,7 @@ Ejecutarlo crea, dentro del tenant `tenant-a` (override con
 | **Tool `example-weather`**    | `implementation_type=http_endpoint`, `security_level=safe`. Wired al agente A vía `agent_tools`.                              |
 | **Tool `alpine-probe`**       | `implementation_type=docker_command`, `security_level=privileged`. Wired al agente B.                                         |
 
-Los ids van a `scripts/.demo_state_05.json` para que los tres demos
+Los ids van a `scripts/demos/.demo_state_05.json` para que los tres demos
 los lean en lugar de re-sembrar.
 
 ---
@@ -82,7 +82,7 @@ los lean en lugar de re-sembrar.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_05_01.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_05_01.py
 ```
 
 **Qué tienes que ver en el admin-panel** (lo imprime el demo al final):
@@ -125,7 +125,7 @@ los lean en lugar de re-sembrar.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_05_02.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_05_02.py
 ```
 
 **Qué tienes que ver en el admin-panel**:
@@ -164,7 +164,7 @@ allowed: <host>` ANTES de hacer la llamada HTTP.
 **Cómo ejecutarlo**:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\demo_human_05_03.py
+.\.venv\Scripts\python.exe scripts\demos\demo_human_05_03.py
 ```
 
 **Qué tienes que ver en el admin-panel**:

@@ -141,8 +141,7 @@ _HUMAN_SYSTEM_PROMPT = (
 )
 
 
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO agents (
         id, tenant_id, name, description, agent_type, role,
         system_prompt, model_config, memory_scope, review_capability,
@@ -160,8 +159,7 @@ _UPSERT_SQL = text(
         system_prompt = EXCLUDED.system_prompt,
         model_config = EXCLUDED.model_config,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def seed_human_agent_templates(session: AsyncSession) -> int:

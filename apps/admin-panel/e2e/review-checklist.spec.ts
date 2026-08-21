@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the human checklist (Plan 06 task_06_31).
@@ -27,9 +28,7 @@ const CHECKLIST = [
 ];
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`**/api/review/${SESSION_ID}`, (route) =>
     route.fulfill({
       status: 200,

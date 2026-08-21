@@ -92,13 +92,11 @@ def test_seed_is_idempotent_and_member_counts_stable(
         try:
             n_teams = int(await conn.fetchval("SELECT count(*) FROM teams WHERE is_builtin = true"))
             n_members = int(
-                await conn.fetchval(
-                    """
+                await conn.fetchval("""
                     SELECT count(*) FROM team_members tm
                       JOIN teams t ON tm.team_id = t.id
                      WHERE t.is_builtin = true
-                    """
-                )
+                    """)
             )
             return n_teams, n_members
         finally:
@@ -118,15 +116,13 @@ def test_every_team_has_exactly_one_leader(alembic_config, migrations_pg_dsn: st
     async def _leader_counts() -> list[tuple[str, int]]:
         conn = await asyncpg.connect(migrations_pg_dsn)
         try:
-            rows = await conn.fetch(
-                """
+            rows = await conn.fetch("""
                 SELECT t.name, count(*) FILTER (WHERE tm.is_team_leader)
                   FROM teams t
                   LEFT JOIN team_members tm ON tm.team_id = t.id
                  WHERE t.is_builtin = true
                  GROUP BY t.name
-                """
-            )
+                """)
             return [(r[0], int(r[1])) for r in rows]
         finally:
             await conn.close()
@@ -149,7 +145,7 @@ def test_seeded_teams_visible_to_tenant_sessions(alembic_config, migrations_pg_d
     )
 
     tenant_id = uuid4()
-    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
     async def _seed_tenant_and_count() -> int:
         conn = await asyncpg.connect(migrations_pg_dsn)

@@ -27,7 +27,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             " organizations, users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
             tenant_id,
             "Tenant Rate",
             "tenant-rate",
@@ -36,7 +36,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "platform-rate",
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3), ($4, $5, $6)",
             admin_id,
             "admin@rate.test",
             "h",
@@ -178,7 +178,7 @@ async def test_non_admin_cannot_change_the_rate(configured_app, migrations_pg_ds
 
 @pytest.mark.asyncio
 async def test_configured_rate_drives_the_cost_breakdown(
-    configured_app, migrations_pg_dsn: str
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
 ) -> None:
     """Once the tenant configures a custom rate, the cost-breakdown
     endpoint uses it instead of the 50 EUR default."""
@@ -201,10 +201,12 @@ async def test_configured_rate_drives_the_cost_breakdown(
 
         # We seed via a direct connection since the existing /projects
         # endpoint requires test infrastructure we already exercised.
-        eng = create_async_engine(
-            "postgresql+asyncpg://migrations_user:changeme-migrations-dev-only"
-            "@localhost:15432/agentic_platform_test"
-        )
+        # La BD de pruebas la elige el arnés (`TEST_PG_DB_NAME`, una por shard):
+        # escribir aquí el nombre a mano hacía que este test sólo funcionase en
+        # la base por defecto y muriese con InvalidCatalogNameError en cualquier
+        # tanda paralela. `admin_database_url` es la misma base, como
+        # migrations_user (BYPASSRLS), que es lo que esta siembra necesita.
+        eng = create_async_engine(admin_database_url)
         async with eng.begin() as conn:
             project_id = uuid7()
             plan_id = uuid7()

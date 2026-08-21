@@ -159,15 +159,52 @@ def test_conversation_foreign_keys() -> None:
     # conversation -> users (SET NULL, the user may be deleted while
     # leaving the chat history intact)
     assert "users.id" in _fk_targets(d.Conversation.__table__.c.created_by)
-    # related_plan_id is intentionally a soft-FK (no formal constraint at
-    # ORM time — the migration adds it after both tables exist).
-    assert _fk_targets(d.Conversation.__table__.c.related_plan_id) == set()
+    # related_plan_id -> plans (SET NULL). Esta aserción decía lo contrario
+    # hasta el 2026-08-20: «soft-FK a propósito, sin constraint formal a nivel
+    # ORM». Era el §2 de `verificar-antes-de-implementar` en estado puro —
+    # documentaba lo observado y lo convertía en contrato. La migración 0014 SÍ
+    # crea la FK (`fk_conversations_related_plan_id`), así que el modelo callado
+    # no era un diseño: era la razón de que `alembic check` propusiera BORRARLA.
+    assert "plans.id" in _fk_targets(d.Conversation.__table__.c.related_plan_id)
 
 
 def test_message_foreign_keys() -> None:
     assert "conversations.id" in _fk_targets(d.Message.__table__.c.conversation_id)
     assert "users.id" in _fk_targets(d.Message.__table__.c.author_user_id)
     assert "agents.id" in _fk_targets(d.Message.__table__.c.author_agent_id)
+    # Misma historia que en `Conversation`: la 0014 promueve también ésta.
+    assert "plans.id" in _fk_targets(d.Message.__table__.c.related_plan_id)
+
+
+def test_the_0014_foreign_keys_carry_their_deployed_name_and_ondelete() -> None:
+    """Las tres FK que la 0014 promovió, con nombre y `ondelete` reales.
+
+    No basta con que exista la constraint: `alembic check` empareja claves
+    ajenas por (origen, destino, `onupdate`, `ondelete`, deferrable), así que un
+    `ondelete` distinto del desplegado deja el item de deriva abierto igual —
+    proponiendo BORRAR la de producción. Y el `SET NULL` no es un detalle: es lo
+    que hace que borrar un plan deje el mensaje huérfano en vez de bloquear el
+    borrado.
+    """
+    from sqlalchemy import ForeignKeyConstraint
+
+    def _fk(table, name: str) -> ForeignKeyConstraint:
+        found = [
+            c for c in table.constraints if isinstance(c, ForeignKeyConstraint) and c.name == name
+        ]
+        assert found, (
+            f"falta {name} en {table.name}: {sorted(str(c.name) for c in table.constraints)}"
+        )
+        return found[0]
+
+    conv = _fk(d.Conversation.__table__, "fk_conversations_related_plan_id")
+    assert conv.ondelete == "SET NULL"
+    # `use_alter` rompe el ciclo `plans` <-> `conversations` al ordenar tablas;
+    # sin él SQLAlchemy avisa y DESCARTA las dos FK.
+    assert conv.use_alter is True
+
+    msg = _fk(d.Message.__table__, "fk_messages_related_plan_id")
+    assert msg.ondelete == "SET NULL"
 
 
 # ---------------------------------------------------------------------------

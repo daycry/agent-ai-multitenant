@@ -1,14 +1,14 @@
 ---
 title: "Recetas de build que muerden: bases `:ci` desfasadas, `WITH_CLAUDE`, el tag del agent-runtime SIN prefijo y admin-panel desde PowerShell"
 area: docker, build, windows
-encountered: 2026-07-01 … 2026-07-28
+encountered: 2026-07-01 … 2026-08-13
 stack: docker buildx, Next.js 14, Git Bash / PowerShell en Windows
 ---
 
 ## Síntoma
 
-Seis fallos distintos con la misma forma: la imagen **construye bien** y falla
-al arrancar o en caliente.
+Siete fallos distintos con la misma forma: la imagen **construye bien** y falla
+al arrancar o en caliente — salvo el (7), que ni llega a construir.
 
 1. `workers` arranca y muere con `ImportError: cannot import name
 'distil_execution_result'`.
@@ -23,6 +23,9 @@ al arrancar o en caliente.
 6. **Un cambio en el agent-runtime no llega a los runs** aunque
    `agentic-platform/agent-runtime:v1` se acabe de reconstruir y verificar
    (2026-07-28).
+7. **El job `build-images` de CI falla SIEMPRE en el admin-panel**:
+   `Error: NEXT_PUBLIC_API_URL no está definida y este es un build de producción`
+   (2026-08-13).
 
 ## Causa raíz
 
@@ -46,6 +49,15 @@ al arrancar o en caliente.
    distintos que conviven en el daemon, y el comando de esta misma receta
    construía **el que los runs no usan**. Se descubrió al ver que el prefijado
    tenía 9 días y el sin prefijo 3 — la fecha del último despliegue.
+7. **El bucle de apps autocontenidas de `ci.yml` construía sin build-args.** El
+   `ARG NEXT_PUBLIC_API_URL=""` del Dockerfile deja la variable definida y vacía,
+   y desde prod-09 `next.config.js` → `assertPublicApiUrl` **revienta a propósito**
+   el build de producción cuando falta (hallazgo frontend-8: Next hornea las
+   `NEXT_PUBLIC_*` en el bundle, así que sin ella el panel apunta al `localhost`
+   de cada usuario). La guarda de la app tenía razón; lo que faltaba era el
+   argumento. No se vio durante semanas porque CI llevaba caído por facturación
+   desde el 2026-07-30. Es el mismo defecto de forma que (5): **un valor que la
+   imagen necesita al construirse y que sólo se pasa en unos sitios**.
 
 ## Fix
 
@@ -72,7 +84,11 @@ docker build -t agentic-platform/agent-runtime:v1 -t agent-runtime:v1 \
 ```
 
 ```powershell
-# 4. admin-panel: contexto = su carpeta y DESDE POWERSHELL, no Git Bash
+# 4 + 7. admin-panel: contexto = su carpeta, `NEXT_PUBLIC_API_URL` SIEMPRE, y
+# DESDE POWERSHELL, no Git Bash. En CI el bucle de autocontenidas lo DEDUCE del
+# `ARG NEXT_PUBLIC_API_URL` del Dockerfile (guardado por
+# tests/unit/test_app_images_are_built_by_ci.py) en vez de nombrar la app: la
+# lista escrita a mano fue el defecto que ya se pagó con el watchdog.
 docker build -t agentic-platform/admin-panel:manuals `
   --build-arg NEXT_PUBLIC_API_URL=/api apps/admin-panel
 ```
@@ -91,6 +107,19 @@ separado; esta nota es la receta completa en un sitio.
 - **Las tres derivadas cuelgan de la base nueva**: importar desde ellas un símbolo
   que solo exista en la api-server recién construida. Si `orchestrator` o
   `notification-dispatcher` fallan y `workers` no, es el `BASE_IMAGE` olvidado (5).
+  La versión exacta de esa comprobación, que no depende de acertar con el símbolo,
+  es que **las capas de la base sean un prefijo de las de la derivada**:
+
+  ```bash
+  docker image inspect agentic-platform/api-server:ci --format '{{json .RootFS.Layers}}'
+  docker image inspect agentic-platform/workers:ci   --format '{{json .RootFS.Layers}}'
+  ```
+
+  Si no lo son, esa derivada colgó de otra base. Ojo al construirlas **mientras**
+  la base aún se está desempaquetando: pasó el 2026-08-13 con
+  `notification-dispatcher`, que reusó la capa de la base anterior y quedó con el
+  ID de la imagen vieja; reconstruirla después la dejó bien.
+
 - **El tag que los runs usan es el correcto** — las fechas tienen que coincidir:
 
   ```bash
@@ -103,9 +132,11 @@ separado; esta nota es la receta completa en un sitio.
 
 ## La comprobación que de verdad las caza todas
 
-Las seis tienen la misma raíz: **el tag que reconstruyes no es el que corre**. Y
-tras un `up -d` la comprobación es distinta de la que se hace sobre la imagen,
-porque un contenedor ya arrancado guarda el **ID** de la imagen, no el tag:
+Las seis primeras tienen la misma raíz: **el tag que reconstruyes no es el que
+corre** (la séptima es su gemela por el otro extremo: el valor que la imagen
+necesita al construirse y que no se le pasa). Y tras un `up -d` la comprobación
+es distinta de la que se hace sobre la imagen, porque un contenedor ya arrancado
+guarda el **ID** de la imagen, no el tag:
 
 ```bash
 docker inspect agentic-platform-workers-1 --format '{{.Image}}'   # ID en uso

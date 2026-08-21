@@ -94,8 +94,12 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "platform-fam",
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES"
-            " ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)",
+            # prod-09 task_prod09_04: `require_system_admin` re-reads
+            # `users.is_system_admin` from the DB, so the System Admin fixture
+            # must actually CARRY the flag — a `sys` JWT claim over a row whose
+            # flag is false is exactly the privilege the gate now refuses.
+            "INSERT INTO users (id, email, password_hash, is_system_admin) VALUES"
+            " ($1, $2, $3, false), ($4, $5, $6, false), ($7, $8, $9, true)",
             ids["admin_a"],
             "admin-a@fam.test",
             "h",
@@ -481,6 +485,98 @@ async def test_resync_closes_period_of_family_removed_from_allowlist(
     # Anthropic is untouched: still the current price.
     assert claude.effective_to is None
     assert claude.input_price == Decimal("3.0")
+
+
+# ===========================================================================
+# Re-sync, direccion ADITIVA: activar un proveedor NUEVO amplia el allowlist y
+# la re-sincronizacion ANADE sus modelos, sin cerrar de rebote los de la familia
+# que ya estaba activa.
+#
+# Es la mitad que faltaba del plan: `test_resync_closes_period_of_family_removed
+# _from_allowlist` cubre el sentido restrictivo (una familia SALE del allowlist ->
+# su periodo se cierra) y `test_active_families_unions_multiple_active_providers`
+# cubre la union del resolvedor sobre proveedores ya sembrados. Nadie afirmaba que
+# ACTIVAR Azure Foundry y re-sincronizar importara los modelos azure/openai que
+# antes eran skips `family_not_active` — ni, sobre todo, que ese `discontinued`
+# del camino restrictivo no se disparara tambien aqui (`sync_prices_from_litellm`
+# cierra TODA fila abierta cuya familia no este en el allowlist: si el allowlist
+# se computara mal en el segundo paso, ollama se cerraria de rebote y nadie lo
+# veria — el `created` seguiria saliendo bien).
+# ===========================================================================
+@pytest.mark.asyncio
+async def test_resync_adds_models_when_a_new_provider_is_activated(
+    configured_app, admin_session_factory, migrations_pg_dsn: str
+) -> None:
+    await _seed(migrations_pg_dsn)
+    # Punto de partida: SOLO ollama activo -> el feed importa `llama3` y deja
+    # claude-sonnet-4-5 (anthropic) + gpt-4o (openai) como skips de familia.
+    await _seed_provider(migrations_pg_dsn, "ollama")
+
+    from api_server.db.model_prices import ModelPrice
+    from api_server.pricing.litellm_sync import (
+        SKIP_FAMILY_NOT_ACTIVE,
+        StaticPriceFeedFetcher,
+        active_litellm_families,
+        sync_prices_from_litellm,
+    )
+
+    feed = _feed()
+    async with admin_session_factory() as session, session.begin():
+        families1 = await active_litellm_families(session)
+        first = await sync_prices_from_litellm(
+            session,
+            fetcher=StaticPriceFeedFetcher(payload=feed),
+            allowed_families=families1,
+        )
+    assert families1 == frozenset({"ollama"})
+    assert first.created == 1
+    assert {s.model_key for s in first.skipped if s.reason == SKIP_FAMILY_NOT_ACTIVE} == {
+        "claude-sonnet-4-5",
+        "gpt-4o",
+    }
+
+    # El operador ACTIVA Azure AI Foundry (ADR 0021). Su kind aporta las familias
+    # {azure, azure_ai, openai}, asi que `gpt-4o` entra en alcance.
+    await _seed_provider(migrations_pg_dsn, "azure_foundry")
+
+    async with admin_session_factory() as session, session.begin():
+        families2 = await active_litellm_families(session)
+        second = await sync_prices_from_litellm(
+            session,
+            fetcher=StaticPriceFeedFetcher(payload=feed),
+            allowed_families=families2,
+        )
+
+    # El allowlist CRECE (union ollama + azure_foundry): no reemplaza al anterior.
+    assert families2 == frozenset({"azure", "azure_ai", "openai", "ollama"})
+    # Direccion aditiva: se CREA exactamente una fila nueva en esta segunda
+    # pasada (cual, lo fija la comprobacion de filas de abajo) y `llama3`, ya
+    # importada e inalterada, cuenta como `unchanged` — no como update.
+    assert second.created == 1
+    assert second.updated == 0
+    assert second.unchanged == 1
+    # anthropic sigue fuera de alcance (ningun proveedor claude_sdk activo).
+    assert {s.model_key for s in second.skipped if s.reason == SKIP_FAMILY_NOT_ACTIVE} == {
+        "claude-sonnet-4-5"
+    }
+    # Y lo que este test existe para fijar: la familia que SIGUE activa no se
+    # cierra de rebote. Cero cierres en una re-sync puramente aditiva.
+    assert second.discontinued == 0
+    assert second.discontinued_models == []
+
+    async with admin_session_factory() as session:
+        rows = (await session.execute(select(ModelPrice))).scalars().all()
+    by_model = {r.model_id: r for r in rows}
+    # Las dos filas conviven, ambas con periodo ABIERTO.
+    assert set(by_model) == {"llama3", "gpt-4o"}
+    assert by_model["llama3"].effective_to is None, (
+        "la fila de la familia que sigue activa se cerro de rebote al ampliar el"
+        " allowlist (el discontinue del camino restrictivo se disparo aqui)"
+    )
+    assert by_model["llama3"].input_price == Decimal("0.10")
+    assert by_model["gpt-4o"].effective_to is None
+    assert by_model["gpt-4o"].provider == "openai"
+    assert by_model["gpt-4o"].input_price == Decimal("2.5")
 
 
 # ===========================================================================

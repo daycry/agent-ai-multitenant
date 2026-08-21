@@ -1,0 +1,57 @@
+# Monitorización de la capa de APLICACIONES — complemento de
+# docker-compose.monitoring.yml.
+#
+# POR QUÉ ESTÁ SEPARADO (2026-08-12): `docker-compose.monitoring.yml` es
+# INFRAESTRUCTURA observable (Prometheus, Grafana, exporters) y tiene que poder
+# levantarse por su cuenta encima del compose base — así lo hacen
+# `scripts/dev/up.sh --monitoring` y `scripts/dev/up.ps1 -Monitoring`, que
+# corren api-server y admin-panel NATIVAMENTE desde el venv y por tanto no
+# tienen ningún contenedor `workers`. El override de `workers` que hay aquí
+# vivía dentro de aquel fichero, y como compose NO ignora un override cuyo
+# servicio no declara nadie —aborta el proyecto ENTERO con
+# `service "workers" has neither an image nor a build context specified`, y no
+# solo el `up`: también `ps`, `logs` y `config`—, el overlay de monitorización
+# dejaba de ser componible por su cuenta. Todas las invocaciones escritas en los
+# runbooks y en los scripts de dev fallaban; el stack vivo no lo notaba solo
+# porque su `-f` real incluye la capa de aplicaciones.
+#
+# Regla: apila este fichero cuando en el mismo `-f` esté la capa de aplicaciones
+# (`docker-compose.manuals.yml` en dev; en producción el compose que genera el
+# instalador ya trae los servicios y su monitorización en un único fichero).
+#
+#   docker compose -f docker/docker-compose.yml \
+#     -f docker/docker-compose.manuals.yml \
+#     -f docker/docker-compose.monitoring.yml \
+#     -f docker/docker-compose.monitoring.apps.yml up -d
+#
+# Guardado por tests/unit/test_compose_stacks_are_launchable.py, que valida en
+# Python lo mismo que `docker compose config` sobre cada combinación de `-f` que
+# el repo promete por escrito.
+
+name: agentic-platform
+
+services:
+  # ---------------------------------------------------------------------------
+  # workers (override) — FASE 2b monitorización (2026-07-12): monta el drop-dir
+  # del textfile collector RW en el worker que consume la cola `default`, donde
+  # corre workers.sample_queue_metrics (cada 30s). Sin este mount el sampler
+  # escribía en su default /host/textfile/ INEXISTENTE dentro del contenedor y
+  # agentic_celery_queue_depth / agentic_tasks_by_status / agentic_dlq_depth /
+  # agentic_executions_24h jamás llegaban a Prometheus (las reglas de
+  # app_alerts.yml no podían disparar). El default del código ya apunta aquí,
+  # así que no hace falta env; las listas de volumes se FUSIONAN entre ficheros
+  # compose, no se reemplazan. Solo aplica si este overlay está desplegado —
+  # sin monitorización el writer trata el sink ausente como esperado (no-op).
+  # ---------------------------------------------------------------------------
+  workers:
+    volumes:
+      - node_exporter_textfile:/host/textfile
+    depends_on:
+      textfile-init:
+        condition: service_completed_successfully
+
+# El volumen y el one-shot `textfile-init` que lo deja en modo 1777 los declara
+# docker-compose.monitoring.yml; este fichero solo los referencia, de ahí que no
+# tenga sentido sin él.
+volumes:
+  node_exporter_textfile:

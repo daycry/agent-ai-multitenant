@@ -88,7 +88,7 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
         slug="research-spec",
         name="Equipo Research & Spec",
         description=(
-            "Pod para investigación, evaluación de opciones y " "redacción de especificaciones."
+            "Pod para investigación, evaluación de opciones y redacción de especificaciones."
         ),
         members=(
             TeamMemberDef("project-manager", "PM", is_team_leader=True, assignment_priority=10),
@@ -115,7 +115,7 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
         slug="data",
         name="Equipo Data",
         description=(
-            "Pod orientado a datos: pipelines, modelado, " "ingestión y validación de calidad."
+            "Pod orientado a datos: pipelines, modelado, ingestión y validación de calidad."
         ),
         members=(
             TeamMemberDef("project-manager", "PM", is_team_leader=True, assignment_priority=10),
@@ -130,19 +130,16 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_TEAM_SQL = text(
-    """
+_UPSERT_TEAM_SQL = text("""
     INSERT INTO teams (id, tenant_id, name, description, is_builtin)
     VALUES (:id, :tenant_id, :name, :description, true)
     ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         description = EXCLUDED.description,
         updated_at = now()
-    """
-)
+    """)
 
-_UPSERT_MEMBER_SQL = text(
-    """
+_UPSERT_MEMBER_SQL = text("""
     INSERT INTO team_members (
         team_id, agent_id, role_in_team, is_team_leader, assignment_priority
     )
@@ -152,16 +149,13 @@ _UPSERT_MEMBER_SQL = text(
         is_team_leader = EXCLUDED.is_team_leader,
         assignment_priority = EXCLUDED.assignment_priority,
         updated_at = now()
-    """
-)
+    """)
 
-_DELETE_STALE_MEMBERS_SQL = text(
-    """
+_DELETE_STALE_MEMBERS_SQL = text("""
     DELETE FROM team_members
      WHERE team_id = :team_id
        AND agent_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
 async def upsert_team(session: AsyncSession, team: BuiltinTeam) -> None:

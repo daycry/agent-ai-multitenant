@@ -33,7 +33,8 @@ import {
 } from "@/components/ui/dialog";
 import { KbCombobox } from "@/components/ui/kb-combobox";
 import { StateBlock } from "@/components/shared/state-block";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface AgentKbRow {
   kb_id: string;
@@ -173,6 +174,7 @@ function GrantKbDialog({
   existingKbIds: string[];
   onGranted: () => void;
 }) {
+  const errorText = useErrorText();
   const [pickedKb, setPickedKb] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -188,7 +190,7 @@ function GrantKbDialog({
       onGranted();
     },
     onError: (err) => {
-      setError(err instanceof ApiError ? err.body : String(err));
+      setError(errorText(err));
     },
   });
 

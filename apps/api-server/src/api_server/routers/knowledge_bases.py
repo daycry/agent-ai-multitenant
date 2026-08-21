@@ -18,20 +18,21 @@ returns 201 immediately.
 
 from __future__ import annotations
 
-import contextlib
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from redis.asyncio import Redis
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import (
     AuthPrincipal,
+    get_principal,
     get_redis,
     get_tenant_session,
+    open_tenant_session,
     require_tenant_admin,
     require_tenant_member,
 )
@@ -46,9 +47,18 @@ from api_server.db.knowledge import (
 )
 from api_server.events import delete_document_stream
 from api_server.ingestion.embeddings import Embedder, EmbeddingError
+from api_server.ingestion.formats import cached_supported_formats
 from api_server.logging import get_logger
 from api_server.rag.search import search_kb_chunks
 from api_server.routers._helpers import require_tenant_id, soft_delete
+from api_server.routers._kb_embedding import stamp_for_kb_update, stamp_for_new_kb
+from api_server.routers._pagination import (
+    MAX_PAGE_SIZE,
+    apply_pagination,
+    limit_query,
+    offset_query,
+)
+from api_server.routers._uploads import declared_content_length, read_capped_upload
 from api_server.routers.docs_viewer import get_query_embedder
 from api_server.schemas.knowledge import (
     ChunkSearchHit,
@@ -160,7 +170,9 @@ async def create_kb(
         tenant_id=tenant_id,
         name=payload.name,
         description=payload.description,
-        embedding_model_id=payload.embedding_model_id or "nomic-embed-text-v1.5",
+        # ADR 0155: el sello lo pone la plataforma, no el cliente. Un modelo
+        # distinto del activo es 422, no un 201 con una etiqueta decorativa.
+        embedding_model_id=stamp_for_new_kb(payload.embedding_model_id),
         created_by=principal.user_id,
         category_id=payload.category_id,
     )
@@ -281,13 +293,30 @@ async def get_kb(
     return to_kb_response(kb, await _load_category_for_kb(session, kb))
 
 
+async def _require_member_without_holding_a_session(
+    principal: AuthPrincipal = Depends(get_principal),
+) -> AuthPrincipal:
+    """``require_tenant_member`` con sesión CORTA (prod-13 task_prod13_07).
+
+    Existe sólo para ``GET /{kb_id}/search``, el endpoint que llama a Ollama en
+    medio: una dependencia con ``yield`` abre su sesión antes del handler y la
+    cierra después de la respuesta, así que mientras la puerta pidiera
+    ``get_tenant_session`` la conexión seguía retenida durante el embed por más
+    que el handler la soltara.
+
+    Llama al ``require_tenant_member`` original como función normal —sus
+    ``Depends(...)`` sólo los interpreta FastAPI— para no acabar con dos
+    predicados de pertenencia que puedan divergir."""
+    async with open_tenant_session(principal) as session:
+        return await require_tenant_member(principal=principal, session=session)
+
+
 @router.get("/{kb_id}/search", response_model=list[ChunkSearchHit])
 async def search_kb(
     kb_id: UUID,
     q: str,
     limit: int = 8,
-    _: AuthPrincipal = Depends(require_tenant_member),
-    session: AsyncSession = Depends(get_tenant_session),
+    principal: AuthPrincipal = Depends(_require_member_without_holding_a_session),
     embedder: Embedder = Depends(get_query_embedder),
 ) -> list[ChunkSearchHit]:
     """Preview/búsqueda de chunks dentro de UNA KB (Plan 06.17 task_06_17_05).
@@ -300,8 +329,15 @@ async def search_kb(
 
     Cross-tenant: ``_load_kb`` devuelve 404 para una KB de otro tenant
     (RLS la oculta), así que la búsqueda nunca filtra contenido ajeno.
+
+    Tres tramos y no uno (prod-13 task_prod13_07): comprobar la KB, **embeber
+    la query fuera de toda transacción** y buscar. El embed es una llamada de
+    red a Ollama; dentro de la transacción del request, una latencia de Ollama
+    se convertía en conexiones del pool retenidas y, con suficientes búsquedas
+    a la vez, en un `TimeoutError` para el resto de la API.
     """
-    await _load_kb(session, kb_id)
+    async with open_tenant_session(principal) as session:
+        await _load_kb(session, kb_id)
     if not q.strip():
         return []
 
@@ -314,13 +350,14 @@ async def search_kb(
         # embedder. Log + degradación, nunca 5xx por Ollama caído.
         _logger.warning("kb.search_embedder_failed", kb_id=str(kb_id), error=str(exc))
 
-    hits = await search_kb_chunks(
-        session,
-        kb_id=kb_id,
-        query=q,
-        query_embedding=query_embedding,
-        limit=max(1, min(limit, 50)),
-    )
+    async with open_tenant_session(principal) as session:
+        hits = await search_kb_chunks(
+            session,
+            kb_id=kb_id,
+            query=q,
+            query_embedding=query_embedding,
+            limit=max(1, min(limit, 50)),
+        )
     return [
         ChunkSearchHit(
             chunk_id=h.chunk_id,
@@ -350,26 +387,19 @@ async def update_kb(
         kb.name = payload.name
     if payload.description is not None:
         kb.description = payload.description
-    if (
-        payload.embedding_model_id is not None
-        and payload.embedding_model_id != kb.embedding_model_id
-    ):
-        # Plan 06.17 task_06_17_05: cambiar el modelo de embedding con
-        # chunks ya indexados los dejaría con vectores de OTRO modelo, que
-        # el path vectorial nunca casaría → RAG roto en silencio. El
-        # re-embedding real está diferido a Plan 12; hasta entonces
-        # bloqueamos el cambio (409) si la KB tiene chunks. Una KB vacía sí
-        # puede cambiar de modelo (no hay nada que invalidar).
-        if await _kb_has_chunks(session, kb.id):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "no se puede cambiar embedding_model_id: la KB ya tiene chunks"
-                    " indexados (re-embedding diferido a Plan 12). Crea una KB nueva"
-                    " con el modelo deseado y reindexa los documentos."
-                ),
-            )
-        kb.embedding_model_id = payload.embedding_model_id
+    if payload.embedding_model_id is not None:
+        # ADR 0155: la plataforma tiene UN modelo. Pedir otro es 422 (antes se
+        # guardaba tal cual sobre una KB vacía, incluido `text-embedding-3-small`,
+        # que esta plataforma —Ollama, 768 dims— no puede ni ejecutar). Pedir el
+        # activo sobre una KB CON chunks sigue siendo 409: re-sellar sin
+        # re-embeber convertiría el sello en otra mentira.
+        new_stamp = stamp_for_kb_update(
+            requested=payload.embedding_model_id,
+            current=kb.embedding_model_id,
+            has_chunks=await _kb_has_chunks(session, kb.id),
+        )
+        if new_stamp is not None:
+            kb.embedding_model_id = new_stamp
     # Plan 06.10: model_fields_set para distinguir "category_id no
     # enviado" (no tocar) de "category_id explícitamente null" (limpiar).
     if "category_id" in payload.model_fields_set:
@@ -583,6 +613,7 @@ async def list_kbs_for_project(
 )
 async def upload_document(
     kb_id: UUID,
+    request: Request,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     principal: AuthPrincipal = Depends(require_tenant_admin),
@@ -594,16 +625,36 @@ async def upload_document(
     tenant_id = require_tenant_id(principal)
     kb = await _load_kb(session, kb_id)
 
-    # Read the upload up-front so we can size-check before we touch MinIO.
-    payload = await file.read()
+    # Rechazo por FORMATO antes de leer un byte (prod-13 task_prod13_04 / api-2).
+    # La lista no está escrita aquí: se le pregunta a docling-serve al arrancar y
+    # se cachea, con respaldo fijo si no contesta — ver
+    # `api_server/ingestion/formats.py`. La lectura es de la caché EN PROCESO:
+    # una validación de entrada no puede depender de la red.
+    # Sin esto el rechazo llegaba minutos después, desde el pipeline, tras haber
+    # transferido y almacenado hasta 50 MiB.
+    rejection = cached_supported_formats().rejection_reason(
+        filename=file.filename, content_type=file.content_type
+    )
+    if rejection is not None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=rejection,
+        )
+
+    # Read the upload in CHUNKS, stopping the moment it exceeds the cap (prod-13
+    # task_prod13_04 / api-2): `await file.read()` used to pull the whole body
+    # into the heap and size-check afterwards, so a 2 GB upload was 2 GB of RSS
+    # in the process that serves every request and every WebSocket. The declared
+    # `Content-Length` gives a free early reject; the chunked read is what makes
+    # the cap true, because that header is written by the client.
+    payload = await read_capped_upload(
+        file,
+        max_bytes=MAX_UPLOAD_BYTES,
+        declared_content_length=declared_content_length(request.headers),
+    )
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="empty upload"
-        )
-    if len(payload) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"upload exceeds {MAX_UPLOAD_BYTES} bytes",
         )
 
     document_id = uuid4()
@@ -656,15 +707,24 @@ async def upload_document(
 @router.get("/{kb_id}/documents", response_model=list[DocumentResponse])
 async def list_documents(
     kb_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[DocumentResponse]:
+    """Los documentos de la KB, más reciente primero, PAGINADO (prod-13, api-6).
+
+    Una KB de manuales tiene miles de documentos y este listado los devolvía
+    todos. El desempate por `id` da orden total: sin él, dos documentos subidos en
+    el mismo instante pueden aparecer en dos páginas o en ninguna.
+    """
     await _load_kb(session, kb_id)
-    result = await session.execute(
+    stmt = (
         select(Document)
         .where(Document.kb_id == kb_id, Document.deleted_at.is_(None))
-        .order_by(Document.created_at.desc())
+        .order_by(Document.created_at.desc(), Document.id)
     )
+    result = await session.execute(apply_pagination(stmt, limit=limit, offset=offset))
     return [to_document_response(d) for d in result.scalars().all()]
 
 
@@ -687,20 +747,31 @@ async def delete_document(
     document_id: UUID,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
-    storage: ObjectStorage = Depends(get_object_storage),
     redis: Redis = Depends(get_redis),
 ) -> None:
-    """Soft-delete the metadata row + drop the MinIO blob. We do the
-    blob deletion best-effort — a 503 from the storage backend
-    shouldn't block the audit-trail update on the DB row."""
+    """Soft-delete the metadata row. El blob de MinIO lo reclama el GC.
+
+    ORDEN (prod-04 task_prod_04_11, hallazgo db-3). Antes esto borraba el blob
+    ANTES del `soft_delete`, y el commit ocurre al cerrar el request: si ese
+    commit fallaba, quedaba un documento **vivo** en la base de datos cuyo
+    binario ya no existía. La UI seguía ofreciéndolo, el reindex era imposible y
+    la fuente estaba perdida sin vuelta atrás — un borrado «reversible» que
+    destruía el dato antes de asegurarse de que la reversión era posible.
+
+    Además contradecía la promesa de `db/knowledge.py` («soft-deletable so a
+    destructive UI action can be reverted before the cleanup job kicks in»):
+    revertir un soft-delete cuyo blob ya no está no revierte nada.
+
+    Ahora el binario sobrevive a la ventana de gracia y lo hard-borra
+    `workers.collect_knowledge_garbage` (G-03) cuando
+    `deleted_at < now - knowledge_gc_retention_days`, junto con los chunks y la
+    fila. Ese barrido ya existía; lo único que hacía falta era dejar de
+    adelantarse a él.
+    """
     require_tenant_id(principal)
     doc = await _load_document(session, document_id)
     if doc.kb_id != kb_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not in this kb")
-    # Best-effort blob drop — metadata is the source of truth. A
-    # storage hiccup leaves an orphan that the GC job sweeps later.
-    with contextlib.suppress(ObjectStorageError):
-        await storage.delete_object(key=doc.source_storage_key)
     await soft_delete(session, doc)
     # Drop the ingestion stream too so no orphan progress events linger in Redis.
     await delete_document_stream(redis, str(doc.id))
@@ -753,30 +824,75 @@ documents_router = APIRouter(prefix="/documents", tags=["documents"])
 @documents_router.get("/{document_id}/citations")
 async def get_document_citations(
     document_id: UUID,
+    limit: int = limit_query(default=MAX_PAGE_SIZE),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> dict[str, object]:
-    """Return the Document + all its chunks ordered by `ordinal`,
+    """Return the Document + a PAGE of its chunks ordered by `ordinal`,
     suitable for the citation viewer (Plan 04 task_04_25).
 
     Tenant isolation rides on RLS; cross-tenant access would surface
     as 404. We deliberately do NOT require knowing the kb_id —
     document_id is enough, and the viewer is often deep-linked from
     a citation in chat where only the document_id is on hand.
+
+    Dos arreglos de prod-13 (perf-8 + api-6):
+
+      * **Columnas explícitas, no la entidad `Chunk`.** `select(Chunk)` traía
+        también `embedding`, un `vector(768)`: ~3 KB por fila que el visor no usa
+        para nada. Un PDF de 2.000 chunks eran 6 MB de vectores por el cable en
+        cada apertura del visor. Se seleccionan las cinco columnas que el payload
+        realmente contiene.
+      * **Paginado por `ordinal`**, con `limit`/`offset` compartidos. El
+        `ordinal` es único por documento, así que el orden ya es total y no hace
+        falta desempate.
+
+    Dos decisiones sobre la paginación que NO son cosméticas, porque el visor de
+    citas del admin-panel llama a este endpoint SIN `limit`:
+
+      * el default es `MAX_PAGE_SIZE`, no `DEFAULT_PAGE_SIZE`. Con 100 por
+        defecto, un PDF de 2.000 chunks habría dejado al visor pintando los
+        resaltados de las primeras páginas y NINGUNO del resto, sin decir nada:
+        cambiar una respuesta pesada por una respuesta silenciosamente incompleta
+        no es una mejora.
+      * la respuesta lleva `total` y `has_more`. Aunque el cliente aún no pagine,
+        la truncación pasa a ser **detectable** en vez de invisible — el visor
+        puede avisar, y quien depure sabe que faltan filas. Cablear el paginado en
+        el front es trabajo del admin-panel (fuera de este cambio).
     """
     doc = await _load_document(session, document_id)
+    total = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Chunk).where(Chunk.document_id == document_id)
+            )
+        ).scalar_one()
+    )
     chunk_rows = await session.execute(
-        select(Chunk).where(Chunk.document_id == document_id).order_by(Chunk.ordinal)
+        apply_pagination(
+            select(
+                Chunk.id,
+                Chunk.ordinal,
+                Chunk.content,
+                Chunk.bbox,
+                Chunk.metadata_,
+            )
+            .where(Chunk.document_id == document_id)
+            .order_by(Chunk.ordinal),
+            limit=limit,
+            offset=offset,
+        )
     )
     chunks = [
         {
-            "id": str(c.id),
-            "ordinal": c.ordinal,
-            "content": c.content,
-            "bbox": c.bbox,
-            "metadata": c.metadata_,
+            "id": str(row.id),
+            "ordinal": row.ordinal,
+            "content": row.content,
+            "bbox": row.bbox,
+            "metadata": row.metadata_,
         }
-        for c in chunk_rows.scalars().all()
+        for row in chunk_rows.all()
     ]
     return {
         "document": {
@@ -794,6 +910,13 @@ async def get_document_citations(
             "error_message": doc.error_message,
         },
         "chunks": chunks,
+        # Metadatos de paginación: `total` es el recuento REAL de chunks del
+        # documento, no `len(chunks)`. Sin esto, un cliente que no pagina no
+        # tiene forma de saber que le faltan filas.
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(chunks) < total,
     }
 
 

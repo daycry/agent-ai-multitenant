@@ -127,14 +127,14 @@ async def test_catalog_seed_populates_each_builtin_kb(
             assert n_chunks > 0, kb.slug
             # Every chunk is tenant-scoped to the platform tenant.
             n_wrong_tenant = await conn.fetchval(
-                "SELECT count(*) FROM chunks" " WHERE document_id = $1 AND tenant_id <> $2",
+                "SELECT count(*) FROM chunks WHERE document_id = $1 AND tenant_id <> $2",
                 document_id,
                 PLATFORM_TENANT_ID,
             )
             assert n_wrong_tenant == 0, kb.slug
             # Embeddings landed (HashEmbedder never returns NULL).
             n_embedded = await conn.fetchval(
-                "SELECT count(*) FROM chunks" " WHERE document_id = $1 AND embedding IS NOT NULL",
+                "SELECT count(*) FROM chunks WHERE document_id = $1 AND embedding IS NOT NULL",
                 document_id,
             )
             assert n_embedded == n_chunks, kb.slug

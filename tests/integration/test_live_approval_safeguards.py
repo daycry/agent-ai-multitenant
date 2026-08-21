@@ -31,11 +31,11 @@ from workers.execution import ExecutionRequest, conduct_execution
 import docker
 
 from ._docker_helpers import docker_client, requires_docker
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
 pytestmark = [pytest.mark.integration, requires_docker]
 
 _IMAGE = "agent-runtime:v1"
-TEST_REDIS_URL = "redis://localhost:6379/15"
 
 
 @pytest.fixture(scope="module", autouse=True)

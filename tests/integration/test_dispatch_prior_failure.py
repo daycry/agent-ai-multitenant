@@ -26,6 +26,8 @@ from tests.integration.test_dispatch_prior_review_feedback import (
     sessionmaker,
 )
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 _fixtures = (_migrated, sessionmaker)  # fixtures reexportadas (pytest las resuelve por nombre)
@@ -71,11 +73,18 @@ async def _add_execution(
     sm: async_sessionmaker,
     ids: dict[str, UUID],
     *,
+    dsn: str,
     status: str,
     abort_code: str | None = None,
     output: str | None = None,
     age_minutes: int = 0,
 ) -> None:
+    creado = datetime.now(UTC) - timedelta(minutes=age_minutes)
+    # `executions` está particionada por mes y SIN DEFAULT (ADR 0151): `age_minutes`
+    # retrofecha, y con el test corriendo en los primeros minutos del mes esa fila
+    # cae en un mes sin partición. Ver
+    # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+    await ensure_partition_for(dsn, "executions", creado)
     async with sm() as s, s.begin():
         s.add(
             Execution(
@@ -85,7 +94,7 @@ async def _add_execution(
                 status=status,
                 abort_code=abort_code,
                 output=output,
-                created_at=datetime.now(UTC) - timedelta(minutes=age_minutes),
+                created_at=creado,
             )
         )
 
@@ -99,12 +108,13 @@ async def _read(sm: async_sessionmaker, ids: dict[str, UUID]):
 
 @pytest.mark.asyncio
 async def test_latest_failed_execution_is_fed_back(
-    _migrated: None, sessionmaker: async_sessionmaker
+    _migrated: None, sessionmaker: async_sessionmaker, migrations_pg_dsn: str
 ) -> None:
     ids = await _seed_task(sessionmaker)
     await _add_execution(
         sessionmaker,
         ids,
+        dsn=migrations_pg_dsn,
         status="aborted",
         abort_code="loop_detected",
         output="last words of the dying run",
@@ -118,11 +128,18 @@ async def test_latest_failed_execution_is_fed_back(
 
 @pytest.mark.asyncio
 async def test_stale_failure_superseded_by_done_run_is_silent(
-    _migrated: None, sessionmaker: async_sessionmaker
+    _migrated: None, sessionmaker: async_sessionmaker, migrations_pg_dsn: str
 ) -> None:
     ids = await _seed_task(sessionmaker)
-    await _add_execution(sessionmaker, ids, status="failed", abort_code="boom", age_minutes=10)
-    await _add_execution(sessionmaker, ids, status="done", age_minutes=1)
+    await _add_execution(
+        sessionmaker,
+        ids,
+        dsn=migrations_pg_dsn,
+        status="failed",
+        abort_code="boom",
+        age_minutes=10,
+    )
+    await _add_execution(sessionmaker, ids, dsn=migrations_pg_dsn, status="done", age_minutes=1)
     assert await _read(sessionmaker, ids) is None
 
 
@@ -133,9 +150,13 @@ async def test_no_executions_reads_none(_migrated: None, sessionmaker: async_ses
 
 
 @pytest.mark.asyncio
-async def test_output_tail_is_capped(_migrated: None, sessionmaker: async_sessionmaker) -> None:
+async def test_output_tail_is_capped(
+    _migrated: None, sessionmaker: async_sessionmaker, migrations_pg_dsn: str
+) -> None:
     ids = await _seed_task(sessionmaker)
-    await _add_execution(sessionmaker, ids, status="failed", output="x" * 9000)
+    await _add_execution(
+        sessionmaker, ids, dsn=migrations_pg_dsn, status="failed", output="x" * 9000
+    )
     failure = await _read(sessionmaker, ids)
     assert failure is not None
     assert len(failure["output_tail"]) <= 1500

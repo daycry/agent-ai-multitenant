@@ -26,9 +26,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
 
-pytestmark = pytest.mark.integration
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
@@ -49,7 +49,9 @@ async def sessionmaker(admin_database_url: str):  # type: ignore[no-untyped-def]
 def _dispatcher(sm: async_sessionmaker) -> TaskDispatcher:
     return TaskDispatcher(
         sessionmaker=sm,
-        celery_app=build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL)),
+        celery_app=build_celery_app(
+            WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+        ),
         settings=OrchestratorSettings(redis_url=TEST_REDIS_URL, dispatch_queue="default"),
     )
 

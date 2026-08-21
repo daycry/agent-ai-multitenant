@@ -31,7 +31,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useLangOptional } from "@/lib/lang-context";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   ASSISTANT_LIMITS,
   assistantToolLabel,
@@ -57,6 +60,9 @@ let turnSeq = 0;
 const nextId = () => `turn-${(turnSeq += 1)}`;
 
 export default function AssistantChatPage() {
+  const t = useT("assistant");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
   const { isTenantAdmin, isLoading: userLoading } = useCurrentUser();
   const [draft, setDraft] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
@@ -127,7 +133,7 @@ export default function AssistantChatPage() {
           const tools = frame.tools_called.length
             ? ` — ${frame.tools_called[frame.tools_called.length - 1]}`
             : "";
-          setProgressNote(frame.rounds > 0 ? `ronda ${frame.rounds}${tools}` : null);
+          setProgressNote(frame.rounds > 0 ? t("progressRound", { n: frame.rounds, tools }) : null);
         },
         (delta) => setDraftAnswer((prev) => prev + delta),
       );
@@ -165,7 +171,7 @@ export default function AssistantChatPage() {
       <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
         <p className="text-muted-foreground flex items-center gap-2 text-sm">
           <Spinner />
-          Cargando…
+          {tCommon("loading")}
         </p>
       </div>
     );
@@ -194,8 +200,8 @@ export default function AssistantChatPage() {
     <div className="mx-auto flex w-full max-w-3xl flex-col px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Asistente personal"
-        description="Pregunta por el estado global de tu tenant: proyectos, planes, actividad, presupuesto y carga de agentes."
+        title={t("title")}
+        description={t("description")}
         actions={
           <>
             <Button
@@ -204,12 +210,12 @@ export default function AssistantChatPage() {
               data-testid="assistant-voice-toggle"
             >
               <Phone className="mr-2 h-4 w-4" />
-              {voiceMode ? "Cerrar voz" : "Modo voz"}
+              {voiceMode ? t("voiceClose") : t("voiceMode")}
             </Button>
             <Button variant="outline" asChild>
               <Link href="/admin/assistant/settings">
                 <Settings className="mr-2 h-4 w-4" />
-                Identidad
+                {t("identityLink")}
               </Link>
             </Button>
           </>
@@ -224,7 +230,7 @@ export default function AssistantChatPage() {
           sin perder las demás (los turnos viven en el backend). */}
       <div className="mt-4 flex flex-wrap items-center gap-2" data-testid="assistant-history-bar">
         <label htmlFor="assistant-conversation-picker" className="text-muted-foreground text-sm">
-          Hilo:
+          {t("threadLabel")}
         </label>
         <select
           id="assistant-conversation-picker"
@@ -241,7 +247,7 @@ export default function AssistantChatPage() {
             }
           }}
         >
-          <option value="">Nuevo hilo</option>
+          <option value="">{t("threadNew")}</option>
           {(conversationsQuery.data ?? []).map((c) => (
             <option key={c.id} value={c.id}>
               {c.title ?? c.id.slice(0, 8)}
@@ -258,11 +264,7 @@ export default function AssistantChatPage() {
             aria-live="polite"
           >
             {turns.length === 0 && !mutation.isPending ? (
-              <EmptyState
-                icon={Bot}
-                title="Empieza una conversación"
-                description="Por ejemplo: «¿Qué planes tengo pendientes de aprobación?»"
-              />
+              <EmptyState icon={Bot} title={t("emptyTitle")} description={t("emptyDescription")} />
             ) : (
               turns.map((turn) => <ChatBubble key={turn.id} turn={turn} />)
             )}
@@ -276,14 +278,14 @@ export default function AssistantChatPage() {
                 data-testid="assistant-thinking"
               >
                 <Spinner />
-                {progressNote ? `Pensando… (${progressNote})` : "Pensando…"}
+                {progressNote ? t("thinkingWith", { note: progressNote }) : t("thinking")}
               </p>
             ) : null}
           </div>
 
           {mutation.isError && !forbidden ? (
             <p className="text-destructive text-sm" data-testid="assistant-chat-error">
-              {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
+              {errorText(mutation.error)}
             </p>
           ) : null}
 
@@ -297,16 +299,16 @@ export default function AssistantChatPage() {
             <input
               ref={inputRef}
               data-testid="assistant-input"
-              aria-label="Mensaje para el asistente"
+              aria-label={t("inputAria")}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               maxLength={ASSISTANT_LIMITS.message.max}
-              placeholder="Escribe tu pregunta…"
+              placeholder={t("inputPlaceholder")}
               className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
             />
             <Button type="submit" data-testid="assistant-send" disabled={!canSend}>
               <Send className="mr-2 h-4 w-4" />
-              Enviar
+              {t("send")}
             </Button>
           </form>
         </CardContent>
@@ -316,6 +318,8 @@ export default function AssistantChatPage() {
 }
 
 function ChatBubble({ turn }: { turn: ChatTurn }) {
+  const t = useT("assistant");
+  const lang = useLangOptional();
   const isUser = turn.role === "user";
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
@@ -341,14 +345,14 @@ function ChatBubble({ turn }: { turn: ChatTurn }) {
                 key={tool}
                 className="bg-background text-muted-foreground rounded border px-1.5 py-0.5 text-[10px]"
               >
-                {assistantToolLabel(tool)}
+                {assistantToolLabel(tool, lang)}
               </span>
             ))}
           </div>
         ) : null}
         {!isUser && typeof turn.rounds === "number" ? (
           <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
-            {turn.rounds} ronda{turn.rounds === 1 ? "" : "s"}
+            {turn.rounds === 1 ? t("roundsOne") : t("roundsMany", { n: turn.rounds })}
           </p>
         ) : null}
       </div>
@@ -357,28 +361,25 @@ function ChatBubble({ turn }: { turn: ChatTurn }) {
 }
 
 function AssistantNoAccess({ canEnable = false }: { canEnable?: boolean }) {
+  const t = useT("assistant");
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Asistente personal"
+        title={t("title")}
         data-testid="assistant-chat-header"
       />
       <EmptyState
         data-testid="assistant-no-access"
         icon={Bot}
-        title="Asistente no disponible"
-        description={
-          canEnable
-            ? "El asistente está deshabilitado para tu organización. Como administrador del tenant puedes habilitarlo en Ajustes."
-            : "El asistente personal es exclusivo para administradores del tenant y debe estar habilitado para tu organización."
-        }
+        title={t("noAccessTitle")}
+        description={canEnable ? t("noAccessDisabled") : t("noAccessMember")}
         action={
           canEnable ? (
             <Button asChild data-testid="assistant-enable-cta">
               <Link href="/admin/assistant/settings">
                 <Settings className="mr-2 h-4 w-4" />
-                Ir a Ajustes
+                {t("goToSettings")}
               </Link>
             </Button>
           ) : undefined

@@ -4,6 +4,69 @@ version = "0.0.0"
 description = "Multi-tenant agentic AI platform — see CLAUDE.md and docs/roadmap/."
 requires-python = ">=3.12"
 
+# ---------------------------------------------------------------------------
+# Toolchain de desarrollo. Espejo EXACTO de requirements-dev.txt, que sigue
+# siendo lo que instalan scripts/dev/bootstrap.{ps1,sh}: aquí entra en la
+# resolución del lockfile (prod-11 task_uv_lock_09) para que el linter/mypy/
+# pytest con los que se valida un commit sean versiones reproducibles y no
+# "lo que resolviera pip ese día".
+#
+# La guarda `test_root_dev_group_mirrors_requirements_dev`
+# (tests/unit/test_supply_chain_config.py) pone en rojo cualquier desincronía
+# entre las dos listas.
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+  "pre-commit>=3.7,<4",
+  "black>=26.3,<27",
+  "ruff>=0.5,<1",
+  "mypy>=1.10,<2",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
+  "pytest-timeout>=2.3,<3",
+  "pyyaml>=6.0,<7",
+]
+
+# ---------------------------------------------------------------------------
+# Workspace uv (ADR 0147, prod-11 task_uv_lock_09 / task_ci_lock_10).
+#
+# Las 13 distribuciones Python del monorepo se resuelven JUNTAS en un único
+# `uv.lock`, del que sale `constraints.txt` (`uv export`). Ese fichero es lo
+# que consume el `pip install -e … -c constraints.txt` de CI y del
+# agent-runtime: los rangos de cada pyproject.toml siguen siendo la
+# restricción de compatibilidad, el lock es la verdad reproducible.
+#
+# Los miembros van ENUMERADOS y no por glob `apps/*`: apps/admin-panel y
+# apps/installer son paquetes npm sin pyproject.toml y un glob los arrastraría.
+# ---------------------------------------------------------------------------
+[tool.uv.workspace]
+members = [
+  "apps/api-server",
+  "apps/installer/backend",
+  "apps/notification-dispatcher",
+  "apps/orchestrator",
+  "apps/watchdog",
+  "apps/workers",
+  "packages/sdk-python",
+  "packages/shared-domain",
+  "packages/shared-guardrails",
+  "packages/shared-llm",
+  "packages/shared-mcp",
+  "packages/shared-test-runtimes",
+  "docker/agent-runtimes/agent-runtime",
+]
+
+# agent-runtime declara `shared-llm`, `shared-mcp`, `shared-domain` y
+# `shared-guardrails` por NOMBRE (y shared-guardrails[content-safety] declara
+# shared-llm). Sin estas fuentes uv los buscaría en PyPI, donde no existen.
+# Declaradas en la RAÍZ del workspace, las heredan todos los miembros.
+[tool.uv.sources]
+shared-llm = { workspace = true }
+shared-mcp = { workspace = true }
+shared-domain = { workspace = true }
+shared-guardrails = { workspace = true }
+shared-test-runtimes = { workspace = true }
+
 [tool.black]
 line-length = 100
 target-version = ["py312"]
@@ -58,6 +121,24 @@ select = [
 ignore = [
   "PLR0913",  # too many arguments — handled case by case
   "PLR2004",  # magic value — common in tests
+  # ---------------------------------------------------------------------------
+  # Reglas que ENTRARON SOLAS al subir ruff (2026-08-13). `select` nombra
+  # FAMILIAS (`PL`, `RUF`, `UP`…), así que cada versión nueva matricula reglas
+  # que nadie eligió. Las dos de abajo se rechazan a conciencia; el resto de las
+  # nuevas SÍ se adoptaron y su deuda se arregló en el mismo commit.
+  #
+  # No se ponen `# noqa` en 717 sitios: una decisión de estilo se toma una vez y
+  # aquí, no se disemina en anotaciones que nadie vuelve a revisar.
+  # ---------------------------------------------------------------------------
+  "PLC0415",  # import fuera del nivel superior — 669 casos, y son DELIBERADOS:
+  #             este repo importa dentro de la función para romper ciclos
+  #             (api_server.db ↔ routers) y para no pagar el arranque de
+  #             dependencias pesadas (spacy, presidio, langgraph) en procesos que
+  #             no las usan. Subirlos al módulo rompería importaciones circulares
+  #             reales y encarecería el arranque de los workers.
+  "PLR0917",  # demasiados argumentos POSICIONALES — 48 casos. Es la hermana de
+  #             PLR0913, que ya se ignora arriba «case by case»: adoptar una y no
+  #             la otra sería incoherente.
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -74,6 +155,11 @@ ignore = [
   "RUF003",
   "N802",
 ]
+# `ast.NodeVisitor` despacha por nombre: el método TIENE que llamarse
+# `visit_Call`, con la mayúscula del nodo. No es estilo, es la API — renombrarlo
+# a `visit_call` haría que el visitante no se llamara nunca y el analizador de
+# seguridad dejaría de ver las llamadas EN SILENCIO.
+"packages/shared-guardrails/src/shared_guardrails/checks/code_safety.py" = ["N802"]
 # Process entry points use lazy imports inside `main()` so logging
 # is configured before the app builds. Intentional, not a smell.
 "apps/orchestrator/src/orchestrator/__main__.py" = ["PLC0415"]
@@ -89,8 +175,8 @@ ignore = [
 # Demo scripts: long linear flows with lazy imports + Protocol-shaped
 # fakes whose method signatures must match the LLMProvider Protocol
 # (so `messages`/`kwargs` look "unused" to ruff).
-"scripts/demo_*.py" = ["PLR0915", "PLC0415", "ARG002", "ARG003"]
-"scripts/setup_demo_*.py" = ["PLR0915", "PLC0415", "E501", "RUF003"]
+"scripts/demos/demo_*.py" = ["PLR0915", "PLC0415", "ARG002", "ARG003"]
+"scripts/demos/setup_demo_*.py" = ["PLR0915", "PLC0415", "E501", "RUF003"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency-injection helpers are the canonical way to declare
@@ -183,12 +269,10 @@ follow_imports = "skip"
 module = ["claude_agent_sdk", "claude_agent_sdk.*"]
 ignore_missing_imports = true
 
-# `python-jose` ships without type stubs. We only use a narrow surface
-# (jwt.encode / jwt.decode / JWTError) so adopting types-python-jose
-# would add weight without buying much.
-[[tool.mypy.overrides]]
-module = ["jose", "jose.*"]
-ignore_missing_imports = true
+# `python-jose` salió del árbol el 2026-07-29 (prod-09 task_prod09_17): la pila
+# JOSE es una sola, `joserfc`, que SÍ trae `py.typed` — así que este override
+# (`module = ["jose", "jose.*"]`, con su nota sobre `types-python-jose`) dejó de
+# tener sujeto y se retiró en vez de quedarse como config muerta.
 
 # `pgvector` (>=0.3) ships .pyi stubs for the asyncpg/numpy adapters
 # but not for `pgvector.sqlalchemy.Vector`; treat the whole module as
@@ -415,6 +499,24 @@ testpaths = ["tests"]
 # `python -m pytest` worked because -m adds CWD.
 pythonpath = ["."]
 addopts = "-ra --strict-markers --strict-config"
+# pytest-asyncio 1.x avisa en cada corrida si este ámbito no se declara, porque su
+# default cambiará. Se declara **`function`**, que es el ámbito de los TESTS de este
+# arnés: los dos tienen que coincidir.
+#
+# Lo probé primero con `session` y rompió CUATRO tests de
+# `test_orchestrator_dispatch_atomicity.py` con
+# `RuntimeError: got Future attached to a different loop`. Tiene sentido: una
+# fixture async de ámbito sesión abre sus conexiones en el loop de la sesión, el
+# test corre en el suyo, y el primer `await` sobre ese recurso cruza la frontera.
+# Es la misma familia que el singleton de httpx de `ingestion/embed_client.py` — un
+# recurso asíncrono sobrevive a su loop y falla lejos de donde se creó.
+#
+# OJO, para quien venga buscando: esto NO arregla los `duplicate key` de
+# `uq_agents_tenant_name_global_live`. Lo probé creyendo que sí y no cambió nada.
+# Esa rotura es de la migración 0126 (2026-07-30), que añadió el índice único bajo
+# tests que ya sembraban dos filas con el mismo (tenant_id, name); se arregla en el
+# sembrador, no aquí.
+asyncio_default_fixture_loop_scope = "function"
 # Avisos silenciados, uno a uno y con motivo (2026-07-28). La regla que se sigue
 # aquí: **solo se filtra lo que no podemos arreglar**. Un aviso propio se corrige
 # —el `on_event is deprecated` de FastAPI, que salía 33 veces por corrida de
@@ -447,6 +549,16 @@ filterwarnings = [
     # el loop. RETIRAR al cablear esa sesión: entonces el aviso dejaría de ser
     # ruido de test y habría que tratarlo como fuga real.
     "ignore:unclosed event loop:ResourceWarning",
+    # `joserfc.jwk.OctKey` avisa (SecurityWarning) al envolver un secreto HMAC de
+    # menos de 112 bits. Lo dispara la FIXTURE, no el código: 181 ficheros de test
+    # firman con `"test-secret"` (11 caracteres). En producción es INALCANZABLE —
+    # `Settings._require_strong_secrets` rechaza cualquier secreto de firma por
+    # debajo de 32 caracteres fuera de `environment=dev`, y el default de dev tiene
+    # 29 — y fuera de pytest el aviso sigue saliendo, así que este filtro no tapa
+    # nada real. Apareció al unificar la pila JOSE (prod-09 task_prod09_17):
+    # python-jose no comprobaba la longitud de la clave.
+    # RETIRAR cuando las fixtures usen secretos representativos (>= 32).
+    "ignore:Key size should be >= 112 bits",
 ]
 markers = [
   "unit: unit tests (fast, no I/O)",

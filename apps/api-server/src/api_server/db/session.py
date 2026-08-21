@@ -16,6 +16,29 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from api_server.config import get_settings
+from api_server.db.after_commit import AfterCommitSession
+
+
+def pool_kwargs() -> dict[str, object]:
+    """Los cuatro parámetros de pool, leídos de settings (prod-13 task_prod13_06).
+
+    Antes los engines se creaban con los defaults de SQLAlchemy — `pool_size=5`,
+    `max_overflow=10`, `pool_timeout=30`, sin `pool_recycle` — y ninguno era
+    visible ni ajustable sin tocar código. Con la transacción por request
+    retenida durante el turno LLM, esas 15 conexiones se agotaban con ~15 chats
+    concurrentes y toda la API empezaba a devolver `TimeoutError` (db-2/perf-2).
+
+    Se expone como función y no como constante para que un cambio de env var se
+    recoja al reconstruir el engine (los tests lo hacen con
+    `reset_engine_cache()`), no al importar el módulo.
+    """
+    settings = get_settings()
+    return {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout,
+        "pool_recycle": settings.db_pool_recycle,
+    }
 
 
 @lru_cache(maxsize=1)
@@ -26,16 +49,49 @@ def get_engine() -> AsyncEngine:
         settings.database_url,
         pool_pre_ping=True,
         future=True,
+        **pool_kwargs(),
     )
+
+
+def _install_pool_metrics_once() -> None:
+    """Registra el colector de saturación del pool en el registro del proceso.
+
+    Vive aquí y no en ``main.install_metrics`` para que la métrica exista en
+    CUALQUIER proceso que abra sesiones (api-server, CLI, seeds), no solo en el
+    que monta la app FastAPI. Es idempotente y se llama desde los sessionmakers,
+    que son ``lru_cache``: en la práctica corre una vez por proceso.
+
+    Nunca levanta: quedarse sin métrica es un incordio; que un import de
+    ``prometheus_client`` tumbe la creación de sesiones, no.
+    """
+    try:
+        from prometheus_client import REGISTRY
+
+        from api_server.db.pool_metrics import install_pool_metrics
+
+        install_pool_metrics(REGISTRY)
+    except Exception:  # pragma: no cover - observabilidad best-effort
+        pass
 
 
 @lru_cache(maxsize=1)
 def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(
+    # `async_sessionmaker[AsyncSession]` explícito: la clase concreta es la
+    # subclase, pero el tipo público sigue siendo el genérico —
+    # `async_sessionmaker` es INVARIANTE, y siete consumidores anotan
+    # `async_sessionmaker[AsyncSession]`.
+    maker = async_sessionmaker[AsyncSession](
         bind=get_engine(),
-        class_=AsyncSession,
+        # `AfterCommitSession` y NO `AsyncSession`: la clase es la que drena los
+        # callbacks de `schedule_after_commit` al cerrar. Ver
+        # `api_server.db.after_commit` — el arreglo vive aquí, en las DOS
+        # factorías, y no en cada llamador precisamente porque un llamador se
+        # olvida (nueve rutas de settings lo estaban).
+        class_=AfterCommitSession,
         expire_on_commit=False,
     )
+    _install_pool_metrics_once()
+    return maker
 
 
 @lru_cache(maxsize=1)
@@ -46,16 +102,21 @@ def get_admin_engine() -> AsyncEngine:
         settings.admin_database_url,
         pool_pre_ping=True,
         future=True,
+        **pool_kwargs(),
     )
 
 
 @lru_cache(maxsize=1)
 def get_admin_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(
+    maker = async_sessionmaker[AsyncSession](
         bind=get_admin_engine(),
-        class_=AsyncSession,
+        # Ver `get_sessionmaker`: es LA sesión que se saltaba el drenaje, porque
+        # todas las escrituras de platform settings son System-Admin only.
+        class_=AfterCommitSession,
         expire_on_commit=False,
     )
+    _install_pool_metrics_once()
+    return maker
 
 
 def reset_engine_cache() -> None:

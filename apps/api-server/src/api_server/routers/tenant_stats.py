@@ -43,6 +43,8 @@ never fabricated.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, cast
@@ -50,18 +52,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import (
-    BigInteger,
     ColumnElement,
+    Select,
     case,
-    column,
     func,
     literal,
     select,
+    tuple_,
 )
-from sqlalchemy import (
-    cast as sa_cast,
-)
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
@@ -150,29 +148,29 @@ def _succeeded_flag() -> ColumnElement[int]:
 
 
 def _last_model_expr() -> ColumnElement[str | None]:
-    """The model of the run's LAST ``model_call`` step (NULL when none).
+    """El modelo del ÚLTIMO ``model_call`` del run (NULL si no llamó a ninguno).
 
-    ``steps_log`` is a JSONB array of step dicts; the model-call steps carry a
-    ``model`` field and a monotonically increasing ``index`` (see
-    ``agent_runtime.steps``). We unnest, keep only ``model_call`` steps that
-    name a model, and pick the highest-``index`` one — a correlated scalar
-    subquery so it composes into a SELECT / WHERE without a GROUP BY. Ordering
-    by the step's own ``index`` (not SQL ordinality) keeps the pick
-    deterministic and portable.
+    Desde la migración **0139** (prod-13 task_prod13_18) esto es una COLUMNA y
+    no una subconsulta. Lo que había antes: desenrollar el ``steps_log`` de cada
+    fila con ``jsonb_array_elements``, quedarse con los pasos ``model_call`` que
+    nombran modelo y escoger el de mayor ``index`` — una subconsulta
+    correlacionada que se ejecutaba por fila del listado y, cuando se usaba como
+    PREDICADO (``?model=``), no le dejaba al planificador nada que indexar.
+
+    La columna la escribe `db/execution_repo.py::apply_steps_rollup`, con la
+    misma definición (incluido el NULL, que significa «ningún modelo», no
+    «desconocido»), y el backfill de la 0139 la rellenó para todo el histórico.
+
+    Esa función es PÚBLICA a propósito: hay dos escritores de `steps_log` —el
+    repositorio y `workers/execution.py::_mark_commit_failed`—, así que la
+    proyección no puede depender de que todo el mundo pase por un helper
+    privado de un módulo. Quien asigne `steps_log` la llama.
+
+    Se conserva la FUNCIÓN, y no se sustituye por la columna en los tres
+    llamantes, porque es donde vive esta explicación y el punto único por el que
+    volver atrás si la denormalización resultara equivocada.
     """
-    elem = func.jsonb_array_elements(Execution.steps_log).table_valued(
-        column("value", JSONB), name="sl"
-    )
-    model_txt = elem.c.value["model"].astext
-    index_int = sa_cast(elem.c.value["index"].astext, BigInteger)
-    return (
-        select(model_txt)
-        .select_from(elem)
-        .where(elem.c.value["kind"].astext == "model_call", model_txt.isnot(None))
-        .order_by(index_int.desc())
-        .limit(1)
-        .scalar_subquery()
-    )
+    return cast("ColumnElement[str | None]", Execution.last_model)
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +403,7 @@ async def query_execution_runs(
     model: str | None = None,
     min_cost: Decimal | None = None,
     display_currency: str | None = None,
+    cursor: str | None = None,
 ) -> list[ExecutionRunRow]:
     """This tenant's executions, newest first, paginated + filtered + currency-applied.
 
@@ -428,7 +427,7 @@ async def query_execution_runs(
     target_currency = await _resolve_display_currency(
         session, tenant_id=tenant_id, override=display_currency
     )
-    rows = await _fetch_runs(session, filters, limit=limit, offset=offset)
+    rows = await _fetch_runs(session, filters, limit=limit, offset=offset, cursor=cursor)
     return await _apply_display_currency(session, rows, target_currency)
 
 
@@ -437,10 +436,20 @@ async def query_execution_runs(
 # ===========================================================================
 @router.get("/runs", response_model=list[ExecutionRunRow])
 async def list_execution_runs(
+    response: Response,
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
     limit: int = limit_query(),
     offset: int = offset_query(),
+    cursor: str | None = Query(
+        default=None,
+        max_length=256,
+        description=(
+            "Keyset pagination token from a previous page's X-Next-Cursor header. "
+            "When present it takes precedence over `offset` (mixing both would "
+            "skip rows). Prefer it over `offset` for deep pagination."
+        ),
+    ),
     window_days: int = _window_days(),
     agent_id: UUID | None = Query(default=None, description="Narrow to one agent."),
     role: str | None = Query(default=None, max_length=32, description="Narrow to one agent role."),
@@ -478,7 +487,7 @@ async def list_execution_runs(
     with the FX rate of that run's OWN date. The stored USD is never changed.
     """
     tenant_id = require_tenant_id(principal)
-    return await query_execution_runs(
+    rows = await query_execution_runs(
         session,
         tenant_id=tenant_id,
         limit=limit,
@@ -492,7 +501,14 @@ async def list_execution_runs(
         model=model,
         min_cost=min_cost,
         display_currency=display_currency,
+        cursor=cursor,
     )
+    # El cursor viaja en cabecera y no en el cuerpo: la respuesta es una LISTA
+    # y meterlo dentro obligaría a envolverla, rompiendo a todos los clientes.
+    next_cursor = next_runs_cursor(rows, limit=limit)
+    if next_cursor is not None:
+        response.headers["X-Next-Cursor"] = next_cursor
+    return rows
 
 
 # ===========================================================================
@@ -502,7 +518,21 @@ async def list_execution_runs(
 # bounded (not streamed): an export is a synchronous build of one response
 # body, so we bound it instead of letting a tenant ask for an unbounded report.
 # A named constant, not a magic number — a platform invariant of the export
-# contract. A tenant that needs more pages the explorer (with its offset).
+# contract.
+#
+# prod-13 task_prod13_18: el tope ya no es un callejón. El export acepta el MISMO
+# `cursor` opaco que el explorador y devuelve `X-Next-Cursor` cuando llenó la
+# página, así que un tenant con 20.000 runs los baja en cuatro ficheros en vez de
+# perder los 15.000 últimos en silencio. Se resuelve con keyset y NO con `offset`
+# a propósito: el offset que necesitaría la cuarta página son 15.000 filas que
+# PostgreSQL produce y tira, y es justo el crecimiento que degrada solo.
+#
+# Lo que este cambio NO hace, dicho aquí para que nadie lo dé por hecho: el
+# export sigue MATERIALIZANDO su página entera en memoria antes de serializar
+# (`build_runs_export` devuelve bytes). Trocear la consulta en lotes internos no
+# arreglaría eso —el cuerpo se construye igual— y saldría más caro: N consultas
+# donde hoy hay una. Bajar el pico de memoria pide streaming del cuerpo, que es
+# otro contrato y otra tarea.
 MAX_EXPORT_ROWS = 5000
 
 
@@ -526,6 +556,15 @@ async def export_execution_runs(
     model: str | None = Query(default=None, max_length=120, description="Narrow to one model."),
     min_cost: Decimal | None = Query(
         default=None, ge=0, description="Minimum total cost USD threshold."
+    ),
+    cursor: str | None = Query(
+        default=None,
+        max_length=256,
+        description=(
+            "Keyset pagination token from a previous export's X-Next-Cursor "
+            "header. Lets a tenant with more than MAX_EXPORT_ROWS runs download "
+            "them in consecutive files instead of losing everything past the cap."
+        ),
     ),
 ) -> Response:
     """Export this tenant's runs explorer to CSV / XLSX / PDF. tenant_admin.
@@ -558,7 +597,7 @@ async def export_execution_runs(
         model=model,
         min_cost=min_cost,
     )
-    rows = await _fetch_runs(session, filters, limit=MAX_EXPORT_ROWS, offset=0)
+    rows = await _fetch_runs(session, filters, limit=MAX_EXPORT_ROWS, offset=0, cursor=cursor)
 
     # The PDF/HTML report embeds a consumption summary; CSV/XLSX are raw rows.
     consumption = (
@@ -588,43 +627,113 @@ async def export_execution_runs(
             detail="xlsx export is not configured in this runtime; use format=csv",
         ) from exc
 
-    return Response(
-        content=content,
-        media_type=media_type_for(fmt),
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename_for(fmt, stem="tenant-runs")}"'
-            )
-        },
-    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename_for(fmt, stem="tenant-runs")}"'
+    }
+    # Sólo cuando la página se llenó: un cursor en la última página obligaría al
+    # cliente a pedir un fichero vacío para descubrir que ya no hay nada.
+    next_cursor = next_runs_cursor(rows, limit=MAX_EXPORT_ROWS)
+    if next_cursor is not None:
+        headers["X-Next-Cursor"] = next_cursor
+
+    return Response(content=content, media_type=media_type_for(fmt), headers=headers)
 
 
-async def _fetch_runs(
-    session: AsyncSession,
+# ---------------------------------------------------------------------------
+# Paginación por keyset del explorador (prod-13)
+# ---------------------------------------------------------------------------
+# `OFFSET n` obliga a PostgreSQL a producir y descartar las n primeras filas: la
+# página 500 cuesta 500 páginas de trabajo, y con el histórico de runs creciendo
+# eso degrada sin que nadie cambie nada. El keyset usa el índice
+# `(tenant_id, created_at)` de la migración 0126 para saltar directo.
+#
+# El `offset` NO se retira: los clientes de hoy paginan con él. Cuando llega un
+# `cursor`, manda el cursor (sumar los dos saltaría filas).
+_CURSOR_SEPARATOR = "|"
+
+
+def encode_runs_cursor(created_at: datetime, execution_id: UUID) -> str:
+    """Token opaco que apunta a la ÚLTIMA fila de una página.
+
+    Opaco (base64url) a propósito: un cursor que parece una fecha invita a que
+    el cliente lo fabrique, y el día que la clave de orden cambie —añadir un
+    tercer desempate, por ejemplo— esos clientes se rompen en silencio.
+    """
+    raw = f"{created_at.isoformat()}{_CURSOR_SEPARATOR}{execution_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_runs_cursor(cursor: str) -> tuple[datetime, UUID]:
+    """Descodifica un cursor. Un token corrupto es un **400**, no un 500.
+
+    Lo manda el cliente, así que un cursor roto es un error suyo; devolver 500
+    lo convertiría en una alerta de servidor y en ruido de guardia.
+    """
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("ascii")).decode("utf-8")
+        moment_text, _, id_text = raw.partition(_CURSOR_SEPARATOR)
+        return datetime.fromisoformat(moment_text), UUID(id_text)
+    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cursor is not a valid pagination token",
+        ) from exc
+
+
+def next_runs_cursor(rows: list[ExecutionRunRow], *, limit: int) -> str | None:
+    """Cursor de la página siguiente, o ``None`` si esta ya era la última.
+
+    Una página incompleta (``len(rows) < limit``) significa que no queda nada
+    detrás; devolver cursor igualmente obligaría al cliente a una petición de
+    más para descubrir el vacío.
+    """
+    if not rows or len(rows) < limit:
+        return None
+    last = rows[-1]
+    return encode_runs_cursor(last.created_at, last.id)
+
+
+def runs_select(
     filters: list[ColumnElement[bool]],
     *,
     limit: int,
-    offset: int,
-) -> list[ExecutionRunRow]:
-    """Load the runs-explorer rows for ``filters`` (newest first, paginated).
+    offset: int = 0,
+    cursor: str | None = None,
+) -> Select[Any]:
+    """El SELECT del explorador de runs — **columnas escalares explícitas**.
 
-    The single query behind both the JSON ``/runs`` endpoint and the export
-    surface (task_14_14) so the two never drift. ``filters`` already carries the
-    tenant scope + the time window + the optional narrowing predicates.
+    Antes era ``select(Execution, …)``, que trae la entidad ENTERA y con ella
+    ``steps_log`` (hallazgo perf-6). Medido el 2026-08-01 sobre la instancia de
+    desarrollo: ``steps_log`` es el 76 % de la tabla ``executions``, 9,5 KiB de
+    media por run y hasta 64 KiB. El export llega a ``MAX_EXPORT_ROWS`` = 5.000
+    filas — del orden de 50 MiB de JSONB materializados en el proceso para
+    producir un CSV que no publica ni un byte de esa traza.
+
+    Desde la migración **0139** ``steps_log`` ya NO aparece tampoco dentro de
+    la resolución del modelo del último paso (:func:`_last_model_expr`), que era
+    la mitad que faltaba de task_prod13_18: es una columna denormalizada. Con
+    eso, este SELECT no toca el JSONB por ningún lado.
     """
-    dur = _duration_ms()
-    model_expr = _last_model_expr()
     stmt = (
         select(
-            Execution,
+            Execution.id,
+            Execution.created_at,
+            Execution.task_id,
+            Execution.agent_id,
+            Execution.status,
+            Execution.finish_status,
+            Execution.total_tokens,
+            Execution.total_cost_usd,
+            Execution.started_at,
+            Execution.completed_at,
             Task.title,
             Task.plan_id,
             Task.retry_count,
             Plan.title,
             Agent.name,
             Agent.role,
-            model_expr,
-            dur,
+            _last_model_expr(),
+            _duration_ms(),
         )
         .select_from(Execution)
         .outerjoin(Task, Task.id == Execution.task_id)
@@ -633,32 +742,68 @@ async def _fetch_runs(
         .where(*filters)
         .order_by(Execution.created_at.desc(), Execution.id.desc())
     )
-    stmt = apply_pagination(stmt, limit=limit, offset=offset)
-    rows = (await session.execute(stmt)).all()
+    if cursor is not None:
+        moment, last_id = decode_runs_cursor(cursor)
+        # Comparación de FILA y no dos predicados sueltos: con
+        # `created_at < :m AND id < :i` se perderían las filas del mismo
+        # instante con id mayor, y con `created_at <= :m` se repetirían.
+        stmt = stmt.where(
+            tuple_(Execution.created_at, Execution.id) < tuple_(literal(moment), literal(last_id))
+        )
+        return stmt.limit(limit)
+    return apply_pagination(stmt, limit=limit, offset=offset)
+
+
+async def _fetch_runs(
+    session: AsyncSession,
+    filters: list[ColumnElement[bool]],
+    *,
+    limit: int,
+    offset: int,
+    cursor: str | None = None,
+) -> list[ExecutionRunRow]:
+    """Load the runs-explorer rows for ``filters`` (newest first, paginated).
+
+    The single query behind both the JSON ``/runs`` endpoint and the export
+    surface (task_14_14) so the two never drift. ``filters`` already carries the
+    tenant scope + the time window + the optional narrowing predicates.
+    """
+    rows = (
+        await session.execute(runs_select(filters, limit=limit, offset=offset, cursor=cursor))
+    ).all()
     return [
         ExecutionRunRow(
-            id=ex.id,
-            created_at=ex.created_at,
-            task_id=ex.task_id,
+            id=execution_id,
+            created_at=created_at,
+            task_id=task_id,
             task_title=task_title,
             plan_id=plan_id,
             plan_title=plan_title,
-            agent_id=ex.agent_id,
+            agent_id=agent_id,
             agent_name=agent_name,
             agent_role=agent_role,
             model=model_name,
-            verdict=ex.status,
-            succeeded=ex.status == _DONE,
-            finish_status=ex.finish_status,
+            verdict=exec_status,
+            succeeded=exec_status == _DONE,
+            finish_status=finish_status,
             retry_count=int(retry_count) if retry_count is not None else 0,
             duration_ms=int(duration) if duration is not None else None,
-            total_tokens=ex.total_tokens,
-            total_cost_usd=ex.total_cost_usd,
-            started_at=ex.started_at,
-            completed_at=ex.completed_at,
+            total_tokens=total_tokens,
+            total_cost_usd=total_cost_usd,
+            started_at=started_at,
+            completed_at=completed_at,
         )
         for (
-            ex,
+            execution_id,
+            created_at,
+            task_id,
+            agent_id,
+            exec_status,
+            finish_status,
+            total_tokens,
+            total_cost_usd,
+            started_at,
+            completed_at,
             task_title,
             plan_id,
             retry_count,
@@ -818,29 +963,26 @@ async def _trend(session: AsyncSession, base: list[ColumnElement[bool]]) -> list
 
 
 async def _token_split(session: AsyncSession, base: list[ColumnElement[bool]]) -> tuple[int, int]:
-    """(sum tokens_in, sum tokens_out) over the windowed runs' model calls."""
-    elem = func.jsonb_array_elements(Execution.steps_log).table_valued(
-        column("value", JSONB), name="sl"
-    )
-    is_call = elem.c.value["kind"].astext == "model_call"
+    """(suma de tokens de entrada, de salida) de los runs de la ventana.
+
+    Desde la 0139 se suman DOS COLUMNAS. Antes esto desenrollaba el `steps_log`
+    de todos los runs del período —el 76 % del peso de la tabla— para sumar dos
+    enteros que ya se conocían al cerrar cada run.
+
+    Un run sin llamadas a modelo aporta 0 y no desaparece del agregado: la forma
+    anterior lo perdía (el `join` lateral con un array vacío no producía fila) y
+    la suma es la misma, pero conviene tenerlo escrito porque es justo el tipo de
+    diferencia que un refactor así introduce sin que nada falle.
+    """
     row = (
         await session.execute(
             select(
-                func.coalesce(
-                    func.sum(sa_cast(elem.c.value["tokens_in"].astext, BigInteger)).filter(is_call),
-                    0,
-                ),
-                func.coalesce(
-                    func.sum(sa_cast(elem.c.value["tokens_out"].astext, BigInteger)).filter(
-                        is_call
-                    ),
-                    0,
-                ),
+                func.coalesce(func.sum(Execution.tokens_in), 0),
+                func.coalesce(func.sum(Execution.tokens_out), 0),
             )
             .select_from(Execution)
             .outerjoin(Agent, Agent.id == Execution.agent_id)
             .outerjoin(Task, Task.id == Execution.task_id)
-            .join(elem, literal(True))
             .where(*base)
         )
     ).one()

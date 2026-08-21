@@ -3,11 +3,14 @@
 Each tool answers one slice of the tenant's global state. The binding
 constraints (see the plan) make tenant isolation + RBAC non-negotiable:
 
-  * Every tool runs through the **caller's tenant-scoped session** — the
-    same RLS-bound ``AsyncSession`` the request uses (``get_tenant_session``).
-    PostgreSQL RLS therefore filters every query to the asking admin's
-    tenant. A tool can NEVER return another tenant's rows: the database
-    refuses to return them, regardless of any id the model might pass.
+  * Every tool runs through a **tenant-scoped session** — an RLS-bound
+    ``AsyncSession`` opened by ``open_tenant_session`` for the asking
+    principal. PostgreSQL RLS therefore filters every query to the asking
+    admin's tenant. A tool can NEVER return another tenant's rows: the
+    database refuses to return them, regardless of any id the model might
+    pass. Since prod-13 ``task_prod13_07`` that session is opened **per tool
+    call** and closed on return (see :class:`AssistantToolScope`), instead
+    of being the request's session held open for the whole LLM turn.
   * Tools are READ-ONLY: they only ``SELECT``. The assistant cannot mutate
     state through them.
 
@@ -30,6 +33,7 @@ probe a user outside their tenant.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -63,17 +67,62 @@ _ACTIVE_TASK_STATUSES: frozenset[str] = frozenset(
 )
 
 
+#: Cómo se abre UNA sesión corta y tenant-scoped para atender una llamada de
+#: tool. En producción el endpoint pasa ``lambda: open_tenant_session(principal)``
+#: **tal cual** — ver :class:`AssistantToolScope` para por qué eso no es un
+#: detalle de estilo.
+ToolSessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
+
+
 @dataclass(frozen=True)
 class AssistantToolContext:
-    """Everything a tool needs to answer. The ``session`` is the request's
-    RLS-bound session, so isolation is enforced by the database, not by
-    the tool code."""
+    """Everything a tool needs to answer. The ``session`` is an RLS-bound
+    session, so isolation is enforced by the database, not by the tool code.
+
+    Es el contexto **enlazado**: toda implementación de tool recibe uno de
+    éstos, con su sesión ya abierta. Quién la abrió —el request, o el despacho
+    para esta única llamada— es cosa de :class:`AssistantToolScope`."""
 
     session: AsyncSession
     tenant_id: UUID
     # The asking admin — reserved for finer-grained RBAC scoping (e.g.
     # project-membership filters) without changing the tool signature.
     user_id: UUID
+
+
+@dataclass(frozen=True)
+class AssistantToolScope:
+    """El alcance de un turno SIN sesión abierta: a quién sirve y cómo abrir una
+    corta cuando haga falta (prod-13 ``task_prod13_07``).
+
+    Es lo que el endpoint le da al grafo desde que el turno LLM dejó de correr
+    dentro de una transacción: mientras el modelo piensa no hay ninguna conexión
+    retenida, y cada llamada a tool abre la suya y la devuelve al pool.
+
+    Por qué la fábrica es ``open_tenant_session`` y no una función propia
+    --------------------------------------------------------------------
+    El riesgo nº 1 de trocear la transacción es abrir un agujero de RLS: si la
+    sesión corta no repite el ``set_config`` de ``app.user_id`` /
+    ``app.tenant_id``, las políticas dejan de casar y el aislamiento entre
+    tenants desaparece. La defensa no es recordarlo en cada sitio: es que **no
+    haya un segundo sitio**. La fábrica que se pasa aquí es exactamente el mismo
+    context manager que abre la sesión del request, así que no existe una segunda
+    implementación que pueda olvidarse del binding."""
+
+    tenant_id: UUID
+    user_id: UUID
+    session_factory: ToolSessionFactory
+
+    def bind(self, session: AsyncSession) -> AssistantToolContext:
+        """El contexto enlazado que ve la tool. Conserva tenant y usuario: un
+        ``bind`` que los perdiera dejaría a las tools que filtran por
+        ``ctx.tenant_id`` mirando otro tenant."""
+        return AssistantToolContext(session=session, tenant_id=self.tenant_id, user_id=self.user_id)
+
+
+#: Lo que el grafo transporta y el despacho acepta: un contexto ya enlazado o el
+#: alcance que sabe abrir su propia sesión.
+AssistantToolBinding = AssistantToolContext | AssistantToolScope
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +232,7 @@ async def _search_knowledge(
     if not q:
         return {"hits": [], "note": "query vacía"}
     k = max(1, min(int(limit or 5), _KB_SEARCH_LIMIT_MAX))
-    sql = sa_text(
-        """
+    sql = sa_text("""
         SELECT chunks.content, documents.kb_id, documents.title
         FROM chunks
         JOIN documents ON documents.id = chunks.document_id
@@ -196,8 +244,7 @@ async def _search_knowledge(
             to_tsvector('public.es_unaccent', chunks.content),
             plainto_tsquery('public.es_unaccent', :q)) DESC
         LIMIT :k
-        """
-    )
+        """)
     rows = (await ctx.session.execute(sql, {"q": q, "k": k})).all()
     return {
         "hits": [
@@ -489,8 +536,7 @@ ASSISTANT_TOOLS: dict[str, ToolEntry] = {
         schema={
             "name": "tenant_projects_status",
             "description": (
-                "Estado consolidado de todos los proyectos del tenant "
-                "(conteo total y por estado)."
+                "Estado consolidado de todos los proyectos del tenant (conteo total y por estado)."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -663,15 +709,24 @@ class UnknownToolError(KeyError):
 
 async def run_assistant_tool(
     name: str,
-    ctx: AssistantToolContext,
+    ctx: AssistantToolBinding,
     arguments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dispatch a tool by name. Raises :class:`UnknownToolError` for an
     unknown name (the graph filters to enabled tools, so this only fires
-    on a programming error or a hostile model)."""
+    on a programming error or a hostile model).
+
+    Ésta es la costura ÚNICA por la que pasa toda llamada a tool del asistente,
+    y por eso es aquí donde se abre la sesión corta cuando el contexto trae una
+    fábrica: las once implementaciones siguen recibiendo un ``ctx.session`` ya
+    enlazado y no cambian. La sesión se cierra —y commitea, que importa para la
+    única tool que escribe— al volver de la tool, no al terminar el turno."""
     entry = ASSISTANT_TOOLS.get(name)
     if entry is None:
         raise UnknownToolError(f"unknown assistant tool {name!r}")
+    if isinstance(ctx, AssistantToolScope):
+        async with ctx.session_factory() as session:
+            return await entry.impl(ctx.bind(session), **(arguments or {}))
     return await entry.impl(ctx, **(arguments or {}))
 
 
@@ -683,8 +738,11 @@ def tool_schemas(enabled: tuple[str, ...]) -> list[dict[str, Any]]:
 
 __all__ = [
     "ASSISTANT_TOOLS",
+    "AssistantToolBinding",
     "AssistantToolContext",
+    "AssistantToolScope",
     "ToolEntry",
+    "ToolSessionFactory",
     "UnknownToolError",
     "run_assistant_tool",
     "tool_schemas",

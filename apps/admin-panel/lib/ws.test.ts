@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/auth", () => ({ getToken: vi.fn() }));
 vi.mock("@/lib/tenant-storage", () => ({ getTenantId: vi.fn() }));
 
-import { getToken } from "@/lib/auth";
 import { getTenantId } from "@/lib/tenant-storage";
 import { reconnectDelayMs, resolveWsBase, wsUrl } from "@/lib/ws";
 
@@ -45,20 +43,29 @@ describe("wsUrl", () => {
   // API_URL defaults to the absolute http://localhost:8001, so resolveWsBase
   // gives ws://localhost:8001 without needing a browser `window`.
   beforeEach(() => {
-    vi.mocked(getToken).mockReturnValue("tok");
     vi.mocked(getTenantId).mockReturnValue(null);
   });
 
   it("appends the acting-as tenant_id when one is selected (WS mirror of X-Tenant-Id)", () => {
     vi.mocked(getTenantId).mockReturnValue("ten-1");
     expect(wsUrl("/ws/conversation/c1")).toBe(
-      "ws://localhost:8001/ws/conversation/c1?token=tok&tenant_id=ten-1",
+      "ws://localhost:8001/ws/conversation/c1?tenant_id=ten-1",
     );
   });
 
-  it("omits tenant_id when no tenant is selected", () => {
+  it("has NO query string at all when no tenant is selected", () => {
     vi.mocked(getTenantId).mockReturnValue(null);
-    expect(wsUrl("/ws/conversation/c1")).toBe("ws://localhost:8001/ws/conversation/c1?token=tok");
+    expect(wsUrl("/ws/conversation/c1")).toBe("ws://localhost:8001/ws/conversation/c1");
+  });
+
+  it("NEVER puts the session in the URL (ADR 0133)", () => {
+    // The whole point of the cookie migration for the WS: the JWT used to end
+    // up in access logs, proxy logs and Loki as `?token=<jwt>`. A regression
+    // here is silent — the socket keeps working — so it gets its own test.
+    vi.mocked(getTenantId).mockReturnValue("ten-1");
+    const url = wsUrl("/ws/kanban/p1");
+    expect(url).not.toContain("token=");
+    expect(url).not.toMatch(/ey[A-Za-z0-9_-]+\./);
   });
 });
 

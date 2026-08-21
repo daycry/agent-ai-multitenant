@@ -271,9 +271,9 @@ def test_full_construction() -> None:
 
 def test_column_server_defaults() -> None:
     for col_name in ("modality", "unit", "currency", "source", "effective_from"):
-        assert (
-            ModelPrice.__table__.columns[col_name].server_default is not None
-        ), f"{col_name} should carry a server default"
+        assert ModelPrice.__table__.columns[col_name].server_default is not None, (
+            f"{col_name} should carry a server default"
+        )
 
 
 # ---------------------------------------------------------------------------

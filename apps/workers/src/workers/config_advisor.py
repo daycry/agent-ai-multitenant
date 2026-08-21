@@ -124,8 +124,7 @@ async def _load_combo_stats(sessionmaker: Any, *, window_days: int = 30) -> list
 
     async with sessionmaker() as session:
         rows = await session.execute(
-            sa_text(
-                """
+            sa_text("""
                 SELECT e.tenant_id, e.agent_id, a.name, m.model,
                        count(*) AS runs,
                        (count(*) FILTER (WHERE e.status = 'done'))::float / count(*)
@@ -143,8 +142,7 @@ async def _load_combo_stats(sessionmaker: Any, *, window_days: int = 30) -> list
                 WHERE e.created_at >= now() - make_interval(days => :days)
                   AND e.agent_id IS NOT NULL
                 GROUP BY e.tenant_id, e.agent_id, a.name, m.model
-                """
-            ),
+                """),
             {"days": window_days},
         )
         return [
@@ -167,11 +165,12 @@ def config_advisor_task() -> dict[str, int]:
     settings = get_settings()
 
     async def _main() -> dict[str, int]:
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
+        from workers.db import worker_engine
         from workers.standup import CeleryStandupNotifier
 
-        engine = create_async_engine(settings.database_url)
+        engine = worker_engine(settings)
         try:
             sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
             stats = await _load_combo_stats(sessionmaker)

@@ -16,11 +16,24 @@ PASSWORD_MAX_LENGTH = 128
 
 
 class RegisterRequest(BaseModel):
-    """Payload for POST /auth/register."""
+    """Payload for POST /auth/register.
+
+    ``invitation_token`` es el token que un admin emitió desde
+    ``/admin/invitations`` (ADR 0134, opción C). Con la tabla ``users`` ya
+    poblada es OBLIGATORIO: sin él el registro devuelve un 403 genérico.
+
+    Viaja en el CUERPO y no como ``?invite=`` (que es como el ADR lo escribió de
+    pasada) por la misma razón que el repo ya fijó para el ``X-API-Token``: un
+    secreto en la query string acaba en los logs de acceso de Caddy, en el
+    historial del navegador y en la cabecera ``Referer``. La pantalla de canje
+    lee el token de la URL para rellenar el formulario, pero lo envía en el
+    cuerpo.
+    """
 
     email: EmailStr
     password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     full_name: str | None = Field(default=None, max_length=255)
+    invitation_token: str | None = Field(default=None, max_length=256)
 
 
 class LoginRequest(BaseModel):

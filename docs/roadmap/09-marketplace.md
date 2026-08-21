@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `09-marketplace`                          |
-| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `05-mcp-tools-avanzadas`                  |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/09-marketplace`                     |
 | **Secciones del .docx**            | [32]                                      |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -257,7 +258,7 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
     description: "Formato estándar de tool (manifest YAML + implementación)"
     check_type: automated
     runtime: python-pytest
-    command: "pytest tests/unit/test_tool_format.py -v"
+    command: "pytest tests/unit/test_tool_manifest_format.py -v"
     expected_signal: "exit_code == 0"
   ```
 
@@ -309,8 +310,8 @@ Tras Fase 5 los proyectos pueden añadir MCP servers manualmente. Esta fase los 
   - id: auto_09_13_a
     description: "Tool Playwright detallada con configuración guiada (browsers, headless, screenshots, traces)"
     check_type: automated
-    runtime: node-playwright
-    command: "npx playwright test e2e/playwright-tool-config.spec.ts"
+    runtime: python-pytest
+    command: "pytest tests/integration/test_playwright_tool.py -v"
     expected_signal: "exit_code == 0"
   ```
 

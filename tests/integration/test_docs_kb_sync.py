@@ -216,7 +216,7 @@ async def test_sync_creates_internal_kb_with_chunks_under_tenant(
             )
             assert n_wrong_tenant == 0, relpath
             n_embedded = await conn.fetchval(
-                "SELECT count(*) FROM chunks" " WHERE document_id = $1 AND embedding IS NOT NULL",
+                "SELECT count(*) FROM chunks WHERE document_id = $1 AND embedding IS NOT NULL",
                 document_id,
             )
             assert n_embedded == n_chunks, relpath

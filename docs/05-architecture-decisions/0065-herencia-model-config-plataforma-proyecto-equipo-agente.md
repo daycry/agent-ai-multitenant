@@ -17,7 +17,7 @@ extends: ["0055", "0057"]
 > seguro de plataforma + saneo de spec `{}`) y se apoya en el
 > [ADR 0057](0057-resolucion-modelo-agentes-por-proveedor.md) (resolución
 > provider→ejecutable en el worker). No toca el catálogo cerrado del
-> [ADR 0021](0021-proveedores-llm-catalogo-cerrado.md).
+> [ADR 0021](0021-shared-llm-layer-catalogo-cerrado.md).
 
 ## Contexto
 

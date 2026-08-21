@@ -68,7 +68,7 @@ from api_server.db.platform_settings import (
 )
 from api_server.db.session import get_admin_sessionmaker
 from api_server.events import EVENT_MESSAGE_CREATED, publish_conversation_event
-from api_server.ingestion.embeddings import OllamaEmbedder
+from api_server.ingestion.embed_client import shared_ollama_embedder
 from api_server.llm_providers.factory import build_llm_provider, build_provider_from_kind
 from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import LLMProviderVaultStore
@@ -973,7 +973,14 @@ async def respond_to_conversation(
             latest_user_text = next(
                 (m.content for m in reversed(list(rows)) if m.author_kind == "user"), ""
             )
-            query_embedder = OllamaEmbedder()
+            # Sobre el cliente httpx COMPARTIDO del proceso (task_prod13_05,
+            # perf-9): esto corre en cada mensaje del chat de planificación, y un
+            # `OllamaEmbedder()` a pelo traía un `httpx.AsyncClient` nuevo — o
+            # sea, un handshake por mensaje y un pool que moría sin reutilizarse.
+            # `aclose()` sobre un cliente inyectado es un no-op, así que el
+            # `finally` se queda por si mañana alguien vuelve a inyectar uno
+            # propio; hoy no cierra nada compartido.
+            query_embedder = shared_ollama_embedder()
             try:
                 project_context = await build_project_context(
                     session,

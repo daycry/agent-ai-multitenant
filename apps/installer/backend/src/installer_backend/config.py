@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import (
@@ -112,12 +112,34 @@ def _is_valid_host(value: str) -> bool:
 # ---------------------------------------------------------------------------
 # Step 2 — system basics.
 # ---------------------------------------------------------------------------
-class Environment(str, Enum):
+class Environment(StrEnum):
     """Deployment environment profile. Drives defaults + hardening posture."""
 
     DEVELOPMENT = "development"
     STAGING = "staging"
     PRODUCTION = "production"
+
+    @property
+    def runtime_value(self) -> str:
+        """El nombre que entienden los servicios: ``{dev, staging, prod}``.
+
+        Los valores de este enum son texto de UI del wizard (``production``), y
+        el runtime valida contra un enum CERRADO distinto (``prod``) — ver
+        ``api_server.config._KNOWN_ENVIRONMENTS``. Traducir es obligatorio en
+        TODO sitio que emita configuración para un servicio.
+
+        Vive aquí, en el enum, y no en un generador, porque tener el mapeo en uno
+        solo de los dos generadores ya costó un bloqueo de arranque: el ``.env``
+        traducía y el compose emitía ``production`` en crudo. Mientras el guard
+        del runtime era fail-open el valor desconocido se trataba como dev y no
+        se notaba; al volverlo fail-closed (prod-09 task_02), el api-server
+        generado por el instalador dejó de arrancar.
+        """
+        return {
+            Environment.DEVELOPMENT: "dev",
+            Environment.STAGING: "staging",
+            Environment.PRODUCTION: "prod",
+        }[self]
 
 
 class SystemConfig(BaseModel):
@@ -284,7 +306,7 @@ class StorageConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # Step 5 — LLM providers (the four ADR-0021 paths).
 # ---------------------------------------------------------------------------
-class LLMProviderKind(str, Enum):
+class LLMProviderKind(StrEnum):
     """The four supported provider paths — closed catalogue (ADR 0021)."""
 
     CLAUDE_SDK = "claude_sdk"

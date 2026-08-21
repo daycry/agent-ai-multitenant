@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1.7
 # agent-runtime-java-maven:v1 — test-runtime template for Java + Maven (Plan 06 task_06_02).
 
-FROM maven:3.9-eclipse-temurin-21 AS runtime
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+FROM maven:3.9-eclipse-temurin-21@sha256:2b4496088e7b80ae10a8c9f74e574ea21380325a006ec684532ad6bad5bc7273 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-java-maven" \
       org.opencontainers.image.version="v1" \

@@ -40,10 +40,11 @@ from uuid import UUID
 import structlog
 from redis.asyncio import Redis
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.ingestion")
 
@@ -83,6 +84,19 @@ def _default_docling_factory() -> Any:
 
 
 def _default_embedder_factory() -> Any:
+    """El embedder de producción: `OllamaEmbedder` con el modelo ACTIVO.
+
+    La auditoría (AUD14-03) señalaba que este embedder se construye antes de
+    saber a qué KB pertenece el documento. Con el ADR 0155 eso deja de ser un
+    defecto y pasa a ser la regla: la plataforma indexa con **un solo modelo**,
+    así que el embedder no depende de la KB — es la KB la que no puede diverger
+    del modelo activo, y si diverge `ingest_document` se niega antes de embeber
+    (regla 4) en vez de mezclar espacios semánticos en silencio.
+
+    Si alguien vuelve aquí con la auditoría en la mano a "arreglarlo" pasando
+    `model_id=kb.embedding_model_id`: eso es la opción B, que el ADR 0155
+    descartó por escrito. Reábrelo antes.
+    """
     from api_server.ingestion.embeddings import OllamaEmbedder
 
     return OllamaEmbedder()
@@ -184,7 +198,7 @@ async def _ingest_document_async(
     """
     from api_server.ingestion import ingest_document
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
     storage = storage_factory()
@@ -278,7 +292,7 @@ async def _sweep_pending_documents_async(
     both claim the same document (the second's predicate no longer matches the
     freshly-stamped rows).
     """
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session, session.begin():

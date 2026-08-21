@@ -217,11 +217,7 @@ def test_shell_true_literal_in_text_is_flagged() -> None:
 def test_safe_python_passes() -> None:
     guard = CodeSafetyGuardrail({})
     code = (
-        "def add(a: int, b: int) -> int:\n"
-        "    total = a + b\n"
-        "    return total\n"
-        "\n"
-        "print(add(2, 3))\n"
+        "def add(a: int, b: int) -> int:\n    total = a + b\n    return total\n\nprint(add(2, 3))\n"
     )
     result = guard.check(GuardrailContext(hook="post_llm", response=code))
     assert result.triggered is False

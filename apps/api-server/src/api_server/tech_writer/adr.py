@@ -51,7 +51,7 @@ ADR_FIRST_NUMBER: int = 1
 #: ``0030-catalog-ingestion-build-time-seed.md`` → ``0030``. The number must
 #: be followed by a ``-`` (the slug separator) so a stray ``README.md`` or a
 #: non-conforming name is ignored by :func:`next_adr_number`.
-_ADR_FILENAME_RE = re.compile(r"^(\d{%d,})-.+\.md$" % ADR_NUMBER_WIDTH)
+_ADR_FILENAME_RE = re.compile(rf"^(\d{{{ADR_NUMBER_WIDTH},}})-.+\.md$")
 
 # --- section headings (named, not magic) -----------------------------------
 
@@ -113,6 +113,13 @@ class AdrMeta:
         authors: Frontmatter authors (a tuple), defaulting to the corpus's
             ``system_architect``.
         plan_referenced: The plan id the decision belongs to, or ``None``.
+        rejects: Roadmap ``plan_id`` / ``task_id`` values whose checkboxes this
+            decision INVALIDATES (``task_gov_01``). Optional and omitted from
+            the frontmatter when empty — most ADRs reject nothing, and
+            ``rejects: []`` across the corpus would be noise nobody reads. When
+            present, ``tests/docs/test_adr_precedence.py`` demands the id
+            exists, that the checkbox is closed ``[x]``, and that the rejected
+            document cites this ADR back.
         docs_language: ``"es"`` or ``"en"``; anything else falls back to
             :data:`DEFAULT_DOCS_LANGUAGE`.
     """
@@ -129,6 +136,7 @@ class AdrMeta:
     date: str | None = None
     authors: tuple[str, ...] = ("system_architect",)
     plan_referenced: str | None = None
+    rejects: tuple[str, ...] = field(default_factory=tuple)
     docs_language: str = DEFAULT_DOCS_LANGUAGE
 
 
@@ -202,10 +210,17 @@ def _frontmatter(meta: AdrMeta, language: str, padded: str) -> str:
     unquoted ``0031`` would round-trip as the integer ``31``). ``authors``
     is a YAML flow list. ``date`` and ``plan_referenced`` render as YAML
     ``null`` when absent.
+
+    ``rejects`` (``task_gov_01``) es la única clave que se **omite entera** en
+    vez de renderizarse ``null`` cuando está vacía — el mismo criterio que
+    gobierna las secciones de cola opcionales. Va justo detrás de
+    ``plan_referenced``, que es donde el lector ya tiene delante la relación
+    con el roadmap.
     """
     authors = ", ".join(meta.authors)
     date = meta.date if meta.date is not None else "null"
     plan = meta.plan_referenced if meta.plan_referenced is not None else "null"
+    rejects = f"rejects: [{', '.join(meta.rejects)}]\n" if meta.rejects else ""
     return (
         "---\n"
         f'adr_id: "{padded}"\n'
@@ -214,6 +229,7 @@ def _frontmatter(meta: AdrMeta, language: str, padded: str) -> str:
         f"date: {date}\n"
         f"authors: [{authors}]\n"
         f"plan_referenced: {plan}\n"
+        f"{rejects}"
         f"docs_language: {language}\n"
         "---\n"
     )

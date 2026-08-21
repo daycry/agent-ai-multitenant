@@ -226,6 +226,38 @@ async def _publish_private_skill(client: AsyncClient, token: str) -> str:
     return resp.json()["id"]
 
 
+async def _approve_listing(client: AsyncClient, listing_id: str, seeded: dict) -> None:
+    """Aprueba el listing como System Admin — y NO es un detalle del arnés.
+
+    Desde el ADR 0142 D6 (fase 3 del marketplace v2), publicar NO publica: deja el
+    listing en `pending_review`, y `catalog_visibility_clause` es `published OR
+    propio`. Un listing sin aprobar NO lo ve nadie más que su autor, **ni siquiera
+    el tenant con el que se ha compartido** — la RLS deja pasar la fila por el
+    grant, y el filtro de revisión, que va encima, la vuelve a quitar.
+
+    Eso es DELIBERADO y está fijado aparte en
+    `test_marketplace_review_flow::test_pending_review_is_invisible_to_another_tenant`:
+    la plataforma revisa antes de que un contenido cruce una frontera de tenant.
+    Este fichero es más antiguo que esa puerta y por eso se quedó sin este paso.
+
+    Lo que NO cambia al aprobar, y conviene tenerlo escrito porque es
+    contraintuitivo: el listing sigue siendo PRIVADO. Su `tenant_id` es el de A, no
+    NULL, así que las tres policies de `marketplace_listings` —propio, global
+    (`tenant_id IS NULL`) y compartido— lo siguen enseñando solo a A y a quien tenga
+    un grant vivo. Aprobar no lo hace global; solo levanta el filtro de revisión.
+    """
+    # El usuario `sysadmin` del seed, que es el ÚNICO con `is_system_admin=true`
+    # en la BD. No basta con la claim del JWT: el endpoint la contrasta contra la
+    # fila y responde «system admin privileges have been revoked» si no cuadra.
+    admin_token = await _mint_token(seeded["sysadmin"], None, is_system_admin=True)
+    resp = await client.post(
+        f"/admin/marketplace/listings/{listing_id}/approve",
+        json={},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
 async def _audit_share_count(dsn: str, tenant_id: UUID) -> int:
     conn = await asyncpg.connect(dsn)
     try:
@@ -292,6 +324,7 @@ async def test_share_makes_listing_visible_and_installable_to_target_only(
 
     async with _client(configured_app) as client:
         listing_id = await _publish_private_skill(client, token_a)
+        await _approve_listing(client, listing_id, seeded)
 
         # Owner A opts in to share with target B.
         share = await client.post(
@@ -353,6 +386,7 @@ async def test_revoke_removes_target_visibility(configured_app, migrations_pg_ds
 
     async with _client(configured_app) as client:
         listing_id = await _publish_private_skill(client, token_a)
+        await _approve_listing(client, listing_id, seeded)
         share = await client.post(
             "/marketplace/shares",
             json={"listing_id": listing_id, "target_tenant_id": str(seeded["tenant_b"])},

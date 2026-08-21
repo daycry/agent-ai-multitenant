@@ -64,15 +64,30 @@ describe("Córtex NAV group", () => {
 
 describe("navItemVisible precedence", () => {
   it("treats systemOwnerOnly as the most restrictive gate", () => {
-    const ownerItem = { href: "/x", label: "x", Icon: cortexGroup().Icon, systemOwnerOnly: true };
+    const ownerItem = {
+      href: "/x",
+      labelKey: "docs",
+      Icon: cortexGroup().Icon,
+      systemOwnerOnly: true,
+    } as const;
     // A system_admin who is NOT the owner must not see a systemOwnerOnly item.
     expect(navItemVisible(ownerItem, SYSTEM_ADMIN)).toBe(false);
     expect(navItemVisible(ownerItem, OWNER)).toBe(true);
   });
 
   it("keeps the existing admin/systemAdmin gates working", () => {
-    const adminItem = { href: "/a", label: "a", Icon: cortexGroup().Icon, adminOnly: true };
-    const sysItem = { href: "/s", label: "s", Icon: cortexGroup().Icon, systemAdminOnly: true };
+    const adminItem = {
+      href: "/a",
+      labelKey: "docs",
+      Icon: cortexGroup().Icon,
+      adminOnly: true,
+    } as const;
+    const sysItem = {
+      href: "/s",
+      labelKey: "docs",
+      Icon: cortexGroup().Icon,
+      systemAdminOnly: true,
+    } as const;
     expect(navItemVisible(adminItem, MEMBER)).toBe(false);
     expect(navItemVisible(adminItem, TENANT_ADMIN)).toBe(true);
     expect(navItemVisible(sysItem, TENANT_ADMIN)).toBe(false);

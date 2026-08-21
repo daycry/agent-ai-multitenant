@@ -26,9 +26,14 @@ plan sí exige:
 Todo con dobles en memoria: unitario, sin I/O (el venv no trae `fakeredis`, que
 es lo que pedía el plan; el doble cubre las cuatro operaciones que se usan).
 
-**Dimensión de coste USD**: NO se prueba aquí porque no existe en el código
-(`usd_cap`, `record_spend(cost_usd)`, `curiosity_cost_usd_today`) — ver la
-auditoría 2026-07-27. Añadir el test exigiría implementarla primero.
+**Dimensión de coste USD** (añadida el 2026-07-30, cerrando la auditoría del
+2026-07-27): `check_and_reserve` mira las DOS dimensiones —búsquedas y dólares— y
+`record_spend` acumula ambas. Contar búsquedas acota el egress pero no el gasto:
+una sola pasada con razonamiento profundo (`claude_sdk` + WebSearch nativa, ADR
+0076) puede costar más que veinte búsquedas baratas, así que un tope de nº de
+búsquedas NO es un tope de coste. La forma de la clave (una string por día y
+dimensión en vez del hash `cortex:budget:{owner}` del plan) es una divergencia
+aceptada: el TTL por-día se autolimpia y ya tenía consumidores.
 """
 
 from __future__ import annotations
@@ -38,11 +43,15 @@ from datetime import UTC, datetime
 import pytest
 from api_server.cortex.autonomy import (
     CURIOSITY_KIND,
+    CURIOSITY_USD_KIND,
+    check_and_reserve,
     check_searches_budget,
     daily_budget_key,
     is_circuit_open,
+    read_budget_usage,
     record_failure,
     record_searches,
+    record_spend,
     record_success,
     seconds_until_utc_midnight,
 )
@@ -53,13 +62,13 @@ _OWNER = "11111111-1111-1111-1111-111111111111"
 
 
 class _FakeRedis:
-    """Redis en memoria con las 4 operaciones del budget, y un log de comandos.
+    """Redis en memoria con las 5 operaciones del budget, y un log de comandos.
 
     ``calls`` guarda ``(comando, clave)`` en orden para poder afirmar QUÉ tocó
     cada función (leer vs. escribir), no solo el resultado."""
 
     def __init__(self) -> None:
-        self.store: dict[str, int] = {}
+        self.store: dict[str, float] = {}
         self.ttls: dict[str, int] = {}
         self.calls: list[tuple[str, str]] = []
 
@@ -71,7 +80,14 @@ class _FakeRedis:
     async def incrby(self, key: str, amount: int) -> int:
         self.calls.append(("incrby", key))
         self.store[key] = self.store.get(key, 0) + int(amount)
-        return self.store[key]
+        return int(self.store[key])
+
+    async def incrbyfloat(self, key: str, amount: float) -> str:
+        # Redis devuelve el nuevo total como STRING en INCRBYFLOAT: el doble lo
+        # imita para que el parseo del código bajo prueba se ejercite de verdad.
+        self.calls.append(("incrbyfloat", key))
+        self.store[key] = float(self.store.get(key, 0.0)) + float(amount)
+        return str(self.store[key])
 
     async def expire(self, key: str, seconds: int) -> bool:
         self.calls.append(("expire", key))
@@ -92,6 +108,7 @@ class _BrokenRedis:
     get = _boom
     incr = _boom
     incrby = _boom
+    incrbyfloat = _boom
     expire = _boom
     exists = _boom
     set = _boom
@@ -237,3 +254,193 @@ async def test_sin_redis_el_registro_del_breaker_es_best_effort() -> None:
     )
     # No devuelve nada; lo que se afirma es que NO propaga.
     assert await record_success(_BrokenRedis(), owner_user_id=_OWNER) is None
+
+
+# ---------------------------------------------------------------------------
+# La dimensión de COSTE (USD) — la que faltaba entera (auditoría 2026-07-27)
+# ---------------------------------------------------------------------------
+_NOW = datetime(2026, 6, 24, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_bajo_los_dos_topes_el_gate_permite_y_reporta_ambos_usos() -> None:
+    """Con búsquedas y dólares por debajo del cap, `allowed` y los dos contadores.
+
+    El gate tiene que exponer AMBAS dimensiones en su veredicto: el panel enseña
+    "0.12 USD de 0.50" y el bucle registra el porqué del skip. Un `BudgetDecision`
+    que solo llevara búsquedas dejaría el coste invisible, que es justamente el
+    defecto que se está cerrando (la columna `cost_usd` era siempre 0)."""
+    redis = _FakeRedis()
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.12, searches=2, now=_NOW)
+
+    d = await check_and_reserve(redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=_NOW)
+    assert d.allowed is True
+    assert d.reason == "ok"
+    assert d.used == 2
+    assert d.cap == 5
+    assert d.used_usd == pytest.approx(0.12)
+    assert d.cap_usd == pytest.approx(0.50)
+
+
+@pytest.mark.asyncio
+async def test_el_cap_de_dolares_bloquea_aunque_queden_busquedas() -> None:
+    """Gastado el cap en USD, no importa que sobren búsquedas: no se busca.
+
+    Es la razón de existir de esta dimensión. Una pasada con razonamiento
+    profundo (claude_sdk + WebSearch nativa, ADR 0076) puede costar más que
+    veinte búsquedas baratas: con SOLO el tope de nº de búsquedas, el gasto real
+    no tenía techo. El `reason` es propio (`usd_budget_exhausted`) para que el
+    pursuit 'skipped' diga la verdad sobre por qué no salió."""
+    redis = _FakeRedis()
+    # Una sola búsqueda, pero caras: 0.60 USD > cap 0.50.
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.60, searches=1, now=_NOW)
+
+    d = await check_and_reserve(redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=_NOW)
+    assert d.allowed is False
+    assert d.reason == "usd_budget_exhausted"
+    assert d.used == 1  # quedaban 4 búsquedas de budget…
+    assert d.used_usd == pytest.approx(0.60)  # …pero el dinero se acabó
+
+
+@pytest.mark.asyncio
+async def test_el_cap_de_busquedas_sigue_bloqueando_con_dinero_de_sobra() -> None:
+    """Simétrico: agotadas las búsquedas, tener saldo no habilita más egress.
+
+    Las dos dimensiones son AND, no OR. Sin este caso, un refactor que mirase
+    solo el dinero (más "moderno") retiraría el freno al egress sin que nada
+    fallase — el cap de búsquedas es el que protege del abuso del proveedor de
+    búsqueda, no del gasto."""
+    redis = _FakeRedis()
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.0, searches=5, now=_NOW)
+
+    d = await check_and_reserve(redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=_NOW)
+    assert d.allowed is False
+    assert d.reason == "budget_exhausted"
+    assert d.used_usd == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_un_cap_de_cero_dolares_apaga_la_curiosidad_de_facto() -> None:
+    """`usd_cap <= 0` ⇒ nunca permitido, igual que el cap de búsquedas.
+
+    Se elige la MISMA semántica que la dimensión hermana (`cap_zero`) a
+    propósito: "no gastes" se lee como "no actúes", no como "sin tope". El
+    reason distingue la dimensión para que el panel pueda explicarlo."""
+    redis = _FakeRedis()
+    d = await check_and_reserve(redis, owner_user_id=_OWNER, usd_cap=0.0, searches_cap=5, now=_NOW)
+    assert d.allowed is False
+    assert d.reason == "usd_cap_zero"
+    # Y no hizo falta ni consultar Redis para negarlo (fail-safe barato).
+    assert redis.calls == []
+
+
+@pytest.mark.asyncio
+async def test_consultar_no_gasta_en_ninguna_de_las_dos_dimensiones() -> None:
+    """`check_and_reserve` NO reserva: el plan lo dice y el nombre engaña.
+
+    El nombre viene del plan («check_and_reserve»), pero la reserva real ocurre
+    DESPUÉS de la búsqueda con `record_spend` — si consultar incrementase, cada
+    pasada que muere más adelante (drive gate, sin tema, approval gate) quemaría
+    budget que nunca se usó y la curiosidad se apagaría sola."""
+    redis = _FakeRedis()
+    for _ in range(5):
+        d = await check_and_reserve(
+            redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=_NOW
+        )
+        assert d.allowed is True
+    assert {cmd for cmd, _ in redis.calls} == {"get"}
+    assert redis.store == {}
+
+
+@pytest.mark.asyncio
+async def test_record_spend_acumula_y_pone_ttl_hasta_medianoche_en_ambas_claves() -> None:
+    """El gasto se ACUMULA en la ventana y muere con ella (las dos dimensiones).
+
+    Sin TTL, el gasto de ayer toparía el cap de hoy para siempre; con un TTL
+    distinto en cada dimensión, una de las dos ventanas se desalinearía."""
+    redis = _FakeRedis()
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.10, searches=1, now=_NOW)
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.05, searches=2, now=_NOW)
+
+    searches, usd = await read_budget_usage(redis, owner_user_id=_OWNER, now=_NOW)
+    assert searches == 3
+    assert usd == pytest.approx(0.15)
+
+    usd_key = daily_budget_key(_OWNER, CURIOSITY_USD_KIND, now=_NOW)
+    searches_key = daily_budget_key(_OWNER, CURIOSITY_KIND, now=_NOW)
+    assert redis.ttls[usd_key] == seconds_until_utc_midnight(_NOW)
+    assert redis.ttls[searches_key] == seconds_until_utc_midnight(_NOW)
+    # Claves DISTINTAS: mezclarlas haría que 3 búsquedas contasen como 3 dólares.
+    assert usd_key != searches_key
+
+
+@pytest.mark.asyncio
+async def test_record_spend_con_coste_cero_no_crea_la_clave_de_dolares() -> None:
+    """Una pasada gratis (Ollama local) no debe dejar una clave de gasto a 0.
+
+    El proveedor local no cuesta nada (ADR 0021: «la factura de la GPU es del
+    operador»), así que el camino habitual del stack de desarrollo pasa por aquí:
+    debe contar la búsqueda y NO tocar la dimensión de dinero."""
+    redis = _FakeRedis()
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.0, searches=1, now=_NOW)
+
+    assert daily_budget_key(_OWNER, CURIOSITY_USD_KIND, now=_NOW) not in redis.store
+    assert redis.store[daily_budget_key(_OWNER, CURIOSITY_KIND, now=_NOW)] == 1
+
+
+@pytest.mark.asyncio
+async def test_la_ventana_de_dolares_tambien_se_resetea_a_medianoche() -> None:
+    """El gasto del día D no cuenta contra el cap del día D+1.
+
+    Misma garantía que ya tenía la dimensión de búsquedas, sobre la otra clave:
+    si la clave del gasto no llevase el día, un despliegue que gastase su cap una
+    vez dejaría la curiosidad muerta para siempre."""
+    redis = _FakeRedis()
+    ultima_hora = datetime(2026, 6, 24, 23, 59, tzinfo=UTC)
+    dia_siguiente = datetime(2026, 6, 25, 0, 1, tzinfo=UTC)
+
+    await record_spend(redis, owner_user_id=_OWNER, cost_usd=0.60, searches=1, now=ultima_hora)
+    agotado = await check_and_reserve(
+        redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=ultima_hora
+    )
+    assert agotado.allowed is False
+
+    manana = await check_and_reserve(
+        redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=dia_siguiente
+    )
+    assert manana.allowed is True
+    assert manana.used_usd == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_un_contador_de_dolares_corrupto_no_tumba_el_gate() -> None:
+    """Un valor no numérico en la clave del gasto se lee como 0, no levanta.
+
+    El bucle corre sin nadie mirando: una clave pisada por otro proceso (o un
+    `SET` manual de operador) no puede convertirse en una excepción dentro de
+    beat. Se lee 0 —el lado que NO bloquea la curiosidad legítima— porque el cap
+    de búsquedas sigue estando ahí como segunda barrera."""
+    redis = _FakeRedis()
+    redis.store[daily_budget_key(_OWNER, CURIOSITY_USD_KIND, now=_NOW)] = "basura"  # type: ignore[assignment]
+
+    d = await check_and_reserve(redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=_NOW)
+    assert d.allowed is True
+    assert d.used_usd == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_sin_redis_el_gate_de_dos_dimensiones_niega_el_gasto() -> None:
+    """Fail-safe del coste también en el gate nuevo: sin Redis no se gasta."""
+    redis = _BrokenRedis()
+    d = await check_and_reserve(redis, owner_user_id=_OWNER, usd_cap=0.50, searches_cap=5, now=_NOW)
+    assert d.allowed is False
+    assert d.reason == "redis_error"
+
+
+@pytest.mark.asyncio
+async def test_sin_redis_record_spend_no_propaga() -> None:
+    """La contabilidad del gasto es best-effort: corre DESPUÉS de gastar."""
+    assert (
+        await record_spend(_BrokenRedis(), owner_user_id=_OWNER, cost_usd=1.0, searches=1, now=_NOW)
+        is None
+    )

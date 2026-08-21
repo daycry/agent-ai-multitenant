@@ -22,9 +22,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ApiError } from "@/lib/api";
 import { useLang } from "@/lib/lang-context";
 import { fmtRunDuration, fmtRunMoney, fmtRunTokens, fmtRunWhen, listRuns } from "@/lib/runs";
+import { useErrorText } from "@/lib/use-error-text";
 
 const VERDICT_VARIANT: Record<string, BadgeVariant> = {
   running: "info",
@@ -64,6 +64,7 @@ export function RunHistorySheet({
   open: boolean;
   onOpenChange: (next: boolean) => void;
 }) {
+  const errorText = useErrorText();
   const router = useRouter();
   const { lang } = useLang();
   const t = COPY[lang];
@@ -95,8 +96,7 @@ export function RunHistorySheet({
           {runsQuery.isLoading && <p className="text-muted-foreground text-sm">{t.loading}</p>}
           {runsQuery.isError && (
             <p className="text-destructive text-sm">
-              {t.loadError}{" "}
-              {runsQuery.error instanceof ApiError ? runsQuery.error.body : String(runsQuery.error)}
+              {t.loadError} {errorText(runsQuery.error)}
             </p>
           )}
           {!runsQuery.isLoading && !runsQuery.isError && rows.length === 0 && (

@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, String, select
+from sqlalchemy import DateTime, Index, String, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,13 +42,31 @@ class BrowseSession(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     `browser-runtime` efímero."""
 
     __tablename__ = "browse_sessions"
+    # El inbox del owner: lo pendiente de decidir, por antigüedad (0112).
+    __table_args__ = (
+        Index(
+            "ix_browse_sessions_owner_status",
+            "owner_user_id",
+            "status",
+            "created_at",
+        ),
+    )
 
     tenant_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
     owner_user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default=BROWSE_PENDING)
+    status: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default=BROWSE_PENDING,
+        server_default=text(f"'{BROWSE_PENDING}'"),
+    )
     goal: Mapped[str] = mapped_column(String(500), nullable=False)
-    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
-    budgets: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    budgets: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     decided_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)

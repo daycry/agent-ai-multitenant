@@ -176,7 +176,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
         )
         # kb_role -> granteada al agente template (nivel rol).
         await conn.execute(
-            "INSERT INTO agent_knowledge_bases (agent_id, kb_id, tenant_id)" " VALUES ($1, $2, $3)",
+            "INSERT INTO agent_knowledge_bases (agent_id, kb_id, tenant_id) VALUES ($1, $2, $3)",
             agent_a,
             kb_role,
             tenant_a,

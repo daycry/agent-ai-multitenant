@@ -22,16 +22,41 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import asyncpg
 import pytest
 from alembic import command
+from httpx import ASGITransport, AsyncClient
+from uuid6 import uuid7
 
 pytestmark = pytest.mark.integration
 
 _VERIFIED = "verified"
 _PLAYWRIGHT_NAME = "playwright"
+
+# A well-formed SKILL.md — used only to prove the private-listing write
+# endpoints WORK, so the 404 the official catalog returns cannot be mistaken
+# for a broken route. Mirrors the fixture in ``test_private_marketplace.py``.
+_SKILL_MD = """\
+---
+name: internal-reporter
+description: Generates the weekly internal status report.
+version: 1.0.0
+dependencies:
+  - jinja2
+permissions:
+  allowed_paths: [/workspace/reports]
+  network_policy: none
+examples:
+  - title: Weekly report
+    prompt: "Generate this week's status report"
+---
+
+# Internal Reporter
+
+A tenant-internal skill that compiles a weekly status report.
+"""
 
 
 def _as_async_dsn(dsn: str) -> str:
@@ -243,3 +268,184 @@ def test_each_seeded_listing_parses_with_its_format_parser(
         manifest = parse_skill_md(artifact.read_text(encoding="utf-8"))
         assert manifest.name == row["name"]
         assert manifest.version  # non-empty, valid semver (parser enforces)
+
+
+# ===========================================================================
+# human_09_1_01 — "los oficiales no se pueden tocar desde el tenant"
+#
+# Estaba implementado (`_load_private_listing` en routers/marketplace.py exige
+# `tenant_id == caller`, así que una fila GLOBAL sale por el 404) y sin un solo
+# assert. Sin este test se podía relajar ese filtro —dejando que un tenant
+# reescribiera o despublicara el catálogo oficial que ven TODOS los tenants—
+# y la suite seguía verde.
+# ===========================================================================
+@pytest.fixture()
+def configured_app(
+    alembic_config,
+    app_database_url: str,
+    admin_database_url: str,
+    test_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    command.upgrade(alembic_config, "head")
+
+    from tests.integration.conftest import _flush_redis, _grant_app_user_existing_tables
+
+    asyncio.run(_grant_app_user_existing_tables())
+    asyncio.run(_flush_redis(test_redis_url))
+
+    monkeypatch.setenv("API_SERVER_DATABASE_URL", app_database_url)
+    monkeypatch.setenv("API_SERVER_ADMIN_DATABASE_URL", admin_database_url)
+    monkeypatch.setenv("API_SERVER_REDIS_URL", test_redis_url)
+    monkeypatch.setenv("API_SERVER_JWT_SECRET", "test-secret")
+
+    from api_server.auth.deps import reset_redis_cache
+    from api_server.config import get_settings
+    from api_server.db.session import reset_engine_cache
+
+    get_settings.cache_clear()
+    reset_engine_cache()
+    reset_redis_cache()
+
+    from api_server.main import create_app
+
+    app = create_app()
+    try:
+        yield app
+    finally:
+        reset_engine_cache()
+        reset_redis_cache()
+        get_settings.cache_clear()
+
+
+async def _seed_tenant_admin(dsn: str) -> tuple[UUID, UUID]:
+    """One tenant + one tenant_admin. Leaves marketplace rows untouched (the
+    official catalog must already be seeded when this runs)."""
+    tenant_id = uuid4()
+    user_id = uuid4()
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "TRUNCATE user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
+        )
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, 'Acme', 'acme-mktseed')",
+            tenant_id,
+        )
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, 'admin@mktseed.test', 'h')",
+            user_id,
+        )
+        await conn.execute(
+            "INSERT INTO user_org_memberships (id, tenant_id, user_id, role)"
+            " VALUES ($1, $2, $3, 'tenant_admin')",
+            uuid4(),
+            tenant_id,
+            user_id,
+        )
+    finally:
+        await conn.close()
+    return tenant_id, user_id
+
+
+async def _mint(user_id: UUID, tenant_id: UUID) -> str:
+    from api_server.auth.deps import get_redis
+    from api_server.auth.jwt import encode_jwt
+    from api_server.auth.sessions import SessionStore
+
+    sid = uuid7()
+    store = SessionStore(get_redis())
+    await store.create(sid, user_id=user_id, tenant_id=tenant_id, ttl_seconds=3600)
+    return encode_jwt(user_id=user_id, session_id=sid, tenant_id=tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_official_listings_cannot_be_modified_from_a_tenant(
+    configured_app, migrations_pg_dsn: str, tmp_path: Path
+) -> None:
+    """A tenant_admin can neither re-publish nor unpublish an OFFICIAL listing.
+
+    Both write verbs 404 (the row is global, not the caller's private one) and
+    — the part that actually matters — the catalog row survives byte-identical:
+    same name, same version, still live.
+    """
+    # ORDEN IMPORTANTE: `_seed_tenant_admin` hace TRUNCATE organizations
+    # CASCADE, que arrastraría los listings (FK tenant_id). Primero el tenant,
+    # después el catálogo oficial.
+    tenant_id, user_id = await _seed_tenant_admin(migrations_pg_dsn)
+    await _truncate(migrations_pg_dsn)
+    seed_result = await _run_seed(_as_async_dsn(migrations_pg_dsn), str(tmp_path))
+    assert seed_result.total >= 4
+
+    token = await _mint(user_id, tenant_id)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        official = await conn.fetchrow(
+            "SELECT id, name, version FROM marketplace_listings"
+            " WHERE tenant_id IS NULL AND deleted_at IS NULL AND kind = 'skill' LIMIT 1"
+        )
+    finally:
+        await conn.close()
+    assert official is not None, "el seed oficial debe haber dejado un listing skill global"
+    listing_id = official["id"]
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        # El listing oficial SÍ es visible para el tenant (el 404 de abajo es
+        # sobre la ESCRITURA, no un "no existe para mí").
+        browse = await client.get("/marketplace/listings", headers=headers)
+        assert browse.status_code == 200, browse.text
+        assert str(listing_id) in {row["id"] for row in browse.json()}
+
+        # Re-publicar el oficial → 404.
+        upd = await client.put(
+            f"/marketplace/private/listings/{listing_id}",
+            json={"manifest": _SKILL_MD, "author": "intruso"},
+            headers=headers,
+        )
+        assert upd.status_code == 404, upd.text
+        assert upd.json()["detail"] == "private listing not found"
+
+        # Despublicar el oficial → 404.
+        deleted = await client.delete(
+            f"/marketplace/private/listings/{listing_id}", headers=headers
+        )
+        assert deleted.status_code == 404, deleted.text
+
+        # Contrapeso: los MISMOS dos verbos funcionan sobre un listing PROPIO,
+        # así que el 404 de arriba es por ser GLOBAL, no por una ruta rota.
+        pub = await client.post(
+            "/marketplace/private/listings",
+            json={"kind": "skill", "manifest": _SKILL_MD},
+            headers=headers,
+        )
+        assert pub.status_code == 201, pub.text
+        own_id = pub.json()["id"]
+        own_upd = await client.put(
+            f"/marketplace/private/listings/{own_id}",
+            json={"manifest": _SKILL_MD.replace("version: 1.0.0", "version: 1.1.0")},
+            headers=headers,
+        )
+        assert own_upd.status_code == 200, own_upd.text
+        own_del = await client.delete(f"/marketplace/private/listings/{own_id}", headers=headers)
+        assert own_del.status_code == 204, own_del.text
+
+    # El listing oficial quedó INTACTO: mismo nombre, misma versión, vivo.
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        after = await conn.fetchrow(
+            "SELECT name, version, author, tenant_id, deleted_at"
+            " FROM marketplace_listings WHERE id = $1",
+            listing_id,
+        )
+    finally:
+        await conn.close()
+    assert after is not None
+    assert after["name"] == official["name"]
+    assert after["version"] == official["version"]
+    assert after["author"] != "intruso"
+    assert after["tenant_id"] is None
+    assert after["deleted_at"] is None

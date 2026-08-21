@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `03-chat-planning-aprobacion`             |
-| **Estado**                         | `in_progress`                             |
 | **Bloqueado por**                  | `02-ejecucion-agentes`                    |
 | **Tiempo estimado (calendario)**   | 4-5 semanas                               |
 | **Tiempo estimado (persona-días)** | 80-100                                    |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/03-chat-planning-aprobacion`        |
 | **Secciones del .docx**            | [8]                                       |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

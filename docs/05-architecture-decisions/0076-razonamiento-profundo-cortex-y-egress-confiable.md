@@ -16,7 +16,7 @@ supersedes: []
 
 ## Contexto
 
-La visión pide **razonamiento profundo** y **búsqueda en Internet**. El catálogo LLM es cerrado (ADR 0021). ADR 0067 (web-search/fetch desde runtimes) está `proposed`/gated porque abre egress en el sandbox de agentes. El córtex, en cambio, corre **dentro del api-server (servicio confiable)**.
+La visión pide **razonamiento profundo** y **búsqueda en Internet**. El catálogo LLM es cerrado (ADR 0021). ADR 0067 (web-search/fetch desde runtimes) estaba `proposed`/gated al redactar esto —hoy `accepted` (2026-06-24)— porque abre egress en el sandbox de agentes. El córtex, en cambio, corre **dentro del api-server (servicio confiable)**.
 
 ## Decisión
 
@@ -34,7 +34,12 @@ La visión pide **razonamiento profundo** y **búsqueda en Internet**. El catál
 
 ## Estado de implementación (2026-07-12)
 
-PARCIAL y con divergencia deliberada — se mantiene `proposed` como registro fiel. Lo implementado: transporte claude_sdk del cortex pineado por test (`test_cortex_claude_sdk_transport`), dependencia opcional (extra `claude`) y degradacion limpia. La via de web elegida en la practica fue el CAMINO DEGRADADO del punto 4 — tool web propia desde el api-server con anti-SSRF obligatorio (`ssrf_guard`, searxng, `cortex.web_enabled`) — porque el owner del stack dev usa gpt-oss/Ollama, sin claude_sdk. El punto 3 (WebSearch nativa del SDK) sigue siendo lo recomendado cuando el owner tenga claude_sdk.
+> Nota (2026-07-29): esta sección es el registro **del 2026-07-12**, cuando el ADR
+> todavía estaba `proposed`. El [cierre del 2026-07-26](#cierre-2026-07-26) lo pasó
+> a `accepted` con la divergencia 3→4 aceptada; la frase «se mantiene `proposed`»
+> se conserva fechada, no como estado vigente.
+
+PARCIAL y con divergencia deliberada — entonces se mantenía `proposed` como registro fiel. Lo implementado: transporte claude_sdk del cortex pineado por test (`test_cortex_claude_sdk_transport`), dependencia opcional (extra `claude`) y degradacion limpia. La via de web elegida en la practica fue el CAMINO DEGRADADO del punto 4 — tool web propia desde el api-server con anti-SSRF obligatorio (`ssrf_guard`, searxng, `cortex.web_enabled`) — porque el owner del stack dev usa gpt-oss/Ollama, sin claude_sdk. El punto 3 (WebSearch nativa del SDK) sigue siendo lo recomendado cuando el owner tenga claude_sdk.
 
 ## Cierre (2026-07-26)
 

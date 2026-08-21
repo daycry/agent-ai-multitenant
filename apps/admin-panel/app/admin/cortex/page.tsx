@@ -23,6 +23,15 @@
  * Honestidad de producto (riesgo F1): el córtex F1 es una mente SIMULADA con
  * memoria + deliberación; NO tiene afecto ni consciencia (eso llega en F2). El
  * copy de esta página no insinúa emociones.
+ *
+ * SEGUNDA COLUMNA (casillas de UI de F2 y F3): a la derecha del hilo viven el
+ * Panel de Mente (`MindPanel`, diales PAD + drives + aviso honesto) y la tarjeta
+ * de identidad (`IdentityCard`). Las dos fases lo pedían aquí y las dos habían
+ * acabado en rutas hermanas, que siguen existiendo con su vista completa y su
+ * formulario. La diferencia no es de sitio, es de USO: el estado afectivo y la
+ * identidad significan algo MIENTRAS conversas, y tenerlos a un cambio de
+ * pantalla equivalía a no tenerlos. Los dos componentes traen su propio copy
+ * honesto, así que la columna no puede quedarse sin él.
  */
 
 import { useEffect, useState } from "react";
@@ -31,6 +40,8 @@ import { Brain, Phone, Send } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
 import { CortexVoiceCall } from "@/components/cortex/cortex-voice-call";
+import { IdentityCard } from "@/components/cortex/identity-card";
+import { MindPanel } from "@/components/cortex/mind-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -40,19 +51,22 @@ import { ApiError } from "@/lib/api";
 import {
   CORTEX_LIMITS,
   cortexConversationLabel,
-  cortexFetch,
   getCortexConversations,
+  getCortexMind,
   getCortexTurns,
   postCortexTurn,
   type CortexConversation,
+  type CortexMind,
   type CortexTurnItem,
   type CortexTurnResponse,
 } from "@/lib/cortex";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
 import { cn } from "@/lib/utils";
 import { useCurrentUser } from "@/lib/use-current-user";
+import { useErrorText } from "@/lib/use-error-text";
 
 export default function CortexChatPage() {
+  const errorText = useErrorText();
   const { isSystemOwner, isLoading: userLoading } = useCurrentUser();
   const queryClient = useQueryClient();
 
@@ -74,16 +88,20 @@ export default function CortexChatPage() {
   const [pendingEcho, setPendingEcho] = useState<string | null>(null);
 
   // C12 (investigación 2026-07-11): el mood vivo también en el CHAT — en voz ya
-  // se materializa (prosodia + avatar) pero en texto el owner no lo veía. Solo
-  // lectura ligera del Panel de Mente, refrescada con calma.
-  const mindQuery = useQuery<{ mood_label?: string }, ApiError>({
+  // se materializa (prosodia + avatar) pero en texto el owner no lo veía. Esta
+  // consulta alimentaba sólo la etiqueta de ánimo de la cabecera; ahora también
+  // los diales de la segunda columna, así que pide el `CortexMind` entero (mismo
+  // endpoint, misma cadencia: no hay petición nueva, sólo se deja de tirar el
+  // 90 % de la respuesta que ya venía).
+  const mindQuery = useQuery<CortexMind, ApiError>({
     queryKey: ["cortex-mind-chat"],
-    queryFn: () => cortexFetch<{ mood_label?: string }>("/mind"),
+    queryFn: getCortexMind,
     refetchInterval: 30_000,
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const moodLabel = mindQuery.data?.mood_label?.trim();
+  const mind = mindQuery.data ?? null;
+  const moodLabel = mind?.mood_label?.trim();
 
   const conversationsQuery = useQuery<CortexConversation[], ApiError>({
     queryKey: ["cortex", "conversations"],
@@ -179,7 +197,7 @@ export default function CortexChatPage() {
   const deepThinking = lastEffort !== null && lastEffort !== "off" && lastEffort !== "none";
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col px-4 py-8 sm:px-6 lg:px-8">
+    <div className="mx-auto flex w-full max-w-6xl flex-col px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         icon={<Brain className="h-6 w-6 sm:h-7 sm:w-7" />}
         title="Córtex"
@@ -212,124 +230,137 @@ export default function CortexChatPage() {
           simulado, ADR 0075) viaja en el subtítulo y la etiqueta de mood. */}
       {voiceMode ? <CortexVoiceCall onClose={() => setVoiceMode(false)} /> : null}
 
-      {/* Historial de hilos: cambia entre conversaciones o empieza una nueva
+      <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="flex min-w-0 flex-col">
+          {/* Historial de hilos: cambia entre conversaciones o empieza una nueva
           sin borrar las demás (patrón del chat de proyecto). */}
-      <div className="mt-4 flex flex-wrap items-center gap-2" data-testid="cortex-history-bar">
-        <label htmlFor="cortex-conversation-picker" className="text-muted-foreground text-sm">
-          Hilo:
-        </label>
-        <div className="w-full min-w-0 sm:w-72">
-          <Select
-            id="cortex-conversation-picker"
-            value={activeConversationId ?? ""}
-            onChange={(e) => {
-              setActiveConversationId(e.target.value || null);
-              setPendingEcho(null);
-            }}
-            data-testid="cortex-conversation-picker"
-            disabled={conversations.length === 0}
-          >
-            {conversations.length === 0 ? (
-              <option value="">Sin hilos todavía</option>
-            ) : (
-              conversations.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {cortexConversationLabel(c)}
-                </option>
-              ))
-            )}
-          </Select>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          data-testid="cortex-conversation-new"
-          disabled={mutation.isPending}
-          onClick={() => {
-            // "Nueva conversación" = desasociar el hilo activo (null EXPLÍCITO,
-            // el auto-select no lo pisa); el próximo turno crea uno nuevo en el
-            // backend y lo adopta como activo.
-            setActiveConversationId(null);
-            setLastEffort(null);
-            setDraft("");
-            setPendingEcho(null);
-          }}
-        >
-          Nueva conversación
-        </Button>
-      </div>
-
-      <Card className="mt-6">
-        <CardContent className="flex flex-col gap-4 pt-5">
-          <div
-            data-testid="cortex-chat"
-            className="flex min-h-[16rem] flex-col gap-3"
-            aria-live="polite"
-          >
-            {turnsQuery.isLoading && activeConversationId ? (
-              <p className="text-muted-foreground flex items-center gap-2 text-sm">
-                <Spinner />
-                Cargando turnos…
-              </p>
-            ) : turns.length === 0 && !mutation.isPending && !echoVisible ? (
-              <EmptyState
-                icon={Brain}
-                title="Empieza a pensar en voz alta"
-                description="Pregunta cualquier cosa; el córtex recuerda este hilo y lo que le has contado antes."
-              />
-            ) : (
-              turns.map((turn) => <CortexBubble key={turn.id} turn={turn} />)
-            )}
-            {echoVisible ? (
-              <CortexBubble
-                turn={{
-                  id: "pending-echo",
-                  role: "user",
-                  content: pendingEcho as string,
-                  created_at: "",
+          <div className="flex flex-wrap items-center gap-2" data-testid="cortex-history-bar">
+            <label htmlFor="cortex-conversation-picker" className="text-muted-foreground text-sm">
+              Hilo:
+            </label>
+            <div className="w-full min-w-0 sm:w-72">
+              <Select
+                id="cortex-conversation-picker"
+                value={activeConversationId ?? ""}
+                onChange={(e) => {
+                  setActiveConversationId(e.target.value || null);
+                  setPendingEcho(null);
                 }}
-              />
-            ) : null}
-            {mutation.isPending ? (
-              <p
-                className="text-muted-foreground flex items-center gap-2 text-sm"
-                data-testid="cortex-thinking"
+                data-testid="cortex-conversation-picker"
+                disabled={conversations.length === 0}
               >
-                <Spinner />
-                {deepThinking ? "Pensando a fondo…" : "Pensando…"}
-              </p>
-            ) : null}
+                {conversations.length === 0 ? (
+                  <option value="">Sin hilos todavía</option>
+                ) : (
+                  conversations.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {cortexConversationLabel(c)}
+                    </option>
+                  ))
+                )}
+              </Select>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="cortex-conversation-new"
+              disabled={mutation.isPending}
+              onClick={() => {
+                // "Nueva conversación" = desasociar el hilo activo (null EXPLÍCITO,
+                // el auto-select no lo pisa); el próximo turno crea uno nuevo en el
+                // backend y lo adopta como activo.
+                setActiveConversationId(null);
+                setLastEffort(null);
+                setDraft("");
+                setPendingEcho(null);
+              }}
+            >
+              Nueva conversación
+            </Button>
           </div>
 
-          {mutation.isError && !forbidden ? (
-            <p className="text-destructive text-sm" data-testid="cortex-chat-error">
-              {mutation.error instanceof ApiError ? mutation.error.body : String(mutation.error)}
-            </p>
-          ) : null}
+          <Card className="mt-6">
+            <CardContent className="flex flex-col gap-4 pt-5">
+              <div
+                data-testid="cortex-chat"
+                className="flex min-h-[16rem] flex-col gap-3"
+                aria-live="polite"
+              >
+                {turnsQuery.isLoading && activeConversationId ? (
+                  <p className="text-muted-foreground flex items-center gap-2 text-sm">
+                    <Spinner />
+                    Cargando turnos…
+                  </p>
+                ) : turns.length === 0 && !mutation.isPending && !echoVisible ? (
+                  <EmptyState
+                    icon={Brain}
+                    title="Empieza a pensar en voz alta"
+                    description="Pregunta cualquier cosa; el córtex recuerda este hilo y lo que le has contado antes."
+                  />
+                ) : (
+                  turns.map((turn) => <CortexBubble key={turn.id} turn={turn} />)
+                )}
+                {echoVisible ? (
+                  <CortexBubble
+                    turn={{
+                      id: "pending-echo",
+                      role: "user",
+                      content: pendingEcho as string,
+                      created_at: "",
+                    }}
+                  />
+                ) : null}
+                {mutation.isPending ? (
+                  <p
+                    className="text-muted-foreground flex items-center gap-2 text-sm"
+                    data-testid="cortex-thinking"
+                  >
+                    <Spinner />
+                    {deepThinking ? "Pensando a fondo…" : "Pensando…"}
+                  </p>
+                ) : null}
+              </div>
 
-          <form
-            className="flex items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              submit();
-            }}
-          >
-            <input
-              data-testid="cortex-input"
-              aria-label="Mensaje para el córtex"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              maxLength={CORTEX_LIMITS.message.max}
-              placeholder="Escribe tu mensaje…"
-              className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-            />
-            <Button type="submit" data-testid="cortex-send" disabled={!canSend}>
-              <Send className="mr-2 h-4 w-4" />
-              Enviar
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+              {mutation.isError && !forbidden ? (
+                <p className="text-destructive text-sm" data-testid="cortex-chat-error">
+                  {errorText(mutation.error)}
+                </p>
+              ) : null}
+
+              <form
+                className="flex items-end gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submit();
+                }}
+              >
+                <input
+                  data-testid="cortex-input"
+                  aria-label="Mensaje para el córtex"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  maxLength={CORTEX_LIMITS.message.max}
+                  placeholder="Escribe tu mensaje…"
+                  className="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background flex h-10 w-full rounded-md border px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+                />
+                <Button type="submit" data-testid="cortex-send" disabled={!canSend}>
+                  <Send className="mr-2 h-4 w-4" />
+                  Enviar
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Segunda columna: el estado del córtex mientras hablas con él. Los dos
+            componentes llevan su propio aviso honesto (ADR 0075 §6 y ADR 0074),
+            así que no hay forma de que esta columna enseñe afecto o identidad
+            sin decir que son un modelo computacional. */}
+        <aside className="flex min-w-0 flex-col gap-6" data-testid="cortex-second-column">
+          <MindPanel mind={mind} columns={1} />
+          <IdentityCard />
+        </aside>
+      </div>
     </div>
   );
 }

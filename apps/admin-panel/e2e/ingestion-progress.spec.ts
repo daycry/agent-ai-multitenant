@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/documents/{id}/ingestion (Plan 04 task_04_15).
@@ -12,8 +13,8 @@ import { expect, test, type Page } from "@playwright/test";
 const DOCUMENT_ID = "deadbeef-0000-0000-0000-000000000001";
 
 async function setup(page: Page): Promise<void> {
+  await seedSession(page);
   await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
     // Patch WebSocket so the page connects to an in-process fake
     // we drive from the test. Production wiring (browser →
     // ws://localhost:8001/ws/documents/{id}) needs the api-server

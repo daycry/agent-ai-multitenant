@@ -10,10 +10,14 @@ helpers fall back to the platform default.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import weakref
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.models import PlatformSetting, User
 
 # Setting keys.
@@ -29,10 +33,139 @@ class PlatformSettingForbiddenError(PermissionError):
     """Raised when a non-System-Admin attempts to write a platform setting."""
 
 
+# ---------------------------------------------------------------------------
+# Caché Redis de lectura (prod-13 task_prod13_21, hallazgo perf-10)
+# ---------------------------------------------------------------------------
+# `get_platform_setting` se llama en 48 sitios, varios de ellos en el camino
+# caliente de CADA run y de cada mensaje del asistente, y cada llamada era un
+# round-trip a PostgreSQL para leer una fila que cambia una vez al mes.
+#
+# TTL corto + invalidación explícita al escribir, y en ese orden de prioridades:
+# la decisión clave 6 del plan dice que ANTE LA DUDA GANA LA FRESCURA, porque
+# entre estas claves hay límites de seguridad (`max_review_retries`, el budget de
+# rate limit del asistente) y un valor rancio es una guarda relajada. 30 s es el
+# techo de lo rancio que puede estar un valor si la invalidación fallase.
+_CACHE_PREFIX = "psetting:"
+_CACHE_TTL_SECONDS = 30
+
+# Un `None` cacheado tiene que distinguirse de "no está en caché", porque la
+# ausencia de la fila es el caso COMÚN (casi todas las claves usan su default) y
+# es justo el que más se beneficia de no ir a la BD. Se cachea el JSON
+# `{"v": <valor>}` y la ausencia como `{}`.
+_MISSING: dict[str, Any] = {}
+
+
+def _cache_key(key: str) -> str:
+    return f"{_CACHE_PREFIX}{key}"
+
+
+# ---------------------------------------------------------------------------
+# El cliente Redis y el event loop
+# ---------------------------------------------------------------------------
+# `auth.deps.get_redis` es un `lru_cache(maxsize=1)`: un singleton de PROCESO. En
+# el api-server eso es correcto —un único loop para toda la vida del proceso—,
+# pero en los WORKERS cada tarea Celery abre su propio `asyncio.run(...)`, que
+# crea un loop y lo cierra al terminar. El cliente cacheado conserva conexiones
+# atadas al loop de la primera tarea, así que desde la segunda en adelante la
+# primera llamada levanta («Future attached to a different loop») y la captura de
+# abajo la traduce a "cache miss".
+#
+# Efecto medido: en los workers la caché NUNCA acertaba y toda lectura iba a
+# PostgreSQL, incluidas las del camino caliente de cada run — sin un solo error
+# en los logs, porque degradar en silencio es justo lo que debe hacer una caché.
+# No era incorrección, y por eso sobrevivió: el código "tenía caché".
+#
+# El arreglo es reconstruir el cliente cuando cambia el loop, no callar el error.
+# Se guarda una referencia DÉBIL al loop: una fuerte mantendría vivo un loop
+# cerrado para siempre, y comparar por `id()` sería peor —los ids se reciclan,
+# así que un loop nuevo podría hacerse pasar por el viejo.
+# Dict de un solo hueco en vez de un `global`: el estado es de módulo igual, pero
+# se muta sin la sentencia que ruff (PLW0603) desaconseja con razón.
+_REDIS_BINDING: dict[str, weakref.ref[asyncio.AbstractEventLoop] | None] = {"loop": None}
+
+
+def reset_platform_setting_cache_binding() -> None:
+    """Olvida a qué loop está atado el cliente. Para tests; nunca en producción."""
+    _REDIS_BINDING["loop"] = None
+
+
+def _redis_for_this_loop() -> Any:
+    """El cliente Redis, reconstruido si el event loop ha cambiado.
+
+    Import perezoso de `auth.deps` a propósito: `auth.deps` importa `db.session`
+    y `db.models`, así que un import de módulo aquí cerraría el ciclo.
+    """
+    from api_server.auth.deps import get_redis, reset_redis_cache
+
+    loop = asyncio.get_running_loop()
+    previous = _REDIS_BINDING["loop"]
+    if previous is not None and previous() is not loop:
+        # Loop distinto (o ya recolectado): el cliente cacheado arrastra
+        # conexiones muertas. Se descarta para que `get_redis()` lo reconstruya
+        # atado al loop actual.
+        reset_redis_cache()
+    _REDIS_BINDING["loop"] = weakref.ref(loop)
+    return get_redis()
+
+
+async def _cached_read(key: str) -> tuple[bool, Any]:
+    """`(hit, valor)`. Un fallo de Redis es `(False, None)`: se cae a la BD."""
+    try:
+        raw = await _redis_for_this_loop().get(_cache_key(key))
+    except Exception:  # Redis caído / no configurado: la BD sigue siendo la verdad
+        return (False, None)
+    if raw is None:
+        return (False, None)
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):  # pragma: no cover - basura en la clave
+        return (False, None)
+    if not isinstance(payload, dict):  # pragma: no cover - idem
+        return (False, None)
+    return (True, payload.get("v"))
+
+
+async def _cache_write(key: str, value: Any, *, found: bool) -> None:
+    try:
+        payload = {"v": value} if found else _MISSING
+        await _redis_for_this_loop().setex(_cache_key(key), _CACHE_TTL_SECONDS, json.dumps(payload))
+    except Exception:  # el cacheo es best-effort; nunca rompe la lectura
+        return
+
+
+async def invalidate_platform_setting_cache(key: str) -> None:
+    """Borra la entrada de caché de `key`. Best-effort, idempotente.
+
+    También pasa por `_redis_for_this_loop`, y no es cosmético: si la
+    invalidación fallase por el loop cerrado, un valor cambiado desde un worker
+    seguiría servido desde la caché hasta que expire el TTL — y entre estas
+    claves hay límites de seguridad (`max_review_retries`, budgets)."""
+    try:
+        await _redis_for_this_loop().delete(_cache_key(key))
+    except Exception:
+        return
+
+
 async def get_platform_setting(session: AsyncSession, key: str, *, default: Any = None) -> Any:
-    """Read a platform setting; return `default` when it has never been set."""
+    """Read a platform setting; return `default` when it has never been set.
+
+    Sirve de la caché Redis cuando hay entrada fresca (TTL 30 s), y sigue siendo
+    correcta si Redis no está: en ese caso es exactamente la función de antes.
+
+    OJO con el contrato de `default`: lo que se cachea es **si la fila existe y su
+    valor**, NO el `default`. Dos llamantes con defaults distintos para la misma
+    clave siguen recibiendo cada uno el suyo — cachear el resultado final habría
+    hecho que el primero en llegar impusiera su default al otro.
+    """
+    hit, cached = await _cached_read(key)
+    if hit:
+        return default if cached is None else cached
+
     row = await session.get(PlatformSetting, key)
-    return row.value if row is not None else default
+    found = row is not None
+    value = row.value if row is not None else None
+    await _cache_write(key, value, found=found)
+    return value if found else default
 
 
 async def set_platform_setting(
@@ -46,6 +179,22 @@ async def set_platform_setting(
 
     Raises `PlatformSettingForbiddenError` for any other actor — a Tenant
     Admin included. The caller owns the transaction (this flushes).
+
+    Invalida la caché DOS veces, y las dos hacen falta:
+
+      * ahora mismo, para que nada sirva el valor viejo desde ya;
+      * y de nuevo TRAS EL COMMIT, porque entre el flush y el commit un lector
+        concurrente todavía ve el valor antiguo en la BD y podría repoblar la
+        caché con él — una invalidación sola dejaría el valor viejo cacheado 30 s
+        DESPUÉS de haberlo cambiado, que es el peor de los dos mundos.
+
+    La segunda la ejecuta la sesión al cerrarse
+    (:class:`~api_server.db.after_commit.AfterCommitSession`).
+    Hasta 2026-08-20 sólo la drenaba ``open_tenant_session``, así que **ninguna**
+    de las nueve rutas que escriben settings —todas System-Admin, todas con sesión
+    admin— llegaba a ejecutarla: el kill-switch de egress del córtex tardaba hasta
+    30 s en apagar. El test que fija la ventana es
+    ``tests/integration/test_platform_settings_after_commit_invalidation.py``.
     """
     if not actor.is_system_admin:
         raise PlatformSettingForbiddenError(
@@ -60,7 +209,23 @@ async def set_platform_setting(
         row.value = value
         row.updated_by = actor.id
     await session.flush()
+    await invalidate_platform_setting_cache(key)
+    _schedule_cache_invalidation(session, key)
     return row
+
+
+def _schedule_cache_invalidation(session: AsyncSession, key: str) -> None:
+    """Registra la segunda invalidación para después del commit.
+
+    La invalidación inmediata de arriba NO es redundante con ésta: cubre el tramo
+    anterior al commit, en el que un lector concurrente todavía obtendría el valor
+    viejo de la BD. Y ésta cubre justo ese recacheo.
+
+    Se registra sobre la sesión, que es quien la ejecuta al cerrarse. Con una
+    sesión ajena al api-server (un doble de test, un worker) el registro no
+    ejecuta nada, y `schedule_after_commit` lo dice en un log en vez de callarlo.
+    """
+    schedule_after_commit(session, lambda: invalidate_platform_setting_cache(key))
 
 
 # ---------------------------------------------------------------------------
@@ -255,12 +420,39 @@ async def get_cortex_browser_enabled(session: AsyncSession) -> bool:
 CORTEX_AUTONOMY_ENABLED_KEY = "cortex.autonomy_enabled"
 DEFAULT_CORTEX_AUTONOMY_ENABLED = False
 
+# ENABLE de la CURIOSIDAD, separado del kill-switch global (ADR 0078). La
+# curiosidad es el único bucle que sale a Internet y gasta LLM por su cuenta: un
+# operador razonable quiere poder dejar la autonomía encendida (reflexión de
+# identidad + mantenimiento de memoria, ambas locales) y la curiosidad APAGADA. Con
+# una sola llave habría que elegir entre todo o nada. Default OFF, y se lee EN VIVO
+# dentro de la pasada — la entrada del beat siempre existe.
+CORTEX_CURIOSITY_ENABLED_KEY = "cortex.curiosity_enabled"
+DEFAULT_CORTEX_CURIOSITY_ENABLED = False
+
+# APPROVAL GATE del owner (ADR 0078, salvaguarda del MVP). Default **ON**: es el
+# único default de este grupo que arranca en True, y a propósito. Con el gate
+# puesto, el bucle elige el tema y deja el pursuit en ``status='selected'`` con
+# ``approved IS NULL`` — NO busca — hasta que el owner lo aprueba explícitamente
+# (columna ``cortex_curiosity_pursuits.approved``, migración 0123). Es la diferencia
+# entre "el córtex me propone investigar X" y "el córtex ya salió a Internet y me lo
+# cuenta después". Bajarlo es una decisión consciente del owner (System Admin).
+CORTEX_CURIOSITY_APPROVAL_GATE_KEY = "cortex.curiosity_approval_gate"
+DEFAULT_CORTEX_CURIOSITY_APPROVAL_GATE = True
+
 # Budget caps de la curiosidad por ventana DIARIA (ADR 0078: caps + circuit-breaker
 # son parte del MVP del bucle, no un fast-follow). Se aplican en Redis
 # (``cortex:budget:{owner}:curiosity:{yyyymmdd}`` con INCR + cap). Cuando se superan
 # → la pasada de curiosidad es un no-op (no busca). Solo un System Admin los escribe.
 CORTEX_CURIOSITY_DAILY_SEARCHES_CAP_KEY = "cortex.curiosity_daily_searches_cap"
 DEFAULT_CORTEX_CURIOSITY_DAILY_SEARCHES_CAP = 5
+
+# Tope de GASTO diario en USD. Es la otra mitad del budget: contar búsquedas acota
+# el egress, pero no el coste — una sola pasada con razonamiento profundo
+# (``claude_sdk`` + WebSearch nativa, ADR 0076) puede costar más que veinte
+# búsquedas baratas. Sin esta dimensión el "coste real de la pasada" del panel era
+# siempre 0 y el único tope era el nº de búsquedas (auditoría 2026-07-27).
+CORTEX_CURIOSITY_DAILY_USD_CAP_KEY = "cortex.curiosity_daily_usd_cap"
+DEFAULT_CORTEX_CURIOSITY_DAILY_USD_CAP = 0.50
 
 # Umbral del drive: la curiosidad SOLO se dispara si ``curiosity < threshold``
 # (hambre de aprender). Por encima del umbral, el drive está saciado → no-op.
@@ -286,6 +478,52 @@ async def get_cortex_autonomy_enabled(session: AsyncSession) -> bool:
         session, CORTEX_AUTONOMY_ENABLED_KEY, default=DEFAULT_CORTEX_AUTONOMY_ENABLED
     )
     return bool(value)
+
+
+async def get_cortex_curiosity_enabled(session: AsyncSession) -> bool:
+    """Si la CURIOSIDAD autónoma está habilitada (independiente del kill-switch global).
+
+    La pasada de curiosidad exige AMBOS: ``cortex.autonomy_enabled`` (todos los
+    bucles) y esta llave (solo la curiosidad). Default OFF: es el bucle que gasta
+    egress y LLM. Solo un System Admin la escribe (``set_platform_setting``)."""
+    value = await get_platform_setting(
+        session, CORTEX_CURIOSITY_ENABLED_KEY, default=DEFAULT_CORTEX_CURIOSITY_ENABLED
+    )
+    return bool(value)
+
+
+async def get_cortex_curiosity_approval_gate(session: AsyncSession) -> bool:
+    """Si una persecución nueva necesita la APROBACIÓN del owner antes de buscar.
+
+    Default **True** (ADR 0078): con el gate puesto, el bucle deja el pursuit en
+    ``status='selected'`` con ``approved IS NULL`` y NO sale a la web; el owner lo
+    aprueba desde el panel (``POST .../pursuits/{id}/approve``) y la siguiente pasada
+    lo continúa. Solo un System Admin lo baja."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_APPROVAL_GATE_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_APPROVAL_GATE,
+    )
+    return bool(value)
+
+
+async def get_cortex_curiosity_daily_usd_cap(session: AsyncSession) -> float:
+    """Tope de GASTO (USD) al día de la curiosidad (default 0.50).
+
+    Lo lee el budget gate en vivo junto al tope de búsquedas; al alcanzarse, la
+    siguiente pasada es un no-op. Un valor negativo se sanea a 0.0 — «no gastes», que
+    es el lado seguro con dinero real, NO «sin tope»; un valor no numérico cae al
+    default."""
+    value = await get_platform_setting(
+        session,
+        CORTEX_CURIOSITY_DAILY_USD_CAP_KEY,
+        default=DEFAULT_CORTEX_CURIOSITY_DAILY_USD_CAP,
+    )
+    try:
+        cap = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_CORTEX_CURIOSITY_DAILY_USD_CAP
+    return max(0.0, cap)
 
 
 async def get_cortex_curiosity_daily_searches_cap(session: AsyncSession) -> int:
@@ -643,8 +881,7 @@ def validate_model_config(cfg: dict[str, Any]) -> dict[str, Any]:
             )
     elif provider not in LLM_PROVIDER_KINDS:
         raise InvalidModelConfigError(
-            f"provider {provider!r} is not in the closed catalogue "
-            f"{LLM_PROVIDER_KINDS} (ADR 0021)"
+            f"provider {provider!r} is not in the closed catalogue {LLM_PROVIDER_KINDS} (ADR 0021)"
         )
     model = cfg.get("model")
     if not isinstance(model, str) or not model.strip():
@@ -1158,8 +1395,7 @@ def validate_budget_alert_thresholds(values: list[int]) -> list[int]:
             raise InvalidBudgetThresholdsError(f"threshold {v!r} must be an integer")
         if v < _BUDGET_THRESHOLD_MIN or v > _BUDGET_THRESHOLD_MAX:
             raise InvalidBudgetThresholdsError(
-                f"threshold {v} must be between "
-                f"{_BUDGET_THRESHOLD_MIN} and {_BUDGET_THRESHOLD_MAX}"
+                f"threshold {v} must be between {_BUDGET_THRESHOLD_MIN} and {_BUDGET_THRESHOLD_MAX}"
             )
         cleaned.add(v)
     cleaned.add(_BUDGET_PAUSE_THRESHOLD)  # auto-pause arm always present

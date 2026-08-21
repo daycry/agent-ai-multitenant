@@ -77,6 +77,7 @@ from workers.backup import (
     MANIFEST_FILENAME,
     CommandRunner,
     SubprocessRunner,
+    libpq_url,
 )
 from workers.backup_encryption import (
     ENCRYPTED_SUFFIX,
@@ -133,6 +134,33 @@ class RestoreConfig:
     # The services that back the data volumes being restored — stopped while
     # their _data tree is wiped + re-extracted, then started again.
     volume_services: tuple[str, ...]
+    # prod-04 task_prod_04_05 — where the `projects_tar` artifact (the bare repos
+    # of every project) is re-extracted. Empty = do not restore them, which loses
+    # the code of every project: only for a deliberate DB-only restore.
+    projects_root: str = ""
+    # prod-04 task_prod_04_06 — dónde se re-extrae el artefacto `redis_tar` (el
+    # `appendonlydir` capturado tras un BGREWRITEAOF, más el `dump.rdb`). Vacío =
+    # no restaurar Redis, que es coherente con no respaldarlo (la opción
+    # «recreable» del ADR de consistencia) pero NO con haberlo respaldado: un
+    # artefacto que nadie extrae es peso muerto y confianza injustificada.
+    redis_dir: str = ""
+    # The bind paths the operator declared for CAPTURE. A `bind_tar` artifact is
+    # only restored when its recorded source is in THIS list — the manifest is
+    # ours, but extracting to an arbitrary absolute path read out of a file is
+    # not a power the restore engine should hold.
+    bind_paths: tuple[str, ...] = ()
+    # prod-04 task_prod_04_04 — FAIL-STOPPED. When a step of the destructive
+    # phase fails, the stack is left DOWN by default and a RestorePartialError
+    # carries the stage reached. Serving a half-restored database is worse than
+    # serving nothing: both DR runbooks already order "keep it stopped", and now
+    # the code obeys them. Flip to True only for a lab where availability beats
+    # correctness.
+    autostart_on_failure: bool = False
+    # prod-04 task_prod_04_08 — the role `pg_restore` must connect as (the
+    # migrations/DDL owner) and the runtime role whose GRANTs are recreated after
+    # `--no-owner --no-privileges` throws them away. Empty = skip that guard.
+    required_db_role: str = ""
+    grant_app_role: str = ""
     # Optional at-rest encryption (mirrors BackupConfig). When the manifest says
     # the bundle is encrypted, an injected BackupEncryptor decrypts it; the Vault
     # key NAME (never the value) lives here so a default encryptor can be built.
@@ -148,13 +176,21 @@ class RestoreConfig:
     def from_settings(cls, settings: Settings) -> RestoreConfig:
         return cls(
             backup_root=Path(settings.backup_root),
-            database_url=settings.backup_database_url,
+            # Mismo saneado que el backup: pg_restore/psql hablan libpq, no
+            # el dialecto de SQLAlchemy que emite el instalador (task_prod_04_09).
+            database_url=libpq_url(settings.backup_database_url),
             volumes=tuple(settings.backup_volumes),
             volumes_mount_root=Path(settings.backup_volumes_mount_root),
             compose_project=str(settings.restore_compose_project),
             compose_file=Path(settings.restore_compose_file),
             app_services=tuple(settings.restore_app_services),
             volume_services=tuple(settings.restore_volume_services),
+            projects_root=str(settings.backup_projects_root),
+            redis_dir=str(settings.backup_redis_dir),
+            bind_paths=tuple(settings.backup_bind_paths),
+            autostart_on_failure=bool(settings.restore_autostart_on_failure),
+            required_db_role=str(settings.restore_required_db_role),
+            grant_app_role=str(settings.restore_grant_app_role),
             encryption_enabled=bool(settings.backup_encryption_enabled),
             encryption_vault_key=str(settings.backup_encryption_vault_key),
         )
@@ -169,6 +205,10 @@ class RestoreResult:
     encrypted: bool
     restored_volumes: tuple[str, ...]
     verification: VerificationReport
+    # prod-04 task_prod_04_05 — host paths re-extracted outside the docker volume
+    # layout: the projects root (bare repos) and each declared bind path. Before
+    # prod-04 these artifacts were captured, checksummed… and never restored.
+    restored_paths: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -176,8 +216,57 @@ class RestoreResult:
             "bundle_dir": self.bundle_dir,
             "encrypted": self.encrypted,
             "restored_volumes": list(self.restored_volumes),
+            "restored_paths": list(self.restored_paths),
             "verification": self.verification.to_dict(),
         }
+
+
+class RestorePartialError(RestoreError):
+    """Un paso de la fase DESTRUCTIVA falló: el stack queda PARADO (task_prod_04_04).
+
+    Antes de prod-04 el motor tenía un ``finally: docker compose up -d`` que
+    arrancaba la aplicación pase lo que pase — sobre una base de datos a medio
+    restaurar. Los dos runbooks de DR ordenan justo lo contrario
+    («mantén el stack parado para no servir datos parciales») y el código los
+    contradecía. Ahora el arranque es opt-in explícito
+    (``WORKERS_RESTORE_AUTOSTART_ON_FAILURE``) y este error lleva el ESTADO
+    alcanzado y el SIGUIENTE PASO, que es lo que un operador necesita a las 4 de
+    la mañana.
+
+    ``stage`` es uno de los hitos de :data:`RESTORE_STAGES`.
+    """
+
+    def __init__(self, stage: str, cause: BaseException, *, stack_running: bool) -> None:
+        self.stage = stage
+        self.stack_running = stack_running
+        state = RESTORE_STAGES.get(stage, stage)
+        if stack_running:
+            posture = (
+                "el stack se ha ARRANCADO porque restore_autostart_on_failure=true "
+                "(puede estar sirviendo datos parciales: párralo)"
+            )
+        else:
+            posture = (
+                "el stack sigue PARADO a propósito (solo PostgreSQL quedó "
+                "alcanzable para diagnóstico); NO lo arranques"
+            )
+        super().__init__(
+            f"el restore falló en la fase destructiva tras «{state}»: {cause}. "
+            f"Estado: {posture}. Siguiente paso: diagnostica la causa y RE-EJECUTA "
+            f"el restore completo desde el mismo bundle (es idempotente: repite "
+            f"--clean y vuelve a vaciar los volúmenes) o desde uno anterior."
+        )
+
+
+#: Hitos de la fase destructiva, en orden. El ``stage`` de un
+#: :class:`RestorePartialError` dice hasta dónde se llegó — la diferencia entre
+#: «hay que repetirlo todo» y «solo faltaban los volúmenes».
+RESTORE_STAGES: dict[str, str] = {
+    "app_stack_stopped": "parar los servicios de aplicación",
+    "database_restored": "restaurar la base de datos (pg_restore)",
+    "grants_reapplied": "re-conceder permisos a los roles de runtime",
+    "data_restored": "restaurar volúmenes, repos de proyectos y binds",
+}
 
 
 class RestoreVerificationError(RestoreError):
@@ -268,28 +357,53 @@ class RestoreEngine:
             )
             raise RestoreVerificationError(report)
 
+        # -- PREFLIGHT: every service we are about to stop must be DECLARED in the
+        # compose file we target. `docker compose stop <unknown>` exits ≠ 0, so a
+        # phantom in the list aborted the restore in step 3 — before restoring a
+        # single byte (ADR 0117 c: `web-app` did exactly that). Still cheap and
+        # non-destructive here, with a message that names the culprit.
+        self._assert_services_declared()
+
         # -- DESTRUCTIVE from here on. Stop the app stack (DB stays reachable).
         self._stop_app_stack()
+        stage = "app_stack_stopped"
         try:
             self._pg_restore(bundle_dir)
-            restored = self._restore_volumes(bundle_dir, manifest)
-        finally:
-            # Always bring the stack back up — even if a step failed, leaving the
-            # stack down is worse than a partially-restored, running stack the
-            # operator can re-run against.
-            self._start_stack()
+            stage = "database_restored"
+            self._reapply_grants()
+            stage = "grants_reapplied"
+            restored, restored_paths = self._restore_data_artifacts(bundle_dir, manifest)
+            stage = "data_restored"
+        except Exception as exc:
+            # FAIL-STOPPED (task_prod_04_04): NO auto-arranque. Un stack a medio
+            # restaurar sirviendo peticiones es peor que un stack parado — y es lo
+            # que ordenan 04-disaster-recovery.md y dr-full-restore.md.
+            stack_running = False
+            if self._config.autostart_on_failure:
+                _log.warning("restore.failed.autostart_opt_in", stage=stage)
+                try:
+                    self._start_stack()
+                    stack_running = True
+                except RestoreError:
+                    _log.warning("restore.failed.autostart_also_failed", stage=stage)
+            _log.error("restore.failed.stack_left_stopped", stage=stage, error=str(exc))
+            raise RestorePartialError(stage, exc, stack_running=stack_running) from exc
+
+        self._start_stack()
 
         _log.info(
             "restore.done",
             backup_id=backup_id,
             encrypted=encrypted,
             volumes=len(restored),
+            paths=len(restored_paths),
         )
         return RestoreResult(
             backup_id=backup_id,
             bundle_dir=str(bundle_dir),
             encrypted=encrypted,
             restored_volumes=restored,
+            restored_paths=restored_paths,
             verification=report,
         )
 
@@ -394,6 +508,42 @@ class RestoreEngine:
             str(self._config.compose_file),
         ]
 
+    def _assert_services_declared(self) -> None:
+        """Fail closed si algún servicio a parar NO está en el compose (task_prod_04_03).
+
+        Se lee el YAML directamente en vez de invocar ``docker compose config
+        --services``: es determinista, no necesita el daemon de Docker y no
+        depende del runner (así el guard corre de verdad, no solo cuando un doble
+        de test decide contestar). Si el fichero no existe o no declara un mapa
+        ``services`` no-vacío, no hay nada contra lo que comparar y no inventamos
+        un veredicto — se registra y se sigue: el guard estático
+        (``tests/unit/test_restore_services_exist.py``) cubre el caso del
+        repositorio, y `_stop_app_stack` da un mensaje accionable si compose
+        rechaza un nombre.
+        """
+        compose_file = Path(self._config.compose_file)
+        declared = _declared_compose_services(compose_file)
+        if not declared:
+            _log.warning(
+                "restore.preflight.services_unverifiable",
+                compose_file=str(compose_file),
+                reason="compose file absent or declares no services",
+            )
+            return
+        wanted = [*self._config.app_services, *self._config.volume_services]
+        missing = sorted({s for s in wanted if s not in declared})
+        if missing:
+            raise RestoreError(
+                f"estos servicios NO están declarados en {compose_file}: {missing}. "
+                f"`docker compose stop` devuelve != 0 ante un servicio desconocido, "
+                f"así que el restore abortaría en el primer paso destructivo. "
+                f"Corrige WORKERS_RESTORE_APP_SERVICES / "
+                f"WORKERS_RESTORE_VOLUME_SERVICES o apunta "
+                f"WORKERS_RESTORE_COMPOSE_FILE al compose que corre de verdad "
+                f"(declarados: {sorted(declared)})."
+            )
+        _log.info("restore.preflight.services_ok", services=len(wanted))
+
     def _stop_app_stack(self) -> None:
         """``docker compose stop`` the app services (DB stays reachable).
 
@@ -408,7 +558,11 @@ class RestoreEngine:
         if result.returncode != 0:
             raise RestoreError(
                 f"stopping the app stack failed (rc={result.returncode}): "
-                f"{result.stderr.strip() or result.stdout.strip()}"
+                f"{result.stderr.strip() or result.stdout.strip()} "
+                f"— la causa habitual es un servicio de "
+                f"WORKERS_RESTORE_APP_SERVICES que no existe en "
+                f"{self._config.compose_file}; compáralo con "
+                f"`docker compose --file {self._config.compose_file} config --services`"
             )
         _log.info("restore.app_stack_stopped", services=list(self._config.app_services))
 
@@ -437,10 +591,16 @@ class RestoreEngine:
         dump_dir = bundle_dir / _DB_DUMP_DIRNAME
         if not dump_dir.is_dir():
             raise RestoreError(f"bundle has no pg_dump directory at {dump_dir}")
+        self._assert_connection_role()
         args = [
             "pg_restore",
             "--clean",
             "--if-exists",
+            # prod-04 task_prod_04_04: sin --exit-on-error pg_restore sigue tras un
+            # error de SQL y termina con rc=0 «con warnings». Eso enmascaraba una
+            # tabla que no se restauró: el restore se daba por bueno y el hueco
+            # aparecía semanas después. Con el flag, cualquier error aborta.
+            "--exit-on-error",
             "--no-owner",
             "--no-privileges",
             f"--dbname={self._config.database_url}",
@@ -454,24 +614,127 @@ class RestoreEngine:
             )
         _log.info("restore.pg_restored", dump_dir=str(dump_dir))
 
+    # -- roles, ownership y GRANTs (task_prod_04_08) --------------------------
+
+    def _assert_connection_role(self) -> None:
+        """El DSN del restore tiene que conectar como el rol DDL (fail-closed).
+
+        `pg_restore --clean` hace DROP + CREATE de todos los objetos y deja el
+        ownership en el rol que conecta. Si eso pasa como `app_user` (el rol
+        NOBYPASSRLS del runtime), el esquema queda propiedad del rol equivocado y
+        `alembic upgrade head` como `migrations_user` empieza a fallar por
+        permisos. `config.py` solo pedía «admin-grade» en la descripción, que no
+        es una comprobación.
+        """
+        required = self._config.required_db_role
+        if not required:
+            return
+        actual = _dsn_username(self._config.database_url)
+        if actual is None:
+            raise RestoreError(
+                f"no se puede leer el usuario del DSN de restore; el restore exige "
+                f"conectar como {required!r} (WORKERS_RESTORE_REQUIRED_DB_ROLE)"
+            )
+        if actual != required:
+            raise RestoreError(
+                f"el DSN de restore conecta como {actual!r} y debe hacerlo como "
+                f"{required!r}: pg_restore --clean recrea TODOS los objetos y el "
+                f"ownership queda en el rol que conecta. Con el rol equivocado el "
+                f"esquema queda inservible para las migraciones. Corrige "
+                f"WORKERS_BACKUP_DATABASE_URL (o "
+                f"WORKERS_RESTORE_REQUIRED_DB_ROLE si el rol DDL cambió)."
+            )
+
+    def _reapply_grants(self) -> None:
+        """Re-concede permisos al rol de runtime tras `pg_restore` (task_prod_04_08).
+
+        `--no-owner --no-privileges` (en el dump Y en el restore) descarta
+        ownership y ACLs a propósito, para que el restore no exija que los roles
+        coincidan. El efecto colateral es que `app_user` — el rol NOBYPASSRLS del
+        que depende TODO el stack con FORCE RLS — se queda sin GRANTs sobre las
+        tablas recién creadas: la aplicación arranca y falla con
+        «permission denied for table …» en la primera consulta.
+
+        Idempotente por construcción (`GRANT` sobre lo ya concedido es un no-op),
+        así que re-ejecutar el restore no acumula estado. Se ejecuta a través del
+        mismo seam de subprocess que el resto (psql), nunca con shell.
+        """
+        role = self._config.grant_app_role
+        if not role:
+            return
+        if not _is_plain_identifier(role):
+            raise RestoreError(
+                f"WORKERS_RESTORE_GRANT_APP_ROLE={role!r} no es un identificador SQL "
+                f"simple; se rechaza antes de interpolarlo en un GRANT"
+            )
+        statements = [
+            f"GRANT USAGE ON SCHEMA public TO {role}",
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role}",
+            f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role}",
+            # Para las tablas que cree una migración POSTERIOR al restore.
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role}",
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO {role}",
+        ]
+        args = [
+            "psql",
+            "--no-psqlrc",
+            # Sin ON_ERROR_STOP psql sigue tras un error y devuelve 0: el mismo
+            # enmascaramiento que --exit-on-error arregla en pg_restore.
+            "--set=ON_ERROR_STOP=1",
+            f"--dbname={self._config.database_url}",
+        ]
+        for stmt in statements:
+            args += ["--command", stmt]
+        result = self._runner.run(args, timeout=self._config.pg_restore_timeout_s)
+        if result.returncode != 0:
+            raise RestoreError(
+                f"re-conceder permisos a {role!r} falló (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}. Sin esos GRANTs "
+                f"la aplicación arranca y falla con «permission denied for table»."
+            )
+        _log.info("restore.grants_reapplied", role=role, statements=len(statements))
+
     # -- volume restore ------------------------------------------------------
 
-    def _restore_volumes(self, bundle_dir: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
-        """Restore each captured volume tar into its host ``_data`` tree.
+    def _restore_data_artifacts(
+        self, bundle_dir: Path, manifest: dict[str, Any]
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Restore every captured data artifact. Returns ``(volumes, host_paths)``.
 
-        Stops the volume-backing services first (so nothing holds the files
-        open), then for each ``volume_tar`` artifact in the manifest: wipe the
-        volume's ``_data`` tree and re-extract the archive into it, so the
-        restored volume is EXACTLY the captured one (no stale files survive).
-        Only volumes the manifest actually captured are touched.
+        Cuatro clases, con semántica DISTINTA a propósito:
+
+        * ``volume_tar`` → vaciar y re-extraer ``<mount_root>/<volume>/_data``:
+          el volumen restaurado es EXACTAMENTE el capturado, sin supervivientes.
+        * ``projects_tar`` → vaciar y re-extraer la raíz de proyectos (los bare
+          repos). Mismo criterio: es un árbol que la plataforma posee entero.
+        * ``redis_tar`` → vaciar y re-extraer el data dir de Redis. Vaciar es
+          OBLIGATORIO aquí: un ``appendonlydir`` residual con una secuencia más
+          alta que la capturada le gana al restaurado, porque Redis lee el
+          manifest que encuentra (task_prod_04_06).
+        * ``bind_tar`` → extraer **SIN vaciar**, y solo si el ``source`` está en
+          los bind paths declarados. Vaciar aquí sería catastrófico: el tar del
+          bind excluye deliberadamente ``backup_root``, que suele vivir DENTRO del
+          bind — un ``rmtree`` borraría el bundle desde el que se está restaurando.
+
+        prod-04 task_prod_04_05: hasta ahora este método filtraba
+        ``kind == "volume_tar"``, así que ``bind_tar`` (los bare repos de los
+        agentes, capturados desde julio) se respaldaba, se le calculaba el
+        checksum, se verificaba… y NUNCA se restauraba. El código de los
+        proyectos no volvía de un DR y nadie lo había notado.
         """
-        volume_artifacts = [
-            a for a in manifest.get("artifacts", []) if a.get("kind") == "volume_tar"
-        ]
-        if not volume_artifacts:
-            return ()
+        artifacts = manifest.get("artifacts", [])
+        volume_artifacts = [a for a in artifacts if a.get("kind") == "volume_tar"]
+        projects_artifacts = [a for a in artifacts if a.get("kind") == "projects_tar"]
+        redis_artifacts = [a for a in artifacts if a.get("kind") == "redis_tar"]
+        bind_artifacts = [a for a in artifacts if a.get("kind") == "bind_tar"]
+        if not (volume_artifacts or projects_artifacts or redis_artifacts or bind_artifacts):
+            return (), ()
 
+        # Los servicios dueños de los volúmenes se paran igual: los repos y los
+        # binds los leen los workers, que ya están parados por `_stop_app_stack`.
         self._stop_volume_services()
+
         restored: list[str] = []
         for art in volume_artifacts:
             volume = str(art.get("source") or "")
@@ -480,7 +743,60 @@ class RestoreEngine:
                 raise RestoreError(f"volume artifact in manifest is missing source/path: {art!r}")
             self._restore_one_volume(bundle_dir, volume=volume, archive_name=archive_name)
             restored.append(volume)
-        return tuple(restored)
+
+        paths: list[str] = []
+        for art in projects_artifacts:
+            archive_name = str(art.get("path") or art.get("name") or "")
+            target = self._config.projects_root
+            if not target:
+                _log.warning(
+                    "restore.projects.skipped",
+                    reason="sin projects_root: el código de los proyectos NO se restaura",
+                    captured_from=art.get("source"),
+                )
+                continue
+            self._extract_into(bundle_dir / archive_name, Path(target), wipe=True, label="projects")
+            paths.append(target)
+
+        # prod-04 task_prod_04_06 — Redis. `wipe=True` y no por simetría estética:
+        # el destino puede tener un `appendonlydir` con una secuencia MÁS ALTA que
+        # la capturada, y Redis lee el manifest que encuentre. Extraer por encima
+        # dejaría ficheros de dos generaciones y un manifest que apunta a la vieja:
+        # el clásico restore que «funciona» y sirve datos de otro momento.
+        for art in redis_artifacts:
+            archive_name = str(art.get("path") or art.get("name") or "")
+            target = self._config.redis_dir
+            if not target:
+                _log.warning(
+                    "restore.redis.skipped",
+                    reason="sin redis_dir: Redis NO se restaura (sesiones y colas vacías)",
+                    captured_from=art.get("source"),
+                )
+                continue
+            self._extract_into(bundle_dir / archive_name, Path(target), wipe=True, label="redis")
+            paths.append(target)
+
+        declared_binds = {str(Path(p)) for p in self._config.bind_paths}
+        for art in bind_artifacts:
+            archive_name = str(art.get("path") or art.get("name") or "")
+            source = str(art.get("source") or "")
+            if not source:
+                raise RestoreError(f"bind artifact in manifest is missing source: {art!r}")
+            if str(Path(source)) not in declared_binds:
+                # Fail-safe, no fail-closed: un bundle viejo puede traer un bind
+                # que este host ya no declara. Extraer a una ruta absoluta que
+                # solo aparece en un fichero NO es una potestad del motor.
+                _log.warning(
+                    "restore.bind.skipped",
+                    reason="source not in the configured bind paths",
+                    source=source,
+                    declared=sorted(declared_binds),
+                )
+                continue
+            self._extract_into(bundle_dir / archive_name, Path(source), wipe=False, label="bind")
+            paths.append(source)
+
+        return tuple(restored), tuple(paths)
 
     def _stop_volume_services(self) -> None:
         """``docker compose stop`` the services backing the restored volumes."""
@@ -526,6 +842,86 @@ class RestoreEngine:
             )
         _log.info("restore.volume_restored", volume=volume, target=str(target_dir))
 
+    def _extract_into(
+        self, archive_path: Path, target_dir: Path, *, wipe: bool, label: str
+    ) -> None:
+        """Extraer un ``.tar.gz`` del bundle en un directorio del host.
+
+        ``wipe=True`` vacía el destino antes (el árbol restaurado es exactamente
+        el capturado); ``wipe=False`` extrae por encima (para un bind cuyo tar
+        excluye a propósito parte del árbol — vaciarlo destruiría lo excluido,
+        incluido el propio bundle).
+        """
+        if not archive_path.is_file():
+            raise RestoreError(f"{label} archive missing in bundle: {archive_path}")
+        if wipe and target_dir.exists():
+            shutil.rmtree(target_dir, ignore_errors=True)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        args = [
+            "tar",
+            "--extract",
+            "--gzip",
+            f"--directory={target_dir}",
+            f"--file={archive_path}",
+        ]
+        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+        if result.returncode != 0:
+            raise RestoreError(
+                f"restoring {label} into {target_dir} failed (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        _log.info("restore.path_restored", kind=label, target=str(target_dir), wiped=wipe)
+
+
+def _declared_compose_services(compose_file: Path) -> set[str]:
+    """Los nombres de servicio declarados en un compose, o ``set()`` si no se puede saber.
+
+    Lee el YAML (sin invocar a docker) para que el preflight de servicios no
+    dependa del daemon ni del runner. Cualquier problema — fichero ausente, YAML
+    inválido, ``services`` que no es un mapa — devuelve el conjunto vacío, que el
+    llamante interpreta como «no verificable» y registra.
+    """
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover — PyYAML es dependencia del stack
+        return set()
+    try:
+        if not compose_file.is_file():
+            return set()
+        data = yaml.safe_load(compose_file.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    services = data.get("services")
+    if not isinstance(services, dict):
+        return set()
+    return {str(name) for name in services}
+
+
+def _dsn_username(dsn: str) -> str | None:
+    """El usuario de un DSN libpq, o ``None`` si no lo trae.
+
+    Deliberadamente no usa `urlsplit` sobre el DSN completo: la contraseña puede
+    llevar caracteres que rompen el parseo estricto, y aquí solo hace falta el
+    tramo ``usuario[:password]@``.
+    """
+    if "://" not in dsn:
+        return None
+    _, _, rest = dsn.partition("://")
+    creds, sep, _ = rest.partition("@")
+    if not sep or not creds:
+        return None
+    user = creds.partition(":")[0]
+    return user or None
+
+
+def _is_plain_identifier(name: str) -> bool:
+    """Un identificador SQL sin comillas: letras, dígitos y ``_``, sin empezar por dígito."""
+    if not name or name[0].isdigit():
+        return False
+    return all(ch.isalnum() or ch == "_" for ch in name)
+
 
 def run_full_restore(
     bundle: str | Path,
@@ -557,9 +953,11 @@ def run_full_restore(
 
 
 __all__ = [
+    "RESTORE_STAGES",
     "RestoreConfig",
     "RestoreEngine",
     "RestoreError",
+    "RestorePartialError",
     "RestoreResult",
     "RestoreVerificationError",
     "run_full_restore",

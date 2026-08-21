@@ -183,9 +183,11 @@ async def generate_plan_closure_docs_async(settings: Settings, plan_id: str) -> 
     from api_server.db.domain import Plan, Project, Task
     from api_server.db.models import Organization
     from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    engine = create_async_engine(settings.database_url)
+    from workers.db import worker_engine
+
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:

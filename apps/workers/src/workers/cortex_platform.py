@@ -27,7 +27,7 @@ from api_server.cortex.affective import AffectState, apply_event, satisfy_drive,
 from api_server.cortex.platform_affect import PlatformPulse, pulse_appraisal
 from redis.asyncio import Redis
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
@@ -37,6 +37,7 @@ from workers.cortex_affect import (
     _publish_frame,
     _refresh_live_state,
 )
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.cortex_platform")
 
@@ -58,7 +59,7 @@ async def _run_platform_pulse(settings: Settings, *, now: datetime | None = None
     """Núcleo async (testeable con ``now`` inyectado). Best-effort: nunca tumba
     el beat; cada guard es un return temprano observable."""
     now = now or datetime.now(UTC)
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         from api_server.db.platform_settings import get_cortex_autonomy_enabled

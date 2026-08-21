@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/projects/{id}/knowledge-bases (Plan 04 task_04_24).
@@ -36,7 +37,10 @@ const KB_FIXTURE = {
   tenant_id: "tttttttt-0000-0000-0000-000000000001",
   name: "Manuales del producto",
   description: "Knowledge base con guías + manuales.",
-  embedding_model_id: "nomic-embed-text-v1.5",
+  // ADR 0155: la API devuelve el sello canonizado + el modelo activo.
+  embedding_model_id: "nomic-embed-text",
+  platform_embedding_model: "nomic-embed-text",
+  embedding_model_stale: false,
   created_by: null,
   created_at: "2026-05-25T10:00:00Z",
   updated_at: "2026-05-25T10:00:00Z",
@@ -73,9 +77,7 @@ async function setup(page: Page, { withKBs = true } = {}): Promise<Capture> {
   };
   let documents: DocFixture[] = withKBs ? [DOC_FIXTURE] : [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   // GET /projects/{id}/knowledge-bases
   await page.route(`http://localhost:8001/projects/${PROJECT_ID}/knowledge-bases`, (route) =>

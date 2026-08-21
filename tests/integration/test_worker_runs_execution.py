@@ -32,8 +32,23 @@ from workers.execution import ExecutionRequest, conduct_execution
 import docker
 
 from ._docker_helpers import docker_client, requires_docker
+from ._wiring import point_everything_at_the_test_redis
 
 pytestmark = [pytest.mark.integration, requires_docker]
+
+
+@pytest.fixture(autouse=True)
+def _test_redis_everywhere() -> None:
+    """`conduct_execution` habla con TRES Redis que estos tests no cablean.
+
+    No construyen la app FastAPI, así que nadie ejecuta el cableado de
+    `conftest.configured_app` y quedan los defaults de producción: la caché de
+    `platform_settings` contra un Redis sin credencial (2 s de reintentos por
+    operación, ~13 s por `_prepare_run`) y los brokers Celery del memorizer y
+    del despacho de eventos (~80 s de reintentos cada uno, por run). Nada de eso
+    falla: todo degrada en silencio y solo se ve en el reloj. Ver `_wiring.py`.
+    """
+    point_everything_at_the_test_redis()
 
 
 class _BlockingRunner:
@@ -360,15 +375,21 @@ async def test_conduct_execution_cancelled_by_operator_flag(
         fake = _BlockingRunner()
 
         async def _cancel_once_running() -> None:
-            for _ in range(200):  # up to ~4s
+            # Espera POR RELOJ, no por número de vueltas: la fila `running` no es
+            # visible hasta que commitea la txn de `_prepare_run`, y esa txn dura
+            # lo que dure la preparación entera (resolución de política de
+            # aprobación + guardrails + modelo). Un presupuesto fijo de 200
+            # iteraciones ~= 4 s daba por bueno un «nunca llegó a running» que en
+            # realidad era «todavía no había commiteado», y el run acababa
+            # `failed` con un mensaje que no mencionaba la cancelación.
+            deadline = asyncio.get_running_loop().time() + 60.0
+            while asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.02)
                 async with sm() as s:
                     rows = await list_executions_for_task(s, ids["task"])
                     if rows and rows[0].status == ExecutionStatus.RUNNING:
                         await s.execute(
-                            text(
-                                "UPDATE executions SET cancel_requested_at = now()" " WHERE id = :i"
-                            ),
+                            text("UPDATE executions SET cancel_requested_at = now() WHERE id = :i"),
                             {"i": rows[0].id},
                         )
                         await s.commit()

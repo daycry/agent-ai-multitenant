@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from workers.runtime_services import (
+    SERVICE_CATALOG,
     RuntimeServicesConfigError,
     build_project_runtime_services,
 )
@@ -29,7 +30,12 @@ def test_mysql_service_sidecar_and_connection_env() -> None:
     r = build_project_runtime_services({"services": [{"type": "mysql"}]})
     assert len(r.aux_services) == 1
     svc = r.aux_services[0]
-    assert svc.image == "mysql:8"
+    # Derivado del catálogo, no el literal `mysql:8`: lo que este test comprueba
+    # es que el tipo `mysql` resuelve a SU imagen, no cuál es la versión. Fijar el
+    # literal convertía el pin por digest (prod-11 task_digest_pin_11) en un rojo
+    # ajeno al comportamiento bajo prueba.
+    assert svc.image == SERVICE_CATALOG["mysql"].default_image
+    assert svc.image.startswith("mysql:")
     assert svc.alias == "mysql"
     assert svc.env["MYSQL_USER"] == "app"
     assert svc.healthcheck_cmd  # has a healthcheck

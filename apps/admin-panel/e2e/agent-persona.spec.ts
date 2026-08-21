@@ -1,4 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import {
+  CLOSED_PROVIDER_KINDS,
+  PROVIDER_OPTIONS,
+  mockProviderOptions,
+} from "./helpers/provider-options";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E de la sección Persona (SER) del agente — Plan 06.17 task_06_17_11.
@@ -29,6 +36,8 @@ const AGENT = {
   role: "backend_dev",
   system_prompt: "Eres un backend senior.",
   model_config: {
+    // ADR 0082: la persona apunta a una FILA de proveedor, no a un kind.
+    provider_id: "prov-claude-1",
     provider: "claude_sdk",
     model: "claude-opus-4",
     temperature: 0.2,
@@ -97,17 +106,16 @@ async function setupDetail(
   opts: { onPut?: (body: Record<string, unknown>) => void; agent?: object } = {},
 ): Promise<void> {
   const agent = opts.agent ?? AGENT;
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route("**/chat-modes", (route) =>
+  await seedSession(page);
+  await mockProviderOptions(page);
+  await page.route(apiRoute("/chat-modes"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(CHAT_MODES),
     }),
   );
-  await page.route(`**/agents/${AGENT_ID}/capabilities`, (route) =>
+  await page.route(apiRoute(`/agents/${AGENT_ID}/capabilities`), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -116,16 +124,16 @@ async function setupDetail(
   );
   // KBs / tools / skills sub-sections fetch their own endpoints; return [] so
   // the page renders without errors.
-  await page.route(`**/agents/${AGENT_ID}/knowledge-bases`, (route) =>
+  await page.route(apiRoute(`/agents/${AGENT_ID}/knowledge-bases`), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route(`**/agents/${AGENT_ID}/tools`, (route) =>
+  await page.route(apiRoute(`/agents/${AGENT_ID}/tools`), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route(`**/agents/${AGENT_ID}/skills`, (route) =>
+  await page.route(apiRoute(`/agents/${AGENT_ID}/skills`), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );
-  await page.route(`**/agents/${AGENT_ID}`, (route) => {
+  await page.route(apiRoute(`/agents/${AGENT_ID}`), (route) => {
     const method = route.request().method();
     if (method === "GET") {
       return route.fulfill({
@@ -189,18 +197,39 @@ test("el modo custom aparece 'No disponible aún' y deshabilitado", async ({ pag
 // Edición: envía model_config con la fuente única bilingüe
 // ---------------------------------------------------------------------------
 
-test("el selector de proveedor ofrece SOLO los 4 del catálogo cerrado (ADR 0021)", async ({
+/**
+ * El ADR 0082 movió el selector de KIND a FILA de proveedor: la pantalla ya no
+ * hardcodea los cuatro caminos del ADR 0021, ofrece las filas configuradas que
+ * devuelve `GET /agents/provider-options` (y el CHECK de la BD es quien impide
+ * que exista una fila de un quinto kind). Afirmar aquí "hay exactamente 4
+ * opciones" era afirmar algo que la pantalla ya no decide.
+ *
+ * Lo que SÍ sigue siendo suyo, y es lo que se comprueba: no inventa opciones
+ * —enseña exactamente lo que le dan, ni una más—, el `value` es el id de la
+ * fila (no el kind, que era el bug del ADR 0082), y cada fila se etiqueta con
+ * su kind, que ha de pertenecer al catálogo cerrado.
+ */
+test("el selector de proveedor ofrece las filas configuradas, con su kind del catálogo cerrado (ADR 0082/0021)", async ({
   page,
 }) => {
   await setupDetail(page);
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("agent-edit-button").click();
   const options = page.locator('[data-testid="edit-agent-provider"] option');
-  await expect(options).toHaveCount(4);
+  // Las filas + el placeholder "sin elegir".
+  await expect(options).toHaveCount(PROVIDER_OPTIONS.length + 1);
   const values = await options.evaluateAll((els) =>
     els.map((el) => (el as HTMLOptionElement).value),
   );
-  expect(values).toEqual(["claude_sdk", "copilot", "azure_foundry", "ollama"]);
+  expect(values).toEqual(["", ...PROVIDER_OPTIONS.map((p) => p.id)]);
+
+  const labels = await options.evaluateAll((els) => els.map((el) => el.textContent ?? ""));
+  for (const [i, provider] of PROVIDER_OPTIONS.entries()) {
+    expect(CLOSED_PROVIDER_KINDS).toContain(provider.kind);
+    // La etiqueta lleva el kind entre paréntesis: sin él, dos filas del mismo
+    // nombre comercial serían indistinguibles al elegir.
+    expect(labels[i + 1]).toContain(provider.kind);
+  }
 });
 
 test("guardar la persona ENVÍA model_config con provider/model/temperature + system_prompts", async ({
@@ -210,9 +239,12 @@ test("guardar la persona ENVÍA model_config con provider/model/temperature + sy
   await setupDetail(page, { onPut: (b) => puts.push(b) });
   await page.goto(`/admin/agents/${AGENT_ID}`, { waitUntil: "domcontentloaded" });
 
+  const ollama = PROVIDER_OPTIONS.find((p) => p.kind === "ollama")!;
   await page.getByTestId("agent-edit-button").click();
-  await page.getByTestId("edit-agent-provider").selectOption("ollama");
-  await page.getByTestId("edit-agent-model").fill("llama3");
+  // Se elige la FILA (ADR 0082); el kind lo gobierna ella. Cambiar de fila
+  // resetea el modelo, así que el modelo se elige DESPUÉS.
+  await page.getByTestId("edit-agent-provider").selectOption(ollama.id);
+  await page.getByTestId("edit-agent-model").selectOption(ollama.models[0]);
   await page.getByTestId("edit-agent-temperature").fill("0.5");
   // Edita el prompt EN sobre la fuente única.
   await page.getByTestId("edit-agent-prompt-en").fill("You are a backend senior, updated.");
@@ -221,8 +253,9 @@ test("guardar la persona ENVÍA model_config con provider/model/temperature + sy
   await page.waitForTimeout(200);
   expect(puts).toHaveLength(1);
   const mc = puts[0].model_config as Record<string, unknown>;
+  expect(mc.provider_id).toBe(ollama.id);
   expect(mc.provider).toBe("ollama");
-  expect(mc.model).toBe("llama3");
+  expect(mc.model).toBe(ollama.models[0]);
   expect(mc.temperature).toBe(0.5);
   const prompts = mc.system_prompts as Record<string, string>;
   expect(prompts.en).toBe("You are a backend senior, updated.");
@@ -252,17 +285,16 @@ async function setupCatalog(
   page: Page,
   opts: { onPost?: (body: Record<string, unknown>) => void } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route("**/chat-modes", (route) =>
+  await seedSession(page);
+  await mockProviderOptions(page);
+  await page.route(apiRoute("/chat-modes"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(CHAT_MODES),
     }),
   );
-  await page.route("**/agents", (route) => {
+  await page.route(apiRoute("/agents"), (route) => {
     const method = route.request().method();
     if (method === "GET") {
       return route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -285,19 +317,23 @@ test("alta de agente envía model_config poblado (ningún agente nace {})", asyn
   await setupCatalog(page, { onPost: (b) => posts.push(b) });
   await page.goto("/admin/agents", { waitUntil: "domcontentloaded" });
 
+  const copilot = PROVIDER_OPTIONS.find((p) => p.kind === "copilot")!;
   await page.getByTestId("new-agent-button").click();
   await page.getByTestId("new-agent-name").fill("Agente Persona");
-  await page.getByTestId("new-agent-system-prompt").fill("Eres un revisor estricto.");
-  await page.getByTestId("new-agent-provider").selectOption("copilot");
-  await page.getByTestId("new-agent-model").fill("gpt-4o");
+  // El prompt vive en un `<MarkdownTextarea>`: el testid nombra el contenedor y
+  // el `<textarea>` real es `-edit`.
+  await page.getByTestId("new-agent-system-prompt-edit").fill("Eres un revisor estricto.");
+  await page.getByTestId("new-agent-provider").selectOption(copilot.id);
+  await page.getByTestId("new-agent-model").selectOption(copilot.models[0]);
   await page.getByTestId("new-agent-submit").click();
 
   await page.waitForTimeout(200);
   expect(posts).toHaveLength(1);
   const mc = posts[0].model_config as Record<string, unknown>;
   expect(mc).toBeTruthy();
+  expect(mc.provider_id).toBe(copilot.id);
   expect(mc.provider).toBe("copilot");
-  expect(mc.model).toBe("gpt-4o");
+  expect(mc.model).toBe(copilot.models[0]);
   const prompts = mc.system_prompts as Record<string, string>;
   expect(prompts.es).toBe("Eres un revisor estricto.");
 });

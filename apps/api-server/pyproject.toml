@@ -28,13 +28,28 @@ dependencies = [
 
   # Auth
   "argon2-cffi>=23.1,<24",
-  "python-jose[cryptography]>=3.3,<4",
+  # ONE JOSE stack (prod-09 task_prod09_17, quality-10). `joserfc` signs and
+  # verifies BOTH token families — human sessions (`auth/jwt.py`) and the
+  # worker→api tokens (`auth/internal_agent.py`) — and verifies OIDC ID tokens
+  # against the IdP's JWKS (`auth/sso/oidc.py`). It used to arrive only
+  # transitively via authlib while `python-jose` did the session half; declared
+  # explicitly now that production code imports it directly. NOTE for anyone
+  # touching `auth/jwt.py`: joserfc's `jwt.decode` does NOT validate `exp` —
+  # that is a separate `JWTClaimsRegistry` call. See the docstring there.
+  "joserfc>=1.0,<2",
   # Enterprise SSO / OIDC (Plan 08 task_08_01). Authlib drives the
-  # OIDC authorization-code flow; it also ships `joserfc`, which we use
-  # to verify the ID-token signature against the IdP's JWKS. Client
-  # secrets are Fernet-encrypted at rest (cryptography, already present
-  # via python-jose[cryptography]) or Vault-resolved.
+  # OIDC authorization-code flow. Client secrets are Fernet-encrypted at rest,
+  # which is why `cryptography` is declared below on its own account: it used to
+  # ride in as the `python-jose[cryptography]` extra, and dropping python-jose
+  # would otherwise have left a direct import with no declared source.
   "authlib>=1.3,<2",
+  # Suelo 50 por CVE, no por compatibilidad (SCA 2026-08-13): 46.0.7 —el techo
+  # que imponía el `<47` anterior— arrastra CVE-2026-69247 (oráculo de
+  # Bleichenbacher en pkcs7_decrypt_der, corregido en 50.0.0), CVE-2026-69248 y
+  # CVE-2026-69249 (49.0.0) y GHSA-537c-gmf6-5ccf (48.0.1). Nada de lo que las
+  # majors 47→50 rompieron nos toca: usamos Fernet, Ed25519 y x509, no los
+  # alias de tipos retirados en 49 ni ChaCha20/FFDH/pkcs7.
+  "cryptography>=50,<51",
   # SAML 2.0 (Plan 08 task_08_04). python3-saml drives the SP-initiated
   # AuthnRequest + the ACS assertion validation. It binds the NATIVE
   # xmlsec/libxml2 libraries, which can fail to install on some hosts;
@@ -52,7 +67,7 @@ dependencies = [
   # W3C WebAuthn server ceremony: it builds the registration / authentication
   # options the browser passes to navigator.credentials, and verifies the
   # attestation / assertion the authenticator returns. Pure-Python (it binds
-  # `cryptography`, already present via python-jose[cryptography]), so it is
+  # `cryptography`, declared above), so it is
   # fully testable offline with crafted fixtures — no real authenticator. We
   # store only the credential id + COSE public key + signature counter; the
   # public key is not a secret, and the counter is what defeats cloned-token
@@ -79,7 +94,22 @@ dependencies = [
   "opentelemetry-api>=1.27,<2",
   "opentelemetry-sdk>=1.27,<2",
   "opentelemetry-instrumentation-fastapi>=0.48b0,<1",
-  "opentelemetry-instrumentation-sqlalchemy>=0.48b0,<1",
+  # RETIRADA `opentelemetry-instrumentation-sqlalchemy` (ADR 0140, prod-08
+  # task_prod08_otel_cleanup_13): estaba declarada desde la fase 0 y
+  # `SQLAlchemyInstrumentor` no se invocaba en ningún sitio. Peso muerto en la
+  # imagen + un docstring que prometía un tracing de queries inexistente.
+  # `tests/unit/test_telemetry_setup.py` impide que vuelva, y generaliza la
+  # guarda a cualquier `opentelemetry-instrumentation-*` sin llamante.
+
+  # Exporter Prometheus (prod-08 Fase B, hallazgo observability-2). Se elige
+  # `prometheus_client` a pelo y NO `prometheus-fastapi-instrumentator`: una
+  # dependencia menos y control total sobre los labels, que es donde está el
+  # riesgo real (cardinalidad). Pure-Python, sin deps transitivas.
+  #
+  # IMPORTANTE para el despliegue: las imágenes de workers,
+  # notification-dispatcher y orchestrator se construyen SOBRE la de
+  # api-server, así que este paquete las alcanza a todas con un solo build.
+  "prometheus-client>=0.20,<1",
   "opentelemetry-instrumentation-asyncpg>=0.48b0,<1",
   "opentelemetry-instrumentation-redis>=0.48b0,<1",
   "opentelemetry-instrumentation-httpx>=0.48b0,<1",
@@ -88,7 +118,7 @@ dependencies = [
   "httpx>=0.27,<1",
 
   # Multi-agent planning sub-graph (Plan 03 Fase C).
-  "langgraph>=0.2,<1",
+  "langgraph>=1.2,<2",
 
   # Vault client — backs `HvacVaultResolver` for MCP auth injection
   # (Plan 05 task_05_05/task_05_17). Sync API; we wrap in to_thread
@@ -108,9 +138,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
-  "pytest-cov>=5.0,<6",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
+  "pytest-cov>=7.1,<8",
   "freezegun>=1.5,<2",
   # Marketplace pre-install static analysis (Plan 09 task_09_05). Bandit
   # is the primary scanner — a clean, pure-Python wheel run as a

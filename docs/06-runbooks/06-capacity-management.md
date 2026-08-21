@@ -53,19 +53,33 @@ después de escalar, [health-check.md](./health-check.md).
 
 ## Topología de colas (el modelo de escalado)
 
-El trabajo se reparte en **5 colas Celery** (`apps/workers/src/workers/celery_app.py`),
+El trabajo se reparte en **6 colas Celery** (`apps/workers/src/workers/celery_app.py`),
 de modo que la carga de runtime / privilegiada queda aislada del carril común y
 **escala por separado**:
 
-| Cola         | Qué drena                                                    |
-| ------------ | ------------------------------------------------------------ |
-| `default`    | Tareas de agente ordinarias — el carril común.               |
-| `ingestion`  | Pipelines de ingestión documental (Docling — Plan 04).       |
-| `test`       | Ejecución del test-runtime (Plan 06).                        |
-| `review`     | Ejecución del review-runtime (Plan 06).                      |
-| `privileged` | Tareas que tocan secretos / infra (rotación de credenciales, |
-|              | backup) — la drena un worker con el perfil de seguridad      |
-|              | más estricto.                                                |
+| Cola          | Qué drena                                                    |
+| ------------- | ------------------------------------------------------------ |
+| `default`     | Tareas de agente ordinarias — el carril común.               |
+| `ingestion`   | Pipelines de ingestión documental (Docling — Plan 04).       |
+| `test`        | Ejecución del test-runtime (Plan 06).                        |
+| `review`      | Ejecución del review-runtime (Plan 06).                      |
+| `privileged`  | Tareas que tocan secretos / infra (rotación de credenciales, |
+|               | backup) — la drena un worker con el perfil de seguridad      |
+|               | más estricto.                                                |
+| `marketplace` | Las puertas de seguridad de una instalación del marketplace  |
+|               | (análisis estático + prueba de humo en sandbox, prod-13      |
+|               | `task_prod13_01`). La drena `workers-marketplace`, con       |
+|               | `--concurrency=1`.                                           |
+
+> **Por qué `marketplace` es lane propia y no un `--queues=...,marketplace` en un
+> pool existente.** El trabajo dura minutos (bandit y semgrep con 120 s de plazo
+> cada uno, más el contenedor de prueba de humo) y los tres pools que ya había
+> tienen su forma documentada de romperse con eso: `workers` y `workers-aux` van a
+> `--concurrency=2` y drenan `test`, la cola por la que un agent-run BLOQUEADO
+> espera su `stack_exec` —la auto-inanición que motivó `workers-aux`—, y
+> `workers-backup` va a `--concurrency=1` detrás del backup nocturno. Subir la
+> capacidad de análisis es subir la concurrencia de ESA lane, sin tocar las otras:
+> es justamente lo que el modelo de una-cola-por-carril compra.
 
 > **Colas `heavy`/`gpu` retiradas (ADR 0083 / prod-06).** Estaban declaradas pero
 > ningún productor enrutaba hacia ellas y, en mono-máquina, no había un worker

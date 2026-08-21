@@ -8,8 +8,34 @@ name: Eval on prompt change
 # CI has NO LLM provider keys by default, so the live harness step is GATED on
 # a provider secret being present and otherwise skips with a notice (the CLI is
 # invoked with --dry-run, which validates config + exits 0 without an LLM
-# call). The structure + the path filter + the harness invocation are what this
-# task delivers; the live-run wiring lands with task_14_08 / task_14_09.
+# call).
+#
+# --- MODO GATE (endurecido el 2026-08-19, `task_gov_04`) --------------------
+# Hasta hoy la rama VIVA de este workflow no podia bloquear nada, por dos
+# defectos que se tapaban entre si:
+#
+#   1. `ci_run.main` devolvia PASS cuando no habia productor de diff («nothing
+#      to gate, treating as pass»), y en el repo NO hay ningun productor vivo.
+#      O sea que la rama con secreto solo podia salir en verde. Arreglado: ese
+#      camino es ahora INCONCLUSIVE (exit 2) - no-cero y distinto del 1 de una
+#      regresion, porque piden arreglos distintos.
+#   2. Los tres argumentos se interpolaban de variables que NADIE definia
+#      (`${EVAL_GOLDEN_DATASET}` se expandia a la cadena vacia) y el agente
+#      salia de un default inventado `:-changed-prompt-agent`. Arreglado: se
+#      leen de `vars.*`, sin defaults, y la CLI rechaza un valor en blanco.
+#
+# `continue-on-error: false` explicito en vez de omitir la linea, mismo criterio
+# que el SCA de ci.yml: el modo del job debe estar A LA VISTA y volver a informe
+# tiene que ser una decision escrita, no una ausencia. Lo exigen
+# `test_the_gate_job_declares_its_mode` y `test_the_gate_job_is_enforcing` de
+# tests/unit/test_eval_gate_config.py.
+#
+# LO QUE SIGUE SIENDO DEL OPERADOR (`task_gov_04`): dar de alta el secreto del
+# proveedor, sembrar el dataset golden real y definir las tres variables de
+# repositorio. Y falta el cableado del productor de diff vivo, que necesita
+# sesion tenant-bound + proveedor LLM. Mientras falte cualquiera de las dos
+# cosas, la rama viva NO se activa (cae en --dry-run con un aviso que dice que
+# falta) o sale INCONCLUSIVE - nunca en verde-que-no-comprueba.
 
 on:
   push:
@@ -42,10 +68,13 @@ jobs:
     name: Eval prompt change (regression gate)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Modo GATE, no informe: una regresion de calidad rompe el build (ADR 0038,
+    # decision 3). Explicito a proposito - ver la cabecera del fichero.
+    continue-on-error: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
           cache: pip
@@ -55,14 +84,30 @@ jobs:
           python -m pip install --upgrade pip
           # shared-llm is a path dep (ADR 0021); install it first so the
           # api-server editable install resolves the local wheel.
-          python -m pip install -e "packages/shared-llm[dev]"
-          python -m pip install -e "apps/api-server[dev]"
+          python -m pip install -e "packages/shared-llm[dev]" -c constraints.txt
+          # shared-domain: mismo motivo que en ci.yml (fuente única del
+          # vocabulario canónico, ADR 0048 / Plan 06.18). Aquí hace falta desde
+          # que `api_server.evals.__init__` expone el gate de edición de prompt
+          # (`task_gov_05`), que lee los presets de aprobación y con ellos entra
+          # `shared_domain.approval_categories`. Sin esta línea, `ci_run
+          # --dry-run` muere con `ModuleNotFoundError` ANTES de decidir nada —
+          # que es lo que pasó el 2026-08-20 (run 32320504352).
+          python -m pip install -e "packages/shared-domain[dev]" -c constraints.txt
+          python -m pip install -e "apps/api-server[dev]" -c constraints.txt
 
-      # Decide once whether a real LLM provider secret is present. CI has none
-      # by default, so the live harness is gated on this; without it we still
-      # run the CLI in --dry-run so its arg-parse / config-resolution path is
-      # exercised, then skip-with-notice.
-      - name: Detect LLM provider secret
+      # Decide once whether the live gate CAN run. Two conditions, not one:
+      #
+      #   * un secreto de proveedor (cualquiera de los cuatro caminos del
+      #     catalogo, ADR 0021), y
+      #   * la configuracion del eval: que agente se evalua, contra que dataset
+      #     golden y contra que run baseline.
+      #
+      # La segunda condicion es nueva (`task_gov_04`). Sin ella, un operador que
+      # diera de alta la credencial sin sembrar el dataset activaria la rama viva
+      # y se encontraria el gate en INCONCLUSIVE (exit 2) en cada PR, sin saber
+      # que le falta. Con las dos, ese caso cae en la rama --dry-run con un aviso
+      # que nombra exactamente lo que falta.
+      - name: Detect LLM provider secret + eval configuration
         id: provider
         env:
           # Any one of the catalog's four provider paths (ADR 0021) is enough
@@ -71,33 +116,69 @@ jobs:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
           OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          # Configuracion del eval - variables de REPOSITORIO (Settings ->
+          # Variables), no secretos: son ids, no credenciales.
+          EVAL_SUBJECT_AGENT: ${{ vars.EVAL_SUBJECT_AGENT }}
+          EVAL_GOLDEN_DATASET: ${{ vars.EVAL_GOLDEN_DATASET }}
+          EVAL_BASELINE_RUN: ${{ vars.EVAL_BASELINE_RUN }}
         run: |
+          has_secret=false
           if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$AZURE_OPENAI_API_KEY" ] \
             || [ -n "$COPILOT_OAUTH_TOKEN" ] || [ -n "$OLLAMA_BASE_URL" ]; then
+            has_secret=true
+          fi
+
+          missing=""
+          [ -n "$EVAL_SUBJECT_AGENT" ] || missing="$missing EVAL_SUBJECT_AGENT"
+          [ -n "$EVAL_GOLDEN_DATASET" ] || missing="$missing EVAL_GOLDEN_DATASET"
+          [ -n "$EVAL_BASELINE_RUN" ] || missing="$missing EVAL_BASELINE_RUN"
+
+          if [ "$has_secret" = "true" ] && [ -z "$missing" ]; then
             echo "has_provider=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_provider=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No LLM provider secret present — running the eval CI gate in dry-run (skip-with-notice)."
+            if [ "$has_secret" != "true" ]; then
+              echo "::notice::No LLM provider secret present — running the eval CI gate in dry-run (skip-with-notice)."
+            else
+              echo "::warning::A provider secret IS present but the eval configuration is incomplete (missing:$missing). The live regression gate CANNOT run: set those repository variables (Settings -> Variables) and seed the golden dataset. See task_gov_04 in docs/roadmap/gov-01-precedencia-prompts-y-rigor.md."
+            fi
           fi
 
       # No provider secret: validate the harness invocation without an LLM
       # call. --dry-run resolves the (operator-configurable) regression
       # threshold and the agent/dataset/baseline args, then exits 0.
-      - name: Eval gate (dry-run, no provider secret)
+      #
+      # Los valores son PLACEHOLDERS con nombre, no UUIDs todo-ceros: un
+      # 00000000-... se lee como un id real y hace pensar que el gate corrio
+      # contra algo. Aqui no se evalua nada, y el argumento solo tiene que
+      # existir para que el arg-parse se ejercite.
+      - name: Eval gate (dry-run, no provider secret or no eval config)
         if: steps.provider.outputs.has_provider == 'false'
         env:
           # Operator-configurable tunable — never a hard-coded magic number.
           EVAL_REGRESSION_THRESHOLD: ${{ vars.EVAL_REGRESSION_THRESHOLD }}
         run: |
           python -m api_server.evals.ci_run \
-            --agent "${EVAL_SUBJECT_AGENT:-changed-prompt-agent}" \
-            --dataset "${EVAL_GOLDEN_DATASET:-00000000-0000-0000-0000-000000000000}" \
-            --baseline-run "${EVAL_BASELINE_RUN:-00000000-0000-0000-0000-000000000000}" \
+            --agent "dry-run-placeholder-agent" \
+            --dataset "dry-run-placeholder-dataset" \
+            --baseline-run "dry-run-placeholder-baseline-run" \
             --dry-run
 
-      # Provider secret present: run the live harness + merge-gate. A non-zero
-      # exit (regression beyond the configured threshold) FAILS the job and
-      # blocks the merge (task_14_08).
+      # Secreto Y configuracion presentes: corre el harness vivo + el merge-gate.
+      # Tres salidas posibles, y las tres significan algo distinto:
+      #
+      #   0 - se midio y no hay regresion mas alla del umbral: se puede mergear.
+      #   1 - se midio y HAY regresion: falla el job y bloquea el merge
+      #       (task_14_08).
+      #   2 - INCONCLUSIVE: no se pudo medir (hoy, porque no hay productor de
+      #       diff vivo cableado). No-cero a proposito: un gate que no comprobo
+      #       nada no puede salir en verde. NO se arregla poniendo --dry-run
+      #       aqui; se arregla cableando el productor.
+      #
+      # Las tres variables van SIN default `:-`: si falta configuracion la CLI
+      # rechaza el valor en blanco y lo dice, en vez de evaluar un agente
+      # inventado. (Este paso solo corre si el paso de deteccion ya comprobo que
+      # estan definidas, asi que un blanco aqui seria un bug del workflow.)
       - name: Eval gate (live harness + merge-gate)
         if: steps.provider.outputs.has_provider == 'true'
         env:
@@ -106,8 +187,11 @@ jobs:
           COPILOT_OAUTH_TOKEN: ${{ secrets.COPILOT_OAUTH_TOKEN }}
           OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
           EVAL_REGRESSION_THRESHOLD: ${{ vars.EVAL_REGRESSION_THRESHOLD }}
+          EVAL_SUBJECT_AGENT: ${{ vars.EVAL_SUBJECT_AGENT }}
+          EVAL_GOLDEN_DATASET: ${{ vars.EVAL_GOLDEN_DATASET }}
+          EVAL_BASELINE_RUN: ${{ vars.EVAL_BASELINE_RUN }}
         run: |
           python -m api_server.evals.ci_run \
-            --agent "${EVAL_SUBJECT_AGENT:-changed-prompt-agent}" \
+            --agent "${EVAL_SUBJECT_AGENT}" \
             --dataset "${EVAL_GOLDEN_DATASET}" \
             --baseline-run "${EVAL_BASELINE_RUN}"

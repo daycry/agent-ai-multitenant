@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the "Sincronizar al Kanban" dialog on the plan detail page
@@ -48,9 +49,7 @@ interface SyncCapture {
 async function setup(page: Page): Promise<SyncCapture> {
   const capture: SyncCapture = { calls: 0, lastBody: {} };
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) =>
     route.fulfill({
       status: 200,

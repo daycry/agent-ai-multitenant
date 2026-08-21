@@ -16,7 +16,17 @@
 #                -t agent-runtime:v1 .
 
 # ---- builder: install the agent_runtime package into an isolated venv ----
-FROM python:3.12-slim AS builder
+# Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
+# de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
+# deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
+# (ecosistema docker, .github/dependabot.yml).
+# 2026-08-14: digest refrescado (era `57cd7c3a…`). Ese snapshot traía
+# `libexpat1` 2.7.1-2 con cuatro CVE HIGH —CVE-2025-59375, CVE-2026-25210,
+# CVE-2026-45186 y CVE-2026-56408— cuyo fix (2.8.2-1~deb13u1) ya estaba en el
+# archivo de Debian. El pin no se quita, se ADELANTA: verificado con Trivy que
+# el digest nuevo trae CERO HIGH/CRITICAL con fix. Es el riesgo 3 de prod-11 en
+# estado puro — un pin sin refresco congela las CVE de la base.
+FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -31,6 +41,13 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Resolución REPRODUCIBLE (prod-11 task_ci_lock_10 b, ADR 0147). Sin `-c`, cada
+# build de esta imagen resuelve las transitivas por su cuenta y dos builds del
+# MISMO commit dan dos imágenes distintas — justo en el contenedor donde corre
+# el bucle del agente. constraints.txt se genera desde uv.lock; el contexto de
+# build de esta imagen es la RAÍZ del repo (ver cabecera), así que está a mano.
+COPY constraints.txt /constraints.txt
+
 # shared-llm is a path dependency of agent-runtime (ADR 0021); install
 # it first so the next `pip install .` resolves the `shared-llm` name
 # from the already-installed local wheel instead of asking PyPI.
@@ -43,9 +60,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 ARG WITH_CLAUDE=0
 COPY packages/shared-llm/ /src/shared-llm/
 RUN if [ "$WITH_CLAUDE" = "1" ]; then \
-        pip install --no-cache-dir "/src/shared-llm[claude]"; \
+        pip install --no-cache-dir -c /constraints.txt "/src/shared-llm[claude]"; \
     else \
-        pip install --no-cache-dir /src/shared-llm; \
+        pip install --no-cache-dir -c /constraints.txt /src/shared-llm; \
     fi
 
 # shared-mcp is a path dependency of agent-runtime since Plan 05
@@ -54,30 +71,30 @@ RUN if [ "$WITH_CLAUDE" = "1" ]; then \
 # against the already-installed package rather than failing because
 # it doesn't exist on PyPI.
 COPY packages/shared-mcp/ /src/shared-mcp/
-RUN pip install --no-cache-dir /src/shared-mcp
+RUN pip install --no-cache-dir -c /constraints.txt /src/shared-mcp
 
 # shared-domain is a path dependency of agent-runtime since Plan 06.18
 # (ADR 0048: canonical tool-name source of truth used by the approval gate).
 # Same trick as shared-llm/shared-mcp: install from the local wheel before
 # agent-runtime so its name resolves locally rather than failing on PyPI.
 COPY packages/shared-domain/ /src/shared-domain/
-RUN pip install --no-cache-dir /src/shared-domain
+RUN pip install --no-cache-dir -c /constraints.txt /src/shared-domain
 
 # shared-guardrails is a path dependency of agent-runtime since ADR 0102 (g1):
 # the runtime runs the guardrail pipeline (post_tool prompt-injection defense)
 # over tool outputs before they re-enter the model context. Same local-wheel
 # trick so its name resolves locally rather than failing on PyPI.
 COPY packages/shared-guardrails/ /src/shared-guardrails/
-RUN pip install --no-cache-dir /src/shared-guardrails
+RUN pip install --no-cache-dir -c /constraints.txt /src/shared-guardrails
 
 # pyproject.toml is the single source of truth for the dependency set.
 WORKDIR /build
 COPY docker/agent-runtimes/agent-runtime/pyproject.toml ./
 COPY docker/agent-runtimes/agent-runtime/agent_runtime/ ./agent_runtime/
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir -c /constraints.txt .
 
 # ---- runtime: slim image, non-root, no build tools ----------------
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime" \
       org.opencontainers.image.version="v1" \
@@ -94,6 +111,16 @@ ENV PYTHONUNBUFFERED=1 \
 # (its own dir / a dedicated tmpfs at run time, isolation.py) and NOT /workspace,
 # so the Claude Code CLI's config (.claude.json/.claude/) never pollutes the
 # agent's project worktree mounted at /workspace.
+# Parches de seguridad del SO. La base `-slim` se reconstruye con retraso
+# respecto al archivo de seguridad de Debian, asi que refrescar el digest no
+# basta: el 2026-08-18 el gate cayo con CVE-2026-53615 (familia util-linux,
+# fix `2.41.5-0+deb13u1` ya publicado en `trixie-security` y ausente todavia
+# de `python:3.12-slim`). Esta capa NO puede cachearse — ver
+# `docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md`.
+RUN apt-get update \
+ && apt-get -y upgrade \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid 1000 agent \
  && useradd --uid 1000 --gid 1000 --no-create-home --home-dir /home/agent agent \
  && mkdir -p /workspace /home/agent \

@@ -16,12 +16,24 @@ Nine tasks of Fase G all live in this module:
   * The terminal-web (06_28) and websocket-logs (06_29) endpoints
     live in api-server (see ``routers/review.py``); here we
     only model the session lifecycle they consult.
-  * The "rerun tests" button (06_30) calls back into worker-test
-    via :meth:`ReviewSession.queue_rerun`.
+  * The "rerun tests" button (06_30) calls back into worker-test via
+    ``review_session_repo.mark_rerun_requested``.
   * The checklist (06_31) is rendered on the frontend; the model is
     :class:`HumanCheckItem`.
-  * Suspension after 4 h idle (06_32), 48 h verdict timeout (06_33),
-    and tenant cap (06_34) live in :class:`ReviewRuntimeManager`.
+
+Este módulo es MODELO, no ciclo de vida. El ciclo de vida lo llevaba
+``ReviewRuntimeManager``, un manager en memoria que nunca corrió en producción y
+que el commit 7959cdcb retiró; hoy el estado vive en la tabla ``review_sessions``
+y las tres políticas que aquel prometía las aplican:
+
+  * suspensión por inactividad (06_32) y caducidad por veredicto (06_33) →
+    ``workers.maintenance.review_runtimes.expire_review_runtimes`` (beat cada
+    5 min), con los filtros en ``api_server.db.review_session_repo``.
+  * cap por tenant (06_34) → ``workers.tasks.review_runtime_task`` antes de
+    crear fila o contenedor.
+
+Las constantes de abajo son las de Plan 06. OJO: el barrido usa su propia
+ventana de inactividad (24 h), NO ``DEFAULT_IDLE_SUSPEND_S``.
 """
 
 from __future__ import annotations
@@ -187,10 +199,10 @@ class ReviewSession:
 
 
 __all__ = [
-    "AuxComposeService",
     "DEFAULT_IDLE_SUSPEND_S",
     "DEFAULT_TENANT_CAP",
     "DEFAULT_VERDICT_TIMEOUT_S",
+    "AuxComposeService",
     "HumanCheckItem",
     "ReviewRuntimeSpec",
     "ReviewSession",

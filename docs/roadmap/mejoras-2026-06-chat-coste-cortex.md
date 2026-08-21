@@ -9,7 +9,9 @@ summary: >
   roadmap maestro): (4) el coste del plan se calcula por el modelo del agente
   asignado, no gpt-4o; (2) historial de conversaciones con creación/listado/
   borrado; (3) borrar un chat limpia DB + Redis sin huérfanos; (1) córtex /
-  memoria cognitiva — F0 (rol system_owner) ahora, F1-F5 GATED.
+  memoria cognitiva — el alcance de ESTE plan es F0 (rol system_owner). F1-F5
+  estaban gated cuando se escribió esto; el operador las autorizó el
+  2026-06-23 y se entregaron fuera de este plan (ver cortex-fases.md).
 ---
 
 # Mejoras 2026-06 — coste, chat e inicio del córtex
@@ -19,8 +21,11 @@ código levantado con un workflow de investigación (4 agentes `Explore`). Cada
 feature lleva su tamaño, riesgo y estado real.
 
 > Orden de ejecución: **#4 → #2/#3 → #1 (solo F0)**. El córtex completo es XL +
-> security-critical (tablas BYPASSRLS, bucles autónomos de coste/egress) y queda
-> a la espera de luz verde explícita salvo su cimiento F0.
+> security-critical (tablas BYPASSRLS, bucles autónomos de coste/egress) y, cuando se escribió
+> este plan, quedaba a la espera de luz verde explícita salvo su cimiento F0. **El operador dio
+> esa luz verde el mismo 2026-06-23** y F1-F5 se implementaron entre el 2026-06-24 y el
+> 2026-07-06, ya **fuera del alcance de este plan** — su rastro vive en
+> [cortex-fases.md](cortex-fases.md) y en las cinco entradas de changelog por fase.
 
 ---
 
@@ -125,23 +130,70 @@ a nivel de tenant). Desacopla "aprobar planes" de "administrar el tenant".
 
 ---
 
-## Feature 1 — Córtex cerebral / memoria cognitiva · XL · 🔒 GATED (solo F0)
+## Feature 1 — Córtex cerebral / memoria cognitiva · XL · ✅ F0 HECHO (y F1-F5 después, fuera de este plan)
 
-**Estado.** Diseño completo (`docs/roadmap/cortex-system-owner.md`, ADRs
-0074-0078 en `proposed`), **cero código**. Fases F0-F5.
+> **Corregido el 2026-07-30.** Esta sección decía que el córtex tenía **«cero código»**, que los
+> ADR 0074-0078 estaban `proposed` y que **«F1-F5 … NO implementadas — gated por fase»**. Las tres
+> cosas eran ciertas el 2026-06-23, cuando se escribió el plan, y **hoy son falsas**: el operador
+> dio luz verde a F1→F5 ese mismo día, las cinco fases se implementaron entre el 2026-06-24 y el
+> 2026-07-06 y están desplegadas, y los ADR 0075-0078 (más 0073 y 0080) están `accepted` — 0074
+> conserva `accepted-f0` por haberse aprobado en dos tiempos. Es el modo de fallo de
+> [`verificar-antes-de-implementar.md`](../03-guides/verificar-antes-de-implementar.md) §1: un plan
+> «pendiente» que miente porque nadie lo actualizó cuando el trabajo siguió por otro sitio.
+
+**Estado.** El **alcance de ESTE plan táctico es sólo F0** (el cimiento de rol, sin tablas
+BYPASSRLS), y está entregado — las casillas de abajo son las de F0 y ya estaban en `[x]`. Lo que
+vino después **no pertenece a este plan**: F1-F5 tienen su propio plan y su propio changelog, con
+sus divergencias y sus casillas abiertas declaradas.
+
+- Índice de las seis fases: [cortex-fases.md](cortex-fases.md).
+- Diseño maestro: [cortex-system-owner.md](cortex-system-owner.md).
+- Entregado por fase:
+  [F1](../07-changelog/cortex-f1-memoria-cognitiva.md) ·
+  [F2](../07-changelog/cortex-f2-afectivo.md) ·
+  [F3](../07-changelog/cortex-f3-identidad.md) ·
+  [F4](../07-changelog/cortex-f4-autonomia.md) ·
+  [F5](../07-changelog/cortex-f5-voz-avatar.md).
+- Huecos que siguen abiertos en F2-F5, casilla a casilla:
+  [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md).
 
 **Decisión.** F0 (cimiento de rol, SIN tablas BYPASSRLS) **APROBADO + HECHO** por el operador.
 
-- [x] **ADR 0074 → `accepted-f0`** (F0 aprobado; F1-F5 siguen `proposed`/gated).
+- [x] **ADR 0074 → `accepted-f0`** (F0 aprobado. La coletilla original decía «F1-F5 siguen `proposed`/gated»; el operador levantó ese gate el 2026-06-23 y el banner del ADR se corrigió el 2026-07-30).
 - [x] **Migración 0091** `users.is_system_owner` (Boolean NOT NULL default false, UNIQUE parcial = singleton). Reversible.
 - [x] **JWT** claim `own` (encode/decode) + `AuthPrincipal.is_system_owner` + `require_system_owner` + `require_admin_or_owner` (**DB-authoritative**, no solo el claim).
 - [x] **Bootstrap** del primer usuario como owner + `/me` (ambos: `/auth/me` y `/me` rico) expone `is_system_owner` + hook `use-current-user` (`isSystemOwner`).
 - [x] **Guardrail SSO** — estructural: las vías SSO/MFA de minteo no fijan `is_system_owner` (default false) y el gate consulta la BD; SSO nunca concede ownership.
 - [x] **Tests** — `tests/integration/test_cortex_f0_ownership.py` (bootstrap, singleton, gate DB-authoritative rechaza hint forjado, /me). 3 en verde.
 
-**F1-F5 (memoria cognitiva, afecto, identidad, autonomía, voz) NO implementadas — gated por fase.**
+### Qué pasó con F1-F5 (lo que este plan dejaba «pendiente de luz verde»)
 
-**F1-F5 (memoria cognitiva asociativa, motor afectivo PAD, identidad, bucles de
-reflexión/curiosidad, voz/avatar) quedan PENDIENTES de luz verde**: introducen
-tablas BYPASSRLS (excepción consciente al Principio 1 RLS), egress y Celery beats
-autónomos con coste, y requieren copy honesto sobre la simulación afectiva.
+Este plan cerraba diciendo que F1-F5 «quedan PENDIENTES de luz verde» porque introducen tablas
+BYPASSRLS (excepción consciente al Principio 1), egress y Celery beats autónomos con coste, y
+exigen copy honesto sobre la simulación afectiva. **Todo eso sigue siendo verdad de la naturaleza
+del trabajo; lo que ya no es verdad es que esté pendiente.** El operador dio la luz verde el
+2026-06-23 y las cinco fases se entregaron entre el 2026-06-24 y el 2026-07-06.
+
+Cómo se resolvieron las tres preocupaciones que este plan levantaba, verificado el 2026-07-30:
+
+- **Tablas BYPASSRLS**: `cortex_conversations`/`cortex_turns` (0092), `cortex_affect_snapshots`
+  (0093), `cortex_identity`/`cortex_identity_history` (0094) y `cortex_curiosity_pursuits` (0095)
+  son tenant-less, con `owner_user_id` explícito en todo SQL y test cross-owner por tabla, tal
+  como el ADR 0074 exige.
+- **Egress**: salió por el camino degradado del ADR 0076 (tool web propia con `ssrf_guard` y
+  kill-switch `cortex.web_enabled`, ADR 0067), no por las WebSearch nativas de `claude_sdk`.
+  Divergencia deliberada y registrada.
+- **Beats autónomos con coste**: existen los tres (`cortex_reflection`, `cortex_curiosity`,
+  `cortex_maintenance`) detrás del kill-switch `cortex.autonomy_enabled`, que **sigue OFF**.
+  **Corregido el 2026-08-19 contra el código:** esta viñeta añadía «no debería encenderse antes de
+  cerrar los huecos de gobierno de F4 (sin owner-approval gate ni tope de USD cableado al bucle)»,
+  y esos dos huecos están cerrados desde julio — `workers/cortex_curiosity.py` reserva y liquida
+  presupuesto en dólares (`check_and_reserve(usd_cap=…)`:281, `record_spend(cost_usd=…)`:372) y
+  retiene el pursuit en `selected` con `approved IS NULL` hasta que el owner lo aprueba (:303,
+  :324). El enlace a [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md) se conserva porque
+  es la auditoría que los detectó, pero es un documento **fechado**: describe el 27 de julio.
+  El kill-switch sigue OFF por **decisión del operador**, no por gobierno pendiente; encenderlo es
+  una decisión suya, no un desbloqueo técnico.
+- **Copy honesto**: presente en el Panel de Mente y en la videollamada, pero **sólo en castellano**
+  en varias superficies, aunque la API ya devuelve `note_es`/`note_en`. Es una de las casillas que
+  siguen abiertas.

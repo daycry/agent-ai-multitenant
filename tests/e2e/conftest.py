@@ -64,9 +64,9 @@ def installed_stack(docker_available: None) -> Iterator[dict[str, str]]:
         timeout=1500,
         check=False,
     )
-    assert (
-        proc.returncode == 0
-    ), f"install.sh falló (rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 0, (
+        f"install.sh falló (rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
+    )
     stdout = proc.stdout
     # The install must be REAL — never a simulation.
     for forbidden in ("SIMULACIÓN", "stub-", "FALSA"):
@@ -93,9 +93,9 @@ def installed_stack(docker_available: None) -> Iterator[dict[str, str]]:
         )
         # Verify the purge actually happened (deploy-3): uninstall succeeded AND
         # the data root no longer exists.
-        assert (
-            un.returncode == 0
-        ), f"uninstall.sh falló (rc={un.returncode}):\n{un.stdout}\n{un.stderr}"
+        assert un.returncode == 0, (
+            f"uninstall.sh falló (rc={un.returncode}):\n{un.stdout}\n{un.stderr}"
+        )
         data_root = _profile_data_root()
         assert not Path(data_root).exists(), f"la purga no eliminó la raíz de datos {data_root}"
 

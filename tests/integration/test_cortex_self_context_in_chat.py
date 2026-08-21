@@ -71,9 +71,13 @@ async def _seed_owner(dsn: str) -> dict[str, UUID]:
     tenant_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
+        # `platform_settings` entra en el TRUNCATE a propósito: los gates del
+        # córtex (`cortex.web_enabled`) son globales, así que un test que los
+        # encienda dejaría el siguiente corriendo con la web puesta. La caché
+        # Redis de esas claves la limpia el `_flush_redis` del fixture.
         await conn.execute(
-            "TRUNCATE memory_entries, cortex_identity_history, cortex_identity,"
-            " cortex_affect_snapshots, cortex_turns, cortex_conversations,"
+            "TRUNCATE platform_settings, memory_entries, cortex_identity_history,"
+            " cortex_identity, cortex_affect_snapshots, cortex_turns, cortex_conversations,"
             " user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
@@ -82,9 +86,13 @@ async def _seed_owner(dsn: str) -> dict[str, UUID]:
             "Cortex SelfCtx Tenant",
             "cortex-selfctx-tenant",
         )
+        # System Owner Y System Admin: son dos columnas distintas y el dueño del
+        # despliegue es las dos cosas (ADR 0074). Sin `is_system_admin`,
+        # `set_platform_setting` —el camino por el que el panel flipa los gates—
+        # rechazaría al owner con un 403.
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash, is_system_owner)"
-            " VALUES ($1, $2, $3, true)",
+            "INSERT INTO users (id, email, password_hash, is_system_owner, is_system_admin)"
+            " VALUES ($1, $2, $3, true, true)",
             owner_id,
             "owner@selfctx.test",
             "h",
@@ -148,15 +156,22 @@ async def _mint(user_id: UUID, tenant_id: UUID) -> str:
 
 
 class _CapturingModel:
-    """Records the system prompt it was handed, then answers (no tools)."""
+    """Records the system prompt it was handed, then answers (no tools).
+
+    Captura también ``enabled_tools``: el prompt y el catálogo son las dos
+    mitades de la misma affordance, y un test que sólo mire el texto no
+    distingue «te anuncio la web y la tienes» de «te la anuncio y no la tienes».
+    """
 
     def __init__(self) -> None:
         self.system_prompt: str | None = None
+        self.enabled_tools: tuple[str, ...] = ()
 
     async def decide(self, state):
         from api_server.assistant.graph import ModelTurn
 
         self.system_prompt = state.system_prompt
+        self.enabled_tools = tuple(state.enabled_tools)
         return ModelTurn(content="entendido")
 
 
@@ -364,6 +379,26 @@ async def test_self_context_cross_owner_aislado(
 async def test_prompt_anuncia_web_solo_cuando_esta_habilitada(
     configured_app, migrations_pg_dsn: str
 ) -> None:
+    """El anuncio de la web sigue al INTERRUPTOR, y en los dos sentidos.
+
+    El interruptor se flipa por donde lo flipa el owner —``PUT /owner/cortex/
+    autonomy``, que es lo que llama el panel— y no escribiendo la fila de
+    ``platform_settings`` a pelo, como hacía este test. La diferencia no es de
+    estilo: desde ``prod-13 task_prod13_21`` las lecturas de settings pasan por
+    una caché Redis de 30 s cuya frescura la garantiza la invalidación que hace
+    ``set_platform_setting``. Un ``INSERT`` directo se salta esa invalidación,
+    así que el turno con la web apagada dejaba cacheada la AUSENCIA de la fila y
+    el turno siguiente seguía leyendo OFF: el verde dependía de que entre los dos
+    turnos pasaran más de 30 s de reloj. En local pasaban (el enqueue del afecto
+    reintenta contra un broker que no está); en CI no, y por eso allí salió rojo.
+
+    Ir por el endpoint no relaja nada: añade cobertura. Si alguien rompe la
+    invalidación de la caché, el turno posterior al PUT sirve el valor rancio y
+    esto se pone rojo — con el ``INSERT`` a pelo esa regresión era invisible. Y
+    la mitad negativa se refuerza: el anuncio no sólo tiene que faltar antes de
+    encender la web, tiene que DESAPARECER al apagarla, que es la dirección del
+    kill-switch que importa (ADR 0067, deny-by-default).
+    """
     seed = await _seed_owner(migrations_pg_dsn)
     owner_id = seed["owner_id"]
     tenant_id = seed["tenant_id"]
@@ -373,40 +408,67 @@ async def test_prompt_anuncia_web_solo_cuando_esta_habilitada(
     captured = _CapturingModel()
     configured_app.dependency_overrides[get_cortex_model] = lambda: captured
     token = await _mint(owner_id, tenant_id)
+    headers = {"Authorization": f"Bearer {token}"}
 
     from httpx import ASGITransport, AsyncClient
 
-    # Web OFF (default): el prompt NO promete web.
     async with AsyncClient(
         transport=ASGITransport(app=configured_app), base_url="http://test"
     ) as client:
-        resp = await client.post(
-            "/owner/cortex/turns",
-            json={"message": "hola"},
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    assert resp.status_code == 200, resp.text
-    assert "web_search" not in (captured.system_prompt or "")
+        # Precondición COMPROBADA, no supuesta: el gate arranca apagado.
+        snapshot = await client.get("/owner/cortex/autonomy", headers=headers)
+        assert snapshot.status_code == 200, snapshot.text
+        assert snapshot.json()["web_enabled"] is False
 
-    # Web ON: el prompt anuncia web_search/web_fetch (affordance explícita).
-    conn = await asyncpg.connect(migrations_pg_dsn)
-    try:
-        await conn.execute(
-            "INSERT INTO platform_settings (key, value) VALUES ('cortex.web_enabled', 'true')"
-            " ON CONFLICT (key) DO UPDATE SET value = 'true'"
-        )
-    finally:
-        await conn.close()
+        # Web OFF: el prompt no promete web — ni buscar ni leer una URL.
+        resp = await client.post("/owner/cortex/turns", json={"message": "hola"}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        prompt_off = captured.system_prompt or ""
+        assert "web_search" not in prompt_off
+        assert "web_fetch" not in prompt_off
+        # …y el catálogo tampoco las lleva: anuncio y affordance van juntos.
+        assert "web_search" not in captured.enabled_tools
+        assert "web_fetch" not in captured.enabled_tools
+        # El catálogo no está vacío: sin esto, un turno que corriera SIN tools
+        # (el camino del onboarding, que es cero-tools a propósito) pasaría estas
+        # dos negativas por la razón equivocada.
+        assert "cortex_remember" in captured.enabled_tools
 
-    async with AsyncClient(
-        transport=ASGITransport(app=configured_app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/owner/cortex/turns",
-            json={"message": "hola de nuevo"},
-            headers={"Authorization": f"Bearer {token}"},
+        # El owner enciende la web por donde la enciende el panel.
+        resp = await client.put(
+            "/owner/cortex/autonomy", json={"web_enabled": True}, headers=headers
         )
-    assert resp.status_code == 200, resp.text
-    prompt = captured.system_prompt or ""
-    assert "web_search" in prompt
-    assert "web_fetch" in prompt
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["web_enabled"] is True
+
+        # Web ON: el prompt anuncia web_search/web_fetch (affordance explícita).
+        resp = await client.post(
+            "/owner/cortex/turns", json={"message": "hola de nuevo"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        prompt_on = captured.system_prompt or ""
+        assert "web_search" in prompt_on
+        assert "web_fetch" in prompt_on
+        # Y lo anunciado existe de verdad en el catálogo del turno.
+        assert "web_search" in captured.enabled_tools
+        assert "web_fetch" in captured.enabled_tools
+
+        # Y al apagarla, el anuncio se retira del turno siguiente: el prompt no
+        # puede quedarse prometiendo una capacidad que el gate ya no concede.
+        resp = await client.put(
+            "/owner/cortex/autonomy", json={"web_enabled": False}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["web_enabled"] is False
+
+        resp = await client.post(
+            "/owner/cortex/turns", json={"message": "y ahora"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        prompt_off_again = captured.system_prompt or ""
+        assert "web_search" not in prompt_off_again
+        assert "web_fetch" not in prompt_off_again
+        # El kill-switch retira la capacidad, no sólo su anuncio.
+        assert "web_search" not in captured.enabled_tools
+        assert "web_fetch" not in captured.enabled_tools
+        assert "cortex_remember" in captured.enabled_tools

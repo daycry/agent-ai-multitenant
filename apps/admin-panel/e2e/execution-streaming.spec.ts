@@ -1,4 +1,5 @@
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for execution streaming over WebSocket (task_02_20).
@@ -69,9 +70,7 @@ async function setup(
   page: Page,
   body: () => unknown = () => EMPTY_EXECUTION,
 ): Promise<{ socket: () => WebSocketRoute }> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   // Match the api-server origin exactly — a `**/executions/...` glob
   // would also catch the `/admin/executions/...` page navigation. The body is
   // computed per request so a test can flip the persisted state mid-run.

@@ -51,13 +51,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from installer_backend.seams import ProgressEvent
 
 
-class StepStatus(str, Enum):
+class StepStatus(StrEnum):
     """Lifecycle of a single install step. ``str`` so it serialises as its value.
 
     * ``PENDING``  — not started yet (the initial state, and the state of every
@@ -73,7 +73,7 @@ class StepStatus(str, Enum):
     FAILED = "failed"
 
 
-class InstallStep(str, Enum):
+class InstallStep(StrEnum):
     """The ordered provisioning steps. ``str`` for stable serialisation."""
 
     GENERATE_CONFIG = "generate_config"
@@ -215,7 +215,7 @@ class InstallOrchestrator:
         """Coarse 0-100 progress from the count of completed steps."""
 
         total = len(INSTALL_STEP_ORDER)
-        return int(round(completed_steps / total * 100)) if total else 0
+        return round(completed_steps / total * 100) if total else 0
 
     # -- the run ------------------------------------------------------------
     def run(self) -> Iterator[ProgressEvent]:

@@ -3,7 +3,9 @@
 // tests ANTES de modularizar el monolito de 1042 líneas. Clava:
 //   - la agrupación por categoría (grupo por categoría con KBs + «Sin
 //     categoría» al final) y el badge builtin por fila;
-//   - crear: el dialog envía POST /knowledge-bases con nombre y embedding;
+//   - crear: el dialog envía POST /knowledge-bases con el nombre y SIN modelo
+//     de embedding (ADR 0155: lo sella la plataforma);
+//   - el desfase de modelo de una KB se ve en la fila, no se calla;
 //   - borrar: el confirm exige teclear el NOMBRE exacto antes de habilitar el
 //     botón, y borra con DELETE /knowledge-bases/{id}.
 
@@ -44,7 +46,10 @@ function kb(overrides: Record<string, unknown> = {}) {
     tenant_id: "t1",
     name: "Manual CI4",
     description: null,
-    embedding_model_id: "nomic-embed-text-v1.5",
+    // El sello que devuelve la API ya viene canonizado (ADR 0155 regla 3).
+    embedding_model_id: "nomic-embed-text",
+    platform_embedding_model: "nomic-embed-text",
+    embedding_model_stale: false,
     created_by: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
@@ -109,7 +114,11 @@ describe("Knowledge Bases (caracterización tramo #9)", () => {
     await waitFor(() => expect(screen.getByTestId("kbs-empty")).toBeTruthy());
   });
 
-  it("create dialog POSTs name and embedding model", async () => {
+  // ADR 0155: este test afirmaba que el alta mandaba
+  // `embedding_model_id: "nomic-embed-text-v1.5"`. Bendecía el defecto: esa
+  // etiqueta no es un tag válido del registro de Ollama y ningún embedder la
+  // envió nunca. El modelo lo pone la plataforma, así que el alta NO lo manda.
+  it("create dialog POSTs the name and does NOT send an embedding model", async () => {
     wireApi([kb()]);
     mount();
     await waitFor(() => expect(screen.getByTestId("kbs-create-button")).toBeTruthy());
@@ -122,11 +131,29 @@ describe("Knowledge Bases (caracterización tramo #9)", () => {
         ([p, o]) => p === "/knowledge-bases" && (o as { method?: string })?.method === "POST",
       );
       expect(post).toBeTruthy();
-      expect(post?.[1]?.body).toMatchObject({
-        name: "Nueva KB",
-        embedding_model_id: "nomic-embed-text-v1.5",
-      });
+      expect(post?.[1]?.body).toMatchObject({ name: "Nueva KB" });
+      expect(post?.[1]?.body).not.toHaveProperty("embedding_model_id");
     });
+  });
+
+  it("flags a KB sealed with a model the platform no longer uses", async () => {
+    wireApi([
+      kb({ id: "kb-ok" }),
+      kb({
+        id: "kb-vieja",
+        name: "Indexada con otro modelo",
+        embedding_model_id: "granite-embedding:278m",
+        embedding_model_stale: true,
+      }),
+    ]);
+    mount();
+    await waitFor(() => expect(screen.getByTestId("kbs-list")).toBeTruthy());
+    // La fila enseña el sello REAL de la KB…
+    expect(screen.getByTestId("kb-kb-vieja").textContent).toContain("granite-embedding:278m");
+    // …y avisa de que necesita reindexado, en vez de callar que sus vectores
+    // ya no participan en la búsqueda vectorial.
+    expect(screen.getByTestId("kb-embedding-stale-kb-vieja")).toBeTruthy();
+    expect(screen.queryByTestId("kb-embedding-stale-kb-ok")).toBeNull();
   });
 
   it("delete dialog only enables after typing the exact KB name", async () => {

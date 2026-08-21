@@ -34,6 +34,20 @@ logger = logging.getLogger(__name__)
 # production incident, not a warning.
 _STRICT_ENVIRONMENTS = frozenset({"staging", "prod"})
 
+# prod-03 task_prod03_05: el nombre de la entrada del sweep de caducidad de
+# aprobaciones. Constante y NO literal repetido, como PRICE_SYNC / BACKUP: se
+# define ANTES del dict porque es su propia clave, así que las dos no pueden
+# divergir (los demás constantes se declaran abajo y sí podrían).
+APPROVAL_EXPIRY_BEAT_ENTRY = "expire-stale-approvals-every-15m"
+
+# prod-13 task_prod13_14: el nombre de la entrada de la purga de filas
+# soft-borradas. Misma disciplina y mismo motivo que la de arriba.
+PURGE_SOFT_DELETED_BEAT_ENTRY = "purge-soft-deleted-daily"
+
+# part-01 task_part01_02 (ADR 0151): el nombre de la entrada del job que crea la
+# partición del mes siguiente de las tablas append-only. Misma disciplina.
+ENSURE_PARTITIONS_BEAT_ENTRY = "ensure-partitions-daily"
+
 # Each schedule entry is the standard Celery shape:
 # `{task: <name>, schedule: <celery.schedules.*>, options: {queue: <name>}}`.
 #
@@ -79,6 +93,20 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "workers.expire_review_runtimes",
         "schedule": schedule(run_every=300.0),
         "options": {"queue": "review"},
+    },
+    # prod-03 task_prod03_05 — caducidad de solicitudes de aprobación sin
+    # atender. `expire_stale_requests` estaba implementada desde el Plan 02 y
+    # NADIE la llamaba: una solicitud que nadie contesta dejaba la ejecución en
+    # `awaiting_human_approval` para siempre (el ADR 0016 ya lo anotaba como
+    # «falta el job»). Cada 15 min, cola `default`: son escrituras de dominio
+    # (fila + ejecución + tarea), sin efectos de infra. La VENTANA (default 24 h)
+    # y el interruptor son platform settings que el task lee en cada pasada, así
+    # que cambiarlos no pide reiniciar el beat. Una pasada sin nada vencido es un
+    # SELECT barato.
+    APPROVAL_EXPIRY_BEAT_ENTRY: {
+        "task": "workers.expire_stale_approvals",
+        "schedule": schedule(run_every=900.0),
+        "options": {"queue": "default"},
     },
     # prod-06 task_prod06_budget_01 — per-tenant budget sweep: re-derive the
     # auto-pause flags + fire threshold alerts. The post-execution hook keeps a
@@ -199,6 +227,18 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": crontab(hour="4", minute="0"),
         "options": {"queue": "ingestion"},
     },
+    # prod-13 task_prod13_14 (hallazgo db-4): purga FÍSICA de las filas
+    # soft-borradas vencidas — KBs (con su cascada a documents/chunks y los
+    # blobs) y proyectos (plans/tasks/executions). Diario 04:30, media hora
+    # después del GC de conocimiento para que no compitan por la misma cola.
+    # Arranca en DRY-RUN: cuenta y no borra hasta que el operador ponga
+    # `purge.soft_deleted_enabled` (riesgo 3 del plan: el borrado es
+    # irreversible). Pinned a `ingestion`, donde vive el cliente de MinIO.
+    PURGE_SOFT_DELETED_BEAT_ENTRY: {
+        "task": "workers.purge_soft_deleted",
+        "schedule": crontab(hour="4", minute="30"),
+        "options": {"queue": "ingestion"},
+    },
     # `task_wf_52b`: latido de shadow evals. `record_shadow_eval` existia desde
     # el Plan 14 sin ningun llamante — el mecanismo entero y nunca disparado.
     # Horario y no mas frecuente: cada corrida cuesta llamadas de juez, y la
@@ -209,6 +249,18 @@ BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "workers.run_shadow_evals",
         "schedule": crontab(minute="17"),
         "options": {"queue": "default"},
+    },
+    # part-01 task_part01_02 (ADR 0151): crea la partición del mes siguiente de
+    # cada tabla append-only convertida, con 3 meses de colchón, y alerta si M+1
+    # sigue faltando al terminar. Sin esto, la PRIMERA inserción del mes que viene
+    # falla («no partition of relation found for row»). Diario a las 03:40 — antes
+    # del backup (04:00 el GC, 04:30 la purga) para que el dump del día ya vea el
+    # esquema del mes nuevo. Cola `privileged`: es DDL con el DSN admin, y ese
+    # pool (`workers-backup`) es el único que lo tiene configurado.
+    ENSURE_PARTITIONS_BEAT_ENTRY: {
+        "task": "workers.ensure_partitions",
+        "schedule": crontab(hour="3", minute="40"),
+        "options": {"queue": "privileged"},
     },
 }
 

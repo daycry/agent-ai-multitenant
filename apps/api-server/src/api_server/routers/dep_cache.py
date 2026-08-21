@@ -123,4 +123,4 @@ async def invalidate_dep_cache(
     )
 
 
-__all__ = ["router", "InvalidateRequest", "InvalidateResponse"]
+__all__ = ["InvalidateRequest", "InvalidateResponse", "router"]

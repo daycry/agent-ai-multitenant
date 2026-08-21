@@ -89,7 +89,7 @@ def test_unknown_category_raises() -> None:
 def test_unknown_key_in_known_category_raises() -> None:
     from api_server.settings_registry import UnknownSettingError, validate_setting_value
 
-    with pytest.raises(UnknownSettingError, match="memories.'not-a-key'"):
+    with pytest.raises(UnknownSettingError, match=r"memories.'not-a-key'"):
         validate_setting_value("memories", "not-a-key", 1)
 
 
@@ -111,3 +111,108 @@ def test_registry_to_dict_shape() -> None:
     costs = payload["costs"]
     assert costs["external_page"] == "/admin/settings/hourly-rate"
     assert costs["settings"] == {}
+
+
+# ---------------------------------------------------------------------------
+# ES + EN — prod-16 `task_prod16_03`
+#
+# Este registry sirve los títulos y descripciones de `/admin/settings`. Mientras
+# sólo tuvo `label_es`/`description_es`, dos pantallas del panel NO se podían
+# migrar «sólo en el frontend»: traducir el marco y dejar el contenido en
+# castellano es media pantalla sin traducir, que es justo el defecto que prod-16
+# cierra. El principio 12 de CLAUDE.md fija ES + EN.
+# ---------------------------------------------------------------------------
+def test_every_category_and_setting_carries_both_languages() -> None:
+    from api_server.settings_registry import KNOWN_SETTINGS
+
+    assert KNOWN_SETTINGS, "el registry está vacío: este test no comprobaría nada"
+
+    categorias = 0
+    ajustes = 0
+    for nombre, cat in KNOWN_SETTINGS.items():
+        categorias += 1
+        assert cat.label_es.strip(), f"{nombre}: sin `label_es`"
+        assert cat.label_en.strip(), f"{nombre}: sin `label_en`"
+        assert cat.label_es != cat.label_en or len(cat.label_es) <= 4, (
+            f"{nombre}: `label_es` y `label_en` son idénticos ({cat.label_es!r})."
+            " Puede ser legítimo en una palabra que se escribe igual, pero con"
+            " esta longitud lo normal es que sea un copia-pega sin traducir."
+        )
+        if cat.description_es.strip():
+            assert cat.description_en.strip(), f"{nombre}: descripción sólo en castellano"
+        for clave, sdef in cat.settings.items():
+            ajustes += 1
+            ruta = f"{nombre}.{clave}"
+            assert sdef.label_es.strip(), f"{ruta}: sin `label_es`"
+            assert sdef.label_en.strip(), f"{ruta}: sin `label_en`"
+            assert sdef.description_es.strip(), f"{ruta}: sin `description_es`"
+            assert sdef.description_en.strip(), f"{ruta}: sin `description_en`"
+
+    # No-vacuidad: si el descubrimiento se rompe, los bucles de arriba pasan
+    # sin recorrer nada y el test diría que todo está bien.
+    assert categorias >= 3, f"esperaba al menos 3 categorías, recorrí {categorias}"
+    assert ajustes >= 2, f"esperaba al menos 2 ajustes, recorrí {ajustes}"
+
+
+def test_registry_to_dict_serialises_both_languages() -> None:
+    """De nada sirve tenerlo en el dataclass si el endpoint no lo emite."""
+    from api_server.settings_registry import registry_to_dict
+
+    payload = registry_to_dict()
+    mem = payload["memories"]
+    assert mem["label_en"] == "Memories"
+    assert "How the system" in mem["description_en"]
+
+    umbral = mem["settings"]["similarity.threshold"]
+    assert umbral["label_en"] == "Similarity threshold"
+    assert umbral["description_en"].startswith("Minimum cosine similarity")
+
+    # Y las claves están en TODAS las entradas, no sólo en la que miramos.
+    for nombre, cat in payload.items():
+        assert "label_en" in cat and "description_en" in cat, nombre
+        for clave, sdef in cat["settings"].items():
+            assert "label_en" in sdef and "description_en" in sdef, f"{nombre}.{clave}"
+
+
+def test_a_setting_without_its_english_pair_refuses_to_be_built() -> None:
+    """La validación es al CONSTRUIR, o sea al importar el módulo.
+
+    Comprobarlo a posteriori dejaría un hueco: el proceso ya habría arrancado
+    sirviendo media pantalla en castellano.
+    """
+    from api_server.settings_registry import SettingDef
+
+    with pytest.raises(ValueError, match="falta la variante `en`"):
+        SettingDef(
+            type="int",
+            default=1,
+            description_es="Descripción en castellano.",
+            description_en="An English description.",
+            label_es="Etiqueta",
+            label_en="",
+        )
+
+    with pytest.raises(ValueError, match="falta la variante `en`"):
+        SettingDef(
+            type="int",
+            default=1,
+            description_es="Descripción en castellano.",
+            description_en="   ",
+            label_es="Etiqueta",
+            label_en="Label",
+        )
+
+
+def test_a_category_with_a_spanish_description_and_no_english_one_refuses() -> None:
+    from api_server.settings_registry import CategoryDef
+
+    # Sin descripción en ninguno de los dos: legítimo.
+    CategoryDef(label_es="Algo", label_en="Something", icon="Box")
+
+    with pytest.raises(ValueError, match="falta la variante `en`"):
+        CategoryDef(
+            label_es="Algo",
+            label_en="Something",
+            icon="Box",
+            description_es="Sólo en castellano.",
+        )

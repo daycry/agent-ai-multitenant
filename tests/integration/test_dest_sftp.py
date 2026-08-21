@@ -209,7 +209,7 @@ def test_upload_maps_transport_error_to_destination_error(tmp_path: Path) -> Non
     dest, _ = _make_destination(tmp_path, fail_on="put")
     bundle = _bundle(tmp_path)
 
-    with pytest.raises(DestinationError, match="SFTP upload to .* failed"):
+    with pytest.raises(DestinationError, match=r"SFTP upload to .* failed"):
         dest.upload(bundle)
 
 
@@ -250,7 +250,7 @@ def test_list_remote_returns_files_skipping_directories(tmp_path: Path) -> None:
 def test_list_remote_maps_transport_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="listdir_attr")
 
-    with pytest.raises(DestinationError, match="SFTP list of .* failed"):
+    with pytest.raises(DestinationError, match=r"SFTP list of .* failed"):
         dest.list_remote()
 
 
@@ -279,7 +279,7 @@ def test_download_fetches_remote_path_to_dest(tmp_path: Path) -> None:
 def test_download_maps_transport_error(tmp_path: Path) -> None:
     dest, _ = _make_destination(tmp_path, fail_on="get")
 
-    with pytest.raises(DestinationError, match="SFTP download of .* failed"):
+    with pytest.raises(DestinationError, match=r"SFTP download of .* failed"):
         dest.download("missing.tar.enc", tmp_path)
 
 

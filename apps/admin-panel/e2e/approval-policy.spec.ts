@@ -1,15 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
+
 /**
  * E2E for the "Configurar Política de Validación Humana" screen
  * (task_01_23).
  *
  * Visible run:
- *   .\scripts\dev\run-e2e.ps1 -Headed -SlowMo 600 -Spec e2e\approval-policy.spec.ts
+ *   npx playwright test e2e/approval-policy.spec.ts
  *
  * Coverage:
- *   1. Nav-item lands on /admin/approval-policy and lists the 4 seeded
- *      built-in presets in the order seeded.
+ *   1. Nav-item lands on /admin/approval-policy and lista los 4 presets
+ *      built-in en el orden en que llegan.
  *   2. Switching the active preset re-renders the 13-category table
  *      with the matching baseline decisions (Sandbox = all auto;
  *      Cliente Externo = all humano).
@@ -17,20 +20,124 @@ import { expect, test, type Page } from "@playwright/test";
  *      "Cambios sin guardar" indicator appears.
  *   4. With zero tenant projects, the "Aplicar política" button is
  *      disabled and the empty-state hint shows.
+ *
+ * ---------------------------------------------------------------------------
+ * 2026-08-19 — MIGRADO a sesión sembrada + mocks. Por qué, y por qué no es
+ * rebajar el listón:
+ *
+ * El spec hacía LOGIN REAL contra el api-server. CI lo mete igualmente en el
+ * subset "mockeado" (lo barre `grep -rlE "page.route"` porque el cuarto test
+ * mockeaba `/projects`), y allí no hay backend: los cuatro tests morían en
+ * `toHaveURL(/admin/dashboard)` sin haber llegado a mirar la pantalla. Un test
+ * que sólo puede fallar no vigila nada.
+ *
+ * La parte que SÍ necesitaba base de datos —que la semilla cree exactamente
+ * cuatro políticas built-in, que Sandbox sea todo `auto` y Cliente Externo todo
+ * `human_required`, y que estén las 13 categorías— ya la cubre
+ * `tests/integration/test_seed_policies.py` (5 tests), que es donde le toca:
+ * comprueba la MIGRACIÓN, no la pantalla. Lo que queda aquí es lo que sólo se
+ * puede comprobar en un navegador: que la tabla se repinta al cambiar de
+ * preset, que un toggle marca override y ensucia el formulario, y que sin
+ * proyecto no se puede aplicar.
  */
-const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? "root@example.com";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? "longenoughpw";
 
-async function login(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(ADMIN_EMAIL);
-  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/\/admin\/dashboard$/);
+/** Las 13 categorías del spec §7.7-7.8, en el orden en que las pinta la pantalla. */
+const CATEGORIES = [
+  "code_changes",
+  "git_commit",
+  "git_push",
+  "external_http_get",
+  "external_http_post",
+  "secrets_access",
+  "data_migration",
+  "production_deploy",
+  "infra_provision",
+  "secret_rotation",
+  "external_communication",
+  "data_export_pii",
+  "user_management",
+];
+
+type Decision = "auto" | "human_required";
+
+const allCategories = (decision: Decision): Record<string, Decision> =>
+  Object.fromEntries(CATEGORIES.map((c) => [c, decision]));
+
+/**
+ * Los cuatro presets built-in, con la forma de `GET /approval-policies?builtin_only=true`.
+ * Sandbox y Cliente Externo son los extremos que el test 2 usa como contraste.
+ */
+const PRESETS = [
+  {
+    id: "aaaa0000-0000-0000-0000-000000000001",
+    name: "Sandbox",
+    description: "Todo automático.",
+    is_builtin: true,
+    categories: { preset: "sandbox", categories: allCategories("auto") },
+  },
+  {
+    id: "aaaa0000-0000-0000-0000-000000000002",
+    name: "Desarrollo",
+    description: "Equilibrio para el día a día.",
+    is_builtin: true,
+    categories: {
+      preset: "development",
+      categories: { ...allCategories("auto"), git_push: "human_required" as Decision },
+    },
+  },
+  {
+    id: "aaaa0000-0000-0000-0000-000000000003",
+    name: "Producción",
+    description: "Lo sensible pasa por un humano.",
+    is_builtin: true,
+    categories: { preset: "production", categories: allCategories("human_required") },
+  },
+  {
+    id: "aaaa0000-0000-0000-0000-000000000004",
+    name: "Cliente Externo",
+    description: "Todo pasa por un humano.",
+    is_builtin: true,
+    categories: { preset: "customer-external", categories: allCategories("human_required") },
+  },
+];
+
+const PROJECT = {
+  id: "bbbb0000-0000-0000-0000-000000000001",
+  name: "Proyecto A",
+  is_template: false,
+  human_approval_policy: null,
+};
+
+/** Prefijo de la clave que persiste abierto/cerrado cada grupo del menú. */
+const NAV_GROUP_LS_PREFIX = "agentic.nav.group.";
+
+async function setup(page: Page, opts: { projects?: object[] } = {}): Promise<void> {
+  await seedSession(page);
+  // La entrada del menú vive en el grupo "config-tenant", que arranca colapsado
+  // fuera de sus rutas: sin esto el enlace ni siquiera está en el DOM.
+  await page.addInitScript(
+    ([key]) => window.localStorage.setItem(key, "1"),
+    [NAV_GROUP_LS_PREFIX + "config-tenant"],
+  );
+  await page.route(apiRoute("/approval-policies?builtin_only=true"), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(PRESETS),
+    }),
+  );
+  await page.route(apiRoute("/projects"), (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(opts.projects ?? [PROJECT]),
+    }),
+  );
 }
 
 test("nav opens the screen and lists the 4 built-in presets", async ({ page }) => {
-  await login(page);
+  await setup(page);
+  await page.goto("/admin/dashboard", { waitUntil: "domcontentloaded" });
   await page.getByTestId("nav-approval-policy").click();
   await expect(page).toHaveURL(/\/admin\/approval-policy$/);
 
@@ -48,8 +155,8 @@ test("nav opens the screen and lists the 4 built-in presets", async ({ page }) =
 });
 
 test("switching presets re-renders the category baseline", async ({ page }) => {
-  await login(page);
-  await page.goto("/admin/approval-policy");
+  await setup(page);
+  await page.goto("/admin/approval-policy", { waitUntil: "domcontentloaded" });
 
   // Click Sandbox explicitly: its baseline is "everything auto", which
   // is a clean check independent of whichever preset the page
@@ -80,8 +187,8 @@ test("switching presets re-renders the category baseline", async ({ page }) => {
 });
 
 test("toggling a category marks it as override and surfaces the dirty badge", async ({ page }) => {
-  await login(page);
-  await page.goto("/admin/approval-policy");
+  await setup(page);
+  await page.goto("/admin/approval-policy", { waitUntil: "domcontentloaded" });
 
   // Switch to Producción so baseline is human_required and an override
   // to "auto" is meaningful.
@@ -103,21 +210,9 @@ test("toggling a category marks it as override and surfaces the dirty badge", as
 });
 
 test("save is disabled without a project", async ({ page }) => {
-  // Same rationale as in dual-kanban's empty-state test: the
-  // superadmin portfolio sees projects from every tenant on the
-  // persistent dev DB, so we mock /projects to [] to exercise the
-  // empty-state path deterministically.
-  await page.route("**/projects", async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: "[]",
-    });
-  });
-
-  await login(page);
-  await page.goto("/admin/approval-policy");
+  // Sin proyectos del tenant no hay a qué aplicar la política.
+  await setup(page, { projects: [] });
+  await page.goto("/admin/approval-policy", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId("no-projects-hint")).toBeVisible();
   await expect(page.getByTestId("save-policy")).toBeDisabled();

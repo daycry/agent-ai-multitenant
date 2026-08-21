@@ -2,7 +2,7 @@
 title: Instalación, CLI, perfiles y endurecimiento de producción — Referencia
 audience: operador, system admin, devops, security
 phase: 15-instalador-produccion
-updated: 2026-05-31
+updated: 2026-08-01
 ---
 
 # Instalación, CLI, perfiles y endurecimiento de producción — Referencia
@@ -125,6 +125,111 @@ confirmar (`--yes`): uno solo no basta. Los datos se **preservan por defecto**;
 En modo **PRESERVE** el reuso de los secretos + unseal keys existentes es
 **obligatorio**: regenerarlos huérfanaría los datos cifrados (Postgres/MinIO +
 el árbol cifrado por Vault están ligados a ellos).
+
+## Imágenes de runtime y hosts sin salida a internet
+
+Las **14 imágenes de runtime** (`agent-runtime-<slug>`) son donde se ejecutan los
+tests del código de los tenants, y desde el
+[ADR 0148](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md)
+se distribuyen **publicadas y fijadas por digest** en vez de construirse en cada
+host. El catálogo las referencia como
+`ghcr.io/agentic-platform/agent-runtime-<slug>:<versión>@sha256:<digest>`, y el
+worker **descarga por digest o aborta la tarea**: nunca cae a una imagen local
+con el mismo tag, porque eso es justo lo que hacía irrepetible el sandbox.
+
+### Requisito de red del host
+
+| Necesita                          | Para qué                                                   |
+| --------------------------------- | ---------------------------------------------------------- |
+| Alcanzar `ghcr.io`                | Descargar las 14 imágenes de runtime y las 5 de plataforma |
+| `docker login ghcr.io` (opcional) | Solo si los packages de la organización no son públicos    |
+
+La descarga ocurre **la primera vez que se usa cada runtime**, no en la
+instalación: una plataforma que solo ejecute proyectos PHP nunca baja la imagen
+de .NET. Una vez descargada por digest, el worker no vuelve al registry (un
+digest es direccionable por contenido: lo que está en local **es** lo correcto),
+así que una caída temporal de GHCR no para los runs de los runtimes ya usados.
+
+### Host air-gapped: importación manual
+
+El registry self-hosted como servicio del stack (opción b del ADR 0148) está
+**documentado y NO construido** a propósito: no existe todavía ninguna
+instalación sin salida a internet, y montar un `registry:2` para un caso
+hipotético añadiría un servicio que operar, respaldar y asegurar para nadie. El
+día que aparezca, el camino es éste y no hay que rediseñarlo con prisa.
+
+**Lo que NO funciona**, y conviene saberlo antes de intentarlo: `docker save` +
+`docker load` **no conserva la referencia por digest**. La imagen llega con el
+mismo contenido pero sin `RepoDigests`, así que el `pull` por digest del worker
+seguirá fallando — y el worker abortará, que es lo correcto. Retaguear con
+`docker tag` no arregla nada: el digest sigue sin resolver.
+
+Hay dos caminos que sí funcionan; los dos preservan el digest, que es lo único
+que hace auditable qué se ejecutó.
+
+**(a) Mirror levantado a mano (recomendado).** Un `registry:2` en la red interna,
+alimentado desde una máquina con salida a internet. El digest del manifiesto
+**no cambia** al copiarlo entre registries, así que las referencias del catálogo
+siguen siendo válidas:
+
+```bash
+# En la máquina con salida (necesita `crane` o `skopeo`; ambos copian sin recomprimir):
+for t in python-pytest node-jest node-vitest node-playwright php-phpunit php-pest \
+         go-test java-maven java-gradle ruby-rspec rust-cargo dotnet-test \
+         generic-shell generic-http; do
+  crane copy "ghcr.io/agentic-platform/agent-runtime-${t}:v1" \
+             "registry.interna:5000/agentic-platform/agent-runtime-${t}:v1"
+done
+```
+
+Y en el host, en el `.env` del stack:
+
+```bash
+RUNTIME_IMAGE_REGISTRY=registry.interna:5000/agentic-platform
+```
+
+Esa variable reapunta **solo el repositorio**, conservando versión y digest.
+Reapuntar el registry no debilita la garantía: si el mirror sirve otra cosa, el
+pull por digest falla y la tarea aborta.
+
+**(b) `docker save` / `load` + push al mirror.** Si el aire está tan cortado que
+ni `crane` puede cruzarlo, el tar viaja en un soporte físico, pero el último paso
+tiene que ser un `push` a un registry interno para que el digest vuelva a
+resolver:
+
+```bash
+# Máquina con salida — tirar POR DIGEST (no por tag) y empaquetar:
+docker pull "ghcr.io/agentic-platform/agent-runtime-python-pytest@sha256:<digest>"
+docker save -o python-pytest.tar "ghcr.io/agentic-platform/agent-runtime-python-pytest@sha256:<digest>"
+
+# Máquina interna — cargar, etiquetar para el mirror y empujar:
+docker load -i python-pytest.tar
+docker tag <IMAGE_ID> registry.interna:5000/agentic-platform/agent-runtime-python-pytest:v1
+docker push registry.interna:5000/agentic-platform/agent-runtime-python-pytest:v1
+```
+
+> **Comprobación obligatoria.** El `push` recalcula el manifiesto y **puede
+> cambiar el digest** (si el daemon recomprime capas). Compara el digest
+> resultante con el del catálogo antes de dar el mirror por bueno:
+>
+> ```bash
+> docker buildx imagetools inspect \
+>   registry.interna:5000/agentic-platform/agent-runtime-python-pytest:v1 \
+>   --format '{{.Manifest.Digest}}'
+> ```
+>
+> Si no coincide con el de
+> `packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json`,
+> el camino (a) es el único válido: **no se edita el manifiesto a mano** para
+> hacerlo cuadrar. Ese fichero lo escribe el pipeline de release, y un digest
+> puesto a mano congela sus CVEs sin que nada lo refresque (ADR 0148,
+> condición 1).
+
+Los digests vigentes se consultan en ese mismo manifiesto:
+
+```bash
+cat packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json
+```
 
 ## Endurecimiento de producción
 

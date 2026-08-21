@@ -62,7 +62,7 @@ def require_project_active(project: Any) -> None:
 # ---------------------------------------------------------------------------
 # Writable lookup
 # ---------------------------------------------------------------------------
-async def get_writable_or_404(
+async def get_writable_or_404[T](
     session: AsyncSession,
     model_cls: type[T],
     obj_id: UUID,
@@ -71,6 +71,7 @@ async def get_writable_or_404(
     not_found_detail: str,
     extra_filters: tuple[ColumnElement[bool], ...] = (),
     soft_delete_aware: bool = True,
+    for_update: bool = False,
 ) -> T:
     """Load a tenant-owned (and, by default, non-deleted) row for write.
 
@@ -83,6 +84,19 @@ async def get_writable_or_404(
 
     `soft_delete_aware`: pass False for models without SoftDeleteMixin
     (Task uses terminal statuses instead of `deleted_at`).
+
+    `for_update` (prod-13 task_prod13_22, hallazgo api-10) añade
+    ``SELECT … FOR UPDATE``: la fila queda bloqueada hasta el final de la
+    transacción, así que dos requests que la leen para decidir una TRANSICIÓN DE
+    ESTADO se serializan en vez de leer las dos el mismo estado previo y escribir
+    las dos. Es lo que cierra la carrera de la doble firma: sin él, dos admins
+    pulsando "Aprobar" a la vez leían `first_approved_by = NULL` los dos y el plan
+    quedaba aprobado con una sola firma real.
+
+    NO es el default, y a propósito: `FOR UPDATE` serializa, y en los PUT de CRUD
+    normal (renombrar un agente, editar una skill) el coste no compra nada — la
+    última escritura gana y eso ya es la semántica deseada. Se activa solo donde
+    la decisión depende del estado que se acaba de leer.
     """
     filters: list[ColumnElement[bool]] = [
         model_cls.id == obj_id,  # type: ignore[attr-defined]
@@ -92,7 +106,10 @@ async def get_writable_or_404(
         filters.append(model_cls.deleted_at.is_(None))  # type: ignore[attr-defined]
     filters.extend(extra_filters)
 
-    result = await session.execute(select(model_cls).where(*filters))
+    stmt = select(model_cls).where(*filters)
+    if for_update:
+        stmt = stmt.with_for_update()
+    result = await session.execute(stmt)
     obj = result.scalar_one_or_none()
     if obj is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
@@ -109,12 +126,19 @@ def apply_partial_update(
     enum_fields: tuple[str, ...] = (),
     rename: dict[str, str] | None = None,
     transform: dict[str, Any] | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> None:
     """Mutate `obj` in place with the values the client actually sent.
 
     Behavior:
       - `model_dump(exclude_unset=True)` so a missing key is left alone
         but an explicit `null` clears the column.
+      - `exclude`: campos del payload que NO son del recurso y que el
+        endpoint maneja por su cuenta (`task_gov_05`:
+        `eval_gate_override` es una directiva de la petición). Sin esto
+        acabarían como `setattr` sobre la fila ORM — que no falla, porque
+        una instancia declarativa acepta atributos arbitrarios, y por eso
+        hace falta un test que lo vigile en vez de confiar en que reviente.
       - `enum_fields`: Pydantic stores StrEnum values as Enum members by
         default; the SA column expects the string. Call `.value` on
         these before assignment.
@@ -125,6 +149,9 @@ def apply_partial_update(
         before assignment. Used for list[UUID] -> list[str] coercion.
     """
     changes = payload.model_dump(exclude_unset=True)
+
+    for field in exclude:
+        changes.pop(field, None)
 
     if rename:
         for src, dst in rename.items():

@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { ApiError, apiFetch } from "@/lib/api";
-import { useLang } from "@/lib/lang-context";
+import { useT } from "@/lib/i18n";
 import { reasoningLabel as labelFor, selectableReasoningOptions } from "@/lib/model-selection";
 
 export interface ProviderOption {
@@ -67,8 +67,7 @@ export function ProviderModelSelects({
   /** Errores de validación a anclar inline (opcional; persona los pasa). */
   errorFor?: (field: "provider" | "model" | "temperature") => string | null;
 }) {
-  const { lang } = useLang();
-  const t = (es: string, en: string) => (lang === "es" ? es : en);
+  const t = useT("capability");
 
   const q = useProviderOptions();
   const providers = q.data?.providers ?? [];
@@ -83,13 +82,13 @@ export function ProviderModelSelects({
   );
   // claude_sdk ignora temperature; los demás la envían.
   const tempApplies = selected ? selected.kind !== "claude_sdk" : true;
-  const reasoningLabel = (opt: string) => labelFor(opt, t("Desactivado", "Off"));
+  const reasoningLabel = (opt: string) => labelFor(opt, t("reasoningOff"));
   const err = (field: "provider" | "model" | "temperature") => errorFor?.(field) ?? null;
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid={`${idPrefix}-model-fields`}>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${idPrefix}-provider`}>{t("Proveedor", "Provider")}</Label>
+        <Label htmlFor={`${idPrefix}-provider`}>{t("fieldProvider")}</Label>
         <Select
           id={`${idPrefix}-provider`}
           value={value.provider_id}
@@ -107,7 +106,7 @@ export function ProviderModelSelects({
           }}
           data-testid={`${idPrefix}-provider`}
         >
-          <option value="">{t("— Selecciona —", "— Select —")}</option>
+          <option value="">{t("fieldSelectPlaceholder")}</option>
           {providers.map((p) => (
             <option key={p.id} value={p.id}>
               {p.display_name} ({p.kind})
@@ -125,7 +124,7 @@ export function ProviderModelSelects({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${idPrefix}-model`}>{t("Modelo", "Model")}</Label>
+        <Label htmlFor={`${idPrefix}-model`}>{t("fieldModel")}</Label>
         {modelOptions.length > 0 ? (
           <Select
             id={`${idPrefix}-model`}
@@ -133,7 +132,7 @@ export function ProviderModelSelects({
             onChange={(e) => onChange({ ...value, model: e.target.value })}
             data-testid={`${idPrefix}-model`}
           >
-            <option value="">{t("— Selecciona —", "— Select —")}</option>
+            <option value="">{t("fieldSelectPlaceholder")}</option>
             {modelOptions.map((m) => (
               <option key={m} value={m}>
                 {m}
@@ -145,7 +144,7 @@ export function ProviderModelSelects({
             id={`${idPrefix}-model`}
             value={value.model}
             onChange={(e) => onChange({ ...value, model: e.target.value })}
-            placeholder={t("nombre del modelo", "model name")}
+            placeholder={t("fieldModelNamePlaceholder")}
             data-testid={`${idPrefix}-model`}
           />
         )}
@@ -160,7 +159,7 @@ export function ProviderModelSelects({
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${idPrefix}-temperature`}>{t("Temperatura", "Temperature")}</Label>
+        <Label htmlFor={`${idPrefix}-temperature`}>{t("fieldTemperature")}</Label>
         <Input
           id={`${idPrefix}-temperature`}
           type="number"
@@ -174,10 +173,7 @@ export function ProviderModelSelects({
         />
         {!tempApplies && (
           <p className="text-muted-foreground text-xs" data-testid={`${idPrefix}-temperature-na`}>
-            {t(
-              "No aplica a Claude (el SDK no la expone)",
-              "Not applicable to Claude (the SDK does not expose it)",
-            )}
+            {t("temperatureNotApplicable")}
           </p>
         )}
         {tempApplies && err("temperature") && (
@@ -192,7 +188,7 @@ export function ProviderModelSelects({
 
       {reasoningSelectable.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${idPrefix}-reasoning`}>{t("Razonamiento", "Reasoning")}</Label>
+          <Label htmlFor={`${idPrefix}-reasoning`}>{t("fieldReasoning")}</Label>
           <Select
             id={`${idPrefix}-reasoning`}
             value={value.reasoning_effort}

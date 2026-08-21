@@ -5,8 +5,17 @@ reescrita** y un **ajuste ACOTADO de traits/baseline**, versionado y nunca
 auto-borrado. El bucle es de FONDO (consume LLM cuando nadie habla), así que es
 deliberadamente barato y conservador.
 
-Tres invariantes (espejo del distilador afectivo :mod:`workers.cortex_affect`):
+Invariantes (espejo del distilador afectivo :mod:`workers.cortex_affect`):
 
+  * **Gobernada** (ADR 0078): el núcleo consulta el kill-switch global
+    ``cortex.autonomy_enabled`` y un **budget diario por owner** ANTES de gastar
+    LLM. Aplica a los DOS caminos —el beat y el botón "Reflexionar ahora"— porque
+    ambos gastan lo mismo; antes el manual esquivaba el kill-switch y no tenía
+    tope ninguno. Ver :data:`REFLECTION_DAILY_CAP`.
+  * **Idempotente por marca**: sólo sintetiza turnos POSTERIORES a la última
+    reflexión (``metadata_.reflected_through``). Sin esto, con el beat cada 6 h y
+    un owner que no habla, cada pasada releía los mismos 20 turnos y derivaba la
+    identidad otra vez sin información nueva.
   * **Fail-open** (ADR 0064): Ollama caído / timeout / JSON inválido ⇒ NO-OP — la
     identidad queda INTACTA (sin nueva versión) y la tarea devuelve
     ``ok:fail_open``. El ``try/except`` global hace que la tarea jamás propague.
@@ -34,10 +43,12 @@ import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import structlog
+from api_server.cortex.autonomy import BudgetDecision
 from api_server.cortex.identity import (
     apply_owner_model_delta,
     apply_reflection_delta,
@@ -50,10 +61,11 @@ from shared_llm.base import LLMProvider
 from shared_llm.providers import OllamaProvider
 from shared_llm.types import Message
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.cortex_reflection")
 
@@ -65,6 +77,26 @@ _RECENT_TURNS_LIMIT = 20
 
 #: Tope de hechos duraderos sobre el owner por ciclo de reflexión (barato).
 _OWNER_FACTS_PER_CYCLE = 3
+
+#: ``kind`` de la reflexión en el gobierno de F4 (``cortex:budget:{owner}:reflection:
+#: {yyyymmdd}``, ``cortex:cb:{owner}:reflection``). Separado del de la curiosidad a
+#: propósito: son gastos distintos y un tope no debe consumir el del otro.
+REFLECTION_KIND = "reflection"
+
+#: Tope DIARIO de pasadas de reflexión por owner (ventana UTC, ADR 0078). El beat
+#: corre cada 6 h (4 pasadas/día, ver ``Settings.cortex_reflection_cron``), así que
+#: 12 deja margen holgado para disparos manuales del owner y a la vez impide que
+#: pulsar "Reflexionar ahora" en bucle vacíe la cuota de LLM: era el hueco literal
+#: («el owner puede pulsar sin tope y el gasto no se contabiliza en ninguna parte»).
+#:
+#: Constante y no platform setting por alcance: hacerlo operator-tunable exige una
+#: clave nueva en ``db/platform_settings.py``, que es de otro dominio. El cap se
+#: cambia aquí mientras eso no exista.
+REFLECTION_DAILY_CAP = 12
+
+#: Cuánto sube el drive ``coherence`` una reflexión exitosa (paso 8 del plan).
+#: Mismo delta que la curiosidad usa para el suyo — el motor PAD lo clampa a 1.0.
+_COHERENCE_SATISFY_DELTA = 0.3
 
 #: System prompt de la reflexión. Pide SÓLO el JSON (sin prosa). El ajuste es
 #: PEQUEÑO (la cota dura la impone el motor, no el LLM). Bilingüe.
@@ -151,8 +183,12 @@ def cortex_reflect_scheduled() -> dict[str, Any]:
 async def _reflect_scheduled_async(
     settings: Settings, *, llm_factory: LLMFactory
 ) -> dict[str, Any]:
-    """Núcleo del beat: kill-switch → owners(singleton) → reflexión por owner."""
-    engine = create_async_engine(settings.database_url)
+    """Núcleo del beat: kill-switch → owners(singleton) → reflexión por owner.
+
+    El kill-switch se mira aquí para salir barato sin resolver owners, y ``_reflect_async``
+    lo vuelve a mirar por owner (es donde vive el gobierno completo, ADR 0078, para que el
+    disparo manual también lo respete). La redundancia es intencional: una consulta."""
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         from api_server.db.models import User
@@ -190,21 +226,55 @@ async def _reflect_async(
     *,
     settings: Settings,
     llm_factory: LLMFactory,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Núcleo async, testeable con un ``llm_factory`` inyectado (sin red).
 
     El ``settings.database_url`` es un rol BYPASSRLS (como el resto del córtex);
     TODO acceso filtra ``owner_user_id`` explícito (defensa cross-owner). La
     aplicación del delta es determinista y ACOTADA (``apply_reflection_delta``).
+
+    Lo ejecutan los DOS caminos —``cortex_reflect`` (botón del owner) y
+    ``cortex_reflect_scheduled`` (beat)— así que el gobierno de ADR 0078
+    (kill-switch + budget diario) vive AQUÍ y no en la entrada del beat: de otro
+    modo el disparo manual lo esquivaba. El reloj entra como ``now`` para que la
+    ventana del budget sea determinista en test.
     """
-    engine = create_async_engine(settings.database_url)
+    now = now or datetime.now(UTC)
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        # (1) Turnos recientes del owner (filtro owner explícito; sin RLS, ADR 0074).
-        turns, tenant_id = await _load_recent_turns(sessionmaker, owner_user_id)
+        # (0) Gobierno (ADR 0078): kill-switch global y budget diario por owner,
+        # ANTES de tocar identidad o LLM. Un no-op aquí no escribe NADA.
+        from api_server.db.platform_settings import get_cortex_autonomy_enabled
+
+        async with sessionmaker() as session:
+            if not await get_cortex_autonomy_enabled(session):
+                _log.info("cortex_reflection.disabled", owner_user_id=str(owner_user_id))
+                return _result(owner_user_id, "skipped:disabled")
+
+        redis = _get_redis()
+        budget = await _check_reflection_budget(redis, owner_user_id, now=now)
+        if not budget.allowed:
+            _log.info(
+                "cortex_reflection.budget_exhausted",
+                owner_user_id=str(owner_user_id),
+                used=budget.used,
+                cap=budget.cap,
+            )
+            return _result(owner_user_id, f"skipped:budget:{budget.reason}")
+
+        # (1) Turnos NUEVOS desde la última reflexión (filtro owner explícito; sin
+        # RLS, ADR 0074). La marca hace la pasada idempotente: sin conversación
+        # nueva no hay nada que sintetizar y no se gasta LLM.
+        watermark = await _last_reflected_turn_at(sessionmaker, owner_user_id)
+        turns, tenant_id, newest_turn_at = await _load_recent_turns(
+            sessionmaker, owner_user_id, after=watermark
+        )
         if not turns:
-            _log.info("cortex_reflection.no_turns", owner_user_id=str(owner_user_id))
-            return _result(owner_user_id, "skipped:no_recent_turns")
+            reason = "skipped:no_new_turns" if watermark is not None else "skipped:no_recent_turns"
+            _log.info("cortex_reflection.no_turns", owner_user_id=str(owner_user_id), reason=reason)
+            return _result(owner_user_id, reason)
 
         # (2) Identidad actual (crea la default si no existe — versión 0).
         async with sessionmaker() as session, session.begin():
@@ -215,6 +285,10 @@ async def _reflect_async(
         proposal = await _synthesize(
             settings=settings, llm_factory=llm_factory, turns=turns, current_state=current_state
         )
+        # El gasto se contabiliza por INTENTO, no por éxito: un modelo que devuelve
+        # basura consume tokens igual, y si sólo contásemos las pasadas que parsean
+        # bien el cap no frenaría precisamente el bucle caro (fail-open en serie).
+        await _record_reflection_run(redis, owner_user_id, now=now)
         if proposal is None:
             _log.warning("cortex_reflection.fail_open", owner_user_id=str(owner_user_id))
             return _result(owner_user_id, "ok:fail_open")
@@ -257,6 +331,17 @@ async def _reflect_async(
             tenant_id=tenant_id,
             facts=proposal.owner_facts,
         )
+
+        # (7b) Marca de idempotencia: hasta aquí llegó esta reflexión.
+        await _mark_reflected_through(
+            sessionmaker, owner_user_id=owner_user_id, through=newest_turn_at
+        )
+
+        # (8) Saciar el drive `coherence` (motor PAD de F2): pensar sobre uno mismo
+        # calma la necesidad de coherencia. Sin esto el drive subía por decay y nada
+        # lo bajaba nunca, así que el córtex quedaba hambriento de una síntesis que
+        # sí estaba haciendo. Best-effort.
+        await _satisfy_coherence(sessionmaker, redis, owner_user_id, now=now)
 
         _log.info("cortex_reflection.done", owner_user_id=str(owner_user_id))
         return _result(owner_user_id, "ok")
@@ -400,22 +485,36 @@ def _extract_json_object(content: str) -> str | None:
 # DB helpers
 # ---------------------------------------------------------------------------
 async def _load_recent_turns(
-    sessionmaker: async_sessionmaker[Any], owner_user_id: UUID
-) -> tuple[list[tuple[str, str]], UUID | None]:
+    sessionmaker: async_sessionmaker[Any],
+    owner_user_id: UUID,
+    *,
+    after: datetime | None = None,
+) -> tuple[list[tuple[str, str]], UUID | None, datetime | None]:
     """Los ``_RECENT_TURNS_LIMIT`` turnos más recientes del owner (orden cronológico).
 
     Filtro ``owner_user_id`` explícito (tablas tenant-less sin RLS, ADR 0074). El
-    ``tenant_id`` (para la memoria) sale del hilo del turno más reciente."""
+    ``tenant_id`` (para la memoria) sale del hilo del turno más reciente.
+
+    ``after`` acota a los turnos POSTERIORES a la última reflexión (idempotencia:
+    ver :func:`_last_reflected_turn_at`). La comparación es ESTRICTA — un empate
+    exacto de ``created_at`` con la marca se considera ya procesado; perder un turno
+    en un empate al microsegundo es inocuo para un resumen, re-procesar los 20 no.
+
+    Devuelve además el ``created_at`` del turno MÁS NUEVO leído, que es la marca a
+    escribir si la pasada acaba bien."""
     async with sessionmaker() as session:
-        stmt = (
-            select(CortexTurn.role, CortexTurn.content, CortexTurn.conversation_id)
-            .where(CortexTurn.owner_user_id == owner_user_id)
-            .order_by(CortexTurn.created_at.desc(), CortexTurn.id.desc())
-            .limit(_RECENT_TURNS_LIMIT)
+        stmt = select(
+            CortexTurn.role, CortexTurn.content, CortexTurn.conversation_id, CortexTurn.created_at
+        ).where(CortexTurn.owner_user_id == owner_user_id)
+        if after is not None:
+            stmt = stmt.where(CortexTurn.created_at > after)
+        stmt = stmt.order_by(CortexTurn.created_at.desc(), CortexTurn.id.desc()).limit(
+            _RECENT_TURNS_LIMIT
         )
         rows = list((await session.execute(stmt)).all())
         if not rows:
-            return [], None
+            return [], None, None
+        newest_at = rows[0].created_at
         # tenant del hilo del turno más reciente (defensa: filtro owner explícito).
         latest_conv_id = rows[0].conversation_id
         conv = await session.get(CortexConversation, latest_conv_id)
@@ -425,7 +524,206 @@ async def _load_recent_turns(
 
     rows.reverse()  # cronológico (más antiguo primero) para la síntesis.
     turns = [(r.role, r.content) for r in rows]
-    return turns, tenant_id
+    return turns, tenant_id, newest_at
+
+
+# ---------------------------------------------------------------------------
+# Idempotencia — la marca de "hasta aquí ya reflexioné"
+# ---------------------------------------------------------------------------
+#: Clave de la marca dentro del ``metadata_`` de la memoria de reflexión.
+_REFLECTED_THROUGH = "reflected_through"
+
+
+async def _last_reflected_turn_at(
+    sessionmaker: async_sessionmaker[Any], owner_user_id: UUID
+) -> datetime | None:
+    """El ``created_at`` del último turno que una reflexión ya consumió, o ``None``.
+
+    La marca vive en ``metadata_.reflected_through`` de la memoria semántica
+    ``kind='reflection'`` más reciente del owner — la que la propia reflexión
+    escribe, ya protegida del auto-olvido (ADR 0077), así que la marca es durable.
+    Filtro ``owner_user_id`` explícito.
+
+    ``None`` (⇒ se procesan los últimos 20 turnos) significa "nunca he reflexionado,
+    o la memoria de la última reflexión no pudo escribirse". Ese segundo caso sólo
+    ocurre cuando el owner no tiene tenant resoluble y ya implica que no hay
+    memorias en absoluto; degradar a re-sintetizar es preferible a no reflexionar.
+    Tolerante: una marca ilegible se trata como ausente."""
+    from api_server.db.memory import MemoryEntry
+
+    async with sessionmaker() as session:
+        raw_meta = (
+            await session.execute(
+                select(MemoryEntry.metadata_)
+                .where(
+                    MemoryEntry.user_id == owner_user_id,
+                    MemoryEntry.scope == "private",
+                    MemoryEntry.metadata_["cortex"].astext == "true",
+                    MemoryEntry.metadata_["kind"].astext == REFLECTION_KIND,
+                    # `has_key` es el operador JSONB `?`, no el dict de Python.
+                    MemoryEntry.metadata_.has_key(_REFLECTED_THROUGH),
+                )
+                .order_by(MemoryEntry.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    raw = (raw_meta or {}).get(_REFLECTED_THROUGH)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        _log.warning("cortex_reflection.bad_watermark", owner_user_id=str(owner_user_id), value=raw)
+        return None
+
+
+async def _mark_reflected_through(
+    sessionmaker: async_sessionmaker[Any], *, owner_user_id: UUID, through: datetime | None
+) -> None:
+    """Escribe la marca en la memoria de reflexión más reciente del owner.
+
+    Se hace como UPDATE separado y no vía ``extra_metadata`` al crear la memoria a
+    propósito: ``persist_memory_candidates`` DEDUPLICA por contenido, así que dos
+    ciclos con el mismo ``summary`` no crearían fila nueva y la marca se quedaría
+    congelada en el valor viejo. Actualizando la fila más reciente el avance ocurre
+    igual (la marca describe el PROGRESO, no el contenido de esa memoria).
+
+    Best-effort: un fallo aquí sólo hace que la próxima pasada vuelva a leer los
+    mismos turnos, nunca rompe la versión de identidad ya escrita."""
+    if through is None:
+        return
+    from api_server.db.memory import MemoryEntry
+    from sqlalchemy import update
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            latest = (
+                await session.execute(
+                    select(MemoryEntry.id)
+                    .where(
+                        MemoryEntry.user_id == owner_user_id,
+                        MemoryEntry.scope == "private",
+                        MemoryEntry.metadata_["cortex"].astext == "true",
+                        MemoryEntry.metadata_["kind"].astext == REFLECTION_KIND,
+                    )
+                    .order_by(MemoryEntry.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if latest is None:
+                return
+            await session.execute(
+                update(MemoryEntry)
+                .where(MemoryEntry.id == latest, MemoryEntry.user_id == owner_user_id)
+                .values(
+                    metadata_=MemoryEntry.metadata_.concat(
+                        {_REFLECTED_THROUGH: through.astimezone(UTC).isoformat()}
+                    )
+                )
+            )
+    except Exception as exc:  # marca best-effort
+        _log.warning(
+            "cortex_reflection.watermark_failed", owner_user_id=str(owner_user_id), error=str(exc)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gobierno (ADR 0078) — budget diario por owner sobre el namespace `cortex:*` de F4
+# ---------------------------------------------------------------------------
+def _get_redis() -> Any:
+    """Cliente Redis del api-server (mismo DB que el gobierno de F4 y la caché de F2).
+
+    Mismo seam que :mod:`workers.cortex_curiosity` / :mod:`workers.cortex_maintenance`:
+    no se abre infra nueva, se reusa el namespace ``cortex:*``."""
+    from api_server.auth.deps import get_redis
+
+    return get_redis()
+
+
+async def _check_reflection_budget(
+    redis: Any, owner_user_id: UUID, *, now: datetime
+) -> BudgetDecision:
+    """¿Queda budget de reflexiones hoy para este owner? (NO reserva todavía).
+
+    Reusa el esquema de claves de F4 (:func:`daily_budget_key`, ventana diaria UTC
+    que se autolimpia) con el ``kind`` propio :data:`REFLECTION_KIND`. Es un gemelo
+    de ``autonomy.check_searches_budget``, que está atado al ``kind`` de la
+    curiosidad y a su unidad (búsquedas web); generalizar aquélla para aceptar
+    ``kind`` permitiría borrar esta función, pero vive en otro módulo.
+
+    Fail-SAFE del coste: si Redis falla NO autorizamos gasto (igual que la
+    curiosidad) — ante la duda, el córtex no consume LLM por su cuenta."""
+    from api_server.cortex.autonomy import daily_budget_key
+
+    cap = REFLECTION_DAILY_CAP
+    if cap <= 0:
+        return BudgetDecision(allowed=False, reason="cap_zero", used=0, cap=cap)
+    key = daily_budget_key(str(owner_user_id), REFLECTION_KIND, now=now)
+    try:
+        raw = await redis.get(key)
+    except Exception:  # Redis caído ⇒ fail-safe del coste
+        return BudgetDecision(allowed=False, reason="redis_error", used=0, cap=cap)
+    used = int(raw) if raw is not None else 0
+    if used >= cap:
+        return BudgetDecision(allowed=False, reason="budget_exhausted", used=used, cap=cap)
+    return BudgetDecision(allowed=True, reason="ok", used=used, cap=cap)
+
+
+async def _record_reflection_run(redis: Any, owner_user_id: UUID, *, now: datetime) -> None:
+    """Suma UNA pasada al contador del día (``INCR`` + TTL a medianoche UTC).
+
+    Best-effort: un fallo de Redis se traga (el trabajo ya se hizo; la contabilidad
+    es secundaria). Sin este productor el cap sería inalcanzable."""
+    from api_server.cortex.autonomy import daily_budget_key, seconds_until_utc_midnight
+
+    key = daily_budget_key(str(owner_user_id), REFLECTION_KIND, now=now)
+    try:
+        await redis.incrby(key, 1)
+        await redis.expire(key, seconds_until_utc_midnight(now))
+    except Exception:  # contabilidad best-effort
+        return
+
+
+async def _satisfy_coherence(
+    sessionmaker: async_sessionmaker[Any], redis: Any, owner_user_id: UUID, *, now: datetime
+) -> None:
+    """Sacia el drive ``coherence`` del motor PAD (F2) y refresca snapshot + caché.
+
+    Espejo exacto de ``cortex_curiosity._satisfy_curiosity`` para el drive que le
+    toca a la reflexión (paso 8 del plan F3): estado actual con decay lazy →
+    ``satisfy_drive`` determinista → snapshot de mantenimiento (sin
+    ``source_turn_id``) → caché viva de Redis, para que el Panel de Mente y el
+    self-context lo vean sin esperar a un turno.
+
+    Best-effort: un fallo aquí no debe tumbar la versión de identidad ya escrita."""
+    from api_server.cortex.affect_cache import write_affect_state
+    from api_server.cortex.affect_store import load_affect_state, save_affect_snapshot
+    from api_server.cortex.affective import AffectState, satisfy_drive
+    from api_server.cortex.identity import effective_mood_baseline, get_identity
+
+    try:
+        async with sessionmaker() as session, session.begin():
+            identity = await get_identity(session, owner_user_id)
+            baseline = effective_mood_baseline(identity.identity_state if identity else None)
+            state = await load_affect_state(session, owner_user_id, now=now, baseline=baseline)
+            new_drives = satisfy_drive(state.drives, "coherence", _COHERENCE_SATISFY_DELTA)
+            new_state = AffectState(emotion=state.emotion, mood=state.mood, drives=new_drives)
+            await save_affect_snapshot(
+                session,
+                owner_user_id=owner_user_id,
+                state=new_state,
+                appraisal_reason=None,
+                source_turn_id=None,
+                language="es",
+            )
+        await write_affect_state(redis, str(owner_user_id), new_state, now=now, baseline=baseline)
+    except Exception as exc:  # best-effort
+        _log.warning(
+            "cortex_reflection.satisfy_coherence_failed",
+            owner_user_id=str(owner_user_id),
+            error=str(exc),
+        )
 
 
 async def _persist_reflection_memory(
@@ -556,6 +854,8 @@ def trigger_cortex_reflection(owner_user_id: UUID) -> bool:
 
 
 __all__ = [
+    "REFLECTION_DAILY_CAP",
+    "REFLECTION_KIND",
     "cortex_reflect",
     "trigger_cortex_reflection",
 ]

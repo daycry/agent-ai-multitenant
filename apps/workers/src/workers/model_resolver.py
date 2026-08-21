@@ -14,14 +14,18 @@ un spec **concreto** para ``AGENT_TASK_SPEC``:
   * ``kind``      — el kind del proveedor (lo que el runtime consume),
   * ``model``     — el nombre nativo del proveedor (``to_provider_model_name``),
   * ``base_url`` / campos de credencial — de la fila ACTIVA más nueva del kind
-    (``resolve_provider_config``) + su secreto en Vault, con el MISMO mapeo
-    por kind que ``agent_runtime.providers._overlay_resolved`` (duplicado a
-    propósito: el worker no importa el paquete del sandbox).
+    (``resolve_provider_config``) + su secreto en Vault, aplicados con la tabla
+    ÚNICA ``shared_llm.credential_fields`` (prod-07 task_prod07_08). Este módulo
+    tenía su propia copia del mapeo, «duplicada a propósito», y la copia
+    divergió: se le quedó sin mapear el ``bearer_token`` de Azure, así que un
+    proveedor azure bearer-only era configurable e irresoluble por dispatch.
 
 Un spec que ya trae ``kind`` (el ``scripted`` de los tests, o uno pre-resuelto)
 pasa intacto. Un spec sin proveedor activo NO degrada a scripted: lanza
 ``ModelResolutionError`` y el worker finaliza la ejecución como fallida con un
-motivo explícito (sin fallos silenciosos).
+motivo explícito (sin fallos silenciosos). Un fallo de VAULT tampoco degrada:
+se distingue con ``abort_code='vault_unavailable'`` (task_prod07_07) para que el
+operador sepa dónde mirar.
 
 El spec resuelto lleva la credencial EN MEMORIA y dentro del env del contenedor
 efímero; nunca debe loguearse (usar ``safe_spec_summary`` para logs).
@@ -36,53 +40,67 @@ from uuid import UUID
 from api_server.assistant.model_config import to_provider_model_name
 from api_server.llm_providers.factory_resolver import resolve_provider_config
 from api_server.llm_providers.vault import LLMProviderVaultError, LLMProviderVaultStore
+from shared_llm.credential_fields import credential_vault_fields, overlay_credentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class ModelResolutionError(RuntimeError):
     """El model_config no se pudo resolver a un proveedor ejecutable.
 
-    El worker la captura y finaliza la ejecución como ``failed`` con
-    ``abort_code='model_unresolved'`` — nunca lanza el contenedor con un spec
-    que caería a scripted o petaría dentro del sandbox.
+    El worker la captura y finaliza la ejecución como ``failed`` SIN lanzar el
+    contenedor, con el ``abort_code`` que trae la excepción:
+
+      * ``model_unresolved`` (por defecto) — el catálogo no da un proveedor:
+        model_config incompleto, o ninguna fila activa del kind. Se arregla en
+        la configuración.
+      * ``vault_unavailable`` (prod-07 task_prod07_07) — el proveedor EXISTE y
+        tiene credencial, pero Vault no la sirve. Se arregla en Vault, y el
+        código lo dice para que nadie vaya a mirar el catálogo.
+
+    La distinción no es cosmética: antes ambos casos acababan en un 401 dentro
+    del sandbox que misatribuía la causa al proveedor (llm-9 / workers-8).
     """
+
+    def __init__(self, message: str, *, abort_code: str = "model_unresolved") -> None:
+        super().__init__(message)
+        self.abort_code = abort_code
 
 
 def _overlay_provider_fields(
     spec: dict[str, Any], kind: str, *, base_url: str | None, secret: dict[str, str]
 ) -> dict[str, Any]:
-    """Aplica base_url+secreto al spec con el mapeo por kind del runtime.
+    """Aplica base_url+secreto al spec con el mapeo por kind del catálogo.
 
-    Espejo de ``agent_runtime.providers._overlay_resolved`` (mismas claves por
-    kind); duplicado consciente — el worker no importa el paquete del sandbox.
+    Delega en ``shared_llm.credential_fields.overlay_credentials``, la tabla
+    ÚNICA (prod-07 task_prod07_08). Esta función tenía su propia copia del mapeo
+    —la copia nº1 de las tres que cita el módulo de la tabla— y era la que
+    DIVERGÍA: no trasladaba el ``bearer_token`` de Azure, así que un proveedor
+    azure bearer-only se creaba desde la UI, pasaba el test de conexión, servía
+    al asistente… y era irresoluble por dispatch. Se queda como envoltorio con
+    nombre propio porque es la costura que el resto del módulo llama.
     """
-    merged = dict(spec)
-    if kind == "azure_foundry":
-        if base_url:
-            merged["apim_base_url"] = base_url
-        if secret.get("api_key"):
-            merged["subscription_key"] = secret["api_key"]
-    elif kind == "copilot":
-        if secret.get("oauth_token"):
-            merged["github_token"] = secret["oauth_token"]
-    elif kind in ("claude_sdk", "claude"):
-        # El Claude Agent SDK admite DOS modos de auth, ambos sobre el mismo
-        # kind (ADR 0021/0063): API key (`secret['api_key']` → ANTHROPIC_API_KEY)
-        # y suscripción Pro/Max (`secret['oauth_token']`, de `claude
-        # setup-token` → CLAUDE_CODE_OAUTH_TOKEN). El runtime mapea la clave del
-        # spec al env var correcto dentro del contenedor; aquí solo trasladamos
-        # la credencial de Vault al spec (antes se descartaba → el agente nunca
-        # se autenticaba en el sandbox).
-        if secret.get("api_key"):
-            merged["api_key"] = secret["api_key"]
-        if secret.get("oauth_token"):
-            merged["oauth_token"] = secret["oauth_token"]
-    elif kind == "ollama":
-        if base_url:
-            merged["base_url"] = base_url
-        if secret.get("bearer_token"):
-            merged["api_key"] = secret["bearer_token"]
-    return merged
+    return overlay_credentials(spec, kind, base_url=base_url, secret=secret)
+
+
+def _read_secret_or_abort(vault: LLMProviderVaultStore, path: str, *, kind: str) -> dict[str, str]:
+    """Lee la credencial de Vault reintentando UNA vez; si no, aborta.
+
+    El reintento existe porque un blip de red no debe tumbar un run de 30
+    iteraciones; el abort existe porque en el sandbox no hay fallback de env que
+    recoja el testigo (ver ``resolve_provider_config(strict_vault=...)``).
+    """
+    for attempt in (1, 2):
+        try:
+            return vault.read_secret(path)
+        except LLMProviderVaultError as exc:
+            if attempt == 2:
+                raise ModelResolutionError(
+                    f"Vault transport error reading the credential of provider "
+                    f"kind {kind!r} (2 attempts): {exc}. La fila TIENE credencial "
+                    f"configurada — revisa Vault, no el catálogo.",
+                    abort_code="vault_unavailable",
+                ) from exc
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 async def resolve_model_spec(
@@ -123,7 +141,27 @@ async def resolve_model_spec(
             "model_config has neither a resolvable provider/model nor an explicit kind"
         )
 
-    resolved = await resolve_provider_config(session, str(provider_kind), vault=vault)
+    # En el dispatch un fallo de Vault NO puede degradar a «sin credencial»
+    # (task_prod07_07): `strict_vault=True` para los kinds que USAN credencial,
+    # con un reintento de la resolución completa —la consulta de la fila es
+    # idempotente y barata— antes de abortar con `vault_unavailable`. Un kind sin
+    # credencial en la tabla conserva la degradación: no hay nada que perder.
+    strict = bool(credential_vault_fields(str(provider_kind)))
+    resolved = None
+    for attempt in (1, 2):
+        try:
+            resolved = await resolve_provider_config(
+                session, str(provider_kind), vault=vault, strict_vault=strict
+            )
+            break
+        except LLMProviderVaultError as exc:
+            if attempt == 2:
+                raise ModelResolutionError(
+                    f"Vault transport error reading the credential of the active "
+                    f"{provider_kind!r} provider (2 attempts): {exc}. La fila TIENE "
+                    f"credencial configurada — revisa Vault, no el catálogo.",
+                    abort_code="vault_unavailable",
+                ) from exc
     if resolved is None:
         raise ModelResolutionError(
             f"no active llm_providers row of kind {provider_kind!r} — "
@@ -163,10 +201,18 @@ async def _resolve_by_provider_id(
         return None
     secret: dict[str, str] = {}
     if row.secret_vault_path and vault is not None:
-        try:
-            secret = vault.read_secret(row.secret_vault_path)
-        except LLMProviderVaultError:
-            secret = {}
+        if credential_vault_fields(row.kind):
+            # El kind usa credencial y la fila apunta a una: si Vault no la
+            # sirve, abortar (task_prod07_07). Antes se degradaba a `{}` y el
+            # contenedor arrancaba sin auth para morir con un 401.
+            secret = _read_secret_or_abort(vault, row.secret_vault_path, kind=row.kind)
+        else:
+            # Kind sin credencial en la tabla: no hay nada que la ausencia del
+            # secreto rompa, así que se mantiene la degradación silenciosa.
+            try:
+                secret = vault.read_secret(row.secret_vault_path)
+            except LLMProviderVaultError:
+                secret = {}
     spec = dict(model_spec)
     spec["kind"] = row.kind
     spec["model"] = to_provider_model_name(row.kind, model_id)

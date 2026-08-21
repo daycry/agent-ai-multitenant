@@ -45,6 +45,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    text,
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column
@@ -146,7 +147,9 @@ class GuardrailAlertRule(
     # --- lifecycle -----------------------------------------------------------
     # A disabled rule is never evaluated (kept for re-enabling without
     # losing its config / history).
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     # Debounce anchor: when the rule last fired an alert. The evaluator
     # suppresses a re-fire until a full window has elapsed since this, so a
     # sustained breach yields at most ONE alert per rule per window. NULL =
@@ -166,10 +169,10 @@ class GuardrailAlertRule(
 __all__ = [
     "DEFAULT_THRESHOLD",
     "DEFAULT_WINDOW_SECONDS",
-    "GuardrailAlertRule",
     "MAX_WINDOW_SECONDS",
     "MIN_THRESHOLD",
     "MIN_WINDOW_SECONDS",
     "SEVERITY_ORDER",
+    "GuardrailAlertRule",
     "severities_at_or_above",
 ]

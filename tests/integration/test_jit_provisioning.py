@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -79,6 +80,12 @@ _SIGNING_KEY = RSAKey.generate_key(2048, parameters={"kid": _KID}, private=True)
 
 
 def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID) -> str:
+    # `exp`/`iat` de verdad: el IdP falso acuñaba tokens SIN caducidad, y el
+    # verificador tampoco la miraba (gotcha joserfc-decode-no-valida-exp). Al
+    # cerrar ese hueco en `auth/sso/oidc.py` estos dobles tenían que dejar de
+    # emitir tokens inmortales: un fake que no puede caducar no ejercita el
+    # camino real.
+    now = int(time.time())
     header = {"alg": "RS256", "kid": _KID}
     claims = {
         "iss": _ISSUER,
@@ -87,6 +94,8 @@ def _id_token(*, nonce: str, sub: str = "idp-subject-123", aud: str = _CLIENT_ID
         "nonce": nonce,
         "email": _IDP_EMAIL,
         "name": "Worker Person",
+        "iat": now,
+        "exp": now + 3600,
     }
     return joserfc_jwt.encode(header, claims, _SIGNING_KEY)
 
@@ -310,10 +319,22 @@ async def _login_state(client: AsyncClient, provider_id: UUID, idp: _FakeIdP) ->
 
 
 async def _sso_callback(client: AsyncClient, state: str) -> httpx.Response:
+    # `follow_redirects=False` desde el ADR 0133: el callback ya no contesta el
+    # `LoginResponse` JSON, sino 303 + `Set-Cookie` hacia el panel. Sin esto el
+    # cliente seguiría el 303 hasta una URL de panel que aquí no existe, y el
+    # estado que se afirmaría sería el del salto, no el del login.
     return await client.get(
         "/auth/sso/oidc/callback",
         params={"code": "fake-auth-code", "state": state},
+        follow_redirects=False,
     )
+
+
+def _session_cookie(client: AsyncClient) -> str:
+    """La credencial que dejó el callback, ya no en el cuerpo sino en la cookie."""
+    token = client.cookies.get("agentic_session")
+    assert token, "el callback no dejó cookie de sesión"
+    return token
 
 
 async def _full_sso_login(client: AsyncClient, provider_id: UUID, idp: _FakeIdP) -> httpx.Response:
@@ -335,8 +356,10 @@ async def test_first_login_creates_user_without_membership(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
         resp = await _full_sso_login(client, provider_id, idp)
-        assert resp.status_code == 200, resp.text
-        token = resp.json()["access_token"]
+        # 303 + Set-Cookie desde el ADR 0133; el contrato del salto en sí está
+        # fijado en test_sso_callback_redirect.py.
+        assert resp.status_code == 303, resp.text
+        token = _session_cookie(client)
 
         me = await client.get("/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200, me.text
@@ -370,12 +393,12 @@ async def test_second_login_reuses_user(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
         first = await _full_sso_login(client, provider_id, idp)
-        assert first.status_code == 200, first.text
+        assert first.status_code == 303, first.text
         first_user = await _user_row(migrations_pg_dsn, _NORMALIZED_EMAIL)
         assert first_user is not None
 
         second = await _full_sso_login(client, provider_id, idp)
-        assert second.status_code == 200, second.text
+        assert second.status_code == 303, second.text
 
     # Exactly one user despite two logins (same row reused).
     assert await _count_users_with_email(migrations_pg_dsn, _NORMALIZED_EMAIL) == 1
@@ -403,7 +426,7 @@ async def test_existing_email_links_no_duplicate(
         transport=ASGITransport(app=configured_app), base_url="http://testserver"
     ) as client:
         resp = await _full_sso_login(client, provider_id, idp)
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 303, resp.text
 
     # No duplicate: the SSO login linked to the existing user row.
     assert await _count_users_with_email(migrations_pg_dsn, _NORMALIZED_EMAIL) == 1
@@ -442,7 +465,7 @@ async def test_sso_provisioned_user_cannot_login_locally(
     ) as client:
         # First SSO login materialises the SSO-only user.
         resp = await _full_sso_login(client, provider_id, idp)
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 303, resp.text
 
         # Any local password attempt is rejected with the generic 401 —
         # the sentinel hash must NEVER reach the argon2 verifier (a 500).
@@ -479,7 +502,7 @@ async def test_concurrent_first_logins_are_idempotent(
 
     # At least one login succeeded; none raised an unhandled exception.
     statuses = [r.status_code for r in results if isinstance(r, httpx.Response)]
-    assert any(s == 200 for s in statuses), results
+    assert any(s == 303 for s in statuses), results
     assert all(not isinstance(r, BaseException) for r in results), results
 
     # Idempotent: exactly one user row despite the race.

@@ -1,10 +1,13 @@
-"""Córtex F2: cortex_affect_snapshots (tenant-less, BYPASSRLS — ADR 0074/0075).
+"""Córtex F2: cortex_affect_snapshots (tenant-less, eje owner — ADR 0074/0075/0156).
 
 Serie temporal **append-only e inmutable** del estado del motor afectivo del
-System Owner (PAD + mood + drives). Como el resto del córtex es **tenant-less**
-(excepción consciente al Principio 1 — no hay RLS): el aislamiento es por un
-filtro ``owner_user_id`` explícito en TODO SQL (defensa en profundidad, sin RLS
-de respaldo; ver ``cortex/affect_store.py`` y el test cross-owner de F2).
+System Owner (PAD + mood + drives). Como el resto del córtex es **tenant-less**:
+el aislamiento es por ``owner_user_id``, en dos capas que no se sustituyen entre
+sí — el filtro explícito en TODO SQL (``cortex/affect_store.py``, el test
+cross-owner de F2), que es la que actúa hoy porque todos los caminos conectan con
+un rol BYPASSRLS; y la policy ``cortex_affect_snapshots_owner_only`` de la
+migración ``0140``, que es la que responde el día que una query llegue por la
+sesión ordinaria de ``app_user``.
 
 Inmutable: NO :class:`SoftDeleteMixin` ni ``updated_at`` — los snapshots no se
 editan ni se borran; un decay/evento produce SIEMPRE una fila nueva. Por eso
@@ -36,9 +39,10 @@ from api_server.db.base import Base, UUIDPrimaryKeyMixin
 class CortexAffectSnapshot(Base, UUIDPrimaryKeyMixin):
     """Una muestra inmutable del estado afectivo del córtex (motor PAD).
 
-    NO :class:`TenantScopedMixin` (no hay RLS), NO :class:`SoftDeleteMixin`, NO
-    ``updated_at``: filas append-only. ``owner_user_id`` es el eje de aislamiento
-    (filtro explícito en todo SQL).
+    NO :class:`TenantScopedMixin` (la RLS no cuelga del tenant), NO
+    :class:`SoftDeleteMixin`, NO ``updated_at``: filas append-only.
+    ``owner_user_id`` es el eje de aislamiento — filtro explícito en todo SQL +
+    policy ``cortex_affect_snapshots_owner_only`` (migración ``0140``).
     """
 
     __tablename__ = "cortex_affect_snapshots"

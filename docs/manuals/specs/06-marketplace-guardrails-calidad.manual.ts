@@ -8,13 +8,18 @@ import { generateManual, ManualDef } from "../lib/manual";
 // PESTAÑAS (Catálogo / Instaladas / Compartir) renderizadas como un mismo
 // `goto`. Si un paso no CLICA su pestaña, captura la pestaña por defecto
 // (Catálogo) y dos pasos salen idénticos. Por eso los pasos de pestaña traen
-// una `action` que pulsa su pestaña ANTES del pantallazo. Los pasos de la
-// configuración de Playwright y del consentimiento granular NAVEGAN mediante
-// clic en sus botones reales («Configurar» del listing Playwright y
-// «Permisos» de una instalación), porque sus rutas llevan un [id] que solo
-// existe en el entorno vivo. Todas las acciones son tolerantes
-// (.catch(()=>{})) para no romper la generación si un selector no existe en
-// este entorno.
+// una `action` que pulsa su pestaña ANTES del pantallazo. El paso del
+// consentimiento granular NAVEGA mediante clic en su botón real («Permisos»
+// de una instalación), porque su ruta lleva un [id] que solo existe en el
+// entorno vivo. Todas las acciones son tolerantes (.catch(()=>{})) para no
+// romper la generación si un selector no existe en este entorno.
+//
+// task_mkt2_13 (ADR 0142): el paso «Configuración guiada de la tool
+// Playwright» SE RETIRÓ con la pantalla que documentaba. La configuración ya
+// no se pide al instalar —los valores, como la base_url del sitio bajo
+// prueba, son del PROYECTO y al instalar los proyectos ni existen— sino al
+// desplegar la capacidad en cada proyecto. Ese formulario se documenta en el
+// manual de proyectos, donde vive.
 const manual: ManualDef = {
   order: "06",
   slug: "06-marketplace-guardrails-calidad",
@@ -40,29 +45,7 @@ const manual: ManualDef = {
           });
         await page.waitForTimeout(500);
       },
-      body: "<p>El Marketplace es el área donde un Tenant Admin gestiona el catálogo de extensiones de su organización. La cabecera muestra el título <b>Marketplace</b> con dos botones de acción: <b>Privadas</b> (lleva al marketplace privado del tenant) y <b>Publicar</b> (atajo al formulario de publicación, visible solo para tenant_admin). Bajo la cabecera hay tres pestañas: <b>Catálogo</b>, <b>Instaladas</b> y <b>Compartir</b>; la de <b>Catálogo</b> está activa por defecto.</p><p>El catálogo muestra todos los listings visibles para tu tenant: los del <b>catálogo global</b> (etiqueta <code>global</code>, visibles para todos los tenants) y los <b>listings privados propios</b> (etiqueta <code>privado</code>, aislados por RLS: ningún otro tenant los ve jamás). Cada listing aparece como una tarjeta con su nombre, su tipo (<code>skill</code>, <code>tool</code> o <code>mcp_server</code>), su versión, su nivel de confianza y, si la tiene, una descripción.</p><p>El <b>nivel de confianza</b> es la pieza central de la política de seguridad del Marketplace. Gobierna las <i>guardas</i> que se aplican al instalar, no la disponibilidad:</p><ul><li><b>verified</b> (verde): revisado y <b>firmado criptográficamente</b> por el equipo de plataforma (firma Ed25519 sobre el manifest exacto). Instala con fricción mínima: sin consentimiento por permiso y sin sandbox, aunque el análisis estático se ejecuta igualmente como defensa en profundidad (tolera hallazgos hasta severidad media).</li><li><b>community</b> (azul): publicado por terceros, sin firma de plataforma. Requiere <b>siempre</b> consentimiento explícito permiso a permiso, análisis estático (solo tolera hallazgos de severidad baja) y una prueba de humo en sandbox.</li><li><b>experimental</b> (ámbar): sin ninguna vejación previa. Máximas guardas: consentimiento por permiso, sandbox y análisis estático en el que <b>cualquier hallazgo bloquea</b> la instalación.</li></ul><p>Si eres tenant_admin verás arriba un aviso destacado («¿Tienes una skill o tool interna?») que invita a publicar tus propias skills o tools internas, con el botón <b>Publicar en el marketplace</b>. El listing destacado de <b>Playwright</b> (tool global verificada) muestra además un botón <b>Configurar</b> que abre su configuración guiada (siguiente paso). Si el catálogo está vacío, se muestra un mensaje invitando a publicar la primera skill o tool interna.</p>",
-      fullPage: true,
-    },
-    {
-      title: "Configuración guiada de la tool Playwright",
-      goto: "/admin/marketplace",
-      // Navegamos como lo haría el usuario: desde el catálogo, pulsando el
-      // botón "Configurar" del listing Playwright (la ruta destino lleva el id
-      // real del listing: /admin/marketplace/listings/{id}/playwright-config).
-      action: async (page) => {
-        await page
-          .getByTestId("marketplace-tab-catalog")
-          .click()
-          .catch(() => {});
-        await page.waitForTimeout(400);
-        await page
-          .locator('[data-testid^="catalog-playwright-config-"]')
-          .first()
-          .click()
-          .catch(() => {});
-        await page.waitForTimeout(900);
-      },
-      body: "<p>Playwright es la tool destacada del catálogo global: permite a los agentes ejecutar pruebas de navegador. En lugar de pedirte YAML libre, la plataforma lee el <code>config_schema</code> del propio listing y renderiza este <b>formulario guiado</b>. La cabecera muestra el nombre y la versión del listing; el listing en sí es de solo lectura (catálogo global compartido): lo que configuras aquí se persiste en la <b>instalación de tu tenant</b>, nunca en el listing.</p><p>Los campos del formulario, validados en cliente con las mismas reglas que el backend:</p><ul><li><b>Navegadores</b>: multi-selección entre <code>chromium</code>, <code>firefox</code> y <code>webkit</code>. Debe quedar al menos uno seleccionado o verás el error «Selecciona al menos un navegador».</li><li><b>Headless</b>: conmutador Sí/No. En servidores sin display debe quedar en Sí (el valor por defecto).</li><li><b>Screenshots</b>: <i>Desactivado</i>, <i>Siempre</i> o <i>Solo en fallo</i> (por defecto, el más útil para depurar sin llenar disco).</li><li><b>Traces</b>: <i>Desactivado</i>, <i>Siempre</i> o <i>Retener en fallo</i> (por defecto).</li><li><b>Avanzado</b>: la <b>Base URL</b> contra la que corren los tests (opcional) y el <b>Timeout (ms)</b>, que debe ser un entero positivo (por defecto 30000).</li></ul><p>Al pie, la tarjeta <b>Configuración resultante</b> muestra en vivo el objeto JSON exacto que se guardará en la instalación del tenant, para que puedas revisarlo antes de aplicar. Si tocas un valor inválido, el mensaje de validación aparece encima de la vista previa.</p>",
+      body: "<p>El Marketplace es el área donde un Tenant Admin gestiona el catálogo de extensiones de su organización. La cabecera muestra el título <b>Marketplace</b> con dos botones de acción: <b>Privadas</b> (lleva al marketplace privado del tenant) y <b>Publicar</b> (atajo al formulario de publicación, visible solo para tenant_admin). Bajo la cabecera hay tres pestañas: <b>Catálogo</b>, <b>Instaladas</b> y <b>Compartir</b>; la de <b>Catálogo</b> está activa por defecto.</p><p>El catálogo muestra todos los listings visibles para tu tenant: los del <b>catálogo global</b> (etiqueta <code>global</code>, visibles para todos los tenants) y los <b>listings privados propios</b> (etiqueta <code>privado</code>, aislados por RLS: ningún otro tenant los ve jamás). Cada listing aparece como una tarjeta con su nombre, su tipo (<code>skill</code>, <code>tool</code> o <code>mcp_server</code>), su versión, su nivel de confianza y, si la tiene, una descripción.</p><p>El <b>nivel de confianza</b> es la pieza central de la política de seguridad del Marketplace. Gobierna las <i>guardas</i> que se aplican al instalar, no la disponibilidad:</p><ul><li><b>verified</b> (verde): revisado y <b>firmado criptográficamente</b> por el equipo de plataforma (firma Ed25519 sobre el manifest exacto). Instala con fricción mínima: sin consentimiento por permiso y sin sandbox, aunque el análisis estático se ejecuta igualmente como defensa en profundidad (tolera hallazgos hasta severidad media).</li><li><b>community</b> (azul): publicado por terceros, sin firma de plataforma. Requiere <b>siempre</b> consentimiento explícito permiso a permiso, análisis estático (solo tolera hallazgos de severidad baja) y una prueba de humo en sandbox.</li><li><b>experimental</b> (ámbar): sin ninguna vejación previa. Máximas guardas: consentimiento por permiso, sandbox y análisis estático en el que <b>cualquier hallazgo bloquea</b> la instalación.</li></ul><p>Si eres tenant_admin verás arriba un aviso destacado («¿Tienes una skill o tool interna?») que invita a publicar tus propias skills o tools internas, con el botón <b>Publicar en el marketplace</b>. El catálogo <b>no configura nada</b>: instalar una capacidad solo la añade al fondo de tu tenant (y consiente sus permisos). Los valores concretos —por ejemplo, contra qué URL corre Playwright sus pruebas— se piden más tarde, al <b>desplegar</b> la capacidad en un proyecto, porque son distintos en cada proyecto y al instalar los proyectos aún no existen. Si el catálogo está vacío, se muestra un mensaje invitando a publicar la primera skill o tool interna.</p>",
       fullPage: true,
     },
     {

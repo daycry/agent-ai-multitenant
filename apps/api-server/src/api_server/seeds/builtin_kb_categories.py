@@ -78,8 +78,7 @@ BUILTIN_KB_CATEGORIES: tuple[BuiltinKbCategory, ...] = (
 # ---------------------------------------------------------------------------
 # Plan 06.12 (ADR 0029): patrón (A) — built-ins bajo el platform tenant
 # con is_builtin=true (antes patrón B: tenant_id NULL).
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO kb_categories (id, tenant_id, slug, name, color, is_builtin)
     VALUES (:id, :platform_tenant_id, :slug, :name, :color, true)
     ON CONFLICT (id) DO UPDATE SET
@@ -89,8 +88,7 @@ _UPSERT_SQL = text(
         is_builtin = true,
         updated_at = now(),
         deleted_at = NULL
-    """
-)
+    """)
 
 
 async def seed_builtin_kb_categories(session: AsyncSession) -> int:
@@ -115,8 +113,8 @@ async def seed_builtin_kb_categories(session: AsyncSession) -> int:
 
 __all__ = [
     "BUILTIN_KB_CATEGORIES",
-    "BuiltinKbCategory",
     "KB_CATEGORY_NAMESPACE",
+    "BuiltinKbCategory",
     "kb_category_id_for_slug",
     "seed_builtin_kb_categories",
 ]

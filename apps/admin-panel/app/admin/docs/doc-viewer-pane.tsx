@@ -26,6 +26,8 @@ import { BookOpen, FileText, GitCompare } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 import { extractToc, fetchDocContent, type DocContent, type TocEntry } from "@/lib/docs-api";
 
 import { BookmarkStar } from "./docs-bookmarks-view";
@@ -50,6 +52,7 @@ export function DocViewerPane({
   bookmarked = false,
   onToggleBookmark,
 }: DocViewerPaneProps) {
+  const t = useT("docs");
   const enabled = Boolean(projectId && path);
   const [mode, setMode] = useState<ViewerMode>("read");
 
@@ -80,9 +83,7 @@ export function DocViewerPane({
         data-testid="docs-content-empty"
       >
         <BookOpen className="text-muted-foreground/50 mb-3 h-10 w-10" aria-hidden="true" />
-        <p className="text-muted-foreground text-sm">
-          Selecciona un documento en el árbol de la izquierda para empezar.
-        </p>
+        <p className="text-muted-foreground text-sm">{t("viewerEmpty")}</p>
       </div>
     );
   }
@@ -103,11 +104,11 @@ export function DocViewerPane({
             <TabsList data-testid="docs-viewer-mode-tabs">
               <TabsTrigger value="read" data-testid="docs-viewer-mode-read">
                 <FileText className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
-                Documento
+                {t("modeRead")}
               </TabsTrigger>
               <TabsTrigger value="diff" data-testid="docs-viewer-mode-diff">
                 <GitCompare className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
-                Comparar
+                {t("modeDiff")}
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -137,6 +138,8 @@ function ReadMode({
   contentQuery: UseQueryResult<DocContent>;
   toc: TocEntry[];
 }) {
+  const t = useT("docs");
+  const errorText = useErrorText();
   return (
     <>
       {contentQuery.isLoading && (
@@ -145,7 +148,7 @@ function ReadMode({
           data-testid="docs-content-loading"
         >
           <Spinner className="h-4 w-4" />
-          Cargando documento…
+          {t("contentLoading")}
         </div>
       )}
 
@@ -154,11 +157,15 @@ function ReadMode({
           className="border-destructive/40 bg-destructive/5 text-destructive rounded-lg border p-4 text-sm"
           data-testid="docs-content-error"
         >
+          {/*
+            El 404 conserva su propio texto porque dice algo que `errorText` no
+            puede: "no existe O no es accesible" —el backend responde 404 tambien
+            cuando el proyecto existe pero el usuario no lo ve, y distinguirlo
+            seria una fuga de informacion.
+          */}
           {contentQuery.error instanceof ApiError && contentQuery.error.status === 404
-            ? "El documento no existe o no es accesible."
-            : contentQuery.error instanceof ApiError
-              ? contentQuery.error.body
-              : "No se pudo cargar el documento."}
+            ? t("docNotFound")
+            : errorText(contentQuery.error)}
         </div>
       )}
 

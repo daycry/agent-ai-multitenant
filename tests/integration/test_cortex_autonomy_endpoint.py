@@ -143,3 +143,100 @@ async def test_put_autonomy_togglea_kill_switch_y_web(
         # Sin ningún campo ⇒ 422 honesto.
         resp = await client.put("/owner/cortex/autonomy", json={}, headers=headers)
         assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_autonomy_expone_el_gasto_usd_del_dia_no_solo_las_busquedas(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """El budget del snapshot lleva las DOS dimensiones: búsquedas y dólares.
+
+    `record_spend` (lo que el bucle llama tras investigar) escribe dos contadores
+    en Redis —búsquedas y USD— porque un tope de búsquedas NO es un tope de coste:
+    una sola pasada con razonamiento profundo puede costar más que veinte
+    búsquedas baratas (ADR 0078). Hasta ahora el snapshot solo leía la clave de
+    búsquedas, así que el dinero gastado no lo enseñaba ninguna ruta: el owner
+    veía «3 de 5 búsquedas» mientras el cap de 0.50 USD podía estar agotado.
+
+    El test escribe con el PRODUCTOR real (`record_spend`), no con un `SET`
+    manual: si la clave del gasto cambiase de forma, el lector dejaría de verla y
+    esto se pone rojo — que es justo el acoplamiento que hay que fijar."""
+    from datetime import UTC, datetime
+
+    from api_server.cortex.autonomy import record_spend
+    from redis.asyncio import Redis
+
+    seed = await _seed_owner(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    now = datetime.now(UTC)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        # Dos pasadas del bucle: 3 búsquedas y 0.12 USD en total.
+        await record_spend(
+            redis, owner_user_id=str(seed["owner_id"]), cost_usd=0.07, searches=2, now=now
+        )
+        await record_spend(
+            redis, owner_user_id=str(seed["owner_id"]), cost_usd=0.05, searches=1, now=now
+        )
+    finally:
+        await redis.aclose()
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/owner/cortex/autonomy", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    budget = resp.json()["budget"]
+    assert budget["searches_today"] == 3
+    assert budget["searches_cap"] == 5
+    # La dimensión que faltaba: gasto del día y su tope (default 0.50, ADR 0078).
+    assert budget["cost_usd_today"] == pytest.approx(0.12)
+    assert budget["cost_usd_cap"] == pytest.approx(0.50)
+
+
+@pytest.mark.cross_tenant
+@pytest.mark.asyncio
+async def test_el_gasto_de_otro_owner_no_se_ve_en_el_snapshot(
+    configured_app, migrations_pg_dsn: str, test_redis_url: str
+) -> None:
+    """El budget es por clave-por-owner: el gasto ajeno no cuenta en el mío.
+
+    El córtex es tenant-less y su eje de aislamiento es la clave-por-owner (ADR
+    0074), así que la única cosa que separa el gasto de dos owners es el
+    `owner_user_id` que entra en la clave Redis. Sin este caso, un snapshot que
+    leyera una clave global (o la del primer owner) pasaría el test de arriba y
+    le enseñaría al owner el dinero de otra persona."""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from api_server.cortex.autonomy import record_spend
+    from redis.asyncio import Redis
+
+    seed = await _seed_owner(migrations_pg_dsn)
+    token = await _mint(seed["owner_id"], seed["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    otro_owner = uuid4()
+    now = datetime.now(UTC)
+    redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
+    try:
+        await record_spend(redis, owner_user_id=str(otro_owner), cost_usd=0.49, searches=4, now=now)
+    finally:
+        await redis.aclose()
+
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/owner/cortex/autonomy", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    budget = resp.json()["budget"]
+    assert budget["cost_usd_today"] == pytest.approx(0.0)
+    assert budget["searches_today"] == 0

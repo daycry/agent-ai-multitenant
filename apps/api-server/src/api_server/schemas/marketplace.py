@@ -38,6 +38,7 @@ from api_server.db.marketplace import (
     MarketplaceInstallation,
     MarketplaceListing,
     MarketplaceListingKind,
+    MarketplaceListingVersion,
     MarketplaceShare,
     MarketplaceTrustLevel,
 )
@@ -72,6 +73,14 @@ class MarketplaceListingResponse(BaseModel):
     description: str | None
     author: str | None
     trust_level: str
+    # ADR 0142 D6. Se expone porque el autor tiene que poder distinguir «lo
+    # mandé» de «está publicado» — la UI de publicación decía «publicado» donde
+    # ahora dice «pendiente de revisión», y sin este campo no podría.
+    review_status: str
+    reviewed_at: datetime | None = None
+    #: Presente solo cuando ``review_status == 'rejected'``. Es lo que el autor
+    #: necesita para corregir; ocultarlo convertiría el rechazo en un muro.
+    rejection_reason: str | None = None
     manifest: dict[str, Any]
     requested_permissions: list[Any]
     # Never echo the detached signature itself — only whether one exists.
@@ -91,6 +100,9 @@ def to_listing_response(listing: MarketplaceListing) -> MarketplaceListingRespon
         description=listing.description,
         author=listing.author,
         trust_level=listing.trust_level,
+        review_status=listing.review_status,
+        reviewed_at=listing.reviewed_at,
+        rejection_reason=listing.rejection_reason,
         manifest=listing.manifest or {},
         requested_permissions=listing.requested_permissions or [],
         is_signed=listing.signature is not None,
@@ -117,6 +129,18 @@ class InstallationCreateRequest(BaseModel):
     listing_id: UUID
     project_id: UUID | None = None
     granted_permissions: list[Any] = Field(default_factory=list)
+    # prod-13 `task_prod13_01`. Con `True` el endpoint responde **202** y las
+    # puertas de seguridad corren en la cola `marketplace`: la instalación nace
+    # `analyzing` y ES el recurso de estado que el cliente consulta
+    # (`GET /marketplace/installations/{id}`).
+    #
+    # Opt-in, y no el nuevo comportamiento por defecto, por una razón que no es
+    # timidez: el 201 síncrono es un contrato que ya consumen el admin-panel y
+    # cualquier script del operador, y cambiarlo por debajo convierte «instalado»
+    # en «aceptado» sin que el llamante se entere — que es peor que una latencia
+    # alta. Un cliente que sepa consultar el estado lo pide; el que no, sigue
+    # esperando su 201.
+    async_gates: bool = False
 
 
 class MarketplaceInstallationResponse(BaseModel):
@@ -259,6 +283,10 @@ class PrivateListingPublishRequest(BaseModel):
     kind: MarketplaceListingKind
     manifest: str = Field(min_length=1)
     author: str | None = None
+    # ADR 0142 D7: qué cambia en esta versión, en prosa. Va a la fila de
+    # `marketplace_listing_versions`, que es lo que el revisor lee y lo que la
+    # ficha de la instalación enseña junto al diff de permisos.
+    changelog: str | None = None
 
 
 class PrivateListingUpdateRequest(BaseModel):
@@ -275,6 +303,78 @@ class PrivateListingUpdateRequest(BaseModel):
 
     manifest: str = Field(min_length=1)
     author: str | None = None
+    changelog: str | None = None
+
+
+# =============================================================================
+# Review queue (ADR 0142 D6 — task_mkt2_09 / task_mkt2_10)
+# =============================================================================
+class ListingRejectRequest(BaseModel):
+    """Rechazar un listing en revisión. El motivo NO es opcional.
+
+    ``min_length=1`` más el `str_strip_whitespace` de la config base hacen que
+    ``"   "`` sea un 422 en la frontera, y :func:`review.reject_listing` lo
+    vuelve a comprobar por dentro. Dos guardas para lo mismo a propósito: la de
+    fuera da el error bonito, la de dentro protege a los llamantes que no pasan
+    por HTTP.
+    """
+
+    model_config = _BASE_CONFIG
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ListingApproveRequest(BaseModel):
+    """Aprobar. ``promote=True`` además lo sube a ``verified`` de una vez."""
+
+    model_config = _BASE_CONFIG
+
+    promote: bool = False
+
+
+class ListingPromoteRequest(BaseModel):
+    """Cambiar el nivel de confianza de un listing YA publicado.
+
+    Admite bajar además de subir: un ``verified`` que se estropea vuelve a
+    ``community`` sin tener que despublicarlo (despublicar rompería las
+    instalaciones vivas).
+    """
+
+    model_config = _BASE_CONFIG
+
+    trust_level: MarketplaceTrustLevel = MarketplaceTrustLevel.VERIFIED
+
+
+class ListingVersionResponse(BaseModel):
+    """Una fila del histórico de versiones (ADR 0142 D7)."""
+
+    model_config = _BASE_CONFIG
+
+    id: UUID
+    listing_id: UUID
+    version: str
+    changelog: str | None
+    config_schema: dict[str, Any] | None
+    requested_permissions: list[Any]
+    published_by: UUID | None
+    reviewed_by: UUID | None
+    reviewed_at: datetime | None
+    created_at: datetime
+
+
+def to_version_response(row: MarketplaceListingVersion) -> ListingVersionResponse:
+    return ListingVersionResponse(
+        id=row.id,
+        listing_id=row.listing_id,
+        version=row.version,
+        changelog=row.changelog,
+        config_schema=row.config_schema,
+        requested_permissions=row.requested_permissions or [],
+        published_by=row.published_by,
+        reviewed_by=row.reviewed_by,
+        reviewed_at=row.reviewed_at,
+        created_at=row.created_at,
+    )
 
 
 # =============================================================================
@@ -357,6 +457,11 @@ class InstallationUpdateCheckResponse(BaseModel):
     outdated: bool
     update_available: bool
     latest_is_major_bump: bool
+    # ADR 0142 D7: el delta de permisos entre la versión PINADA y la candidata.
+    # Es lo que el banner de la ficha pinta en claro, y lo que decide si el
+    # update va a exigir re-consentimiento antes de tocar nada.
+    permission_delta: dict[str, Any] | None = None
+    requires_consent: bool = False
 
 
 class InstallationUpdateRequest(BaseModel):
@@ -373,6 +478,16 @@ class InstallationUpdateRequest(BaseModel):
 
     allow_major: bool = False
     target_version: str | None = None
+    # -- ADR 0142 D7 -------------------------------------------------------
+    #: Decisiones sobre el DELTA de permisos: `{tipo: "grant"|"deny"}`. Solo
+    #: hacen falta los tipos que la versión nueva añade o ensancha — los ya
+    #: concedidos NO se re-preguntan, que es el punto entero de D7: re-preguntar
+    #: por todo enseña al operador a aceptar sin leer.
+    consent: dict[str, str] | None = None
+    #: El rollback. Sin esto, mover una instalación a una versión ANTERIOR es un
+    #: 409 («no es más nueva»), que es la guarda correcta para una actualización
+    #: accidental y el obstáculo equivocado para una vuelta atrás deliberada.
+    allow_rollback: bool = False
 
 
 class InstallationUpdateResponse(BaseModel):
@@ -387,6 +502,12 @@ class InstallationUpdateResponse(BaseModel):
     installation: MarketplaceInstallationResponse
     from_version: str
     to_version: str
+    #: Qué pasó con CADA despliegue de esta instalación (ADR 0142 D7). Un
+    #: despliegue que no encaja en el esquema nuevo queda `disabled` con motivo
+    #: y aparece aquí; los demás se actualizan igual.
+    deployments: dict[str, Any] | None = None
+    #: El delta de permisos que se re-consintió en esta llamada.
+    permission_delta: dict[str, Any] | None = None
 
 
 def to_update_check_response(
@@ -394,6 +515,7 @@ def to_update_check_response(
     installation: MarketplaceInstallation,
     name: str,
     assessment: Any,
+    permission_delta: dict[str, Any] | None = None,
 ) -> InstallationUpdateCheckResponse:
     """Render a :class:`~api_server.marketplace.versioning.UpdateAssessment`."""
     return InstallationUpdateCheckResponse(
@@ -406,6 +528,8 @@ def to_update_check_response(
         outdated=assessment.outdated,
         update_available=assessment.update_available,
         latest_is_major_bump=assessment.latest_is_major_bump,
+        permission_delta=permission_delta,
+        requires_consent=bool(permission_delta and permission_delta.get("requires_consent")),
     )
 
 

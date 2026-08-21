@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the tenant STATISTICS dashboard + runs explorer (Plan 14 task_14_12).
@@ -124,6 +125,14 @@ const CONSUMPTION = {
   total_tokens_input: 3000,
   total_tokens_output: 1500,
   total_tokens_cached: 0,
+  // Segmentación IA vs humano (Plan 16 `task_16_12`). El fixture no la traía y
+  // la tarjeta de coste total pintaba "$undefined": desde ese plan, el titular
+  // ya NO es `accumulated_cost_usd` (sólo IA) sino `total_cost_usd`, que suma
+  // las horas humanas tarifadas. 0.075 IA + 0.030 humano (2 h × 15 USD/h).
+  ai_cost_usd: "0.075000",
+  human_cost_usd: "0.030000",
+  total_cost_usd: "0.105000",
+  human_hours_logged: "2.00",
   costliest_run: {
     execution_id: EXEC_ID,
     task_id: "70000000-0000-0000-0000-000000000001",
@@ -180,13 +189,7 @@ async function setup(
 ): Promise<Capture> {
   const capture: Capture = { windows: [], verdicts: [], currencies: [] };
 
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route(`${BASE}/me`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(identity) }),
@@ -257,8 +260,15 @@ test("admin sees the stats, consumption summary and runs explorer", async ({ pag
   // per-agent table.
   await expect(page.getByTestId(`agent-row-${AGENT_BE}`)).toContainText("66.7%");
 
-  // consumption summary.
-  await expect(page.getByTestId("accumulated-cost")).toContainText("$0.075000");
+  // consumption summary. Dos derivas a la vez (2026-08-19): el testid es
+  // `total-cost` desde que el bloque se extrajo a `stats-body.tsx`
+  // (`accumulated-cost` no existe en el panel), y el titular ya no es el coste
+  // IA sino el TOTAL con las horas humanas (Plan 16 `task_16_12`).
+  await expect(page.getByTestId("total-cost")).toContainText("$0.105000");
+  // Y la segmentación que hace ese total explicable, que no cubría nadie.
+  await expect(page.getByTestId("ai-cost")).toContainText("$0.075000");
+  await expect(page.getByTestId("human-cost")).toContainText("$0.030000");
+  await expect(page.getByTestId("human-hours")).toContainText("2");
   await expect(page.getByTestId("consumption-tokens")).toContainText("3000/1500/0");
   await expect(page.getByTestId("costliest-run")).toContainText("Build login");
 

@@ -133,8 +133,7 @@ def upgrade() -> None:
     # (tenant_id, name) keep the most-recently-updated live row and soft-delete
     # the losers (same "latest wins" stance as migration 0076's consolidation).
     bind.execute(
-        sa.text(
-            """
+        sa.text("""
             WITH ranked AS (
                 SELECT id,
                        row_number() OVER (
@@ -148,8 +147,7 @@ def upgrade() -> None:
                SET deleted_at = now()
               FROM ranked r
              WHERE t.id = r.id AND r.rn > 1
-            """
-        )
+            """)
     )
 
     op.create_index(

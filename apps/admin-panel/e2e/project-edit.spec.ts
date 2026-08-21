@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the project edit dialog (Plan 06.6 task_06_6_02).
@@ -7,6 +9,9 @@ import { expect, test, type Page } from "@playwright/test";
  *   - Clicking "Editar" opens the dialog with the current values.
  *   - Save fires a PUT with the typed payload.
  *   - Error responses surface in the dialog.
+ *
+ * Reparado el 2026-08-19: la descripción se edita en un `<MarkdownTextarea>`,
+ * cuyo `data-testid` nombra el CONTENEDOR; el `<textarea>` es `-edit`.
  */
 
 const PROJECT_ID = "22222222-aaaa-bbbb-cccc-000000000001";
@@ -40,10 +45,8 @@ async function setup(
   page: Page,
   opts: { onPut?: (body: Record<string, unknown>) => void; putStatus?: number } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route(`**/projects/${PROJECT_ID}`, async (route) => {
+  await seedSession(page);
+  await page.route(apiRoute(`/projects/${PROJECT_ID}`), async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
         status: 200,
@@ -69,7 +72,7 @@ test("edit dialog opens with current values", async ({ page }) => {
   await page.goto(`/admin/projects/${PROJECT_ID}`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("project-edit-button").click();
   await expect(page.getByTestId("edit-project-name")).toHaveValue("Antes de editar");
-  await expect(page.getByTestId("edit-project-description")).toHaveValue("old description");
+  await expect(page.getByTestId("edit-project-description-edit")).toHaveValue("old description");
   await expect(page.getByTestId("edit-project-status")).toHaveValue("active");
 });
 
@@ -80,7 +83,7 @@ test("save sends PUT with updated payload", async ({ page }) => {
 
   await page.getByTestId("project-edit-button").click();
   await page.getByTestId("edit-project-name").fill("Nombre actualizado");
-  await page.getByTestId("edit-project-description").fill("nueva descripción");
+  await page.getByTestId("edit-project-description-edit").fill("nueva descripción");
   await page.getByTestId("edit-project-status").selectOption("paused");
   await page.getByTestId("edit-project-save").click();
 

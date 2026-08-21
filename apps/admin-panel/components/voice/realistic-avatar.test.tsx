@@ -3,29 +3,31 @@
 // exigía y nunca se escribió.
 //
 // Por qué existe: `RealisticAvatar` es el avatar VIVO de la videollamada
-// (`components/cortex/cortex-voice-call.tsx` lo monta; `CortexAvatar` de
-// components/cortex/ es un duplicado muerto que nadie importa). Sin test de
+// (`components/cortex/cortex-voice-call.tsx` lo monta). El duplicado muerto que
+// había en `components/cortex/cortex-avatar.tsx` se borró al cerrar C1. Sin test de
 // render, nada impedía que una refactorización del SVG dejara el `affect` sin
 // efecto: el frame llegaría, el estado se actualizaría y la cara seguiría
 // idéntica. Estos tests fijan el ÚNICO contrato observable — el afecto tiene
 // que verse en el DOM — y la degradación a neutro cuando no hay frame.
 //
-// AVISO SOBRE LA DUPLICACIÓN (hueco C1, defecto conocido, NO se arregla aquí):
-// este componente NO llama a `avatarStyleFromAffect` (lib/cortex.ts), sino que
-// reimplementa el mapeo afecto→visual inline (`auraHue` :100, sway :154). Por
-// eso los asserts de abajo son de DIRECCIÓN y RANGO, no de valores exactos:
-// deben seguir en verde tanto con la copia inline de hoy como cuando el avatar
-// pase a usar la función pura (ambos mapeos son monótonos en la valencia y
-// coinciden en la duración del sway).
+// SOBRE LA DUPLICACIÓN (hueco C1): YA ARREGLADO. Este componente consume la
+// función pura `avatarStyleFromAffect` (lib/cortex.ts) en vez de reimplementar el
+// mapeo inline, así que el último describe de este fichero puede exigir IGUALDAD
+// exacta con ella. Los asserts de los primeros describes se dejaron de DIRECCIÓN
+// y RANGO a propósito: siguen valiendo si el diseño visual cambia de rampa.
 
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import React from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RealisticAvatar } from "@/components/voice/realistic-avatar";
 import { avatarStyleFromAffect } from "@/lib/cortex";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function mount(props: Partial<React.ComponentProps<typeof RealisticAvatar>> = {}) {
   return render(
@@ -113,10 +115,9 @@ describe("RealisticAvatar — el afecto del córtex se ve en el DOM (C2)", () =>
   });
 
   it("la activación acelera el vaivén, y coincide con la función pura del mapeo", () => {
-    // El acoplamiento con `avatarStyleFromAffect` se asserta SÓLO en el sway
-    // porque es la única dimensión en la que la copia inline del componente y
-    // la función pura de lib/cortex.ts coinciden hoy (hueco C1). Cuando C1 se
-    // cierre y el avatar llame a la función pura, este assert sigue verde.
+    // Cerrado el hueco C1, el sway sale de `avatarStyleFromAffect` igual que
+    // todo lo demás; este assert (dirección + valor) sigue siendo el que fija
+    // que "más activación = más rápido" no se invierta.
     const calm = mount({ speaking: true, affect: { valence: 0, arousal: 0.1 } });
     const calmSway = swaySeconds(calm.container);
     cleanup();
@@ -185,6 +186,16 @@ describe("RealisticAvatar — el afecto del córtex se ve en el DOM (C2)", () =>
     expect(swaySeconds(under.container)).toBeGreaterThan(0);
   });
 
+  it("la activación acelera el vaivén, y coincide con la función pura del mapeo (bis)", () => {
+    // Duplicado intencionado del assert de arriba en su versión ESTRICTA: ahora
+    // que el componente consume la función pura, el acoplamiento es exacto.
+    const { container } = mount({ speaking: true, affect: { valence: 0.4, arousal: 0.62 } });
+    expect(swaySeconds(container)).toBeCloseTo(
+      avatarStyleFromAffect({ valence: 0.4, arousal: 0.62 }).swayDurationSec,
+      2,
+    );
+  });
+
   it("el avatar sigue a la voz elegida (peinado/rasgos por prefijo Kokoro)", () => {
     const female = mount({ voiceId: "ef_dora" });
     expect(
@@ -199,5 +210,88 @@ describe("RealisticAvatar — el afecto del córtex se ve en el DOM (C2)", () =>
         .querySelector('[data-testid="cortex-avatar"]')
         ?.getAttribute("data-voice-gender"),
     ).toBe("male");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C1 — el mapeo afecto→visual lo gobierna la FUNCIÓN PURA, no una copia inline
+//
+// Estos son los asserts que el hueco C1 pedía y que antes no podían existir:
+// igualdad exacta con `avatarStyleFromAffect` y un parpadeo cuya CADENCIA
+// depende de la activación (antes era un intervalo aleatorio fijo: un córtex
+// excitado parpadeaba igual que uno apagado).
+// ---------------------------------------------------------------------------
+
+/** `ry` de la esclera: 0.4 mientras parpadea, 4.6 con el ojo abierto. */
+function eyeRy(container: HTMLElement): number {
+  const sclera = Array.from(container.querySelectorAll("ellipse")).find(
+    (e) => e.getAttribute("fill") === "#fff",
+  );
+  expect(sclera, "no se encontró la esclera").toBeTruthy();
+  return Number(sclera!.getAttribute("ry"));
+}
+
+describe("RealisticAvatar — consume el mapeo puro (C1)", () => {
+  it("el tono del aura es EXACTAMENTE el de la función pura (una sola verdad)", () => {
+    // Antes había dos rampas distintas: la del componente (`8 + (v+1)*62`) y la
+    // de la función pura (`((v+1)/2)*130`). Con la misma valencia daban tonos
+    // distintos, así que el avatar y cualquier otra superficie que usara la
+    // función pura NO pintaban el mismo estado.
+    for (const valence of [-1, -0.6, 0, 0.35, 1]) {
+      const { container } = mount({ affect: { valence, arousal: 0.4 } });
+      expect(auraHue(container)).toBeCloseTo(
+        avatarStyleFromAffect({ valence, arousal: 0.4 }).hue,
+        0,
+      );
+      cleanup();
+    }
+  });
+
+  it("la boca en reposo sigue el `mouthBias` de la función pura", () => {
+    const { container } = mount({ affect: { valence: -0.5, arousal: 0.3 } });
+    const bias = avatarStyleFromAffect({ valence: -0.5, arousal: 0.3 }).mouthBias;
+    // El componente pinta `132 - mouthBias*5` como punto de control.
+    expect(restMouthControlY(container)).toBeCloseTo(132 - bias * 5, 5);
+  });
+
+  it("con la activación ALTA parpadea antes que con la activación BAJA", () => {
+    // La prueba de que `blinkRate` gobierna de verdad el temporizador: mismo
+    // instante, distinto estado del párpado. Sin `Math.random` fijo el jitter
+    // haría el test aleatorio, así que se clava en 0.5 (factor 1.0 = base).
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+
+    const excited = mount({ affect: { valence: 0, arousal: 1 } });
+    const excitedBase =
+      60_000 / Math.round(avatarStyleFromAffect({ valence: 0, arousal: 1 }).blinkRate);
+    act(() => {
+      vi.advanceTimersByTime(excitedBase + 20);
+    });
+    expect(eyeRy(excited.container)).toBe(0.4); // parpadeando
+    cleanup();
+
+    const calm = mount({ affect: { valence: 0, arousal: 0 } });
+    act(() => {
+      vi.advanceTimersByTime(excitedBase + 20); // el MISMO tiempo
+    });
+    expect(eyeRy(calm.container)).toBe(4.6); // todavía con el ojo abierto
+
+    // …y acaba parpadeando cuando le toca por su propia cadencia.
+    const calmBase =
+      60_000 / Math.round(avatarStyleFromAffect({ valence: 0, arousal: 0 }).blinkRate);
+    act(() => {
+      vi.advanceTimersByTime(calmBase - excitedBase + 40);
+    });
+    expect(eyeRy(calm.container)).toBe(0.4);
+  });
+
+  it("el parpadeo se reprograma al cambiar el afecto y no deja timers vivos al desmontar", () => {
+    // Un timer que sobrevive al unmount dispara `setState` sobre un componente
+    // muerto (y, en la videollamada, se acumula uno por cada frame de afecto).
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const { unmount } = mount({ affect: { valence: 0, arousal: 0.2 } });
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -49,15 +49,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build & push api-server
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: apps/api-server/Dockerfile
@@ -68,6 +68,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Trivy sobre la imagen publicada (prod-11 task_trivy_07).
+      #
+      # TRADE-OFF declarado: el escaneo va DESPUÉS del push, no antes. Hacerlo
+      # antes obligaría a partir el paso en build+load → scan → push, y esta
+      # tubería de release no se puede validar hoy (CI caído por facturación),
+      # así que se prefirió el cambio de menor riesgo. Lo que SÍ garantiza este
+      # orden: el job queda en rojo —la release entera se marca fallida— y el
+      # `needs: api-server` impide que se publiquen los tres backends que
+      # heredan esta base. Convertirlo en gate previo al push es follow-up.
+      - name: Trivy — api-server publicada (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/api-server:${{ needs.prep.outputs.tag }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
   backend:
     name: Build & push ${{ matrix.app }}
     needs: [prep, api-server]
@@ -75,17 +95,24 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        app: [workers, orchestrator, notification-dispatcher]
+        # Toda app cuyo Dockerfile lleva `ARG BASE_IMAGE` va aquí, y una guarda
+        # lo comprueba contra el árbol (tests/unit/test_app_images_are_built_by_ci.py):
+        # `watchdog` entró el 2026-08-02 y esta matriz siguió diciendo tres, así
+        # que su imagen no se publicaba en ningún sitio mientras el compose
+        # canónico ya la pedía por `${IMAGE_WATCHDOG}`. Un servicio declarado sin
+        # imagen publicada no es un servicio: es un `up` que falla en el host de
+        # otro.
+        app: [workers, orchestrator, notification-dispatcher, watchdog]
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build & push ${{ matrix.app }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: apps/${{ matrix.app }}/Dockerfile
@@ -98,21 +125,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Trivy — ${{ matrix.app }} publicada (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.app }}:${{ needs.prep.outputs.tag }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
   admin-panel:
     name: Build & push admin-panel
     needs: prep
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build & push admin-panel
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: apps/admin-panel
           file: apps/admin-panel/Dockerfile
@@ -129,3 +167,14 @@ jobs:
             ${{ env.REGISTRY }}/admin-panel:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trivy — admin-panel publicada (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/admin-panel:${{ needs.prep.outputs.tag }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true

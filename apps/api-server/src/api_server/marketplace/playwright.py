@@ -18,10 +18,10 @@ inventing a parallel concept:
   2. :class:`PlaywrightToolConfig` — the typed, validated *guided config*:
      the operator's run-time choices (browsers, headless, screenshots,
      traces, base_url, timeouts). It is NOT the manifest — the manifest
-     declares the tool; the config records how a given installation drives
+     declares the tool; the config records how a given **deployment** drives
      it. Validation rejects an unknown browser / screenshot mode / trace
      mode, a non-positive timeout, etc., so a bad config never reaches the
-     node-playwright runtime. :meth:`config_schema` emits a JSON-Schema-ish
+     node-playwright runtime. :func:`config_schema` emits a JSON-Schema-ish
      descriptor the admin-panel renders as the guided form (and the manifest
      embeds under ``config_schema`` so the UI can discover it).
 
@@ -37,12 +37,30 @@ exactly like the platform's builtin skills/tools. It is therefore written by a
 BYPASSRLS catalog-publisher session (the loader runs with the migrations role,
 mirroring how the official source is seeded), and every tenant SEES it via the
 ``marketplace_listings_global_read`` SELECT policy but can only INSTALL it into
-its own tenant-scoped ``marketplace_installations`` (RLS). The guided config a
-tenant chooses lives on that tenant-owned installation, never on the shared
-listing.
+its own tenant-scoped ``marketplace_installations`` (RLS).
+
+## Dónde vive la config, desde `task_mkt2_13`
+
+**Ya no en la instalación.** Ése era el anti-patrón que el ADR 0142 midió: la
+`base_url` del sitio bajo prueba es del PROYECTO (el A prueba ``app-a.example``
+y el B ``app-b.example``), y al instalar los proyectos que la usarán ni existen.
+Con las tres capas del ADR 0142 la instalación solo consiente permisos y los
+valores se capturan **al desplegar en cada proyecto**
+(``marketplace_deployments.config``), así que dos proyectos con `base_url`
+distinta conviven — que es justo lo que el modelo viejo no podía expresar.
+
+:class:`PlaywrightToolConfig` NO se retira con el formulario: pasa de guardar la
+config a **validarla**. El :func:`config_schema` declara su nombre bajo
+``x-typed-validator`` y
+:func:`api_server.marketplace.config_schema.validate_deployment_config` lo
+invoca en cada despliegue, así que las reglas que el dialecto genérico no sabe
+expresar (una ``base_url`` de espacios, por ejemplo) se siguen aplicando —
+ahora en el sitio correcto y para los tres tipos de listing por igual.
 
 Pure Python + SQLAlchemy; PyYAML (existing dep) parses the manifest. No new
-dependency, no migration.
+dependency, no migration — y **la mudanza tampoco la necesita**:
+``marketplace_installations`` nunca tuvo columna de config (grep de sus columnas
+en :mod:`api_server.db.marketplace`), así que no hay valores viejos que migrar.
 """
 
 from __future__ import annotations
@@ -56,11 +74,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.marketplace import (
+    ListingReviewStatus,
     MarketplaceListing,
     MarketplaceListingKind,
     MarketplaceSource,
     MarketplaceSourceType,
     MarketplaceTrustLevel,
+)
+from api_server.marketplace.config_schema import (
+    TYPED_VALIDATOR_KEY,
+    register_typed_validator,
 )
 from api_server.marketplace.tool_format import ToolManifest, parse_tool_manifest
 
@@ -215,8 +238,7 @@ class PlaywrightToolConfig:
             except ValueError as exc:
                 allowed = ", ".join(b.value for b in PlaywrightBrowser)
                 raise PlaywrightConfigError(
-                    f"playwright config 'browsers' has unknown browser {item!r}; "
-                    f"allowed: {allowed}"
+                    f"playwright config 'browsers' has unknown browser {item!r}; allowed: {allowed}"
                 ) from exc
             if browser not in seen:  # de-dupe, preserve selection order
                 seen.add(browser)
@@ -267,6 +289,34 @@ class PlaywrightToolConfig:
         return int(raw)
 
 
+# The name a ``config_schema`` uses to ask for the typed validation below.
+PLAYWRIGHT_TYPED_VALIDATOR = "playwright"
+
+
+def validate_playwright_config(values: dict[str, Any]) -> list[str]:
+    """Typed validation of an already structurally-valid deployment config.
+
+    The bridge that keeps :class:`PlaywrightToolConfig` useful after
+    ``task_mkt2_13`` moved the form to the deployment: the generic dialect in
+    :mod:`api_server.marketplace.config_schema` checks types, enums and ranges;
+    this checks what only Playwright knows — an all-whitespace ``base_url``, for
+    one, which is a perfectly good ``type: string`` and a useless URL.
+
+    Returns a list (never raises) because the deployment form wants to paint
+    every problem at once. One message per call is enough: ``from_dict`` stops
+    at the first failure by design, and a config with two typed problems is
+    fixed one at a time anyway.
+    """
+    try:
+        PlaywrightToolConfig.from_dict(values)
+    except PlaywrightConfigError as exc:
+        return [str(exc)]
+    return []
+
+
+register_typed_validator(PLAYWRIGHT_TYPED_VALIDATOR, validate_playwright_config)
+
+
 def config_schema() -> dict[str, Any]:
     """The guided-config descriptor the admin-panel renders as a form.
 
@@ -275,9 +325,17 @@ def config_schema() -> dict[str, Any]:
     flag, and default. Embedded in the tool manifest under ``config_schema``
     so the front-end discovers it from the listing's manifest JSONB without a
     hard-coded copy.
+
+    Since ``task_mkt2_13`` it also NAMES its typed validator
+    (:data:`PLAYWRIGHT_TYPED_VALIDATOR`), so every deployment that carries this
+    schema runs :func:`validate_playwright_config` on top of the generic
+    dialect. The form this drives is the deployment's
+    (``components/marketplace/deployment-config-form.tsx``), not the install's —
+    the install screen is gone.
     """
     default = PlaywrightToolConfig()
     return {
+        TYPED_VALIDATOR_KEY: PLAYWRIGHT_TYPED_VALIDATOR,
         "type": "object",
         "properties": {
             "browsers": {
@@ -389,8 +447,30 @@ def playwright_listing_manifest() -> dict[str, Any]:
     ``config_schema`` — so the admin-panel discovers the guided form directly
     off the listing's manifest, and the install/sandbox flow still reads the
     standard tool fields it already understands.
+
+    ## Por qué se estampa ``implementation_type`` aquí (`task_mkt2_13`)
+
+    Sin este campo **el listing destacado del marketplace no se podía
+    instalar**: la materialización del ADR 0100 corta por
+    ``implementation_type`` y un valor ausente cae en su rama de error, así que
+    ``POST /marketplace/installations`` devolvía 422 («listing manifest has no
+    materialisable implementation_type ('')») desde que esa puerta se añadió,
+    después de `task_09_13`. Es el modo de fallo nº1 de esta base —dos piezas
+    correctas que nadie ejerció juntas— y lo destapó el test de despliegue de
+    esta tarea, no un usuario.
+
+    El valor es ``docker_command`` porque es la verdad: Playwright conduce un
+    navegador real dentro del runtime ``node-playwright``, o sea código
+    arbitrario en un contenedor. Esa clasificación lo deja **diferido honesto**
+    (ADR 0081 Fase B/C): la instalación entra sin fila de catálogo y el
+    despliegue lo dice en un aviso, en vez de fingir una tool invocable que
+    ningún agente podría llamar. Cuando exista el sandbox out-of-process, lo que
+    cambia es la materialización, no este manifest.
     """
+    from api_server.db.domain import ToolImplementationType
+
     manifest = playwright_tool_manifest().to_manifest_dict()
+    manifest["implementation_type"] = ToolImplementationType.DOCKER_COMMAND.value
     manifest["config_schema"] = config_schema()
     return manifest
 
@@ -473,6 +553,10 @@ async def seed_playwright_listing(session: AsyncSession) -> SeedResult:
         listing.kind = MarketplaceListingKind.TOOL.value
         listing.description = manifest.description
         listing.trust_level = MarketplaceTrustLevel.VERIFIED.value
+        # ADR 0142 D6: catálogo oficial = ya revisado (lo cura la plataforma).
+        # Explícito para que un cambio del `server_default` de la 0129 no lo
+        # saque del catálogo en el siguiente re-seed sin que nadie lo vea.
+        listing.review_status = ListingReviewStatus.PUBLISHED.value
         listing.manifest = listing_manifest
         listing.requested_permissions = requested_permissions
         await session.flush()
@@ -487,6 +571,7 @@ async def seed_playwright_listing(session: AsyncSession) -> SeedResult:
         description=manifest.description,
         author="Platform",
         trust_level=MarketplaceTrustLevel.VERIFIED.value,
+        review_status=ListingReviewStatus.PUBLISHED.value,
         manifest=listing_manifest,
         requested_permissions=requested_permissions,
     )
@@ -500,6 +585,7 @@ __all__ = [
     "PLAYWRIGHT_TOOL_NAME",
     "PLAYWRIGHT_TOOL_VERSION",
     "PLAYWRIGHT_TOOL_YAML",
+    "PLAYWRIGHT_TYPED_VALIDATOR",
     "PlaywrightBrowser",
     "PlaywrightConfigError",
     "PlaywrightToolConfig",
@@ -512,4 +598,5 @@ __all__ = [
     "playwright_listing_manifest",
     "playwright_tool_manifest",
     "seed_playwright_listing",
+    "validate_playwright_config",
 ]

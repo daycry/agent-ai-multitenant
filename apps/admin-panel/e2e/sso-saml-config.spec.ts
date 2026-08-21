@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/settings/sso/saml — the per-tenant SAML 2.0 config UI
@@ -123,9 +124,7 @@ async function setup(page: Page, initial: SamlConfigFixture[]): Promise<Capture>
   };
   let configs = [...initial];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route("http://localhost:8001/auth/sso/saml/sp-metadata", (route) =>
     route.fulfill({

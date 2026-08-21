@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the docs visor markdown rendering pane (Plan 07 Fase D, task_07_12).
@@ -86,9 +87,7 @@ const UNSAFE_CONTENT = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/projects", (route) =>
     route.fulfill({
       status: 200,
@@ -143,7 +142,11 @@ test("renders markdown: heading, inline code, highlighted code block, table", as
 
   // Heading rendered as a real <h1> with the slugged id rehype-slug assigns.
   await expect(md.getByRole("heading", { level: 1, name: "Guía de Ejemplo" })).toBeVisible();
-  await expect(md.locator("#primera-seccion")).toBeVisible();
+  // OJO con el slug: `github-slugger` —la librería que usa `rehype-slug`, y la
+  // misma que `extractToc`— CONSERVA los acentos. "Primera Sección" es
+  // `#primera-sección`, no `#primera-seccion`; el spec daba por hecho que se
+  // limpiaban y buscaba un ancla que no existe (2026-08-19).
+  await expect(md.locator("#primera-sección")).toBeVisible();
 
   // GFM table rendered.
   await expect(md.getByRole("table")).toBeVisible();
@@ -159,11 +162,18 @@ test("auto-generates a table of contents from the headings", async ({ page }) =>
 
   const toc = page.getByTestId("docs-toc");
   await expect(toc).toBeVisible();
-  await expect(page.getByTestId("docs-toc-link-primera-seccion")).toBeVisible();
+  await expect(page.getByTestId("docs-toc-link-primera-sección")).toBeVisible();
   await expect(page.getByTestId("docs-toc-link-diagrama")).toBeVisible();
   await expect(page.getByTestId("docs-toc-link-tabla")).toBeVisible();
   // The link points at the matching heading anchor.
   await expect(page.getByTestId("docs-toc-link-tabla")).toHaveAttribute("href", "#tabla");
+  // Y el caso que de verdad puede desalinearse: con acento, el href del TOC y el
+  // id que pinta el renderer tienen que seguir siendo el MISMO slug.
+  await expect(page.getByTestId("docs-toc-link-primera-sección")).toHaveAttribute(
+    "href",
+    "#primera-sección",
+  );
+  await expect(page.getByTestId("docs-markdown").locator("#primera-sección")).toBeVisible();
 });
 
 test("renders a mermaid fence as a diagram (not a raw code block)", async ({ page }) => {

@@ -22,12 +22,13 @@ priority: P1
 | Campo                              | Valor                                  |
 | ---------------------------------- | -------------------------------------- |
 | **ID del Plan**                    | `prod-12-hardening-tools-agentes`      |
-| **Estado**                         | `in_progress`                          |
 | **Prioridad**                      | P1                                     |
 | **Bloqueado por**                  | — (coordinar con prod-01 y prod-06)    |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                            |
 | **Tiempo estimado (persona-días)** | 17 (suma de tareas: 17,0)              |
 | **Rama git sugerida**              | `plan/prod-12-hardening-tools-agentes` |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -176,10 +177,10 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   ```yaml
   - id: auto_prod12_ssrf_01_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_ssrf_guard.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_ssrf_guard.py -v"
   - id: auto_prod12_ssrf_01_b
     runtime: python-pytest
-    command: "pytest tests/unit/test_http_tools_destination_validation.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py -v"
   ```
 
 #### `task_prod12_ssrf_02` — Anclaje de DNS y `follow_redirects=False` explícito
@@ -194,9 +195,20 @@ de ingestión es fail-open si ClamAV está caído (api-1).
 - **Depende de**: task_prod12_ssrf_01
 - **Tests automáticos**:
   ```yaml
+  # CORREGIDO el 2026-08-19: `tests/unit/test_http_tools_dns_pinning_redirects.py` no ha
+  # existido nunca. El trabajo SÍ está —`http_tool.py:78-92` y `http_endpoint_tool.py`
+  # conectan a `pinned_url(url, pin)` con `Host` y `sni_hostname` preservados y
+  # `follow_redirects=False` explícito— y su test también, con otro nombre y en OTRO ÁRBOL:
+  # vive junto al código que prueba, en `docker/agent-runtimes/agent-runtime/tests/`, y
+  # cubre las dos mitades de esta casilla (su propio docstring: «conectan a la IP pineada
+  # (Host + SNI preservados, redirects NO seguidos)»).
+  # Comprobado que muerde: `follow_redirects=False` → `True` en `http_tool.py` y
+  # `test_request_tool_does_not_follow_redirects` se puso ROJO enseñando el salto real
+  # (`GET https://93.184.216.34/redirige` → `GET http://10.0.0.5/internal`, o sea el SSRF
+  # consumado). Restaurado con `git show HEAD:… > …`; 7 verdes.
   - id: auto_prod12_ssrf_02_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_http_tools_dns_pinning_redirects.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_http_tools_destination_validation.py -v"
   ```
 
 #### `task_prod12_ssrf_03` — Validar las entradas de allowlist en el api-server
@@ -232,7 +244,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   ```yaml
   - id: auto_prod12_allow_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_execution_request_allowed_domains.py -v"
+    command: "pytest tests/unit/test_execution_request_allowed_domains.py -v"
   ```
 
 #### `task_prod12_allow_02` — Test e2e de la cadena de allowlist + documentación
@@ -283,7 +295,7 @@ de ingestión es fail-open si ClamAV está caído (api-1).
   ```yaml
   - id: auto_prod12_net_01_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_network_policy_open_egress.py -v"
+    command: "pytest tests/integration/test_install_sandbox.py -v"
   ```
 
 #### `task_prod12_img_01` — Imágenes de test-runtime no-root y dep-cache escribible
@@ -369,17 +381,24 @@ de ingestión es fail-open si ClamAV está caído (api-1).
       hace `docker.from_env()` dentro del sandbox, pero la imagen no instala el paquete
       `docker` (pyproject.toml:6) ni recibe socket por diseño (Dockerfile:8 "carries NO
       Docker client") — hoy los `run*\*`(run_pytest/run_lint/…) inyectados por esta vía
-fallan en la primera llamada. Opción (a): retirarla del catálogo y del wiring,
-documentando que la ejecución real de tests va por`TestRuntimeRunner` del worker.
+      fallan en la primera llamada. Opción (a): retirarla del catálogo y del wiring,
+      documentando que la ejecución real de tests va por`TestRuntimeRunner` del worker.
       Opción (b): error explícito "no soportado en sandbox" en boot. Actualizar la
       asignación de tools en seeds/catálogo para que el operador no pueda asignar una
       tool muerta.
 - **Tiempo**: 1 día · **Complejidad**: m
+- ✅ **Comando corregido (2026-08-20)**: el test **existe y pasa**, sólo que en otro árbol. La
+  tool corre DENTRO del sandbox, así que su test vive junto al código, en
+  `docker/agent-runtimes/agent-runtime/tests/` — la nota de cierre de la Fase D (arriba, del
+  2026-07-08) ya lo nombraba como `tests/test_docker_command_tool_retired.py`, que es su ruta
+  **relativa al agent-runtime**, y el bloque `command:` la copió como si fuera relativa a la
+  raíz del repo. Es el mismo desplazamiento que ya se corrigió en `task_prod03_12` y
+  `task_prod12_ssrf_02`. Verde 2/2 desde la raíz.
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod12_docker_01_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_docker_command_tool_retired.py -v"
+    command: "pytest docker/agent-runtimes/agent-runtime/tests/test_docker_command_tool_retired.py -v"
   ```
 
 ### Fase E — Marketplace y antivirus (quality-4, api-1)

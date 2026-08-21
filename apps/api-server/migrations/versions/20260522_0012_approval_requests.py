@@ -115,7 +115,7 @@ def downgrade() -> None:
     # Shrink back, truncating any value that no longer fits — keeps the
     # downgrade structurally reversible even with awaiting_human_approval rows.
     op.execute(
-        "ALTER TABLE executions ALTER COLUMN status TYPE VARCHAR(16)" " USING substr(status, 1, 16)"
+        "ALTER TABLE executions ALTER COLUMN status TYPE VARCHAR(16) USING substr(status, 1, 16)"
     )
     op.execute("DROP POLICY IF EXISTS approval_requests_tenant_isolation ON approval_requests")
     op.execute("ALTER TABLE approval_requests DISABLE ROW LEVEL SECURITY")

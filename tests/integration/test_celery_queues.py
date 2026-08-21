@@ -30,14 +30,18 @@ def test_queues_are_declared() -> None:
     app = _app()
     declared = {q.name for q in app.conf.task_queues}
     # ADR 0083 Option B: only the lanes with a real producer + consumer.
+    # `marketplace` (prod-13 task_prod13_01) la cumple: productor en
+    # `api_server.celery_client.enqueue_marketplace_install_gates`, consumidor en
+    # el servicio `workers-marketplace` de los dos composes.
     assert declared == {
         "default",
         "ingestion",
         "test",
         "review",
         "privileged",
+        "marketplace",
     }
-    assert len(QUEUE_NAMES) == 5
+    assert len(QUEUE_NAMES) == 6
     # The retired lanes must not creep back in.
     assert "heavy" not in declared
     assert "gpu" not in declared

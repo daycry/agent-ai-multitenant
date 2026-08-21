@@ -24,19 +24,25 @@ logged and never echoed back to the client (the API returns only
 
 from __future__ import annotations
 
-import base64
-import hashlib
+from cryptography.fernet import MultiFernet
 
-from cryptography.fernet import Fernet
-
+from api_server.auth.crypto_keys import build_multifernet
 from api_server.config import get_settings
 
 
-def _fernet() -> Fernet:
-    """Build the Fernet cipher from the configured notification key."""
-    raw = get_settings().notification_encryption_key.get_secret_value().encode("utf-8")
-    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
-    return Fernet(key)
+def _fernet() -> MultiFernet:
+    """Build the cipher over the notification key RING (prod-05 task_prod05_01).
+
+    The head key encrypts, every key decrypts. The PAIR CONTRACT with the
+    dispatcher is unchanged and now applies to the whole ring:
+    ``API_SERVER_NOTIFICATION_ENCRYPTION_KEYS`` must equal
+    ``NOTIFY_NOTIFICATION_ENCRYPTION_KEYS``, because the dispatcher is the READ
+    side of the ciphertext this module writes. Deploying only one of the two
+    services during a rotation is what breaks the pair — the runbook orders both
+    in the same window, and ``tests/unit/test_multifernet_builders.py`` pins the
+    two parsers against each other so they cannot drift silently.
+    """
+    return build_multifernet(get_settings().notification_encryption_key_ring)
 
 
 def encrypt_channel_secret(plaintext: str) -> str:

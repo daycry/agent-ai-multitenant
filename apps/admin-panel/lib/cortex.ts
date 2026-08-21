@@ -275,6 +275,20 @@ export interface CortexPursuit {
   surfaced_at: string | null;
   learning_memory_id: string | null;
   search_count: number;
+  /**
+   * Owner-approval gate (ADR 0078): `null`/ausente = sin decidir (o el gate está
+   * apagado y no hace falta decidir nada), `true`/`false` = decisión del owner.
+   * OPCIONAL a propósito: la columna y el campo del schema los está añadiendo el
+   * carril de backend; mientras no lleguen, la UI se comporta como si el gate
+   * estuviera apagado en vez de romperse.
+   */
+  approved?: boolean | null;
+  /**
+   * Coste real de la pasada (`Numeric(12,6)` de la tabla). También opcional: el
+   * bucle todavía no lo escribe, y la UI prefiere NO mostrar coste a mostrar un
+   * 0 que parecería real.
+   */
+  cost_usd?: number | null;
 }
 
 /**
@@ -289,6 +303,22 @@ export function getCortexPursuits(
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
   const qs = params.toString();
   return cortexFetch<CortexPursuit[]>(`/curiosity/pursuits${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * POST /owner/cortex/curiosity/pursuits/{id}/approve — decisión del owner en el
+ * owner-approval gate (ADR 0078): `true` mueve `selected→searching` en la
+ * siguiente pasada del bucle, `false` la deja en `skipped`.
+ *
+ * Contrato del endpoint que está construyendo el carril de backend (F4,
+ * Sub-fase 4.5): mismo verbo para aprobar y rechazar, con `approved` en el
+ * cuerpo — NO un DELETE ni dos rutas distintas.
+ */
+export function decideCortexPursuit(id: string, approved: boolean): Promise<CortexPursuit> {
+  return cortexFetch<CortexPursuit>(`/curiosity/pursuits/${id}/approve`, {
+    method: "POST",
+    body: { approved },
+  });
 }
 
 /** Estado de la autonomía del córtex (kill-switch + gates + budget de hoy). */
@@ -559,6 +589,25 @@ export interface CortexAvatarStyle {
   intensity: number;
   /** Duración del ciclo de sway en segundos (más activación → más rápido). */
   swayDurationSec: number;
+  /**
+   * Parpadeos por minuto. Sube con la ACTIVACIÓN: un córtex excitado parpadea
+   * más que uno apagado. Siempre > 0 — un 0 dejaría los ojos abiertos para
+   * siempre (y dividiría por cero al calcular el intervalo).
+   */
+  blinkRate: number;
+  /**
+   * Sesgo de la comisura de la boca EN REPOSO ∈ [-1,1]: +1 sonrisa plena, −1
+   * mueca (= la valencia clampada). El lip-sync manda mientras habla.
+   */
+  mouthBias: number;
+  /**
+   * La etiqueta que pinta el avatar: la `mood_label` del backend, recortada.
+   * VACÍA si no hay ninguna — NO se deriva del PAD aquí a propósito: la etiqueta
+   * bilingüe la deriva el backend (`derive_mood_label`) y duplicar ese mapeo
+   * crearía dos verdades. Vacía ⇒ el avatar no enseña chip de mood (no se
+   * inventa un estado de ánimo que el servidor no ha mandado).
+   */
+  label: string;
 }
 
 /**
@@ -566,13 +615,20 @@ export interface CortexAvatarStyle {
  *
  *   - **Color/tono** sigue la VALENCIA: valence −1 → rojo (hue 0), 0 → ámbar
  *     (hue ~50), +1 → verde (hue ~130). Positivo = cálido/verde, negativo = rojo.
- *   - **Saturación** y **energía/sway** siguen la ACTIVACIÓN (arousal ∈ [0,1]):
- *     más activación → más saturado y un sway más amplio y rápido.
+ *   - **Saturación**, **energía/sway** y **frecuencia de parpadeo** siguen la
+ *     ACTIVACIÓN (arousal ∈ [0,1]): más activación → más saturado, sway más
+ *     rápido y más parpadeos por minuto.
+ *   - **`mouthBias`** es la valencia clampada: la curvatura de la boca en reposo.
+ *   - **`label`** es la `mood_label` del backend recortada (vacía si no hay).
+ *
+ * Es la ÚNICA fuente del mapeo afecto→visual: el avatar vivo
+ * (`components/voice/realistic-avatar.tsx`) la consume en vez de reimplementarla
+ * inline, que era el hueco C1 de la auditoría 2026-07-27.
  *
  * Clampa fuera de rango (un valor sucio nunca produce un color/animación inválida).
  */
 export function avatarStyleFromAffect(
-  affect: Pick<CortexVoiceAffectFrame, "valence" | "arousal">,
+  affect: Pick<CortexVoiceAffectFrame, "valence" | "arousal"> & { mood_label?: string },
 ): CortexAvatarStyle {
   const valence = Math.min(1, Math.max(-1, affect.valence));
   const arousal = Math.min(1, Math.max(0, affect.arousal));
@@ -582,5 +638,20 @@ export function avatarStyleFromAffect(
   const saturation = 45 + arousal * 45;
   // Sway más rápido (3.4s → 1.8s) cuanto mayor la activación.
   const swayDurationSec = 3.4 - arousal * 1.6;
-  return { hue, saturation, intensity: arousal, swayDurationSec };
+  // Parpadeo: ~11/min en reposo profundo, ~29/min al máximo de activación
+  // (la banda humana está en 10-30, así que se queda dentro de lo verosímil).
+  const blinkRate = BLINK_RATE_MIN + arousal * (BLINK_RATE_MAX - BLINK_RATE_MIN);
+  return {
+    hue,
+    saturation,
+    intensity: arousal,
+    swayDurationSec,
+    blinkRate,
+    mouthBias: valence,
+    label: affect.mood_label?.trim() ?? "",
+  };
 }
+
+/** Banda de parpadeo (parpadeos/minuto) del avatar: reposo → máxima activación. */
+export const BLINK_RATE_MIN = 11;
+export const BLINK_RATE_MAX = 29;

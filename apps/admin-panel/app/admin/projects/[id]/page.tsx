@@ -13,6 +13,12 @@
  *   name, description, status, team_id).
  *
  * Borra vía dialog con confirm-by-name → DELETE /projects/{id}.
+ *
+ * i18n (prod-16 `task_prod16_03`): esta pantalla NO entraba a trozos. Su texto
+ * se reparte entre este fichero, seis piezas de `components/projects/` y
+ * `lib/project-governance.ts`; migrar sólo el marco daba la pantalla
+ * mitad-y-mitad que el plan cierra. El test que lo fija es `i18n.test.tsx`, al
+ * lado.
  */
 
 import { useEffect, useState } from "react";
@@ -66,6 +72,8 @@ import { ProjectGovernanceSection } from "@/components/projects/governance-secti
 import { ReviewPreviewSection } from "@/components/projects/review-preview-section";
 import { RuntimeServicesSection } from "@/components/projects/runtime-services-section";
 import { ApiError, apiFetch } from "@/lib/api";
+import { dictionary, useT, type MessageKey } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 type ProjectStatus = "active" | "paused" | "archived";
 
@@ -107,90 +115,78 @@ interface ProjectUpdate {
   chat_model_config?: ChatModelConfig;
 }
 
+type HubKey = MessageKey<"projectHub">;
+
 const STATUS_VARIANT: Record<string, BadgeVariant> = {
   active: "success",
   paused: "warning",
   archived: "muted",
 };
 
-const STATUS_OPTIONS: { value: ProjectStatus; label: string }[] = [
-  { value: "active", label: "Activo" },
-  { value: "paused", label: "Pausado" },
-  { value: "archived", label: "Archivado" },
-];
+const STATUS_OPTIONS = [
+  { value: "active", labelKey: "statusActive" },
+  { value: "paused", labelKey: "statusPaused" },
+  { value: "archived", labelKey: "statusArchived" },
+] as const satisfies readonly { value: ProjectStatus; labelKey: HubKey }[];
 
 // The 8 sub-sections every project always has (some may be empty,
 // like dep-cache for a brand-new project, but they're always
 // reachable). Tasks lista TODAS las tareas del proyecto (incluye las
 // que están fuera de un plan).
+//
+// El catálogo guarda las CLAVES del diccionario, no los textos: es un dato de
+// UI y traducirlo en el sitio de uso obliga a que las dos caras existan.
 const SUBSECTIONS = [
-  {
-    key: "chat",
-    label: "Chat",
-    description: "Conversación con los agentes del proyecto.",
-    Icon: MessageSquare,
-  },
-  {
-    key: "plans",
-    label: "Planes",
-    description: "Planes de construcción + Kanban de sus tareas.",
-    Icon: Workflow,
-  },
-  {
-    key: "tasks",
-    label: "Tasks",
-    description: "Todas las tareas del proyecto, incluidas las que no tienen plan.",
-    Icon: ListTodo,
-  },
+  { key: "chat", labelKey: "sectionChat", descKey: "sectionChatDesc", Icon: MessageSquare },
+  { key: "plans", labelKey: "sectionPlans", descKey: "sectionPlansDesc", Icon: Workflow },
+  { key: "tasks", labelKey: "sectionTasks", descKey: "sectionTasksDesc", Icon: ListTodo },
   {
     key: "knowledge-bases",
-    label: "Knowledge Bases",
-    description: "Bases de conocimiento + documentos indexados.",
+    labelKey: "sectionKbs",
+    descKey: "sectionKbsDesc",
     Icon: Database,
   },
-  {
-    key: "memories",
-    label: "Memoria",
-    description: "Lo que el equipo recuerda en el scope del proyecto (project_shared).",
-    Icon: Brain,
-  },
-  {
-    key: "mcp-servers",
-    label: "MCP servers",
-    description: "Servidores MCP a los que se conectan los agentes.",
-    Icon: Plug,
-  },
+  { key: "memories", labelKey: "sectionMemories", descKey: "sectionMemoriesDesc", Icon: Brain },
+  { key: "mcp-servers", labelKey: "sectionMcp", descKey: "sectionMcpDesc", Icon: Plug },
   {
     key: "agent-tools-diagnostic",
-    label: "Tools por agente",
-    description: "Diagnóstico read-only de tools wired a cada agente.",
+    labelKey: "sectionToolsDiagnostic",
+    descKey: "sectionToolsDiagnosticDesc",
     Icon: Bot,
   },
   {
     key: "commands",
-    label: "Comandos & runtime",
-    description: "Comandos autorizados (shell_exec) + runtime por defecto del stack.",
+    labelKey: "sectionCommands",
+    descKey: "sectionCommandsDesc",
     Icon: Terminal,
   },
   {
     key: "dep-cache",
-    label: "Caché de dependencias",
-    description: "Invalidar caché de deps por runtime.",
+    labelKey: "sectionDepCache",
+    descKey: "sectionDepCacheDesc",
     Icon: Layers,
   },
   {
     key: "incoming-webhooks",
-    label: "Webhooks entrantes",
-    description: "Eventos de GitHub, Jira, Sentry… que disparan acciones.",
+    labelKey: "sectionWebhooks",
+    descKey: "sectionWebhooksDesc",
     Icon: Webhook,
   },
-] as const;
+] as const satisfies readonly {
+  key: string;
+  labelKey: HubKey;
+  descKey: HubKey;
+  Icon: typeof Bot;
+}[];
 
 export default function ProjectHubPage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id ?? "";
   const router = useRouter();
   const queryClient = useQueryClient();
+  const t = useT("projectHub");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
 
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -236,8 +232,8 @@ export default function ProjectHubPage() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8" data-testid="project-hub">
       <PageHeader
         icon={<FolderKanban className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title={project?.name ?? "Proyecto"}
-        description={project?.description ?? "Cargando…"}
+        title={project?.name ?? t("fallbackTitle")}
+        description={project?.description ?? tCommon("loading")}
         actions={
           project && (
             <div className="flex gap-2">
@@ -248,7 +244,7 @@ export default function ProjectHubPage() {
                 data-testid="project-edit-button"
               >
                 <Pencil className="mr-1 h-4 w-4" />
-                Editar
+                {t("edit")}
               </Button>
               <Button
                 variant="destructive"
@@ -257,7 +253,7 @@ export default function ProjectHubPage() {
                 data-testid="project-delete-button"
               >
                 <Trash2 className="mr-1 h-4 w-4" />
-                Borrar
+                {t("delete")}
               </Button>
             </div>
           )
@@ -274,11 +270,11 @@ export default function ProjectHubPage() {
       {isError && (
         <Card className="p-6" data-testid="project-error">
           <p className="text-danger-soft-foreground text-sm">
-            No se pudo cargar el proyecto: {error?.message ?? "error desconocido"}.
+            {t("loadError", { detail: errorText(error) })}
           </p>
           <div className="mt-3">
             <Button asChild variant="outline" size="sm">
-              <Link href="/admin/projects">Volver al listado</Link>
+              <Link href="/admin/projects">{t("backToList")}</Link>
             </Button>
           </div>
         </Card>
@@ -288,12 +284,12 @@ export default function ProjectHubPage() {
         <>
           {/* Status banner */}
           <div className="mb-6 flex items-center gap-3" data-testid="project-status-row">
-            <span className="text-muted-foreground text-sm">Estado:</span>
+            <span className="text-muted-foreground text-sm">{t("statusLabel")}</span>
             <Badge variant={STATUS_VARIANT[project.status] ?? "muted"}>{project.status}</Badge>
-            {project.is_template && <Badge variant="info">plantilla</Badge>}
+            {project.is_template && <Badge variant="info">{t("templateBadge")}</Badge>}
             {project.team_id && (
               <span className="text-muted-foreground text-xs">
-                Team: <code>{project.team_id.slice(0, 8)}</code>
+                {t("teamLabel")} <code>{project.team_id.slice(0, 8)}</code>
               </span>
             )}
           </div>
@@ -305,21 +301,16 @@ export default function ProjectHubPage() {
           </div>
 
           {/* Modelo de EJECUCIÓN del proyecto (ADR 0065): proveedor concreto por nombre,
-              uniforme con el del chat y el asistente. Lo heredan los agentes sin modelo. */}
+              uniforme con el del chat y el asistente. Lo heredan los agentes sin modelo.
+              `ChatModelSection` recibe el par bilingüe y lo resuelve con `pickLang`
+              (su contrato, ADR 0065): se le pasa la entrada del diccionario entera. */}
           <div className="mb-6">
             <ChatModelSection
               value={project.model_config}
               pending={saveModel.isPending}
               idPrefix="project-exec"
-              title={{ es: "Modelo del proyecto", en: "Project model" }}
-              description={{
-                es:
-                  "Proveedor + modelo por defecto del proyecto, que heredan los agentes sin " +
-                  "modelo propio. Vacío = heredar del nivel superior (equipo → plataforma).",
-                en:
-                  "The project's default provider + model, inherited by agents without their " +
-                  "own. Empty = inherit from the level above (team → platform).",
-              }}
+              title={dictionary.projectHub.execModelTitle}
+              description={dictionary.projectHub.execModelDescription}
               onSave={(cfg) => saveModel.mutate(cfg)}
             />
           </div>
@@ -370,18 +361,18 @@ export default function ProjectHubPage() {
 
           {/* ADR 0130: levantar la app del proyecto (rama por defecto) en preview 24h. */}
           <div className="mb-6">
-            <PreviewLauncher scope="projects" id={projectId} title="Preview de la app (proyecto)" />
+            <PreviewLauncher scope="projects" id={projectId} />
           </div>
 
           {/* Sub-sections grid */}
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Secciones
+            {t("sectionsHeading")}
           </h2>
           <div
             className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
             data-testid="project-subsections"
           >
-            {SUBSECTIONS.map(({ key, label, description, Icon }) => (
+            {SUBSECTIONS.map(({ key, labelKey, descKey, Icon }) => (
               <Card
                 key={key}
                 data-testid={`project-section-${key}`}
@@ -394,9 +385,9 @@ export default function ProjectHubPage() {
                 >
                   <div className="mb-2 flex items-center gap-2">
                     <Icon className="h-5 w-5 text-muted-foreground" />
-                    <h3 className="font-semibold">{label}</h3>
+                    <h3 className="font-semibold">{t(labelKey)}</h3>
                   </div>
-                  <p className="text-sm text-muted-foreground">{description}</p>
+                  <p className="text-sm text-muted-foreground">{t(descKey)}</p>
                 </Link>
               </Card>
             ))}
@@ -449,6 +440,8 @@ function ProjectEditDialog({
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
 }) {
+  const t = useT("projectHub");
+  const errorText = useErrorText();
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description ?? "");
   const [status, setStatus] = useState<ProjectStatus>(
@@ -489,15 +482,12 @@ function ProjectEditDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Editar proyecto</DialogTitle>
-          <DialogDescription>
-            Cambia los campos básicos. La configuración avanzada (MCP, KBs, etc.) se edita desde sus
-            respectivas sub-secciones.
-          </DialogDescription>
+          <DialogTitle>{t("editTitle")}</DialogTitle>
+          <DialogDescription>{t("editDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-name">Nombre</Label>
+            <Label htmlFor="edit-name">{t("fieldName")}</Label>
             <Input
               id="edit-name"
               value={name}
@@ -507,7 +497,7 @@ function ProjectEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
+            <Label>{t("fieldDescription")}</Label>
             <MarkdownTextarea
               value={description}
               onChange={setDescription}
@@ -516,7 +506,7 @@ function ProjectEditDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-status">Estado</Label>
+            <Label htmlFor="edit-status">{t("fieldStatus")}</Label>
             <Select
               id="edit-status"
               value={status}
@@ -525,43 +515,40 @@ function ProjectEditDialog({
             >
               {STATUS_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {o.label}
+                  {t(o.labelKey)}
                 </option>
               ))}
             </Select>
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="edit-team">Equipo</Label>
+            <Label htmlFor="edit-team">{t("fieldTeam")}</Label>
             <Select
               id="edit-team"
               value={teamId}
               onChange={(e) => setTeamId(e.target.value)}
               data-testid="edit-project-team"
             >
-              <option value="">Sin equipo</option>
-              {(teamsQuery.data ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
+              <option value="">{t("noTeam")}</option>
+              {(teamsQuery.data ?? []).map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
                 </option>
               ))}
             </Select>
-            <p className="text-muted-foreground text-xs">
-              El equipo del proyecto gobierna qué agentes ejecutan sus tareas y la política de
-              memoria (ADR 0071).
-            </p>
+            <p className="text-muted-foreground text-xs">{t("teamHint")}</p>
           </div>
           {mutation.isError && (
             <p
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="edit-project-error"
             >
-              {mutation.error?.message ?? "Error al guardar"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={!name.trim() || mutation.isPending}
@@ -575,7 +562,7 @@ function ProjectEditDialog({
             }
             data-testid="edit-project-save"
           >
-            {mutation.isPending ? "Guardando…" : "Guardar"}
+            {mutation.isPending ? t("saving") : t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -598,8 +585,26 @@ function ProjectDeleteDialog({
   onOpenChange: (v: boolean) => void;
   onDeleted: () => void;
 }) {
+  const t = useT("projectHub");
+  const errorText = useErrorText();
   const [typed, setTyped] = useState("");
   const matches = typed === project.name;
+
+  /**
+   * Cerrar SIEMPRE limpia la confirmación tecleada.
+   *
+   * El botón Cancelar llamaba a `onOpenChange(false)` directamente, saltándose
+   * el envoltorio del `<Dialog>` que hacía el reset: al reabrir, el nombre
+   * seguía escrito y el botón destructivo estaba HABILITADO de entrada. La
+   * confirmación por nombre existe justo para que borrar sea un acto
+   * deliberado; si sobrevive a un "Cancelar", el siguiente borrado es un click.
+   * Detectado el 2026-08-19 por `project-delete.spec.ts` (el mismo defecto
+   * estaba en las cuatro pantallas con confirmación por nombre).
+   */
+  const closeAndReset = () => {
+    setTyped("");
+    onOpenChange(false);
+  };
 
   const mutation = useMutation<void, ApiError, void>({
     mutationFn: async () => {
@@ -612,21 +617,22 @@ function ProjectDeleteDialog({
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v) setTyped("");
-        onOpenChange(v);
+        if (!v) closeAndReset();
+        else onOpenChange(v);
       }}
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Borrar proyecto</DialogTitle>
+          <DialogTitle>{t("deleteTitle")}</DialogTitle>
           <DialogDescription>
-            Esta acción es <strong>irreversible</strong>. Borra el proyecto, sus planes, tareas y
-            conversaciones. Los repos git en disco NO se tocan.
+            {t("deleteDescriptionIntro")}
+            <strong>{t("deleteDescriptionStrong")}</strong>
+            {t("deleteDescriptionRest")}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <p className="text-sm">
-            Para confirmar, teclea el nombre del proyecto:
+            {t("deleteConfirmPrompt")}
             <br />
             <code className="bg-muted rounded px-1 py-0.5 text-xs">{project.name}</code>
           </p>
@@ -641,13 +647,13 @@ function ProjectDeleteDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="delete-project-error"
             >
-              {mutation.error?.message ?? "Error al borrar"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+          <Button variant="outline" onClick={closeAndReset}>
+            {t("cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -655,7 +661,7 @@ function ProjectDeleteDialog({
             onClick={() => mutation.mutate()}
             data-testid="delete-project-confirm"
           >
-            {mutation.isPending ? "Borrando…" : "Borrar definitivamente"}
+            {mutation.isPending ? t("deleting") : t("deleteConfirm")}
           </Button>
         </DialogFooter>
       </DialogContent>

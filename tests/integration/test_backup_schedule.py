@@ -6,7 +6,8 @@ never a hardcoded cron. Two surfaces are exercised:
 
   * **API** (``/admin/backup/schedule``) through the real FastAPI app + the
     real test Postgres so the RBAC / RLS boundary is the one under test:
-      - GET is readable by any authenticated member (defaults when unset).
+      - GET is System-Admin-only (defaults when unset); prod-09 task_prod09_01
+        closed the earlier ``require_tenant_member`` read.
       - PUT is System-Admin-only (a Tenant Admin is 403).
       - PUT validates the cron + retention window (a bad value is a 422, no
         write) and PERSISTS the three settings (read-back proves it).
@@ -159,14 +160,14 @@ async def _setting(dsn: str, key: str) -> Any:
 
 
 # ===========================================================================
-# GET — defaults when unset, readable by any member.
+# GET — defaults when unset, System-Admin only.
 # ===========================================================================
 @pytest.mark.asyncio
 async def test_get_schedule_returns_platform_defaults_when_unset(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     seeded = await _seed(migrations_pg_dsn)
-    token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    token = await _mint_token(seeded["sysadmin"], None, is_system_admin=True)
     async with _client(configured_app) as client:
         resp = await client.get(
             "/admin/backup/schedule",
@@ -178,6 +179,26 @@ async def test_get_schedule_returns_platform_defaults_when_unset(
     assert body["enabled"] is True
     assert body["cron"] == "0 3 * * *"
     assert body["retention_days"] == 7
+
+
+@pytest.mark.asyncio
+async def test_get_schedule_is_not_readable_by_a_tenant_admin(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """prod-09 task_prod09_01 (authz-1): the READ used to accept any tenant
+    member (``require_tenant_member``), so a tenant user could learn the
+    platform's backup cadence and retention window — when the platform is least
+    defended — from an ``/admin`` path whose sibling is a destructive restore.
+    The whole ``/admin/backup`` surface is System-Admin only now.
+    """
+    seeded = await _seed(migrations_pg_dsn)
+    tenant_admin_token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
+    async with _client(configured_app) as client:
+        resp = await client.get(
+            "/admin/backup/schedule",
+            headers={"Authorization": f"Bearer {tenant_admin_token}"},
+        )
+    assert resp.status_code == 403, resp.text
 
 
 # ===========================================================================
@@ -312,6 +333,22 @@ def migrated_db(alembic_config, migrations_pg_dsn: str):
             await conn.execute("TRUNCATE platform_settings RESTART IDENTITY CASCADE")
         finally:
             await conn.close()
+        # …y la CACHÉ. `platform_settings` se sirve de una caché en Redis con TTL
+        # de 30 s que solo se invalida al escribir por `set_platform_setting`;
+        # este fixture vacía la TABLA por detrás. Sin limpiar también la caché, el
+        # test N lee los valores que el test N-1 dejó calientes y falla con un
+        # valor que ya no está en la base — pasando en solitario y fallando en la
+        # suite. (Diagnosticado en prod-04: `assert 7 == 21`, luego
+        # `enabled is False`; ambos order-dependent.)
+        from api_server.auth.deps import get_redis
+
+        try:
+            client = get_redis()
+            keys = [k async for k in client.scan_iter(match="psetting:*")]
+            if keys:
+                await client.delete(*keys)
+        except Exception:  # limpiar la caché es best-effort
+            pass
 
     asyncio.run(_truncate())
     return migrations_pg_dsn
@@ -328,6 +365,12 @@ async def _set_schedule_row(dsn: str, key: str, value_jsonb: str) -> None:
         )
     finally:
         await conn.close()
+    from api_server.db.platform_settings import invalidate_platform_setting_cache
+
+    # Mismo motivo que en `migrated_db`: este helper escribe SQL CRUDO, así que se
+    # salta la invalidación que hace `set_platform_setting`. Sin esto, el valor
+    # recién escrito no se ve durante los 30 s de TTL de la caché.
+    await invalidate_platform_setting_cache(key)
 
 
 def _worker_settings(admin_database_url: str):

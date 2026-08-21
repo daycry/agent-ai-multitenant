@@ -145,11 +145,20 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             project_a,
             "Plan A",
         )
-        for agent_id, tenant_id, user_id in (
-            (worker_agent_a, tenant_a, alice),
-            (reviewer_agent_a, tenant_a, bob),
-            (worker_agent_b, tenant_b, carol),
-            (reviewer_agent_b, tenant_b, dave),
+        # El NOMBRE va por agente y no fijo: la migración 0126 (2026-07-30) añadió
+        # `uq_agents_tenant_name_global_live`, único sobre `(tenant_id, name)` para
+        # los agentes globales. Esta siembra creaba DOS por tenant —el trabajador y
+        # el revisor— con el mismo «Human Agent», así que desde esa migración el
+        # fichero entero muere en el fixture con `duplicate key`.
+        #
+        # Nadie lo vio durante dos semanas porque el job de integración de CI venía
+        # fallando ANTES, en `docker compose config`: una guarda en rojo por otro
+        # motivo estaba tapando una rotura real.
+        for agent_id, tenant_id, user_id, agent_name in (
+            (worker_agent_a, tenant_a, alice, "Human Worker A"),
+            (reviewer_agent_a, tenant_a, bob, "Human Reviewer A"),
+            (worker_agent_b, tenant_b, carol, "Human Worker B"),
+            (reviewer_agent_b, tenant_b, dave, "Human Reviewer B"),
         ):
             await conn.execute(
                 "INSERT INTO agents (id, tenant_id, name, agent_type, role, system_prompt,"
@@ -158,7 +167,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
                 " 'global_tenant_template', true, NULL)",
                 agent_id,
                 tenant_id,
-                "Human Agent",
+                agent_name,
             )
             await conn.execute(
                 "INSERT INTO human_agent_config (id, tenant_id, agent_id, assignment_mode,"

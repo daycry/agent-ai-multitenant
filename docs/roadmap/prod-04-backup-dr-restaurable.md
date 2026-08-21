@@ -22,12 +22,13 @@ priority: P0
 | Campo                              | Valor                           |
 | ---------------------------------- | ------------------------------- |
 | **ID del Plan**                    | `prod-04-backup-dr-restaurable` |
-| **Estado**                         | `pending_approval`              |
 | **Prioridad**                      | P0 — bloqueante de producción   |
 | **Bloqueado por**                  | `prod-01-despliegue-ejecutable` |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                     |
 | **Tiempo estimado (persona-días)** | 17                              |
 | **Rama git sugerida**              | `plan/prod-04-backup-dr`        |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -83,13 +84,15 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_01` — Añadir `--create` a los dos argv de tar + test de humo con tar real
 
-> **Estado (2026-07-06, auditoría de roadmap)**: PARCIAL — el fix del bug (`--create` en los argv
-> de tar) ya está en el código (`apps/workers/src/workers/backup.py:416,454,505`, commit `bdea0af`
-> "feat(infra): data-root de agentes durable... backup diario funcional"), pero el
-> `tests/integration/test_backup_tar_smoke.py` dedicado que este task pide NO existe — no marcar
-> `[x]` hasta añadirlo (la cobertura real con runner real sigue pendiente).
+> **Estado (2026-07-31, prod-04)**: CERRADO. El fix del bug (`--create` en los tres argv de
+> tar) ya estaba desde el commit `bdea0af`; lo que faltaba —y era lo que importaba— era la
+> cobertura de EJECUCIÓN. Añadidos `tests/integration/test_backup_tar_smoke.py` (los argv del
+> código de producción contra el binario `tar` real, con ida y vuelta byte a byte) y
+> `tests/integration/test_backup_real_runner.py` (task_prod_04_02). Ciclo rojo-verde
+> verificado: quitando `--create` de `_tar_volume`, tar devuelve rc=1 («Must specify one of
+> -c, -r, -t, -u, -x») y el smoke test se pone en rojo.
 
-- [ ] **Título**: Fix de `_tar_volume` y `_encrypt_bundle` + smoke test que ejecuta el binario `tar` REAL
+- [x] **Título**: Fix de `_tar_volume` y `_encrypt_bundle` + smoke test que ejecuta el binario `tar` REAL
 - **Descripción**: En `apps/workers/src/workers/backup.py`, añadir `--create` al argv de `_tar_volume` (≈ líneas 400-409) y al de `_encrypt_bundle` (≈ 451-456). Añadir `tests/integration/test_backup_tar_smoke.py` que ejecute los argv generados con `SubprocessRunner` real contra un directorio temporal (no requiere Docker ni stack vivo) y verifique que el archivo `.tar.gz` se crea, no está vacío y se extrae con el contenido original. Este test debe FALLAR con el código actual (rojo antes del fix).
 - **Tiempo**: 4 h · **Complejidad**: s
 - **Tests automáticos**:
@@ -101,7 +104,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_02` — Test de integración del backup completo con `SubprocessRunner` real
 
-- [ ] **Título**: `run_full_backup` end-to-end con tar/gzip/sha256/AES reales (el `FakeRunner` deja de ser la única cobertura)
+- [x] **Título**: `run_full_backup` end-to-end con tar/gzip/sha256/AES reales (el `FakeRunner` deja de ser la única cobertura)
 - **Descripción**: Nuevo `tests/integration/test_backup_real_runner.py`: ejecutar `run_full_backup` con el runner real sobre directorios temporales que simulan los mounts de volúmenes (el binario `pg_dump` se sustituye por un stub ejecutable en `PATH` que emite un dump sintético — es el ÚNICO seam mockeado; tar, gzip, checksums, manifest y cifrado/descifrado AES-256-GCM corren de verdad). Verificar: bundle creado, `backup_verification.py` lo valida, el blob cifrado se descifra y contiene los artefactos. Documentar en el docstring de `tests/integration/test_backup_full.py` que el `FakeRunner` solo cubre la construcción de argv, no la ejecución. Depende de `task_prod_04_01`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
@@ -115,7 +118,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_03` — Plano de ejecución real del restore: `scripts/restore.sh` + defaults alineados
 
-- [ ] **Título**: Restore lanzable desde el host y `restore_app_services` sin servicios fantasma
+- [x] **Título**: Restore lanzable desde el host y `restore_app_services` sin servicios fantasma
 - **Descripción**: Crear `scripts/restore.sh` host-side que ejecute el motor (`python -m workers.restore ...` o entrypoint equivalente) con acceso al socket Docker y a los volúmenes, fuera de los contenedores que se van a parar. Alinear `RestoreConfig.restore_app_services` (`apps/workers/src/workers/config.py:475-482`) con los servicios que prod-01 declara realmente en el compose; excluir de la lista de stop el plano que ejecuta el restore. Añadir un test que parsee `docker/docker-compose.yml` (+ el compose de apps de prod-01) y asserte `restore_app_services ⊆ servicios declarados` — guard permanente contra servicios fantasma. Reescribir el paso 3 de `docs/06-runbooks/dr-full-restore.md` (líneas 81-89: eliminar `exec -T worker`) con el comando que funciona. Depende de prod-01.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
@@ -127,7 +130,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_04` — Fail-stopped por defecto + `pg_restore --exit-on-error`
 
-- [ ] **Título**: Un fallo a mitad del restore deja el stack PARADO; los errores de pg_restore no se enmascaran
+- [x] **Título**: Un fallo a mitad del restore deja el stack PARADO; los errores de pg_restore no se enmascaran
 - **Descripción**: En `apps/workers/src/workers/restore.py:272-280`, invertir el `finally` que ejecuta `docker compose up -d` incondicionalmente: ante fallo en la fase destructiva, dejar el stack parado (opcionalmente levantar solo postgres para diagnóstico) y lanzar `RestoreError` con el estado alcanzado y el siguiente paso. Auto-arranque solo opt-in (`restore_autostart_on_failure`, default `false`). Añadir `--exit-on-error` al argv de `pg_restore` (restore.py:440-448). Alinear `docs/06-runbooks/04-disaster-recovery.md:209-212` y `dr-full-restore.md:140-145` con el nuevo comportamiento (ya lo describen: ahora el código obedece). Actualizar los tests de `test_restore_full.py` afectados.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
@@ -141,7 +144,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_05` — Repos git de proyectos dentro del bundle y del restore
 
-- [ ] **Título**: `{data_root}/projects` (bare repos) como artefacto de backup verificado
+- [x] **Título**: `{data_root}/projects` (bare repos) como artefacto de backup verificado
 - **Descripción**: Añadir a `backup.py` un artefacto `projects_tar`: tar de `{data_root}/projects` (bare repos por tenant/proyecto, `git_repos.py:6,74`) excluyendo `worktrees/` y dep-cache (transitorios). Nueva setting `backup_projects_root` en `workers/config.py` (default `{data_root}/projects`). Incluir el artefacto en el manifest y en `backup_verification.py`. En `restore.py`, re-extraer a `data_root` en la fase de volúmenes. Test con runner real: crear un bare repo temporal con una rama `plan/xxx`, backup, restore a otro directorio, verificar `git rev-parse` de la rama. Cierra deploy-5 y la mitad estructural de gap3-5 (principios rectores 4 y 5 de CLAUDE.md).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
@@ -153,7 +156,75 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_06` — Captura coherente: Redis BGSAVE, Vault snapshot y ADR de consistencia del bundle
 
-- [ ] **Título**: Eliminar la captura en caliente ingenua y documentar el skew residual aceptado
+> **Estado (2026-07-31, prod-04)**: (1) y (2) HECHOS, (3) redactado y **ABIERTO a propósito**
+> — el ADR es una decisión de dirección y la casilla no se marca hasta que alguien la tome.
+>
+> Lo entregado, porque era estrictamente mejor con cualquiera de las tres opciones:
+>
+> - **(1) Redis**: `BGREWRITEAOF` (con `aof_last_bgrewrite_status` comprobado) + artefacto
+>   propio `redis_tar`, verificado y **restaurado** (`wipe=True`). **La letra del task era
+>   incorrecta y se midió**: «capturar solo el `dump.rdb`» restaura una base **VACÍA**, porque
+>   con `--appendonly yes` (como lo arranca el compose) Redis ignora el RDB si no hay
+>   `appendonlydir` — crea un AOF nuevo y sirve `DBSIZE 0` sin un solo error. Medido contra
+>   `redis:7-alpine` el 2026-07-31; documentado en
+>   `docs/03-guides/gotchas/redis-aof-ignores-a-restored-rdb.md`.
+> - **(2) Vault**: captura verificada estable (huella por CONTENIDO antes/después del tar,
+>   reintentos, y fallo del run si no converge). La primera versión comparaba
+>   `(tamaño, mtime)` y una ejecución real de la suite la pilló dando «estable» sobre un
+>   árbol recién reescrito.
+> - Skew residual medido y documentado en `04-disaster-recovery.md` («Skew residual del
+>   bundle»), que es la condición previa para que la decisión del ADR sea informada.
+>
+> Lo que falta para marcar la casilla: **la decisión humana del
+> [ADR 0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md)**
+> (quiesce corto / snapshot de FS / skew aceptado) + la ligada «¿Redis es crítico o
+> recreable?» + la de `vault_data` dentro o fuera del blob cifrado (que task_prod_04_07 pedía
+> anotar aquí). Implementar una de las tres antes de que dirección elija sería decidir por
+> ella y luego tirarlo. El ADR trae el coste y la estimación de cada opción.
+
+> ✅ **CERRADA el 2026-08-12: lo que la bloqueaba ya no existe.** La nota de arriba se
+> escribió cuando el ADR estaba `proposed`; **se firmó el 2026-08-01** (opción A, quiesce
+> corto con plazo que degrada a C) y otra ola lo implementó. Verificado contra el código,
+> no contra la nota:
+>
+> - **El quiesce existe y es el del ADR**: `apps/workers/src/workers/backup_quiesce.py`
+>   (`ComposeQuiescer` / `QuiesceRecord`), llamado desde `backup.py:559-564` con el
+>   `resume` en un `finally` —los servicios rearrancan aunque la captura falle— y con
+>   `quiesce` en el manifest (`backup.py:321-341`), que es el acta que el ADR exige.
+>   Ajustes en `workers/config.py:716-750`: `backup_quiesce_services`,
+>   `backup_quiesce_never_stop` (`workers-privileged`, la lane que corre el propio
+>   backup) y `backup_quiesce_timeout_seconds=180`. La métrica de duración
+>   (`agentic_backup_quiesce_seconds`) y la de degradación
+>   (`agentic_backup_quiesce_degraded`) están en `backup_metrics.py:65-110`.
+> - **El skew residual aceptado está documentado**, que es la otra mitad del título:
+>   [`06-runbooks/04-disaster-recovery.md`](../06-runbooks/04-disaster-recovery.md)
+>   §«Skew residual del bundle» —con la tabla t₀…t₄ marcada como la que **aplica cuando el
+>   quiesce degrada a `partial`**— y §«El quiesce: qué pasa a las 03:00, y qué pasa cuando
+>   no pasa», con la palanca para desactivarlo y qué se pierde al hacerlo.
+> - **La captura en caliente ingenua ya no está**: Redis por `BGREWRITEAOF` verificado,
+>   Vault por huella de contenido antes/después, y `worktrees/`/`dep-cache/` fuera de los tars.
+>
+> **Ejecutado**: `pytest tests/integration/test_backup_consistency.py -q` → **10 passed**
+> (el `auto_prod_04_06_a` declarado; no necesita Postgres, corre sobre `tmp_path`), y
+> `pytest tests/unit/test_backup_quiesce.py -q` → **17 passed**.
+>
+> **Lo que sigue abierto NO es esta casilla**, y por eso no la retiene: las dos decisiones
+> **ligadas** del ADR 0149 —«¿Redis es crítico o recreable?» y «¿`vault_data` viaja dentro
+> del blob cifrado?»— siguen sin firmar. Viven en el ADR, con sus opciones escritas, y son
+> del operador. Ninguna de las dos está en el enunciado ni en la descripción de esta tarea.
+>
+> ⚠️ **Y una consecuencia operativa que hay que leer ANTES del próximo despliegue**: con
+> los defaults, el backup de las 03:00 **para api-server, orchestrator, workers,
+> workers-marketplace, cortex-beat, notification-dispatcher y admin-panel** durante la
+> captura (la lane `workers-marketplace` se sumó con prod-13 `task_prod13_01`, que la
+> creó como escritora nueva). Es lo que el
+> operador firmó, pero es un corte de servicio diario que antes no existía. Además, el
+> instalador **no emite `WORKERS_RESTORE_COMPOSE_FILE`** (el puntero al compose que usa el
+> quiesce): con un `data_root` distinto del default, el quiesce no encuentra el compose y
+> degrada a `partial` todas las noches, diciéndolo sólo en el log
+> (`backup.quiesce.no_compose_file`). Está avisado en el runbook.
+
+- [x] **Título**: Eliminar la captura en caliente ingenua y documentar el skew residual aceptado
 - **Descripción**: (1) Redis: antes del tar, lanzar `BGSAVE` y capturar solo el `dump.rdb` resultante (o, si dirección lo decide, declarar Redis como no respaldado por recreable — opción del ADR); dejar de tarear el AOF en escritura activa (`docker-compose.yml:104-107`). (2) Vault: captura coherente del file backend (parar el servicio un instante o copia atómica verificada). (3) Redactar **ADR propuesto** «Consistencia del bundle de backup» con las opciones de la Decisión clave 3 (quiesce corto / snapshot FS / skew aceptado), el orden de captura resultante y el skew residual medido — decisión para humano. Implementar la opción elegida tras aprobación (presupuestado: quiesce corto).
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
@@ -167,7 +238,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_07` — Custodia offsite de la clave de descifrado + runbooks veraces
 
-- [ ] **Título**: Romper la circularidad: la clave que descifra el bundle no puede vivir solo en la máquina respaldada
+- [x] **Título**: Romper la circularidad: la clave que descifra el bundle no puede vivir solo en la máquina respaldada
 - **Descripción**: (1) Corregir los tres runbooks que afirman que la clave se resuelve de Vault — falso: `EnvSecretsProvider` lee `WORKERS_BACKUP_ENCRYPTION_KEY` de `os.environ` (`backup_encryption.py:95-102`, `restore.py:547-553`) — y dejar EXPLÍCITO que las unseal keys NO descifran el bundle AES-GCM: `docs/06-runbooks/dr-full-restore.md:35-37,151-153`, `dr-manual-backup.md:36-37`, `04-disaster-recovery.md:70-74`. (2) Añadir paso OBLIGATORIO de custodia offsite del VALOR de la clave (gestor corporativo / sobre sellado, junto a las unseal keys pero diferenciado). (3) Fail-closed técnico: registrar el fingerprint SHA-256 de la clave en el manifest y nueva setting `backup_key_custody_fingerprint`; si `encryption_enabled=true` y el fingerprint no coincide (o está vacío), el backup falla con mensaje accionable. (4) Anotar en el ADR de task_prod_04_06 la opción de excluir `vault_data` del blob o cifrarlo con clave distinta (rompe la circularidad estructuralmente — decisión humana).
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
@@ -179,33 +250,70 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_08` — GRANTs y ownership tras `pg_restore`
 
-- [ ] **Título**: Re-concesión idempotente post-restore y validación del rol de conexión
+- [x] **Título**: Re-concesión idempotente post-restore y validación del rol de conexión
+  - ✅ **Comando corregido (2026-08-20)**: `tests/integration/test_restore_grants.py` nunca
+    existió; los cuatro tests que esta casilla pedía viven en
+    `tests/integration/test_restore_full.py`, bajo una cabecera que dice literalmente
+    «prod-04 task_prod_04_08 — GRANTs y rol de conexión». Cubren las dos mitades y el ORDEN,
+    que es lo que importa: los GRANTs se re-conceden **después** del `pg_restore` (antes no
+    habría tablas), con `ON_ERROR_STOP=1` para que un GRANT fallido no salga con rc=0, un
+    fallo del paso es fail-stopped, y restaurar con el DSN de `app_user` se **rechaza antes**
+    de tocar nada. El `-k` es necesario porque el fichero cubre además `task_12_10`,
+    `task_prod_04_05` y `task_prod_04_06`. Verde 4/4 (23 deseleccionados).
 - **Descripción**: El dump/restore descartan ownership y ACLs (`backup.py:369-376`, `restore.py:440-448`) y nada recrea los GRANTs de `app_user` (rol NOBYPASSRLS del que depende TODO el stack con FORCE RLS). Añadir al final del restore un paso idempotente: `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;` y `REASSIGN OWNED` / `ALTER TABLE ... OWNER TO migrations_user` cuando el rol de conexión no sea `migrations_user`. Validar en el motor que la URL de restore conecta como `migrations_user` (fail-closed con mensaje claro si no; `config.py:255-259` hoy solo pide «admin-grade»). Añadir al runbook la comprobación post-restore: conectar como `app_user`, SELECT/INSERT sobre una tabla con RLS, y `alembic upgrade head` como `migrations_user`.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod_04_08_a
     runtime: python-pytest
-    command: "pytest tests/integration/test_restore_grants.py -v"
+    command: "pytest tests/integration/test_restore_full.py -v -k 'grant or role'"
   ```
 
 ### Fase E — Defaults de producción y vías secundarias
 
 #### `task_prod_04_09` — Defaults de producción del backup en el instalador
 
-- [ ] **Título**: El backup diario no puede apuntar a `localhost:15432` ni a volúmenes con nombre inexistentes
+> **Estado (2026-07-31, prod-04)**: CERRADO, y el hallazgo era PEOR de lo que el task
+> describía. Lo que decía («`config_generators.py` solo emite `WORKERS_BACKUP_ROOT`») ya no
+> era cierto —prod-01 añadió `WORKERS_BACKUP_DATABASE_URL` y `WORKERS_BACKUP_VOLUMES`— pero
+> los valores que emitía describían **otra máquina**:
+>
+> 1. **DSN**: `WORKERS_BACKUP_DATABASE_URL` = `${WORKERS_DATABASE_URL}` = la URL de
+>    SQLAlchemy (`postgresql+asyncpg://`), que libpq no entiende. Saneado en el motor
+>    (`workers.backup.libpq_url`) **y** ahora emitido ya en forma libpq por el instalador.
+> 2. **Volúmenes FANTASMA** (esto no lo había visto nadie): el compose generado monta
+>    **binds** bajo `{data_root}` y **no declara ningún named volume**, pero
+>    `_BACKUP_VOLUME_NAMES` emitía los nombres del stack de manuales
+>    (`agentic-platform_minio_data`, …). `tar` sobre
+>    `/var/lib/docker/volumes/<fantasma>/_data` devuelve rc≠0 y el contrato clean-failure
+>    **borraba el bundle entero, pg_dump bueno incluido**. El backup de una instalación por
+>    el instalador fallaba TODAS las noches.
+> 3. **PGDATA vivo en los tars**: el default `backup_bind_paths=["/data/agent-platform"]`
+>    tarea el data dir de PostgreSQL (copia rota + «file changed as we read it» → rc≠0) y los
+>    modelos de Ollama (decenas de GB por bundle). Ahora los bind paths son explícitos.
+> 4. **Cifrado encendido a medias**: el compose emitía `ENCRYPTION_ENABLED=true` sin emitir
+>    la clave ni la huella de custodia, y el motor es fail-closed (task_prod_04_07) → el
+>    backup fallaba antes del dump. Se emite `false` y el opt-in en dos pasos (generar clave
+>    → custodiarla → encender) está en `dr-manual-backup.md`.
+>
+> El test vive en `tests/unit/test_backup_env_contract.py` y no en
+> `apps/installer/backend/tests/`, que es lo que el task pedía: ese directorio no existe ni
+> tiene configuración de pytest, y el patrón de la casa para cruzar instalador↔runtime es
+> `tests/unit/test_compose_env_contract.py`. 12 tests, verde.
+
+- [x] **Título**: El backup diario no puede apuntar a `localhost:15432` ni a volúmenes con nombre inexistentes
 - **Descripción**: `config_generators.py:241-242` solo emite `WORKERS_BACKUP_ROOT`, dejando los defaults dev de `workers/config.py` (pg*dump a `localhost:15432` con password dev; tars de `/var/lib/docker/volumes/...` cuando el compose generado usa bind-mounts bajo `{data_root}`). Emitir `WORKERS_BACKUP_DATABASE_URL` (DSN al servicio postgres con la credencial generada) y `WORKERS_BACKUP_VOLUMES`/`WORKERS_BACKUP_VOLUMES_MOUNT_ROOT` coherentes con el layout de bind-mounts del compose generado (`compose_generator.py:255,277,301-303`). Test que genera el `.env` y valida que la config efectiva de backup no contiene `localhost:15432` ni `changeme-` y que las rutas de captura existen en el layout generado. **Coordinación**: el instalador es territorio de prod-01 (este plan solo toca las claves `WORKERS_BACKUP*\*`); la alerta de «último backup correcto > 24 h» ya existe (`BackupTooOld`) y su enrutado a humanos es prod-08.
 - **Tiempo**: 1 día · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod_04_09_a
     runtime: python-pytest
-    command: "pytest apps/installer/backend/tests/test_backup_env_defaults.py -v"
+    command: "pytest tests/unit/test_backup_env_contract.py -v"
   ```
 
 #### `task_prod_04_10` — Restore por tenant sin mutar el `_data` de un MinIO vivo
 
-- [ ] **Título**: La rebanada del tenant se restaura por API S3 (o con MinIO parado), nunca por debajo del servidor
+- [x] **Título**: La rebanada del tenant se restaura por API S3 (o con MinIO parado), nunca por debajo del servidor
 - **Descripción**: `restore_per_tenant.py:875-897` hace `shutil.rmtree(ignore_errors=True)` + `tar --extract` directo sobre `minio_data/_data` con MinIO en marcha — no soportado por el formato xl (objetos invisibles/corruptos). Implementar la vía segura: extraer el tar a un directorio temporal, levantar un MinIO efímero sobre él y `mc mirror` la rebanada del tenant hacia el MinIO del stack vía API S3; como mínimo aceptable (decisión en code review), parar el servicio `minio` durante la extracción y verificar después por API que los objetos del tenant son legibles. Convertir el wipe `ignore_errors=True` en error duro. Actualizar `docs/06-runbooks/dr-tenant-restore.md:141-143`.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
@@ -217,7 +325,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_11` — Borrado de documentos: soft-delete + commit ANTES de tocar el blob
 
-- [ ] **Título**: Invertir el orden en `delete_document` para no perder la fuente si la transacción falla
+- [x] **Título**: Invertir el orden en `delete_document` para no perder la fuente si la transacción falla
 - **Descripción**: `apps/api-server/src/api_server/routers/knowledge_bases.py:673-677` ejecuta `storage.delete_object` ANTES del `soft_delete`, con el commit al cierre del request: si el commit falla, queda un documento «vivo» cuyo binario ya no existe (reindex imposible). Invertir: soft-delete y commit primero; el borrado del blob pasa a una tarea Celery best-effort posterior (o al job de purga). Mantener la semántica «recuperable hasta la purga» que promete `db/knowledge.py:72-73`. **Coordinación**: el job de purga definitivo (db-4) es de prod-13; aquí la tarea Celery basta y queda lista para que prod-13 la absorba.
 - **Tiempo**: 0,5 días · **Complejidad**: s
 - **Tests automáticos**:
@@ -231,7 +339,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_12` — RPO/RTO declarados + subida remota automática post-verificación
 
-- [ ] **Título**: Garantías de pérdida y recuperación medibles, y el bundle sale de la máquina solo
+- [x] **Título**: Garantías de pérdida y recuperación medibles, y el bundle sale de la máquina solo
 - **Descripción**: (1) Declarar en `docs/06-runbooks/04-disaster-recovery.md` (y referenciar desde `dr-full-restore.md`) RPO y RTO explícitos y medibles: RPO ≤ 24 h (cadencia diaria 03:00 + copia remota verificada) y RTO objetivo ≤ 4 h (a confirmar en el drill); validar las cifras con dirección. (2) Cablear la subida automática del bundle verificado al destino remoto tras cada backup (los adaptadores de `backup_destinations` ya existen y están testeados; hoy `run_full_backup()` NO sube nada, `dr-full-restore.md:157-159`), con métrica/log de éxito. (3) Si dirección exige RPO < 24 h: **ADR propuesto** «PITR con WAL archiving (archive_mode + wal-g/pgbackrest)» — no se implementa en este plan.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
@@ -243,7 +351,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_13` — Reconciliación post-restore BD↔MinIO↔Vault↔git
 
-- [ ] **Título**: El restore no se da por bueno hasta reconciliar los cuatro almacenes
+- [x] **Título**: El restore no se da por bueno hasta reconciliar los cuatro almacenes
 - **Descripción**: Nuevo módulo `apps/workers/src/workers/restore_reconcile.py` (invocado como paso final del restore y ejecutable standalone) con criterios medibles: (a) BD↔MinIO: conteo de filas de documents/KB cuyo `source_storage_key` no existe en MinIO y de blobs huérfanos sin fila; (b) BD↔Vault: ping de cada `llm_providers.secret_vault_path` contra el Vault restaurado; (c) BD↔git: cada plan activo tiene su rama `plan/{id_short}-{slug}` en el bare correspondiente. Informe de divergencias al operador (exit code ≠ 0 si hay divergencias críticas) ANTES de dar el restore por bueno. Ampliar la «Verificación post-restore» de `04-disaster-recovery.md:175-199` (hoy solo health/login/smoke) con este paso. Depende de `task_prod_04_05`.
 - **Tiempo**: 2 días · **Complejidad**: l
 - **Tests automáticos**:
@@ -255,7 +363,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 #### `task_prod_04_14` — Guion del drill de DR + ejecución asistida y evidencia
 
-- [ ] **Título**: Runbook `dr-drill.md` y preparación del drill backup → máquina limpia → restore → login + ejecución
+- [x] **Título**: Runbook `dr-drill.md` y preparación del drill backup → máquina limpia → restore → login + ejecución
 - **Descripción**: Redactar `docs/06-runbooks/dr-drill.md` con el guion paso a paso del drill: backup en la máquina origen (tar real, bundle verificado) → subida al destino remoto → en una **máquina limpia** (sin `.env` original): obtener la clave de descifrado y las unseal keys EXCLUSIVAMENTE de custodia offsite → `scripts/restore.sh` → desellado de Vault → verificación de GRANTs/RLS → reconciliación (task_prod_04_13) → login de un usuario de tenant → ejecución de un plan end-to-end. Incluir plantilla de acta (tiempos medidos → RTO real, divergencias, incidencias). Preparar el entorno del drill y asistir su ejecución; el drill en sí es el test humano `human_prod_04_01` y su acta sirve además como evidencia de `human_12_02` del Plan 12 (cierre del Plan 12 coordinado con prod-15). Depende de todas las tareas anteriores.
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
@@ -340,7 +448,7 @@ Este plan arregla el bug del tar con tests de **runner real**, hace el restore e
 
 1. Todas las tareas con `[x]` y sus tests automáticos en verde (incluido el test de humo con tar REAL y el de runner real — no cuentan los verdes del `FakeRunner`).
 2. Los 4 tests humanos pass, con el acta del drill (`human_prod_04_01`) archivada como evidencia.
-3. ADR «Consistencia del bundle de backup» (y, si procede, ADR «PITR/WAL archiving») creados en `docs/05-architecture-decisions/` y decididos por un humano.
+3. ADR «Consistencia del bundle de backup» (y, si procede, ADR «PITR/WAL archiving») creados en `docs/05-architecture-decisions/` y decididos por un humano. **Estado**: el ADR existe ([0149](../05-architecture-decisions/0149-consistencia-del-bundle-de-backup.md), `proposed`) con las tres opciones presupuestadas y las dos decisiones ligadas (¿Redis crítico? ¿`vault_data` dentro del blob?); **falta la decisión**.
 4. Runbooks DR (`04-disaster-recovery.md`, `dr-full-restore.md`, `dr-manual-backup.md`, `dr-tenant-restore.md`, `dr-drill.md`) veraces y verificados contra el código.
 5. Entrada de changelog en `docs/07-changelog/prod-04-backup-dr-restaurable.md`.
 6. PR del plan mergeado a `master` y frontmatter actualizado a `completed`.

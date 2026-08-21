@@ -18,10 +18,22 @@ unrouted tasks fall through to the default queue.
 
 from __future__ import annotations
 
+from api_server.logging.celery_pipeline import install_celery_logging
 from celery import Celery
 from kombu import Exchange, Queue
 
 from notification_dispatcher.config import Settings, get_settings
+
+# prod-08 Fase C (observability-3). Este servicio entrega notificaciones: sus
+# logs tocan direcciones de email, números de teléfono y webhooks con token en
+# la URL — precisamente lo que el enmascarado PII existe para tapar. Hasta
+# 2026-07-31 salían en claro, porque nadie llamaba a `configure_logging()`.
+#
+# El import de `api_server` no cruza una frontera de despliegue: el Dockerfile
+# de este servicio se construye SOBRE la imagen de api-server (`ARG
+# BASE_IMAGE`) y ya lee los modelos `api_server.db.notification` en tiempo de
+# ejecución. Ver ADR 0141.
+install_celery_logging(service="notification-dispatcher")
 
 
 def build_celery_app(settings: Settings | None = None) -> Celery:

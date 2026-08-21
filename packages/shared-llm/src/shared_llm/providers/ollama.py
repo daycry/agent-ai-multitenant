@@ -21,6 +21,7 @@ import httpx
 
 from shared_llm.providers._openai_compat import (
     check_status,
+    check_stream_status,
     iter_sse_chunks,
     parse_chat_completion,
     to_openai_messages,
@@ -166,6 +167,12 @@ class OllamaProvider:
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
+            # prod-07 task_prod07_04: sin `stream_options.include_usage` el
+            # proveedor NO manda el chunk de usage y el turno se contabiliza a 0
+            # tokens / $0 (llm-6). Va ANTES de `**kwargs` a propósito: un caller
+            # con un endpoint que no soporte el campo puede pasar
+            # `stream_options=None` y desactivarlo sin tocar el provider.
+            "stream_options": {"include_usage": True},
             **kwargs,
         }
         if tools:
@@ -179,7 +186,8 @@ class OllamaProvider:
                 headers=self._headers(),
             ) as resp,
         ):
-            check_status(resp, provider=self.name)
+            # prod-07 task_prod07_03: lee el cuerpo antes de clasificar un no-2xx.
+            await check_stream_status(resp, provider=self.name)
             # iter_sse_chunks wraps the body iteration so a mid-stream
             # network/transport error becomes a typed ProviderError.
             async for chunk in iter_sse_chunks(resp, provider=self.name):

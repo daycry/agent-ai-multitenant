@@ -9,6 +9,8 @@ package; the steps_log is opaque JSONB here).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
@@ -148,6 +150,147 @@ async def snapshot_execution_prices(
     return enriched, rollup
 
 
+def _catalog_cost_total(steps: list[dict[str, Any]]) -> Decimal | None:
+    """Sum of the frozen catalog cost of every PRICED `model_call` step.
+
+    ``None`` when not a single call could be priced — which is *not* the same
+    as ``Decimal(0)``: "the catalog does not know this model" must never become
+    a bill. Only snapshots with ``available=True`` count; an unknown price is
+    recorded as ``available=False`` with ``cost_usd=None`` (see
+    ``price_snapshot``), and a free call (a real 0) still sums as 0.
+    """
+    total = Decimal(0)
+    priced = False
+    for step in steps:
+        snapshot = step.get("price_snapshot")
+        if not isinstance(snapshot, dict) or snapshot.get("available") is not True:
+            continue
+        raw = snapshot.get("cost_usd")
+        if raw is None:
+            continue
+        try:
+            total += Decimal(str(raw))
+        except (ArithmeticError, ValueError):  # pragma: no cover - defensive
+            continue
+        priced = True
+    return total if priced else None
+
+
+def _billable_cost_usd(usage: dict[str, Any], steps: list[dict[str, Any]]) -> Decimal:
+    """The cost that lands on ``executions.total_cost_usd`` (prod-07 llm-1).
+
+    Precedence, in this order and no other:
+
+    1. **What the runtime reported.** ``claude_sdk`` is the only kind that
+       reports a real per-call cost today; that figure is what the provider
+       actually charged and an estimate must never overwrite it.
+    2. **The sum of the per-call catalog snapshots**, when the runtime reported
+       0. The three OpenAI-compatible kinds (ollama, copilot, azure_foundry)
+       never populate ``usage.cost`` — `_openai_compat` can only pass through
+       what the endpoint sends — so that 0 was being persisted verbatim and the
+       budgets summed $0 for three of the four providers of the closed catalog.
+    3. **0**, when the catalog could not price a single call. An unknown price
+       stays unknown.
+
+    Why an override and not a new ``cost_estimated_usd`` column: the
+    provenance the column would have carried is already per call in
+    ``steps_log`` — the runtime's raw ``cost_usd`` stays beside a
+    ``price_snapshot`` that names its ``source`` and ``price_id``. A column
+    would duplicate that at the price of a schema migration, and every reader
+    of the billable figure (budgets, dashboards, the plan cost breakdown)
+    would have to learn to coalesce or keep under-counting.
+    """
+    reported = Decimal(str(usage.get("cost_usd", 0) or 0))
+    if reported > 0:
+        return reported
+    estimated = _catalog_cost_total(steps)
+    if estimated is None or estimated <= 0:
+        return reported
+    return estimated
+
+
+@dataclass(frozen=True)
+class StepsRollup:
+    """La proyección de `steps_log` en las tres columnas de la migración 0139."""
+
+    last_model: str | None
+    tokens_in: int
+    tokens_out: int
+
+
+def steps_rollup(steps: Sequence[Any]) -> StepsRollup:
+    """Denormaliza `steps_log` (prod-13 task_prod13_18).
+
+    Réplica EXACTA, en Python, de las dos expresiones SQL que el explorador de
+    runs usaba para no tener que expandir el JSONB por fila:
+
+    * ``last_model`` ← el ``model`` del paso ``model_call`` de mayor ``index``
+      que declare modelo (``NULL`` si el run no llamó a ninguno). Se ordena por
+      el ``index`` del propio paso y no por la posición, igual que hacía
+      ``tenant_stats._last_model_expr``; sin ``index`` se usa la posición.
+    * ``tokens_in`` / ``tokens_out`` ← la suma sobre los pasos ``model_call``,
+      con ``0`` cuando no hay ninguno (el ``coalesce`` de ``_token_split``).
+
+    **Nunca levanta.** Un `steps_log` viejo o mal formado no puede hacer fallar
+    el cierre de un run: convertiría un dato de panel en trabajo perdido. Los
+    valores no numéricos cuentan como 0 y las entradas no-dict se ignoran, que
+    es lo que el ``(el->>'tokens_in')::bigint`` de PostgreSQL hace con un NULL.
+    """
+    last_model: str | None = None
+    best_order: int | None = None
+    tokens_in = 0
+    tokens_out = 0
+    for position, step in enumerate(steps):
+        if not isinstance(step, dict) or step.get("kind") != "model_call":
+            continue
+        tokens_in += _as_int(step.get("tokens_in"))
+        tokens_out += _as_int(step.get("tokens_out"))
+        model = step.get("model")
+        if not isinstance(model, str) or not model:
+            continue
+        raw_index: Any = step.get("index")
+        usable = isinstance(raw_index, int) and not isinstance(raw_index, bool)
+        order: int = raw_index if usable else position
+        if best_order is None or order >= best_order:
+            best_order, last_model = order, model
+    return StepsRollup(last_model=last_model, tokens_in=tokens_in, tokens_out=tokens_out)
+
+
+def _as_int(value: Any) -> int:
+    """El valor como entero, o 0. Ver el «nunca levanta» de :func:`steps_rollup`."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def apply_steps_rollup(execution: Execution, steps: Sequence[Any]) -> None:
+    """Escribe la proyección de `steps_log` sobre las columnas de la ejecución.
+
+    **Pública a propósito, y es contrato**: quien asigne ``execution.steps_log``
+    —desde donde sea— tiene que llamar a esto acto seguido. Es lo único que
+    impide que la proyección y su fuente se separen, y no hay ningún mecanismo
+    en la BD (ni trigger ni columna generada) que lo haga por su cuenta: si un
+    escritor la olvida, `last_model` / `tokens_in` / `tokens_out` describen un
+    `steps_log` que ya no existe y el panel enseña cifras falsas SIN que nada
+    falle, que es exactamente el modo de fallo que estas columnas tenían que
+    evitar.
+
+    Hoy hay dos llamantes: este repositorio (``record_execution`` /
+    ``finalize_execution``) y ``workers.execution._mark_commit_failed``, que
+    anexa el paso estructurado del conflicto de rebase en su propia sesión
+    BYPASSRLS. El segundo existe porque la invariante de «un solo escritor» que
+    el diseño invocaba era falsa; se hizo verdadera la garantía en vez de
+    rebajar el texto (revisión adversarial del 2026-08-12).
+    """
+    rollup = steps_rollup(steps)
+    execution.last_model = rollup.last_model
+    execution.tokens_in = rollup.tokens_in
+    execution.tokens_out = rollup.tokens_out
+
+
 def _apply_price_snapshot(execution: Execution, rollup: PriceSnapshot | None) -> None:
     """Write the representative snapshot onto the execution's columns."""
     if rollup is None:
@@ -188,7 +331,7 @@ async def record_execution(
         steps_log=steps,
         iterations=result.iterations,
         total_tokens=int(usage.get("total_tokens", 0)),
-        total_cost_usd=Decimal(str(usage.get("cost_usd", 0))),
+        total_cost_usd=_billable_cost_usd(usage, steps),
         tool_call_count=int(usage.get("tool_calls", 0)),
         model_call_count=int(usage.get("model_calls", 0)),
         started_at=started_at,
@@ -197,6 +340,7 @@ async def record_execution(
         completed_at=(datetime.now(UTC) if is_terminal_execution_status(result.status) else None),
     )
     _apply_price_snapshot(execution, rollup)
+    apply_steps_rollup(execution, steps)
     session.add(execution)
     await session.flush()
     return execution
@@ -232,6 +376,12 @@ async def create_running_execution(
         started_at=started_at or datetime.now(UTC),
         celery_task_id=celery_task_id,
     )
+    # Aquí el rollup de un log vacío coincide con los `server_default` de las tres
+    # columnas (NULL/0/0), así que llamarlo no cambia ni una fila. Se llama igual
+    # porque la regla «quien asigna `steps_log` llama a `apply_steps_rollup`» solo
+    # sirve si no tiene excepciones: una excepción «inocua» es lo que hay que
+    # recordar al añadir el cuarto escritor, y nadie lo recuerda.
+    apply_steps_rollup(execution, [])
     session.add(execution)
     await session.flush()
     return execution
@@ -513,6 +663,12 @@ async def finalize_execution(
         if len(incoming) > len(execution.steps_log or []):
             steps, _rollup = await snapshot_execution_prices(session, steps=incoming)
             execution.steps_log = steps
+            # Y su proyección, porque es eso: una proyección de la columna que
+            # se acaba de reemplazar (prod-13 task_prod13_18). Esto NO es
+            # recomputar los roll-ups de `usage` que esta guarda protege — a
+            # `total_tokens` / `total_cost_usd` no se les toca —; es no dejar
+            # que `last_model` describa un `steps_log` que ya no existe.
+            apply_steps_rollup(execution, steps)
             await session.flush()
         return execution
 
@@ -533,9 +689,10 @@ async def finalize_execution(
     execution.runtime_image_digest = getattr(result, "runtime_image_digest", None)
     execution.steps_log = steps
     _apply_price_snapshot(execution, rollup)
+    apply_steps_rollup(execution, steps)
     execution.iterations = result.iterations
     execution.total_tokens = int(usage.get("total_tokens", 0))
-    execution.total_cost_usd = Decimal(str(usage.get("cost_usd", 0)))
+    execution.total_cost_usd = _billable_cost_usd(usage, steps)
     execution.tool_call_count = int(usage.get("tool_calls", 0))
     execution.model_call_count = int(usage.get("model_calls", 0))
     # Only a terminal status completes the run — a run parked in

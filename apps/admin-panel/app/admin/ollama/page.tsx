@@ -46,7 +46,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.routers.embeddings + api_server.routers.ollama.
@@ -77,12 +79,6 @@ interface OllamaModelsResponse {
   models: OllamaModel[];
 }
 
-function errorText(err: unknown): string {
-  if (err instanceof ApiError) return err.body || err.message;
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
 function formatBytes(bytes: number | null): string {
   if (bytes == null) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -96,12 +92,13 @@ function formatBytes(bytes: number | null): string {
 }
 
 export default function OllamaPage() {
+  const t = useT("ollama");
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8" data-testid="ollama-page">
       <PageHeader
         icon={<Sparkles className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Ollama & Embeddings"
-        description="Gestión del Ollama del stack (ADR 0056): modelo de embeddings activo + descubrimiento, y administración de modelos (listar / pull / borrar). Solo System Admin."
+        title={t("title")}
+        description={t("description")}
         data-testid="ollama-header"
       />
       <RoleGuard
@@ -110,9 +107,7 @@ export default function OllamaPage() {
           <Card className="mt-6" data-testid="ollama-forbidden">
             <CardContent className="flex items-center gap-3 py-10">
               <ShieldAlert className="text-muted-foreground h-5 w-5 shrink-0" />
-              <p className="text-muted-foreground text-sm">
-                Esta sección es exclusiva del System Admin de la plataforma.
-              </p>
+              <p className="text-muted-foreground text-sm">{t("forbidden")}</p>
             </CardContent>
           </Card>
         }
@@ -130,6 +125,7 @@ export default function OllamaPage() {
 // Section 1 — Embeddings (read-only discovery).
 // ---------------------------------------------------------------------------
 function EmbeddingsSection() {
+  const t = useT("ollama");
   const query = useQuery({
     queryKey: ["embeddings-available"],
     queryFn: () => apiFetch<EmbeddingModelsResponse>("/admin/embeddings/available-models"),
@@ -139,7 +135,7 @@ function EmbeddingsSection() {
   return (
     <section data-testid="embeddings-section">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Embeddings</h2>
+        <h2 className="text-lg font-semibold">{t("embeddingsHeading")}</h2>
         <Button
           variant="outline"
           size="sm"
@@ -148,14 +144,14 @@ function EmbeddingsSection() {
           data-testid="embeddings-refresh"
         >
           <RefreshCw className={`mr-1 h-3.5 w-3.5 ${query.isFetching ? "animate-spin" : ""}`} />
-          Actualizar
+          {t("refresh")}
         </Button>
       </div>
       <StateBlock
         isLoading={query.isLoading}
         isError={query.isError}
         error={query.error}
-        loadingLabel="Cargando embeddings…"
+        loadingLabel={t("loadingEmbeddings")}
       >
         {query.data ? <EmbeddingsBody data={query.data} /> : null}
       </StateBlock>
@@ -164,23 +160,24 @@ function EmbeddingsSection() {
 }
 
 function EmbeddingsBody({ data }: { data: EmbeddingModelsResponse }) {
+  const t = useT("ollama");
   return (
     <Card>
       <CardContent className="space-y-4 py-6">
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="text-muted-foreground">Modelo activo:</span>
+          <span className="text-muted-foreground">{t("activeModel")}</span>
           <Badge variant="default" data-testid="embeddings-active">
             {data.active_model}
           </Badge>
-          <span className="text-muted-foreground">Dim requerida:</span>
+          <span className="text-muted-foreground">{t("requiredDim")}</span>
           <span className="font-mono">{data.required_dim}</span>
           {data.ollama_reachable ? (
             <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 className="h-4 w-4" /> Ollama accesible
+              <CheckCircle2 className="h-4 w-4" /> {t("reachable")}
             </span>
           ) : (
             <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-              <XCircle className="h-4 w-4" /> Ollama no accesible
+              <XCircle className="h-4 w-4" /> {t("unreachable")}
             </span>
           )}
         </div>
@@ -190,10 +187,10 @@ function EmbeddingsBody({ data }: { data: EmbeddingModelsResponse }) {
             <Table>
               <TableHeader className="bg-muted">
                 <TableRow>
-                  <TableHead className="px-3">Embedder instalado</TableHead>
-                  <TableHead className="px-3">Dim</TableHead>
-                  <TableHead className="px-3">Compatible (768)</TableHead>
-                  <TableHead className="px-3">Activo</TableHead>
+                  <TableHead className="px-3">{t("colEmbedder")}</TableHead>
+                  <TableHead className="px-3">{t("colDim")}</TableHead>
+                  <TableHead className="px-3">{t("colCompatible")}</TableHead>
+                  <TableHead className="px-3">{t("colActive")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -203,9 +200,9 @@ function EmbeddingsBody({ data }: { data: EmbeddingModelsResponse }) {
                     <TableCell className="px-3">{m.dim}</TableCell>
                     <TableCell className="px-3">
                       {m.compatible ? (
-                        <Badge variant="success">sí</Badge>
+                        <Badge variant="success">{t("yes")}</Badge>
                       ) : (
-                        <Badge variant="muted">no</Badge>
+                        <Badge variant="muted">{t("no")}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="px-3">{m.active ? "★" : ""}</TableCell>
@@ -216,16 +213,12 @@ function EmbeddingsBody({ data }: { data: EmbeddingModelsResponse }) {
           </div>
         ) : (
           <p className="text-muted-foreground text-sm italic">
-            {data.ollama_reachable
-              ? "No hay embedders del catálogo instalados todavía."
-              : "Sin conexión con Ollama: no se pueden listar los embedders instalados."}
+            {data.ollama_reachable ? t("noEmbeddersInstalled") : t("embeddersUnreachable")}
           </p>
         )}
 
         <div>
-          <p className="text-muted-foreground mb-1 text-xs">
-            Recomendados (768 dims, compatibles) — instálalos desde «Modelos Ollama»:
-          </p>
+          <p className="text-muted-foreground mb-1 text-xs">{t("recommendedHelp")}</p>
           <div className="flex flex-wrap gap-1.5" data-testid="embeddings-recommended">
             {data.recommended.map((name) => (
               <Badge key={name} variant="info" className="font-mono text-[11px]">
@@ -243,6 +236,8 @@ function EmbeddingsBody({ data }: { data: EmbeddingModelsResponse }) {
 // Section 2 — Ollama model management (list / pull / delete).
 // ---------------------------------------------------------------------------
 function ModelsSection() {
+  const t = useT("ollama");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [pullName, setPullName] = useState("");
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -290,7 +285,7 @@ function ModelsSection() {
   return (
     <section data-testid="models-section">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Modelos Ollama</h2>
+        <h2 className="text-lg font-semibold">{t("modelsHeading")}</h2>
         <Button
           variant="outline"
           size="sm"
@@ -299,7 +294,7 @@ function ModelsSection() {
           data-testid="models-refresh"
         >
           <RefreshCw className={`mr-1 h-3.5 w-3.5 ${query.isFetching ? "animate-spin" : ""}`} />
-          Actualizar
+          {t("refresh")}
         </Button>
       </div>
 
@@ -307,11 +302,11 @@ function ModelsSection() {
         <CardContent className="flex flex-wrap items-end gap-3 py-4">
           <div className="grow">
             <label htmlFor="pull-name" className="text-muted-foreground mb-1 block text-xs">
-              Descargar (pull) un modelo
+              {t("pullLabel")}
             </label>
             <Input
               id="pull-name"
-              placeholder="p. ej. nomic-embed-text"
+              placeholder={t("pullPlaceholder")}
               value={pullName}
               onChange={(e) => setPullName(e.target.value)}
               data-testid="pull-input"
@@ -325,7 +320,7 @@ function ModelsSection() {
             <Download
               className={`mr-1 h-3.5 w-3.5 ${pullMutation.isPending ? "animate-pulse" : ""}`}
             />
-            {pullMutation.isPending ? "Descargando…" : "Pull"}
+            {pullMutation.isPending ? t("pulling") : t("pull")}
           </Button>
         </CardContent>
       </Card>
@@ -340,23 +335,20 @@ function ModelsSection() {
         isLoading={query.isLoading}
         isError={query.isError}
         error={query.error}
-        loadingLabel="Cargando modelos…"
+        loadingLabel={t("loadingModels")}
       >
         {query.data && !query.data.ollama_reachable ? (
           <Card>
             <CardContent className="flex items-center gap-3 py-8">
               <XCircle className="h-5 w-5 shrink-0 text-amber-500" />
-              <p className="text-muted-foreground text-sm">
-                Sin conexión con Ollama. Comprueba que el servicio del stack está levantado (modo
-                CPU/GPU, ADR 0056).
-              </p>
+              <p className="text-muted-foreground text-sm">{t("modelsUnreachable")}</p>
             </CardContent>
           </Card>
         ) : query.data && query.data.models.length === 0 ? (
           <Card>
             <CardContent className="py-8 text-center">
               <p className="text-muted-foreground text-sm italic" data-testid="models-empty">
-                No hay modelos instalados. Descarga uno con «Pull».
+                {t("modelsEmpty")}
               </p>
             </CardContent>
           </Card>
@@ -365,9 +357,9 @@ function ModelsSection() {
             <Table>
               <TableHeader className="bg-muted">
                 <TableRow>
-                  <TableHead className="px-3">Modelo</TableHead>
-                  <TableHead className="px-3">Tamaño</TableHead>
-                  <TableHead className="px-3 text-right">Acciones</TableHead>
+                  <TableHead className="px-3">{t("colModel")}</TableHead>
+                  <TableHead className="px-3">{t("colSize")}</TableHead>
+                  <TableHead className="px-3 text-right">{t("colActions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -382,7 +374,7 @@ function ModelsSection() {
                         onClick={() => deleteMutation.mutate(m.name)}
                         disabled={busy}
                         data-testid={`delete-${m.name}`}
-                        aria-label={`Borrar ${m.name}`}
+                        aria-label={t("deleteAria", { name: m.name })}
                       >
                         <Trash2 className="h-3.5 w-3.5 text-red-500" />
                       </Button>

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for AI-generating a task's acceptance criteria from the TaskDetailSheet.
@@ -52,9 +53,7 @@ async function setup(
   const state = { criteria: opts.initialCriteria ?? [] };
   const proposal = opts.proposal ?? ["criterio generado 1", "criterio generado 2"];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`${API}/projects/${PROJECT_ID}/tasks`, (route) =>
     route.fulfill({

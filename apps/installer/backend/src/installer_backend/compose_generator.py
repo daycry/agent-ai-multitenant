@@ -51,7 +51,6 @@ references. Nothing here is logged.
 from __future__ import annotations
 
 import copy
-import json
 from typing import Any
 
 import yaml
@@ -78,6 +77,9 @@ IMAGE_GRAFANA = "grafana/grafana:11.2.0"
 IMAGE_NODE_EXPORTER = "prom/node-exporter:v1.8.2"
 IMAGE_ALERTMANAGER = "prom/alertmanager:v0.27.0"
 IMAGE_CADVISOR = "gcr.io/cadvisor/cadvisor:v0.49.1"
+# One-shot que abre el drop-dir del textfile collector (ver TEXTFILE_* abajo).
+# Misma imagen que el `textfile-init` de docker-compose.monitoring.yml.
+IMAGE_BUSYBOX = "busybox:1.36"
 # Read-only Docker API gateway with a per-endpoint ACL (Plan prod-01 task_09,
 # ADR 0060). The workers reach the daemon ONLY through this, never the raw
 # socket (Principio 2).
@@ -122,8 +124,19 @@ CORE_SERVICES: tuple[str, ...] = (
     "orchestrator",
     "workers",
     "workers-privileged",
+    # prod-13 task_prod13_01: la lane de las puertas del marketplace. Va en el
+    # NÚCLEO porque su cola se declara en `QUEUE_NAMES`: dejarla fuera dejaría
+    # una cola sin consumidor justo en la instalación de producción, que es el
+    # error que el ADR 0083 retiró para `heavy`/`gpu`.
+    "workers-marketplace",
     "cortex-beat",
     "notification-dispatcher",
+    # prod-08 task_prod08_watchdog_14: NÚCLEO, no overlay opcional. Es lo que
+    # reinicia postgres/redis/minio/vault/clamav y los dos proxies cuando se
+    # caen, y lo que avisa a un humano cuando no consigue levantarlos. Dejarlo
+    # fuera del núcleo era lo que hacía que la instalación de producción —la que
+    # nadie vigila— fuese el único despliegue SIN recuperación automática.
+    "watchdog",
     "admin-panel",
     "caddy",
 )
@@ -134,11 +147,129 @@ CORE_SERVICES: tuple[str, ...] = (
 #: to the platform notifier) and cAdvisor (per-container metrics).
 MONITORING_SERVICES: tuple[str, ...] = (
     "prometheus",
+    "textfile-init",
     "node-exporter",
     "alertmanager",
     "cadvisor",
     "grafana",
 )
+
+# ---------------------------------------------------------------------------
+# Textfile collector de node-exporter — el ÚNICO camino por el que las métricas
+# de APLICACIÓN llegan a Prometheus en este stack (no hay sidecar de
+# instrumentación: un proceso deja un `.prom` en el drop-dir y node-exporter
+# re-exporta sus muestras; ver `workers/textfile_collector.py`).
+#
+# POR QUÉ ESTÁ AQUÍ (2026-08-12): este generador NO cableaba nada de esto —ni el
+# mount, ni el volumen, ni la bandera `--collector.textfile.directory`—, así que
+# en una instalación hecha por el instalador `workers.sample_queue_metrics`
+# escribía cada 30 s en un `/host/textfile/` INEXISTENTE dentro del contenedor.
+# El writer trata un sink ausente como «topología sin monitorización» y calla a
+# propósito (si no, inundaría el log ~2880 veces/día), de modo que la avería era
+# SILENCIOSA: las cuatro series de aplicación
+#
+#     agentic_celery_queue_depth · agentic_tasks_by_status
+#     agentic_dlq_depth          · agentic_executions_24h
+#
+# sencillamente no existían, y las CUATRO reglas de alerta montadas sobre ellas
+# en docker/monitoring/prometheus/rules/app_alerts.yml (CeleryQueueGrowing,
+# NotificationsDLQNotEmpty, ExecutionFailureRateHigh, TasksBlockedHigh) estaban
+# cargadas y armadas sin poder disparar JAMÁS. Un dashboard vacío se nota; una
+# alerta que no puede sonar —`agentic_dlq_depth > 0` es trabajo PERDIDO— parece
+# que no hay nada que sonar. El stack de desarrollo sí lo hacía bien
+# (docker-compose.monitoring.yml + docker-compose.monitoring.apps.yml); esto lo
+# lleva a la instalación generada.
+# ---------------------------------------------------------------------------
+#: Volumen nombrado compartido: lo escriben las lanes de workers, lo lee
+#: node-exporter. Mismo nombre que en docker-compose.monitoring.yml.
+TEXTFILE_COLLECTOR_VOLUME = "node_exporter_textfile"
+
+#: Punto de montaje. Es el default del código del worker
+#: (`workers.config.queue_metrics_textfile_path` / `backup_metrics_textfile_path`
+#: cuelgan de aquí), así que montándolo en esta ruta NO hace falta ninguna
+#: variable de entorno extra.
+TEXTFILE_COLLECTOR_DIR = "/host/textfile"
+
+#: One-shot que deja el drop-dir en 1777 antes de que arranquen sus escritores.
+TEXTFILE_INIT_SERVICE = "textfile-init"
+
+#: Los servicios que ESCRIBEN ficheros `.prom`, y por tanto necesitan el drop-dir
+#: montado en lectura-escritura. `workers` drena la cola `default`
+#: (`sample_queue_metrics` cada 30 s + las métricas de curiosidad del córtex) y
+#: `workers-privileged` la cola `privileged` (backup diario → `agentic_backup_*`,
+#: la fuente de BackupLastRunFailed/BackupTooOld). Montar solo uno dejaría la
+#: mitad de las series sin publicar, que es otra forma de mentir.
+TEXTFILE_WRITER_SERVICES: tuple[str, ...] = ("workers", "workers-privileged")
+
+# ---------------------------------------------------------------------------
+# Healthcheck de los DOS tinyproxy (prod-08 task_prod08_egress_health_15 /
+# deploy-9). Una sola constante para los dos servicios y COPIA LITERAL de la
+# línea del compose canónico: son la misma imagen y el mismo demonio, y tenerlo
+# escrito dos veces es exactamente cómo el egress-proxy y el registry-proxy
+# heredaron el mismo defecto por copy-paste.
+#
+# Tres decisiones dentro de una línea, ninguna cosmética:
+#
+#  * **`|| exit 1`, no `|| true`.** Con `|| true` el comando SIEMPRE devolvía 0:
+#    el contenedor salía `healthy` con tinyproxy muerto. Como el egress-proxy es
+#    la única salida de los agent-runtimes hacia los LLM (ADR 0019), los agentes
+#    se quedaban sin red y el stack no delataba la causa. Y desde que el watchdog
+#    vigila los dos proxies (`task_prod08_watchdog_14`), un estado mentiroso
+#    también desactiva la recuperación automática: no reinicia lo que cree sano.
+#  * **`-Y off`, no `--no-proxy`.** La imagen lleva el wget de BusyBox, que NO
+#    reconoce `--no-proxy`: salía por el mensaje de uso con rc≠0, así que este
+#    healthcheck NUNCA fue válido. Invisible mientras hubo un `|| true` delante.
+#    Portar sólo el final —el «arreglo de dos caracteres» que el plan dictó
+#    durante tres pasadas— habría dejado los dos proxies permanentemente
+#    `unhealthy` y al watchdog reiniciándolos en bucle: peor que no vigilar.
+#  * **Se afirma el `403 Access denied`, no la palabra «tinyproxy».** El cuerpo
+#    de la página de error no viaja con `-q`; la línea de estado sí. Un 403 a una
+#    petición DIRECTA prueba que el demonio escucha y aplica su política (sólo
+#    sirve peticiones proxificadas); caído, wget diría «Connection refused».
+#
+# Verificado contra el binario, no contra el YAML: con el stack arriba,
+# `docker inspect` de agentic-egress-proxy y agentic-registry-proxy →
+# `healthy`, `FailingStreak=0` (2026-08-12).
+#
+# Guardado por tests/unit/test_compose_healthchecks_honest.py, que exige que
+# esta cadena sea IDÉNTICA a la del compose canónico — no parecida.
+# ---------------------------------------------------------------------------
+TINYPROXY_HEALTHCHECK_CMD = (
+    "wget -q -O- -Y off http://127.0.0.1:8888/ 2>&1 | grep -q '403 Access denied' || exit 1"
+)
+
+# ---------------------------------------------------------------------------
+# Buzón de credenciales del receiver de RESPALDO de Alertmanager (prod-08
+# task_prod08_alert_fallback_02).
+#
+# POR QUÉ ESTÁ AQUÍ (2026-08-12): `monitoring/alertmanager/alertmanager.yml` —el
+# MISMO fichero que este generador monta— declara el receiver de último recurso
+# leyendo el webhook de Slack de un fichero
+# (`api_url_file: /etc/alertmanager/secrets/slack_api_url`) en vez de incrustarlo:
+# Alertmanager no expande `${ENV}` en su config y un webhook de Slack es una
+# credencial. Pero declarar la ruta no es tenerla: hasta hoy este generador montaba
+# exactamente dos cosas en el alertmanager —su `alertmanager.yml` y su directorio
+# de estado—, así que en una instalación hecha por el instalador esa ruta NO
+# EXISTÍA dentro del contenedor y el operador no tenía dónde dejar la credencial
+# sin editar a mano un compose generado (justo lo que el runbook le pide no hacer).
+#
+# El fallo es del tipo caro: `api_url_file` se lee al NOTIFICAR, no al cargar la
+# config, de modo que Alertmanager ARRANCA IGUAL, el stack entero sale `healthy` y
+# el canal de respaldo falla en cada envío EN SILENCIO — precisamente en el único
+# escenario para el que existe: el api-server caído, que no puede entregarse a sí
+# mismo la alerta de que está caído. El stack de desarrollo lo cableó el
+# 2026-08-10 (docker/docker-compose.monitoring.yml); esto lo lleva a la
+# instalación generada.
+# ---------------------------------------------------------------------------
+#: Lado HOST, relativo al directorio del compose. Misma convención (y mismo árbol
+#: `monitoring/` copiado junto al compose) que el resto de la configuración de
+#: monitorización que ya se monta así: prometheus.yml, las reglas, alertmanager.yml
+#: y el provisioning de Grafana.
+ALERTMANAGER_SECRETS_HOST_DIR = "./monitoring/alertmanager/secrets"
+
+#: Lado CONTENEDOR. No es una elección libre: es el directorio del que cuelga el
+#: `api_url_file` del receiver `critical-fallback` en `alertmanager.yml`.
+ALERTMANAGER_SECRETS_DIR = "/etc/alertmanager/secrets"
 
 #: The in-stack Ollama service + its model-pull one-shot, added when
 #: ``ollama_mode != "none"`` (ADR 0056). ``GPU_SERVICE`` is kept as a
@@ -454,10 +585,7 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         "build": "./egress-proxy",
         "container_name": "agentic-egress-proxy",
         "healthcheck": {
-            "test": [
-                "CMD-SHELL",
-                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
-            ],
+            "test": ["CMD-SHELL", TINYPROXY_HEALTHCHECK_CMD],
             "interval": "30s",
             "timeout": "5s",
             "retries": 3,
@@ -478,10 +606,7 @@ def _registry_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, An
         "build": "./registry-proxy",
         "container_name": "agentic-registry-proxy",
         "healthcheck": {
-            "test": [
-                "CMD-SHELL",
-                "wget -q -O- --no-proxy http://127.0.0.1:8888/ 2>&1 | grep -q tinyproxy || true",
-            ],
+            "test": ["CMD-SHELL", TINYPROXY_HEALTHCHECK_CMD],
             "interval": "30s",
             "timeout": "5s",
             "retries": 3,
@@ -555,7 +680,11 @@ def _app_environment(cfg: InstallerConfig, prefix: str, *, prod: bool) -> dict[s
     """
 
     return {
-        f"{prefix}ENVIRONMENT": cfg.system.environment.value,
+        # `.runtime_value`, NO `.value`: el enum del wizard dice `production` y el
+        # runtime solo acepta {dev, staging, prod}. Emitirlo en crudo impedía
+        # arrancar al api-server generado por el instalador en cuanto el guard de
+        # `environment` pasó a fail-closed (prod-09 task_02).
+        f"{prefix}ENVIRONMENT": cfg.system.environment.runtime_value,
         # Reference the per-service DSN the .env carries (config_generators
         # writes one per service: api-server gets the app role, workers/notify
         # the migrations role, etc.) — NOT a shared bare var.
@@ -606,6 +735,12 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # is NOT here: it is optional (default None) and injected by the Vault
             # bootstrap (task 15_09), not the .env.
             "API_SERVER_JWT_SECRET": _env_ref("API_SERVER_JWT_SECRET", None, prod=prod),
+            # ADR 0136: secreto DEDICADO de los tokens internos del sandbox. Sin él
+            # el api-server NO ARRANCA en prod (guard fail-closed de anti-defaults),
+            # y su ausencia en el generador es la que dejó el stack sin levantar.
+            "API_SERVER_INTERNAL_TOKEN_SECRET": _env_ref(
+                "API_SERVER_INTERNAL_TOKEN_SECRET", None, prod=prod
+            ),
             # NOTIF-2: Bearer del ingest de Alertmanager (fail-closed sin el).
             "API_SERVER_ALERTS_INGEST_TOKEN": _env_ref(
                 "API_SERVER_ALERTS_INGEST_TOKEN", None, prod=prod
@@ -685,6 +820,13 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
 # ADR 0083 (prod-06 colas_02) — dead lanes on a single host.
 _WORKER_GENERIC_QUEUES = "default,ingestion,test,review"
 _WORKER_PRIVILEGED_QUEUE = "privileged"
+# prod-13 task_prod13_01: la lane de las puertas de seguridad del marketplace
+# (bandit + semgrep + prueba de humo del sandbox). Lane propia porque un trabajo
+# de ~4 min no cabe en los pools de arriba sin arriesgar la inanición que
+# documenta `workers-aux` en el compose de dev. Declararla en `QUEUE_NAMES` sin
+# drenarla aquí sería la cola muerta que el ADR 0083 retiró para heavy/gpu, y
+# `tests/unit/test_compose_generator.py` compara ambas cosas.
+_WORKER_MARKETPLACE_QUEUE = "marketplace"
 
 # Both worker lanes sit on three nets (task_09): agentic-net (general), the
 # internal agentic-agents (reach the egress-proxy + the runtimes they launch),
@@ -720,14 +862,55 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             # prereq load docker/apparmor/agent-runtime.profile).
             "WORKERS_SECCOMP_PROFILE_PATH": "/etc/agentic/seccomp/agent-runtime.json",
             "WORKERS_APPARMOR_PROFILE": "agent-runtime",
-            # Backup wiring (workers-6 / prod-04). The NAMES are pinned here so
-            # the .env contract holds; the correct VALUES (a dedicated pg_dump
-            # DSN, the bind-mount capture path) are prod-04's job — TODO(prod-04).
-            # Default the backup DSN to the migrations-role DSN the workers
-            # already carry (pg_dump needs broad read).
-            "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_DATABASE_URL", None, prod=prod),
-            "WORKERS_BACKUP_ENCRYPTION_ENABLED": "true",
+            # Backup wiring (workers-6 / prod-04 task_prod_04_09). Los VALORES
+            # los pone `config_generators._backup_env`, que es quien conoce el
+            # layout de binds de ESTE compose; aquí solo se referencian. Antes se
+            # copiaba `WORKERS_DATABASE_URL` (una URL de SQLAlchemy que `pg_dump`
+            # no entiende) y se dejaba que `WORKERS_BACKUP_VOLUMES` heredase los
+            # named volumes del stack de manuales, que aquí no existen: el backup
+            # diario de una instalación por el instalador fallaba cada noche.
+            "WORKERS_BACKUP_DATABASE_URL": _env_ref("WORKERS_BACKUP_DATABASE_URL", None, prod=prod),
+            "WORKERS_BACKUP_BIND_PATHS": _env_ref("WORKERS_BACKUP_BIND_PATHS", None, prod=prod),
+            "WORKERS_BACKUP_PROJECTS_ROOT": _env_ref(
+                "WORKERS_BACKUP_PROJECTS_ROOT", None, prod=prod
+            ),
+            # task_prod_04_06: Redis con artefacto propio (BGREWRITEAOF + tar del
+            # appendonlydir) y el árbol de Vault con captura verificada estable.
+            "WORKERS_BACKUP_REDIS_DIR": _env_ref("WORKERS_BACKUP_REDIS_DIR", None, prod=prod),
+            "WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS": _env_ref(
+                "WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS", None, prod=prod
+            ),
+            # Cifrado en reposo: OFF de fábrica, y no por descuido. El motor es
+            # fail-closed (task_prod_04_07): con el cifrado encendido y sin huella
+            # de custodia declarada, el backup falla ANTES del dump — y con razón,
+            # porque un bundle cifrado cuya clave no está custodiada es
+            # irrecuperable. Un instalador no puede depositar una clave en un sobre
+            # sellado, así que encenderlo aquí solo producía un stack cuyo backup
+            # fallaba todas las noches. El opt-in en dos pasos (generar clave →
+            # custodiarla → encender) está en docs/06-runbooks/dr-manual-backup.md.
+            "WORKERS_BACKUP_ENCRYPTION_ENABLED": "false",
             "WORKERS_BACKUP_ENCRYPTION_VAULT_KEY": "agentic-platform/backups/encryption-key",
+            # --- las DOS variables con prefijo AJENO que el worker necesita ---
+            # El worker mintea el token del sandbox (`AGENTIC_INTERNAL_TOKEN`)
+            # importando `mint_agent_token` del paquete del api-server, así que ese
+            # camino lee `api_server.config` y sus variables `API_SERVER_*`. Es la
+            # excepción al contrato de prefijos: el worker corre DOS clases de
+            # Settings. Sin estas dos, el stack generado tenía dos averías:
+            #
+            #   1. sin `API_SERVER_INTERNAL_TOKEN_SECRET`, el worker firmaba con el
+            #      default de dev y el api-server —que sí lleva el real— rechazaba
+            #      el token: el sandbox no podía llamar a `/internal/agent/*`;
+            #   2. sin `API_SERVER_ENVIRONMENT`, ese `Settings` se creía en `dev`,
+            #      así que los guards anti-defaults NO disparaban dentro del worker
+            #      y la avería (1) ocurría en silencio en vez de al arrancar.
+            #
+            # El valor del secreto es el MISMO que el del api-server a propósito:
+            # los dos lados verifican la misma firma. Lo que NO puede compartir es
+            # `API_SERVER_JWT_SECRET`, que ya no viaja al worker (ADR 0136).
+            "API_SERVER_ENVIRONMENT": cfg.system.environment.runtime_value,
+            "API_SERVER_INTERNAL_TOKEN_SECRET": _env_ref(
+                "API_SERVER_INTERNAL_TOKEN_SECRET", None, prod=prod
+            ),
         }
     )
     return env
@@ -775,15 +958,15 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     return svc
 
 
-#: Los named volumes que el backup taréa (prod-01 A9 / prod-04). El worker corre
-#: `tar` sobre sus _data (owned uid 999/100, modo 0700) → necesita root + el mount
-#: de /var/lib/docker/volumes. Los nombres llevan el prefijo del proyecto compose.
-_BACKUP_VOLUME_NAMES = (
-    "agentic-platform_minio_data",
-    "agentic-platform_redis_data",
-    "agentic-platform_vault_data",
-    "agentic-platform-agent-data",
-)
+#: prod-04 task_prod_04_09: este compose NO declara named volumes — cada store es
+#: un bind bajo `{data_root}` (`{data_root}/minio:/data`, …). Aquí había una lista
+#: de nombres copiada del stack de manuales (`agentic-platform_minio_data`, …) que
+#: en este layout eran FANTASMA: `tar` sobre
+#: `/var/lib/docker/volumes/<fantasma>/_data` devuelve rc≠0 y el contrato
+#: clean-failure del motor borraba el bundle entero, incluido el `pg_dump` bueno.
+#: Lo que se captura ahora son bind paths que emite `config_generators._backup_env`,
+#: que es quien conoce el layout. El worker sigue necesitando root para leerlos
+#: (uid 999 de redis, uid 100 de vault, modo 0700).
 
 
 def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
@@ -801,9 +984,10 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     env = _workers_env(cfg, prod=prod)
     env.update(
         {
-            # Backup como root: leer los volume _data a 0700 (prod-01 A9 / prod-04).
+            # Backup como root: leer los `_data`/binds de los stores a 0700
+            # (prod-01 A9 / prod-04).
             "WORKERS_RUN_AS_ROOT": "1",
-            "WORKERS_BACKUP_VOLUMES": json.dumps(list(_BACKUP_VOLUME_NAMES)),
+            "WORKERS_BACKUP_VOLUMES": _env_ref("WORKERS_BACKUP_VOLUMES", None, prod=prod),
         }
     )
     volumes = [*_workers_volumes(cfg), "/var/lib/docker/volumes:/var/lib/docker/volumes"]
@@ -836,6 +1020,50 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     return svc
 
 
+def _workers_marketplace_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """Lane que drena SOLO la cola ``marketplace`` (prod-13 task_prod13_01).
+
+    Las puertas de seguridad de una instalación —bandit y semgrep por
+    ``subprocess`` con 120 s de plazo cada uno, más la prueba de humo del
+    sandbox— corrían dentro del request del api-server. ``asyncio.to_thread`` ya
+    impedía que congelasen el event loop, pero no las saca del HTTP: el request
+    seguía durando minutos y eso lo corta un proxy.
+
+    ``--concurrency=1`` porque instalar es una acción humana y rara, y así dos
+    instalaciones simultáneas no se pelean por la CPU del host. No es singleton
+    por corrección (a diferencia de la lane ``privileged``, cuyos jobs periódicos
+    no pueden doblarse): es una elección de capacidad, y subirla es cambiar este
+    número.
+
+    Necesita ``DOCKER_HOST`` porque la puerta 5 lanza un contenedor efímero de
+    prueba de humo — precisamente lo que el api-server NO puede hacer (no tiene
+    socket Docker, principio 2). Esta lane ES el «sandbox out-of-process» que el
+    ADR 0081 pedía para poder cerrar su Fase B/C.
+    """
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "command": (
+            f"celery -A workers.celery_app worker "
+            f"--queues={_WORKER_MARKETPLACE_QUEUE} --concurrency=1"
+        ),
+        "environment": _workers_env(cfg, prod=prod),
+        "volumes": _workers_volumes(cfg),
+        "healthcheck": _healthcheck(
+            "celery -A workers.celery_app inspect ping -d celery@$$HOSTNAME -t 5 || exit 1",
+            start_period="40s",
+            timeout="30s",
+        ),
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "redis": {"condition": "service_healthy"},
+        },
+        "networks": _WORKER_NETWORKS,
+    }
+    svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
+    svc["deploy"]["replicas"] = 1
+    return svc
+
+
 def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     """El Celery beat (scheduler) — prod-01 A9 (auditoría 2026-07-06).
 
@@ -856,8 +1084,7 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
                 "CMD",
                 "python",
                 "-c",
-                "import sys; sys.exit(0 if b'beat' in "
-                "open('/proc/1/cmdline','rb').read() else 1)",
+                "import sys; sys.exit(0 if b'beat' in open('/proc/1/cmdline','rb').read() else 1)",
             ],
             "interval": "30s",
             "timeout": "5s",
@@ -914,6 +1141,71 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
         "networks": ["agentic-net"],
     }
     svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
+    return svc
+
+
+def _watchdog_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+    """Vigilante de salud: reinicia con backoff y, al agotarlo, AVISA a un humano.
+
+    prod-08 ``task_prod08_watchdog_14`` (observability-6 + deploy-10). Hasta que
+    esto existió, ``apps/watchdog`` era código escrito, probado y **no
+    desplegado**: el compose canónico lo declaró el 2026-08-02, y el que se
+    ejecuta en casa del operador —éste— siguió sin él. O sea que la
+    «recuperación automática de la plataforma» no existía justo en el entorno
+    donde no hay nadie mirando ``docker ps``.
+
+    Tres decisiones que van juntas y conviene no separar:
+
+    * **Sin socket Docker.** El enunciado del plan pedía montarlo; el principio
+      rector 2 y ``tests/security/test_pentest_findings.py`` lo prohíben, y con
+      razón: un contenedor con ``/var/run/docker.sock`` escapa al host de forma
+      trivial. Habla con el daemon por ``DOCKER_HOST`` contra el
+      ``docker-socket-proxy`` del **ADR 0060**, al que le basta ``CONTAINERS=1``
+      + ``POST=1`` para listar y reiniciar. El riesgo 4 del plan queda así
+      disuelto, no mitigado.
+    * **DOS redes, y las dos hacen falta.** ``agentic-docker`` (``internal``)
+      para RESOLVER el proxy —el fallo del 2026-08-10 en el compose canónico fue
+      declararlo sólo en ``agentic-net``: el nombre DNS no resolvía, el watchdog
+      no veía NINGÚN contenedor, no reiniciaba nada y se callaba, que es
+      indistinguible de un stack sano— y ``agentic-net`` para POSTear la alerta
+      al api-server, sin la cual la alerta terminal vuelve a ser una línea de log
+      local dentro de un contenedor (el defecto original de observability-6).
+    * **La alerta comparte secreto con el endpoint.** ``WATCHDOG_ALERTS_INGEST_TOKEN``
+      referencia el MISMO ``${API_SERVER_ALERTS_INGEST_TOKEN}`` que valida
+      ``/internal/alerts/ingest`` (el instalador ya lo genera y lo escribe en el
+      ``.env``). Inventar aquí una variable propia daría un watchdog que cree
+      avisar y se come un 401 en cada alerta — peor que no tenerlo, porque nadie
+      mira.
+
+    Sin perfil, a diferencia del compose canónico: allí va bajo ``profiles:``
+    porque ese fichero es la capa de infraestructura y no construye imágenes de
+    aplicación. Aquí las apps SON parte del stack, y un vigilante que hay que
+    acordarse de levantar con un flag no vigila nada.
+    """
+    svc: dict[str, Any] = {
+        "image": f"{APP_IMAGE_REGISTRY}/watchdog:{APP_IMAGE_TAG}",
+        "environment": {
+            # ADR 0060: la pasarela de mínimo privilegio, NUNCA el socket crudo.
+            "DOCKER_HOST": "tcp://docker-socket-proxy:2375",
+            # Sin esto el watchdog busca contenedores del proyecto por defecto y
+            # no encuentra los de esta instalación: resuelve por las etiquetas
+            # `com.docker.compose.project` que Docker pone en cada contenedor.
+            "WATCHDOG_COMPOSE_PROJECT": PROJECT_NAME,
+            "WATCHDOG_POLL_INTERVAL": "30",
+            "WATCHDOG_ALERTS_INGEST_URL": ("http://api-server:8000/internal/alerts/ingest"),
+            "WATCHDOG_ALERTS_INGEST_TOKEN": _env_ref(
+                "API_SERVER_ALERTS_INGEST_TOKEN", None, prod=prod
+            ),
+        },
+        "depends_on": {
+            # El proxy del daemon: sin él arranca igual (degradación deliberada,
+            # lo dice en el log) pero no ve nada. Ordenarlo evita una ventana de
+            # `container_missing` en cada `up`.
+            "docker-socket-proxy": {"condition": "service_healthy"},
+        },
+        "networks": ["agentic-net", "agentic-docker"],
+    }
+    svc.update(_hardening(limits_cpus="0.25", limits_memory="192m"))
     return svc
 
 
@@ -1148,12 +1440,19 @@ def _node_exporter_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any
             "--path.sysfs=/host/sys",
             "--path.rootfs=/host/root",
             "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)",
+            # Textfile collector: sin esta bandera node-exporter NO mira el
+            # drop-dir y las métricas de aplicación que dejan ahí los workers no
+            # se re-exportan — el mount por sí solo no basta.
+            f"--collector.textfile.directory={TEXTFILE_COLLECTOR_DIR}",
         ],
         "pid": "host",
         "volumes": [
             "/proc:/host/proc:ro",
             "/sys:/host/sys:ro",
             "/:/host/root:ro,rslave",
+            # Solo LECTURA: aquí node-exporter consume; quien escribe son las
+            # lanes de workers (TEXTFILE_WRITER_SERVICES), que lo montan RW.
+            f"{TEXTFILE_COLLECTOR_VOLUME}:{TEXTFILE_COLLECTOR_DIR}:ro",
         ],
         "networks": ["agentic-net"],
     }
@@ -1161,14 +1460,51 @@ def _node_exporter_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any
     return svc
 
 
+def _textfile_init_service(
+    cfg: InstallerConfig,  # noqa: ARG001 — firma uniforme de los builders
+    *,
+    prod: bool,  # noqa: ARG001 — firma uniforme de los builders
+) -> dict[str, Any]:
+    """One-shot que abre el drop-dir del textfile collector (espejo del
+    ``textfile-init`` de docker-compose.monitoring.yml).
+
+    El directorio es MULTI-ESCRITOR: ``workers`` escribe como uid 1000 (el
+    entrypoint degrada de root salvo bandera) y ``workers-privileged`` como root
+    (``WORKERS_RUN_AS_ROOT=1``, se lo exige el volume-tar del backup). Un volumen
+    nombrado nace ``root:root 0755``, así que el sampler recibiría EACCES en cada
+    pasada — y en silencio, porque publicar métricas es best-effort. Modo 1777
+    sticky (como ``/tmp``): cualquier escritor deja su ``.prom`` y nadie puede
+    borrar el de otro. Los escritores lo esperan con
+    ``service_completed_successfully`` (ver :func:`generate_compose`).
+
+    Efímero pero corre como root, así que lleva la misma línea base de
+    endurecimiento que el resto: ``chmod`` sobre un directorio cuyo dueño ya es
+    root no necesita ninguna capability (el euid coincide con el propietario, no
+    hace falta CAP_FOWNER), de modo que ``cap_drop: [ALL]`` no le quita nada.
+    """
+
+    svc: dict[str, Any] = {
+        "image": IMAGE_BUSYBOX,
+        "command": ["chmod", "1777", TEXTFILE_COLLECTOR_DIR],
+        "volumes": [f"{TEXTFILE_COLLECTOR_VOLUME}:{TEXTFILE_COLLECTOR_DIR}"],
+        # Sin red: solo toca un volumen local.
+        "network_mode": "none",
+    }
+    svc.update(_hardening(limits_cpus="0.1", limits_memory="64m"))
+    svc["restart"] = "no"  # one-shot: hace el chmod y sale
+    return svc
+
+
 def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
     """Alertmanager — routes Prometheus' firing alerts to the platform notifier.
 
     Mirrors docker/docker-compose.monitoring.yml: the routing/receiver config is
-    the secret-free ``monitoring/alertmanager/alertmanager.yml`` (its default
-    receiver webhooks the api-server's ``/internal/alerts/ingest``, reusing the
-    Plan 10 notifier — no SMTP/Slack secrets here). Without this service the
-    alert RULES Prometheus evaluates would have nowhere to go in production.
+    ``monitoring/alertmanager/alertmanager.yml`` (its default receiver webhooks
+    the api-server's ``/internal/alerts/ingest``, reusing the Plan 10 notifier).
+    The file itself carries NO secret: the ``severity=critical`` backup receiver
+    reads its Slack webhook from a file in the secrets mailbox mounted below.
+    Without this service the alert RULES Prometheus evaluates would have nowhere
+    to go in production.
     """
     svc: dict[str, Any] = {
         "image": IMAGE_ALERTMANAGER,
@@ -1179,6 +1515,18 @@ def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         ],
         "volumes": [
             "./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
+            # Buzón de la credencial del receiver de RESPALDO. El porqué, con el
+            # dato concreto, está en el bloque ``ALERTMANAGER_SECRETS_*`` de
+            # arriba: sin este montaje la ruta que declara ``api_url_file`` no
+            # existe en el contenedor, Alertmanager ARRANCA IGUAL (ese fichero se
+            # lee al notificar, no al cargar la config) y el canal de último
+            # recurso falla en cada envío en silencio, con el stack `healthy` —
+            # en el único escenario para el que existe, el api-server caído.
+            #
+            # Read-only: Alertmanager solo lee. Corre como ``nobody`` (65534), así
+            # que el lado host debe existir con permisos de lectura para él antes
+            # de levantar el stack; si no existe, Docker lo inventa como root.
+            f"{ALERTMANAGER_SECRETS_HOST_DIR}:{ALERTMANAGER_SECRETS_DIR}:ro",
             f"{cfg.storage.data_root}/alertmanager:/alertmanager",
         ],
         "healthcheck": {
@@ -1279,8 +1627,10 @@ _BUILDERS = {
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
     "workers-privileged": _workers_privileged_service,
+    "workers-marketplace": _workers_marketplace_service,
     "cortex-beat": _cortex_beat_service,
     "notification-dispatcher": _notification_dispatcher_service,
+    "watchdog": _watchdog_service,
     "admin-panel": _admin_panel_service,
     "caddy": _reverse_proxy_service,
     "ollama": _ollama_service,
@@ -1288,6 +1638,7 @@ _BUILDERS = {
     "stt": _stt_service,
     "tts": _tts_service,
     "prometheus": _prometheus_service,
+    TEXTFILE_INIT_SERVICE: _textfile_init_service,
     "node-exporter": _node_exporter_service,
     "alertmanager": _alertmanager_service,
     "cadvisor": _cadvisor_service,
@@ -1402,6 +1753,38 @@ def _networks_block() -> dict[str, Any]:
     }
 
 
+def _wire_textfile_collector(services: dict[str, Any]) -> None:
+    """Monta el drop-dir del textfile collector en los servicios que publican
+    métricas de aplicación y los hace esperar al ``textfile-init``.
+
+    El POR QUÉ, con el dato concreto, está en el bloque ``TEXTFILE_*`` de arriba:
+    sin este mount las cuatro series de aplicación (``agentic_celery_queue_depth``,
+    ``agentic_tasks_by_status``, ``agentic_dlq_depth``, ``agentic_executions_24h``)
+    no existen en una instalación generada por el instalador, y las cuatro reglas
+    de ``monitoring/prometheus/rules/app_alerts.yml`` que las evalúan quedan
+    armadas sin poder disparar nunca.
+
+    En RW a propósito (node-exporter es quien lo monta ``:ro``), y sin variables
+    de entorno: el punto de montaje ES el default que ya trae el código del
+    worker.
+    """
+
+    mount = f"{TEXTFILE_COLLECTOR_VOLUME}:{TEXTFILE_COLLECTOR_DIR}"
+    for name in TEXTFILE_WRITER_SERVICES:
+        svc = services.get(name)
+        if svc is None:  # pragma: no cover — ambas lanes son servicios core
+            continue
+        volumes = svc.setdefault("volumes", [])
+        assert isinstance(volumes, list)
+        if mount not in volumes:
+            volumes.append(mount)
+        # Arrancar antes del chmod significa que el PRIMER sample muere con
+        # EACCES (y en silencio, porque publicar métricas es best-effort).
+        deps = svc.setdefault("depends_on", {})
+        assert isinstance(deps, dict)
+        deps[TEXTFILE_INIT_SERVICE] = {"condition": "service_completed_successfully"}
+
+
 def generate_compose(
     cfg: InstallerConfig,
     *,
@@ -1438,6 +1821,7 @@ def generate_compose(
         "orchestrator",
         "workers",
         "workers-privileged",
+        "workers-marketplace",
         "cortex-beat",
         "notification-dispatcher",
     )
@@ -1458,17 +1842,30 @@ def generate_compose(
             deps["migrations"] = {"condition": "service_completed_successfully"}
         services[name] = svc
 
+    # Métricas de APLICACIÓN: solo con monitorización desplegada. El mount y el
+    # depends_on NO pueden colarse en una instalación sin monitorización — ahí no
+    # existen ni el volumen ni el one-shot, y compose se negaría a levantar el
+    # proyecto entero por un volumen no declarado / un depends_on huérfano.
+    if monitoring:
+        _wire_textfile_collector(services)
+
     compose: dict[str, Any] = {
         "name": PROJECT_NAME,
         "services": services,
         "networks": _networks_block(),
     }
-    # Declare the named volume(s) any generated service references. The only one
-    # is the Whisper model cache for the voice stt service (every other stateful
-    # service uses a {data_root} bind mount). Declared only when voice is on so
-    # the compose carries no dangling volume otherwise.
+    # Declare the named volume(s) any generated service references. Every
+    # stateful service uses a {data_root} bind mount; the exceptions are the
+    # Whisper model cache (voice) and the textfile-collector drop dir
+    # (monitoring), each declared only when its feature is on so the compose
+    # carries no dangling volume otherwise.
+    volumes: dict[str, Any] = {}
     if STT_SERVICE in services:
-        compose["volumes"] = {WHISPER_MODELS_VOLUME: None}
+        volumes[WHISPER_MODELS_VOLUME] = None
+    if TEXTFILE_INIT_SERVICE in services:
+        volumes[TEXTFILE_COLLECTOR_VOLUME] = None
+    if volumes:
+        compose["volumes"] = volumes
     return compose
 
 

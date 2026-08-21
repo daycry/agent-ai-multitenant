@@ -13,9 +13,9 @@ Cada `decide()` del agent-runtime reconstruye `[system, user]` desde cero
 nunca ve un historial real assistant/tool: la continuidad depende de la ventana
 de 8 items + stickies + el condensado (P1-5), y se anula el prompt-caching de
 una conversación creciente (coste y latencia). Relacionado: ADR 0097 (sesión
-SDK persistente, proposed).
+SDK persistente; entonces `proposed`, `accepted` desde el 2026-07-13).
 
-## Decisión (propuesta)
+## Decisión (aceptada el 2026-07-26 — ver «Cierre»)
 
 Pasar el loop a un HILO acumulado por run: mensajes assistant (tool_calls) +
 tool (resultados) reales, con compactación explícita al superar un umbral

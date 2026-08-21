@@ -47,7 +47,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface BackupListItem {
   backup_id: string;
@@ -96,10 +98,6 @@ interface RestoreJobStatus {
 
 type RestoreKind = "full" | "per_tenant";
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 function formatBytes(n: number | null): string {
   if (n === null) return "—";
   if (n < 1024) return `${n} B`;
@@ -121,12 +119,13 @@ function expectedToken(backupId: string, kind: RestoreKind, tenantId: string): s
 const TERMINAL_STATES = new Set(["SUCCESS", "FAILURE"]);
 
 export default function RestorePage() {
+  const t = useT("backupRestore");
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 lg:px-8" data-testid="restore-page">
       <PageHeader
         icon={<DatabaseBackup className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Restaurar desde backup"
-        description="Restaura el stack completo o un único tenant desde un backup. Operación larga y destructiva: corre como job en segundo plano y exige doble confirmación. Solo System Admin."
+        title={t("title")}
+        description={t("description")}
         data-testid="restore-header"
       />
 
@@ -136,7 +135,7 @@ export default function RestorePage() {
           <Card className="mt-6">
             <CardContent className="py-6">
               <p className="text-muted-foreground text-sm" data-testid="restore-forbidden">
-                Solo un System Admin puede restaurar desde un backup.
+                {t("forbidden")}
               </p>
             </CardContent>
           </Card>
@@ -149,6 +148,8 @@ export default function RestorePage() {
 }
 
 function RestoreWorkspace() {
+  const t = useT("backupRestore");
+  const errorText = useErrorText();
   const [selected, setSelected] = useState<string | null>(null);
   const [kind, setKind] = useState<RestoreKind>("full");
   const [tenantId, setTenantId] = useState("");
@@ -223,12 +224,12 @@ function RestoreWorkspace() {
       {/* ----- Backups list ----- */}
       <Card>
         <CardHeader>
-          <CardTitle>Backups disponibles</CardTitle>
+          <CardTitle>{t("listTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
           {listQuery.isLoading ? (
             <p className="text-muted-foreground text-sm" data-testid="restore-list-loading">
-              Cargando…
+              {t("loading")}
             </p>
           ) : listQuery.isError ? (
             <p className="text-destructive text-sm" data-testid="restore-list-error">
@@ -236,7 +237,7 @@ function RestoreWorkspace() {
             </p>
           ) : listQuery.data && listQuery.data.backups.length === 0 ? (
             <p className="text-muted-foreground text-sm" data-testid="restore-list-empty">
-              No hay backups disponibles.
+              {t("listEmpty")}
             </p>
           ) : (
             <ul className="space-y-2" data-testid="restore-list">
@@ -257,7 +258,7 @@ function RestoreWorkspace() {
                   >
                     <span className="font-mono text-xs">{b.backup_id}</span>
                     <span className="text-muted-foreground flex items-center gap-3 text-xs">
-                      {b.encrypted ? <span>cifrado</span> : null}
+                      {b.encrypted ? <span>{t("encrypted")}</span> : null}
                       <span>{formatBytes(b.total_size_bytes)}</span>
                       <span>{b.locations.join(", ")}</span>
                     </span>
@@ -273,12 +274,12 @@ function RestoreWorkspace() {
       {selected !== null ? (
         <Card data-testid="restore-preview-card">
           <CardHeader>
-            <CardTitle>Preview del backup</CardTitle>
+            <CardTitle>{t("previewTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {previewQuery.isLoading ? (
               <p className="text-muted-foreground text-sm" data-testid="restore-preview-loading">
-                Cargando preview…
+                {t("previewLoading")}
               </p>
             ) : previewQuery.isError ? (
               <p className="text-destructive text-sm" data-testid="restore-preview-error">
@@ -287,20 +288,22 @@ function RestoreWorkspace() {
             ) : preview ? (
               <div className="space-y-4" data-testid="restore-preview">
                 <dl className="grid grid-cols-2 gap-2 text-sm">
-                  <dt className="text-muted-foreground">Backup</dt>
+                  <dt className="text-muted-foreground">{t("previewBackup")}</dt>
                   <dd className="font-mono text-xs" data-testid="restore-preview-id">
                     {preview.backup_id}
                   </dd>
-                  <dt className="text-muted-foreground">Cifrado</dt>
-                  <dd data-testid="restore-preview-encrypted">{preview.encrypted ? "Sí" : "No"}</dd>
-                  <dt className="text-muted-foreground">Creado</dt>
+                  <dt className="text-muted-foreground">{t("previewEncrypted")}</dt>
+                  <dd data-testid="restore-preview-encrypted">
+                    {preview.encrypted ? t("yes") : t("no")}
+                  </dd>
+                  <dt className="text-muted-foreground">{t("previewCreated")}</dt>
                   <dd>{preview.created_at ?? "—"}</dd>
-                  <dt className="text-muted-foreground">Tamaño total</dt>
+                  <dt className="text-muted-foreground">{t("previewTotalSize")}</dt>
                   <dd>{formatBytes(preview.total_size_bytes)}</dd>
                 </dl>
 
                 <div>
-                  <p className="mb-1 text-sm font-medium">Artefactos</p>
+                  <p className="mb-1 text-sm font-medium">{t("artifacts")}</p>
                   <ul className="space-y-1 text-xs" data-testid="restore-preview-artifacts">
                     {preview.artifacts.map((a) => (
                       <li key={a.name} className="flex justify-between rounded border px-2 py-1">
@@ -315,7 +318,7 @@ function RestoreWorkspace() {
 
                 {/* ----- Full vs per-tenant choice ----- */}
                 <fieldset className="space-y-2" data-testid="restore-kind">
-                  <legend className="text-sm font-medium">Tipo de restore</legend>
+                  <legend className="text-sm font-medium">{t("kindLegend")}</legend>
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="radio"
@@ -324,7 +327,7 @@ function RestoreWorkspace() {
                       checked={kind === "full"}
                       onChange={() => setKind("full")}
                     />
-                    Restore completo (detiene el stack y restaura todo)
+                    {t("kindFull")}
                   </label>
                   <label
                     className={`flex items-center gap-2 text-sm ${
@@ -339,13 +342,13 @@ function RestoreWorkspace() {
                       checked={kind === "per_tenant"}
                       onChange={() => setKind("per_tenant")}
                     />
-                    Restore selectivo por tenant (solo sus datos)
+                    {t("kindPerTenant")}
                   </label>
 
                   {kind === "per_tenant" ? (
                     <div className="space-y-2 pl-6">
                       <div className="space-y-1">
-                        <Label htmlFor="restore-tenant-id">Tenant ID (UUID)</Label>
+                        <Label htmlFor="restore-tenant-id">{t("tenantIdLabel")}</Label>
                         <Input
                           id="restore-tenant-id"
                           data-testid="restore-tenant-id"
@@ -356,9 +359,7 @@ function RestoreWorkspace() {
                         />
                       </div>
                       <div data-testid="restore-tenant-tables">
-                        <p className="text-muted-foreground text-xs">
-                          Tablas afectadas (solo las filas de este tenant):
-                        </p>
+                        <p className="text-muted-foreground text-xs">{t("tenantTables")}</p>
                         <p className="font-mono text-xs">
                           {preview.tenant_scoped_tables.join(", ")}
                         </p>
@@ -379,7 +380,7 @@ function RestoreWorkspace() {
                       setConfirmOpen(true);
                     }}
                   >
-                    Restaurar…
+                    {t("openConfirm")}
                   </Button>
                 </div>
               </div>
@@ -392,11 +393,11 @@ function RestoreWorkspace() {
       {jobId !== null ? (
         <Card data-testid="restore-progress-card">
           <CardHeader>
-            <CardTitle>Progreso del restore</CardTitle>
+            <CardTitle>{t("progressTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <p className="text-sm" data-testid="restore-job-state">
-              Estado: <span className="font-mono">{jobQuery.data?.state ?? "PENDING"}</span>
+              {t("jobState")} <span className="font-mono">{jobQuery.data?.state ?? "PENDING"}</span>
             </p>
             {jobQuery.data?.progress?.message ? (
               <p className="text-muted-foreground text-sm" data-testid="restore-job-message">
@@ -405,12 +406,12 @@ function RestoreWorkspace() {
             ) : null}
             {jobQuery.data?.state === "SUCCESS" ? (
               <p className="text-sm text-emerald-600" data-testid="restore-job-success">
-                Restore completado.
+                {t("jobSuccess")}
               </p>
             ) : null}
             {jobQuery.data?.state === "FAILURE" ? (
               <p className="text-destructive text-sm" data-testid="restore-job-failure">
-                {jobQuery.data.error ?? "El restore falló."}
+                {jobQuery.data.error ?? t("jobFailure")}
               </p>
             ) : null}
           </CardContent>
@@ -421,16 +422,14 @@ function RestoreWorkspace() {
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen} size="md">
         <DialogContent data-testid="restore-confirm-dialog">
           <DialogHeader>
-            <DialogTitle>Confirmar restore destructivo</DialogTitle>
+            <DialogTitle>{t("confirmTitle")}</DialogTitle>
             <DialogDescription>
-              {kind === "per_tenant"
-                ? "Vas a sobrescribir SOLO los datos de este tenant con los del backup. El resto de tenants no se ven afectados."
-                : "Vas a DETENER el stack y reemplazar la base de datos y los volúmenes con los del backup. Esta acción es destructiva."}
+              {kind === "per_tenant" ? t("confirmBodyPerTenant") : t("confirmBodyFull")}
             </DialogDescription>
           </DialogHeader>
           <DialogBody>
             <p className="text-sm">
-              Para confirmar, teclea exactamente:{" "}
+              {t("confirmPrompt")}{" "}
               <code
                 className="bg-muted rounded px-1 py-0.5 font-mono text-xs"
                 data-testid="restore-confirm-token"
@@ -459,7 +458,7 @@ function RestoreWorkspace() {
               data-testid="restore-confirm-cancel"
               onClick={() => setConfirmOpen(false)}
             >
-              Cancelar
+              {t("cancel")}
             </Button>
             <Button
               type="button"
@@ -468,7 +467,7 @@ function RestoreWorkspace() {
               disabled={!confirmMatches || triggerMutation.isPending}
               onClick={() => triggerMutation.mutate()}
             >
-              {triggerMutation.isPending ? "Encolando…" : "Confirmar y restaurar"}
+              {triggerMutation.isPending ? t("enqueuing") : t("confirmSubmit")}
             </Button>
           </DialogFooter>
         </DialogContent>

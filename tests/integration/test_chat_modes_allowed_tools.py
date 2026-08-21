@@ -61,7 +61,7 @@ def _scripted_model(act_tool: str) -> dict[str, Any]:
     }
 
 
-def _spec(act_tool: str, *, allowed_tools: list[str] | None | object = None) -> dict[str, Any]:
+def _spec(act_tool: str, *, allowed_tools: list[str] | object | None = None) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "task": {"id": "t-1", "title": "exercise allowlist", "description": "drive the loop"},
         "model": _scripted_model(act_tool),

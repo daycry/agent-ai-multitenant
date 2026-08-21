@@ -181,9 +181,9 @@ def test_adr_frontmatter_references_plan_06_17(adr: tuple[str, str, str]) -> Non
     data = yaml.safe_load(frontmatter)
     found = [data[f] for f in _PLAN_FIELDS if f in data and data[f] is not None]
     assert found, f"{adr_key}: falta un campo de plan ({' / '.join(_PLAN_FIELDS)})"
-    assert any(
-        str(v) == PLAN_ID for v in found
-    ), f"{adr_key}: el campo de plan debe apuntar a {PLAN_ID!r}, no a {found!r}"
+    assert any(str(v) == PLAN_ID for v in found), (
+        f"{adr_key}: el campo de plan debe apuntar a {PLAN_ID!r}, no a {found!r}"
+    )
 
 
 # --- secciones canónicas ---------------------------------------------------
@@ -193,9 +193,9 @@ def test_adr_frontmatter_references_plan_06_17(adr: tuple[str, str, str]) -> Non
 def test_adr_has_required_sections(adr: tuple[str, str, str], prefix: str) -> None:
     adr_key, _, body = adr
     titles = _heading_titles(body)
-    assert any(
-        t.startswith(prefix) for t in titles
-    ), f"{adr_key}: falta la sección '## {prefix}...' (encabezados: {titles})"
+    assert any(t.startswith(prefix) for t in titles), (
+        f"{adr_key}: falta la sección '## {prefix}...' (encabezados: {titles})"
+    )
 
 
 def test_adr_options_has_at_least_two_options(adr: tuple[str, str, str]) -> None:
@@ -228,9 +228,9 @@ def test_adr_0053_references_adr_0026() -> None:
     cuerpo debe enlazarlo explícitamente.
     """
     body = _adr_body("adr_0053")
-    assert re.search(r"\bADR\s*0026\b", body) or re.search(
-        r"\b0026\b", body
-    ), "adr_0053: debe referenciar el ADR 0026"
+    assert re.search(r"\bADR\s*0026\b", body) or re.search(r"\b0026\b", body), (
+        "adr_0053: debe referenciar el ADR 0026"
+    )
 
 
 # --- requisitos específicos de ADR 0055 ------------------------------------
@@ -241,12 +241,11 @@ def test_adr_0055_enumerates_the_four_providers() -> None:
     body = _adr_body("adr_0055")
     for provider in _ADR_0021_PROVIDERS:
         assert provider in body, (
-            f"adr_0055: debe enumerar el proveedor {provider!r} del catálogo "
-            "cerrado del ADR 0021"
+            f"adr_0055: debe enumerar el proveedor {provider!r} del catálogo cerrado del ADR 0021"
         )
-    assert re.search(r"\bADR\s*0021\b", body) or re.search(
-        r"\b0021\b", body
-    ), "adr_0055: debe referenciar el ADR 0021 (catálogo cerrado de proveedores)"
+    assert re.search(r"\bADR\s*0021\b", body) or re.search(r"\b0021\b", body), (
+        "adr_0055: debe referenciar el ADR 0021 (catálogo cerrado de proveedores)"
+    )
 
 
 # --- el ADR 0026 gana una nota que enlaza el ADR 0053 ----------------------
@@ -256,6 +255,6 @@ def test_adr_0026_links_back_to_adr_0053() -> None:
     """El ADR 0026 debe ganar una nota que enlace el ADR 0053."""
     text = _adr_path("0026-agent-scoped-kbs.md").read_text(encoding="utf-8")
     _, body = _split_frontmatter(text)
-    assert re.search(r"\bADR\s*0053\b", body) or re.search(
-        r"\b0053\b", body
-    ), "0026: debe ganar una nota que enlace el ADR 0053"
+    assert re.search(r"\bADR\s*0053\b", body) or re.search(r"\b0053\b", body), (
+        "0026: debe ganar una nota que enlace el ADR 0053"
+    )

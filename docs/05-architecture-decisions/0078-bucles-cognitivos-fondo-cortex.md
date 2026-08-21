@@ -53,4 +53,77 @@ DE MÍ". Ver [cortex-identidad-real](../roadmap/cortex-identidad-real.md).
 
 ## Estado de implementación (2026-07-12)
 
+> ⚠️ **Este matiz está VENCIDO**, comprobado contra el código el 2026-08-19: lo que dice de la
+> REFLEXIÓN (sin budget, sin saciado de `coherence`, no idempotente) y lo que dice de la
+> CURIOSIDAD (sin tope en USD, sin owner-approval gate, sin métricas) ya no es cierto. Ver
+> [§ Estado de implementación (2026-08-19 — la reflexión de F3)](#estado-de-implementación-2026-08-19--la-reflexión-de-f3)
+> abajo, con evidencia `fichero:línea`. Se conserva el texto original porque describe el estado
+> real en su fecha y explica por qué se abrió la revisión.
+>
+> **Matiz añadido el 2026-07-30, porque el párrafo de abajo se lee como «todo hecho» y el
+> gobierno de este ADR no lo estaba.** Lo implementado se detalla en el plan
+> [cortex-f4-autonomia](../roadmap/cortex-f4-autonomia.md) y su
+> [changelog](../07-changelog/cortex-f4-autonomia.md); la reflexión y el mantenimiento salieron por
+> los planes [F3](../roadmap/cortex-f3-identidad.md) y
+> [F5](../roadmap/cortex-f5-voz-avatar.md). De los cuatro puntos que este ADR declara **«gobierno
+> no negociable»**, la auditoría del [2026-07-27](../roadmap/gaps-cortex-2026-07-27.md) encontró
+> tres incumplidos: no había tope de **coste en USD** (sólo de nº de búsquedas), no había
+> **owner-approval gate**, y no existía **ninguna** de las cuatro métricas **OTEL**. A 2026-07-30
+> las claves de settings y la capa USD del budget ya estaban escritas, pero
+> `workers/cortex_curiosity.py` **todavía no las llamaba** (grep de
+> `check_and_reserve|record_spend|cost_usd` → cero), y el bucle de **reflexión** no consulta budget
+> alguno: el disparo manual desde `POST /owner/cortex/reflect` no mira ni budget ni kill-switch.
+> Tampoco se sacia el drive `coherence` que el punto 1 promete, ni la reflexión marca lo procesado,
+> así que **no es idempotente**: dos pasadas re-sintetizan los mismos turnos.
+>
+> Nada de esto puede gastar hoy porque `cortex.autonomy_enabled` sigue OFF. La consecuencia ⚠️ de
+> arriba —«los caps y el kill-switch son parte del MVP del bucle, no un fast-follow»— es
+> exactamente la que hay que satisfacer **con tests** antes de encenderlo. El estado vigente lo
+> mandan el plan y sus tests, no este párrafo.
+
 IMPLEMENTADO (fase F4 del cortex + tandas posteriores): los tres bucles beat existen y son idempotentes — `workers/cortex_reflection.py` (sintesis de insights + narrativa versionada + baseline clampeado), `workers/cortex_curiosity.py` (pursuits con kill-switch, budget caps en Redis, circuit-breaker `is_circuit_open` y gate de drive), `workers/cortex_maintenance.py` (decay, retention, snapshots). Ademas se anadieron `cortex_platform.py` (pulso de plataforma, 2026-07-12) y `cortex_initiative.py` (proactividad gated). La autonomia global sigue OFF (`cortex.autonomy_enabled`, decision del operador).
+
+## Estado de implementación (2026-08-19 — la reflexión de F3)
+
+**Anotado desde la casilla F3.7 del plan [cortex-f3-identidad](../roadmap/cortex-f3-identidad.md).**
+De los cuatro puntos que este ADR llama «gobierno no negociable», el bucle **1
+(reflexión)** los cumple hoy, y lo cumple **en el núcleo** —o sea también en el
+disparo manual desde `POST /owner/cortex/reflect`, que era el hueco concreto que
+denunciaba el matiz del 2026-07-30:
+
+- **Budget cap**: `REFLECTION_DAILY_CAP = 12` pasadas/día por owner, ventana UTC,
+  sobre el mismo esquema de claves de F4 (`cortex:budget:{owner}:reflection:{yyyymmdd}`)
+  y con `kind` propio para no consumir la cuota de la curiosidad
+  (`workers/cortex_reflection.py`, `_check_reflection_budget`). El gasto se contabiliza
+  **por intento**, no por éxito: un modelo que devuelve basura consume tokens igual.
+- **Kill-switch**: `cortex.autonomy_enabled` (OFF por defecto) se consulta en el mismo
+  núcleo, antes de tocar identidad o LLM.
+- **Idempotencia**: marca `metadata_.reflected_through`; dos pasadas seguidas ya no
+  re-sintetizan los mismos 20 turnos.
+- **Saciado de `coherence`**: el paso 1 de la «Decisión» («sacia `coherence`») existe —
+  `_satisfy_coherence(...)`, con refresco del snapshot y de la caché de F2.
+
+Acreditado por `tests/integration/test_cortex_f3_reflection.py` (16 tests: kill-switch,
+budget agotado, consumo por pasada, fail-open que también consume, saciado, no-saciado en
+fail-open, y las dos de idempotencia).
+
+**Sobre el resto del gobierno, comprobado también hoy** —para no repetir en esta misma
+sección el error que la abrió—: el matiz del 2026-07-30 daba por incumplidos el
+owner-approval gate, el tope en USD y las métricas de la **curiosidad**, y eso también ha
+cambiado. `workers/cortex_curiosity.py` llama hoy a `check_and_reserve` (:279) y
+`record_spend` (:372) con `cost_usd` real, y respeta el gate parando en `selected` con
+`approved IS NULL` (:303); las cuatro métricas del plan las publica
+`workers/cortex_curiosity_metrics.py` por el **textfile-collector de node-exporter**, que
+no es la instrumentación OTEL que este ADR pedía —divergencia a declarar donde toque— pero
+sí deja las series. El estado exacto de F4 lo mandan su plan y su
+[changelog](../07-changelog/cortex-f4-autonomia.md), no este párrafo.
+
+Lo que **no** tiene métricas es el bucle de **reflexión**: no publica ninguna serie. Y
+`cortex.autonomy_enabled` sigue OFF por decisión del operador, no por un hueco de gobierno
+de la reflexión.
+
+Sobre el `status`: este ADR se queda en **`accepted`**, no en un `accepted-f3`. El corpus
+no usa estados por fase —el `accepted-f0` del ADR 0074 es el único, y por una razón
+histórica escrita en él—, así que inventar un valor nuevo aquí crearía la ambigüedad que
+aquel banner explica que se conserva a propósito. La trazabilidad por fase la dan el plan
+y su changelog.

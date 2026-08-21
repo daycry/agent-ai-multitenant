@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E del flujo completo de capacitación — Plan 06.17 task_06_17_16.
@@ -153,27 +155,25 @@ const CAPS_GLOBAL_AGENT = {
 async function setup(page: Page, opts: { caps?: object; agent?: object } = {}): Promise<void> {
   const caps = opts.caps ?? CAPS_EMPTY;
   const agent = opts.agent ?? AGENT;
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route("**/chat-modes", (route) =>
+  await seedSession(page);
+  await page.route(apiRoute("/chat-modes"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(CHAT_MODES),
     }),
   );
-  await page.route(`**/agents/${AGENT_ID}/capabilities`, (route) =>
+  await page.route(apiRoute(`/agents/${AGENT_ID}/capabilities`), (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(caps) }),
   );
   // Sub-secciones de la ficha consultan sus propios endpoints; [] para que la
   // página renderice sin error (el Hub solo lee /capabilities).
   for (const sub of ["knowledge-bases", "tools", "skills"]) {
-    await page.route(`**/agents/${AGENT_ID}/${sub}`, (route) =>
+    await page.route(apiRoute(`/agents/${AGENT_ID}/${sub}`), (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
     );
   }
-  await page.route(`**/agents/${AGENT_ID}`, (route) => {
+  await page.route(apiRoute(`/agents/${AGENT_ID}`), (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({
       status: 200,

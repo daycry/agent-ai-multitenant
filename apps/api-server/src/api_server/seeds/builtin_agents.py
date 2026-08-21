@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID, uuid5
 
+from shared_domain.reject_taxonomy import reject_taxonomy_instruction
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,11 @@ from api_server.seeds.builtin_skills import _skill_id as builtin_skill_id
 
 def _agent_id(slug: str) -> UUID:
     return uuid5(AGENT_SEED_NAMESPACE, f"agent:{slug}")
+
+
+#: `task_gov_10`: los dos ejes cerrados del rechazo, tal como los anuncia el
+#: runtime. Se resuelve una vez al importar el seed.
+REJECT_TAXONOMY_INSTRUCTION = reject_taxonomy_instruction()
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +424,7 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
         slug="reviewer",
         name="Code Reviewer",
         description=(
-            "Revisa PRs con foco en correctness, multi-tenancy, " "seguridad y mantenibilidad."
+            "Revisa PRs con foco en correctness, multi-tenancy, seguridad y mantenibilidad."
         ),
         role="reviewer",
         memory_scope="project_shared",
@@ -449,7 +455,13 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "Si rechazas, añade un bloque `<rejection>` con tres campos:\n"
             "  `<failed_criterion>...</failed_criterion>`\n"
             "  `<testreport_evidence>...</testreport_evidence>`\n"
-            "  `<what_to_fix>...</what_to_fix>`"
+            "  `<what_to_fix>...</what_to_fix>`\n" + REJECT_TAXONOMY_INSTRUCTION
+            # `task_gov_10`: los dos ejes CERRADOS del rechazo. El texto no se
+            # teclea aquí: se interpola desde `shared_domain.reject_taxonomy`,
+            # la misma declaración que parsea `reviewer_bridge` y que anuncia el
+            # preámbulo del runtime. Un prompt de reviewer que pidiera TRES
+            # campos mientras el preámbulo pide CINCO son dos contratos en
+            # competencia — exactamente el fallo que arregló F1.6c.
         ),
         system_prompt_en=(
             "You are a Code Reviewer. You review PRs along four axes, in "
@@ -472,7 +484,7 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "On reject, also emit a `<rejection>` block with three fields:\n"
             "  `<failed_criterion>...</failed_criterion>`\n"
             "  `<testreport_evidence>...</testreport_evidence>`\n"
-            "  `<what_to_fix>...</what_to_fix>`"
+            "  `<what_to_fix>...</what_to_fix>`\n" + REJECT_TAXONOMY_INSTRUCTION
         ),
     ),
     BuiltinAgent(
@@ -513,8 +525,7 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
 # ---------------------------------------------------------------------------
 # Seed entry point
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO agents (
         id, tenant_id, name, description, agent_type, role,
         system_prompt, model_config, memory_scope, review_capability,
@@ -536,8 +547,7 @@ _UPSERT_SQL = text(
         review_capability = EXCLUDED.review_capability,
         max_concurrent_tasks = EXCLUDED.max_concurrent_tasks,
         updated_at = now()
-    """
-)
+    """)
 
 
 async def seed_builtin_agents(session: AsyncSession) -> int:
@@ -569,21 +579,17 @@ async def seed_builtin_agents(session: AsyncSession) -> int:
 # agent_skills point at agents.id and skills.id. Skill ids are resolved by the
 # same stable uuid5(slug) the skills seed uses, so the link is deterministic
 # and survives a re-seed (idempotent upsert + stale-row cleanup).
-_UPSERT_AGENT_SKILL_SQL = text(
-    """
+_UPSERT_AGENT_SKILL_SQL = text("""
     INSERT INTO agent_skills (agent_id, skill_id)
     VALUES (:agent_id, :skill_id)
     ON CONFLICT (agent_id, skill_id) DO UPDATE SET updated_at = now()
-    """
-)
+    """)
 
-_DELETE_STALE_AGENT_SKILLS_SQL = text(
-    """
+_DELETE_STALE_AGENT_SKILLS_SQL = text("""
     DELETE FROM agent_skills
      WHERE agent_id = :agent_id
        AND skill_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
 async def seed_builtin_agent_skills(session: AsyncSession) -> int:
@@ -609,20 +615,16 @@ async def seed_builtin_agent_skills(session: AsyncSession) -> int:
     return links
 
 
-_UPSERT_AGENT_TOOL_SQL = text(
-    """
+_UPSERT_AGENT_TOOL_SQL = text("""
     INSERT INTO agent_tools (agent_id, tool_id)
     VALUES (:agent_id, :tool_id)
     ON CONFLICT (agent_id, tool_id) DO UPDATE SET updated_at = now()
-    """
-)
-_DELETE_STALE_AGENT_TOOLS_SQL = text(
-    """
+    """)
+_DELETE_STALE_AGENT_TOOLS_SQL = text("""
     DELETE FROM agent_tools
      WHERE agent_id = :agent_id
        AND tool_id <> ALL(:keep_ids)
-    """
-)
+    """)
 
 
 async def seed_builtin_agent_tools(session: AsyncSession) -> int:

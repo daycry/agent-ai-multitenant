@@ -20,11 +20,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from workers.browse_runner import run_browse_container
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_sessionmaker
 
 _log = structlog.get_logger("workers.browse_task")
 
@@ -48,12 +48,10 @@ async def _run_browse(
 
     # BYPASSRLS: browse_sessions del córtex es tenant-less (tenant_id NULL), como
     # la memoria del córtex — el worker accede sin `app.tenant_id`. `sessionmaker`
-    # inyectable es un seam de test; en producción es None y se abre el engine.
-    engine = None if sessionmaker is not None else create_async_engine(settings.database_url)
-    if sessionmaker is None:
-        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with sessionmaker() as session, session.begin():
+    # inyectable es un seam de test; en producción es None y lo abre la factoría
+    # (`workers.db`), que además garantiza el dispose del engine.
+    async with worker_sessionmaker(settings, override=sessionmaker) as sessions:
+        async with sessions() as session, session.begin():
             row = await get_browse_session(session, UUID(session_id))
             if row is None:
                 return {"session_id": session_id, "skipped": "not_found"}
@@ -80,7 +78,7 @@ async def _run_browse(
             # `failed` con la causa — el docstring lo promete.
             ok, payload = False, {"error": f"fallo al ejecutar la sesión: {exc}"[:500]}
 
-        async with sessionmaker() as session, session.begin():
+        async with sessions() as session, session.begin():
             row = await get_browse_session(session, UUID(session_id))
             if row is None:  # pragma: no cover — borrada a mitad de vuelo
                 return {"session_id": session_id, "skipped": "vanished"}
@@ -90,9 +88,6 @@ async def _run_browse(
                 await mark_failed(session, row, error=str(payload.get("error", "fallo"))[:500])
         _log.info("browse.session_finished", session=session_id, ok=ok)
         return {"session_id": session_id, "ok": ok}
-    finally:
-        if engine is not None:
-            await engine.dispose()
 
 
 __all__ = ["browse_session"]

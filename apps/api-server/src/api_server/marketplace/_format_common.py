@@ -83,7 +83,7 @@ def parse_permissions_block(raw: Any, err: ErrFactory) -> dict[str, Any]:
     for key, value in raw.items():
         if key not in PERMISSION_KEYS:
             raise err(
-                f"'permissions' has unknown key {key!r}; " f"allowed: {', '.join(PERMISSION_KEYS)}"
+                f"'permissions' has unknown key {key!r}; allowed: {', '.join(PERMISSION_KEYS)}"
             )
         if key in (PERMISSION_ALLOWED_DOMAINS, PERMISSION_ALLOWED_PATHS):
             permissions[key] = parse_str_list(key, value, err)
@@ -132,11 +132,136 @@ def requested_permission_descriptors(permissions: dict[str, Any]) -> list[dict[s
     ]
 
 
+# ---------------------------------------------------------------------------
+# Los dos campos OPCIONALES que el manifest v2 gana (ADR 0142). Viven aquí,
+# compartidos, por el mismo motivo que el vocabulario de permisos: dos parsers
+# que validan lo mismo por su cuenta acaban divergiendo.
+#
+# Retro-compatibilidad, y es un requisito, no una cortesía: un manifest SIN
+# estos campos sigue siendo válido. Sin `targets` no se pre-marca ningún rol;
+# sin `config_schema` el despliegue no muestra formulario.
+# ---------------------------------------------------------------------------
+
+#: Tipos admitidos por el dialecto de `config_schema` (ver
+#: :mod:`api_server.marketplace.config_schema` para el porqué de no usar JSON
+#: Schema entero).
+CONFIG_SCHEMA_TYPES: frozenset[str] = frozenset(
+    {"string", "integer", "number", "boolean", "array", "object"}
+)
+
+
+def parse_targets(raw: Any, err: ErrFactory) -> tuple[str, ...]:
+    """Valida el `targets` opcional: roles de agente SUGERIDOS por el manifest.
+
+    El manifest sugiere y quien despliega confirma o ajusta (decisión D5), así
+    que esto no autoriza nada: solo pre-marca casillas. Pero se valida contra el
+    vocabulario cerrado :class:`~api_server.db.domain.AgentRole` porque un rol
+    mal escrito (``backend-dev`` por ``backend_dev``) no da error en ningún sitio
+    — simplemente no casa con ningún agente, y el despliegue «funciona» sin
+    entregar nada. Ése es justo el modo de fallo silencioso que este plan
+    existe para cerrar.
+
+    Absent/``None`` => tupla vacía (sin sugerencia).
+    """
+    if raw is None:
+        return ()
+    from api_server.db.domain import AgentRole
+
+    if isinstance(raw, str):  # un rol suelto es una selección de uno
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise err("'targets' must be a list of agent role names")
+    allowed = {r.value for r in AgentRole}
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            raise err("'targets' entries must be non-empty strings")
+        role = item.strip()
+        if role not in allowed:
+            raise err(
+                f"'targets' has unknown agent role {role!r}; allowed: " + ", ".join(sorted(allowed))
+            )
+        if role not in out:  # de-dupe conservando el orden declarado
+            out.append(role)
+    return tuple(out)
+
+
+def _check_config_property(name: Any, spec: Any, err: ErrFactory) -> None:
+    """Una propiedad del `config_schema`: nombre, `type` y `secret` bien formados.
+
+    Extraído de :func:`parse_config_schema` para que esa función quepa en el
+    límite de ramas de ruff sin bajar la cobertura de la validación.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise err("'config_schema.properties' keys must be non-empty strings")
+    if not isinstance(spec, dict):
+        raise err(f"'config_schema.properties.{name}' must be a mapping")
+    declared = spec.get("type")
+    if declared is not None and (
+        not isinstance(declared, str) or declared not in CONFIG_SCHEMA_TYPES
+    ):
+        raise err(
+            f"'config_schema.properties.{name}.type' must be one of: "
+            + ", ".join(sorted(CONFIG_SCHEMA_TYPES))
+        )
+    if "secret" in spec and not isinstance(spec["secret"], bool):
+        raise err(f"'config_schema.properties.{name}.secret' must be a boolean")
+
+
+def parse_config_schema(raw: Any, err: ErrFactory) -> dict[str, Any]:
+    """Valida el `config_schema` opcional (el descriptor del formulario guiado).
+
+    Se comprueba la ESTRUCTURA, no los valores (los valores son cosa del
+    despliegue, :func:`api_server.marketplace.config_schema.validate_deployment_config`):
+
+      * documento mapping con `properties` mapping;
+      * cada propiedad es un mapping y su `type`, si lo declara, está en
+        :data:`CONFIG_SCHEMA_TYPES`;
+      * `required`, si está, es una lista de strings que EXISTEN en
+        `properties` — un requerido que no se declara es un formulario
+        imposible de rellenar;
+      * `secret`, si está, es booleano.
+
+    Absent/``None`` => mapping vacío (esta capacidad no pide configuración).
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise err("'config_schema' must be a mapping")
+
+    properties = raw.get("properties")
+    if properties is None:
+        properties = {}
+    if not isinstance(properties, dict):
+        raise err("'config_schema.properties' must be a mapping")
+
+    for name, spec in properties.items():
+        _check_config_property(name, spec, err)
+
+    required = raw.get("required")
+    if required is not None:
+        if not isinstance(required, list):
+            raise err("'config_schema.required' must be a list of field names")
+        for item in required:
+            if not isinstance(item, str) or not item.strip():
+                raise err("'config_schema.required' entries must be non-empty strings")
+            if item not in properties:
+                raise err(
+                    f"'config_schema.required' names {item!r}, which is not declared in"
+                    " 'properties'"
+                )
+
+    return raw
+
+
 __all__ = [
+    "CONFIG_SCHEMA_TYPES",
     "ErrFactory",
     "is_valid_semver",
+    "parse_config_schema",
     "parse_network_policy",
     "parse_permissions_block",
     "parse_str_list",
+    "parse_targets",
     "requested_permission_descriptors",
 ]

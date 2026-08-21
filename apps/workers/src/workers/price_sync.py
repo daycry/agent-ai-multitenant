@@ -44,10 +44,11 @@ import asyncio
 from typing import Any
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.price_sync")
 
@@ -81,7 +82,7 @@ async def _sync_model_prices(settings: Settings) -> dict[str, Any]:
     )
     from api_server.pricing.sync_audit import write_sync_audit
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 

@@ -49,7 +49,7 @@ from uuid import UUID, uuid5
 
 import structlog
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from api_server.db.knowledge import Chunk, Document
 from api_server.ingestion.embeddings import Embedder, EmbeddingError, OllamaEmbedder
@@ -213,6 +213,63 @@ async def seed_catalog_ingestion(
     return results
 
 
+async def seed_catalog_ingestion_per_document(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    embedder: Embedder | None = None,
+    catalog_dir: Path | None = None,
+) -> list[CatalogIngestionResult]:
+    """Como :func:`seed_catalog_ingestion`, pero **una transacción por documento**.
+
+    Es la variante que usa el runner de seeds (prod-13 task_prod13_09). La
+    diferencia importa por dos motivos, y ninguno es cosmético:
+
+      * este seed es el único que hace **I/O de red** (embeddings contra Ollama),
+        así que la versión de transacción única retenía una conexión y sus locks
+        durante todo el embebido de los seis corpus;
+      * un corpus que falle a mitad ya no tira los documentos anteriores. Con
+        seis KBs y un Ollama inestable, «todo o nada» significaba en la práctica
+        «nada».
+
+    El embedder se crea UNA vez para toda la pasada (no uno por documento): el
+    caro es su cliente HTTP, y reutilizarlo mantiene el keep-alive vivo entre
+    documentos.
+    """
+    own_embedder = embedder is None
+    active_embedder: Embedder = embedder or OllamaEmbedder()
+    base_dir = catalog_dir or CATALOG_DIR
+
+    results: list[CatalogIngestionResult] = []
+    try:
+        for kb in BUILTIN_KBS:
+            md_path = base_dir / f"{kb.slug}.md"
+            if not md_path.is_file():
+                logger.warning("catalog_ingestion.missing_corpus", slug=kb.slug, path=str(md_path))
+                continue
+            async with sessionmaker() as session, session.begin():
+                results.append(
+                    await _ingest_one(
+                        session,
+                        slug=kb.slug,
+                        title=kb.name,
+                        corpus=md_path.read_text(encoding="utf-8"),
+                        embedder=active_embedder,
+                    )
+                )
+    finally:
+        if own_embedder:
+            await active_embedder.aclose()
+
+    logger.info(
+        "catalog_ingestion.completed",
+        documents=len(results),
+        skipped=sum(1 for r in results if r.skipped),
+        chunks=sum(r.chunks_persisted for r in results),
+        per_document_tx=True,
+    )
+    return results
+
+
 async def _ingest_one(
     session: AsyncSession,
     *,
@@ -357,4 +414,5 @@ __all__ = [
     "catalog_document_id_for_slug",
     "chunk_markdown",
     "seed_catalog_ingestion",
+    "seed_catalog_ingestion_per_document",
 ]

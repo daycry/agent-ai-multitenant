@@ -53,11 +53,13 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { pickLang, useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
 import { resolveCategory, resolveImpl, resolveSecurity } from "@/lib/tools/taxonomy";
 import { useCurrentUser } from "@/lib/use-current-user";
 import { cn } from "@/lib/utils";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types (mirror api_server.schemas.catalog.ToolResponse +
@@ -129,9 +131,17 @@ const CATEGORY_ORDER = [
   "notification",
 ];
 
+/**
+ * Nombre legible de una categoria en el idioma activo.
+ *
+ * El label llega en DATOS bilingues (`{labelEs, labelEn}` de
+ * `lib/tools/taxonomy`), no del diccionario: el catalogo lo alimenta el
+ * backend. Por eso lo elige `pickLang`, que ademas cae al otro idioma si el
+ * pedido viene vacio -- antes era un ternario a mano.
+ */
 function categoryLabel(cat: string, lang: Lang): string {
   const d = resolveCategory(cat, lang);
-  return lang === "es" ? d.labelEs : d.labelEn;
+  return pickLang(lang, { es: d.labelEs, en: d.labelEn });
 }
 
 function categoryRank(cat: string): number {
@@ -158,6 +168,8 @@ function isMcp(tool: { implementation_type: string; category: string }): boolean
 }
 
 export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentToolsSectionProps) {
+  const errorText = useErrorText();
+  const t = useT("agents");
   const queryClient = useQueryClient();
   const { lang } = useLang();
   const { isTenantAdmin, isLoading: roleLoading } = useCurrentUser();
@@ -210,7 +222,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
       void queryClient.invalidateQueries({ queryKey: ["agent-tools", agentId] });
     },
     onError: (err) => {
-      setSaveError(err instanceof ApiError ? err.body : String(err));
+      setSaveError(errorText(err));
     },
   });
 
@@ -282,13 +294,14 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
         <div className="min-w-0">
           <CardTitle className="text-base">
             <span className="inline-flex items-center gap-2">
-              <Wrench className="h-4 w-4" /> Tools del agente
+              <Wrench className="h-4 w-4" /> {t("toolsTitle")}
             </span>
           </CardTitle>
           <p className="text-muted-foreground mt-1 text-xs">
-            Marca las tools que este agente puede usar. Sin ninguna marcada, conserva el
-            comportamiento por defecto (sin restricción por agente).
-            <span className="ml-1 font-medium">{selected.size} seleccionadas.</span>
+            {t("toolsHelp")}
+            <span className="ml-1 font-medium">
+              {t("toolsSelectedCount", { n: selected.size })}
+            </span>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -297,12 +310,12 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
               asChild
               variant="outline"
               size="sm"
-              title="Verificación read-only: qué tools ve cada agente del proyecto."
+              title={t("toolsDiagnosticTitle")}
               data-testid="agent-tools-diagnostic-link"
             >
               <Link href={`/admin/projects/${projectId}/agent-tools-diagnostic`}>
                 <ScanSearch className="mr-1 h-4 w-4" />
-                Diagnóstico
+                {t("toolsDiagnostic")}
               </Link>
             </Button>
           )}
@@ -316,7 +329,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   disabled={saveMutation.isPending}
                   data-testid="agent-tools-reset"
                 >
-                  Descartar
+                  {t("discard")}
                 </Button>
               )}
               <Button
@@ -325,7 +338,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                 disabled={!dirty || saveMutation.isPending}
                 data-testid="agent-tools-save"
               >
-                {saveMutation.isPending ? "Guardando…" : "Guardar"}
+                {saveMutation.isPending ? t("saving") : t("save")}
               </Button>
               {!saveMutation.isPending && savedAt !== null && !dirty && (
                 <span
@@ -333,7 +346,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   data-testid="agent-tools-saved"
                 >
                   <Check className="h-4 w-4" />
-                  Guardado
+                  {t("saved")}
                 </span>
               )}
             </>
@@ -350,7 +363,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
 
         {!isLoading && isError && (
           <p className="text-danger-soft-foreground text-sm" data-testid="agent-tools-error">
-            No se pudieron cargar las tools: {errorMsg}.
+            {t("toolsLoadError", { detail: errorMsg })}
           </p>
         )}
 
@@ -374,8 +387,8 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                 type="search"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Buscar tool por nombre, descripción o categoría…"
-                aria-label="Buscar tool por nombre, descripción o categoría"
+                placeholder={t("toolsSearchPlaceholder")}
+                aria-label={t("toolsSearchLabel")}
                 className="pl-9"
                 data-testid="agent-tools-search"
               />
@@ -384,10 +397,10 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
             <Tabs defaultValue="basic">
               <TabsList data-testid="agent-tools-tabs">
                 <TabsTrigger value="basic" data-testid="agent-tools-tab-basic">
-                  Básicas ({totalBasic})
+                  {t("toolsTabBasic")} ({totalBasic})
                 </TabsTrigger>
                 <TabsTrigger value="advanced" data-testid="agent-tools-tab-advanced">
-                  Avanzadas ({totalAdvanced})
+                  {t("toolsTabAdvanced")} ({totalAdvanced})
                 </TabsTrigger>
               </TabsList>
 
@@ -399,11 +412,7 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   lang={lang}
                   onToggle={toggle}
                   onToggleMany={toggleMany}
-                  emptyMessage={
-                    q
-                      ? "Ninguna tool básica coincide con la búsqueda."
-                      : "No hay tools básicas (de plataforma) en el catálogo."
-                  }
+                  emptyMessage={q ? t("toolsEmptyBasicSearch") : t("toolsEmptyBasic")}
                   testidPrefix="basic"
                 />
               </TabsContent>
@@ -417,9 +426,9 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                 >
                   <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    Las tools MCP se configuran a nivel de proyecto (ADR 0128) — usa la{" "}
-                    <span className="font-medium">sección MCP del proyecto</span>. Aquí solo se
-                    asignan tools custom (HTTP · Python · contenedor).
+                    {t("toolsMcpNoteLead")}{" "}
+                    <span className="font-medium">{t("toolsMcpNoteStrong")}</span>
+                    {t("toolsMcpNoteTail")}
                   </span>
                 </div>
                 <GroupedToolList
@@ -431,18 +440,18 @@ export function AgentToolsSection({ agentId, isReadOnly, projectId }: AgentTools
                   onToggleMany={toggleMany}
                   emptyMessage={
                     q ? (
-                      "Ninguna tool avanzada coincide con la búsqueda."
+                      t("toolsEmptyAdvancedSearch")
                     ) : (
                       <>
-                        No hay tools custom. Créalas en el{" "}
+                        {t("toolsEmptyAdvancedLead")}{" "}
                         <Link
                           href="/admin/tools"
                           className="text-primary font-medium underline-offset-4 hover:underline"
                           data-testid="agent-tools-catalog-link"
                         >
-                          catálogo de tools
+                          {t("toolsCatalogLink")}
                         </Link>
-                        . (Las tools MCP se configuran en el proyecto.)
+                        {t("toolsEmptyAdvancedTail")}
                       </>
                     )
                   }
@@ -479,6 +488,7 @@ function GroupedToolList({
   emptyMessage: ReactNode;
   testidPrefix: string;
 }) {
+  const t = useT("agents");
   const groups = useMemo(() => {
     const byCat = new Map<string, CatalogTool[]>();
     for (const t of tools) {
@@ -537,12 +547,12 @@ function GroupedToolList({
                     onChange={() => onToggleMany(ids, !allOn)}
                     aria-label={
                       allOn
-                        ? `Quitar todas las tools de ${categoryLabel(cat, lang)}`
-                        : `Seleccionar todas las tools de ${categoryLabel(cat, lang)}`
+                        ? t("toolsUnselectAllAria", { category: categoryLabel(cat, lang) })
+                        : t("toolsSelectAllAria", { category: categoryLabel(cat, lang) })
                     }
                     data-testid={bulkId}
                   />
-                  {allOn ? "Quitar todas" : "Seleccionar todas"}
+                  {allOn ? t("toolsUnselectAll") : t("toolsSelectAll")}
                 </label>
               )}
             </div>
@@ -578,6 +588,7 @@ function ToolRow({
   lang: Lang;
   onToggle: (toolId: string) => void;
 }) {
+  const t = useT("agents");
   const inputId = `agent-tool-${tool.id}`;
   // SINGLE source: the same shared resolvers the diagnostic uses, so a tool
   // shows identical label/variant in both screens (never the raw enum).
@@ -585,9 +596,10 @@ function ToolRow({
   const impl = resolveImpl(tool.implementation_type, lang);
   const secVariant = sec.variant;
   const implVariant = impl.variant;
-  const secLabel = lang === "es" ? sec.labelEs : sec.labelEn;
+  // Mismo caso que `categoryLabel`: label bilingue que viene en datos.
+  const secLabel = pickLang(lang, { es: sec.labelEs, en: sec.labelEn });
   const secHelp = sec.help;
-  const implLabel = lang === "es" ? impl.labelEs : impl.labelEn;
+  const implLabel = pickLang(lang, { es: impl.labelEs, en: impl.labelEn });
   const implHelp = impl.help;
 
   return (
@@ -641,7 +653,7 @@ function ToolRow({
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           <Tooltip content={secHelp}>
             <TooltipTrigger
-              aria-label={`Seguridad: ${secLabel}. ${secHelp}`}
+              aria-label={t("toolSecurityAria", { label: secLabel, help: secHelp })}
               data-testid={`agent-tool-security-badge-${tool.id}`}
             >
               <Badge variant={secVariant} className="gap-1">
@@ -652,7 +664,7 @@ function ToolRow({
           </Tooltip>
           <Tooltip content={implHelp}>
             <TooltipTrigger
-              aria-label={`Implementación: ${implLabel}. ${implHelp}`}
+              aria-label={t("toolImplAria", { label: implLabel, help: implHelp })}
               data-testid={`agent-tool-impl-badge-${tool.id}`}
             >
               <Badge variant={implVariant} className="gap-1">
@@ -662,20 +674,14 @@ function ToolRow({
             </TooltipTrigger>
           </Tooltip>
           {tool.is_runtime_wired === false && (
-            <Tooltip
-              content={
-                lang === "es"
-                  ? "El runtime aún no puede ejecutar esta tool: el agente la vería pero fallaría al invocarla."
-                  : "The runtime cannot execute this tool yet: the agent would see it but every call would fail."
-              }
-            >
+            <Tooltip content={t("toolNotWiredTooltip")}>
               <TooltipTrigger
-                aria-label={lang === "es" ? "No ejecutable en runtime" : "Not runtime-wired"}
+                aria-label={t("toolNotWiredAria")}
                 data-testid={`agent-tool-not-wired-badge-${tool.id}`}
               >
                 <Badge variant="warning" className="gap-1">
                   <Info aria-hidden="true" className="h-3 w-3" />
-                  {lang === "es" ? "No ejecutable" : "Not wired"}
+                  {t("toolNotWiredBadge")}
                 </Badge>
               </TooltipTrigger>
             </Tooltip>

@@ -7,9 +7,17 @@
  * marketplace de su tenant. Reúne, sin duplicar, las superficies de las
  * tareas anteriores de Plan 09 en cuatro pestañas:
  *
- *   - Catálogo   — explora el catálogo (global público + privados propios);
- *                  enlaza a la config guiada de Playwright (09_13) y a la
- *                  pantalla de consentimiento de una instalación (09_07).
+ *   - Catálogo   — explora el catálogo (global público + privados propios) y
+ *                  enlaza a la pantalla de consentimiento de una instalación
+ *                  (09_07). NO configura nada: desde el ADR 0142 la
+ *                  configuración se rinde AL DESPLEGAR en un proyecto (el
+ *                  formulario vive en components/marketplace/
+ *                  deployment-config-form.tsx y lo abren las tres puertas de
+ *                  despliegue). El enlace a la config guiada de Playwright que
+ *                  había aquí (09_13) se retiró con `task_mkt2_13`: pedía al
+ *                  instalar unos valores —la base_url del sitio bajo prueba—
+ *                  que son del proyecto, y los proyectos aún no existen cuando
+ *                  se instala.
  *   - Instaladas — lista lo instalado por el tenant, enlaza al
  *                  consentimiento granular (09_07), revoca y desinstala.
  *   - Privadas   — enlaza al marketplace privado del tenant (09_16).
@@ -44,9 +52,18 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, ExternalLink, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
+import { Ban, PackagePlus, Share2, ShieldCheck, Store, Trash2 } from "lucide-react";
+
+import {
+  CatalogUpdateChip,
+  INSTALLATIONS_KEY,
+  INSTALLATIONS_PATH,
+  MarketplaceUpdatesCallout,
+  useInstallationUpdates,
+} from "./catalog-updates";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { ReviewStatusBadge, ReviewStatusNote } from "@/components/marketplace/review-status-badge";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,7 +72,9 @@ import { Label } from "@/components/ui/label";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT, type Translator } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.marketplace
@@ -70,6 +89,12 @@ interface MarketplaceListing {
   description: string | null;
   author: string | null;
   trust_level: string;
+  // ADR 0142 D6: el catálogo devuelve lo publicado MÁS lo propio en cualquier
+  // estado, así que un listing del propio tenant puede llegar aquí sin estar
+  // publicado. Pintarlo como uno más sería decirle a su autor que ya está en el
+  // catálogo de todos cuando no lo ve nadie más que él.
+  review_status: string;
+  rejection_reason: string | null;
   requested_permissions: { type: string; value: unknown }[];
   is_signed: boolean;
   created_at: string;
@@ -111,10 +136,19 @@ const TRUST_BADGE: Record<string, BadgeVariant> = {
   experimental: "warning",
 };
 
-const STATUS_BADGE: Record<string, { variant: BadgeVariant; label: string }> = {
-  enabled: { variant: "success", label: "Habilitada" },
-  disabled: { variant: "warning", label: "Deshabilitada" },
-  revoked: { variant: "muted", label: "Revocada" },
+/**
+ * Variante + CLAVE del diccionario por estado de instalacion.
+ *
+ * El mapa se conserva para que TypeScript siga exigiendo una entrada por
+ * estado; lo que cambia es que lleva la clave y no el texto.
+ */
+const STATUS_BADGE: Record<
+  string,
+  { variant: BadgeVariant; labelKey: Parameters<Translator<"marketplace">>[0] }
+> = {
+  enabled: { variant: "success", labelKey: "installStatusEnabled" },
+  disabled: { variant: "warning", labelKey: "installStatusDisabled" },
+  revoked: { variant: "muted", labelKey: "installStatusRevoked" },
 };
 
 /** Listings carrying a non-null tenant_id are the caller tenant's PRIVATE rows. */
@@ -122,14 +156,11 @@ function isPrivate(listing: MarketplaceListing): boolean {
   return listing.tenant_id !== null;
 }
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 // ===========================================================================
 // Page
 // ===========================================================================
 export default function MarketplaceAdminPage() {
+  const t = useT("marketplace");
   return (
     <div
       className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8"
@@ -137,22 +168,22 @@ export default function MarketplaceAdminPage() {
     >
       <PageHeader
         icon={<Store className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Marketplace"
-        description="Explora el catálogo, gestiona lo instalado, tus listings privados y los recursos compartidos entre tenants."
+        title={t("title")}
+        description={t("description")}
         data-testid="marketplace-admin-header"
         actions={
           <>
             <Button asChild variant="outline" size="sm" data-testid="marketplace-private-link">
               <Link href="/admin/marketplace/private">
                 <Store className="mr-1 h-3.5 w-3.5" />
-                Privadas
+                {t("privateLink")}
               </Link>
             </Button>
             <RoleGuard min="tenant_admin">
               <Button asChild size="sm" data-testid="marketplace-publish-cta">
                 <Link href="/admin/marketplace/private">
                   <PackagePlus className="mr-1 h-3.5 w-3.5" />
-                  Publicar
+                  {t("publish")}
                 </Link>
               </Button>
             </RoleGuard>
@@ -160,16 +191,21 @@ export default function MarketplaceAdminPage() {
         }
       />
 
+      {/* `task_mkt2_12`: el aviso de actualización va FUERA de las pestañas.
+          Dentro de «Instaladas» volvería a ser algo a lo que hay que ir a
+          mirar, que es exactamente lo que hacía invisible el mecanismo. */}
+      <MarketplaceUpdatesCallout />
+
       <Tabs defaultValue="catalog" className="mt-6" data-testid="marketplace-tabs">
         <TabsList data-testid="marketplace-tablist">
           <TabsTrigger value="catalog" data-testid="marketplace-tab-catalog">
-            Catálogo
+            {t("tabCatalog")}
           </TabsTrigger>
           <TabsTrigger value="installed" data-testid="marketplace-tab-installed">
-            Instaladas
+            {t("tabInstalled")}
           </TabsTrigger>
           <TabsTrigger value="shares" data-testid="marketplace-tab-shares">
-            Compartir
+            {t("tabShares")}
           </TabsTrigger>
         </TabsList>
 
@@ -191,6 +227,14 @@ export default function MarketplaceAdminPage() {
 // Catalog — browse global + own private listings
 // ===========================================================================
 function CatalogTab() {
+  const t = useT("marketplace");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
+  // El estado de actualización de lo instalado, indexado por listing: es lo que
+  // convierte una tarjeta del catálogo en «ésta la tienes atrasada». Comparte
+  // caché con el aviso de arriba y con la ficha, así que no cuesta una segunda
+  // ronda de peticiones.
+  const { byListing } = useInstallationUpdates();
   const listingsQuery = useQuery({
     queryKey: ["marketplace-listings"],
     queryFn: () => apiFetch<MarketplaceListing[]>("/marketplace/listings?limit=100"),
@@ -200,7 +244,7 @@ function CatalogTab() {
   if (listingsQuery.isLoading) {
     return (
       <p className="text-muted-foreground text-sm" data-testid="catalog-loading">
-        Cargando…
+        {tCommon("loading")}
       </p>
     );
   }
@@ -220,7 +264,7 @@ function CatalogTab() {
         <Card>
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="catalog-empty">
-              El catálogo está vacío. Publica tu primera skill o tool interna para empezar.
+              {t("catalogEmpty")}
             </p>
           </CardContent>
         </Card>
@@ -233,7 +277,6 @@ function CatalogTab() {
       <PublishCallout />
       <ul className="space-y-3" data-testid="catalog-list">
         {listings.map((listing) => {
-          const isPlaywright = listing.name === "playwright" && listing.kind === "tool";
           return (
             <li key={listing.id}>
               <Card data-testid={`catalog-listing-${listing.id}`}>
@@ -253,33 +296,39 @@ function CatalogTab() {
                       </Badge>
                       {isPrivate(listing) ? (
                         <Badge variant="warning" data-testid={`catalog-private-${listing.id}`}>
-                          privado
+                          {t("badgePrivate")}
                         </Badge>
                       ) : (
                         <Badge variant="default" data-testid={`catalog-global-${listing.id}`}>
-                          global
+                          {t("badgeGlobal")}
                         </Badge>
                       )}
+                      {/* `task_mkt2_10`: si esta fila NO está publicada es que
+                          es del propio tenant y sigue en revisión (o fue
+                          rechazada) — nadie más la ve. El catálogo lo dice
+                          aquí, donde su autor la va a buscar. */}
+                      {listing.review_status !== "published" ? (
+                        <ReviewStatusBadge
+                          status={listing.review_status}
+                          testId={`catalog-review-status-${listing.id}`}
+                        />
+                      ) : null}
+                      {/* `task_mkt2_12`: y si la tiene instalada y atrasada. */}
+                      <CatalogUpdateChip
+                        checks={byListing.get(listing.id)}
+                        testId={`catalog-update-${listing.id}`}
+                      />
                     </CardTitle>
                     {listing.description ? (
                       <p className="text-muted-foreground mt-1 break-words text-xs">
                         {listing.description}
                       </p>
                     ) : null}
+                    <ReviewStatusNote
+                      listing={listing}
+                      testId={`catalog-review-note-${listing.id}`}
+                    />
                   </div>
-                  {isPlaywright ? (
-                    <Button
-                      asChild
-                      variant="outline"
-                      size="sm"
-                      data-testid={`catalog-playwright-config-${listing.id}`}
-                    >
-                      <Link href={`/admin/marketplace/listings/${listing.id}/playwright-config`}>
-                        <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                        Configurar
-                      </Link>
-                    </Button>
-                  ) : null}
                 </CardHeader>
               </Card>
             </li>
@@ -299,6 +348,8 @@ function CatalogTab() {
  * Hidden for non-admins (the RoleGuard), since they cannot publish anyway.
  */
 function PublishCallout() {
+  const t = useT("marketplaceReview");
+  const tMkt = useT("marketplace");
   return (
     <RoleGuard min="tenant_admin">
       <Card
@@ -311,17 +362,24 @@ function PublishCallout() {
               <PackagePlus className="h-5 w-5" />
             </span>
             <div className="space-y-0.5">
-              <p className="text-sm font-semibold">¿Tienes una skill o tool interna?</p>
-              <p className="text-muted-foreground text-xs">
-                Publícala como listing privado de tu tenant. Solo tu organización la verá; el
-                manifest se valida al publicar.
+              <p className="text-sm font-semibold">{tMkt("calloutTitle")}</p>
+              <p className="text-muted-foreground text-xs">{tMkt("calloutBody")}</p>
+              {/* La otra mitad, que faltaba: publicar deja el listing EN COLA.
+                  Decirlo aquí —antes de que nadie pulse— evita que la sorpresa
+                  llegue después, cuando el listing ya está esperando y su autor
+                  cree que está publicado. */}
+              <p
+                className="text-muted-foreground text-xs"
+                data-testid="catalog-publish-review-note"
+              >
+                {t("beforePublish")}
               </p>
             </div>
           </div>
           <Button asChild size="sm" data-testid="catalog-publish-cta">
             <Link href="/admin/marketplace/private">
               <PackagePlus className="mr-1 h-3.5 w-3.5" />
-              Publicar en el marketplace
+              {tMkt("calloutCta")}
             </Link>
           </Button>
         </CardContent>
@@ -334,11 +392,17 @@ function PublishCallout() {
 // Installed — consent / revoke / uninstall
 // ===========================================================================
 function InstalledTab() {
+  const t = useT("marketplace");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
+  // Misma clave y misma ruta que el aviso de actualización (`catalog-updates`):
+  // una sola petición para las dos lecturas, y ningún sitio donde el `limit`
+  // pueda discrepar.
   const installedQuery = useQuery({
-    queryKey: ["marketplace-installations"],
-    queryFn: () => apiFetch<MarketplaceInstallation[]>("/marketplace/installations?limit=100"),
+    queryKey: INSTALLATIONS_KEY,
+    queryFn: () => apiFetch<MarketplaceInstallation[]>(INSTALLATIONS_PATH),
     refetchOnWindowFocus: false,
   });
 
@@ -363,7 +427,7 @@ function InstalledTab() {
   if (installedQuery.isLoading) {
     return (
       <p className="text-muted-foreground text-sm" data-testid="installed-loading">
-        Cargando…
+        {tCommon("loading")}
       </p>
     );
   }
@@ -381,7 +445,7 @@ function InstalledTab() {
       <Card>
         <CardContent className="py-10 text-center">
           <p className="text-muted-foreground text-sm italic" data-testid="installed-empty">
-            Este tenant no tiene nada instalado todavía.
+            {t("installedEmpty")}
           </p>
         </CardContent>
       </Card>
@@ -391,10 +455,12 @@ function InstalledTab() {
   return (
     <div className="space-y-3" data-testid="installed-list">
       {installations.map((install) => {
-        const statusBadge = STATUS_BADGE[install.status] ?? {
-          variant: "muted" as BadgeVariant,
-          label: install.status,
-        };
+        const known = STATUS_BADGE[install.status];
+        // Un estado que este mapa no conoce se muestra CRUDO a proposito: es el
+        // valor del backend, y traducirlo a un texto inventado esconderia la
+        // divergencia en vez de enseniarla.
+        const statusVariant = known?.variant ?? ("muted" as BadgeVariant);
+        const statusLabel = known ? t(known.labelKey) : install.status;
         const isRevoked = install.status === "revoked";
         return (
           <Card key={install.id} data-testid={`installed-${install.id}`}>
@@ -403,11 +469,8 @@ function InstalledTab() {
                 <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                   <span className="truncate font-mono text-sm">{install.listing_id}</span>
                   <Badge variant="muted">{install.version}</Badge>
-                  <Badge
-                    variant={statusBadge.variant}
-                    data-testid={`installed-status-${install.id}`}
-                  >
-                    {statusBadge.label}
+                  <Badge variant={statusVariant} data-testid={`installed-status-${install.id}`}>
+                    {statusLabel}
                   </Badge>
                 </CardTitle>
               </div>
@@ -420,7 +483,7 @@ function InstalledTab() {
                 >
                   <Link href={`/admin/marketplace/installations/${install.id}/permissions`}>
                     <ShieldCheck className="mr-1 h-3.5 w-3.5" />
-                    Permisos
+                    {t("permissions")}
                   </Link>
                 </Button>
                 <RoleGuard min="tenant_admin">
@@ -430,10 +493,10 @@ function InstalledTab() {
                     onClick={() => revokeMutation.mutate(install.id)}
                     disabled={isRevoked || revokeMutation.isPending}
                     data-testid={`installed-revoke-${install.id}`}
-                    aria-label="Revocar"
+                    aria-label={t("revoke")}
                   >
                     <Ban className="mr-1 h-3.5 w-3.5" />
-                    Revocar
+                    {t("revoke")}
                   </Button>
                   <Button
                     variant="destructive"
@@ -441,10 +504,10 @@ function InstalledTab() {
                     onClick={() => uninstallMutation.mutate(install.id)}
                     disabled={uninstallMutation.isPending}
                     data-testid={`installed-uninstall-${install.id}`}
-                    aria-label="Desinstalar"
+                    aria-label={t("uninstall")}
                   >
                     <Trash2 className="mr-1 h-3.5 w-3.5" />
-                    Desinstalar
+                    {t("uninstall")}
                   </Button>
                 </RoleGuard>
               </div>
@@ -471,6 +534,9 @@ function InstalledTab() {
 // Shares — cross-tenant sharing (opt-in, explicit grant, System-Admin audited)
 // ===========================================================================
 function SharesTab() {
+  const t = useT("marketplace");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const listingsQuery = useQuery({
@@ -528,25 +594,23 @@ function SharesTab() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Share2 className="h-4 w-4" />
-              Compartir un listing privado con otro tenant
+              {t("shareCardTitle")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-muted-foreground text-xs" data-testid="share-explainer">
-              Compartir es opt-in y explícito: el tenant destino ve e instala el listing solo
-              mediante este grant, y el System Admin audita cada acción. Revocar retira la
-              visibilidad de inmediato.
+              {t("shareExplainer")}
             </p>
 
             <div className="space-y-1">
-              <Label htmlFor="share-listing">Listing privado</Label>
+              <Label htmlFor="share-listing">{t("shareListingLabel")}</Label>
               <Select
                 id="share-listing"
                 value={listingId}
                 onChange={(e) => setListingId(e.target.value)}
                 data-testid="share-listing-select"
               >
-                <option value="">Selecciona un listing…</option>
+                <option value="">{t("sharePickListing")}</option>
                 {privateListings.map((listing) => (
                   <option key={listing.id} value={listing.id}>
                     {listing.name} {listing.version}
@@ -555,9 +619,9 @@ function SharesTab() {
               </Select>
               {privateListings.length === 0 ? (
                 <p className="text-muted-foreground text-xs" data-testid="share-no-private">
-                  No tienes listings privados que compartir. Publica uno en{" "}
+                  {t("shareNoPrivateBefore")}{" "}
                   <Link href="/admin/marketplace/private" className="underline">
-                    Marketplace privado
+                    {t("shareNoPrivateLink")}
                   </Link>
                   .
                 </p>
@@ -565,7 +629,7 @@ function SharesTab() {
             </div>
 
             <div className="space-y-1">
-              <Label htmlFor="share-target">Tenant destino (UUID)</Label>
+              <Label htmlFor="share-target">{t("shareTargetLabel")}</Label>
               <Input
                 id="share-target"
                 placeholder="00000000-0000-0000-0000-000000000000"
@@ -583,7 +647,7 @@ function SharesTab() {
                 }
                 data-testid="share-submit"
               >
-                {shareMutation.isPending ? "Compartiendo…" : "Compartir"}
+                {shareMutation.isPending ? t("shareSubmitting") : t("shareSubmit")}
               </Button>
             </div>
 
@@ -599,12 +663,12 @@ function SharesTab() {
       {/* The tenant's outgoing share grants */}
       <div>
         <h2 className="mb-3 text-sm font-semibold" data-testid="shares-title">
-          Grants activos creados por tu tenant
+          {t("sharesTitle")}
         </h2>
 
         {sharesQuery.isLoading ? (
           <p className="text-muted-foreground text-sm" data-testid="shares-loading">
-            Cargando…
+            {tCommon("loading")}
           </p>
         ) : sharesQuery.isError ? (
           <p className="text-destructive text-sm" data-testid="shares-error">
@@ -614,8 +678,7 @@ function SharesTab() {
           <Card>
             <CardContent className="py-10 text-center">
               <p className="text-muted-foreground text-sm italic" data-testid="shares-empty">
-                Por defecto no compartes nada. Crea un grant arriba para compartir un listing
-                privado.
+                {t("sharesEmpty")}
               </p>
             </CardContent>
           </Card>
@@ -641,10 +704,10 @@ function SharesTab() {
                         onClick={() => revokeShareMutation.mutate(share.id)}
                         disabled={revokeShareMutation.isPending}
                         data-testid={`share-revoke-${share.id}`}
-                        aria-label="Revocar share"
+                        aria-label={t("revokeShare")}
                       >
                         <Ban className="mr-1 h-3.5 w-3.5" />
-                        Revocar
+                        {t("revoke")}
                       </Button>
                     </RoleGuard>
                   </CardHeader>

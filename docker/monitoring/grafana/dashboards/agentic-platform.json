@@ -5,7 +5,7 @@
   "tags": ["agentic", "celery", "queues", "app"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "30s",
   "time": {
@@ -35,26 +35,45 @@
       "type": "row",
       "title": "Pipeline agéntico",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
     },
     {
       "id": 2,
       "type": "timeseries",
       "title": "Profundidad de colas Celery",
       "description": "Mensajes esperando en cada cola (Redis LLEN). Una cola que crece sostenida = ningún worker la drena (alerta CeleryQueueGrowing a los 15m > 50).",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "min": 0,
-          "custom": { "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "agentic_celery_queue_depth",
           "legendFormat": "{{queue}}",
           "refId": "A"
@@ -66,24 +85,49 @@
       "type": "timeseries",
       "title": "Tareas por estado (todas las tenants)",
       "description": "Filas de tasks por estado de ciclo de vida. blocked sostenido alto dispara TasksBlockedHigh (30m > 10).",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "min": 0,
-          "custom": { "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "blocked" },
-            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+            "matcher": {
+              "id": "byName",
+              "options": "blocked"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
           }
         ]
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "agentic_tasks_by_status",
           "legendFormat": "{{status}}",
           "refId": "A"
@@ -95,31 +139,51 @@
       "type": "row",
       "title": "Actividad y entregabilidad",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      }
     },
     {
       "id": 5,
       "type": "bargauge",
       "title": "Ejecuciones últimas 24h por estado",
       "description": "Pulso real de runs: executions creadas en las últimas 24h agrupadas por estado.",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 10
+      },
       "options": {
         "orientation": "horizontal",
         "displayMode": "gradient",
-        "reduceOptions": { "calcs": ["lastNotNull"] }
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "min": 0,
-          "color": { "mode": "palette-classic" }
+          "color": {
+            "mode": "palette-classic"
+          }
         },
         "overrides": []
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "agentic_executions_24h",
           "legendFormat": "{{status}}",
           "refId": "A"
@@ -131,10 +195,20 @@
       "type": "stat",
       "title": "Dead-letter notificaciones",
       "description": "Entradas en los streams DLQ (XLEN). >0 sostenido = notificaciones PERDIDAS tras agotar reintentos (alerta NotificationsDLQNotEmpty a los 10m).",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 10
+      },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
         "colorMode": "background",
         "graphMode": "area"
       },
@@ -146,8 +220,14 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           }
         },
@@ -155,7 +235,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "sum(agentic_dlq_depth)",
           "legendFormat": "DLQ total",
           "refId": "A"
@@ -167,10 +250,20 @@
       "type": "stat",
       "title": "Backup: horas desde el último éxito",
       "description": "time() - agentic_backup_last_success_timestamp_seconds. La alerta BackupTooOld salta pasadas ~26h.",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 10
+      },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        },
         "colorMode": "background",
         "graphMode": "none"
       },
@@ -182,9 +275,18 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 26 },
-              { "color": "red", "value": 48 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 26
+              },
+              {
+                "color": "red",
+                "value": 48
+              }
             ]
           }
         },
@@ -192,7 +294,10 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "(time() - agentic_backup_last_success_timestamp_seconds) / 3600",
           "legendFormat": "antigüedad",
           "refId": "A"
@@ -204,26 +309,45 @@
       "type": "row",
       "title": "Servicios del stack (cAdvisor)",
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      }
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "CPU por contenedor de la plataforma",
       "description": "Uso de CPU (cores) de los servicios propios: api-server, workers, orchestrator, notification-dispatcher, admin-panel.",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
           "min": 0,
-          "custom": { "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\".*(api-server|workers|orchestrator|notification-dispatcher|admin-panel).*\"}[5m]))",
           "legendFormat": "{{name}}",
           "refId": "A"
@@ -235,22 +359,573 @@
       "type": "timeseries",
       "title": "Memoria por contenedor de la plataforma",
       "description": "Working set de los servicios propios del stack.",
-      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
           "min": 0,
-          "custom": { "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "sum by (name) (container_memory_working_set_bytes{name=~\".*(api-server|workers|orchestrator|notification-dispatcher|admin-panel).*\"})",
           "legendFormat": "{{name}}",
           "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "collapsed": false,
+      "title": "API HTTP (api-server)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Latencia p95 del api-server por ruta",
+      "description": "Percentil 95 de la latencia HTTP, por PLANTILLA de ruta (nunca por path crudo: eso multiplicaria las series por cada URL que invente un bot). Distingue «va lento» de «va mal», que sin exporter era indistinguible.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(agentic_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{route}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Tasa de respuestas 5xx del api-server",
+      "description": "Errores de servidor por segundo, por ruta. Un escalon aqui es un fallo de la plataforma, no del usuario: hasta prod-08 no habia forma de verlo salvo leyendo logs.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (route) (rate(agentic_http_requests_total{status=~\"5..\"}[5m]))",
+          "legendFormat": "{{route}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Peticiones por segundo y codigo",
+      "description": "Trafico agregado por familia de codigo. Sirve de contexto para la tasa de 5xx: 2 errores/s sobre 3 req/s es una caida; sobre 300 req/s, ruido.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (status) (rate(agentic_http_requests_total[5m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Targets scrapeados vivos",
+      "description": "1 = Prometheus alcanza el target; 0 = no responde (dispara ServiceDown a los 2m, severity critical). Es la unica senal que distingue «servicio caido» de «no esta pasando nada»: las demas metricas simplemente DESAPARECEN cuando el servicio muere, y una metrica ausente no dispara ninguna regla.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "CAIDO",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Trabajo humano y fiabilidad de los runs",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Aprobaciones humanas pendientes",
+      "description": "Peticiones de aprobación esperando respuesta. Cada una tiene una ejecución DETENIDA detrás. El número solo no basta: mira también la edad de la más antigua — es sobre eso que alerta HumanApprovalsStale (>24 h).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 15
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_human_approvals_pending",
+          "legendFormat": "pendientes",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Espera de la aprobación más antigua",
+      "description": "Edad de la petición de aprobación más vieja sin responder. HumanApprovalsStale dispara a las 24 h.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 43200
+              },
+              {
+                "color": "red",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_human_approvals_oldest_age_seconds",
+          "legendFormat": "espera",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Tareas Celery terminadas por cola y resultado",
+      "description": "Ritmo de tareas terminadas, separando éxito de fallo. La profundidad de cola NO distingue un worker sano de uno que drena la cola fallando todo: en ambos casos vale cero. Los acumulan las señales de Celery (workers/task_metrics.py).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (queue, status) (rate(agentic_celery_tasks_total[15m]))",
+          "legendFormat": "{{queue}} · {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Tasa de fallo de ejecuciones (24 h)",
+      "description": "Fracción de ejecuciones fallidas sobre el total de la ventana. ExecutionFailureRateHigh dispara por encima de 0,2 sostenido 30 min, con un suelo de 10 runs para no gritar con el sistema parado.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(agentic_executions_24h{status=\"failed\"}) / clamp_min(sum(agentic_executions_24h), 1)",
+          "legendFormat": "tasa de fallo",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Duración media de tarea Celery por cola",
+      "description": "Segundos acumulados / tareas terminadas, por cola. Un salto sin cambio de volumen suele ser un runtime más lento o un proveedor LLM degradado.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (queue) (rate(agentic_celery_task_duration_seconds_total[30m])) / clamp_min(sum by (queue) (rate(agentic_celery_tasks_total[30m])), 0.0001)",
+          "legendFormat": "{{queue}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "Gasto LLM (24 h)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Coste de los runs (USD, 24 h)",
+      "description": "Gasto del pipeline de agentes. SIN desglose por proveedor a propósito: executions no guarda con qué proveedor corrió (el modelo se resuelve por agente en tiempo de ejecución). Es la mayor parte del gasto.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_run_cost_usd_24h",
+          "legendFormat": "runs",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "bargauge",
+      "title": "Coste fuera de runs por proveedor (USD, 24 h)",
+      "description": "Asistente, córtex y planning — el único gasto con dimensión de proveedor (llm_usage_events.provider_kind). NO incluye los runs: mirar el panel de al lado para el total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "min": 0,
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_llm_cost_usd_24h",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Tokens consumidos (24 h)",
+      "description": "Runs (sin proveedor) frente al consumo fuera de runs, por proveedor.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_run_tokens_24h",
+          "legendFormat": "runs",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "agentic_llm_tokens_24h",
+          "legendFormat": "{{provider}}",
+          "refId": "B"
         }
       ]
     }

@@ -37,9 +37,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = pytest.mark.integration
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
 _SCRIPTED_FINISH = {"kind": "scripted", "decisions": [{"kind": "finish", "output": "done"}]}
 
 
@@ -176,7 +177,9 @@ async def test_beat_pauses_over_budget_then_dispatch_is_refused(
         sm = async_sessionmaker(engine, expire_on_commit=False)
         dispatcher = TaskDispatcher(
             sessionmaker=sm,
-            celery_app=build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL)),
+            celery_app=build_celery_app(
+                WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+            ),
             settings=OrchestratorSettings(redis_url=TEST_REDIS_URL),
         )
         await dispatcher.handle(

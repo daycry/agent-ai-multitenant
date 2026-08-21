@@ -13,7 +13,7 @@ related: ["0062"]
 # ADR 0069 — Origen público y prefijo de API separados para URLs SSO
 
 > **Estado: `accepted`** (operador eligió la "opción C", 2026-06-19). Extiende el
-> [ADR 0047](0047-sso-global.md) (SSO global: callback/ACS/EntityID derivados de
+> [ADR 0047](0047-sso-auth-global-platform-membership-access.md) (SSO global: callback/ACS/EntityID derivados de
 > una base pública) y el [ADR 0061](0061-reverse-proxy-tls.md) (Caddy
 > single-origin: SPA en `/`, API bajo `/api`).
 

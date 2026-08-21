@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the plan DAG view (Plan 03 task_03_19).
@@ -35,9 +36,7 @@ const PLAN_FIXTURE = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) =>
     route.fulfill({
       status: 200,
@@ -92,9 +91,7 @@ test("depth-based layout places nodes in the right columns", async ({ page }) =>
 });
 
 test("empty task list renders a friendly placeholder", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route(`http://localhost:8001/plans/${PLAN_ID}`, (route) =>
     route.fulfill({
       status: 200,

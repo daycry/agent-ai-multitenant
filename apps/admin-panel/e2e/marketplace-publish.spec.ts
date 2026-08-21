@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the publish discoverability + UX work (Plan 09.1 task_09_1_02).
@@ -57,6 +58,9 @@ const PRIVATE_LISTING = {
   is_signed: false,
   created_at: "2026-05-30T00:00:00Z",
   updated_at: "2026-05-30T00:00:00Z",
+  // El estado de revisión es lo que gobierna qué dice la pantalla al publicar:
+  // una fila privada nace `pending_review` y espera a un system admin.
+  review_status: "pending_review",
 };
 
 const GLOBAL_LISTING = {
@@ -76,13 +80,7 @@ const GLOBAL_LISTING = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("http://localhost:8001/me", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(ME) }),
@@ -167,7 +165,37 @@ test("usar ejemplo inserts a valid manifest and publishing POSTs kind + manifest
 
   await expect.poll(() => posted.kind).toBe("skill");
   expect(posted.manifest).toContain("internal-reporter");
+  // Publicar NO es "publicado": el 201 crea la fila en `pending_review` y la
+  // pantalla dice eso, con su estado y con quién decide. Llamarlo "publicado"
+  // era mentir con un 201 en la mano (commit 7d85dde6). El spec afirmaba el
+  // mensaje de éxito, que hoy sólo sale si el backend devuelve `published`.
+  await expect(page.getByTestId("private-publish-queued")).toBeVisible();
+  await expect(page.getByTestId("private-publish-success")).toHaveCount(0);
+});
+
+test("cuando el backend devuelve `published`, y sólo entonces, se anuncia publicado", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.route("http://localhost:8001/marketplace/private/listings", async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...PRIVATE_LISTING,
+        id: NEW_ID,
+        name: "internal-reporter",
+        review_status: "published",
+      }),
+    });
+  });
+
+  await page.goto("/admin/marketplace/private", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("private-use-example").click();
+  await page.getByTestId("private-publish-submit").click();
+
   await expect(page.getByTestId("private-publish-success")).toBeVisible();
+  await expect(page.getByTestId("private-publish-queued")).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

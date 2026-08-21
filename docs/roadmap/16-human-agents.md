@@ -12,24 +12,36 @@ estimated_cost_ai_eur: 100 € – 180 €
 created_by: system_architect
 spec_sections_referenced: [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]
 docs_language: es
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: 10-asistente-personal y 11-guardrails-precios
+  reason: >-
+    Los dos bloqueantes entregados y en `pending_human_validation`. **El override ya
+    lo había escrito un humano** en el campo duplicado de la cabecera, igual que en
+    `15-instalador-produccion`, y se rescató antes de la limpieza.
 ---
 
 # Plan 16 — Human Agents y Workflows Mixtos Humano-IA
 
 ## Cabecera
 
-| Campo                              | Valor                                                                                     |
-| ---------------------------------- | ----------------------------------------------------------------------------------------- |
-| **ID del Plan**                    | `16-human-agents`                                                                         |
-| **Estado**                         | `in_progress` (override humano del gate blocking_plan: 10/11 en pending_human_validation) |
-| **Bloqueado por**                  | `06-testing-revision-git`, `10-asistente-personal`, `11-guardrails-precios`               |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                               |
-| **Tiempo estimado (persona-días)** | 85-100                                                                                    |
-| **Previsión de coste — humano**    | 34.000 € – 40.000 € (tarifa media 50 €/h)                                                 |
-| **Previsión de coste — IA**        | 100 € – 180 €                                                                             |
-| **Aprobador propuesto**            | System Admin                                                                              |
-| **Rama git**                       | `plan/16-human-agents`                                                                    |
-| **Secciones del .docx**            | [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]                                                       |
+| Campo                              | Valor                                                                       |
+| ---------------------------------- | --------------------------------------------------------------------------- |
+| **ID del Plan**                    | `16-human-agents`                                                           |
+| **Bloqueado por**                  | `06-testing-revision-git`, `10-asistente-personal`, `11-guardrails-precios` |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                 |
+| **Tiempo estimado (persona-días)** | 85-100                                                                      |
+| **Previsión de coste — humano**    | 34.000 € – 40.000 € (tarifa media 50 €/h)                                   |
+| **Previsión de coste — IA**        | 100 € – 180 €                                                               |
+| **Aprobador propuesto**            | System Admin                                                                |
+| **Rama git**                       | `plan/16-human-agents`                                                      |
+| **Secciones del .docx**            | [3.1.3, 5.8, 7.2, 13.6, 17, 28.7.2]                                         |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
+>
+> Lo que decía el campo retirado y no está en el frontmatter: **el arranque de esta fase fue un override humano explícito del gate `blocking_plan`** (10 de sus 11 bloqueantes estaban en `pending_human_validation`, no `completed`). Este era el único sitio del repo donde ese override estaba escrito, y por eso se preserva: es entrada del ADR 0138 (decisión D1).
 
 ---
 

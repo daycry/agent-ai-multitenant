@@ -42,7 +42,7 @@ hoy con 0075/0078.
 
 | Orden | Ítem                                      | Qué falta de verdad                                                                                                          | Tamaño  | Riesgo     | Veredicto                                                     |
 | ----- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------- | ---------- | ------------------------------------------------------------- |
-| 1     | **ADR 0101** discovery MCP                | persistir `input_schema` en el import (hoy se descarta → tools MCP con args inservibles)                                     | **S**   | bajo       | **Bugfix, hacer ya**                                          |
+| 1     | ~~**ADR 0101** discovery MCP~~            | ✅ **RESUELTO** (2026-08-19, verificado): el import re-descubre y persiste `input_schema`                                    | **S**   | bajo       | Hecho — ver §1                                                |
 | 2     | Ratificación documental 0063/0073-F1/0077 | actualizar status+texto                                                                                                      | **S**   | nulo       | Hacer ya                                                      |
 | 3     | **ADR 0103** restos SAFE                  | firma de símbolos G10 + `safeguard_stats` en el visor; **ratificar G8-B** (está en código y el ADR exige firma del operador) | **S**   | bajo       | Hacer pronto + pedir ratificación G8-B                        |
 | 4     | **ADR 0098** beat de fetch                | `sweep_project_git_remotes` con kill-switch (patrón fx_fetch calcado)                                                        | **S-M** | bajo       | Hacer pronto                                                  |
@@ -63,6 +63,20 @@ hoy con 0075/0078.
 ## Detalle por ítem
 
 ### 1. ADR 0101 — Discovery MCP: persistir el `input_schema` (S, bugfix)
+
+> ✅ **RESUELTO. Comprobado contra el código el 2026-08-19** (`task_audit14_10`),
+> no dado por bueno: `routers/mcp.py:415` re-descubre el `input_schema` en el
+> import, `:430` lo fija al crear la fila y `:442` lo **refresca** en el upsert,
+> que era el tercer agujero (una tool ya importada seguía con el schema viejo).
+> Lo fija un test que se rompe si alguien lo deshace:
+> `tests/integration/test_mcp_tool_import_and_threading.py:369` en adelante —
+> afirma el schema persistido en el alta (`:422`), que una tool **sin**
+> argumentos se queda con `{}` y no con basura (`:426`), y que un segundo import
+> con el schema cambiado lo actualiza (`:437`, `_SCHEMA_V1` → `_SCHEMA_V2`).
+>
+> El párrafo de abajo se deja **tal cual estaba** —describe el defecto tal como
+> se midió el 2026-07-12— porque este documento es un informe fechado y
+> reescribirlo por dentro borraría la evidencia de que el defecto existió.
 
 El discovery server-side YA existe (`routers/mcp.py:231` `discover_tools`,
 usado por test-connection) y el runtime valida args contra el schema VIVO

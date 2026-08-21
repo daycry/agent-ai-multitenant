@@ -45,7 +45,7 @@ const GOOGLE: PublicProviderFixture = {
   id: "bbbbbbbb-0000-0000-0000-000000000002",
   kind: "oidc",
   display_name: "Google Workspace",
-  button_label: null, // → brand default "Sign in with Google"
+  button_label: null, // → texto de respaldo de la marca, ya traducido
   login_url: "/auth/sso/bbbbbbbb-0000-0000-0000-000000000002/oidc/login",
 };
 
@@ -85,8 +85,8 @@ test("password form is present even with no SSO providers", async ({ page }) => 
 
   // Password login stays intact: email + password + Sign in button.
   await expect(page.getByLabel("Email")).toBeVisible();
-  await expect(page.getByLabel("Password")).toBeVisible();
-  await expect(page.getByRole("button", { name: /sign in/i })).toBeVisible();
+  await expect(page.getByLabel(/^(password|contraseña)$/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i })).toBeVisible();
 
   // No providers → no buttons block and no "or with email" divider.
   await expect(page.getByTestId("login-providers")).toHaveCount(0);
@@ -105,7 +105,7 @@ test("renders one branded button per enabled provider + the divider", async ({ p
   await expect(page.getByTestId("login-divider")).toBeVisible();
 
   // Password form coexists above the buttons (SSO is additive, not a gate).
-  await expect(page.getByLabel("Password")).toBeVisible();
+  await expect(page.getByLabel(/^(password|contraseña)$/i)).toBeVisible();
 
   const ms = page.getByTestId(`login-provider-${MICROSOFT.id}`);
   const google = page.getByTestId(`login-provider-${GOOGLE.id}`);
@@ -121,8 +121,12 @@ test("renders one branded button per enabled provider + the divider", async ({ p
   await expect(ms).toContainText("Iniciar sesión con Microsoft");
   await expect(gh).toContainText("Continuar con GitHub");
   await expect(saml).toContainText("Acceder con SSO corporativo");
-  // No label → the brand default text.
-  await expect(google).toContainText("Sign in with Google");
+  // No label → the brand default text. Desde prod-16 `task_prod16_02` ese
+  // respaldo sale del diccionario y no cableado en inglés, así que en el idioma
+  // por DEFECTO del panel (ES) se lee en castellano. Antes decía "Sign in with
+  // Google" con el resto de la pantalla en castellano: la misma pantalla
+  // mitad-y-mitad que este plan cierra, sólo que en el otro sentido.
+  await expect(google).toContainText("Iniciar sesión con Google");
 
   // Brand inferred from kind + label/display_name.
   await expect(ms).toHaveAttribute("data-brand", "microsoft");

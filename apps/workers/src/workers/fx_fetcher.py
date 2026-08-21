@@ -39,10 +39,11 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 _log = structlog.get_logger("workers.fx_fetcher")
 
@@ -143,7 +144,7 @@ async def _fetch_exchange_rates(
     from api_server.db.platform_settings import get_fx_fetch_enabled, get_fx_source
     from api_server.fx.fetcher import FxFeedError, fetch_and_upsert_rates
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     http_client: Any | None = None
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)

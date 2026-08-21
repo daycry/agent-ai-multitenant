@@ -37,6 +37,8 @@ import pytest
 from alembic import command
 from httpx import ASGITransport, AsyncClient
 
+from tests.integration._user_seeding import seed_user
+
 pytestmark = pytest.mark.integration
 
 
@@ -101,11 +103,15 @@ async def _login(client: AsyncClient, email: str, password: str) -> str:
     return resp.json()["access_token"]
 
 
-async def _register(client: AsyncClient, email: str, password: str = "longenoughpw") -> str:
-    """Register a user and return their user id."""
-    resp = await client.post("/auth/register", json={"email": email, "password": password})
-    assert resp.status_code in (200, 201), resp.text
-    return resp.json()["id"]
+async def _register(dsn: str, email: str, password: str = "longenoughpw") -> str:
+    """Seed a user and return their user id.
+
+    Sembraba con ``POST /auth/register``; desde el ADR 0134 ese endpoint solo da
+    de alta al PRIMER usuario o a quien traiga invitación, y aquí hacen falta
+    varios usuarios para probar OTRA cosa (las membresías). Se insertan
+    directamente — ver ``tests/integration/_user_seeding.py``.
+    """
+    return await seed_user(dsn, email, password)
 
 
 async def _register_and_login_admin(
@@ -119,7 +125,7 @@ async def _register_and_login_admin(
     # collides with other suites that create it. uuid-suffix keeps isolation.
     if email is None:
         email = f"admin-{uuid4().hex[:8]}@example.com"
-    await client.post("/auth/register", json={"email": email, "password": password})
+    await seed_user(migrations_dsn, email, password)
     await _promote_to_system_admin(migrations_dsn, email)
     return await _login(client, email, password)
 
@@ -149,7 +155,7 @@ async def test_assign_list_update_revoke_membership(configured_app, migrations_p
     ) as client:
         admin_token = await _register_and_login_admin(client, migrations_pg_dsn)
         u = uuid4().hex[:8]
-        user_id = await _register(client, f"worker-{u}@example.com")
+        user_id = await _register(migrations_pg_dsn, f"worker-{u}@example.com")
         tenant_id = await _create_tenant(client, admin_token, name=f"Acme {u}", slug=f"acme-{u}")
 
         # Initially no memberships.
@@ -219,7 +225,7 @@ async def test_duplicate_assign_conflicts_then_reassign_revives(
     ) as client:
         admin_token = await _register_and_login_admin(client, migrations_pg_dsn)
         u = uuid4().hex[:8]
-        user_id = await _register(client, f"dup-{u}@example.com")
+        user_id = await _register(migrations_pg_dsn, f"dup-{u}@example.com")
         tenant_id = await _create_tenant(client, admin_token, name=f"Beta {u}", slug=f"beta-{u}")
 
         first = await client.post(
@@ -266,7 +272,7 @@ async def test_membership_endpoints_require_system_admin(
     ) as client:
         admin_token = await _register_and_login_admin(client, migrations_pg_dsn)
         u = uuid4().hex[:8]
-        target_id = await _register(client, f"target-{u}@example.com")
+        target_id = await _register(migrations_pg_dsn, f"target-{u}@example.com")
         tenant_id = await _create_tenant(client, admin_token, name=f"Gamma {u}", slug=f"gamma-{u}")
         assigned = await client.post(
             f"/admin/users/{target_id}/memberships",
@@ -276,9 +282,7 @@ async def test_membership_endpoints_require_system_admin(
         membership_id = assigned.json()["id"]
 
         # A regular (non-admin) user.
-        await client.post(
-            "/auth/register", json={"email": f"evil-{u}@example.com", "password": "longenoughpw"}
-        )
+        await seed_user(migrations_pg_dsn, f"evil-{u}@example.com")
         user_token = await _login(client, f"evil-{u}@example.com", "longenoughpw")
         h = _auth(user_token)
 
@@ -314,7 +318,7 @@ async def test_membership_endpoints_unauthenticated_is_401(
     ) as client:
         admin_token = await _register_and_login_admin(client, migrations_pg_dsn)
         u = uuid4().hex[:8]
-        target_id = await _register(client, f"anon-target-{u}@example.com")
+        target_id = await _register(migrations_pg_dsn, f"anon-target-{u}@example.com")
         tenant_id = await _create_tenant(client, admin_token, name=f"Delta {u}", slug=f"delta-{u}")
 
         resp = await client.post(
@@ -337,9 +341,7 @@ async def test_assigned_membership_lets_user_reach_tenant(
     ) as client:
         admin_token = await _register_and_login_admin(client, migrations_pg_dsn)
         u = uuid4().hex[:8]
-        await client.post(
-            "/auth/register", json={"email": f"newhire-{u}@example.com", "password": "longenoughpw"}
-        )
+        await seed_user(migrations_pg_dsn, f"newhire-{u}@example.com")
         user_token = await _login(client, f"newhire-{u}@example.com", "longenoughpw")
         user_id = (await client.get("/auth/me", headers=_auth(user_token))).json()["id"]
         tenant_id = await _create_tenant(
@@ -383,10 +385,7 @@ async def test_revoked_or_inactive_membership_denies_tenant_access(
     ) as client:
         admin_token = await _register_and_login_admin(client, migrations_pg_dsn)
         u = uuid4().hex[:8]
-        await client.post(
-            "/auth/register",
-            json={"email": f"boundary-{u}@example.com", "password": "longenoughpw"},
-        )
+        await seed_user(migrations_pg_dsn, f"boundary-{u}@example.com")
         user_token = await _login(client, f"boundary-{u}@example.com", "longenoughpw")
         user_id = (await client.get("/auth/me", headers=_auth(user_token))).json()["id"]
 

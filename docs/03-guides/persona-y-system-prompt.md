@@ -88,6 +88,61 @@ La sección **SER** del Hub muestra el estado real:
 - `model_config` sin provider/model ⇒ **"Modelo no configurado"** (aviso).
 - En proyecto/equipo (sin persona propia) ⇒ **"No aplica"**.
 
+## Guardar un prompt puede rechazarse: el gate de evals (`task_gov_05`)
+
+Al guardar un `system_prompt` (o la persona bilingüe) el sistema **lo evalúa
+contra el golden set del agente** antes de escribir. Qué pasa después depende del
+**preset de validación humana** del proyecto:
+
+| Preset del proyecto                | Si la evaluación empeora                                                |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `production` · `customer-external` | **409 y NO se guarda**. El mensaje nombra los escenarios que empeoraron |
+| `development` · `sandbox`          | Se guarda, y la respuesta trae un aviso con esos mismos escenarios      |
+
+Tres cosas que conviene saber antes de que te pase:
+
+- **Si el agente no tiene golden set, no se gatea nada.** No es un aprobado: es
+  que nadie ha declarado que ese agente se mida. Para activarlo, crea un dataset
+  con `target_agent_id` apuntando al agente y promociona tareas aprobadas
+  (`POST /tasks/{id}/promote-to-dataset`).
+- **Hace falta una corrida base.** El gate compara contra la última corrida
+  completada del dataset; sin ella no puede decir si el cambio empeora. Se lanza
+  con `POST /eval-runs` indicando `subject_agent_id`.
+- **Una plantilla de tenant se juzga por el proyecto más estricto de sus
+  equipos.** Editar la plantilla no es una forma de esquivar el preset del
+  proyecto de producción.
+
+### Si la evaluación no puede medir: la válvula de escape
+
+Cuando el gate **no puede medir** —no hay proveedor LLM activo, la corrida se
+cae, no hay corrida base— bajo un preset estricto la escritura también se
+rechaza, con `error: prompt_eval_inconclusive`. Es deliberado: dejar pasar lo que
+no se ha medido sería un verde que nadie se ha ganado.
+
+Para ese caso —y **sólo** para ése— el `PUT` admite una válvula:
+
+```json
+{
+  "system_prompt": "…",
+  "eval_gate_override": {
+    "reason": "El proveedor del juez lleva caído desde las 09:00 (INC-4412) y este cambio corrige una fuga de datos en producción."
+  }
+}
+```
+
+- **Quién puede usarla**: el mismo `tenant_admin` que ya puede hacer el `PUT`.
+  No es un permiso nuevo — y es más estrecha que lo que ya podía hacer (bajar el
+  preset del proyecto a `development`, que además es permanente y no deja rastro).
+- **El motivo es obligatorio y de al menos 80 caracteres**, el mismo listón que
+  `CLAUDE.md` §«La excepción al gate» le pone al `gate_override` del roadmap. Uno
+  más corto se rechaza con 422.
+- **Queda auditado**: una fila en `audit_log` con `action = 'prompt_eval_gate'`,
+  tu usuario, el agente, el preset que gobernaba, por qué no se pudo medir y tu
+  motivo **verbatim**. Se registra también cuando mandas el override y no hacía
+  falta.
+- **NO abre una regresión medida.** Si la evaluación sí midió y el resultado
+  empeora, la escritura se rechaza igual, lleves override o no.
+
 ## Resumen (EN)
 
 The **persona** is the **BE** path: provider/model/temperature from the **closed
@@ -110,3 +165,5 @@ shown **"Not available yet"**.
 - [skills-de-agentes.md](./skills-de-agentes.md) — fragmentos de persona.
 - [configurar-proveedores-llm.md](./configurar-proveedores-llm.md) — alta de los 4 proveedores (System Admin).
 - [ADR 0055](../05-architecture-decisions/0055-validacion-model-config.md) — validación de `model_config`.
+- [validacion-humana.md](../04-reference/validacion-humana.md) — los 4 presets que deciden si el gate de evals bloquea o avisa.
+- [evals-stats.md](../04-reference/evals-stats.md) — golden sets, corridas y diffs.

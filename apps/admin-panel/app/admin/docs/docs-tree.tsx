@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
 
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { DocTree, DocTreeFile, DocTreeFolder } from "@/lib/docs-api";
 
@@ -42,11 +43,12 @@ export function DocsTree({
   onSelect,
   bookmarks,
 }: DocsTreeProps) {
+  const t = useT("docs");
   const isEmpty = tree.folders.length === 0 && tree.files.length === 0;
   if (isEmpty) {
     return (
       <p className="text-muted-foreground px-2 py-1 text-xs italic" data-testid="docs-tree-empty">
-        Sin documentos en este proyecto.
+        {t("treeEmpty")}
       </p>
     );
   }

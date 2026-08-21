@@ -90,7 +90,7 @@ def test_training_model_frontmatter_is_valid_yaml() -> None:
 def test_training_model_lists_the_four_categories(category: str) -> None:
     _, body = _split_frontmatter(_read(_TRAINING_MODEL))
     assert category in body, (
-        f"training-model.md: debe enunciar la categoría {category!r} " "(SABER/RECORDAR/SER/HACER)"
+        f"training-model.md: debe enunciar la categoría {category!r} (SABER/RECORDAR/SER/HACER)"
     )
 
 
@@ -129,20 +129,20 @@ def test_training_model_lists_the_four_levels(level: str) -> None:
 def test_glossary_has_operator_headwords(headword: str) -> None:
     """El glosario gana los headwords Capacidad / Persona / Contexto en negrita."""
     text = _read(_GLOSSARY)
-    assert re.search(
-        rf"\*\*{headword}", text
-    ), f"glossary.md: falta el headword en negrita **{headword}**"
+    assert re.search(rf"\*\*{headword}", text), (
+        f"glossary.md: falta el headword en negrita **{headword}**"
+    )
 
 
 def test_glossary_distinguishes_documento_vs_documentacion() -> None:
     """El glosario distingue 'Documento' (de KB) de 'Documentación' (de /docs)."""
     text = _read(_GLOSSARY)
-    assert re.search(
-        r"\*\*Documento\b", text
-    ), "glossary.md: falta el headword **Documento** (unidad ingerida en una KB)"
-    assert re.search(
-        r"\*\*Documentación\b", text
-    ), "glossary.md: falta el headword **Documentación** (las 7 carpetas de /docs)"
+    assert re.search(r"\*\*Documento\b", text), (
+        "glossary.md: falta el headword **Documento** (unidad ingerida en una KB)"
+    )
+    assert re.search(r"\*\*Documentación\b", text), (
+        "glossary.md: falta el headword **Documentación** (las 7 carpetas de /docs)"
+    )
 
 
 # --- domain-model.md: forked_from_agent_id (no parent_agent_id) ------------
@@ -152,7 +152,7 @@ def test_domain_model_uses_forked_from_agent_id() -> None:
     text = _read(_DOMAIN_MODEL)
     assert "forked_from_agent_id" in text, (
         "domain-model.md: debe usar la columna real 'forked_from_agent_id' "
-        "(ver agents en db/domain.py)"
+        "(ver agents en db/domain/agents.py)"
     )
 
 
@@ -177,5 +177,5 @@ def test_guides_readme_index_is_complete() -> None:
     readme = _read(_GUIDES_README)
     missing = sorted(name for name in _guide_stems() if name not in readme)
     assert not missing, (
-        "03-guides/README.md: el índice no lista estas guías presentes en la " f"carpeta: {missing}"
+        f"03-guides/README.md: el índice no lista estas guías presentes en la carpeta: {missing}"
     )

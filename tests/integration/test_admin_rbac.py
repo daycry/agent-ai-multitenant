@@ -19,6 +19,8 @@ import pytest
 from alembic import command
 from httpx import ASGITransport, AsyncClient
 
+from tests.integration._user_seeding import seed_user
+
 pytestmark = pytest.mark.integration
 
 
@@ -87,20 +89,26 @@ async def _register_and_login_admin(
     email: str = "root@example.com",
     password: str = "longenoughpw",
 ) -> str:
-    """Register a fresh user, promote to system admin in the DB,
-    log in, return the resulting JWT."""
-    await client.post("/auth/register", json={"email": email, "password": password})
+    """Seed a fresh user, promote to system admin in the DB, log in, return the JWT.
+
+    Sembraba con ``POST /auth/register``; desde el ADR 0134 ese endpoint solo da
+    de alta al PRIMER usuario o a quien traiga invitación, así que estos tests
+    —que necesitan varios usuarios y no están probando el alta— insertan
+    directamente (ver ``tests/integration/_user_seeding.py``).
+    """
+    await seed_user(migrations_dsn, email, password)
     await _promote_to_system_admin(migrations_dsn, email)
     return await _login(client, email, password)
 
 
 async def _register_and_login_user(
     client: AsyncClient,
+    migrations_dsn: str,
     email: str = "tenant-admin@example.com",
     password: str = "longenoughpw",
 ) -> str:
-    """Register a regular (non-admin) user and return the JWT."""
-    await client.post("/auth/register", json={"email": email, "password": password})
+    """Seed a regular (non-admin) user and return the JWT."""
+    await seed_user(migrations_dsn, email, password)
     return await _login(client, email, password)
 
 
@@ -132,12 +140,12 @@ async def test_create_tenant_as_system_admin_succeeds(
 
 
 @pytest.mark.asyncio
-async def test_create_tenant_as_tenant_admin_is_403(configured_app) -> None:
+async def test_create_tenant_as_tenant_admin_is_403(configured_app, migrations_pg_dsn: str) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
     ) as client:
-        token = await _register_and_login_user(client)
+        token = await _register_and_login_user(client, migrations_pg_dsn)
         resp = await client.post(
             "/admin/tenants",
             headers={"Authorization": f"Bearer {token}"},
@@ -254,11 +262,8 @@ async def test_list_users_cross_tenant(configured_app, migrations_pg_dsn: str) -
         transport=ASGITransport(app=configured_app),
         base_url="http://test",
     ) as client:
-        # Register a regular user + an admin user.
-        await client.post(
-            "/auth/register",
-            json={"email": "regular@example.com", "password": "longenoughpw"},
-        )
+        # Seed a regular user + an admin user.
+        await seed_user(migrations_pg_dsn, "regular@example.com")
         token = await _register_and_login_admin(client, migrations_pg_dsn)
 
         users = await client.get("/admin/users", headers={"Authorization": f"Bearer {token}"})

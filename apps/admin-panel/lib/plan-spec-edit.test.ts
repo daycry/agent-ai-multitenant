@@ -98,15 +98,32 @@ describe("nextTaskId", () => {
 describe("localSpecProblems", () => {
   it("catches what does not need a round-trip", () => {
     const rows = drafts();
-    expect(localSpecProblems(rows)).toEqual([]);
-    expect(localSpecProblems([{ ...rows[0], title: "  " }])).toContain(
+    expect(localSpecProblems(rows, "es")).toEqual([]);
+    expect(localSpecProblems([{ ...rows[0], title: "  " }], "es")).toContain(
       "La tarea «t1» no tiene título.",
     );
-    expect(localSpecProblems([rows[0], { ...rows[1], id: "t1" }])).toContain(
+    expect(localSpecProblems([rows[0], { ...rows[1], id: "t1" }], "es")).toContain(
       "El identificador «t1» está repetido.",
     );
-    expect(localSpecProblems([{ ...rows[0], id: "" }])).toContain(
+    expect(localSpecProblems([{ ...rows[0], id: "" }], "es")).toContain(
       "Toda tarea necesita un identificador.",
+    );
+  });
+
+  /*
+   * Estos mensajes se PINTAN en el editor del spec, y este módulo es puro: no
+   * lo ve el guard de atributos ni el de ternarios, así que llevaban en
+   * castellano fijo mientras la pantalla que los muestra ya estaba migrada
+   * (prod-16 `task_prod16_03`). `lang` es obligatorio y sin default por lo
+   * mismo que en `conversationLabel()`.
+   */
+  it("los da en el idioma activo, que es donde se leen", () => {
+    const rows = drafts();
+    expect(localSpecProblems([{ ...rows[0], title: "  " }], "en")).toContain(
+      "Task “t1” has no title.",
+    );
+    expect(localSpecProblems([{ ...rows[0], id: "" }], "en")).toContain(
+      "Every task needs an identifier.",
     );
   });
 });
@@ -119,7 +136,7 @@ describe("describeSaveError", () => {
       422,
       JSON.stringify({ detail: { error: "dag_cycle", cycle: ["t1", "t2", "t1"] } }),
     );
-    const message = describeSaveError(error, drafts());
+    const message = describeSaveError(error, drafts(), "es");
     expect(message).toContain("t1 («Migrar el esquema»)");
     expect(message).toContain("t2 («Cargar los datos»)");
     expect(message).toContain("romper el ciclo");
@@ -132,7 +149,7 @@ describe("describeSaveError", () => {
         detail: { error: "spec_not_editable", status: "approved", message: "Ya está aprobado." },
       }),
     );
-    expect(describeSaveError(error, drafts())).toBe("Ya está aprobado.");
+    expect(describeSaveError(error, drafts(), "es")).toBe("Ya está aprobado.");
   });
 
   it("unwraps a pydantic 422 to its readable messages", () => {
@@ -142,10 +159,21 @@ describe("describeSaveError", () => {
         detail: [{ msg: "tasks[t2] depends on unknown task 't9'", loc: ["body"] }],
       }),
     );
-    expect(describeSaveError(error, drafts())).toBe("tasks[t2] depends on unknown task 't9'");
+    expect(describeSaveError(error, drafts(), "es")).toBe("tasks[t2] depends on unknown task 't9'");
   });
 
   it("falls back to the raw body rather than swallowing an unknown failure", () => {
-    expect(describeSaveError(new ApiError(500, "boom"), drafts())).toBe("boom");
+    expect(describeSaveError(new ApiError(500, "boom"), drafts(), "es")).toBe("boom");
+  });
+
+  it("traduce el ciclo, y sigue nombrando los títulos que el operador escribió", () => {
+    const error = new ApiError(
+      422,
+      JSON.stringify({ detail: { error: "dag_cycle", cycle: ["t1", "t2", "t1"] } }),
+    );
+    const message = describeSaveError(error, drafts(), "en");
+    expect(message).toContain("Circular dependency");
+    expect(message).toContain("break the cycle");
+    expect(message).toContain("t1 («Migrar el esquema»)");
   });
 });

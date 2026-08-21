@@ -8,6 +8,7 @@ survives persistence into the `executions` row.
 
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -221,5 +222,141 @@ async def test_persisted_steps_log_keeps_per_call_detail(
         first_model_call = model_calls(loaded.steps_log)[0]
         assert first_model_call["tokens_in"] == 100
         assert first_model_call["model"] == _MODEL
+    finally:
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# prod-07 task_prod07_12 (llm-1) — el step `model_call` casa con el CATÁLOGO
+# ---------------------------------------------------------------------------
+# El hallazgo llm-1 tenía dos mitades. La primera —el runtime no registraba
+# `provider`, así que `snapshot_execution_prices` buscaba con `provider=""`— se
+# cerró por AUD16-15 (`steps.model_call_step` ya emite el kind). La segunda no
+# tenía prueba: el runtime registra el nombre NATIVO del modelo
+# (`to_provider_model_name` despoja el prefijo de familia), mientras que el
+# catálogo de precios está tecleado a la LiteLLM (`ollama/llama3.1`,
+# `anthropic/claude-…`). Que el kind viaje no sirve de nada si la clave no casa:
+# el snapshot sale `available=False` y el coste facturable vuelve a ser 0.
+#
+# Estos tests siembran precios con la clave del CATÁLOGO y consultan con la
+# clave del RUNTIME — que es la asimetría real y la única que puede fallar.
+_SNAPSHOT_CASES = (
+    # (kind del runtime, familia del catálogo, model_id del catálogo, model_id nativo)
+    ("ollama", "ollama", "ollama/llama3.1", "llama3.1"),
+    ("copilot", "github_copilot", "gpt-4.1", "gpt-4.1"),
+    ("azure_foundry", "azure", "gpt-4o-mini", "gpt-4o-mini"),
+    ("claude_sdk", "anthropic", "claude-sonnet-4-5", "claude-sonnet-4-5"),
+)
+
+
+_INSERT_PRICE = text(
+    "INSERT INTO model_prices"
+    " (id, provider, model_id, modality, input_price, output_price, source, effective_from)"
+    # `unit` cae a su default `per_1m_tokens`: 3 USD/1M in, 15 USD/1M out.
+    " VALUES (:id, :provider, :model_id, 'text', 3.0, 15.0, 'manual', now())"
+)
+
+
+async def _insert_price(s: Any, *, provider: str, model_id: str) -> None:
+    """SQL crudo a propósito: cargar el ORM de `model_prices` arrastra su FK a
+    `llm_providers`, cuyo modelo este fichero no importa, y SQLAlchemy revienta al
+    resolver la metadata. La fila es lo que importa, no por dónde entra."""
+    await s.execute(_INSERT_PRICE, {"id": uuid4(), "provider": provider, "model_id": model_id})
+
+
+async def _seed_catalog_prices(session: async_sessionmaker) -> None:
+    """Una fila de precio ABIERTA por caso, tecleada como la teclea el catálogo."""
+    async with session() as s, s.begin():
+        await s.execute(text("TRUNCATE model_prices RESTART IDENTITY CASCADE"))
+        for _kind, family, catalog_model_id, _native in _SNAPSHOT_CASES:
+            await _insert_price(s, provider=family, model_id=catalog_model_id)
+
+
+def _model_call_step(*, kind: str, native_model: str) -> dict[str, object]:
+    """Exactamente lo que emite `agent_runtime.steps.model_call_step`."""
+    from agent_runtime.steps import model_call_step
+
+    return model_call_step(
+        0,
+        "act",
+        model=native_model,
+        tokens_in=1000,
+        tokens_out=500,
+        cost_usd=0.0,  # Ollama/Copilot/Azure NO reportan coste: ese es el punto
+        summary="llamada del agente",
+        provider=kind,
+    )
+
+
+@pytest.mark.asyncio
+async def test_snapshot_provider_finds_a_catalog_price_for_every_kind(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """El snapshot precia los 4 kinds del catálogo cerrado (ADR 0021).
+
+    Sin esto, `cost_usd=0` del runtime se persistía tal cual y los budgets
+    sumaban $0 para tres de los cuatro proveedores."""
+    from api_server.db.execution_repo import snapshot_execution_prices
+
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        await _seed_catalog_prices(sm)
+
+        steps = [
+            _model_call_step(kind=kind, native_model=native)
+            for kind, _, _, native in _SNAPSHOT_CASES
+        ]
+        async with sm() as s:
+            enriched, rollup = await snapshot_execution_prices(s, steps=steps)
+
+        assert len(enriched) == len(_SNAPSHOT_CASES), "la guarda dejó de mirar todos los kinds"
+        for step, (kind, _family, _catalog_id, _native) in zip(
+            enriched, _SNAPSHOT_CASES, strict=True
+        ):
+            snapshot = step["price_snapshot"]
+            assert snapshot["available"] is True, (
+                f"{kind}: el catálogo no casó con la clave del runtime "
+                f"(model={step['model']!r}) — el coste volvería a ser 0 (llm-1)"
+            )
+            # 1000/1e6 * 3 + 500/1e6 * 15 = 0.003 + 0.0075
+            assert float(snapshot["cost_usd"]) == pytest.approx(0.0105)
+        assert rollup is not None and rollup.available
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_provider_without_the_kind_cannot_price_an_ambiguous_model(
+    _migrated: None, admin_database_url: str
+) -> None:
+    """El control negativo: es el `provider` lo que hace casar la clave.
+
+    Con el mismo model_id presente en DOS familias y sin kind en el step, el
+    lookup se niega a adivinar (integridad de facturación > cobertura) y el
+    snapshot sale `available=False` en vez de un precio inventado."""
+    from api_server.db.execution_repo import snapshot_execution_prices
+
+    engine = create_async_engine(admin_database_url)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+        async with sm() as s, s.begin():
+            await s.execute(text("TRUNCATE model_prices RESTART IDENTITY CASCADE"))
+            for family in ("openai", "azure"):
+                await _insert_price(s, provider=family, model_id="gpt-4o-mini")
+
+        blind = _model_call_step(kind="azure_foundry", native_model="gpt-4o-mini")
+        blind.pop("provider")  # el step de ANTES de AUD16-15
+        with_kind = _model_call_step(kind="azure_foundry", native_model="gpt-4o-mini")
+
+        async with sm() as s:
+            enriched, _ = await snapshot_execution_prices(s, steps=[blind, with_kind])
+
+        assert enriched[0]["price_snapshot"]["available"] is False, (
+            "sin `provider` el lookup adivinó entre dos familias — eso es facturar a ciegas"
+        )
+        assert enriched[1]["price_snapshot"]["available"] is True, (
+            "con `provider` debe casar: si no, este test no prueba que el kind sea la causa"
+        )
     finally:
         await engine.dispose()

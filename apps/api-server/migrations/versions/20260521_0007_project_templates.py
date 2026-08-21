@@ -48,7 +48,7 @@ def upgrade() -> None:
         postgresql_where=sa.text("is_template = true"),
     )
     op.execute(
-        "CREATE POLICY projects_template_read ON projects FOR SELECT" " USING (is_template = true)"
+        "CREATE POLICY projects_template_read ON projects FOR SELECT USING (is_template = true)"
     )
 
 

@@ -101,19 +101,19 @@ Tengo confirmación completa del enrutado Caddy (single-origin: `handle_path /ap
 Dos servicios, ambos en `agentic-net`, **sin `ports:` al host**, reusando las anclas existentes verificadas (`*default-restart`, `*default-logging`, `*default-seccomp` → `no-new-privileges` + `apparmor=agentic-default` + `cap_drop:[ALL]`, `*default-limits`):
 
 ```yaml
-  stt:
-    image: ${IMAGE_STT:-ghcr.io/collabora/whisperlive-cpu:<PIN>}
-    environment: { ... modelo small/base, language auto|es|en ... }
-    volumes: [ whisper_models:/root/.cache/whisper ]   # modelos en volumen
-    healthcheck: { ... }
-    networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+stt:
+  image: ${IMAGE_STT:-ghcr.io/collabora/whisperlive-cpu:<PIN>}
+  environment: { ... modelo small/base, language auto|es|en ... }
+  volumes: [whisper_models:/root/.cache/whisper] # modelos en volumen
+  healthcheck: { ... }
+  networks: [agentic-net]
+  <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 
-  tts:
-    image: ${IMAGE_TTS:-ghcr.io/remsky/kokoro-fastapi-cpu:<PIN>}
-    healthcheck: { test: ["CMD","curl","-fsS","http://localhost:8880/health"] }
-    networks: [agentic-net]
-    <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
+tts:
+  image: ${IMAGE_TTS:-ghcr.io/remsky/kokoro-fastapi-cpu:<PIN>}
+  healthcheck: { test: ["CMD", "curl", "-fsS", "http://localhost:8880/health"] }
+  networks: [agentic-net]
+  <<: [*default-restart, *default-logging, *default-seccomp, *default-limits]
 ```
 
 Overlay GPU en `docker/docker-compose.gpu.yml` (mismo patrón que `ollama`): `deploy.resources.reservations.devices` NVIDIA sobre `stt` y `tts`, e imágenes `-gpu`. **[INCERTIDUMBRE]** El healthcheck de Kokoro-FastAPI usa `curl`: confirmar que la imagen lo trae o usar `python -c`/`wget` según corresponda.

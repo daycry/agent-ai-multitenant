@@ -94,8 +94,7 @@ async def _seed_two_tenants(dsn: str) -> tuple[UUID, UUID, UUID, UUID]:
             "h",
         )
         await conn.execute(
-            "INSERT INTO marketplace_sources (id, name, source_type)"
-            " VALUES ($1, $2, 'official')",
+            "INSERT INTO marketplace_sources (id, name, source_type) VALUES ($1, $2, 'official')",
             source_id,
             "official-catalog",
         )
@@ -213,7 +212,7 @@ async def test_rls_enabled_on_tenant_owned_tables(schema_at_head, migrations_pg_
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         rows = await conn.fetch(
-            "SELECT relname, relrowsecurity FROM pg_class" " WHERE relname = ANY($1::text[])",
+            "SELECT relname, relrowsecurity FROM pg_class WHERE relname = ANY($1::text[])",
             list(_MARKETPLACE_TABLES),
         )
         flags = {r["relname"]: r["relrowsecurity"] for r in rows}
@@ -231,7 +230,7 @@ async def test_listings_policies_exist(schema_at_head, migrations_pg_dsn: str) -
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         rows = await conn.fetch(
-            "SELECT polname FROM pg_policy" " WHERE polrelid = 'marketplace_listings'::regclass"
+            "SELECT polname FROM pg_policy WHERE polrelid = 'marketplace_listings'::regclass"
         )
         names = {r["polname"] for r in rows}
         assert "marketplace_listings_tenant_isolation" in names

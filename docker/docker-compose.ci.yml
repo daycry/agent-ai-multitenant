@@ -1,4 +1,11 @@
-# CI fallback overlay (Plan prod-02 task_prod_02_03, finding tests-3).
+# Overlay del job de integración de CI. Hace DOS cosas independientes:
+#
+#   (1) el fallback AppArmor de prod-02 (abajo), y
+#   (2) declarar el `api-server`, que la capa de infraestructura no trae y sin el
+#       cual CI no puede correr NINGÚN run de agente con agente asignado — el
+#       porqué, largo, está junto al servicio al final del fichero.
+#
+# ## (1) Fallback AppArmor (Plan prod-02 task_prod_02_03, finding tests-3)
 #
 # PRIMARY path: ci.yml's test-integration job loads the real production
 # AppArmor profile with `apparmor_parser -r -W docker/apparmor/
@@ -44,3 +51,71 @@ services:
     security_opt: !override
       - no-new-privileges:true
       - apparmor=unconfined
+
+  # ---------------------------------------------------------------------------
+  # api-server — la SEGUNDA razón de este overlay (2026-08-19).
+  #
+  # ## Por qué la capa de infraestructura no basta para el job de integración
+  #
+  # El job levantaba `postgres redis vault minio` y nada más. Suficiente para casi
+  # toda la suite… y NO para los cuatro tests que conducen una ejecución de agente
+  # de verdad (`test_e2e_smoke`, `test_autonomous_cycle` ×2,
+  # `test_orchestrator_dispatch::test_run_execution_celery_task_conducts_the_execution`).
+  #
+  # La cadena, que ningún fichero decía entera:
+  #
+  #   1. la tarea de esos tests lleva agente asignado;
+  #   2. con `agent_id`, `workers.execution._build_env` mintea
+  #      `AGENTIC_INTERNAL_TOKEN` y publica `AGENTIC_API_URL` (ADR 0012);
+  #   3. con token inyectado, el runtime EXIGE que `/internal/agent/*` conteste:
+  #      `_build_internal_api()` llama a `ensure_reachable()`, que revienta el
+  #      arranque en vez de degradar en silencio (prod-01 task_11 / sandbox-4);
+  #   4. sin api-server el contenedor sale 1 con
+  #      `InternalAPIUnreachableError` y la ejecución acaba `failed`.
+  #
+  # O sea que hasta hoy CI **no podía correr ni un solo run con agente asignado**,
+  # que es la forma que tiene TODO run de producción. No se veía porque el job
+  # agotaba su reloj y GitHub lo marcaba `cancelled`: el 2026-08-19, al partirlo en
+  # shards, los cuatro salieron rojos a la vez con `assert 'failed' == 'done'`.
+  #
+  # La alternativa era apilar `docker-compose.manuals.yml`, que ya trae este
+  # servicio. Se descartó: ese overlay REDEFINE `vault` (de `-dev` a modo servidor
+  # con backend de fichero y desellado por un compañero), así que en CI dejaría el
+  # Vault sellado y el `--wait` de arriba colgado — un servicio de aplicación
+  # arrastrando media capa de infraestructura detrás.
+  #
+  # Wiring mínimo a propósito: este contenedor sólo tiene que (a) contestar
+  # `/healthz` desde `agentic-agents` y (b) validar el token interno que el worker
+  # mintea. La BD de los tests es OTRA (efímera, por sesión de pytest), así que las
+  # llamadas de conocimiento/memoria del runtime fallan y el propio runtime las
+  # traga (son best-effort by design) — exactamente igual que en la máquina de
+  # desarrollo, donde el api-server del stack mira a `agentic_platform` y los tests
+  # a su base de usar y tirar.
+  #
+  # `API_SERVER_ENVIRONMENT: dev` no es cosmético: sin él los guards anti-defaults
+  # de `api_server.config` rechazan los secretos de desarrollo y el contenedor no
+  # arranca. Y los secretos se dejan en su DEFAULT a propósito — el worker corre en
+  # el runner (pytest) y firma el token con el mismo default, así que ambos lados
+  # comparten `internal_token_secret` sin declararlo dos veces.
+  #
+  # `restart` se queda en `no`: si el proceso muere, que el `--wait` lo diga en vez
+  # de reintentar en bucle hasta agotar el reloj del job.
+  # ---------------------------------------------------------------------------
+  api-server:
+    image: agentic-platform/api-server:ci
+    environment:
+      API_SERVER_ENVIRONMENT: dev
+      API_SERVER_DATABASE_URL: postgresql+asyncpg://app_user:${APP_USER_PASSWORD:?set APP_USER_PASSWORD in docker/.env}@postgres:5432/agentic_platform
+      API_SERVER_ADMIN_DATABASE_URL: postgresql+asyncpg://migrations_user:${MIGRATIONS_USER_PASSWORD:?set MIGRATIONS_USER_PASSWORD in docker/.env}@postgres:5432/agentic_platform
+      API_SERVER_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/0
+      API_SERVER_BROKER_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/1
+      API_SERVER_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in docker/.env}@redis:6379/2
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [agentic-net, agentic-agents]
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=unconfined
+    cap_drop: [ALL]
+    restart: "no"

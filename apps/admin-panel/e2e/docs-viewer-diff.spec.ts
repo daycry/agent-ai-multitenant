@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the docs visor version-diff view (Plan 07 Fase D, task_07_16).
@@ -64,9 +65,7 @@ const DIFF_UNCHANGED = {
 };
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   await page.route("**/projects", (route) =>
     route.fulfill({
       status: 200,

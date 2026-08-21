@@ -60,6 +60,7 @@ from uuid6 import uuid7
 from api_server.auth.deps import AuthPrincipal, get_tenant_session, require_tenant_admin
 from api_server.db.domain import Execution, ExecutionStatus, Task, TaskStatus
 from api_server.db.evals import EvalCriterion, EvalDataset, EvalDatasetItem, EvalResult, EvalRun
+from api_server.evals.constants import MAX_SYNC_EVAL_CALLS as _MAX_SYNC_EVAL_CALLS
 from api_server.evals.diff import DatasetMismatchError, RunDiff, diff_runs
 from api_server.evals.judge import JudgeResponseError, SameModelJudgeError, run_eval
 from api_server.routers._helpers import (
@@ -90,12 +91,12 @@ from api_server.schemas.evals import (
 
 router = APIRouter(tags=["evals"])
 
-# Techo de llamadas a modelo de UNA corrida lanzada por `POST /eval-runs`.
-# La corrida es síncrona (se ejecuta dentro de la petición), así que el límite
-# real no es el dinero sino el timeout del gateway. Con 200 llamadas y un
-# proveedor razonable la petición cabe; por encima, morir a la mitad deja al
-# operador con un 504 y sin explicación.
-MAX_SYNC_EVAL_CALLS = 200
+# Techo de llamadas a modelo de UNA corrida síncrona. Vive en
+# `api_server.evals.constants` desde `task_gov_05`: el gate de edición de prompt
+# corre el mismo tipo de corrida dentro de un `PUT`, y dos techos distintos para
+# la misma limitación acabarían divergiendo. Se reexporta con este nombre porque
+# `tests/integration/test_eval_run_endpoint.py` lo monkeypatchea aquí.
+MAX_SYNC_EVAL_CALLS = _MAX_SYNC_EVAL_CALLS
 
 
 def _dataset_to_response(dataset: EvalDataset, *, item_count: int = 0) -> EvalDatasetResponse:
@@ -983,7 +984,16 @@ async def create_eval_run(
             },
         )
 
-    judge, subject = await _build_eval_seams(session, payload.judge_model, payload.subject_model)
+    # `task_gov_05`: cuando la corrida declara QUÉ agente evalúa, el sujeto corre
+    # con el prompt de ese agente. Sin esto la corrida base y la candidata del
+    # gate de edición no serían comparables — la base habría corrido sin prompt.
+    subject_prompt = await _subject_prompt_of(session, payload.subject_agent_id)
+    judge, subject = await _build_eval_seams(
+        session,
+        payload.judge_model,
+        payload.subject_model,
+        subject_system_prompt=subject_prompt,
+    )
     run = EvalRun(
         id=uuid7(),
         tenant_id=principal.tenant_id,
@@ -1031,14 +1041,40 @@ async def create_eval_run(
     return EvalRunResponse.model_validate(run)
 
 
+async def _subject_prompt_of(session: AsyncSession, agent_id: UUID | None) -> str | None:
+    """El prompt EFECTIVO del agente que esta corrida evalúa, o ``None``.
+
+    El efectivo (`agent_persona.effective_prompt_text`) y no el campo plano: es
+    el texto que el modelo vería de verdad, ya resuelto es→en y ya capado. Un
+    agente que no existe (o de otro tenant, invisible por RLS) devuelve ``None``
+    en vez de fallar: la corrida sigue siendo válida, sólo mide sin prompt.
+    """
+    if agent_id is None:
+        return None
+    from api_server.agent_persona import effective_prompt_text
+    from api_server.db.domain import Agent
+
+    agent = (await session.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
+    return effective_prompt_text(agent) if agent is not None else None
+
+
 async def _build_eval_seams(
-    session: AsyncSession, judge_model: str, subject_model: str
+    session: AsyncSession,
+    judge_model: str,
+    subject_model: str,
+    *,
+    subject_system_prompt: str | None = None,
 ) -> tuple[Any, Any]:
     """El juez y el sujeto, sobre la capa de proveedores del sistema.
 
     Se resuelve por la MISMA vía que el chat (proveedor activo + credencial de
     Vault): un segundo camino de LLM que mantener es como acaban divergiendo
     las credenciales y el catálogo.
+
+    ``subject_system_prompt`` es el prompt bajo evaluación (`task_gov_05`). Sin
+    él el sujeto corría SIN prompt, así que dos corridas de prompts distintos
+    salían iguales y medir un cambio de prompt era imposible — ver el docstring
+    de :class:`~api_server.evals.llm_judge.LLMSubjectModel`.
     """
     from api_server.chat.responder import _resolve_chat_provider, resolve_chat_model_config
     from api_server.evals.llm_judge import LLMJudgeModel, LLMSubjectModel
@@ -1058,5 +1094,9 @@ async def _build_eval_seams(
         )
     return (
         LLMJudgeModel(provider=provider, model=judge_model or api_model),
-        LLMSubjectModel(provider=provider, model=subject_model or api_model),
+        LLMSubjectModel(
+            provider=provider,
+            model=subject_model or api_model,
+            system_prompt=subject_system_prompt,
+        ),
     )

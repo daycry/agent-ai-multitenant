@@ -98,8 +98,12 @@ cd apps/api-server
 
 ### 4. Registra el primer usuario
 
-Desde el admin-panel (http://localhost:3000/login → enlace de
-registro próximamente; por ahora vía API):
+`POST /auth/register` está **cerrado al público** (ADR 0134): solo da de alta a
+quien presenta una invitación válida… **con una excepción, que es justo ésta**:
+mientras la tabla `users` esté vacía el registro se permite sin invitación. Es
+la puerta de arranque de una instalación nueva; sin ella, un despliegue recién
+levantado quedaría inaccesible para siempre, porque no habría nadie que pudiera
+emitir la primera invitación.
 
 ```bash
 curl -X POST http://localhost:8001/auth/register \
@@ -107,11 +111,16 @@ curl -X POST http://localhost:8001/auth/register \
   -d '{"email":"root@example.com","password":"longenoughpw","full_name":"Root"}'
 ```
 
-### 5. Promueve a System Admin
+### 5. (Ya eres System Admin y System Owner)
 
-En esta fase no hay endpoint de bootstrap del primer admin: lo
-haces directamente en la base de datos. Después de Fase 15 (el
-instalador) esto será un wizard.
+No hace falta ningún `UPDATE` a mano: ese primer usuario sale de fábrica con
+`is_system_admin` **y** `is_system_owner` (ADR 0074 / ADR 0134). El segundo
+—System Owner— es el que abre el córtex, y hasta el 2026-07-31 no lo fijaba
+nadie salvo este registro, de modo que las instalaciones hechas con el
+instalador se quedaban sin propietario. Hoy lo fija también
+`api_server.seeds.init_tenant`, que es lo que ejecuta el instalador.
+
+Compruébalo:
 
 ```bash
 docker compose \
@@ -119,7 +128,28 @@ docker compose \
   -f docker/docker-compose.dev.yml \
   exec postgres \
   psql -U postgres -d agentic_platform \
-       -c "UPDATE users SET is_system_admin = true WHERE email = 'root@example.com'"
+       -c "SELECT email, is_system_admin, is_system_owner FROM users"
+```
+
+### 5-bis. Dar de alta a cualquier OTRA persona
+
+A partir del segundo usuario el alta es por invitación:
+
+1. Como System Admin, entra en **Plataforma → Invitaciones**
+   (`/admin/invitations`), elige email, espacio de trabajo y rol, y emite.
+2. Copia el enlace que aparece (`/accept-invite?token=…`) — **el código solo se
+   muestra una vez**: en la base de datos únicamente vive su hash, así que si lo
+   pierdes hay que revocar la invitación y emitir otra.
+3. La persona invitada abre ese enlace, elige contraseña y entra ya con la
+   membresía del espacio y el rol que llevaba la invitación.
+
+Una invitación caduca (7 días por defecto), sirve **una sola vez** y se puede
+revocar desde la misma pantalla. Por API:
+
+```bash
+curl -X POST http://localhost:8001/admin/invitations \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"email":"ana@example.com","tenant_id":"<uuid>","role":"tenant_user"}'
 ```
 
 ### 6. Login y dashboard

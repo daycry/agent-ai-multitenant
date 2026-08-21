@@ -39,6 +39,9 @@ from api_server.memorizer.recall import (
     fuse_rankings,
 )
 
+# Ajuste de sesión para el índice HNSW (prod-13 task_prod13_12 / db-6).
+from api_server.rag.hnsw import tune_hnsw_session
+
 # Configuración FTS única para TODAS las rutas de búsqueda sobre chunks (P0-4):
 # spanish + unaccent (migración 0079). Debe coincidir con la expresión del
 # índice ix_chunks_content_fts (migración 0107) — divergir = seq scan.
@@ -69,6 +72,43 @@ class ChunkHit:
 # ---------------------------------------------------------------------------
 # Internal SQL builders
 # ---------------------------------------------------------------------------
+def _same_embedding_space_filter() -> str:
+    """`AND` que restringe los chunks a KBs selladas con el modelo de la consulta.
+
+    ADR 0155 regla 5. Sin esto, el vector de consulta —producido por el modelo
+    ACTIVO— compite contra vectores de otro modelo: misma dimensión, ningún
+    error, y un `<=>` perfectamente válido entre dos espacios semánticos que no
+    tienen nada que ver. El filtro es sólo del camino VECTORIAL: BM25 sigue
+    viendo esos chunks, así que una KB sellada con otro modelo no se vuelve
+    invisible — pierde el vector, que es lo que ya había perdido de hecho.
+
+    Parámetro ligado: ``:embedding_model_refs`` (las grafías equivalentes del
+    modelo, ver `accepted_model_refs`; comparar alias en SQL sería duplicar el
+    contrato en un sitio donde no se puede testear igual de barato).
+    """
+    return (
+        " AND EXISTS ("
+        "     SELECT 1 FROM documents dm"
+        "     JOIN knowledge_bases kbm ON kbm.id = dm.kb_id"
+        "     WHERE dm.id = chunks.document_id"
+        "       AND kbm.embedding_model_id = ANY(:embedding_model_refs)"
+        " )"
+    )
+
+
+def _accepted_refs_param(embedding_model: str | None) -> list[str]:
+    """Las grafías aceptadas para el filtro, resolviendo el modelo activo
+    cuando el llamante no lo fija (producción: el mismo setting del que sale el
+    embedder de consulta)."""
+    from api_server.ingestion.embedding_contract import (
+        accepted_model_refs,
+        active_embedding_model,
+    )
+
+    model = embedding_model if embedding_model is not None else active_embedding_model()
+    return sorted(accepted_model_refs(model))
+
+
 def _kb_visibility_filter(*, with_agent: bool = False) -> str:
     """`AND` clause restricting chunks to KBs the caller can read.
 
@@ -132,6 +172,31 @@ async def bm25_chunks(
 # ---------------------------------------------------------------------------
 # Vector (task_04_17)
 # ---------------------------------------------------------------------------
+def vector_sql(*, with_agent: bool) -> str:
+    """El SQL exacto que ejecuta :func:`vector_chunks`.
+
+    Extraído a una función para que un test pueda pedirle el **plan** a
+    PostgreSQL (`EXPLAIN`) sobre esta misma cadena en vez de sobre una copia.
+    `tests/integration/test_vector_recall_desbalanceado.py` lo necesita porque su
+    control sólo significa algo si la consulta la resuelve el índice HNSW; una
+    copia del SQL en el test se habría desincronizado en silencio justo el día en
+    que un filtro nuevo cambia el plan — que es exactamente lo que pasó con el
+    `EXISTS` de espacio de embeddings del ADR 0155.
+
+    Parámetros ligados: ``:qvec``, ``:limit``, ``:tenant_id``, ``:project_id``,
+    ``:embedding_model_refs`` y, con ``with_agent``, ``:agent_id``.
+    """
+    return (
+        "SELECT chunks.id"
+        " FROM chunks"
+        " WHERE chunks.embedding IS NOT NULL"
+        + _kb_visibility_filter(with_agent=with_agent)
+        + _same_embedding_space_filter()
+        + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
+        " LIMIT :limit"
+    )
+
+
 async def vector_chunks(
     session: AsyncSession,
     *,
@@ -140,25 +205,27 @@ async def vector_chunks(
     project_id: UUID,
     agent_id: UUID | None = None,
     limit: int = VECTOR_K_DEFAULT,
+    embedding_model: str | None = None,
 ) -> list[UUID]:
     """Top-`limit` chunk ids by cosine similarity. Empty list if no
-    query embedding (an embedder is required for the vector path)."""
+    query embedding (an embedder is required for the vector path).
+
+    Ajusta antes los GUC de HNSW (`api_server.rag.hnsw`): el índice es global y
+    los filtros —RLS + KBs visibles— se aplican DESPUÉS, así que sin escaneo
+    iterativo un tenant pequeño dentro de un corpus desbalanceado recibe cero
+    resultados para consultas que sí tienen respuesta en su corpus (db-6).
+    """
     if query_embedding is None:
         return []
-    sql = (
-        "SELECT chunks.id"
-        " FROM chunks"
-        " WHERE chunks.embedding IS NOT NULL"
-        + _kb_visibility_filter(with_agent=agent_id is not None)
-        + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
-        " LIMIT :limit"
-    )
+    await tune_hnsw_session(session)
+    sql = vector_sql(with_agent=agent_id is not None)
     qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
     params: dict[str, object] = {
         "qvec": qvec_str,
         "tenant_id": tenant_id,
         "project_id": project_id,
         "limit": limit,
+        "embedding_model_refs": _accepted_refs_param(embedding_model),
     }
     if agent_id is not None:
         params["agent_id"] = agent_id
@@ -385,6 +452,7 @@ async def _kb_vector_chunks(
     kb_id: UUID,
     query_embedding: Sequence[float] | None,
     limit: int,
+    embedding_model: str | None = None,
 ) -> list[UUID]:
     """Top-`limit` chunk ids por similitud coseno, acotados a la KB.
     Lista vacía si no hay query embedding (sin embedder no hay vector)."""
@@ -397,11 +465,20 @@ async def _kb_vector_chunks(
         " WHERE documents.kb_id = :kb_id"
         "   AND documents.deleted_at IS NULL"
         "   AND chunks.embedding IS NOT NULL"
-        " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
+        + _same_embedding_space_filter()
+        + " ORDER BY chunks.embedding <=> CAST(:qvec AS vector)"
         " LIMIT :limit"
     )
     qvec_str = "[" + ",".join(f"{x:.6f}" for x in query_embedding) + "]"
-    result = await session.execute(text(sql), {"qvec": qvec_str, "kb_id": kb_id, "limit": limit})
+    result = await session.execute(
+        text(sql),
+        {
+            "qvec": qvec_str,
+            "kb_id": kb_id,
+            "limit": limit,
+            "embedding_model_refs": _accepted_refs_param(embedding_model),
+        },
+    )
     return [row[0] for row in result.all()]
 
 
@@ -411,4 +488,5 @@ __all__ = [
     "recall_chunks",
     "search_kb_chunks",
     "vector_chunks",
+    "vector_sql",
 ]

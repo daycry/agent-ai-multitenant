@@ -31,10 +31,15 @@ def _vault_store(settings: Settings) -> Any | None:
     if not url or not token:
         return None
     try:
-        import hvac
         from api_server.llm_providers.vault import HvacLLMProviderVaultStore
 
-        return HvacLLMProviderVaultStore(hvac.Client(url=url, token=token))
+        # prod-10 task_prod10_07: fábrica compartida del worker (renueva el token).
+        from workers.vault_client import build_worker_vault_client
+
+        client = build_worker_vault_client(settings)
+        if client is None:
+            return None
+        return HvacLLMProviderVaultStore(client)
     except Exception as exc:  # pragma: no cover - binding de install
         _log.warning("repo_clone.vault_unavailable", error=str(exc))
         return None
@@ -44,9 +49,11 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
     from api_server.db.domain import Project
     from api_server.db.models import Organization
     from api_server.git_integration import project_git_secret_path
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    engine = create_async_engine(settings.database_url)
+    from workers.db import worker_engine
+
+    engine = worker_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with sessionmaker() as session:

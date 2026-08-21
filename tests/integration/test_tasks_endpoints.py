@@ -40,7 +40,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             " users RESTART IDENTITY CASCADE"
         )
         await conn.execute(
-            "INSERT INTO organizations (id, name, slug) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3), ($4, $5, $6)",
             tenant_a,
             "Tenant A",
             "tenant-a",
@@ -49,7 +49,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "tenant-b",
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES" " ($1, $2, $3), ($4, $5, $6)",
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3), ($4, $5, $6)",
             user_a,
             "alice@a.test",
             "argon2-placeholder",

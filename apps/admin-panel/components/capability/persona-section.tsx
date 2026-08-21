@@ -38,6 +38,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Tooltip, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
 import {
   chatModeLabel,
@@ -83,6 +84,7 @@ interface PersonaSectionProps {
 
 export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSectionProps) {
   const { lang } = useLang();
+  const t = useT("capability");
   const { data: modes } = useChatModes();
   const draft = useMemo(() => draftFromConfig(modelConfig), [modelConfig]);
   // ADR 0082: resolvemos el provider_id a su nombre concreto (ollama-cloud vs
@@ -124,33 +126,29 @@ export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSecti
         <CardTitle className="text-base">
           <span className="inline-flex items-center gap-2">
             <Sparkles className="h-4 w-4" aria-hidden="true" />
-            {lang === "es" ? "SER · Persona" : "BE · Persona"}
+            {t("personaTitle")}
           </span>
         </CardTitle>
-        <p className="text-muted-foreground text-xs">
-          {lang === "es"
-            ? "Quién es el agente: proveedor, modelo, temperatura y el prompt efectivo (rol + modo)."
-            : "Who the agent is: provider, model, temperature and the effective prompt (role + mode)."}
-        </p>
+        <p className="text-muted-foreground text-xs">{t("personaDescription")}</p>
       </CardHeader>
 
       <CardContent className="space-y-4">
         {/* Modelo configurado (honesto: si no hay provider/model lo dice). */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="persona-model-summary">
           <SummaryField
-            label={lang === "es" ? "Proveedor" : "Provider"}
+            label={t("fieldProvider")}
             value={modelConfigured ? providerSummary : null}
-            fallback={lang === "es" ? "No configurado" : "Not configured"}
+            fallback={t("personaNotConfigured")}
             testid="persona-summary-provider"
           />
           <SummaryField
-            label={lang === "es" ? "Modelo" : "Model"}
+            label={t("fieldModel")}
             value={draft.model || null}
-            fallback={lang === "es" ? "No configurado" : "Not configured"}
+            fallback={t("personaNotConfigured")}
             testid="persona-summary-model"
           />
           <SummaryField
-            label={lang === "es" ? "Temperatura" : "Temperature"}
+            label={t("fieldTemperature")}
             value={String(draft.temperature)}
             testid="persona-summary-temperature"
           />
@@ -160,9 +158,7 @@ export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSecti
         <div className="space-y-2" data-testid="persona-effective-prompt">
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="persona-mode-select">
-                {lang === "es" ? "Combinar con el modo" : "Combine with mode"}
-              </Label>
+              <Label htmlFor="persona-mode-select">{t("personaCombineWithMode")}</Label>
               <Select
                 id="persona-mode-select"
                 value={modeName}
@@ -170,7 +166,7 @@ export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSecti
                 data-testid="persona-mode-select"
                 className="w-56"
               >
-                <option value="">{lang === "es" ? "Solo el rol" : "Role only"}</option>
+                <option value="">{t("personaRoleOnly")}</option>
                 {(modes ?? []).map((m) => (
                   <option key={m.name} value={m.name} disabled={!m.available}>
                     {chatModeLabel(m, lang)}
@@ -180,7 +176,7 @@ export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSecti
               </Select>
             </div>
             <Badge variant="muted" data-testid="persona-role-badge">
-              {lang === "es" ? "Rol" : "Role"}: {role}
+              {t("personaRoleLabel")}: {role}
             </Badge>
           </div>
 
@@ -192,9 +188,7 @@ export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSecti
               role="note"
             >
               <Info className="h-3 w-3" aria-hidden="true" />
-              {lang === "es"
-                ? `El modo personalizado está "${UNAVAILABLE_LABEL.es}".`
-                : `The custom mode is "${UNAVAILABLE_LABEL.en}".`}
+              {t("personaCustomUnavailable", { label: UNAVAILABLE_LABEL[lang] })}
             </p>
           )}
 
@@ -212,16 +206,12 @@ export function PersonaSection({ modelConfig, systemPrompt, role }: PersonaSecti
               data-testid="persona-no-prompt"
               role="status"
             >
-              {lang === "es"
-                ? "Sin system prompt definido. Edita la persona para añadir uno (es/en)."
-                : "No system prompt defined. Edit the persona to add one (es/en)."}
+              {t("personaNoPrompt")}
             </p>
           )}
           {role_prompt.origin === "flat" && (
             <p className="text-muted-foreground text-xs" data-testid="persona-prompt-origin-flat">
-              {lang === "es"
-                ? "Prompt heredado del campo plano legacy; edita la persona para migrarlo a es/en."
-                : "Prompt inherited from the legacy flat field; edit the persona to migrate it to es/en."}
+              {t("personaPromptOriginFlat")}
             </p>
           )}
         </div>
@@ -307,17 +297,15 @@ export function PersonaPromptFields({
   onChange: (next: SystemPrompts) => void;
   idPrefix?: string;
 }) {
-  const { lang } = useLang();
+  const t = useT("capability");
   return (
     <div className="space-y-3" data-testid={`${idPrefix}-prompt-fields`}>
-      <p className="text-muted-foreground text-xs">
-        {lang === "es"
-          ? "System prompt por idioma (ES + EN). Es la fuente única que muestran la tarjeta y el prompt efectivo."
-          : "System prompt per language (ES + EN). Single source shown by the card and the effective prompt."}
-      </p>
+      <p className="text-muted-foreground text-xs">{t("personaPromptsHelp")}</p>
       <PromptLangField
         langTag="es"
-        label={lang === "es" ? "System prompt (ES)" : "System prompt (ES)"}
+        // "System prompt (ES)" es igual en los dos idiomas: nombra el campo del
+        // JSON, no una frase. No pasa por el diccionario.
+        label="System prompt (ES)"
         value={prompts.es ?? ""}
         onChange={(v) => onChange({ ...prompts, es: v })}
         idPrefix={idPrefix}
@@ -346,16 +334,13 @@ function PromptLangField({
   onChange: (v: string) => void;
   idPrefix: string;
 }) {
+  const t = useT("capability");
   return (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={`${idPrefix}-prompt-${langTag}`}>
         {label}
         <Tooltip
-          content={
-            langTag === "es"
-              ? "Se guarda en model_config.system_prompts.es"
-              : "Stored in model_config.system_prompts.en"
-          }
+          content={langTag === "es" ? t("personaPromptStoredEs") : t("personaPromptStoredEn")}
         >
           <TooltipTrigger className="ml-1 align-middle" aria-label={`${label} info`}>
             <Info className="text-muted-foreground inline h-3 w-3" aria-hidden="true" />

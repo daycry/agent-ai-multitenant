@@ -39,7 +39,6 @@ from api_server.auth.deps import (
     require_can_approve_plan,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.celery_client import (
     compute_plan_code_diff_and_wait,
@@ -78,6 +77,7 @@ from api_server.chat.sync_to_kanban import (
     sync_plan_to_kanban,
 )
 from api_server.dag_promotion import announce_ready_tasks, promote_ready_tasks
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.conversation import Conversation, Message
 from api_server.db.domain import Execution, Plan, PlanStatus, Project, Task
 from api_server.db.execution_repo import cancel_tasks_and_executions
@@ -90,10 +90,12 @@ from api_server.db.review_session_repo import (
     list_review_sessions_for_plan,
 )
 from api_server.events import publish_task_status_changed
+from api_server.guardrails.route_gates import gate_plan_generation
 from api_server.llm_providers.vault import LLMProviderVaultStore
 from api_server.plan_preflight import run_plan_preflight
 from api_server.plan_progress import TaskSnapshot, compute_plan_progress
 from api_server.preview_launch import build_preview_request
+from api_server.routers._guards import verify_project_visible
 from api_server.routers._helpers import (
     get_writable_or_404,
     move_plan,
@@ -101,6 +103,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import integrity_conflict
 from api_server.routers._pagination import (
     apply_pagination,
     limit_query,
@@ -136,14 +139,6 @@ plans_router = APIRouter(prefix="/plans", tags=["plans"])
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Project:
-    result = await session.execute(
-        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-    return project
 
 
 # PROY2-02: estados de tarea NO terminales — un plan con alguno de estos no
@@ -334,7 +329,7 @@ async def create_plan(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> PlanResponse:
     tenant_id = require_tenant_id(principal)
-    project = await _verify_project_visible(session, project_id)
+    project = await verify_project_visible(session, project_id)
     # P1-01: un proyecto pausado/archivado no acepta planes nuevos.
     require_project_active(project)
 
@@ -372,6 +367,34 @@ async def create_plan(
     # (chat→plan materialisation, task_03_14); else an empty draft.
     draft_title, spec_dict = await _resolve_initial_spec(session, payload)
 
+    # prod-03 task_prod03_14 (guardrails-9): el gate estructural delante de
+    # «Generar Plan». `gate_generate_plan` existía desde el Plan 11 con test
+    # propio y CERO llamantes — `routers/plans.py` no importaba nada de
+    # `api_server.guardrails`—, así que el roadmap del Plan 11 daba por cableado
+    # algo que ninguna ruta invocaba.
+    #
+    # Solo sobre el borrador que produjo el CHAT, que es literalmente la acción
+    # «Generar Plan». Dos exclusiones deliberadas, y la segunda costó medirla:
+    #
+    #  * un plan vacío es un estado legítimo del producto (se crea la carcasa y
+    #    se rellena después), y el esquema exige `summary` y al menos una tarea;
+    #  * un `specification` INLINE (API/SDK) no viene de un LLM: ya lo valida
+    #    Pydantic, y pasarlo además por el esquema estructural rompía 14 tests de
+    #    flujos legítimos que crean planes con tareas y `summary` vacío. El gate
+    #    existe para que un borrador MAL FORMADO del equipo no se materialice,
+    #    no para estrechar el contrato público de la API.
+    if (
+        payload.specification is None
+        and payload.conversation_id is not None
+        and spec_dict.get("tasks")
+    ):
+        await gate_plan_generation(
+            session,
+            draft=spec_dict,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+
     plan_title = payload.title or draft_title or "Borrador del plan"
     plan = Plan(
         tenant_id=tenant_id,
@@ -390,7 +413,7 @@ async def create_plan(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="plan.create") from exc
     await session.refresh(plan)
 
     # Back-link the conversation to the plan so the chat UI can show
@@ -413,7 +436,7 @@ async def list_plans(
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[PlanResponse]:
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     stmt = select(Plan).where(Plan.project_id == project_id, Plan.deleted_at.is_(None))
     if status_ is not None:
         stmt = stmt.where(Plan.status == status_)
@@ -447,7 +470,7 @@ async def get_plan_code_diff(
     # FileNotFoundError NO capturado → 500 SIEMPRE. El worker posee el data_root
     # real + corre como owner de los bares; la api-server delega y relaya.
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
     plan = await _load_plan(session, plan_id)
     if plan.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="plan not found")
@@ -1405,8 +1428,15 @@ async def approve_plan(
     illegal move.
     """
     require_tenant_id(principal)
+    # `for_update=True` (prod-13 task_prod13_22, hallazgo api-10): la decisión de
+    # abajo —primera firma vs. segunda, y si el segundo firmante coincide con el
+    # primero— se toma sobre el `status`/`first_approved_by` que se acaban de leer.
+    # Sin el bloqueo de fila, dos admins pulsando "Aprobar" simultáneamente leían
+    # los dos `pending_approval` con `first_approved_by = NULL`, los dos escribían
+    # su firma y el plan acababa APROBADO con una sola firma humana real: justo la
+    # garantía que la doble firma existe para dar.
     plan = await get_writable_or_404(
-        session, Plan, plan_id, principal, not_found_detail="plan not found"
+        session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
 
     # Decide the target status: single firma, first of two, or second of two.
@@ -1570,11 +1600,13 @@ async def start_plan_execution(
     an already-running plan is a no-op that just re-ensures the Kanban.
     """
     require_tenant_id(principal)
+    # `FOR UPDATE` (api-10): dos "Empezar" simultáneos leían los dos `approved`,
+    # los dos pasaban la máquina de estados y los dos materializaban el Kanban.
     plan = await get_writable_or_404(
-        session, Plan, plan_id, principal, not_found_detail="plan not found"
+        session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
     # P1-01: un proyecto pausado/archivado no arranca ejecuciones.
-    require_project_active(await _verify_project_visible(session, plan.project_id))
+    require_project_active(await verify_project_visible(session, plan.project_id))
     await _start_approved_plan(session, redis, plan, principal)
     return to_plan_response(plan)
 
@@ -1651,8 +1683,10 @@ async def approve_and_start_plan(
     se llevaría también la firma.
     """
     require_tenant_id(principal)
+    # Mismo bloqueo de fila que `/approve` (api-10): este endpoint TAMBIÉN firma,
+    # así que sin `FOR UPDATE` la carrera de la doble firma entra por aquí.
     plan = await get_writable_or_404(
-        session, Plan, plan_id, principal, not_found_detail="plan not found"
+        session, Plan, plan_id, principal, not_found_detail="plan not found", for_update=True
     )
     if plan.status != PlanStatus.PENDING_APPROVAL.value:
         raise HTTPException(
@@ -1666,7 +1700,7 @@ async def approve_and_start_plan(
         )
 
     # Precondiciones del ARRANQUE, antes de firmar (ver el docstring).
-    require_project_active(await _verify_project_visible(session, plan.project_id))
+    require_project_active(await verify_project_visible(session, plan.project_id))
     if not await _plan_has_any_tasks(session, plan):
         raise _plan_has_no_tasks_error()
 
@@ -1749,7 +1783,7 @@ async def generate_plan_corrections(
             already_generated=True,
         )
 
-    project = await _verify_project_visible(session, plan.project_id)
+    project = await verify_project_visible(session, plan.project_id)
     effective = await resolve_chat_model_config(session, project)
     provider, _kind, api_model = await _resolve_chat_provider(session, effective, vault)
     if provider is None:

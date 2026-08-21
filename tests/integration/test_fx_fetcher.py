@@ -99,6 +99,16 @@ def _static_fetcher(body: str):
 
 
 async def _set_setting(dsn: str, key: str, value_json: str) -> None:
+    """Escribe el ajuste por SQL crudo **e invalida**, como hace la vía real.
+
+    La invalidación no es adorno: `get_fx_source` / `get_fx_fetch_enabled` leen
+    de una caché Redis con TTL de 30 s que sólo `set_platform_setting` —la vía
+    del System Admin— tira al escribir. Sin esta línea,
+    `test_source_is_configurable` seguía leyendo el `"ecb"` que cacheó su primera
+    mitad y su segunda mitad **no podía fallar**: afirmaba `source == "ecb"`
+    contra un valor que la caché ya garantizaba. Ahora ejerce de verdad el
+    fallback de una fuente desconocida.
+    """
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
@@ -109,6 +119,10 @@ async def _set_setting(dsn: str, key: str, value_json: str) -> None:
         )
     finally:
         await conn.close()
+
+    from api_server.db.platform_settings import invalidate_platform_setting_cache
+
+    await invalidate_platform_setting_cache(key)
 
 
 class _RecordingNotifier:

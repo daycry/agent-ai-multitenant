@@ -11,7 +11,7 @@ date: 2026-07-12
 El escalado actual es TERMINAL (blocked + inbox): una ambigüedad pequeña
 cuesta el run entero. No hay canal para preguntar y continuar.
 
-## Decisión (propuesta)
+## Decisión
 
 Tool `ask_human(question, options?)`: el run se SUSPENDE (estado reanudable o
 re-dispatch con la respuesta en el preámbulo), la pregunta llega al inbox +

@@ -35,6 +35,6 @@ def test_template_bakes_nonroot_user_and_writable_home(dockerfile: Path) -> None
     text = dockerfile.read_text(encoding="utf-8")
     assert "USER 1000:1000" in text, f"{dockerfile.parent.name}: sin USER 1000:1000"
     assert "HOME=/home/agent" in text, f"{dockerfile.parent.name}: sin HOME=/home/agent"
-    assert (
-        "chown -R 1000:1000 /home/agent" in text
-    ), f"{dockerfile.parent.name}: /home/agent sin chown a uid 1000"
+    assert "chown -R 1000:1000 /home/agent" in text, (
+        f"{dockerfile.parent.name}: /home/agent sin chown a uid 1000"
+    )

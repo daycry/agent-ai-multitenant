@@ -12,9 +12,11 @@ no de un tenant. Con RLS estándar esas filas quedan invisibles para tenants
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Index, Integer, Numeric, String
+from sqlalchemy import CheckConstraint, Index, Integer, Numeric, String, text
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -31,6 +33,11 @@ class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "source IN ('assistant', 'cortex', 'planning')",
             name="ck_llm_usage_events_source",
         ),
+        # part-01 / ADR 0151: particionado mensual por rango sobre `created_at`
+        # (migración 0135). Declarado también aquí porque la guarda de
+        # `tests/unit/test_partition_planner.py` DESCUBRE en el modelo qué tablas
+        # están particionadas y exige que el job las conozca.
+        {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
     # NULLABLE a propósito (córtex = plataforma) — ver docstring del módulo.
@@ -39,7 +46,23 @@ class LLMUsageEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     provider_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
-    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+
+    # PARTE DE LA CLAVE PRIMARIA desde part-01 (ADR 0151, migración 0135), lo que
+    # OBLIGA a redeclararla aquí pisando la de `TimestampMixin`: PostgreSQL exige
+    # que la PK de una tabla particionada incluya la clave de partición, así que
+    # la PK es `(id, created_at)`. Nada dependía de que `id` fuese único por sí
+    # solo: esta tabla no tiene ninguna FK entrante.
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        primary_key=True,
+        nullable=False,
+        server_default=text("now()"),
+    )

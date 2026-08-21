@@ -53,6 +53,13 @@ _ALLOWED: frozenset[tuple[str, str]] = frozenset(
         ("apps/api-server/src/api_server/db/approval_repo.py", "request_approval_if_needed"),
         ("apps/api-server/src/api_server/db/approval_repo.py", "resolve_approval"),
         ("apps/api-server/src/api_server/db/approval_repo.py", "expire_stale_requests"),
+        # ADR 0135: el cobro del reintento al reanudar. No es un sitio NUEVO —
+        # es la mitad de `resolve_approval` (ya amparada arriba) extraída a un
+        # helper con nombre al cerrar el bucle infinito del ADR 0020, que no
+        # bumpeaba `retry_count` y dejaba a la tarea re-aprobándose sin techo.
+        # Mismo motor, mismo vocabulario acotado (backlog / blocked), y ahora
+        # con el sitio declarado en vez de escondido dentro de una función larga.
+        ("apps/api-server/src/api_server/db/approval_repo.py", "_spend_retry_or_block"),
         # Cancelación en cascada de tareas + ejecuciones (prod-06 cancel_01).
         ("apps/api-server/src/api_server/db/execution_repo.py", "cancel_tasks_and_executions"),
         # Edge documentado en la state machine: revert de un dispatch que no

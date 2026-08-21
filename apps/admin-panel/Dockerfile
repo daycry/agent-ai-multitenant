@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# admin-panel — Next.js 14 (standalone output) System Admin + tenant UI.
+# admin-panel — Next.js 15 (standalone output) System Admin + tenant UI.
 #
 # Plan prod-01 task_02 (finding deploy-2). Self-contained build context
 # (apps/admin-panel — the frontend imports none of the Python packages), so it

@@ -15,6 +15,11 @@
  *
  * Sin hardcodear nada del registry — los rangos vienen del propio
  * endpoint /_registry.
+ *
+ * i18n (prod-16 `task_prod16_03`): marco del diccionario (`settingsMemories`) y
+ * etiquetas/descripciones de los dos ajustes del registry vía `pickLang`, que
+ * las sirve bilingües desde el 2026-08-19. Las claves `*Fallback` sólo se ven
+ * mientras el registry no ha llegado; cuando el dato está, gana el dato.
  */
 
 import { useEffect, useState } from "react";
@@ -28,25 +33,41 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
+import { pickLang, useT } from "@/lib/i18n";
 import { useLang } from "@/lib/lang-context";
 import { memoryDetectorState } from "@/lib/memory/honesty";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface RegistrySettingDef {
   type: "float" | "int" | "string" | "bool";
   default: number;
   label_es: string;
+  label_en: string;
   description_es: string;
+  description_en: string;
   min_value: number | null;
   max_value: number | null;
 }
 
 interface RegistryCategoryDef {
   label_es: string;
+  label_en: string;
   icon: string;
   description_es: string;
+  description_en: string;
   external_page: string | null;
   settings: Record<string, RegistrySettingDef>;
 }
+
+/**
+ * Estado del guardado, como DISCRIMINANTE y no como mensaje.
+ *
+ * Antes era un `string` y el color se decidía con `status.startsWith("Error")`.
+ * Eso deja de funcionar en cuanto el texto se traduce (en inglés empieza por
+ * "Could not"), y falla en silencio: el mensaje sale, el color no. Guardar el
+ * caso y derivar el texto es lo que hace la traducción posible sin más ramas.
+ */
+type SaveStatus = { kind: "saving" } | { kind: "saved" } | { kind: "error"; detail: string };
 
 interface SettingValueResponse {
   category: string;
@@ -64,7 +85,9 @@ interface MemoryEmbeddingProbe {
 const CATEGORY = "memories";
 
 export default function MemoriesSettingsPage() {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
+  const t = useT("settingsMemories");
   const { lang } = useLang();
 
   const registryQuery = useQuery<{ categories: Record<string, RegistryCategoryDef> }, ApiError>({
@@ -94,7 +117,7 @@ export default function MemoriesSettingsPage() {
 
   const [threshold, setThreshold] = useState<number>(0.85);
   const [limit, setLimit] = useState<number>(5);
-  const [status, setStatus] = useState<string>("");
+  const [status, setStatus] = useState<SaveStatus | null>(null);
 
   // Hydrate form state from the server once both queries land.
   useEffect(() => {
@@ -121,17 +144,22 @@ export default function MemoriesSettingsPage() {
   });
 
   const onSave = async () => {
-    setStatus("Guardando…");
+    setStatus({ kind: "saving" });
     try {
       await Promise.all([
         putSetting.mutateAsync({ key: "similarity.threshold", value: threshold }),
         putSetting.mutateAsync({ key: "similarity.limit", value: limit }),
       ]);
-      setStatus("Guardado");
+      setStatus({ kind: "saved" });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Error al guardar";
-      setStatus(`Error: ${msg}`);
+      setStatus({ kind: "error", detail: errorText(err) });
     }
+  };
+
+  const statusText = (s: SaveStatus): string => {
+    if (s.kind === "saving") return t("saving");
+    if (s.kind === "saved") return t("saved");
+    return s.detail ? t("saveError", { detail: s.detail }) : t("saveErrorUnknown");
   };
 
   return (
@@ -141,13 +169,13 @@ export default function MemoriesSettingsPage() {
     >
       <PageHeader
         icon={<Brain className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Memorias"
-        description="Cómo el sistema detecta memorias similares para que el operador las fusione o descarte."
+        title={t("title")}
+        description={t("description")}
       />
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3">
-          <CardTitle>Detector de similares</CardTitle>
+          <CardTitle>{t("detectorTitle")}</CardTitle>
           {detectorUnavailable && (
             <Badge variant="muted" data-testid="settings-memories-unavailable">
               {detector.label}
@@ -166,7 +194,10 @@ export default function MemoriesSettingsPage() {
           )}
           <div className="space-y-2">
             <Label htmlFor="threshold" className="text-sm font-medium">
-              {thresholdDef?.label_es ?? "Umbral de similitud"} · {threshold.toFixed(2)}
+              {thresholdDef
+                ? pickLang(lang, { es: thresholdDef.label_es, en: thresholdDef.label_en })
+                : t("thresholdFallback")}{" "}
+              · {threshold.toFixed(2)}
             </Label>
             <input
               id="threshold"
@@ -181,12 +212,21 @@ export default function MemoriesSettingsPage() {
               aria-disabled={detectorUnavailable}
               className="w-full disabled:cursor-not-allowed disabled:opacity-50"
             />
-            <p className="text-muted-foreground text-xs">{thresholdDef?.description_es}</p>
+            <p className="text-muted-foreground text-xs">
+              {thresholdDef
+                ? pickLang(lang, {
+                    es: thresholdDef.description_es,
+                    en: thresholdDef.description_en,
+                  })
+                : ""}
+            </p>
           </div>
 
           <div className="space-y-2">
             <Label htmlFor="limit" className="text-sm font-medium">
-              {limitDef?.label_es ?? "Número de candidatos"}
+              {limitDef
+                ? pickLang(lang, { es: limitDef.label_es, en: limitDef.label_en })
+                : t("limitFallback")}
             </Label>
             <Input
               id="limit"
@@ -199,7 +239,11 @@ export default function MemoriesSettingsPage() {
               disabled={detectorUnavailable}
               className="w-32"
             />
-            <p className="text-muted-foreground text-xs">{limitDef?.description_es}</p>
+            <p className="text-muted-foreground text-xs">
+              {limitDef
+                ? pickLang(lang, { es: limitDef.description_es, en: limitDef.description_en })
+                : ""}
+            </p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -208,18 +252,16 @@ export default function MemoriesSettingsPage() {
               disabled={putSetting.isPending || detectorUnavailable}
               data-testid="settings-memories-save"
             >
-              {putSetting.isPending ? "Guardando…" : "Guardar"}
+              {putSetting.isPending ? t("saving") : t("save")}
             </Button>
             {status && (
               <span
                 className={
-                  status.startsWith("Error")
-                    ? "text-danger-soft-foreground"
-                    : "text-muted-foreground"
+                  status.kind === "error" ? "text-danger-soft-foreground" : "text-muted-foreground"
                 }
                 data-testid="settings-memories-status"
               >
-                {status}
+                {statusText(status)}
               </span>
             )}
           </div>

@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 import { runStatusLabel, runStatusVariant } from "@/lib/runs";
 import { useWebSocket, wsUrl } from "@/lib/ws";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types
@@ -112,6 +113,7 @@ function fmtDuration(step: Step): string {
 // Page
 // --------------------------------------------------------------------------
 export default function ExecutionTimelinePage() {
+  const errorText = useErrorText();
   const params = useParams<{ id: string }>();
   const executionId = String(params.id);
   const [liveSteps, setLiveSteps] = useState<Step[]>([]);
@@ -202,10 +204,7 @@ export default function ExecutionTimelinePage() {
       {executionQuery.isError && (
         <Card className="border-destructive p-4" data-testid="execution-error">
           <p className="text-destructive text-sm">
-            No se pudo cargar la ejecución:{" "}
-            {executionQuery.error instanceof ApiError
-              ? executionQuery.error.body
-              : String(executionQuery.error)}
+            No se pudo cargar la ejecución: {errorText(executionQuery.error)}
           </p>
         </Card>
       )}

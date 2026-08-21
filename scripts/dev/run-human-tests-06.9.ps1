@@ -8,11 +8,11 @@
 #
 # Flujo:
 #   1) Verifica api-server :8001 y admin-panel :3000.
-#   2) Lee scripts/.demo_state_06_9.json (creado por setup_demo_06_9.py)
+#   2) Lee scripts/demos/.demo_state_06_9.json (creado por setup_demo_06_9.py)
 #      e imprime los UUIDs + URLs concretas + checklist resumido por test.
 #
 # Si nunca corriste el setup:
-#   .\.venv\Scripts\python.exe scripts\setup_demo_06_9.py
+#   .\.venv\Scripts\python.exe scripts\demos\setup_demo_06_9.py
 # -----------------------------------------------------------------------------
 
 [CmdletBinding()]
@@ -46,10 +46,10 @@ if (-not $apiOk) {
     exit 1
 }
 
-$StateFile = Join-Path $RepoRoot "scripts\.demo_state_06_9.json"
+$StateFile = Join-Path $RepoRoot "scripts\demos\.demo_state_06_9.json"
 if (-not (Test-Path $StateFile)) {
     Write-Step "No existe $StateFile"
-    Write-Hint "Corre primero: .\.venv\Scripts\python.exe scripts\setup_demo_06_9.py"
+    Write-Hint "Corre primero: .\.venv\Scripts\python.exe scripts\demos\setup_demo_06_9.py"
     exit 1
 }
 

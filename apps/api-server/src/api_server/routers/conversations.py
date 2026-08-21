@@ -34,10 +34,10 @@ from api_server.auth.deps import (
     get_redis,
     get_tenant_session,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.chat.modes import list_chat_modes
 from api_server.chat.responder import schedule_reply, team_planning_roles
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.conversation import (
     ChatMode,
     Conversation,
@@ -52,7 +52,9 @@ from api_server.events import (
     delete_conversation_stream,
     publish_conversation_event,
 )
+from api_server.guardrails.route_gates import gate_planning_turn
 from api_server.llm_providers.vault import LLMProviderVaultStore
+from api_server.routers._guards import verify_project_visible
 from api_server.routers._helpers import (
     apply_partial_update,
     get_writable_or_404,
@@ -60,6 +62,8 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import integrity_conflict
+from api_server.routers._pagination import apply_pagination, limit_query, offset_query
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.conversations import (
     ChatModeResponse,
@@ -90,16 +94,6 @@ project_planning_roles_router = APIRouter(prefix="/projects/{project_id}", tags=
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-async def _verify_project_visible(session: AsyncSession, project_id: UUID) -> Project:
-    """RLS hides cross-tenant projects; this turns a silent 0-row SELECT
-    into an explicit 404 instead of a downstream FK error."""
-    result = await session.execute(
-        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
-    )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
-    return project
 
 
 async def _load_conversation(session: AsyncSession, conversation_id: UUID) -> Conversation:
@@ -152,7 +146,7 @@ async def create_conversation(
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ConversationResponse:
     tenant_id = require_tenant_id(principal)
-    await _verify_project_visible(session, project_id)
+    await verify_project_visible(session, project_id)
 
     conv = Conversation(
         tenant_id=tenant_id,
@@ -167,7 +161,7 @@ async def create_conversation(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="conversation.create") from exc
     await session.refresh(conv)
     return to_conversation_response(conv)
 
@@ -175,18 +169,29 @@ async def create_conversation(
 @project_conversations_router.get("", response_model=list[ConversationResponse])
 async def list_conversations(
     project_id: UUID,
+    limit: int = limit_query(),
+    offset: int = offset_query(),
     _: AuthPrincipal = Depends(require_tenant_member),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> list[ConversationResponse]:
-    await _verify_project_visible(session, project_id)
-    result = await session.execute(
+    """Los hilos del proyecto, más antiguo primero, PAGINADO (prod-13, api-6).
+
+    Devolvía todas las conversaciones del proyecto sin cota. Un proyecto vivo
+    acumula cientos de hilos y el listado del tablero los arrastraba enteros en
+    cada carga. El orden por `created_at` se desempata por `id`: sin desempate, dos
+    hilos creados en el mismo instante pueden salir en las DOS páginas o en
+    ninguna, que es el fallo clásico de paginar por OFFSET sin orden total.
+    """
+    await verify_project_visible(session, project_id)
+    stmt = (
         select(Conversation)
         .where(
             Conversation.project_id == project_id,
             Conversation.deleted_at.is_(None),
         )
-        .order_by(Conversation.created_at)
+        .order_by(Conversation.created_at, Conversation.id)
     )
+    result = await session.execute(apply_pagination(stmt, limit=limit, offset=offset))
     return [to_conversation_response(c) for c in result.scalars().all()]
 
 
@@ -362,6 +367,22 @@ async def post_message(
     if project is not None:
         require_project_active(project)
 
+    # prod-03 task_prod03_14 (guardrails-9): el motor corre AQUÍ, en la ruta.
+    # `run_planning_chat_guardrails` existía desde el Plan 11 con test propio y
+    # cero llamantes: el texto del humano entraba al modelo sin pasar por
+    # ningún guardrail. Se ejecuta antes de persistir el mensaje y antes de
+    # programar la respuesta del equipo — bloquear después de haber llamado al
+    # LLM no bloquea nada. `warn` es advisory (queda como evento y sigue);
+    # `block` corta con 422 (ver `gate_planning_turn`).
+    if payload.author_kind == MessageAuthorKind.USER:
+        await gate_planning_turn(
+            session,
+            hook="pre_llm",
+            text=payload.content,
+            tenant_id=tenant_id,
+            project_id=conv.project_id,
+        )
+
     # Resolve author_user_id from the principal when the caller is a
     # human user and didn't pass it explicitly.
     author_user_id: UUID | None
@@ -392,7 +413,7 @@ async def post_message(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="message.create") from exc
     await session.refresh(message)
     await _publish_message_event(redis, message)
     # The team replies to a USER message (Plan 04 wiring): planning → multi-agent
@@ -522,7 +543,7 @@ async def list_project_planning_roles(
     Siempre incluye `project_manager`: es el único rol obligatorio y el que
     conduce cada turno de planificación.
     """
-    project = await _verify_project_visible(session, project_id)
+    project = await verify_project_visible(session, project_id)
     roles = await team_planning_roles(session, project)
     return PlanningRolesResponse(roles=sorted(r.value for r in roles))
 

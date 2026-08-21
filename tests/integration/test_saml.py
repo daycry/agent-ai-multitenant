@@ -341,12 +341,14 @@ async def test_acs_creates_user_session_and_jwt(configured_app, migrations_pg_ds
         resp = await client.post(
             "/auth/sso/saml/acs",
             data={"SAMLResponse": saml_response, "RelayState": relay_state},
+            follow_redirects=False,
         )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["token_type"] == "bearer"
-        assert body["expires_in"] > 0
-        token = body["access_token"]
+        # 303 + Set-Cookie desde el ADR 0133: el ACS ya no contesta el
+        # `LoginResponse` JSON, deja la sesión en cookie y bota al panel. El
+        # 303 (y no 302/307) es lo que hace que el navegador pase a GET tras
+        # este POST. El contrato del salto vive en test_sso_callback_redirect.py.
+        assert resp.status_code == 303, resp.text
+        token = client.cookies.get("agentic_session")
         assert token
 
         me = await client.get("/me", headers={"Authorization": f"Bearer {token}"})
@@ -375,8 +377,9 @@ async def test_second_acs_reuses_existing_user(configured_app, migrations_pg_dsn
             resp = await client.post(
                 "/auth/sso/saml/acs",
                 data={"SAMLResponse": saml_response, "RelayState": relay_state},
+                follow_redirects=False,
             )
-            assert resp.status_code == 200, resp.text
+            assert resp.status_code == 303, resp.text
 
     assert await _count_users_with_email(migrations_pg_dsn, "worker@acme.test") == 1
 
@@ -399,9 +402,10 @@ async def test_acs_idp_initiated_no_relay_state(configured_app, migrations_pg_ds
         resp = await client.post(
             "/auth/sso/saml/acs",
             data={"SAMLResponse": saml_response},
+            follow_redirects=False,
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["access_token"]
+        assert resp.status_code == 303, resp.text
+        assert client.cookies.get("agentic_session")
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +506,13 @@ async def test_login_returns_501_when_saml_unavailable(
     await _truncate_all(migrations_pg_dsn)
     provider_id = await _seed_global_saml(migrations_pg_dsn)
 
-    import api_server.routers.sso as sso_router
+    # `routers.sso.saml`, no `routers.sso`: al partir el router en paquete
+    # (prod-16 `task_prod16_10`) el guard de disponibilidad se fue al módulo
+    # SAML, y `monkeypatch.setattr` sobre el paquete no alcanza al global del
+    # submódulo — pondría el atributo en `__init__` y el código seguiría leyendo
+    # el suyo. Es la ÚNICA línea que el troceo obligó a tocar en los tests SSO,
+    # y es la diana del parche, no una aserción.
+    import api_server.routers.sso.saml as sso_router
 
     monkeypatch.setattr(sso_router, "saml_available", lambda: False)
 

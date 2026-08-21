@@ -110,3 +110,30 @@ gracia bajo carga + runbook/changelog.
 ## Estado de implementación (2026-07-12)
 
 F1 IMPLEMENTADA Y DESPLEGADA (verificado 2026-07-12) para el asistente de tenants Y el cortex sobre la misma infra: WS `/ws/assistant/voice` (`routers/assistant_voice.py`), `VoiceSession` (transcribe->respond->synthesize) con clientes STT/TTS (`assistant/voice_clients.py`), servicios `stt` (faster-whisper) y `tts` (Kokoro-82M) en docker-compose.yml, shell UI compartida `components/voice/voice-call-shell.tsx` + avatar con lip-sync por amplitud (`realistic-avatar.tsx`, SVG procedural ~= F3 MVP; no el TalkingHead/GLB propuesto). PENDIENTE: F2 (streaming token-a-token + barge-in/VAD; hoy push-to-talk y `/assistant/chat/stream` emite progreso por rondas, no deltas) y F4 (visemas). El token-a-token exige `stream()` en los 4 providers de shared-llm.
+
+### Quién reutiliza esta infra: el córtex (plan F5)
+
+**Ojo con las dos numeraciones de fase**: las F1-F4 de arriba son las de ESTE ADR (el modo voz
+del asistente de tenant). El córtex del `system_owner` tiene su propia numeración, y quien
+reutiliza esta infra es su **F5**:
+[`docs/roadmap/cortex-f5-voz-avatar.md`](../roadmap/cortex-f5-voz-avatar.md), entregada entre el
+2026-06-24 y el 2026-07-06 ([changelog](../07-changelog/cortex-f5-voz-avatar.md)).
+
+Qué reutiliza y qué añade encima, para que la frontera quede escrita:
+
+- **Reutiliza** los servicios `stt`/`tts`, los clientes `assistant/voice_clients.py`
+  (`HttpTextToSpeech`/`HttpSpeechToText`), el catálogo de voces y los guardas de tamaño de
+  `assistant_voice.py` (`_resolve_voice`, `_SUPPORTED_VOICES`, `_MAX_UTTERANCE_BYTES`, `_reject`),
+  y la shell de UI `components/voice/voice-call-shell.tsx` con su avatar de lip-sync.
+- **Añade** un WS propio `/ws/owner/cortex/voice` (`routers/cortex_voice.py`) porque el cerebro es
+  otro (`cortex.default_model`, no el del tenant) y el gate es otro
+  (`require_system_owner` **DB-authoritative**, verificado antes de instanciar el modelo); un frame
+  `{type:'affect', …}` que el asistente de tenant no emite; y la **modulación de prosodia por
+  afecto** (`cortex/voice_affect.py::arousal_to_speed` → `speed` de Kokoro), que es la única
+  extensión que este ADR no contemplaba.
+- **No añade** un quinto proveedor LLM: coherente con la decisión de este ADR, STT/TTS/avatar
+  siguen siendo add-ons de medios (Principio 9 / ADR 0021 intactos).
+
+La voz por defecto del córtex sale de `cortex_tts_default_voice`, no de
+`assistant_tts_default_voice`: son ajustes separados a propósito, para que el owner pueda darle
+otra voz a su córtex sin tocar la del asistente de tenants.

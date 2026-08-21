@@ -31,8 +31,8 @@ const ADMIN_PASSWORD = process.env.E2E_TENANT_ADMIN_PASSWORD ?? "longenoughpw";
 async function login(page: Page, email: string, password: string) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByLabel(/^(password|contraseña)$/i).fill(password);
+  await page.getByRole("button", { name: /^(sign in|iniciar sesión)$/i }).click();
   await expect(page).toHaveURL(/\/admin\//);
 }
 
@@ -59,6 +59,15 @@ test("marking an item read clears its unread dot", async ({ page }) => {
   // Only show unread so the first row is guaranteed to have a mark-read button.
   await page.getByTestId("inbox-unread-only").check();
 
+  // ESPERAR a que la lista se pinte antes de contar. `locator.count()` NO
+  // auto-espera: devuelve lo que hay en el DOM en ese instante, y en ese
+  // instante la query del inbox todavia esta en vuelo. El `test.skip` de abajo
+  // saltaba SIEMPRE —incluso con cuatro notificaciones sin leer en la base,
+  // comprobado el 2026-08-20—, asi que este test nunca se habia ejecutado: una
+  // guarda que no puede fallar no es una guarda. Con la espera, el skip solo
+  // salta cuando de verdad no hay historico que ejercitar.
+  await expect(page.getByTestId("inbox-list").or(page.getByTestId("inbox-empty"))).toBeVisible();
+
   const markButtons = page.getByTestId(/^inbox-mark-read-/);
   const count = await markButtons.count();
   test.skip(count === 0, "no unread notifications seeded for this tenant");
@@ -76,6 +85,10 @@ test("a dead-lettered notification can be retried from the inbox", async ({ page
 
   await page.goto("/admin/notifications/inbox");
   await page.getByTestId("inbox-status-filter").selectOption("dead_letter");
+
+  // Igual que arriba: sin esperar a que la lista filtrada se pinte, el
+  // `count()` vale 0 y el skip salta siempre.
+  await expect(page.getByTestId("inbox-list").or(page.getByTestId("inbox-empty"))).toBeVisible();
 
   const retryButtons = page.getByTestId(/^inbox-retry-/);
   const count = await retryButtons.count();

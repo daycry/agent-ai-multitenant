@@ -3,14 +3,19 @@
 
 Dos contratos que cierran la honestidad de SABER en la API de KBs:
 
-  1. **``PUT /knowledge-bases/{id}`` bloquea cambiar
-     ``embedding_model_id`` si la KB ya tiene chunks** (409). El
-     re-embedding real está diferido a Plan 12; permitir el cambio
-     dejaría los chunks existentes con embeddings de OTRO modelo, que
-     el path vectorial nunca casaría → RAG roto en silencio. Cambiar
-     el modelo en una KB SIN chunks sí se permite (no hay nada que
-     invalidar). El resto del PUT (name/description/category) sigue
-     funcionando.
+  1. **``PUT /knowledge-bases/{id}`` y el sello de embeddings** (ADR 0155).
+     La plataforma indexa con UN modelo, así que el campo no es un selector:
+
+       * pedir un modelo que no es el de la plataforma → **422**, tenga o no
+         chunks la KB. Antes esto devolvía 200 sobre una KB vacía y guardaba
+         tan ricamente `text-embedding-3-small`, un modelo de OpenAI que este
+         stack —Ollama, 768 dims— no puede ni ejecutar;
+       * pedir el modelo activo sobre una KB sellada con otro y CON chunks →
+         **409**: re-sellar sin re-embeber convertiría el sello en mentira y
+         el camino vectorial seguiría sin casar;
+       * lo mismo sobre una KB vacía → 200, no hay nada que invalidar.
+
+     El resto del PUT (name/description/category) sigue funcionando.
 
   2. **``GET /knowledge-bases/{id}/search?q=...``** devuelve los chunks
      de la KB que casan la query (BM25 + vector opcional), tenant-scoped
@@ -124,17 +129,29 @@ async def _seed_single(dsn: str) -> dict[str, UUID]:
 
 
 async def _seed_kb_with_chunks(
-    dsn: str, *, tenant_id: UUID, kb_name: str, chunks: list[str]
+    dsn: str,
+    *,
+    tenant_id: UUID,
+    kb_name: str,
+    chunks: list[str],
+    embedding_model_id: str = "nomic-embed-text-v1.5",
 ) -> dict[str, UUID]:
+    """Siembra una KB con documento y chunks.
+
+    El sello por defecto es la etiqueta heredada porque es lo que hay en las
+    KBs reales; los tests del ADR 0155 lo sobreescriben para fabricar una KB
+    «sellada con otro modelo» sin depender del entorno."""
     kb_id = uuid4()
     document_id = uuid4()
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "INSERT INTO knowledge_bases (id, tenant_id, name) VALUES ($1, $2, $3)",
+            "INSERT INTO knowledge_bases (id, tenant_id, name, embedding_model_id)"
+            " VALUES ($1, $2, $3, $4)",
             kb_id,
             tenant_id,
             kb_name,
+            embedding_model_id,
         )
         await conn.execute(
             "INSERT INTO documents"
@@ -215,10 +232,10 @@ async def _mint_token(user_id: UUID, tenant_id: UUID) -> str:
 
 
 # ===========================================================================
-# 1. PUT embedding_model_id guard
+# 1. PUT embedding_model_id guard (ADR 0155)
 # ===========================================================================
 @pytest.mark.asyncio
-async def test_put_blocks_embedding_model_change_when_kb_has_chunks(
+async def test_put_rejects_a_model_the_platform_does_not_use(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     app = configured_app
@@ -233,13 +250,13 @@ async def test_put_blocks_embedding_model_change_when_kb_has_chunks(
     headers = {"Authorization": f"Bearer {token}"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Cambiar el modelo de embedding con chunks → 409.
+        # Un modelo que esta plataforma no ejecuta → 422, no un guardado feliz.
         resp = await client.put(
             f"/knowledge-bases/{kb['kb_id']}",
             json={"embedding_model_id": "text-embedding-3-small"},
             headers=headers,
         )
-        assert resp.status_code == 409, resp.text
+        assert resp.status_code == 422, resp.text
 
         # El resto del PUT (description) sigue funcionando aunque haya chunks.
         ok = await client.put(
@@ -249,12 +266,48 @@ async def test_put_blocks_embedding_model_change_when_kb_has_chunks(
         )
         assert ok.status_code == 200, ok.text
         assert ok.json()["description"] == "renombrada"
-        # El modelo NO cambió.
-        assert ok.json()["embedding_model_id"] == "nomic-embed-text-v1.5"
+        # El sello NO cambió, y se devuelve canonizado (lo GUARDADO sigue siendo
+        # la etiqueta heredada hasta que corra la migración de datos).
+        assert ok.json()["embedding_model_id"] == "nomic-embed-text"
+        assert ok.json()["embedding_model_stale"] is False
 
 
 @pytest.mark.asyncio
-async def test_put_allows_embedding_model_change_when_kb_empty(
+async def test_put_restamping_a_stale_kb_with_chunks_is_409(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    app = configured_app
+    seeded = await _seed_single(migrations_pg_dsn)
+    kb = await _seed_kb_with_chunks(
+        migrations_pg_dsn,
+        tenant_id=seeded["tenant_id"],
+        kb_name="KB Sellada Con Otro",
+        chunks=["arquitectura del sistema"],
+        embedding_model_id="granite-embedding:278m",
+    )
+    token = await _mint_token(seeded["user_id"], seeded["tenant_id"])
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # La KB se ve como desfasada: no calla que sus vectores son de otro
+        # espacio semántico.
+        got = await client.get(f"/knowledge-bases/{kb['kb_id']}", headers=headers)
+        assert got.status_code == 200, got.text
+        assert got.json()["embedding_model_id"] == "granite-embedding:278m"
+        assert got.json()["embedding_model_stale"] is True
+
+        # Y re-sellarla al modelo activo sin re-embeber es 409: sería cambiar la
+        # etiqueta sin cambiar los vectores, o sea, otra mentira.
+        resp = await client.put(
+            f"/knowledge-bases/{kb['kb_id']}",
+            json={"embedding_model_id": got.json()["platform_embedding_model"]},
+            headers=headers,
+        )
+        assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.asyncio
+async def test_put_restamping_an_empty_kb_is_allowed(
     configured_app, migrations_pg_dsn: str
 ) -> None:
     app = configured_app
@@ -263,17 +316,20 @@ async def test_put_allows_embedding_model_change_when_kb_empty(
     headers = {"Authorization": f"Bearer {token}"}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        kb_id = (
-            await client.post("/knowledge-bases", json={"name": "KB Empty"}, headers=headers)
-        ).json()["id"]
-        # Sin chunks → cambiar el modelo se permite.
+        created = await client.post("/knowledge-bases", json={"name": "KB Empty"}, headers=headers)
+        assert created.status_code == 201, created.text
+        active = created.json()["platform_embedding_model"]
+        kb_id = created.json()["id"]
+
+        # Re-sellar con el modelo activo: sin chunks no hay nada que invalidar.
         resp = await client.put(
             f"/knowledge-bases/{kb_id}",
-            json={"embedding_model_id": "text-embedding-3-small"},
+            json={"embedding_model_id": active},
             headers=headers,
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["embedding_model_id"] == "text-embedding-3-small"
+        assert resp.json()["embedding_model_id"] == active
+        assert resp.json()["embedding_model_stale"] is False
 
 
 # ===========================================================================

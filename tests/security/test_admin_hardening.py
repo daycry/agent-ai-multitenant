@@ -132,13 +132,26 @@ def test_non_positive_ttl_disables_the_clamp() -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("env", "enforced"),
-    [("dev", False), ("staging", True), ("prod", True), ("weird", False)],
+    [("dev", False), ("staging", True), ("prod", True)],
 )
 def test_only_staging_prod_enforce(env: str, enforced: bool) -> None:
     # staging/prod trip the dev-secret guard unless the secrets are real, so
     # `_settings(environment=...)` supplies non-dev values for those cases.
     settings = _settings(environment=env) if enforced else Settings(environment=env)
     assert admin_hardening_enforced(settings) is enforced
+
+
+def test_an_unknown_environment_can_no_longer_exist() -> None:
+    """The predicate above used to have a fourth case — ``("weird", False)`` —
+    and THAT was the hole (authz-2): an unrecognised environment tag silently
+    turned the whole hardening off. Since prod-09 task_prod09_02 such a value
+    cannot be constructed at all, so the "unknown -> not enforced" branch is
+    unreachable by construction rather than merely undesirable.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(environment="weird")
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +166,9 @@ def _settings(**overrides: Any) -> Settings:
         # Keep the prod dev-secret guard happy: give every guarded secret a
         # non-dev value so Settings(environment="prod") constructs.
         "jwt_secret": "prod-jwt-secret-xxxxxxxxxxxxxxxxxxxx",
+        # Dedicated worker->api signing key (prod-09 task_prod09_03): it is
+        # guarded like every other secret, and must DIFFER from `jwt_secret`.
+        "internal_token_secret": "prod-internal-secret-xxxxxxxxxxxxxxx",
         "review_url_signing_secret": "prod-review-secret-xxxxxxxxxxxx",
         "sso_encryption_key": "prod-sso-key-xxxxxxxxxxxxxxxxxxxx",
         "notification_encryption_key": "prod-notif-key-xxxxxxxxxxxxxxx",
@@ -319,6 +335,10 @@ async def test_regular_tenant_user_never_reaches_the_gate(
     We assert the composition directly: `require_system_admin` 403s a
     non-admin principal, which is what the router-level dependency chains
     first. The hardening predicates are admin-surface-only by construction.
+
+    `require_system_admin` became a coroutine in prod-09 task_prod09_04 (it now
+    re-reads `users.is_system_admin`); the claim check still runs FIRST, so this
+    call raises without touching the DB — which is the property being asserted.
     """
     from api_server.auth.deps import require_system_admin
 
@@ -329,7 +349,7 @@ async def test_regular_tenant_user_never_reaches_the_gate(
         is_system_admin=False,
     )
     with pytest.raises(HTTPException) as excinfo:
-        require_system_admin(principal=regular)
+        await require_system_admin(principal=regular)
     assert excinfo.value.status_code == 403
 
 

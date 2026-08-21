@@ -130,7 +130,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_claude_md_01` — CLAUDE.md refleja el repo real
 
-- [ ] **Título**: Actualizar estructura, rama y componentes de CLAUDE.md
+- [x] **Título**: Actualizar estructura, rama y componentes de CLAUDE.md
 - **Descripción**: En `CLAUDE.md`: (1) en el árbol "Estructura del Repositorio" (líneas
   46-56), anotar `web-app`, `memorizer`, `personal-assistant`, `webhook-dispatcher`,
   `shared-auth`, `shared-db` y `shared-domain` como "previsto — hoy integrado en api-server
@@ -150,7 +150,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_arch_overview_02` — architecture-overview alineado con la topología real
 
-- [ ] **Título**: Plano de control = los 5 servicios que el installer genera
+- [x] **Título**: Plano de control = los 5 servicios que el installer genera
 - **Descripción**: En `docs/context/architecture-overview.md` (líneas 33, 104-105, 433):
   sustituir la lista del plano de control (que incluye personal-assistant,
   webhook-dispatcher, memorizer y web-app) por los servicios reales de
@@ -172,7 +172,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_adr_gates_03` — ADR: destino de las fases con gate saltado
 
-- [ ] **Título**: ADR (proposed) con las opciones de D1 para decisión humana
+- [x] **Título**: ADR (proposed) con las opciones de D1 para decisión humana
 - **Descripción**: Redactar `docs/05-architecture-decisions/00XX-gates-validacion-humana-roadmap.md`
   con las opciones A/B/híbrida de D1, el inventario exacto de fases afectadas (las ~26 en
   `pending_human_validation`, con `started_at` y `blocking_plan` incumplido de cada una) y la
@@ -185,6 +185,63 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 #### `task_gov_reestado_04` — Aplicar la decisión: re-estado honesto + cola de validación
 
 - [ ] **Título**: Frontmatter de las ~26 fases coherente con la decisión del ADR
+  - ⏳ **La anotación de 2026-07-31 está OBSOLETA; medido de nuevo el 2026-08-01:** el ADR 0138 está **`accepted`** (opción C) y sus tres primeras consecuencias están **aplicadas**: las **6** fases en deuda (`06.10-kb-categories`, `06.17-capacitacion-agentes`, `11.1-budgets-fx`, `15-instalador-produccion`, `16-human-agents`, `prod-17-bucle-ai-reviewer`) llevan `gate_override` con `reason` escrito, `CLAUDE.md` tiene la sección «La excepción al gate», el `xfail` ya no está y `auto_gov_04_a` (`pytest tests/unit/test_roadmap_frontmatter.py`) da **11 passed** — incluidos `test_started_phase_declares_its_gate` y `test_gate_override_carries_a_written_justification`.
+  - **Lo corregido hoy**: el `README.md` del roadmap seguía diciendo que el ADR estaba `proposed` y «pendiente de decisión humana». Ya no.
+  - **Por qué la casilla NO se marca**: falta el tercer bullet de la tarea — la cola de validación tiene el **orden** publicado, pero no **responsable ni ventana**. Y eso no es trabajo pendiente, es una decisión que un agente no puede tomar: el propio ADR 0138 la deja fuera de su alcance por escrito («`prod-15` exige nombrarlos; este ADR no los puede inventar») porque compromete el calendario de una persona. **Firma humana pendiente**, sin nada que implementar antes.
+  - ✅ **Verificado el 2026-08-01 — los tres guardas del ADR 0138 no son cargo cult, y había un cuarto agujero.** Lo que pedía comprobar esta casilla era que el mecanismo se cumple HOY y que los tests lo vigilan de verdad. Se hizo por mutación, rompiendo cada invariante a propósito y mirando el rojo antes de restaurar:
+
+    | Guarda                                                                            | Mutación aplicada                                             | Resultado                                          |
+    | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------- |
+    | `test_gate_override_carries_a_written_justification`                              | `reason` de `11.1-budgets-fx` reducido a 9 caracteres         | **rojo**, nombrando plan y longitud                |
+    | `test_gate_override_only_where_the_gate_is_actually_unmet`                        | `11-guardrails-precios` → `completed`                         | **rojo**: «la excepción caducó: `11.1-budgets-fx`» |
+    | `test_gate_debt_inventory_has_not_grown` + `test_started_phase_declares_its_gate` | `prod-11` → `pending_human_validation` con su gate incumplido | **rojo los dos**                                   |
+
+    Los 6 `gate_override` vivos tienen los cuatro campos y una `reason` por encima del mínimo. Solo hay una fase `in_progress` (`marketplace-v2-despliegue`).
+
+  - 🔧 **Agujero encontrado y cerrado (1): un `gate_override` sobre un plan sin `blocking_plan` pasaba los once guardas en silencio.** `test_gate_override_only_where_the_gate_is_actually_unmet` solo mira planes con dependencias (`if deps and not sin_cerrar`), y `unmet_gates()` descarta los planes sin bloqueantes **antes** de mirar el override. Comprobado inyectando uno en `prod-14` (`blocking_plan: null`): 11/11 en verde. No es hipotético — `blocking_plan` es una lista YAML multilínea en varios planes y basta vaciarla para que el gate deje de declararse y el override sobreviva como afirmación de una excepción que ya no se refiere a nada. Cerrado con `test_gate_override_names_a_gate_that_actually_exists` (rojo con la inyección, verde al retirarla).
+  - 🔧 **Agujero encontrado y cerrado (2): 17 ficheros del roadmap llevan un `status:` del enum de fases y NO llevan `plan_id`, así que ningún guarda de gate los ve.** `_plans()` exige los dos campos; sin `plan_id`, un fichero se salta `test_at_most_one_phase_in_progress`, el gate, el `gate_override` y el changelog. Ocho de los diecisiete son las fases del córtex, **con casillas `- [ ]` y `blocking_plan` propio**: planes en todo menos en el campo que los haría auditables. Se destapó por un recuento que daba 46 por fichero y 35 por plan. Cerrado con `test_no_new_roadmap_file_escapes_the_guards_by_omitting_plan_id`, con la deuda acotada e inventariada al estilo de `_GATE_DEBT_2026_07_29`: **no arregla los 17** —darles `plan_id` los somete de golpe al guarda de changelog, que es trabajo de otro carril— pero impide que aparezca el número dieciocho. Mutación verificada: un `.md` nuevo con `status: in_progress` y sin `plan_id` lo pone rojo.
+  - ➕ **De paso, la tercera guarda que faltaba**: el recuento de la cola de validación del `README.md` («35 planes están en `pending_human_validation`») no lo vigilaba nadie, a diferencia del recuento hermano de planes de construcción. Ahora sí (`test_readme_declares_the_real_size_of_the_validation_queue`, mutado a 34 → rojo). Y conviene dejar dicho, porque casi me lleva a «corregir» un número correcto: **35 son los planes; los 46 que cuenta `CONTINUE_HERE.md` incluyen 11 ficheros sin `plan_id`**. Son las dos poblaciones del agujero (2).
+  - Suite tras los tres tests nuevos: `tests/unit/test_roadmap_frontmatter.py` **14 passed**.
+  - ⏳ **2026-08-10 — la parte de frontmatter sigue coherente, medida y no
+    supuesta; lo que falta sigue siendo una firma de calendario.** - Ejecutado: `pytest tests/unit/test_roadmap_frontmatter.py
+tests/unit/test_docs_governance.py` → **25 passed**. - **Una sola fase `in_progress`** (`marketplace-v2-despliegue`), que es lo que
+    exige la regla dura del protocolo — comprobado además a mano con
+    `grep -l '^status: in_progress' docs/roadmap/*.md`, porque el test y el grep
+    pueden discrepar y el que manda es el fichero. - Recuento por estado hoy: 46 `pending_human_validation`, 25 `completed`,
+    14 `pending_approval`, 1 `in_progress`, 1 `blocked`, más los ficheros del
+    roadmap que llevan `status:` de otro enum (`published`, `informe`, `open`,
+    `delivered`, `archived`, `approved`, `remediation_implemented`) y que son
+    justamente la población del **agujero (2)** de arriba. - **Por qué sigue sin marcarse, sin cambios**: falta el tercer bullet de la
+    tarea — la cola de validación tiene **orden** publicado pero no
+    **responsable ni ventana**. Eso compromete el calendario de una persona, el
+    ADR 0138 lo deja fuera de su alcance por escrito, y no hay nada que
+    implementar antes. Es una firma, no trabajo.
+  - 🔧 **2026-08-12 — la incoherencia se movió de sitio, y esta vez es NUEVA.** Los gates
+    y los `gate_override` siguen coherentes (`pytest tests/unit/test_roadmap_frontmatter.py`
+    → **16 passed**, y sólo `marketplace-v2-despliegue` está `in_progress`). Pero la
+    medición de hoy encontró otra cosa que este mismo casillero cubre —«frontmatter
+    coherente»— y que las olas de estas dos semanas han creado:
+    **los CATORCE planes en `pending_approval` tienen casillas marcadas.** El enum de
+    CLAUDE.md define ese estado como «plan definido pero **no empezado**», así que hoy no
+    describe a ninguno de los catorce. De ellos, **seis no tienen NADA abierto**:
+    `cadena-pr-plan`, `prod-03`, `prod-04` (se unió hoy, al cerrarse su última casilla),
+    `prod-05`, `prod-07` y `prod-09`.
+    - **Por qué NO les cambio el estado**: pasar a `pending_human_validation` exige la
+      entrada en `docs/07-changelog/` —lo pide `test_every_started_phase_has_changelog`, y
+      sólo `prod-07` la tiene—, y escribirla es auditar entre 9 y 18 tareas por plan. Y
+      hay un motivo de fondo mejor: cambiarles el estado afirmaría una aprobación que
+      **nadie ha dado**. Que se hayan implementado sin aprobar es precisamente el problema
+      de gobernanza que este plan existe para no tapar.
+    - **Entregado**: el guarda que impide que crezca a espaldas de nadie, con el patrón de
+      inventario congelado de este mismo fichero
+      (`_DELIVERED_BUT_UNSTARTED_2026_08_12` + `test_no_new_plan_is_delivered_while_still_labelled_unstarted`
+      y su hermano de entradas muertas). **Rojo verificado en las dos direcciones**:
+      marcando la única casilla abierta de `prod-14` → rojo nombrándolo; y poniendo
+      `prod-07` en `pending_human_validation` → rojo por entrada caduca. Restaurado: 16 passed.
+    - **Lo que sigue faltando es lo de siempre y sigue siendo humano**: la cola de
+      validación tiene orden publicado pero **no responsable ni ventana**. El ADR 0138 lo
+      deja fuera de su alcance por escrito. **Firma humana pendiente, sin nada que
+      implementar antes.**
 - **Descripción**: Tras aprobación humana del ADR (task 03): añadir `gate_override` (o el
   mecanismo decidido) al frontmatter de cada fase empezada con gate saltado; actualizar la
   sección "Reglas Duras del Protocolo" de CLAUDE.md para reconocer el override explícito;
@@ -204,7 +261,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_changelogs_05` — Changelogs faltantes de 06.8 y 06.9
 
-- [ ] **Título**: Crear `docs/07-changelog/06.8-rbac-enforcement.md` y `06.9-agent-scoped-kbs.md`
+- [x] **Título**: Crear `docs/07-changelog/06.8-rbac-enforcement.md` y `06.9-agent-scoped-kbs.md`
 - **Descripción**: Son los dos únicos planes con código mergeado sin entrada de changelog
   (el resto de fases pendientes sí la tienen). Generarlas con el formato de las existentes
   (p.ej. `06.10-kb-categories.md`), resumiendo lo entregado y los tests que lo cubren.
@@ -218,7 +275,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_indices_06` — EXECUTION-SEQUENCE.md y README.md del roadmap al día
 
-- [ ] **Título**: Archivar EXECUTION-SEQUENCE como histórico y corregir el README
+- [x] **Título**: Archivar EXECUTION-SEQUENCE como histórico y corregir el README
 - **Descripción**: Según D3: añadir banner de histórico a `EXECUTION-SEQUENCE.md` (estado
   congelado a 2026-05-29: dice "10 completados" cuando hay 16, lista como violación viva
   3 fases ya `completed`, clasifica 07–16 como "nuevos") y retirar su pretensión de
@@ -235,7 +292,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_cabeceras_07` — Una sola fuente de estado por plan + huecos canónicos
 
-- [ ] **Título**: Eliminar el campo "Estado" duplicado de las cabeceras de los planes
+- [x] **Título**: Eliminar el campo "Estado" duplicado de las cabeceras de los planes
 - **Descripción**: Según docsroadmap-6: retirar la fila `| **Estado** | ... |` de la tabla de
   cabecera de todos los planes en `docs/roadmap/*.md` (ya está desincronizada: 06.8 dice
   `pending_approval` con frontmatter `pending_human_validation`; 15 dice `in_progress`),
@@ -254,7 +311,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_rbac_matrix_08` — Matriz RBAC al día + guardia anti-drift
 
-- [ ] **Título**: Añadir `/admin/platform-settings` y `/admin/ollama` a rbac.md y al test parametrizado
+- [x] **Título**: Añadir `/admin/platform-settings` y `/admin/ollama` a rbac.md y al test parametrizado
 - **Descripción**: Según docsroadmap-5: añadir a `docs/04-reference/rbac.md` las secciones de
   `platform_settings.py` (4 endpoints, prefix `/admin/platform-settings`) y `ollama.py`
   (3 endpoints, prefix `/admin/ollama`), ambos `require_system_admin`; añadir sus filas al
@@ -274,7 +331,7 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_trailers_09` — Política real de trailers de commit
 
-- [ ] **Título**: Conventions.md y práctica de trailers convergen (D2)
+- [x] **Título**: Conventions.md y práctica de trailers convergen (D2)
 - **Descripción**: Según quality-9 (solo 80/662 commits no-merge llevan `Plan-Id`; ninguno de
   los últimos ~30): aplicar la opción decidida de D2. Con la recomendación B: editar
   `docs/context/conventions.md:106-123` para que los trailers sean obligatorios solo en
@@ -296,7 +353,129 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_higiene_10` — Higiene de raíz y reordenación de scripts/
 
-- [ ] **Título**: Borrar restos locales y mover demos de fase a `scripts/demos/`
+- [x] **Título**: Borrar restos locales y mover demos de fase a `scripts/demos/`
+  - ✅ **2026-08-19 — HECHO, en la pasada dedicada que las cinco mediciones anteriores
+    pedían.** `scripts/demos/` existe con los **22 ficheros** (14 `demo_human_*` + 7
+    `setup_demo_*` + `_demo_common.py`); la raíz de `scripts/` se queda con las **cinco**
+    utilidades de plataforma (`audit_rbac`, `check_commit_trailers`,
+    `check_no_secret_artifacts`, `check_pip_audit_report`, `mypy_gate`).
+    `tests/unit/test_scripts_layout.py` (`auto_gov_10_a`) existe y está verde con 7 tests.
+    - **La trampa que ninguna de las cinco mediciones nombró, y era la única de verdad
+      peligrosa.** La receta escrita abajo daba el movimiento por «mecánico»; no lo era.
+      **Siete demos resolvían rutas contra la raíz del repo con
+      `Path(__file__).resolve().parent.parent`**, que al bajar un nivel deja de apuntar a
+      la raíz. Y peor: cinco de ellos leían el estado compartido como
+      `_REPO_ROOT / "scripts" / ".demo_state_05.json"` mientras el `setup_demo_*` que lo
+      ESCRIBE usa `Path(__file__).parent`. Con todos en `scripts/` las dos formas daban
+      el mismo fichero; separados, no — y el síntoma **no habría sido un error**, sino un
+      demo que arranca y dice «no hay estado, corre el setup» habiéndolo corrido. Un
+      `git mv` a secas, tal como la receta lo describía, habría dejado exactamente eso.
+      Arreglado poniendo las dos mitades en `Path(__file__).parent` (deja de importar
+      dónde viva el directorio) y subiendo los `_REPO_ROOT` supervivientes a `parents[2]`.
+      Hay un test dedicado a cada mitad.
+    - **Referencias actualizadas** (grep previo de las cuatro formas, POSIX y Windows):
+      `pyproject.toml` (2 carve-outs de ruff), `.gitignore` (6 patrones — se escriben
+      junto al script, así que van a `scripts/demos/`), `tests/docs/test_human_test_guides.py`
+      (`_SCRIPTS` + el mensaje de su guarda), los **cinco** launchers
+      `scripts/dev/run-human-tests*.ps1`, **15 guías** de `docs/03-guides/human-tests/`
+      y 2 gotchas que dan un comando ejecutable.
+    - **Lo que NO se reescribió, y por qué**: los ADR, los changelog y las auditorías
+      citan estas rutas **narrando lo que pasó entonces**. Cambiarlas ahí no arregla nada
+      y falsea el relato. El test lo dice explícitamente: sólo vigila `docs/03-guides/`,
+      que es lo operativo. La única excepción es el `hint:` de un test humano en
+      `docs/roadmap/02-ejecucion-agentes.md`, que es una instrucción, no un relato.
+    - **La receta de abajo estaba mal en un punto más**: decía «48 ficheros, 35 fuera del
+      carril». El grep real da **74 menciones en 52 ficheros ajenos**, de los que sólo
+      **26 había que tocar**; el resto son narrativa histórica. La cuenta que importaba no
+      era cuántos ficheros mencionan el nombre, sino cuántos le dicen a alguien qué ejecutar.
+    - **Un efecto colateral que sólo se ve ejecutándolo, y que la receta no preveía**:
+      cambiar los patrones de `.gitignore` **designoró los seis ficheros de estado que ya
+      había** en `scripts/` (`.demo_state*.json`, `.demo_06/`) — el estado local del
+      operador, con ids de tenant y de proyecto, apareciendo de golpe como untracked y a
+      un `git add -A` de ser comiteado. Se movieron con los scripts, que es donde el
+      código los lee y escribe ahora, así que además se conserva el `-SkipSetup`.
+    - ⏳ **Pendiente de un humano**: correr un launcher `.ps1` de verdad. Ninguna suite los
+      ejecuta —son PowerShell contra un stack vivo—, así que sus rutas están verificadas
+      por lectura y grep, no por ejecución.
+  - _Historial de las cinco mediciones previas, conservado porque explica por qué esta
+    casilla tardó tanto en cerrarse:_
+  - ⏳ **Sigue pendiente, y el 2026-08-01 se midió su radio de explosión antes de tocar nada:** confirmado que no hay `scripts/demos/`, que quedan **14 `demo_human_*` + 7 `setup_demo_*`** (de 26 `.py` en la raíz de `scripts/`; el plan decía «~27» contando el resto de tooling), que `scripts/__pycache__/check_commit_trailers.cpython-313.pyc` sigue ahí —bytecode huérfano, aunque no el `setup_webscorpo` que citaba la tarea— y que `tests/unit/test_scripts_layout.py` no existe.
+  - **Dos correcciones a la descripción de la tarea, que la subestima:** (1) dice que «nada de esto está trackeado en git» — **es falso**, los 21 demos y `_demo_common.py` están todos en `git ls-files`, así que esto no es higiene local sino un rename de ficheros versionados; (2) `_demo_common.py` **tiene que moverse con ellos**: **11 scripts** hacen `from _demo_common import …`, que solo resuelve porque el directorio del script está en `sys.path` — si se quedara en `scripts/` los once dejarían de arrancar.
+  - **Blast radius medido: 74 ficheros** mencionan `demo_human_*` / `setup_demo_*` / `_demo_common` / `.demo_state`, repartidos en `docs/03-guides/human-tests/` (24), `docs/03-guides/gotchas/`, `docs/05-architecture-decisions/`, `docs/07-changelog/`, `scripts/dev/*.ps1`, `.gitignore`, `pyproject.toml`, `apps/api-server/.../seeds/builtin_kbs.py` y `tests/docs/test_human_test_guides.py` (una guarda que se pondría roja a mitad del movimiento).
+  - **NO ejecutado a propósito**: es un rename mecánico de 74 ficheros, casi todos fuera del carril de este agente, en una sesión con otros 4 agentes escribiendo en paralelo sobre el mismo árbol. Es exactamente el cambio que hay que hacer **solo**, en una pasada dedicada y sin nadie más tocando el repo. Bajo riesgo técnico, alto riesgo de conflicto.
+  - ⏳ **Re-medido el 2026-08-01: idéntico.** 26 `.py` en la raíz de `scripts/`, de los cuales **14 `demo_human_*` + 7 `setup_demo_*`**; `scripts/demos/` no existe; `tests/unit/test_scripts_layout.py` no existe. Nada ha cambiado, y la razón para no hacerlo tampoco: esta pasada vuelve a ser concurrente con otros cuatro carriles. **Sigue siendo la casilla más barata del plan y la que más caro sale hacer mal**: no necesita decisión humana, necesita el repo para ella sola.
+  - ✅ **2026-08-10 — el sub-punto (1) se cierra en NEGATIVO: no queda nada que
+    borrar.** Verificado fichero a fichero, y la descripción de la tarea está
+    desfasada en los tres ítems:
+    · `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` **no existe** (el
+    script que lo generaba se eliminó hace tiempo). Lo que hay son
+    `check_commit_trailers.cpython-31{2,3}.pyc`, bytecode de un script **vivo** y
+    en un directorio **no trackeado** (`git ls-files scripts/__pycache__` → vacío):
+    borrarlo no es higiene, es ruido que Python regenera al siguiente import.
+    · `admin-panel-dev.log` y `.e2e-api-server.log` **no existen** en la raíz.
+    · `.gitignore` ya cubre los seis patrones de `.demo_state*` — sub-punto (3),
+    verificado.
+    Lo único que queda de esta casilla es el sub-punto (2), el movimiento.
+  - ⏳ **2026-08-10 — el movimiento: medido por CUARTA vez y NO ejecutado, con la
+    razón concreta y una receta para que la próxima no vuelva a medir.** El dato
+    que faltaba en las tres anotaciones anteriores es _cuántos ficheros ajenos_
+    hay que editar, y es el que decide: **48**, de los cuales 31 son guías de
+    `docs/03-guides/human-tests/`. El detalle:
+
+    | Qué                                                                 | Cuánto | Quién lo toca |
+    | ------------------------------------------------------------------- | -----: | ------------- |
+    | Scripts a mover (`demo_human_*`, `setup_demo_*`, `_demo_common.py`) |     22 | el rename     |
+    | Guías de tests humanos que citan rutas                              |     31 | otro carril   |
+    | `pyproject.toml` (carve-outs de ruff, 2 líneas)                     |      1 | otro carril   |
+    | `.gitignore` (6 patrones `scripts/.demo_state*`)                    |      1 | otro carril   |
+    | `apps/api-server/.../seeds/builtin_kbs.py`                          |      1 | otro carril   |
+    | `tests/docs/test_human_test_guides.py`                              |      1 | otro carril   |
+    | Gotchas / ADR / changelogs (relato histórico)                       |     11 | —             |
+
+    **Y una trampa que ninguna anotación anterior nombró**:
+    `tests/docs/test_human_test_guides.py` resuelve la existencia de cada script
+    recomendado contra `_SCRIPTS = repo/scripts`. En cuanto se mueve el primer
+    fichero y antes de tocar esa constante, **la guarda se pone roja** — y su
+    mensaje dirá «la guía recomienda un script que no existe», que es
+    indistinguible de un error de documentación real. El movimiento no tiene
+    estado intermedio verde.
+    **Receta para la pasada dedicada** (con el repo para ella sola), en este orden
+    y en un solo commit:
+    1. `git mv scripts/{demo_human_*,setup_demo_*,_demo_common}.py scripts/demos/`
+       — `_demo_common.py` va con ellos **obligatoriamente**: 11 scripts hacen
+       `from _demo_common import …`, que solo resuelve porque el directorio del
+       script entra en `sys.path`.
+    2. `pyproject.toml`: `scripts/demo_*.py` → `scripts/demos/demo_*.py` y
+       `scripts/setup_demo_*.py` → `scripts/demos/setup_demo_*.py`.
+    3. `tests/docs/test_human_test_guides.py`: `_SCRIPTS` pasa a `scripts/demos`.
+    4. `sed` sobre las 31 guías + `builtin_kbs.py`: `scripts/demo_human_` →
+       `scripts/demos/demo_human_`, `scripts/setup_demo_` →
+       `scripts/demos/setup_demo_`.
+    5. `.gitignore`: los seis `scripts/.demo_state*` → `scripts/demos/.demo_state*`
+       (los scripts escriben el estado **junto a sí mismos**).
+    6. Escribir `tests/unit/test_scripts_layout.py` (`auto_gov_10_a`, que **no
+       existe**): la raíz de `scripts/` solo contiene tooling, los demos compilan
+       con `py_compile`, y ninguna guía cita la ruta vieja.
+       **Por qué sigo sin hacerlo**: 48 ficheros, 35 de ellos fuera de la propiedad
+       de este carril, en una pasada con otros cuatro agentes escribiendo el mismo
+       árbol, y sin estado intermedio verde. El riesgo técnico es bajo; el de
+       conflicto, alto; y el coste de hacerlo mal —guías de test humano apuntando a
+       scripts que no arrancan— lo paga un humano en mitad de una validación.
+
+  - ⏳ **2026-08-12 — sigue sin ejecutarse, y el motivo ya NO es la medición.** Re-verificado
+    en 30 segundos y sin cambios: **14 `demo_human_*` + 7 `setup_demo_*` + `_demo_common.py`**
+    en la raíz de `scripts/`, `scripts/demos/` no existe, `tests/unit/test_scripts_layout.py`
+    tampoco. La receta de arriba sigue siendo correcta al pie de la letra; no hace falta
+    medir una sexta vez.
+    **El bloqueo real, dicho sin rodeos**: de los 48 ficheros que toca, **35 no son de este
+    carril** (`docs/03-guides/human-tests/` ×31, `pyproject.toml`, `.gitignore`,
+    `apps/api-server/.../seeds/builtin_kbs.py`, `tests/docs/test_human_test_guides.py`), y
+    el movimiento **no tiene estado intermedio verde**: en cuanto se mueve el primer
+    fichero, `test_human_test_guides.py` se pone rojo diciendo «la guía recomienda un
+    script que no existe». Hacer sólo la parte propia deja el repo roto para todos los
+    demás. **Esto no necesita una decisión ni más análisis: necesita una pasada con el
+    repo entero asignado a un solo agente, y son ~30 minutos.**
+
 - **Descripción**: Según quality-11 (nada de esto está trackeado en git; es higiene local +
   reorganización): (1) borrar `scripts/__pycache__/setup_webscorpo.cpython-313.pyc` (bytecode
   huérfano de un script eliminado) y los logs locales de la raíz (`admin-panel-dev.log`,
@@ -317,7 +496,130 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
 
 #### `task_gov_app_boundary_11` — Restaurar la frontera apps: backup sin importar workers
 
-- [ ] **Título**: `routers/backup.py` deja de hacer `from workers...` (api-9, D5)
+- [x] **Título**: `routers/backup.py` deja de hacer `from workers...` (api-9, D5)
+  - ✅ **2026-08-19 — HECHO por la decisión D5, y sin tocar el contrato de los dos
+    endpoints, que era lo que las cuatro pasadas anteriores daban por imposible.**
+    `routers/backup.py` no tiene ni un `from workers`; el AST lo comprueba en
+    `tests/unit/test_backup_probe_runs_in_the_worker.py`.
+    - **Lo entregado**: `apps/workers/src/workers/backup_probe_task.py` con
+      `workers.backup_test_destination` y `workers.backup_list_remote` (registrado en el
+      `imports` de `celery_app`), los productores
+      `probe_backup_destination_and_wait` / `list_remote_backup_entries_and_wait` en
+      `celery_client.py`, y el router encolando **por nombre** y relayando el resultado.
+    - **Por qué el contrato NO tenía que cambiar, que es lo que desbloqueó la casilla.**
+      Las anotaciones de agosto asumían que D5 obligaba a «polling corto o respuesta
+      diferida», o sea a cambiar dos endpoints que consume el `admin-panel`. No hacía
+      falta: `compute_plan_code_diff_and_wait` ya era el precedente de un
+      **send+get síncrono** en este mismo repo (el visor de diff, ADR 0099). El endpoint
+      sigue devolviendo `BackupConnectivityResult` en la misma petición; lo único que
+      cambia es **dónde** se ejecuta la red. Sin cambio de contrato, la superficie del
+      `admin-panel` deja de estar en juego y la coordinación con prod-04/prod-13 se
+      reduce a un rebase de fichero.
+    - **La cola: `privileged`, con `expires`.** Es la única lane del compose que lleva
+      las `WORKERS_BACKUP_*` (servicio `workers-backup`), así que mandarla a `default`
+      reproduciría el fallo que la casilla arregla. La objeción de la anotación del
+      2026-08-12 —`--concurrency=1`, detrás del backup nocturno— se resuelve con
+      `expires` en el mensaje: una sonda que no ha ARRANCADO cuando vence su plazo se
+      **descarta en el broker** en vez de ejecutarse tarde, y el endpoint devuelve un
+      FAIL con motivo («the backup worker did not answer in 15s»). O sea que **no hizo
+      falta la decisión de despliegue** que la anotación creía bloqueante: una lane
+      propia o replicar las `WORKERS_BACKUP_*` en `default` mejorarían la latencia, no
+      la corrección.
+    - **`test_app_boundaries.py` cambió de umbral, no se retiró**: `routers/backup.py`
+      sale del inventario y el test que exigía «exactamente un `worker-work`» ahora exige
+      **cero**, con un test hermano que impide que pase en vacío (las cinco entradas que
+      quedan son `helper`, y su salida es moverlas a `packages/` — otra tarea).
+    - **`auto_gov_11_b` sigue sin fichero, y ahora por otra razón.** Nombraba
+      `tests/integration/test_backup_destination_endpoints.py` para «el nuevo flujo
+      encolado»; ese flujo está cubierto por unitarios (14 tests, con el productor y el
+      worker por separado) y por el de integración que ya existía,
+      `tests/integration/test_dest_ui.py`, adaptado para mockear el **productor** en vez
+      del constructor de adaptadores. Crear un integration nuevo que no se puede ejecutar
+      en esta pasada —la suite de integración corre en 4 shards contra la misma BD— sería
+      añadir un arnés sin verde, que es justo el problema que tuvo esta casilla durante
+      tres pasadas. Ver el comando corregido debajo.
+    - ⏳ **Pendiente de un humano, y es lo mismo que estaba pendiente antes**: nadie ha
+      probado nunca este botón con un destino remoto **con credencial** — ni antes ni
+      después del cambio, porque este stack no tiene ninguno configurado. Lo que se puede
+      afirmar es que ahora corre en el proceso que tiene las credenciales. Y hay que
+      ejecutar `tests/integration/test_dest_ui.py`, que se editó a ciegas.
+  - _Historial de las cuatro pasadas previas:_
+  - ⏳ **Pendiente. Re-medido el 2026-08-01 con el inventario exacto**, que es el dato que faltaba para dimensionarla: `from workers` aparece en **6 ficheros** de `api_server`, no en uno —
+    `routers/backup.py:234,235,369,370` (`backup_destinations`, `backup_encryption`),
+    `backup_restore.py:164` (`restore_per_tenant`),
+    `code_diff.py:91,92` (`git_repos`, `plan_git`),
+    `docs_structure/kb_sync.py:736` (`git_repos`),
+    `docs_viewer/service.py:655` (`git_repos`) y
+    `routers/review.py:44` (`review_runtime`, y este es un import **de módulo**, no diferido dentro de la función).
+  - **Por qué eso cambia el alcance**: `auto_gov_11_a` es
+    `test_app_boundaries.py::test_api_server_never_imports_workers`, una guarda sobre **todo** `api_server`. Arreglar solo `backup.py` la deja igual de roja, así que la casilla **no puede cerrarse** con el alcance que la tarea describe. O se amplía la tarea a los 6, o la guarda nace con una allowlist declarada de excepciones — y esa es una decisión de diseño, no de implementación.
+  - **NO abordado en esta pasada**: los cinco ficheros restantes son operaciones de git/datos que el memorándum del proyecto manda ejecutar **en el worker**, así que moverlas es un rediseño, no un rename; y crear las dos tareas Celery de `backup.test_destination` / `backup.list_remote` toca `apps/workers/**` y cambia el contrato de dos endpoints que consume el `admin-panel`, ambos fuera del carril de este agente. Sigue vigente la coordinación con prod-04/prod-13 que la propia tarea declara.
+  - ⏳ **Re-medido el 2026-08-01: el inventario no se ha movido.** Siguen siendo **6 ficheros y 10 imports** (`backup.py` ×4, `backup_restore.py`, `code_diff.py` ×2, `docs_structure/kb_sync.py`, `docs_viewer/service.py`, `routers/review.py`). La decisión de diseño que la casilla necesita —ampliar la tarea a los 6, o que `auto_gov_11_a` nazca con una allowlist de excepciones declarada— **sigue sin tomarse**, y es lo único que la bloquea. Apunte para quien la tome: los 5 ficheros que no son `backup.py` importan **funciones puras** (`_run_git`, `worktree_coordinates`, `sign_review_url`, `DEFAULT_TENANT_SCOPED_TABLES`), no ejecutan I/O de worker por el hecho de importarlas; el que de verdad rompe la frontera en espíritu —boto3/paramiko dentro del event loop del api-server— es `backup.py`. Una allowlist que distinga «importa un helper» de «ejecuta trabajo de worker» sería honesta; una que liste los 6 sin distinguir, no.
+  - 🔧 **2026-08-10 — la guarda ya existe (era el hueco más caro), y la casilla
+    sigue abierta a propósito.** Lo que se descubrió al ir a ejecutar el test
+    declarado: **`tests/unit/test_app_boundaries.py` no existía**. O sea que
+    `auto_gov_11_a` —«la guardia permanente» según la propia tarea— llevaba
+    tres pasadas nombrando un fichero inexistente: tal cual, falla en la
+    recolección, y ese rojo no distingue «la frontera está rota» de «el arnés
+    apunta a la nada». Nadie vigilaba la frontera **en absoluto**.
+    - **Entregado**: `tests/unit/test_app_boundaries.py` (6 tests, verde).
+      Descubrimiento por **AST**, no por grep — este repositorio está lleno de
+      comentarios que explican por qué NO se importa `workers`, y un grep los
+      cuenta como violaciones. Congela el inventario de los 6 módulos con la
+      clasificación que la anotación de arriba pedía: cinco `helper` (función
+      pura; la salida es moverla a `packages/`) y **uno solo `worker-work`**,
+      `routers/backup.py`, que es el hallazgo api-9 de verdad y el que cierra la
+      decisión D5. Hay un test dedicado a que ese conjunto siga teniendo un solo
+      elemento: si aparece un segundo, el problema dejó de ser un caso aislado
+      con decisión pendiente y pasó a ser un patrón.
+    - **Rojo verificado en las dos direcciones** (no solo «falla si crece»):
+      añadido un `from workers.git_repos import _run_git` a `routers/_guards.py`
+      → rojo nombrando el módulo; renombrada una entrada del inventario a un
+      fichero inexistente → rojo por entrada muerta, que es lo que impide que la
+      allowlist envejezca afirmando una deuda ya pagada. Restaurado: 6 passed.
+    - **Nota de rumbo que la tarea no tenía**: `backup.py` **ya no bloquea el
+      bucle de eventos** — sus dos llamadas van por `to_thread`, así que la
+      coordinación con api-3/prod-13 que la tarea declara está resuelta por otro
+      camino. Lo que queda es estrictamente el acoplamiento de import.
+    - **Por qué NO se marca**: el enunciado es «`routers/backup.py` deja de hacer
+      `from workers…`», y sigue haciéndolo. Cerrarlo exige crear
+      `backup.test_destination` y `backup.list_remote` en `apps/workers/**` y
+      cambiar el contrato de dos endpoints que consume el `admin-panel`: dos
+      superficies fuera de este carril. La guarda es el suelo que impide que la
+      deuda crezca mientras esa decisión espera, no el arreglo.
+    - **Arnés corregido**: `auto_gov_11_a` ya apunta a un fichero que existe.
+      `auto_gov_11_b` (`tests/integration/test_backup_destination_endpoints.py`)
+      **sigue sin existir** y no puede existir todavía: cubre «el nuevo flujo
+      encolado», que es justo lo que falta por diseñar.
+  - 🔎 **2026-08-12 — esto ha dejado de ser una deuda estética: el endpoint NO PUEDE
+    funcionar donde está.** Lo que faltaba para decidir D5 era saber si mover la sonda al
+    worker aporta algo más que limpieza. Aporta corrección, y se verifica en un grep:
+    - Los adaptadores resuelven sus credenciales por el _seam_ de secretos, y el que se les
+      pasa desde el router es `EnvSecretsProvider`, que lee **`os.environ` del proceso que
+      lo ejecuta** (`backup_encryption.py:157-164`: `backup_s3_access_key_id` →
+      `WORKERS_BACKUP_S3_ACCESS_KEY_ID`).
+    - El proceso que lo ejecuta es el **api-server**, y en el compose desplegado el servicio
+      `api-server` **no declara ni una sola variable `WORKERS_*`** (verificado sobre
+      `docker/docker-compose.manuals.yml`, servicio `api-server`: 0 coincidencias). Las
+      `WORKERS_BACKUP_*` viven en la lane `workers-backup`, que es donde
+      `04-reference/backup-restore.md` manda ponerlas.
+    - Traducción operativa: en cuanto alguien configure un destino remoto con credencial
+      (S3/B2/SFTP/rclone) siguiendo la documentación, **el botón «probar conectividad» del
+      panel dirá FAIL** con un «faltan credenciales» perfectamente correcto y perfectamente
+      inútil, y el listado remoto devolverá vacío en silencio (es best-effort). Hoy nadie
+      lo ha visto porque **no hay ningún destino configurado** en este stack.
+    - **Lo que esto cambia para D5**: la salida no es «encolar por elegancia», es que la
+      sonda tiene que correr **donde están los secretos**. Y añade una restricción que
+      ninguna anotación anterior tenía: la lane `privileged` es `--concurrency=1` y es la
+      que corre el backup nocturno y los restores, así que encolar ahí una sonda la deja
+      esperando detrás de un backup de media hora. O va a `default` con las
+      `WORKERS_BACKUP_*` replicadas en esa lane, o hace falta una lane propia. **Eso es
+      diseño de despliegue, y sigue fuera de este carril.**
+    - **NO ejecutado**, y la razón de hoy pesa más que la de agosto: tocar el contrato de
+      dos endpoints que consume el `admin-panel` la misma tarde en que se redespliega el
+      stack cambia un fallo latente que nadie ha visto por un fallo nuevo en el camino
+      caliente del despliegue. La guarda de `test_app_boundaries.py` impide que la deuda
+      crezca mientras tanto.
 - **Descripción**: `celery_client.py:6` declara "we never import the workers package", pero
   `routers/backup.py:222` y `:351` importan `workers.backup_destinations` y
   `workers.backup_encryption` para test de conectividad y listado remoto, ejecutando
@@ -333,13 +635,38 @@ Las decisiones de producto/proceso van como **ADR propuesto** — las cierra un 
   ```yaml
   - id: auto_gov_11_a
     runtime: python-pytest
-    command: "pytest tests/unit/test_app_boundaries.py::test_api_server_never_imports_workers -v"
+    command: "pytest tests/unit/test_app_boundaries.py -v"
   - id: auto_gov_11_b
     runtime: python-pytest
-    command: "pytest tests/integration/test_backup_destination_endpoints.py -v"
+    command: "pytest tests/unit/test_backup_probe_runs_in_the_worker.py -v"
+  - id: auto_gov_11_c
+    runtime: python-pytest
+    command: "pytest tests/integration/test_dest_ui.py -v"
   ```
-  (el primero es la guardia permanente: AST/grep de imports `workers` en todo `api_server`;
-  el segundo cubre el nuevo flujo encolado de test/list con worker simulado)
+  (el primero es la guardia permanente: AST de imports `workers` en todo `api_server`;
+  el segundo cubre el flujo encolado —productor, worker, lane, caducidad y degradación—
+  con worker simulado; el tercero es el de integración que ya existía, adaptado al
+  productor)
+
+> **`auto_gov_11_b` cambió de fichero el 2026-08-19.** Nombraba
+> `tests/integration/test_backup_destination_endpoints.py`, un fichero que nunca
+> existió porque cubría «el nuevo flujo encolado» mientras ese flujo estaba sin
+> diseñar. Ahora el flujo existe y está cubierto donde de verdad se ejerce:
+> `tests/unit/test_backup_probe_runs_in_the_worker.py` (14 tests) prueba las dos
+> mitades —productor y tarea de worker— sin broker; `test_dest_ui.py` prueba el
+> endpoint entero contra la app y el Postgres reales, mockeando el productor. Un
+> tercer fichero de integración habría duplicado ese segundo, y crear un arnés que
+> no se puede poner en verde es lo que dejó a esta casilla nombrando un fichero
+> inexistente durante tres pasadas.
+
+> **`auto_gov_11_a` cambió de selector el 2026-08-10, a propósito.** Nombraba
+> `::test_api_server_never_imports_workers`, un test que **no puede estar en verde
+> hoy**: el api-server sí importa `workers` en seis módulos. Un comando que solo
+> puede salir rojo no es un gate, es ruido que se aprende a ignorar — y encima el
+> fichero entero no existía, así que fallaba en la recolección. El fichero sí es
+> ejecutable y verde, y contiene el invariante que hoy se puede exigir de verdad:
+> la deuda está inventariada, clasificada y **no crece**. El día que se implemente
+> la decisión D5, el inventario se queda vacío solo y el test literal es trivial.
 
 ## Hallazgos de auditoría cubiertos
 

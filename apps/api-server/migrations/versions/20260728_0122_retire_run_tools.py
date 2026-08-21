@@ -60,16 +60,14 @@ _RETIRED = ("run_pytest", "run_lint", "run_typecheck", "run_build")
 
 
 def upgrade() -> None:
-    op.execute(
-        """
+    op.execute("""
         UPDATE tools
            SET deleted_at = now()
          WHERE is_builtin = true
            AND implementation_type = 'docker_command'
            AND deleted_at IS NULL
            AND name IN ('run_pytest', 'run_lint', 'run_typecheck', 'run_build')
-        """
-    )
+        """)
 
 
 def downgrade() -> None:
@@ -78,13 +76,11 @@ def downgrade() -> None:
     # evita resucitar una fila que un operador hubiera borrado por su cuenta
     # antes de esta migración… y sí, también la resucitaría; es el precio de no
     # guardar el timestamp previo, y es preferible a dejar el downgrade vacío.
-    op.execute(
-        """
+    op.execute("""
         UPDATE tools
            SET deleted_at = NULL
          WHERE is_builtin = true
            AND implementation_type = 'docker_command'
            AND deleted_at IS NOT NULL
            AND name IN ('run_pytest', 'run_lint', 'run_typecheck', 'run_build')
-        """
-    )
+        """)

@@ -73,7 +73,8 @@ from api_server.docs_viewer.service import (
     search_docs,
     semantic_search_docs,
 )
-from api_server.ingestion.embeddings import Embedder, OllamaEmbedder
+from api_server.ingestion.embed_client import shared_ollama_embedder
+from api_server.ingestion.embeddings import Embedder
 from api_server.routers._helpers import require_tenant_id
 
 router = APIRouter(prefix="/projects/{project_id}/docs", tags=["docs-viewer"])
@@ -125,17 +126,18 @@ def get_docs_repo_resolver() -> DocsRepoResolver:
 async def get_query_embedder() -> AsyncIterator[Embedder]:
     """Provide the query embedder for semantic search (overridable in tests).
 
-    Production yields the real :class:`OllamaEmbedder` (owns an httpx client we
-    close after the request). Tests register an override via
+    Production yields a real :class:`OllamaEmbedder` sobre el cliente httpx
+    COMPARTIDO del proceso: el embedder es un envoltorio barato de crear, el
+    cliente no. Como el cliente se inyecta, ``OllamaEmbedder._owns_client`` es
+    ``False`` y su ``aclose()`` es un no-op — por eso ya no se llama aquí:
+    cerrarlo mataría el pool compartido para las siguientes requests.
+
+    Tests register an override via
     ``app.dependency_overrides[get_query_embedder]`` returning the deterministic
     :class:`~api_server.ingestion.embeddings.HashEmbedder` so no network /
     running Ollama is required (it is down in CI).
     """
-    embedder = OllamaEmbedder()
-    try:
-        yield embedder
-    finally:
-        await embedder.aclose()
+    yield shared_ollama_embedder()
 
 
 async def _require_visible_project(session: AsyncSession, project_id: UUID) -> None:

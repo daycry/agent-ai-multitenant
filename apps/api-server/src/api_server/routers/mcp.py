@@ -64,7 +64,7 @@ class _ResolverCache:
     a `global` keyword) so ruff PLW0603 stays happy and the test reset
     hook reads cleanly."""
 
-    value: VaultResolver | None | object = _UNSET
+    value: VaultResolver | object | None = _UNSET
 
 
 def get_vault_resolver() -> VaultResolver | None:
@@ -89,26 +89,25 @@ def get_vault_resolver() -> VaultResolver | None:
 
     from shared_mcp import HvacVaultResolver
 
-    from api_server.config import get_settings
+    # prod-10 task_prod10_07 (secrets-4): una sola fábrica para el cliente de
+    # Vault, que además mantiene vivo el token (`renew_self` en segundo plano).
+    # Antes se construía aquí un `hvac.Client` con el token estático y se cacheaba
+    # para siempre; el día que caducase, toda resolución de `auth_ref` de MCP
+    # empezaría a devolver AUTH_ERROR sin que nada hubiera cambiado.
+    #
+    # Además hereda el timeout de 5 s que a ESTE cliente le faltaba: sin él,
+    # `requests` espera indefinidamente y un Vault sellado congelaba el bucle de
+    # eventos (hallazgo perf-7, arreglado en llm_providers y no aquí).
+    #
+    # `None` sigue significando lo mismo que antes: sin token o sin hvac, el
+    # api-server arranca y el `auth_ref` degrada a AUTH_ERROR tipado.
+    from api_server.vault_client import build_vault_client
 
-    settings = get_settings()
-    if settings.vault_token is None:
+    client = build_vault_client()
+    if client is None:
         _ResolverCache.value = None
         return None
 
-    try:
-        import hvac
-    except ImportError:
-        # hvac not installed — same as no token. Surface AUTH_ERROR
-        # rather than crash; the operator can either pip-install or
-        # unset the token to acknowledge they don't want Vault.
-        _ResolverCache.value = None
-        return None
-
-    client = hvac.Client(
-        url=settings.vault_url,
-        token=settings.vault_token.get_secret_value(),
-    )
     resolver: VaultResolver = HvacVaultResolver(client=client)
     _ResolverCache.value = resolver
     return resolver
@@ -117,8 +116,24 @@ def get_vault_resolver() -> VaultResolver | None:
 def reset_vault_resolver_cache() -> None:
     """Test hook: forget the cached resolver so the next call rebuilds
     it from current settings + env. Used by tests that mutate
-    ``API_SERVER_VAULT_TOKEN`` between cases."""
+    ``API_SERVER_VAULT_TOKEN`` between cases.
+
+    Vacía LAS DOS cachés, no sólo la de este módulo. Desde que prod-10
+    (``task_prod10_07``) metió :func:`api_server.vault_client.build_vault_client`
+    debajo, hay un segundo singleton —el ``hvac.Client``— que este hook no
+    tocaba: un caso que corriese SIN token dejaba ese cliente cacheado en
+    ``None``, y el siguiente, ya con token, reconstruía el resolver sobre el
+    mismo ``None`` y se lo encontraba a ``None`` otra vez. El hook seguía
+    prometiendo en su docstring que reconstruye «from current settings + env»
+    y había dejado de hacerlo; el síntoma es un test que sólo pasa cuando corre
+    solo, y lo sufren también los módulos que llaman a este hook para no
+    arrastrar el Vault de otro test (``test_jit_provisioning``,
+    ``test_sso_global_login``, ``test_post_login_membership_resolution``).
+    """
+    from api_server.vault_client import reset_vault_client_cache
+
     _ResolverCache.value = _UNSET
+    reset_vault_client_cache()
 
 
 # ---------------------------------------------------------------------------

@@ -310,7 +310,7 @@ def test_missing_artifact_marks_backup_invalid(tmp_path: Path) -> None:
 def test_missing_manifest_raises(tmp_path: Path) -> None:
     empty = tmp_path / "no-manifest"
     empty.mkdir()
-    with pytest.raises(BackupVerificationError, match="no manifest.json"):
+    with pytest.raises(BackupVerificationError, match=r"no manifest.json"):
         BackupVerifier(runner=FakeRunner()).verify_bundle(empty)
 
 

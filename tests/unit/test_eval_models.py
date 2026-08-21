@@ -178,13 +178,27 @@ def test_item_dataset_fk_cascades() -> None:
 def test_item_provenance_fks_set_null() -> None:
     """Provenance back to the real task/execution — promotion is
     idempotent (task_14_02 dedupes on these); the golden item survives the
-    real task it was promoted from."""
+    real task it was promoted from.
+
+    ``source_execution_id`` **no longer carries a foreign key** since part-01 /
+    ADR 0154 (migration 0137): ``executions`` is partitioned by month, so its
+    primary key is ``(id, created_at)`` and a FK cannot reference it without
+    carrying both columns. What the ``SET NULL`` bought — the golden item
+    surviving the run it was promoted from — is *more* true now, not less: the
+    column was already nullable and no reader assumes the run still exists. The
+    provenance FK that remains, ``source_task_id``, is unaffected.
+    """
     task_fks = list(EvalDatasetItem.__table__.columns["source_task_id"].foreign_keys)
-    exec_fks = list(EvalDatasetItem.__table__.columns["source_execution_id"].foreign_keys)
     assert task_fks[0].target_fullname == "tasks.id"
     assert task_fks[0].ondelete == "SET NULL"
-    assert exec_fks[0].target_fullname == "executions.id"
-    assert exec_fks[0].ondelete == "SET NULL"
+
+    exec_fks = list(EvalDatasetItem.__table__.columns["source_execution_id"].foreign_keys)
+    assert not exec_fks, (
+        "source_execution_id volvió a declarar una FK hacia executions. La tabla"
+        " está particionada (PK compuesta) y esa constraint no se puede crear:"
+        " la migración fallaría. Ver ADR 0154."
+    )
+    assert EvalDatasetItem.__table__.columns["source_execution_id"].nullable
 
 
 def test_item_construction() -> None:

@@ -1,0 +1,32 @@
+# .trivyignore — excepciones del escaneo de imágenes (plan prod-11).
+#
+# Este fichero es el ÚNICO sitio donde una vulnerabilidad de imagen puede
+# quedar suprimida, y a propósito está versionado: una supresión que vive en
+# la cabeza de alguien es una supresión permanente.
+#
+# FORMATO OBLIGATORIO — una entrada por línea, precedida SIN línea en blanco
+# de por medio por sus comentarios de justificación, que deben incluir una
+# fecha de revisión `# review: YYYY-MM-DD`:
+#
+#     # CVE-2025-XXXXX en libfoo: no hay fix upstream y el vector (parseo de
+#     # ficheros .foo) no se alcanza desde el runtime — no montamos .foo.
+#     # Reevaluar cuando debian publique el parche.
+#     # review: 2026-09-30
+#     CVE-2025-XXXXX
+#
+# La guarda `test_sca_ignore_lists_exist_and_document_every_exception`
+# (tests/unit/test_supply_chain_config.py) pone en rojo cualquier entrada sin
+# justificación legible o sin fecha de revisión. Sin esa regla el gate muere
+# por acumulación silenciosa: es el modo de fallo nº1 de los escáneres.
+#
+# Antes de añadir una entrada, lee docs/06-runbooks/triage-vulnerabilidades.md:
+# el criterio por defecto es ACTUALIZAR, no suprimir.
+#
+# Nota: los pasos Trivy corren con `ignore-unfixed: true`, así que las CVEs
+# SIN fix upstream ya quedan fuera y NO hace falta listarlas aquí. Este
+# fichero es solo para vulnerabilidades CON fix disponible que, aun así, se
+# decide no aplicar todavía.
+#
+# ---------------------------------------------------------------------------
+# Excepciones vigentes: NINGUNA (2026-07-31).
+# ---------------------------------------------------------------------------

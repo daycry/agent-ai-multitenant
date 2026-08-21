@@ -5,9 +5,10 @@
  * that (403). This module only carries:
  *   - the request/response shapes of the three `/assistant/*` endpoints
  *     (the contract — no endpoints invented here),
- *   - the friendly, ES-labelled catalogue of the read tools the admin can
- *     enable for the assistant (mirrors `assistant/tools.py` /
- *     `DEFAULT_ENABLED_TOOLS` server-side),
+ *   - the catalogue of the read tools the admin can enable for the assistant
+ *     (mirrors `assistant/tools.py` / `DEFAULT_ENABLED_TOOLS` server-side),
+ *     which since prod-16 `task_prod16_04` carries dictionary KEYS instead of
+ *     Spanish literals,
  *   - pure validation for the identity form, factored out so a vitest can
  *     exercise it without rendering React.
  *
@@ -17,6 +18,7 @@
  */
 
 import { ApiError, apiFetch } from "@/lib/api";
+import { translate, type Lang, type MessageKey } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Endpoint contract (the three endpoints in routers/assistant.py)
@@ -90,66 +92,75 @@ export const ASSISTANT_LIMITS = {
 // Names + order MIRROR DEFAULT_ENABLED_TOOLS in assistant/config.py. The
 // server intersects the submitted list with its catalogue, so an unknown
 // name can never widen the surface; this list is purely the friendly
-// presentation. Each entry gets an ES label + one-line description.
+// presentation.
+//
+// prod-16 `task_prod16_04`: cada entrada lleva la CLAVE del diccionario, no el
+// texto. Los literales castellanos que habia aqui no estaban en un atributo ni
+// en un ternario, asi que las dos guardas de `check-i18n.mjs` daban este modulo
+// por limpio teniendo dieciseis textos de UI sin traducir.
 // ---------------------------------------------------------------------------
 export interface AssistantToolDef {
   /** Canonical tool name sent to the backend (must match the server catalogue). */
   name: string;
-  /** Friendly ES label for the checkbox. */
-  label: string;
-  /** One-line ES description of what the tool lets the assistant read. */
-  description: string;
+  /** Clave de `assistant.*` con la etiqueta del checkbox. */
+  labelKey: MessageKey<"assistant">;
+  /** Clave de `assistant.*` con la descripcion de una linea. */
+  descriptionKey: MessageKey<"assistant">;
 }
 
 export const ASSISTANT_TOOL_CATALOGUE: readonly AssistantToolDef[] = [
   {
     name: "tenant_projects_status",
-    label: "Estado de proyectos",
-    description: "Conteo y estado consolidado de todos los proyectos del tenant.",
+    labelKey: "toolProjectsLabel",
+    descriptionKey: "toolProjectsDescription",
   },
   {
     name: "tenant_plans_summary",
-    label: "Resumen de planes",
-    description:
-      "Planes cross-proyecto agrupados por estado, incluyendo los pendientes de aprobación.",
+    labelKey: "toolPlansLabel",
+    descriptionKey: "toolPlansDescription",
   },
   {
     name: "tenant_recent_activity",
-    label: "Actividad reciente",
-    description: "Tareas no terminales más recientes y total de tareas abiertas del tenant.",
+    labelKey: "toolActivityLabel",
+    descriptionKey: "toolActivityDescription",
   },
   {
     name: "tenant_budget_status",
-    label: "Estado de presupuesto",
-    description: "Gasto del periodo actual frente al presupuesto del tenant y sus proyectos.",
+    labelKey: "toolBudgetLabel",
+    descriptionKey: "toolBudgetDescription",
   },
   {
     name: "tenant_human_workload",
-    label: "Carga de agentes humanos",
-    description: "Tareas humanas activas y sesiones de trabajo de un usuario esta semana.",
+    labelKey: "toolWorkloadLabel",
+    descriptionKey: "toolWorkloadDescription",
   },
   {
     name: "tenant_human_assignments_pending",
-    label: "Asignaciones humanas pendientes",
-    description: "Tareas humanas sin aceptar desde hace más de N horas (por defecto 24h).",
+    labelKey: "toolPendingLabel",
+    descriptionKey: "toolPendingDescription",
   },
   {
     name: "search_knowledge",
-    label: "Buscar en el conocimiento",
-    description:
-      "Busca pasajes relevantes en las bases de conocimiento del tenant (documentación, guías).",
+    labelKey: "toolKnowledgeLabel",
+    descriptionKey: "toolKnowledgeDescription",
   },
   {
     name: "remember_about_me",
-    label: "Recordar sobre ti",
-    description:
-      "Deja que el asistente guarde datos personales duraderos (tu nombre, preferencias, gustos) y los recuerde en futuras conversaciones.",
+    labelKey: "toolRememberLabel",
+    descriptionKey: "toolRememberDescription",
   },
 ] as const;
 
-/** Friendly label for a tool name, falling back to the raw name. */
-export function assistantToolLabel(name: string): string {
-  return ASSISTANT_TOOL_CATALOGUE.find((t) => t.name === name)?.label ?? name;
+/**
+ * Etiqueta amable de una tool, o su nombre crudo si no esta en el catalogo.
+ *
+ * El fallback al nombre NO se traduce a proposito: si el backend manda una tool
+ * que este catalogo no conoce, lo util es ver su identificador tal cual, no un
+ * texto inventado que oculte la divergencia.
+ */
+export function assistantToolLabel(name: string, lang: Lang = "es"): string {
+  const tool = ASSISTANT_TOOL_CATALOGUE.find((t) => t.name === name);
+  return tool ? translate(lang, "assistant", tool.labelKey) : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,35 +195,38 @@ export function isSupportedLanguage(value: string): value is AssistantLanguage {
  */
 export function validateAssistantIdentity(
   values: AssistantIdentityFormValues,
+  lang: Lang = "es",
 ): AssistantIdentityFormErrors {
   const errors: AssistantIdentityFormErrors = {};
+  const t = (key: MessageKey<"assistant">, vars?: Record<string, number>) =>
+    translate(lang, "assistant", key, vars);
 
   const name = values.name.trim();
   if (name.length < ASSISTANT_LIMITS.name.min) {
-    errors.name = "El nombre es obligatorio.";
+    errors.name = t("errorNameRequired");
   } else if (name.length > ASSISTANT_LIMITS.name.max) {
-    errors.name = `El nombre no puede superar ${ASSISTANT_LIMITS.name.max} caracteres.`;
+    errors.name = t("errorNameTooLong", { max: ASSISTANT_LIMITS.name.max });
   }
 
   const tone = values.tone.trim();
   if (tone.length < ASSISTANT_LIMITS.tone.min) {
-    errors.tone = "El tono es obligatorio.";
+    errors.tone = t("errorToneRequired");
   } else if (tone.length > ASSISTANT_LIMITS.tone.max) {
-    errors.tone = `El tono no puede superar ${ASSISTANT_LIMITS.tone.max} caracteres.`;
+    errors.tone = t("errorToneTooLong", { max: ASSISTANT_LIMITS.tone.max });
   }
 
   const avatar = values.avatarUrl.trim();
   if (avatar.length > ASSISTANT_LIMITS.avatarUrl.max) {
-    errors.avatarUrl = `La URL no puede superar ${ASSISTANT_LIMITS.avatarUrl.max} caracteres.`;
+    errors.avatarUrl = t("errorAvatarTooLong", { max: ASSISTANT_LIMITS.avatarUrl.max });
   }
 
   const prompt = values.systemPrompt.trim();
   if (prompt.length > ASSISTANT_LIMITS.systemPrompt.max) {
-    errors.systemPrompt = `El prompt no puede superar ${ASSISTANT_LIMITS.systemPrompt.max} caracteres.`;
+    errors.systemPrompt = t("errorPromptTooLong", { max: ASSISTANT_LIMITS.systemPrompt.max });
   }
 
   if (!isSupportedLanguage(values.language)) {
-    errors.language = "Idioma no soportado.";
+    errors.language = t("errorLanguage");
   }
 
   return errors;
@@ -282,17 +296,20 @@ export async function streamAssistantChat(
   onDelta?: (text: string) => void,
 ): Promise<AssistantChatResponse> {
   const { apiUrl } = await import("@/lib/api");
-  const { getToken } = await import("@/lib/auth");
+  const { CSRF_HEADER, getCsrfToken } = await import("@/lib/auth");
   const { getTenantId } = await import("@/lib/tenant-storage");
   const headers = new Headers({ "Content-Type": "application/json" });
-  const token = getToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  // Hand-rolled fetch (SSE, not JSON) so it repeats what `apiFetch` does:
+  // session by cookie + the CSRF proof, since this is a POST (ADR 0133).
+  const csrf = getCsrfToken();
+  if (csrf) headers.set(CSRF_HEADER, csrf);
   const tenantId = getTenantId();
   if (tenantId) headers.set("X-Tenant-Id", tenantId);
 
   const response = await fetch(apiUrl("/assistant/chat/stream"), {
     method: "POST",
     headers,
+    credentials: "include",
     body: JSON.stringify(
       conversationId ? { message, conversation_id: conversationId } : { message },
     ),

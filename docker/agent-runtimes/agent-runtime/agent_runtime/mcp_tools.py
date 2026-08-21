@@ -453,7 +453,7 @@ class MCPToolRunner:
         except TimeoutError as exc:
             future.cancel()
             raise MCPTransportError(
-                f"tool {server_name}.{tool_name} timed out after " f"{session.config.timeout_s}s"
+                f"tool {server_name}.{tool_name} timed out after {session.config.timeout_s}s"
             ) from exc
 
     # -- internal ----------------------------------------------------------

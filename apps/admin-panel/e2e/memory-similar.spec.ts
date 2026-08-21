@@ -1,7 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
+import { apiRoute } from "./helpers/api";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the similar-memories dialog (Plan 06.7 task_06_7_08).
+ *
+ * Reparado el 2026-08-19 (subset mockeado de CI). Dos derivas del panel:
+ *
+ *   1. **El testid del disparador cambió** a `memory-similar-badge-{id}`. Al
+ *      lado nació `memory-similar-unavailable-{id}`, que es lo que se pinta
+ *      cuando la memoria NO tiene embedding (honestidad de estado, Plan 06.17):
+ *      antes ahí no salía nada y se leía como "0 similares, todo bien".
+ *   2. **Sin candidatos no hay disparador**: `SimilarCountBadge` no renderiza
+ *      nada si el contador es 0, así que "lista vacía muestra el estado vacío"
+ *      ya no se puede provocar desde la lista — no hay botón que pulsar. Ese
+ *      test pasa a afirmar el contrato de verdad (sin candidatos, sin badge), y
+ *      el estado vacío del diálogo se cubre por donde SÍ ocurre hoy: descartar
+ *      al último candidato con el diálogo abierto.
  */
 
 const MEMORIES_FIXTURE = [
@@ -53,31 +68,32 @@ async function setup(
     onDiscard?: (id: string) => void;
   } = {},
 ): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
-  await page.route("**/memories?**", (route) =>
+  await seedSession(page);
+  await page.route(apiRoute("/memories?**"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(MEMORIES_FIXTURE),
     }),
   );
-  await page.route("**/memories", (route) =>
+  await page.route(apiRoute("/memories"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(MEMORIES_FIXTURE),
     }),
   );
-  await page.route("**/memories/mem-target-1/similar*", (route) =>
+  // Store MUTABLE: descartar o fusionar un candidato lo saca de la lista, que es
+  // lo que hace observable el estado vacío del diálogo tras el último descarte.
+  let similar = opts.similar ?? SIMILAR_FIXTURE;
+  await page.route(apiRoute("/memories/mem-target-1/similar*"), (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(opts.similar ?? SIMILAR_FIXTURE),
+      body: JSON.stringify(similar),
     }),
   );
-  await page.route("**/memories/mem-candidate-1/merge-into", async (route) => {
+  await page.route(apiRoute("/memories/mem-candidate-1/merge-into"), async (route) => {
     const body = JSON.parse(route.request().postData() ?? "{}");
     opts.onMerge?.("mem-candidate-1", body);
     return route.fulfill({
@@ -86,9 +102,10 @@ async function setup(
       body: JSON.stringify(MEMORIES_FIXTURE[0]),
     });
   });
-  await page.route("**/memories/mem-candidate-1", async (route) => {
+  await page.route(apiRoute("/memories/mem-candidate-1"), async (route) => {
     if (route.request().method() !== "DELETE") return route.fallback();
     opts.onDiscard?.("mem-candidate-1");
+    similar = [];
     return route.fulfill({ status: 204, body: "" });
   });
 }
@@ -96,14 +113,16 @@ async function setup(
 test("similar button shows on memories with embedding", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/memories", { waitUntil: "domcontentloaded" });
-  await expect(page.getByTestId("memory-similar-mem-target-1")).toBeVisible();
+  await expect(page.getByTestId("memory-similar-badge-mem-target-1")).toBeVisible();
+  // Y no se marca "No disponible aún": esta memoria SÍ tiene embedding.
+  await expect(page.getByTestId("memory-similar-unavailable-mem-target-1")).toHaveCount(0);
 });
 
 test("clicking similar opens dialog with candidates + similarity %", async ({ page }) => {
   await setup(page);
   await page.goto("/admin/memories", { waitUntil: "domcontentloaded" });
 
-  await page.getByTestId("memory-similar-mem-target-1").click();
+  await page.getByTestId("memory-similar-badge-mem-target-1").click();
   await expect(page.getByTestId("similar-list")).toBeVisible();
   await expect(page.getByTestId("similar-item-mem-candidate-1")).toBeVisible();
   await expect(page.getByTestId("similar-pct-mem-candidate-1")).toContainText("91.2%");
@@ -116,7 +135,7 @@ test("merge fires POST /merge-into with target_id of current memory", async ({ p
   });
   await page.goto("/admin/memories", { waitUntil: "domcontentloaded" });
 
-  await page.getByTestId("memory-similar-mem-target-1").click();
+  await page.getByTestId("memory-similar-badge-mem-target-1").click();
   await page.getByTestId("similar-merge-mem-candidate-1").click();
   await page.waitForTimeout(200);
 
@@ -132,16 +151,23 @@ test("discard fires DELETE on candidate", async ({ page }) => {
   await setup(page, { onDiscard: () => (discarded = true) });
   await page.goto("/admin/memories", { waitUntil: "domcontentloaded" });
 
-  await page.getByTestId("memory-similar-mem-target-1").click();
+  await page.getByTestId("memory-similar-badge-mem-target-1").click();
   await page.getByTestId("similar-discard-mem-candidate-1").click();
-  await page.waitForTimeout(200);
-  expect(discarded).toBe(true);
+  await expect.poll(() => discarded).toBe(true);
+  // Descartado el único candidato, el diálogo enseña su estado vacío: es la vía
+  // por la que hoy se llega a él (desde la lista ya no hay badge que pulsar).
+  await expect(page.getByTestId("similar-empty")).toBeVisible();
 });
 
-test("empty similar list shows empty state", async ({ page }) => {
+test("sin candidatos no se ofrece el badge (nada que revisar, nada que pulsar)", async ({
+  page,
+}) => {
   await setup(page, { similar: [] });
   await page.goto("/admin/memories", { waitUntil: "domcontentloaded" });
 
-  await page.getByTestId("memory-similar-mem-target-1").click();
-  await expect(page.getByTestId("similar-empty")).toBeVisible();
+  // La fila está pintada (la lista sí llegó)…
+  await expect(page.getByTestId("memory-mem-target-1")).toBeVisible();
+  // …y precisamente por eso el badge ausente significa "0 candidatos", no
+  // "todavía cargando".
+  await expect(page.getByTestId("memory-similar-badge-mem-target-1")).toHaveCount(0);
 });

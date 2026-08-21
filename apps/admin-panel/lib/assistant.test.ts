@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { translate } from "@/lib/i18n";
+
 import {
   ASSISTANT_TOOL_CATALOGUE,
   assistantToolLabel,
@@ -30,6 +32,15 @@ describe("isSupportedLanguage", () => {
 });
 
 describe("validateAssistantIdentity", () => {
+  it("localiza los mensajes: el mismo fallo, en el idioma pedido", () => {
+    expect(validateAssistantIdentity({ ...valid, name: "" }).name).toBe(
+      "El nombre es obligatorio.",
+    );
+    expect(validateAssistantIdentity({ ...valid, name: "" }, "en").name).toBe(
+      "The name is required.",
+    );
+  });
+
   it("passes a well-formed identity", () => {
     expect(validateAssistantIdentity(valid)).toEqual({});
     expect(isAssistantIdentityValid(valid)).toBe(true);
@@ -117,16 +128,22 @@ describe("identityToFormValues", () => {
 });
 
 describe("assistantToolLabel", () => {
-  it("returns the friendly label for a known tool", () => {
+  it("returns the friendly label for a known tool, in the language asked for", () => {
     expect(assistantToolLabel("tenant_projects_status")).toBe("Estado de proyectos");
+    expect(assistantToolLabel("tenant_projects_status", "en")).toBe("Project status");
   });
   it("falls back to the raw name for an unknown tool", () => {
+    // El nombre crudo NO se traduce a proposito: si el backend manda una tool
+    // que este catalogo no conoce, lo util es ver su identificador.
     expect(assistantToolLabel("nope")).toBe("nope");
+    expect(assistantToolLabel("nope", "en")).toBe("nope");
   });
-  it("covers every catalogue tool with a label", () => {
+  it("covers every catalogue tool with a label and a description in BOTH languages", () => {
     for (const tool of ASSISTANT_TOOL_CATALOGUE) {
-      expect(tool.label.length).toBeGreaterThan(0);
-      expect(tool.description.length).toBeGreaterThan(0);
+      for (const lang of ["es", "en"] as const) {
+        expect(translate(lang, "assistant", tool.labelKey).length).toBeGreaterThan(0);
+        expect(translate(lang, "assistant", tool.descriptionKey).length).toBeGreaterThan(0);
+      }
     }
   });
 });

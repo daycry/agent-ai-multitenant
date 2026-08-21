@@ -303,6 +303,7 @@ cuatro platform-global marcadas explícitamente.
 - `executions` — una fila por run del loop del agente IA, con el
   **snapshot de coste** por llamada (tokens, modelo, precio aplicado,
   coste canónico en USD). Es el equivalente IA de `human_work_sessions`.
+  **Particionada por mes** — ver § «Tablas particionadas» abajo.
 - `conversations`, `messages`, `custom_chat_modes` — chat / planning
   sub-graph: una conversación produce un Plan en borrador.
 - `approval_requests` — request de validación humana sobre una acción
@@ -406,6 +407,56 @@ Ver [marketplace.md](./marketplace.md). Las fuentes son tenant-agnósticas
   Ver [evals-stats.md](./evals-stats.md).
 - **Tareas no agrupadas**: además de `task.plan_id`, la tabla `plans`
   está activa (Plan = DAG con rama git); ver `PlanStatus` arriba.
+
+## Tablas particionadas por mes
+
+Cinco tablas **append-only** —las que solo crecen— son tablas
+`PARTITION BY RANGE (created_at)` con una partición por mes natural, decidido en
+el [ADR 0151](../05-architecture-decisions/0151-retencion-de-tablas-append-only.md)
+(opción C) y ejecutado por el plan `part-01`. **No es una política de retención:
+no se borra nada.** Es lo que evita que cada una sea un solo montón que crece sin
+límite.
+
+| Tabla               | Clave de partición   | Clave primaria     | Migración |
+| ------------------- | -------------------- | ------------------ | --------- |
+| `guardrail_events`  | `RANGE (created_at)` | `(id, created_at)` | `0131`    |
+| `notification_logs` | `RANGE (created_at)` | `(id, created_at)` | `0134`    |
+| `llm_usage_events`  | `RANGE (created_at)` | `(id, created_at)` | `0135`    |
+| `audit_log`         | `RANGE (created_at)` | `(id, created_at)` | `0136`    |
+| `executions`        | `RANGE (created_at)` | `(id, created_at)` | `0137`    |
+
+Tres consecuencias que hay que conocer antes de tocar cualquiera de ellas:
+
+1. **La PK es compuesta, y no por gusto.** PostgreSQL **exige** que la clave
+   primaria de una tabla particionada incluya la clave de partición. De ahí que
+   `id` deje de ser único por sí solo.
+2. **Ninguna admite ya una clave foránea entrante.** Una FK no puede referenciar
+   una PK compuesta sin llevar las dos columnas, así que las cinco que existían
+   —`approval_requests.execution_id`, `memory_entries.source_execution_id`,
+   `eval_dataset_items.source_execution_id`,
+   `eval_shadow_records.source_execution_id` y
+   `notification_log_reads.log_id`— **se retiraron** y su columna quedó como
+   referencia suelta. El porqué de cada una, y quién borra esas filas ahora, está
+   en el [ADR 0154](../05-architecture-decisions/0154-fk-hacia-tablas-particionadas.md).
+   Las FK **salientes** de esas tablas sí sobreviven.
+3. **La RLS se declara por partición.** Al leer por el padre se aplica la policy
+   del padre; una consulta directa contra una partición solo pasa por las suyas.
+   Cada partición nace con `ENABLE` + `FORCE` + policy de aislamiento por tenant,
+   la cree la migración o el job.
+
+> **Un detalle del ORM que solo lleva `Execution`.** Su mapper declara
+> `__mapper_args__ = {"primary_key": [id]}`: la **tabla** tiene la PK compuesta
+> (es lo que exige PostgreSQL) pero el **mapper** sigue identificando la fila por
+> `id`, para que los `session.get(Execution, uuid)` que hay repartidos por el
+> código y la suite sigan funcionando. Se apoya en que `id` es un UUIDv7 generado
+> por la aplicación —único de hecho, aunque ya no por constraint—, que es la misma
+> suposición que hacía `session.get` antes de particionar. Las otras cuatro no lo
+> llevan porque nadie las busca por `id`.
+
+El job `workers.ensure_partitions` (beat diario) mantiene el mes en curso más
+tres de colchón y publica un `infra_alert` `PartitionCoverageMissing` si el mes
+siguiente falta. Operación, diagnóstico y creación manual:
+[runbook de particiones](../06-runbooks/particiones-append-only.md).
 
 ## Ver también
 

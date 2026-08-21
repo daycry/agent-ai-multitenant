@@ -222,7 +222,7 @@ async def test_assistant_usage_is_recorded(configured_app, migrations_pg_dsn: st
         provider_kind = "ollama"
         model = "gpt-oss:20b"
 
-    configured_app.dependency_overrides[get_assistant_model] = lambda: _ModelWithUsage()
+    configured_app.dependency_overrides[get_assistant_model] = _ModelWithUsage
     token = await _mint_token(seeded["admin_a"], seeded["tenant_a"])
     headers = {"Authorization": f"Bearer {token}"}
 

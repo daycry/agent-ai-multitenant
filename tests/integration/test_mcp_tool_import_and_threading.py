@@ -34,6 +34,8 @@ from alembic import command
 from httpx import ASGITransport, AsyncClient
 from uuid6 import uuid7
 
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
+
 pytestmark = [pytest.mark.integration, pytest.mark.cross_tenant]
 
 
@@ -525,7 +527,7 @@ async def test_dispatcher_threads_project_mcp_servers(
     from workers.celery_app import build_celery_app
     from workers.config import Settings as WorkerSettings
 
-    test_redis_url = "redis://localhost:6379/15"
+    test_redis_url = TEST_REDIS_URL
     engine = create_async_engine(admin_database_url)
     redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
     try:
@@ -601,7 +603,9 @@ async def test_dispatcher_threads_project_mcp_servers(
         await redis.delete("default")
         dispatcher = TaskDispatcher(
             sessionmaker=sm,
-            celery_app=build_celery_app(WorkerSettings(broker_url=test_redis_url)),
+            celery_app=build_celery_app(
+                WorkerSettings(broker_url=test_redis_url, result_backend=test_redis_url)
+            ),
             settings=OrchestratorSettings(redis_url=test_redis_url),
         )
         event = TaskEvent(
@@ -663,7 +667,7 @@ async def test_project_mcp_tool_schema_reaches_the_model(
     from workers.config import Settings as WorkerSettings
     from workers.execution import ExecutionRequest, _agent_spec
 
-    test_redis_url = "redis://localhost:6379/15"
+    test_redis_url = TEST_REDIS_URL
     engine = create_async_engine(admin_database_url)
     redis: Redis = Redis.from_url(test_redis_url, decode_responses=True)
     try:
@@ -746,7 +750,9 @@ async def test_project_mcp_tool_schema_reaches_the_model(
         await redis.delete("default")
         dispatcher = TaskDispatcher(
             sessionmaker=sm,
-            celery_app=build_celery_app(WorkerSettings(broker_url=test_redis_url)),
+            celery_app=build_celery_app(
+                WorkerSettings(broker_url=test_redis_url, result_backend=test_redis_url)
+            ),
             settings=OrchestratorSettings(redis_url=test_redis_url),
         )
         await dispatcher.handle(
@@ -774,9 +780,9 @@ async def test_project_mcp_tool_schema_reaches_the_model(
         # 2. Y el esquema llega al bloque que el proveedor pasa al modelo.
         spec = _agent_spec(ExecutionRequest.from_dict(request), None)
         advertised = {t["function"]["name"]: t["function"] for t in spec["model"]["tools"]}
-        assert (
-            "filesystem.list_directory" in advertised
-        ), "la tool MCP del proyecto sigue siendo invisible para el modelo"
+        assert "filesystem.list_directory" in advertised, (
+            "la tool MCP del proyecto sigue siendo invisible para el modelo"
+        )
         assert advertised["filesystem.list_directory"]["parameters"] == _MCP_TOOL_SCHEMA
     finally:
         await redis.delete("default")

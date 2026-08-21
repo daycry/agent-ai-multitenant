@@ -111,3 +111,68 @@ async def test_dispatch_falls_back_to_flat_system_prompt(
     ids = await _seed_agent_with_persona(migrations_pg_dsn, bilingual=False)
     request = await _dispatch_and_drain(ids, admin_database_url)
     assert request["agent_persona"]["prompt"] == "PERSONA-PLANA legacy"
+
+
+# ---------------------------------------------------------------------------
+# `task_gov_03`: el sello del prompt viaja PEGADO a la persona
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_dispatch_threads_the_prompt_seal_next_to_the_persona(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    """El cableado de `task_gov_03`, con un despacho de verdad.
+
+    `executions.prompt_version` hasheaba los tres módulos del runtime y **ni un
+    byte del `system_prompt` del agente**, así que dos runs con personas distintas
+    compartían etiqueta. El sello es lo que lo arregla, y sólo sirve si llega:
+    aquí se comprueba sobre el payload que sale a la cola, no sobre la función que
+    lo calcula.
+
+    `version` es `None` a propósito: este agente se sembró por SQL, no editando su
+    prompt, así que no tiene fila en `agent_prompt_versions`. Es el caso
+    mayoritario el primer día y el que obliga a que el hash viaje igualmente.
+    """
+    from api_server.agent_persona import prompt_text_hash
+
+    ids = await _seed_agent_with_persona(migrations_pg_dsn, bilingual=True)
+    request = await _dispatch_and_drain(ids, admin_database_url)
+
+    sello = request["agent_prompt_version"]
+    assert sello["version"] is None, sello
+    # El hash es del texto EFECTIVO, o sea del bilingüe `es` que la persona
+    # resolvió — no del campo plano, que en esta semilla dice otra cosa.
+    assert sello["prompt_hash"] == prompt_text_hash(request["agent_persona"]["prompt"])
+    assert request["agent_persona"]["prompt"].startswith("PERSONA-ES")
+
+
+@pytest.mark.asyncio
+async def test_the_seal_names_the_recorded_version_once_there_is_one(
+    configured_app, migrations_pg_dsn: str, admin_database_url: str
+) -> None:
+    """Con historial, el sello nombra la FILA y no sólo el contenido.
+
+    Es lo que convierte «este run corrió con este texto» en «este run corrió con
+    la versión 3, que firmó tal usuario tal día» — la única forma de que la
+    etiqueta responda a «¿qué cambió?».
+    """
+    ids = await _seed_agent_with_persona(migrations_pg_dsn, bilingual=True)
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO agent_prompt_versions"
+            " (id, tenant_id, agent_id, version, system_prompt, prompt_hash)"
+            " VALUES ($1, $2, $3, 3, 'da igual', $4)",
+            uuid4(),
+            ids["tenant"],
+            ids["agent"],
+            "f" * 64,
+        )
+    finally:
+        await conn.close()
+
+    request = await _dispatch_and_drain(ids, admin_database_url)
+    assert request["agent_prompt_version"]["version"] == 3
+    # El HASH sigue saliendo del agente vivo y no de la fila: la fila puede estar
+    # desfasada respecto a un `UPDATE` hecho por fuera de la API, y lo que corrió
+    # es lo que el agente tiene HOY.
+    assert request["agent_prompt_version"]["prompt_hash"] != "f" * 64

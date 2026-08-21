@@ -153,7 +153,7 @@ def _normalise_allowed_commands(value: list[str]) -> list[str]:
             continue
         if len(cmd) > _MAX_COMMAND_LENGTH:
             raise ValueError(
-                f"allowed_commands entry too long ({len(cmd)} chars); " f"max {_MAX_COMMAND_LENGTH}"
+                f"allowed_commands entry too long ({len(cmd)} chars); max {_MAX_COMMAND_LENGTH}"
             )
         if cmd in seen:
             continue
@@ -239,6 +239,38 @@ def _validate_guardrails_config(value: dict[str, Any] | None) -> dict[str, Any] 
     return value
 
 
+def _validate_human_approval_policy(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Valida SOLO la clave `unlisted_category` de la política (ADR 0153).
+
+    El resto del blob sigue sin esquema a propósito (`categories` admite hoy
+    claves no canónicas como `all`, que las plantillas built-in escriben). Lo
+    que aquí no puede pasar es un `unlisted_category` que el gate no sepa leer:
+    ante un valor ilegible el motor se para POR SEGURIDAD, y un typo escrito por
+    API acabaría en una cola de aprobaciones que nadie entiende — «la política
+    dice `human_requiered`» no es un error que se vea en ninguna pantalla.
+
+    También se rechaza colarla DENTRO de `categories`: ahí sería una categoría
+    fantasma que ningún `review()` consulta, exactamente el modo de fallo de
+    `external_http`.
+    """
+    if value is None:
+        return None
+    valid = ("auto", "human_required")
+    raw = value.get("unlisted_category")
+    if raw is not None and (not isinstance(raw, str) or raw not in valid):
+        raise ValueError(
+            f"human_approval_policy.unlisted_category debe ser uno de {list(valid)} "
+            f"(recibido: {raw!r})"
+        )
+    categories = value.get("categories")
+    if isinstance(categories, dict) and "unlisted_category" in categories:
+        raise ValueError(
+            "human_approval_policy.unlisted_category va como clave HERMANA de "
+            "`categories`, no dentro: dentro sería una categoría que nadie consulta"
+        )
+    return value
+
+
 def _check_json_config_size(value: Any, field_name: str) -> None:
     """Reject a free-form JSON config blob over `_MAX_JSON_CONFIG_BYTES`.
 
@@ -250,7 +282,7 @@ def _check_json_config_size(value: Any, field_name: str) -> None:
     size = len(json.dumps(value, default=str).encode("utf-8"))
     if size > _MAX_JSON_CONFIG_BYTES:
         raise ValueError(
-            f"{field_name} is too large ({size} bytes); " f"max {_MAX_JSON_CONFIG_BYTES} bytes"
+            f"{field_name} is too large ({size} bytes); max {_MAX_JSON_CONFIG_BYTES} bytes"
         )
 
 
@@ -369,6 +401,11 @@ class ProjectCreateRequest(BaseModel):
     def _validate_runtime_template(cls, value: str | None) -> str | None:
         return _validate_runtime_template(value)
 
+    @field_validator("human_approval_policy", mode="after")
+    @classmethod
+    def _check_human_approval_policy(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_human_approval_policy(value)
+
     @field_validator(
         "rag_knowledge_bases",
         "worker_config",
@@ -480,6 +517,11 @@ class ProjectUpdateRequest(BaseModel):
     @classmethod
     def _validate_runtime_template(cls, value: str | None) -> str | None:
         return _validate_runtime_template(value)
+
+    @field_validator("human_approval_policy", mode="after")
+    @classmethod
+    def _check_human_approval_policy(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_human_approval_policy(value)
 
     @field_validator(
         "rag_knowledge_bases",

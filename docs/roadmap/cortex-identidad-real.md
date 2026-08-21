@@ -191,7 +191,7 @@ max_keys=12, max_value_len=280)` — merge acotado sobre `relationship_model`;
 
 - En `cortex_recall`: un único UPDATE (jsonb*set) de
   `metadata*.recall_count += 1`+`last_recalled_at` sobre los ids devueltos
-(`WHERE id=ANY(:ids) AND user_id=:owner AND scope='private'`), en try/except
+  (`WHERE id=ANY(:ids) AND user_id=:owner AND scope='private'`), en try/except
   con warning (un fallo del contador jamás rompe el recall). Instrumenta chat y
   voz a la vez.
 - `forgetting.py`: `recall_frequency_factor(count) = 0.5 + 0.5·min(1, count/5)`

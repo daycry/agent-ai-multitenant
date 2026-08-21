@@ -21,20 +21,27 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_AGENTS = (
-    Path(__file__).resolve().parents[2]
-    / "apps"
-    / "api-server"
-    / "src"
-    / "api_server"
-    / "routers"
-    / "agents.py"
-)
-_PANEL = Path(__file__).resolve().parents[2] / "apps" / "admin-panel"
+_ROOT = Path(__file__).resolve().parents[2]
+_API_SERVER = _ROOT / "apps" / "api-server" / "src" / "api_server"
+#: Era el fichero `routers/agents.py` hasta el troceo de prod-16
+#: (`task_prod16_12`); hoy es un paquete. La guarda lee TODOS sus módulos: si
+#: mirase solo uno, el endpoint retirado podría reaparecer en otro y pasaría.
+_AGENTS_PKG = _API_SERVER / "routers" / "agents"
+_PANEL = _ROOT / "apps" / "admin-panel"
+
+
+def _agents_router_source() -> str:
+    """El código del paquete `routers/agents/` entero, como un solo texto."""
+    modules = sorted(_AGENTS_PKG.glob("*.py"))
+    assert len(modules) >= 5, (
+        f"la guarda solo vio {len(modules)} módulos en {_AGENTS_PKG}: ¿se movió "
+        "el paquete? Un verde leyendo la nada no significaría nada."
+    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in modules)
 
 
 def test_the_by_kind_endpoint_is_gone() -> None:
-    source = _AGENTS.read_text(encoding="utf-8")
+    source = _agents_router_source()
     assert not re.search(r'@router\.get\("/model-options"', source), (
         "volvió `/agents/model-options`: agrega por kind y esconde una de dos "
         "filas del mismo proveedor (ADR 0082)"
@@ -43,14 +50,14 @@ def test_the_by_kind_endpoint_is_gone() -> None:
 
 def test_the_replacement_is_still_there() -> None:
     # No vacuo: sin esto, borrar las DOS rutas dejaría el test en verde.
-    source = _AGENTS.read_text(encoding="utf-8")
-    assert re.search(
-        r'@router\.get\("/provider-options"', source
-    ), "desapareció `/agents/provider-options`, que es el sustituto"
+    source = _agents_router_source()
+    assert re.search(r'@router\.get\("/provider-options"', source), (
+        "desapareció `/agents/provider-options`, que es el sustituto"
+    )
 
 
 def test_the_dead_schema_went_with_it() -> None:
-    schemas = (_AGENTS.parent.parent / "schemas" / "agents.py").read_text(encoding="utf-8")
+    schemas = (_API_SERVER / "schemas" / "agents.py").read_text(encoding="utf-8")
     assert "AgentModelOptionsResponse" not in schemas
 
 

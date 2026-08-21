@@ -33,11 +33,18 @@ class AttemptRecord:
     consecutive_failures: int = 0
     last_attempt_at: float = field(default=0.0)
     alerted: bool = False
+    # prod-08 task_prod08_watchdog_14: `alerted` significa "ya lo escribí en el
+    # log"; `alert_delivered`, "llegó a un humano". Son dos cosas distintas y
+    # confundirlas fue el defecto original: el log se daba por aviso. Mientras la
+    # entrega no confirme, el siguiente tick la reintenta — un api-server que
+    # arranca tarde no debe costar la única notificación del episodio.
+    alert_delivered: bool = False
 
     def reset(self) -> None:
         self.consecutive_failures = 0
         self.last_attempt_at = 0.0
         self.alerted = False
+        self.alert_delivered = False
 
     def exhausted(self, policy: BackoffPolicy) -> bool:
         """We've reached the cap and shouldn't keep retrying."""

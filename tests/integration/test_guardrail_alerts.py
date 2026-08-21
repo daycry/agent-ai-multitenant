@@ -40,6 +40,8 @@ from alembic import command
 from httpx import ASGITransport, AsyncClient
 from uuid6 import uuid7
 
+from ._partitions import ensure_partition_for
+
 pytestmark = pytest.mark.integration
 
 
@@ -111,6 +113,12 @@ async def _insert_event(
     created_at: datetime | None = None,
 ) -> None:
     """Insert one guardrail_events row directly as the BYPASSRLS migrations user."""
+    if created_at is not None:
+        # `guardrail_events` está particionada por mes y SIN DEFAULT (ADR 0151): el
+        # llamante retrofecha (`now - 2h`) y esa fila cae en el mes anterior si el
+        # test corre en las dos primeras horas del mes. Ver
+        # docs/03-guides/gotchas/sembrar-filas-retrofechadas-en-tabla-particionada.md
+        await ensure_partition_for(dsn, "guardrail_events", created_at)
     conn = await asyncpg.connect(dsn)
     try:
         if created_at is None:
@@ -500,7 +508,7 @@ async def test_default_dispatcher_enqueues_plan10_event(
 
     import api_server.celery_client as cc
 
-    monkeypatch.setattr(cc, "get_celery_client", lambda: _FakeCelery())
+    monkeypatch.setattr(cc, "get_celery_client", _FakeCelery)
 
     # Use the DEFAULT dispatcher (CeleryAlertDispatcher) by passing None.
     from api_server.auth.deps import AuthPrincipal, open_tenant_session

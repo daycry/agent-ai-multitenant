@@ -15,10 +15,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 from workers.docker_client import get_docker_client
 
 _log = structlog.get_logger("workers.tasks")
@@ -149,7 +150,7 @@ async def _run_test_runtime(request: dict[str, Any], settings: Settings) -> dict
     tenant_id = UUID(str(request["tenant_id"]))
     task_id = UUID(str(request["task_id"]))
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 

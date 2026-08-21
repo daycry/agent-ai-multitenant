@@ -15,6 +15,24 @@ artifact files pg_dump / tar would have written. The tests therefore assert:
     just-written bundle survive.
 
 No real backup of the live stack happens here.
+
+LÍMITE DE ESTE FICHERO (prod-04 task_prod_04_02) — leer antes de confiar en su verde
+------------------------------------------------------------------------------------
+El `FakeRunner` prueba la CONSTRUCCIÓN del argv, **nunca su ejecución**. Eso no es
+una sutileza académica: los argv de tar de Plan 12 omitían el flag de modo
+(`--create`), la suite estaba verde, y el primer backup real (2026-07-03) reventó
+con rc=2 borrando el bundle entero — pg_dump bueno incluido. Un doble que fabrica
+el artefacto siempre dirá que el backup funciona.
+
+La cobertura de EJECUCIÓN vive en otros dos ficheros, y son ellos los que valen
+como evidencia de que el backup produce bundles restaurables:
+
+  * `test_backup_tar_smoke.py` — los argv de tar contra el binario `tar` REAL.
+  * `test_backup_real_runner.py` — `run_full_backup` de punta a punta con
+    `SubprocessRunner` (tar/gzip/sha256/AES de verdad; solo pg_dump/pg_restore
+    doblados).
+
+Al añadir aquí un test de un comando externo nuevo, añade su gemelo allí.
 """
 
 from __future__ import annotations
@@ -232,9 +250,9 @@ def test_bind_tar_excludes_nested_backup_root(tmp_path: Path) -> None:
     # El argv debe llevar un --exclude que cubra el backup_root anidado (rel al
     # directorio archivado, p.ej. './backups' o 'backups').
     excludes = [t.split("=", 1)[1] for t in bind_tar if t.startswith("--exclude=")]
-    assert any(
-        "backups" in e for e in excludes
-    ), f"el bind tar no excluye el backup_root anidado; argv={bind_tar}"
+    assert any("backups" in e for e in excludes), (
+        f"el bind tar no excluye el backup_root anidado; argv={bind_tar}"
+    )
 
 
 def test_bind_tar_no_exclude_when_backup_root_outside(tmp_path: Path) -> None:
@@ -362,3 +380,127 @@ def test_run_full_backup_entrypoint_builds_engine_from_settings(tmp_path: Path) 
     # Honoured the single configured volume + the configured bind path (F0.4).
     tar_calls = [c for c in runner.calls if c[0] == "tar"]
     assert len(tar_calls) == 2
+
+
+# --------------------------------------------------------------------------- #
+# El DSN que hablan pg_dump / pg_restore / psql (prod-04 task_prod_04_09).
+# --------------------------------------------------------------------------- #
+
+
+def test_a_sqlalchemy_dsn_is_normalised_to_libpq() -> None:
+    """El instalador emite `WORKERS_BACKUP_DATABASE_URL` copiando
+    `WORKERS_DATABASE_URL`, que es una URL de SQLAlchemy (`postgresql+asyncpg://`).
+    libpq NO entiende el sufijo `+driver`: el backup diario de una instalación de
+    producción moría en el primer pg_dump. El docstring del Settings ya avisaba,
+    pero un aviso en una descripción no es una comprobación.
+    """
+    from workers.backup import libpq_url
+
+    assert (
+        libpq_url("postgresql+asyncpg://u:p@postgres:5432/db")
+        == "postgresql://u:p@postgres:5432/db"
+    )
+    assert libpq_url("postgres+psycopg://u:p@h/db") == "postgres://u:p@h/db"
+    # Idempotente, y no toca lo que ya está bien.
+    assert libpq_url("postgresql://u:p@h/db") == "postgresql://u:p@h/db"
+    # Una conninfo de libpq (sin esquema) es válida y se deja intacta.
+    assert libpq_url("host=postgres dbname=agentic") == "host=postgres dbname=agentic"
+    # Un esquema ajeno no se toca: no es cosa nuestra reescribirlo.
+    assert libpq_url("mysql+pymysql://u:p@h/db") == "mysql+pymysql://u:p@h/db"
+
+
+def test_the_engine_hands_pg_dump_a_libpq_dsn_even_from_a_sqlalchemy_setting(
+    tmp_path: Path,
+) -> None:
+    """De punta a punta: la Settings trae la URL de SQLAlchemy y el argv de
+    pg_dump sale ya saneado."""
+    from workers.config import Settings
+
+    volumes = tmp_path / "volumes"
+    (volumes / "minio_data" / "_data").mkdir(parents=True)
+    settings = Settings(
+        backup_root=str(tmp_path / "backups"),
+        backup_database_url="postgresql+asyncpg://migrations_user:p@postgres:5432/agentic",
+        backup_volumes=["minio_data"],
+        backup_volumes_mount_root=str(volumes),
+        backup_bind_paths=[],
+        backup_projects_root="",
+    )
+    runner = FakeRunner()
+    run_full_backup(settings=settings, runner=runner, now=_NOW)
+
+    argv = next(c for c in runner.calls if c[0] == "pg_dump")
+    dsn = next(a for a in argv if a.startswith("--dbname="))
+    assert "+asyncpg" not in dsn, f"pg_dump recibió una URL de SQLAlchemy: {dsn}"
+    assert dsn == "--dbname=postgresql://migrations_user:p@postgres:5432/agentic"
+
+
+def _settings_with_dev_backup_dsn(tmp_path: Path, **overrides: object) -> object:
+    """`Settings` cuyo `backup_database_url` es el DEFAULT DE DEV.
+
+    O sea: `postgresql://migrations_user:changeme-migrations-dev-only@localhost:15432`.
+    El guard de credenciales-dev del propio Settings solo mira `database_url`, así
+    que hay que darle uno sintético para poder construirlo fuera de dev — que es
+    justo la mitad del agujero: la segunda credencial no la miraba nadie.
+    """
+    from workers.config import Settings
+
+    volumes = tmp_path / "volumes"
+    (volumes / "minio_data" / "_data").mkdir(parents=True, exist_ok=True)
+    base: dict[str, object] = {
+        "database_url": "postgresql+asyncpg://service_user:sintetica@postgres:5432/agentic",
+        "backup_root": str(tmp_path / "backups"),
+        "backup_volumes": ["minio_data"],
+        "backup_volumes_mount_root": str(volumes),
+        "backup_bind_paths": [],
+        "backup_projects_root": "",
+    }
+    base.update(overrides)
+    return Settings(**base)  # type: ignore[arg-type]
+
+
+def test_a_dev_default_backup_dsn_aborts_the_run_outside_dev(tmp_path: Path) -> None:
+    """Fuera de dev, un `WORKERS_BACKUP_DATABASE_URL` sin emitir es fatal.
+
+    Es la mitad de deploy-4 que el saneado a libpq NO cubre: si la variable falta
+    del todo, el motor hereda el default de dev y `pg_dump` sale a buscar
+    `localhost:15432` con `changeme-migrations-dev-only`. Dentro del contenedor de
+    un worker eso no es «otra base de datos»: no es ninguna. El backup fallaba
+    todas las noches con un error de conexión que nadie relaciona con una variable
+    que falta.
+
+    Se comprueba en el motor y no en el arranque del worker a propósito: negarle
+    el boot a la flota entera de workers por una variable del backup es un radio
+    de explosión mayor que el problema. Aquí falla el run del backup, con un
+    mensaje que dice qué variable emitir, y ANTES de gastar una hora en el dump.
+    """
+    settings = _settings_with_dev_backup_dsn(tmp_path, environment="prod")
+    runner = FakeRunner()
+
+    with pytest.raises(BackupError, match="WORKERS_BACKUP_DATABASE_URL"):
+        run_full_backup(settings=settings, runner=runner, now=_NOW)  # type: ignore[arg-type]
+
+    # Ni un comando lanzado ni un bundle a medias: el gate va antes de todo.
+    assert runner.calls == []
+    assert not (tmp_path / "backups" / _NOW.strftime("%Y%m%dT%H%M%SZ")).exists()
+
+
+def test_the_dev_default_backup_dsn_is_tolerated_in_dev(tmp_path: Path) -> None:
+    """En dev el default ES el valor correcto (un postgres publicado en
+    `localhost:15432` por el compose de desarrollo). Fallar aquí convertiría el
+    guard en un estorbo y alguien lo apagaría — y con él, el caso de producción."""
+    settings = _settings_with_dev_backup_dsn(tmp_path, environment="dev")
+    result = run_full_backup(settings=settings, runner=FakeRunner(), now=_NOW)  # type: ignore[arg-type]
+    assert result.bundle_dir.exists()
+
+
+def test_a_real_backup_dsn_passes_the_gate_outside_dev(tmp_path: Path) -> None:
+    """No-vacuidad: el gate tiene que dejar pasar el DSN que el instalador emite,
+    o el test de arriba pasaría con un motor que simplemente nunca respalda."""
+    settings = _settings_with_dev_backup_dsn(
+        tmp_path,
+        environment="prod",
+        backup_database_url="postgresql://migrations_user:g3n3r4d4@postgres:5432/agentic_platform",
+    )
+    result = run_full_backup(settings=settings, runner=FakeRunner(), now=_NOW)  # type: ignore[arg-type]
+    assert result.bundle_dir.exists()

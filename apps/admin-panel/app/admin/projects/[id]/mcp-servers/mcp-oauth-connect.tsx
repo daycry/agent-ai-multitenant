@@ -32,7 +32,9 @@ import { KeyRound, Link2, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 export interface OAuthStatus {
   connected: boolean;
@@ -64,6 +66,9 @@ export function McpOAuthConnect({
   providerLabel?: string;
   onAuthorize?: (url: string) => void;
 }) {
+  const errorText = useErrorText();
+  const t = useT("mcpServers");
+
   const statusQuery = useQuery({
     queryKey: ["mcp-oauth-status", projectId, serverName],
     queryFn: () => apiFetch<OAuthStatus>(statusPath(projectId, serverName)),
@@ -82,7 +87,7 @@ export function McpOAuthConnect({
     },
   });
 
-  const provider = providerLabel || "el proveedor";
+  const provider = providerLabel || t("oauthProviderFallback");
   const connected = statusQuery.data?.connected === true;
   const statusUnavailable = statusQuery.isError; // endpoint aún no disponible / error
   const expiresAt = statusQuery.data?.expires_at ?? null;
@@ -96,27 +101,29 @@ export function McpOAuthConnect({
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-sm font-medium">
             <KeyRound className="h-3.5 w-3.5" />
-            Conexión OAuth
+            {t("oauthTitle")}
             {statusQuery.isLoading ? (
               <Badge variant="muted" data-testid={`mcp-oauth-status-loading-${serverName}`}>
-                comprobando…
+                {t("oauthChecking")}
               </Badge>
             ) : connected ? (
               <Badge variant="success" data-testid={`mcp-oauth-status-connected-${serverName}`}>
-                Conectado
+                {t("oauthConnectedBadge")}
               </Badge>
             ) : (
               <Badge variant="muted" data-testid={`mcp-oauth-status-disconnected-${serverName}`}>
-                No conectado
+                {t("oauthDisconnectedBadge")}
               </Badge>
             )}
           </p>
           <p className="text-muted-foreground mt-1 text-xs">
             {connected
-              ? `Autorizado con ${provider}. La plataforma refresca el token automáticamente.`
-              : `Autoriza el acceso a ${provider} una sola vez; la plataforma guardará y refrescará el token.`}
+              ? t("oauthConnectedHelp", { provider })
+              : t("oauthDisconnectedHelp", { provider })}
             {connected && expiresAt ? (
-              <span data-testid={`mcp-oauth-expires-${serverName}`}> · caduca {expiresAt}</span>
+              <span data-testid={`mcp-oauth-expires-${serverName}`}>
+                {t("oauthExpires", { date: expiresAt })}
+              </span>
             ) : null}
           </p>
         </div>
@@ -129,16 +136,16 @@ export function McpOAuthConnect({
           data-testid={`mcp-oauth-connect-button-${serverName}`}
         >
           {connectMutation.isPending ? (
-            "Redirigiendo…"
+            t("oauthRedirecting")
           ) : connected ? (
             <>
               <RefreshCw className="mr-1 h-3.5 w-3.5" />
-              Reconectar
+              {t("oauthReconnect")}
             </>
           ) : (
             <>
               <Link2 className="mr-1 h-3.5 w-3.5" />
-              Conectar
+              {t("oauthConnect")}
             </>
           )}
         </Button>
@@ -149,17 +156,14 @@ export function McpOAuthConnect({
           className="text-destructive mt-2 whitespace-pre-wrap text-xs"
           data-testid={`mcp-oauth-connect-error-${serverName}`}
         >
-          {connectMutation.error instanceof ApiError
-            ? connectMutation.error.body
-            : String(connectMutation.error)}
+          {errorText(connectMutation.error)}
         </p>
       ) : statusUnavailable && !statusQuery.isLoading ? (
         <p
           className="text-muted-foreground mt-2 text-xs italic"
           data-testid={`mcp-oauth-status-unavailable-${serverName}`}
         >
-          No se pudo consultar el estado de conexión (el flujo OAuth puede no estar disponible
-          todavía).
+          {t("oauthStatusUnavailable")}
         </p>
       ) : null}
     </div>

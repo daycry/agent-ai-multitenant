@@ -9,8 +9,11 @@ Security:
   * The admin password is read from the ``INIT_ADMIN_PASSWORD`` env var, NEVER
     from argv (so it can't leak via ``ps``/shell history) and never logged. It
     is stored only as an argon2id hash (``auth.passwords.hash_password``).
-  * The first user on a fresh DB is promoted to ``is_system_admin`` (mirrors
-    POST /auth/register), giving the operator the cross-tenant superpowers.
+  * The first user on a fresh DB is promoted to ``is_system_admin`` **and**
+    ``is_system_owner`` (ADR 0134), giving the operator both the cross-tenant
+    superpowers and the deployment-owner rol del córtex (ADR 0074). Con el
+    registro público cerrado por invitación, este seed es la única vía de
+    arranque de una instalación.
 
 Caller must hold an AsyncSession bound to the BYPASSRLS admin engine — a tenant
 session cannot write to ``organizations``/``users``.
@@ -60,6 +63,9 @@ class InitTenantResult:
     created_user: bool
     created_membership: bool
     is_system_admin: bool
+    # ADR 0134: el seed es la ÚNICA vía de arranque soportada, así que también
+    # es la única que puede otorgar el System Owner (ADR 0074).
+    is_system_owner: bool
 
 
 async def init_tenant(
@@ -105,6 +111,17 @@ async def init_tenant(
             password_hash=hash_password(admin_password),
             full_name=full_name or f"{tenant_name} Admin",
             is_system_admin=is_first_user,
+            # ADR 0134: …y también System Owner (ADR 0074). Hasta el 2026-07-31
+            # el único sitio que otorgaba el rol era `POST /auth/register` con la
+            # tabla vacía, de modo que TODA instalación hecha con el instalador
+            # (que siembra por aquí) se quedaba SIN owner y el córtex entero
+            # —cuanto protege `require_system_owner`— era inalcanzable salvo con
+            # un UPDATE a mano. Al cerrar el registro público (ADR 0134) esta
+            # pasa a ser la única puerta al rol, así que el seed DEBE otorgarlo.
+            # Se ata a `is_first_user` porque el rol es un singleton
+            # (`uq_users_system_owner`): escribir True a ciegas reventaría el
+            # segundo seed con un IntegrityError.
+            is_system_owner=is_first_user,
         )
         session.add(user)
         await session.flush()
@@ -136,6 +153,7 @@ async def init_tenant(
         created_user=created_user,
         created_membership=created_membership,
         is_system_admin=user.is_system_admin,
+        is_system_owner=user.is_system_owner,
     )
 
 
@@ -185,6 +203,7 @@ async def _amain(argv: list[str]) -> int:
         created_user=result.created_user,
         created_membership=result.created_membership,
         is_system_admin=result.is_system_admin,
+        is_system_owner=result.is_system_owner,
     )
     return 0
 

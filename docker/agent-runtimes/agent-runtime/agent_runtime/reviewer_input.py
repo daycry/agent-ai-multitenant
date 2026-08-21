@@ -64,4 +64,4 @@ def overall_status(reports: Sequence[TestReport]) -> str:
     return "passed"
 
 
-__all__ = ["reviewer_input_block", "overall_status"]
+__all__ = ["overall_status", "reviewer_input_block"]

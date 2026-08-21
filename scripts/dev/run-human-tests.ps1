@@ -74,12 +74,12 @@ if (-not $SkipStack) {
 # 2) Setup compartido. Idempotentes; siempre se ejecutan.
 # -----------------------------------------------------------------------------
 Write-Step "Setup Plan 02: proyecto + agente Writer compartidos"
-& $VenvPython (Join-Path $RepoRoot "scripts\setup_demo_project.py")
+& $VenvPython (Join-Path $RepoRoot "scripts\demos\setup_demo_project.py")
 if ($LASTEXITCODE -ne 0) { throw "setup_demo_project.py fallo" }
 
 if ($Only -ne "02") {
     Write-Step "Setup Plan 04.5: KB + Document + Team"
-    & $VenvPython (Join-Path $RepoRoot "scripts\setup_demo_04_5.py")
+    & $VenvPython (Join-Path $RepoRoot "scripts\demos\setup_demo_04_5.py")
     if ($LASTEXITCODE -ne 0) { throw "setup_demo_04_5.py fallo" }
 }
 
@@ -105,7 +105,7 @@ if ($Only -in @("all", "04_5"))  { $Demos += $Plan045 }
 $Results = @()
 foreach ($demo in $Demos) {
     Write-Step "Ejecutando $demo"
-    $script = Join-Path $RepoRoot "scripts\$demo"
+    $script = Join-Path $RepoRoot "scripts\demos\$demo"
     & $VenvPython $script
     $code = $LASTEXITCODE
     if ($code -eq 0) {
@@ -129,7 +129,7 @@ $Results | Format-Table -AutoSize | Out-Host
 # Lee el project_id real del estado compartido para sustituir <id>
 # en las URLs por el valor concreto — Ctrl+click directo.
 $ProjectId = $null
-$DemoState = Join-Path $RepoRoot "scripts\.demo_state.json"
+$DemoState = Join-Path $RepoRoot "scripts\demos\.demo_state.json"
 if (Test-Path $DemoState) {
     try {
         $state = Get-Content $DemoState -Raw | ConvertFrom-Json

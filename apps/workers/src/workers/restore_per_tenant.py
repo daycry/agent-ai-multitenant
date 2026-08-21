@@ -93,6 +93,7 @@ from workers.backup import (
     MANIFEST_FILENAME,
     CommandRunner,
     SubprocessRunner,
+    libpq_url,
 )
 from workers.backup_encryption import (
     ENCRYPTED_SUFFIX,
@@ -185,6 +186,17 @@ class PerTenantRestoreConfig:
     # captured volume tar; only that prefix is re-extracted.
     object_store_volume: str = "minio_data"
     volumes_mount_root: Path = Path("/var/lib/docker/volumes")
+    # prod-04 task_prod_04_10 — MinIO NO soporta que le escriban el `_data` por
+    # debajo mientras corre: el formato xl mantiene metadatos por objeto y una
+    # extracción en caliente produce objetos invisibles o corruptos vía API. Se
+    # para el servicio durante la extracción y se vuelve a arrancar SIEMPRE (aunque
+    # la extracción falle: dejar MinIO caído por un restore de UN tenant tumbaría a
+    # todos los demás, que es peor que el problema que se estaba resolviendo).
+    object_store_service: str = "minio"
+    stop_object_store_during_restore: bool = True
+    compose_project: str = "agentic-platform"
+    compose_file: Path = Path("/data/agent-platform/docker-compose.yml")
+    compose_timeout_s: int = 600
     # Name of the throwaway staging database the full dump is restored into before
     # filtering. Suffixed with the bundle id + tenant at run time so concurrent
     # restores never collide; never the live database.
@@ -205,8 +217,7 @@ class PerTenantRestoreConfig:
         for table in self.tenant_scoped_tables:
             if not _SAFE_IDENT.fullmatch(table):
                 raise PerTenantRestoreError(
-                    f"unsafe tenant-scoped table name {table!r}; must match "
-                    f"{_SAFE_IDENT.pattern}"
+                    f"unsafe tenant-scoped table name {table!r}; must match {_SAFE_IDENT.pattern}"
                 )
 
     @classmethod
@@ -214,10 +225,12 @@ class PerTenantRestoreConfig:
         tables = tuple(settings.restore_tenant_scoped_tables) or DEFAULT_TENANT_SCOPED_TABLES
         return cls(
             backup_root=Path(settings.backup_root),
-            admin_database_url=settings.backup_database_url,
+            admin_database_url=libpq_url(settings.backup_database_url),
             tenant_scoped_tables=tables,
             object_store_volume=str(settings.restore_object_store_volume),
             volumes_mount_root=Path(settings.backup_volumes_mount_root),
+            compose_project=str(settings.restore_compose_project),
+            compose_file=Path(settings.restore_compose_file),
             encryption_enabled=bool(settings.backup_encryption_enabled),
             encryption_vault_key=str(settings.backup_encryption_vault_key),
         )
@@ -519,15 +532,19 @@ class PerTenantRestoreEngine:
         Devuelve el total de filas huérfanas borradas (0 = restore limpio)."""
         import asyncio
 
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
+        from workers.db import worker_engine
         from workers.maintenance.integrity import sweep_fk_orphans
 
         async def _run() -> int:
             url = self._config.admin_database_url.replace(
                 "postgresql://", "postgresql+asyncpg://", 1
             )
-            engine = create_async_engine(url)
+            # `url=` a secas: el restore escribe en la copia, no en la BD de
+            # `Settings.database_url`, y `PerTenantRestoreConfig` sólo tiene
+            # `admin_database_url`.
+            engine = worker_engine(url=url)
             try:
                 sm = async_sessionmaker(engine, expire_on_commit=False)
                 async with sm() as session, session.begin():
@@ -906,6 +923,25 @@ class PerTenantRestoreEngine:
         ``_data`` tree, leaving every other tenant's objects untouched. The wipe is
         scoped to the tenant's prefix dir too — never the whole volume.
 
+        DOS ARREGLOS DE prod-04 task_prod_04_10 (hallazgo gap3-6)
+        ---------------------------------------------------------
+        1. **Con MinIO PARADO.** Escribir el `_data` por debajo de un MinIO vivo
+           no está soportado: el formato xl guarda metadatos por objeto y el
+           servidor cachea; una extracción en caliente deja objetos que el
+           filesystem tiene y la API no ve, o los ve corruptos. Se para el
+           servicio alrededor de la extracción y se vuelve a arrancar SIEMPRE —
+           incluso si la extracción falla, porque dejar MinIO caído por el
+           restore de UN tenant deja sin object storage a todos los demás.
+        2. **El wipe es un error duro.** Era `shutil.rmtree(..., ignore_errors=True)`:
+           si el borrado fallaba a medias (fichero bloqueado, permisos), la
+           extracción se superponía a los restos y el tenant acababa con una
+           mezcla de dos momentos distintos — un estado que no existió nunca y
+           que nadie detectaría. Ahora aborta.
+
+        Verificación por API S3 (que los objetos del tenant se leen de verdad)
+        es el test humano `human_prod_04_03`: aquí se comprueba lo que se puede
+        comprobar sin cliente S3 — que la rebanada quedó en disco.
+
         Returns True when the tenant slice was present + restored, False when the
         bundle captured no object-store volume (nothing to do, not an error).
         """
@@ -929,26 +965,41 @@ class PerTenantRestoreEngine:
         data_dir = self._config.volumes_mount_root / volume / "_data"
         tenant_prefix = f"{tenant_id}"  # objects are keyed <tenant_id>/<...>
         member = f"./{tenant_prefix}"
-        # Wipe ONLY the tenant's prefix dir (never the whole volume), then extract
-        # just that member from the archive. Best-effort wipe; the extract is hard.
         tenant_dir = data_dir / tenant_prefix
-        if tenant_dir.exists():
-            shutil.rmtree(tenant_dir, ignore_errors=True)
-        data_dir.mkdir(parents=True, exist_ok=True)
-        args = [
-            "tar",
-            "--extract",
-            "--gzip",
-            f"--directory={data_dir}",
-            f"--file={archive_path}",
-            member,  # ONLY the tenant's slice — never the whole archive
-        ]
-        result = self._runner.run(args, timeout=self._config.tar_timeout_s)
-        if result.returncode != 0:
-            raise PerTenantRestoreError(
-                f"restoring tenant object-store slice failed (rc={result.returncode}): "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
+
+        self._stop_object_store()
+        try:
+            # Wipe ONLY the tenant's prefix dir (never the whole volume). ERROR
+            # DURO: un borrado a medias + extracción encima mezcla dos momentos.
+            if tenant_dir.exists():
+                try:
+                    shutil.rmtree(tenant_dir)
+                except OSError as exc:
+                    raise PerTenantRestoreError(
+                        f"no se pudo vaciar la rebanada del tenant en {tenant_dir}: {exc}. "
+                        f"Se aborta: extraer encima de restos dejaría al tenant con una "
+                        f"mezcla de dos momentos distintos."
+                    ) from exc
+            data_dir.mkdir(parents=True, exist_ok=True)
+            args = [
+                "tar",
+                "--extract",
+                "--gzip",
+                f"--directory={data_dir}",
+                f"--file={archive_path}",
+                member,  # ONLY the tenant's slice — never the whole archive
+            ]
+            result = self._runner.run(args, timeout=self._config.tar_timeout_s)
+            if result.returncode != 0:
+                raise PerTenantRestoreError(
+                    f"restoring tenant object-store slice failed (rc={result.returncode}): "
+                    f"{result.stderr.strip() or result.stdout.strip()}"
+                )
+        finally:
+            # SIEMPRE, incluso tras un fallo: dejar MinIO caído por el restore de
+            # un tenant deja sin object storage a todos los demás.
+            self._start_object_store()
+
         _log.info(
             "restore_per_tenant.object_store_restored",
             tenant_id=tenant_id,
@@ -956,6 +1007,54 @@ class PerTenantRestoreEngine:
             prefix=tenant_prefix,
         )
         return True
+
+    def _compose_base(self) -> list[str]:
+        return [
+            "docker",
+            "compose",
+            "--project-name",
+            self._config.compose_project,
+            "--file",
+            str(self._config.compose_file),
+        ]
+
+    def _stop_object_store(self) -> None:
+        """Parar MinIO antes de tocar su `_data` (task_prod_04_10)."""
+        if not self._config.stop_object_store_during_restore:
+            _log.warning(
+                "restore_per_tenant.object_store_hot_write",
+                reason="stop_object_store_during_restore=false",
+                risk="MinIO no soporta escrituras bajo su _data en caliente",
+            )
+            return
+        args = [*self._compose_base(), "stop", self._config.object_store_service]
+        result = self._runner.run(args, timeout=self._config.compose_timeout_s)
+        if result.returncode != 0:
+            raise PerTenantRestoreError(
+                f"no se pudo parar {self._config.object_store_service!r} antes de "
+                f"restaurar su volumen (rc={result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}. Se aborta: "
+                f"escribir el _data con MinIO vivo produce objetos que la API no "
+                f"puede leer."
+            )
+        _log.info("restore_per_tenant.object_store_stopped")
+
+    def _start_object_store(self) -> None:
+        """Volver a arrancar MinIO. Best-effort a propósito: ya estamos en un
+        `finally` y una excepción aquí taparía la causa real del fallo."""
+        if not self._config.stop_object_store_during_restore:
+            return
+        args = [*self._compose_base(), "start", self._config.object_store_service]
+        result = self._runner.run(args, timeout=self._config.compose_timeout_s)
+        if result.returncode != 0:
+            _log.error(
+                "restore_per_tenant.object_store_restart_failed",
+                returncode=result.returncode,
+                detail=result.stderr.strip() or result.stdout.strip(),
+                action="arráncalo a mano: el object storage está caído para TODOS",
+            )
+            return
+        _log.info("restore_per_tenant.object_store_started")
 
     # -- helpers -------------------------------------------------------------
 

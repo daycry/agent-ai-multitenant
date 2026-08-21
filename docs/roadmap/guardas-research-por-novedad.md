@@ -192,6 +192,22 @@ docs_language: es
 - [ ] **F2 — Relanzar «Tests de feature»** (víctima del ReadTimeout) y verificar en su run nuevo: phpunit
       via stack_exec ≤600 s sin ReadTimeout, sin nudges sobre su exploración inicial, `safeguard_stats` en el
       step final. **Test:** e2e observacional + SQL sobre `steps_log`.
+  - ⚠️ **Aclarado el 2026-08-19: esto NO es un test automático y no puede llegar a serlo.**
+    Se revisó esta casilla buscando un `command:` desfasado y no hay ninguno —ni lo
+    habrá—: «relanzar un run real y mirar sus `steps_log`» es un **test humano**, con
+    stack arriba y un run de verdad, no un fichero de pytest. Escrito como «**Test:**»
+    dentro del bullet parecía una medida automática pendiente de cablear, y no lo es; por
+    eso ni figura ni debe figurar en el inventario de `test_declared_tests_exist.py`,
+    que sólo vigila comandos declarados.
+  - 🔒 **Y sigue en `[ ]` a propósito**, no por olvido. El `blocked_reason` del frontmatter
+    lo dice: F2 y G13 exigen desplegar la imagen nueva y relanzar runs, y hay una **orden
+    permanente del operador** de no relanzar ni desbloquear nada hasta dar el sistema por
+    verificado. Marcarla sin ese run sería exactamente el checkbox que miente que este
+    repaso viene a quitar. Lo que SÍ está entregado y verificable es el código de las
+    fases A–E: D2 vive hoy en
+    `docker/agent-runtimes/agent-runtime/agent_runtime/internal_api.py` (`run_stack`
+    espera `timeout_s + 180` frente a los `+120` del server, con el porqué en su propio
+    docstring) y D1 en `docker/docker-compose.manuals.yml` (servicio `workers-aux`).
 - [x] **F3 — Métricas vs baseline**: comparar nudges/trips por run y relecturas por run contra los runs del
       07-01/07-03 (SQL sobre `steps_log`); documentar en este plan los números y el ajuste de umbrales si toca.
 

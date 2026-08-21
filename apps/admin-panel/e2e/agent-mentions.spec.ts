@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for @-mentions in the chat composer (Plan 03 task_03_12).
@@ -38,9 +39,7 @@ async function setup(page: Page): Promise<PostCapture> {
   const capture: PostCapture = { lastBody: {}, calls: 0 };
   const persisted: Array<Record<string, unknown>> = [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`**/projects/${PROJECT_ID}/planning-roles`, (route) =>
     route.fulfill({

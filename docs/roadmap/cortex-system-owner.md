@@ -5,9 +5,10 @@ status: pending_human_validation
 date: 2026-06-22
 started_at: 2026-06-23
 completed_at: null
-author: claude-opus (workflow multi-agente: research + panel de diseño + jueces)
+author: "claude-opus (workflow multi-agente: research + panel de diseño + jueces)"
 blocking_plan: null
-related_adrs: ["0074", "0075", "0076", "0077", "0078", "0021", "0064", "0070", "0073", "0059", "0067"]
+related_adrs:
+  ["0074", "0075", "0076", "0077", "0078", "0021", "0064", "0070", "0073", "0059", "0067"]
 docs_language: es
 ---
 
@@ -18,9 +19,35 @@ docs_language: es
 > [cortex-fases.md](cortex-fases.md)) se implementaban por completo entre 2026-06-24 y 2026-07-06.
 > Desviación real vs. diseño: la búsqueda web salió por el ADR 0067 (provider-agnóstica,
 > egress-proxy), no por el ADR 0076 (WebSearch/WebFetch nativas de claude_sdk) que este documento
-> recomendaba como "camino preferente". Los ADRs 0075-0078 siguen en `proposed` en sus propios
-> ficheros pese a que el código que autorizan ya está en producción — pendiente de promoción
-> formal, no de implementación.
+> recomendaba como "camino preferente".
+>
+> **Actualizado el 2026-07-30.** Este banner decía que «los ADRs 0075-0078 siguen en `proposed` …
+> pendiente de promoción formal»: ya no es cierto. Comprobado ADR por ADR, **0073, 0075, 0076,
+> 0077, 0078 y 0080 están `accepted`**; **0074 está `accepted-f0`**, el único valor así del repo,
+> conservado a propósito porque se aprobó en dos tiempos (cimiento F0 primero, excepción a RLS
+> después). Sus banners de cuerpo, que se contradecían con su propio frontmatter, se corrigieron
+> entre el 2026-07-27 y el 2026-07-30.
+>
+> **«Implementado» no es «cerrado».** F2, F3, F4 y F5 conservan casillas abiertas con hueco
+> identificado — inventario casilla a casilla en
+> [gaps-cortex-2026-07-27.md](gaps-cortex-2026-07-27.md), que es una auditoría **fechada**: sus
+> hallazgos describen el 27 de julio, no el estado de hoy.
+>
+> **Corregido el 2026-08-19 contra el código.** Este banner decía que «F4 salió sin
+> owner-approval gate ni tope de gasto en USD cableados al bucle, y por eso
+> `cortex.autonomy_enabled` sigue OFF». Las dos mitades eran falsas ya:
+>
+> - el **tope en USD** está cableado — `workers/cortex_curiosity.py:256` lee
+>   `cortex.curiosity_daily_usd_cap`, `:281` lo pasa a `check_and_reserve(usd_cap=…,
+searches_cap=…)` y `:372` liquida la pasada con `record_spend(cost_usd=…)` real;
+> - el **owner-approval gate** también — `:259` lee `cortex.curiosity_approval_gate` (ON por
+>   defecto), `:324` deja el pursuit recién elegido en `selected` con `approved IS NULL` **sin
+>   salir a Internet**, y `:303` lo mantiene ahí en pasadas posteriores hasta que el owner decide
+>   por `POST /owner/cortex/curiosity/pursuits/{id}/approve` (columna `approved`, migración 0123).
+>
+> Lo que sí sigue siendo cierto es que **`cortex.autonomy_enabled` está OFF**, pero por **decisión
+> del operador**, no porque falte el gobierno. Encenderlo es una decisión suya, no un pendiente
+> técnico de F4.
 
 > Diseño producido por un workflow multi-agente (research de 5 áreas → panel de 3 arquitecturas independientes → jueces → síntesis). El diseño ganador (score 90/100) es una **arquitectura cognitiva por capas** sobre el sustrato existente. La **crítica adversarial automática no llegó a correr** (límite de sesión); la suplo en la sección [Crítica de restricciones y seguridad](#crítica-de-restricciones-y-seguridad).
 
@@ -115,9 +142,20 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ## Plan por fases
 
-> Cada fase produce software funcional y testeable por sí misma. Las migraciones son reversibles (a partir de 0090). **Las fases que tocan egress/aislamiento/rol nuevo están GATED por sus ADRs (0074-0078) y el visto bueno del owner.**
+> Cada fase produce software funcional y testeable por sí misma. Las migraciones son reversibles (a partir de 0090). **Las fases que tocan egress/aislamiento/rol nuevo estaban GATED por sus ADRs (0074-0078) y el visto bueno del owner** — ese gate se levantó el 2026-06-23 y los seis ADR están hoy `accepted`/`accepted-f0`.
+
+> **Estado de las seis fases, anotado el 2026-07-30.** Cada epígrafe lleva su línea
+> `**Estado:**` con el plan que la ejecutó y su changelog. Las viñetas de cada fase son el
+> **diseño original**, no una lista de tareas: dónde el diseño y lo entregado difieren, la
+> divergencia está declarada en el changelog de la fase, no aquí. El estado por casilla lo
+> mandan el plan de la fase y sus tests.
 
 ### Fase 0 — Cimiento `shared-llm` + rol `system_owner` (ADR 0074)
+
+**Estado:** ✅ implementada y desplegada el 2026-06-23 (migración 0091). Ejecutada por el plan
+táctico [mejoras-2026-06-chat-coste-cortex](mejoras-2026-06-chat-coste-cortex.md) ·
+[changelog](../07-changelog/mejoras-2026-06-chat-coste-cortex.md). Pendiente sólo de validación
+humana.
 
 - **Fix bloqueante**: añadir parámetro `effort` a `ClaudeAgentProvider.run_agent` y propagarlo a `_build_options` (`claude_agent.py:425-430`) + test.
 - Migración `users.is_system_owner` (Boolean NOT NULL default false) + UNIQUE parcial `WHERE is_system_owner` (0089→0090).
@@ -127,6 +165,12 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 - Tests cross-rol/gating (403), singleton, aislamiento.
 
 ### Fase 1 — Córtex conversacional con memoria persistente (mente útil mínima)
+
+**Estado:** ✅ implementada y desplegada (migración 0092). Plan
+[cortex-f1-memoria-cognitiva](cortex-f1-memoria-cognitiva.md) ·
+[changelog](../07-changelog/cortex-f1-memoria-cognitiva.md). **Divergencia:** la búsqueda web
+salió por el camino degradado del ADR 0076 (tool propia con anti-SSRF, ADR 0067), no por las
+WebSearch/WebFetch nativas de `claude_sdk` que este documento recomendaba.
 
 - Migración `cortex_conversations` + `cortex_turns` (hilo persistente).
 - Grafo del córtex (extraer/reusar el turn-loop + topes; tools propias owner-scoped; `remember` capado 1/turno).
@@ -138,6 +182,13 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ### Fase 2 — Modelo afectivo + Panel de Mente (ADR 0075)
 
+**Estado:** ✅ implementada y desplegada (migración 0093), ❌ **no cerrada**. Plan
+[cortex-f2-afectivo](cortex-f2-afectivo.md) ·
+[changelog](../07-changelog/cortex-f2-afectivo.md). La auditoría del 2026-07-27 dejó ocho casillas
+abiertas (suite de calibración incompleta, sin chequeo de drift de la migración, UI sólo en ES);
+varias estaban siendo remediadas el 2026-07-30, así que el estado vigente lo mandan el plan y sus
+tests, no esta línea.
+
 - Migración `cortex_affect_snapshots` + estado vivo en Redis (decay lazy).
 - Motor PAD determinista (decay/update/EWMA, clamps, drives) en código puro testeable.
 - Distilador afectivo asíncrono (Celery, Ollama local) fail-open.
@@ -148,6 +199,28 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ### Fase 3 — Identidad evolutiva + reflexión (ADR 0074/0078)
 
+**Estado:** ✅ implementada y desplegada (migración 0094), ❌ **no cerrada**. Plan
+[cortex-f3-identidad](cortex-f3-identidad.md) ·
+[changelog](../07-changelog/cortex-f3-identidad.md). Lo entregado: identidad singleton versionada
+con histórico y `diff`, clamp de rasgos y cota de baseline por ciclo
+(`BASELINE_MAX_DELTA_PER_REFLECTION = 0.05`), bucle `workers.cortex_reflect` y UI de identidad; el
+`identity_preamble` entra en el self-context de cada turno, así que la identidad **gobierna la
+conducta** y no decora.
+
+**Re-verificado contra el código el 2026-08-19, y las cuatro cosas que este párrafo daba por
+faltantes ya no faltan**: `propose_identity` existe (`cortex/identity.py:391`) y la
+co-construcción del autonombrado aterrizó en esa fecha (`cortex/onboarding.py` +
+`POST /identity/onboarding`); el **timeline** de evolución tiene su lectura
+(`GET /owner/cortex/identity/history`, `routers/cortex_mind.py:543`, con el `diff` que el
+`/journal` descartaba) y su pantalla (`components/cortex/identity-timeline.tsx` +
+`trait-radar.tsx`); el **budget** de la reflexión existe y se comprueba en el núcleo, o sea
+también en el botón «Reflexionar ahora» (`REFLECTION_DAILY_CAP = 12`); y el drive `coherence`
+**se sacia** (`_satisfy_coherence`). La contradicción de diseño que bloqueaba los endpoints
+—quién reescribe la narrativa— la cerró el
+[ADR 0157](../05-architecture-decisions/0157-quien-reescribe-la-narrativa-del-cortex.md).
+Lo que sigue abierto de F3 es el **copy honesto ES-only** de la tarjeta de identidad (debe ir
+por el diccionario, ES **y** EN) y el **PR sin abrir**. Estado por casilla: el plan.
+
 - Migración `cortex_identity` + `cortex_identity_history`.
 - Onboarding de identidad (autonombrado, co-construcción de valores).
 - Bucle de reflexión (Celery beat): insights, reescribe narrativa, deriva traits/baseline clampeado + bound + diff versionado.
@@ -155,12 +228,48 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ### Fase 4 — Curiosidad y pensamiento de fondo (ADR 0078)
 
+**Estado:** ✅ implementada y desplegada (migración 0095, +0103 para `surfaced`, +0123 para
+`approved`), ❌ **no cerrada** — pero por lo que queda, no por el gobierno. Plan
+[cortex-f4-autonomia](cortex-f4-autonomia.md) · [changelog](../07-changelog/cortex-f4-autonomia.md).
+El bucle elige tema, investiga, destila a una memoria de aprendizaje y **abre el tema en el
+siguiente encuentro**.
+
+**Los cuatro puntos que el ADR 0078 llama «gobierno no negociable» están cableados al bucle**
+(comprobado contra el código el 2026-08-19; este párrafo decía lo contrario y era un hueco cerrado
+en julio que nadie vino a tachar):
+
+| Punto del ADR 0078      | Dónde vive hoy                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Budget caps             | **DOS dimensiones**: nº de búsquedas y **dólares**. `cortex_curiosity.py:256` lee el cap USD, `:281` lo reserva con `check_and_reserve(usd_cap=…, searches_cap=…)` y `:372` liquida con `record_spend(cost_usd=…)`; agotada cualquiera, la pasada queda `skipped` con el motivo |
+| Circuit-breaker         | `is_circuit_open` antes de tocar nada; un fallo lo acerca a abrirse, un éxito lo resetea                                                                                                                                                                                        |
+| Owner-approval gate     | `cortex.curiosity_approval_gate`, **ON por defecto**: `:324` deja el pursuit en `selected` con `approved IS NULL` y NO busca; `:303` lo sigue reteniendo en pasadas siguientes; decide `POST /owner/cortex/curiosity/pursuits/{id}/approve`                                     |
+| Observabilidad de coste | Las cuatro series (`agentic_cortex_curiosity_{runs_total,cost_usd_total,searches_total,circuit_open}`) las publica `workers/cortex_curiosity_metrics.py`, llamado desde `cortex_curiosity.py:198`                                                                               |
+
+Dos matices honestos, para no cerrar en falso en la otra dirección:
+
+- La observabilidad salió por el **textfile-collector de node-exporter**, no por la instrumentación
+  **OTEL** que el ADR 0078 nombra. Es una divergencia deliberada (mismo patrón que
+  `backup_metrics.py`, y el exporter HTTP por proceso no funciona con el pool prefork — ADR 0141),
+  pero es una divergencia y hay que declararla donde toque.
+- **`cortex.autonomy_enabled` sigue OFF por decisión del operador**, no porque falte gobierno.
+
 - Bucle de curiosidad (drives bajos → metas desde entities → WebSearch→digest→memoria→satisfacción).
 - Inicia temas en el siguiente encuentro.
-- Budget caps + circuit-breaker + (opcional) owner-approval gate; métricas OTEL.
+- Budget caps + circuit-breaker + owner-approval gate (el ADR lo marcaba «opcional»; el plan lo
+  subió al MVP y así se entregó); métricas por textfile-collector.
 - UI: "lo que está aprendiendo".
 
 ### Fase 5 — Voz/avatar afectivo + olvido (ADR 0073/0077)
+
+**Estado:** ✅ implementada y desplegada (sin tablas nuevas), ❌ **no cerrada**. Plan
+[cortex-f5-voz-avatar](cortex-f5-voz-avatar.md) ·
+[changelog](../07-changelog/cortex-f5-voz-avatar.md). WS `/ws/owner/cortex/voice` con gate
+DB-authoritative, frame `{type:'affect'}`, prosodia Kokoro modulada por el arousal
+(`arousal_to_speed`), y el olvido reversible por soft-delete + consolidación merge-into, todo
+detrás del kill-switch. Abierto: el **QA visual humano** (avatar en ES+EN, latencia de Kokoro), el
+copy y el `mood_label` **sólo en castellano**, y la decisión pendiente sobre la tarea **D3** — el
+diseño pivotó de columnas dedicadas a contadores en `metadata_` JSONB sin dejarlo escrito, y
+`last_recalled_at` se escribe pero nadie lo lee (la recencia se puntúa sobre `created_at`).
 
 - WS `/ws/owner/cortex/voice` (gate `require_system_owner`, reutiliza `VoiceSession`).
 - Frame `{type:'affect'}`; avatar modulado por PAD; voz Kokoro por arousal.
@@ -170,6 +279,12 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 ---
 
 ## ADRs necesarios (a crear como `proposed`)
+
+> **Los cinco existen y ninguno sigue `proposed`** (comprobado el 2026-07-30): 0074
+> `accepted-f0`; 0075, 0076, 0077 y 0078 `accepted`. Se añadieron después dos más al track:
+> **0073** (modo voz, `accepted`) y **0080** (navegador Playwright, `accepted`). Este epígrafe se
+> conserva como registro del diseño original — «a crear como `proposed`» era la instrucción de
+> entonces, no una tarea viva.
 
 - **ADR 0074** — Rol `system_owner` y Córtex: identidad global singleton, tablas tenant-less sobre BYPASSRLS y **excepción consciente al Principio 1 (RLS)**.
 - **ADR 0075** — Modelo afectivo computacional (PAD + appraisal OCC + drives homeostáticos), dinámica determinista, appraisal asíncrono, filosofía de honestidad.

@@ -176,8 +176,7 @@ async def test_sweep_claims_only_leaseless_or_expired(
         )
         # The within-lease doc was NOT re-stamped (still ~60s ago).
         recent_still_old = await conn.fetchval(
-            "SELECT enqueued_at < now() - make_interval(secs => 30)"
-            " FROM documents WHERE id = $1",
+            "SELECT enqueued_at < now() - make_interval(secs => 30) FROM documents WHERE id = $1",
             ids["recent_lease"],
         )
     finally:

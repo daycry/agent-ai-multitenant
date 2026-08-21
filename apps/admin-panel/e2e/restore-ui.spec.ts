@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/backup/restore — the System-Admin restore screen (Plan 12
@@ -83,13 +84,7 @@ async function setup(
   page: Page,
   identity: typeof SYSTEM_ADMIN | typeof TENANT_USER = SYSTEM_ADMIN,
 ): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route(`${API}/me`, (route) =>
     route.fulfill({

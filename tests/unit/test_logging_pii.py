@@ -68,7 +68,7 @@ def test_nie_masked_keeps_last_two() -> None:
 # JWT / Bearer
 # ---------------------------------------------------------------------------
 def test_jwt_is_fully_redacted() -> None:
-    jwt = "eyJhbGciOiJIUzI1NiJ9." "eyJzdWIiOiIxMjMiLCJleHAiOjE3MDB9." "abcdefABCDEF1234567890"
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMiLCJleHAiOjE3MDB9.abcdefABCDEF1234567890"
     out = mask_pii_in_text(f"token={jwt}")
     assert "eyJhbGci" not in out
     assert "***REDACTED***" in out

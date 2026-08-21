@@ -464,7 +464,7 @@ def validate_saml_security(config: ResolvedSAMLConfig) -> None:
         if config.want_name_id_encrypted:
             features.append("NameID encryption")
         raise SAMLConfigError(
-            f"SAML config enables {', '.join(features)} but is missing " f"{' and '.join(missing)}"
+            f"SAML config enables {', '.join(features)} but is missing {' and '.join(missing)}"
         )
 
 

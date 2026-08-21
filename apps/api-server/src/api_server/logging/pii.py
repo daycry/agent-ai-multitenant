@@ -8,6 +8,7 @@ shapes our logs leak rather than be exhaustive:
   - DNI / NIE       keep last 2                       ******12X
   - Bearer token    drop everything after "Bearer "   Bearer ***REDACTED***
   - JWT             drop the three b64url segments    ***REDACTED***
+  - API key         keep the prefix, drop the body    sk-***REDACTED***
 
 Anything not matching is left intact. We mask strings recursively
 inside dicts and lists so structlog event_dicts that wrap nested
@@ -42,6 +43,27 @@ _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_=-]{4,}\.eyJ[A-Za-z0-9_=-]{4,}\.[A-Za-z0-
 # Bearer header value (the whole `Bearer xxx...` chunk).
 _BEARER_RE = re.compile(r"(?i)Bearer\s+\S+")
 
+# prod-08 task_prod08_shared_logging_08 — claves de API por PREFIJO. Es la
+# familia que este stack maneja a diario y la que de verdad abre puertas: la
+# arrastran al log una traza de un 401 del proveedor, el `repr` de una config o
+# el mensaje de error de la librería del proveedor. Desde el ADR 0139 esos logs
+# viven además 30 días en Loki, indexados y buscables.
+#
+# Las tres familias reales del sistema:
+#   sk-…   OpenAI/Anthropic-style (Azure AI Foundry vía APIM)
+#   gh?_…  GitHub / Copilot (ghp_ personal, gho_ oauth, ghu_ user, ghs_, ghr_)
+#   hvs.…  tokens de servicio de Vault — la llave del baúl con todo lo demás
+#
+# El cuerpo mínimo (20/36/16 caracteres) NO es decorativo: sin él, `sk-` se
+# comería `sk-1` de un nombre de rama y `hvs.` cualquier hostname que empiece
+# así. Enmascarar de más deja unos logs ilegibles, y unos logs ilegibles acaban
+# con el masker desactivado — es decir, sin protección ninguna.
+_API_KEY_RE = re.compile(
+    r"\b(sk-(?:proj-|ant-)?)[A-Za-z0-9_-]{20,}"
+    r"|\b(gh[pousr]_)[A-Za-z0-9]{36,}"
+    r"|\b(hvs\.)[A-Za-z0-9_-]{16,}"
+)
+
 _REDACTED = "***REDACTED***"
 
 
@@ -73,6 +95,17 @@ def _mask_bearer(_match: re.Match[str]) -> str:
     return f"Bearer {_REDACTED}"
 
 
+def _mask_api_key(match: re.Match[str]) -> str:
+    """Conserva el PREFIJO y tapa el cuerpo.
+
+    Saber que la credencial que falló era una `hvs.` (Vault) y no una `sk-`
+    (proveedor LLM) es la mitad del diagnóstico; sustituirlo todo por
+    ``***REDACTED***`` protegería igual pero dejaría al operador a ciegas.
+    """
+    prefix = next((group for group in match.groups() if group), "")
+    return f"{prefix}{_REDACTED}"
+
+
 # ---------------------------------------------------------------------------
 # Public surface
 # ---------------------------------------------------------------------------
@@ -85,6 +118,9 @@ def mask_pii_in_text(text: str) -> str:
     # alphanumeric runs from being eaten piecewise.
     text = _JWT_RE.sub(_mask_jwt, text)
     text = _BEARER_RE.sub(_mask_bearer, text)
+    # Después de Bearer (un `Bearer sk-…` ya quedó tapado entero) y antes de
+    # IBAN/DNI, cuyas clases de caracteres solapan con el cuerpo de una clave.
+    text = _API_KEY_RE.sub(_mask_api_key, text)
     text = _IBAN_RE.sub(_mask_iban, text)
     text = _NIE_RE.sub(_mask_dni, text)
     text = _DNI_RE.sub(_mask_dni, text)

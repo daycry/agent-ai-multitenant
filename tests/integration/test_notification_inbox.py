@@ -211,7 +211,7 @@ async def _read_receipt_count(dsn: str, *, user_id: UUID, log_id: UUID) -> int:
     try:
         return int(
             await conn.fetchval(
-                "SELECT count(*) FROM notification_log_reads" " WHERE user_id = $1 AND log_id = $2",
+                "SELECT count(*) FROM notification_log_reads WHERE user_id = $1 AND log_id = $2",
                 user_id,
                 log_id,
             )

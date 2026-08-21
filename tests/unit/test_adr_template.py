@@ -320,3 +320,36 @@ def test_allocate_then_render_uses_the_allocated_number(tmp_path: Path) -> None:
     md = render_adr(meta)
     assert f"# ADR {format_adr_number(number)} —" in md
     assert adr_filename_stem(meta) == "0031-adr-template-sequential-numbering"
+
+
+# --- rejects: qué casillas invalida esta decisión (task_gov_01) -------------
+#
+# El campo es OPCIONAL a propósito: la mayoría de los ADR no invalidan ninguna
+# casilla, y una clave `rejects: []` en 155 documentos sería ruido que nadie
+# lee. Se emite solo cuando hay algo que declarar — el mismo criterio que ya
+# gobierna `## Alternativas consideradas` y `## Referencias`.
+
+
+def test_rejects_renders_as_yaml_flow_list_when_present() -> None:
+    md = render_adr(_sample_meta(rejects=("task_prod07_09", "task_prod13_15")))
+    frontmatter, _ = split_frontmatter(md)
+    data = yaml.safe_load(frontmatter)
+    assert data["rejects"] == ["task_prod07_09", "task_prod13_15"]
+
+
+def test_no_rejects_key_when_nothing_is_rejected() -> None:
+    """Sin rechazos NO hay clave: `rejects: []` en 155 ADR es ruido."""
+    frontmatter, _ = split_frontmatter(render_adr(_sample_meta()))
+    assert "rejects:" not in frontmatter
+    assert yaml.safe_load(frontmatter).get("rejects") is None
+
+
+def test_rejects_sits_after_plan_referenced_in_key_order() -> None:
+    """El orden de claves es contrato (el corpus se lee a ojo, no con un parser).
+
+    `rejects:` va donde el lector ya está mirando la relación con el roadmap:
+    justo detrás de `plan_referenced`.
+    """
+    frontmatter, _ = split_frontmatter(render_adr(_sample_meta(rejects=("task_prod07_09",))))
+    lines = [line.split(":", 1)[0] for line in frontmatter.split("\n") if ":" in line]
+    assert lines.index("rejects") == lines.index("plan_referenced") + 1

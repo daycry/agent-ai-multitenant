@@ -223,6 +223,12 @@ def _agent_spec(  # noqa: PLR0912, PLR0915 - secuencia lineal de claves opcional
     # emit when present (backward-compat).
     if request.agent_persona is not None:
         spec["agent_persona"] = request.agent_persona
+    # `task_gov_03`: el sello del prompt del agente → el runtime lo mezcla en
+    # `executions.prompt_version` (`prompt_version.agent_prompt_seal`). Sin él el
+    # runtime hashea la persona por su cuenta y la etiqueta sigue distinguiendo
+    # agentes; con él, además nombra la versión del historial que corrió.
+    if request.agent_prompt_version is not None:
+        spec["agent_prompt_version"] = request.agent_prompt_version
     # Agentes #2: advertise the agent's tools to the LLM so it can actually call
     # them (memory_recall/rag_search/read_file/…). Without this the model never
     # sees any tool → it can neither recall memory nor work through tools, for ANY

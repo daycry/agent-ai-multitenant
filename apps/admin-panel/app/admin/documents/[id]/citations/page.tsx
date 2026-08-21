@@ -25,7 +25,8 @@ import { FileText } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 interface BBox {
   page: number;
@@ -65,6 +66,7 @@ const PAGE_ASPECT = 1.414;
 const PAGE_WIDTH_PX = 480;
 
 export default function CitationViewerPage() {
+  const errorText = useErrorText();
   const params = useParams<{ id: string }>();
   const documentId = params.id;
   const [activeChunkId, setActiveChunkId] = useState<string | null>(null);
@@ -133,7 +135,7 @@ export default function CitationViewerPage() {
         <p className="text-muted-foreground mt-6 text-sm">Cargando…</p>
       ) : query.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="citations-error">
-          {query.error instanceof ApiError ? query.error.body : String(query.error)}
+          {errorText(query.error)}
         </p>
       ) : !data ? null : (
         <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">

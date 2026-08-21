@@ -18,6 +18,7 @@ import { Check, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 interface CriterionOutcome {
   text: string;
@@ -57,6 +58,7 @@ export function latestReviewCriteria(events: readonly AuditEvent[]): CriterionOu
 }
 
 export function TaskReviewCriteria({ taskId }: { taskId: string }) {
+  const t = useT("taskDetail");
   const historyQuery = useQuery({
     queryKey: ["task-history", taskId],
     queryFn: () => apiFetch<{ events: AuditEvent[] }>(`/tasks/${taskId}/history`),
@@ -73,21 +75,27 @@ export function TaskReviewCriteria({ taskId }: { taskId: string }) {
     <section className="mb-4" data-testid="task-review-criteria">
       <div className="mb-1 flex items-center gap-2">
         <h4 className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
-          Veredicto del reviewer
+          {t("reviewHeading")}
         </h4>
         <Badge variant={failed > 0 ? "danger" : "success"}>
           {failed > 0
-            ? `${failed} de ${criteria.length} sin cumplir`
-            : `${criteria.length} criterios cumplidos`}
+            ? t("reviewFailed", { failed, total: criteria.length })
+            : t("reviewAllPassed", { total: criteria.length })}
         </Badge>
       </div>
       <ul className="space-y-1.5">
         {criteria.map((criterion, index) => (
           <li key={index} className="flex gap-2 text-sm" data-testid={`review-criterion-${index}`}>
             {criterion.passed ? (
-              <Check className="text-success mt-0.5 h-4 w-4 shrink-0" aria-label="cumplido" />
+              <Check
+                className="text-success mt-0.5 h-4 w-4 shrink-0"
+                aria-label={t("reviewPassedIcon")}
+              />
             ) : (
-              <X className="text-destructive mt-0.5 h-4 w-4 shrink-0" aria-label="sin cumplir" />
+              <X
+                className="text-destructive mt-0.5 h-4 w-4 shrink-0"
+                aria-label={t("reviewFailedIcon")}
+              />
             )}
             <span>
               {criterion.text}

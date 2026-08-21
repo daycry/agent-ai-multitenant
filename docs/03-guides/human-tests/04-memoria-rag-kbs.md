@@ -14,8 +14,8 @@ manualmente por UI o queda bloqueado por features posteriores.
 
 ```powershell
 .\scripts\dev\up.ps1                                        # stack arriba (1ª vez)
-.\.venv\Scripts\python.exe scripts\setup_demo_project.py    # proyecto + agente compartidos
-.\.venv\Scripts\python.exe scripts\setup_demo_04_5.py       # KB destino + Document sembrado (cubre 04_01/04_02)
+.\.venv\Scripts\python.exe scripts\demos\setup_demo_project.py    # proyecto + agente compartidos
+.\.venv\Scripts\python.exe scripts\demos\setup_demo_04_5.py       # KB destino + Document sembrado (cubre 04_01/04_02)
 .\scripts\dev\run-human-tests.ps1 -Only 04_5                # demos cubren los caminos automáticos
 # luego: pruebas manuales para 04_02 completo, 04_03, 04_04, 04_05
 ```
@@ -122,17 +122,30 @@ follow-up de esta guía cuando llegue el upload de archivos en el chat.
 
 ---
 
-## `human_04_05` — Cambio modelo embeddings + reindexación
+## `human_04_05` — Cambio del modelo de embeddings de la plataforma
 
-❌ **Bloqueado**. `embedding_model_id` se muestra como texto sin
-selector ni endpoint para cambiarlo. **Saltar** hasta que llegue la
-feature (probablemente Plan 12, "evals + estadísticas").
+Este test estuvo marcado ❌ **Bloqueado** esperando un selector por KB que el
+**ADR 0155** decidió no construir: la plataforma indexa con un único modelo, y
+el campo por KB es el **sello** de con cuál se generaron sus vectores. Así que
+lo que hay que probar no es cambiar el campo, sino cambiar el modelo de la
+plataforma y ver que el sistema lo dice en vez de degradarse en silencio.
 
-Cuando llegue, el flow será:
-
-1. Cambiar `embedding_model_id` en el KB.
-2. El worker de re-embed regenera todos los chunks.
-3. Las búsquedas RAG usan el modelo nuevo a partir de ese momento.
+1. Con una KB **con documentos indexados**, cambia
+   `API_SERVER_EMBEDDING_MODEL` a otro embedder de 768 dims (p. ej.
+   `granite-embedding:278m`, previo `ollama pull`) **en api-server y workers**, y
+   reinicia los dos.
+2. En Admin → Knowledge Bases, la KB aparece marcada **«Reindexado pendiente»**,
+   y su ficha nombra el modelo con el que se indexó y el activo.
+3. Sube un documento nuevo a esa KB: termina en **failed**, y el motivo en la
+   ficha nombra los dos modelos. (Antes se indexaba tan feliz con vectores de
+   otro espacio semántico y nadie se enteraba.)
+4. Busca en el RAG algo que sólo esté en esa KB: sigue apareciendo por texto
+   (BM25) pero ya no compite por vector.
+5. Reindexa sus documentos
+   (`POST /knowledge-bases/{kb}/documents/{doc}/reindex`) y comprueba que el
+   aviso desaparece y la búsqueda vectorial vuelve.
+6. Vuelve a dejar `API_SERVER_EMBEDDING_MODEL` como estaba (y reindexa otra vez
+   si habías reindexado).
 
 ---
 
@@ -140,7 +153,7 @@ Cuando llegue, el flow será:
 
 ```powershell
 .\scripts\dev\down.ps1 -Docker
-Remove-Item scripts\.demo_state.json -ErrorAction SilentlyContinue
+Remove-Item scripts\demos\.demo_state.json -ErrorAction SilentlyContinue
 docker exec agentic-platform-postgres-1 psql -U migrations_user -d agentic_platform -c `
   "TRUNCATE memory_entries CASCADE; TRUNCATE chunks, documents, kb_projects, knowledge_bases RESTART IDENTITY CASCADE;"
 .\scripts\dev\up.ps1

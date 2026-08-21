@@ -15,19 +15,33 @@
  * The logos below are the providers' OWN published marks (simple-icons /
  * official brand pages), inlined as SVG so the button renders offline with
  * no extra request. Microsoft's logo is the four-square mark; the "Sign in
- * with Microsoft" text + light button is per the Microsoft brand guidance.
+ * with Microsoft" text + light button is per the Microsoft brand guidance —
+ * whose own guidelines publish that text TRANSLATED, so the fallback label is
+ * a dictionary key (prod-16 `task_prod16_02`) and not a hardcoded English
+ * string.
  * Google follows the "G" mark on a white button (neutral light theme).
  * GitHub uses the Octocat mark on its near-black brand color.
  */
 
 import type { ComponentType, SVGProps } from "react";
 
+import type { MessageKey } from "@/lib/i18n";
+
 /** The brands we render with a first-class, guideline-compliant treatment. */
 export type ProviderBrand = "microsoft" | "google" | "github" | "oidc" | "saml";
 
 interface BrandSpec {
-  /** Default sign-in text when the operator left `button_label` unset. */
-  defaultLabel: string;
+  /**
+   * Clave del diccionario con el texto de respaldo, para cuando el operador
+   * dejó `button_label` vacío (prod-16 `task_prod16_02`).
+   *
+   * Antes era el texto YA resuelto, y siempre en inglés («Sign in with
+   * Microsoft»): con el panel en castellano —que es el idioma por defecto— el
+   * botón de SSO salía en inglés desde el día 1. Guardar la CLAVE y no el
+   * texto es lo que impide que la cara castellana se quede sin llamante, que
+   * es como se pierde una traducción ya escrita.
+   */
+  defaultLabelKey: MessageKey<"login">;
   /** The brand mark. */
   Logo: ComponentType<SVGProps<SVGSVGElement>>;
   /**
@@ -129,7 +143,7 @@ const BRAND_SPECS: Record<ProviderBrand, BrandSpec> = {
   // Microsoft brand guidance: white button, neutral border, the colored
   // four-square mark, "Sign in with Microsoft".
   microsoft: {
-    defaultLabel: "Sign in with Microsoft",
+    defaultLabelKey: "ssoWithMicrosoft",
     Logo: MicrosoftLogo,
     className:
       "border border-[#8c8c8c] bg-white text-[#5e5e5e] hover:bg-[#f3f3f3] focus-visible:ring-[#5e5e5e]/40",
@@ -137,7 +151,7 @@ const BRAND_SPECS: Record<ProviderBrand, BrandSpec> = {
   // Google brand guidance: light (white) button with a subtle border and
   // the colored "G" mark, "Sign in with Google".
   google: {
-    defaultLabel: "Sign in with Google",
+    defaultLabelKey: "ssoWithGoogle",
     Logo: GoogleLogo,
     className:
       "border border-[#dadce0] bg-white text-[#3c4043] hover:bg-[#f8f9fa] focus-visible:ring-[#4285f4]/40",
@@ -145,7 +159,7 @@ const BRAND_SPECS: Record<ProviderBrand, BrandSpec> = {
   // GitHub brand guidance: the near-black brand color with the white
   // Octocat, "Sign in with GitHub".
   github: {
-    defaultLabel: "Sign in with GitHub",
+    defaultLabelKey: "ssoWithGithub",
     Logo: GitHubLogo,
     className:
       "border border-[#1b1f24] bg-[#24292f] text-white hover:bg-[#1b1f24] focus-visible:ring-white/40",
@@ -153,13 +167,13 @@ const BRAND_SPECS: Record<ProviderBrand, BrandSpec> = {
   // Neutral fallbacks reuse the app's outline treatment so an un-branded
   // IdP still looks at home in the panel.
   oidc: {
-    defaultLabel: "Sign in with SSO",
+    defaultLabelKey: "ssoWithSso",
     Logo: OidcLogo,
     className:
       "border-input bg-background text-foreground hover:bg-muted border focus-visible:ring-ring",
   },
   saml: {
-    defaultLabel: "Sign in with SSO",
+    defaultLabelKey: "ssoWithSso",
     Logo: SamlLogo,
     className:
       "border-input bg-background text-foreground hover:bg-muted border focus-visible:ring-ring",
@@ -189,7 +203,7 @@ export function resolveBrand(kind: string, ...hints: (string | null | undefined)
 }
 
 export function brandSpec(brand: ProviderBrand): {
-  defaultLabel: string;
+  defaultLabelKey: MessageKey<"login">;
   Logo: ComponentType<SVGProps<SVGSVGElement>>;
   className: string;
 } {

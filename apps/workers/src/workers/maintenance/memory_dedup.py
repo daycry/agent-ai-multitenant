@@ -20,13 +20,14 @@ import structlog
 from sqlalchemy import CursorResult, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from workers.db import worker_engine
+
 _log = structlog.get_logger("workers.maintenance")
 
 # Todas-menos-la-más-antigua por grupo exacto. COALESCE con el UUID cero para
 # que los owners NULL agrupen entre sí (NULL != NULL en un PARTITION BY crudo
 # no rompe, pero el cero-UUID lo hace explícito y legible en el plan).
-_CONSOLIDATE_SQL = text(
-    """
+_CONSOLIDATE_SQL = text("""
     WITH ranked AS (
         SELECT id,
                row_number() OVER (
@@ -45,8 +46,7 @@ _CONSOLIDATE_SQL = text(
     SET deleted_at = now()
     FROM ranked r
     WHERE m.id = r.id AND r.rn > 1
-    """
-)
+    """)
 
 
 async def consolidate_exact_duplicate_memories(session: AsyncSession) -> int:
@@ -66,11 +66,11 @@ async def consolidate_exact_duplicate_memories(session: AsyncSession) -> int:
 
 async def run() -> int:
     """Entry point de deploy: engine propio, una transacción, dispose."""
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from workers.config import get_settings
 
-    engine = create_async_engine(get_settings().database_url)
+    engine = worker_engine(get_settings())
     try:
         sm = async_sessionmaker(engine, expire_on_commit=False)
         async with sm() as session, session.begin():

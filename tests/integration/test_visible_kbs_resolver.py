@@ -62,7 +62,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             foreign_tenant,
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES" " ($1, 'u@acme.test', 'h')",
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, 'u@acme.test', 'h')",
             user,
         )
         await conn.execute(

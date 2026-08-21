@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E: the "Depende de" section of the task detail sheet must show dependency
@@ -41,20 +42,24 @@ function taskRow(
 }
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   const main = taskRow(MAIN_ID, "Tarea principal", { depends_on: [DEP_ID] });
   const dep = taskRow(DEP_ID, "Definir contrato de respuesta JSON");
 
-  await page.route(`${API}/projects/${PROJECT_ID}/tasks`, (route) =>
+  // Dos patrones para la MISMA lista, y no es redundancia: la pantalla la pide
+  // sin paginar (`apiFetch`) y la hoja de detalle la vuelve a pedir paginada
+  // (`fetchAllPages` añade `?limit=&offset=`) para resolver los títulos de las
+  // dependencias. Con sólo el primero, la hoja se quedaba sin lista y pintaba el
+  // UUID recortado — justo lo que este test dice vigilar (2026-08-19).
+  const tasksList = (route: Route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify([main, dep]),
-    }),
-  );
+    });
+  await page.route(`${API}/projects/${PROJECT_ID}/tasks`, tasksList);
+  await page.route(`${API}/projects/${PROJECT_ID}/tasks?*`, tasksList);
   await page.route(`${API}/projects/${PROJECT_ID}/plans`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
   );

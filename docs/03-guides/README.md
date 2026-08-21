@@ -43,6 +43,7 @@ y la tabla de NIVELES) vive en
 | [run-demo-human-tests.md](./run-demo-human-tests.md)                     | Ejecutar los scripts demo de tests humanos (Plan 02 + Plan 04.5)                                                                        |
 | [design-tokens.md](./design-tokens.md)                                   | Tokens de diseño del frontend                                                                                                           |
 | [ui-conventions.md](./ui-conventions.md)                                 | Design-system del admin-panel: primitivas, componentes, estados, a11y                                                                   |
+| [e2e-con-backend-vivo.md](./e2e-con-backend-vivo.md)                     | Los 12 specs Playwright que hablan con un api-server de verdad: el guion del arnes y sus cinco trampas                                  |
 | [gotchas/](./gotchas/)                                                   | Trampas conocidas del toolchain (Docker, asyncpg, mypy, OTEL, Windows…)                                                                 |
 | [../../CONTINUE_HERE.md](../../CONTINUE_HERE.md)                         | Por dónde va el trabajo ahora mismo: rama, bloqueos, qué espera al operador                                                             |
 | [verificar-antes-de-implementar.md](./verificar-antes-de-implementar.md) | Prácticas de trabajo: por qué un plan «pendiente» miente, cómo evitar que un test fije el defecto, y guardas que no pueden pasar vacías |

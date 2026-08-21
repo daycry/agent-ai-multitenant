@@ -33,7 +33,9 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
 import { Spinner } from "@/components/ui/spinner";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT, type MessageKey, type Translator } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // ---------------------------------------------------------------------------
 // Types — mirror api_server.schemas.guardrail_events.
@@ -92,17 +94,24 @@ const SEVERITY_BADGE: Record<string, BadgeVariant> = {
 // Severity render order (most severe first) for the breakdown.
 const SEVERITY_ORDER: Severity[] = ["critical", "high", "medium", "low", "info"];
 
-const ACTION_LABEL: Record<string, string> = {
-  block: "bloquear",
-  redact: "enmascarar",
-  warn: "avisar",
-  retry_with_feedback: "reintentar",
-  escalate_to_human: "escalar",
-  transform: "transformar",
-};
+/**
+ * Acción del evento → clave del diccionario. El slug crudo del backend es el
+ * fallback: una acción nueva sale legible aunque nadie la haya traducido, que
+ * es mejor que una celda vacía.
+ */
+const ACTION_KEY = {
+  block: "actionBlock",
+  redact: "actionRedact",
+  warn: "actionWarn",
+  retry_with_feedback: "actionRetryWithFeedback",
+  escalate_to_human: "actionEscalateToHuman",
+  transform: "actionTransform",
+} as const satisfies Record<string, MessageKey<"guardrails">>;
 
-function errorText(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
+function actionLabel(t: Translator<"guardrails">, action: string | null): string {
+  if (!action) return "—";
+  const key = ACTION_KEY[action as keyof typeof ACTION_KEY];
+  return key ? t(key) : action;
 }
 
 function fmtWhen(iso: string): string {
@@ -115,7 +124,7 @@ function fmtWhen(iso: string): string {
  * Pure-SVG sparkline of the per-day event counts. No heavy chart dep
  * (recharts is not present). Returns a flat baseline when there is no data.
  */
-function Sparkline({ data }: { data: DayCount[] }) {
+function Sparkline({ data, t }: { data: DayCount[]; t: Translator<"guardrails"> }) {
   const width = 480;
   const height = 80;
   const pad = 4;
@@ -126,7 +135,7 @@ function Sparkline({ data }: { data: DayCount[] }) {
         viewBox={`0 0 ${width} ${height}`}
         className="text-muted-foreground/40 h-20 w-full"
         role="img"
-        aria-label="Sin eventos en la ventana"
+        aria-label={t("sparklineEmptyAria")}
       >
         <line
           x1={pad}
@@ -156,7 +165,7 @@ function Sparkline({ data }: { data: DayCount[] }) {
       viewBox={`0 0 ${width} ${height}`}
       className="text-primary h-20 w-full"
       role="img"
-      aria-label="Eventos por día"
+      aria-label={t("sparklineAria")}
       preserveAspectRatio="none"
     >
       <polyline points={points} fill="none" stroke="currentColor" strokeWidth={2} />
@@ -196,6 +205,8 @@ function BarRow({
 }
 
 function DashboardBody() {
+  const t = useT("guardrails");
+  const errorText = useErrorText();
   const [windowDays, setWindowDays] = useState<number>(30);
 
   const { data, isLoading, isError, error } = useQuery({
@@ -217,7 +228,7 @@ function DashboardBody() {
     return (
       <Card>
         <CardContent className="text-destructive pt-5 text-sm" data-testid="guardrails-error">
-          No se pudo cargar el dashboard: {errorText(error)}
+          {t("loadError")} {errorText(error)}
         </CardContent>
       </Card>
     );
@@ -231,7 +242,7 @@ function DashboardBody() {
     <div className="space-y-6" data-testid="guardrails-dashboard">
       {/* Window selector */}
       <SegmentedControl
-        label="Ventana:"
+        label={t("windowLabel")}
         value={windowDays}
         onChange={setWindowDays}
         options={WINDOW_OPTIONS.map((w) => ({ value: w, label: `${w}d` }))}
@@ -244,7 +255,7 @@ function DashboardBody() {
         <Card>
           <CardContent className="pt-5">
             <p className="text-muted-foreground text-xs uppercase tracking-wider">
-              Eventos ({data.window_days}d)
+              {t("eventsInWindow", { n: data.window_days })}
             </p>
             <p className="mt-1 text-3xl font-semibold tabular-nums" data-testid="total-count">
               {data.total}
@@ -254,9 +265,9 @@ function DashboardBody() {
         <Card className="md:col-span-2">
           <CardContent className="pt-5">
             <p className="text-muted-foreground mb-2 text-xs uppercase tracking-wider">
-              Tendencia diaria
+              {t("dailyTrend")}
             </p>
-            <Sparkline data={data.by_day} />
+            <Sparkline data={data.by_day} t={t} />
           </CardContent>
         </Card>
       </div>
@@ -265,18 +276,18 @@ function DashboardBody() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardContent className="space-y-3 pt-5">
-            <p className="text-muted-foreground text-xs uppercase tracking-wider">Por tipo</p>
+            <p className="text-muted-foreground text-xs uppercase tracking-wider">{t("byType")}</p>
             <div className="space-y-2" data-testid="by-type">
               {data.by_type.length === 0 ? (
-                <p className="text-muted-foreground text-sm">Sin eventos.</p>
+                <p className="text-muted-foreground text-sm">{t("noEvents")}</p>
               ) : (
-                data.by_type.map((t) => (
+                data.by_type.map((row) => (
                   <BarRow
-                    key={t.guardrail_type}
-                    label={t.guardrail_type}
-                    count={t.count}
+                    key={row.guardrail_type}
+                    label={row.guardrail_type}
+                    count={row.count}
                     max={maxType}
-                    testid={`type-row-${t.guardrail_type}`}
+                    testid={`type-row-${row.guardrail_type}`}
                   />
                 ))
               )}
@@ -285,10 +296,12 @@ function DashboardBody() {
         </Card>
         <Card>
           <CardContent className="space-y-3 pt-5">
-            <p className="text-muted-foreground text-xs uppercase tracking-wider">Por severidad</p>
+            <p className="text-muted-foreground text-xs uppercase tracking-wider">
+              {t("bySeverity")}
+            </p>
             <div className="space-y-2" data-testid="by-severity">
               {data.total === 0 ? (
-                <p className="text-muted-foreground text-sm">Sin eventos.</p>
+                <p className="text-muted-foreground text-sm">{t("noEvents")}</p>
               ) : (
                 SEVERITY_ORDER.filter((s) => sevByKey.has(s)).map((s) => (
                   <BarRow
@@ -310,21 +323,21 @@ function DashboardBody() {
       <Card>
         <CardContent className="pt-5">
           <p className="text-muted-foreground mb-3 text-xs uppercase tracking-wider">
-            Eventos recientes
+            {t("recentEvents")}
           </p>
           {data.recent.length === 0 ? (
-            <p className="text-muted-foreground text-sm">Sin eventos recientes.</p>
+            <p className="text-muted-foreground text-sm">{t("noRecentEvents")}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm" data-testid="recent-events-table">
                 <thead className="text-muted-foreground text-left text-xs uppercase">
                   <tr>
-                    <th className="py-2 pr-3">Tipo</th>
-                    <th className="py-2 pr-3">Hook</th>
-                    <th className="py-2 pr-3">Severidad</th>
-                    <th className="py-2 pr-3">Acción</th>
-                    <th className="py-2 pr-3">Detalle (enmascarado)</th>
-                    <th className="py-2 pr-3">Cuándo</th>
+                    <th className="py-2 pr-3">{t("colType")}</th>
+                    <th className="py-2 pr-3">{t("colHook")}</th>
+                    <th className="py-2 pr-3">{t("colSeverity")}</th>
+                    <th className="py-2 pr-3">{t("colAction")}</th>
+                    <th className="py-2 pr-3">{t("colDetail")}</th>
+                    <th className="py-2 pr-3">{t("colWhen")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -340,7 +353,7 @@ function DashboardBody() {
                         <Badge variant={SEVERITY_BADGE[e.severity] ?? "muted"}>{e.severity}</Badge>
                       </td>
                       <td className="text-muted-foreground py-2 pr-3">
-                        {e.action ? (ACTION_LABEL[e.action] ?? e.action) : "—"}
+                        {actionLabel(t, e.action)}
                       </td>
                       <td className="text-muted-foreground max-w-md truncate py-2 pr-3">
                         {e.detail || "—"}
@@ -361,12 +374,13 @@ function DashboardBody() {
 }
 
 export default function GuardrailsDashboardPage() {
+  const t = useT("guardrails");
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 md:px-8" data-testid="guardrails-page">
       <PageHeader
         icon={<ShieldAlert className="h-5 w-5 text-white" />}
-        title="Guardrails"
-        description="Eventos de guardrails sobre el trabajo de tu tenant. El detalle está enmascarado: el secreto / PII que disparó el guardrail nunca se almacena."
+        title={t("title")}
+        description={t("description")}
       />
       <div className="mt-6">
         <RoleGuard
@@ -375,7 +389,7 @@ export default function GuardrailsDashboardPage() {
             <Card>
               <CardContent className="text-muted-foreground flex items-center gap-2 pt-5 text-sm">
                 <Activity className="h-4 w-4" />
-                Necesitas el rol tenant_admin para ver el dashboard de guardrails.
+                {t("forbidden")}
               </CardContent>
             </Card>
           }

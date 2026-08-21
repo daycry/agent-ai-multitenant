@@ -67,8 +67,12 @@ async def _seed(dsn: str) -> dict[str, UUID]:
             "platform-prices",
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES"
-            " ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)",
+            # prod-09 task_prod09_04: `require_system_admin` re-reads
+            # `users.is_system_admin` from the DB, so the System Admin fixture
+            # must actually CARRY the flag — a `sys` JWT claim over a row whose
+            # flag is false is exactly the privilege the gate now refuses.
+            "INSERT INTO users (id, email, password_hash, is_system_admin) VALUES"
+            " ($1, $2, $3, false), ($4, $5, $6, false), ($7, $8, $9, true)",
             ids["admin_a"],
             "admin-a@prices.test",
             "h",
@@ -487,7 +491,7 @@ async def test_current_price_lookup(configured_app, migrations_pg_dsn: str) -> N
 
     async with _client(configured_app) as client:
         resp = await client.get(
-            "/model-prices/current" "?provider=anthropic&model_id=claude-sonnet-4-5&modality=text",
+            "/model-prices/current?provider=anthropic&model_id=claude-sonnet-4-5&modality=text",
             headers=headers,
         )
     assert resp.status_code == 200, resp.text

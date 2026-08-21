@@ -22,12 +22,13 @@ priority: P1
 | Campo                              | Valor                                                     |
 | ---------------------------------- | --------------------------------------------------------- |
 | **ID del Plan**                    | `prod-07-fiabilidad-llm-costes`                           |
-| **Estado**                         | `pending_approval`                                        |
 | **Prioridad**                      | P1                                                        |
 | **Bloqueado por**                  | — (independiente; coordina con prod-06, prod-08, prod-10) |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                                               |
 | **Tiempo estimado (persona-días)** | 14                                                        |
 | **Rama git sugerida**              | `plan/prod-07-fiabilidad-llm-costes`                      |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -134,7 +135,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_01` — Retry con backoff en los consumidores de los 4 providers
 
-- [ ] **Título**: Helper `with_retries()` en shared-llm + aplicación en runtime y asistente
+- [x] **Título**: Helper `with_retries()` en shared-llm + aplicación en runtime y asistente
 - **Descripción**: crear `packages/shared-llm/src/shared_llm/retry.py` con backoff
   exponencial + jitter (2-3 intentos) que reintente `RateLimitError` (respetando
   `Retry-After` — `check_status` en `_openai_compat.py:61` debe adjuntar el header
@@ -156,7 +157,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_02` — Event loop único por ejecución en el agent-runtime + aclose
 
-- [ ] **Título**: Eliminar `asyncio.run` por llamada (bug "Event loop is closed")
+- [x] **Título**: Eliminar `asyncio.run` por llamada (bug "Event loop is closed")
 - **Descripción**: sustituir `_run()` (`agent_runtime/providers.py:186-194`) por un
   `asyncio.Runner` persistente por ejecución (o hilo dedicado con loop propio) de
   modo que el `httpx.AsyncClient` que el provider crea una vez en su constructor
@@ -178,7 +179,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_03` — Errores de stream no-2xx legibles
 
-- [ ] **Título**: `await resp.aread()` antes de `check_status` en streaming
+- [x] **Título**: `await resp.aread()` antes de `check_status` en streaming
 - **Descripción**: en `ollama.py:156`, `azure_foundry.py:134` y
   `copilot.py:368/380`, cuando `resp.status_code >= 400` dentro del bloque
   `client.stream(...)`, leer el cuerpo (`await resp.aread()`) antes de llamar a
@@ -197,7 +198,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_04` — `usage` y `tool_calls` en el streaming OpenAI-compat
 
-- [ ] **Título**: `stream_options.include_usage` + parseo de tool_calls en SSE
+- [x] **Título**: `stream_options.include_usage` + parseo de tool_calls en SSE
 - **Descripción**: añadir `stream_options: {"include_usage": true}` al body de
   `stream()` en los tres providers OpenAI-compat; extender
   `parse_sse_delta`/`iter_sse_chunks` (`_openai_compat.py:111-152`) para parsear
@@ -216,7 +217,16 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_05` — Cierre de providers en `/assistant/chat`
 
-- [ ] **Título**: `get_assistant_model` como dependencia async-generator con `aclose()`
+- [x] **Título**: `get_assistant_model` como dependencia async-generator con `aclose()`
+  - ✅ **Cerrada (2026-08-01):** `get_assistant_model` es ahora async generator
+    (`yield` + `finally: await aclose_assistant_model(model)`). El cuerpo se extrajo
+    a `build_assistant_model`, el builder plano, porque `routers/assistant_voice.py`
+    lo llamaba directamente y un WebSocket no tiene ciclo de vida de request: ese
+    socket cierra su provider en su propio `finally` (antes fugaba uno por sesión de
+    voz). `tests/integration/test_assistant_provider_teardown.py` — **5 tests
+    verdes**: la forma de la dependencia, un cierre por request, el cierre en el
+    camino de ERROR (el que más fugaba: ningún `except` cerraba nada) y dos requests
+    → dos cierres. RED previo: los 5 en rojo con `closes == 0`.
 - **Descripción**: convertir `get_assistant_model`
   (`apps/api-server/src/api_server/routers/assistant.py:150`) en async generator
   de FastAPI (`yield` + `finally: await provider.aclose()`), siguiendo el patrón
@@ -232,7 +242,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_06` — `ClaudeAgentProvider` sin mutar `os.environ`
 
-- [ ] **Título**: Credencial por env del subproceso del query SDK, no process-global
+- [x] **Título**: Credencial por env del subproceso del query SDK, no process-global
 - **Descripción**: eliminar `os.environ["ANTHROPIC_API_KEY"] = api_key`
   (`claude_agent.py:51-52`); pasar la credencial por las opciones/env por
   invocación que acepta el claude-agent-sdk. Si no es viable en todos los caminos,
@@ -252,7 +262,7 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_07` — Vault fail-fast en el dispatch (`vault_unavailable`)
 
-- [ ] **Título**: Fallo de Vault → `ModelResolutionError`, no 401 opaco en el sandbox
+- [x] **Título**: Fallo de Vault → `ModelResolutionError`, no 401 opaco en el sandbox
 - **Descripción**: en `apps/workers/src/workers/model_resolver.py` (resolve del
   spec, líneas 94-118), cuando la fila tiene `secret_vault_path` y el kind
   requiere credencial (azure_foundry, copilot, ollama-cloud), tratar
@@ -276,14 +286,14 @@ contabilidad de costes exacta (C) y Memorizer + documentación (D).
 
 #### `task_prod07_08` — Unificar el mapeo kind→credencial triplicado
 
-- [ ] **Título**: Tabla única en shared-llm consumida por worker, runtime y factory
+- [x] **Título**: Tabla única en shared-llm consumida por worker, runtime y factory
 - **Descripción**: extraer el mapeo kind→campos (azure*foundry→apim_base_url/
   subscription_key/bearer_token, copilot→github_token, ollama→base_url/api_key) a
   `packages/shared-llm/src/shared_llm/credential_fields.py` y hacer que lo
   consuman las tres copias actuales: `workers/model_resolver._overlay_provider_fields`
   (`model_resolver.py:49-74`), `agent_runtime/providers._overlay_resolved`
   (`providers.py:403-435`) y los `\_build*\*` del api-server (`factory.py:50-116`).
-Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
+  Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
   Azure mientras el factory sí lo acepta — un proveedor azure bearer-only es hoy
   construible vía asistente pero irresoluble vía dispatch.
 - **Tiempo**: 8 h · **Complejidad**: m
@@ -298,7 +308,30 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_09` — Capacidades `claude_sdk` honestas
 
-- [ ] **Título**: Bloqueo/aviso explícito de tools+claude_sdk, timeout del SDK y ADR
+- [x] **Título**: Bloqueo/aviso explícito de tools+claude_sdk, timeout del SDK y ADR
+  - ✅ **Cerrada (2026-08-01)** — mitad entregada, mitad **retirada por obsoleta**,
+    y la retirada la firma un humano: el **ADR 0150 está `accepted`** con la
+    opción A (se mantiene el cableado).
+  - **Entregado**: (c) el timeout del SDK — `asyncio.wait_for` **por mensaje**
+    alrededor del iterador del query (`providers/claude_agent.py:272`), de modo
+    que el reloj se reinicia mientras el CLI emita algo y sólo salta si se calla
+    durante `_DEFAULT_SDK_MESSAGE_TIMEOUT_S`; y (d) el ADR. Test:
+    `pytest packages/shared-llm/tests/test_claude_agent_provider.py -k "timeout or environ"`
+    → **9 verdes**.
+  - **Retirado**: (a) el bloqueo en validación de `tools + claude_sdk` y (b) la
+    nota de limitación en la UI. Su premisa —«`complete()` ignora tools y
+    `decide()` siempre devuelve FINISH»— es **falsa desde los ADR
+    0086/0087/0092/0097**: el provider anuncia los schemas del host como servidor
+    MCP in-process, intercepta la llamada con `can_use_tool` y la devuelve en
+    `tool_calls` (test `test_complete_emits_tool_calls_when_model_requests_a_tool`),
+    y `ClaudeSDKModelClient` hereda `decide()` de la base, así que alcanza ACT
+    como los OpenAI-compat. Implementar (a) hoy **rompería el proveedor principal
+    de la plataforma**: el «riesgo 5» de este mismo plan pasó de riesgo a certeza.
+  - **Documentado**: la matriz de capacidades de
+    `docs/04-reference/llm-providers.md` §4 dice ahora que `claude_sdk` **sí**
+    soporta herramientas, con la limitación real anotada — se **median, no se
+    compelen**: el SDK no tiene `tool_choice` forzado, y de ahí que
+    `_advertises_submit_result` y `_forces_verdict_choice` estén a `False`.
 - **Descripción**: hoy `ClaudeAgentProvider.complete()` ignora tools/max_tokens/
   temperature (`claude_agent.py:152-154`) y `ClaudeSDKModelClient.decide()` siempre
   devuelve FINISH (`agent_runtime/providers.py:343-347`): un agente claude_sdk con
@@ -323,7 +356,60 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_10` — Credencial fuera del env del contenedor
 
-- [ ] **Título**: Mount tmpfs read-only para el secreto; env solo con puntero
+- [x] **Título**: Mount tmpfs read-only para el secreto; env solo con puntero
+  - ✅ **Cerrada (2026-08-10).** La credencial ya no viaja en el env. El worker
+    parte el spec resuelto en (público, credenciales) con
+    `workers/model_secret.py::split_model_credentials`, escribe las credenciales
+    en un fichero 0444 bajo `{data_root}/run-secrets/` y lo bind-montea
+    **read-only** en `/run/secrets` reutilizando `workers/secrets.py::stage_secrets`
+    — que llevaba desde el Plan 02 escrito y con CERO llamantes productivos, el
+    modo de fallo nº 1 de esta base. En `AGENT_TASK_SPEC` sólo queda el puntero
+    `model.credentials_file`. El runtime lo hidrata en `_load_spec`
+    (`agent_runtime/spec_secrets.py`), la única puerta por la que entra un spec,
+    así que ni una firma cambia aguas abajo. Y `container.py::_scrub_env` redacta
+    los valores sensibles del `config_env` capturado.
+  - **Lo que se midió y por qué NO es un `tmpfs` de Docker, pese al título:** un
+    `--tmpfs` nace VACÍO — no hay forma de pre-cargarlo, así que no puede
+    entregar un valor. Y el worker lanza contenedores HERMANOS: el daemon
+    resuelve el origen de un bind en el HOST, de modo que escribir en el
+    `/dev/shm` del worker (que sí es tmpfs) no le serviría. El staging vive bajo
+    `data_root` porque es la única ruta que el compose garantiza idéntica en host
+    y worker (`WORKERS_DATA_ROOT=/var/lib/docker/volumes/agentic-platform-agent-data/_data`),
+    la misma razón por la que el worktree se monta desde ahí y funciona. Residuo
+    escrito en el módulo: el fichero toca el disco del host mientras dura el run,
+    acotado por directorio aleatorio por lanzamiento + 0444 + borrado en un
+    `finally`.
+  - **Tests (los dos que el plan nombra), verificados en ROJO antes de darlos por
+    buenos:** `tests/unit/test_model_credential_not_in_env.py` (9), que asserta
+    que el valor del secreto no aparece en NINGUNA variable del env serializado —
+    y trae su contraste, un test que comprueba que SIN el split sí aparecía;
+    `docker/agent-runtimes/agent-runtime/tests/test_spec_secret_file.py` (6), que
+    incluye el arranque real por `_load_spec`; `tests/unit/test_container_env_scrubbing.py`
+    (3); y `tests/integration/test_worker_launches_container.py -k secret_mount`,
+    que lo prueba **contra un daemon Docker de verdad**: el contenedor lee su
+    credencial del mount, no puede escribirla, y el env no la lleva.
+  - ⚠ **LO QUE FALTA Y ES DE UN HUMANO — el ORDEN de despliegue.** La imagen
+    `agent-runtime` **no se ha reconstruido**. Una imagen antigua ignora el
+    puntero y arranca sin credencial (401 dentro del sandbox). La imagen nueva
+    entiende los DOS formatos, así que **el orden seguro es: reconstruir la
+    imagen PRIMERO, desplegar el worker DESPUÉS**. Válvula de escape si hay que
+    desplegar el worker antes: `WORKERS_MODEL_CREDENTIAL_FILE=false` en el `.env`,
+    sin tocar el compose. Y queda sin ejercitar el camino con un run real: lo que
+    se ha probado con Docker es el mount (con `python:3.12-slim`), no un run
+    completo del reviewer/implementador bajo la imagen nueva.
+  - ⏳ ~~**Pendiente (2026-08-01) — re-verificado, sigue haciendo falta.**~~ La
+    credencial se superpone al model spec (`workers/model_resolver.py:177`,
+    `overlay_credentials`) y el spec entero viaja en el env como
+    `AGENT_TASK_SPEC` (`workers/execution.py:184`). El seam existe
+    (`ContainerSpec.extra_mounts`, `container.py:63`/`:167`) pero **nadie lo usa
+    para el secreto**, y `docker/agent-runtimes/agent-runtime/tests/test_spec_secret_file.py`
+    no existe.
+  - **Es la única de las 16 que queda, y es la más cara**: exige tocar el
+    lanzador del contenedor, versionar el formato del spec para que el runtime
+    acepte los DOS durante una versión, y **reconstruir la imagen
+    `agent-runtime`** — hacerlo a medias rompe los runs en vuelo (riesgo 2 del
+    plan). Fuera del carril `llm/observabilidad`: `apps/workers/execution.py`,
+    `container.py` y `docker/agent-runtimes/**`.
 - **Descripción**: mover api_key/subscription_key/github_token de
   `AGENT_TASK_SPEC` (`apps/workers/src/workers/execution.py:303-305`) a un
   fichero en tmpfs montado read-only vía el seam ya existente
@@ -350,7 +436,7 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_11` — Test de conexión que detecta tokens revocados
 
-- [ ] **Título**: Probe real para copilot y soporte bearer-only en azure_foundry
+- [x] **Título**: Probe real para copilot y soporte bearer-only en azure_foundry
 - **Descripción**: en `apps/api-server/src/api_server/llm_providers/liveness.py`:
   para copilot, ejecutar el mint del JWT (`copilot_internal/v2/token`, ya
   implementado en `copilot.py:264-273`) y distinguir 401 — hoy un token revocado
@@ -372,7 +458,18 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_12` — `provider` y clave de catálogo en los pasos `model_call`
 
-- [ ] **Título**: El runtime registra provider/kind y model id casable con el catálogo
+- [x] **Título**: El runtime registra provider/kind y model id casable con el catálogo
+  - ✅ **Cerrada (2026-08-01):** el mecanismo ya estaba (el `provider` del step lo
+    puso AUD16-15; el casado kind→familia LiteLLM vive en
+    `price_snapshot._CATALOG_PROVIDER_ALIASES` y prueba también la clave prefijada
+    `'<familia>/<modelo>'`). Lo que faltaba era la acreditación, y ahora existe:
+    `pytest tests/integration/test_execution_capture.py -k snapshot_provider` →
+    **2 tests verdes**. Uno siembra precios con la clave del CATÁLOGO y consulta con
+    la clave NATIVA del runtime para los cuatro kinds (ollama, copilot,
+    azure_foundry, claude_sdk) y exige `available=True` + el coste exacto; el otro es
+    el control negativo — con el mismo `model_id` en dos familias y **sin** `provider`
+    en el step, el lookup se niega a adivinar y sale `available=False`. RED
+    verificado: ambos caen si `steps.model_call_step` deja de emitir `provider`.
 - **Descripción**: `model_call_step`
   (`docker/agent-runtimes/agent-runtime/agent_runtime/steps.py:52-72`) no registra
   `provider`, así que `snapshot_execution_prices` busca con `provider=""`
@@ -392,7 +489,29 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_13` — `total_cost_usd` real desde los snapshots de precio
 
-- [ ] **Título**: Cuando el runtime reporta 0, persistir la suma de snapshots y que budgets la consuma
+- [x] **Título**: Cuando el runtime reporta 0, persistir la suma de snapshots y que budgets la consuma
+  - ✅ **Cerrada (2026-08-01)** con la **opción (b)** de la decisión clave, y la
+    decisión queda documentada aquí porque el propio plan la delegaba a esta tarea
+    («Decidir en task_prod07_13 y documentarlo»). `_billable_cost_usd`
+    (`db/execution_repo.py`) impone una precedencia de tres escalones: lo que
+    reportó el runtime si es > 0; si no, la **suma de los `price_snapshot`
+    preciados** de los pasos; y si el catálogo no supo preciar ni una llamada, 0
+    — un «no lo sé» nunca se convierte en factura. Se aplica en las **dos** vías
+    de escritura (`finalize_execution` y `record_execution`): arreglar sólo la
+    primera dejaba facturando $0 el camino de un paso.
+  - **Por qué (b) y no la columna `cost_estimated_usd` recomendada**: crear
+    columnas exige migración Alembic, fuera del alcance de este carril; pero
+    además la trazabilidad que la columna iba a dar **ya existe por llamada** —
+    el `cost_usd` crudo del runtime sigue en el step junto a un `price_snapshot`
+    con su `source` y su `price_id`. Una columna la duplicaría, y obligaría a
+    cada lector de la cifra facturable (budgets, dashboards, desglose de coste
+    del plan) a aprender a hacer coalesce o a seguir contando de menos. Por eso
+    `budgets/consumption.py` **no se toca**: sigue sumando `total_cost_usd`, que
+    ahora es exacto.
+  - **Tests**: `pytest tests/integration/test_execution_cost_finalize.py` → **5
+    verdes**, incluido el de no-regresión de claude_sdk (riesgo 3 del plan) y el
+    del run sin precio en catálogo. RED verificado rompiendo la guarda a
+    propósito (`if reported >= 0`): caen 3 de los 5.
 - **Descripción**: `_openai_compat.py:99` solo rellena `usage.cost_usd` si el
   endpoint añade `cost` (Ollama/Copilot nunca; APIM solo con policy), y ese 0 se
   persiste en `finalize_execution` (`execution_repo.py:254`) y lo suman los
@@ -413,7 +532,22 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_14` — Test de integración e2e: coste > 0 y budgets consumiendo
 
-- [ ] **Título**: Pipeline completo con modelo del catálogo asserta coste real
+- [x] **Título**: Pipeline completo con modelo del catálogo asserta coste real
+  - ✅ **Cerrada (2026-08-01):** `tests/integration/test_execution_cost_e2e.py` —
+    **2 tests verdes**, y cubren los dos EXTREMOS que ni el 12 ni el 13 tocaban.
+    (1) El origen del 0, con HTTP real: un servidor OpenAI-compat que devuelve
+    `usage` sin `cost` (la forma exacta de Ollama) atravesado por
+    `OllamaModelClient` → `cost_usd == 0`. Sin esto, toda la cadena de estimación
+    se apoyaba en una **suposición** sobre el proveedor. (2) El destino: el run
+    completo (`run_agent` → `record_execution` → snapshot → `total_cost_usd`)
+    llega a `compute_budget_consumption` y el proyecto **cruza el umbral del
+    80 %** de su presupuesto. Ahí es donde dolía llm-1: no en la columna, sino en
+    que un proyecto que gastaba de verdad marcaba 0 % usado para siempre.
+  - **Trampa cazada en caliente y anotada en el test**: con tokens de 100k por
+    llamada el run se aborta contra `safeguards.RunBudgets.max_tokens` (100 000)
+    y sólo queda **un** `model_call` — el test seguía verde midiendo un sexto del
+    gasto. La calibración (62 000 tokens, 0,306 USD, cap de 0,35) está escrita
+    con su porqué para que nadie la «simplifique».
 - **Descripción**: test de integración que ejecuta el pipeline con un fake
   provider OpenAI-compat (sin campo `cost` en usage, como Ollama/Copilot reales)
   y un modelo presente en el catálogo de precios, y asserta:
@@ -435,7 +569,29 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_15` — Memorizer dentro del catálogo `llm_providers`
 
-- [ ] **Título**: Resolver el LLM del Memorizer vía catálogo (DB row > env)
+- [x] **Título**: Resolver el LLM del Memorizer vía catálogo (DB row > env)
+  - ✅ **Cerrada (2026-08-01):** el destilador tiene ahora **tres escalones**, en
+    este orden — provider del AGENTE por `provider_id` (ADR 0082, ya estaba) →
+    **fila ACTIVA del catálogo `llm_providers` para `ollama`** (lo que faltaba,
+    `_catalog_fallback_llm` en `workers/memorizer.py`) → env del worker. Con eso
+    la precedencia «fila de BD > env» deja de tener su única excepción. El
+    fallback usa la misma regla que el dispatch (`resolve_provider_config` +
+    `build_provider_from_kind`) y **nunca propaga**: un Vault con hipo no puede
+    dejar sin memoria a una plataforma que tiene un Ollama local respondiendo.
+  - `pytest tests/integration/test_memorizer.py -k provider_resolution` → **2
+    verdes** (con fila activa gana la fila; sin fila activa —o con la fila
+    DESACTIVADA, que es el control negativo: si contara, apagar un proveedor no
+    lo apagaría— gana el env). RED verificado: el primero fallaba yendo a
+    `localhost:11434`.
+  - **La muerte silenciosa, cerrada**: `workers/memorizer_metrics.py` lleva la
+    racha de destilaciones fallidas **consecutivas** en el Redis del broker (el
+    prefork tiene N hijos; un contador en proceso contaría el de uno al azar),
+    el sampler la publica como `agentic_memorizer_consecutive_distill_failures`
+    y la regla `MemorizerDistillationFailing` (≥5, 10 m) alerta — el cableado
+    que este plan delegaba en prod-08. Un éxito borra la racha, así que la
+    alerta se apaga sola al arreglar el proveedor. `llm_empty` **no** cuenta
+    como fallo: ahí el modelo contestó bien. `pytest
+tests/unit/test_memorizer_distill_failures.py` → **7 verdes**.
 - **Descripción**: `_default_llm_factory`
   (`apps/workers/src/workers/memorizer.py:87-97`) construye `OllamaProvider`
   directamente con `WORKERS_MEMORIZER_LLM_BASE_URL` (default
@@ -457,7 +613,25 @@ Corregir la divergencia ya existente: el worker no mapea `bearer_token` de
 
 #### `task_prod07_16` — Documentación de referencia de la capa LLM
 
-- [ ] **Título**: Referencia: retry, streaming, capacidades por kind, costes, Vault
+- [x] **Título**: Referencia: retry, streaming, capacidades por kind, costes, Vault
+  - ✅ **Cerrada (2026-08-01):** `docs/04-reference/llm-providers.md` cubre las
+    **cinco** áreas que pedía la tarea, cada una en su sección: §1 reintentos
+    (qué se reintenta y qué falla rápido), §3 contrato de streaming (chunk final
+    con usage/tool_calls), §4 capacidades por kind, §5 Vault caído
+    (`vault_unavailable`) y §7 contabilidad de costes, reescrita hoy con la tabla
+    de precedencia real (runtime > catálogo > 0) y con **dónde se lee la
+    procedencia** de la cifra ahora que no hay columna `cost_estimated_usd`.
+  - Dos correcciones de hecho, no de forma: la matriz de §4 decía que
+    `claude_sdk` **no** soporta herramientas y remataba con «no asignes
+    herramientas a un agente `claude_sdk`» — al revés de lo que hace el código
+    desde los ADR 0086/0087 (ver ADR 0150); y §7 seguía anunciando como
+    pendiente una contabilidad que hoy está entregada.
+  - Entrada de changelog escrita:
+    `docs/07-changelog/prod-07-fiabilidad-llm-costes.md`, con `tasks_done: 14/16`
+    y `tasks_pending_local: [task_prod07_10]` — **no** declara el plan cerrado.
+    `pytest tests/docs/ -q` → **286 verdes**.
+  - Queda documentado en §8 lo que NO está (`task_prod07_10`): documentar el
+    estado real incluye documentar el hueco.
 - **Descripción**: crear/ampliar `docs/04-reference/llm-providers.md` con: la
   política de retry (qué se reintenta y qué no), el contrato de streaming
   (chunk final con usage/tool_calls), la matriz de capacidades por kind (incluida

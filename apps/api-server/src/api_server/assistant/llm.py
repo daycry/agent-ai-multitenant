@@ -13,16 +13,20 @@ real provider is ever contacted (the established chat-test pattern).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from shared_llm.base import LLMProvider
+from shared_llm.retry import DEFAULT_ATTEMPTS, RetryEvent, with_retries
+from shared_llm.types import CompletionResponse, Role
 from shared_llm.types import Message as LLMMessage
-from shared_llm.types import Role
 
 from api_server.assistant.graph import AssistantState, ModelTurn, ToolInvocation
 from api_server.assistant.tools import tool_schemas
+
+_log = logging.getLogger(__name__)
 
 # Función que traduce las tools habilitadas a sus JSON schemas. El default es el
 # catálogo del ASISTENTE; el córtex inyecta el suyo (``cortex_tool_schemas``) —
@@ -69,6 +73,12 @@ class LLMAssistantModel:
     usage_output_tokens: int = 0
     usage_cost_usd: float = 0.0
     usage_calls: int = 0
+    # prod-07 task_prod07_01 (llm-2): presupuesto de reintentos de `decide()`.
+    # 1 = sin reintentos (comportamiento previo, escotilla de escape por si un
+    # despliegue necesita volver atrás sin tocar código).
+    retry_attempts: int = DEFAULT_ATTEMPTS
+    # Inyectable SOLO para los tests: evita esperar el backoff de verdad.
+    retry_sleep: Callable[[float], Awaitable[None]] | None = None
 
     async def decide(self, state: AssistantState) -> ModelTurn:
         messages = self._build_messages(state)
@@ -77,13 +87,27 @@ class LLMAssistantModel:
         # envelope most providers expect; harmless for those that ignore it.
         tools = [{"type": "function", "function": s} for s in schemas] if schemas else None
 
-        response = await self.provider.complete(
-            messages,
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            tools=tools,
-            **self.extra_call_kwargs,
+        # prod-07 task_prod07_01 (llm-2): un 429 puntual o un socket cortado ya no
+        # matan el turno. La política (qué se reintenta y cuánto se espera) vive en
+        # `shared_llm.retry`, ÚNICA para todos los consumidores; aquí solo se aplica.
+        # `complete()` es idempotente desde nuestro lado, así que repetirla es
+        # seguro — el coste de los tokens duplicados queda VISIBLE en el log.
+        async def _call() -> CompletionResponse:
+            return await self.provider.complete(
+                messages,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                tools=tools,
+                **self.extra_call_kwargs,
+            )
+
+        response = await with_retries(
+            _call,
+            attempts=self.retry_attempts,
+            provider=getattr(self.provider, "name", "") or "",
+            sleep=self.retry_sleep,
+            on_retry=_log_retry,
         )
         usage = getattr(response, "usage", None)
         if usage is not None:
@@ -105,7 +129,11 @@ class LLMAssistantModel:
         Async generator de deltas de texto via ``provider.stream()`` (los 4
         kinds lo implementan; sin tools no aplica el caveat de claude_sdk).
         Acumula usage del chunk final. Solo lo invoca el nodo ``finish`` en el
-        camino FINISH_NUDGE cuando el caller pidio deltas (``on_delta``)."""
+        camino FINISH_NUDGE cuando el caller pidio deltas (``on_delta``).
+
+        SIN reintentos, a diferencia de ``decide()`` (prod-07 task_prod07_01):
+        reintentar un stream reemitiría los deltas que el usuario YA vio en
+        pantalla. El fallo sube tipado y el router decide cómo mostrarlo."""
         messages = self._build_messages(state)
         async for chunk in self.provider.stream(
             messages,
@@ -149,6 +177,22 @@ class LLMAssistantModel:
         if state.final_instruction:
             messages.append(LLMMessage(role="system", content=state.final_instruction))
         return messages
+
+
+def _log_retry(event: RetryEvent) -> None:
+    """Deja rastro de CADA reintento (prod-07 task_prod07_01).
+
+    Un reintento silencioso esconde dos cosas a la vez: que el proveedor está
+    inestable y que el turno pagó los tokens del prompt más de una vez. Los
+    campos van en `extra` para que el log estructurado los indexe."""
+    _log.warning(
+        "LLM retry %s/%s tras %s (espera %.2fs)",
+        event.attempt,
+        event.attempts,
+        type(event.error).__name__,
+        event.delay,
+        extra=event.as_log_extra(),
+    )
 
 
 __all__ = ["LLMAssistantModel"]

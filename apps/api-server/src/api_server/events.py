@@ -34,6 +34,20 @@ EVENT_TASK_STATUS_CHANGED = "task.status_changed"
 # Approximate trimming (`~`) lets Redis trim in efficient batches.
 _MAXLEN = 10_000
 
+# Cota del stream POR PROYECTO. Mucho más corta que la del global a propósito:
+# su único consumidor es el socket del tablero, que arranca en `now - 15 s`
+# (`_KANBAN_REPLAY_WINDOW_MS`) y nunca mira más atrás. Guardar 10.000 entradas
+# por proyecto sería pagar memoria por un histórico que nadie lee — el histórico
+# de verdad son las filas de `tasks` en PostgreSQL.
+_PROJECT_MAXLEN = 500
+
+# TTL deslizante del stream por proyecto, por el mismo motivo que el de las
+# ejecuciones: `maxlen` acota lo que PESA cada stream, no CUÁNTOS hay. Sin
+# caducidad quedaría una clave por proyecto para siempre, incluida la de cada
+# proyecto borrado. Un día basta y sobra: lo que el socket puede pedir son los
+# últimos 15 segundos.
+_PROJECT_STREAM_TTL_S = 24 * 3600
+
 # TTL deslizante del stream EN VIVO de una ejecución. `maxlen` acota lo que pesa
 # cada stream, pero no cuántos hay: sin caducidad, la plataforma dejaba una clave
 # `exec:{id}` en Redis **por cada run, para siempre**, y eso crece de forma
@@ -44,17 +58,57 @@ _MAXLEN = 10_000
 _EXECUTION_STREAM_TTL_S = 7 * 24 * 3600
 
 
+def project_task_events_stream(project_id: str) -> str:
+    """Stream de eventos de tarea de UN proyecto (task_prod13_19, perf-5).
+
+    El tablero abre un socket por proyecto. Mientras el único stream era el
+    global, cada socket recibía por la red los eventos de TODOS los proyectos de
+    la plataforma y descartaba en Python los que no eran suyos: el tráfico de
+    cada tablero crecía con la actividad ajena.
+
+    El nombre deriva del global a propósito (`events:tasks:{id}`) para que un
+    `SCAN events:tasks*` los enumere todos — operar sobre claves que no se
+    pueden encontrar es su propio problema.
+    """
+    return f"{EVENTS_STREAM}:{project_id}"
+
+
 async def _publish(redis: Redis, fields: dict[str, str]) -> None:
+    """Escribe el evento en el stream global Y en el de su proyecto.
+
+    **Dual-write, no migración**: el global lo consume el orchestrator con un
+    grupo de consumidores (`orchestrator.consumer`), que es quien despacha las
+    tareas; dejar de escribirlo pararía el sistema. El por-proyecto solo alimenta
+    a `/ws/kanban`. Los dos van en el MISMO pipeline: una ida y vuelta a Redis,
+    igual que antes, y ningún camino en el que un evento llegue al tablero pero
+    no al despachador.
+
+    Un evento sin `project_id` (que hoy no existe: los dos publicadores lo
+    ponen) se escribe solo en el global en vez de fabricar una clave
+    `events:tasks:None`.
+    """
+    project_id = fields.get("project_id")
     try:
         # redis-py types xadd's `fields` with a wide key/value union;
         # `dict` is invariant so a plain dict[str, str] won't match the
         # annotation even though it's a valid argument at runtime.
-        await redis.xadd(
+        pipe = redis.pipeline()
+        pipe.xadd(
             EVENTS_STREAM,
             fields,  # type: ignore[arg-type]
             maxlen=_MAXLEN,
             approximate=True,
         )
+        if project_id:
+            key = project_task_events_stream(project_id)
+            pipe.xadd(
+                key,
+                fields,  # type: ignore[arg-type]
+                maxlen=_PROJECT_MAXLEN,
+                approximate=True,
+            )
+            pipe.expire(key, _PROJECT_STREAM_TTL_S)
+        await pipe.execute()
     except Exception as exc:  # event bus is best-effort, never fail the caller
         _log.warning("api_server.event_publish_failed", error=str(exc))
 
@@ -365,7 +419,8 @@ def publish_plan_transition_after_commit(session: Any, plan: Any, old_status: st
     api-server (donde `schedule_after_commit` existe); los caminos del
     orchestrator y del worker publican a mano tras su propio commit.
     """
-    from api_server.auth.deps import get_redis, schedule_after_commit
+    from api_server.auth.deps import get_redis
+    from api_server.db.after_commit import schedule_after_commit
 
     new_status = plan.status
     if old_status == new_status:

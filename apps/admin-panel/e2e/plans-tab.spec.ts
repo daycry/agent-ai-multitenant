@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the project "Planes" tab (Plan 03 task_03_17).
@@ -39,9 +40,7 @@ const PLANS = [
 ];
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
   // Use the full api-server URL so the mock cannot accidentally match
   // the admin-panel page route at /admin/projects/{id}/plans (which
   // shares the suffix). Pattern `**` here is intentional to avoid

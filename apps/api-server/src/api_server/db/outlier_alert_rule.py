@@ -157,8 +157,7 @@ class OutlierAlertRule(
         ),
         # A success-rate floor is a fraction in [0, 1] when set.
         CheckConstraint(
-            "success_rate_floor IS NULL "
-            "OR (success_rate_floor >= 0 AND success_rate_floor <= 1)",
+            "success_rate_floor IS NULL OR (success_rate_floor >= 0 AND success_rate_floor <= 1)",
             name="ck_outlier_alert_rules_floor_unit_range",
         ),
         # The standard-deviation multiplier is non-negative when set.
@@ -207,7 +206,9 @@ class OutlierAlertRule(
     # --- lifecycle -----------------------------------------------------------
     # A disabled rule is never evaluated (kept for re-enabling without losing
     # its config / history).
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     # Debounce anchor: when the rule last fired an alert. The evaluator
     # suppresses a re-fire until a full window has elapsed since this, so a
     # sustained outlier yields at most ONE alert per rule per window. NULL =

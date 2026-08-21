@@ -103,7 +103,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name="pk_review_sessions"),
         sa.CheckConstraint(
-            "status IN ('running', 'suspended', 'approved', 'rejected', " "'expired', 'cancelled')",
+            "status IN ('running', 'suspended', 'approved', 'rejected', 'expired', 'cancelled')",
             name="ck_review_sessions_status",
         ),
         sa.CheckConstraint(

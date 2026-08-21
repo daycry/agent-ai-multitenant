@@ -34,19 +34,17 @@ flowchart TB
     end
 
     subgraph app["Plano de control (aplicación)"]
-        API["api-server<br/>FastAPI · REST/WS/SSE · RBAC · RLS"]
+        API["api-server<br/>FastAPI · REST/WS/SSE · RBAC · RLS<br/>+ asistente · memorizer · webhooks (ADR 0033)"]
         ORCH["orchestrator<br/>asigna tareas → workers"]
-        PA["personal-assistant"]
         ND["notification-dispatcher"]
-        WD["webhook-dispatcher"]
-        MEM["memorizer"]
+        BEAT["cortex-beat<br/>cadencias del córtex"]
     end
 
-    subgraph workers["Workers Celery"]
-        WDEF["worker-default / heavy / gpu"]
-        WING["worker-ingestion (RAG)"]
-        WTEST["worker-test"]
-        WREV["worker-review"]
+    subgraph workers["workers · workers-privileged (colas Celery, no servicios)"]
+        WDEF["cola default / heavy / gpu"]
+        WING["cola ingestion (RAG)"]
+        WTEST["cola test"]
+        WREV["cola review"]
     end
 
     subgraph runtimes["Plano de ejecución (contenedores efímeros, no confiables)"]
@@ -92,22 +90,38 @@ flowchart TB
     AR -. shared-llm .-> EGRESS
     EGRESS --> AZURE & COPILOT & OLLAMA
     AR -.-> CLAUDE
-    PA --> ND
-    WD --> API
-    MEM --> PG
+    API --> ND
+    BEAT --> API
     API -. métricas/logs .-> PROM
     DOCLING --> CLAMAV
 ```
 
 **Plano de control** (servicios de larga vida, imágenes de primera parte
-confiables): `api-server`, `orchestrator`, `personal-assistant`,
-`notification-dispatcher`, `webhook-dispatcher`, `memorizer`.
+confiables): `api-server`, `orchestrator`, `workers`, `workers-privileged`,
+`cortex-beat`, `notification-dispatcher`, `admin-panel`, `caddy`, más el
+one-shot `migrations`. Es **exactamente** la lista de aplicación de
+`CORE_SERVICES` en
+[`compose_generator.py`](../../apps/installer/backend/src/installer_backend/compose_generator.py)
+— lo que el installer genera de verdad; el test
+`tests/unit/test_docs_governance.py::test_arch_overview_control_plane_matches_compose_generator`
+falla si este párrafo se separa de esa constante.
 
-**Workers Celery** (escalables a mano): `worker-default`, `worker-heavy`,
-`worker-gpu` (si GPU), `worker-ingestion` (pipeline RAG con Docling),
-`worker-test` (orquesta `test-runtime`), `worker-review` (gestiona
-`review-runtime`), `worker-privileged` (off por defecto). Los workers **no
-ejecutan código del usuario**: lanzan contenedores efímeros.
+> **No son servicios**: el **asistente personal**, el **memorizer** y el
+> **despacho de webhooks** se diseñaron como contenedores propios y hoy son
+> **módulos internos** — `api_server/assistant/`, `api_server/memorizer/`,
+> `api_server/webhooks/` (asistente y memorizer por el ADR
+> [0033](../05-architecture-decisions/0033-personal-assistant-en-api-server-reutilizando-chat.md);
+> el despacho de webhooks corre además en los workers). `apps/memorizer/`,
+> `apps/personal-assistant/` y `apps/webhook-dispatcher/` existen en el árbol
+> pero solo contienen `.gitkeep`. Buscar sus contenedores en el compose es
+> perder el tiempo.
+
+**Colas Celery** (escalables a mano, dentro de los servicios `workers` y
+`workers-privileged`, no un contenedor por cola): `default`, `heavy`, `gpu` (si
+GPU), `ingestion` (pipeline RAG con Docling), `test` (orquesta `test-runtime`),
+`review` (gestiona `review-runtime`); `workers-privileged` está off por
+defecto. Los workers **no ejecutan código del usuario**: lanzan contenedores
+efímeros.
 
 **Plano de ejecución** (no confiable): `agent-runtime` (agent loop),
 `test-runtime` (tests por stack), `review-runtime` (sirve el código al humano).

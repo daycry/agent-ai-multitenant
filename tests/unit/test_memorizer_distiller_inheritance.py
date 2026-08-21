@@ -32,7 +32,7 @@ class _FakeSession:
 
 
 def _sessionmaker() -> Any:
-    return lambda: _FakeSession()
+    return _FakeSession
 
 
 @pytest.fixture()

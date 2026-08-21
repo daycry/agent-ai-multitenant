@@ -81,7 +81,7 @@ CANONICAL_DOC_FOLDERS: tuple[CanonicalDocFolder, ...] = (
     CanonicalDocFolder(
         name="07-changelog",
         diataxis_purpose=(
-            "Reference — one entry per closed plan: summary, tasks, " "decisions and the PR link."
+            "Reference — one entry per closed plan: summary, tasks, decisions and the PR link."
         ),
     ),
 )

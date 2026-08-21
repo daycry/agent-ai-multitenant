@@ -94,8 +94,7 @@ async def _seed(dsn: str, *, owner_is_owner: bool = True) -> dict[str, UUID]:
             "cortex-ws-tenant",
         )
         await conn.execute(
-            "INSERT INTO users (id, email, password_hash, is_system_owner)"
-            " VALUES ($1, $2, $3, $4)",
+            "INSERT INTO users (id, email, password_hash, is_system_owner) VALUES ($1, $2, $3, $4)",
             owner_id,
             "owner@ws-cortex.test",
             "h",

@@ -26,7 +26,7 @@ from redis.asyncio import Redis
 from api_server.auth.deps import _is_db_system_owner, get_redis, get_session_store
 from api_server.auth.sessions import SessionStore
 from api_server.events import cortex_telemetry_stream_key
-from api_server.routers.ws import _pump, _reject, _resolve_principal
+from api_server.routers.ws import _authenticate_socket, _pump, _reject
 
 router = APIRouter(tags=["ws"])
 
@@ -45,17 +45,30 @@ async def cortex_telemetry_stream(
     tailea ``cortex:telemetry:{owner}`` (desde el inicio, así un cliente que
     conecta tarde recibe el backlog y luego el tail en vivo)."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions)
+    if authenticated is None:
         return
+    principal, token = authenticated
     # DB-authoritative: el claim `own` es sólo una pista (ADR 0074); revocar la
     # propiedad cierra el socket en la siguiente conexión.
     if not await _is_db_system_owner(principal.user_id):
         await _reject(ws, "forbidden")
         return
     stream = cortex_telemetry_stream_key(str(principal.user_id))
-    await _pump(ws, redis, stream, project_filter=None)
+    # `sessions`/`principal`/`token` alimentan la re-validación periódica del pump
+    # (prod-09 task_prod09_13): el socket del córtex también se cierra con 1008 si
+    # la sesión se revoca o el token caduca mientras está abierto — antes sólo se
+    # comprobaba en el accept, así que un logout dejaba el panel de mente
+    # recibiendo telemetría afectiva del owner indefinidamente.
+    await _pump(
+        ws,
+        redis,
+        stream,
+        project_filter=None,
+        sessions=sessions,
+        principal=principal,
+        token=token,
+    )
 
 
 __all__ = ["router"]

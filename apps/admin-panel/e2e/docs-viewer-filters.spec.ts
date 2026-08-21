@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the docs visor filters + bookmarks (Plan 07 Fase D, task_07_15).
@@ -92,14 +93,8 @@ const SEARCH_HITS = {
 const TENANT_ID = "tenant-e2e";
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(
-    ([tenant]) => {
-      window.localStorage.setItem("agentic.token", "e2e-fake-token");
-      // Scope bookmarks to a known tenant so we can assert the storage key.
-      window.localStorage.setItem("admin-panel.tenant-id", tenant);
-    },
-    [TENANT_ID],
-  );
+  // Scope bookmarks to a known tenant so we can assert the storage key.
+  await seedSession(page, { tenantId: TENANT_ID });
   await page.route("**/projects", (route) =>
     route.fulfill({
       status: 200,
@@ -130,11 +125,23 @@ async function setup(page: Page): Promise<void> {
   );
 }
 
-/** Open the visor scoped to project A and expand its tree. */
+/**
+ * Open the visor scoped to project A and expand its tree.
+ *
+ * Reparado el 2026-08-19: el deep-link `?project=` ya abre la sección del
+ * proyecto (`forceOpen` en `docs-sidebar.tsx`, "a deep-link starts open so the
+ * file is reachable"), así que el `click()` que había aquí la CERRABA y ningún
+ * fichero llegaba a verse nunca. Se afirma que viene abierta —que es el
+ * contrato del deep-link— en lugar de pulsarla. El toggle en sí lo sigue
+ * cubriendo `docs-viewer-sidebar.spec.ts`, que entra SIN deep-link.
+ */
 async function openTree(page: Page): Promise<void> {
   await page.goto(`/admin/docs?project=${PROJECT_A}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("docs-visor")).toBeVisible();
-  await page.getByTestId(`docs-project-toggle-${PROJECT_A}`).click();
+  await expect(page.getByTestId(`docs-project-toggle-${PROJECT_A}`)).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   await expect(page.getByTestId(`docs-file-${PROJECT_A}-docs/README.md`)).toBeVisible();
 }
 

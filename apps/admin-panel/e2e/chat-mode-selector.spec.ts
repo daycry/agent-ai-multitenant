@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the chat mode selector (Plan 03 task_03_05).
@@ -36,9 +37,7 @@ async function setup(page: Page): Promise<PutCapture> {
   const capture: PutCapture = { calls: 0, lastBody: {} };
   let currentMode = "planning";
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`**/projects/${PROJECT_ID}/conversations`, (route) => {
     if (route.request().method() !== "GET") return route.continue();

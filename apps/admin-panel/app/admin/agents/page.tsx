@@ -30,7 +30,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StateBlock } from "@/components/shared/state-block";
 import { PersonaModelFields } from "@/components/capability/persona-section";
 import { ApiError, apiFetch } from "@/lib/api";
+import { pickLang, useT, type MessageKey } from "@/lib/i18n";
 import { useLang, type Lang } from "@/lib/lang-context";
+import { useErrorText } from "@/lib/use-error-text";
 import {
   buildModelConfig,
   DEFAULT_MODEL_CONFIG,
@@ -61,18 +63,39 @@ interface Agent {
 
 const PROMPT_SNIPPET = 180;
 
+/**
+ * Recorte del system prompt del agente en el idioma activo.
+ *
+ * El prompt llega en DATOS bilingües (`system_prompts.{es,en}`), no del
+ * diccionario: no hay clave posible porque el contenido lo escribe el usuario.
+ * Por eso usa `pickLang`, que es la otra mitad del i18n (prod-16) — antes esto
+ * era un ternario a mano.
+ *
+ * `pickLang` NO es equivalente al `??` que había: cae al otro idioma también
+ * cuando el pedido viene **vacío o en blanco**, no sólo cuando falta. Es un
+ * cambio deliberado: un agente con `en: ""` pintaba una tarjeta sin prompt y el
+ * operador lo leía como "este agente no tiene prompt", cuando sí lo tiene en
+ * castellano.
+ */
 function promptIn(agent: Agent, lang: Lang): string | null {
   const prompts = agent.model_config?.system_prompts;
   if (!prompts) return null;
-  const value = prompts[lang] ?? prompts[lang === "es" ? "en" : "es"];
+  const value = pickLang(lang, { es: prompts.es ?? "", en: prompts.en ?? "" });
   if (!value) return null;
   return value.length > PROMPT_SNIPPET ? value.slice(0, PROMPT_SNIPPET).trim() + "…" : value;
 }
 
-const SCOPE_LABEL: Record<string, string> = {
-  global_builtin: "Built-in",
-  global_tenant_template: "Plantilla del tenant",
-  project_local: "Local del proyecto",
+/**
+ * Scope crudo del backend → clave del diccionario que lo etiqueta.
+ *
+ * El valor (`global_builtin`…) NO se traduce: es lo que viaja por la API. Un
+ * scope desconocido cae a pintar el identificador, que es mejor pista de un
+ * backend nuevo que una etiqueta genérica que lo esconda.
+ */
+const SCOPE_LABEL_KEY: Record<string, MessageKey<"agents">> = {
+  global_builtin: "scopeBuiltin",
+  global_tenant_template: "scopeTenantTemplate",
+  project_local: "scopeProjectLocal",
 };
 
 const SCOPE_BADGE: Record<string, BadgeVariant> = {
@@ -90,8 +113,11 @@ function AgentList({
   emptyText: string;
   lang: Lang;
 }) {
+  const t = useT("agents");
   if (agents.length === 0) {
-    return <EmptyState className="mt-2" icon={Bot} title="Sin agentes" description={emptyText} />;
+    return (
+      <EmptyState className="mt-2" icon={Bot} title={t("emptyTitle")} description={emptyText} />
+    );
   }
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="agents-grid">
@@ -111,12 +137,12 @@ function AgentList({
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-base">{agent.name}</CardTitle>
                 <Badge variant={SCOPE_BADGE[agent.scope] ?? "muted"}>
-                  {SCOPE_LABEL[agent.scope] ?? agent.scope}
+                  {SCOPE_LABEL_KEY[agent.scope] ? t(SCOPE_LABEL_KEY[agent.scope]) : agent.scope}
                 </Badge>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
                 <p className="text-muted-foreground text-xs">
-                  <span className="font-medium">Role:</span> {agent.role}
+                  <span className="font-medium">{t("cardRole")}</span> {agent.role}
                   {agent.agent_type !== "ai" && (
                     <span className="ml-2 italic">({agent.agent_type})</span>
                   )}
@@ -129,13 +155,13 @@ function AgentList({
                     data-lang={lang}
                   >
                     <p className="text-muted-foreground mb-1 text-[10px] font-semibold uppercase tracking-wide">
-                      System prompt · {lang}
+                      {t("systemPrompt")} · {lang}
                     </p>
                     <p className="text-foreground/90 leading-snug">{snippet}</p>
                   </div>
                 )}
                 {agent.forked_from_agent_id && (
-                  <p className="text-muted-foreground text-xs italic">Forked from another agent</p>
+                  <p className="text-muted-foreground text-xs italic">{t("forkedFrom")}</p>
                 )}
                 {/* ADR 0071: equipos del agente (su memoria la gobierna el equipo). */}
                 <div
@@ -149,7 +175,9 @@ function AgentList({
                       </Badge>
                     ))
                   ) : (
-                    <span className="text-muted-foreground text-[10px] italic">Sin equipo</span>
+                    <span className="text-muted-foreground text-[10px] italic">
+                      {t("filterNoTeam")}
+                    </span>
                   )}
                 </div>
               </CardContent>
@@ -162,6 +190,7 @@ function AgentList({
 }
 
 export default function AgentsCatalogPage() {
+  const t = useT("agents");
   const { lang } = useLang();
   const queryClient = useQueryClient();
   const [newOpen, setNewOpen] = useState(false);
@@ -195,19 +224,19 @@ export default function AgentsCatalogPage() {
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <Breadcrumb
         items={[
-          { label: "Inicio", href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
-          { label: "Agentes" },
+          { label: t("home"), href: "/admin", icon: <Home className="h-3.5 w-3.5" /> },
+          { label: t("agents") },
         ]}
       />
       <PageHeader
         icon={<Bot className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Catálogo de agentes"
-        description="Built-ins de la plataforma, plantillas de tu tenant y agentes locales de proyecto."
+        title={t("catalogTitle")}
+        description={t("catalogDescription")}
         actions={
           <RoleGuard min="tenant_admin">
             <Button onClick={() => setNewOpen(true)} data-testid="new-agent-button">
               <Plus className="mr-1 h-4 w-4" />
-              Nuevo agente
+              {t("newAgent")}
             </Button>
           </RoleGuard>
         }
@@ -225,16 +254,16 @@ export default function AgentsCatalogPage() {
         isLoading={isLoading}
         isError={isError}
         error={error}
-        loadingLabel="Cargando agentes…"
+        loadingLabel={t("loading")}
         loadingTestId="agents-loading"
-        errorTitle="Could not load agents"
+        errorTitle={t("loadError")}
         errorTestId="agents-error"
       >
         {data && (
           <div className="mb-4 flex flex-wrap items-center gap-4" data-testid="agents-filters">
             <div className="flex items-center gap-2">
               <Label htmlFor="agents-membership" className="text-xs">
-                Pertenencia
+                {t("filterMembership")}
               </Label>
               {/* Ancho fijo en el contenedor: el wrapper del Select es w-full, así
                   que el <select> no se queda estrecho y no recorta el valor. */}
@@ -245,15 +274,15 @@ export default function AgentsCatalogPage() {
                   onChange={(e) => setMembership(e.target.value as "all" | "in_team" | "no_team")}
                   data-testid="agents-membership-filter"
                 >
-                  <option value="all">Todos</option>
-                  <option value="in_team">En equipo</option>
-                  <option value="no_team">Sin equipo</option>
+                  <option value="all">{t("filterAll")}</option>
+                  <option value="in_team">{t("filterInTeam")}</option>
+                  <option value="no_team">{t("filterNoTeam")}</option>
                 </Select>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="agents-team" className="text-xs">
-                Equipo
+                {t("filterTeam")}
               </Label>
               <div className="w-56">
                 <Select
@@ -262,7 +291,7 @@ export default function AgentsCatalogPage() {
                   onChange={(e) => setTeamFilter(e.target.value)}
                   data-testid="agents-team-filter"
                 >
-                  <option value="">Todos los equipos</option>
+                  <option value="">{t("filterAllTeams")}</option>
                   {(teamsQuery.data ?? []).map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name}
@@ -277,36 +306,24 @@ export default function AgentsCatalogPage() {
           <Tabs defaultValue="builtin" data-testid="agents-tabs">
             <TabsList>
               <TabsTrigger value="builtin" data-testid="tab-builtin">
-                Built-in ({builtins.length})
+                {t("scopeBuiltin")} ({builtins.length})
               </TabsTrigger>
               <TabsTrigger value="template" data-testid="tab-template">
-                Plantillas del Tenant ({tenantTemplates.length})
+                {t("tabTemplates")} ({tenantTemplates.length})
               </TabsTrigger>
               <TabsTrigger value="local" data-testid="tab-local">
-                Locales del Proyecto ({projectLocal.length})
+                {t("tabLocal")} ({projectLocal.length})
               </TabsTrigger>
             </TabsList>
 
             <TabsContent value="builtin">
-              <AgentList
-                agents={builtins}
-                lang={lang}
-                emptyText="No hay built-ins seedeados. Corre python -m api_server.seeds."
-              />
+              <AgentList agents={builtins} lang={lang} emptyText={t("emptyBuiltins")} />
             </TabsContent>
             <TabsContent value="template">
-              <AgentList
-                agents={tenantTemplates}
-                lang={lang}
-                emptyText="Tu tenant aún no tiene plantillas de agente propias."
-              />
+              <AgentList agents={tenantTemplates} lang={lang} emptyText={t("emptyTemplates")} />
             </TabsContent>
             <TabsContent value="local">
-              <AgentList
-                agents={projectLocal}
-                lang={lang}
-                emptyText="No hay agentes locales de proyecto. Forkea uno desde un built-in o plantilla."
-              />
+              <AgentList agents={projectLocal} lang={lang} emptyText={t("emptyLocal")} />
             </TabsContent>
           </Tabs>
         )}
@@ -356,6 +373,8 @@ function NewAgentDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: () => void;
 }) {
+  const errorText = useErrorText();
+  const t = useT("agents");
   const { lang } = useLang();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -401,16 +420,13 @@ function NewAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Nuevo agente</DialogTitle>
-          <DialogDescription>
-            Crea una plantilla del tenant (reutilizable en todos los proyectos) o un agente local de
-            un proyecto específico.
-          </DialogDescription>
+          <DialogTitle>{t("newAgent")}</DialogTitle>
+          <DialogDescription>{t("newDescription")}</DialogDescription>
         </DialogHeader>
         <DialogBody className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="na-name">Nombre</Label>
+              <Label htmlFor="na-name">{t("fieldName")}</Label>
               <Input
                 id="na-name"
                 value={name}
@@ -419,7 +435,7 @@ function NewAgentDialog({
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="na-role">Role</Label>
+              <Label htmlFor="na-role">{t("fieldRole")}</Label>
               <Select
                 id="na-role"
                 value={role}
@@ -436,7 +452,7 @@ function NewAgentDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>Descripción</Label>
+            <Label>{t("fieldDescription")}</Label>
             <MarkdownTextarea
               value={description}
               onChange={setDescription}
@@ -446,7 +462,7 @@ function NewAgentDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>{lang === "es" ? "System prompt (ES)" : "System prompt (ES)"}</Label>
+            <Label>{t("promptEsLabel")}</Label>
             <MarkdownTextarea
               value={systemPrompt}
               onChange={setSystemPrompt}
@@ -458,12 +474,10 @@ function NewAgentDialog({
           {/* Persona (SER): proveedor/modelo/temperatura del catálogo cerrado
               (ADR 0021) + prompt EN opcional (el ES sale del campo de arriba). */}
           <fieldset className="border-border space-y-3 rounded-md border p-3">
-            <legend className="px-1 text-sm font-medium">
-              {lang === "es" ? "Persona (modelo)" : "Persona (model)"}
-            </legend>
+            <legend className="px-1 text-sm font-medium">{t("personaModelLegend")}</legend>
             <PersonaModelFields draft={draft} onChange={setDraft} idPrefix="new-agent" />
             <div className="flex flex-col gap-1.5">
-              <Label>System prompt (EN)</Label>
+              <Label>{t("promptEnLabel")}</Label>
               <MarkdownTextarea
                 value={promptEn}
                 onChange={setPromptEn}
@@ -474,7 +488,7 @@ function NewAgentDialog({
           </fieldset>
 
           <fieldset className="flex flex-col gap-2">
-            <legend className="text-sm font-medium">Scope</legend>
+            <legend className="text-sm font-medium">{t("scopeLegend")}</legend>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="radio"
@@ -483,7 +497,7 @@ function NewAgentDialog({
                 onChange={() => setScope("global_tenant_template")}
                 data-testid="new-agent-scope-template"
               />
-              Plantilla del tenant (reutilizable)
+              {t("scopeTemplateOption")}
             </label>
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -493,21 +507,19 @@ function NewAgentDialog({
                 onChange={() => setScope("project_local")}
                 data-testid="new-agent-scope-local"
               />
-              Local de un proyecto (requiere project_id)
+              {t("scopeLocalOption")}
             </label>
           </fieldset>
 
           {scope === "project_local" && (
             <div className="flex flex-col gap-1.5">
-              <Label>Proyecto</Label>
+              <Label>{t("fieldProject")}</Label>
               <ProjectCombobox
                 value={projectId || null}
                 onChange={(id) => setProjectId(id ?? "")}
                 data-testid="new-agent-project-id"
               />
-              <p className="text-muted-foreground text-xs">
-                Sólo tus proyectos del tenant — escribe para buscar entre ellos.
-              </p>
+              <p className="text-muted-foreground text-xs">{t("projectHint")}</p>
             </div>
           )}
 
@@ -516,13 +528,13 @@ function NewAgentDialog({
               className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
               data-testid="new-agent-error"
             >
-              {mutation.error?.message ?? "Error al crear"}
+              {errorText(mutation.error)}
             </p>
           )}
         </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancelar
+            {t("cancel")}
           </Button>
           <Button
             disabled={submitDisabled}
@@ -545,7 +557,7 @@ function NewAgentDialog({
             }
             data-testid="new-agent-submit"
           >
-            {mutation.isPending ? "Creando…" : "Crear"}
+            {mutation.isPending ? t("creating") : t("create")}
           </Button>
         </DialogFooter>
       </DialogContent>

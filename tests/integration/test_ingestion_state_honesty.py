@@ -235,7 +235,7 @@ async def test_zero_chunks_marks_indexed_empty(
     conn = await asyncpg.connect(migrations_pg_dsn)
     try:
         doc = await conn.fetchrow(
-            "SELECT status, indexed_at, error_message, page_count" " FROM documents WHERE id = $1",
+            "SELECT status, indexed_at, error_message, page_count FROM documents WHERE id = $1",
             seeded["document_id"],
         )
         n_chunks = await conn.fetchval(

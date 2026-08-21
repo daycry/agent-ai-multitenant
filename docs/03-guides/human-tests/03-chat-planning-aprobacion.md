@@ -13,7 +13,7 @@ respetando el DAG → doble firma sobre umbral.
 
 ## TL;DR
 
-El Plan 03 **no tiene** `scripts/setup_demo_03.py` ni launcher
+El Plan 03 **no tiene** `scripts/demos/setup_demo_03.py` ni launcher
 dedicado: los tests son una conversación real con el equipo desde la
 UI. Setup manual:
 
@@ -25,7 +25,7 @@ UI. Setup manual:
 > Requiere un **proveedor LLM configurado** (Claude SDK / Copilot /
 > Azure Foundry / Ollama) para que los agentes respondan. Sin
 > proveedor, el chat de planning no avanza. Puedes apoyarte en
-> `scripts/setup_demo_project.py` para tener un proyecto + agente base
+> `scripts/demos/setup_demo_project.py` para tener un proyecto + agente base
 > de partida.
 
 ## Pre-requisitos

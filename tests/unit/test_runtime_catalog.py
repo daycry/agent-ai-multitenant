@@ -104,23 +104,26 @@ def test_each_dockerfile_starts_with_syntax_and_has_from(template_id: str) -> No
     dockerfile = DOCKERFILES_DIR / template_id / "Dockerfile"
     content = dockerfile.read_text(encoding="utf-8")
     first_line = content.splitlines()[0] if content else ""
-    assert first_line.startswith(
-        "# syntax=docker/dockerfile:"
-    ), f"{template_id}: first line must be the syntax directive, got {first_line!r}"
+    assert first_line.startswith("# syntax=docker/dockerfile:"), (
+        f"{template_id}: first line must be the syntax directive, got {first_line!r}"
+    )
     assert "\nFROM " in content, f"{template_id}: Dockerfile has no FROM directive"
     # WORKDIR /workspace is the contract with the catalog (every
     # template advertises workspace_mount_path="/workspace").
-    assert (
-        "WORKDIR /workspace" in content
-    ), f"{template_id}: Dockerfile must declare WORKDIR /workspace"
+    assert "WORKDIR /workspace" in content, (
+        f"{template_id}: Dockerfile must declare WORKDIR /workspace"
+    )
 
 
 def test_catalog_get_returns_known_template() -> None:
-    from shared_test_runtimes.catalog import get
+    from shared_test_runtimes.catalog import MANIFEST, get
 
     t = get("python-pytest")
     assert t.id == "python-pytest"
-    assert t.docker_image == "agent-runtime-python-pytest:v1"
+    # La referencia sale del manifiesto de release (ADR 0148), no de una
+    # constante: en un repo sin release publicada es el nombre local de
+    # siempre, y tras publicar lleva registry + versión + digest.
+    assert t.docker_image == MANIFEST.reference("python-pytest")
 
 
 def test_catalog_get_raises_keyerror_on_unknown() -> None:
@@ -141,14 +144,62 @@ def test_list_ids_returns_insertion_order() -> None:
     assert ids[1] == "node-jest"
 
 
-def test_template_image_refs_use_v1_tag() -> None:
-    """We launch task_06_02 with the ``v1`` tag for every template;
-    task_06_03's CI also publishes ``v1``. If someone bumps the tag in
-    the catalog they must update the CI workflow too — this test
-    flags the drift."""
+def test_every_image_reference_names_its_own_template() -> None:
+    """Ninguna plantilla apunta a la imagen de otra.
+
+    Es el error de copia-pega que nadie ve: los tests de un proyecto node
+    corriendo dentro de la imagen de PHP fallan por «falta el intérprete», no
+    por «la plantilla está mal cableada», y se investiga el proyecto.
+    """
     from shared_test_runtimes.catalog import CATALOG
+    from shared_test_runtimes.images import IMAGE_PREFIX, split_reference
 
     for tid, template in CATALOG.items():
-        assert template.docker_image.endswith(
-            ":v1"
-        ), f"{tid}: docker_image must end with ':v1', got {template.docker_image!r}"
+        repo, _, _ = split_reference(template.docker_image)
+        assert repo.endswith(f"{IMAGE_PREFIX}{tid}"), (
+            f"{tid}: su docker_image apunta a otro repositorio ({template.docker_image!r})"
+        )
+
+
+def test_image_references_carry_version_and_digest_once_published() -> None:
+    """Publicada la release, TODA entrada se resuelve por digest (ADR 0148).
+
+    El tag versionado viaja además del digest, igual que en los ``FROM`` de los
+    Dockerfiles: sin él nadie sabe qué versión corre ni Dependabot puede
+    proponer la siguiente. Mientras no haya release, la referencia es el nombre
+    local que construye `scripts/dev/build-runtime-templates.sh` — y eso es lo
+    que se afirma, para que el día del salto esta guarda hable.
+    """
+    from shared_test_runtimes.catalog import CATALOG, MANIFEST
+    from shared_test_runtimes.images import split_reference
+
+    for tid, template in CATALOG.items():
+        _, tag, digest = split_reference(template.docker_image)
+        assert tag == MANIFEST.version, f"{tid}: tag {tag!r} ≠ versión del manifiesto"
+        if MANIFEST.is_pinned:
+            assert digest == MANIFEST.digest_for(tid), f"{tid}: digest fuera del manifiesto"
+            assert template.is_pinned
+        else:
+            assert digest is None, f"{tid}: digest sin release publicada que lo respalde"
+
+
+def test_no_digest_is_hardcoded_in_the_catalog_source() -> None:
+    """Condición 1 del ADR 0148: el digest lo escribe el pipeline, no una mano.
+
+    Un `@sha256:` tecleado en `catalog.py` no lo refresca nadie —Dependabot
+    parsea Dockerfiles y ficheros compose, no fuentes Python— y sería la
+    congelación de CVEs del riesgo 3 de `prod-11`, encima en las imágenes donde
+    corre el código no confiable.
+    """
+    source = (
+        REPO_ROOT
+        / "packages"
+        / "shared-test-runtimes"
+        / "src"
+        / "shared_test_runtimes"
+        / "catalog.py"
+    ).read_text(encoding="utf-8")
+    assert "sha256:" not in source, (
+        "hay un digest escrito a mano en catalog.py: debe salir del manifiesto "
+        "de release (runtime_images.json), que reescribe el pipeline"
+    )

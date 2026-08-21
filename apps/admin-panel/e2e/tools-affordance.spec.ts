@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the affordance overhaul of the "Tools del agente" section in
@@ -24,6 +25,14 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * PENDING HUMAN VERIFICATION (needs a browser + admin-panel dev server +
  * a live backend, none of which exist in the implementation environment).
  * Run with `npx playwright test e2e/tools-affordance.spec.ts`.
+ *
+ * Reparado el 2026-08-19 (subset mockeado de CI): el mock del PUT ACEPTABA la
+ * asignación pero no la PERSISTÍA, así que el GET posterior (la sección
+ * invalida y recarga al guardar) seguía devolviendo la lista vieja. La pantalla
+ * hacía lo correcto —comparar lo recargado con lo seleccionado y volver a
+ * marcarse "sucia"—, y con ello desaparecía el "Guardado" que el test esperaba.
+ * Un backend que olvida lo que acaba de aceptar no es un caso que merezca la
+ * pena fijar en un test: el mock ahora recuerda.
  */
 
 const API = "http://localhost:8001";
@@ -140,11 +149,10 @@ async function setup(
 ): Promise<void> {
   const scope = opts.scope ?? "project_local";
   const id = scope === "global_builtin" ? BUILTIN_AGENT_ID : AGENT_ID;
-  const assigned = opts.assigned ?? [];
+  // Estado MUTABLE: un PUT aceptado cambia lo que devuelve el GET siguiente.
+  let assigned = opts.assigned ?? [];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/agents/${id}`, (route) => json(route, agentBody(scope)));
@@ -154,6 +162,7 @@ async function setup(
     if (route.request().method() === "PUT") {
       opts.onPut?.(route.request().postDataJSON());
       const sent = route.request().postDataJSON() as { tools: { tool_id: string }[] };
+      assigned = sent.tools.map((t) => t.tool_id);
       await json(
         route,
         sent.tools.map((t) => assignedRow(t.tool_id)),

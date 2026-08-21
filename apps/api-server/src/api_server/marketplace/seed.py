@@ -51,6 +51,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_server.db.marketplace import (
+    ListingReviewStatus,
     MarketplaceListing,
     MarketplaceListingKind,
     MarketplaceTrustLevel,
@@ -371,6 +372,11 @@ async def _seed_skill_listing(
         listing.kind = MarketplaceListingKind.SKILL.value
         listing.description = manifest.description
         listing.trust_level = MarketplaceTrustLevel.VERIFIED.value
+        # ADR 0142 D6: el catálogo oficial nace revisado — lo cura la propia
+        # plataforma, que es quien revisa. Explícito y no confiado al
+        # `server_default` de la 0129, para que un cambio de ese default no
+        # vacíe el catálogo en el siguiente re-seed sin que nadie lo note.
+        listing.review_status = ListingReviewStatus.PUBLISHED.value
         listing.manifest = listing_manifest
         listing.requested_permissions = requested_permissions
         await session.flush()
@@ -385,6 +391,7 @@ async def _seed_skill_listing(
             description=manifest.description,
             author=OFFICIAL_AUTHOR,
             trust_level=MarketplaceTrustLevel.VERIFIED.value,
+            review_status=ListingReviewStatus.PUBLISHED.value,
             manifest=listing_manifest,
             requested_permissions=requested_permissions,
         )
@@ -452,7 +459,7 @@ async def seed_marketplace_listings(
 
 
 __all__ = [
-    "CatalogSeedResult",
     "OFFICIAL_AUTHOR",
+    "CatalogSeedResult",
     "seed_marketplace_listings",
 ]

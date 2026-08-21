@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { ApiError, apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
 
 import type { InboxAssignment } from "./page";
 
@@ -91,6 +92,7 @@ export function InboxJustifyDialog({
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
+  const errorText = useErrorText();
   const [text, setText] = useState("");
 
   // Reset the textarea whenever a new request opens the dialog.
@@ -147,7 +149,7 @@ export function InboxJustifyDialog({
                   className="bg-danger-soft text-danger-soft-foreground rounded p-2 text-xs"
                   data-testid="inbox-dialog-error"
                 >
-                  {mutation.error?.message ?? "Error al aplicar la acción"}
+                  {errorText(mutation.error)}
                 </p>
               )}
             </DialogBody>

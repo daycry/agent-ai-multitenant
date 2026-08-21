@@ -48,7 +48,7 @@ diseño: los runtimes corren con red restringida y una allowlist de egress (la
 `filter.txt` del sandbox). Abrir esto es una decisión de seguridad, no una tool
 más — de ahí este ADR.
 
-## Decisión (propuesta)
+## Decisión (aprobada el 2026-06-24)
 
 Añadir dos tools de categoría **`network`** (sin tocar la taxonomía cerrada del
 ADR 0049) — `web-search` y `web-fetch` — gobernadas por **egress allowlist +
@@ -122,9 +122,13 @@ credenciales LLM del ADR 0057).
   skill `web-research` de la Ola B0.1) podrían **ejecutar** búsquedas, no solo
   "saber" investigar.
 - **−** Superficie de ataque nueva (SSRF, exfiltración, contenido hostil). Por eso
-  va con allowlist + anti-SSRF + guardrails + validación humana, y por eso este
-  ADR está `proposed` y no implementado.
-- **Trabajo de implementación (cuando se apruebe):**
+  va con allowlist + anti-SSRF + guardrails + validación humana.
+  <!-- Esta viñeta terminaba diciendo «y por eso este ADR está `proposed` y no
+  implementado». Quedó obsoleta el 2026-06-24, cuando el operador aprobó abrir
+  egress web (ver el banner de estado y las preguntas resueltas más abajo);
+  corregida el 2026-07-29 porque contradecía a su propio frontmatter
+  `status: accepted`. -->
+- **Trabajo de implementación (aprobado el 2026-06-24; primer destino, el córtex):**
   1. Migración `projects.web_egress_allowlist` JSONB `[]`.
   2. Proveedor de búsqueda en `shared-llm`-style (Brave + SearXNG), key en Vault.
   3. Tools `web-search`/`web-fetch` (categoría `network`) + ejecutores en el

@@ -73,7 +73,7 @@ def test_ensure_repo_init_race_with_invalid_dir_still_raises(
     monkeypatch.setattr(git_repos, "_run_git", broken_init)
     monkeypatch.setattr(git_repos, "_INIT_RACE_WAIT_ATTEMPTS", 2)
     monkeypatch.setattr(git_repos, "_INIT_RACE_WAIT_DELAY_S", 0.01)
-    with pytest.raises(GitCommandError, match="init race|never became valid"):
+    with pytest.raises(GitCommandError, match=r"init race|never became valid"):
         mgr.ensure_repo("backend")
 
 

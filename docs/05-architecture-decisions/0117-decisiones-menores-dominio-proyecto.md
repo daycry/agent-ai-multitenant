@@ -70,7 +70,10 @@ Implementación:
   (`mcp.context7.com`, `api.githubcopilot.com`); el sidecar Atlassian es
   hostname interno de `agentic-agents` (sin egress).
 - Empaquetar binarios stdio (Opción 1) queda descartado salvo caso de uso que
-  lo pague. Las decisiones (b) y (c) de este ADR siguen `proposed`.
+  lo pague. Las decisiones (b) y (c) seguían abiertas el día que se escribió esto
+  y **se resolvieron el 2026-07-26** — ver sus secciones de resolución más abajo
+  (corregido el 2026-07-29: la frase decía que seguían `proposed`, contradiciendo
+  al propio documento, que las cierra, y a su frontmatter `accepted`).
 
 Doc de referencia actualizado: `docs/04-reference/mcp-servers.md`
 (sección «Qué se OFRECE en el picker (ADR 0117)»).

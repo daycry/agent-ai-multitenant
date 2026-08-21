@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `13-api-publica-webhooks`                 |
-| **Estado**                         | `pending_human_validation`                |
 | **Bloqueado por**                  | `01-dominio-minimo`                       |
 | **Tiempo estimado (calendario)**   | 3-4 semanas                               |
 | **Tiempo estimado (persona-días)** | 60-80                                     |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/13-api-publica-webhooks`            |
 | **Secciones del .docx**            | [26]                                      |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

@@ -16,9 +16,11 @@ Decisiones:
     bajo el tenant especial de la plataforma. Cualquier tenant puede
     grantearlas a un proyecto suyo (ADR pendiente formaliza este
     "global builtin" análogo al de los agentes built-in).
-  * **Embedding model**: dejamos el default `nomic-embed-text-v1.5`
-    de la plataforma (ADR 0023) — re-embedar es una operación
-    fuera-de-banda.
+  * **Embedding model**: se sella el modelo ACTIVO de la plataforma
+    (ADR 0023 / 0155), no un literal. Con el literal antiguo
+    (`nomic-embed-text-v1.5`) una instalación con otro embedder nacía
+    desfasada y rechazaba documentos desde el primer día. Re-embeber
+    es una operación fuera-de-banda.
   * **Chunks de contenido**: este seed sólo crea el `KnowledgeBase`
     row. Los chunks reales los carga `setup_demo_06_9.py` o el
     pipeline de ingesta de Plan 04 a partir de los .md upstream
@@ -227,12 +229,11 @@ BUILTIN_KBS: tuple[BuiltinKB, ...] = (
 # ---------------------------------------------------------------------------
 # Upsert
 # ---------------------------------------------------------------------------
-_UPSERT_SQL = text(
-    """
+_UPSERT_SQL = text("""
     INSERT INTO knowledge_bases
         (id, tenant_id, name, description, embedding_model_id, category_id, is_builtin)
     VALUES
-        (:id, :tenant_id, :name, :description, 'nomic-embed-text-v1.5', :category_id, true)
+        (:id, :tenant_id, :name, :description, :embedding_model_id, :category_id, true)
     ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         description = EXCLUDED.description,
@@ -240,8 +241,7 @@ _UPSERT_SQL = text(
         is_builtin = true,
         updated_at = now(),
         deleted_at = NULL
-    """
-)
+    """)
 
 
 async def seed_builtin_kbs(session: AsyncSession) -> int:
@@ -253,6 +253,7 @@ async def seed_builtin_kbs(session: AsyncSession) -> int:
     `knowledge_bases.category_id`. Asume que `seed_builtin_kb_categories`
     se ejecutó antes (el runner del seed garantiza el orden).
     """
+    from api_server.ingestion.embedding_contract import active_embedding_model
     from api_server.seeds.builtin_kb_categories import (
         kb_category_id_for_slug,
     )
@@ -269,6 +270,10 @@ async def seed_builtin_kbs(session: AsyncSession) -> int:
                 "category_id": (
                     str(kb_category_id_for_slug(kb.category_slug)) if kb.category_slug else None
                 ),
+                # ADR 0155: se sella el modelo ACTIVO de la plataforma, no un
+                # literal. El `ON CONFLICT` NO lo actualiza a propósito: re-sellar
+                # una KB ya indexada mentiría sobre los vectores que tiene.
+                "embedding_model_id": active_embedding_model(),
             },
         )
         count += 1
@@ -277,8 +282,8 @@ async def seed_builtin_kbs(session: AsyncSession) -> int:
 
 __all__ = [
     "BUILTIN_KBS",
-    "BuiltinKB",
     "KB_SLUG_NAMESPACE",
+    "BuiltinKB",
     "kb_id_for_slug",
     "seed_builtin_kbs",
 ]

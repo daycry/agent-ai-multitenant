@@ -246,7 +246,7 @@ async def test_fallo_del_llm_hace_rollback_y_el_pursuit_sigue_pendiente(
 
     from api_server.routers.cortex import get_cortex_model
 
-    configured_app.dependency_overrides[get_cortex_model] = lambda: _BoomModel()
+    configured_app.dependency_overrides[get_cortex_model] = _BoomModel
     token = await _mint(owner_id, tenant_id)
 
     resp = await _post_turn(configured_app, token, "hola")

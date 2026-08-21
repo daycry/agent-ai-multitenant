@@ -49,9 +49,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from workers.celery_app import build_celery_app
 from workers.config import Settings as WorkerSettings
 
-pytestmark = pytest.mark.integration
+from ._redis_url import TEST_REDIS_URL  # con credencial; ver _redis_url.py
 
-TEST_REDIS_URL = "redis://localhost:6379/15"
+pytestmark = pytest.mark.integration
 
 
 # A scripted model whose single ACT picks one tool, then finishes — enough to
@@ -297,7 +297,9 @@ def _ready_event(tenant: UUID, project: UUID, task: UUID) -> TaskEvent:
 
 
 def _dispatcher(sm: async_sessionmaker[AsyncSession]) -> TaskDispatcher:
-    celery_app = build_celery_app(WorkerSettings(broker_url=TEST_REDIS_URL))
+    celery_app = build_celery_app(
+        WorkerSettings(broker_url=TEST_REDIS_URL, result_backend=TEST_REDIS_URL)
+    )
     return TaskDispatcher(
         sessionmaker=sm,
         celery_app=celery_app,

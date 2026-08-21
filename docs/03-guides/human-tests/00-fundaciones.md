@@ -13,7 +13,7 @@ watchdog, observabilidad útil y documentación inicial navegable.
 
 ## TL;DR
 
-El Plan 00 **no tiene** `scripts/setup_demo_00.py` ni launcher
+El Plan 00 **no tiene** `scripts/demos/setup_demo_00.py` ni launcher
 dedicado — los tests son de infraestructura (arranque limpio, kill de
 servicios, inspección de logs). Setup manual:
 

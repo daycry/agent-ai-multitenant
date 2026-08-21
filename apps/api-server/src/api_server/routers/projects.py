@@ -23,7 +23,6 @@ from api_server.auth.deps import (
     get_tenant_session,
     require_tenant_admin,
     require_tenant_member,
-    schedule_after_commit,
 )
 from api_server.capabilities import (
     CapabilitiesResponse,
@@ -38,6 +37,7 @@ from api_server.celery_client import (
     enqueue_compose_review_runtime,
     revoke_job_callback,
 )
+from api_server.db.after_commit import schedule_after_commit
 from api_server.db.domain import Project, ProjectStatus, Team
 from api_server.db.execution_repo import cancel_tasks_and_executions
 from api_server.db.models import Organization
@@ -51,6 +51,7 @@ from api_server.routers._helpers import (
     require_tenant_id,
     soft_delete,
 )
+from api_server.routers._integrity import integrity_conflict
 from api_server.routers.llm_providers import get_provider_vault_store
 from api_server.schemas.projects import (
     GitConfigResponse,
@@ -394,7 +395,7 @@ async def create_project(
         await session.flush()
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc.orig)) from exc
+        raise integrity_conflict(exc, context="project.create") from exc
 
     # Ola C / ADR 0068: fork opt-in del equipo. Si el wizard pide personalizar el
     # equipo para este proyecto, forkeamos el equipo referenciado (built-in de la

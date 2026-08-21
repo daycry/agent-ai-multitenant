@@ -22,12 +22,13 @@ priority: P0
 | Campo                              | Valor                                |
 | ---------------------------------- | ------------------------------------ |
 | **ID del Plan**                    | `prod-01-despliegue-ejecutable`      |
-| **Estado**                         | `pending_approval`                   |
 | **Prioridad**                      | P0                                   |
 | **Bloqueado por**                  | — (primero de la serie correctiva)   |
 | **Tiempo estimado (calendario)**   | 5-6 semanas                          |
 | **Tiempo estimado (persona-días)** | 23                                   |
 | **Rama git sugerida**              | `plan/prod-01-despliegue-ejecutable` |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 
@@ -88,8 +89,27 @@ Este plan convierte el simulacro en un despliegue real:
   ```yaml
   - id: auto_prod01_01_a
     runtime: python-pytest
-    command: "pytest tests/smoke/test_app_images_build.py -v"
+    command: "pytest tests/unit/test_app_images_are_built_by_ci.py -v"
+  - id: auto_prod01_01_b
+    runtime: python-pytest
+    command: "pytest tests/unit/test_compose_images_contract.py -v"
   ```
+
+> **Comando corregido (2026-08-20)**: `tests/smoke/test_app_images_build.py` nunca existió, y
+> **no debía existir con ese nombre**. Lo que declaraba —«los 4 images construyen»— es un
+> `docker build` de la imagen pesada más tres derivadas: minutos por pasada y un demonio Docker
+> vivo. Eso ya lo hace el job **`build-images` de `.github/workflows/ci.yml`** como gate de PR,
+> y con la trampa que este task documenta resuelta (contexto = raíz del repo, api-server
+> primero como BASE, `BASE_IMAGE` a las derivadas). Lo que un pytest sí puede vigilar, y es
+> justo donde este plan se rompió de verdad, es **que ese job y el de publicación no se dejen
+> ninguna app atrás**: `test_app_images_are_built_by_ci.py` **deriva la lista de los
+> Dockerfiles** en vez de enumerarla, porque una lista escrita a mano fue el defecto —
+> `apps/watchdog/Dockerfile` entró el 2026-08-02 y nadie actualizó ni el bucle de `ci.yml` ni
+> la matriz de `release-images.yml`, así que rompía el build y no se publicaba. El segundo
+> comando cierra el otro extremo: toda imagen que el compose generado referencia tiene
+> Dockerfile y entrada en el workflow. Verde 44/44 entre los dos ficheros. La construcción real
+> de las 4 imágenes queda acreditada por la verificación local anotada arriba y por CI, no por
+> un test que fingiera hacerla.
 
 #### `task_prod01_02` — Dockerfile del admin-panel ✅
 

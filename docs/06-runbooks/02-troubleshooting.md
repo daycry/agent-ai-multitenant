@@ -51,6 +51,7 @@ adivinar. No reinicies a ciegas:
 | Migraciones Alembic fallan al arrancar               | [Migraciones de base de datos](#migraciones-de-base-de-datos)                     |
 | Procesos OOM-killed, host lento, disco lleno         | [Presión de recursos: OOM, RAM y disco](#presión-de-recursos-oom-ram-y-disco)     |
 | Saltó una alerta de monitorización                   | [Alertas de monitorización](#alertas-de-monitorización-plan-12)                   |
+| El api-server aborta al arrancar por un secreto      | [El arranque falla fail-closed](#el-arranque-falla-fail-closed)                   |
 
 ---
 
@@ -134,6 +135,26 @@ docker compose exec vault vault status   # Sealed: true → hay que desellar
 > La rotación periódica de unseal keys y de credenciales está en
 > [05-key-rotation.md](./05-key-rotation.md).
 
+## El arranque falla fail-closed
+
+Desde prod-10 (`task_prod10_04`, `task_prod10_05`) el stack **prefiere no
+arrancar antes que arrancar con un secreto conocido**. Es intencionado: la
+alternativa es correr meses en producción con la JWT secret que está publicada en
+GitHub. Los tres mensajes y su arreglo:
+
+| Mensaje al arrancar                                                                 | Qué pasa                                                                                                                                             | Arreglo                                                                                                                                         |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `required variable POSTGRES_PASSWORD is missing a value` (y equivalentes)           | El compose canónico ya no cae a `changeme-dev-only`: usa `${VAR:?…}`.                                                                                | `cp docker/.env.example docker/.env` y rellena. Catálogo completo en [mandatory-env-vars.md](../04-reference/mandatory-env-vars.md).            |
+| `environment='dev' but these settings still use dev defaults: …`                    | No se declaró `API_SERVER_ENVIRONMENT`, el DSN apunta a un host remoto (o sea: **no** es un portátil) y algún secreto lleva `changeme` / `dev-only`. | Declara `API_SERVER_ENVIRONMENT=dev\|staging\|prod`, **o** pon secretos de verdad. El mensaje nombra la variable ofensora.                      |
+| `environment='prod' rejects trivially weak secrets: … (only 1 distinct characters)` | Un secreto sin marcador de dev pero que es relleno (`xxxxxxxx…`). Suelo: 24 caracteres, ≥8 distintos, ≥2 bits/carácter.                              | Genera uno: `python -c "import secrets; print(secrets.token_urlsafe(36))"`. Aplica sólo con `staging`/`prod` **declarados**.                    |
+| `environment='prod' requires HMAC signing secrets of at least 32 characters`        | `API_SERVER_JWT_SECRET(S)` o `API_SERVER_INTERNAL_TOKEN_SECRET(S)` demasiado cortos — **en cualquier posición del anillo**, no sólo en la cabeza.    | Igual que arriba. Una clave retirada que sigue en la cola no firma nada nuevo, pero **verifica**: una entrada débil ahí es una sesión forjable. |
+| `INTERNAL_TOKEN_SECRET(S) must share NO key with JWT_SECRET(S)`                     | Los dos dominios criptográficos ([ADR 0136](../05-architecture-decisions/0136-dominios-criptograficos-worker-api.md)) se han fusionado.              | Valores distintos, y anillos **disjuntos**: una clave en ambos deja a un worker comprometido forjar sesiones humanas.                           |
+
+> **En dev no cambia nada.** El guard se salta entero cuando `environment` es
+> `dev` **declarado**, o cuando no se declaró y el DSN apunta a
+> localhost/127.0.0.1 — que es lo que hacen `scripts/dev/up.ps1` y el conftest de
+> integración.
+
 ## Conectividad con PostgreSQL
 
 Síntomas: la API/worker arranca pero falla con errores de conexión,
@@ -167,16 +188,18 @@ procesarse y la cola se acumula.
 2. Prueba directa:
 
    ```bash
-   docker compose exec redis redis-cli ping   # debe responder PONG
+   # Redis pide contraseña desde prod-10: sin `-a` responde NOAUTH, no PONG.
+   docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'   # PONG
    ```
 
 3. Causas frecuentes:
 
-   | Causa                                  | Fix                                                                                                                                      |
-   | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-   | Redis caído / `Restarting`             | [Un contenedor no arranca](#un-contenedor-no-arranca) y [restart-services.md](./restart-services.md).                                    |
-   | Colas atascadas pero Redis sano        | El cuello suele estar en los **workers**: mira sus logs; escala réplicas (ver el runbook de capacity, `06-capacity-management.md`).      |
-   | AOF/RDB corrupto tras un corte abrupto | Restaura desde backup ([dr-full-restore.md](./dr-full-restore.md)); Redis es estado efímero/recuperable, prioriza recuperar el servicio. |
+   | Causa                                  | Fix                                                                                                                                                         |
+   | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Redis caído / `Restarting`             | [Un contenedor no arranca](#un-contenedor-no-arranca) y [restart-services.md](./restart-services.md).                                                       |
+   | Colas atascadas pero Redis sano        | El cuello suele estar en los **workers**: mira sus logs; escala réplicas (ver el runbook de capacity, `06-capacity-management.md`).                         |
+   | AOF/RDB corrupto tras un corte abrupto | Restaura desde backup ([dr-full-restore.md](./dr-full-restore.md)); Redis es estado efímero/recuperable, prioriza recuperar el servicio.                    |
+   | `NOAUTH Authentication required`       | Desde prod-10 Redis arranca con `--requirepass`. La URL del cliente tiene que ser `redis://:<REDIS_PASSWORD>@redis:6379/<db>`, y `redis-cli` necesita `-a`. |
 
 ## Conectividad con MinIO
 

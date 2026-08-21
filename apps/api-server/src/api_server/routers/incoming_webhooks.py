@@ -31,6 +31,15 @@ authentication — so the order of checks is the security contract:
      collides on the partial UNIQUE, so neither the event NOR its action is
      re-applied — a redelivered webhook never creates a duplicate task.
 
+Anti-replay (authz-5), añadido después: entre 4 y 5 hay una **ventana de
+frescura** para los orígenes que declaran marca de tiempo, y el
+``delivery_id`` que se persiste **ya nunca es NULL** — cuando el emisor no
+manda id de entrega se deriva del cuerpo firmado
+(:func:`~api_server.webhooks.signatures.derive_delivery_id`). Antes, un origen
+``generic`` sin cabecera de entrega guardaba NULL, esquivaba el índice único
+parcial y la misma petición capturada podía reproducirse infinitas veces,
+re-ejecutando su acción cada vez.
+
 Multi-tenancy (CLAUDE.md principle 1): the config carries ``tenant_id`` +
 ``project_id``; the resolved secret only ever validates a signature for THIS
 config's own project/tenant — an event for project A can never act on tenant B.
@@ -69,7 +78,10 @@ from api_server.webhooks.secrets import (
 )
 from api_server.webhooks.signatures import (
     IncomingWebhookOrigin,
+    derive_delivery_id,
     signature_header_for,
+    timestamp_header_for,
+    verify_incoming_freshness,
     verify_incoming_signature,
 )
 from api_server.webhooks.templates import (
@@ -87,8 +99,10 @@ router = APIRouter(prefix="/webhooks/incoming", tags=["incoming-webhooks"])
 _RATE_LIMIT_PREFIX = "incomingwebhook:rl:"
 
 # Sender headers we record for replay (task_13_12). Origin-agnostic best-effort:
-# GitHub uses X-GitHub-Delivery / X-GitHub-Event; others differ, so a missing
-# header is simply NULL.
+# GitHub uses X-GitHub-Delivery / X-GitHub-Event; others differ. Cuando NINGUNA
+# viene, la clave de dedup ya no queda a NULL: la deriva del cuerpo
+# `derive_delivery_id` (authz-5). El tipo de evento sí puede quedarse a NULL,
+# que es informativo.
 _DELIVERY_HEADERS = ("X-GitHub-Delivery", "X-Gitlab-Event-UUID", "X-Request-Id")
 _EVENT_TYPE_HEADERS = ("X-GitHub-Event", "X-Gitlab-Event", "X-Sentry-Hook-Resource")
 
@@ -212,6 +226,32 @@ async def receive_incoming_webhook(
             detail="invalid webhook signature",
         )
 
+    # 4-bis. Ventana de frescura (authz-5), DESPUÉS del MAC a propósito: la
+    #        cabecera de timestamp no está firmada, así que evaluarla antes
+    #        daría a un desconocido una respuesta distinta según lo que
+    #        mandase — un oráculo gratis. Detrás del MAC solo la alcanza quien
+    #        ya demostró conocer el secreto. Rechaza reintentos rancios; el
+    #        control anti-replay de verdad es la clave de dedup de abajo.
+    timestamp_header = timestamp_header_for(origin)
+    freshness = verify_incoming_freshness(
+        origin=origin,
+        timestamp_header=(
+            request.headers.get(timestamp_header) if timestamp_header is not None else None
+        ),
+        max_skew_seconds=settings.incoming_webhook_max_skew_seconds,
+    )
+    if not freshness.ok:
+        _log.info(
+            "incoming_webhook.stale_delivery",
+            config_id=str(config.id),
+            origin=origin.value,
+            reason=freshness.reason,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="webhook timestamp outside the accepted window",
+        )
+
     # 5. Map the verified payload to a system action (pure; never touches the
     #    DB / network). A malformed or generic-origin payload that can't be
     #    normalised is recorded with NO action (best-effort: a verified-but-odd
@@ -230,7 +270,14 @@ async def receive_incoming_webhook(
     #    in ONE transaction, under the resolved tenant's RLS scope. The event's
     #    partial UNIQUE on (config_id, delivery_id) makes a redelivery collide,
     #    so the action only ever runs once per delivery (idempotent: no dup task).
-    delivery_id = _first_header(request, _DELIVERY_HEADERS)
+    # La clave de dedup NUNCA es NULL (authz-5): cuando el emisor no manda id
+    # de entrega se deriva del cuerpo, que es el material que la firma cubre.
+    # Antes se guardaba NULL, el índice único parcial no aplicaba y el mismo
+    # mensaje podía reproducirse infinitas veces, re-ejecutando su acción cada
+    # vez. Ver `derive_delivery_id` para el precio de la decisión.
+    delivery_id = derive_delivery_id(
+        delivery_header=_first_header(request, _DELIVERY_HEADERS), body=raw_body
+    )
     event_id = uuid7()
     sessionmaker = get_sessionmaker()
     action_result = None

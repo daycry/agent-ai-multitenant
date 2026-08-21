@@ -18,10 +18,11 @@ from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
+from workers.db import worker_engine
 
 # P1-4 (investigación 2026-07-11): destilado de logs. El tail crudo de 8000
 # chars podía CORTAR la traza útil (el assert que falló al principio, ruido
@@ -179,7 +180,7 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
     cwd_raw = request.get("cwd")
     cwd = str(cwd_raw) if cwd_raw not in (None, "") else None
 
-    engine = create_async_engine(settings.database_url)
+    engine = worker_engine(settings)
     try:
         sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
         async with sessionmaker() as session:

@@ -44,7 +44,7 @@ async def _seed(dsn: str, *, with_session: bool = False) -> dict[str, UUID]:
     conn = await asyncpg.connect(dsn)
     try:
         await conn.execute(
-            "TRUNCATE review_sessions, plans, projects, organizations" " RESTART IDENTITY CASCADE"
+            "TRUNCATE review_sessions, plans, projects, organizations RESTART IDENTITY CASCADE"
         )
         await conn.execute(
             "INSERT INTO organizations (id, name, slug) VALUES ($1, 'Org', 'org-c8-f39')",

@@ -26,6 +26,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/api";
+import { resetTenantScopedQueries } from "@/lib/session-cache";
 import {
   getTenantChoice,
   getTenantId,
@@ -104,16 +105,13 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       else setAllTenants();
       // Drop tenant-scoped queries so the next read goes out with the new
       // X-Tenant-Id header — but NOT the queries that don't depend on the
-      // tenant (frontend-admin-panel-2). `auth` is the user identity,
-      // `admin`/`system-health` are platform-wide (BYPASSRLS) reads;
-      // wiping them on every tenant switch forces needless refetches.
-      const TENANT_INDEPENDENT_KEYS = new Set(["auth", "admin", "system-health"]);
-      queryClient.invalidateQueries({
-        predicate: (query) =>
-          !query.queryKey.some(
-            (key) => typeof key === "string" && TENANT_INDEPENDENT_KEYS.has(key),
-          ),
-      });
+      // tenant (frontend-admin-panel-2).
+      //
+      // RESET, not invalidate (task_prod09_11, frontend-4): invalidation keeps
+      // serving the cached rows until the refetch lands, so the screen showed
+      // the OUTGOING tenant's data for a beat after the switch — the one thing
+      // the tenant picker must never do.
+      resetTenantScopedQueries(queryClient);
     },
     [queryClient],
   );

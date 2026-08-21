@@ -23,24 +23,26 @@ import { Building2 } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { getToken } from "@/lib/auth";
+import { hasSession } from "@/lib/auth";
+import { useT } from "@/lib/i18n";
 import {
   HOME_ROUTE,
   NO_ACCESS_ROUTE,
   resolveSession,
   selectTenant,
-  setTokenForSingle,
+  applySingleResolution,
   type ResolvedMembership,
 } from "@/lib/session";
 
 export default function SelectTenantPage() {
+  const t = useT("selectTenant");
   const router = useRouter();
   const [memberships, setMemberships] = useState<ResolvedMembership[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       router.replace("/login");
       return;
     }
@@ -56,19 +58,19 @@ export default function SelectTenantPage() {
         if (resolution.state === "single") {
           // Only one tenant — enter it directly (the backend already
           // minted the tenant-scoped token in the resolution).
-          setTokenForSingle(resolution);
+          applySingleResolution(resolution);
           router.replace(HOME_ROUTE);
           return;
         }
         setMemberships(resolution.memberships);
       } catch {
-        if (!cancelled) setError("No se pudo cargar la lista de espacios de trabajo.");
+        if (!cancelled) setError(t("errorList"));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [router]);
+  }, [router, t]);
 
   async function onPick(tenantId: string) {
     setPending(tenantId);
@@ -77,7 +79,7 @@ export default function SelectTenantPage() {
       await selectTenant(tenantId);
       router.push(HOME_ROUTE);
     } catch {
-      setError("No se pudo activar ese espacio de trabajo. Inténtalo de nuevo.");
+      setError(t("errorActivate"));
       setPending(null);
     }
   }
@@ -89,12 +91,10 @@ export default function SelectTenantPage() {
     >
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Elige un espacio de trabajo</CardTitle>
+          <CardTitle>{t("title")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-muted-foreground text-sm">
-            Tienes acceso a varios espacios. Selecciona con cuál quieres entrar.
-          </p>
+          <p className="text-muted-foreground text-sm">{t("help")}</p>
           {memberships === null && !error && (
             <div className="flex items-center justify-center py-6">
               <Spinner className="h-5 w-5" />

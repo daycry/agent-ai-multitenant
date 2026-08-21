@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the UI-level "a real assigned tool executes (not 'unknown tool')"
@@ -38,6 +39,14 @@ import { expect, test, type Page, type Route } from "@playwright/test";
  * PENDING HUMAN VERIFICATION (needs a browser + the admin-panel dev server; no
  * live stack exists in the implementation environment). Run with
  * `npx playwright test e2e/tools-execution.spec.ts`.
+ *
+ * Reparado el 2026-08-19 (subset mockeado de CI): el mock del PUT ACEPTABA la
+ * asignación pero no la PERSISTÍA, así que el GET posterior (la sección
+ * invalida y recarga al guardar) seguía devolviendo la lista vieja. La pantalla
+ * hacía lo correcto —comparar lo recargado con lo seleccionado y volver a
+ * marcarse "sucia"—, y con ello desaparecía el "Guardado" que el test esperaba.
+ * Un backend que olvida lo que acaba de aceptar no es un caso que merezca la
+ * pena fijar en un test: el mock ahora recuerda.
  */
 
 const API = "http://localhost:8001";
@@ -160,12 +169,11 @@ async function setup(
     onPut?: (body: unknown) => void;
   } = {},
 ): Promise<void> {
-  const assigned = opts.assigned ?? [];
+  // Estado MUTABLE: un PUT aceptado cambia lo que devuelve el GET siguiente.
+  let assigned = opts.assigned ?? [];
   const rejectIds = new Set(opts.rejectIds ?? []);
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route(`${API}/me`, (route) => json(route, TENANT_ADMIN));
   await page.route(`${API}/agents/${AGENT_ID}`, (route) => json(route, agentBody()));
@@ -189,6 +197,7 @@ async function setup(
         );
         return;
       }
+      assigned = sent.tools.map((t) => t.tool_id);
       await json(
         route,
         sent.tools.map((t) => assignedRow(t.tool_id)),

@@ -17,7 +17,9 @@ dependencies = [
   # At-rest backup encryption — AES-256-GCM of the backup bundle, keyed by a
   # Vault-resolved secret (Plan 12 task_12_02). Same lib the rest of the
   # platform already uses for Fernet-at-rest secrets.
-  "cryptography>=42,<49",
+  # Suelo 50 por CVE, no por compatibilidad (SCA 2026-08-13): ver la nota
+  # extensa en apps/api-server/pyproject.toml. AESGCM no cambió en 47→50.
+  "cryptography>=50,<51",
 
   # Remote backup destinations — S3 / any S3-compatible provider (MinIO,
   # Backblaze B2, Wasabi, R2) via the AWS SDK (Plan 12 task_12_05+). The S3
@@ -27,7 +29,7 @@ dependencies = [
   # SFTP / NAS remote backup destination (Plan 12 task_12_07). paramiko opens
   # the SSH+SFTP session the SftpDestination adapter uploads/lists/downloads
   # over. Mocked in tests — no real SSH host is reachable.
-  "paramiko>=3.4,<4",
+  "paramiko>=5.0,<6",
 
   # Observability
   "structlog>=24.1,<25",
@@ -35,14 +37,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
   # Stubs para el gate mypy (2026-07-08, mypy-total): boto3 es untyped y
   # paramiko publica stubs aparte — sin ellos backup_destinations no pasa
   # strict en el entorno del proyecto (antes vivían solo en el venv aislado
   # del hook de pre-commit, hoy retirado).
   "boto3-stubs[s3]>=1.34,<2",
-  "types-paramiko>=3.4,<4",
+  "types-paramiko>=5.0,<6",
 ]
 
 [build-system]

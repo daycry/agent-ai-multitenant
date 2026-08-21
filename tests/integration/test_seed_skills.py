@@ -138,7 +138,7 @@ def test_each_skill_has_non_empty_prompt_fragment(alembic_config, migrations_pg_
     for name, fragment in asyncio.run(_fetch()):
         assert fragment and fragment.strip(), f"empty prompt_fragment on {name!r}"
         assert len(fragment) >= 50, (
-            f"prompt_fragment for {name!r} is suspiciously short " f"({len(fragment)} chars)"
+            f"prompt_fragment for {name!r} is suspiciously short ({len(fragment)} chars)"
         )
 
 
@@ -157,7 +157,7 @@ def test_seeded_skills_visible_to_tenant_sessions(alembic_config, migrations_pg_
     )
 
     tenant_id = uuid4()
-    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}" f"@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
+    app_dsn = f"postgresql://{PG_APP_USER}:{PG_APP_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_TEST_DB}"
 
     async def _seed_tenant_and_count() -> int:
         conn = await asyncpg.connect(migrations_pg_dsn)

@@ -97,7 +97,7 @@ def test_trip_outcome_stalemate_in_review_cycle() -> None:
 
 
 def test_trip_outcome_outside_review_is_fallback() -> None:
-    code, summary, output = _trip_outcome(
+    code, _summary, output = _trip_outcome(
         review_retries=0,
         last_review_feedback="",
         fallback_code=str(SafeguardCode.RESEARCH_EXHAUSTED),

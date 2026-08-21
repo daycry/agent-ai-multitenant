@@ -37,7 +37,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 // --------------------------------------------------------------------------
 // Types — mirror api_server.schemas.notifications
@@ -94,10 +96,6 @@ const STATUS_VARIANT: Record<string, "success" | "warning" | "danger" | "info" |
   dead_letter: "danger",
 };
 
-function apiErrorBody(err: unknown): string {
-  return err instanceof ApiError ? err.body : String(err);
-}
-
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
@@ -107,6 +105,9 @@ function formatTimestamp(iso: string): string {
 // Page
 // --------------------------------------------------------------------------
 export default function NotificationInboxPage() {
+  const t = useT("notificationsInbox");
+  const tCommon = useT("common");
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
 
   const [scope, setScope] = useState<InboxScope>("tenant");
@@ -182,8 +183,8 @@ export default function NotificationInboxPage() {
     >
       <PageHeader
         icon={<Inbox className="h-6 w-6 sm:h-7 sm:w-7" />}
-        title="Bandeja de notificaciones"
-        description="Histórico de notificaciones enviadas a tus canales, con estado y reintento manual."
+        title={t("title")}
+        description={t("description")}
         data-testid="notification-inbox-header"
       />
 
@@ -191,14 +192,14 @@ export default function NotificationInboxPage() {
       <div className="mt-6 flex flex-wrap items-center gap-3">
         {/* AUD16-10: scope de PLATAFORMA (tenant NULL) — solo System Admin. */}
         <RoleGuard min="system_admin">
-          <div className="flex rounded-md border" role="group" aria-label="Ámbito del inbox">
+          <div className="flex rounded-md border" role="group" aria-label={t("scopeGroupAria")}>
             <Button
               variant={scope === "tenant" ? "default" : "ghost"}
               size="sm"
               onClick={() => changeScope("tenant")}
               data-testid="inbox-scope-tenant"
             >
-              Tenant
+              {t("scopeTenant")}
             </Button>
             <Button
               variant={scope === "platform" ? "default" : "ghost"}
@@ -206,15 +207,15 @@ export default function NotificationInboxPage() {
               onClick={() => changeScope("platform")}
               data-testid="inbox-scope-platform"
             >
-              Plataforma
+              {t("scopePlatform")}
             </Button>
           </div>
         </RoleGuard>
         <Badge variant={unread > 0 ? "info" : "muted"} data-testid="inbox-unread-badge">
-          {unread} sin leer
+          {t("unreadBadge", { n: unread })}
         </Badge>
         <label className="flex items-center gap-2 text-sm" htmlFor="inbox-status-filter">
-          <span className="text-muted-foreground">Estado</span>
+          <span className="text-muted-foreground">{t("statusLabel")}</span>
           <select
             id="inbox-status-filter"
             data-testid="inbox-status-filter"
@@ -222,7 +223,7 @@ export default function NotificationInboxPage() {
             value={statusFilter}
             onChange={(e) => changeStatus(e.target.value)}
           >
-            <option value="">Todos</option>
+            <option value="">{t("statusAll")}</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}
@@ -239,7 +240,7 @@ export default function NotificationInboxPage() {
             checked={unreadOnly}
             onChange={toggleUnreadOnly}
           />
-          <span>Solo sin leer</span>
+          <span>{t("unreadOnly")}</span>
         </label>
         <div className="ml-auto">
           <Button
@@ -250,7 +251,7 @@ export default function NotificationInboxPage() {
             data-testid="inbox-mark-all-read"
           >
             <CheckCheck className="mr-1 h-3.5 w-3.5" />
-            Marcar todo como leído
+            {t("markAllRead")}
           </Button>
         </div>
       </div>
@@ -258,17 +259,17 @@ export default function NotificationInboxPage() {
       {/* Lista */}
       {inboxQuery.isLoading ? (
         <p className="text-muted-foreground mt-6 text-sm" data-testid="inbox-loading">
-          Cargando…
+          {tCommon("loading")}
         </p>
       ) : inboxQuery.isError ? (
         <p className="text-destructive mt-6 text-sm" data-testid="inbox-error">
-          {apiErrorBody(inboxQuery.error)}
+          {errorText(inboxQuery.error)}
         </p>
       ) : (data?.items ?? []).length === 0 ? (
         <Card className="mt-6">
           <CardContent className="py-10 text-center">
             <p className="text-muted-foreground text-sm italic" data-testid="inbox-empty">
-              No hay notificaciones que coincidan con el filtro.
+              {t("empty")}
             </p>
           </CardContent>
         </Card>
@@ -290,14 +291,17 @@ export default function NotificationInboxPage() {
 
       {retryMutation.isError ? (
         <p className="text-destructive mt-3 text-xs" data-testid="inbox-retry-error">
-          {apiErrorBody(retryMutation.error)}
+          {errorText(retryMutation.error)}
         </p>
       ) : null}
 
       {/* Paginación */}
       <div className="mt-6 flex items-center justify-between">
         <span className="text-muted-foreground text-xs" data-testid="inbox-count">
-          {total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)}`} de {total}
+          {t("range", {
+            range: total === 0 ? "0" : `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)}`,
+            total,
+          })}
         </span>
         <div className="flex gap-2">
           <Button
@@ -307,7 +311,7 @@ export default function NotificationInboxPage() {
             disabled={!hasPrev || inboxQuery.isFetching}
             data-testid="inbox-prev-page"
           >
-            Anterior
+            {t("prev")}
           </Button>
           <Button
             variant="outline"
@@ -316,7 +320,7 @@ export default function NotificationInboxPage() {
             disabled={!hasNext || inboxQuery.isFetching}
             data-testid="inbox-next-page"
           >
-            Siguiente
+            {t("next")}
           </Button>
         </div>
       </div>
@@ -342,6 +346,7 @@ function InboxRow({
   retryBusy: boolean;
   showRetry?: boolean;
 }) {
+  const t = useT("notificationsInbox");
   const isDeadLetter = log.status === "dead_letter" && showRetry;
   return (
     <Card
@@ -353,7 +358,7 @@ function InboxRow({
         {!log.read ? (
           <span
             className="bg-primary inline-block h-2 w-2 shrink-0 rounded-full"
-            aria-label="sin leer"
+            aria-label={t("unreadDot")}
             data-testid={`inbox-unread-dot-${log.id}`}
           />
         ) : (
@@ -374,7 +379,9 @@ function InboxRow({
               {log.status}
             </Badge>
             {log.attempt > 1 ? (
-              <span className="text-muted-foreground text-xs">intento {log.attempt}</span>
+              <span className="text-muted-foreground text-xs">
+                {t("attempt", { n: log.attempt })}
+              </span>
             ) : null}
           </div>
           {/* AUD16-11: el CONTENIDO persistido (in_app) — antes solo se veía el event_type. */}
@@ -412,7 +419,7 @@ function InboxRow({
                 data-testid={`inbox-retry-${log.id}`}
               >
                 <RefreshCw className="mr-1 h-3.5 w-3.5" />
-                Reintentar
+                {t("retry")}
               </Button>
             </RoleGuard>
           ) : null}
@@ -424,7 +431,7 @@ function InboxRow({
               disabled={markBusy}
               data-testid={`inbox-mark-read-${log.id}`}
             >
-              Marcar leído
+              {t("markRead")}
             </Button>
           ) : null}
         </div>

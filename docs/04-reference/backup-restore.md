@@ -34,7 +34,10 @@ Cada corrida del motor (`workers.backup.run_full_backup`) escribe un
 ```
 <backup_id>/
 ├── postgres/            # pg_dump LÓGICO, formato directorio (--format=directory)
-├── <volumen>.tar.gz     # uno por volumen Docker (minio_data, redis_data, vault_data)
+├── <volumen>.tar.gz     # uno por volumen Docker, si el stack usa named volumes
+├── bind-<slug>.tar.gz   # uno por bind path (MinIO, file backend de Vault)
+├── redis.tar.gz         # data dir de Redis tras un BGREWRITEAOF completado
+├── projects.tar.gz      # bare repos de todos los proyectos (sin worktrees/)
 └── manifest.json        # version, backup_id, created_at, status, encrypted,
                          #   artifacts[] (name/kind/path/size_bytes/sha256/source),
                          #   total_size_bytes; la URL de la BD va SANEADA (sin password)
@@ -46,7 +49,11 @@ Cuando el cifrado está activado, el directorio contiene en su lugar un único
 | Propiedad             | Valor                                                                                   |
 | --------------------- | --------------------------------------------------------------------------------------- |
 | Captura de PostgreSQL | `pg_dump --format=directory` (LÓGICO; permite `pg_restore --list` + restore por tenant) |
-| Captura de volúmenes  | `tar + gzip` por volumen (`WORKERS_BACKUP_VOLUMES`)                                     |
+| Captura de volúmenes  | `tar + gzip` por volumen (`WORKERS_BACKUP_VOLUMES`) — vacío en un stack del instalador  |
+| Captura de binds      | `tar + gzip` por ruta (`WORKERS_BACKUP_BIND_PATHS`): MinIO y el file backend de Vault   |
+| Captura de Redis      | `BGREWRITEAOF` completado + `tar` del data dir (`WORKERS_BACKUP_REDIS_DIR`)             |
+| Captura de repos      | `tar + gzip` de los bare repos (`WORKERS_BACKUP_PROJECTS_ROOT`), sin `worktrees/`       |
+| Coherencia            | huella antes/después en `WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS`; skew residual: ADR 0149 |
 | Integridad            | checksums SHA-256 por artefacto en el manifest                                          |
 | Fail-closed           | cualquier sub-fallo borra el bundle parcial y eleva `BackupError`                       |
 | Retención local       | poda los bundles más antiguos que `WORKERS_BACKUP_RETENTION_DAYS` (default 7)           |
@@ -90,8 +97,38 @@ región y pinea el part-size multipart; SFTP usa `host_key_policy: reject` por
 defecto (el host debe estar en known_hosts — nunca se desactiva el check
 silenciosamente); rclone escribe el blob a un temp `rclone.conf` (0600) pasado
 con `--config` (creds en el FICHERO, nunca en argv/log) y lo borra en un finally.
-El botón "test de conectividad" de la UI (task_12_09) construye el destino (lazy,
-sin red) y hace una sonda barata (`head_bucket` / `stat` / `lsd`).
+El botón "test de conectividad" de la UI (task_12_09) hace una sonda barata
+(`head_bucket` / `stat` / `lsd`).
+
+### Dónde CORREN la sonda y el listado remoto (prod-15 `task_gov_app_boundary_11`)
+
+**En el worker, no en el api-server**, y esto no es un detalle de arquitectura:
+los adaptadores resuelven sus credenciales de `os.environ` **del proceso que los
+ejecuta** (`backup_s3_access_key_id` → `WORKERS_BACKUP_S3_ACCESS_KEY_ID`), y el
+api-server no declara ninguna `WORKERS_BACKUP_*` — las lleva la lane
+`privileged` (servicio `workers-backup`), que es donde la tabla de knobs de más
+abajo manda ponerlas. Hasta 2026-08-19 la sonda se ejecutaba dentro del
+api-server: en cuanto un destino tuviera credencial, el botón habría dicho FAIL
+con un «faltan credenciales» correcto e inútil, y el listado remoto habría vuelto
+vacío en silencio.
+
+| Qué                    | Tarea Celery                      | Cola         |
+| ---------------------- | --------------------------------- | ------------ |
+| Probar conectividad    | `workers.backup_test_destination` | `privileged` |
+| Listar bundles remotos | `workers.backup_list_remote`      | `privileged` |
+
+El router (`POST /admin/backup/destinations/{name}/test`,
+`GET /admin/backup/restore/backups`) encola **por nombre** y relaya el resultado
+— el contrato HTTP no cambió. Por el broker viaja sólo la config NO secreta del
+destino. Dos plazos: `expires` en el mensaje (la lane es `--concurrency=1` y
+drena el backup nocturno, así que una sonda que no arranca a tiempo se descarta
+en vez de correr tarde) y un plazo de respuesta en el endpoint, que ante silencio
+devuelve FAIL con motivo en vez de colgarse.
+
+> **Si se configura un destino remoto y la sonda dice «did not answer»**: mira
+> que el pool `workers-backup` esté vivo y drenando `privileged`
+> (`docker compose ps workers-backup`), y que las `WORKERS_BACKUP_*` de ese
+> destino estén declaradas **en ese servicio**.
 
 ## Modos de restore + seguridad
 
@@ -175,6 +212,10 @@ detalle de defaults en `apps/workers/src/workers/config.py`.
 | `WORKERS_BACKUP_DATABASE_URL`                                                      | URL libpq de `pg_dump`/`pg_restore` (rol BYPASSRLS)         |
 | `WORKERS_BACKUP_RETENTION_DAYS`                                                    | retención local (default 7)                                 |
 | `WORKERS_BACKUP_VOLUMES` / `_VOLUMES_MOUNT_ROOT`                                   | volúmenes capturados + su mount root                        |
+| `WORKERS_BACKUP_BIND_PATHS` / `_PROJECTS_ROOT`                                     | rutas del host capturadas + raíz de los bare repos          |
+| `WORKERS_BACKUP_REDIS_DIR` / `_REDIS_URL`                                          | data dir de Redis + conexión para el `BGREWRITEAOF`         |
+| `WORKERS_BACKUP_STABLE_SNAPSHOT_PATHS` / `_SNAPSHOT_RETRIES`                       | capturas con coherencia verificada (Vault) + reintentos     |
+| `WORKERS_BACKUP_KEY_CUSTODY_FINGERPRINT`                                           | huella de la clave depositada offsite (fail-closed)         |
 | `WORKERS_BACKUP_CRON` + setting `backup_enabled`                                   | cadencia diaria (`0 3 * * *`) + palanca live (System Admin) |
 | `WORKERS_BACKUP_METRICS_TEXTFILE_PATH`                                             | fichero `.prom` de salud del backup                         |
 | `WORKERS_BACKUP_ENCRYPTION_ENABLED` / `_ENCRYPTION_VAULT_KEY`                      | cifrado AES-256 opcional + nombre de la clave del Vault     |

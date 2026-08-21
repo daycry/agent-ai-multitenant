@@ -47,7 +47,12 @@ from api_server.mcp_oauth_flow import (
 )
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers.mcp import get_vault_resolver
-from api_server.routers.sso import _effective_redirect_base
+
+# `sso.common`, no `sso` a secas: al partir el router en paquete (prod-16
+# `task_prod16_10`) esta pieza compartida se quedó donde le toca — el módulo sin
+# rutas del que cuelgan OIDC y SAML. Importarla del `__init__` funcionaría con un
+# reexport, pero oculta de qué depende esto realmente.
+from api_server.routers.sso.common import _effective_redirect_base
 
 router = APIRouter(prefix="/projects/{project_id}/mcp-servers/{server_name}/oauth", tags=["mcp"])
 

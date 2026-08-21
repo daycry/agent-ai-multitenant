@@ -17,12 +17,11 @@ urlsafe-base64 value).
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import secrets
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken, MultiFernet
 
+from api_server.auth.crypto_keys import build_multifernet
 from api_server.config import get_settings
 
 # Bytes of CSPRNG entropy in a freshly minted incoming-webhook signing secret,
@@ -41,11 +40,17 @@ class IncomingWebhookSecretError(Exception):
     """
 
 
-def _fernet() -> Fernet:
-    """Build the Fernet cipher from the configured webhook encryption key."""
-    raw = get_settings().incoming_webhook_encryption_key.get_secret_value().encode("utf-8")
-    key = base64.urlsafe_b64encode(hashlib.sha256(raw).digest())
-    return Fernet(key)
+def _fernet() -> MultiFernet:
+    """Build the cipher over the webhook key RING (prod-05 task_prod05_01).
+
+    Head key encrypts, every key decrypts — so rotating
+    ``API_SERVER_INCOMING_WEBHOOK_ENCRYPTION_KEY`` no longer means every project's
+    inbound integration starts rejecting signatures. Note the asymmetry with the
+    other families: the signing secret itself is shown to the operator ONCE and
+    pasted into GitHub/Jira, so a lost ciphertext cannot be recovered by asking
+    the provider — the ring is the only safety net there is.
+    """
+    return build_multifernet(get_settings().incoming_webhook_encryption_key_ring)
 
 
 def generate_signing_secret() -> str:

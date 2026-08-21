@@ -21,7 +21,6 @@ docs_language: es
 | Campo                              | Valor                                     |
 | ---------------------------------- | ----------------------------------------- |
 | **ID del Plan**                    | `05-mcp-tools-avanzadas`                  |
-| **Estado**                         | `pending_approval`                        |
 | **Bloqueado por**                  | `04-memoria-rag-kbs`                      |
 | **Tiempo estimado (calendario)**   | 2-3 semanas                               |
 | **Tiempo estimado (persona-días)** | 40-55                                     |
@@ -30,6 +29,8 @@ docs_language: es
 | **Aprobador propuesto**            | System Admin                              |
 | **Rama git**                       | `plan/05-mcp-tools-avanzadas`             |
 | **Secciones del .docx**            | [9]                                       |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
 
 ---
 

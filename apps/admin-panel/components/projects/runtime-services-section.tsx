@@ -8,6 +8,12 @@
 // contenedor de stack_exec, los tests de aceptación y el app-preview del review.
 // Los servicios del catálogo derivan su connection-string solos; para una imagen
 // arbitraria, fija tú la cadena de conexión en las variables de entorno.
+//
+// i18n (prod-16 `task_prod16_03`): `validate()` NO devuelve texto, devuelve la
+// clave del diccionario y sus variables. Devolver texto obligaba a la función
+// pura a conocer el idioma, y en la práctica significaba que los siete mensajes
+// de validación salían en castellano con el toggle en EN — justo cuando el
+// operador está corrigiendo un formulario.
 
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -18,11 +24,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useT, type MessageKey, type TranslationVars, type Translator } from "@/lib/i18n";
+import { useErrorText } from "@/lib/use-error-text";
 
 /** Tipos de servicio del catálogo cerrado (ADR 0129 §1) + la escotilla de imagen. */
 const CATALOG_TYPES = ["mysql", "mariadb", "postgres", "redis", "beanstalkd"] as const;
 const IMAGE_KIND = "__image__";
+
+type ServicesKey = MessageKey<"projectRuntimeServices">;
+type ServicesT = Translator<"projectRuntimeServices">;
 
 interface RuntimeServicesSectionProps {
   projectId: string;
@@ -77,6 +88,8 @@ function parseEnv(raw: unknown): EnvRow[] {
 
 export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSectionProps) {
   const queryClient = useQueryClient();
+  const t = useT("projectRuntimeServices");
+  const errorText = useErrorText();
   const [services, setServices] = useState<ServiceRow[]>(() => parseServices(value?.["services"]));
   const [env, setEnv] = useState<EnvRow[]>(() => parseEnv(value?.["env"]));
   const [runtimeImage, setRuntimeImage] = useState(
@@ -133,7 +146,7 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
     },
     onError: (e) => {
       setSaved(false);
-      setErrorMsg(e instanceof ApiError ? e.body : String(e));
+      setErrorMsg(errorText(e));
     },
   });
 
@@ -141,28 +154,23 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
     <Card data-testid="runtime-services-section">
       <CardHeader className="flex flex-row items-center gap-2">
         <Boxes className="text-muted-foreground h-5 w-5" />
-        <CardTitle>Servicios e imagen de runtime</CardTitle>
+        <CardTitle>{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        <p className="text-muted-foreground text-sm">
-          Servicios de respaldo (base de datos, caché, colas) que la plataforma levanta como
-          sidecars endurecidos junto al runtime del proyecto, para que sus tests y el app-preview
-          arranquen. Los servicios del catálogo derivan su cadena de conexión automáticamente
-          (`DATABASE_URL`, `REDIS_URL`, …); para una imagen arbitraria, fija tú la conexión en las
-          variables de entorno. Aíslados en una red interna por tarea/sesión (ADR 0129).
-        </p>
+        <p className="text-muted-foreground text-sm">{t("description")}</p>
 
         {/* --- Servicios --- */}
         <div className="space-y-3">
-          <Label>Servicios</Label>
+          <Label>{t("servicesLabel")}</Label>
           {services.length === 0 ? (
-            <p className="text-muted-foreground text-xs">Sin servicios declarados.</p>
+            <p className="text-muted-foreground text-xs">{t("servicesEmpty")}</p>
           ) : null}
           <div className="space-y-2">
             {services.map((svc, i) => (
               <ServiceRowEditor
                 key={i}
                 row={svc}
+                t={t}
                 onChange={(next) => {
                   touched();
                   setServices((prev) => prev.map((s, j) => (j === i ? next : s)));
@@ -188,18 +196,14 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
             }}
           >
             <Plus className="mr-1 h-4 w-4" />
-            Añadir servicio
+            {t("addService")}
           </Button>
         </div>
 
         {/* --- Variables de entorno --- */}
         <div className="space-y-3">
-          <Label>Variables de entorno</Label>
-          <p className="text-muted-foreground text-xs">
-            Inyectadas en el contenedor principal (tests / app-preview). Sobrescriben la
-            connection-env derivada si repites la clave. No es Vault: no pongas secretos de
-            producción aquí.
-          </p>
+          <Label>{t("envLabel")}</Label>
+          <p className="text-muted-foreground text-xs">{t("envHint")}</p>
           <div className="space-y-2">
             {env.map((row, i) => (
               <div
@@ -208,7 +212,7 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
                 data-testid={`env-row-${i}`}
               >
                 <Input
-                  aria-label="Clave"
+                  aria-label={t("envKeyLabel")}
                   placeholder="APP_ENV"
                   value={row.key}
                   data-testid={`env-key-${i}`}
@@ -220,7 +224,7 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
                   }}
                 />
                 <Input
-                  aria-label="Valor"
+                  aria-label={t("envValueLabel")}
                   placeholder="testing"
                   value={row.value}
                   data-testid={`env-value-${i}`}
@@ -234,7 +238,7 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
                 <Button
                   variant="ghost"
                   size="sm"
-                  aria-label="Quitar variable"
+                  aria-label={t("removeEnv")}
                   data-testid={`env-remove-${i}`}
                   onClick={() => {
                     touched();
@@ -256,13 +260,13 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
             }}
           >
             <Plus className="mr-1 h-4 w-4" />
-            Añadir variable
+            {t("addEnv")}
           </Button>
         </div>
 
         {/* --- Imagen de runtime custom --- */}
         <div className="space-y-1.5">
-          <Label htmlFor="runtime-image">Imagen de runtime custom (opcional)</Label>
+          <Label htmlFor="runtime-image">{t("runtimeImageLabel")}</Label>
           <Input
             id="runtime-image"
             data-testid="runtime-image-input"
@@ -274,11 +278,9 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
             }}
           />
           <p className="text-muted-foreground text-xs">
-            Solo si necesitas paquetes/extensiones de sistema no cubiertos por los comandos del
-            proyecto. Básala en un runtime-template de la plataforma (p.ej.{" "}
-            <code>FROM agentic-platform/agent-runtime-php-phpunit:v1</code>) e instala lo que falte;
-            la publica tu CI (la plataforma no la construye, ADR 0129). Vacío = usa el runtime por
-            defecto del proyecto.
+            {t("runtimeImageHintBefore")}
+            <code>FROM agentic-platform/agent-runtime-php-phpunit:v1</code>
+            {t("runtimeImageHintAfter")}
           </p>
         </div>
 
@@ -288,14 +290,14 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
             disabled={save.isPending || !validation.ok}
             data-testid="runtime-services-save"
           >
-            Guardar servicios
+            {t("save")}
           </Button>
           {!validation.ok ? (
             <p className="text-destructive text-xs" data-testid="runtime-services-validation">
-              {validation.message}
+              {t(validation.key, validation.vars)}
             </p>
           ) : null}
-          {saved ? <p className="text-success text-xs">Guardado.</p> : null}
+          {saved ? <p className="text-success text-xs">{t("saved")}</p> : null}
           {errorMsg ? (
             <p className="text-destructive text-xs" data-testid="runtime-services-error">
               {errorMsg}
@@ -309,11 +311,13 @@ export function RuntimeServicesSection({ projectId, value }: RuntimeServicesSect
 
 function ServiceRowEditor({
   row,
+  t,
   onChange,
   onRemove,
   index,
 }: {
   row: ServiceRow;
+  t: ServicesT;
   onChange: (next: ServiceRow) => void;
   onRemove: () => void;
   index: number;
@@ -325,7 +329,7 @@ function ServiceRowEditor({
       data-testid={`service-row-${index}`}
     >
       <Select
-        aria-label="Tipo de servicio"
+        aria-label={t("serviceTypeLabel")}
         value={kindValue}
         data-testid={`service-type-${index}`}
         onChange={(e) => {
@@ -337,25 +341,26 @@ function ServiceRowEditor({
           }
         }}
       >
-        {CATALOG_TYPES.map((t) => (
-          <option key={t} value={t}>
-            {t}
+        {/* Los tipos del catálogo son los identificadores que viajan al backend. */}
+        {CATALOG_TYPES.map((type) => (
+          <option key={type} value={type}>
+            {type}
           </option>
         ))}
-        <option value={IMAGE_KIND}>imagen…</option>
+        <option value={IMAGE_KIND}>{t("serviceImageOption")}</option>
       </Select>
 
       {row.kind === "catalog" ? (
         <Input
-          aria-label="Versión"
-          placeholder="versión (ej. 8.4) — vacío = por defecto"
+          aria-label={t("serviceVersionLabel")}
+          placeholder={t("serviceVersionPlaceholder")}
           value={row.version}
           data-testid={`service-version-${index}`}
           onChange={(e) => onChange({ ...row, version: e.target.value })}
         />
       ) : (
         <Input
-          aria-label="Imagen"
+          aria-label={t("serviceImageLabel")}
           placeholder="rabbitmq:3-management"
           value={row.image}
           data-testid={`service-image-${index}`}
@@ -364,8 +369,8 @@ function ServiceRowEditor({
       )}
 
       <Input
-        aria-label="Alias (hostname)"
-        placeholder="alias/hostname (vacío = tipo)"
+        aria-label={t("serviceAliasLabel")}
+        placeholder={t("serviceAliasPlaceholder")}
         value={row.alias}
         data-testid={`service-alias-${index}`}
         onChange={(e) => onChange({ ...row, alias: e.target.value })}
@@ -374,7 +379,7 @@ function ServiceRowEditor({
       <Button
         variant="ghost"
         size="sm"
-        aria-label="Quitar servicio"
+        aria-label={t("removeService")}
         data-testid={`service-remove-${index}`}
         onClick={onRemove}
       >
@@ -397,39 +402,38 @@ function serializeService(s: ServiceRow): Record<string, unknown> | null {
   return out;
 }
 
-function validate(
-  services: ServiceRow[],
-  env: EnvRow[],
-  runtimeImage: string,
-): { ok: true } | { ok: false; message: string } {
+/** El problema, como CLAVE del diccionario + sus variables. Ver la cabecera. */
+type Validation = { ok: true } | { ok: false; key: ServicesKey; vars?: TranslationVars };
+
+function validate(services: ServiceRow[], env: EnvRow[], runtimeImage: string): Validation {
   const aliases = new Set<string>();
   for (const s of services) {
     const alias = s.alias.trim();
     if (alias && !ALIAS_RE.test(alias)) {
-      return { ok: false, message: `Alias inválido: ${alias} (usa [a-z][a-z0-9-]*).` };
+      return { ok: false, key: "invalidAlias", vars: { alias } };
     }
     if (alias) {
-      if (aliases.has(alias)) return { ok: false, message: `Alias duplicado: ${alias}.` };
+      if (aliases.has(alias)) return { ok: false, key: "duplicateAlias", vars: { alias } };
       aliases.add(alias);
     }
     if (s.kind === "image") {
-      if (!s.image.trim()) return { ok: false, message: "Una imagen de servicio requiere un tag." };
+      if (!s.image.trim()) return { ok: false, key: "imageNeedsTag" };
       if (!IMAGE_RE.test(s.image.trim())) {
-        return { ok: false, message: `Imagen inválida: ${s.image.trim()}.` };
+        return { ok: false, key: "invalidImage", vars: { image: s.image.trim() } };
       }
-      if (!alias) return { ok: false, message: "Una imagen de servicio requiere un alias." };
+      if (!alias) return { ok: false, key: "imageNeedsAlias" };
     }
   }
-  if (services.length > 8) return { ok: false, message: "Máximo 8 servicios." };
+  if (services.length > 8) return { ok: false, key: "tooManyServices" };
   for (const { key } of env) {
     const k = key.trim();
     if (k && !ENV_KEY_RE.test(k)) {
-      return { ok: false, message: `Variable inválida: ${k} (usa [A-Z][A-Z0-9_]*).` };
+      return { ok: false, key: "invalidEnvKey", vars: { key: k } };
     }
   }
   const img = runtimeImage.trim();
   if (img && !IMAGE_RE.test(img)) {
-    return { ok: false, message: `Imagen de runtime inválida: ${img}.` };
+    return { ok: false, key: "invalidRuntimeImage", vars: { image: img } };
   }
   return { ok: true };
 }

@@ -202,7 +202,7 @@ class _PythonDangerVisitor(ast.NodeVisitor):
             )
         )
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802 (ast visitor naming)
+    def visit_Call(self, node: ast.Call) -> None:
         func = node.func
 
         # Bare builtins: eval / exec / compile / __import__.

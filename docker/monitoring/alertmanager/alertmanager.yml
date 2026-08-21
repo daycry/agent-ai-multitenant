@@ -46,6 +46,27 @@ route:
         - severity = "critical"
       receiver: platform-notifier
       repeat_interval: 1h
+      # `continue: true` es la pieza clave del respaldo (prod-08
+      # task_prod08_alert_fallback_02). El árbol de rutas de Alertmanager SE
+      # DETIENE en la primera coincidencia; sin este flag, la ruta de abajo
+      # nunca se evaluaría y añadir el respaldo habría SUSTITUIDO la
+      # notificación por la plataforma en vez de duplicarla — un fallo
+      # silencioso. Guardado por tests/unit/test_alertmanager_routing.py.
+      continue: true
+
+    # RESPALDO para críticas. El punto ciego del diseño «todo por la
+    # plataforma» se enuncia solo: si el servicio caído es el api-server, no
+    # puede entregarse la alerta a sí mismo — y `ServiceDown` del api-server es
+    # justo la alerta que más importa. Así que las críticas salen ADEMÁS por un
+    # canal que no depende de la plataforma.
+    #
+    # Solo `severity=critical`, no todo: la duplicación es deliberada y acotada
+    # (riesgo #5 del plan). Con `repeat_interval` más largo que el de la
+    # plataforma, porque este canal es el de último recurso, no el principal.
+    - matchers:
+        - severity = "critical"
+      receiver: critical-fallback
+      repeat_interval: 4h
 
 receivers:
   - name: platform-notifier
@@ -63,6 +84,33 @@ receivers:
           authorization:
             type: Bearer
             credentials: "dev-alerts-ingest-token"
+
+  # ---------------------------------------------------------------------------
+  # RESPALDO para `severity=critical` — el canal que NO pasa por la plataforma.
+  #
+  # El webhook apunta a un endpoint de Slack (`slack_api_url`) leído de un
+  # FICHERO, no incrustado aquí: Alertmanager no expande `${ENV}` en su config,
+  # y un webhook de Slack es una credencial (quien la tiene, publica en el
+  # canal). El fichero lo provee el operador / el instalador; su custodia es de
+  # prod-10.
+  #
+  # Comportamiento cuando el fichero NO existe (el caso por defecto en dev):
+  # Alertmanager **arranca igual** — `api_url_file` se lee en el momento de
+  # notificar, no al cargar la config. Falla ese envío concreto y lo registra
+  # en su log. Es la degradación correcta: preferimos perder el canal de
+  # respaldo antes que impedir arrancar a Alertmanager, porque eso dejaría el
+  # stack de alertas ENTERO caído. Verificado con `amtool check-config`.
+  # ---------------------------------------------------------------------------
+  - name: critical-fallback
+    slack_configs:
+      - api_url_file: /etc/alertmanager/secrets/slack_api_url
+        channel: "#alertas-plataforma"
+        send_resolved: true
+        title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          ({{ .Labels.instance }}){{ "\n" }}{{ end }}
+          Este es el canal de RESPALDO: llega aunque la plataforma esté caída.
 
 # ---------------------------------------------------------------------------
 # Inhibition: while the host kernel is OOM-killing, suppress the noisier

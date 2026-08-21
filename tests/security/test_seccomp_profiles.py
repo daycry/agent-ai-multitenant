@@ -558,9 +558,9 @@ def test_the_dev_stack_pins_the_hardened_seccomp_profile() -> None:
         assert "agent-runtime.json" in pinned, f"{name} no pina el perfil seccomp endurecido"
         # Y el JSON tiene que estar realmente montado, o el worker apunta a nada.
         volumes = [str(v) for v in (svc.get("volumes") or [])]
-        assert any(
-            "/etc/agentic/seccomp" in v for v in volumes
-        ), f"{name} pina el perfil pero no monta ./seccomp"
+        assert any("/etc/agentic/seccomp" in v for v in volumes), (
+            f"{name} pina el perfil pero no monta ./seccomp"
+        )
 
 
 def test_the_seccomp_pin_can_be_turned_off_from_the_env() -> None:
@@ -569,9 +569,9 @@ def test_the_seccomp_pin_can_be_turned_off_from_the_env() -> None:
     # borrar la línea y que nadie se entere de que se desactivó.
     for name, svc in _worker_lanes().items():
         value = str((svc.get("environment") or {}).get("WORKERS_SECCOMP_PROFILE_PATH", ""))
-        assert value.startswith(
-            "${WORKERS_SECCOMP_PROFILE_PATH"
-        ), f"{name} pina el perfil sin dejar override por env"
+        assert value.startswith("${WORKERS_SECCOMP_PROFILE_PATH"), (
+            f"{name} pina el perfil sin dejar override por env"
+        )
 
 
 def test_apparmor_is_not_hard_pinned_in_the_dev_stack() -> None:
@@ -584,9 +584,9 @@ def test_apparmor_is_not_hard_pinned_in_the_dev_stack() -> None:
     """
     for name, svc in _worker_lanes().items():
         value = str((svc.get("environment") or {}).get("WORKERS_APPARMOR_PROFILE", ""))
-        assert value.startswith(
-            "${WORKERS_APPARMOR_PROFILE"
-        ), f"{name} debería dejar AppArmor a la decisión del host, no fijarlo"
-        assert (
-            "agent-runtime" not in value
-        ), f"{name} pina AppArmor por defecto: rompe cualquier host sin el perfil cargado"
+        assert value.startswith("${WORKERS_APPARMOR_PROFILE"), (
+            f"{name} debería dejar AppArmor a la decisión del host, no fijarlo"
+        )
+        assert "agent-runtime" not in value, (
+            f"{name} pina AppArmor por defecto: rompe cualquier host sin el perfil cargado"
+        )

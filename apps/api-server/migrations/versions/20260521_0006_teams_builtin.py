@@ -43,7 +43,7 @@ def upgrade() -> None:
         ["is_builtin"],
         postgresql_where=sa.text("is_builtin = true"),
     )
-    op.execute("CREATE POLICY teams_builtin_read ON teams FOR SELECT" " USING (is_builtin = true)")
+    op.execute("CREATE POLICY teams_builtin_read ON teams FOR SELECT USING (is_builtin = true)")
 
 
 def downgrade() -> None:

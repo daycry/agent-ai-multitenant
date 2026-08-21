@@ -13,6 +13,8 @@ tres cosas:
      frame ``{type:'affect', valence, arousal, dominance, mood_label, drives}``
      (de F2) que el avatar mapea a color/expresión; y la síntesis Kokoro se
      **modula por el arousal** vigente (``voice_params_from_affect`` → ``speed``).
+     El ``mood_label`` del frame es copy de UI, así que viaja en el idioma de la
+     VOZ elegida (``_frame_language``) — ES+EN, Principio 12.
 
 Protocolo (idéntico al asistente):
 
@@ -57,6 +59,7 @@ from api_server.auth.deps import AuthPrincipal, _is_db_system_owner, get_redis, 
 from api_server.auth.sessions import SessionStore
 from api_server.celery_client import enqueue_cortex_distill_affect
 from api_server.config import get_settings
+from api_server.cortex.affective import Language
 from api_server.cortex.threads import CortexNoTenantError
 from api_server.cortex.voice_affect import voice_params_from_affect
 from api_server.cortex.voice_turn import affect_frame, load_current_affect, run_cortex_voice_turn
@@ -67,11 +70,12 @@ from api_server.routers.assistant_voice import (
     _SUPPORTED_VOICES,  # noqa: F401  (re-exported allowlist; kept for parity/tests)
     _reject,
     _resolve_voice,
+    voice_language,
     voice_language_instruction,
 )
 from api_server.routers.cortex import build_cortex_default_model
 from api_server.routers.llm_providers import get_provider_vault_store
-from api_server.routers.ws import _resolve_principal
+from api_server.routers.ws import _authenticate_socket
 
 _log = structlog.get_logger("api_server.cortex_voice")
 
@@ -134,6 +138,17 @@ async def _resolve_voice_model(
             return await result  # type: ignore[no-any-return]
         return result  # type: ignore[no-any-return]
     return await get_cortex_voice_model(vault=vault)
+
+
+def _frame_language(voice: str) -> Language:
+    """El idioma del frame afectivo = el de la VOZ elegida (Principio 12: ES+EN).
+
+    ``voice_language`` devuelve ``str``; esto lo estrecha al ``Literal`` que
+    :func:`affect_frame` espera sin un ``cast`` ciego (default español, como el
+    resto del despliegue ES-first). Sin esto el ``mood_label`` salía siempre en
+    castellano aunque la llamada fuese con voz inglesa, y el avatar rotulaba
+    "alegría" en una videollamada en inglés."""
+    return "en" if voice_language(voice) == "en" else "es"
 
 
 @dataclass
@@ -226,8 +241,9 @@ async def _run_turn(
         return
 
     await ws.send_json({"type": "answer", "text": turn.answer_text})
-    # Affect frame for the avatar (color/expression/sway) BEFORE the audio.
-    await ws.send_json(affect_frame(affect))
+    # Affect frame for the avatar (color/expression/sway) BEFORE the audio. The
+    # mood label is UI copy, so it travels in the language of the chosen voice.
+    await ws.send_json(affect_frame(affect, language=_frame_language(state.voice)))
     if turn.audio:
         await ws.send_bytes(turn.audio)
     await ws.send_json({"type": "turn_end"})
@@ -299,10 +315,10 @@ async def cortex_voice(
 ) -> None:
     """Per-turn spoken conversation with the córtex — System Owner only."""
     await ws.accept()
-    principal = await _resolve_principal(token, sessions)
-    if principal is None:
-        await _reject(ws, "unauthenticated")
+    authenticated = await _authenticate_socket(ws, token, sessions)
+    if authenticated is None:
         return
+    principal, _credential = authenticated
     # DB-authoritative owner gate (ADR 0074): the `own` claim is only a hint, so a
     # non-owner (even with a forged claim) is rejected here, BEFORE the brain is
     # built or any turn runs — never touching the córtex on a rejected socket.

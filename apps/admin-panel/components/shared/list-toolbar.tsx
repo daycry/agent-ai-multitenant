@@ -4,6 +4,7 @@ import * as React from "react";
 import { Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
+import { useT } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,13 +17,13 @@ import { cn } from "@/lib/utils";
  * to render just the title + actions.
  *
  *   <ListToolbar
- *     title="Equipos"
+ *     title={t("title")}
  *     count={teams.length}
  *     search={q}
  *     onSearchChange={setQ}
- *     searchPlaceholder="Buscar equipos…"
+ *     searchPlaceholder={t("searchTeams")}
  *     searchTestId="teams-search"
- *     actions={<Button>Nuevo</Button>}
+ *     actions={<Button>{t("new")}</Button>}
  *   />
  */
 interface ListToolbarProps {
@@ -48,14 +49,20 @@ export function ListToolbar({
   count,
   search,
   onSearchChange,
-  searchPlaceholder = "Buscar…",
+  searchPlaceholder,
   searchTestId,
   searchAriaLabel,
   actions,
   className,
   ...props
 }: ListToolbarProps) {
+  const t = useT("listToolbar");
   const hasSearch = typeof onSearchChange === "function";
+  // El default era `"Buscar…"` cableado. `check-i18n` no lo veía por DOS
+  // razones a la vez: es un default de prop, no un atributo, y su nombre es
+  // `searchPlaceholder` — el patrón de atributos distingue mayúsculas, así que
+  // ninguna prop compuesta (`searchPlaceholder`, `filterLabel`…) le casa.
+  const placeholder = searchPlaceholder === undefined ? t("searchPlaceholder") : searchPlaceholder;
 
   return (
     <div
@@ -87,8 +94,8 @@ export function ListToolbar({
               type="search"
               value={search ?? ""}
               onChange={(e) => onSearchChange?.(e.target.value)}
-              placeholder={searchPlaceholder}
-              aria-label={searchAriaLabel ?? searchPlaceholder}
+              placeholder={placeholder}
+              aria-label={searchAriaLabel ?? placeholder}
               data-testid={searchTestId}
               className="pl-9"
             />

@@ -19,7 +19,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
-import { ApiError, apiFetch } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { useErrorText } from "@/lib/use-error-text";
+
+import { PriorApprovalsNotice } from "./prior-approvals-notice";
 
 interface ApprovalRequest {
   id: string;
@@ -82,6 +85,7 @@ export default function ApprovalsPage() {
 }
 
 function ApprovalCard({ request }: { request: ApprovalRequest }) {
+  const errorText = useErrorText();
   const queryClient = useQueryClient();
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +114,7 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
       // an unhandled rejection (frontend-admin-panel-7).
       await queryClient.invalidateQueries({ queryKey: ["approvals"] });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.body : String(err)),
+    onError: (err) => setError(errorText(err)),
   });
 
   return (
@@ -141,9 +145,15 @@ function ApprovalCard({ request }: { request: ApprovalRequest }) {
             )}
           </div>
         ) : (
-          <pre className="bg-muted/40 overflow-x-auto rounded-md p-2 text-xs">
-            {JSON.stringify(request.action, null, 2)}
-          </pre>
+          <>
+            {/* ADR 0135 (N3): si esto es un «casi igual» de algo ya aprobado,
+                el delta primero — es lo que convierte una re-lectura completa
+                en una confirmación de dos segundos. */}
+            <PriorApprovalsNotice action={request.action} />
+            <pre className="bg-muted/40 overflow-x-auto rounded-md p-2 text-xs">
+              {JSON.stringify(request.action, null, 2)}
+            </pre>
+          </>
         )}
 
         <MarkdownTextarea

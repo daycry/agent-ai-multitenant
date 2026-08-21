@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for /admin/settings/sso — the per-tenant OIDC config UI
@@ -100,9 +101,7 @@ async function setup(page: Page, initial: SsoConfigFixture[]): Promise<Capture> 
   };
   let configs = [...initial];
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("agentic.token", "e2e-fake-token");
-  });
+  await seedSession(page);
 
   await page.route("http://localhost:8001/auth/sso/oidc/callback-url", (route) =>
     route.fulfill({

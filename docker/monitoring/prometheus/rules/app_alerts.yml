@@ -5,6 +5,31 @@
 groups:
   - name: agentic-app
     rules:
+      # prod-08 Fase B: LA alerta que faltaba. `up` la sintetiza Prometheus en
+      # cada scrape (1 = el target respondió, 0 = no). Hasta 2026-07-31 no
+      # había ninguna regla sobre ella, así que un servicio caído —incluido el
+      # api-server— no disparaba absolutamente nada: todas las demás alertas de
+      # este fichero se apoyan en métricas que un servicio muerto deja de
+      # emitir, y una métrica AUSENTE no dispara ninguna regla. «No data» y
+      # «todo bien» eran indistinguibles.
+      #
+      # `critical` a propósito: es la clase que alertmanager.yml enruta también
+      # al receiver de respaldo email/Slack. Si el caído es el api-server, la
+      # notificación por la plataforma no puede entregarse a sí misma.
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "El target {{ $labels.job }} ({{ $labels.instance }}) no responde"
+          description: >-
+            Prometheus lleva 2 minutos sin poder scrapear {{ $labels.instance }}
+            del job {{ $labels.job }}. Si es api-server, la plataforma está
+            caída para los usuarios. Si es node-exporter, se han ido con él
+            TODAS las métricas de aplicación (viajan por su textfile
+            collector). Comprueba `docker compose ps` y los logs del servicio.
+
       # Una cola Celery creciendo = ningún worker la drena (worker caído,
       # cola sin consumidor — el caso notifications.* muerto en dev de
       # 2026-07-10) o backlog fuera de control.
@@ -64,6 +89,86 @@ groups:
             reportando fallo (up=0). Revisa los logs del worker de
             mantenimiento (maintenance.sample_queue_metrics.error).
 
+      # prod-08 Fase B. `agentic_celery_queue_depth` dice cuántos mensajes
+      # ESPERAN, no cuántas tareas fallaron: un worker que drena la cola y falla
+      # el 100% de lo que saca presenta exactamente la misma profundidad (cero)
+      # que uno sano. Esta es la mitad que faltaba, y consume los contadores que
+      # las señales de Celery acumulan (`workers/task_metrics.py`).
+      #
+      # El suelo de volumen (`>= 10`) no es cosmético: sin él, 1 fallo de 2 runs
+      # es un 50% y la alerta grita de madrugada con el sistema prácticamente
+      # parado. Una alerta que grita cuando no pasa nada se silencia, y una
+      # alerta silenciada no existe.
+      #
+      # `clamp_min(..., 1)` evita la división por cero cuando no hay ninguna
+      # ejecución en la ventana (la expresión daría NaN y la regla no evaluaría).
+      - alert: ExecutionFailureRateHigh
+        expr: >-
+          (
+            sum(agentic_executions_24h{status="failed"})
+            / clamp_min(sum(agentic_executions_24h), 1) > 0.2
+          )
+          and sum(agentic_executions_24h) >= 10
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Más del 20% de las ejecuciones de las últimas 24h están fallando"
+          description: >-
+            La tasa de fallo de ejecuciones lleva 30 minutos por encima del 20%
+            con volumen suficiente para ser significativa. Revisa el visor de
+            runs y los logs del worker: suele ser credencial de proveedor LLM
+            caducada, imagen de runtime rota o el egress-proxy caído.
+
+      # prod-08 Fase B. Cuando un agente pide aprobación humana su ejecución se
+      # DETIENE. Una petición olvidada no genera error, ni log de fallo, ni cola
+      # creciendo: el plan simplemente no avanza y nadie se entera. Es el modo de
+      # fallo más silencioso del pipeline autónomo.
+      #
+      # Se alerta sobre la EDAD de la más vieja, no sobre el contador: tres
+      # aprobaciones recién pedidas son el funcionamiento normal, una de hace
+      # tres días es trabajo parado. Una alerta sobre el contador dispararía con
+      # el sistema sano y acabaría silenciada.
+      - alert: HumanApprovalsStale
+        expr: agentic_human_approvals_oldest_age_seconds > 86400
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hay una aprobación humana esperando desde hace más de 24 h"
+          description: >-
+            La petición de aprobación más antigua lleva {{ $value |
+            humanizeDuration }} sin respuesta, así que su ejecución está
+            detenida. Revisa la bandeja del inbox humano
+            (docs/06-runbooks/observabilidad.md).
+
+      # prod-07 task_prod07_15 (hallazgo llm-10). El Memorizer destila las
+      # lecciones de cada run con un LLM, y esa tarea es best-effort A PROPÓSITO:
+      # se traga sus excepciones para no tumbar el pipeline de Celery. El precio
+      # de esa decisión es que su muerte es MUDA — el run termina `ok`, no se
+      # persiste ni una memoria, y la plataforma deja de aprender sin que nada
+      # falle. El caso real fue apagar ollama-local (ADR 0056) mientras el
+      # fallback del destilador seguía apuntando a `localhost:11434`.
+      #
+      # Se alerta sobre la racha CONSECUTIVA, no sobre un acumulado: lo que
+      # importa es si el destilador está roto AHORA. Un éxito borra el contador,
+      # así que la alerta se apaga sola al arreglar el proveedor. El umbral es 5
+      # porque un fallo suelto (un timeout, un modelo que devolvió basura) no es
+      # una avería, y una alerta que salta por eso se silencia.
+      - alert: MemorizerDistillationFailing
+        expr: agentic_memorizer_consecutive_distill_failures >= 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El Memorizer lleva {{ $value }} destilaciones fallidas seguidas"
+          description: >-
+            Ninguno de los últimos runs ha dejado memorias: el LLM del
+            destilador no responde o devuelve algo inservible. Revisa la fila
+            activa de kind `ollama` en el catálogo `llm_providers` y los logs
+            `memorizer.distillation_failed` del worker
+            (docs/04-reference/llm-providers.md §7).
+
       # Muchas tareas bloqueadas sostenidas = el pipeline autónomo está parado
       # esperando humanos (o un bug de convergencia).
       - alert: TasksBlockedHigh
@@ -77,3 +182,51 @@ groups:
             Hay más de 10 tareas en estado blocked de forma sostenida. Revisa
             el inbox humano y el visor de runs: o hay decisiones pendientes o
             el pipeline no converge.
+
+      # prod-10 task_prod10_09 (hallazgos secrets-5 / deploy-8). Tras un reinicio
+      # del host, un Vault con backend de fichero arranca SELLADO: vivo,
+      # respondiendo HTTP, y sin poder descifrar un solo secreto. El healthcheck
+      # del compose lo mapea a 200 A PROPÓSITO (si fuese unhealthy, Vault se
+      # reiniciaría en bucle antes de que nadie pueda desellarlo), así que sin
+      # esta regla no queda NINGUNA señal: las apps arrancan detrás de un
+      # `service_healthy` mentiroso y fallan una a una al primer secreto.
+      #
+      # La serie la publica el api-server desde su sonda de
+      # `/v1/sys/seal-status` (api_server.vault_client.probe_vault_seal), no el
+      # exporter de Vault: las métricas de un Vault sellado son justo las que no
+      # se pueden leer.
+      #
+      # `for: 2m` y no 0: un `docker restart vault` planificado tarda segundos en
+      # desellarse con el compañero de auto-unseal del stack de dev, y una alerta
+      # que grita en cada reinicio se silencia y deja de servir.
+      - alert: VaultSealed
+        expr: agentic_vault_sealed == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault está SELLADO: ningún secreto se puede resolver"
+          description: >-
+            Vault lleva 2 minutos sellado o sin inicializar. Las credenciales de
+            proveedor LLM, los auth_ref de MCP y todo lo que viva en el KV son
+            inaccesibles, y los servicios que arrancaron detrás de su healthcheck
+            fallarán al primer secreto. Desellar es el PRIMER paso post-reinicio:
+            docs/06-runbooks/restart-services.md.
+
+      # Complemento de la anterior: el token con el que el api-server habla con
+      # Vault caduca. Sin renovación era una avería programada a ~32 días vista
+      # (hallazgo secrets-4); con `renew_self` en marcha, esta alerta es la que
+      # avisa de que la renovación dejó de funcionar — 24 h de margen para
+      # arreglarlo antes de que se caigan las credenciales LLM.
+      - alert: VaultTokenExpiringSoon
+        expr: agentic_vault_token_ttl_seconds > 0 and agentic_vault_token_ttl_seconds < 86400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Al token de Vault le quedan menos de 24 h"
+          description: >-
+            El TTL del token de Vault del api-server ha bajado de 24 horas, así
+            que la renovación automática (renew_self) no está funcionando. Busca
+            `vault.token.renew_failed` en los logs y rota el token de servicio
+            con scripts/vault-mint-service-tokens.sh antes de que caduque.

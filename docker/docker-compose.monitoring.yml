@@ -20,6 +20,14 @@
 #   docker compose -f docker/docker-compose.yml \
 #     -f docker/docker-compose.monitoring.yml up -d
 #
+# Este fichero contiene SOLO servicios propios (con su imagen), así que se apila
+# sobre la infraestructura sin necesitar la capa de aplicaciones — que es como
+# lo levantan scripts/dev/up.* , donde api-server y admin-panel corren nativos
+# desde el venv y no hay contenedor `workers` al que parchear. Lo que monitoriza
+# a las apps (el override de `workers` con el drop-dir del textfile collector)
+# vive aparte, en docker-compose.monitoring.apps.yml: apílalo cuando en el mismo
+# `-f` esté también la capa de aplicaciones.
+#
 # All images are pinned to a fixed tag (no :latest) — the 06.14 audit
 # (container-isolation-3/4) requires reproducible, supply-chain-pinned
 # images across the stack. Bump tags deliberately.
@@ -115,25 +123,6 @@ services:
     <<: [*default-restart, *default-logging]
 
   # ---------------------------------------------------------------------------
-  # workers (override) — FASE 2b monitorización (2026-07-12): monta el drop-dir
-  # del textfile collector RW en el worker que consume la cola `default`, donde
-  # corre workers.sample_queue_metrics (cada 30s). Sin este mount el sampler
-  # escribía en su default /host/textfile/ INEXISTENTE dentro del contenedor y
-  # agentic_celery_queue_depth / agentic_tasks_by_status / agentic_dlq_depth /
-  # agentic_executions_24h jamás llegaban a Prometheus (las reglas de
-  # app_alerts.yml no podían disparar). El default del código ya apunta aquí,
-  # así que no hace falta env; las listas de volumes se FUSIONAN entre ficheros
-  # compose, no se reemplazan. Solo aplica si este overlay está desplegado —
-  # sin monitorización el writer trata el sink ausente como esperado (no-op).
-  # ---------------------------------------------------------------------------
-  workers:
-    volumes:
-      - node_exporter_textfile:/host/textfile
-    depends_on:
-      textfile-init:
-        condition: service_completed_successfully
-
-  # ---------------------------------------------------------------------------
   # textfile-init — one-shot: el drop-dir del textfile collector es
   # MULTI-ESCRITOR (workers escribe como uid 1000; workers-backup como root) y
   # el volumen nace root:root 0755 → EACCES para el sampler. Modo 1777 (sticky,
@@ -177,6 +166,23 @@ services:
       ALERTMANAGER_NOTIFIER_WEBHOOK_URL: ${ALERTMANAGER_NOTIFIER_WEBHOOK_URL:-}
     volumes:
       - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Buzón de credenciales del receiver de RESPALDO (prod-08
+      # task_prod08_alert_fallback_02). `alertmanager.yml` declara
+      # `api_url_file: /etc/alertmanager/secrets/slack_api_url`, y sin este
+      # montaje esa ruta NO EXISTE dentro del contenedor: el operador que
+      # consiga el webhook de Slack no tiene dónde dejarlo sin editar el
+      # compose, que es justo lo que el runbook le pide no hacer.
+      #
+      # El fallo era del tipo caro: Alertmanager arranca igual (el fichero se
+      # lee al notificar, no al cargar la config), así que el stack sale
+      # `healthy` y el canal de último recurso falla en cada envío en silencio
+      # — en el único escenario para el que existe, el api-server caído.
+      #
+      # Read-only: Alertmanager solo lee. El directorio está versionado (con su
+      # propio `.gitignore`) para que Docker no lo invente como root: el
+      # contenedor corre como `nobody` y no podría leerlo.
+      # Guardado por tests/unit/test_alertmanager_secret_mount.py.
+      - ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro
       - alertmanager_data:/alertmanager
     # TRUSTED service hardening (revised): no-new-privileges + Docker's DEFAULT
     # seccomp (NOT overridden) + apparmor. The hand-rolled default-deny seccomp
@@ -245,7 +251,7 @@ services:
     user: "472:472" # grafana — the image's built-in non-root uid.
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme-dev-only}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in docker/.env (cp docker/.env.example docker/.env)}
       # Lock the surface down: no sign-up, no anonymous viewing, no telemetry.
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"

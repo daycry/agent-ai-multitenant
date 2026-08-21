@@ -13,7 +13,7 @@ dependencies = [
 # (scripts/generate.py). Only needed to RE-generate the SDK, not to use it.
 dev = [
   "datamodel-code-generator>=0.25",
-  "pytest>=8.2,<9",
+  "pytest>=9.1,<10",
 ]
 
 [build-system]

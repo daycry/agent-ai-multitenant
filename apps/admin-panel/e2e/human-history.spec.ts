@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { seedSession } from "./helpers/session";
 
 /**
  * E2E for the personal "Histórico" tab — past tasks + performance metrics
@@ -96,13 +97,7 @@ const HISTORY = [
 ];
 
 async function setup(page: Page): Promise<void> {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
 
   await page.route("**/me", (route) =>
     route.fulfill({
@@ -164,13 +159,7 @@ test("the Histórico tab shows per-user metrics and past tasks", async ({ page }
 });
 
 test("empty history shows a friendly empty state and 'sin datos' metrics", async ({ page }) => {
-  await page.addInitScript(
-    ([token, tenantKey, tenantId]) => {
-      window.localStorage.setItem("agentic.token", token);
-      window.localStorage.setItem(tenantKey, tenantId);
-    },
-    ["e2e-fake-token", "admin-panel.tenant-id", TENANT_ID],
-  );
+  await seedSession(page, { tenantId: TENANT_ID });
   await page.route("**/me", (route) =>
     route.fulfill({
       status: 200,

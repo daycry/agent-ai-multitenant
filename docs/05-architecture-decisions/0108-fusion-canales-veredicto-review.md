@@ -36,8 +36,10 @@ dos parsers con semánticas de tolerancia distintas (`unknown → reject` defens
 worker vs `inconclusive → humano` en el runtime), y los campos del reject viajan
 distinto (tag `<rejection>` con 3 campos ricos vs `feedback` string).
 
-Este ADR **no decide la implementación**: enumera las opciones y sus riesgos para que el
-operador elija. Es una **decisión de producto**.
+Este ADR **no decidía la implementación** al redactarse (2026-07-09): enumeraba las
+opciones y sus riesgos para que el operador eligiera, por ser una **decisión de
+producto**. La elección está tomada — ver [Resolución](#resolución-2026-07-12) —
+y el frontmatter refleja `accepted`.
 
 ## Resolución (2026-07-12)
 

@@ -109,10 +109,33 @@ _MYSQL_ENV = {
 }
 _PG_ENV = {"POSTGRES_USER": _DB_USER, "POSTGRES_PASSWORD": _DB_PASSWORD, "POSTGRES_DB": _DB_NAME}
 
-# The allowlisted service catalog (ADR 0129 §1). Adding a type is a code change.
+# ---------------------------------------------------------------------------
+# El catálogo permitido de servicios (ADR 0129 §1). Añadir un tipo es un cambio
+# de código.
+#
+# FIJADOS POR DIGEST (prod-11 task_digest_pin_11), 2026-08-19. La casilla nombraba
+# sólo `DEFAULT_POSTGRES`/`DEFAULT_REDIS` de test_runtime.py; esta es la MISMA
+# superficie por otra puerta —lo que un proyecto declara en su config acaba en los
+# mismos `AuxServiceSpec`, en el mismo bridge per-tarea, junto al mismo código no
+# confiable— y pinear sólo la otra habría sido cobertura aparente.
+#
+# El peor caso del sistema por este criterio vivía aquí: `schickling/beanstalkd`
+# iba por **`latest`**, un tag rodante de una imagen de tercero sin OCI
+# annotations. Un `docker pull` podía cambiar el binario que corre al lado del
+# agente sin que cambiara una línea del repo.
+#
+# El tag legible va DENTRO de la referencia; los digests son del índice
+# multi-arch donde lo hay (`docker buildx imagetools inspect`). El `default_image`
+# es sólo el DEFAULT: un proyecto puede seguir declarando su propia `image`.
+# Refresco y calendario: docs/06-runbooks/triage-vulnerabilidades.md §6, la misma
+# revisión manual que los dos de test_runtime.py.
+#
+# review: 2026-11-19
+# ---------------------------------------------------------------------------
 SERVICE_CATALOG: dict[str, _ServiceType] = {
     "mysql": _ServiceType(
-        default_image="mysql:8",
+        # mysql:8 == 8.4.11 (resuelto 2026-08-19)
+        default_image="mysql:8@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
         default_alias="mysql",
         service_env=_MYSQL_ENV,
         healthcheck_cmd=("mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"),
@@ -120,7 +143,8 @@ SERVICE_CATALOG: dict[str, _ServiceType] = {
         conn_env=_mysql_conn,
     ),
     "mariadb": _ServiceType(
-        default_image="mariadb:11",
+        # mariadb:11 == 11.8.8-noble (resuelto 2026-08-19)
+        default_image="mariadb:11@sha256:1fe78d53850250aa2560aa0059e3088b4cd230a5db2230f530c70e4b87bcc30c",
         default_alias="mariadb",
         service_env=_MYSQL_ENV,
         healthcheck_cmd=("healthcheck.sh", "--connect", "--innodb_initialized"),
@@ -128,7 +152,8 @@ SERVICE_CATALOG: dict[str, _ServiceType] = {
         conn_env=_mysql_conn,
     ),
     "postgres": _ServiceType(
-        default_image="postgres:16-alpine",
+        # postgres:16-alpine == 16.15-alpine3.24 (resuelto 2026-08-19)
+        default_image="postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685",
         default_alias="postgres",
         service_env=_PG_ENV,
         healthcheck_cmd=("pg_isready", "-U", _DB_USER, "-d", _DB_NAME),
@@ -136,7 +161,8 @@ SERVICE_CATALOG: dict[str, _ServiceType] = {
         conn_env=_postgres_conn,
     ),
     "redis": _ServiceType(
-        default_image="redis:7-alpine",
+        # redis:7-alpine == 7.4.10-alpine (resuelto 2026-08-19)
+        default_image="redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2",
         default_alias="redis",
         service_env={},
         healthcheck_cmd=("redis-cli", "ping"),
@@ -144,7 +170,10 @@ SERVICE_CATALOG: dict[str, _ServiceType] = {
         conn_env=_redis_conn,
     ),
     "beanstalkd": _ServiceType(
-        default_image="schickling/beanstalkd:latest",
+        # El único `:latest` que quedaba, y de una imagen de tercero: sin
+        # annotations OCI no publica versión, así que el digest ES la única
+        # identificación que tiene. Resuelto 2026-08-19.
+        default_image="schickling/beanstalkd:latest@sha256:19a928e3563973219e44f6c29df2a71103c7db894692ae94b7d0760837877e73",
         default_alias="beanstalkd",
         service_env={},
         healthcheck_cmd=None,  # no shell/health tool in the image

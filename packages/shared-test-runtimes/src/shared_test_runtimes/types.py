@@ -47,6 +47,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from shared_test_runtimes.images import is_valid_digest, split_reference
+
 # Output parser ids. Plan 06 Fase D (task_06_14) implements the
 # concrete parsers; this literal is the closed set the schema accepts.
 # Adding a new parser ⇒ add it here AND add the implementation in
@@ -123,8 +125,14 @@ class RuntimeTemplate:
     # Kebab-case, lowercase, no spaces.
     id: str
 
-    # Full registry reference including tag. The worker passes this
-    # to ``docker pull`` / ``docker run`` verbatim.
+    # Referencia completa de la imagen. Desde el ADR 0148 el catálogo la compone
+    # con el manifiesto de release y, cuando hay release publicada, incluye el
+    # digest: ``ghcr.io/agentic-platform/agent-runtime-<slug>:v1@sha256:…``. El
+    # digest se expone aparte en :attr:`digest`, DERIVADO de esta cadena y no
+    # guardado como campo propio: un `dataclasses.replace(docker_image=…)` —que
+    # es como el ADR 0129 inyecta la imagen propia de un proyecto— dejaría un
+    # campo `digest` heredado apuntando a otra imagen, y ese digest mentiroso es
+    # peor que no tenerlo.
     docker_image: str
 
     # Filesystem location inside the container where the task's
@@ -196,6 +204,30 @@ class RuntimeTemplate:
             raise ValueError("output_parsers must list at least one parser")
         if len(set(self.output_parsers)) != len(self.output_parsers):
             raise ValueError(f"output_parsers has duplicates: {self.output_parsers!r}")
+        _, _, digest = split_reference(self.docker_image)
+        if digest is not None and not is_valid_digest(digest):
+            raise ValueError(
+                f"docker_image trae un digest mal formado: {digest!r} "
+                "(se espera `sha256:` + 64 hex en minúscula)"
+            )
+
+    @property
+    def digest(self) -> str | None:
+        """Digest con el que se resuelve la imagen, o ``None`` si no lo lleva.
+
+        Es lo que hace auditable el Principio Rector 2: la respuesta a «¿qué
+        imagen exacta ejecutó el código de este tenant?» (ADR 0148). ``None``
+        significa referencia por tag —imagen construida en el host: el catálogo
+        antes de la primera release, o la imagen propia de un proyecto del
+        ADR 0129— y el worker la ejecuta tal cual, sin pull.
+        """
+        _, _, digest = split_reference(self.docker_image)
+        return digest
+
+    @property
+    def is_pinned(self) -> bool:
+        """¿La referencia declara procedencia verificable?"""
+        return self.digest is not None
 
 
 __all__ = [

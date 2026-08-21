@@ -13,7 +13,11 @@ dependencies = [
   "redis>=5.0,<6",
 
   # Secrets at rest — Fernet decrypt of channel secrets (never plaintext).
-  "cryptography>=42,<49",
+  # Suelo 50 por CVE, no por compatibilidad (SCA 2026-08-13): ver la nota
+  # extensa en apps/api-server/pyproject.toml. Los tres pyproject que declaran
+  # cryptography van al mismo suelo a propósito — si divergen, uv resuelve el
+  # más bajo para todo el workspace y el arreglo se pierde sin avisar.
+  "cryptography>=50,<51",
 
   # Notification template rendering — SANDBOXED Jinja2 (task_10_03). Never
   # the default Environment: a tenant override must not execute arbitrary
@@ -37,7 +41,13 @@ dependencies = [
   # The OPTIONAL SendGrid path is driven over the documented v3 HTTP API with
   # httpx (above) rather than the heavy ``sendgrid`` SDK, so it needs no extra
   # dependency and its absence never breaks import / CI.
-  "aiosmtplib>=3.0,<4",
+  # Suelo 5.1.2 por CVE (SCA 2026-08-13): 3.0.2 acepta CR/LF en los argumentos
+  # de MAIL/RCPT (CVE-2026-53533, inyección de comandos SMTP; corregido en
+  # 5.1.1) y 5.1.2 cierra además GHSA-vxj7-4xrp-5vr4 (inyección de respuesta
+  # antes del handshake STARTTLS). Las dos majors intermedias sólo retiraron
+  # Python 3.8 (4.0.0) y 3.9 (5.0.0) — la firma de `aiosmtplib.send(...)` que
+  # usa channels/email.py no cambió.
+  "aiosmtplib>=5.1.2,<6",
 
   # Observability
   "structlog>=24.1,<25",
@@ -45,8 +55,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.2,<9",
-  "pytest-asyncio>=0.23,<1",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
   # The channel adapters talk to external services over HTTP; tests mock
   # the transport (httpx.MockTransport) so no real network is hit. httpx
   # is a runtime dep above; pinned here too so the dev env always has it.

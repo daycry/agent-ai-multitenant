@@ -35,6 +35,7 @@ import httpx
 from shared_llm.exceptions import AuthError, ProviderError
 from shared_llm.providers._openai_compat import (
     check_status,
+    check_stream_status,
     iter_sse_chunks,
     parse_chat_completion,
     to_openai_messages,
@@ -370,6 +371,12 @@ class CopilotProvider:
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": True,
+            # prod-07 task_prod07_04: sin `stream_options.include_usage` el
+            # proveedor NO manda el chunk de usage y el turno se contabiliza a 0
+            # tokens / $0 (llm-6). Va ANTES de `**kwargs` a propósito: un caller
+            # con un endpoint que no soporte el campo puede pasar
+            # `stream_options=None` y desactivarlo sin tocar el provider.
+            "stream_options": {"include_usage": True},
             **kwargs,
         }
         if tools:
@@ -387,7 +394,8 @@ class CopilotProvider:
                 json=body,
             ) as resp:
                 if resp.status_code != 401:
-                    check_status(resp, provider=self.name)
+                    # prod-07 task_prod07_03: cuerpo leído antes de clasificar.
+                    await check_stream_status(resp, provider=self.name)
                     async for chunk in iter_sse_chunks(resp, provider=self.name):
                         yield chunk
                     return
@@ -399,7 +407,8 @@ class CopilotProvider:
                 headers=await self._chat_headers(),
                 json=body,
             ) as retry_resp:
-                check_status(retry_resp, provider=self.name)
+                # Idem en el reintento: era el segundo camino con el mismo defecto.
+                await check_stream_status(retry_resp, provider=self.name)
                 async for chunk in iter_sse_chunks(retry_resp, provider=self.name):
                     yield chunk
 

@@ -29,24 +29,38 @@ estimated_cost_ai_eur: 150 € – 240 €
 created_by: system_architect
 spec_sections_referenced: [22]
 docs_language: es
+gate_override:
+  approved_by: operador
+  date: 2026-07-31
+  adr: 0138
+  unmet: 07, 08, 09, 10, 11, 12, 13 y 14
+  reason: >-
+    Ocho bloqueantes, los ocho entregados y en `pending_human_validation`. **El
+    override ya lo había escrito un humano**: estaba en el campo `| **Estado** |`
+    duplicado de la tabla de cabecera, que `task_gov_cabeceras_07` venía a retirar
+    por desincronizado, y se rescató como nota en prosa antes de borrarlo. Este
+    campo es el sitio previsto que le faltaba.
 ---
 
 # Plan 15 — Instalador, Endurecimiento y Producción
 
 ## Cabecera
 
-| Campo                              | Valor                                                                                                                                                                                       |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ID del Plan**                    | `15-instalador-produccion`                                                                                                                                                                  |
-| **Estado**                         | `in_progress` — 27/29 tareas construibles completas + verdes; restan SOLO las 2 reservadas al humano: 15_27 pentest externo + 15_29 release v1.0.0 (override humano del gate blocking_plan) |
-| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`)                                                                                                                     |
-| **Tiempo estimado (calendario)**   | 4-5 semanas                                                                                                                                                                                 |
-| **Tiempo estimado (persona-días)** | 80-100                                                                                                                                                                                      |
-| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                                                                                                                                                   |
-| **Previsión de coste — IA**        | 150 € – 240 €                                                                                                                                                                               |
-| **Aprobador propuesto**            | System Admin                                                                                                                                                                                |
-| **Rama git**                       | `plan/15-instalador-produccion`                                                                                                                                                             |
-| **Secciones del .docx**            | [22]                                                                                                                                                                                        |
+| Campo                              | Valor                                                                   |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| **ID del Plan**                    | `15-instalador-produccion`                                              |
+| **Bloqueado por**                  | todas las fases anteriores (`00-fundaciones` … `14-evals-estadisticas`) |
+| **Tiempo estimado (calendario)**   | 4-5 semanas                                                             |
+| **Tiempo estimado (persona-días)** | 80-100                                                                  |
+| **Previsión de coste — humano**    | 32.000 € – 40.000 € (tarifa media 50 €/h)                               |
+| **Previsión de coste — IA**        | 150 € – 240 €                                                           |
+| **Aprobador propuesto**            | System Admin                                                            |
+| **Rama git**                       | `plan/15-instalador-produccion`                                         |
+| **Secciones del .docx**            | [22]                                                                    |
+
+> **Estado**: la fuente de verdad es el frontmatter YAML de este fichero (`status:`). El campo duplicado que había en esta tabla se retiró en prod-15 (hallazgo docsroadmap-6): se había desincronizado en 22 de 51 planes.
+>
+> Lo que decía el campo retirado y no está en el frontmatter: 27/29 tareas construibles completas y verdes; restan SOLO las 2 reservadas al humano (`task_15_27` pentest externo y `task_15_29` release v1.0.0). **El arranque de esta fase fue un override humano explícito del gate `blocking_plan`** — este era el único sitio del repo donde ese override estaba escrito, y por eso se preserva: es entrada del ADR 0138 (decisión D1).
 
 ---
 
