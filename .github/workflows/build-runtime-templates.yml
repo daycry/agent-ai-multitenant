@@ -111,7 +111,15 @@ jobs:
       # Referencia con la que trabajan Trivy y el smoke: la publicada cuando esta
       # ejecución publica, la local cuando no. Una sola variable para que los dos
       # pasos no puedan mirar imágenes distintas.
-      IMAGE_REF: ${{ needs.prep.outputs.publish == 'true' && format('{0}/agent-runtime-{1}:{2}', 'ghcr.io/${{ github.repository_owner }}', matrix.template, needs.prep.outputs.version) || format('agent-runtime-{0}:{1}', matrix.template, needs.prep.outputs.version) }}
+      #
+      # El dueño entra como ARGUMENTO de `format`, no interpolado en la cadena.
+      # Un `'ghcr.io/${{ github.repository_owner }}'` aquí NO es una expresión:
+      # está dentro de un `${{ }}` ya abierto, así que es texto literal y viaja
+      # tal cual al tag (`invalid reference format`, las 14 en rojo el
+      # 2026-08-21). actionlint no lo caza porque la sintaxis es válida; el
+      # error es semántico. Tampoco vale `env.REGISTRY`: el contexto `env` no
+      # está disponible en un `env:` de nivel job. `github` sí.
+      IMAGE_REF: ${{ needs.prep.outputs.publish == 'true' && format('ghcr.io/{0}/agent-runtime-{1}:{2}', github.repository_owner, matrix.template, needs.prep.outputs.version) || format('agent-runtime-{0}:{1}', matrix.template, needs.prep.outputs.version) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
