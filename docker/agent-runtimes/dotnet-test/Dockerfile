@@ -17,7 +17,7 @@
 # Un SDK 10 compila y ejecuta proyectos que tengan como target net8.0 (la
 # compatibilidad va hacia atrás), así que los proyectos de los tenants no
 # necesitan cambiar de TFM.
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e1fc6e423f543119c406d24e2e687d67c569f18f04a37a8b0005d80ad0dcee80 AS runtime
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e1ffd2a92ae84c1291bc1b6887501f8af98e6331e7af6d4c8d37168c5e87a64c AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-dotnet-test" \
       org.opencontainers.image.version="v1" \
