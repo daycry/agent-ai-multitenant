@@ -305,6 +305,11 @@ user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
 
 ### ci / github actions
 
+- [pr-abierto-por-github-token-no-dispara-workflows.md](./pr-abierto-por-github-token-no-dispara-workflows.md)
+  — `no checks reported on the branch` en un PR que abre un workflow: GitHub no
+  emite eventos para acciones hechas con el `GITHUB_TOKEN` (anti-recursión), así
+  que el PR se mergea sin un solo check aunque `ci.yml` no tenga filtros. «Sin
+  checks» y «todo verde» se parecen demasiado en la interfaz.
 - [expresion-anidada-en-actions-es-texto-literal.md](./expresion-anidada-en-actions-es-texto-literal.md)
   — `invalid tag "ghcr.io/${{ github.repository_owner }}/..."` con **actionlint
   en verde**: una expresión dentro de otra ya abierta es una CADENA, no se
