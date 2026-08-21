@@ -117,8 +117,21 @@ describe("McpToolRolePolicySection (ADR 0128 fase 4)", () => {
   it("pre-seeds the existing role policy into the checkboxes", async () => {
     wireApi({ toolRoles: { "github-mcp.create_issue": ["backend_dev"] } });
     mount();
+    // Se espera al ESTADO que este test necesita, no a que el nodo exista.
+    //
+    // Son DOS queries: la lista de tools pinta la fila y la politica de roles
+    // decide el `checked`. Esperar solo a la existencia deja pasar el instante
+    // en que la fila ya esta y la politica no, y en ese instante `checked` es
+    // false: un rojo que la maquina rapida no ve nunca y el runner cargado si
+    // (run 32518688383 sobre el PR #84).
     await waitFor(() =>
-      expect(screen.getByTestId("mcp-tool-roles-tool-github-mcp.create_issue")).toBeTruthy(),
+      expect(
+        (
+          screen.getByTestId(
+            "mcp-tool-roles-role-github-mcp.create_issue-backend_dev",
+          ) as HTMLInputElement
+        ).checked,
+      ).toBe(true),
     );
     const backendCb = screen.getByTestId(
       "mcp-tool-roles-role-github-mcp.create_issue-backend_dev",
@@ -135,8 +148,21 @@ describe("McpToolRolePolicySection (ADR 0128 fase 4)", () => {
   it("toggling a role dirties the form and Save PUTs the whole policy", async () => {
     wireApi({ toolRoles: { "github-mcp.create_issue": ["backend_dev"] } });
     mount();
+    // Se espera al ESTADO que este test necesita, no a que el nodo exista.
+    //
+    // Son DOS queries: la lista de tools pinta la fila y la politica de roles
+    // decide el `checked`. Esperar solo a la existencia deja pasar el instante
+    // en que la fila ya esta y la politica no, y en ese instante `checked` es
+    // false: un rojo que la maquina rapida no ve nunca y el runner cargado si
+    // (run 32518688383 sobre el PR #84).
     await waitFor(() =>
-      expect(screen.getByTestId("mcp-tool-roles-tool-github-mcp.list_prs")).toBeTruthy(),
+      expect(
+        (
+          screen.getByTestId(
+            "mcp-tool-roles-role-github-mcp.create_issue-backend_dev",
+          ) as HTMLInputElement
+        ).checked,
+      ).toBe(true),
     );
 
     // Save arranca deshabilitado (no dirty).
@@ -164,10 +190,21 @@ describe("McpToolRolePolicySection (ADR 0128 fase 4)", () => {
   it("unchecking the last role drops the tool from the policy (open-to-all)", async () => {
     wireApi({ toolRoles: { "github-mcp.create_issue": ["backend_dev"] } });
     mount();
+    // Se espera al ESTADO que este test necesita, no a que el nodo exista.
+    //
+    // Son DOS queries: la lista de tools pinta la fila y la politica de roles
+    // decide el `checked`. Esperar solo a la existencia deja pasar el instante
+    // en que la fila ya esta y la politica no, y en ese instante `checked` es
+    // false: un rojo que la maquina rapida no ve nunca y el runner cargado si
+    // (run 32518688383 sobre el PR #84).
     await waitFor(() =>
       expect(
-        screen.getByTestId("mcp-tool-roles-role-github-mcp.create_issue-backend_dev"),
-      ).toBeTruthy(),
+        (
+          screen.getByTestId(
+            "mcp-tool-roles-role-github-mcp.create_issue-backend_dev",
+          ) as HTMLInputElement
+        ).checked,
+      ).toBe(true),
     );
     fireEvent.click(screen.getByTestId("mcp-tool-roles-role-github-mcp.create_issue-backend_dev"));
     fireEvent.click(screen.getByTestId("mcp-tool-roles-save"));
