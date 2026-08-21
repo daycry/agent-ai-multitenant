@@ -23,7 +23,7 @@
 # habría servido de nada: con la capa entera cacheada, ese comando ni se habría
 # llegado a ejecutar. (Abajo hay uno, pero es para otro CVE distinto y por otro
 # motivo; está justificado ahí.)
-FROM ruby:3.3-slim@sha256:649a5d3b7ca4f574a5f84a61bd79cdc7cca2bbd1f882fbe6c1eb4fdbc7454738 AS runtime
+FROM ruby:4.0-slim@sha256:607bf92fa7ecebb4a0c6654b62cb44c48d94b36b6f5a754611ddbbe3dc5b6135 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-ruby-rspec" \
       org.opencontainers.image.version="v1" \
