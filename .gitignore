@@ -74,6 +74,12 @@ playwright/.cache/
 .e2e-api-server.log
 .e2e-api-server.err.log
 
+# Estado del arnés de backend vivo (scripts/dev/e2e-live-harness.ps1). El .pid
+# es cómo `-Down` sabe a qué api-server parar sin adivinar por el puerto.
+.e2e-live-harness.log
+.e2e-live-harness.err.log
+.e2e-live-harness.pid
+
 # Detached dev stack state (scripts/dev/up.{ps1,sh} + down.{ps1,sh})
 .dev/
 

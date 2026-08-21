@@ -93,12 +93,22 @@ el problema ya esté documentado.
 
 ### postgres / asyncpg / sqlalchemy
 
+- [alter-role-password-es-de-cluster-no-de-base.md](./alter-role-password-es-de-cluster-no-de-base.md)
+  — un `ALTER ROLE ... PASSWORD` cambia la credencial en TODAS las bases del
+  servidor, no en la que crees. Rompe el stack y el contenedor sigue
+  `healthy`, porque `/healthz` no toca la base: la señal es `/readyz` a 503 y
+  `pg_stat_activity` sin el rol de la aplicación.
+
 - [postgres-port-clash-with-laragon.md](./postgres-port-clash-with-laragon.md)
   — host 5432 lo ocupa Laragon; usamos 15432.
 - [postgres-roles-bypassrls.md](./postgres-roles-bypassrls.md)
   — `migrations_user` necesita `BYPASSRLS`, `app_user` no.
 - [postgres-alter-default-privileges-per-db.md](./postgres-alter-default-privileges-per-db.md)
-  — los privilegios por defecto no viajan a una BD nueva.
+  — los privilegios por defecto no viajan a una BD nueva, así que una BD migrada
+  a mano queda completa y muda: el login cae con `permission denied for table
+user_mfa_totp`. Y el aviso contrario, que es peor porque pasa en verde:
+  conceder de más deshace los REVOKE deliberados (migración 0138) y deja el arnés
+  MÁS permisivo que producción.
 - [asyncpg-set-local-no-bind-params.md](./asyncpg-set-local-no-bind-params.md)
   — `SET LOCAL x = $1` falla; usar `set_config('x', $1, true)`.
 - [asyncpg-no-multistatement.md](./asyncpg-no-multistatement.md)
@@ -275,8 +285,11 @@ el problema ya esté documentado.
   rendirse, y el turno del córtex se los come enteros. Hay que redirigir DOS
   variables, no una: la que revienta es `API_SERVER_RESULT_BACKEND`.
 - [auth-rate-limit-dev-loop.md](./auth-rate-limit-dev-loop.md)
-  — el rate limit de `/auth/login` se acumula entre runs del E2E
-  y trips 429; limpia `rl:login:*` antes de probar.
+  — el rate limit de `/auth/login` (5 por 15 min, contando también los logins que
+  ACIERTAN) no cabe en una tanda e2e, y su síntoma no es un 429 visible: es un
+  `toHaveURL` que no llega nunca y un caso que consume su timeout entero. Limpia
+  `rl:login:*` en un bucle de desarrollo; sube
+  `API_SERVER_LOGIN_RATE_LIMIT_COUNT` sólo en el arnés.
 - [redis-con-contrasena-rompe-la-integracion.md](./redis-con-contrasena-rompe-la-integracion.md)
   — al activar `--requirepass` (endurecimiento de prod-10) los **249 ficheros**
   de integración mueren dentro de una fixture con `AuthenticationError`, porque
@@ -301,10 +314,12 @@ el problema ya esté documentado.
   proyecto ENTERO —también `logs` y el `down` del teardown—. El workflow copia
   `.env.example` en vez de enumerar las variables a mano.
 - [test-fixture-admin-db-url-override.md](./test-fixture-admin-db-url-override.md)
-  — fixture que setea `API_SERVER_DATABASE_URL` pero NO
-  `API_SERVER_ADMIN_DATABASE_URL`: el admin engine cae al DSN por defecto;
-  verde en local (BD dev migrada) pero `relation X does not exist` solo-en-CI
-  (BD por defecto vacía).
+  — el api-server usa DOS urls de BD y quien setea `API_SERVER_DATABASE_URL` pero
+  NO `API_SERVER_ADMIN_DATABASE_URL` deja el admin engine en su DSN por defecto,
+  que apunta a `agentic_platform`: **la base del operador**. En una fixture eso
+  es verde en local y `relation X does not exist` solo-en-CI; en un arnés e2e a
+  mano el síntoma es un 500 opaco en el login y la consecuencia es escribir en la
+  base de producción.
 - [playwright-route-glob-intercepts-navigation.md](./playwright-route-glob-intercepts-navigation.md)
   — `page.route("**/X")` en Playwright 1.60 intercepta también la navegación
   `page.goto(".../X")` (misma cola de path) → la página recibe el JSON del mock
@@ -315,6 +330,13 @@ el problema ya esté documentado.
   una máquina cargada, contra 30 s de presupuesto por test). CI no lo sufre
   porque sirve un build de producción; la receta está en el gotcha. No se
   arregla subiendo el timeout.
+- [expect-de-cinco-segundos-no-cubre-un-backend-vivo.md](./expect-de-cinco-segundos-no-cubre-un-backend-vivo.md)
+  — el caso OPUESTO al anterior, y el gotcha explica el criterio para no
+  confundirlos: contra backend vivo, 21 de 41 casos caen por el reloj porque
+  el `services-grid` del dashboard espera a `/admin/system-health`, cuyo techo por
+  sonda es de 10 s (las ocho van en paralelo, así que NO se suman).
+  5 s es aritméticamente insuficiente; se sube con `E2E_EXPECT_TIMEOUT` sólo en
+  esos specs, con el default intacto para el subset mockeado de CI.
 
 ### tests (patrones que engañan)
 
