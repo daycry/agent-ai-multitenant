@@ -652,7 +652,7 @@ jobs:
       # finding tests-6. Context is the repo ROOT (the Dockerfile COPYs in
       # packages/shared-llm, ADR 0021). buildx + gha cache so it does not
       # rebuild from scratch every run.
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         if: steps.detect.outputs.has_compose == 'true'
 
       - name: Build agent-runtime:v1 (e2e pipeline image)
@@ -832,7 +832,7 @@ jobs:
             echo "No Dockerfiles yet — skipping."
           fi
 
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         if: steps.detect.outputs.has_dockerfiles == 'true'
 
       - name: Build each app
