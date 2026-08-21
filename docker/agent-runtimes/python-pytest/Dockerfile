@@ -15,7 +15,7 @@
 # publicado en Debian (2.8.2-1~deb13u1). Esta plantilla pasaba Trivy en verde el
 # 13-08 y dejó de pasarlo sin que cambiara una línea: es deriva de CVE, no una
 # regresión nuestra, y por eso el arreglo es refrescar el pin, no relajarlo.
-FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS runtime
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-python-pytest" \
       org.opencontainers.image.version="v1" \

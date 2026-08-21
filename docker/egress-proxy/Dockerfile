@@ -8,7 +8,7 @@
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
 # deposita el aislamiento del codigo NO confiable. El refresco lo hace Dependabot
 # (ecosistema docker, .github/dependabot.yml).
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 RUN apk add --no-cache tinyproxy~=1.11 && \
     install -d -o tinyproxy -g tinyproxy /var/log/tinyproxy

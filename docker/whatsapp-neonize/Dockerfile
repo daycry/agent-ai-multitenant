@@ -11,7 +11,7 @@
 # backend, agent-runtime y browser-runtime—, así que compartía la base
 # vulnerable sin que ninguna guarda lo dijese. Se refresca con las otras tres
 # justamente por eso: la que nadie mira es la que se queda atrás.
-FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4
 
 WORKDIR /app
 COPY requirements.txt .
