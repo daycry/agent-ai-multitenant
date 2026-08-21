@@ -127,7 +127,7 @@ class RuntimeTemplate:
 
     # Referencia completa de la imagen. Desde el ADR 0148 el catálogo la compone
     # con el manifiesto de release y, cuando hay release publicada, incluye el
-    # digest: ``ghcr.io/agentic-platform/agent-runtime-<slug>:v1@sha256:…``. El
+    # digest: ``ghcr.io/daycry/agent-runtime-<slug>:v1@sha256:…``. El
     # digest se expone aparte en :attr:`digest`, DERIVADO de esta cadena y no
     # guardado como campo propio: un `dataclasses.replace(docker_image=…)` —que
     # es como el ADR 0129 inyecta la imagen propia de un proyecto— dejaría un

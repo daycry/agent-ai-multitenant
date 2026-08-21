@@ -21,6 +21,10 @@ commits** escritos entre el 2026-07-30 y el 2026-08-21 — 39 arreglos, 28 featu
 10 de documentación, 8 de mantenimiento, 2 refactores, 2 de tests, 1 de
 rendimiento y 1 merge.
 
+El trabajo posterior a ese merge, en
+`work/validacion-cortex-seguridad-2026-07-30`, también se lista aquí y llegará a
+`master` en el siguiente pull request.
+
 ### Por qué importa esta entrada
 
 Cuatro cosas de esta tanda hay que leerlas antes de las listas, porque cambian
@@ -147,6 +151,25 @@ cuánto valen el resto de los números de este repositorio.
   check verde-tachado que nadie lee.
 
 ### Arreglado
+
+- **Las catorce imágenes de sandbox nunca se habían publicado, y el fallo era
+  invisible.** `build-runtime-templates.yml` empujaba a `ghcr.io/agentic-platform`
+  autenticándose con el `GITHUB_TOKEN` de Actions, que sólo puede publicar en el
+  namespace del dueño del repositorio: el destino era inalcanzable por
+  construcción. La publicación ocurre **sólo en `master`** y en rama se construye y
+  escanea sin empujar, así que el gate de siempre salió verde tres semanas; la
+  primera vez que corrió en `master` murieron los catorce builds con `denied:
+permission_denied: The requested installation does not exist`. Lo caro no fue el
+  rojo: `runtime_images.json` seguía con `digests: {}` —su fallback documentado—, o
+  sea que **cada host seguía construyendo su propia variante** de las catorce
+  imágenes donde vive el aislamiento por contenedor del Principio Rector 2, que es
+  exactamente el estado que el ADR 0148 se firmó para terminar. El namespace se
+  deriva ahora de `github.repository_owner`, y una guarda rechaza cualquier
+  namespace de GHCR escrito a mano en un workflow que se autentique con el
+  `GITHUB_TOKEN`; conservar el viejo habría exigido guardar un PAT clásico de larga
+  vida como secreto del repo, peor cadena de suministro que el problema que
+  arregla. El riesgo estaba anotado en `prod-01` y su mitigación —«decidir el
+  registro en la primera semana»— nunca se ejecutó.
 
 - **La segunda invalidación de caché de `set_platform_setting` no corrió nunca, en
   ninguna ruta.** Arreglado en la sesión y no en los llamantes, lo que además hizo

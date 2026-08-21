@@ -1,0 +1,14 @@
+# Exclusiones de markdownlint. La lista es DELIBERADAMENTE mínima: sólo código
+# de terceros que ya está en .gitignore y que nosotros no escribimos.
+#
+# Por qué existe: `docs/manuals/` instala sus dependencias de npm en
+# `docs/manuals/node_modules/`, y el glob del gate (`docs/**/*.md`) entraba en
+# los README de playwright y tslib. En CI no se veía —checkout limpio, ese job
+# no instala nada—, pero en local dejaba el lint inservible como comprobación
+# previa al push: los errores propios quedaban sepultados entre los ajenos.
+#
+# NO añadir aquí documentación propia. Un patrón que tape `docs/` o la raíz
+# convierte este fichero en la forma barata de poner el gate en verde, que es
+# justo lo que prohíbe el protocolo. Lo vigila
+# tests/docs/test_markdownlint_scope.py.
+node_modules/

@@ -20,6 +20,10 @@ Merged into `master` as `e8e945da` on 2026-08-21 (pull request #67): **91 commit
 written between 2026-07-30 and 2026-08-21 — 39 fixes, 28 features, 10 docs,
 8 chores, 2 refactors, 2 tests, 1 perf and 1 merge.
 
+Work that landed after that merge, on
+`work/validacion-cortex-seguridad-2026-07-30`, is listed here too; it reaches
+`master` in the next pull request.
+
 ### Why this entry matters
 
 Four things in this batch are worth reading before the lists, because they change
@@ -141,6 +145,24 @@ what the rest of the numbers in this repository are worth.
   struck-through green check.
 
 ### Fixed
+
+- **The fourteen sandbox images had never been published, and the failure was
+  invisible.** `build-runtime-templates.yml` pushed to `ghcr.io/agentic-platform`
+  while authenticating with the Actions `GITHUB_TOKEN`, which can only publish to
+  the repository owner's namespace, so the destination was unreachable by
+  construction. Publication happens only on `master` and branch runs build and scan
+  without pushing, so the usual gate stayed green for three weeks; the first run on
+  `master` killed all fourteen builds with `denied: permission_denied: The requested
+installation does not exist`. The cost was not the red run. `runtime_images.json`
+  kept `digests: {}` — its documented fallback — so every host went on building its
+  own variant of the fourteen images that carry the container isolation of Guiding
+  Principle 2, which is the exact state ADR 0148 was signed to end. The namespace
+  now derives from `github.repository_owner`, and a guard refuses any hand-written
+  GHCR namespace in a workflow that authenticates with the `GITHUB_TOKEN`; keeping
+  the old one would have meant storing a long-lived classic PAT as a repository
+  secret, a worse supply chain than the problem it solves. The risk was on record in
+  `prod-01` and its mitigation — "decide the registry in the first week" — was never
+  carried out.
 
 - **The second cache invalidation of `set_platform_setting` never ran, on any
   route.** Fixed in the session rather than in the callers, which also made the

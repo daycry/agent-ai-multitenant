@@ -6,7 +6,7 @@ después de publicar las 14 imágenes y de que Trivy las haya dado por buenas:
 
 ```bash
 python -m shared_test_runtimes.release \
-    --registry ghcr.io/agentic-platform --version v1 \
+    --registry ghcr.io/daycry --version v1 \
     --digest python-pytest=sha256:… --digest node-jest=sha256:… …
 ```
 
@@ -55,7 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Reescribe el manifiesto de digests de las imágenes de runtime (ADR 0148).",
     )
     parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
-    parser.add_argument("--registry", required=True, help="p. ej. ghcr.io/agentic-platform")
+    parser.add_argument("--registry", required=True, help="p. ej. ghcr.io/daycry")
     parser.add_argument("--version", required=True, help="tag versionado publicado, p. ej. v1")
     parser.add_argument(
         "--digest",

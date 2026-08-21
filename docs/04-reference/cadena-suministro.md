@@ -119,12 +119,12 @@ del installer.
 
 ## 3. Inmutabilidad: nada mutable entra en el build
 
-| Qué                       | Cómo se referencia                                                 | Cuántos (2026-08-01)                                |
-| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------- |
-| Bases de imagen           | `FROM python:3.12-slim@sha256:… ` (tag + digest)                   | 22 `FROM` externos en 19 Dockerfiles bajo `docker/` |
-| GitHub Actions            | `uses: owner/repo@<sha40> # vN`                                    | 46 usos en 4 workflows                              |
-| Composer en las PHP       | etapa `FROM composer:2@sha256:…` + `COPY --from=`                  | 2 imágenes (`php-phpunit`, `php-pest`)              |
-| Imágenes de runtime (×14) | `ghcr.io/agentic-platform/agent-runtime-<slug>:<versión>@sha256:…` | manifiesto de release (ADR 0148)                    |
+| Qué                       | Cómo se referencia                                       | Cuántos (2026-08-01)                                |
+| ------------------------- | -------------------------------------------------------- | --------------------------------------------------- |
+| Bases de imagen           | `FROM python:3.12-slim@sha256:… ` (tag + digest)         | 22 `FROM` externos en 19 Dockerfiles bajo `docker/` |
+| GitHub Actions            | `uses: owner/repo@<sha40> # vN`                          | 46 usos en 4 workflows                              |
+| Composer en las PHP       | etapa `FROM composer:2@sha256:…` + `COPY --from=`        | 2 imágenes (`php-phpunit`, `php-pest`)              |
+| Imágenes de runtime (×14) | `ghcr.io/daycry/agent-runtime-<slug>:<versión>@sha256:…` | manifiesto de release (ADR 0148)                    |
 
 El tag va **dentro** de la referencia además del digest (`python:3.12-slim@sha256:…`,
 no `python@sha256:…`): sin él nadie sabe qué versión corre y Dependabot no puede
@@ -209,13 +209,13 @@ es una excepción de seguridad: es una ficción.
 
 Cómo funciona ahora:
 
-| Pieza                                              | Qué hace                                                                                                                                       |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build-runtime-templates.yml`                      | En `master` publica las 14 en `ghcr.io/agentic-platform/agent-runtime-<slug>:<versión>` (+ tag del commit). En PR y ramas `plan/**` no publica |
-| `shared_test_runtimes/runtime_images.json`         | Manifiesto de release: `registry` + `version` + los 14 digests. **Lo escribe el pipeline**                                                     |
-| `shared_test_runtimes/catalog.py`                  | Compone la referencia desde el manifiesto. Cero digests escritos a mano (lo vigila un test)                                                    |
-| `workers/test_runtime.py` → `ensure_runtime_image` | Descarga por digest antes de lanzar. Si el pull falla, **aborta**                                                                              |
-| `python -m shared_test_runtimes.release`           | La única mano que reescribe el manifiesto; valida cada digest antes de tocarlo                                                                 |
+| Pieza                                              | Qué hace                                                                                                                             |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `build-runtime-templates.yml`                      | En `master` publica las 14 en `ghcr.io/daycry/agent-runtime-<slug>:<versión>` (+ tag del commit). En PR y ramas `plan/**` no publica |
+| `shared_test_runtimes/runtime_images.json`         | Manifiesto de release: `registry` + `version` + los 14 digests. **Lo escribe el pipeline**                                           |
+| `shared_test_runtimes/catalog.py`                  | Compone la referencia desde el manifiesto. Cero digests escritos a mano (lo vigila un test)                                          |
+| `workers/test_runtime.py` → `ensure_runtime_image` | Descarga por digest antes de lanzar. Si el pull falla, **aborta**                                                                    |
+| `python -m shared_test_runtimes.release`           | La única mano que reescribe el manifiesto; valida cada digest antes de tocarlo                                                       |
 
 Las dos condiciones que el ADR pone para que esto no empeore nada, y dónde vive
 cada una:
@@ -239,7 +239,7 @@ deliberado.
 > **Lo que cambia el día que se publique**, y conviene saberlo antes: en cuanto
 > el manifiesto traiga digests, `scripts/dev/build-runtime-templates.sh` deja de
 > alimentar al worker. Sus imágenes se siguen llamando `agent-runtime-<slug>:v1`
-> y el catálogo pasará a pedir `ghcr.io/agentic-platform/…@sha256:…`, que es otra
+> y el catálogo pasará a pedir `ghcr.io/daycry/…@sha256:…`, que es otra
 > cosa: la máquina de desarrollo empezará a **descargar** en vez de usar lo que
 > construyó. Es lo que se quiere (el sandbox del desarrollador y el del cliente
 > ejecutan lo mismo), pero un `docker build` local que «no se aplica» desconcierta

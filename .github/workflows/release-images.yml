@@ -2,7 +2,7 @@ name: Release images
 
 # Plan prod-01 task_03 (finding deploy-2 / quality-2): build & push the five
 # application images the installer's compose references
-# (ghcr.io/agentic-platform/<app>:<tag>, see compose_generator.APP_IMAGE_*).
+# (ghcr.io/${{ github.repository_owner }}/<app>:<tag>, see compose_generator.APP_IMAGE_*).
 # They did not exist and there was no pipeline to publish them.
 #
 # Triggered by a release tag (v*) or manual dispatch — NOT on every push (that
@@ -26,7 +26,7 @@ permissions:
   packages: write
 
 env:
-  REGISTRY: ghcr.io/agentic-platform
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   prep:

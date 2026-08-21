@@ -172,6 +172,40 @@ rediseñarlo con prisa. Cuando exista, se construye.
   catálogo lleva digest, y `tests/docs/test_supply_chain_docs.py` deja de exigir
   el statu quo.
 
+## Corrección operativa (2026-08-21): el namespace era de otra organización
+
+La decisión no cambia; el destino sí. El ADR nombraba `ghcr.io/agentic-platform`,
+y los dos workflows que publican se autentican con `secrets.GITHUB_TOKEN`. Ese
+token **sólo puede publicar paquetes en el namespace del dueño del repositorio**
+—aquí `daycry`—, así que el destino escrito era inalcanzable por construcción.
+
+No se vio antes porque la publicación ocurre **sólo en `master`**: en rama el
+workflow construye y escanea sin empujar, que es el gate de siempre y salía
+verde. La primera vez que corrió en `master`, el 2026-08-21, los catorce builds
+murieron con `denied: permission_denied: The requested installation does not
+exist`.
+
+Lo caro no fue el rojo. Fue que durante esas tres semanas `runtime_images.json`
+siguió con `digests: {}` —su fallback documentado— y por tanto **cada host
+siguió construyendo su propia variante** de las 14 imágenes donde vive el
+aislamiento del Principio Rector 2: exactamente el estado que este ADR se firmó
+para terminar. El fallback estaba escrito y era honesto; lo que faltaba era que
+alguien midiese que había dejado de ser transitorio.
+
+Y el riesgo estaba anotado. `prod-01` (§Riesgos, punto 1) decía que
+`ghcr.io/agentic-platform` _«presupone una organización GitHub con packages
+habilitados»_, con la mitigación «decidir el registro en la primera semana».
+Nunca se decidió: una premisa pendiente acabó siendo un fallo silencioso.
+
+**Lo que queda.** Los workflows derivan el namespace de
+`${{ github.repository_owner }}` en vez de fijarlo a mano, y
+[`tests/unit/test_ghcr_namespace_is_pushable.py`](../../tests/unit/test_ghcr_namespace_is_pushable.py)
+lo comprueba: un workflow que se autentique en GHCR con el `GITHUB_TOKEN` no
+puede empujar a un namespace escrito a mano. La alternativa —conservar
+`agentic-platform` con un PAT clásico de larga vida como secreto del repo— se
+descarta: entrega un secreto de alcance amplio y permanente a cambio de un
+nombre, que es peor cadena de suministro que el problema que resuelve.
+
 ## Referencias
 
 - [ADR 0051 — endpoint del catálogo de runtime templates](./0051-runtime-templates-endpoint.md)
