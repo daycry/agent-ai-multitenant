@@ -1144,6 +1144,43 @@ jobs:
           E2E_WEBSERVER_CMD: npm run start
         run: |
           # Self-contained specs only: those that mock the API via page.route.
-          mapfile -t specs < <(grep -rlE "page\.route|\.route\(" e2e)
-          echo "Running ${#specs[@]} mocked Playwright specs (no api-server)"
+          # El subset se elige por EXCLUSION, no por `grep page.route`.
+          #
+          # Aquel grep era un proxy TEXTUAL de «autocontenido» y envejecio: el
+          # ADR 0133 movio los mocks al helper `seedSession`, asi que tres specs
+          # que pasan SIN backend ninguno (dev-portal, playwright-templates,
+          # ingestion-progress: 16 casos en 41,7 s medidos el 2026-08-21) se
+          # quedaban fuera. De paso le pasaba a Playwright los ficheros de
+          # `e2e/helpers/` como si fueran specs, y seleccionaba 100 de 112
+          # mientras el comentario de arriba decia 88.
+          #
+          # La lista de abajo nombra lo que NO cabe aqui: los specs que hablan
+          # con un api-server de verdad. La direccion importa — un spec nuevo
+          # entra en CI por defecto, y solo sale si alguien declara que necesita
+          # backend. Con una lista de inclusion seria al contrario: el spec nuevo
+          # no correria y nadie se enteraria.
+          #
+          # Su arnes y por que existe:
+          # docs/03-guides/e2e-con-backend-vivo.md
+          # La lista la vigila tests/unit/test_ci_e2e_subset.py.
+          vivos=(
+            admin-login agents-catalog lang-switcher mfa-enrollment
+            notification-config notification-inbox personal-assistant
+            project-wizard team-detail
+          )
+          mapfile -t todos < <(find e2e -maxdepth 1 -type f -name "*.spec.ts" | sort)
+          specs=()
+          for spec in "${todos[@]}"; do
+            base="$(basename "$spec" .spec.ts)"
+            saltar=0
+            for vivo in "${vivos[@]}"; do
+              if [ "$base" = "$vivo" ]; then saltar=1; break; fi
+            done
+            if [ "$saltar" -eq 0 ]; then specs+=("$spec"); fi
+          done
+          if [ "${#specs[@]}" -lt 90 ]; then
+            echo "Solo ${#specs[@]} specs en el subset: el descubrimiento se rompio." >&2
+            exit 1
+          fi
+          echo "Running ${#specs[@]} de ${#todos[@]} specs (los ${#vivos[@]} de backend vivo quedan fuera)"
           npm run e2e -- "${specs[@]}" --max-failures=15 --timeout=15000
