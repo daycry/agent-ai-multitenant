@@ -8,6 +8,7 @@
 [![Build runtime templates](https://github.com/daycry/agent-ai-multitenant/actions/workflows/build-runtime-templates.yml/badge.svg?branch=master)](https://github.com/daycry/agent-ai-multitenant/actions/workflows/build-runtime-templates.yml)
 [![Eval on prompt change](https://github.com/daycry/agent-ai-multitenant/actions/workflows/eval-on-prompt-change.yml/badge.svg?branch=master)](https://github.com/daycry/agent-ai-multitenant/actions/workflows/eval-on-prompt-change.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/github/deployments/daycry/agent-ai-multitenant/github-pages?label=docs)](https://daycry.github.io/agent-ai-multitenant/)
 
 [![Stars](https://img.shields.io/github/stars/daycry/agent-ai-multitenant?style=flat&label=stars&color=yellow&logo=github)](https://github.com/daycry/agent-ai-multitenant)
 [![Forks](https://img.shields.io/github/forks/daycry/agent-ai-multitenant?style=flat&label=forks&color=blueviolet&logo=github)](https://github.com/daycry/agent-ai-multitenant/forks)
@@ -123,6 +124,14 @@ columns — is argued in
 [ADR 0146](docs/05-architecture-decisions/0146-fernet-en-db-vs-vault.md).
 
 ## Where to read more
+
+All of this is browsable at
+**[daycry.github.io/agent-ai-multitenant](https://daycry.github.io/agent-ai-multitenant/)**
+— the same corpus, rendered and searchable, published from `master` by
+[`docs.yml`](.github/workflows/docs.yml). The badge above tracks the real state of
+the `github-pages` deployment, so it says "inactive" until the first publish
+rather than claiming a site that is not there. The table below is the same map
+inside the repository.
 
 | Path                                                                          | What is in there                                                                                                |
 | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |

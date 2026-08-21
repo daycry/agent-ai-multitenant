@@ -8,11 +8,15 @@ name: Docs site
 # two days removing elsewhere. `deploy` runs only from master, and is the only
 # job that gets `pages: write` / `id-token: write`.
 #
-# NOTE FOR THE OPERATOR: this workflow cannot publish until Pages is switched to
-# the Actions source once, by hand:
-#   Settings -> Pages -> Build and deployment -> Source: GitHub Actions
-# Until then `deploy` fails with "Get Pages site failed"; `build` is already
-# useful on its own as the strict link gate.
+# Pages is configured (2026-08-21): the source is GitHub Actions, set with
+#   gh api -X POST repos/daycry/agent-ai-multitenant/pages -f build_type=workflow
+# which is the API equivalent of Settings -> Pages -> Source: GitHub Actions and
+# does not need anyone to click through the settings UI.
+#
+# The site lands on https://daycry.github.io/agent-ai-multitenant/ — the same URL
+# as `site_url` in mkdocs.yml. Those two have to stay equal: if they drift, the
+# canonical links and the sitemap of a site that renders fine point elsewhere,
+# which is the kind of breakage nobody sees while reading the pages.
 
 on:
   push:
@@ -76,8 +80,8 @@ jobs:
       # failed"). Placed here it would turn every master build red for a reason
       # that has nothing to do with the documentation, which is exactly the kind
       # of misleading signal this repository has been removing. Keeping it out
-      # means the strict build stands on its own and only `deploy` waits on the
-      # operator's one-time switch.
+      # means the strict build stands on its own; Pages was configured through the
+      # API on 2026-08-21 (see the header), so `deploy` no longer waits on anyone.
       - name: Upload the site as a Pages artifact
         if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
