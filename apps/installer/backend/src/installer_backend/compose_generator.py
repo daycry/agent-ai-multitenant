@@ -97,7 +97,7 @@ IMAGE_TTS = "ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2"
 #: tag (the installer pulls the released images); the build context lives in the
 #: repo. Pinned to the platform release tag at install time.
 APP_IMAGE_TAG = "${PLATFORM_IMAGE_TAG:-v1.0.0}"
-APP_IMAGE_REGISTRY = "${PLATFORM_REGISTRY:-ghcr.io/agentic-platform}"
+APP_IMAGE_REGISTRY = "${PLATFORM_REGISTRY:-ghcr.io/daycry}"
 
 # Dev-default markers the prod secret guard rejects (mirror of
 # api_server.config._DEV_SECRET_MARKERS). The generated *production* compose

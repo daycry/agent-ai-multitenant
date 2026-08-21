@@ -16,7 +16,7 @@ digest. La pieza que lo hace posible es el **manifiesto de release**
 ```json
 {
   "_generated_by": ".github/workflows/build-runtime-templates.yml …",
-  "registry": "ghcr.io/agentic-platform",
+  "registry": "ghcr.io/daycry",
   "version": "v1",
   "digests": {"python-pytest": "sha256:…", …}
 }

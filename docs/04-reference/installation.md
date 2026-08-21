@@ -133,7 +133,7 @@ tests del código de los tenants, y desde el
 [ADR 0148](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md)
 se distribuyen **publicadas y fijadas por digest** en vez de construirse en cada
 host. El catálogo las referencia como
-`ghcr.io/agentic-platform/agent-runtime-<slug>:<versión>@sha256:<digest>`, y el
+`ghcr.io/daycry/agent-runtime-<slug>:<versión>@sha256:<digest>`, y el
 worker **descarga por digest o aborta la tarea**: nunca cae a una imagen local
 con el mismo tag, porque eso es justo lo que hacía irrepetible el sandbox.
 
@@ -177,7 +177,7 @@ siguen siendo válidas:
 for t in python-pytest node-jest node-vitest node-playwright php-phpunit php-pest \
          go-test java-maven java-gradle ruby-rspec rust-cargo dotnet-test \
          generic-shell generic-http; do
-  crane copy "ghcr.io/agentic-platform/agent-runtime-${t}:v1" \
+  crane copy "ghcr.io/daycry/agent-runtime-${t}:v1" \
              "registry.interna:5000/agentic-platform/agent-runtime-${t}:v1"
 done
 ```
@@ -199,8 +199,8 @@ resolver:
 
 ```bash
 # Máquina con salida — tirar POR DIGEST (no por tag) y empaquetar:
-docker pull "ghcr.io/agentic-platform/agent-runtime-python-pytest@sha256:<digest>"
-docker save -o python-pytest.tar "ghcr.io/agentic-platform/agent-runtime-python-pytest@sha256:<digest>"
+docker pull "ghcr.io/daycry/agent-runtime-python-pytest@sha256:<digest>"
+docker save -o python-pytest.tar "ghcr.io/daycry/agent-runtime-python-pytest@sha256:<digest>"
 
 # Máquina interna — cargar, etiquetar para el mirror y empujar:
 docker load -i python-pytest.tar

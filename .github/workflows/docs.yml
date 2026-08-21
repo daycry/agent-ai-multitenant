@@ -1,0 +1,113 @@
+name: Docs site
+
+# Builds the MkDocs site and publishes it to GitHub Pages.
+#
+# Two jobs on purpose. `build` runs on pull requests too, with `--strict`, so a
+# PR that breaks a link between documents fails BEFORE it reaches master — a
+# docs site with dead links is the same class of defect this repository spent
+# two days removing elsewhere. `deploy` runs only from master, and is the only
+# job that gets `pages: write` / `id-token: write`.
+#
+# Pages is configured (2026-08-21): the source is GitHub Actions, set with
+#   gh api -X POST repos/daycry/agent-ai-multitenant/pages -f build_type=workflow
+# which is the API equivalent of Settings -> Pages -> Source: GitHub Actions and
+# does not need anyone to click through the settings UI.
+#
+# The site lands on https://daycry.github.io/agent-ai-multitenant/ — the same URL
+# as `site_url` in mkdocs.yml. Those two have to stay equal: if they drift, the
+# canonical links and the sitemap of a site that renders fine point elsewhere,
+# which is the kind of breakage nobody sees while reading the pages.
+
+on:
+  push:
+    branches: [master, "plan/**"]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - "scripts/docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - "scripts/docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Read-only by default. The two write scopes Pages needs are granted to the
+# `deploy` job alone, which is what keeps a compromised docs dependency from
+# being able to publish anything from a pull request build.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build site (strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: docs-build-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      # Fully pinned, transitive dependencies included. See the header of
+      # requirements-docs.txt for why a loose pin is not acceptable here.
+      - name: Install the docs toolchain
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-docs.txt
+
+      # --strict turns every MkDocs warning into a failure. That is the gate:
+      # a broken link between documents, a nav entry pointing at a file that no
+      # longer exists, or an auto-nav glob that stopped matching anything all
+      # stop the build here instead of shipping a site with holes in it.
+      - name: Build the site
+        run: python -m mkdocs build --strict
+
+      # No `actions/configure-pages` step on purpose. Its job is to discover the
+      # site's base URL at run time, which `site_url` in mkdocs.yml already
+      # states — and it *fails* while Pages is unconfigured ("Get Pages site
+      # failed"). Placed here it would turn every master build red for a reason
+      # that has nothing to do with the documentation, which is exactly the kind
+      # of misleading signal this repository has been removing. Keeping it out
+      # means the strict build stands on its own; Pages was configured through the
+      # API on 2026-08-21 (see the header), so `deploy` no longer waits on anyone.
+      - name: Upload the site as a Pages artifact
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job can write. `id-token: write` is what lets deploy-pages mint
+    # the OIDC token Pages verifies; `contents` stays read.
+    permissions:
+      pages: write
+      id-token: write
+      contents: read
+    # Never cancel a deployment in flight: a half-cancelled Pages deployment
+    # leaves the environment stuck pending, unlike a cancelled build.
+    concurrency:
+      group: docs-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

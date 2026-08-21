@@ -59,7 +59,9 @@ Cada archivo Markdown:
 
 ## Idioma
 
-El idioma se configura por proyecto: `es` o `en`. Todo el `/docs` debe estar en el idioma declarado del proyecto. Mezclar idiomas dispara el linter de idioma.
+**En un proyecto generado** —el caso que describe esta plantilla— el idioma se configura por proyecto: `es` o `en`. Todo el `/docs` debe estar en el idioma declarado del proyecto. Mezclar idiomas dispara el linter de idioma.
+
+**En este repositorio de plataforma la regla es otra, y no la contradice**: su documentación es **bilingüe**, con el inglés como canónico, porque sus lectores son quienes contribuyen y quien encuentre el repo público — no un único cliente con un idioma declarado. La convención (`foo.md` inglés canónico, `foo.es.md` castellano), qué está bilingüe hoy, qué no lo está a propósito y la guarda que lo vigila están en [03-guides/bilingual-docs.md](./03-guides/bilingual-docs.md) ([castellano](./03-guides/bilingual-docs.es.md)). Decisión del operador del 2026-08-21.
 
 ## Mantenimiento
 

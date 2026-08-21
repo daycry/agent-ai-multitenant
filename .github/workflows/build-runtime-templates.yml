@@ -11,7 +11,7 @@ name: Build runtime templates
 # tenant?».
 #
 # Ahora, en `master` (y en `workflow_dispatch`), las catorce se PUBLICAN en
-# ghcr.io/agentic-platform/agent-runtime-<slug>:<version> y un job final resuelve
+# ghcr.io/${{ github.repository_owner }}/agent-runtime-<slug>:<version> y un job final resuelve
 # sus digests y abre un PR contra el manifiesto que lee el catálogo
 # (`packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json`).
 # En pull_request y en ramas `plan/**` nada se publica: se construye en local y
@@ -49,7 +49,7 @@ permissions:
   packages: write
 
 env:
-  REGISTRY: ghcr.io/agentic-platform
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   # ¿Esta ejecución publica? Se resuelve UNA vez y los demás jobs la heredan:
@@ -111,7 +111,7 @@ jobs:
       # Referencia con la que trabajan Trivy y el smoke: la publicada cuando esta
       # ejecución publica, la local cuando no. Una sola variable para que los dos
       # pasos no puedan mirar imágenes distintas.
-      IMAGE_REF: ${{ needs.prep.outputs.publish == 'true' && format('{0}/agent-runtime-{1}:{2}', 'ghcr.io/agentic-platform', matrix.template, needs.prep.outputs.version) || format('agent-runtime-{0}:{1}', matrix.template, needs.prep.outputs.version) }}
+      IMAGE_REF: ${{ needs.prep.outputs.publish == 'true' && format('{0}/agent-runtime-{1}:{2}', 'ghcr.io/${{ github.repository_owner }}', matrix.template, needs.prep.outputs.version) || format('agent-runtime-{0}:{1}', matrix.template, needs.prep.outputs.version) }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 

@@ -36,7 +36,12 @@ def test_publishes_all_five_app_images() -> None:
     missing = [app for app in APPS if app not in text]
     assert not missing, f"release workflow does not build: {missing}"
     assert "push: true" in text, "build-push-action must push (push: true)"
-    assert "ghcr.io/agentic-platform" in text, "must publish to the app registry"
+    assert "ghcr.io/${{ github.repository_owner }}" in text, (
+        "must publish to the REPO OWNER's GHCR namespace: it is the only "
+        "one the Actions GITHUB_TOKEN can push to. A foreign org would need "
+        "a long-lived classic PAT as a secret, which is a worse supply chain "
+        "than the problem it solves (see test_ghcr_namespace_is_pushable)."
+    )
 
 
 def test_dependent_backends_build_after_api_server_base() -> None:

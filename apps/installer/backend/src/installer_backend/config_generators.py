@@ -325,7 +325,7 @@ def build_env_vars(
         "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": secrets_.notification_encryption_key,
         # --- platform image pins (consumed by the generated compose) ---
         "PLATFORM_IMAGE_TAG": "v1.0.0",
-        "PLATFORM_REGISTRY": "ghcr.io/agentic-platform",
+        "PLATFORM_REGISTRY": "ghcr.io/daycry",
     }
 
     # Provider wiring (non-secret toggles + endpoints). Credentials go to Vault.

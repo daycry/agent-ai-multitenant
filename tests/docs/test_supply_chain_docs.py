@@ -73,11 +73,28 @@ def _configured_scanners() -> set[str]:
 
 
 def _ignore_files() -> set[str]:
-    """Ficheros de excepción versionados en la raíz del repo."""
+    """Ficheros de excepción versionados en la raíz del repo.
+
+    Lo que busca son **supresiones**: excepciones que silencian un hallazgo de
+    seguridad y que, sin revisión periódica, se vuelven permanentes. Los
+    exentos no son excepciones a esta regla, son otra cosa: `.gitignore` y
+    `.dockerignore` delimitan qué entra en el repo y en la imagen, y
+    `.prettierignore` y `.markdownlintignore` delimitan el ALCANCE de un
+    formateador. Ninguno silencia un hallazgo, así que nombrarlos en el runbook
+    de triaje de vulnerabilidades lo haría menos cierto, no más.
+
+    Los de alcance tienen su propio freno, que es más fuerte que una mención en
+    prosa: `tests/docs/test_markdownlint_scope.py` sólo admite excluir código de
+    terceros y rompe si un patrón tapa documentación propia.
+    """
+    #: Delimitan repo/imagen (no silencian nada).
+    frontera = {".gitignore", ".dockerignore"}
+    #: Delimitan el alcance de un linter; guardados por test_markdownlint_scope.
+    alcance_de_lint = {".prettierignore", ".markdownlintignore"}
     return {
         p.name
         for p in REPO_ROOT.glob(".*ignore")
-        if p.is_file() and p.name not in {".gitignore", ".dockerignore", ".prettierignore"}
+        if p.is_file() and p.name not in frontera | alcance_de_lint
     }
 
 
