@@ -114,7 +114,20 @@ describe("AgentToolsSection — tenant_user: solo lectura (06.15)", () => {
   it("pinta el catálogo pero con TODOS los checkboxes deshabilitados", async () => {
     wireApi();
     mount({ isReadOnly: false });
-    await waitFor(() => expect(screen.getByTestId("agent-tool-checkbox-b1")).toBeTruthy());
+    // Se espera al ESTADO que este test afirma, no a que el checkbox exista.
+    //
+    // Son DOS queries: `["tools-catalog"]` pinta la fila y `["agent-tools", id]`
+    // decide el `checked`. Esperar sólo a la existencia deja pasar el instante en
+    // que el catálogo ya resolvió y las asignaciones no, y en ese instante
+    // `b1.checked` es false — un rojo que la máquina rápida no ve nunca y el
+    // runner cargado sí (run 32473901482 en master, 1 de 1423).
+    //
+    // El `asyncUtilTimeout` de arriba se subió por este mismo rojo y no podía
+    // arreglarlo: `waitFor` se satisfacía al instante con la existencia, así que
+    // el reloj nunca fue la restricción.
+    await waitFor(() =>
+      expect((screen.getByTestId("agent-tool-checkbox-b1") as HTMLInputElement).checked).toBe(true),
+    );
 
     // La lista se VE (es una vista de consulta legítima)…
     const boxes = ["b1", "b2"].map(

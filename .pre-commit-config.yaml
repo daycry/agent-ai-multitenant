@@ -139,7 +139,11 @@ repos:
         name: markdownlint (docs, mismo pin que CI)
         entry: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc
         language: system
-        files: ^docs/.*\.md$
+        # `docs/` MÁS los `.md` de la raíz (README, CHANGELOG y sus mitades
+        # `.es.md`): eran el único markdown del repo que ningún linter miraba, y
+        # son los primeros que lee alguien de fuera. Mismo alcance que el job
+        # «Lint Markdown» de CI, atado por tests/docs/test_bilingual_docs.py.
+        files: ^(docs/.*|[^/]*)\.md$
         exclude: ^docs/manuals/node_modules/.*$
         pass_filenames: true
 
