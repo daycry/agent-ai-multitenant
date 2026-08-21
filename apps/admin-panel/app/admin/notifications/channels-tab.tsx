@@ -148,6 +148,11 @@ export function ChannelsTab() {
 
       {dialogOpen ? (
         <ChannelDialog
+          // La identidad del diálogo es el canal que edita (o «alta»). Con la
+          // `key`, pasar de un canal a otro REMONTA el formulario en vez de
+          // pedirle que se resincronice solo, que es de donde salían los
+          // reseteos a destiempo.
+          key={editing?.id ?? "new"}
           open={dialogOpen}
           onOpenChange={(next) => {
             if (!saveMutation.isPending) setDialogOpen(next);
@@ -251,9 +256,30 @@ function ChannelDialog({
   const [state, setState] = useState<ChannelFormState>(() => channelToForm(initial, enabledTypes));
   const [configError, setConfigError] = useState<string | null>(null);
 
+  // El estado inicial ya lo pone el `useState` de arriba, y la `key` del
+  // llamante remonta el diálogo cuando cambia el canal que edita: NO hay que
+  // resincronizar el formulario entero desde un efecto.
+  //
+  // Aquí había uno que hacía `setState(channelToForm(initial, enabledTypes))`
+  // con `enabledTypes` en las dependencias, y `enabledTypes` es
+  // `typesQuery.data?.enabled ?? []`: un array NUEVO en cada render del padre
+  // mientras `GET /notifications/platform/channel-types` está en vuelo. Con el
+  // diálogo abierto, la llegada de esa respuesta reescribía el formulario en
+  // blanco y dejaba «Crear» deshabilitado para siempre (nombre vacío ⇒
+  // `!canSubmit`), sin decir nada. El operador veía desaparecer lo que acababa
+  // de escribir. Regresión cubierta por `page.test.tsx` («lo escrito SOBREVIVE
+  // a que los transportes lleguen tarde»).
+  //
+  // Lo único que sí depende de esa respuesta es el transporte por defecto: en
+  // un alta se elige `enabledTypes[0]` y, si los transportes llegan tarde, el
+  // valor provisional puede no estar entre los habilitados. Se corrige ESE
+  // campo y sólo ése, devolviendo `prev` intacto cuando ya es válido — así el
+  // efecto no puede realimentarse ni pisar nada escrito a mano.
   useEffect(() => {
-    setState(channelToForm(initial, enabledTypes));
-    setConfigError(null);
+    if (initial !== null || enabledTypes.length === 0) return;
+    setState((prev) =>
+      enabledTypes.includes(prev.channel_type) ? prev : { ...prev, channel_type: enabledTypes[0] },
+    );
   }, [initial, enabledTypes]);
 
   // `t` viaja como argumento porque `buildBody` se llama desde un handler y

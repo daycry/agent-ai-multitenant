@@ -196,6 +196,61 @@ describe("notificaciones — pestaña de canales", () => {
     });
   });
 
+  // Medido con el arnés de backend vivo el 2026-08-20: el e2e
+  // `notification-config.spec.ts:40` moría con el botón «Crear» DESHABILITADO y
+  // el click esperando 90 s. El botón decía «Crear» (no «Guardando»), así que
+  // `submitting` era falso y el `disabled` venía de `!canSubmit`; y como
+  // `channel_type` nunca puede quedar vacío (`channelToForm` siempre devuelve
+  // `enabledTypes[0] ?? "telegram"`), el único candidato era el NOMBRE, ya
+  // relleno por el spec. Alguien lo borraba después.
+  //
+  // Ese alguien era el efecto de reset del diálogo: llevaba `enabledTypes` en
+  // sus dependencias, y `enabledTypes` es `typesQuery.data?.enabled ?? []` — un
+  // array NUEVO en cada render del padre mientras `GET
+  // /notifications/platform/channel-types` está en vuelo. Cuando la respuesta
+  // llegaba con el diálogo ya abierto, el efecto se volvía a disparar y
+  // reescribía el formulario entero en blanco.
+  //
+  // No es un problema de test: es el operador escribiendo mientras una petición
+  // de fondo termina, y perdiendo lo escrito sin ningún aviso. El e2e sólo lo
+  // veía cuando el servidor iba frío; aquí la carrera se provoca a mano.
+  it("lo escrito SOBREVIVE a que los transportes lleguen tarde", async () => {
+    let releaseTypes: (value: unknown) => void = () => {};
+    const typesArriveLate = new Promise((resolve) => {
+      releaseTypes = resolve;
+    });
+    apiFetchMock.mockImplementation((path: string, opts?: { method?: string }) => {
+      if (opts?.method && opts.method !== "GET") return Promise.resolve({});
+      if (path === "/notifications/platform/channel-types") return typesArriveLate;
+      if (path === "/notifications/channels") return Promise.resolve([CHANNEL]);
+      if (path === "/notifications/event-catalog") return Promise.resolve(CATALOG);
+      return Promise.resolve([]);
+    });
+    mount();
+
+    fireEvent.click(await screen.findByTestId("channel-create-button"));
+    await waitFor(() => expect(screen.getByTestId("channel-dialog")).toBeTruthy());
+    fireEvent.change(screen.getByTestId("channel-form-name"), { target: { value: "Bot QA" } });
+    fireEvent.change(screen.getByTestId("channel-form-config"), {
+      target: { value: '{ "chat_id": "77" }' },
+    });
+
+    // …y AHORA contesta el backend de los transportes.
+    releaseTypes({ enabled: ["telegram"], available: ["telegram", "email"] });
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("channel-form-type") as HTMLSelectElement).options.length,
+      ).toBeGreaterThan(0),
+    );
+
+    const name = screen.getByTestId("channel-form-name") as HTMLInputElement;
+    expect(name.value).toBe("Bot QA");
+    expect((screen.getByTestId("channel-form-config") as HTMLTextAreaElement).value).toBe(
+      '{ "chat_id": "77" }',
+    );
+    expect((screen.getByTestId("channel-form-submit") as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("borrar pide confirmación antes de llamar al backend", async () => {
     wireApi();
     mount();
