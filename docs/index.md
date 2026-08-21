@@ -1,5 +1,10 @@
 ---
-title: Agentic Platform
+# Sin `title:` A PROPOSITO. Material usa `page.meta.title` con prioridad y SIN
+# comprobar si la pagina es la portada, asi que un `title: Agentic Platform`
+# aqui renderiza `<title>Agentic Platform - Agentic Platform</title>`. Al no
+# ponerlo, cae en la rama de portada y sale el nombre del sitio una sola vez.
+# La mitad castellana SI lo lleva (`Plataforma Agentica`), y hace bien: alli no
+# coincide con el nombre del sitio, asi que distingue la variante de idioma.
 last_updated: 2026-08-21
 status: published
 docs_language: en
