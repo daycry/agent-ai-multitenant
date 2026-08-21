@@ -23,13 +23,11 @@ flowchart LR
     end
 
     subgraph Control["Plano de control"]
-        API[api-server<br/>FastAPI · REST/WS/SSE]
+        API[api-server<br/>FastAPI · REST/WS/SSE<br/>+ asistente · memorizer · webhooks]
         ORQ[orchestrator]
-        WRK[workers<br/>Celery]
-        MEM[memorizer]
-        PA[personal-assistant]
+        WRK[workers<br/>Celery · despacho de webhooks]
         ND[notification-dispatcher]
-        WD[webhook-dispatcher]
+        BEAT[cortex-beat<br/>planificador]
     end
 
     subgraph Datos["Datos y secretos"]
@@ -51,16 +49,28 @@ flowchart LR
     ORQ --> RED
     WRK --> RED
     WRK -.lanza.-> RT1 & RT2 & RT3
-    MEM --> PG
-    PA --> API
-    ND & WD --> RED
+    ND --> RED
+    BEAT --> RED
 ```
+
+> **El memorizer, el asistente personal y el despacho de webhooks no son
+> contenedores.** Son módulos que viven dentro de `api-server` (los dos
+> primeros) y dentro de los workers (el tercero), por el
+> [ADR 0033](../05-architecture-decisions/0033-personal-assistant-en-api-server-reutilizando-chat.md).
+> Este diagrama los dibujaba como servicios propios, y quien leía eso buscaba
+> contenedores que nunca arrancan. Lo vigila
+> `tests/docs/test_diagram_guards.py::test_no_mermaid_diagram_draws_a_phantom_service`.
+
+Los diagramas de detalle —máquinas de estados de Plan y Tarea, los dos
+significados de «review», el aislamiento multi-tenant y el del sandbox— están
+en [03-diagrams.es.md](./03-diagrams.es.md) ([English](./03-diagrams.md)).
 
 ## Planos: control vs ejecución
 
-- **Plano de control** (api-server, orchestrator, workers, memorizer,
-  dispatchers): código de la plataforma, confiable. Los **workers
-  nunca ejecutan código del usuario**: orquestan contenedores.
+- **Plano de control** (api-server, orchestrator, workers,
+  notification-dispatcher, cortex-beat): código de la plataforma,
+  confiable. Los **workers nunca ejecutan código del usuario**: orquestan
+  contenedores.
 - **Plano de ejecución** (agent-runtime, test-runtime, review-runtime):
   contenedores **efímeros y no confiables** con red restringida, sin
   socket Docker, `cap-drop ALL` y perfiles seccomp/AppArmor (confiables
@@ -88,10 +98,10 @@ flowchart LR
 | `apps/api-server`              | FastAPI: REST/WebSocket/SSE, RBAC, middleware multi-tenant (RLS).                                                  |
 | `apps/orchestrator`            | Asigna tareas listas del DAG a los workers.                                                                        |
 | `apps/workers`                 | Celery (default/heavy/gpu/ingestion/test/review): orquestan runtimes.                                              |
-| `apps/memorizer`               | Indexa memoria (4 scopes) y destila ejecuciones.                                                                   |
-| `apps/personal-assistant`      | Asistente personal por usuario.                                                                                    |
+| `apps/memorizer`               | RESERVADA (vacía): indexa memoria (4 scopes) y destila ejecuciones **dentro de `api-server`** (ADR 0033).          |
+| `apps/personal-assistant`      | RESERVADA (vacía): el asistente por usuario vive **dentro de `api-server`** (ADR 0033).                            |
 | `apps/notification-dispatcher` | Entrega notificaciones multicanal.                                                                                 |
-| `apps/webhook-dispatcher`      | Entrega webhooks salientes.                                                                                        |
+| `apps/webhook-dispatcher`      | RESERVADA (vacía): el despacho de webhooks vive **en los workers**.                                                |
 | `apps/admin-panel`             | Next.js 14 — frontend ÚNICO: tenants + System Admin, separados por RBAC y rutas (ADR 0117 c). Incl. `/admin/docs`. |
 | `apps/installer`               | Wizard de bootstrap (Fase 15).                                                                                     |
 

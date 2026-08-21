@@ -1,0 +1,214 @@
+[English](README.md) · **Español**
+
+# agent-ai-multitenant
+
+**Una plataforma agéntica multi-tenant donde equipos de agentes IA especialistas planifican, escriben, prueban y revisan software — sobre un único host Docker Compose, no Kubernetes.**
+
+[![CI](https://github.com/daycry/agent-ai-multitenant/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/daycry/agent-ai-multitenant/actions/workflows/ci.yml)
+[![Build runtime templates](https://github.com/daycry/agent-ai-multitenant/actions/workflows/build-runtime-templates.yml/badge.svg?branch=master)](https://github.com/daycry/agent-ai-multitenant/actions/workflows/build-runtime-templates.yml)
+[![Eval on prompt change](https://github.com/daycry/agent-ai-multitenant/actions/workflows/eval-on-prompt-change.yml/badge.svg?branch=master)](https://github.com/daycry/agent-ai-multitenant/actions/workflows/eval-on-prompt-change.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+[![Stars](https://img.shields.io/github/stars/daycry/agent-ai-multitenant?style=flat&label=stars&color=yellow&logo=github)](https://github.com/daycry/agent-ai-multitenant)
+[![Forks](https://img.shields.io/github/forks/daycry/agent-ai-multitenant?style=flat&label=forks&color=blueviolet&logo=github)](https://github.com/daycry/agent-ai-multitenant/forks)
+[![Open issues](https://img.shields.io/github/issues/daycry/agent-ai-multitenant?label=open%20issues)](https://github.com/daycry/agent-ai-multitenant/issues)
+[![Last commit](https://img.shields.io/github/last-commit/daycry/agent-ai-multitenant/master?label=last%20commit)](https://github.com/daycry/agent-ai-multitenant/commits/master)
+[![Commit activity](https://img.shields.io/github/commit-activity/m/daycry/agent-ai-multitenant?label=commits%2Fmonth)](https://github.com/daycry/agent-ai-multitenant/pulse)
+[![Contributors](https://img.shields.io/github/contributors/daycry/agent-ai-multitenant?label=contributors)](https://github.com/daycry/agent-ai-multitenant/graphs/contributors)
+
+[![Python](https://img.shields.io/badge/python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](pyproject.toml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-async-009688.svg?logo=fastapi&logoColor=white)](apps/api-server)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-4169E1.svg?logo=postgresql&logoColor=white)](docker/docker-compose.yml)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D.svg?logo=redis&logoColor=white)](docker/docker-compose.yml)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000.svg?logo=nextdotjs&logoColor=white)](apps/admin-panel)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-single%20host-2496ED.svg?logo=docker&logoColor=white)](docker/docker-compose.yml)
+
+[![ADRs](https://img.shields.io/badge/ADRs-160-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
+[![Migrations](https://img.shields.io/badge/migrations-144-0ea5e9.svg)](apps/api-server/migrations/versions)
+[![Test runtimes](https://img.shields.io/badge/test%20runtimes-14-0ea5e9.svg)](docker/agent-runtimes)
+[![Sensitive actions](https://img.shields.io/badge/gated%20action%20categories-13-0ea5e9.svg)](docs/04-reference/README.md)
+
+> Los cuatro contadores de arriba no son decorativos:
+> [`tests/unit/test_readme_badges_do_not_lie.py`](tests/unit/test_readme_badges_do_not_lie.py)
+> cuenta los ficheros de verdad y rompe la build cuando un número de este README
+> deja de coincidir con el repositorio. Y el mismo test comprueba que todos los
+> enlaces relativos de esta página resuelven.
+
+## Qué es esto
+
+Describes lo que quieres construir. De ahí sale un **Plan** —un conjunto ordenado
+de tareas con dependencias DAG— y un equipo de agentes especialistas (Project
+Manager, Arquitecto, Backend, Frontend, QA, Reviewer, Technical Writer…) lo
+ejecuta en paralelo contra un repositorio git real, corriendo la suite de tests
+del propio proyecto en su propio toolchain, y abriendo una pull request al cerrar
+el plan.
+
+Se opera como un **stack Docker Compose en una sola máquina**. El multi-tenancy
+llega a departamentos y equipos dentro de una organización, no a SaaS comercial
+masivo. Kubernetes y multi-máquina están explícitamente fuera de alcance.
+
+```mermaid
+flowchart LR
+    U["👤 Equipo<br/>admin-panel · Next.js"] --> API["⚙️ api-server<br/>FastAPI · REST + WebSocket<br/>+ memorizer · asistente · webhooks"]
+    API --> ORCH["🧭 orchestrator<br/>asignación tarea → worker"]
+    ORCH --> W["🛠️ Workers Celery<br/>default · heavy · gpu · test · review"]
+    W -->|"lanza efímeros:<br/>sin socket docker<br/>cap-drop ALL · seccomp deny"| RT["📦 agent-runtime<br/>test-runtime · review-runtime"]
+    RT -->|"un git worktree por tarea"| REPO[("bare repos en disco<br/>projects/…/repos/*.git")]
+    RT -.->|"egress sólo allowlisted"| PROXY["🚧 egress-proxy<br/>registry-proxy"]
+    API --> LLM["🧠 shared-llm<br/>Claude SDK · Copilot<br/>Azure Foundry · Ollama"]
+    API --- PG[("🐘 PostgreSQL 16<br/>pgvector · RLS por tenant")]
+    API --- RD[("🔴 Redis 7<br/>caché + broker de Celery")]
+    W --- PG
+    W --- RD
+    style RT fill:#fff4e5,stroke:#f0ad4e
+    style PROXY fill:#fdecea,stroke:#ef9a9a
+```
+
+## Qué hace distinto
+
+| Decisión de diseño                              | Qué te da                                                                                                                                                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **El Plan es la unidad de cambio**              | Un plan se materializa como rama `plan/{id}-{slug}`; cada commit de tarea lleva trailers `Plan-Id` / `Task-Id` / `Execution-Id`; al cerrarlo se abre UNA PR. Revisas un cambio coherente, no cuarenta commits |
+| **Doble Kanban**                                | Arriba un tablero gerencial de Planes; dentro de cada plan, el tablero operativo de Tareas. Nunca un tablero plano que mezcla tareas de varios planes                                                         |
+| **Multi-tenancy desde el día uno**              | `tenant_id` en cada tabla, RLS de PostgreSQL activado, middleware que inyecta el tenant en cada request y tests de fuga cross-tenant en CI                                                                    |
+| **Los agentes no ejecutan código en el worker** | Los workers sólo orquestan. El código no confiable corre en contenedores efímeros con red restringida, sin socket Docker, `cap-drop ALL` y perfil seccomp default-deny                                        |
+| **Tu stack, no el nuestro**                     | 14 imágenes de test-runtime mantenidas (pytest, jest, vitest, playwright, phpunit, pest, go, maven, gradle, rspec, cargo, dotnet, shell, http) para que el agente corra _tu_ suite                            |
+| **Guardrails declarativos por capas**           | Plataforma → tenant → proyecto, aplicados en cuatro puntos del ciclo: `pre_llm`, `post_llm`, `pre_tool`, `post_tool`                                                                                          |
+| **Validación humana donde importa**             | 13 categorías de acción sensible × 4 plantillas (Sandbox, Desarrollo, Producción, Cliente Externo), más la tool `ask_human` que el propio agente puede llamar. Por plan, nunca un checkbox por tarea          |
+| **Los proveedores LLM son catálogo cerrado**    | Claude Agent SDK, GitHub Copilot, Azure AI Foundry vía APIM y Ollama — detrás de un único `Protocol` async `LLMProvider`. Un quinto proveedor exige un ADR escrito                                            |
+| **Las decisiones están escritas**               | 160 ADR, una cadena de precedencia para cuando dos documentos se contradicen, y tests que fallan cuando la documentación deja de describir el repositorio                                                     |
+
+## Cómo se arranca
+
+Prerequisitos: Docker Engine 24+, Docker Compose v2+, Python 3.12+, Node.js 20+,
+Git 2.40+. En Windows funciona con Docker Desktop.
+
+```bash
+git clone https://github.com/daycry/agent-ai-multitenant.git
+cd agent-ai-multitenant
+```
+
+**1. Bootstrap del entorno Python** — crea `.venv/`, instala los paquetes
+locales en editable y registra el hook de pre-commit. Idempotente.
+
+```bash
+./scripts/dev/bootstrap.sh        # Linux / macOS
+.\scripts\dev\bootstrap.ps1       # Windows
+```
+
+**2. Levantar el stack.** La infraestructura (PostgreSQL + pgvector, Redis,
+MinIO, Vault, ClamAV, docling-serve, egress-proxy, Ollama) vive en Compose; el
+`api-server` y el `admin-panel` corren desde fuente en modo desarrollo:
+
+```bash
+./scripts/dev/up.sh               # Linux / macOS  (añade --monitoring para Grafana)
+.\scripts\dev\up.ps1              # Windows
+```
+
+El Postgres de desarrollo publica el puerto **15432** del host, no el 5432, para
+no chocar con un Postgres local. Dale 30–60 s a los contenedores hasta que
+reporten healthy (`docker compose ps`) y sigue con
+[primeros pasos](docs/02-getting-started/README.md) para sembrar un tenant y
+lanzar tu primer plan.
+
+Para una instalación desatendida guiada por un perfil YAML
+(`scripts/install-profiles/{minimal,recommended,gpu}.yaml`):
+
+```bash
+./scripts/install.sh --config install.yaml
+```
+
+La configuración se lee de `docker/.env`, que está en `.gitignore`. Las
+credenciales de plataforma viven en **Vault**; la base de datos guarda sólo el
+puntero. La única excepción escrita —secretos de terceros que configura un
+tenant, en columnas cifradas con Fernet— está argumentada en el
+[ADR 0146](docs/05-architecture-decisions/0146-fernet-en-db-vs-vault.md).
+
+## Dónde leer más
+
+| Ruta                                                                          | Qué hay dentro                                                                                                      |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| [`CLAUDE.md`](CLAUDE.md)                                                      | Los principios rectores, el árbol real del repositorio y la cadena de precedencia entre documentos                  |
+| [`docs/01-overview/`](docs/01-overview/README.md)                             | Qué es el producto y cómo está montado                                                                              |
+| [`docs/02-getting-started/`](docs/02-getting-started/README.md)               | Instalación y primer arranque                                                                                       |
+| [`docs/03-guides/`](docs/03-guides/README.md)                                 | Guías por tarea — más [`gotchas/`](docs/03-guides/gotchas/README.md), las trampas del toolchain que ya hemos pagado |
+| [`docs/04-reference/`](docs/04-reference/README.md)                           | Modelo de dominio, guardrails, auth/SSO, backup y restore, API pública                                              |
+| [`docs/05-architecture-decisions/`](docs/05-architecture-decisions/README.md) | Cada decisión arquitectónica, con la opción que se descartó y por qué                                               |
+| [`docs/06-runbooks/`](docs/06-runbooks/README.md)                             | Procedimientos de operación: upgrades, recuperación ante desastres, rotación de claves, capacidad                   |
+| [`docs/07-changelog/`](docs/07-changelog/README.md)                           | Una entrada por plan cerrado                                                                                        |
+| [`docs/roadmap/`](docs/roadmap/README.md)                                     | Los planes en sí, con su estado en el frontmatter YAML                                                              |
+
+Antes de implementar nada, dos documentos valen más que su longitud:
+[gotchas](docs/03-guides/gotchas/README.md) (trampas del toolchain, con síntoma,
+causa raíz y fix) y
+[verificar antes de implementar](docs/03-guides/verificar-antes-de-implementar.md)
+(los modos de fallo que no producen error alguno — sólo trabajo perdido o
+confianza injustificada).
+
+## Estado del proyecto — qué _no_ está publicado
+
+Dicho sin adornos, para que nadie busque algo que no está:
+
+- **No se ha cortado ninguna release.** No hay tags de git ni releases de
+  GitHub, así que arriba no hay badge de versión.
+- **Los SDK no están publicados.** `packages/sdk-python` y
+  `packages/sdk-typescript` se generan del OpenAPI v1 y viven sólo en este
+  repositorio. Todavía no hay un `pip install agentic-platform-sdk` ni un
+  `npm install @agentic-platform/sdk` que funcione.
+- **Aún no hay imágenes en ningún registry.** Las imágenes de aplicación se
+  publican en `ghcr.io/agentic-platform/*` cuando se empuja un tag `v*` — el
+  workflow [Release images](.github/workflows/release-images.yml) no ha corrido
+  nunca, porque ese tag no existe. Hasta entonces las imágenes se construyen en
+  local con los scripts de desarrollo.
+- **No hay número de cobertura publicado**, porque no hay servicio de cobertura
+  conectado. Lo que CI aplica es un suelo de ratchet sobre el subconjunto unit
+  ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).
+- **El sitio de documentación se construye, pero aún no se publica.** El workflow
+  [Docs site](.github/workflows/docs.yml) construye `docs/` con MkDocs en cada
+  pull request, y `mkdocs build --strict` es la puerta que rompe con un enlace
+  muerto antes de que llegue a `master`. Publicar espera un único interruptor
+  manual que sólo puede accionar quien es dueño del repositorio —Settings →
+  Pages → Source: GitHub Actions—, así que hoy no hay URL viva a la que enlazar y
+  `docs/` se lee directamente en GitHub. Por eso tampoco hay badge de ese
+  workflow: no ha corrido nunca en `master`, y renderizaría «no status».
+
+Comprueba cualquiera de esas afirmaciones tú mismo en vez de creerte la lista:
+
+```bash
+git tag                                              # sin tags
+gh release list --repo daycry/agent-ai-multitenant   # sin releases
+ls docs/05-architecture-decisions/[0-9]*.md | wc -l  # el número del badge de ADR
+ls apps/api-server/migrations/versions/*.py | wc -l  # el número del badge de migraciones
+```
+
+## Idioma de la documentación
+
+El inglés es el canónico y el castellano va en un sidecar `.es.md`: `foo.md` es
+el documento inglés, `foo.es.md` su traducción, y los dos se enlazan en la
+cabecera. La política y su guarda están escritas en
+[documentación bilingüe](docs/03-guides/bilingual-docs.es.md).
+
+El resto del corpus se describe honestamente como **castellano hoy, traducido de
+forma incremental**. Es grande —160 ADR, un catálogo entero de gotchas, las siete
+carpetas canónicas de documentación, el roadmap— con enlaces internos y guardas
+estáticas sobre todo ello, así que una traducción de golpe rompería más de lo que
+entregaría. Los documentos llevan un campo `docs_language` en su frontmatter YAML,
+y la plantilla de ADR ya renderiza los encabezados en inglés cuando vale `en`. Lo
+nuevo de primer nivel nace en los dos idiomas.
+
+## Contribuir
+
+La rama por defecto es `master`, y nada se empuja a ella directamente: una pull
+request por plan. Conventional Commits con trailers `Plan-Id` / `Task-Id` /
+`Execution-Id`; `black`, `ruff` y `mypy --strict` en Python; `prettier` y
+`eslint` sin `any` en TypeScript. El detalle está en
+[`docs/context/conventions.md`](docs/context/conventions.md).
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/unit -q    # la puerta rápida más útil
+pre-commit run --all-files
+```
+
+## Licencia
+
+[MIT](LICENSE) © daycry

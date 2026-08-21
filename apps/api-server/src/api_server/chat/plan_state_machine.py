@@ -15,6 +15,7 @@ This module is the single source of truth for what's legal:
   in_progress -> blocked | pending_human_validation | cancelled
   blocked -> in_progress | cancelled
   pending_human_validation -> completed | rejected | in_progress
+                           |  blocked   (expired review session)
   completed -> archived
   rejected -> draft | archived | in_progress
   cancelled -> archived

@@ -1,0 +1,228 @@
+# MkDocs configuration for the public documentation site.
+#
+# Why MkDocs + Material + static-i18n, and not something else:
+#
+#   * the toolchain is already Python, so the site builds with the same pinned
+#     `pip install -r requirements-docs.txt` discipline as everything else here;
+#   * Material ships search, light/dark, tabs and — via pymdownx.superfences —
+#     Mermaid, which nine documents of this corpus already use;
+#   * `mkdocs-static-i18n` in `suffix` mode implements *exactly* the bilingual
+#     convention this repo already decided in docs/03-guides/bilingual-docs.md:
+#     the bare filename is the English canonical document and `foo.es.md` is its
+#     Spanish sidecar. One site with a language selector, not two sites, and no
+#     document has to move for it. A `docs/en/` + `docs/es/` split would have
+#     required relocating 160 ADRs, 108 gotchas and the roadmap — over a
+#     thousand internal links — which is explicitly out of scope.
+#
+# The build is run with `--strict`, so any warning fails it. What that catches
+# and what it deliberately does not is documented in `validation:` below.
+site_name: Agentic Platform
+site_description: Multi-tenant agentic platform — teams of specialist AI agents that plan, build, test and review software on a single Docker Compose host.
+site_author: daycry
+site_url: https://daycry.github.io/agent-ai-multitenant/
+repo_url: https://github.com/daycry/agent-ai-multitenant
+repo_name: daycry/agent-ai-multitenant
+edit_uri: edit/master/docs/
+copyright: MIT-licensed. Documentation built from the repository at each push to master.
+
+docs_dir: docs
+site_dir: site
+
+# Everything here is either not documentation or would bloat the site without
+# adding a page anybody reads. Excluding a file is not the same as ignoring a
+# check: MkDocs still validates every link that points *into* these paths, and
+# the build hook rewrites such links to the repository so they keep resolving.
+#
+#   /README.md         the canonical-/docs-template contract, replaced as the
+#                      site home page by index.md (MkDocs would otherwise map
+#                      README.md to index.html and make it the front page)
+#   manuals/           132 MB of generated PDFs, Playwright fixtures and a
+#                      vendored node_modules with 30 dependency READMEs
+#   provider-example/  reference *code* (the llm_layer skeleton ADR 0021 cites),
+#                      not prose — see docs/README.md
+exclude_docs: |
+  /README.md
+  manuals/
+  provider-example/
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow system theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  # English is canonical (operator decision, 2026-08-21). Documents with no
+  # `.es.md` sidecar — the whole Spanish corpus today — are served in both
+  # builds as the fallback, which is the state docs/03-guides/bilingual-docs.md
+  # describes as "a backlog with a shape, not a gap": each one becomes bilingual
+  # on its own, without coordinating with any other.
+  - i18n:
+      docs_structure: suffix
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: es
+          name: Español
+          build: true
+          site_description: Plataforma agéntica multi-tenant — equipos de agentes de IA especialistas que planifican, construyen, prueban y revisan software en un único host Docker Compose.
+          nav_translations:
+            Home: Inicio
+            Start here: Empezar
+            Concepts: Conceptos
+            Guides: Guías
+            Reference: Referencia
+            Decisions: Decisiones
+            Operations: Operación
+            Pitfalls: Trampas
+            Changelog: Cambios
+            Project: Proyecto
+            Overview: Vista general
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  # Mermaid: nine documents already ship ```mermaid blocks (the architecture
+  # overview, the human-agents guide, ADR 0046…). This renders them client-side.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+# `links.not_found` stays at its default `warn`, so with `--strict` a broken
+# link between documents fails the build — the whole point of the gate. The
+# corpus's 210 source-code citations (`../../apps/.../foo.py#L120-L130`) land in
+# that same bucket because MkDocs only looks at whether the last path segment
+# has an extension, so they are handled where they can be handled honestly:
+# scripts/docs/hooks.py rewrites them to their canonical GitHub URL after
+# checking the file really exists, and degrades the ones that resolve to nothing
+# into plain code spans instead of publishing a hyperlink that 404s.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+  links:
+    not_found: warn
+    absolute_links: info
+    unrecognized_links: info
+    anchors: info
+
+# scripts/docs/hooks.py — expands the `auto:` nav globs below and enforces the
+# site's one link rule. Read its module docstring before changing the nav.
+hooks:
+  - scripts/docs/hooks.py
+
+# The front of the nav is organised by what a reader is looking for, not by the
+# seven canonical folders. Everything not placed by hand is swept up by an
+# `auto:` glob, which the hook expands from the filesystem and de-duplicates
+# against the hand-written entries — so no page is orphaned and none is listed
+# twice, and adding an ADR or a gotcha needs no edit here.
+nav:
+  - Home: index.md
+  - Start here:
+      - Overview: 02-getting-started/README.md
+      - What this is: 01-overview/01-introduction.md
+      - Install: 02-getting-started/01-installation.md
+      - First run: 02-getting-started/03-first-run.md
+      - Your first project: 03-guides/01-create-first-project.md
+      - Install from scratch: 06-runbooks/01-installation-from-scratch.md
+      - Bilingual documentation policy: 03-guides/bilingual-docs.md
+  - Concepts:
+      - Overview: 01-overview/README.md
+      - Architecture: 01-overview/02-architecture.md
+      - Multi-tenancy: 04-reference/multi-tenancy.md
+      - Domain model: 04-reference/domain-model.md
+      - Human validation of plans: 04-reference/validacion-humana.md
+      - Guardrails: 04-reference/guardrails.md
+      - Roles and permissions: 04-reference/rbac.md
+      - LLM providers: 04-reference/llm-providers.md
+      - How agents are trained: 04-reference/training-model.md
+      - Sessions: 04-reference/sesiones.md
+      - auto: 01-overview/*.md
+  - Guides:
+      - Overview: 03-guides/README.md
+      - auto: 03-guides/*.md
+      - Human test guides:
+          - Overview: 03-guides/human-tests/README.md
+          - auto: 03-guides/human-tests/*.md
+  - Reference:
+      - Overview: 04-reference/README.md
+      - auto: 04-reference/*.md
+  - Decisions:
+      - Overview: 05-architecture-decisions/README.md
+      - auto: 05-architecture-decisions/*.md
+  - Operations:
+      - Overview: 06-runbooks/README.md
+      - auto: 06-runbooks/*.md
+  - Pitfalls:
+      - Overview: 03-guides/gotchas/README.md
+      - auto: 03-guides/gotchas/*.md
+  - Changelog:
+      - Overview: 07-changelog/README.md
+      - auto: 07-changelog/*.md
+  - Project:
+      - Roadmap: roadmap/README.md
+      - Development context:
+          - auto: context/*.md
+          - auto: context/memoria-asistente/*.md
+      - Design notes:
+          - auto: superpowers/specs/*.md
+          - auto: superpowers/plans/*.md
+      - Plans:
+          - auto: roadmap/*.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/daycry/agent-ai-multitenant
+      name: The repository on GitHub

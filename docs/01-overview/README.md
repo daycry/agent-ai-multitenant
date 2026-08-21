@@ -11,10 +11,11 @@ Esta carpeta explica **qué es la plataforma y por qué existe**: el
 gran panorama, los conceptos clave y cómo encajan las piezas. Es la
 primera parada para alguien que llega nuevo al proyecto.
 
-| Documento                                  | Para qué                                                     |
-| ------------------------------------------ | ------------------------------------------------------------ |
-| [01-introduction.md](./01-introduction.md) | Qué es la plataforma, para quién, qué hace y qué no es       |
-| [02-architecture.md](./02-architecture.md) | Cómo encajan las piezas en una sola máquina (Docker Compose) |
+| Documento                                  | Para qué                                                                                                                   |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| [01-introduction.md](./01-introduction.md) | Qué es la plataforma, para quién, qué hace y qué no es                                                                     |
+| [02-architecture.md](./02-architecture.md) | Cómo encajan las piezas en una sola máquina (Docker Compose)                                                               |
+| [03-diagrams.md](./03-diagrams.md)         | Seis diagramas verificados contra el código, con guarda automática — canónico en inglés, [castellano](./03-diagrams.es.md) |
 
 ## Para profundizar
 

@@ -118,8 +118,12 @@ jobs:
         with:
           node-version: "20"
 
+      # The root globs are not decoration: README.md and CHANGELOG.md are the
+      # first documents a stranger reads, and until 2026-08-21 they were the only
+      # Markdown in the repo that no linter ever looked at. Kept in sync with the
+      # pre-commit hook by tests/docs/test_bilingual_docs.py.
       - name: markdownlint docs
-        run: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc "docs/**/*.md"
+        run: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc "docs/**/*.md" "*.md"
 
   # ---------------------------------------------------------------------------
   # TypeScript lint: prettier + eslint via the admin-panel package itself.
