@@ -992,7 +992,7 @@ jobs:
       # del plan (CVEs sin fix en las bases `-slim` bloqueando PRs ajenos).
       - name: Trivy — api-server (imagen base, HIGH/CRITICAL)
         if: steps.detect.outputs.has_dockerfiles == 'true'
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: agentic-platform/api-server:ci
@@ -1004,7 +1004,7 @@ jobs:
 
       - name: Trivy — installer (wizard de bootstrap)
         if: steps.detect.outputs.has_dockerfiles == 'true'
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: agentic-platform/installer:ci
@@ -1016,7 +1016,7 @@ jobs:
 
       - name: Trivy — installer backend
         if: steps.detect.outputs.has_dockerfiles == 'true'
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: agentic-platform/backend:ci
@@ -1027,7 +1027,7 @@ jobs:
           cache: true
 
       - name: Trivy — agent-runtime (sandbox del bucle del agente)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: agent-runtime:v1
@@ -1038,7 +1038,7 @@ jobs:
           cache: true
 
       - name: Trivy — browser-runtime (ADR 0080)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: image
           image-ref: browser-runtime:v1
