@@ -205,6 +205,21 @@ jobs:
   # vía. El digest del catálogo no lo teclea nadie: se resuelve contra el
   # registry después de que las catorce hayan pasado Trivy, y llega al repo por
   # PR — revisable, y sin permiso de escritura directa sobre `master`.
+  #
+  # AJUSTE DEL REPOSITORIO QUE ESTE JOB NECESITA, y que no se deduce de aquí:
+  # Settings -> Actions -> General -> Workflow permissions -> «Allow GitHub
+  # Actions to create and approve pull requests». Sin esa casilla el job hace
+  # TODO su trabajo —resuelve los catorce digests y empuja la rama— y muere en
+  # la última línea con:
+  #
+  #   GraphQL: GitHub Actions is not permitted to create or approve pull requests
+  #
+  # Pasó en la primera publicación real, el 2026-08-21: el rojo no señalaba nada
+  # roto y la rama con el manifiesto ya estaba en origin (se abrió el PR #84 a
+  # mano). El operador activó la casilla ese mismo día, dejando
+  # `default_workflow_permissions` en `read`: lo que se concede es abrir PRs, no
+  # escritura general con el token. Si algún día se revoca, este job volverá a
+  # morir así, y el arreglo es la casilla, no el workflow.
   refresh-digests:
     name: Refresh catalog digests
     needs: [prep, build]

@@ -38,6 +38,8 @@ from agent_runtime.internal_api import InternalAgentAPI
 from agent_runtime.orchestration_tools import OrchestrationSink
 from agent_runtime.tools import ToolRegistry
 
+from tests.integration._runtime_image_refs import apunta_a
+
 pytestmark = pytest.mark.integration
 
 
@@ -196,7 +198,7 @@ def test_worker_resolves_docker_command_image() -> None:
     # docker_command: runtime_template replaced by an explicit, concrete image.
     run = resolved[1]["config"]
     assert "runtime_template" not in run
-    assert run["image"] == "agent-runtime-python-pytest:v1"
+    assert apunta_a(run["image"], "python-pytest")
 
 
 def test_worker_resolves_image_from_project_stack() -> None:
@@ -211,7 +213,10 @@ def test_worker_resolves_image_from_project_stack() -> None:
     ]
     # The PHP project stack wins over the tool default (Plan 06.16 precedence).
     resolved = _resolve_tool_spec_images(specs, project_default_runtime="php-phpunit")
-    assert resolved[0]["config"]["image"] == "agent-runtime-php-phpunit:v1"
+    # La negativa importa: es lo que distingue «gana el proyecto» de «devuelve
+    # siempre lo mismo».
+    assert apunta_a(resolved[0]["config"]["image"], "php-phpunit")
+    assert not apunta_a(resolved[0]["config"]["image"], "python-pytest")
 
 
 def test_worker_leaves_explicit_image_untouched() -> None:
@@ -248,7 +253,7 @@ def test_agent_spec_forwards_tool_specs_with_resolved_images() -> None:
         ],
     )
     spec = _agent_spec(req, None)
-    assert spec["tool_specs"][0]["config"]["image"] == "agent-runtime-python-pytest:v1"
+    assert apunta_a(spec["tool_specs"][0]["config"]["image"], "python-pytest")
     # Round-trips through the Celery payload.
     rebuilt = ExecutionRequest.from_dict(req.as_dict())
     assert rebuilt.tool_specs == req.tool_specs

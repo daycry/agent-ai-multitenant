@@ -1,7 +1,22 @@
 {
   "_generated_by": ".github/workflows/build-runtime-templates.yml (job `refresh-digests`) vía `python -m shared_test_runtimes.release`. NO EDITAR A MANO: un digest escrito por una persona no tiene vía de refresco y congela sus CVEs para siempre (ADR 0148, condición 1).",
-  "_state": "Sin release publicada todavía: `digests` vacío ⇒ el catálogo compone el nombre local `agent-runtime-<slug>:v1` que construye scripts/dev/build-runtime-templates.sh, igual que antes del ADR 0148. La primera publicación en GHCR rellena `registry` y las 14 entradas de `digests`, y a partir de ahí el worker resuelve por digest o aborta.",
-  "registry": "",
+  "_state": "14 plantillas publicadas en `ghcr.io/daycry` con el tag `v1`; el catálogo las referencia por digest y el worker las descarga por digest o aborta (ADR 0148).",
+  "registry": "ghcr.io/daycry",
   "version": "v1",
-  "digests": {}
+  "digests": {
+    "dotnet-test": "sha256:d8b3f0878411ab3949e5475094f70a7905b41ebf3764a7f35ecf8b331cefa12f",
+    "generic-http": "sha256:3ff33d5427f007f5275ec31b810ed2322f0199727d8dbae5cbfd54e82747d3a7",
+    "generic-shell": "sha256:1d7051f3d13ee1980c52d7c6f6b21536ef40a762779e82b9c341bacc3012ad88",
+    "go-test": "sha256:513ecbca51780001fbf65cf7b9d397914884e3a9d743c701f7c75946f5406721",
+    "java-gradle": "sha256:9a9d0c0632ad8d81a5b417d9e87edad02e98d0600ae2cbd1cb0b36a0978209c1",
+    "java-maven": "sha256:855afd6d24c1ba49b1a401bac2abad37dcb131c50ab4d3b43b8edf8b679d2e75",
+    "node-jest": "sha256:620df74c9a26453dfbcadd8bee37060bf26cf55b7de93c6f2f65d3d5836f3185",
+    "node-playwright": "sha256:91fc0da912497a72ec6bc9d58dc56139b7ae0b4a3af2ae04c875de37f84e51b3",
+    "node-vitest": "sha256:8df70fa536d94e567ae1c6c4b2df8180fe57d81a0a7bc4e0add2ab3cb99e30a2",
+    "php-pest": "sha256:d05b31615f7d1c7e8835dd350f84cf17cf893d465deefc91a35ee8c2bd7a196f",
+    "php-phpunit": "sha256:fa0bb4665ea3c2e21d1c24f61dc011624cf6e743acf947a23245ac747960f94b",
+    "python-pytest": "sha256:4cd7a539513534599169103e21f5ac373b99f2e9854929a6f185026a484daf6f",
+    "ruby-rspec": "sha256:e759b1bb0f15b6a789ff759e4ecc2c014c19e48faf20f693a61f9dc69e62a2be",
+    "rust-cargo": "sha256:94c79c2863fb8954e028e71a0b59884c34298b2d314684d64da2f751fa947ce3"
+  }
 }
