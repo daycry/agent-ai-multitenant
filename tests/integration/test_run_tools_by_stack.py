@@ -38,6 +38,8 @@ import asyncpg
 import pytest
 from alembic import command
 
+from tests.integration._runtime_image_refs import apunta_a
+
 pytestmark = pytest.mark.integration
 
 
@@ -132,11 +134,17 @@ def test_resolve_run_runtime_image_adapter() -> None:
 
     # The (project_default, tool_default) -> image adapter the worker injects
     # into the agent-runtime tool_wiring.WiringContext.
-    assert resolve_run_runtime_image("php-phpunit", "python-pytest") == (
-        "agent-runtime-php-phpunit:v1"
-    )
-    assert resolve_run_runtime_image(None, "python-pytest") == "agent-runtime-python-pytest:v1"
-    assert resolve_run_runtime_image(None, None) == "agent-runtime-python-pytest:v1"
+    # El default del PROYECTO gana al de la herramienta. Se afirma tambien la
+    # negativa: sin ella, un resolutor que devolviera siempre la misma imagen
+    # pasaria este test.
+    del_proyecto = resolve_run_runtime_image("php-phpunit", "python-pytest")
+    assert apunta_a(del_proyecto, "php-phpunit")
+    assert not apunta_a(del_proyecto, "python-pytest")
+
+    # Sin default de proyecto manda el de la herramienta; sin ninguno, el del
+    # catalogo.
+    assert apunta_a(resolve_run_runtime_image(None, "python-pytest"), "python-pytest")
+    assert apunta_a(resolve_run_runtime_image(None, None), "python-pytest")
 
 
 # ===========================================================================
@@ -169,7 +177,8 @@ def test_tool_dispatch_uses_project_runtime_image() -> None:
     # The registered DockerCommandTool's image is resolved from the PROJECT
     # stack, not the tool default.
     fn = registry._tools["run_pytest"]
-    assert fn.image == "agent-runtime-php-phpunit:v1"  # type: ignore[attr-defined]
+    assert apunta_a(fn.image, "php-phpunit")  # type: ignore[attr-defined]
+    assert not apunta_a(fn.image, "python-pytest")  # type: ignore[attr-defined]
 
 
 def test_tool_dispatch_falls_back_to_tool_default_without_project() -> None:
@@ -184,7 +193,7 @@ def test_tool_dispatch_falls_back_to_tool_default_without_project() -> None:
     )
     register_tool_specs(registry, [_run_tool_spec("run_pytest", "python-pytest")], ctx=ctx)
     fn = registry._tools["run_pytest"]
-    assert fn.image == "agent-runtime-python-pytest:v1"  # type: ignore[attr-defined]
+    assert apunta_a(fn.image, "python-pytest")  # type: ignore[attr-defined]
 
 
 def test_tool_dispatch_unknown_runtime_skips_tool_not_the_run() -> None:
