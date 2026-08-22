@@ -583,6 +583,12 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     # agentic-agents (the only path the sandbox runtime has to a provider).
     svc: dict[str, Any] = {
         "build": "./egress-proxy",
+        # `image:` explícito además del `build:`. Sin él la imagen se llama
+        # `<proyecto>-egress-proxy`, y el proyecto lo elige cada instalación: el mismo
+        # Dockerfile acabaría con un nombre distinto en cada host y ninguno
+        # coincidiría con el que construye y escanea CI. Guardado por
+        # tests/unit/test_infra_images_are_scanned.py.
+        "image": "agentic-platform/egress-proxy:v1",
         "container_name": "agentic-egress-proxy",
         "healthcheck": {
             "test": ["CMD-SHELL", TINYPROXY_HEALTHCHECK_CMD],
@@ -604,6 +610,9 @@ def _registry_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, An
     # worker lo conecta a los bridges efímeros per-task de los runtimes.
     svc: dict[str, Any] = {
         "build": "./registry-proxy",
+        # `image:` explícito por lo mismo que el egress-proxy: sin él el nombre
+        # lo pone el proyecto de cada instalación y no coincide con el de CI.
+        "image": "agentic-platform/registry-proxy:v1",
         "container_name": "agentic-registry-proxy",
         "healthcheck": {
             "test": ["CMD-SHELL", TINYPROXY_HEALTHCHECK_CMD],

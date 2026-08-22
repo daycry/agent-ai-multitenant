@@ -146,6 +146,24 @@ what the rest of the numbers in this repository are worth.
 
 ### Fixed
 
+- **The three infrastructure images were built under one name and run under
+  another, so nothing scanned them.** `docker/egress-proxy`, `docker/registry-proxy`
+  and `docker/whatsapp-neonize` had three builders producing three different names:
+  the canonical compose declared `build:` without `image:`, which makes compose name
+  the image after the _project_ (`agentic-platform-egress-proxy`); `ci.yml` tagged
+  `agentic-egress-proxy:v1`; and the compose the installer generates repeated the
+  canonical form under whatever project each installation chose. On the operator's
+  machine two of them coexisted. The damage was not the clutter: CI built its copy
+  and threw it away — these images are in neither `release-images.yml` (they are not
+  published) nor the template matrix (they are not templates) — so the `egress-proxy`,
+  the ONLY route to the internet for the container that runs untrusted code
+  (ADR 0019, Guiding Principle 2), had never passed through Trivy. The comment that
+  divides Trivy coverage across the three workflows nevertheless claimed, five lines
+  below the loop that builds them, that no image in the repository went unscanned.
+  All three actors now build `agentic-platform/<name>:v1`, `ci.yml` scans each one,
+  and the claim is held up by a guard that derives the list from the tree rather
+  than by that sentence.
+
 - **The fourteen sandbox images had never been published, and the failure was
   invisible.** `build-runtime-templates.yml` pushed to `ghcr.io/agentic-platform`
   while authenticating with the Actions `GITHUB_TOKEN`, which can only publish to
