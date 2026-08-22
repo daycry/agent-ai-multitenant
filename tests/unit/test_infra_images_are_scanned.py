@@ -97,8 +97,18 @@ def _scanned_image_refs() -> set[str]:
     return refs
 
 
-def _services_built_from(image: str) -> list[tuple[Path, str, dict[str, Any]]]:
-    """Servicios de cualquier compose cuyo `build` apunta a `docker/<image>/`."""
+def _servicios_que_usan(image: str) -> list[tuple[Path, str, dict[str, Any]]]:
+    """Servicios de cualquier compose que levantan la imagen `docker/<image>/`.
+
+    Cuentan las DOS formas, y que sean dos importa: al mirar sólo el `build:`,
+    esta función devolvía vacío para `whatsapp-neonize` —que el compose de
+    manuales declara con `image:` a secas, porque se construye a mano— y el test
+    se saltaba con un `skip` de aspecto inocente. Debajo del skip estaba
+    exactamente el defecto que persigue este fichero: compose lo levantaba como
+    `:dev` y CI lo construía como `:v1`. Una guarda que se salta el caso que no
+    encaja en su forma preferida no es una guarda con una excepción: es un
+    agujero con buena presentación.
+    """
     found: list[tuple[Path, str, dict[str, Any]]] = []
     for path in sorted(_DOCKER.glob("docker-compose*.yml")):
         parsed = yaml.load(path.read_text(encoding="utf-8"), Loader=ComposeLoader) or {}
@@ -107,7 +117,8 @@ def _services_built_from(image: str) -> list[tuple[Path, str, dict[str, Any]]]:
                 continue
             build = service.get("build")
             context = build if isinstance(build, str) else (build or {}).get("context", "")
-            if str(context).strip("./") == image:
+            declarada = str(service.get("image", ""))
+            if str(context).strip("./") == image or f"/{image}:" in declarada:
                 found.append((path, str(name), service))
     return found
 
@@ -199,7 +210,7 @@ def test_compose_pins_the_infra_image_name(image: str) -> None:
     Y entonces el nombre depende de `COMPOSE_PROJECT_NAME`, o sea que cambia
     entre el stack canónico y cada instalación del wizard.
     """
-    services = _services_built_from(image)
+    services = _servicios_que_usan(image)
     if not services:
         pytest.skip(f"`{image}` no lo construye ningún compose de docker/")
     for path, name, service in services:
