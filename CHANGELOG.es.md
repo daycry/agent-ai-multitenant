@@ -168,7 +168,13 @@ cuánto valen el resto de los números de este repositorio.
   workflows afirmaba igualmente, cinco líneas por debajo del bucle que las construye,
   que no quedaba ninguna imagen del repo sin escanear. Ahora los tres actores
   construyen `agentic-platform/<nombre>:v1`, `ci.yml` escanea cada una, y la
-  afirmación la sostiene una guarda que deriva la lista del árbol, no esa frase.
+  afirmación la sostiene una guarda que deriva la lista del árbol, no esa frase. El
+  primer escaneo lo demostró: `whatsapp-neonize` salió con **36 HIGH**, todos de la
+  familia `util-linux` de Debian 13 cuyo arreglo se repartió el 2026-08-19 entre las
+  otras cuatro imágenes afectadas — ésta se quedó fuera porque no estaba en la lista
+  de nadie. Su Dockerfile lo decía desde el 2026-08-14: «la que nadie mira es la que
+  se queda atrás». Arreglado con la capa de parcheo que las demás ya llevaban, no con
+  una entrada en `.trivyignore`: el fix estaba a un `apt-get upgrade` de distancia.
 
 - **Las catorce imágenes de sandbox nunca se habían publicado, y el fallo era
   invisible.** `build-runtime-templates.yml` empujaba a `ghcr.io/agentic-platform`

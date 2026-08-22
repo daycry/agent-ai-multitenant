@@ -162,7 +162,13 @@ what the rest of the numbers in this repository are worth.
   below the loop that builds them, that no image in the repository went unscanned.
   All three actors now build `agentic-platform/<name>:v1`, `ci.yml` scans each one,
   and the claim is held up by a guard that derives the list from the tree rather
-  than by that sentence.
+  than by that sentence. The very first scan proved the point: `whatsapp-neonize`
+  came back with **36 HIGH**, every one of them the Debian 13 `util-linux` family
+  whose fix had been distributed to the four other affected images on 2026-08-19 —
+  this one was left out because it was not on anybody's list. Its Dockerfile had
+  said as much since 2026-08-14: "the one nobody looks at is the one that falls
+  behind". Fixed with the patch layer the other images already carry, not with a
+  `.trivyignore` entry: the fix was one `apt-get upgrade` away.
 
 - **The fourteen sandbox images had never been published, and the failure was
   invisible.** `build-runtime-templates.yml` pushed to `ghcr.io/agentic-platform`
