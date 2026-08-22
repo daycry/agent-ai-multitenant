@@ -229,3 +229,56 @@ def test_the_installer_generates_the_same_image_name(image: str) -> None:
         f"un `image: {_PREFIX}{image}…`, así que cada instalación acaba con un "
         "nombre de imagen distinto para el mismo Dockerfile."
     )
+
+
+def _servicios_con_build_e_image() -> list[tuple[Path, str, dict[str, Any]]]:
+    """Servicios de cualquier compose que declaran `build:` Y `image:` a la vez."""
+    encontrados: list[tuple[Path, str, dict[str, Any]]] = []
+    for path in sorted(_DOCKER.glob("docker-compose*.yml")):
+        parsed = yaml.load(path.read_text(encoding="utf-8"), Loader=ComposeLoader) or {}
+        for name, service in (parsed.get("services") or {}).items():
+            if isinstance(service, dict) and service.get("build") and service.get("image"):
+                encontrados.append((path, str(name), service))
+    return encontrados
+
+
+_BUILD_E_IMAGE = _servicios_con_build_e_image()
+
+
+@pytest.mark.parametrize(
+    ("compose", "servicio"),
+    [(path.name, name) for path, name, _ in _BUILD_E_IMAGE],
+)
+def test_a_locally_built_service_is_never_pulled(compose: str, servicio: str) -> None:
+    """Poner `image:` junto a `build:` rompe `docker compose pull` si falta esto.
+
+    El defecto, medido el 2026-08-22 al introducir el `image:` de los proxies:
+    sin `image:`, `compose pull` los saltaba (`Skipped - No image to be pulled`,
+    rc=0); con `image:` y sin `pull_policy`, intenta bajarlos de Docker Hub —donde
+    no existen, porque se construyen aquí— y sale con `pull access denied` y rc=1.
+
+    No es un detalle cosmético: ese `pull` es el paso `PULL_IMAGES` del wizard de
+    instalación (`real_step_executor.py`) y el paso 2 del runbook de upgrade. La
+    instalación abortaba.
+
+    Vive en este fichero, y no con las otras guardas de compose, porque el defecto
+    lo introdujo la decisión que documenta este mismo fichero: quien llegue aquí a
+    entender por qué hay un `image:` encuentra al lado lo que ese `image:` obliga
+    a poner.
+    """
+    servicios = {(path.name, name): svc for path, name, svc in _BUILD_E_IMAGE}
+    politica = str(servicios[(compose, servicio)].get("pull_policy", ""))
+    assert politica == "build", (
+        f"{compose}:{servicio} declara `build:` e `image:` pero su pull_policy es "
+        f"{politica or '<ninguna>'}. `docker compose pull` intentará bajar esa "
+        "imagen de un registro donde no existe y saldrá con rc=1, que es lo que "
+        "ejecutan el instalador y el runbook de upgrade."
+    )
+
+
+def test_the_pull_policy_guard_is_not_vacuous() -> None:
+    """Si ningún servicio combina `build:` e `image:`, la guarda de arriba no mira nada."""
+    assert len(_BUILD_E_IMAGE) >= 2, (
+        f"solo se han encontrado {len(_BUILD_E_IMAGE)} servicios con `build:` e "
+        "`image:` a la vez. La guarda del pull_policy estaría pasando en vacío."
+    )
