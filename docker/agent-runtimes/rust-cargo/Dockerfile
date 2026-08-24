@@ -12,7 +12,7 @@
 # 0.10.38, rustls-webpki 0.102.6, aws-lc-sys 0.20.1, pyo3 0.20.0) y que sólo se
 # renuevan con el toolchain. De ahí que aquí no baste refrescar el digest de la
 # 1.79: el arreglo es la versión de Rust.
-FROM rust:1.97-slim@sha256:8e8cf8f7fd54a2d23d5a743b3a03f56e26b6c774276c33fa0595111704ebb15c AS runtime
+FROM rust:1.98-slim@sha256:cc0448b41c3b7b7fea44f5dc50eacba729a56db365b65b7bd5e8a82d5b3db078 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-rust-cargo" \
       org.opencontainers.image.version="v1" \

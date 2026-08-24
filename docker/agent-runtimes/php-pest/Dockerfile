@@ -23,7 +23,7 @@ FROM composer:2@sha256:4d71c3c2109c61d5415544264b59ad4087e4c5b7244481723664138fd
 # HIGH CON fix publicado en apt (el riesgo 3 de prod-11 en estado puro: el pin
 # sin refresco congela las CVE de la base). La versión de PHP no cambia — sube
 # el snapshot de Debian.
-FROM php:8.3-cli@sha256:f62df9916bc05ae3c5120b41a115938f22623b0c98c815cbe2c67bc73cec21ef AS runtime
+FROM php:8.5-cli@sha256:54d82ff9be6bd198145e90c917fc9b2e24230b42e52def8deb3554baf61c451a AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-php-pest" \
       org.opencontainers.image.version="v1" \

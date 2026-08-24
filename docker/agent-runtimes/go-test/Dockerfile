@@ -26,7 +26,7 @@
 # cambiara una línea de este fichero: es deriva de CVE —Go 1.26.6 se publicó
 # entremedias— y no una regresión nuestra, y por eso el arreglo es refrescar el
 # pin, no relajarlo.
-FROM golang:1.26-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS runtime
+FROM golang:1.27-bookworm@sha256:484ef6066fa69acb059fdfeda7ba2b8f7391f2ef6abc6f9b8411e669ebd56466 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-go-test" \
       org.opencontainers.image.version="v1" \
