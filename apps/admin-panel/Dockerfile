@@ -10,13 +10,23 @@
 #   docker build -f apps/admin-panel/Dockerfile -t agentic-platform/admin-panel:ci apps/admin-panel
 
 # ---- deps: install node_modules from the lockfile ----
-FROM node:20-slim AS deps
+# Base pineada por DIGEST y en Node 26, como el resto de imágenes de Node del
+# repo (installer, node-jest, node-vitest). Era la ÚNICA que seguía en
+# `node:20-slim` SIN pin, y las dos mitades importan: Node 20 salió de soporte
+# y su base dejó de recibir los parches de Debian —el Dockerfile de node-jest
+# lo dejó escrito el 2026-08-13, con libgnutls30 arrastrando dos CRITICAL—, y
+# un tag sin digest es móvil, que es justo lo que prod-11 vino a cerrar.
+#
+# Se sube al hilo del bump de `@types/node` 20 -> 26 (PR #96): subir los tipos
+# por encima del intérprete real es una incoherencia que `tsc` no delata,
+# porque valida contra la declaración de tipos y no contra el runtime.
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---- builder: compile the standalone server bundle ----
-FROM node:20-slim AS builder
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -30,7 +40,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
 RUN mkdir -p public && npm run build
 
 # ---- runner: minimal standalone server, non-root ----
-FROM node:20-slim AS runner
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS runner
 LABEL org.opencontainers.image.title="admin-panel" \
       org.opencontainers.image.description="agentic-platform Next.js admin/tenant UI." \
       org.opencontainers.image.source="https://github.com/daycry/agent-ai-multitenant"
