@@ -959,7 +959,14 @@ jobs:
           [ "$built" -eq 1 ] || echo "No agent-runtime Dockerfiles yet."
 
       # Infra images bajo docker/* que no son agent-runtimes
-      # (egress-proxy, …). task_02_35 / ADR 0019.
+      # (egress-proxy, registry-proxy, whatsapp-neonize). task_02_35 / ADR 0019.
+      #
+      # El tag es `agentic-platform/<name>:v1`, EL MISMO nombre que declara el
+      # `image:` de esos servicios en el compose canónico y en el que genera el
+      # instalador. Antes eran `agentic-<name>:v1` aquí y `<proyecto>-<name>` allí:
+      # tres nombres para un Dockerfile, con los que nadie podía responder «¿la
+      # imagen que corre es la que CI construyó?» — y en la máquina del operador
+      # convivían dos. Guardado por tests/unit/test_infra_images_are_scanned.py.
       - name: Build infra images under docker/
         run: |
           shopt -s nullglob
@@ -969,8 +976,8 @@ jobs:
               docker/agent-runtimes) continue ;;  # ya cubiertas arriba
             esac
             name="$(basename "$d")"
-            echo "::group::docker build agentic-$name:v1"
-            docker build -t "agentic-$name:v1" "$d"
+            echo "::group::docker build agentic-platform/$name:v1"
+            docker build -t "agentic-platform/$name:v1" "$d"
             echo "::endgroup::"
           done
 
@@ -989,8 +996,16 @@ jobs:
       #     pesada de la que heredan tres backends vía BASE_IMAGE, escaneada en
       #     cada push y no solo en release), `agent-runtime` y `browser-runtime`
       #     (que NO están en la matriz de templates y son justo los contenedores
-      #     donde corre el código no confiable, Principio Rector 2), y las dos
-      #     del installer.
+      #     donde corre el código no confiable, Principio Rector 2), las dos
+      #     del installer y las tres de `docker/*/` (los dos tinyproxy y el
+      #     sidecar neonize).
+      #
+      # Esas tres últimas faltaban hasta el 2026-08-22, y el reparto de arriba
+      # decía igualmente que no quedaba «ninguna imagen del repo sin escanear».
+      # Un comentario que afirma una cobertura que no existe es peor que no
+      # haberlo escrito: quien lo lea da el hueco por cerrado y no vuelve. La
+      # afirmación la sostiene ahora una guarda que deriva la lista del árbol
+      # (tests/unit/test_infra_images_are_scanned.py), no esta frase.
       #
       # `ignore-unfixed: true` + `.trivyignore` versionado evitan el riesgo 2
       # del plan (CVEs sin fix en las bases `-slim` bloqueando PRs ajenos).
@@ -1046,6 +1061,45 @@ jobs:
         with:
           scan-type: image
           image-ref: browser-runtime:v1
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      # Los tres Dockerfiles de `docker/*/` que NO son runtime templates. Se
+      # construyen en el paso «Build infra images under docker/» de más arriba y,
+      # hasta hoy, se tiraban sin que los mirase nadie: no se publican (fuera de
+      # release-images.yml) ni están en la matriz de templates. El egress-proxy es
+      # la única salida a internet del contenedor donde corre código no confiable.
+      # Guardado por tests/unit/test_infra_images_are_scanned.py.
+      - name: Trivy — egress-proxy (única salida de los agent-runtimes, ADR 0019)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agentic-platform/egress-proxy:v1
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      - name: Trivy — registry-proxy (salida allowlisted a los registries, ADR 0094)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agentic-platform/registry-proxy:v1
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      - name: Trivy — whatsapp-neonize (sidecar whatsmeow del canal WhatsApp, ADR 0109)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: agentic-platform/whatsapp-neonize:v1
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
