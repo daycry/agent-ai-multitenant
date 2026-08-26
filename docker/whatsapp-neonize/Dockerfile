@@ -13,6 +13,24 @@
 # justamente por eso: la que nadie mira es la que se queda atrás.
 FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65
 
+# Parches de seguridad del SO: la misma capa que llevan `agent-runtime` y los
+# cuatro templates parcheados el 2026-08-19. Faltaba aquí por la razón que da el
+# comentario de arriba — es la imagen que no escaneaba nadie, así que cuando el
+# gate cayó con la familia `util-linux` de Debian 13 y se repartió el arreglo,
+# ésta no estaba en la lista. Su primer escaneo (2026-08-22, al entrar en
+# `ci.yml` con las otras dos de `docker/*/`) devolvió 36 HIGH, todos de esa
+# familia.
+#
+# Refrescar el digest NO sirve, y está medido: el `python:3.12-slim` más reciente
+# sigue trayendo `util-linux 2.41-5`, con el fix `2.41.5-0+deb13u1` publicado en
+# `trixie-security`. El parche está en el repositorio de Debian, no en la imagen.
+# Ver docs/03-guides/gotchas/trivy-en-rojo-tres-causas-distintas.md (causa 2).
+# Tampoco se suprime en `.trivyignore`: eso es para vulnerabilidades CON fix que
+# se decide no aplicar, y este fix está a un `apt-get upgrade` de distancia.
+RUN apt-get update \
+ && apt-get -y upgrade \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

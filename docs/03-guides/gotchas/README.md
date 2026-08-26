@@ -60,6 +60,12 @@ el problema ya esté documentado.
   revienta, así que el paso 4 de la rotación no se podía reintentar. Ningún
   doble lo reproducía.
 
+- [compose-sin-image-bautiza-con-el-proyecto.md](./compose-sin-image-bautiza-con-el-proyecto.md)
+  — un servicio con `build:` y sin `image:` no se queda sin nombre: compose se
+  lo pone con el del proyecto, así que el mismo Dockerfile se llamaba distinto
+  en el stack, en CI y en cada instalación. Consecuencia silenciosa: Trivy no
+  escaneaba los dos tinyproxy y nadie veía que el que corría era de junio.
+
 - [image-build-recipes-that-bite.md](./image-build-recipes-that-bite.md)
   — las seis recetas que muerden en un sitio: **tres** imágenes cuelgan de
   `BASE_IMAGE` (workers, orchestrator y notification-dispatcher — la base `:ci`
