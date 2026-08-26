@@ -116,7 +116,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "26"
+          node-version: "24"
 
       # The root globs are not decoration: README.md and CHANGELOG.md are the
       # first documents a stranger reads, and until 2026-08-21 they were the only
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: steps.detect.outputs.has_node == 'true'
         with:
-          node-version: "26"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/admin-panel/package-lock.json
 
@@ -419,7 +419,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "26"
+          node-version: "24"
 
       # `--omit=dev`: la toolchain de build (eslint, playwright, vitest…) no se
       # despliega, y su ruido mataría el gate. `--audit-level=high`: sin umbral
@@ -1139,7 +1139,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: steps.detect.outputs.has_node == 'true'
         with:
-          node-version: "26"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/admin-panel/package-lock.json
 

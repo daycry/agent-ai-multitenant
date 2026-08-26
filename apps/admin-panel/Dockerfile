@@ -10,23 +10,33 @@
 #   docker build -f apps/admin-panel/Dockerfile -t agentic-platform/admin-panel:ci apps/admin-panel
 
 # ---- deps: install node_modules from the lockfile ----
-# Base pineada por DIGEST y en Node 26, como el resto de imágenes de Node del
-# repo (installer, node-jest, node-vitest). Era la ÚNICA que seguía en
-# `node:20-slim` SIN pin, y las dos mitades importan: Node 20 salió de soporte
-# y su base dejó de recibir los parches de Debian —el Dockerfile de node-jest
-# lo dejó escrito el 2026-08-13, con libgnutls30 arrastrando dos CRITICAL—, y
-# un tag sin digest es móvil, que es justo lo que prod-11 vino a cerrar.
+# Base pineada por DIGEST y en Node 24 LTS. Era la ÚNICA base de Node del repo
+# que seguía en `node:20-slim` y SIN pin, y las dos mitades importan: Node 20
+# salió de soporte y su base dejó de recibir los parches de Debian —el
+# Dockerfile de node-jest lo dejó escrito el 2026-08-13, con libgnutls30
+# arrastrando dos CRITICAL—, y un tag sin digest es móvil, que es justo lo que
+# prod-11 (task_digest_pin_11) vino a cerrar.
 #
-# Se sube al hilo del bump de `@types/node` 20 -> 26 (PR #96): subir los tipos
-# por encima del intérprete real es una incoherencia que `tsc` no delata,
-# porque valida contra la declaración de tipos y no contra el runtime.
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS deps
+# POR QUÉ 24 Y NO 26, que es donde van node-jest y node-vitest: se intentó 26 y
+# CI lo tumbó con tres tests de jsdom cayendo en
+# `Cannot read properties of undefined (reading 'getItem')` — `window.localStorage`
+# indefinido bajo vitest. Medido: los mismos tests pasan en local con Node 23.8
+# (14/14), o sea que el corte está entre la 23 y la 26, y encaja con que Node
+# haya pasado a exponer un `localStorage` nativo que se pisa con el de jsdom.
+# 24 es LTS, cierra el fin de soporte —que es el problema de seguridad real— y
+# no arrastra esa novedad. Subir a 26 pide arreglar antes esos tests, y eso es
+# trabajo con su propio PR, no un efecto colateral de pinear una base.
+#
+# Se sube al hilo del bump de `@types/node` (PR #96): subir los tipos por
+# encima del intérprete real es una incoherencia que `tsc` no delata, porque
+# valida contra la declaración de tipos y no contra el runtime.
+FROM node:24-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---- builder: compile the standalone server bundle ----
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS builder
+FROM node:24-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -40,7 +50,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
 RUN mkdir -p public && npm run build
 
 # ---- runner: minimal standalone server, non-root ----
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS runner
+FROM node:24-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS runner
 LABEL org.opencontainers.image.title="admin-panel" \
       org.opencontainers.image.description="agentic-platform Next.js admin/tenant UI." \
       org.opencontainers.image.source="https://github.com/daycry/agent-ai-multitenant"
