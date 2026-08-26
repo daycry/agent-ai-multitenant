@@ -205,6 +205,10 @@ class NotificationChannel(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteM
             " OR (scope IN ('tenant', 'user') AND tenant_id IS NOT NULL)",
             name="ck_notification_channels_scope_tenant",
         ),
+        CheckConstraint(
+            "NOT (secret_ref IS NOT NULL AND secret_encrypted IS NOT NULL)",
+            name="ck_notification_channels_single_secret",
+        ),
         # A given (scope, tenant, owner) holds at most one LIVE channel of
         # a name per type. NULLs (platform tenant_id, non-user owner) never
         # collide, so this dedupes cleanly per scope.
@@ -292,6 +296,16 @@ class NotificationPreference(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDele
 
     __tablename__ = "notification_preferences"
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración: desde Alembic 1.19 el
+        # autogenerate SÍ detecta los CHECK, así que uno que viva sólo en la
+        # migración se lee como esquema que el modelo no conoce y el siguiente
+        # `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint(
+            "(scope = 'platform' AND tenant_id IS NULL)"
+            " OR (scope IN ('tenant', 'user') AND tenant_id IS NOT NULL)",
+            name="ck_notification_preferences_scope_tenant",
+        ),
         # One preference per (scope, tenant, owner, event_type, channel_type).
         UniqueConstraint(
             "tenant_id",
@@ -476,6 +490,15 @@ class NotificationTemplate(
 
     __tablename__ = "notification_templates"
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración: desde Alembic 1.19 el
+        # autogenerate SÍ detecta los CHECK, así que uno que viva sólo en la
+        # migración se lee como esquema que el modelo no conoce y el siguiente
+        # `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint(
+            "locale IN ('es', 'en')",
+            name="ck_notification_templates_locale",
+        ),
         # At most one LIVE override per (tenant, event, channel, locale).
         # A soft-deleted row keeps its key free for a fresh override via the
         # partial unique index below rather than this constraint, so we scope
