@@ -152,6 +152,30 @@ cuánto valen el resto de los números de este repositorio.
 
 ### Arreglado
 
+- **Las tres imágenes de infraestructura se construían con un nombre y corrían con
+  otro, así que no las escaneaba nadie.** `docker/egress-proxy`,
+  `docker/registry-proxy` y `docker/whatsapp-neonize` tenían tres constructores que
+  producían tres nombres distintos: el compose canónico declaraba `build:` sin
+  `image:`, lo que hace que compose bautice la imagen con el nombre del _proyecto_
+  (`agentic-platform-egress-proxy`); `ci.yml` la etiquetaba `agentic-egress-proxy:v1`;
+  y el compose que genera el instalador repetía la forma del canónico con el proyecto
+  que eligiera cada instalación. En la máquina del operador convivían dos. El daño no
+  era el desorden: CI construía su copia y la tiraba —esas imágenes no están ni en
+  `release-images.yml` (no se publican) ni en la matriz de templates (no son
+  templates)—, así que el `egress-proxy`, la ÚNICA salida a internet del contenedor
+  donde corre código no confiable (ADR 0019, Principio Rector 2), no había pasado
+  nunca por Trivy. Y el comentario que reparte la cobertura de Trivy entre los tres
+  workflows afirmaba igualmente, cinco líneas por debajo del bucle que las construye,
+  que no quedaba ninguna imagen del repo sin escanear. Ahora los tres actores
+  construyen `agentic-platform/<nombre>:v1`, `ci.yml` escanea cada una, y la
+  afirmación la sostiene una guarda que deriva la lista del árbol, no esa frase. El
+  primer escaneo lo demostró: `whatsapp-neonize` salió con **36 HIGH**, todos de la
+  familia `util-linux` de Debian 13 cuyo arreglo se repartió el 2026-08-19 entre las
+  otras cuatro imágenes afectadas — ésta se quedó fuera porque no estaba en la lista
+  de nadie. Su Dockerfile lo decía desde el 2026-08-14: «la que nadie mira es la que
+  se queda atrás». Arreglado con la capa de parcheo que las demás ya llevaban, no con
+  una entrada en `.trivyignore`: el fix estaba a un `apt-get upgrade` de distancia.
+
 - **Las catorce imágenes de sandbox nunca se habían publicado, y el fallo era
   invisible.** `build-runtime-templates.yml` empujaba a `ghcr.io/agentic-platform`
   autenticándose con el `GITHUB_TOKEN` de Actions, que sólo puede publicar en el

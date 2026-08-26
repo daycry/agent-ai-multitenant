@@ -104,6 +104,42 @@ HIGH,CRITICAL` sale con **código 0**.
 > Dockerfiles, no haberlo entendido. Un gotcha documentado y no aplicado avisa dos
 > veces del mismo incendio.
 
+## Actualización 2026-08-22: el mismo incendio, por tercera vez, donde nadie miraba
+
+La moraleja de arriba —«un gotcha documentado y no aplicado avisa dos veces del
+mismo incendio»— se quedó corta. Avisó tres veces.
+
+El reparto del 2026-08-19 alcanzó a `python-pytest`, `node-jest`, `node-vitest`,
+`rust-cargo` y `api-server`. No alcanzó a `docker/whatsapp-neonize/`, y la razón no
+fue un descuido al copiar la lista: **esa imagen no la escaneaba ningún paso de
+Trivy**, así que no aparecía en ningún informe rojo del que sacar la lista. Su
+propio Dockerfile lo llevaba escrito desde el 2026-08-14:
+
+> la que nadie mira es la que se queda atrás.
+
+Al entrar en `ci.yml` con las otras dos de `docker/*/`
+(`tests/unit/test_infra_images_are_scanned.py`), su primer escaneo devolvió **36
+HIGH**, los 36 de la familia `util-linux` — exactamente los que las otras cinco
+habían cerrado tres días antes.
+
+Lo aprovechable para la próxima: cuando esta trampa obligue a repartir un arreglo
+entre varias imágenes, **la lista no se saca del informe de Trivy**, porque el
+informe sólo nombra lo que se escanea. Se saca del árbol — qué Dockerfiles comparten
+esa base—, que es la misma lección que la guarda de imágenes ya aplicaba por otro
+motivo:
+
+```console
+$ grep -rln "FROM python:3.12-slim" --include=Dockerfile apps/ docker/
+apps/api-server/Dockerfile
+apps/installer/backend/Dockerfile
+docker/agent-runtimes/agent-runtime/Dockerfile
+docker/agent-runtimes/python-pytest/Dockerfile
+docker/whatsapp-neonize/Dockerfile
+```
+
+Verificado en local antes de tocar CI, como la vez anterior: imagen reconstruida →
+`util-linux 2.41.5-0+deb13u1` en los nueve paquetes de la familia.
+
 ## Cómo distinguirlas en dos minutos
 
 Del informe de Trivy, mira la columna del paquete y pregúntate **de dónde salió**:

@@ -2,7 +2,7 @@
 # proveedores LLM (ADR 0019 / task_02_35). Tinyproxy con `FilterDefaultDeny`:
 # sólo los hosts del fichero `filter` salen al exterior.
 #
-# Construye solo: `docker build -t agentic-egress-proxy:v1 docker/egress-proxy/`.
+# Construye solo: `docker build -t agentic-platform/egress-proxy:v1 docker/egress-proxy/`.
 # En producción lo levanta docker-compose como servicio `egress-proxy`.
 # Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2
