@@ -35,14 +35,15 @@ RUN npm install -g npm@12.0.2 --no-fund --no-audit \
  && npm --version
 
 # Mismo parche que en node-jest / node-vitest, y por el mismo motivo: npm
-# publica su árbol de dependencias EMPAQUETADO, así que estas dos indirectas no
+# publica su árbol de dependencias EMPAQUETADO, así que estas TRES indirectas no
 # se mueven ni actualizando npm — la 12.0.2 sigue trayendo brace-expansion 5.0.7
-# (CVE-2026-14257, CVE-2026-69152) e ip-address 10.2.0 (CVE-2026-69192, SSRF).
+# (CVE-2026-14257, CVE-2026-69152), ip-address 10.2.0 (CVE-2026-69192, SSRF) y
+# node-tar 7.5.19 (CVE-2026-73566, DoS al desempaquetar), añadida el 2026-08-24.
 # Las tres tienen fix del autor: no es supresión, es aplicar el fix mientras npm
 # reempaqueta. Rango `^` para no degradar nada si el bundle ya viene por delante.
 RUN set -eux; \
     bundle="$(npm root -g)/npm/node_modules"; \
-    for spec in 'brace-expansion@^5.0.9' 'ip-address@^10.3.1'; do \
+    for spec in 'brace-expansion@^5.0.9' 'ip-address@^10.3.1' 'tar@^7.5.21'; do \
       name="${spec%@*}"; \
       tmp="$(mktemp -d)"; \
       npm pack "$spec" --pack-destination "$tmp" --silent >/dev/null; \

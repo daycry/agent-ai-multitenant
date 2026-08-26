@@ -37,20 +37,28 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # npm publica su árbol de dependencias EMPAQUETADO (`bundleDependencies`), así
-# que estas dos indirectas no se pueden actualizar con un `npm install -g npm@…`:
+# que estas TRES indirectas no se pueden actualizar con un `npm install -g npm@…`:
 # la 12.0.2 —la última publicada el 2026-08-13— sigue trayendo brace-expansion
-# 5.0.7 (CVE-2026-14257 y CVE-2026-69152) e ip-address 10.2.0 (CVE-2026-69192,
-# SSRF). Las tres tienen fix publicado por sus autores, así que NO caen bajo
+# 5.0.7 (CVE-2026-14257 y CVE-2026-69152), ip-address 10.2.0 (CVE-2026-69192,
+# SSRF) y node-tar 7.5.19 (CVE-2026-73566, DoS al desempaquetar un archivo).
+#
+# `tar` se añade el 2026-08-24, y su historia dice algo que conviene retener: la
+# cabecera de este fichero eligió `node:26-slim` PRECISAMENTE porque embarcaba
+# node-tar 7.5.19 en vez de la 7.5.16 con un CRITICAL abierto. O sea que la
+# versión que se eligió como la buena duró once días. Elegir la base por la
+# versión que empaqueta no evita esta capa: la aplaza.
+#
+# Las tres tienen fix publicado por sus autores, así que NO caen bajo
 # `ignore-unfixed` ni son candidatas a `.trivyignore`: lo que falta es que npm
 # reempaquete. Hasta entonces se sustituye el paquete dentro del bundle, que es
 # aplicar el arreglo, no silenciarlo. Rango `^` a propósito: si npm acaba
 # empaquetando una versión mayor, esto no la degrada.
 #
 # Retirar esta capa cuando `npm view npm dependencies` (transitivas incluidas)
-# traiga brace-expansion >=5.0.9 e ip-address >=10.3.1.
+# traiga brace-expansion >=5.0.9, ip-address >=10.3.1 y tar >=7.5.21.
 RUN set -eux; \
     bundle="$(npm root -g)/npm/node_modules"; \
-    for spec in 'brace-expansion@^5.0.9' 'ip-address@^10.3.1'; do \
+    for spec in 'brace-expansion@^5.0.9' 'ip-address@^10.3.1' 'tar@^7.5.21'; do \
       name="${spec%@*}"; \
       tmp="$(mktemp -d)"; \
       npm pack "$spec" --pack-destination "$tmp" --silent >/dev/null; \
