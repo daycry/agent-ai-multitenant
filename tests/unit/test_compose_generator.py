@@ -630,7 +630,7 @@ def test_images_are_pinned_never_latest() -> None:
     for name, svc in compose["services"].items():
         image = svc.get("image")
         if image is None:
-            # egress-proxy builds from a local context (no image tag).
+            # Un servicio sin `image:` se construye desde un contexto local.
             assert "build" in svc, name
             continue
         assert ":" in image, f"{name} image not tagged: {image}"
