@@ -60,6 +60,11 @@ el problema ya esté documentado.
   revienta, así que el paso 4 de la rotación no se podía reintentar. Ningún
   doble lo reproducía.
 
+- [una-base-mas-nueva-puede-traer-mas-cves.md](./una-base-mas-nueva-puede-traer-mas-cves.md)
+  — medido: `alpine:3.20` salía **limpio** y `alpine:3.24` con **2 HIGH**. Un
+  bump de base es el único PR donde lo esperado y lo medido divergen sin que
+  nada chirríe, porque «más nueva» y «con menos CVE» no son lo mismo.
+
 - [compose-sin-image-bautiza-con-el-proyecto.md](./compose-sin-image-bautiza-con-el-proyecto.md)
   — un servicio con `build:` y sin `image:` no se queda sin nombre: compose se
   lo pone con el del proyecto, así que el mismo Dockerfile se llamaba distinto

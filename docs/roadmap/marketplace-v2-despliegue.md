@@ -1,7 +1,7 @@
 ---
 plan_id: marketplace-v2-despliegue
 title: Marketplace v2 — despliegue en proyectos, publicación con revisión y versiones
-status: in_progress
+status: pending_human_validation
 blocking_plan: []
 started_at: 2026-07-31
 completed_at: null
