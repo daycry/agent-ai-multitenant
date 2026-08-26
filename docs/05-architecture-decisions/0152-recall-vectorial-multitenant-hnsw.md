@@ -1,6 +1,6 @@
 ---
 title: "ADR 0152: Recall vectorial multi-tenant — índices HNSW parciales, particionado o mitigación"
-status: proposed
+status: accepted
 date: 2026-08-01
 deciders: [operador]
 relates_to: [0151, 0028]
@@ -11,11 +11,24 @@ docs_language: es
 
 # ADR 0152: Recall vectorial multi-tenant
 
-> **Estado: `proposed`.** La mitigación (opción A) **ya está entregada y en
-> producción** desde task_prod13_12; lo que este ADR pide decidir es si se
-> compra además la solución estructural, y cuál. No es urgente: es una decisión
-> que conviene tomar **antes** de que el corpus sea grande, porque las dos
-> opciones estructurales son mucho más caras sobre una tabla llena.
+> **Estado: `accepted` (2026-08-26).** **Opción A con disparador medible hacia
+> C**, tal cual la recomendaba este documento. La mitigación ya estaba entregada
+> y en producción desde task_prod13_12; lo que faltaba para poder DECIDIR era el
+> instrumento, y el propio ADR lo decía: «sin ella el disparador de arriba no es
+> comprobable y este ADR se queda en literatura».
+>
+> Ese instrumento ya existe: `apps/workers/src/workers/corpus_distribution.py`
+> publica `agentic_kb_chunks_total`, `agentic_kb_tenants_with_chunks` y
+> `agentic_kb_largest_tenant_share`. Con eso el disparador —cuota del mayor
+>
+> > 0,6 **Y** corpus > 200.000— pasa de prosa a dos series que se pueden mirar.
+>
+> Se descarta **B** por lo que dice §«Recomendación»: mete DDL en el camino de
+> alta de un tenant y su coste operativo no deja de crecer.
+>
+> **Lo que este ADR NO decide y sigue abierto:** cuándo se ejecuta la métrica
+> (queda por cablear al beat) y si el disparador debe además alertar. Aceptarlo
+> no compra la partición: compra poder ver el día en que toque comprarla.
 
 ## Contexto: un índice global sobre una tabla multi-tenant
 
