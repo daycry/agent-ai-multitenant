@@ -3,7 +3,7 @@
 # del fichero `filter` salen al exterior. Segunda instancia, disjunta del
 # `egress-proxy` LLM (el agent-runtime NUNCA usa este proxy).
 #
-# Construye solo: `docker build -t agentic-registry-proxy:v1 docker/registry-proxy/`.
+# Construye solo: `docker build -t agentic-platform/registry-proxy:v1 docker/registry-proxy/`.
 # En producción lo levanta docker-compose como servicio `registry-proxy`.
 # Base pineada por DIGEST (prod-11 task_digest_pin_11, hallazgo gap5-3): un tag
 # de imagen es mutable y esta es una de las imagenes donde el Principio Rector 2

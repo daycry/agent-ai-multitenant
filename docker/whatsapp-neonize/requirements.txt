@@ -1,4 +1,14 @@
 # Sidecar neonize (ADR 0109). Versiones pineadas — actualizar deliberadamente.
-fastapi==0.115.6
-uvicorn==0.32.1
+#
+# 2026-08-22: `fastapi` sube de 0.115.6 y `uvicorn` de 0.32.1 a las mismas
+# versiones que ya corre la api-server, porque el primer escaneo de Trivy sobre
+# esta imagen (entró en `ci.yml` ese día, ver el Dockerfile) sacó tres HIGH de
+# `starlette 0.41.3` — la que arrastraba fastapi 0.115.6: CVE-2025-62727 (DoS por
+# cabecera Range), CVE-2026-48818 (SSRF y robo de credenciales NTLM por rutas UNC
+# en StaticFiles) y CVE-2026-54283 (los límites de `request.form()` ignorados en
+# silencio). El fix acumulado está en starlette 1.3.1, que fastapi 0.115.x no
+# admite: su rango es `<0.42`. Alinear con la api-server en vez de elegir una
+# versión propia es deliberado — esa combinación ya la ejercita el stack entero.
+fastapi==0.141.1
+uvicorn==0.52.4
 neonize==0.3.9

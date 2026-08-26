@@ -38,6 +38,8 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.unit._compose_yaml import ComposeLoader
+
 pytestmark = pytest.mark.unit
 
 _DOCKER = Path(__file__).resolve().parents[2] / "docker"
@@ -110,30 +112,9 @@ _DOCUMENTED_STACKS: dict[str, tuple[str, ...]] = {
 }
 
 
-class _ComposeLoader(yaml.SafeLoader):
-    """`SafeLoader` que no se atraganta con las etiquetas propias de compose.
-
-    Los overlays usan `!reset` y `!override` (compose ≥ 2.24) para sustituir una
-    lista en vez de fusionarla — p. ej. `volumes: !reset` en `dev.yml`.
-    `yaml.safe_load` a secas revienta con `could not determine a constructor`, y
-    ese error se lee como «el fichero está roto» cuando el fichero está bien.
-    """
-
-
-def _ignore_unknown_tag(loader: yaml.Loader, suffix: str, node: yaml.Node) -> Any:
-    if isinstance(node, yaml.SequenceNode):
-        return loader.construct_sequence(node)
-    if isinstance(node, yaml.MappingNode):
-        return loader.construct_mapping(node)
-    return loader.construct_scalar(node)
-
-
-_ComposeLoader.add_multi_constructor("!", _ignore_unknown_tag)
-
-
 def _services(file_name: str) -> dict[str, dict[str, Any]]:
     text = (_DOCKER / file_name).read_text(encoding="utf-8")
-    raw = yaml.load(text, Loader=_ComposeLoader) or {}
+    raw = yaml.load(text, Loader=ComposeLoader) or {}
     services = raw.get("services") or {}
     return {
         name: (body or {})

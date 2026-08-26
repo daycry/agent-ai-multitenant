@@ -404,6 +404,18 @@ services:
   # ---------------------------------------------------------------------------
   egress-proxy:
     build: ./egress-proxy
+    # `image:` explícito y NO sólo `build:`: sin él Docker bautiza la imagen con
+    # el nombre del proyecto de compose, o sea que el mismo Dockerfile acaba
+    # llamándose distinto en el stack canónico, en CI y en cada instalación del
+    # wizard. Con tres nombres nadie puede responder «¿la imagen que corre es la
+    # que CI construyó?». Guardado por tests/unit/test_infra_images_are_scanned.py.
+    image: ${IMAGE_EGRESS_PROXY:-agentic-platform/egress-proxy:v1}
+    # `pull_policy: build` no es decoración: va con el `image:` de arriba. Al
+    # declarar un `image:`, `docker compose pull` deja de saltarse el servicio e
+    # intenta bajarlo de Docker Hub, donde no existe. Medido: rc=1 «pull access
+    # denied» sin esta línea, rc=0 «Skipped» con ella. Eso rompía el paso 2 del
+    # runbook de upgrade y el PULL_IMAGES del instalador.
+    pull_policy: build
     container_name: agentic-egress-proxy
     # prod-08 / deploy-9: el test terminaba en `|| true`, así que SIEMPRE
     # devolvía 0 y el contenedor salía `healthy` con tinyproxy muerto. Como
@@ -453,6 +465,10 @@ services:
   # ---------------------------------------------------------------------------
   registry-proxy:
     build: ./registry-proxy
+    # `image:` explícito por lo mismo que el egress-proxy: sin él el nombre lo
+    # pone el proyecto de compose y deja de coincidir con el que construye CI.
+    image: ${IMAGE_REGISTRY_PROXY:-agentic-platform/registry-proxy:v1}
+    pull_policy: build # mismo motivo que el egress-proxy
     container_name: agentic-registry-proxy
     # prod-08 / deploy-9: mismo `|| true` que el egress-proxy (misma imagen
     # tinyproxy, mismo copy-paste). Aquí un proxy muerto se manifiesta como

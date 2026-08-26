@@ -230,3 +230,117 @@ la implementación.
   restore por tenant. Pide su propio plan.
 - **C**: cerrar `restore_reconcile` con umbrales acordados y añadir al acta del
   drill una sección de divergencias esperadas. Estimación: 0,5 días.
+
+## Reapertura (2026-08-22): la opción A está firmada y NO está en vigor
+
+Medido sobre el stack vivo, no deducido del código. **El quiesce no ha degradado
+nunca: nunca ha llegado a intentarse.** Los cuatro bundles que hay en disco,
+incluido el de esta misma mañana, dicen lo mismo:
+
+```console
+$ python -c "…leer manifest.json de cada bundle…"
+20260818T103216Z -> {"duration_s": 0.0, "error": "el compose /data/agent-platform/docker-compose.yml no existe…"}
+20260819T073852Z -> {"duration_s": 0.0, "error": "…"}
+20260821T030001Z -> {"duration_s": 0.0, "error": "…"}
+20260822T092750Z -> {"duration_s": 0.0, "error": "…"}
+```
+
+`duration_s: 0.0` en los cuatro. El módulo aborta en su primera guarda,
+`_missing_compose_file()`, antes de tocar nada.
+
+### Por qué esto no es un fallo de configuración
+
+La lectura fácil es «falta la variable»: `WORKERS_RESTORE_COMPOSE_FILE` no está
+definida en el contenedor y el default apunta a
+`/data/agent-platform/docker-compose.yml`, que ahí no existe. Pero definirla no
+arregla nada, y conviene decirlo antes de que alguien pierda una tarde:
+
+```console
+$ docker exec agentic-platform-workers-backup-1 sh -c "command -v docker || echo 'NO docker'; ls /var/run/docker.sock || echo 'NO socket'"
+NO docker
+NO socket
+```
+
+`ComposeQuiescer` construye una línea de órdenes `docker compose …` y la ejecuta.
+En el contenedor de la lane de backup **no hay binario `docker`, ni plugin
+`compose`, ni socket, ni ningún fichero compose**. Arreglar la variable sólo
+cambiaría el mensaje de error: de «no existe el compose» a «no existe docker».
+
+El desajuste es de diseño, no de despliegue: **es código que pilota compose desde
+dentro del compose que pilota**. El propio repo ya lo tenía escrito para la
+operación simétrica —`scripts/restore.sh` dice que ejecutar la restauración desde
+dentro de lo que se va a parar es frágil por construcción— y el backup hace
+exactamente eso.
+
+### Lo que esto significa según la cadena de precedencia
+
+`CLAUDE.md` §«Qué manda cuando dos documentos se contradicen» es explícito: _un
+comportamiento vivo que contradice un ADR aceptado es una regresión, no una
+decisión_. El operador firmó la opción A el 2026-08-01; el sistema ejecuta la C
+todas las noches. Por eso esto se reabre en lugar de documentarse como estado
+aceptado.
+
+Con un matiz que hay que conceder, porque el ADR no se está incumpliendo en la
+letra: el bundle **existe**, el acta **registra** `partial`, y nada se queda
+parado a las 03:00. La degradación funciona. Lo que es falso es la premisa: se
+diseñó como la excepción rara —«si un worker no atiende la señal»— y es la regla
+invariable. Y el acta nombra una variable de entorno, lo que se lee como «este
+host está mal configurado» y no como «esto no puede funcionar en esta
+arquitectura», que es lo que pasa.
+
+### Dos defectos menores que aparecieron al medir
+
+1. **La red de seguridad protege a un servicio que no existe.**
+   `backup_quiesce_never_stop` trae por defecto `["workers-privileged"]`, y las
+   lanes reales son `workers`, `workers-aux`, `workers-marketplace` y
+   `workers-backup`. El daño hoy es nulo porque `workers-backup` tampoco está en
+   `backup_quiesce_services`, así que nadie la pararía; pero si alguien la añade
+   —que es justo el caso contra el que la guarda existe— la guarda no la atrapa.
+2. **La métrica `agentic_backup_quiesce_degraded` se publica y no la lee ninguna
+   regla de Prometheus.** Cuatro noches degradando sin una alerta es coherente
+   con eso.
+
+### La salida, y por qué es más corta de lo que parece
+
+No hace falta inventar nada: **el `watchdog` ya pilota contenedores desde dentro
+del stack**, y lo hace por la vía que el [ADR 0060](0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)
+bendijo — el SDK de Docker contra `docker-socket-proxy`, nunca el socket crudo.
+Y ese proxy ya permite lo que el quiesce necesita:
+
+```yaml
+CONTAINERS: "1"
+POST: "1"
+```
+
+Así que la opción A es implementable sin tocar la postura de seguridad, sin
+binario `docker` y sin fichero compose: parar por **etiquetas de compose**
+(`com.docker.compose.project` + `.service`), que es como el watchdog resuelve
+cada servicio. Lo que falta, medido:
+
+| Pieza                                                              | Estado hoy                                                      |
+| ------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `ComposeQuiescer` → un `SdkQuiescer` que hable con el socket proxy | por escribir                                                    |
+| La lane del backup en la red `agentic-docker`                      | **no está** — `workers` y `workers-aux` sí, `workers-backup` no |
+| Corregir `never_stop` a la lane real                               | una línea                                                       |
+| Una regla de Prometheus sobre `agentic_backup_quiesce_degraded`    | por escribir                                                    |
+
+### Lo que hay que decidir, que no es técnico
+
+La parte técnica está clara y no necesita al operador. Lo que sí lo necesita es
+esto: **implementarlo hace que el backup nocturno pase a parar servicios de
+verdad**, hasta 180 s cada madrugada, cosa que hoy no ocurre y no ha ocurrido
+nunca. Es exactamente lo que la opción A dice, y aun así es un cambio de
+comportamiento en un sistema vivo que hasta ahora no lo hacía. Tres caminos:
+
+- **A-real** — implementar el quiesce por SDK. El backup pasa a ser coherente y a
+  costar una parada corta de madrugada. Es lo firmado.
+- **A-diferida** — dejarlo como está pero **decirlo**: que el acta distinga «no se
+  pudo cumplir» de «no está implementado», y que la alerta exista. No arregla la
+  coherencia; sí acaba con el acta que induce a error.
+- **C-explícita** — reconocer que en un despliegue de una sola máquina con el
+  backup dentro del propio compose, A no compensa, y cambiar la decisión del ADR
+  con su motivo. Sería una decisión, no una regresión, y cerraría la
+  contradicción por el otro lado.
+
+Ninguno de los tres se ejecuta sin firma, porque los tres cambian lo que hace el
+stack cada noche o lo que el ADR dice.
