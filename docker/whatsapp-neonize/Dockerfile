@@ -29,6 +29,15 @@ FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a036425
 # se decide no aplicar, y este fix está a un `apt-get upgrade` de distancia.
 RUN apt-get update \
  && apt-get -y upgrade \
+# `libmagic1` va DENTRO de este RUN y no en uno propio: los índices de apt los
+# borra la última línea, así que un `apt-get install` posterior no encontraría
+# nada que instalar. Falta desde el primer día y el síntoma no era un fallo de
+# arranque sino un 503 permanente: `neonize` arrastra `python-magic`, cuyo
+# import de nivel de módulo lanza «failed to find libmagic», el `_connect()` de
+# app.py se lo traga por diseño («arranca degradado») y /send responde 503 para
+# siempre. El contenedor se veía sano. Medido: `git log -S libmagic` sobre este
+# directorio sale vacío, o sea que nunca estuvo.
+ && apt-get install -y --no-install-recommends libmagic1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
