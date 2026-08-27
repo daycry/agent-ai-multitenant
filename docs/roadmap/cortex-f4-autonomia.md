@@ -3,7 +3,7 @@ title: "Córtex F4 — Curiosidad y pensamiento de fondo (bucles cognitivos aut�
 status: pending_human_validation
 blocking_plan:
   - "docs/roadmap/cortex-system-owner.md (F1, F2, F3) — IMPLEMENTADAS"
-  - "ADR 0078 (bucles cognitivos de fondo) — proposed → requiere accepted-f4"
+  - "ADR 0078 (bucles cognitivos de fondo) — accepted desde el 2026-07-12"
   - "ADR 0076 (razonamiento profundo + egress confiable vía WebSearch del SDK)"
   - "ADR 0075 (drives homeostáticos)"
   - "ADR 0021 (catálogo LLM cerrado), ADR 0070 (reasoning_effort)"
