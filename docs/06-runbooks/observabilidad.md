@@ -366,7 +366,9 @@ Lo que **falta**, en orden:
 > **Ya no hay un paso «replicar el montaje en el instalador».** Lo tenía este
 > runbook porque `compose_generator._alertmanager_service` no declaraba el
 > volumen y un despliegue **generado** conservaba el hueco. Se replicó el
-> 2026-08-12 (`- ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`),
+> 2026-08-12 (hoy `- ./stack/monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro`,
+> tras mover los auxiliares a `stack/` el 2026-08-27 para que la instalación
+> pueda escribirlos donde el compose los busca),
 > así que el compose del instalador trae el buzón igual que el canónico. Lo
 > guarda `tests/unit/test_compose_generator.py -k alertmanager`.
 

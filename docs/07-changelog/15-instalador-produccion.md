@@ -7,6 +7,28 @@ docs_language: es
 
 # Plan 15 — Instalador, Endurecimiento y Producción
 
+> **Fe de erratas (2026-08-27) — se corrige aquí, no se reescribe abajo.** Este
+> changelog afirma que «el mismo backend sirve a la UI del wizard y al CLI
+> desatendido, de modo que ambos caminos corren la **misma** orquestación». Eso
+> era el diseño; **no llegó a ser el código**. El wizard HTTP cablea
+> `FakeStepExecutor` por defecto (`installer_backend.main`): no aprovisiona nada
+> y las credenciales que revela no son reales. El camino real es y fue el **CLI**
+> (`scripts/install.sh --config`), que además aborta con código 4 (`PROVISION`)
+> si detecta un seam de simulación. Cablear el wizard es el follow-up **prod-09**
+> (ya recogido en
+> [prod-01-despliegue-ejecutable.md](prod-01-despliegue-ejecutable.md)).
+>
+> Con la misma honestidad: el camino real tampoco termina hoy en una máquina
+> limpia —no hay imágenes publicadas
+> ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
+> La otra avería que se anotó aquí —las **rutas relativas** del compose generado,
+> que no resolvían donde el compose se escribe
+> ([ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md))—
+> quedó **reparada el 2026-08-27**: los auxiliares viajan dentro del instalador y
+> se escriben bajo `stack/`. El cuerpo de abajo se conserva como registro de lo que
+> se entregó; para el estado vivo, el runbook
+> [01-installation-from-scratch.md](../06-runbooks/01-installation-from-scratch.md).
+
 ## Resumen
 
 El sistema funcional ya estaba. Este plan lo hace **instalable por terceros sin

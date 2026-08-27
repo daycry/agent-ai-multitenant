@@ -48,7 +48,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import yaml
 
-from installer_backend.compose_generator import enabled_providers
+from installer_backend.compose_generator import STACK_ASSETS_DIR_NAME, enabled_providers
 from installer_backend.config import Environment, InstallerConfig
 
 # Dev-default markers the prod secret guard rejects (mirror of
@@ -551,6 +551,45 @@ def build_data_tree_plan(
             continue
         plan.append(DataDir(path=f"{root}/{sub}", mode=mode, description=desc))
     return plan
+
+
+def build_stack_dirs_plan(compose_dir: str, *, monitoring: bool = False) -> list[DataDir]:
+    """Directorios del subárbol ``stack/`` que ningún fichero trae consigo.
+
+    Casi todo ``stack/`` aparece solo: el ``EnvFileWriter`` hace
+    ``mkdir(parents=True)`` al escribir cada auxiliar, así que sus directorios
+    existen porque existe su contenido. La excepción es un bind que monta un
+    directorio **vacío**: no hay fichero que lo cree, y si no está, Docker lo crea
+    él —como ``root``— con el contenedor corriendo como usuario sin privilegios y
+    sin poder leerlo. Es el mismo motivo por el que el equivalente del stack de
+    desarrollo se versiona con un ``.gitignore`` dentro
+    (``docker/monitoring/alertmanager/secrets/.gitignore``).
+
+    Cuelga del **directorio del compose**, no de ``storage.data_root``: es donde
+    resuelven los ``./stack/…`` del compose generado y donde se escriben los demás
+    auxiliares. Hoy el instalador los hace coincidir (``cli.py`` →
+    ``compose_dir = config.storage.data_root``), y precisamente por eso conviene
+    que este cálculo no dependa de que sigan coincidiendo.
+    """
+
+    if not monitoring:
+        return []
+    stack = f"{compose_dir}/{STACK_ASSETS_DIR_NAME}"
+    return [
+        DataDir(
+            # 0o755 y no 0o700 pese a ser un buzón de credenciales: el fichero
+            # que el operador deja aquí (`slack_api_url`) lo lee Alertmanager
+            # DESDE DENTRO del contenedor y como usuario sin privilegios. Un
+            # directorio que él no puede atravesar rompe el receiver de respaldo
+            # EN SILENCIO —`api_url_file` se lee al notificar, no al cargar la
+            # config— y precisamente en el escenario para el que existe. El
+            # secreto lo protege el modo del fichero, no el del buzón; lo que sí
+            # se mantiene es que no sea escribible por otros.
+            path=f"{stack}/monitoring/alertmanager/secrets",
+            mode=0o755,
+            description="Alertmanager fallback-receiver credential mailbox (operator-filled).",
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------

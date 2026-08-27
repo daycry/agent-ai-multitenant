@@ -1,0 +1,58 @@
+# Allowlist de hosts a los que los RUNTIME-TEMPLATES pueden llegar a través del
+# `registry-proxy` (tinyproxy, FilterDefaultDeny Yes) para resolver dependencias
+# (ADR 0094). Un regex ERE por línea, anclado: el campo que evalúa tinyproxy con
+# `FilterURLs Off` es el `Host:`/CONNECT (sin esquema, sin path).
+#
+# Superficie DISJUNTA del egress-proxy LLM (D3): aquí NO hay endpoints LLM y el
+# agent-runtime NUNCA usa este proxy. Solo registries PÚBLICOS + git hosts (D4);
+# privados con credenciales = iteración posterior.
+
+# --- PHP / composer → Packagist + dist archives -----------------------
+^packagist\.org$
+^repo\.packagist\.org$
+^getcomposer\.org$
+
+# --- Python / pip → PyPI ----------------------------------------------
+^pypi\.org$
+^files\.pythonhosted\.org$
+
+# --- Node / npm -------------------------------------------------------
+^registry\.npmjs\.org$
+^([a-z0-9-]+\.)*npmjs\.org$
+
+# --- Go modules → proxy/sum + zips en GCS -----------------------------
+^proxy\.golang\.org$
+^sum\.golang\.org$
+# Amplio (cualquier bucket público de GCS) pero exigido por los zips de módulo
+# que sirve proxy.golang.org. Riesgo residual aceptable de superficie-registry.
+^storage\.googleapis\.com$
+
+# --- Java → Maven Central + Gradle ------------------------------------
+^repo\.maven\.apache\.org$
+^repo1\.maven\.org$
+^plugins\.gradle\.org$
+^services\.gradle\.org$
+
+# --- Ruby → RubyGems --------------------------------------------------
+^rubygems\.org$
+^index\.rubygems\.org$
+
+# --- Rust → crates.io -------------------------------------------------
+^crates\.io$
+^static\.crates\.io$
+^index\.crates\.io$
+
+# --- .NET → NuGet -----------------------------------------------------
+^api\.nuget\.org$
+^([a-z0-9-]+\.)*nuget\.org$
+
+# --- Git hosts (deps git por HTTPS + dist/archive CDNs) ---------------
+^github\.com$
+^codeload\.github\.com$
+# composer/go descargan zipballs de dist vía la API: api.github.com/repos/.../zipball/<ref>
+# (redirige a codeload). Sin esto, `composer install` de deps de GitHub da CONNECT 403.
+^api\.github\.com$
+^([a-z0-9-]+\.)*githubusercontent\.com$
+^gitlab\.com$
+^dev\.azure\.com$
+^bitbucket\.org$

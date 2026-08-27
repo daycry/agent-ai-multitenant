@@ -1,0 +1,28 @@
+# Grafana dashboard provider (Plan 12 — Backup/Restore, task_12_15).
+#
+# Mounted read-only into the grafana container by
+# docker/docker-compose.monitoring.yml at
+# /etc/grafana/provisioning/dashboards/. It tells Grafana to load every
+# dashboard JSON found under `options.path` and keep it in sync with the file
+# on disk (file is the source of truth — UI edits are not persisted because
+# the dashboard files are mounted read-only).
+#
+# The host-overview dashboard JSON (uid: host-overview) lives in
+# ./dashboards/host-overview.json and is mounted at the path below.
+
+apiVersion: 1
+
+providers:
+  - name: agentic-host
+    orgId: 1
+    folder: "Host & Containers"
+    type: file
+    # Do not let UI deletes remove the provisioned file from disk.
+    disableDeletion: true
+    # Re-read changed files every 30s.
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      # Directory the dashboard JSON files are mounted into (see compose).
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

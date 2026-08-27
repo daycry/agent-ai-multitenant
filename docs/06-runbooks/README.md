@@ -18,7 +18,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 
 | Runbook                                                              | Cuándo usarlo                                                                                                                |
 | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| [01-installation-from-scratch.md](./01-installation-from-scratch.md) | Instalar desde cero en una máquina virgen (wizard de 9 pasos o CLI desatendido)                                              |
+| [01-installation-from-scratch.md](./01-installation-from-scratch.md) | Instalar desde cero en una máquina virgen. El **CLI desatendido** es el camino real; el wizard de 9 pasos hoy **simula**     |
 | [02-troubleshooting.md](./02-troubleshooting.md)                     | Diagnóstico y fix de fallos frecuentes tras instalar o en operación                                                          |
 | [03-system-upgrade.md](./03-system-upgrade.md)                       | Actualizar una instalación en marcha a una versión nueva (imágenes + esquema)                                                |
 | [04-disaster-recovery.md](./04-disaster-recovery.md)                 | DR: punto de entrada canónico para restore completo o selectivo por tenant                                                   |

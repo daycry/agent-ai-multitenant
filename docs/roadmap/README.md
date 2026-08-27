@@ -220,6 +220,7 @@ Informes previos a un plan: exploran el problema y proponen opciones. No llevan 
 | [2026-08-10-analisis-claude-code-agent-monitor.md](./2026-08-10-analisis-claude-code-agent-monitor.md)                         | Qué ideas de `hoangsonww/Claude-Code-Agent-Monitor` nos faltan: 6 sobreviven, 13 se descartan por tenerlas ya y 7 por no aplicar.                                       |
 | [2026-08-12-analisis-agentic-workflow.md](./2026-08-12-analisis-agentic-workflow.md)                                           | Qué ideas de `AgentShekel/agentic-workflow` nos faltan. Su §4 lleva las **seis decisiones del operador** del 2026-08-12, que originan el plan `gov-01`.                 |
 | [2026-08-27-comparativa-autogpt.md](./2026-08-27-comparativa-autogpt.md)                                                       | Comparativa con AutoGPT: de ~35 candidatos, 13 refutados con fichero:línea y 14 que no aplican. Casi nada suyo nos sirve; el valor fue destapar siete defectos propios. |
+| [2026-08-27-coste-de-kubernetes.md](./2026-08-27-coste-de-kubernetes.md)                                                       | Qué costaría migrar a Kubernetes: 175-275 días-persona, de los que sólo un cuarto es traducción. Once averías no obvias, 14 ADR a reabrir y cero demanda registrada.    |
 
 ## Cola de validación humana
 

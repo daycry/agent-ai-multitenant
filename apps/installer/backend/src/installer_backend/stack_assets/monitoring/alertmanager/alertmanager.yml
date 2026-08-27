@@ -1,0 +1,127 @@
+# Alertmanager configuration (Plan 12 — Backup/Restore, task_12_14).
+#
+# Mounted read-only into the alertmanager container by
+# docker/docker-compose.monitoring.yml. Prometheus pushes firing alerts here
+# (the `alerting.alertmanagers: [alertmanager:9093]` target in
+# ../prometheus/prometheus.yml); Alertmanager dedups/groups/throttles them and
+# delivers to the platform notifier.
+#
+# REUSE THE PLATFORM NOTIFIER (task_12_14): rather than wiring SMTP/Slack here
+# (a second, divergent notification path), the default receiver is a
+# `webhook_config` that POSTs the Alertmanager payload to the platform's
+# notification ingest (the api-server, on the in-network agentic-net DNS name).
+# The api-server turns it into a Plan 10 notification to the System Admin
+# channel and fans it out over the configured channels.
+#
+# NOTE: Alertmanager does NOT expand ${ENV} placeholders in its config file
+# (unlike docker-compose), so the receiver URL below is a CONCRETE in-network
+# default. To point it elsewhere, override this mounted file (bind-mount your
+# own alertmanager.yml) — the compose service carries
+# ALERTMANAGER_NOTIFIER_WEBHOOK_URL purely as the documented seam for an
+# entrypoint that templates this file (envsubst), not consumed by Alertmanager
+# directly. The alert still fires + is visible in the Alertmanager UI /
+# Prometheus regardless of where it is delivered.
+
+global:
+  # If an alert stops firing, Alertmanager waits this long before declaring it
+  # resolved (covers a scrape gap without a flapping resolve/refire).
+  resolve_timeout: 5m
+
+# ---------------------------------------------------------------------------
+# Routing tree. Everything funnels to the platform-notifier receiver; the two
+# critical classes (backup failures, OOM kills) get a tighter repeat window so
+# the System Admin is reminded more often until acknowledged.
+# ---------------------------------------------------------------------------
+route:
+  receiver: platform-notifier
+  # Group alerts by the dimensions an operator reasons about together so one
+  # incident is one notification, not one-per-mountpoint.
+  group_by: ["alertname", "component", "instance"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Backup + OOM are page-worthy: remind hourly, not every 4h.
+    - matchers:
+        - severity = "critical"
+      receiver: platform-notifier
+      repeat_interval: 1h
+      # `continue: true` es la pieza clave del respaldo (prod-08
+      # task_prod08_alert_fallback_02). El árbol de rutas de Alertmanager SE
+      # DETIENE en la primera coincidencia; sin este flag, la ruta de abajo
+      # nunca se evaluaría y añadir el respaldo habría SUSTITUIDO la
+      # notificación por la plataforma en vez de duplicarla — un fallo
+      # silencioso. Guardado por tests/unit/test_alertmanager_routing.py.
+      continue: true
+
+    # RESPALDO para críticas. El punto ciego del diseño «todo por la
+    # plataforma» se enuncia solo: si el servicio caído es el api-server, no
+    # puede entregarse la alerta a sí mismo — y `ServiceDown` del api-server es
+    # justo la alerta que más importa. Así que las críticas salen ADEMÁS por un
+    # canal que no depende de la plataforma.
+    #
+    # Solo `severity=critical`, no todo: la duplicación es deliberada y acotada
+    # (riesgo #5 del plan). Con `repeat_interval` más largo que el de la
+    # plataforma, porque este canal es el de último recurso, no el principal.
+    - matchers:
+        - severity = "critical"
+      receiver: critical-fallback
+      repeat_interval: 4h
+
+receivers:
+  - name: platform-notifier
+    webhook_configs:
+      # The platform notification ingest (System Admin channel). The api-server
+      # turns this Alertmanager payload into a Plan 10 notification and fans it
+      # out over the configured channels (email / Slack / Telegram / ...).
+      # NOTIF-2: el endpoint exige un token Bearer compartido — DEBE coincidir
+      # con API_SERVER_ALERTS_INGEST_TOKEN del api-server (fail-closed: sin
+      # token el ingest responde 503 y la alerta se pierde). Valor de DEV; el
+      # instalador genera uno aleatorio por despliegue en producción.
+      - url: "http://api-server:8000/internal/alerts/ingest"
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: "dev-alerts-ingest-token"
+
+  # ---------------------------------------------------------------------------
+  # RESPALDO para `severity=critical` — el canal que NO pasa por la plataforma.
+  #
+  # El webhook apunta a un endpoint de Slack (`slack_api_url`) leído de un
+  # FICHERO, no incrustado aquí: Alertmanager no expande `${ENV}` en su config,
+  # y un webhook de Slack es una credencial (quien la tiene, publica en el
+  # canal). El fichero lo provee el operador / el instalador; su custodia es de
+  # prod-10.
+  #
+  # Comportamiento cuando el fichero NO existe (el caso por defecto en dev):
+  # Alertmanager **arranca igual** — `api_url_file` se lee en el momento de
+  # notificar, no al cargar la config. Falla ese envío concreto y lo registra
+  # en su log. Es la degradación correcta: preferimos perder el canal de
+  # respaldo antes que impedir arrancar a Alertmanager, porque eso dejaría el
+  # stack de alertas ENTERO caído. Verificado con `amtool check-config`.
+  # ---------------------------------------------------------------------------
+  - name: critical-fallback
+    slack_configs:
+      - api_url_file: /etc/alertmanager/secrets/slack_api_url
+        channel: "#alertas-plataforma"
+        send_resolved: true
+        title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          ({{ .Labels.instance }}){{ "\n" }}{{ end }}
+          Este es el canal de RESPALDO: llega aunque la plataforma esté caída.
+
+# ---------------------------------------------------------------------------
+# Inhibition: while the host kernel is OOM-killing, suppress the noisier
+# warning-level host alerts (high RAM, swap) for the same instance — they are
+# symptoms of the same incident the critical OOM alert already reports.
+# ---------------------------------------------------------------------------
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+      - component = "host"
+    target_matchers:
+      - severity = "warning"
+      - component = "host"
+    equal: ["instance"]

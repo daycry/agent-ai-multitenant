@@ -25,10 +25,16 @@ El instalador vive en `apps/installer/` y se ejecuta como un **contenedor
 separado** (`docker-compose.installer.yml`) que sirve la UI del wizard sobre
 loopback. Toda la orquestación real (prereqs, generación de config, `docker
 compose up`, bootstrap de Vault, seed del tenant, finalize) vive en el **backend
-Python** `installer_backend` detrás de **seams** inyectables, de modo que el
-**wizard** y el **CLI desatendido** corren la **misma** orquestación.
+Python** `installer_backend` detrás de **seams** inyectables.
 
-### Wizard de 9 pasos
+> ⚠️ **De los dos frontales, sólo uno aprovisiona.** El diseño de seams permitía
+> que wizard y CLI corrieran la misma orquestación; **hoy no la corren**. El CLI
+> cablea los bindings reales por defecto; el wizard HTTP se quedó en los seams de
+> simulación (`main.py`: `FakeStepExecutor`, `StubPrereqChecker`,
+> `StubInstallerLifecycle`). Esta página describía la versión que se quería, no
+> la que hay; lo que sigue distingue una de otra en cada apartado.
+
+### Wizard de 9 pasos — SIMULACIÓN (no instala)
 
 | Paso | Qué hace                                                                                 | Módulo backend            |
 | ---- | ---------------------------------------------------------------------------------------- | ------------------------- |
@@ -38,14 +44,23 @@ Python** `installer_backend` detrás de **seams** inyectables, de modo que el
 | 8    | Instalación con progreso + logs en tiempo real                                           | `install.py`              |
 | 9    | Credenciales mostradas **una vez** + autodestrucción del installer                       | `finalize.py`             |
 
-El paso 9 revela las credenciales del admin inicial y las **unseal keys de
-Vault exactamente una vez** y **sin recuperación**: el operador es responsable de
-guardarlas. Acto seguido el contenedor installer **se autodestruye**. Ver
-[ADR 0039](../05-architecture-decisions/0039-installer-autodestructivo-secretos-csprng-prod-guard.md)
-y el runbook
+La tabla describe la **intención** de cada paso. Sobre HTTP, hoy: los pasos 2-7
+capturan config de verdad, y los pasos 1, 8 y 9 corren contra stubs. En concreto
+el paso 9 ejecuta toda la ceremonia del revelado —una vez, sin recuperación,
+autodestrucción incluida— sobre credenciales y unseal keys **generadas al vuelo y
+tiradas** (`main.py::build_install_credentials`, que lo dice en su propio
+docstring). **No abren nada.** Apuntarlas es apuntar ruido, y el peligro está en
+que la ceremonia es indistinguible de la real: mismo aviso de «se muestran una
+sola vez», misma urgencia.
+
+Cablear el wizard al ejecutor real (plumbing de `compose_dir`/`cfg`/`secrets` por
+request + una guarda de simulación en el revelado) es un follow-up de la UI del
+instalador (prod-09). El diseño de la ceremonia —que sí es el bueno— está en
+[ADR 0039](../05-architecture-decisions/0039-installer-autodestructivo-secretos-csprng-prod-guard.md);
+el estado real de cada camino, en el runbook
 [01-installation-from-scratch.md](../06-runbooks/01-installation-from-scratch.md).
 
-### CLI desatendido
+### CLI desatendido — el camino REAL
 
 ```bash
 # Copia un perfil, edítalo, y pásalo al instalador headless:
@@ -55,8 +70,11 @@ cp scripts/install-profiles/recommended.yaml install.yaml
 ```
 
 `install.sh` es un wrapper fino sobre `python -m installer_backend.cli install`.
-Corre la **misma** orquestación que el wizard, headless. Códigos de salida
-estables:
+`--config` es **obligatorio**: sin él sale con código 1 (`USAGE`) y no arranca
+ninguna UI. Éste es el frontal que cablea los bindings reales, y el que **aborta
+con código 4 (`PROVISION`)** si detecta un seam de simulación sin `--dry-run`
+(`cli._assert_real_install_seams`) — no existe la instalación falsa silenciosa.
+Códigos de salida estables:
 
 | Código | Significado                                                          |
 | ------ | -------------------------------------------------------------------- |
@@ -97,6 +115,49 @@ El instalador materializa en disco (a través de seams; nunca commiteados):
 
 Los secretos generados son **únicos por instalación** y de alta entropía. Ver
 [ADR 0039](../05-architecture-decisions/0039-installer-autodestructivo-secretos-csprng-prod-guard.md).
+
+### Dónde se escribe, y por qué eso decide qué más hay que escribir
+
+El compose generado **no se escribe en el repo**: se escribe en la **raíz de
+datos** (`cli.py` → `compose_dir = config.storage.data_root`,
+`/data/agent-platform` por defecto) y todo `docker compose` se lanza con `cwd`
+ahí. Por tanto cada **ruta relativa** `./algo` del compose generado resuelve
+contra `/data/agent-platform/…`, donde no hay ningún checkout — **clonar el
+repositorio no cambia nada**.
+
+Por eso el instalador escribe también los auxiliares que ese compose monta, en un
+subárbol único `stack/` y desde su propio paquete
+(`installer_backend.stack_assets`, copia guardada byte a byte contra `docker/`):
+
+| Ruta del compose generado  | Qué es                                               |
+| -------------------------- | ---------------------------------------------------- |
+| `./stack/postgres/init`    | `CREATE EXTENSION vector` + roles `migrations`/`app` |
+| `./stack/vault/config.hcl` | Configuración de Vault (bind de **fichero**)         |
+| `./stack/seccomp`          | Perfiles de los runtimes no confiables               |
+| `./stack/egress-proxy`     | Contexto de build del proxy de salida a los LLM      |
+| `./stack/registry-proxy`   | Contexto de build del proxy a registros de paquetes  |
+| `./stack/monitoring/**`    | Prometheus + Alertmanager + Grafana (overlay)        |
+| `./caddy/Caddyfile`        | Generado por instalación (dominio + modo TLS)        |
+
+**Por qué esto no era opcional, y por qué `stack/`.** Hasta el 2026-08-27 esas
+seis familias vivían sólo en el árbol `docker/` y no viajaban. El modo de fallo no
+avisaba donde estaba la causa: Docker materializa como directorio vacío el lado
+host ausente de un bind, así que `./postgres/init` se creaba **dentro** del PGDATA
+—`initdb` encontraba un directorio no vacío y los SQL de inicialización no corrían
+jamás, dejando un Postgres `healthy` **sin `pgvector`**— y `./vault/config.hcl`
+acababa siendo un directorio donde el binario espera un fichero. El subárbol
+`stack/` existe justo para que ninguna ruta del instalador pueda volver a
+aterrizar dentro del almacén de datos de otro servicio.
+
+Está medido, ruta por ruta y con file:line, en el
+[ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+§«La avería que no estaba escrita», junto a la otra avería independiente del mismo
+camino: el `docker compose pull` va contra un tag que no existe
+([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
+**La reparación está en curso**, con una guarda ejecutable que deriva del código
+—no de una lista escrita a mano, que envejece en cuanto alguien añade un
+montaje— tanto el conjunto de rutas que el compose pide como el que la
+instalación produce. Sin fechas: el estado vivo es el del ADR 0161.
 
 ## Uninstall y reinstall
 
@@ -285,7 +346,7 @@ Ver [ADR 0042](../05-architecture-decisions/0042-hardening-panel-admin-mfa-ip-al
 
 | Runbook                                                                           | Cuándo                                                      |
 | --------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [01-installation-from-scratch.md](../06-runbooks/01-installation-from-scratch.md) | Instalar desde cero (wizard o CLI)                          |
+| [01-installation-from-scratch.md](../06-runbooks/01-installation-from-scratch.md) | Instalar desde cero (CLI real; el wizard simula)            |
 | [02-troubleshooting.md](../06-runbooks/02-troubleshooting.md)                     | Diagnóstico de fallos tras instalar o en operación          |
 | [03-system-upgrade.md](../06-runbooks/03-system-upgrade.md)                       | Actualizar imágenes + esquema de forma reversible           |
 | [04-disaster-recovery.md](../06-runbooks/04-disaster-recovery.md)                 | DR completo o restore selectivo por tenant                  |

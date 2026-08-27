@@ -1,0 +1,30 @@
+# Grafana datasource provisioning (Plan 12 — Backup/Restore, task_12_15).
+#
+# Mounted read-only into the grafana container by
+# docker/docker-compose.monitoring.yml at
+# /etc/grafana/provisioning/datasources/. Grafana loads every file in that
+# directory on startup and reconciles the declared datasources — no clicking
+# through the UI, no API call. The host dashboards (host-overview) reference
+# this datasource by its fixed `uid` so the provisioned dashboard JSON keeps
+# resolving regardless of display name.
+#
+# Single datasource: the Prometheus added in this same overlay (task_12_13),
+# reachable on the agentic-net by its compose service name.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Stable uid referenced by the dashboard panels' `datasource.uid`.
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    # In-network address of the prometheus service (docker-compose.monitoring).
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Match the Prometheus global scrape_interval (prometheus.yml) so range
+      # queries pick a sensible default step.
+      timeInterval: "15s"
+      httpMethod: POST

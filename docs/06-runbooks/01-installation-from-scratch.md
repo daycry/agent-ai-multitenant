@@ -28,6 +28,34 @@ install.yaml`, la orquestación headless desde un fichero YAML. Aprovisiona
 > simulación sin `--dry-run` (no existe una instalación falsa silenciosa —
 > deploy-1). El wizard HTTP queda como simulación hasta prod-09.
 
+> ⚠️ **Y aun así, hoy el camino real no llega al final en una máquina limpia.**
+> Son dos averías independientes, medidas en el
+> [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md):
+>
+> 1. El paso `PULL_IMAGES` hace `docker compose pull` contra un tag que **no se
+>    ha publicado nunca** — no hay `git tag` y el workflow de release jamás ha
+>    corrido ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
+> 2. ~~Las **rutas relativas** del compose generado no resuelven.~~
+>    **Reparada el 2026-08-27.** El compose se escribe en la **raíz de datos**
+>    (`/data/agent-platform` por defecto), no en el repo, así que cada `./algo`
+>    apuntaba a `/data/agent-platform/…`, donde no hay checkout — y **clonar el
+>    repositorio no lo arreglaba**. De siete familias de rutas relativas el
+>    instalador escribía una (`./caddy/Caddyfile`); ahora las seis restantes
+>    viajan dentro del propio paquete del instalador y se escriben bajo
+>    `stack/` (ver [Qué se genera](#qué-se-genera)).
+>
+> Lo que hacía cara a la segunda: Docker inventa como **directorio vacío** el
+> lado host ausente de un bind, así que `./postgres/init` se creaba dentro del
+> PGDATA, `initdb` lo veía no vacío y los SQL de inicialización (`pgvector`,
+> roles) no corrían jamás — un Postgres `healthy` **sin `pgvector`**. Lo guardan
+> ahora `tests/unit/test_generated_compose_is_installable.py` (deriva del código
+> las rutas que el compose pide y las que la instalación produce, y exige que
+> ninguna caiga dentro del almacén de otro servicio) y
+> `tests/unit/test_installer_ships_stack_assets.py` (que lo que viaja siga siendo
+> idéntico a `docker/`).
+>
+> **La primera sigue abierta**: sin release publicada, `PULL_IMAGES` falla igual.
+
 > Alcance: **Docker Compose en una sola máquina** (CLAUDE.md). No
 > Kubernetes, no multi-máquina, no HA multi-instancia.
 
@@ -126,8 +154,8 @@ un `install.yaml`, sin navegador
 ```
 
 > **Real vs simulación (`--dry-run`).** Sin `--dry-run`, el CLI aprovisiona
-> **de verdad**: escribe el `docker-compose.yml` + `.env` + `caddy/Caddyfile`
-> bajo el `data_root`, hace `docker compose pull` / `up -d --wait`, aplica las
+> **de verdad**: escribe el `docker-compose.yml` + `.env` + `caddy/Caddyfile` +
+> el árbol `stack/` de auxiliares bajo el `data_root`, hace `docker compose pull` / `up -d --wait`, aplica las
 > migraciones (servicio one-shot `migrations`), bootstrapea Vault y siembra el
 > tenant inicial. Requiere Docker + Compose v2 en el host (el `PrereqChecker`
 > lo verifica, incluido que los puertos **80/443** estén libres — la única
@@ -209,6 +237,25 @@ los generadores de Fase B son las tareas 15_07/15_08/15_09):
   (`changeme` / `dev-only` / `minioadmin`) y pasa el guard de Plan 06.14.
 - **`config/global.yaml`** — config no secreta (dominio, entorno,
   proveedores habilitados, dimensionado, almacenamiento, idiomas ES+EN).
+- **`stack/`** — los auxiliares que el compose generado **monta**, escritos
+  desde el propio paquete del instalador (`installer_backend.stack_assets`):
+  los scripts de inicialización de PostgreSQL (`stack/postgres/init/` —
+  `pgvector` y los roles `migrations`/`app`/`service_user`), la configuración
+  de Vault (`stack/vault/config.hcl`), los perfiles seccomp
+  (`stack/seccomp/`), los contextos de build de los dos tinyproxy
+  (`stack/egress-proxy/`, `stack/registry-proxy/`) y —con el overlay de
+  monitoring— la configuración de Prometheus/Alertmanager/Grafana.
+  Configuración en `0644` y scripts en `0755`: los lee el proceso de **dentro**
+  del contenedor, que no corre como el usuario que instaló.
+
+  > No es un adorno. Docker materializa como **directorio vacío** el lado host
+  > ausente de un bind, así que un auxiliar que faltase no daría error: dejaría
+  > la base sin `pgvector` ni roles (el `initdb` se salta la inicialización si
+  > el PGDATA no está vacío) o a Vault con un directorio donde espera su
+  > fichero de configuración. Y los dos contextos de build llevan
+  > `pull_policy: build`: sin ellos `docker compose up` aborta **al resolver el
+  > proyecto**, sin arrancar un solo contenedor.
+
 - **El árbol de datos** bajo la raíz (por defecto `/data/agent-platform/`,
   `build_data_tree_plan`), con permisos POSIX por directorio
   (`0700` para lo que guarda secretos, `0750` el resto):
@@ -227,8 +274,18 @@ los generadores de Fase B son las tareas 15_07/15_08/15_09):
   ├── backups/                 (0700)  bundles de backup (Plan 12)
   ├── ollama/                  (0750)  modelos locales (solo perfil GPU)
   ├── prometheus/              (0750)  TSDB (solo overlay de monitoring)
-  └── grafana/                 (0750)  estado (solo overlay de monitoring)
+  ├── grafana/                 (0750)  estado (solo overlay de monitoring)
+  └── stack/                           auxiliares que el compose monta
+      └── monitoring/alertmanager/secrets/  (0755)  buzón del webhook de
+                                     respaldo, vacío y a rellenar por el
+                                     operador (solo overlay de monitoring)
   ```
+
+  El resto de `stack/` aparece al escribir su contenido; el buzón de
+  Alertmanager está aquí porque es el único bind que monta un directorio
+  **vacío**: sin crearlo, lo crearía Docker como `root` y Alertmanager —que
+  corre como `nobody`— no podría leer el webhook, fallando en silencio en cada
+  envío del receiver de respaldo.
 
 - **Bootstrap de Vault** — `init` + `unseal` + KV v2 + políticas iniciales
   (`vault_bootstrap.py`, task 15_09; ver también `scripts/init-vault.sh`).

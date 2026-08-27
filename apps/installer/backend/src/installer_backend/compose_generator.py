@@ -108,6 +108,48 @@ _DEV_SECRET_MARKERS = ("changeme", "dev-only", "minioadmin")
 # treats a re-generated file as the same project).
 PROJECT_NAME = "agentic-platform"
 
+# ---------------------------------------------------------------------------
+# Dónde viven los auxiliares que la instalación trae consigo.
+#
+# Toda ruta `./x` de este fichero resuelve contra el directorio donde el compose
+# ACABA, que no es el repo: es la raíz de datos (`cli.py` → `compose_dir =
+# config.storage.data_root`). Hasta el 2026-08-27 este generador arrastraba las
+# rutas relativas del compose canónico —que sí vive junto a `docker/`— y encima
+# con DOS bases implícitas incompatibles: `./postgres/init` y `./vault/config.hcl`
+# sólo resolvían si el compose estaba en `docker/`, mientras que `./docker/seccomp`
+# sólo resolvía si estaba en la raíz del repo. Ninguna de las dos era la real.
+#
+# El arreglo no es reescribir las rutas una a una hacia la base correcta: es que
+# haya UNA sola base y un solo subárbol. Todo lo que la instalación escribe
+# verbatim cuelga de aquí, y eso compra dos invariantes que antes dependían de la
+# suerte:
+#
+#   1. **Nada aterriza dentro del almacén de datos de otro servicio.** El caso que
+#      lo motiva: `./postgres/init` resolvía a `{data_root}/postgres/init`, o sea
+#      DENTRO del PGDATA. Docker crea el lado host ausente de un bind como
+#      directorio vacío, así que el PGDATA dejaba de estar vacío antes del
+#      `initdb`: el cluster no se inicializaba, los cinco scripts de
+#      `docker/postgres/init/` no corrían jamás y la base nacía sin `pgvector` y
+#      sin los roles. Postgres salía `healthy`; la avería se cobraba en la primera
+#      consulta que necesitaba la extensión.
+#   2. **Se ve de un vistazo qué trajo el instalador y qué es estado.** `stack/`
+#      es reproducible desde el paquete; el resto de la raíz de datos, no.
+#
+# El contenido de este subárbol viaja dentro del paquete Python
+# (`installer_backend.stack_assets`) y lo escribe el paso GENERATE_CONFIG.
+#
+# El `caddy/Caddyfile` NO cuelga de aquí a propósito: no viaja verbatim, se GENERA
+# a partir de la configuración de cada instalación (dominio, modo TLS), ya lo
+# escribía GENERATE_CONFIG y no cae dentro de ningún almacén. `stack/` es «lo que
+# el instalador trae dentro», no «todo lo que el instalador escribe».
+# ---------------------------------------------------------------------------
+#: Nombre del subdirectorio, relativo al directorio del compose.
+STACK_ASSETS_DIR_NAME = "stack"
+
+#: Prefijo con el que se montan. `./` explícito: compose exige que un bind
+#: relativo empiece por `./` o `../`, o lo interpreta como volumen nombrado.
+STACK = f"./{STACK_ASSETS_DIR_NAME}"
+
 #: Canonical core services always present in the runtime stack.
 CORE_SERVICES: tuple[str, ...] = (
     "postgres",
@@ -265,7 +307,7 @@ TINYPROXY_HEALTHCHECK_CMD = (
 #: `monitoring/` copiado junto al compose) que el resto de la configuración de
 #: monitorización que ya se monta así: prometheus.yml, las reglas, alertmanager.yml
 #: y el provisioning de Grafana.
-ALERTMANAGER_SECRETS_HOST_DIR = "./monitoring/alertmanager/secrets"
+ALERTMANAGER_SECRETS_HOST_DIR = f"{STACK}/monitoring/alertmanager/secrets"
 
 #: Lado CONTENEDOR. No es una elección libre: es el directorio del que cuelga el
 #: `api_url_file` del receiver `critical-fallback` en `alertmanager.yml`.
@@ -430,7 +472,10 @@ def _postgres_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         },
         "volumes": [
             f"{cfg.storage.data_root}/postgres:/var/lib/postgresql/data",
-            "./postgres/init:/docker-entrypoint-initdb.d:ro",
+            # Los scripts de inicialización van bajo `stack/`, NO bajo
+            # `{data_root}/postgres/...`: ahí caerían dentro del PGDATA de la línea
+            # de arriba y el `initdb` se saltaría la inicialización entera.
+            f"{STACK}/postgres/init:/docker-entrypoint-initdb.d:ro",
         ],
         "healthcheck": {
             "test": [
@@ -518,7 +563,10 @@ def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
         "volumes": [
             f"{cfg.storage.data_root}/vault/file:/vault/file",
             f"{cfg.storage.data_root}/vault/logs:/vault/logs",
-            "./vault/config.hcl:/vault/config/config.hcl:ro",
+            # Bind de FICHERO, no de directorio: si el lado host no existe, Docker
+            # lo inventa como directorio y `vault server` no encuentra su config.
+            # Lo escribe GENERATE_CONFIG desde `installer_backend.stack_assets`.
+            f"{STACK}/vault/config.hcl:/vault/config/config.hcl:ro",
         ],
         "command": ["server"],
         "healthcheck": {
@@ -582,7 +630,43 @@ def _egress_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     # On TWO networks: agentic-net (egress to internet) + the internal
     # agentic-agents (the only path the sandbox runtime has to a provider).
     svc: dict[str, Any] = {
-        "build": "./egress-proxy",
+        # ------------------------------------------------------------------
+        # POR QUÉ EL CONTEXTO VIAJA, EN VEZ DE PUBLICAR LA IMAGEN (2026-08-27).
+        #
+        # Los dos tinyproxy son los únicos servicios del NÚCLEO que se construyen
+        # en el destino, y había dos formas de que dejaran de pedir un contexto
+        # que no existía: (a) que la instalación lo escriba —lo que se hizo— o
+        # (b) referenciarlos como imagen publicada, como las seis de aplicación.
+        #
+        # (b) está DESCARTADA hoy, y no por gusto:
+        #
+        #   * **Nadie las publica.** `release-images.yml` publica seis imágenes de
+        #     aplicación y ninguna es ésta; `ci.yml` las construye para pasarles
+        #     Trivy y las tira. Poner `image:` sin `build:` no las hace existir:
+        #     hace que `docker compose pull` —el paso PULL_IMAGES del propio
+        #     wizard— intente bajarlas de un registro donde no están y salga con
+        #     rc=1. Es EXACTAMENTE la regresión que este repo ya midió y revirtió
+        #     el 2026-08-22 («poner `image:` rompió `docker compose pull`, y con
+        #     él la instalación»), sólo que entonces se encontró antes de
+        #     desplegar y aquí se estaría entregando como diseño.
+        #   * **La decisión no es de este fichero.** Publicarlas es la pregunta 6
+        #     del ADR 0161, que sigue `proposed`. Ese mismo ADR recomienda hacer
+        #     primero el suelo —los auxiliares— y publicar después, y advierte de
+        #     que publicarlas obliga además a mover dos guardas
+        #     (`test_infra_images_are_scanned.py`). Decidirlo por implementación
+        #     sería saltarse la cadena de precedencia del CLAUDE.md.
+        #   * **`filter.txt` es política del operador, no un detalle de build.**
+        #     Es la allowlist de hosts del ADR 0019, y su propia cabecera invita a
+        #     editarla («si el operador usa un custom domain… lo añade aquí»). Con
+        #     el contexto en disco eso es editar un fichero y reconstruir; con una
+        #     imagen publicada, forkear el repo y esperar a un release ajeno.
+        #
+        # Y (a) no añade requisitos: el `up` construye la imagen que falta, y la
+        # instalación ya necesita salida a internet para bajar el resto del stack.
+        # El día que se firme el ADR 0161 y se publiquen, esto se sustituye por
+        # `image:` + digest y el contexto deja de escribirse.
+        # ------------------------------------------------------------------
+        "build": f"{STACK}/egress-proxy",
         # `image:` explícito además del `build:`. Sin él la imagen se llama
         # `<proyecto>-egress-proxy`, y el proyecto lo elige cada instalación: el mismo
         # Dockerfile acabaría con un nombre distinto en cada host y ninguno
@@ -617,7 +701,12 @@ def _registry_proxy_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, An
     # agentic-agents — el agent-runtime no debe alcanzar github/pypi/etc. El
     # worker lo conecta a los bridges efímeros per-task de los runtimes.
     svc: dict[str, Any] = {
-        "build": "./registry-proxy",
+        # Contexto de build escrito por la instalación, por las mismas tres
+        # razones que el egress-proxy (ver el comentario largo de arriba): las
+        # imágenes no se publican, publicarlas es la pregunta 6 de un ADR todavía
+        # `proposed`, y su `filter.txt` es la allowlist de registros de paquetes
+        # que el operador ajusta a su red (ADR 0094).
+        "build": f"{STACK}/registry-proxy",
         # `image:` explícito por lo mismo que el egress-proxy: sin él el nombre
         # lo pone el proyecto de cada instalación y no coincide con el de CI.
         "image": "agentic-platform/registry-proxy:v1",
@@ -942,7 +1031,11 @@ def _workers_volumes(cfg: InstallerConfig) -> list[str]:
     at it — set in task_prod01_10)."""
     return [
         f"{cfg.storage.data_root}:{cfg.storage.data_root}",
-        "./docker/seccomp:/etc/agentic/seccomp:ro",
+        # Los perfiles los escribe GENERATE_CONFIG bajo `stack/`. Antes ponía
+        # `./docker/seccomp`, que sólo resolvía si el compose viviera en la raíz
+        # del repo — una segunda base implícita, distinta de la que usaban las
+        # demás rutas relativas de este mismo fichero, y falsa las dos.
+        f"{STACK}/seccomp:/etc/agentic/seccomp:ro",
     ]
 
 
@@ -1433,8 +1526,8 @@ def _prometheus_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]: 
             "--web.enable-lifecycle",
         ],
         "volumes": [
-            "./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro",
-            "./monitoring/prometheus/rules:/etc/prometheus/rules:ro",
+            f"{STACK}/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro",
+            f"{STACK}/monitoring/prometheus/rules:/etc/prometheus/rules:ro",
             f"{cfg.storage.data_root}/prometheus:/prometheus",
         ],
         "healthcheck": {
@@ -1532,7 +1625,7 @@ def _alertmanager_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
             "--storage.path=/alertmanager",
         ],
         "volumes": [
-            "./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
+            f"{STACK}/monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro",
             # Buzón de la credencial del receiver de RESPALDO. El porqué, con el
             # dato concreto, está en el bloque ``ALERTMANAGER_SECRETS_*`` de
             # arriba: sin este montaje la ruta que declara ``api_url_file`` no
@@ -1611,8 +1704,8 @@ def _grafana_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "GF_ANALYTICS_CHECK_FOR_UPDATES": "false",
         },
         "volumes": [
-            "./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro",
-            "./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro",
+            f"{STACK}/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro",
+            f"{STACK}/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro",
             f"{cfg.storage.data_root}/grafana:/var/lib/grafana",
         ],
         "depends_on": ["prometheus"],

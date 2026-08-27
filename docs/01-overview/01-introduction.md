@@ -117,7 +117,9 @@ horas`). El modo de revisión del entregable es por proyecto
 - **Notificaciones multicanal** + **asistente personal**.
 - **Visor de documentación** integrado (`/admin/docs` y
   `/projects/{id}/docs`).
-- **Backup / restore** y, en Fase 15, el **instalador** (wizard).
+- **Backup / restore** y, en Fase 15, el **instalador** (CLI desatendido; el
+  wizard HTTP todavía simula — ver
+  [referencia de instalación](../04-reference/installation.md)).
 - **Validación humana** configurable por proyecto con 13 categorías de
   acciones sensibles y 4 plantillas (Sandbox, Desarrollo, Producción,
   Cliente Externo).

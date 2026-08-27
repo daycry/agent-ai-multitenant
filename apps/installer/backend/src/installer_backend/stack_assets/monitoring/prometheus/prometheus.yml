@@ -1,0 +1,76 @@
+# Prometheus scrape configuration for the host/container monitoring stack
+# (Plan 12 — Backup/Restore, Phase D, task_12_13).
+#
+# This file is mounted read-only into the prometheus container by
+# docker/docker-compose.monitoring.yml. It defines the scrape jobs for:
+#   - prometheus itself (self-monitoring),
+#   - node-exporter  → host metrics (CPU / RAM / disk / swap / network),
+#   - cadvisor       → per-container metrics.
+#
+# Alerting rules (task_12_14) live in ./rules/*.yml and are wired through
+# the `rule_files` + `alerting` blocks below so the file is stable across
+# the rest of Phase D. The Alertmanager target is left commented until
+# task_12_14 introduces the alertmanager service.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: agentic-platform
+
+# Alert rules (task_12_14) live in ./rules/*.yml — host_alerts.yml ships the
+# disk / RAM / swap / OOM / last-backup-failed alerts. The glob loads every
+# rules file in the directory.
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Send firing alerts to Alertmanager (task_12_14). The alertmanager service is
+# added in docker/docker-compose.monitoring.yml and reachable on the
+# agentic-net by name.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # Prometheus self-monitoring.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Host metrics: CPU, RAM, disk, swap, network, load (node_load1, ...).
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Per-container metrics (cgroup CPU / memory / network / fs).
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # ---------------------------------------------------------------------------
+  # Métricas de APLICACIÓN (prod-08 Fase B — hallazgo observability-2).
+  #
+  # Hasta 2026-07-31 aquí solo había infraestructura, y eso dejaba un agujero
+  # que no se ve a simple vista: `up` es una serie que Prometheus SINTETIZA por
+  # cada target scrapeado. Sin target no hay serie, y sin serie la regla
+  # `ServiceDown` (`up == 0`) no puede escribirse. Es decir: un api-server
+  # caído no disparaba ninguna alerta; el operador se enteraba porque la UI
+  # dejaba de cargar.
+  #
+  # Alcanzable por nombre DNS dentro de `agentic-net`. El endpoint no publica
+  # puerto al host y no expone datos de tenant (solo agregados de proceso).
+  # ---------------------------------------------------------------------------
+  - job_name: api-server
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api-server:8000"]
+
+  # NOTA sobre los workers: NO se scrapean por HTTP a propósito. Celery corre en
+  # modo prefork (N procesos hijos), así que un `start_http_server` por proceso
+  # se pelearía por el puerto y expondría el estado de UN hijo al azar. Sus
+  # métricas viajan por el textfile-collector de node-exporter
+  # (`workers/queue_metrics.py`, muestreo cada 30s), que consulta la BD y el
+  # broker y por tanto ve el sistema entero. Que el worker esté vivo se detecta
+  # con `MetricsSamplerStale` (el heartbeat del sampler), no con `up`. Ver el
+  # ADR 0141.

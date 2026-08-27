@@ -18,6 +18,19 @@ robusto, que la **reinstalación preserva datos**, y que la
 > (auditoría profesional) y `task_15_29` **release v1.0.0** — ambas
 > human-owned, no automatizables por la plataforma. Estos 5 tests humanos
 > y esas 2 tareas son el último paso antes de pasar a `completed`.
+>
+> **Matiz que hay que leer antes de reservar máquinas** (añadido el 2026-08-27):
+> «completas y verdes» significa verdes **contra los seams falsos**, que es lo
+> que la suite puede correr sin un host Docker. El **wizard HTTP no aprovisiona**
+> —`FakeStepExecutor` por defecto— y el camino real (el CLI) arrastra dos averías
+> medidas en el [ADR 0160](../../05-architecture-decisions/0160-versionado-de-la-plataforma.md)
+> y el [ADR 0161](../../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md):
+> no hay imágenes publicadas (sigue abierta), y las **rutas relativas** del
+> compose generado no resolvían donde el compose se escribe — **esta segunda,
+> reparada el 2026-08-27**: los auxiliares viajan dentro del instalador y se
+> escriben bajo `stack/`. Por eso `human_15_01` está marcado 🛑 más abajo. Un test humano en
+> verde sobre un camino simulado es peor que uno sin hacer: firma una instalación
+> que nadie hizo.
 
 > **Reservado al humano (no lo hace la plataforma)**:
 >
@@ -46,10 +59,19 @@ Para los tests de instalación reales se usa el **instalador** del repo
 
 ```bash
 # En la máquina/VM virgen, tras clonar el repo:
-./scripts/install.sh                       # modo wizard (sirve UI temporal autodestructiva)
-./scripts/install.sh --config install.yaml  # modo CLI desatendido (task_15_10)
+./scripts/install.sh --config install.yaml  # modo CLI desatendido (task_15_10) — el camino REAL
 ./scripts/uninstall.sh                      # desinstalación con doble confirmación (task_15_12)
 ```
+
+> **Aquí había una tercera línea, `./scripts/install.sh` a secas, anotada como
+> «modo wizard», con la promesa de que servía una UI temporal y autodestructiva.
+> Ese comando no existe.** `--config` es obligatorio en el parser del CLI: la
+> invocación desnuda sale con código 1 (`USAGE`) sin tocar el host y sin servir
+> ninguna UI. El wizard se levanta con su propio compose —el de
+> `apps/installer/docker-compose.installer.yml`— y, esto es lo que cambia el test
+> de abajo, **es una SIMULACIÓN**: su `StepExecutor` por defecto es
+> `FakeStepExecutor`, no aprovisiona nada y las credenciales que revela al final
+> no sirven.
 
 Las plantillas YAML por perfil están en `scripts/install-profiles/`
 (minimal, recommended, gpu — `task_15_11`). Los runbooks operativos viven
@@ -72,11 +94,37 @@ en `docs/06-runbooks/` y el portal de desarrollador en la doc pública.
 
 ## `human_15_01` — Instalación desde cero en máquina virgen
 
-**Qué prueba**: en una Ubuntu 24.04 nueva, clonar el repo y ejecutar
-`install.sh` levanta el wizard en el navegador en <30 s, cada paso es
-comprensible sin haber leído la doc, la detección de GPU funciona si la
-hay, el panel admin queda accesible con las credenciales mostradas, y el
-contenedor installer se autodestruye.
+> 🛑 **BLOQUEADO — no reserves la VM todavía.** Este test, tal y como está
+> escrito, no se puede pasar: da por supuesto que el wizard HTTP instala, y el
+> wizard **no instala**. Su `StepExecutor` por defecto es `FakeStepExecutor`
+> (`apps/installer/backend/src/installer_backend/main.py`), así que el paso 8 no
+> aprovisiona nada y el paso 9 revela credenciales y unseal keys generadas al
+> vuelo y tiradas. Los pasos 5 y 6 de la lista de abajo —«accede al panel admin
+> con las credenciales mostradas» y «el contenedor se autodestruye tras
+> instalar»— **no pueden dar verde por definición**: no hay panel al que entrar.
+>
+> **Qué SÍ se puede validar hoy con este guion**: los pasos 1-4 como test de UX
+> del wizard (aparece rápido, se entiende sin haber leído la doc, detecta la
+> GPU). Es útil y vale la pena hacerlo, pero anótalo como lo que es —revisión de
+> flujo— y no como una instalación.
+>
+> **Qué falta para desbloquearlo**: (a) cablear el wizard al ejecutor real,
+> follow-up prod-09; y (b) la avería del camino real que este test heredaría en
+> cuanto se cablee — no hay imágenes publicadas
+> ([ADR 0160](../../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
+> La segunda que había aquí —las **rutas relativas** del compose generado, que no
+> resolvían donde el compose se escribe
+> ([ADR 0161](../../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md))—
+> quedó **reparada el 2026-08-27**.
+>
+> Mientras tanto, la instalación real de una máquina virgen se prueba con
+> `human_15_02` (CLI desatendido), que es el camino soportado.
+
+**Qué prueba** (redacción original, conservada para cuando se desbloquee): en una
+Ubuntu 24.04 nueva, clonar el repo y levantar el wizard lo sirve en el navegador
+en <30 s, cada paso es comprensible sin haber leído la doc, la detección de GPU
+funciona si la hay, el panel admin queda accesible con las credenciales
+mostradas, y el contenedor installer se autodestruye.
 
 **Precondiciones**:
 
@@ -86,8 +134,15 @@ contenedor installer se autodestruye.
 
 **Pasos**:
 
-1. En la VM virgen, clona el repo y lanza **`./scripts/install.sh`**
-   (modo wizard).
+1. En la VM virgen, clona el repo y levanta el wizard con su propio compose:
+
+   ```bash
+   docker compose -f apps/installer/docker-compose.installer.yml up -d --build
+   ```
+
+   **No** con `./scripts/install.sh`: ese script exige `--config` y no sirve
+   ninguna UI.
+
 2. Abre el navegador: el **wizard debe aparecer en menos de 30 s**.
 3. Recorre los **9 pasos** (Bienvenida → Config básica → Recursos/GPU →
    Almacenamiento → Providers LLM → Tenant inicial → Resumen →
@@ -95,29 +150,36 @@ contenedor installer se autodestruye.
    que no ha leído la doc**.
 4. En el paso de Recursos/GPU, si la máquina tiene GPU NVIDIA, la
    **detección de GPU** debe reconocerla.
-5. Tras instalar, accede al **panel admin** con las **credenciales
-   mostradas** en el último paso (mostradas UNA vez — anótalas).
-6. Comprueba que el **contenedor installer se autodestruye** tras
-   completar (`docker ps` no lo muestra).
+5. 🛑 _(bloqueado)_ Tras instalar, accede al **panel admin** con las
+   **credenciales mostradas** en el último paso (mostradas UNA vez —
+   anótalas). Hoy no hay panel: el wizard no ha instalado nada y esas
+   credenciales no son reales.
+6. 🛑 _(bloqueado)_ Comprueba que el **contenedor installer se autodestruye**
+   tras completar (`docker ps` no lo muestra). El seam de autodestrucción del
+   frontal HTTP es `StubInstallerLifecycle`: registra la petición, no destruye
+   el contenedor.
 
 **Resultado esperado**: el wizard aparece <30 s, los 9 pasos son
 comprensibles, la GPU se detecta si la hay, el panel admin es accesible
 con las credenciales mostradas y el installer se autodestruye.
 
-**Checklist**:
+**Checklist** (los dos últimos están 🛑 **bloqueados**: dependen de que el wizard
+aprovisione, y hoy simula):
 
 - [ ] Wizard aparece en navegador en menos de 30 s.
 - [ ] Cada paso del wizard es comprensible para alguien que no ha leído
       la doc.
 - [ ] Detección de GPU funciona si la máquina tiene una.
-- [ ] Tras instalar, panel admin accesible con credenciales mostradas.
-- [ ] Contenedor installer se autodestruye.
+- [ ] 🛑 Tras instalar, panel admin accesible con credenciales mostradas.
+- [ ] 🛑 Contenedor installer se autodestruye.
 
 **Pitfalls conocidos**:
 
 - El installer corre en un **contenedor separado autodestructivo**
   (Decisión Clave): si tras completar sigue vivo, revisa el paso de
-  finalización (`task_15_06`).
+  finalización (`task_15_06`). Ojo: sobre HTTP **siempre** sigue vivo, porque el
+  seam por defecto es un stub que sólo registra la petición — eso no es un fallo
+  del entorno, es el estado actual del frontal.
 - Las **unseal keys de Vault se muestran UNA vez sin recuperación**
   (Decisión Clave): guárdalas en ese momento o tendrás que reinstalar.
 - En máquinas con **configuraciones exóticas** el wizard puede fallar la
