@@ -139,6 +139,23 @@ repos:
         name: markdownlint (docs, mismo pin que CI)
         entry: npx --yes markdownlint-cli@0.48.0 --config .markdownlint.jsonc
         language: system
+        # `require_serial` NO es una optimización: es lo que impide una CARRERA.
+        # Sin él, pre-commit trocea los 699 `.md` y lanza el `entry` en VARIOS
+        # procesos a la vez. Cada uno ejecuta `npx --yes`, y todos compiten por
+        # poblar el mismo `~/.npm/_npx/<hash>`: el que llega tarde ve un árbol a
+        # medio escribir.
+        #
+        # El síntoma es un fallo de CI que parece de red y no lo es. Medido tres
+        # veces el 2026-08-26/27, con TRES módulos distintos corrompidos y siempre
+        # el mismo directorio de caché:
+        #
+        #   ERR_MODULE_NOT_FOUND  .../micromark-core-commonmark/...  (SyntaxError)
+        #   ERR_MODULE_NOT_FOUND  .../balanced-match/dist/esm/index.js
+        #   SyntaxError: './md029.mjs' does not provide an export named 'default'
+        #
+        # Relanzar lo arreglaba, que es justo lo que hace que se lea como
+        # transitorio y se quede sin arreglar.
+        require_serial: true
         # `docs/` MÁS los `.md` de la raíz (README, CHANGELOG y sus mitades
         # `.es.md`): eran el único markdown del repo que ningún linter miraba, y
         # son los primeros que lee alguien de fuera. Mismo alcance que el job
