@@ -1,15 +1,30 @@
 name: Release images
 
-# Plan prod-01 task_03 (finding deploy-2 / quality-2): build & push the five
+# Plan prod-01 task_03 (finding deploy-2 / quality-2): build & push the
 # application images the installer's compose references
-# (ghcr.io/${{ github.repository_owner }}/<app>:<tag>, see compose_generator.APP_IMAGE_*).
+# (ghcr.io/${{ github.repository_owner }}/<app>:<tag>, see compose_generator.app_image).
 # They did not exist and there was no pipeline to publish them.
 #
 # Triggered by a release tag (v*) or manual dispatch — NOT on every push (that
 # is ci.yml's gate). api-server is the heavy BASE image (shared-* + native
-# xmlsec); workers/orchestrator/notification-dispatcher reuse it via BASE_IMAGE,
-# so they must build AFTER it (the `needs:` chain enforces the order task_01
-# documented). admin-panel is independent.
+# xmlsec); workers/orchestrator/notification-dispatcher/watchdog reuse it via
+# BASE_IMAGE, so they must build AFTER it (the `needs:` chain enforces the order
+# task_01 documented). admin-panel is independent.
+#
+# LA SÉPTIMA IMAGEN: el instalador (ADR 0161, decisión del operador del
+# 2026-08-27). Hasta hoy este workflow publicaba las seis de plataforma y ninguna
+# era la del instalador, así que **instalar exigía clonar el repositorio** aunque
+# la plataforma viniera del registry. El job `installer` de abajo la publica, y
+# cuelga del resto por una razón que no es de comodidad — ver su comentario.
+#
+# TRIVY CORRE DESPUÉS DEL PUSH EN TODO ESTE FICHERO, y hay que leerlo así: un
+# rojo NO impide la publicación, la imagen ya está en el registro. Es un hecho
+# del diseño actual (prod-11 lo declaró y no se cambia aquí). Lo que sí impide un
+# rojo es lo que viene detrás: el job `installer` depende de los tres que
+# publican las seis, así que una CVE HIGH/CRITICAL en cualquiera de ellas deja al
+# instalador sin publicar y al manifiesto de digests sin escribir. Esa cadena de
+# `needs:` es la ÚNICA mitigación real del orden, y por eso
+# `tests/unit/test_release_publishes_the_installer.py` la vigila.
 
 on:
   push:
@@ -178,3 +193,198 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore
           cache: true
+
+  # ---------------------------------------------------------------------------
+  # LA SÉPTIMA IMAGEN + EL PIN POR DIGEST DE LAS SEIS. Un solo job, y no por
+  # ahorrar: las dos cosas TIENEN que pasar aquí dentro.
+  #
+  # ADR 0161 (opción D con el envoltorio de B, firmada por el operador el
+  # 2026-08-27): el instalador se distribuye como imagen para que instalar no
+  # exija clonar el repo, y **no se publica antes de que las seis de plataforma
+  # se puedan pinear por digest**. Un instalador verificado que descarga seis
+  # imágenes sin verificar no arregla la cadena de suministro: mueve el eslabón
+  # débil un paso. El `needs:` de este job convierte ese orden en mecánica, no en
+  # documentación.
+  #
+  # POR QUÉ RESOLVER DIGESTS Y CONSTRUIR VAN JUNTOS. El manifiesto
+  # (`installer_backend/platform_images.json`) llega al repo por PR, que se
+  # mergea más tarde. Si el instalador se construyera en otro job desde el
+  # checkout, la imagen publicada pinearía los digests de la release ANTERIOR —y
+  # lo parecería todo correcto—. Resolviendo y reescribiendo el fichero ANTES del
+  # build, la imagen que se publica pinea exactamente lo que se acaba de
+  # publicar; el PR sólo persigue que el árbol diga lo mismo.
+  #
+  # Se construye el BACKEND (`apps/installer/backend/Dockerfile`), que es donde
+  # vive el CLI. El wizard HTTP (`apps/installer/Dockerfile`) es el que el ADR
+  # 0161 §«Lo que hay hoy, medido» describe como simulación: empaquetarlo sería
+  # publicar la fachada.
+  #
+  # AJUSTE DEL REPOSITORIO QUE ESTE JOB NECESITA, igual que su gemelo de
+  # `build-runtime-templates.yml`: Settings → Actions → General → Workflow
+  # permissions → «Allow GitHub Actions to create and approve pull requests». Sin
+  # esa casilla el job hace todo su trabajo y muere en la última línea con
+  # `GraphQL: GitHub Actions is not permitted to create or approve pull
+  # requests`. El arreglo es la casilla, no el workflow.
+  installer:
+    name: Build & push installer (+ pin the six by digest)
+    needs: [prep, api-server, backend, admin-panel]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `fetch-depth: 0` NO es comodidad: sin él, empujar la rama del
+          # manifiesto falla cuando el commit de la release toca un workflow.
+          # Está medido y explicado en `build-runtime-templates.yml` (job
+          # `refresh-digests`): con profundidad 1 el push reenvía el commit
+          # padre, y GitHub rechaza que una App empuje commits que tocan
+          # `.github/workflows/**` sin un scope que el GITHUB_TOKEN no puede
+          # tener. Parecía aleatorio porque sólo aparece según qué tocara el tip.
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ADR 0148, condición 1: «nada de digest sin vía de refresco». ESTE paso es
+      # la vía para las seis de plataforma. El digest no lo teclea nadie: se
+      # resuelve contra el registry después de que las seis hayan pasado build y
+      # Trivy, y lo escribe una CLI que VALIDA antes de tocar el fichero — un
+      # `imagetools inspect` que devuelve vacío, o un mensaje de error del
+      # registry, acabaría versionado como si fuera un digest.
+      - name: Resolve the six platform digests
+        env:
+          TAG: ${{ needs.prep.outputs.tag }}
+          # El módulo no tiene dependencias: basta el PYTHONPATH. Un `pip
+          # install` aquí chocaría con el entorno gestionado del runner (PEP 668)
+          # por nada.
+          PYTHONPATH: apps/installer/backend/src
+        run: |
+          set -euo pipefail
+          # La lista de apps sale del MÓDULO, no de una copia en este fichero:
+          # una app nueva entra en el pin sin que nadie se acuerde de tocar el
+          # workflow. Enumerarla a mano fue el defecto del `watchdog`, que estuvo
+          # diez días sin publicarse en 2026-08 por exactamente eso.
+          apps=$(python3 -c "from installer_backend.platform_images import PLATFORM_APPS; print('\n'.join(PLATFORM_APPS))")
+          # Los pares se guardan en un fichero porque el paso de sellado, más
+          # abajo, tiene que volver a escribir el manifiesto con estos MISMOS
+          # digests más el del instalador. Re-resolverlos allí daría lo mismo
+          # hoy, pero sería una segunda fuente de verdad para el mismo dato.
+          : > "${RUNNER_TEMP}/platform-digests.txt"
+          for app in $apps; do
+            ref="${REGISTRY}/${app}:${TAG}"
+            digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')
+            echo "$app -> $digest"
+            echo "${app}=${digest}" >> "${RUNNER_TEMP}/platform-digests.txt"
+          done
+          args=()
+          while IFS= read -r pair; do args+=(--digest "$pair"); done \
+            < "${RUNNER_TEMP}/platform-digests.txt"
+          python3 -m installer_backend.platform_release \
+            --registry "${REGISTRY}" --version "${TAG}" "${args[@]}"
+
+      # El build va DESPUÉS del paso anterior a propósito: `COPY src` se lleva el
+      # manifiesto recién reescrito, así que la imagen publicada pinea los
+      # digests de esta misma release.
+      #
+      # `context: apps/installer/backend` — el Dockerfile del backend hace `COPY
+      # pyproject.toml` y `COPY src` relativos a su propio directorio. Es de la
+      # familia «autocontenida», no de las derivadas de la imagen base: con la
+      # raíz del repo como contexto, el build falla.
+      - name: Build & push installer
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: apps/installer/backend
+          file: apps/installer/backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/installer:${{ needs.prep.outputs.tag }}
+            ${{ env.REGISTRY }}/installer:${{ github.sha }}
+          cache-from: type=gha,scope=installer
+          cache-to: type=gha,mode=max,scope=installer
+
+      # Mismo gate que las otras seis, y mismo trade-off declarado: el escaneo va
+      # DESPUÉS del push, así que un rojo aquí NO despublica la imagen. Lo que sí
+      # hace es dejar el paso siguiente sin correr, o sea que el manifiesto no
+      # llega al árbol y la release queda marcada fallida entera.
+      - name: Trivy — installer publicada (HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/installer:${{ needs.prep.outputs.tag }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          cache: true
+
+      # LA SÉPTIMA IMAGEN SE SELLA A SÍ MISMA. El artefacto descargable
+      # (`docker/bootstrap/docker-compose.generate.yml`, el envoltorio de la
+      # opción B) lleva el hueco `${INSTALLER_IMAGE_DIGEST:-}` a la vista, y el
+      # runbook 09 §«Dónde acaba el digest» dice quién lo rellena: **el pipeline
+      # al publicar, y nunca a mano**. Sin este paso, esa frase sería una promesa
+      # sin mecanismo y el fichero que la gente descarga iría por tag mutable —
+      # justo lo que el camino sin clon no se puede permitir, porque quien lo baja
+      # no tiene checkout con el que contrastar nada.
+      #
+      # Va DESPUÉS del push por una razón física: el digest de una imagen no
+      # existe hasta que está en el registro.
+      - name: Seal the bootstrap artifact with the published installer digest
+        env:
+          TAG: ${{ needs.prep.outputs.tag }}
+          PYTHONPATH: apps/installer/backend/src
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "${REGISTRY}/installer:${TAG}" \
+            --format '{{.Manifest.Digest}}')
+          echo "installer -> $digest"
+          args=()
+          while IFS= read -r pair; do args+=(--digest "$pair"); done \
+            < "${RUNNER_TEMP}/platform-digests.txt"
+          python3 -m installer_backend.platform_release \
+            --registry "${REGISTRY}" --version "${TAG}" "${args[@]}" \
+            --installer-digest "$digest" \
+            --bootstrap docker/bootstrap/docker-compose.generate.yml
+
+      # El manifiesto y el artefacto sellado llegan al repo por PR: revisable, y
+      # sin permiso de escritura directa sobre `master`.
+      #
+      # SÓLO PARA UN TAG FINAL. Este workflow dispara con `tags: ['v*']`, que
+      # incluye las pre-releases (`v1.0.0-rc1`, el flujo del runbook 09). La
+      # imagen del instalador de esa ejecución sí debe pinear los digests del rc
+      # —coherencia interna de lo que se publicó ese día—, pero dejar `master`
+      # pineado a una release candidate sería otra cosa: el siguiente que genere
+      # un compose desde el árbol instalaría el rc creyendo que instala estable.
+      - name: Open a PR when the manifest moved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prep.outputs.tag }}
+        run: |
+          set -euo pipefail
+          manifest=apps/installer/backend/src/installer_backend/platform_images.json
+          artifact=docker/bootstrap/docker-compose.generate.yml
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "«$TAG» no es un tag final: la imagen del instalador ya pinea sus digests, pero master no se toca."
+            exit 0
+          fi
+          if git diff --quiet -- "$manifest" "$artifact"; then
+            echo "Ni el manifiesto ni el artefacto han cambiado: nada que proponer."
+            exit 0
+          fi
+          branch="chore/platform-digests-${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add "$manifest" "$artifact"
+          git commit -m "chore(plataforma): pinea por digest las seis imágenes y el instalador de ${TAG}" \
+                     -m "Generado por release-images.yml sobre ${GITHUB_SHA}. ADR 0148 aplicado a las seis y al artefacto de arranque, por el orden duro del ADR 0161."
+          git push origin "$branch"
+          gh pr create --base master --head "$branch" \
+            --title "chore(plataforma): digests de las imágenes de plataforma (${TAG})" \
+            --body "Digests resueltos contra \`${REGISTRY}\` tras publicar las siete imágenes y pasar Trivy: las seis del compose generado van al manifiesto, y la del instalador sella \`${artifact}\`. Los escribe el pipeline: editarlos a mano congelaría sus CVEs (ADR 0148, condición 1)."

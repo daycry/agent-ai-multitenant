@@ -43,6 +43,13 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # El ENTRYPOINT de la imagen es el CLI (`python -m installer_backend.cli`),
+    # porque la forma publicada de usarla es `docker run … generate --config …`
+    # (ADR 0161, la séptima imagen de release-images.yml). El wizard HTTP sigue
+    # dentro y se alcanza sobrescribiéndolo aquí. Sin esta línea el contenedor
+    # imprimiría el `--help` del CLI y el healthcheck se quedaría esperando un
+    # /healthz que nadie sirve.
+    entrypoint: ["installer-backend"]
     environment:
       INSTALLER_HOST: 0.0.0.0
       INSTALLER_PORT: 8080

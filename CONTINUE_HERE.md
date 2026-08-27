@@ -220,9 +220,17 @@ fijar`. El ADR 0138 las deja fuera de su alcance por escrito porque
 8. **`registry-egress-followups`** (`open`): F3 cerrada el 2026-07-28; F1/F4/F5
    siguen abiertos. F5 lleva escrito su orden correcto y su trampa (si se hace a
    medias reabre la puerta trasera de B-04).
-9. **CI sigue caído por facturación** de la cuenta `daycry` («recent account
-   payments have failed»). Se arregla en <https://github.com/settings/billing>.
-   Mientras tanto, las suites se corren en local (abajo).
+9. ~~**CI sigue caído por facturación** de la cuenta `daycry`.~~ **RESUELTO.**
+   Comprobado el 2026-08-27: CI corre y pasa — run `33083267973` sobre
+   `1aec3ebc`, los doce jobs en verde.
+
+   Esta línea se queda tachada en vez de borrada porque su vida útil fue el
+   problema. Sobrevivió a su causa, y el 2026-08-27 un agente la citó como
+   hecho —`CONTINUE_HERE.md:223`— y la metió **tres veces en un ADR firmado**,
+   donde afirmaba que no se podía publicar nada porque no había controles. Los
+   había. Una nota de estado sin fecha de caducidad se convierte en una fuente
+   de verdad falsa justo cuando alguien la necesita: **antes de repetir de aquí
+   un estado operativo, compruébalo.**
 
 ## Deuda conocida que NO bloquea el despliegue
 

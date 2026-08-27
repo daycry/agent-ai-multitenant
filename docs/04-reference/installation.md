@@ -2,7 +2,7 @@
 title: Instalación, CLI, perfiles y endurecimiento de producción — Referencia
 audience: operador, system admin, devops, security
 phase: 15-instalador-produccion
-updated: 2026-08-01
+updated: 2026-08-27
 ---
 
 # Instalación, CLI, perfiles y endurecimiento de producción — Referencia
@@ -18,6 +18,96 @@ enlazados.
 > **Alcance.** Docker Compose en una sola máquina (no Kubernetes, no
 > multi-máquina). El instalador NO forma parte del stack runtime: es un
 > contenedor temporal que se autodestruye tras instalar.
+
+## Los tres caminos de instalación
+
+Hay tres formas de poner esto en una máquina y **no son intercambiables**: cada
+una exige cosas distintas del host y hoy están en estados distintos. La tercera
+columna está **medida** sobre el árbol en el
+[ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+(firmado el 2026-08-27), no estimada — que es la diferencia entre elegir camino y
+reservar una máquina para descubrirlo.
+
+| Camino                                                                                                  | Qué exige del host                                                                                                                  | Estado hoy                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(1) Sin clonar** — descargar el compose de arranque, leerlo, ejecutarlo, y después `up` + `bootstrap` | Docker + Compose v2, salida a `ghcr.io`, un `install.yaml` y la raíz de datos creada. **Ni git, ni Python, ni el repositorio**      | **No disponible todavía.** No hay ninguna imagen del instalador publicada, así que el `run` termina en `denied`. El artefacto ya existe y es auditable; falta publicar                                         |
+| **(2) Con clon + `docker compose`**                                                                     | git, el repositorio, `docker/.env` (nueve variables sin default abortan sin él)                                                     | **Levanta infraestructura, no la plataforma.** El compose canónico no declara los servicios de aplicación: da Postgres, Redis, MinIO, Vault, ClamAV, docling, proxies, searxng, Ollama                         |
+| **(3) Con los scripts** — `./scripts/install.sh --config install.yaml`                                  | git, el repositorio, **Python 3.12 y el paquete `installer_backend` importable** (`scripts/dev/bootstrap.sh`), y root sobre `/data` | **Es el camino real, y hoy no termina en una máquina limpia**: el paso `PULL_IMAGES` va contra un tag que nunca se ha publicado ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)) |
+
+Tres cosas que no se deducen de la tabla y deciden la elección:
+
+- **(1) y (3) ejecutan el MISMO código**, el CLI `installer_backend`. Lo que
+  cambia es quién pone el intérprete —la imagen publicada o tu host— y **hasta
+  dónde llega**: en (1) el contenedor **genera** el árbol de arranque y sale, y
+  el `docker compose up` lo ejecutas tú; en (3) el propio CLI lanza también el
+  `up`. No es un detalle de comodidad: es la decisión firmada del ADR 0161, y el
+  motivo está abajo.
+- **(2) no es un camino de producción**, aunque lo parezca. Es el stack de
+  desarrollo: sirve para tener la infraestructura delante, no para instalar el
+  producto.
+- **El wizard HTTP no es un cuarto camino.** Es una **simulación** (`FakeStepExecutor`)
+  que recorre los nueve pasos sin aprovisionar nada; véase el apartado siguiente.
+
+### (1) Sin clonar: descargar, leer, ejecutar
+
+El artefacto de entrada es un fichero, no un `curl … | bash`, y esa diferencia es
+la decisión: se descarga, **se lee**, y sólo entonces se ejecuta. Vive en
+[`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml)
+y cabe en una pantalla a propósito.
+
+```bash
+sudo mkdir -p /data/agent-platform
+curl -fsSLO https://raw.githubusercontent.com/daycry/agent-ai-multitenant/v1.0.0/docker/bootstrap/docker-compose.generate.yml
+less docker-compose.generate.yml     # este paso NO es decorativo: es su función
+
+# tu install.yaml, al lado del compose (sale de un perfil, ver más abajo)
+docker compose -f docker-compose.generate.yml run --rm generate
+
+cd /data/agent-platform && docker compose up -d --wait
+docker compose run --rm bootstrap    # Vault init + unseal + siembra + credenciales
+```
+
+**Qué se está leyendo cuando se lee ese fichero**: que baja **una** imagen, que le
+monta **sólo** la raíz de datos y el `install.yaml` en solo lectura, y que **no
+monta `/var/run/docker.sock`**. Lo último es lo que separa este diseño del que se
+descartó: montar el socket es acceso root efectivo al host, la alternativa que el
+[ADR 0060](../05-architecture-decisions/0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)
+rechazó por escrito. Por eso el contenedor **genera y no aprovisiona**, y por eso
+los comandos son tres y no uno.
+
+> **Hoy estos comandos no funcionan, y decirlo es parte de documentarlos.** No hay
+> imagen del instalador publicada: el `run` sale con `denied`. Lo que decide que
+> este camino exista es la publicación, y ésa tiene un **orden duro** —las seis
+> imágenes de plataforma pineadas por digest primero— escrito en el runbook
+> [09-release.md](../06-runbooks/09-release.md) §«La séptima imagen». Mientras
+> tanto, el camino soportado es el (3).
+
+### (2) Con clon: la infraestructura, no el producto
+
+```bash
+git clone https://github.com/daycry/agent-ai-multitenant.git && cd agent-ai-multitenant
+cp docker/.env.example docker/.env      # ANTES del `up`: hay variables sin default
+docker compose -f docker/docker-compose.yml up -d
+```
+
+Levanta la capa de infraestructura y nada más. Los servicios de aplicación
+(`api-server`, `workers`, `orchestrator`, `admin-panel`…) los declara el compose
+que **genera el instalador**, no éste. El paso a paso de desarrollo está en
+[02-getting-started/01-installation.md](../02-getting-started/01-installation.md).
+
+### (3) Con los scripts: el camino soportado hoy
+
+```bash
+cp scripts/install-profiles/recommended.yaml install.yaml
+# edita install.yaml: dominio, providers LLM, sizing, tenant inicial…
+./scripts/install.sh --config install.yaml
+```
+
+`--config` es obligatorio. Los prerrequisitos **no documentados en la checklist
+del runbook de producción** son los que hacen fallar esto en una máquina limpia:
+`install.sh` es un wrapper de `python -m installer_backend.cli install`, así que
+necesita Python 3.12 y el paquete importable; en Debian/Ubuntu limpio no existe
+siquiera un binario llamado `python`.
 
 ## El instalador
 

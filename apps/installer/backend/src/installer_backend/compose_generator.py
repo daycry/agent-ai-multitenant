@@ -60,6 +60,7 @@ from installer_backend.config import (
     InstallerConfig,
     LLMProviderKind,
 )
+from installer_backend.platform_images import load_platform_manifest
 
 # ---------------------------------------------------------------------------
 # Pinned images — kept in lockstep with docker/docker-compose.yml +
@@ -93,11 +94,35 @@ IMAGE_CADDY = "caddy:2.8-alpine"
 IMAGE_STT = "fedirz/faster-whisper-server:latest-cpu"
 IMAGE_TTS = "ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2"
 
-#: The application images the platform builds. The generator references them by
-#: tag (the installer pulls the released images); the build context lives in the
-#: repo. Pinned to the platform release tag at install time.
-APP_IMAGE_TAG = "${PLATFORM_IMAGE_TAG:-v1.0.0}"
-APP_IMAGE_REGISTRY = "${PLATFORM_REGISTRY:-ghcr.io/daycry}"
+#: The application images the platform builds. La referencia ya NO se compone
+#: aquí con dos constantes: sale del manifiesto de release
+#: (:mod:`installer_backend.platform_images`, ADR 0148 aplicado a las seis por el
+#: orden duro del ADR 0161), que es quien sabe si hay digests publicados.
+#:
+#: Mientras no los haya —el estado de hoy— el manifiesto devuelve exactamente la
+#: misma cadena que había escrita aquí: `${PLATFORM_REGISTRY:-…}/<app>:${PLATFORM_IMAGE_TAG:-…}`.
+#: Vacío significa vacío: el mecanismo degrada, no rompe. En cuanto una release
+#: publique las seis y el pipeline resuelva sus digests, la misma llamada empieza
+#: a devolver `…:v1.0.0@sha256:…` sin tocar una línea de este fichero.
+#:
+#: Se lee al IMPORTAR a propósito: un manifiesto corrupto tiene que doler aquí,
+#: no en el host del operador cuando `docker compose pull` resuelva una
+#: referencia inventada.
+PLATFORM_IMAGES = load_platform_manifest()
+APP_IMAGE_TAG = PLATFORM_IMAGES.tag_expression()
+APP_IMAGE_REGISTRY = PLATFORM_IMAGES.registry_expression()
+
+
+def app_image(app: str) -> str:
+    """Imagen publicada de ``app``, pineada por digest si hay release.
+
+    Punto de enganche único: todo `image:` de una app de este repo pasa por aquí,
+    de modo que el día que existan digests no queda ningún servicio componiendo
+    su referencia por su cuenta. La guarda que lo comprueba es
+    `tests/unit/test_platform_images_wiring.py`.
+    """
+    return PLATFORM_IMAGES.reference(app)
+
 
 # Dev-default markers the prod secret guard rejects (mirror of
 # api_server.config._DEV_SECRET_MARKERS). The generated *production* compose
@@ -808,7 +833,7 @@ def _migrations_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]: 
     ``service_completed_successfully`` (wired in :func:`generate_compose`)."""
 
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
+        "image": app_image("api-server"),
         "command": "alembic upgrade head",
         "environment": {
             # Alembic reads DATABASE_URL; migrations run as the migrations role.
@@ -875,7 +900,7 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         }
     )
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/api-server:{APP_IMAGE_TAG}",
+        "image": app_image("api-server"),
         "environment": env,
         # No host ports: the TLS reverse proxy (caddy) is the only published
         # surface (ADR 0061 / deploy-7); api-server is reached internally on
@@ -905,7 +930,7 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
         }
     )
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/orchestrator:{APP_IMAGE_TAG}",
+        "image": app_image("orchestrator"),
         "environment": env,
         "healthcheck": _http_healthcheck("http://localhost:8002/healthz"),
         "depends_on": {
@@ -1044,7 +1069,7 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     # (parametrised resource allocation, task 15_03).
     mem = f"{cfg.resources.worker_memory_gib}g"
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "image": app_image("workers"),
         "command": f"celery -A workers.celery_app worker --queues={_WORKER_GENERIC_QUEUES}",
         "environment": _workers_env(cfg, prod=prod),
         "volumes": _workers_volumes(cfg),
@@ -1103,7 +1128,7 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     )
     volumes = [*_workers_volumes(cfg), "/var/lib/docker/volumes:/var/lib/docker/volumes"]
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "image": app_image("workers"),
         "command": (
             f"celery -A workers.celery_app worker "
             f"--queues={_WORKER_PRIVILEGED_QUEUE} --concurrency=1"
@@ -1152,7 +1177,7 @@ def _workers_marketplace_service(cfg: InstallerConfig, *, prod: bool) -> dict[st
     ADR 0081 pedía para poder cerrar su Fase B/C.
     """
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "image": app_image("workers"),
         "command": (
             f"celery -A workers.celery_app worker "
             f"--queues={_WORKER_MARKETPLACE_QUEUE} --concurrency=1"
@@ -1187,7 +1212,7 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     es un worker (``inspect ping`` no aplica) ni tiene HTTP — se comprueba que el
     proceso beat es el PID 1 vivo del contenedor."""
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/workers:{APP_IMAGE_TAG}",
+        "image": app_image("workers"),
         "command": "celery -A workers.celery_app beat --loglevel=info",
         "environment": _workers_env(cfg, prod=prod),
         "healthcheck": {
@@ -1231,7 +1256,7 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
         }
     )
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/notification-dispatcher:{APP_IMAGE_TAG}",
+        "image": app_image("notification-dispatcher"),
         "environment": env,
         # -A debe ser el módulo REAL de la app (el mismo target del CMD del
         # Dockerfile): `-A notification_dispatcher` no carga («no attribute
@@ -1294,7 +1319,7 @@ def _watchdog_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
     acordarse de levantar con un flag no vigila nada.
     """
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/watchdog:{APP_IMAGE_TAG}",
+        "image": app_image("watchdog"),
         "environment": {
             # ADR 0060: la pasarela de mínimo privilegio, NUNCA el socket crudo.
             "DOCKER_HOST": "tcp://docker-socket-proxy:2375",
@@ -1322,7 +1347,7 @@ def _watchdog_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
 
 def _admin_panel_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     svc: dict[str, Any] = {
-        "image": f"{APP_IMAGE_REGISTRY}/admin-panel:{APP_IMAGE_TAG}",
+        "image": app_image("admin-panel"),
         "environment": {
             "NODE_ENV": "production" if prod else "development",
             "PLATFORM_DOMAIN": cfg.system.domain,

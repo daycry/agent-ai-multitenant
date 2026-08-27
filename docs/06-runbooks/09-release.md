@@ -22,6 +22,10 @@ nadie lo ha hecho: medido el 2026-08-27, `release-images.yml` tiene
 > definitivo es **acto del operador**: nada en el repositorio lo crea, por decisión
 > explícita del
 > [ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md).
+>
+> **Y un orden que no se negocia**: la imagen del **instalador** —la séptima, la
+> que hace posible instalar sin clonar— se publica **después** de que esas seis se
+> puedan pinear por digest, nunca antes (§«La séptima imagen»).
 
 ## Cuándo
 
@@ -110,6 +114,57 @@ imágenes (`compose_generator.py`): `migrations` y `api-server` comparten la de
 `notification-dispatcher`, `watchdog` y `admin-panel` tienen la suya. Por eso
 «faltan las imágenes» no es el fallo de un servicio: es un `up` que no llega a
 existir.
+
+### La séptima imagen: el instalador, y el orden duro que la precede
+
+Desde el [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+(firmado el 2026-08-27) existe un camino de instalación **sin clonar el
+repositorio**, y su artefacto de entrada es un fichero que se descarga suelto:
+[`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml).
+Ese fichero levanta **una** imagen, la del instalador, y por eso publicarla es
+parte de la release y no un trámite aparte.
+
+**El orden duro: las seis primero, pineadas por digest; el instalador después.**
+No es una preferencia de secuencia, es lo único que hace que publicarlo signifique
+algo. Un instalador que el operador verifica por digest y que acto seguido se
+descarga seis imágenes por **tag mutable** no es una cadena más fuerte: es la
+misma cadena con el eslabón débil movido un paso y un artefacto más que auditar.
+El ADR 0161 lo firma así de literal —«sería mover el eslabón débil un paso y
+llamarlo arreglo»— y de ahí salen las **dos condiciones** que hay que comprobar
+_antes_ de publicar el instalador:
+
+| Condición                                                     | Cómo se comprueba                                                                                                                                                                                       |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Las seis imágenes de plataforma se referencian **por digest** | El manifiesto que resuelve el pipeline (`installer_backend/platform_images.json`) trae los seis digests, y el compose generado deja de componer `…:${PLATFORM_IMAGE_TAG}` a secas (paso 6 del ADR 0161) |
+| CI da veredicto                                               | `gh run list --workflow=ci.yml --limit 1`. Está caído desde el **2026-07-30** por facturación de la cuenta (`CONTINUE_HERE.md`)                                                                         |
+| El workflow construye de verdad la imagen del instalador      | `grep -n installer .github/workflows/release-images.yml` — si no aparece, esta release publica seis imágenes y el camino sin clon sigue sin existir                                                     |
+
+La segunda condición es de higiene, no de diseño, y es la que más fácil se pasa
+por alto: **Trivy corre después del push** (siguiente apartado) y la guarda de
+digest vive en los tests. Publicar con CI caído es publicar **sin ningún control
+efectivo** — y hacerlo justo con el contenedor que mintea el root token de Vault
+y las cinco unseal keys en claro es el peor sitio para estrenar esa costumbre.
+
+**Dónde acaba el digest, y quién lo escribe.** El artefacto descargable lleva el
+hueco a la vista:
+
+```yaml
+image: ghcr.io/daycry/installer:v1.0.0${INSTALLER_IMAGE_DIGEST:-}
+```
+
+Con el hueco vacío, el fichero referencia un **tag mutable**: quien lo descargue
+mañana puede recibir otro contenido bajo el mismo nombre. Lo rellena el pipeline
+al publicar, sustituyendo la línea por su forma sellada
+(`…:v1.0.0@sha256:<64 hex>`), y **nunca se escribe a mano**: un digest puesto por
+una persona no tiene vía de refresco y congela sus CVEs para siempre — es la
+condición 1 del [ADR 0148](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md),
+la misma que rige `runtime_images.json`.
+
+Lo que este orden **no** compra, y conviene no confundirlo: el digest protege
+contra deriva y contra que te sirvan otra cosa bajo el mismo tag; **no protege
+contra suplantación**. Quien comprometa el `GITHUB_TOKEN` o la cuenta puede
+publicar una imagen que el digest describirá fielmente. La firma (cosign) tiene
+su propio ADR pendiente, y hasta que exista esto es lo que hay.
 
 ### Trivy corre DESPUÉS del push, y eso cambia qué significa un rojo
 
@@ -282,6 +337,47 @@ done
 roto a medias que el ensayo existía para evitar, y hay que cerrarlo antes de
 anunciar nada — la tabla de «Si el ensayo falla» aplica igual aquí.
 
+### 6. Sólo entonces: publicar el instalador y sellar el artefacto de arranque
+
+Este paso **no se hace en la misma release** que estrena las seis, salvo que las
+tres condiciones del apartado «La séptima imagen» ya se cumplan. Si alguna no se
+cumple, la release termina en el paso 5 y el camino sin clon sigue sin existir:
+eso es correcto, no una release incompleta.
+
+Cuando se cumplan, el procedimiento es el mismo de los pasos 2 y 5 aplicado a una
+imagen más, con un cierre propio:
+
+```bash
+docker logout ghcr.io
+docker manifest inspect "ghcr.io/daycry/installer:v1.0.0" > /dev/null && echo "OK installer"
+
+# El digest que hay que sellar en el artefacto (el del manifiesto publicado):
+docker buildx imagetools inspect "ghcr.io/daycry/installer:v1.0.0" \
+  --format '{{.Manifest.Digest}}'
+```
+
+Ese digest es el que el pipeline escribe en
+[`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml)
+sustituyendo `${INSTALLER_IMAGE_DIGEST:-}`. **No lo pegues a mano**: además de
+congelar sus CVEs (ADR 0148), un fichero editado a mano y otro publicado dejan de
+ser el mismo artefacto, y el camino sin clon se apoya en que lo sean.
+
+La comprobación final es la que hará un cliente, y se hace **como el cliente**:
+en un directorio vacío, sin checkout y sin sesión abierta.
+
+```bash
+mkdir /tmp/audit && cd /tmp/audit
+curl -fsSLO "https://raw.githubusercontent.com/daycry/agent-ai-multitenant/v1.0.0/docker/bootstrap/docker-compose.generate.yml"
+less docker-compose.generate.yml      # el paso que justifica que esto sea un fichero
+docker compose -f docker-compose.generate.yml config
+```
+
+El `config` tiene que resolver la imagen **con su digest** y mostrar exactamente
+dos binds: la raíz de datos y `./install.yaml`. Si aparece cualquier otra cosa
+—y muy en particular `/var/run/docker.sock`— no publiques: el artefacto ha dejado
+de ser el que el ADR 0161 firmó, y su garantía se pierde sin que nada falle
+(lo vigila `tests/docs/test_installer_bootstrap_artifact.py`).
+
 ## Verificación
 
 Una release está publicada cuando las cinco cosas son ciertas, en este orden:
@@ -296,6 +392,12 @@ Una release está publicada cuando las cinco cosas son ciertas, en este orden:
 4. El `/healthz` del instalador y el `/openapi.json` de la api-server declaran el
    número de la release, no `0.0.0`.
 5. El changelog tiene su sección numerada y `[Unreleased]` está vacía.
+
+Y una **sexta, sólo si esta release publicó además el instalador** (paso 6): el
+artefacto `docker/bootstrap/docker-compose.generate.yml` referencia la imagen
+**con el digest** de lo que se acaba de publicar, y descargarlo en un directorio
+vacío y pasarle `docker compose config` resuelve sin tocar el repositorio. Sin
+esa sexta, la release es válida: lo que no existe todavía es el camino sin clon.
 
 ## Si el ensayo falla
 
@@ -344,6 +446,10 @@ falla, el `rc` es lo único con lo que se puede seguir instalando.
 ## Enlaces
 
 - La decisión de versionado: [ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md).
+- Cómo se distribuye e instala la plataforma, y por qué el instalador genera en
+  vez de aprovisionar: [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
+- Los tres caminos de instalación y qué exige cada uno:
+  [04-reference/installation.md](../04-reference/installation.md).
 - Qué versiona la API pública, y por qué los SDK van aparte: [ADR 0037](../05-architecture-decisions/0037-api-publica-x-api-token-versionado-path-webhooks-hmac-config-id-sdks-openapi.md).
 - Actualizar una instalación a una versión ya publicada: [03-system-upgrade.md](./03-system-upgrade.md).
 - Instalar en producción de cero: [08-instalacion-produccion.md](./08-instalacion-produccion.md).

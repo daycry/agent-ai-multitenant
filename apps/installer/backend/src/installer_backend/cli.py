@@ -30,6 +30,36 @@ wizard gates it in step 1) and the finalize reveal at the end (the wizard's
 step 9). :func:`headless_pipeline` is the single source of truth for the named
 phases so a test can assert the CLI runs the wizard's pipeline.
 
+``generate``: el instalador escribe y sale (ADR 0161, opción D)
+---------------------------------------------------------------
+``install`` presupone que quien lo ejecuta manda sobre el daemon Docker del
+host. Cuando el instalador se distribuye **como contenedor** eso deja de ser
+gratis: para provisionar necesitaría el socket del daemon montado dentro, que es
+acceso root efectivo al host — exactamente lo que rechazó el ADR 0060 — y no
+puede pasar por el socket-proxy, cuya ACL deniega ``VOLUMES``.
+
+El subcomando ``generate`` es la salida que eligió el operador el 2026-08-27: el
+contenedor **no habla con Docker**. Se le monta sólo la raíz de datos, ejecuta
+ÚNICAMENTE el paso :data:`~installer_backend.install.InstallStep.GENERATE_CONFIG`
+—compose, ``.env``, ``config/global.yaml``, el ``Caddyfile`` y los auxiliares que
+el compose monta— y sale. El ``up`` y la finalización los ejecuta el operador::
+
+    docker run --rm -v /data/agent-platform:/data/agent-platform \\
+      ghcr.io/daycry/installer:v1.0.0 generate --config install.yaml
+    cd /data/agent-platform && docker compose up -d --wait
+    docker compose run --rm bootstrap
+
+El precio del diseño es que **una línea se convierte en tres**, así que
+``generate`` termina imprimiendo los dos comandos que le quedan al operador: un
+instalador que acaba en verde sin decirlo deja un stack que no existe y a alguien
+convencido de lo contrario.
+
+Y a diferencia de ``install``, ``generate`` **no tiene ``--dry-run``**. Simular la
+escritura de un árbol de ficheros no informa de nada —el árbol ES el resultado— y
+un ejecutor de simulación cableado aquí produciría el fallo que hoy tiene el
+wizard HTTP: log en verde, raíz de datos vacía, y el operador enterándose en el
+``up``. La guarda :func:`_assert_real_generate_seams` no tiene puerta trasera.
+
 Exit codes
 ----------
 The CLI maps each failure class to a distinct, documented exit code
@@ -42,6 +72,11 @@ The CLI maps each failure class to a distinct, documented exit code
     3  PREREQ        — a required prerequisite failed (aborts BEFORE provisioning).
     4  PROVISION     — a provisioning step (generate/pull/start/vault/seed) failed.
     5  ABORTED       — the operator declined a destructive confirmation.
+    6  GENERATE      — ``generate`` no pudo escribir el árbol de arranque (o se
+                       cableó con seams de simulación). Distinto de PROVISION a
+                       propósito: un 4 dice «el stack puede haber quedado a
+                       medias»; un 6 dice «no se levantó nada, y la raíz de datos
+                       puede tener escrituras parciales».
 
 Security
 --------
@@ -73,8 +108,11 @@ from installer_backend.config_generators import generate_secrets
 from installer_backend.finalize import FinalizeService, InstallCredentials, RevealPayload
 from installer_backend.install import (
     INSTALL_STEP_ORDER,
+    INSTALL_STEP_TITLES_ES,
     FakeStepExecutor,
     InstallOrchestrator,
+    InstallStep,
+    StepExecutionError,
     StepExecutor,
 )
 from installer_backend.prereqs import RealPrereqChecker, SystemHostProbe
@@ -124,6 +162,25 @@ class ExitCode(IntEnum):
     PREREQ = 3
     PROVISION = 4
     ABORTED = 5
+    #: ``generate`` no llegó a dejar el árbol de arranque escrito. Se separa de
+    #: PROVISION porque significan cosas distintas para quien recoge el error:
+    #: con PROVISION puede haber contenedores levantados a medias; con GENERATE
+    #: no se levantó nada y lo único que puede haber quedado a medias son
+    #: ficheros bajo la raíz de datos.
+    GENERATE = 6
+
+
+#: El one-shot de finalización del compose generado (init de Vault + siembra +
+#: revelado), que corre DENTRO de la red del stack ya levantado — que es donde
+#: tiene que correr y por lo que ``generate`` no lo hace.
+#:
+#: **Ojo: el compose generado todavía no lo declara.** El paso 8 del ADR 0161 son
+#: dos mitades —este subcomando y ese one-shot— y sólo está hecha la primera. El
+#: nombre se fija aquí para que la costura entre el banner y el generador de
+#: compose sea un símbolo y no una cadena suelta, y hay una guarda-alambre en
+#: ``tests/unit/installer/test_generate.py`` que se disparará cuando la otra
+#: mitad aterrice.
+BOOTSTRAP_SERVICE = "bootstrap"
 
 
 def headless_pipeline() -> tuple[str, ...]:
@@ -453,12 +510,107 @@ class HeadlessInstaller:
 
 
 # ---------------------------------------------------------------------------
+# `generate` — escribe el árbol de arranque y sale (ADR 0161, opción D).
+# ---------------------------------------------------------------------------
+@dataclass
+class BootTreeGenerator:
+    """Ejecuta ÚNICAMENTE ``GENERATE_CONFIG``, con los seams reales.
+
+    Es deliberadamente la mitad de :class:`HeadlessInstaller`: no hay puerta de
+    prerequisitos (no se comprueba Docker porque no se va a usar), no hay
+    pipeline (un solo paso, así que no hace falta orquestador ni máquina de
+    estados) y no hay finalize (las credenciales nacen en el one-shot de
+    finalización, dentro de la red del stack, no aquí).
+
+    Lo que sí hay es la propiedad que sostiene el diseño: **este camino no
+    invoca a Docker**. Ni ``pull``, ni ``up``, ni ``run``. Un test lo afirma con
+    un ``CommandRunner`` que revienta si alguien lo llama, porque es una
+    propiedad invisible: el día que un refactor «aproveche» que el ejecutor ya
+    sabe hablar con compose, nada fallaría en la suite y el contenedor
+    simplemente dejaría de poder correr sin el socket del daemon.
+
+    Registra el nombre de la fase ejecutada en :attr:`phases` para que un test
+    pueda afirmar que fue exactamente una, y cuál.
+    """
+
+    executor: StepExecutor
+    out: TextIO
+    #: Las fases realmente ejecutadas — debe ser ``["generate_config"]``.
+    phases: list[str] = field(default_factory=list)
+
+    def _log(self, message: str) -> None:
+        """Emite una línea para el operador. NUNCA lleva un secreto."""
+
+        print(message, file=self.out)
+
+    def run(self, config: InstallerConfig) -> list[str]:
+        """Escribe el árbol de arranque de *config*; devuelve sus líneas de log.
+
+        Lanza :class:`CliError` con :data:`ExitCode.GENERATE` si la escritura
+        falla (permisos sobre la raíz de datos montada, el guardián de secretos
+        de producción, un auxiliar que no se puede leer del paquete…). No se
+        arrastra a :data:`ExitCode.PROVISION` a propósito: aquí no se ha
+        levantado nada, y quien recoja el código de salida necesita saberlo.
+        """
+
+        step = InstallStep.GENERATE_CONFIG
+        self.phases.append(step.value)
+        self._log(f"[{step.value}] {INSTALL_STEP_TITLES_ES[step]}…")
+        try:
+            lines = self.executor.execute(step, _config_to_executor_payload(config))
+        except StepExecutionError as exc:
+            raise CliError(
+                f"No se pudo generar el árbol de arranque: {exc}",
+                ExitCode.GENERATE,
+            ) from exc
+        for line in lines:
+            self._log(f"[{step.value}] {line}")
+        self._log(_next_steps_banner(config))
+        return lines
+
+
+def _next_steps_banner(config: InstallerConfig) -> str:
+    """Los DOS comandos que le quedan al operador, y por qué le quedan.
+
+    La opción D convierte una línea en tres. Si el instalador se limitara a
+    terminar en verde, el modo de fallo sería el peor de todos: no un error, sino
+    un operador convencido de que el stack está levantado cuando lo único que
+    existe es un directorio con ficheros. El banner es, literalmente, la parte de
+    la interfaz que paga el precio del diseño.
+    """
+
+    root = config.storage.data_root
+    return "\n".join(
+        (
+            "",
+            "=" * 68,
+            "  Árbol de arranque generado. El instalador NO ha tocado Docker:",
+            "  ni pull, ni up, ni bootstrap de Vault, ni siembra (ADR 0161, opción D:",
+            "  montar el socket del daemon sería acceso root al host).",
+            "",
+            "  Quedan DOS comandos, y los ejecutas TÚ:",
+            "",
+            f"    1) cd {root} && docker compose up -d --wait",
+            f"    2) docker compose run --rm {BOOTSTRAP_SERVICE}",
+            "",
+            "  El (2) inicializa Vault, siembra el tenant inicial y muestra las",
+            "  credenciales UNA sola vez. Corre dentro de la red del stack, que es",
+            "  donde tiene que correr.",
+            "=" * 68,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Seam factory — built fresh per run so the in-memory stubs don't leak state.
 # Phase B / tests override these with real / fake bindings.
 # ---------------------------------------------------------------------------
 #: The simulation seams (used by ``--dry-run``). The no-silent-stubs guard
 #: (:func:`_assert_real_install_seams`) rejects these when ``--dry-run`` is absent
 #: so a fake install can never masquerade as a real one (task_prod01_19 / deploy-1).
+#: :func:`_assert_real_generate_seams` lee la MISMA lista —sin la salida del
+#: ``--dry-run``, que ``generate`` no tiene— para que añadir un fake nuevo aquí
+#: cubra los dos caminos y no haya que acordarse del segundo.
 _SIMULATION_INSTALL_SEAMS = (FakeStepExecutor, StubPrereqChecker)
 _SIMULATION_UNINSTALL_SEAMS = (StubStackTeardown, StubDataPurger)
 
@@ -514,6 +666,50 @@ def build_default_installer(
     )
 
 
+def build_default_generator(out: TextIO, config: InstallerConfig) -> BootTreeGenerator:
+    """Construye el :class:`BootTreeGenerator` con el ejecutor REAL. Sin variantes.
+
+    No acepta ``dry_run``: ``generate`` no tiene simulación (ver el docstring del
+    módulo). El :class:`RealStepExecutor` se cablea entero —incluido el ``runner``
+    de subprocesos y el factory de cliente de Vault, que este camino no usará—
+    porque el ejecutor es una pieza compartida con ``install``; lo que garantiza
+    que no se toque Docker no es amputar el ejecutor, sino que
+    :meth:`BootTreeGenerator.run` sólo le pide ``GENERATE_CONFIG``. Construir es
+    libre de efectos: nada toca el host hasta ese ``run``.
+    """
+
+    compose_dir = config.storage.data_root
+    executor = RealStepExecutor(
+        compose_dir=compose_dir,
+        runner=SubprocessRunner(),
+        env_writer=RealEnvFileWriter(),
+        tree=RealDataTreeProvisioner(),
+        vault_client_factory=build_hvac_vault_client,
+        cfg=config,
+        secrets=generate_secrets(),
+    )
+    return BootTreeGenerator(executor=executor, out=out)
+
+
+def _assert_real_generate_seams(generator: BootTreeGenerator) -> None:
+    """Aborta si ``generate`` se cableó con un ejecutor de SIMULACIÓN.
+
+    Sin ``dry_run`` que la abra, a diferencia de la guarda de ``install``: una
+    generación simulada no informa de nada, porque el entregable ES el árbol de
+    ficheros. Lo que produciría es el fallo que hoy tiene el wizard HTTP — log
+    en verde, raíz de datos vacía— y el operador lo descubriría en el ``up``.
+    """
+
+    if isinstance(generator.executor, _SIMULATION_INSTALL_SEAMS):
+        raise CliError(
+            "Abortado: `generate` tiene un ejecutor de SIMULACIÓN cableado "
+            f"({type(generator.executor).__name__}). No existe --dry-run para "
+            "`generate`: simular la escritura del árbol de arranque no informa de "
+            "nada, y dejaría la raíz de datos vacía con un log en verde.",
+            ExitCode.GENERATE,
+        )
+
+
 def _assert_real_install_seams(installer: HeadlessInstaller, *, dry_run: bool) -> None:
     """Fail loud if a simulation seam is wired without ``--dry-run`` (deploy-1).
 
@@ -561,7 +757,13 @@ def _assert_real_uninstall_seams(uninstaller: Uninstaller, *, dry_run: bool) -> 
 # Argument parsing + the `install` / `uninstall` subcommands.
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
-    """Build the CLI argument parser (``install`` + ``uninstall`` subcommands)."""
+    """Build the CLI argument parser (``generate`` / ``install`` / ``uninstall`` /
+    ``reinstall``).
+
+    ``install`` provisiona de punta a punta desde el host; ``generate`` sólo
+    escribe el árbol de arranque y sale, que es la forma que puede vivir dentro
+    de un contenedor sin el socket del daemon (ADR 0161, opción D).
+    """
 
     parser = argparse.ArgumentParser(
         prog="installer_backend.cli",
@@ -592,6 +794,32 @@ def build_parser() -> argparse.ArgumentParser:
             "una instalación falsa silenciosa)."
         ),
     )
+
+    generate = sub.add_parser(
+        "generate",
+        help=(
+            "Escribe el árbol de arranque (compose, .env, config, Caddyfile y "
+            "auxiliares) bajo la raíz de datos y SALE. No toca Docker: el `up` y "
+            "la finalización los ejecuta el operador (ADR 0161, opción D)."
+        ),
+        description=(
+            "Genera la configuración de la plataforma sin provisionar nada. "
+            "Pensado para ejecutarse dentro del contenedor del instalador con "
+            "sólo la raíz de datos montada: no necesita el socket del daemon "
+            "Docker, que es acceso root al host (ADR 0060). Al terminar imprime "
+            "los dos comandos que quedan por ejecutar."
+        ),
+    )
+    generate.add_argument(
+        "--config",
+        required=True,
+        metavar="install.yaml",
+        help="Ruta al fichero YAML de configuración de la instalación.",
+    )
+    # NOTA: `generate` NO tiene --dry-run, y es intencionado. Ver
+    # `_assert_real_generate_seams`: el entregable de este subcomando es el árbol
+    # de ficheros, así que simularlo sólo produce un log en verde sobre una raíz
+    # de datos vacía — el defecto que hoy tiene el wizard HTTP.
 
     uninstall = sub.add_parser(
         "uninstall",
@@ -758,6 +986,35 @@ def run_install(
     return ExitCode.OK
 
 
+def run_generate(
+    config_path: str,
+    *,
+    generator: BootTreeGenerator | None = None,
+    out: TextIO | None = None,
+) -> ExitCode:
+    """Carga *config_path* y escribe el árbol de arranque. NO toca Docker.
+
+    Mismo orden de puertas que :func:`run_install`: primero la configuración (un
+    YAML malo devuelve :data:`ExitCode.CONFIG` sin haber escrito nada), después la
+    guarda anti-simulación, y sólo entonces la escritura. ``generator`` es
+    inyectable para los tests; sin él se construye el cableado real.
+
+    Devuelve :data:`ExitCode.OK` tras imprimir los dos comandos que le quedan al
+    operador; lanza :class:`CliError` con :data:`ExitCode.GENERATE` si la
+    generación falla.
+    """
+
+    stream = out if out is not None else sys.stdout
+
+    text = _read_config_file(config_path)
+    config = load_install_config(text)
+
+    gen = generator if generator is not None else build_default_generator(stream, config)
+    _assert_real_generate_seams(gen)
+    gen.run(config)
+    return ExitCode.OK
+
+
 def run_uninstall(
     *,
     deployment_name: str,
@@ -859,6 +1116,44 @@ def run_reinstall(
     return ExitCode.OK
 
 
+def _dispatch(args: argparse.Namespace, out: TextIO | None) -> ExitCode:
+    """Encamina los args ya parseados al runner del subcomando.
+
+    Separado de :func:`main` para que el punto de entrada se quede sólo con las
+    dos responsabilidades que NO son por-comando: normalizar la salida propia de
+    argparse y mapear un :class:`CliError` a su código documentado. Todo runner
+    devuelve un :class:`ExitCode` o lanza :class:`CliError`.
+    """
+
+    if args.command == "install":
+        return run_install(args.config, out=out, dry_run=args.dry_run)
+    if args.command == "generate":
+        return run_generate(args.config, out=out)
+    if args.command == "uninstall":
+        return run_uninstall(
+            deployment_name=args.deployment_name,
+            data_root=args.data_root,
+            purge_data=args.purge_data,
+            confirm_name=args.confirm_name,
+            yes=args.yes,
+            interactive=args.interactive,
+            out=out,
+            dry_run=args.dry_run,
+        )
+    if args.command == "reinstall":
+        return run_reinstall(
+            deployment_name=args.deployment_name,
+            data_root=args.data_root,
+            fresh=args.fresh,
+            confirm_name=args.confirm_name,
+            yes=args.yes,
+            interactive=args.interactive,
+            out=out,
+        )
+    # Inalcanzable (el subparser es `required=True`); se deja por exhaustividad.
+    raise CliError("comando desconocido.", ExitCode.USAGE)  # pragma: no cover
+
+
 def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int:
     """CLI entry point. Returns a process exit code (see :class:`ExitCode`).
 
@@ -876,40 +1171,10 @@ def main(argv: Sequence[str] | None = None, *, out: TextIO | None = None) -> int
         return int(ExitCode.USAGE) if exc.code not in (0, None) else int(ExitCode.OK)
 
     try:
-        if args.command == "install":
-            return int(run_install(args.config, out=out, dry_run=args.dry_run))
-        if args.command == "uninstall":
-            return int(
-                run_uninstall(
-                    deployment_name=args.deployment_name,
-                    data_root=args.data_root,
-                    purge_data=args.purge_data,
-                    confirm_name=args.confirm_name,
-                    yes=args.yes,
-                    interactive=args.interactive,
-                    out=out,
-                    dry_run=args.dry_run,
-                )
-            )
-        if args.command == "reinstall":
-            return int(
-                run_reinstall(
-                    deployment_name=args.deployment_name,
-                    data_root=args.data_root,
-                    fresh=args.fresh,
-                    confirm_name=args.confirm_name,
-                    yes=args.yes,
-                    interactive=args.interactive,
-                    out=out,
-                )
-            )
+        return int(_dispatch(args, out))
     except CliError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return int(exc.code)
-
-    # Unreachable (subparser is required), kept for exhaustiveness.
-    print("error: comando desconocido.", file=sys.stderr)  # pragma: no cover
-    return int(ExitCode.USAGE)  # pragma: no cover
 
 
 if __name__ == "__main__":  # pragma: no cover

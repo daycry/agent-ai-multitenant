@@ -1,0 +1,85 @@
+# =============================================================================
+# Arranque de la plataforma agéntica — camino SIN CLONAR el repositorio.
+#
+# Descárgalo, LÉELO, y sólo entonces ejecútalo. Para eso es un fichero y no un
+# `curl … | bash`: lo que se ejecuta se puede auditar antes (ADR 0161, opción D
+# con el envoltorio de la B, firmada el 2026-08-27).
+#
+# Lo que hace, entero:
+#   1. baja UNA imagen, la del instalador publicada en ghcr;
+#   2. le monta tu `install.yaml` en solo lectura y la raíz de datos;
+#   3. escribe ahí el árbol de arranque —`docker-compose.yml`, `.env`,
+#      `config/global.yaml`, `caddy/Caddyfile` y `stack/**`— y sale.
+#
+# Lo que NO hace: levantar la plataforma. Eso lo ejecutas tú, en tu host y con
+# tus permisos. Los tres comandos, en orden:
+#
+#   docker compose -f docker-compose.generate.yml run --rm generate
+#   cd /data/agent-platform && docker compose up -d --wait
+#   docker compose run --rm bootstrap    # Vault init + unseal + siembra
+#
+# -----------------------------------------------------------------------------
+# AQUÍ NO HAY `/var/run/docker.sock`, Y ÉSA ES LA DECISIÓN, NO UN OLVIDO.
+#
+# Un instalador que aprovisionara el host necesitaría hablar con el daemon de
+# Docker, y montar su socket en un contenedor es acceso root efectivo a la
+# máquina: es la alternativa que el ADR 0060 rechazó por escrito («escape a
+# root»). El `docker-socket-proxy` tampoco es la salida —su ACL deniega
+# `VOLUMES`, y esto necesita bind-mounts del host—, así que pasar por ahí
+# obligaría a relajar esa ACL para TODOS los contenedores que la usan.
+#
+# Por eso este contenedor GENERA y no provisiona. Si algún día alguien añade
+# aquí un `docker.sock`, un `DOCKER_HOST` o un `privileged: true`, la garantía
+# se pierde en silencio: el fichero seguiría funcionando igual de bien. Lo
+# vigila `tests/docs/test_installer_bootstrap_artifact.py`.
+# =============================================================================
+
+name: agentic-platform-bootstrap
+
+services:
+  generate:
+    # Imagen del instalador: tag para leerlo, DIGEST para creerlo.
+    # El tag es mutable —quien lo resuelva mañana puede recibir otro contenido—,
+    # así que el hueco `${INSTALLER_IMAGE_DIGEST}` lo rellena el pipeline de
+    # release con `@sha256:…` al publicar este artefacto, igual que
+    # `runtime_images.json` con las 14 imágenes de runtime (ADR 0148). Mientras
+    # el hueco esté VACÍO no hay imagen publicada y este fichero no puede
+    # funcionar todavía: el `pull` termina en `denied`.
+    image: ghcr.io/daycry/installer:v1.0.0${INSTALLER_IMAGE_DIGEST:-}
+
+    # Generar es escribir ficheros. Este contenedor mintea en claro el material
+    # de arranque del stack, así que se le niega la red: la contención más
+    # barata que existe, y una afirmación que el lector puede comprobar aquí.
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+
+    command: ["generate", "--config", "/work/install.yaml"]
+
+    volumes:
+      # (1) LA RAÍZ DE DATOS — lo único del host que este contenedor escribe.
+      #     Las dos mitades del bind son la MISMA ruta a propósito: el CLI
+      #     escribe en la ruta literal que declara `storage.data_root` de tu
+      #     `install.yaml`, y el compose que genera lleva esa ruta dentro como
+      #     absoluta del host. Si las tres no coinciden, el contenedor escribe
+      #     en su capa efímera y sale con rc=0 dejándote la raíz vacía: el fallo
+      #     que no avisa donde está la causa.
+      - type: bind
+        source: ${AGENT_PLATFORM_DATA_ROOT:-/data/agent-platform}
+        target: ${AGENT_PLATFORM_DATA_ROOT:-/data/agent-platform}
+        bind:
+          # Créala tú (`sudo mkdir -p /data/agent-platform`). Sin esto, Docker
+          # inventa el lado ausente de un bind como directorio vacío, y un
+          # camino mal tecleado se instalaría entero donde no era.
+          create_host_path: false
+
+      # (2) TU CONFIGURACIÓN, en solo lectura. Sale de un perfil
+      #     (`minimal.yaml` / `recommended.yaml` / `gpu.yaml`) editado con tu
+      #     dominio, tus providers LLM, tu sizing y tu tenant inicial, y va
+      #     JUNTO A ESTE FICHERO: la ruta es relativa al compose, no a tu `cwd`.
+      - type: bind
+        source: ./install.yaml
+        target: /work/install.yaml
+        read_only: true
+        bind:
+          create_host_path: false
