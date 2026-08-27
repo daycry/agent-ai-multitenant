@@ -159,7 +159,7 @@ def test_the_guard_actually_found_the_admin_surface(app: FastAPI) -> None:
     routes = _admin_routes(app)
     assert len(routes) >= 40, f"the admin-surface discovery found only {len(routes)} routes"
 
-    prefixes = {label.split(" ", 1)[1].split("/")[2] for label in (lbl for lbl, _ in routes)}
+    prefixes = {label.split(" ", 1)[1].split("/")[2] for label in (lbl for lbl, _, _ in routes)}
     # The ten sub-surfaces of the finding (nine unhardened + routers/admin.py,
     # whose routes sit directly under /admin/<something>).
     for expected in (
