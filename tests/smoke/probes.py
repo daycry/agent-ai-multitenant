@@ -228,3 +228,19 @@ def probe_reachable(
         status_code=response.status_code,
         detail=detail,
     )
+
+
+def base_url_no_es_la_de_la_api(salud: ProbeResult, readiness: ProbeResult) -> bool:
+    """¿La base apunta al gateway en vez de a la api-server?
+
+    Firma inconfundible: ``/healthz`` responde 200 pero ``/readyz`` da **404**.
+    Ocurre cuando ``SMOKE_BASE_URL`` es la raíz del gateway: el reverse proxy
+    contesta su propia liveness sin proxificar, mientras ``/readyz`` cae en el
+    SPA, que no la conoce. La api-server real sirve las dos.
+
+    El 404 es lo que lo distingue de una incidencia: si una dependencia está
+    caída, la api-server responde **503** nombrándola. Por eso aquí sólo cuenta
+    el 404 — tragarse un 503 cambiaría un mensaje confuso por uno tranquilizador,
+    que es peor que no diagnosticar nada.
+    """
+    return salud.ok and readiness.status_code == 404

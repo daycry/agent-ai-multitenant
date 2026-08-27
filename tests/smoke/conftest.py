@@ -30,7 +30,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
-from tests.smoke.probes import DEFAULT_TIMEOUT, probe_health
+from tests.smoke.probes import DEFAULT_TIMEOUT, base_url_no_es_la_de_la_api, probe_health
 
 
 def _env(name: str) -> str | None:
@@ -77,6 +77,23 @@ def smoke_client(smoke_base_url: str, smoke_timeout: float) -> Iterator[httpx.Cl
         pytest.skip(
             f"deployed stack at {smoke_base_url} is unreachable ({health.detail}); "
             "skipping post-deploy smoke tests"
+        )
+    # Una base mal apuntada tiene que decir que es configuración (2026-08-27).
+    # Con la RAÍZ del gateway como base, `/healthz` da 200 —lo contesta el propio
+    # reverse proxy, sin proxificar— y `/readyz` cae en el SPA y da 404. Sin este
+    # aviso la suite fallaba en `test_readyz` con «readiness check failed», que se
+    # lee como «Postgres o Redis están caídos»: manda a diagnosticar una caída que
+    # no existe, justo después de un despliegue. Falla, no se salta: un skip aquí
+    # sería un verde silencioso, y el objetivo es lo contrario.
+    readiness = probe_health(client, smoke_base_url, path="/readyz")
+    if base_url_no_es_la_de_la_api(health, readiness):
+        client.close()
+        pytest.fail(
+            f"SMOKE_BASE_URL={smoke_base_url} responde /healthz pero da 404 en /readyz: "
+            "apunta al gateway, no a la api-server. Detrás de un reverse proxy la base "
+            "suele llevar el prefijo (p. ej. http://host:8080/api). Esto es un error de "
+            "configuración de la prueba, NO una dependencia caída.",
+            pytrace=False,
         )
     try:
         yield client

@@ -222,3 +222,51 @@ def test_reachable_uses_given_path() -> None:
     with _client(_record) as client:
         probes.probe_reachable(client, BASE, "prometheus", path="/-/healthy")
     assert seen == [f"{BASE}/-/healthy"]
+
+
+# ---------------------------------------------------------------------------
+# Diagnóstico de base mal apuntada (2026-08-27)
+# ---------------------------------------------------------------------------
+#
+# El defecto que motiva esto: apuntando `SMOKE_BASE_URL` a la RAÍZ del gateway
+# en vez de a la base de la api-server, `/healthz` responde 200 —lo contesta el
+# propio Caddy, sin proxy— y `/readyz` cae en el SPA y devuelve 404. La suite
+# fallaba entonces en `test_readyz` con «readiness check failed», que se lee
+# como «Postgres o Redis están caídos» y no como «has apuntado mal».
+#
+# Es el modo de fallo caro: manda a alguien a diagnosticar una caída que no
+# existe, de madrugada y con el despliegue recién hecho. La configuración mala
+# tiene que decir que es configuración.
+
+
+def test_liveness_sin_readiness_se_reconoce_como_base_equivocada() -> None:
+    """200 en /healthz + 404 en /readyz = la base apunta al gateway, no a la API."""
+    salud = probes.ProbeResult(name="health", ok=True, reachable=True, status_code=200, detail="ok")
+    readiness = probes.ProbeResult(
+        name="health", ok=False, reachable=True, status_code=404, detail="unexpected status 404"
+    )
+    assert probes.base_url_no_es_la_de_la_api(salud, readiness) is True
+
+
+def test_un_stack_sano_no_se_confunde_con_una_base_equivocada() -> None:
+    """El caso bueno: readiness responde 200. No hay nada que diagnosticar."""
+    salud = probes.ProbeResult(name="health", ok=True, reachable=True, status_code=200, detail="ok")
+    readiness = probes.ProbeResult(
+        name="health", ok=True, reachable=True, status_code=200, detail="ok"
+    )
+    assert probes.base_url_no_es_la_de_la_api(salud, readiness) is False
+
+
+def test_readiness_caida_de_verdad_NO_se_disfraza_de_error_de_configuracion() -> None:
+    """La mitad que impide que el arreglo tape el fallo que debe ver.
+
+    Un 503 en /readyz es la api-server diciendo que una dependencia está caída.
+    Eso es una incidencia real y tiene que seguir fallando como tal — si el
+    diagnóstico se lo tragase, habríamos cambiado un mensaje confuso por uno
+    tranquilizador, que es peor.
+    """
+    salud = probes.ProbeResult(name="health", ok=True, reachable=True, status_code=200, detail="ok")
+    readiness = probes.ProbeResult(
+        name="health", ok=False, reachable=True, status_code=503, detail="postgresql unreachable"
+    )
+    assert probes.base_url_no_es_la_de_la_api(salud, readiness) is False
