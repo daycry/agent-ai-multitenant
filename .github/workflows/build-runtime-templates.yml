@@ -232,6 +232,27 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `fetch-depth: 0` NO es comodidad: sin él este job no puede empujar su
+          # rama cuando el tip de master toca un workflow.
+          #
+          # Con la profundidad 1 por defecto, el único commit local es el tip. Al
+          # empujar la rama nueva, git no puede demostrarle al remoto que ya tiene el
+          # padre, así que lo reenvía dentro del push. Y GitHub rechaza que una
+          # GitHub App empuje CUALQUIER commit que toque `.github/workflows/**` sin
+          # el scope `workflow`, que el GITHUB_TOKEN no puede tener por diseño.
+          #
+          # Medido el 2026-08-27 (run 33020504882, master 8a73f337):
+          #
+          #   ! [remote rejected] chore/runtime-digests-8a73f337ca19
+          #     (refusing to allow a GitHub App to create or update workflow
+          #      `.github/workflows/ci.yml` without `workflows` permission)
+          #
+          # Por eso parecía aleatorio: sólo aparece cuando el tip de master toca un
+          # workflow. Los dos refrescos anteriores (fde43a06, 2fa5a899) empujaron
+          # bien porque sus tips no lo hacían; éste venía detrás del bump de
+          # docker/build-push-action, que toca cinco.
+          fetch-depth: 0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
