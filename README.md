@@ -24,7 +24,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-000000.svg?logo=nextdotjs&logoColor=white)](apps/admin-panel)
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-single%20host-2496ED.svg?logo=docker&logoColor=white)](docker/docker-compose.yml)
 
-[![ADRs](https://img.shields.io/badge/ADRs-160-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
+[![ADRs](https://img.shields.io/badge/ADRs-161-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
 [![Migrations](https://img.shields.io/badge/migrations-144-0ea5e9.svg)](apps/api-server/migrations/versions)
 [![Test runtimes](https://img.shields.io/badge/test%20runtimes-14-0ea5e9.svg)](docker/agent-runtimes)
 [![Sensitive actions](https://img.shields.io/badge/gated%20action%20categories-13-0ea5e9.svg)](docs/04-reference/README.md)
@@ -75,7 +75,7 @@ flowchart LR
 | **Layered declarative guardrails**    | Platform → tenant → project, applied at four points of the cycle: `pre_llm`, `post_llm`, `pre_tool`, `post_tool`                                                                                       |
 | **Human approval where it matters**   | 13 categories of sensitive action × 4 policy templates (Sandbox, Development, Production, External Client), plus an `ask_human` tool the agent itself can call. Per plan, never a checkbox per task    |
 | **LLM providers are a closed set**    | Claude Agent SDK, GitHub Copilot, Azure AI Foundry via APIM, and Ollama — behind one async `LLMProvider` protocol. A fifth provider requires a written ADR                                             |
-| **Decisions are written down**        | 160 ADRs, a precedence chain for when two documents disagree, and tests that fail when the documentation stops describing the repository                                                               |
+| **Decisions are written down**        | 161 ADRs, a precedence chain for when two documents disagree, and tests that fail when the documentation stops describing the repository                                                               |
 
 ## Get started
 
@@ -196,7 +196,7 @@ each other in the header. The policy and its guard are written up in
 [bilingual documentation](docs/03-guides/bilingual-docs.md).
 
 The rest of the corpus is honestly described as **Spanish today, translated
-incrementally**. It is large — 160 ADRs, a full gotchas catalogue, seven
+incrementally**. It is large — 161 ADRs, a full gotchas catalogue, seven
 canonical documentation folders, the roadmap — with internal links and static
 guards over all of it, so a big-bang translation would break more than it
 delivers. Documents carry a `docs_language` field in their YAML frontmatter, and
