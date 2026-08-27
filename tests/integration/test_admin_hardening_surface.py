@@ -40,7 +40,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from api_server.routing_introspection import iter_routes
+from api_server.routing_introspection import (
+    iter_routes,
+    iter_routes_with_inherited_dependencies,
+)
 from fastapi import FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, APIWebSocketRoute
@@ -97,18 +100,29 @@ def _dependency_names(dependant: Dependant) -> set[str]:
     return names
 
 
-def _admin_routes(app: FastAPI) -> list[tuple[str, Dependant]]:
-    """Every mounted route under ``/admin`` as ``(label, dependant)``."""
-    found: list[tuple[str, Dependant]] = []
+def _admin_routes(app: FastAPI) -> list[tuple[str, Dependant, tuple[str, ...]]]:
+    """Every mounted route under ``/admin`` as ``(label, dependant, heredadas)``.
+
+    Cada etiqueta viene acompañada de las dependencias heredadas del montaje,
+    que desde FastAPI 0.141 ya NO están en el ``dependant`` de la ruta: el
+    ``include_router(dependencies=[...])` pasó a ser perezoso y lo que se pasó al
+    montar vive en el ``include_context`` hasta que se resuelve la petición.
+    Ignorarlas da un falso negativo — esta guarda llegó a decir que 43 rutas no
+    llevaban el gate llevándolo las 54.
+    """
+    heredadas = {
+        id(route): nombres for route, nombres in iter_routes_with_inherited_dependencies(app)
+    }
+    found: list[tuple[str, Dependant, tuple[str, ...]]] = []
     for route in iter_routes(app):
         path = str(getattr(route, "path", ""))
         if path != _ADMIN_PREFIX and not path.startswith(f"{_ADMIN_PREFIX}/"):
             continue
         if isinstance(route, APIRoute):
             methods = ",".join(sorted(route.methods or set()))
-            found.append((f"{methods} {path}", route.dependant))
+            found.append((f"{methods} {path}", route.dependant, heredadas.get(id(route), ())))
         elif isinstance(route, APIWebSocketRoute):
-            found.append((f"WS {path}", route.dependant))
+            found.append((f"WS {path}", route.dependant, heredadas.get(id(route), ())))
         else:  # pragma: no cover - a non-API route under /admin would be new
             pytest.fail(f"unexpected route type under /admin: {path} ({type(route)})")
     return found
@@ -126,8 +140,8 @@ def test_every_admin_route_carries_the_hardening_gate(app: FastAPI) -> None:
     """
     offenders = [
         label
-        for label, dependant in _admin_routes(app)
-        if _GATE_NAME not in _dependency_names(dependant)
+        for label, dependant, heredadas in _admin_routes(app)
+        if _GATE_NAME not in (_dependency_names(dependant) | set(heredadas))
     ]
     assert not offenders, (
         f"{len(offenders)} route(s) under /admin lack {_GATE_NAME}: {sorted(offenders)}"
@@ -172,8 +186,8 @@ def test_admin_backup_schedule_is_not_tenant_readable(app: FastAPI) -> None:
     invariant above, the hardened gate) and must NOT mention the tenant gate.
     """
     matches = [
-        _dependency_names(dependant)
-        for label, dependant in _admin_routes(app)
+        _dependency_names(dependant) | set(heredadas)
+        for label, dependant, heredadas in _admin_routes(app)
         if label == "GET /admin/backup/schedule"
     ]
     assert len(matches) == 1, "GET /admin/backup/schedule is no longer mounted"
