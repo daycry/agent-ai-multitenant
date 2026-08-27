@@ -1,7 +1,13 @@
 # Instalación
 
-Guía para levantar el stack en local. Producción real llegará con el
-instalador de Fase 15.
+Guía para levantar el stack **en local, para desarrollar**. No es una
+instalación de producción y no pretende serlo: aquí se clona el repo, se corre
+`api-server` y `admin-panel` desde el código y Vault va en modo dev.
+
+> **¿Buscas producción?** Salta a la sección **«Instalación de producción: el
+> camino real»**, al final de esta página. Va aparte porque el camino de
+> producción **no es este** y porque tiene hoy dos averías conocidas que conviene
+> leer antes de reservar una máquina.
 
 ## Prerequisitos
 
@@ -102,8 +108,11 @@ y ajusta si necesitas puertos diferentes:
 cp docker/.env.example docker/.env
 ```
 
-En producción, los secretos vienen de **Vault** —no de `.env`— vía
-el instalador de Fase 15.
+En producción, los secretos vienen de **Vault** —no de `.env`— y los genera el
+instalador (§siguiente). La excepción escrita a esa regla —los secretos que un
+tenant configura para un tercero, en columna cifrada con Fernet— está en
+[ADR 0146](../05-architecture-decisions/0146-fernet-en-db-vs-vault.md) y en
+`CLAUDE.md` §«Dónde vive un secreto».
 
 ## 6. Tests
 
@@ -113,6 +122,67 @@ Suite completa (unit + integración):
 .venv/Scripts/python -m pytest tests/ -v        # Windows
 .venv/bin/python -m pytest tests/ -v            # Linux / macOS
 ```
+
+## Instalación de producción: el camino real
+
+Nada de lo de arriba instala la plataforma en una máquina de producción. Para
+eso hay **un solo camino soportado**, y conviene decir cuál porque hay dos y uno
+de ellos no hace nada:
+
+- **CLI desatendido** (`scripts/install.sh --config install.yaml`) — el camino
+  **REAL**. Cablea los bindings reales por defecto y **aborta con código 4
+  (`PROVISION`)** si detecta un seam de simulación sin `--dry-run`: no existe la
+  instalación falsa silenciosa. `--config` es obligatorio; sin él sale con
+  código 1 y no arranca nada.
+- **Wizard HTTP** (`apps/installer`) — una **SIMULACIÓN**. Recorre los nueve
+  pasos, pero su `StepExecutor` por defecto es `FakeStepExecutor`: no aprovisiona
+  nada y **las credenciales y las unseal keys de Vault que revela al final no
+  sirven para nada**. Sirve para revisar el flujo y la detección de GPU;
+  cablearlo al ejecutor real es un follow-up (prod-09).
+
+```bash
+cp scripts/install-profiles/recommended.yaml install.yaml
+# edita install.yaml: dominio, providers LLM, sizing, tenant inicial…
+./scripts/install.sh --config install.yaml
+```
+
+El procedimiento completo, con prerequisitos, fases y códigos de salida, está en
+el runbook
+[`06-runbooks/01-installation-from-scratch.md`](../06-runbooks/01-installation-from-scratch.md);
+el paso a paso de producción con dominio propio, en
+[`06-runbooks/08-instalacion-produccion.md`](../06-runbooks/08-instalacion-produccion.md).
+
+### Lo que hoy no termina, y por qué se dice aquí
+
+El camino real tampoco llega hasta el final en una máquina limpia. Está medido en
+el [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+y son dos averías **independientes**:
+
+1. **No hay imágenes publicadas.** El paso `PULL_IMAGES` tira de un tag que
+   nunca se ha publicado — no existe ningún `git tag` y el workflow de release
+   jamás ha corrido
+   ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
+2. ~~**Las rutas relativas del compose generado no resuelven.**~~ **Reparada el
+   2026-08-27.** El instalador escribe el `docker-compose.yml` en la **raíz de
+   datos** (`/data/agent-platform` por defecto), no en el repo, y lanza `docker
+compose` desde ahí: cada `./algo` de ese fichero resuelve contra
+   `/data/agent-platform/…`, donde no hay ningún checkout — **clonar el
+   repositorio no lo arreglaba**, que era la mitad contraintuitiva. De siete
+   familias de rutas relativas el instalador escribía una; ahora escribe las
+   siete, las seis nuevas bajo `stack/` y desde su propio paquete.
+
+La segunda merecía leerse con cuidado porque **no avisaba donde estaba la
+causa**: ante el lado host ausente de un bind, Docker lo materializa como
+directorio vacío. Así, `./postgres/init` acababa **dentro** del PGDATA, `initdb`
+encontraba un directorio no vacío y los SQL reales (`pgvector`, roles de servicio)
+no corrían nunca. Lo que se veía era un Postgres `healthy` sin `pgvector`, con el
+error saliendo a la primera consulta que la necesita.
+
+Lo sostienen ahora dos guardas que derivan del código —no de una lista a mano— las
+rutas que el compose pide y las que la instalación produce
+(`tests/unit/test_generated_compose_is_installable.py`) y la integridad de lo que
+el instalador lleva dentro (`tests/unit/test_installer_ships_stack_assets.py`).
+**La primera avería sigue abierta**: el estado vivo es el del ADR 0161.
 
 ## Próximos pasos
 

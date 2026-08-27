@@ -24,7 +24,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-000000.svg?logo=nextdotjs&logoColor=white)](apps/admin-panel)
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-single%20host-2496ED.svg?logo=docker&logoColor=white)](docker/docker-compose.yml)
 
-[![ADRs](https://img.shields.io/badge/ADRs-161-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
+[![ADRs](https://img.shields.io/badge/ADRs-162-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
 [![Migrations](https://img.shields.io/badge/migrations-144-0ea5e9.svg)](apps/api-server/migrations/versions)
 [![Test runtimes](https://img.shields.io/badge/test%20runtimes-14-0ea5e9.svg)](docker/agent-runtimes)
 [![Sensitive actions](https://img.shields.io/badge/gated%20action%20categories-13-0ea5e9.svg)](docs/04-reference/README.md)
@@ -77,7 +77,7 @@ flowchart LR
 | **Guardrails declarativos por capas**           | Plataforma → tenant → proyecto, aplicados en cuatro puntos del ciclo: `pre_llm`, `post_llm`, `pre_tool`, `post_tool`                                                                                          |
 | **Validación humana donde importa**             | 13 categorías de acción sensible × 4 plantillas (Sandbox, Desarrollo, Producción, Cliente Externo), más la tool `ask_human` que el propio agente puede llamar. Por plan, nunca un checkbox por tarea          |
 | **Los proveedores LLM son catálogo cerrado**    | Claude Agent SDK, GitHub Copilot, Azure AI Foundry vía APIM y Ollama — detrás de un único `Protocol` async `LLMProvider`. Un quinto proveedor exige un ADR escrito                                            |
-| **Las decisiones están escritas**               | 161 ADR, una cadena de precedencia para cuando dos documentos se contradicen, y tests que fallan cuando la documentación deja de describir el repositorio                                                     |
+| **Las decisiones están escritas**               | 162 ADR, una cadena de precedencia para cuando dos documentos se contradicen, y tests que fallan cuando la documentación deja de describir el repositorio                                                     |
 
 ## Cómo se arranca
 
@@ -118,6 +118,16 @@ Para una instalación desatendida guiada por un perfil YAML
 ```bash
 ./scripts/install.sh --config install.yaml
 ```
+
+Este CLI es el camino de instalación **real** — el wizard HTTP de
+`apps/installer` es una simulación que no aprovisiona nada y revela credenciales
+que no son reales. Lee las salvedades antes de reservar una máquina: en un host
+limpio el CLI hoy no llega al final, por dos motivos independientes medidos en el
+[ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+(no hay imágenes publicadas, y las rutas relativas del compose generado resuelven
+contra la raíz de datos, donde no hay checkout — clonar no arregla ésa). La
+segunda está en reparación; sin fechas prometidas. Estado de cada camino:
+[runbook de instalación](docs/06-runbooks/01-installation-from-scratch.md).
 
 La configuración se lee de `docker/.env`, que está en `.gitignore`. Las
 credenciales de plataforma viven en **Vault**; la base de datos guarda sólo el
@@ -169,6 +179,13 @@ Dicho sin adornos, para que nadie busque algo que no está:
   workflow [Release images](.github/workflows/release-images.yml) no ha corrido
   nunca, porque ese tag no existe. Hasta entonces las imágenes se construyen en
   local con los scripts de desarrollo.
+- **El wizard de instalación no instala.** El wizard HTTP de nueve pasos de
+  `apps/installer` corre contra un ejecutor falso: no aprovisiona nada y las
+  credenciales que revela al final no son reales. El camino soportado es el CLI
+  de arriba, y ése hoy está bloqueado por las dos averías del
+  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
+  O sea: este repositorio se puede levantar para desarrollar, y todavía no se
+  puede instalar en un host de producción limpio.
 - **No hay número de cobertura publicado**, porque no hay servicio de cobertura
   conectado. Lo que CI aplica es un suelo de ratchet sobre el subconjunto unit
   ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).
@@ -198,7 +215,7 @@ cabecera. La política y su guarda están escritas en
 [documentación bilingüe](docs/03-guides/bilingual-docs.es.md).
 
 El resto del corpus se describe honestamente como **castellano hoy, traducido de
-forma incremental**. Es grande —161 ADR, un catálogo entero de gotchas, las siete
+forma incremental**. Es grande —162 ADR, un catálogo entero de gotchas, las siete
 carpetas canónicas de documentación, el roadmap— con enlaces internos y guardas
 estáticas sobre todo ello, así que una traducción de golpe rompería más de lo que
 entregaría. Los documentos llevan un campo `docs_language` en su frontmatter YAML,

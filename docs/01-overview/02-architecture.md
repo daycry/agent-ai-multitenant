@@ -103,7 +103,7 @@ en [03-diagrams.es.md](./03-diagrams.es.md) ([English](./03-diagrams.md)).
 | `apps/notification-dispatcher` | Entrega notificaciones multicanal.                                                                                 |
 | `apps/webhook-dispatcher`      | RESERVADA (vacía): el despacho de webhooks vive **en los workers**.                                                |
 | `apps/admin-panel`             | Next.js 14 — frontend ÚNICO: tenants + System Admin, separados por RBAC y rutas (ADR 0117 c). Incl. `/admin/docs`. |
-| `apps/installer`               | Wizard de bootstrap (Fase 15).                                                                                     |
+| `apps/installer`               | Bootstrap (Fase 15). El CLI aprovisiona; el wizard HTTP simula (prod-09).                                          |
 
 ## Modelo multi-tenant
 

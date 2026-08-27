@@ -4,16 +4,37 @@
 # installer is a self-destructing, throwaway container that runs ONLY during
 # first-time provisioning. It is NOT wired into the runtime stack.
 #
-# Bring it up on a fresh host:
+# ---------------------------------------------------------------------------
+# WHAT THIS ACTUALLY DOES TODAY: it serves a SIMULATION.
+#
+# The backend served here binds `FakeStepExecutor` by default (main.py,
+# `_default_step_executor`). Bringing this up shows the nine steps and streams
+# progress, but it provisions NOTHING, and the credentials + Vault unseal keys
+# it reveals at step 9 are thrown-away values that open nothing. Use it to
+# review the flow and the copy; do NOT use it to install.
+#
+# The REAL install path is the CLI:
+#   ./scripts/install.sh --config install.yaml
+# which wires the real bindings and aborts with exit code 4 (PROVISION) if it
+# ever detects a simulation seam without --dry-run. See
+# docs/06-runbooks/01-installation-from-scratch.md.
+# ---------------------------------------------------------------------------
+#
+# Bring it up on a fresh host (a clone is REQUIRED — both services are `build:`
+# and no installer image is published anywhere):
 #   docker compose -f apps/installer/docker-compose.installer.yml up -d --build
-# then open the wizard at http://localhost:3100. When the wizard finishes
-# (step 9 → "Listo"), the installer requests its own teardown (the
-# self-destruct seam wired in task 15_06) and you run:
+# then open the wizard at http://localhost:3100, and tear it down with:
 #   docker compose -f apps/installer/docker-compose.installer.yml down
 #
-# In Phase B the backend mounts the host docker socket / data dir to actually
-# provision the stack; Phase A serves only the wizard shell + its API, so no
-# host mounts are declared here yet.
+# NO HOST MOUNTS ARE DECLARED HERE, AND THAT IS NOT JUST A PENDING TASK.
+# The "Phase B" plan was for this backend to mount the host docker socket and
+# the data root so it could provision the stack itself. That is precisely the
+# alternative ADR 0060 rejected in writing (socket in a container == effective
+# root on the host), and the socket-proxy is not a way around it: its ACL
+# denies VOLUMES, while the installer needs host bind-mounts to write
+# /data/agent-platform. So this is an OPEN DECISION, not pending plumbing —
+# see ADR 0161 §"Qué hay que decidir", question 3. Do not add mounts here
+# without that decision.
 
 name: agentic-platform-installer
 

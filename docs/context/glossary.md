@@ -218,7 +218,7 @@ catálogo cerrado de cuatro proveedores.
 
 **Bandeja personal (human inbox)**: UI donde el usuario aceptar/rechazar/escalar sus `HumanTaskAssignment` y registrar la entrega que crea la `HumanWorkSession` (ADR 0046).
 
-**Instalador**: aplicación web temporal servida por el contenedor `installer`. Wizard de 9 pasos; autodestructivo, secretos CSPRNG, guard de producción (ADR 0039).
+**Instalador**: la orquestación de instalación (`installer_backend`) con dos frontales. El **CLI desatendido** (`scripts/install.sh --config`) es el camino REAL: cablea los bindings reales y aborta si detecta un seam de simulación. El **wizard** de 9 pasos, servido por el contenedor temporal `installer`, es HOY una **simulación**: no aprovisiona y las credenciales que revela no son reales (cablearlo = prod-09). Diseño autodestructivo, secretos CSPRNG y guard de producción: ADR 0039.
 
 ## Acrónimos
 

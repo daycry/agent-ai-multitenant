@@ -23,8 +23,30 @@ instalador), [custom domain](07-custom-domain.md) (dominio/SSO en detalle),
 > Kubernetes, sin multi-host, sin HA multi-instancia.
 >
 > **Camino soportado**: el **CLI desatendido** (`scripts/install.sh`). El wizard
-> HTTP existe pero HOY es una simulación de flujo (no aprovisiona); no lo uses
-> para producción. Ver [01-installation-from-scratch.md](01-installation-from-scratch.md).
+> HTTP existe pero HOY es una simulación de flujo (no aprovisiona, y las
+> credenciales que revela no son reales); no lo uses para producción. Ver
+> [01-installation-from-scratch.md](01-installation-from-scratch.md).
+
+> 🛑 **Antes de reservar la máquina: este manual, de punta a punta, hoy no
+> termina.** El camino feliz que describe está escrito y es el correcto, pero se
+> topaba con dos averías medidas en el
+> [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md),
+> ninguna de las dos culpa del operador. **Queda una:**
+>
+> - **No hay imágenes publicadas**: el paso `PULL_IMAGES` tira de un tag que
+>   nunca se ha publicado ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
+>   Sigue abierta, y es donde vas a parar (paso 4).
+> - ~~**Las rutas relativas del compose generado no resuelven**~~ — **reparado el
+>   2026-08-27**. Ese compose se escribe en la raíz de datos
+>   (`/data/agent-platform`), no en el repo, así que sus `./algo` apuntaban a un
+>   sitio sin checkout y **clonar el repo no lo arreglaba**; además fallaba
+>   callando (Docker crea como directorio vacío el bind ausente, con lo que el
+>   init de Postgres no corría y quedaba un Postgres `healthy` sin `pgvector`).
+>   Ahora los auxiliares viajan dentro del instalador y se escriben bajo
+>   `stack/`, con guardas que derivan las rutas del código y no de una lista.
+>
+> Sigue leyendo el manual —es la referencia buena de qué hay que preparar— pero
+> cuenta con parar en el paso 4 mientras no haya release publicada.
 
 ---
 

@@ -485,5 +485,7 @@ merge (ver [`conventions.md`](conventions.md)).
   [0039](../05-architecture-decisions/0039-installer-autodestructivo-secretos-csprng-prod-guard.md)):
   wizard de 9 pasos (Bienvenida → Config → Recursos/Workers/GPU → Almacenamiento
   → Providers LLM → Tenant inicial → Resumen → Instalación → Listo) + modo CLI
-  desatendido; autodestructivo, secretos CSPRNG, guard de producción.
+  desatendido; autodestructivo, secretos CSPRNG, guard de producción. **De los
+  dos frontales sólo el CLI aprovisiona**: el wizard HTTP corre contra
+  `FakeStepExecutor` y las credenciales que revela no son reales (prod-09).
   Referencia [installation](../04-reference/installation.md).

@@ -10,7 +10,12 @@ Per step:
   * **GENERATE_CONFIG** — render + write ``docker-compose.yml`` (0640), ``.env``
     (0600, prod secret-guarded), ``config/global.yaml`` (0640) and the
     ``caddy/Caddyfile`` (0644, the compose bind-mounts it so it MUST exist before
-    ``up``), then provision the ``/data`` tree.
+    ``up``); copy out the shipped auxiliaries under ``stack/``
+    (:mod:`installer_backend.stack_assets` — Postgres init scripts, Vault config,
+    seccomp profiles, the two tinyproxy build contexts, monitoring config: every
+    one of them a bind the generated compose declares, so a missing one is not a
+    degraded service but a stack that does not come up); then provision the
+    ``/data`` tree.
   * **PULL_IMAGES** — ``docker compose pull``.
   * **START_STACK** — ``docker compose up -d --wait`` (Compose blocks until every
     service is healthy or fails — no hand-rolled polling).
@@ -30,8 +35,14 @@ import secrets as _secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from . import stack_assets
 from .command_runner import CommandRunner
-from .compose_generator import PROJECT_NAME, generate_compose, render_compose_yaml
+from .compose_generator import (
+    PROJECT_NAME,
+    STACK_ASSETS_DIR_NAME,
+    generate_compose,
+    render_compose_yaml,
+)
 from .config import Environment, InstallerConfig
 from .config_generators import (
     DataTreeProvisioner,
@@ -39,6 +50,7 @@ from .config_generators import (
     GeneratedSecrets,
     assert_env_passes_prod_secret_guard,
     build_data_tree_plan,
+    build_stack_dirs_plan,
     generate_env_file,
     generate_global_config,
     render_global_yaml,
@@ -155,7 +167,27 @@ class RealStepExecutor:
         )
         lines.append("Escrito caddy/Caddyfile")
 
+        # Los auxiliares que el compose monta y que NADIE escribía hasta el
+        # 2026-08-27: los scripts de inicialización de Postgres, la config de
+        # Vault, los perfiles seccomp, los dos contextos de build de los tinyproxy
+        # y —con la superposición— la configuración de monitorización. Viajan
+        # dentro del paquete (`installer_backend.stack_assets`) porque en el
+        # destino no hay ningún `docker/` del que copiarlos: el compose se escribe
+        # bajo la raíz de datos y la imagen del instalador sólo lleva `src/`.
+        assets = stack_assets.assets_for(monitoring=self.monitoring)
+        for asset in assets:
+            self.env_writer.write(
+                f"{self.compose_dir}/{STACK_ASSETS_DIR_NAME}/{asset.path}",
+                stack_assets.read_text(asset),
+                mode=asset.mode,
+            )
+        lines.append(f"Escritos {len(assets)} auxiliares en {STACK_ASSETS_DIR_NAME}/")
+
         plan = build_data_tree_plan(self.cfg, monitoring=self.monitoring)
+        # Los directorios de `stack/` que ningún auxiliar trae consigo (un bind
+        # que monta un directorio vacío) cuelgan del directorio del COMPOSE, que
+        # es contra lo que resuelven sus `./stack/…`.
+        plan += build_stack_dirs_plan(self.compose_dir, monitoring=self.monitoring)
         self.tree.provision(plan)
         lines.append(f"Árbol de datos creado: {len(plan)} directorios")
 

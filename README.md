@@ -24,7 +24,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-000000.svg?logo=nextdotjs&logoColor=white)](apps/admin-panel)
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-single%20host-2496ED.svg?logo=docker&logoColor=white)](docker/docker-compose.yml)
 
-[![ADRs](https://img.shields.io/badge/ADRs-161-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
+[![ADRs](https://img.shields.io/badge/ADRs-162-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
 [![Migrations](https://img.shields.io/badge/migrations-144-0ea5e9.svg)](apps/api-server/migrations/versions)
 [![Test runtimes](https://img.shields.io/badge/test%20runtimes-14-0ea5e9.svg)](docker/agent-runtimes)
 [![Sensitive actions](https://img.shields.io/badge/gated%20action%20categories-13-0ea5e9.svg)](docs/04-reference/README.md)
@@ -75,7 +75,7 @@ flowchart LR
 | **Layered declarative guardrails**    | Platform → tenant → project, applied at four points of the cycle: `pre_llm`, `post_llm`, `pre_tool`, `post_tool`                                                                                       |
 | **Human approval where it matters**   | 13 categories of sensitive action × 4 policy templates (Sandbox, Development, Production, External Client), plus an `ask_human` tool the agent itself can call. Per plan, never a checkbox per task    |
 | **LLM providers are a closed set**    | Claude Agent SDK, GitHub Copilot, Azure AI Foundry via APIM, and Ollama — behind one async `LLMProvider` protocol. A fifth provider requires a written ADR                                             |
-| **Decisions are written down**        | 161 ADRs, a precedence chain for when two documents disagree, and tests that fail when the documentation stops describing the repository                                                               |
+| **Decisions are written down**        | 162 ADRs, a precedence chain for when two documents disagree, and tests that fail when the documentation stops describing the repository                                                               |
 
 ## Get started
 
@@ -116,6 +116,16 @@ For an unattended install driven by a YAML profile
 ```bash
 ./scripts/install.sh --config install.yaml
 ```
+
+This CLI is the **real** install path — the HTTP wizard under `apps/installer`
+is a simulation that provisions nothing and reveals credentials that are not
+real. Read the caveats before you reserve a machine: on a clean host the CLI
+does not reach the end today, for two independent reasons measured in
+[ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+(no images published, and the generated compose's relative paths resolving
+against the data root, where there is no checkout — cloning does not fix that
+one). The second is being repaired; no dates are promised. State of each path:
+[installation runbook](docs/06-runbooks/01-installation-from-scratch.md).
 
 Configuration is read from `docker/.env`, which is git-ignored. Platform
 credentials live in **Vault**; the database stores only the pointer. The single
@@ -167,6 +177,13 @@ Stated plainly, so nobody goes looking for something that is not there:
   [Release images](.github/workflows/release-images.yml) workflow has never run,
   because no such tag exists. Until then, images are built locally by the dev
   scripts.
+- **The install wizard does not install.** The nine-step HTTP wizard under
+  `apps/installer` runs against a fake executor: it provisions nothing and the
+  credentials it reveals at the end are not real. The supported path is the CLI
+  above, and that one is blocked today by the two breakages in
+  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
+  So: this repository is runnable for development, and not yet installable on a
+  clean production host.
 - **There is no published coverage number**, because no coverage service is
   wired up. CI enforces a ratchet floor on the unit subset instead
   ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).
@@ -196,7 +213,7 @@ each other in the header. The policy and its guard are written up in
 [bilingual documentation](docs/03-guides/bilingual-docs.md).
 
 The rest of the corpus is honestly described as **Spanish today, translated
-incrementally**. It is large — 161 ADRs, a full gotchas catalogue, seven
+incrementally**. It is large — 162 ADRs, a full gotchas catalogue, seven
 canonical documentation folders, the roadmap — with internal links and static
 guards over all of it, so a big-bang translation would break more than it
 delivers. Documents carry a `docs_language` field in their YAML frontmatter, and

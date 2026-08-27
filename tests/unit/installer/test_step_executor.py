@@ -61,7 +61,7 @@ def test_real_executor_satisfies_the_step_executor_protocol(
     assert isinstance(ex, StepExecutor)
 
 
-def test_generate_config_writes_the_four_files_with_modes(
+def test_generate_config_writes_the_generated_files_with_modes(
     installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
 ) -> None:
     ex, _runner, writer, tree = _executor(installer_config, gen_secrets)
@@ -75,6 +75,74 @@ def test_generate_config_writes_the_four_files_with_modes(
     assert "reverse_proxy admin-panel:3000" in writer.written[f"{_COMPOSE_DIR}/caddy/Caddyfile"]
     # The /data tree was provisioned.
     assert tree.provisioned, "data tree was not provisioned"
+
+
+def test_generate_config_also_lays_down_the_auxiliaries_the_compose_mounts(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Los auxiliares que el compose monta se escriben, y con su contenido real.
+
+    Hasta el 2026-08-27 este paso escribía cuatro ficheros y el compose montaba
+    seis familias de rutas más. Faltar no daba error: Docker inventa el lado host
+    ausente de un bind como directorio vacío, así que Postgres nacía sin
+    `pgvector` ni roles y Vault encontraba un directorio donde espera su config.
+    """
+
+    ex, _runner, writer, _tree = _executor(installer_config, gen_secrets)
+    ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    init_sql = writer.written[f"{_COMPOSE_DIR}/stack/postgres/init/01-extensions.sql"]
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in init_sql
+
+    # Los `.sh` van ejecutables: el entrypoint de Postgres hace `source` de un
+    # `.sh` que no lo es, y eso mete su `set -euo pipefail` en el shell que
+    # sigue corriendo después.
+    assert writer.modes[f"{_COMPOSE_DIR}/stack/postgres/init/02-roles.sh"] == 0o755
+    # Config: legible por el proceso de dentro del contenedor, que no corre como
+    # el usuario que instaló.
+    assert writer.modes[f"{_COMPOSE_DIR}/stack/vault/config.hcl"] == 0o644
+    assert 'storage "file"' in writer.written[f"{_COMPOSE_DIR}/stack/vault/config.hcl"]
+    # Los dos contextos de build de los servicios del NÚCLEO.
+    for proxy in ("egress-proxy", "registry-proxy"):
+        assert f"{_COMPOSE_DIR}/stack/{proxy}/Dockerfile" in writer.written
+        assert f"{_COMPOSE_DIR}/stack/{proxy}/filter.txt" in writer.written
+    assert f"{_COMPOSE_DIR}/stack/seccomp/agent-runtime.json" in writer.written
+
+    # Sin la superposición de observabilidad no se escribe su configuración.
+    assert not [path for path in writer.written if "/stack/monitoring/" in path]
+
+
+def test_generate_config_lays_down_the_monitoring_auxiliaries_only_with_the_overlay(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Con `monitoring=True` el generador emite Prometheus/Alertmanager/Grafana…
+
+    …y sus tres binds de configuración. El buzón de credenciales del receiver de
+    respaldo no lleva ficheros, así que no puede salir de un `write`: sale del
+    plan de directorios, o Docker lo crearía como root y Alertmanager —que corre
+    como `nobody`— fallaría al notificar, en silencio.
+    """
+
+    runner = FakeCommandRunner()
+    writer = FakeEnvFileWriter()
+    tree = FakeDataTreeProvisioner()
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=runner,
+        env_writer=writer,
+        tree=tree,
+        vault_client_factory=lambda _cfg: FakeVaultClient(),
+        cfg=installer_config,
+        secrets=gen_secrets,
+        monitoring=True,
+    )
+    ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    assert f"{_COMPOSE_DIR}/stack/monitoring/prometheus/prometheus.yml" in writer.written
+    assert f"{_COMPOSE_DIR}/stack/monitoring/prometheus/rules/host_alerts.yml" in writer.written
+    assert f"{_COMPOSE_DIR}/stack/monitoring/alertmanager/alertmanager.yml" in writer.written
+    buzon = f"{_COMPOSE_DIR}/stack/monitoring/alertmanager/secrets"
+    assert buzon in [entry.path for entry in tree.provisioned]
 
 
 def test_generate_config_env_carries_no_dev_secret_marker_in_prod(

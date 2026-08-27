@@ -38,6 +38,7 @@ from typing import Any
 
 import pytest
 import yaml
+from installer_backend.compose_generator import CORE_SERVICES
 
 from tests.unit._compose_yaml import ComposeLoader
 
@@ -231,9 +232,28 @@ def test_compose_pins_the_infra_image_name(image: str) -> None:
 
 @pytest.mark.parametrize("image", _INFRA)
 def test_the_installer_generates_the_same_image_name(image: str) -> None:
-    """El tercer actor: el compose que escribe el wizard de instalación."""
+    """El tercer actor: el compose que escribe el wizard de instalación.
+
+    La detección busca el contexto de build por su FINAL (``…/egress-proxy``) y no
+    por la ruta literal ``"./egress-proxy"``. El motivo está medido: el 2026-08-27
+    los contextos se movieron a ``./stack/egress-proxy`` —para que el instalador
+    pudiera escribirlos en destino sin pisar el PGDATA— y con la comparación
+    literal esta guarda pasó de comprobar dos imágenes a **saltárselas en
+    silencio**. Un `skip` que aparece solo es peor que un fallo: nadie lo lee, y
+    la afirmación del fichero (tres actores, un nombre) quedaba sin sostener.
+
+    Y si el que desaparece del generador es un servicio del NÚCLEO, esto no se
+    salta: falla. Un `egress-proxy` que el generador dejara de emitir no es una
+    imagen menos que vigilar, es una instalación sin salida a los proveedores LLM.
+    """
     source = _GENERATOR.read_text(encoding="utf-8")
-    if f'"./{image}"' not in source:
+    if re.search(rf'"build":\s*f?"[^"]*{re.escape(image)}"', source) is None:
+        assert image not in CORE_SERVICES, (
+            f"`{image}` está en CORE_SERVICES pero compose_generator.py ya no lo "
+            "emite con un `build:`. O se publica como imagen (y entonces esta "
+            "guarda y la del `pull_policy` cambian a la vez, ver ADR 0161), o "
+            "falta el servicio."
+        )
         pytest.skip(f"el instalador no genera un servicio para `{image}`")
     assert f'"{_PREFIX}{image}' in source, (
         f"compose_generator.py genera el servicio `{image}` con `build:` y sin "

@@ -1,0 +1,218 @@
+# Host + container alerting rules (Plan 12 — Backup/Restore, task_12_14).
+#
+# Loaded by Prometheus via the `rule_files: [/etc/prometheus/rules/*.yml]`
+# glob in ../prometheus.yml. Prometheus EVALUATES these expressions on every
+# `evaluation_interval` (15s) and, when an alert stays firing for its `for:`
+# window, hands it to Alertmanager (the `alerting.alertmanagers` target wired
+# in prometheus.yml) which routes it to the platform notifier receiver
+# (docker/monitoring/alertmanager/alertmanager.yml).
+#
+# The five alerts the plan (Alcance / task_12_14) requires:
+#   1. DISK   usage > 80%            → HostDiskUsageHigh
+#   2. RAM    > 90% SUSTAINED (5m)   → HostMemoryUsageHigh
+#   3. SWAP   active (any in use)    → HostSwapActive
+#   4. OOM    kills (host + cont.)   → HostOOMKills / ContainerOOMKilled
+#   5. LAST BACKUP FAILED            → BackupLastRunFailed / BackupTooOld
+#
+# Thresholds are kept as readable, NAMED literals here (Prometheus rules have
+# no variable substitution; the value lives once in the expression and is
+# called out in the comment + the `summary`/`description` annotations so an
+# operator editing the panel sees one source of truth). Metric sources:
+#   - node-exporter  : node_filesystem_*, node_memory_*, node_vmstat_oom_kill
+#   - cadvisor       : container_oom_events_total
+#   - backup engine  : agentic_backup_* (node-exporter textfile collector,
+#                      emitted by workers.backup_metrics — task_12_14)
+
+groups:
+  # ---------------------------------------------------------------------------
+  # Host resource pressure (disk / RAM / swap / OOM).
+  # ---------------------------------------------------------------------------
+  - name: host-resources
+    rules:
+      # 1. DISK USAGE > 80% — alert when free space on a real (non-pseudo)
+      #    filesystem drops below 20% of its size. `fstype` filter drops
+      #    tmpfs/overlay/squashfs noise; the mountpoint excludes match the
+      #    node-exporter --collector.filesystem exclusions. Sustained 10m so
+      #    a transient spike (a big tar mid-backup) does not page anyone.
+      - alert: HostDiskUsageHigh
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*"}
+              / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|fuse.*"}
+            )
+          ) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "Disk usage above 80% on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: >-
+            Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} is
+            {{ $value | humanizePercentage }} full (threshold 80%). Free space
+            for new backups is at risk — prune old bundles or expand the disk.
+
+      # 2. RAM > 90% SUSTAINED — used = 1 - available/total. MemAvailable is
+      #    the kernel's honest "reclaimable + free" figure (better than
+      #    MemFree, which ignores the page cache). `for: 5m` enforces the
+      #    "sustained" requirement from the plan — a momentary 90% spike does
+      #    not fire.
+      - alert: HostMemoryUsageHigh
+        expr: |
+          (
+            1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+          ) > 0.90
+        for: 5m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "RAM usage above 90% for 5m on {{ $labels.instance }}"
+          description: >-
+            Memory usage on {{ $labels.instance }} has been above 90%
+            ({{ $value | humanizePercentage }}) for 5 minutes. Risk of OOM
+            kills — investigate the heaviest containers.
+
+      # 3. SWAP ACTIVE — any swap in use at all. On a single-machine Docker
+      #    host swap thrash is a strong early signal of memory pressure, so
+      #    even a small amount used for 5m is worth surfacing.
+      - alert: HostSwapActive
+        expr: |
+          (node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: host
+        annotations:
+          summary: "Swap in use on {{ $labels.instance }}"
+          description: >-
+            {{ $value | humanize1024 }}B of swap is in use on
+            {{ $labels.instance }}. The host is under memory pressure.
+
+      # 4a. HOST OOM KILLS — node_vmstat_oom_kill is a monotonic counter of
+      #     kernel OOM-killer invocations. Any increase over 5m means the
+      #     kernel killed a process to reclaim memory. `increase(...) > 0`.
+      - alert: HostOOMKills
+        expr: |
+          increase(node_vmstat_oom_kill[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: host
+        annotations:
+          summary: "Kernel OOM killer fired on {{ $labels.instance }}"
+          description: >-
+            The kernel OOM killer killed {{ $value }} process(es) in the last
+            5 minutes on {{ $labels.instance }}. A container exceeded its
+            memory limit or the host ran out of RAM.
+
+      # 4b. CONTAINER OOM — cAdvisor exposes container_oom_events_total per
+      #     container. Pinpoints WHICH container was OOM-killed (the host
+      #     counter above does not name it).
+      - alert: ContainerOOMKilled
+        expr: |
+          increase(container_oom_events_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: container
+        annotations:
+          summary: "Container OOM-killed: {{ $labels.name }}"
+          description: >-
+            Container {{ $labels.name }} was OOM-killed
+            {{ $value }} time(s) in the last 5 minutes. Raise its memory
+            limit or fix the leak.
+
+      # 4c. CADVISOR DEGRADED (AUD16-07, auditoría 2026-07-16) — en Docker
+      #     Desktop con el containerd snapshotter, cAdvisor no resuelve la capa
+      #     RW de ningún contenedor ("failed to identify the read-write layer
+      #     ID") y solo exporta el cgroup raíz {id="/"}: los paneles
+      #     per-container quedan vacíos y ContainerOOMKilled (4b) NO PUEDE
+      #     disparar jamás — con el healthcheck en verde enmascarándolo. Esta
+      #     regla hace visible esa ceguera: un cAdvisor sano en este stack ve
+      #     SIEMPRE >1 serie container_last_seen (los ~20 contenedores de la
+      #     plataforma). Gotcha:
+      #     docs/03-guides/gotchas/cadvisor-containerd-snapshotter.md
+      - alert: CadvisorDegraded
+        expr: |
+          count(container_last_seen) <= 1
+        for: 15m
+        labels:
+          severity: warning
+          component: monitoring
+        annotations:
+          summary: "cAdvisor no ve contenedores — métricas per-container ciegas"
+          description: >-
+            cAdvisor lleva 15 minutos exportando {{ $value }} serie(s) de
+            container_last_seen: no está resolviendo los contenedores del host
+            (típico en Docker Desktop con containerd snapshotter). Los paneles
+            per-container y la alerta ContainerOOMKilled están ciegos. Ver la
+            gotcha cadvisor-containerd-snapshotter.md.
+
+  # ---------------------------------------------------------------------------
+  # Backup health — fed by the node-exporter textfile collector that the
+  # backup engine writes after every run (workers.backup_metrics).
+  # ---------------------------------------------------------------------------
+  - name: backup-health
+    rules:
+      # 5a. LAST BACKUP FAILED — the engine writes
+      #     `agentic_backup_last_success` = 1 on a verified-good run, 0 on a
+      #     failed/invalid run. 0 means the most recent attempt did not produce
+      #     a trustworthy bundle. Fires fast (2m) — a failed backup is urgent.
+      - alert: BackupLastRunFailed
+        expr: |
+          agentic_backup_last_success == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "Last backup run failed or did not verify"
+          description: >-
+            The most recent backup run reported failure/invalid
+            (agentic_backup_last_success == 0). Inspect the worker logs and the
+            backup bundle directory before the retention window prunes the last
+            good bundle.
+
+      # 5b. BACKUP TOO OLD — defence in depth for the "last backup failed"
+      #     requirement: if the engine never even ran (beat down, worker dead)
+      #     no fresh success timestamp is written, so 5a stays silent. Here we
+      #     alert when the newest SUCCESS is older than 26h (daily 03:00 cadence
+      #     + a 2h grace). `time()` minus the success timestamp.
+      - alert: BackupTooOld
+        expr: |
+          (time() - agentic_backup_last_success_timestamp_seconds) > 93600
+        for: 0m
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "No successful backup in over 26h"
+          description: >-
+            The last successful backup completed
+            {{ $value | humanizeDuration }} ago (threshold 26h). The daily
+            03:00 backup job has not produced a good bundle — check Celery beat
+            and the worker.
+
+      # 5c. OFFSITE STALE (AUD16-19, auditoría 2026-07-16) — los bundles se
+      #     verificaban en local pero uploaded=[] era invisible: cero copia
+      #     offsite y nada lo decía. Solo arma si ALGUNA vez hubo un upload
+      #     bueno (ts > 0): un host sin destino offsite configurado (decisión
+      #     del operador, gated) no alerta — lo documenta el runbook de backup.
+      #     Umbral 8 días: cadencia diaria + margen de fin de semana apagado.
+      - alert: BackupOffsiteStale
+        expr: |
+          agentic_backup_offsite_last_success_timestamp_seconds > 0
+          and (time() - agentic_backup_offsite_last_success_timestamp_seconds) > 691200
+        for: 0m
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "No offsite backup upload in over 8 days"
+          description: >-
+            The last successful OFFSITE upload was
+            {{ $value | humanizeDuration }} ago (threshold 8d) — local bundles
+            keep verifying but the offsite copy has stopped shipping. Check the
+            backup destinations config and the worker's backup.upload logs.
