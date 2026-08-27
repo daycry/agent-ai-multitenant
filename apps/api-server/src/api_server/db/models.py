@@ -522,6 +522,24 @@ class SSOConfiguration(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixi
             "NOT (client_secret_ref IS NOT NULL AND client_secret_encrypted IS NOT NULL)",
             name="ck_sso_config_single_secret_source",
         ),
+        CheckConstraint(
+            "(provider <> 'oidc' OR (issuer IS NOT NULL AND client_id IS NOT NULL))"
+            " AND (provider <> 'saml' OR (idp_entity_id IS NOT NULL"
+            " AND idp_sso_url IS NOT NULL AND idp_x509_cert IS NOT NULL))",
+            name="ck_sso_config_provider_shape",
+        ),
+        CheckConstraint(
+            "NOT (sp_private_key_ref IS NOT NULL AND sp_private_key_encrypted IS NOT NULL)",
+            name="ck_sso_config_single_sp_key_source",
+        ),
+        CheckConstraint(
+            "(authn_requests_signed = false"
+            " AND want_assertions_encrypted = false"
+            " AND want_name_id_encrypted = false)"
+            " OR (sp_x509_cert IS NOT NULL"
+            " AND (sp_private_key_ref IS NOT NULL OR sp_private_key_encrypted IS NOT NULL))",
+            name="ck_sso_config_sp_key_when_crypto",
+        ),
         # Multi-provider (2026-07-18, migración 0115): se retiró el
         # uq_sso_config_provider — la plataforma admite N configs por kind
         # (p.ej. Google Y Microsoft a la vez). El flujo es per-provider-id de
@@ -1040,6 +1058,14 @@ class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
         CheckConstraint(
             "verdict IS NULL OR verdict IN ('approved', 'rejected')",
             name="ck_review_sessions_verdict",
+        ),
+        CheckConstraint(
+            "kind IN ('plan', 'preview')",
+            name="ck_review_sessions_kind",
+        ),
+        CheckConstraint(
+            "plan_id IS NOT NULL OR kind = 'preview'",
+            name="ck_review_sessions_plan_or_preview",
         ),
         ForeignKeyConstraint(
             ["tenant_id"],

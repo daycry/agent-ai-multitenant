@@ -148,6 +148,17 @@ class Task(Base, UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin):
 
     __tablename__ = "tasks"
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración 0101: desde Alembic 1.19 el
+        # autogenerate detecta los CHECK, y uno que viva sólo en la migración se
+        # lee como esquema que el modelo no conoce — el siguiente
+        # `--autogenerate` propondría BORRARLO. Los valores son los de
+        # `domain.TaskStatus` a fecha de esa revisión, igual que allí: ampliar el
+        # enum pide su propia migración, no ensanchar este CHECK en silencio.
+        CheckConstraint(
+            "status IN ('backlog', 'ready', 'assigned_to_human', 'in_progress',"
+            " 'awaiting_human_approval', 'in_review', 'blocked', 'done', 'cancelled')",
+            name="ck_tasks_status_valid",
+        ),
         Index("ix_tasks_tenant_status", "tenant_id", "status"),
         Index("ix_tasks_project_plan", "project_id", "plan_id"),
         CheckConstraint("retry_count >= 0", name="ck_tasks_retry_count_non_negative"),
