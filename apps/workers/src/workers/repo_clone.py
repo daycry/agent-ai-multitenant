@@ -18,7 +18,7 @@ import structlog
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
-from workers.git_auth import build_git_auth_env
+from workers.git_auth import build_git_auth_env, host_de_remote
 from workers.git_repos import BareRepoLayout, BareRepoManager
 
 _log = structlog.get_logger("workers.repo_clone")
@@ -94,6 +94,7 @@ async def _clone_project_repo_async(project_id: UUID, *, settings: Settings) -> 
             username=username,
             token=token,
             ssh_key=ssh_key,
+            allowed_host=host_de_remote(remote_url),
         )
         try:
             layout = BareRepoLayout(
