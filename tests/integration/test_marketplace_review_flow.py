@@ -305,6 +305,57 @@ def test_pending_review_is_invisible_to_another_tenant(
     asyncio.run(scenario())
 
 
+def test_pending_review_cannot_be_INSTALLED_by_another_tenant(
+    configured_app: Any, migrations_pg_dsn: str
+) -> None:
+    """El hermano del test de arriba, y el que faltaba (2026-08-27).
+
+    Aquel comprueba que un listing compartido y sin aprobar no SE VE. Éste
+    comprueba que tampoco se INSTALA, que es la mitad que estaba abierta: el
+    `POST /marketplace/installations` resolvía el listing con
+
+        WHERE id = :id AND deleted_at IS NULL
+
+    y nada más. La RLS decide qué filas existen —y con un share, ésta existe
+    para el tenant B—, pero la RLS no mira el estado de revisión. O sea que
+    conociendo el id se instalaba igual: el catálogo lo escondía y la
+    instalación lo servía, saltándose entera la revisión humana del flujo de
+    publicación (D6).
+
+    El `share` NO es decoración del escenario: es lo que hace que el test
+    signifique algo. Sin él la fila ni siquiera existe para el tenant B y esto
+    daría 404 por la RLS, verde de nacimiento y sin probar nada.
+    """
+
+    async def scenario() -> None:
+        ids = await _seed(migrations_pg_dsn)
+        async with _client(configured_app) as client:
+            author_token = await _mint(ids["author"], ids["tenant_a"])
+            published = await _publish(client, author_token)
+
+            share = await client.post(
+                "/marketplace/shares",
+                json={
+                    "listing_id": published["id"],
+                    "target_tenant_id": str(ids["tenant_b"]),
+                },
+                headers={"Authorization": f"Bearer {author_token}"},
+            )
+            assert share.status_code == 201, share.text
+
+            outsider = await _mint(ids["outsider"], ids["tenant_b"])
+            instalacion = await client.post(
+                "/marketplace/installations",
+                json={"listing_id": published["id"]},
+                headers={"Authorization": f"Bearer {outsider}"},
+            )
+            assert instalacion.status_code == 404, (
+                "un listing compartido pero SIN aprobar no se puede instalar "
+                f"conociendo su id; la API devolvió {instalacion.status_code}: "
+                f"{instalacion.text}"
+            )
+
+
 def test_the_author_sees_their_own_listing_in_any_state(
     configured_app: Any, migrations_pg_dsn: str
 ) -> None:

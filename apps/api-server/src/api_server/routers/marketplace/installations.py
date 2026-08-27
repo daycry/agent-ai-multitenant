@@ -31,6 +31,7 @@ from api_server.marketplace.async_gates import queue_install_gates
 from api_server.marketplace.finalize import finalize_installation
 from api_server.marketplace.install import InstallError, InstallOrchestrator
 from api_server.marketplace.materialize import MaterializeError
+from api_server.marketplace.review import catalog_visibility_clause
 from api_server.routers._helpers import require_tenant_id
 from api_server.routers._pagination import (
     apply_pagination,
@@ -118,10 +119,25 @@ async def install_listing(
     # Resolve the listing under RLS: a global catalog row or the caller's
     # own private listing. Another tenant's private listing is invisible
     # here, so installing it is a clean 404 (no cross-tenant leak).
+    #
+    # `catalog_visibility_clause` va ADEMÁS de la RLS, y esa distinción es la
+    # que faltaba (2026-08-27). La RLS decide qué filas EXISTEN para esta
+    # sesión —globales, propias y COMPARTIDAS—, pero no mira el estado de
+    # revisión. Sin esta cláusula, un listing compartido en `pending_review` o
+    # `rejected` era instalable conociendo su id: el catálogo lo escondía y la
+    # instalación lo servía, o sea que la revisión humana del flujo de
+    # publicación (D6) se podía saltar entera.
+    #
+    # Se reutiliza la cláusula del catálogo en vez de escribir aquí la misma
+    # regla: una tercera copia de «qué listing es visible» se separaría de las
+    # otras dos en cuanto alguien tocase una. Su semántica —publicado O
+    # propio— es exactamente la que la instalación necesita: el autor sigue
+    # pudiendo instalar lo suyo antes de publicarlo.
     result = await session.execute(
         select(MarketplaceListing).where(
             MarketplaceListing.id == payload.listing_id,
             MarketplaceListing.deleted_at.is_(None),
+            catalog_visibility_clause(principal.tenant_id),
         )
     )
     listing = result.scalar_one_or_none()

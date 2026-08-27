@@ -20,7 +20,7 @@ import structlog
 
 from workers.celery_app import app
 from workers.config import Settings, get_settings
-from workers.git_auth import build_git_auth_env
+from workers.git_auth import build_git_auth_env, host_de_remote
 from workers.git_repos import BareRepoLayout, BareRepoManager
 from workers.plan_git import PlanGitPolicies, PlanGitWorkflow, plan_git_identity
 from workers.pr_openers import build_pr_opener
@@ -196,7 +196,12 @@ async def _push_branch_to_remote_gated(
     identity = plan_git_identity(plan_id, plan_slug, project_slug)
     username, token, ssh_key = _resolve_git_secret(settings, project_id, auth_mode)
     auth = build_git_auth_env(
-        auth_mode, provider=provider, username=username, token=token, ssh_key=ssh_key
+        auth_mode,
+        provider=provider,
+        username=username,
+        token=token,
+        ssh_key=ssh_key,
+        allowed_host=host_de_remote(remote_url),
     )
     try:
         layout = BareRepoLayout(
@@ -348,7 +353,12 @@ async def _open_plan_pr_async(
         )
 
         auth = build_git_auth_env(
-            auth_mode, provider=provider, username=username, token=token, ssh_key=ssh_key
+            auth_mode,
+            provider=provider,
+            username=username,
+            token=token,
+            ssh_key=ssh_key,
+            allowed_host=host_de_remote(remote_url),
         )
         pr_url: str | None = None
         pr_error: str | None = None
