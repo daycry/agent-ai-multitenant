@@ -10,6 +10,13 @@ docs_language: es
 
 # ADR 0054 — Memoria del usuario en el asistente personal
 
+> ⚠️ **El número 0054 está usado dos veces.** El otro es [`0054-acoplamiento-contexto-proyecto-task.md`](./0054-acoplamiento-contexto-proyecto-task.md).
+> Una referencia suelta a «ADR 0054» en este repo **es ambigua**: hoy
+> aparece en decenas de ficheros y ninguno dice a cuál de los dos apunta. Al
+> citar uno de estos dos, enlaza el fichero en vez de escribir el número.
+> Vigilado por `tests/docs/test_adr_numbers_are_unique.py`, que impide que
+> aparezca un tercero.
+
 > **Estado: `accepted`** (aprobado por el operador 2026-06-08).
 > El asistente personal debe ir generando memoria del usuario (su nombre, preferencias, gustos) y usarla
 > en futuras conversaciones, reutilizando el subsistema de memoria existente.
