@@ -675,6 +675,25 @@ GitPlanValidationMode = Literal["human_required", "auto_approve"]
 GitPushPolicy = Literal["forbidden", "branch_only_pr_required", "direct_to_default_allowed"]
 
 
+#: Formas de remoto git que un tenant configura de verdad. Allowlist, no
+#: denylist: la lista de transportes de git crece, y una denylist envejece
+#: siempre hacia el lado peligroso.
+#:
+#:   https://host[:puerto]/ruta
+#:   ssh://[git@]host[:puerto]/ruta
+#:   git@host:ruta            (la forma scp-like que copia y pega GitHub)
+#:
+#: El `(?![^/@]*@)` de la rama https es lo que rechaza el userinfo: una
+#: credencial en la URL acaba en `.git/config` en claro (ADR 0072).
+_REMOTE_URL_ACEPTADAS = re.compile(
+    r"^(?:"
+    r"https://(?![^/@]*@)[A-Za-z0-9._-]+(?::[0-9]{1,5})?/\S+"
+    r"|ssh://(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9._-]+(?::[0-9]{1,5})?/\S+"
+    r"|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:\S+"
+    r")$"
+)
+
+
 class GitConfigUpdateRequest(BaseModel):
     """Fija el remoto + credencial del proyecto. El secreto (token/ssh_key) es de
     SOLO ESCRITURA: se guarda en Vault y NUNCA se devuelve."""
@@ -684,6 +703,42 @@ class GitConfigUpdateRequest(BaseModel):
     provider: GitProvider = "generic"
     remote_url: str = Field(min_length=1, max_length=2048)
     default_branch: str = Field(default="main", min_length=1, max_length=255)
+
+    @field_validator("remote_url")
+    @classmethod
+    def _remote_url_es_una_forma_conocida(cls, valor: str) -> str:
+        """Deny-by-default sobre el remoto: lo que no case con una forma sana, fuera.
+
+        Este campo es entrada NO confiable que acaba, sin más filtros, en
+        ``git remote add origin <url>`` dentro del worker (``git_repos.py``). Y
+        git no habla sólo https:
+
+        * ``ext::<comando>`` hace que git **ejecute ese comando** como
+          transporte, y el worker es el proceso que tiene el token de Vault,
+          ``DOCKER_HOST`` al socket-proxy y el data-root montado;
+        * ``file://`` y las rutas locales alcanzan su sistema de ficheros;
+        * ``git://`` y ``http://`` no autentican ni cifran, así que quien esté
+          en medio sirve otro repositorio — y este sistema **ejecuta** el código
+          que clona;
+        * una URL con userinfo persiste la credencial en ``.git/config`` en
+          claro, que es exactamente lo que rechazó el ADR 0072.
+
+        Se valida por allowlist y no por lista de prohibidos a propósito: la
+        lista de transportes de git crece, y una denylist envejece hacia el lado
+        peligroso.
+        """
+        candidato = valor.strip()
+        if not _REMOTE_URL_ACEPTADAS.match(candidato):
+            raise ValueError(
+                "remote_url no tiene una forma admitida. Se aceptan "
+                "`https://host[:puerto]/ruta`, `ssh://[git@]host[:puerto]/ruta` y "
+                "`git@host:ruta`. No se aceptan `ext::` (ejecuta un comando), "
+                "`file://` ni rutas locales, `git://` ni `http://` (sin cifrar), "
+                "ni credenciales embebidas en la URL: la credencial va por "
+                "`auth_mode` y se guarda en Vault, nunca en el remoto."
+            )
+        return candidato
+
     auth_mode: GitAuthMode = "none"
     # Credencial (write-only). PAT: username opcional + token. SSH: ssh_key.
     username: str | None = Field(default=None, max_length=255)
