@@ -12,7 +12,10 @@ supersedes: []
 
 # ADR 0078 — Bucles cognitivos de fondo del Córtex
 
-> **Estado: `accepted`** (frontmatter desde el 2026-06-22; banner corregido el 2026-07-27, decía `proposed`). Introduce comportamiento **autónomo** —el córtex actúa cuando nadie habla— y consumo de LLM/egress no disparado por el owner, así que lo aprobado incluye el **kill-switch** `cortex.autonomy_enabled`, que arranca APAGADO: las tres entradas del beat tickean siempre pero salen no-op mientras esté off. Cadencias en `WORKERS_CORTEX_{CURIOSITY,REFLECTION,MAINTENANCE}_CRON`.
+> **Estado: `accepted`** (frontmatter desde el **2026-07-12**, commit `affb048e`;
+> banner corregido el 2026-07-27, decía `proposed`). La fecha del `date:` es el
+> 2026-06-22 y es la de REDACCIÓN, no la de aceptación: entre una y otra el ADR
+> estuvo veinte días en `proposed`. El banner las confundía. Introduce comportamiento **autónomo** —el córtex actúa cuando nadie habla— y consumo de LLM/egress no disparado por el owner, así que lo aprobado incluye el **kill-switch** `cortex.autonomy_enabled`, que arranca APAGADO: las tres entradas del beat tickean siempre pero salen no-op mientras esté off. Cadencias en `WORKERS_CORTEX_{CURIOSITY,REFLECTION,MAINTENANCE}_CRON`.
 
 ## Contexto
 
