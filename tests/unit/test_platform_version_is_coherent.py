@@ -371,3 +371,67 @@ def test_hardcoded_sdk_versions_follow_their_own_manifest(
         f"`{_declared_version(_MANIFESTS[manifest])}`. El SDK tiene ciclo propio "
         "(ADR 0037), pero dentro de ese ciclo sus dos números son el mismo."
     )
+
+
+# ---------------------------------------------------------------------------
+# Los lockfiles, que se quedaron atrás en el primer bump (2026-08-27)
+# ---------------------------------------------------------------------------
+#
+# `package-lock.json` repite la versión del paquete raíz en DOS sitios: la clave
+# `version` de nivel superior y `packages[""]["version"]`. El bump a 1.0.0 tocó
+# los `package.json` y dejó los dos locks diciendo `0.0.0`.
+#
+# Nadie lo cazó: `Lint TypeScript` no mira ese drift y `npm ci` no falla por él
+# —comprueba el árbol de dependencias, no el número del paquete raíz—. O sea que
+# el modo de fallo es silencioso y permanente: el manifiesto dice una versión y
+# el artefacto reproducible dice otra, y quien audite cuál se publicó encuentra
+# dos respuestas.
+#
+# El equivalente en Python sí tiene guarda: `uv lock --check` corre en CI y fue
+# justo quien detectó este bump a medias. Esto es su mitad de JavaScript.
+
+
+def _npm_lockfiles() -> list[Path]:
+    """Los `package-lock.json` de las distribuciones de plataforma, del árbol."""
+    encontrados: list[Path] = []
+    for manifest in _PLATFORM.values():
+        if manifest.name != "package.json":
+            continue
+        lock = manifest.parent / "package-lock.json"
+        if lock.is_file():
+            encontrados.append(lock)
+    return sorted(encontrados)
+
+
+def test_the_guard_still_sees_the_npm_lockfiles() -> None:
+    """Si un renombrado deja esta lista vacía, la guarda pasaría sin mirar nada.
+
+    Es la misma red que llevan las otras derivaciones de este fichero: una
+    guarda que recorre una lista vacía es verde y no comprueba nada, que es
+    peor que no tenerla porque además tranquiliza.
+    """
+    assert _npm_lockfiles(), (
+        "no se encontró ningún package-lock.json de plataforma; la derivación "
+        "del árbol se ha roto y esta guarda estaría pasando en vacío"
+    )
+
+
+@pytest.mark.parametrize("lock", _npm_lockfiles(), ids=lambda p: str(p.relative_to(_REPO_ROOT)))
+def test_npm_lockfiles_carry_the_same_version_as_their_manifest(lock: Path) -> None:
+    """El lock y su `package.json` dicen el mismo número, en los DOS sitios."""
+    manifest = lock.parent / "package.json"
+    esperada = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+    datos = json.loads(lock.read_text(encoding="utf-8"))
+
+    assert datos.get("version") == esperada, (
+        f"{lock.relative_to(_REPO_ROOT)} declara version={datos.get('version')!r} "
+        f"pero {manifest.relative_to(_REPO_ROOT)} dice {esperada!r}. "
+        "Tras un bump hay que regenerar el lock (`npm install --package-lock-only`)."
+    )
+    raiz = datos.get("packages", {}).get("", {})
+    assert raiz.get("version") == esperada, (
+        f"{lock.relative_to(_REPO_ROOT)} tiene packages[''].version="
+        f"{raiz.get('version')!r} pero su manifiesto dice {esperada!r}. "
+        "Es el segundo sitio donde npm repite el número; actualizar sólo el "
+        "primero deja el drift a medio arreglar."
+    )
