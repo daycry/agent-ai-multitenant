@@ -1,6 +1,6 @@
 {
   "name": "installer",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Temporary self-destructing installer wizard UI (Next.js 15 App Router). NOT part of the runtime stack — Plan 15 Fase A.",
   "scripts": {

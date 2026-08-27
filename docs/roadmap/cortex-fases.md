@@ -49,10 +49,11 @@ se vende como conciencia).
 ## Gating — histórico y estado actual
 
 **El gate por fase ya no existe.** Comprobado ADR por ADR el 2026-07-30: **0073, 0075, 0076,
-0077, 0078 y 0080 están `accepted`** en su frontmatter, y **0074 está `accepted-f0`** — el único
-valor así del repo, conservado a propósito porque ese ADR se aprobó en dos tiempos (cimiento F0
-primero, excepción a RLS después); su banner, que hasta el 2026-07-30 seguía declarando
-«F1-F5 `proposed` (gated)» con el código desplegado, ya está corregido.
+0077, 0078 y 0080 están `accepted`** en su frontmatter, y el 0074 también — llevó `accepted-f0`
+hasta el 2026-08-27, único valor así del repo, como registro de que se aprobó en dos tiempos
+(cimiento F0 primero, excepción a RLS después); se normalizó a `accepted` al comprobar que no era
+un estado sino una nota histórica sin consumidores, y esa traza vive hoy en su banner — el mismo
+que hasta el 2026-07-30 seguía declarando «F1-F5 `proposed` (gated)» con el código desplegado.
 
 > Esta sección decía «Todas las fases F1-F5 siguen `proposed` en sus ADR». Era cierto el
 > 2026-06-23 y dejó de serlo con las promociones del 2026-06-24 y el 2026-07-27. Se corrige el

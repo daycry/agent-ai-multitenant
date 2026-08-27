@@ -245,9 +245,10 @@ Todos **gated `require_system_owner`** (DB-authoritative, F0). Routers nuevos en
     `docs/05-architecture-decisions/0078-bucles-cognitivos-fondo-cortex.md` a `accepted-f4` exige
     el **visto bueno del operador** y no se ha hecho (sigue en `accepted` a secas). Hay además un
     argumento escrito **en contra** del propio ADR, en su sección del 2026-08-19: el corpus no usa
-    estados por fase —`accepted-f0` del ADR 0074 es el único, por una razón histórica anotada en
-    él— así que inventar `accepted-f4` reintroduce la ambigüedad que aquel banner conserva a
-    propósito. **Decisión del operador**: (a) flip a `accepted-f4`, o (b) dejarlo en `accepted` y
+    estados por fase, y desde el 2026-08-27 **sin ninguna excepción** —el `accepted-f0` del ADR
+    0074, que era la única, se normalizó a `accepted` por no ser un estado sino una nota histórica
+    en el campo equivocado, sin un solo consumidor—, así que inventar `accepted-f4` reintroduciría
+    justo la ambigüedad que se acaba de retirar. **Decisión del operador**: (a) flip a `accepted-f4`, o (b) dejarlo en `accepted` y
     cerrar esta casilla apoyándose en el plan y el changelog, que es lo que el propio ADR
     recomienda.
   - **Aceptación:** el roadmap refleja el estado real de F4 ✅; ADR 0078 documenta la aceptación

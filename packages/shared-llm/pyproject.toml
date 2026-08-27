@@ -1,6 +1,6 @@
 [project]
 name = "shared-llm"
-version = "0.0.0"
+version = "1.0.0"
 description = "Unified async LLM provider layer for the agentic platform (ADR 0021)."
 requires-python = ">=3.12"
 dependencies = [

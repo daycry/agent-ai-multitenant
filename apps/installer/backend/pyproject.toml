@@ -1,6 +1,6 @@
 [project]
 name = "installer-backend"
-version = "0.0.0"
+version = "1.0.0"
 description = "Temporary bootstrap installer backend (FastAPI) — served by the self-destructing installer container, NOT part of the runtime stack."
 requires-python = ">=3.12"
 dependencies = [

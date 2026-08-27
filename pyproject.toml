@@ -1,6 +1,6 @@
 [project]
 name = "agentic-platform"
-version = "0.0.0"
+version = "1.0.0"
 description = "Multi-tenant agentic AI platform — see CLAUDE.md and docs/roadmap/."
 requires-python = ">=3.12"
 

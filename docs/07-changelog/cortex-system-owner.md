@@ -49,10 +49,10 @@ F1-F5 tienen plan y changelog propios (índice en
 - **ADRs de gobierno redactados**: 0074 (rol + tablas tenant-less sobre
   BYPASSRLS, excepción consciente al Principio 1), 0075 (modelo afectivo), 0076
   (razonamiento profundo + egress confiable), 0077 (olvido y consolidación) y
-  0078 (bucles de fondo). Hoy 0075-0078 están `accepted`; **0074 conserva
-  `accepted-f0`** a propósito, por haberse aprobado en dos tiempos (cimiento F0
-  primero, excepción a RLS después) — razón que desde el 2026-07-30 está escrita
-  en el propio ADR.
+  0078 (bucles de fondo). Hoy **los cinco están `accepted`**: el 0074 llevó
+  `accepted-f0` entre 2026-06-22 y 2026-08-27, por haberse aprobado en dos tiempos
+  (cimiento F0 primero, excepción a RLS después), y ese valor se normalizó a
+  `accepted` — la traza de la aprobación en dos tiempos vive en el banner del ADR.
 
 ## Decisiones abiertas del diseño: cómo quedaron
 
@@ -85,12 +85,19 @@ La parte **documental** de ese cierre sí se hizo el 2026-07-30: el banner del A
 0074 ya no gatea F1-F5, el diseño maestro
 ([cortex-system-owner.md](../roadmap/cortex-system-owner.md)) declara el estado de
 cada una de las seis fases con su plan y su changelog, y ya no afirma que los ADR
-0075-0078 estén `proposed`. Queda una decisión, no un trabajo: **normalizar el
+0075-0078 estén `proposed`. Quedaba una decisión, no un trabajo: **normalizar el
 `accepted-f0` del frontmatter del 0074 a `accepted`** o dejarlo como registro de
 la aprobación en dos tiempos. Esta entrega eligió dejarlo y **escribir la razón en
 el ADR**, porque inventar estados por fase (`accepted-f5`) rompería la coherencia
-de un corpus donde los otros 132 ADR usan `accepted`. Mover ese frontmatter sigue
-siendo decisión del operador.
+de un corpus donde los otros ADR usan `accepted`.
+
+**Resuelto el 2026-08-27: normalizado a `accepted`.** El operador lo aprobó en el
+mismo cambio que reparó el cuerpo del ADR, y lo que inclinó la decisión fue
+comprobar que el valor **no tenía un solo consumidor** —fuera del vocabulario de
+estados del repo, `AdrMeta.status` es texto libre y ningún `.py`/`.yml`/`.sh`/`.ts`
+lo lee—, así que no gateaba nada: sólo obligaba a diez documentos a explicar por
+qué existía. La traza de la aprobación en dos tiempos se queda en el banner del ADR,
+que la cuenta con fecha y con más detalle del que cabe en un frontmatter.
 
 ## PR
 

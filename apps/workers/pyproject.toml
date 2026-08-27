@@ -1,6 +1,6 @@
 [project]
 name = "workers"
-version = "0.0.0"
+version = "1.0.0"
 description = "Celery workers: pick up jobs and manage agent-runtime containers."
 requires-python = ">=3.12"
 dependencies = [

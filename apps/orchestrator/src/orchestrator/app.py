@@ -91,7 +91,7 @@ def create_app(
 
     app = FastAPI(
         title="agentic-platform / orchestrator",
-        version="0.0.0",
+        version="1.0.0",
         docs_url="/docs",
         redoc_url=None,
         lifespan=lifespan,

@@ -153,8 +153,9 @@ Comprobado uno a uno el 2026-08-19 (el `grep` que sostenía la lista anterior es
   `apply_onboarding`) y el `POST /identity/onboarding` aterrizaron en esta misma
   ola, el 2026-08-19; su cierre lo manda la casilla F3.3 del plan.
 - **El ADR 0078 quedó `accepted`, no `accepted-f3`.** Benigno y deliberado: el
-  corpus no usa estados por fase (el `accepted-f0` del ADR 0074 es el único, y por
-  una razón histórica). Lo que sí se hizo es anotar en él el estado real de la
+  corpus no usa estados por fase. (Cuando se escribió esto, el `accepted-f0` del
+  ADR 0074 era la única excepción; se normalizó a `accepted` el 2026-08-27, así
+  que hoy no hay ninguna.) Lo que sí se hizo es anotar en él el estado real de la
   reflexión.
 - **PR sin abrir.** Regla dura de `CLAUDE.md`: sin PR mergeado ningún plan pasa a
   `completed`, así que la fase sigue en `pending_human_validation`.

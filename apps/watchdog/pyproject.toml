@@ -1,6 +1,6 @@
 [project]
 name = "watchdog"
-version = "0.0.0"
+version = "1.0.0"
 description = "Container health watchdog with exponential backoff."
 requires-python = ">=3.12"
 dependencies = [

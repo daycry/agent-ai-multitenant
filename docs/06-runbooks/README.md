@@ -2,7 +2,7 @@
 title: Runbooks operativos
 docs_language: es
 audience: operador, system admin
-updated: 2026-05-31
+updated: 2026-08-27
 ---
 
 # 06-runbooks — Runbooks operativos
@@ -26,6 +26,7 @@ Orientados a quien mantiene el sistema corriendo en una sola máquina
 | [06-capacity-management.md](./06-capacity-management.md)             | Escalar workers/colas, concurrencia + límites de tiempo, sizing y capacity de GPU                                            |
 | [07-custom-domain.md](./07-custom-domain.md)                         | Publicar bajo un dominio propio (DNS + TLS + origen/prefijo) y su efecto en el SSO                                           |
 | [08-instalacion-produccion.md](./08-instalacion-produccion.md)       | Manual de PRODUCCIÓN de punta a punta: host + DNS + install.yaml + dominio (example.com) + verificación + endurecimiento     |
+| [09-release.md](./09-release.md)                                     | Publicar una versión: ensayo obligatorio con `v1.0.0-rc1`, tag definitivo (acto del operador) y verificación en ghcr         |
 | [health-check.md](./health-check.md)                                 | Verificar que todos los servicios del stack están sanos                                                                      |
 | [backups.md](./backups.md)                                           | Copia/restauración manual a nivel de volumen (procedimiento básico)                                                          |
 | [restart-services.md](./restart-services.md)                         | Reiniciar el stack o un servicio concreto sin perder datos                                                                   |
