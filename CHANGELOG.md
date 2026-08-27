@@ -279,8 +279,8 @@ This project has never cut a version. Concretely, as measured on 2026-08-21:
 | `version` of every deployable service | `0.0.0` — the two SDK packages say `0.1.0`, and neither is published |
 
 Until a first version is tagged, everything lands under `[Unreleased]`. Cutting
-one means, at minimum: deciding the version numbers the components carry (there is
-no ADR for that yet), running `release-images.yml` for the first time, and
+one means, at minimum: deciding the version numbers the components carry ([ADR 0160](docs/05-architecture-decisions/0160-versionado-de-la-plataforma.md),
+`proposed` since 2026-08-27), running `release-images.yml` for the first time, and
 deciding whether the SDKs are published at all.
 
 ## How to add an entry

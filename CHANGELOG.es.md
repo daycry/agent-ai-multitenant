@@ -295,7 +295,7 @@ Este proyecto no ha cortado nunca una versión. En concreto, medido el 2026-08-2
 
 Hasta que se etiquete una primera versión, todo aterriza bajo `[Unreleased]`.
 Cortarla exige, como mínimo: decidir qué números de versión llevan los componentes
-(no hay ADR para eso todavía), correr `release-images.yml` por primera vez, y
+([ADR 0160](docs/05-architecture-decisions/0160-versionado-de-la-plataforma.md), `proposed` desde el 2026-08-27), correr `release-images.yml` por primera vez, y
 decidir si los SDK se publican siquiera.
 
 ## Cómo añadir una entrada
