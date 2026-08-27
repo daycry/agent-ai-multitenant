@@ -110,21 +110,49 @@ with a local Postgres. Give the containers 30–60 s to report healthy
 [getting started](docs/02-getting-started/README.md) to seed a tenant and run
 your first plan.
 
-For an unattended install driven by a YAML profile
-(`scripts/install-profiles/{minimal,recommended,gpu}.yaml`):
+### Installing it, rather than developing on it
+
+Three paths, decided in
+[ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
+They differ in what you need to have before you start:
+
+**(1) Without cloning.** Download the bootstrap compose, **read it**, then run
+it. It is deliberately two commands and not one magic line: the artifact is
+meant to be audited before it executes.
 
 ```bash
-./scripts/install.sh --config install.yaml
+curl -fsSLO https://raw.githubusercontent.com/daycry/agent-ai-multitenant/master/docker/bootstrap/docker-compose.generate.yml
+# read it, then:
+docker compose -f docker-compose.generate.yml run --rm generate
+cd /data/agent-platform && docker compose up -d --wait
 ```
 
-This CLI is the **real** install path — the HTTP wizard under `apps/installer`
-is a simulation that provisions nothing and reveals credentials that are not
-real. Read the caveats before you reserve a machine: on a clean host the CLI
-does not reach the end today, for two independent reasons measured in
-[ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-(no images published, and the generated compose's relative paths resolving
-against the data root, where there is no checkout — cloning does not fix that
-one). The second is being repaired; no dates are promised. State of each path:
+The installer **generates and does not provision**: it writes the boot tree and
+exits, and never talks to the Docker daemon. That is why it does not mount
+`/var/run/docker.sock` — mounting it is effective root on the host, which
+[ADR 0060](docs/05-architecture-decisions/0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)
+rejected. **Needs the images published; not available yet.**
+
+**(2) Cloning, with Compose.** What the `Get started` steps above describe. Good
+for development and for reading the stack; the canonical compose brings up
+infrastructure, and the application services come from the generated compose.
+
+**(3) Unattended, with the scripts** — the supported path today:
+
+```bash
+./scripts/install.sh --config install.yaml   # profiles: scripts/install-profiles/
+```
+
+This CLI is the **real** install path. The HTTP wizard under `apps/installer` is
+a simulation: it provisions nothing and the credentials it reveals are not real.
+
+**Read this before you reserve a machine.** On a clean host the CLI does not
+reach the end today, and the reason is now a single one. Of the two breakages
+measured in ADR 0161, the second — the generated compose referring to files
+nobody wrote, which cloning did _not_ fix — **is repaired**: the auxiliaries
+travel inside the installer package. What remains is the first: **no images are
+published**, so `docker compose pull` has nothing to pull. Publishing is an
+operator action, and no dates are promised. State of each path:
 [installation runbook](docs/06-runbooks/01-installation-from-scratch.md).
 
 Configuration is read from `docker/.env`, which is git-ignored. Platform
@@ -173,17 +201,20 @@ Stated plainly, so nobody goes looking for something that is not there:
   this repository only. There is no `pip install agentic-platform-sdk` and no
   `npm install @agentic-platform/sdk` to run yet.
 - **No container images are on a registry yet.** The application images publish
-  to `ghcr.io/agentic-platform/*` when a `v*` tag is pushed — the
+  to `ghcr.io/daycry/*` when a `v*` tag is pushed — the
   [Release images](.github/workflows/release-images.yml) workflow has never run,
   because no such tag exists. Until then, images are built locally by the dev
-  scripts.
+  scripts. (This line said `ghcr.io/agentic-platform/*` until 2026-08-27; the
+  workflow derives the namespace from the repository owner, so it was wrong —
+  and wrong in the one place a reader would copy it from.)
 - **The install wizard does not install.** The nine-step HTTP wizard under
   `apps/installer` runs against a fake executor: it provisions nothing and the
   credentials it reveals at the end are not real. The supported path is the CLI
-  above, and that one is blocked today by the two breakages in
-  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
-  So: this repository is runnable for development, and not yet installable on a
-  clean production host.
+  above, and that one is blocked today by **one** of the two breakages in
+  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+  — the missing published images. The other, the generated compose referring to
+  files nobody wrote, is repaired. So: this repository is runnable for
+  development, and not yet installable on a clean production host.
 - **There is no published coverage number**, because no coverage service is
   wired up. CI enforces a ratchet floor on the unit subset instead
   ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).
