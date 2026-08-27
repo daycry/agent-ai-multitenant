@@ -5,16 +5,35 @@
 All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
-and the project intends to follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+and the project follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)
+under [ADR 0160](docs/05-architecture-decisions/0160-versionado-de-la-plataforma.md):
+**one number for the whole monorepo**, moved by a single tag, with the two SDK
+packages keeping their own cycle.
 
-> **Nothing has been released yet.** There are no git tags, no GitHub releases, no
-> images in the container registry and no published SDK packages; every
-> `pyproject.toml` of a deployable service still declares `version = "0.0.0"`. So
-> there is one section below and it is `[Unreleased]`. See
-> [Versioning and releases](#versioning-and-releases) for what has to happen
-> before that changes.
+> **`[1.0.0]` is cut here; the tag is not pushed yet.** The section below is the
+> content of the first release. **Pushing the `v1.0.0` tag is an act of the
+> operator** — nothing in this repository creates it, by explicit decision of ADR
+> 0160 — and it is that push that makes `release-images.yml` publish the six
+> images. So until it happens, `[1.0.0]` describes what is going to be published,
+> not something anyone can `docker pull`: measured on 2026-08-27, ghcr answers
+> `denied` for `ghcr.io/daycry/api-server:v1.0.0`, which is the installer's own
+> default. The procedure, including the mandatory `v1.0.0-rc1` rehearsal, is
+> [docs/06-runbooks/09-release.md](docs/06-runbooks/09-release.md).
 
 ## [Unreleased]
+
+Nothing yet. New entries land here as they are merged, and move down into a
+numbered section when the next release is cut — see
+[How to add an entry](#how-to-add-an-entry).
+
+## [1.0.0] - 2026-08-27
+
+**What this version promises** ([ADR 0160](docs/05-architecture-decisions/0160-versionado-de-la-plataforma.md),
+decision 4): the **REST API v1 contract**, and nothing else. Not database-schema
+compatibility — Alembic migrations govern that — and not the backup bundle format,
+which has its own ADR. Promising compatibility for things that already have their
+own mechanism is promising what nobody would write the test for, and a promise
+nobody tests ages without any failure to announce it.
 
 Merged into `master` as `e8e945da` on 2026-08-21 (pull request #67): **91 commits**
 written between 2026-07-30 and 2026-08-21 — 39 fixes, 28 features, 10 docs,
@@ -267,21 +286,36 @@ PRIVILEGES` granting `app_user` full DML on every table Alembic creates
 
 ## Versioning and releases
 
-This project has never cut a version. Concretely, as measured on 2026-08-21:
+[ADR 0160](docs/05-architecture-decisions/0160-versionado-de-la-plataforma.md)
+(`accepted`, signed by the operator on 2026-08-27) settles what number the
+components carry: **one version for the whole monorepo**. The fifteen platform
+distributions move together, so a tag `vX.Y.Z` means «this stack, whole, as it was
+published that day» — which is what the installer's compose already assumed. The
+two SDK packages are deliberately outside that number, because their compatibility
+is governed by
+[ADR 0037](docs/05-architecture-decisions/0037-api-publica-x-api-token-versionado-path-webhooks-hmac-config-id-sdks-openapi.md)
+(path versioning of the API) and tying them to the platform would mean publishing
+a new SDK every time the `watchdog` changes. The version bump of those fifteen
+distributions ships with this same release.
 
-| Artefact                              | State                                                                |
-| ------------------------------------- | -------------------------------------------------------------------- |
-| git tags                              | none                                                                 |
-| GitHub releases                       | none                                                                 |
-| container registry (ghcr)             | empty — `release-images.yml` has never run                           |
-| `agentic-platform-sdk` (PyPI)         | not published                                                        |
-| `@agentic-platform/sdk` (npm)         | not published (`private: true`)                                      |
-| `version` of every deployable service | `0.0.0` — the two SDK packages say `0.1.0`, and neither is published |
+What is actually out there, measured on 2026-08-27 — after the `[1.0.0]` cut above
+and before the operator pushes anything:
 
-Until a first version is tagged, everything lands under `[Unreleased]`. Cutting
-one means, at minimum: deciding the version numbers the components carry ([ADR 0160](docs/05-architecture-decisions/0160-versionado-de-la-plataforma.md),
-`proposed` since 2026-08-27), running `release-images.yml` for the first time, and
-deciding whether the SDKs are published at all.
+| Artefact                                                      | State                                                      |
+| ------------------------------------------------------------- | ---------------------------------------------------------- |
+| git tag `v1.0.0`                                              | **not pushed** — `git tag` and the API's `/tags` are empty |
+| GitHub release                                                | none                                                       |
+| the six images in ghcr                                        | **not published** — `release-images.yml` has never run     |
+| runs of `release-images.yml`                                  | `total_count: 0`                                           |
+| `agentic-platform-sdk` (PyPI) / `@agentic-platform/sdk` (npm) | not published; own cycle, out of this number               |
+
+That last state is not cosmetic: while it holds, a from-scratch install fails on
+the main path, because the installer's default
+(`PLATFORM_IMAGE_TAG:-v1.0.0`, `PLATFORM_REGISTRY:-ghcr.io/daycry`) pulls a tag
+nobody ever published and the registry answers `denied`. Publishing them — with the
+mandatory `v1.0.0-rc1` rehearsal first, so the pipeline's first run is not the one
+that counts — is
+[docs/06-runbooks/09-release.md](docs/06-runbooks/09-release.md).
 
 ## How to add an entry
 
@@ -301,3 +335,4 @@ The language policy that governs both halves of this file is
 [`docs/03-guides/bilingual-docs.md`](docs/03-guides/bilingual-docs.md).
 
 [unreleased]: https://github.com/daycry/agent-ai-multitenant/commits/master
+[1.0.0]: https://github.com/daycry/agent-ai-multitenant/releases/tag/v1.0.0

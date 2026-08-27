@@ -427,7 +427,7 @@ def create_app() -> FastAPI:
     docs_published = settings.api_docs_published
     app = FastAPI(
         title="agentic-platform / api-server",
-        version="0.0.0",
+        version="1.0.0",
         docs_url="/docs" if docs_published else None,
         openapi_url="/openapi.json" if docs_published else None,
         redoc_url=None,

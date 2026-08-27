@@ -73,7 +73,7 @@ provides-extras = ["dev", "claude"]
 
 [[package]]
 name = "agentic-platform"
-version = "0.0.0"
+version = "1.0.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -194,7 +194,7 @@ wheels = [
 
 [[package]]
 name = "api-server"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "apps/api-server" }
 dependencies = [
     { name = "alembic" },
@@ -1610,7 +1610,7 @@ wheels = [
 
 [[package]]
 name = "installer-backend"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "apps/installer/backend" }
 dependencies = [
     { name = "fastapi" },
@@ -2358,7 +2358,7 @@ wheels = [
 
 [[package]]
 name = "notification-dispatcher"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "apps/notification-dispatcher" }
 dependencies = [
     { name = "aiosmtplib" },
@@ -2617,7 +2617,7 @@ wheels = [
 
 [[package]]
 name = "orchestrator"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "apps/orchestrator" }
 dependencies = [
     { name = "fastapi" },
@@ -3673,7 +3673,7 @@ wheels = [
 
 [[package]]
 name = "shared-domain"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "packages/shared-domain" }
 
 [package.optional-dependencies]
@@ -3687,7 +3687,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "shared-guardrails"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "packages/shared-guardrails" }
 dependencies = [
     { name = "jsonschema" },
@@ -3719,7 +3719,7 @@ provides-extras = ["dev", "pii", "content-safety"]
 
 [[package]]
 name = "shared-llm"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "packages/shared-llm" }
 dependencies = [
     { name = "httpx" },
@@ -3745,7 +3745,7 @@ provides-extras = ["claude", "dev"]
 
 [[package]]
 name = "shared-mcp"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "packages/shared-mcp" }
 dependencies = [
     { name = "mcp" },
@@ -3767,7 +3767,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "shared-test-runtimes"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "packages/shared-test-runtimes" }
 
 [package.optional-dependencies]
@@ -4384,7 +4384,7 @@ wheels = [
 
 [[package]]
 name = "watchdog"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "apps/watchdog" }
 dependencies = [
     { name = "docker" },
@@ -4616,7 +4616,7 @@ wheels = [
 
 [[package]]
 name = "workers"
-version = "0.0.0"
+version = "1.0.0"
 source = { editable = "apps/workers" }
 dependencies = [
     { name = "boto3" },

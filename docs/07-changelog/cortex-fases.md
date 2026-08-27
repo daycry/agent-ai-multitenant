@@ -50,8 +50,8 @@ no actualiza, lo paga quien lo lee después.
 La sección **Gating** del documento decía: «Todas las fases F1-F5 siguen
 `proposed` en sus ADR». Comprobado ADR por ADR, eso hacía tiempo que no era
 cierto: **0073, 0075, 0076, 0077, 0078 y 0080 están `accepted`** en su
-frontmatter, y **0074 está `accepted-f0`** — el único ADR del repo con ese
-valor.
+frontmatter, y **0074 estaba `accepted-f0`** — el único ADR del repo con ese
+valor, normalizado después a `accepted` (ver la nota del 2026-08-27, más abajo).
 
 Corregido:
 
@@ -61,13 +61,20 @@ Corregido:
   Se añade además una tabla que separa **«implementada»** de **«cerrada»**, que
   es la confusión que este índice venía alimentando.
 - El **banner del ADR 0074** ya no declara «F1-F5 `proposed` (gated)».
-- El `accepted-f0` del frontmatter del 0074 **se conserva a propósito**, y ahora
-  con su razón escrita en el propio ADR: ese ADR se aprobó **en dos tiempos**
-  (cimiento F0 primero, excepción a RLS después) y el valor lo registra. No se
-  ha inventado un `accepted-f5`: el corpus de 132 ADR sólo usa `accepted`, y las
-  fases se trazan por su plan y su changelog, no por el `status` del ADR.
-  Normalizarlo a `accepted` seguiría siendo defendible, pero es una decisión del
-  operador y no cambia ningún hecho.
+- El `accepted-f0` del frontmatter del 0074 se conservó entonces, con su razón
+  escrita en el propio ADR: ese ADR se aprobó **en dos tiempos** (cimiento F0
+  primero, excepción a RLS después) y el valor lo registraba. No se ha inventado
+  un `accepted-f5`: el corpus sólo usa `accepted`, y las fases se trazan por su
+  plan y su changelog, no por el `status` del ADR.
+
+  > **VENCIDO el 2026-08-27: el `accepted-f0` ya no existe.** El operador aprobó
+  > normalizarlo a `accepted` en el mismo cambio que reparó el cuerpo del ADR.
+  > Se comprobó que no era un estado sino una nota histórica en el campo
+  > equivocado: fuera del vocabulario de estados del repo y con **cero
+  > consumidores** (`AdrMeta.status` es texto libre; ningún `.py`/`.yml`/`.sh`/
+  > `.ts` lo lee). No gateaba nada — sólo obligaba a diez documentos, éste
+  > incluido, a explicar por qué existía. La traza de la aprobación en dos
+  > tiempos sigue donde se lee de verdad: el banner del ADR 0074.
 
 ## Estado de cierre
 

@@ -126,7 +126,8 @@ Lo que **no** tiene métricas es el bucle de **reflexión**: no publica ninguna 
 de la reflexión.
 
 Sobre el `status`: este ADR se queda en **`accepted`**, no en un `accepted-f3`. El corpus
-no usa estados por fase —el `accepted-f0` del ADR 0074 es el único, y por una razón
-histórica escrita en él—, así que inventar un valor nuevo aquí crearía la ambigüedad que
-aquel banner explica que se conserva a propósito. La trazabilidad por fase la dan el plan
-y su changelog.
+no usa estados por fase, y desde el 2026-08-27 **ya no hay ninguna excepción**: el
+`accepted-f0` del ADR 0074 —el único que hubo— se normalizó a `accepted`, porque no era un
+estado sino una nota histórica en el campo equivocado, sin un solo consumidor que la
+leyera. Inventar un valor nuevo aquí reabriría justo esa ambigüedad. La trazabilidad por
+fase la dan el plan y su changelog.

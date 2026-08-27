@@ -136,8 +136,9 @@ a nivel de tenant). Desacopla "aprobar planes" de "administrar el tenant".
 > ADR 0074-0078 estaban `proposed` y que **«F1-F5 … NO implementadas — gated por fase»**. Las tres
 > cosas eran ciertas el 2026-06-23, cuando se escribió el plan, y **hoy son falsas**: el operador
 > dio luz verde a F1→F5 ese mismo día, las cinco fases se implementaron entre el 2026-06-24 y el
-> 2026-07-06 y están desplegadas, y los ADR 0075-0078 (más 0073 y 0080) están `accepted` — 0074
-> conserva `accepted-f0` por haberse aprobado en dos tiempos. Es el modo de fallo de
+> 2026-07-06 y están desplegadas, y los ADR 0075-0078 (más 0073 y 0080) están `accepted` — el 0074
+> también, tras normalizarse el 2026-08-27 el `accepted-f0` que registraba su aprobación en dos
+> tiempos. Es el modo de fallo de
 > [`verificar-antes-de-implementar.md`](../03-guides/verificar-antes-de-implementar.md) §1: un plan
 > «pendiente» que miente porque nadie lo actualizó cuando el trabajo siguió por otro sitio.
 
@@ -159,9 +160,9 @@ sus divergencias y sus casillas abiertas declaradas.
 
 **Decisión.** F0 (cimiento de rol, SIN tablas BYPASSRLS) **APROBADO + HECHO** por el operador.
 
-- [x] **ADR 0074 → `accepted-f0`** (F0 aprobado. La coletilla original decía «F1-F5 siguen `proposed`/gated»; el operador levantó ese gate el 2026-06-23 y el banner del ADR se corrigió el 2026-07-30).
+- [x] **ADR 0074 → `accepted`** (F0 aprobado. Se marcó `accepted-f0` para registrar la aprobación en dos tiempos y se normalizó a `accepted` el 2026-08-27, quedando esa traza en el banner del ADR. La coletilla original decía «F1-F5 siguen `proposed`/gated»; el operador levantó ese gate el 2026-06-23 y el banner del ADR se corrigió el 2026-07-30).
 - [x] **Migración 0091** `users.is_system_owner` (Boolean NOT NULL default false, UNIQUE parcial = singleton). Reversible.
-- [x] **JWT** claim `own` (encode/decode) + `AuthPrincipal.is_system_owner` + `require_system_owner` + `require_admin_or_owner` (**DB-authoritative**, no solo el claim).
+- [x] **JWT** claim `own` (encode/decode) + `AuthPrincipal.is_system_owner` + `require_system_owner` (**DB-authoritative**, no solo el claim). También se entregó entonces la compuesta `require_admin_or_owner`, **retirada el 2026-07-30** por vivir con cero llamantes en una superficie de autorización; no reponerla sin endpoint (ver punto 3 del [ADR 0074](../05-architecture-decisions/0074-rol-system-owner-y-cortex-singleton.md), y la guarda `tests/unit/test_no_dead_authorization_gates.py`).
 - [x] **Bootstrap** del primer usuario como owner + `/me` (ambos: `/auth/me` y `/me` rico) expone `is_system_owner` + hook `use-current-user` (`isSystemOwner`).
 - [x] **Guardrail SSO** — estructural: las vías SSO/MFA de minteo no fijan `is_system_owner` (default false) y el gate consulta la BD; SSO nunca concede ownership.
 - [x] **Tests** — `tests/integration/test_cortex_f0_ownership.py` (bootstrap, singleton, gate DB-authoritative rechaza hint forjado, /me). 3 en verde.

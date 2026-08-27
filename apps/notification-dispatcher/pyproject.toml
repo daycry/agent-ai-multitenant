@@ -1,6 +1,6 @@
 [project]
 name = "notification-dispatcher"
-version = "0.0.0"
+version = "1.0.0"
 description = "Notification dispatcher: Celery service that delivers multichannel notifications and logs every send."
 requires-python = ">=3.12"
 dependencies = [

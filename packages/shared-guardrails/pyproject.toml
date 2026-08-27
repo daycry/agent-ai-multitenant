@@ -1,6 +1,6 @@
 [project]
 name = "shared-guardrails"
-version = "0.0.0"
+version = "1.0.0"
 description = "Declarative guardrails engine for the agentic platform (Plan 11)."
 requires-python = ">=3.12"
 dependencies = [

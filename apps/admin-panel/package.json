@@ -1,6 +1,6 @@
 {
   "name": "admin-panel",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "System Admin panel for the agentic platform (Next.js 15 App Router).",
   "scripts": {

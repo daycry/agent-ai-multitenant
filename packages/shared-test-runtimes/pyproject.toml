@@ -1,6 +1,6 @@
 [project]
 name = "shared-test-runtimes"
-version = "0.0.0"
+version = "1.0.0"
 description = "Runtime template schema + catalog for heterogeneous test execution (Plan 06)."
 requires-python = ">=3.12"
 dependencies = []

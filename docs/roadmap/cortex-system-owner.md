@@ -23,10 +23,11 @@ docs_language: es
 >
 > **Actualizado el 2026-07-30.** Este banner decía que «los ADRs 0075-0078 siguen en `proposed` …
 > pendiente de promoción formal»: ya no es cierto. Comprobado ADR por ADR, **0073, 0075, 0076,
-> 0077, 0078 y 0080 están `accepted`**; **0074 está `accepted-f0`**, el único valor así del repo,
-> conservado a propósito porque se aprobó en dos tiempos (cimiento F0 primero, excepción a RLS
-> después). Sus banners de cuerpo, que se contradecían con su propio frontmatter, se corrigieron
-> entre el 2026-07-27 y el 2026-07-30.
+> 0077, 0078 y 0080 están `accepted`**; el **0074 también**, tras normalizarse el 2026-08-27 el
+> `accepted-f0` que llevaba desde junio —único valor así del repo— como registro de que se aprobó
+> en dos tiempos (cimiento F0 primero, excepción a RLS después); esa traza está hoy en su banner,
+> que es donde se lee. Sus banners de cuerpo, que se contradecían con su propio frontmatter, se
+> corrigieron entre el 2026-07-27 y el 2026-07-30.
 >
 > **«Implementado» no es «cerrado».** F2, F3, F4 y F5 conservan casillas abiertas con hueco
 > identificado — inventario casilla a casilla en
@@ -142,7 +143,7 @@ Nueva superficie `app/admin/cortex` (gated `isSystemOwner`), grupo NAV "Córtex"
 
 ## Plan por fases
 
-> Cada fase produce software funcional y testeable por sí misma. Las migraciones son reversibles (a partir de 0090). **Las fases que tocan egress/aislamiento/rol nuevo estaban GATED por sus ADRs (0074-0078) y el visto bueno del owner** — ese gate se levantó el 2026-06-23 y los seis ADR están hoy `accepted`/`accepted-f0`.
+> Cada fase produce software funcional y testeable por sí misma. Las migraciones son reversibles (a partir de 0090). **Las fases que tocan egress/aislamiento/rol nuevo estaban GATED por sus ADRs (0074-0078) y el visto bueno del owner** — ese gate se levantó el 2026-06-23 y los seis ADR están hoy `accepted` (el 0074 llevó `accepted-f0` hasta que se normalizó el 2026-08-27).
 
 > **Estado de las seis fases, anotado el 2026-07-30.** Cada epígrafe lleva su línea
 > `**Estado:**` con el plan que la ejecutó y su changelog. Las viñetas de cada fase son el
@@ -280,8 +281,9 @@ diseño pivotó de columnas dedicadas a contadores en `metadata_` JSONB sin deja
 
 ## ADRs necesarios (a crear como `proposed`)
 
-> **Los cinco existen y ninguno sigue `proposed`** (comprobado el 2026-07-30): 0074
-> `accepted-f0`; 0075, 0076, 0077 y 0078 `accepted`. Se añadieron después dos más al track:
+> **Los cinco existen y ninguno sigue `proposed`** (comprobado el 2026-07-30): 0074 llevaba
+> entonces `accepted-f0` y hoy `accepted` (normalizado el 2026-08-27); 0075, 0076, 0077 y 0078
+> `accepted`. Se añadieron después dos más al track:
 > **0073** (modo voz, `accepted`) y **0080** (navegador Playwright, `accepted`). Este epígrafe se
 > conserva como registro del diseño original — «a crear como `proposed`» era la instrucción de
 > entonces, no una tarea viva.

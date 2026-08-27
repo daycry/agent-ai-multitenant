@@ -338,7 +338,7 @@ async def require_system_owner(
 # RETIRADA: `require_admin_or_owner` (2026-07-30)
 # -----------------------------------------------
 # La dependencia compuesta «System Admin OR System Owner» que el ADR 0074
-# (decisión 4) previó para las superficies admin del owner existió desde
+# (punto 3 de su «Decisión») previó para las superficies admin del owner existió desde
 # entonces con CERO llamantes: ni un `Depends(require_admin_or_owner)` en todo
 # `apps/`. Solo la referenciaban su propia definición, una línea de
 # `tests/integration/test_cortex_f0_ownership.py` y la documentación.

@@ -1,6 +1,6 @@
 [project]
 name = "shared-domain"
-version = "0.0.0"
+version = "1.0.0"
 description = "Shared domain constants for the agentic platform: canonical tool-name source of truth (ADR 0048)."
 requires-python = ">=3.12"
 dependencies = []
