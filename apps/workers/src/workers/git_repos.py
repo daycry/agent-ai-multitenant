@@ -157,8 +157,27 @@ def _run_git(*args: str, cwd: Path | None = None, env_extra: dict[str, str] | No
     import os
 
     # Append our config to any inherited GIT_CONFIG_PARAMETERS (don't clobber).
+    #
+    # `protocol.ext.allow=never` y `http.followRedirects=false` (2026-08-27) son
+    # la SEGUNDA capa de la validación de `remote_url`. La primera está en el
+    # borde (`schemas/projects.py`, allowlist de formas), y sola no basta: hay
+    # filas de `projects.git_config` escritas ANTES de que existiera.
+    #
+    # `ext::<comando>` no es un transporte más: hace que git EJECUTE ese comando.
+    # Y este proceso es el que tiene el token de Vault, `DOCKER_HOST` al
+    # socket-proxy y el data-root montado. `followRedirects=false` cierra la
+    # variante indirecta: un host permitido que redirige a otro.
+    #
+    # Se prohíbe `ext` y NO `file` a propósito: cuatro tests de integración
+    # (`test_incremental_remote_push`, `test_plan_close_e2e`,
+    # `test_plan_close_pushes_branch` y `plan_pr`) usan remotos `file://` en
+    # `tmp_path` para ejercitar git de verdad sin red. Aquí abajo sólo se veta lo
+    # que nunca es legítimo; lo demás lo filtra el borde, que es donde escribe
+    # una persona.
     inherited = os.environ.get("GIT_CONFIG_PARAMETERS", "")
-    config_params = (inherited + " " if inherited else "") + "'safe.bareRepository=all'"
+    config_params = (inherited + " " if inherited else "") + (
+        "'safe.bareRepository=all' 'protocol.ext.allow=never' 'http.followRedirects=false'"
+    )
     env = {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
