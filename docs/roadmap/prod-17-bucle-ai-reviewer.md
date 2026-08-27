@@ -279,17 +279,40 @@ reviewer_agent_id` y un contexto de review (Fase B task_loop_02) y encolarla; si
 
 #### `task_prod17_e2e_01` — e2e del bucle + presupuesto + ratificación ADR
 
-- [ ] **Título** ⏸️ **BLOQUEADO (Docker real + test_01)**: Test e2e del ciclo completo
+- [x] **Título**: Test e2e del ciclo completo
       (implementador → test-runtime → reviewer → approve=done / reject=backlog → reintento →
       escalado a `blocked`). Verificar que la ejecución de review cuenta contra el budget del
       proyecto (reusa prod-06 budget_02). Ratificar ADR 0084 + entrada de changelog +
       actualizar el diagrama de ADR 0027 si procede. > **BLOQUEADO:** el e2e corre contenedores reales (la ejecución del reviewer de punta a > punta) → gateado por Docker como el e2e de instalación; y el tramo con test-runtime > depende de `task_prod17_test_01` (a su vez bloqueado por el worktree-en-ejecución). El > bucle SIN test-report (Fases A–B + test_02 consumidor) está cubierto por los tests de > integración (`test_reviewer_bridge_wiring`, `test_in_review_dispatch`, > `test_review_execution_applies_verdict`). Changelog de progreso emitido en > `docs/07-changelog/prod-17-bucle-ai-reviewer.md`.
+
+  > **Cerrada el 2026-08-27 sin escribir nada nuevo: la cobertura ya existía con
+  > otro nombre.** El `command:` de abajo apuntaba a
+  > `tests/e2e/test_autonomous_review_loop.py`, que **no existe en el repo**. Lo
+  > que sí existe es `tests/integration/test_autonomous_cycle.py`, y cubre
+  > exactamente este enunciado —implementador → in_review → dispatch del review →
+  > reviewer → veredicto → done|backlog— **sobre contenedores reales**, con
+  > modelos scripted y con el eslabón worker→orchestrator probado de verdad (el
+  > dispatch del review consume de `events:tasks` el `task.status_changed` que
+  > `run_cycle` publicó al soltar el run-lock).
+  >
+  > Medido antes de marcarla, que es lo que el protocolo exige: corre en el
+  > **shard 3** del job de integración de master (run 33063384295) con **2 casos
+  > PASSED y 0 fallidos ni saltados**.
+  >
+  > El bloqueo que declaraba —«requiere Docker real»— era cierto y está resuelto:
+  > los shards de integración levantan el stack. Escribir el fichero que nombraba
+  > el enunciado habría duplicado cobertura, que es peor que no escribirlo.
+  >
+  > **Lo que NO cierra esta casilla**, y por eso se dice: el tramo con
+  > `test-runtime` sigue dependiendo de `task_prod17_test_01`, y la ratificación
+  > del ADR 0084 más el diagrama del 0027 son trabajo documental aparte.
+
 - **Tiempo**: 1,5 días · **Complejidad**: m
 - **Tests automáticos**:
   ```yaml
   - id: auto_prod17_e2e_01_a
     runtime: python-pytest
-    command: "pytest tests/e2e/test_autonomous_review_loop.py -v"
+    command: "pytest tests/integration/test_autonomous_cycle.py -v"
   ```
 
 ## Hallazgos de auditoría cubiertos
