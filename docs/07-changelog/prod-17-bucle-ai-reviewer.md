@@ -70,9 +70,15 @@ eventos → bloque vacío (el reviewer revisa el diff solo; degradación elegant
   **git-worktrees en la ejecución** (CLAUDE.md 4/5) — candidato a plan dedicado. El
   consumidor (test_02) ya está listo: en cuanto el productor persista los eventos, el
   reviewer los usa automáticamente.
-- **`task_prod17_e2e_01`** (Fase D, e2e): **BLOQUEADO** — corre contenedores reales (Docker)
-  y el tramo con test-runtime depende de test_01. El bucle sin test-report ya está cubierto
-  por tests de integración.
+- **`task_prod17_e2e_01`** (Fase D, e2e): **CERRADA el 2026-08-27**, y sin escribir nada
+  nuevo. Este párrafo decía «BLOQUEADO — corre contenedores reales (Docker)», y esa
+  última frase —«el bucle sin test-report ya está cubierto por tests de integración»—
+  era la pista: la cobertura estaba, con otro nombre.
+  `tests/e2e/test_autonomous_review_loop.py`, que es lo que nombraba el enunciado, no
+  existe en el repo; `tests/integration/test_autonomous_cycle.py` sí, y cubre el ciclo
+  entero sobre contenedores reales. Corre en el shard 3 del job de integración de
+  master (run 33063384295) con 2 casos PASSED y 0 fallidos ni saltados.
+  Sigue pendiente el tramo con `test-runtime`, que depende de `test_01`.
 
 Por estos dos ítems el plan permanece en `in_progress`. El **bucle autónomo de revisión
 es funcional** (in_review → reviewer → veredicto → done/backlog/blocked); falta el
