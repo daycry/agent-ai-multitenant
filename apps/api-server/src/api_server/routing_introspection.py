@@ -72,18 +72,46 @@ def _prefijo_de(route: Any) -> str:
     return prefijo if isinstance(prefijo, str) else ""
 
 
+def _dependencias_de(route: Any) -> tuple[str, ...]:
+    """Nombres de las dependencias con las que se MONTÓ este router.
+
+    La otra mitad de lo mismo que ``_prefijo_de``, y por el mismo motivo. Hasta
+    FastAPI 0.136 un ``include_router(dependencies=[...])`` fusionaba esas
+    dependencias en el ``dependant`` de cada hija, así que quien caminaba el
+    árbol resuelto las veía. Desde 0.141 el include es **perezoso**: la hija se
+    queda como estaba y lo que se pasó al montarla vive en
+    ``include_context.dependencies`` hasta que FastAPI resuelve la petición.
+
+    Quien introspeccione sin mirar aquí concluirá que una ruta montada con una
+    guarda NO la tiene. Es un falso negativo de los caros: hace rojo un test de
+    seguridad que dice justo lo contrario de lo que pasa.
+    """
+    ctx = getattr(route, "include_context", None)
+    deps = getattr(ctx, "dependencies", None) if ctx is not None else None
+    nombres: list[str] = []
+    for dep in deps or []:
+        fn = getattr(dep, "dependency", None)
+        if fn is not None:
+            nombres.append(getattr(fn, "__name__", ""))
+    return tuple(nombres)
+
+
 def _walk(
     routes: Any,
     out: list[Any],
     acc: list[tuple[Any, str]] | None,
     visto: set[int],
     prefijo: str = "",
+    deps: list[tuple[Any, tuple[str, ...]]] | None = None,
+    heredadas: tuple[str, ...] = (),
 ) -> None:
     for route in routes:
         if id(route) in visto:  # defensa contra un ciclo, que colgaría el arranque
             continue
         visto.add(id(route))
         out.append(route)
+        if deps is not None:
+            deps.append((route, heredadas))
         if acc is not None:
             p = getattr(route, "path", None)
             if isinstance(p, str) and p:
@@ -99,7 +127,8 @@ def _walk(
             if hijas:
                 anidado = attr == "original_router"
                 hijo_prefijo = prefijo + _prefijo_de(route) if anidado else prefijo
-                _walk(hijas, out, acc, visto, hijo_prefijo)
+                hijo_deps = heredadas + _dependencias_de(route) if anidado else heredadas
+                _walk(hijas, out, acc, visto, hijo_prefijo, deps, hijo_deps)
 
 
 def iter_routes_with_paths(container: Any) -> list[tuple[Any, str]]:
@@ -150,3 +179,27 @@ def route_paths(container: Any) -> set[str]:
     la diferencia entre creer que el arreglo funciona y saberlo.
     """
     return {p for _, p in iter_routes_with_paths(container)}
+
+
+def iter_routes_with_inherited_dependencies(
+    container: Any,
+) -> list[tuple[Any, tuple[str, ...]]]:
+    """Cada ruta con los NOMBRES de las dependencias heredadas de sus montajes.
+
+    El tercer hueco de esta familia, y el más caro de los tres porque el que se
+    cae por él obtiene un falso negativo en un test de seguridad.
+
+    Hasta FastAPI 0.136, un ``include_router(dependencies=[...])`` fusionaba esas
+    dependencias en el ``dependant`` de cada ruta hija, así que caminar el árbol
+    resuelto bastaba. Desde 0.141 el include es perezoso y lo que se pasó al
+    montar vive en ``include_context.dependencies``; la hija queda intacta.
+
+    Consecuencia medida el 2026-08-27 al subir el pin de 0.136.1 a 0.141.1:
+    ``test_every_admin_route_carries_the_hardening_gate`` declaró que 43 rutas
+    ``/admin`` no llevaban ``require_hardened_system_admin``. Las llevaban las 54:
+    el gate estaba en el ``include_context`` de los 11 routers, y se aplica en
+    cada petición. Lo que había dejado de ser cierto era la introspección.
+    """
+    deps: list[tuple[Any, tuple[str, ...]]] = []
+    _walk(getattr(container, "routes", []) or [], [], None, set(), "", deps)
+    return deps

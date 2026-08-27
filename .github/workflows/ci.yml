@@ -90,15 +90,40 @@ jobs:
 
       # Drift del lockfile (prod-11 task_ci_lock_10 c). `uv lock --check` falla
       # si algún pyproject.toml del workspace cambió sus rangos sin regenerar
-      # uv.lock. Sin esto, constraints.txt describiría un árbol que ya no es el
-      # que declaran los paquetes: un lock que miente es peor que no tenerlo.
-      # Va en lint-python (job BLOQUEANTE) y no en security-scan a propósito:
-      # esto es higiene de repo, no un hallazgo de vulnerabilidad, así que no
-      # debe heredar el modo informe del gate SCA.
+      # uv.lock. Va en lint-python (job BLOQUEANTE) y no en security-scan a
+      # propósito: esto es higiene de repo, no un hallazgo de vulnerabilidad, así
+      # que no debe heredar el modo informe del gate SCA.
       - name: uv lock --check (drift entre pyproject.toml y uv.lock)
         run: |
           python -m pip install uv
           uv lock --check
+
+      # El segundo salto, que hasta el 2026-08-26 no vigilaba nadie.
+      #
+      # La cadena tiene DOS eslabones: pyproject.toml -> uv.lock -> constraints.txt.
+      # El paso de arriba comprueba el primero, y el comentario que lo acompañaba
+      # afirmaba que con eso `constraints.txt` no describiría «un árbol que ya no
+      # es el que declaran los paquetes». No era cierto: `uv lock --check` no abre
+      # `constraints.txt`, así que la proyección plana podía quedarse atrás sin que
+      # nada lo dijese — y se quedó. Medido: el lock traía `mcp 1.29.0` y
+      # `claude-agent-sdk 0.2.144` mientras la proyección seguía en 1.28.1 y
+      # 0.2.128, o sea que CI y el `agent-runtime` —que instalan CON `-c
+      # constraints.txt`— validaban un árbol distinto del que corría en los
+      # servidores. Trece días.
+      #
+      # La comprobación es regenerar y comparar: si el fichero versionado no es
+      # exactamente lo que `uv export` produce hoy, alguien tocó el lock y no
+      # rehizo la proyección.
+      - name: constraints.txt sigue siendo la proyección fiel de uv.lock
+        run: |
+          cabecera=$(grep -c '^#' constraints.txt)
+          head -n "$cabecera" constraints.txt > /tmp/cabecera.txt
+          uv export --frozen --all-packages --all-extras --all-groups             --no-hashes --no-emit-workspace --no-annotate --no-header             -o /tmp/cuerpo.txt
+          cat /tmp/cabecera.txt /tmp/cuerpo.txt > /tmp/constraints-esperado.txt
+          if ! diff -u constraints.txt /tmp/constraints-esperado.txt; then
+            echo "::error::constraints.txt no coincide con uv.lock. Regenéralo con el comando de su cabecera."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # Markdown lint (Plan 07 task_07_03): structural / hygiene linting of the

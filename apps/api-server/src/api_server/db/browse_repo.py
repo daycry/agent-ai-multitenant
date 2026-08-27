@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Index, String, select, text
+from sqlalchemy import CheckConstraint, DateTime, Index, String, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +49,15 @@ class BrowseSession(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "owner_user_id",
             "status",
             "created_at",
+        ),
+        # Declarado aquí y no sólo en la migración que lo creó (0112): desde
+        # Alembic 1.19 el autogenerate SÍ detecta los CHECK, así que un CHECK que
+        # vive sólo en la migración se lee como esquema que el modelo no conoce y
+        # el siguiente `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint(
+            "status IN ('pending_approval', 'approved', 'running', 'done', 'failed', 'rejected')",
+            name="ck_browse_sessions_status",
         ),
     )
 

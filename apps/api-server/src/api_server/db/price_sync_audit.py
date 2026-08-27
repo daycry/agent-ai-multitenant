@@ -51,6 +51,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -103,6 +104,18 @@ class PriceSyncAudit(Base, UUIDPrimaryKeyMixin):
 
     __tablename__ = "price_sync_audit"
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración: desde Alembic 1.19 el
+        # autogenerate SÍ detecta los CHECK, así que uno que viva sólo en la
+        # migración se lee como esquema que el modelo no conoce y el siguiente
+        # `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint("fetched >= 0", name="ck_price_sync_audit_fetched_non_negative"),
+        CheckConstraint("created >= 0", name="ck_price_sync_audit_created_non_negative"),
+        CheckConstraint("updated >= 0", name="ck_price_sync_audit_updated_non_negative"),
+        CheckConstraint("unchanged >= 0", name="ck_price_sync_audit_unchanged_non_negative"),
+        CheckConstraint("discontinued >= 0", name="ck_price_sync_audit_discontinued_non_negative"),
+        CheckConstraint("skipped >= 0", name="ck_price_sync_audit_skipped_non_negative"),
+        CheckConstraint("held >= 0", name="ck_price_sync_audit_held_non_negative"),
         # The history screen's primary query: newest-first by time.
         Index("ix_price_sync_audit_created", "created_at"),
         # Filter the history by trigger (manual vs scheduled) over time.

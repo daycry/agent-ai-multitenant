@@ -519,8 +519,18 @@ DDL_BEFORE_THE_SPLIT: dict[str, tuple[str, tuple[str, ...]]] = {
             "updated_at",
         ),
     ),
+    # 2026-08-27: el digest cambia a propósito, y es la ÚNICA entrada de este
+    # inventario que se ha movido desde que se escribió. `ck_tasks_status_valid`
+    # vivía sólo en la migración 0101, así que el autogenerate de Alembic 1.19 —el
+    # que corre en producción— proponía BORRARLO. Al declararlo en el modelo, el
+    # `CREATE TABLE` compilado gana esa línea y el digest se mueve.
+    #
+    # Esta guarda vigila que el troceo de models.py no PERDIERA nada; aquí se ha
+    # AÑADIDO algo que la BD ya tenía, que es la dirección contraria. Actualizar el
+    # digest sin este comentario sería indistinguible de subir un número para poner
+    # CI en verde, que es justo lo que este fichero existe para impedir.
     "tasks": (
-        "399389c271c05b23",
+        "e655b88501a42815",  # era 399389c271c05b23 antes de declarar el CHECK
         (
             "acceptance_criteria",
             "assigned_agent_id",

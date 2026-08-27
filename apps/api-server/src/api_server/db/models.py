@@ -513,6 +513,33 @@ class SSOConfiguration(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixi
 
     __tablename__ = "sso_configurations"
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración: desde Alembic 1.19 el
+        # autogenerate SÍ detecta los CHECK, así que uno que viva sólo en la
+        # migración se lee como esquema que el modelo no conoce y el siguiente
+        # `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint(
+            "NOT (client_secret_ref IS NOT NULL AND client_secret_encrypted IS NOT NULL)",
+            name="ck_sso_config_single_secret_source",
+        ),
+        CheckConstraint(
+            "(provider <> 'oidc' OR (issuer IS NOT NULL AND client_id IS NOT NULL))"
+            " AND (provider <> 'saml' OR (idp_entity_id IS NOT NULL"
+            " AND idp_sso_url IS NOT NULL AND idp_x509_cert IS NOT NULL))",
+            name="ck_sso_config_provider_shape",
+        ),
+        CheckConstraint(
+            "NOT (sp_private_key_ref IS NOT NULL AND sp_private_key_encrypted IS NOT NULL)",
+            name="ck_sso_config_single_sp_key_source",
+        ),
+        CheckConstraint(
+            "(authn_requests_signed = false"
+            " AND want_assertions_encrypted = false"
+            " AND want_name_id_encrypted = false)"
+            " OR (sp_x509_cert IS NOT NULL"
+            " AND (sp_private_key_ref IS NOT NULL OR sp_private_key_encrypted IS NOT NULL))",
+            name="ck_sso_config_sp_key_when_crypto",
+        ),
         # Multi-provider (2026-07-18, migración 0115): se retiró el
         # uq_sso_config_provider — la plataforma admite N configs por kind
         # (p.ej. Google Y Microsoft a la vez). El flujo es per-provider-id de
@@ -1019,6 +1046,27 @@ class ReviewSession(Base, UUIDPrimaryKeyMixin, TenantScopedMixin):
     # que no sale en el veredicto; arreglarlo pide tocar el mixin, que es de
     # todas las tablas tenant-scoped y no de esta.
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración: desde Alembic 1.19 el
+        # autogenerate SÍ detecta los CHECK, así que uno que viva sólo en la
+        # migración se lee como esquema que el modelo no conoce y el siguiente
+        # `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint(
+            "status IN ('running', 'suspended', 'approved', 'rejected', 'expired', 'cancelled')",
+            name="ck_review_sessions_status",
+        ),
+        CheckConstraint(
+            "verdict IS NULL OR verdict IN ('approved', 'rejected')",
+            name="ck_review_sessions_verdict",
+        ),
+        CheckConstraint(
+            "kind IN ('plan', 'preview')",
+            name="ck_review_sessions_kind",
+        ),
+        CheckConstraint(
+            "plan_id IS NOT NULL OR kind = 'preview'",
+            name="ck_review_sessions_plan_or_preview",
+        ),
         ForeignKeyConstraint(
             ["tenant_id"],
             ["organizations.id"],

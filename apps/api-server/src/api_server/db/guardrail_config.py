@@ -51,7 +51,7 @@ from shared_guardrails.layers import (
     ResolvedConfig,
     resolve_config,
 )
-from sqlalchemy import ForeignKey, Index, Integer, String, select, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,6 +86,21 @@ class GuardrailConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # plataforma, porque en PostgreSQL NULL != NULL. Una config de seguridad
     # ambigua se resuelve mal, así que el predicado ES la garantía.
     __table_args__ = (
+        # Declarado aquí y no sólo en la migración: desde Alembic 1.19 el
+        # autogenerate SÍ detecta los CHECK, así que uno que viva sólo en la
+        # migración se lee como esquema que el modelo no conoce y el siguiente
+        # `--autogenerate` propone BORRARLO. Ver
+        # tests/integration/test_alembic_autogenerate_clean.py.
+        CheckConstraint(
+            "scope IN ('platform', 'tenant', 'project')",
+            name="ck_guardrail_configs_scope",
+        ),
+        CheckConstraint(
+            "(scope = 'platform' AND tenant_id IS NULL AND project_id IS NULL)"
+            " OR (scope = 'tenant' AND tenant_id IS NOT NULL AND project_id IS NULL)"
+            " OR (scope = 'project' AND tenant_id IS NOT NULL AND project_id IS NOT NULL)",
+            name="ck_guardrail_configs_scope_columns",
+        ),
         Index(
             "uq_guardrail_configs_platform",
             "scope",
