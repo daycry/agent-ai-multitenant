@@ -133,13 +133,17 @@ El instalador **genera y no aprovisiona**: escribe el árbol de arranque y sale,
 sin hablar nunca con el daemon de Docker. Por eso no monta
 `/var/run/docker.sock` — montarlo es acceso root efectivo al host, que el
 [ADR 0060](docs/05-architecture-decisions/0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)
-rechazó. **Necesita las imágenes publicadas; hoy no está disponible.**
+rechazó. **Este camino todavía no existe para un usuario real**: necesita las
+imágenes publicadas —la del propio instalador incluida— y hoy no hay ninguna en
+`ghcr.io/daycry`.
 
 **(2) Clonando, con Compose.** Lo que describen los pasos de arriba. Sirve para
-desarrollar y para leerse el stack: el compose canónico levanta la
-infraestructura, y los servicios de aplicación salen del compose generado.
+desarrollar y para leerse el stack, pero te da infraestructura y no el producto:
+el compose canónico levanta PostgreSQL, Redis, MinIO, Vault y compañía, y los
+servicios de aplicación salen del compose generado.
 
-**(3) Desatendido, con los scripts** — el camino soportado hoy:
+**(3) Desatendido, con los scripts** — el camino soportado, y el único medido de
+punta a punta:
 
 ```bash
 ./scripts/install.sh --config install.yaml   # perfiles: scripts/install-profiles/
@@ -149,14 +153,36 @@ Este CLI es el camino de instalación **real**. El wizard HTTP de
 `apps/installer` es una simulación: no aprovisiona nada y las credenciales que
 revela no son reales.
 
-**Lee esto antes de reservar una máquina.** En un host limpio el CLI hoy no
-llega al final, y ya sólo por un motivo. De las dos averías medidas en el ADR
-0161, la segunda —el compose generado pidiendo ficheros que nadie escribía, que
-clonar _no_ arreglaba— **está reparada**: los auxiliares viajan dentro del
-paquete del instalador. Queda la primera: **no hay imágenes publicadas**, así
-que el `docker compose pull` no tiene de dónde tirar. Publicar es acto del
-operador, y no se prometen fechas. Estado de cada camino:
+**Qué ha quedado probado.** En una máquina Linux limpia este camino llega ahora
+al final: 18 pasos en verde, 22 servicios healthy, migraciones de Alembic
+aplicadas, Vault inicializado, el primer tenant sembrado y sus credenciales
+reveladas, el proxy sirviendo HTTPS y el login funcionando con la credencial
+revelada. Es el job [Install E2E](.github/workflows/install-e2e.yml), ejecución
+`33197920542`, cuatro tests pasados.
+
+**Qué NO ha quedado probado, y es la mitad del mensaje.** Esa ejecución
+**construye las seis imágenes en el propio job y las sirve desde un registro
+local**. Ejercita el instalador, el compose generado y la secuencia de arranque;
+**no** demuestra que la instalación con las imágenes **publicadas** funcione,
+porque no hay ninguna publicada. Ese único hueco es toda la distancia entre el
+camino (3), que hoy funciona con imágenes construidas en local, y el camino (1),
+que quien no ha clonado sigue sin poder usar. Publicar es acto del operador, y
+no se prometen fechas. Estado de cada camino:
 [runbook de instalación](docs/06-runbooks/01-installation-from-scratch.md).
+
+**Por qué nada de esto es una promesa.** El test que hay detrás se escribió en
+junio de 2026 y no se había ejecutado NUNCA: estaba gateado por `E2E_INSTALL=1`,
+ningún workflow ponía la variable, y el gate cae en el setup de las fixtures —
+así que pytest recolectaba los cuatro casos, los saltaba y salía 0. Un check
+verde que no instalaba nada. Ahora corre **cada noche y a petición**, y el job
+no se fía de su propio código de salida: una guarda anti-falso-verde
+([`scripts/check_e2e_install_report.py`](scripts/check_e2e_install_report.py))
+lee el informe JUnit y falla si alguno de los cuatro casos exigidos no se
+ejecutó de verdad. Encenderlo costó 24 ejecuciones y sacó defectos reales,
+ninguno hipotético: el perfil de AppArmor no se había aplicado jamás y rompía
+seis cosas, los workers hacían chown de los datos de todos los demás servicios,
+el almacén de artefactos del marketplace no estaba cableado, y el watchdog
+heredaba una sonda HTTP sin servir HTTP.
 
 La configuración se lee de `docker/.env`, que está en `.gitignore`. Las
 credenciales de plataforma viven en **Vault**; la base de datos guarda sólo el
@@ -207,19 +233,25 @@ Dicho sin adornos, para que nadie busque algo que no está:
   publican en `ghcr.io/daycry/*` cuando se empuja un tag `v*` — el workflow
   [Release images](.github/workflows/release-images.yml) no ha corrido nunca,
   porque ese tag no existe. Hasta entonces las imágenes se construyen en local
-  con los scripts de desarrollo. (Esta línea decía `ghcr.io/agentic-platform/*`
-  hasta el 2026-08-27; el workflow deriva el espacio de nombres del dueño del
-  repositorio, así que era falsa — y falsa justo en el sitio de donde alguien la
-  copiaría.)
+  con los scripts de desarrollo. Es ya lo único que separa el camino de
+  instalación que sí está medido —el (3), con las imágenes construidas en el
+  propio job— del que no exige clonar. (Esta línea decía
+  `ghcr.io/agentic-platform/*` hasta el 2026-08-27; el workflow deriva el
+  espacio de nombres del dueño del repositorio, así que era falsa — y falsa
+  justo en el sitio de donde alguien la copiaría.)
 - **El wizard de instalación no instala.** El wizard HTTP de nueve pasos de
   `apps/installer` corre contra un ejecutor falso: no aprovisiona nada y las
   credenciales que revela al final no son reales. El camino soportado es el CLI
-  de arriba, y ése hoy está bloqueado por **una** de las dos averías del
-  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-  —las imágenes sin publicar—. La otra, el compose generado pidiendo ficheros
-  que nadie escribía, está reparada. O sea: este repositorio se puede levantar
-  para desarrollar, y todavía no se puede instalar en un host de producción
-  limpio.
+  de arriba. De las dos averías medidas en el
+  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md),
+  la segunda —el compose generado pidiendo ficheros que nadie escribía— está
+  reparada. La primera, las imágenes sin publicar, no está arreglada, pero sí
+  **acotada**: el e2e de instalación lleva la secuencia entera hasta el final en
+  un Linux limpio con las imágenes construidas dentro del job, así que lo que
+  queda es publicarlas, no averiguar qué más se rompe. O sea: hoy un host Linux
+  limpio se puede instalar partiendo de un clon; lo que nadie puede hacer
+  todavía es instalar desde imágenes publicadas, que es justo lo que necesita
+  quien no clona.
 - **No hay número de cobertura publicado**, porque no hay servicio de cobertura
   conectado. Lo que CI aplica es un suelo de ratchet sobre el subconjunto unit
   ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).

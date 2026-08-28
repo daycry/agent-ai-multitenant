@@ -467,7 +467,17 @@ def test_compose_generator_emits_trusted_baseline_without_custom_seccomp() -> No
     custom_seccomp: list[str] = []
     for name, svc in compose["services"].items():
         opts = [str(x) for x in svc.get("security_opt", [])]
-        if "no-new-privileges:true" not in opts or "apparmor=agentic-default" not in opts:
+        # `no-new-privileges` es universal; el PERFIL de AppArmor no tiene por
+        # qué ser el mismo en todos (2026-08-28). El `docker-socket-proxy` lleva
+        # `agentic-socket-proxy`, idéntico al compartido salvo en una regla: el
+        # socket de Docker, que `agentic-default` deniega a todo el mundo y que
+        # ese servicio existe para sostener. Con el compartido puesto, HAProxy no
+        # alcanzaba su propio backend (e2e run 33177824929).
+        #
+        # Lo que esta guarda sigue exigiendo: que TODOS lleven un perfil, y que
+        # sea uno de los dos que el repo mantiene — no uno inventado.
+        perfiles_validos = {"apparmor=agentic-default", "apparmor=agentic-socket-proxy"}
+        if "no-new-privileges:true" not in opts or not (perfiles_validos & set(opts)):
             missing_baseline.append(name)
         if any(o.startswith("seccomp=") for o in opts):
             custom_seccomp.append(name)
