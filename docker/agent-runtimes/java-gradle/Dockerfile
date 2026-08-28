@@ -77,7 +77,7 @@
 # relajar el gate (`.trivyignore`) sería suprimir ocho HIGH **con fix
 # publicado** en la imagen donde el Principio Rector 2 deposita el aislamiento
 # del código NO confiable, teniendo una base sin ellos a un tag de distancia.
-FROM gradle:9-jdk21-noble@sha256:7818865626870c3bfd7847482bce8462e1e436a02e0b1c7737c0c47a06a1a6de AS runtime
+FROM gradle:9-jdk21-noble@sha256:153b5cbc7fa81767329b52f741ac63027710fed12624a0014ad1849d6a02f755 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-java-gradle" \
       org.opencontainers.image.version="v1" \
