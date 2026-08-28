@@ -109,14 +109,38 @@ def _generated_stack() -> tuple[dict[str, Any], dict[str, str]]:
     return compose, dotenv
 
 
+#: `${VAR}`, `${VAR:-default}` y `${VAR:?mensaje}` — las tres formas que emite
+#: `compose_generator._env_ref`, con el operador y su argumento separados.
+_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-?])?([^}]*)\}")
+
+
 def _resolve(value: str, dotenv: dict[str, str]) -> str:
-    """Sustituir las referencias `${VAR}` / `${VAR:-default}` con el `.env` real."""
+    """Sustituir las referencias del compose con el `.env` real.
+
+    Modela lo que hace docker compose, **incluida la diferencia que importa**:
+    con `:?` una variable ausente ABORTA el proyecto entero; no se resuelve a
+    cadena vacía. Este helper sólo entendía `${VAR}` y `${VAR:-default}`, así que
+    cuando el instalador pasó a la forma fail-closed (auditoría 2026-08-27)
+    devolvía `""` para TODAS las credenciales — y los tests de este fichero
+    pasaban a afirmar sobre un entorno que ningún contenedor llega a ver nunca.
+    Un resolvedor que traduce «esto aborta» por «esto vale la cadena vacía» no
+    modela el sistema: lo suplanta.
+    """
 
     def _sub(match: re.Match[str]) -> str:
-        name, _, fallback = match.group(1).partition(":-")
-        return dotenv.get(name, fallback)
+        name, op, arg = match.group(1), match.group(2), match.group(3)
+        if name in dotenv:
+            return dotenv[name]
+        if op == ":-":
+            return arg
+        if op == ":?":
+            raise AssertionError(
+                f"el compose referencia {name} como obligatoria y el `.env` generado no "
+                f"la escribe: `docker compose up` abortaría con «{arg}»"
+            )
+        return ""
 
-    return re.sub(r"\$\{([^}]+)\}", _sub, value)
+    return _REF.sub(_sub, value)
 
 
 def _service_env(compose: dict[str, Any], dotenv: dict[str, str], service: str) -> dict[str, str]:

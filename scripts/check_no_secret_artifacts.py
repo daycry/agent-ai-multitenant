@@ -86,6 +86,24 @@ ENCRYPTED_SUFFIXES: frozenset[str] = frozenset({".age", ".gpg", ".asc", ".pgp"})
 _TOKEN_PREFIX = "hvs"
 VAULT_TOKEN_RE = re.compile(_TOKEN_PREFIX + r"\.[A-Za-z0-9_-]{16,}")
 
+# El ÚNICO literal exento, y el porqué (2026-08-28).
+#
+# La redacción de `api_server/logging/pii.py:64` usa el MISMO umbral de 16
+# caracteres que este gate. Encadenando: un test que compruebe que un token de
+# Vault se redacta necesita, por fuerza, un literal con forma de token — y ese
+# literal dispara este gate. Las dos guardas son correctas y se estorban.
+#
+# La salida NO es eximir `tests/`: ahí es exactamente donde alguien pegaría un
+# token real mientras depura, y perderíamos la detección donde más falta hace.
+# Se exime **un literal exacto**, registrado aquí. Un secreto de verdad nunca es
+# esta cadena, así que la exención no puede tapar ninguno; y como es una
+# igualdad y no un patrón, no puede crecer sola.
+#
+# Construido por concatenación por el mismo motivo que el patrón de arriba: si
+# el literal apareciese entero en este fichero, el gate se denunciaría a sí
+# mismo al escanearse.
+FAKE_TOKEN_SENTINEL = _TOKEN_PREFIX + "." + "token-de-mentira-para-tests"
+
 # Árboles que no se recorren: vendorizados, cachés y artefactos de build. Sin
 # esto el gate tarda minutos en cada commit (y `node_modules/` está lleno de
 # strings que parecen cualquier cosa).
@@ -248,7 +266,10 @@ def _token_findings(root: Path) -> tuple[list[Finding], int]:
             continue
         scanned += 1
         text = raw.decode("utf-8", errors="ignore")
-        if VAULT_TOKEN_RE.search(text):
+        # El centinela se retira ANTES de buscar, no después: así un fichero que
+        # lleve el centinela Y un token real sigue saltando por el real.
+        sin_centinela = text.replace(FAKE_TOKEN_SENTINEL, "")
+        if VAULT_TOKEN_RE.search(sin_centinela):
             findings.append(
                 Finding(
                     path,

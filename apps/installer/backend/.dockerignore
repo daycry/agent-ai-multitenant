@@ -1,0 +1,12 @@
+# El Dockerfile hace `COPY src ./src`, y en un checkout de trabajo `src/` lleva
+# los `__pycache__` del intérprete de quien construye. Sin este fichero acaban en
+# la imagen publicada: `.pyc` compilados por otra versión de Python, que no se
+# usan (el `pip install .` deja el paquete en site-packages) pero sí viajan,
+# pesan y hacen que la misma revisión produzca imágenes distintas según quién la
+# construya. En CI no se nota, porque el checkout está limpio: esa asimetría es
+# justo lo que hace que un fallo aparezca donde nadie lo puede reproducir — la
+# misma razón por la que existe `apps/installer/.dockerignore`.
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache

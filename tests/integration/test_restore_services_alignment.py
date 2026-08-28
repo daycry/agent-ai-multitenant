@@ -56,6 +56,13 @@ _DELIBERATELY_NOT_STOPPED = {
     "postgres",
     # One-shot: corre `alembic upgrade head` y termina. No hay nada que parar.
     "migrations",
+    # One-shot bajo `profiles: [bootstrap]` (ADR 0161, paso 8). Dos motivos, y
+    # el segundo es el que cuenta: no está corriendo durante un restore —sólo
+    # arranca cuando alguien lo nombra, y `up -d` no lo levanta—, y si alguien
+    # lo lanzara EN MEDIO de un pg_restore, pararlo no sería el remedio: sembraría
+    # sobre una base a medio restaurar. Lo que protege de eso es que el propio
+    # one-shot es idempotente y no re-inicializa lo que ya existe.
+    "bootstrap",
     # Se paran aparte, alrededor de la re-extracción de sus volúmenes.
     "minio",
     "redis",

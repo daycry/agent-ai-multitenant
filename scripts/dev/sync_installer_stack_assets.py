@@ -17,8 +17,21 @@ comando que ofrecer:
     .venv/Scripts/python.exe scripts/dev/sync_installer_stack_assets.py
 
 Sin argumentos copia lo que difiera y dice qué tocó. Con ``--check`` no escribe
-nada y sale con rc=1 si algo ha derivado (la misma comprobación que
-``tests/unit/test_installer_ships_stack_assets.py``, disponible fuera de pytest).
+nada y sale con rc=1 si algo ha derivado.
+
+Qué NO hace, y conviene saberlo antes de fiarse de un «Al día»
+--------------------------------------------------------------
+Este script trabaja **sobre el manifiesto**: sincroniza el contenido de lo que ya
+está declarado. No decide qué debe viajar, así que un fichero NUEVO bajo
+``docker/postgres/init/`` —el caso caro, porque la instalación no lo ejecutaría
+jamás— le es invisible: no está en el manifiesto, luego no lo mira.
+
+Quien sí lo mira es la guarda, ``tests/unit/test_installer_ships_stack_assets.py``,
+que recorre el árbol bajo un conjunto de raíces declaradas y exige que cada
+fichero esté en el manifiesto o en una exclusión escrita. Vigila además la
+dirección contraria (nada en el paquete sin entrada en el manifiesto) y que el
+empaquetado siga metiendo los auxiliares en el wheel. Las dos cosas se
+complementan: la guarda dice *qué falta*, este script arregla *lo que derivó*.
 """
 
 from __future__ import annotations
@@ -44,7 +57,14 @@ def _normalised(path: Path) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    # RawDescription: el docstring lleva párrafos y un encabezado subrayado, y el
+    # formateador por defecto los aplasta en un solo bloque ilegible. Quien pide
+    # `--help` aquí es quien acaba de tocar `docker/` y necesita entender el
+    # alcance del script, no un párrafo continuo.
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--check",
         action="store_true",

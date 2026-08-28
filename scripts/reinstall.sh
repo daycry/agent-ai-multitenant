@@ -13,10 +13,14 @@
 # FIRST decide what to do with the data already there:
 #
 #   * PRESERVE (default) — keep the data volumes + DB + object store, regenerate
-#     config/compose, and REUSE the existing secrets + Vault unseal keys. Reusing
-#     the existing material is mandatory: the kept Postgres/MinIO data and the
-#     Vault-encrypted secret tree are bound to it, so regenerating secrets would
-#     ORPHAN the existing encrypted data. No data is wiped; no confirmation needed.
+#     config/compose, and REUSE the existing secrets, read back from the
+#     deployment's own .env. Reusing them is mandatory: the kept Postgres/MinIO
+#     data and the Fernet-encrypted columns are bound to that material, so
+#     regenerating it would ORPHAN the existing data. No data is wiped; no
+#     confirmation needed. It runs four of the six install steps: it does NOT
+#     re-bootstrap Vault (already initialised, and unsealing stays MANUAL per
+#     ADR 0145 — unseal it yourself afterwards) and does NOT re-seed the tenant
+#     (it exists; that step would mint an admin password that opens nothing).
 #
 #   * FRESH (--fresh) — wipe the existing data tree and reinstall from scratch
 #     (fresh secrets, fresh Vault). Because this DESTROYS tenant data it is gated
@@ -27,18 +31,26 @@
 #   * No prior install — degrades to a plain first install (fresh secrets, no
 #     confirmation; there is no data to destroy).
 #
+# --config is REQUIRED: a reinstall REGENERATES config + compose, so it needs the
+# same install.yaml an install needs. The data root comes from it
+# (storage.data_root) — there is no separate --data-root flag, because two
+# sources for the same path is a divergence waiting to happen.
+#
 # Usage (preserve — the safe default):
-#   ./scripts/reinstall.sh
+#   ./scripts/reinstall.sh --config install.yaml
 #
 # Usage (fresh wipe-and-reinstall, headless):
-#   ./scripts/reinstall.sh --fresh --confirm-name agentic-platform --yes
+#   ./scripts/reinstall.sh --config install.yaml --fresh #     --confirm-name agentic-platform --yes
 #
 # Usage (interactive prompts for the FRESH confirmations):
-#   ./scripts/reinstall.sh --fresh --interactive
+#   ./scripts/reinstall.sh --config install.yaml --fresh --interactive
 #
 # Exit codes (propagated from the Python CLI, see installer_backend.cli.ExitCode):
-#   0  reinstall pre-install work completed (preserve / fresh / first install)
-#   1  usage error (bad args)
+#   0  reinstall completed (preserve / fresh / first install)
+#   1  usage error (bad args, missing --config)
+#   2  config error (install.yaml malformed or invalid; NOTHING was touched)
+#   3  prereq failed (only on the fresh / first-install path, before provisioning)
+#   4  a provisioning step failed (the stack may be half-up)
 #   5  aborted (a FRESH confirmation was not given, or PRESERVE could not reuse
 #      the existing secrets; NOTHING was removed and the data is intact)
 # -----------------------------------------------------------------------------

@@ -112,21 +112,50 @@ reporten healthy (`docker compose ps`) y sigue con
 [primeros pasos](docs/02-getting-started/README.md) para sembrar un tenant y
 lanzar tu primer plan.
 
-Para una instalación desatendida guiada por un perfil YAML
-(`scripts/install-profiles/{minimal,recommended,gpu}.yaml`):
+### Instalarla, en vez de desarrollar sobre ella
+
+Tres caminos, decididos en el
+[ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
+Se diferencian en qué necesitas tener antes de empezar:
+
+**(1) Sin clonar.** Descargas el compose de arranque, **lo lees**, y lo
+ejecutas. Son dos comandos y no una línea mágica a propósito: el artefacto está
+pensado para auditarse antes de ejecutarse.
 
 ```bash
-./scripts/install.sh --config install.yaml
+curl -fsSLO https://raw.githubusercontent.com/daycry/agent-ai-multitenant/master/docker/bootstrap/docker-compose.generate.yml
+# léelo, y entonces:
+docker compose -f docker-compose.generate.yml run --rm generate
+cd /data/agent-platform && docker compose up -d --wait
 ```
 
-Este CLI es el camino de instalación **real** — el wizard HTTP de
-`apps/installer` es una simulación que no aprovisiona nada y revela credenciales
-que no son reales. Lee las salvedades antes de reservar una máquina: en un host
-limpio el CLI hoy no llega al final, por dos motivos independientes medidos en el
-[ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-(no hay imágenes publicadas, y las rutas relativas del compose generado resuelven
-contra la raíz de datos, donde no hay checkout — clonar no arregla ésa). La
-segunda está en reparación; sin fechas prometidas. Estado de cada camino:
+El instalador **genera y no aprovisiona**: escribe el árbol de arranque y sale,
+sin hablar nunca con el daemon de Docker. Por eso no monta
+`/var/run/docker.sock` — montarlo es acceso root efectivo al host, que el
+[ADR 0060](docs/05-architecture-decisions/0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)
+rechazó. **Necesita las imágenes publicadas; hoy no está disponible.**
+
+**(2) Clonando, con Compose.** Lo que describen los pasos de arriba. Sirve para
+desarrollar y para leerse el stack: el compose canónico levanta la
+infraestructura, y los servicios de aplicación salen del compose generado.
+
+**(3) Desatendido, con los scripts** — el camino soportado hoy:
+
+```bash
+./scripts/install.sh --config install.yaml   # perfiles: scripts/install-profiles/
+```
+
+Este CLI es el camino de instalación **real**. El wizard HTTP de
+`apps/installer` es una simulación: no aprovisiona nada y las credenciales que
+revela no son reales.
+
+**Lee esto antes de reservar una máquina.** En un host limpio el CLI hoy no
+llega al final, y ya sólo por un motivo. De las dos averías medidas en el ADR
+0161, la segunda —el compose generado pidiendo ficheros que nadie escribía, que
+clonar _no_ arreglaba— **está reparada**: los auxiliares viajan dentro del
+paquete del instalador. Queda la primera: **no hay imágenes publicadas**, así
+que el `docker compose pull` no tiene de dónde tirar. Publicar es acto del
+operador, y no se prometen fechas. Estado de cada camino:
 [runbook de instalación](docs/06-runbooks/01-installation-from-scratch.md).
 
 La configuración se lee de `docker/.env`, que está en `.gitignore`. Las
@@ -175,17 +204,22 @@ Dicho sin adornos, para que nadie busque algo que no está:
   repositorio. Todavía no hay un `pip install agentic-platform-sdk` ni un
   `npm install @agentic-platform/sdk` que funcione.
 - **Aún no hay imágenes en ningún registry.** Las imágenes de aplicación se
-  publican en `ghcr.io/agentic-platform/*` cuando se empuja un tag `v*` — el
-  workflow [Release images](.github/workflows/release-images.yml) no ha corrido
-  nunca, porque ese tag no existe. Hasta entonces las imágenes se construyen en
-  local con los scripts de desarrollo.
+  publican en `ghcr.io/daycry/*` cuando se empuja un tag `v*` — el workflow
+  [Release images](.github/workflows/release-images.yml) no ha corrido nunca,
+  porque ese tag no existe. Hasta entonces las imágenes se construyen en local
+  con los scripts de desarrollo. (Esta línea decía `ghcr.io/agentic-platform/*`
+  hasta el 2026-08-27; el workflow deriva el espacio de nombres del dueño del
+  repositorio, así que era falsa — y falsa justo en el sitio de donde alguien la
+  copiaría.)
 - **El wizard de instalación no instala.** El wizard HTTP de nueve pasos de
   `apps/installer` corre contra un ejecutor falso: no aprovisiona nada y las
   credenciales que revela al final no son reales. El camino soportado es el CLI
-  de arriba, y ése hoy está bloqueado por las dos averías del
-  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md).
-  O sea: este repositorio se puede levantar para desarrollar, y todavía no se
-  puede instalar en un host de producción limpio.
+  de arriba, y ése hoy está bloqueado por **una** de las dos averías del
+  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+  —las imágenes sin publicar—. La otra, el compose generado pidiendo ficheros
+  que nadie escribía, está reparada. O sea: este repositorio se puede levantar
+  para desarrollar, y todavía no se puede instalar en un host de producción
+  limpio.
 - **No hay número de cobertura publicado**, porque no hay servicio de cobertura
   conectado. Lo que CI aplica es un suelo de ratchet sobre el subconjunto unit
   ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).

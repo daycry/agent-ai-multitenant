@@ -13,6 +13,13 @@
 # it reveals at step 9 are thrown-away values that open nothing. Use it to
 # review the flow and the copy; do NOT use it to install.
 #
+# Desde el 2026-08-28 ese aviso ya no vive SÓLO en este comentario, que es medio
+# defecto en sí mismo: el navegador no muestra comentarios de YAML. El wizard
+# lleva banda permanente y diálogo bloqueante (`app/simulation-notice.tsx`), y el
+# backend responde 501 en los dos endpoints que fingen salvo que alguien encienda
+# `INSTALLER_ALLOW_SIMULATION` — que es lo que hace este fichero, abajo y a la
+# vista, para que levantar la fachada sea un acto consciente y no un descuido.
+#
 # The REAL install path is the CLI:
 #   ./scripts/install.sh --config install.yaml
 # which wires the real bindings and aborts with exit code 4 (PROVISION) if it
@@ -32,9 +39,13 @@
 # alternative ADR 0060 rejected in writing (socket in a container == effective
 # root on the host), and the socket-proxy is not a way around it: its ACL
 # denies VOLUMES, while the installer needs host bind-mounts to write
-# /data/agent-platform. So this is an OPEN DECISION, not pending plumbing —
-# see ADR 0161 §"Qué hay que decidir", question 3. Do not add mounts here
-# without that decision.
+# /data/agent-platform.
+#
+# Eso YA NO es una decisión abierta: el operador firmó el ADR 0161 el 2026-08-27
+# y la respuesta a su pregunta 3 es «genera, no provisiona». Añadir aquí un
+# `docker.sock`, un `DOCKER_HOST` o un `privileged: true` no es completar una
+# fase pendiente: es reabrir por la puerta de atrás lo que el ADR 0060 rechazó
+# por escrito.
 
 name: agentic-platform-installer
 
@@ -43,11 +54,33 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # El ENTRYPOINT de la imagen es el CLI (`python -m installer_backend.cli`),
+    # porque la forma publicada de usarla es `docker run … generate --config …`
+    # (ADR 0161, la séptima imagen de release-images.yml). El wizard HTTP sigue
+    # dentro y se alcanza sobrescribiéndolo aquí. Sin esta línea el contenedor
+    # imprimiría el `--help` del CLI y el healthcheck se quedaría esperando un
+    # /healthz que nadie sirve.
+    entrypoint: ["installer-backend"]
     environment:
+      # 0.0.0.0 DENTRO del contenedor es correcto —es como uvicorn oye lo que
+      # llega por el bind de abajo—; lo que acota la exposición es el `ports`.
       INSTALLER_HOST: 0.0.0.0
       INSTALLER_PORT: 8080
+      # Autoriza la SIMULACIÓN. Sin esto el backend sirve los pasos 1-7 (que son
+      # reales: captura + validación + preview) y responde 501 en los dos que
+      # fingen, `/api/install/stream` y `/api/finalize/reveal`. Ese es el defecto
+      # correcto para la imagen publicada; aquí se enciende a propósito, porque
+      # revisar el flujo es exactamente para lo que existe este compose. Va
+      # escrito y no heredado del entorno para que un `docker compose config` lo
+      # enseñe.
+      INSTALLER_ALLOW_SIMULATION: "1"
     ports:
-      - "8080:8080"
+      # SÓLO loopback. Este backend no tiene autenticación de ningún tipo y su
+      # CORS es `allow_origins=["*"]`: publicado como "8080:8080" quedaba en
+      # TODAS las interfaces del host. El ADR 0161 ya nombró ese riesgo al
+      # descartar su opción A. Si alguna vez hace falta alcanzarlo desde otra
+      # máquina, la respuesta es un túnel SSH, no quitar el `127.0.0.1`.
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test:
         [
@@ -70,7 +103,9 @@ services:
       # it points at the published backend port, not the compose service name.
       NEXT_PUBLIC_INSTALLER_API: http://localhost:8080
     ports:
-      - "3100:3100"
+      # Loopback, igual que el backend: el wizard no autentica a nadie y, hasta
+      # el paso 7, recoge dominio, claves de MinIO y tokens de proveedores LLM.
+      - "127.0.0.1:3100:3100"
     depends_on:
       installer-backend:
         condition: service_healthy

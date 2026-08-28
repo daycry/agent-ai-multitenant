@@ -52,6 +52,7 @@ PLATFORM_TOOLING: frozenset[str] = frozenset(
     {
         "audit_rbac.py",
         "check_commit_trailers.py",
+        "check_e2e_install_report.py",
         "check_no_secret_artifacts.py",
         "check_pip_audit_report.py",
         "mypy_gate.py",

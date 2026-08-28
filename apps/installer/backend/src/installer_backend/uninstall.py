@@ -17,15 +17,19 @@ The teardown contract
        GitHub's "type the repo name to delete") AND (b) give an explicit yes
        (``--yes`` on the CLI, or an interactive "y"). A single confirmation is
        NOT enough — both must pass or the whole run ABORTS with nothing removed.
-    2. Stack teardown — ``docker compose -p <project> down`` stops + removes the
-       containers + network. By DEFAULT the data volumes / bind-mounted data
-       tree are PRESERVED (``down`` without ``-v``; the data root is left on
-       disk) so a reinstall (task 15_13) can reuse them.
-    3. Data purge (OPT-IN) — only when ``--purge-data`` is given AND its OWN
-       extra confirmation passes does the uninstall wipe the data root
-       (``/data/agent-platform``). Without that extra confirmation the purge is
-       refused even if ``--purge-data`` was on the command line, so a fat-finger
-       can never delete data.
+    2. Purge gate (OPT-IN) — when ``--purge-data`` is given, its OWN extra
+       confirmation is asked HERE, still before anything is destroyed. Without it
+       the purge is refused even though ``--purge-data`` was on the command line,
+       so a fat-finger can never delete data.
+    3. Stack teardown — ``docker compose -p <project> down`` stops + removes the
+       containers + network. By DEFAULT the named volumes / bind-mounted data
+       tree are PRESERVED (``down`` without ``-v``) so a reinstall can reuse
+       them; a CONFIRMED purge adds ``-v`` so the stack's named volumes go too
+       (``whisper_models``, the multi-GB voice model cache every default install
+       creates, lives in one and used to survive a ``--purge-data``).
+    4. Data purge — wipe the data root (``/data/agent-platform``) and REPORT
+       what could not be removed. "It was deleted" is an observation here, never
+       an assumption: see :class:`PurgeReport`.
 
 Abort semantics
 ---------------
@@ -85,18 +89,60 @@ class StackTeardown(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class PurgeLeftover:
+    """One path the purge could NOT remove, and why it survived.
+
+    ``reason`` is the operator-facing motive (``Device or resource busy`` on a
+    mount point, ``Permission denied``, or the silent case: the path still
+    exists after a deletion that reported no error). It is what tells the
+    operator whether to unmount, kill a surviving container or fix permissions,
+    so it travels WITH the path — a bare "no se pudo borrar" is not actionable.
+    """
+
+    path: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PurgeReport:
+    """What a purge actually did: the operator log AND what survived it.
+
+    Before this existed the purge returned only log lines and the uninstall
+    derived "Datos ELIMINADOS." from *having called* the purger. That is the
+    defect the 2026-08-27 audit found: on a data root mounted on a dedicated
+    disk (what the disk prereq's own remediation recommends) ``rmtree`` fails
+    with ``Device or resource busy``, ``ignore_errors=True`` swallowed it, and
+    the operator read a success message with the ``.env`` — Postgres password,
+    MinIO keys, JWT secret and the three Fernet keys — still on disk. They then
+    hand the machine back believing it is clean.
+
+    So the outcome is now REPORTED, not assumed: :attr:`leftovers` is the
+    evidence, and :attr:`complete` is the only thing entitled to print success.
+    """
+
+    lines: list[str] = field(default_factory=list)
+    leftovers: tuple[PurgeLeftover, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        """True iff NOTHING survived the purge (the only success condition)."""
+
+        return not self.leftovers
+
+
 @runtime_checkable
 class DataPurger(Protocol):
     """Wipes the persistent data tree under the data root.
 
-    The real binding ``shutil.rmtree``s ``/data/agent-platform`` (every PGDATA /
-    MinIO / Vault / repos byte). The fake records the path it was asked to wipe
-    so a test can assert the purge happened ONLY with both confirmations — and
-    never otherwise.
+    The real binding deletes ``/data/agent-platform`` (every PGDATA / MinIO /
+    Vault / repos byte) and VERIFIES the result path by path. The fake records
+    the path it was asked to wipe so a test can assert the purge happened ONLY
+    with both confirmations — and never otherwise.
     """
 
-    def purge(self, data_root: str) -> list[str]:
-        """Delete every byte under *data_root*; return the log lines produced."""
+    def purge(self, data_root: str) -> PurgeReport:
+        """Delete every byte under *data_root*; report what was — and was not — removed."""
         ...
 
 
@@ -161,10 +207,16 @@ class StubDataPurger:
     #: The data root the purge targeted.
     data_root: str = ""
 
-    def purge(self, data_root: str) -> list[str]:
+    def purge(self, data_root: str) -> PurgeReport:
         self.purged = True
         self.data_root = data_root
-        return [f"Eliminando todos los datos bajo {data_root}.", "Datos eliminados."]
+        return PurgeReport(
+            lines=[f"Eliminando todos los datos bajo {data_root}.", "Datos eliminados."],
+            # A simulation removes nothing, so it also invents no leftovers: the
+            # ``--dry-run`` banner is what says this was not real, not a fake
+            # failure here.
+            leftovers=(),
+        )
 
 
 @dataclass
@@ -219,11 +271,18 @@ class UninstallResult:
     """Outcome of a completed uninstall (returned on success).
 
     ``data_preserved`` is the headline guarantee: True unless the data tree was
-    actually purged. ``log`` is the secret-free operator log.
+    actually purged. ``volumes_removed`` records whether the compose teardown
+    also took the stack's NAMED volumes (only on a confirmed purge — see
+    :meth:`Uninstaller.run`). ``leftovers`` is what a requested purge could NOT
+    delete: non-empty means the purge was INCOMPLETE and the caller must not
+    report success (the CLI maps it to a non-zero exit code). ``log`` is the
+    secret-free operator log.
     """
 
     stack_removed: bool
     data_purged: bool
+    volumes_removed: bool = False
+    leftovers: tuple[PurgeLeftover, ...] = ()
     log: list[str] = field(default_factory=list)
 
     @property
@@ -231,6 +290,16 @@ class UninstallResult:
         """True iff the persistent data tree was left intact."""
 
         return not self.data_purged
+
+    @property
+    def purge_complete(self) -> bool:
+        """True iff a requested purge left NOTHING behind.
+
+        Vacuously true when no purge was requested; the caller pairs it with
+        :attr:`data_purged` to tell "nothing to purge" from "purged clean".
+        """
+
+        return not self.leftovers
 
 
 @dataclass
@@ -292,13 +361,11 @@ class Uninstaller:
                 "Desinstalación abortada: no se confirmó explícitamente (no se ha eliminado nada)."
             )
 
-    def _maybe_purge(self, req: UninstallRequest) -> bool:
-        """Purge the data tree ONLY with --purge-data AND its extra confirmation.
+    def _confirm_purge(self, req: UninstallRequest) -> bool:
+        """Ask the purge's OWN extra confirmation; True iff the data may be wiped.
 
-        Returns True iff the data was actually wiped. When ``purge_data`` is not
-        requested the data is preserved (the default). When it IS requested the
-        purge still needs its OWN extra confirmation — a refusal leaves the data
-        intact and the stack already-removed (a safe partial outcome).
+        Asked BEFORE anything is destroyed (see :meth:`run`), so a *no* here
+        leaves both the stack and the data exactly as they were.
         """
 
         if not req.purge_data:
@@ -306,20 +373,25 @@ class Uninstaller:
             return False
 
         self.phases.append("confirm_purge")
-        # The purge's OWN extra confirmation (separate from the double confirm).
         if not self.confirmer.confirm_yes(
             f"--purge-data BORRARÁ DE FORMA IRREVERSIBLE todos los datos bajo "
-            f"{req.data_root}. Esta acción NO se puede deshacer. "
+            f"{req.data_root} Y los volúmenes nombrados del stack (entre ellos la "
+            "caché de modelos de voz). Esta acción NO se puede deshacer. "
             "¿Eliminar los datos? [y/N]: "
         ):
             self._log("[datos] Purga cancelada: no se confirmó. Los datos se conservan.")
             return False
+        return True
+
+    def _purge(self, req: UninstallRequest) -> PurgeReport:
+        """Wipe the data tree and return the purger's REPORT (never a bare bool)."""
 
         self.phases.append("purge_data")
         self._log(f"[datos] Eliminando todos los datos bajo {req.data_root}…")
-        for line in self.purger.purge(req.data_root):
+        report = self.purger.purge(req.data_root)
+        for line in report.lines:
             self._log(f"[datos]   {line}")
-        return True
+        return report
 
     def run(self, req: UninstallRequest) -> UninstallResult:
         """Run the gated uninstall for *req*; return the :class:`UninstallResult`.
@@ -327,30 +399,70 @@ class Uninstaller:
         Raises :class:`UninstallAbortedError` (with nothing removed) if the double
         confirmation fails. On success the stack has been torn down; the data is
         purged ONLY if both ``purge_data`` and its extra confirmation passed.
+
+        **Every confirmation is asked before ANY destruction.** The purge gate
+        used to be asked *after* the stack was already down, which was harmless
+        while the teardown never touched volumes — but the teardown now removes
+        the stack's named volumes on a confirmed purge (that is how the voice
+        models cache goes away), and removing them on a purge the operator then
+        declines would destroy data behind its own gate. Asking first keeps the
+        rule the module promises: a declined confirmation leaves the machine
+        untouched.
         """
 
         # 1. Gate FIRST: no destructive action until the double confirm passes.
         self._confirm_double(req)
 
-        # 2. Tear down the stack (data preserved unless purge runs below).
+        # 2. …and the purge's own gate too, still before anything is destroyed.
+        purge_confirmed = self._confirm_purge(req)
+
+        # 3. Tear down the stack. The platform's persistent data lives in the
+        #    bind-mounted data root (wiped separately below), so a normal
+        #    uninstall keeps the named volumes; a CONFIRMED purge takes them too,
+        #    because otherwise `whisper_models` — the multi-GB HuggingFace cache
+        #    every default install creates, since voice_mode defaults to "cpu" —
+        #    survives an uninstall that told the operator everything was deleted,
+        #    and nothing in the per-category log would ever mention it.
         self.phases.append("teardown")
         self._log(f"[stack] Deteniendo y eliminando el stack '{req.deployment_name}'…")
-        # Data lives in the bind-mounted data root, deleted separately by the
-        # purger — so the compose teardown never removes named volumes here.
-        for line in self.teardown.down(req.deployment_name, remove_volumes=False):
+        for line in self.teardown.down(req.deployment_name, remove_volumes=purge_confirmed):
             self._log(f"[stack]   {line}")
+        if purge_confirmed:
+            self._log(
+                "[stack]   volúmenes nombrados del stack (incluida la caché de "
+                "modelos de voz `whisper_models`): eliminados"
+            )
 
-        # 3. Opt-in data purge (its own extra confirmation).
-        data_purged = self._maybe_purge(req)
+        # 4. The data purge itself.
+        report = self._purge(req) if purge_confirmed else None
 
+        leftovers = report.leftovers if report is not None else ()
         result = UninstallResult(
             stack_removed=True,
-            data_purged=data_purged,
+            data_purged=report is not None,
+            volumes_removed=purge_confirmed,
+            leftovers=leftovers,
             log=[],
         )
         self._log("")
         self._log("Desinstalación completada.")
-        self._log("Datos ELIMINADOS." if data_purged else "Datos CONSERVADOS (intactos).")
+        if leftovers:
+            # NEVER "Datos ELIMINADOS." here: something survived, and the whole
+            # point of the report is that the operator learns it now — before
+            # handing over, reassigning or selling the machine — and not by
+            # discovering the .env later.
+            self._log(f"PURGA INCOMPLETA: quedan datos en disco bajo {req.data_root}.")
+            for left in leftovers:
+                self._log(f"  - {left.path} ({left.reason})")
+            self._log(
+                "Revisa esas rutas a mano (desmonta el disco, para el contenedor "
+                "que las tenga abiertas o corrige permisos) y vuelve a ejecutar la "
+                "purga: la máquina NO está limpia."
+            )
+        elif report is not None:
+            self._log("Datos ELIMINADOS.")
+        else:
+            self._log("Datos CONSERVADOS (intactos).")
         return result
 
 
@@ -366,7 +478,8 @@ def build_default_uninstaller(
     ``dry_run=True`` wires the in-memory stub seams (import-safe, no Docker / no
     disk writes) for an explicitly-marked simulation. Otherwise it wires the real
     bindings: :class:`RealStackTeardown` (``docker compose down`` under
-    *compose_dir*) + :class:`RealDataPurger` (``rmtree`` of the data tree). The
+    *compose_dir*) + :class:`RealDataPurger` (deletes the data tree and verifies
+    it, reporting whatever survived). The
     caller supplies the :class:`Confirmer`; the double confirmation gates the
     real destruction. The real seams only touch the host when :meth:`Uninstaller.run`
     executes.

@@ -125,11 +125,20 @@ def test_api_server_emits_prod_critical_keys_prefixed() -> None:
 
 
 def test_every_prod_compose_env_ref_is_written_to_the_dotenv() -> None:
-    """Compose↔.env contract: every ``${VAR}`` the PROD compose references (no
-    ``:-default`` fallback in prod) MUST be a key config_generators writes into
-    the ``.env`` — otherwise the container env resolves to empty and the app
-    falls back to a dev default or fails (Plan prod-01 task_05, the
-    config_generators ↔ builders cross-check)."""
+    """Compose↔.env contract: toda ``${VAR}`` que referencia el compose de PROD
+    tiene que ser una clave que ``config_generators`` escribe en el ``.env``.
+
+    Si no, la variable del contenedor se resuelve a vacío y la app cae a su
+    default de desarrollo o no arranca (Plan prod-01 task_05, el cruce
+    config_generators ↔ builders).
+
+    **El patrón cubre las tres formas a propósito.** Desde el 2026-08-27
+    ``_env_ref`` emite ``${VAR:?mensaje}`` en producción (la forma fail-closed;
+    ``${VAR}`` a secas interpolaba a cadena vacía y seguía adelante). Un patrón
+    que sólo aceptase la forma desnuda dejaría de encontrar NADA y este test
+    pasaría en vacío — que es peor que fallar, porque la ausencia de rojo se lee
+    como «el contrato se cumple». De ahí la aserción de que encontró algo.
+    """
     cfg = _prod_config()
     # monitoring=True EN AMBOS LADOS: el overlay también forma parte del
     # contrato (grafana referencia ${GRAFANA_ADMIN_USER}/${..PASSWORD}, que el
@@ -139,13 +148,18 @@ def test_every_prod_compose_env_ref_is_written_to_the_dotenv() -> None:
     compose = generate_compose(cfg, monitoring=True)
     dotenv = set(build_env_vars(cfg, generate_secrets(), monitoring=True))
 
+    # `${VAR}`, `${VAR:-default}` y `${VAR:?mensaje}` — sólo interesa el NOMBRE.
+    ref_re = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[?+-][^}]*)?\}")
     referenced: set[str] = set()
     for service in compose["services"].values():
         for value in (service.get("environment") or {}).values():
             if isinstance(value, str):
-                # prod has no ``:-default``; capture the bare ``${VAR}`` name.
-                referenced.update(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", value))
+                referenced.update(ref_re.findall(value))
 
+    assert len(referenced) > 10, (
+        f"la guarda dejó de encontrar referencias en el compose (vio {sorted(referenced)}): "
+        "si el patrón no reconoce la forma que emite `_env_ref`, este test aprueba en vacío"
+    )
     missing = sorted(v for v in referenced if v not in dotenv)
     assert not missing, (
         "compose references ${VAR}s with no matching .env key from "

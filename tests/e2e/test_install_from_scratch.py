@@ -51,8 +51,18 @@ def test_direct_app_ports_are_not_published(installed_stack: dict[str, str]) -> 
 def test_admin_login_with_the_revealed_credential(installed_stack: dict[str, str]) -> None:
     username = installed_stack.get("admin_username")
     password = installed_stack.get("admin_password")
-    if not username or not password:
-        pytest.skip("no se pudieron parsear las credenciales reveladas del stdout del install")
+    # Antes esto era un `pytest.skip`. Un salto aquí era el falso verde de
+    # dentro: el install podía haber ido bien y este módulo quedarse en «3
+    # pasados + 1 saltado» habiendo perdido la ÚNICA aserción que prueba que la
+    # credencial sembrada autentica — que es lo que acredita deploy-2. Si el
+    # revelado no trae las dos credenciales, eso es un fallo del install o del
+    # parseo, no una circunstancia que excuse no comprobar nada.
+    assert username and password, (
+        "el revelado del install no trajo usuario + contraseña de admin. Mira el "
+        "bloque de credenciales en el stdout de install.sh: o la siembra no creó "
+        "el admin, o cambiaron las etiquetas que parsea tests/e2e/conftest.py "
+        "(_LABEL_ADMIN_USERNAME / _LABEL_ADMIN_PASSWORD)."
+    )
     resp = httpx.post(
         f"{_BASE}/api/auth/login",
         headers=_HEADERS,

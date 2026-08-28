@@ -1,6 +1,6 @@
 ---
 title: "ADR 0161: Cómo se distribuye e instala la plataforma — los tres caminos, y qué le falta a cada uno"
-status: proposed
+status: accepted
 date: 2026-08-27
 deciders: [operador]
 relates_to: [0060, 0061, 0094, 0129, 0145, 0146, 0148, 0160]
@@ -11,12 +11,19 @@ docs_language: es
 
 # ADR 0161 — Distribución e instalación de la plataforma
 
-> **Estado: `proposed`. No lo firma quien lo escribe.** El documento pone
-> delante del operador cuatro opciones con su coste, se moja con una
-> recomendación en §«Recomendación de este documento» y deja la decisión donde
-> corresponde. Mientras esto siga en `proposed`, lo que manda es el estado
-> descrito en §«Lo que hay hoy, medido» — que no es «funciona con clon y no sin
-> él», sino algo peor y que conviene leer entero.
+> **Estado: `accepted`.** Firmado por el operador el **2026-08-27**: gana la
+> **opción D con el envoltorio de la B** —el instalador **genera** el árbol de
+> arranque y **no provisiona** el host, y se entra por un fichero compose
+> descargable y auditable— y la **opción A queda descartada** por exigir el
+> socket de Docker. La decisión literal, con sus tres razones y las respuestas a
+> las preguntas que este documento planteaba, está en §«Decisión».
+>
+> El resto se conserva **tal como se le puso delante al operador**,
+> §«Recomendación de este documento» incluida, para que se vea sobre qué medición
+> se decidió. Dos avisos de lectura: §«Lo que hay hoy, medido» describe el árbol
+> **antes** de la reparación del suelo —lo corrige el recuadro de actualización
+> de esa misma sección— y §«Qué se hace cuando esto se acepte» lleva ya marcado,
+> paso a paso, qué está hecho y qué queda.
 
 ## El hecho que lo motiva
 
@@ -373,10 +380,19 @@ claro. Ese material es además el que sostiene la excepción Fernet del
 [ADR 0146](0146-fernet-en-db-vs-vault.md), que existe porque el desellado de
 Vault es manual ([ADR 0145](0145-vault-operable-tokens-y-unseal.md)).
 
-**Y una advertencia de calendario.** Ninguno de estos gates corre hoy: CI lleva
-caído desde el 2026-07-30 por facturación de la cuenta (`CONTINUE_HERE.md:223`).
-Publicar una imagen de instalador en este estado sería publicar **sin ningún
-control efectivo**.
+**Una advertencia de calendario, y su corrección (2026-08-27).** Este párrafo
+afirmaba que ninguno de estos gates corría porque «CI lleva caído desde el
+2026-07-30 por facturación», citando `CONTINUE_HERE.md:223`. **Era falso**: CI
+corre y pasa — run `33083267973` sobre `1aec3ebc`, doce jobs en verde.
+
+Se deja escrito porque el error importa más que el dato. La afirmación se tomó
+de un documento rancio sin comprobarla contra la realidad, y acabó **tres veces
+dentro de un ADR firmado**: exactamente el modo de fallo que esta plataforma
+persigue, una medida que miente costando más que no tener medida.
+
+Lo que sí se sostiene es la regla que la sustituye, y que no caduca: **no se
+publica sin que los gates corran de verdad**, comprobándolo en el momento y no
+en un documento que alguien escribió hace un mes.
 
 ## Opciones
 
@@ -490,8 +506,9 @@ docker compose run --rm bootstrap   # Vault init + unseal + siembra + credencial
 
 ## Recomendación de este documento
 
-> Es una **recomendación**, no una decisión. Se escribe antes de la firma y para
-> que se vea qué se le puso delante al operador.
+> Es una **recomendación**, no una decisión. Se escribió antes de la firma y se
+> conserva para que se vea qué se le puso delante al operador. **El operador la
+> aceptó el 2026-08-27**; lo que manda es §«Decisión», más abajo.
 
 **D, entregada con el envoltorio de B, y A descartada.** Es decir: se publican
 las imágenes del instalador (que A, B y D necesitan igual), el artefacto de
@@ -533,6 +550,116 @@ como _dos comandos auditables_, no como una línea mágica. El único precedente
 como autorización tácita el camino sin clon nacerá con el estándar más bajo de la
 casa.
 
+## Decisión
+
+Decidido por el **operador** el **2026-08-27**. Gana la **opción D entregada con
+el envoltorio de la B**; la **opción A queda descartada**. Las tres piezas, sin
+margen de interpretación:
+
+1. **El instalador GENERA, no provisiona** (pregunta 3). El contenedor **no habla
+   con el daemon de Docker**: se le monta **sólo** la raíz de datos, escribe el
+   árbol de arranque completo —compose, `.env`, `config/global.yaml`, el
+   `Caddyfile` y los auxiliares del stack— y sale. El `docker compose up` lo
+   ejecuta el operador, en su host y con sus permisos.
+2. **El artefacto de entrada es un fichero compose descargable y auditable**
+   (pregunta 2), que es lo que aporta la opción B como envoltorio: los dos
+   servicios del instalador pasan de `build:` a `image:` y sus imágenes se
+   publican —cosa que A, B y D necesitaban por igual—. **No** es un `curl | bash`:
+   el fichero se lee **antes** de ejecutarlo.
+3. **A queda descartada, y el motivo es el socket de Docker.** Montar
+   `/var/run/docker.sock` es acceso root efectivo al host, que es literalmente la
+   alternativa (a) que el
+   [ADR 0060](0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md) rechazó por
+   escrito por «escape a root». Y no hay salida por el `docker-socket-proxy`: su
+   ACL deniega `VOLUMES`, y el instalador necesita bind-mounts del host, así que
+   la única forma de pasar por ahí sería relajar esa ACL **para todos los
+   contenedores que la usan**.
+
+La forma de uso que queda firmada son **tres comandos**:
+
+```bash
+docker run --rm -v /data/agent-platform:/data/agent-platform \
+  ghcr.io/daycry/installer:v1.0.0 generate --config install.yaml
+cd /data/agent-platform && docker compose up -d --wait
+docker compose run --rm bootstrap   # Vault init + unseal + siembra + credenciales
+```
+
+### Las tres razones, por orden de peso
+
+1. **Es la única que no pide una excepción al ADR 0060.** Pagar una excepción de
+   seguridad **estructural** —una que debilita el modelo para todo el stack, no
+   sólo para el instalador— a cambio de ahorrarle dos comandos al operador es mal
+   negocio, y peor en el contenedor que mintea el root token de Vault y las cinco
+   unseal keys en claro. Con D la pregunta del socket no se responde mejor: **se
+   evapora**.
+2. **Reutiliza el camino que funciona.** El instalador real es el CLI —lo dice el
+   propio código, `main.py:262-269`— y el wizard HTTP es un stub cableado a
+   `FakeStepExecutor`. D empaqueta el CLI; A y B empaquetaban la fachada del
+   wizard y dejaban el cableado para después, que es apostar el camino nuevo a un
+   trabajo que aún no está hecho.
+3. **El orden importa más que la opción: el suelo primero, publicar después.** Los
+   auxiliares, los dos tinyproxy y los perfiles son el grueso del trabajo, se
+   deben **con clon o sin él**, y arreglan **hoy** el camino (3), que es el único
+   soportado. Publicar antes habría sido distribuir un instalador que no instala,
+   y con un artefacto ya publicado encima sale más caro descubrirlo.
+
+### Las preguntas que este documento planteaba, respondidas
+
+| #   | Pregunta                                               | Respuesta firmada                                                                                          |
+| --- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| 1   | ¿Existe el camino sin clonar?                          | **Sí** — pero como **dos comandos auditables**, no como una línea mágica.                                  |
+| 2   | ¿Cuál es su artefacto?                                 | Un **fichero compose descargable** (envoltorio B) que arranca **imágenes publicadas** del instalador.      |
+| 3   | ¿Provisiona el host o sólo genera?                     | **Genera.** Ni socket de Docker, ni CLI de Docker dentro de la imagen (bloqueante 5 evaporado).            |
+| 4   | ¿Los auxiliares viajan, o el compose deja de pedirlos? | **Viajan con el instalador.** Ya hecho: `installer_backend.stack_assets` → `{data_root}/stack/` (PR #124). |
+| 5   | ¿Qué listón de integridad?                             | **Digest sí, firma todavía no.**                                                                           |
+| 6   | ¿Qué se hace con los dos tinyproxy?                    | **Sigue abierta.** Sus contextos ya viajan; si además se publican como imagen, esta firma no lo decide.    |
+
+#### Pregunta 1: sí al camino sin clon, pero en dos comandos auditables
+
+Que exista no autoriza la forma. La línea mágica —`curl … | bash`— **se descarta
+expresamente**: el único precedente de `curl | bash` del repo es el flojo
+(`docs/06-runbooks/08-instalacion-produccion.md:75`,
+`curl -fsSL https://get.docker.com | sh`, sin verificación de ningún tipo), y
+tomarlo como autorización tácita haría nacer el camino sin clon con **el estándar
+más bajo de la casa**. Lo que se firma es lo contrario: primero se descarga algo
+que se puede leer, y luego se ejecuta. El precio está aceptado, y conviene decirlo
+en voz alta en vez de descubrirlo en el runbook: el «una línea» se convierte en
+tres.
+
+#### Pregunta 5: digest sí, firma no — y por qué la firma no cabe en este ADR
+
+El **digest** se adopta, y no cuesta inventar nada: el módulo ya existe
+(`packages/shared-test-runtimes/src/shared_test_runtimes/images.py`,
+[ADR 0148](0148-distribucion-imagenes-runtime-por-digest.md)) y se **extiende**,
+en vez de escribir un parser nuevo que repita el bug del `:` del puerto.
+
+La **firma** (cosign / sigstore) **no se firma aquí**, y no por desinterés: no
+tiene un solo precedente en el repo y merece **su propio ADR**, porque adoptarla
+es decidir tres cosas que este documento no ha medido — **quién custodia la
+clave** (o si se usa la identidad OIDC del workflow), **quién verifica**, y **qué
+pasa cuando la verificación falla en un host sin salida a internet**, que en la
+máquina donde se instala esto no es un escenario exótico. Meter eso en un párrafo
+sería decidir por omisión justo la parte cara. Queda como paso 10 de la lista de
+trabajo.
+
+Y con ello se nombra lo que esta firma **no** cubre: la cadena que hay hoy
+—digest-pinning + Dependabot + Trivy— protege contra CVEs y contra deriva, **no
+contra suplantación**. Quien comprometa el `GITHUB_TOKEN` o la cuenta puede
+publicar una imagen que el digest describirá fielmente.
+
+#### El orden duro que acompaña a la firma
+
+**No se publica la imagen del instalador antes de que las seis imágenes de
+plataforma se puedan pinear por digest.** Publicar antes sería mover el eslabón
+débil un paso y llamarlo arreglo: un instalador verificado que se descarga seis
+imágenes sin verificar. Y una segunda condición, de higiene y no de diseño: **se
+comprueba que los gates corren de verdad en el momento de publicar** — Trivy, la
+guarda de digest y los tests—, no que constaba en algún sitio que corrían.
+
+(Aquí se afirmaba que CI llevaba caído desde el 2026-07-30 por facturación. Era
+una cita a un documento rancio y se corrigió el 2026-08-27: CI pasa, run
+`33083267973`. Ver la advertencia de calendario en §«La superficie de seguridad».)
+
 ## Consecuencias de no decidir
 
 No es neutral, y hay que nombrarlo:
@@ -559,63 +686,97 @@ No es neutral, y hay que nombrarlo:
 
 ## Qué se hace cuando esto se acepte
 
-En este orden, y los tres primeros pasos **se hacen gane la opción que gane**:
+**Aceptado el 2026-08-27**, así que la lista deja de ser condicional. Se conserva
+en su orden y con su redacción original, y cada paso lleva delante su estado
+**medido sobre el árbol ese mismo día**. El estado no es adorno: buena parte de
+este ADR existe porque una avería sobrevivió meses sin dueño, y una lista de
+trabajo sin estado repite ese modo de fallo un nivel más arriba.
 
-1. **Cerrar el contrato compose↔ficheros generados.** Que `_generate_config`
-   (`real_step_executor.py:131-160`) escriba también los seis auxiliares —o que el
-   generador deje de pedirlos— y **una guarda que compruebe el contrato**: toda
-   ruta relativa del compose generado tiene que ser un fichero que el instalador
-   produce. Hoy no lo comprueba nada, que es por lo que la avería sobrevivió a la
-   suite entera. Resolver de paso las dos colisiones: `./postgres/init` dentro del
-   PGDATA y `./vault/config.hcl` como fichero en un directorio de datos.
-2. **Medir antes de diseñar** lo que este documento deduce: levantar el compose
-   generado en un host limpio y comprobar (a) qué hace Postgres con un `init/`
-   vacío dentro del PGDATA, (b) qué hace Vault con un `config.hcl` que es un
-   directorio, y (c) si el contexto de build ausente aborta el proyecto entero o
-   sólo los dos proxies. Los tres cambian el presupuesto.
-3. **Arreglar las tres contradicciones doc↔código** de la opción C
-   (`apps/installer/README.md:51`, el namespace de `README.md:166` /
-   `README.es.md:168`, y el orden de los pasos 3 y 5 de
-   `docs/02-getting-started/01-installation.md`), y añadir Python + el
-   `pip install` a la checklist de
-   `docs/06-runbooks/08-instalacion-produccion.md:36-51` o hacer `install.sh`
-   autosuficiente.
-4. **Declarar `hvac`** en `apps/installer/backend/pyproject.toml` y **declarar
-   `pyyaml`** explícitamente en vez de heredarlo del extra de `uvicorn`; capturar
-   `ImportError` en `real_step_executor.py:164-167` para que el fallo salga como
-   `StepExecutionError` legible.
-5. **Publicar los dos tinyproxy** (`egress-proxy`, `registry-proxy`) o empotrar
-   sus contextos en el artefacto del instalador. Si se publican, hay que mover a
-   la vez las dos guardas de `tests/unit/test_infra_images_are_scanned.py`
+1. **HECHO** — PR **#124**, commit `1129f987`, mergeando. Cerrar el contrato
+   compose↔ficheros generados. Resultaron ser **once** rutas huérfanas con el
+   overlay de monitorización (cinco con el perfil básico), no seis: los auxiliares
+   viajan ahora dentro del paquete (`installer_backend.stack_assets`, copia byte a
+   byte de `docker/` con guarda de deriva) y el paso `GENERATE_CONFIG` los escribe
+   bajo `{data_root}/stack/`. Con eso caen también **las dos colisiones**:
+   `stack/postgres/init` ya no resuelve dentro del PGDATA y `stack/vault/config.hcl`
+   se escribe como fichero. La guarda que faltaba existe y **no lleva lista escrita
+   a mano**: deriva las rutas del propio compose generado y las cruza con lo que la
+   instalación produce de verdad
+   (`tests/unit/test_generated_compose_is_installable.py`,
+   `tests/unit/test_installer_ships_stack_assets.py`), así que un montaje nuevo
+   entra solo.
+
+   **Lo que ese PR no cubrió, y sigue siendo suelo**: los tres perfiles YAML
+   (`scripts/install-profiles/*.yaml`, bloqueante 3) y el perfil AppArmor
+   (bloqueante 4) siguen sin viajar en la imagen.
+
+2. **PENDIENTE, y ya no bloquea.** Medir en un host limpio lo que este documento
+   deduce. El paso 1 le quitó el filo: sin bind ausente, la cadena «bind ausente →
+   Docker crea un directorio vacío → el init de Postgres no corre / Vault no lee su
+   config» **no puede empezar**, y el contexto de build tampoco falta ya. Lo que
+   queda es conocimiento de regresión —qué se rompería si alguien deshace el paso
+   1— y se sigue debiendo, con su trampa conocida: sólo corre en Linux con
+   `E2E_INSTALL=1` y **salta en verde por diseño** sin esa variable.
+3. **PARCIAL.** De las contradicciones doc↔código de la opción C:
+   - **Corregida**: `apps/installer/README.md` ya no afirma que el instalador
+     aprovisiona de verdad — ahora dice que el wizard es una simulación y que el
+     camino real es el CLI.
+   - **Abierta**: `README.md:176` y `README.es.md:178` siguen nombrando
+     `ghcr.io/agentic-platform/*`, cuando el workflow publica en
+     `ghcr.io/${{ github.repository_owner }}` = `ghcr.io/daycry`
+     (`release-images.yml:29`), que es lo que pide el compose generado.
+   - **Abierta**: `docs/02-getting-started/01-installation.md` sigue con el
+     `docker compose up` en el paso 3 (`:49`) y el
+     `cp docker/.env.example docker/.env` en el paso 5 (`:104-108`). El compose
+     canónico exige **ocho** variables `${VAR:?}` sin default —contadas hoy; el
+     cuerpo de §«Opciones» dijo nueve— y el override de desarrollo no aporta
+     ninguna: seguir el orden escrito aborta.
+   - **Abierta** también la mitad documental del bloqueante 8: la checklist de
+     `docs/06-runbooks/08-instalacion-produccion.md:53-74` sigue sin pedir Python
+     ni `pip`, y `scripts/install.sh` sigue sin ser autosuficiente.
+4. **PENDIENTE.** `hvac` y `pyyaml` siguen sin declarar en
+   `apps/installer/backend/pyproject.toml:6-16` —`yaml` sigue llegando de rebote
+   por el extra `[standard]` de `uvicorn`— y `real_step_executor.py:164-167` sigue
+   capturando sólo `VaultBootstrapError`, así que el `ImportError` saldría crudo.
+5. **PARCIAL.** Los contextos de los dos tinyproxy **ya viajan** con el instalador
+   (`stack_assets/egress-proxy/`, `stack_assets/registry-proxy/`), que es lo que
+   desbloqueaba el camino (3). Publicarlos además como imagen es la **pregunta 6,
+   que esta firma no responde**; el día que se responda que sí, hay que mover a la
+   vez las dos guardas de `tests/unit/test_infra_images_are_scanned.py`
    (`:232-242` y `:264-282`) **entendiendo el historial del `pull_policy: build`**,
    o se reintroduce el rc=1 que ya se pagó una vez.
-6. **Pinear por digest las seis imágenes de plataforma** en el compose generado,
-   extendiendo `shared_test_runtimes/images.py` en vez de escribir un parser
-   nuevo, y **pinear `apps/installer/backend/Dockerfile:5`** — más ampliar el
-   radio de `tests/unit/test_supply_chain_config.py:897-913` a `apps/`, que es por
-   lo que ese hueco no se veía.
-7. **Publicar la imagen del instalador** en `release-images.yml`, y sólo entonces
-   — no antes del paso 6. Con dos condiciones: que CI esté vivo
-   (`CONTINUE_HERE.md:223`) y que se decida si `release-images.yml` necesita un
-   gate posterior al push equivalente al `refresh-digests` de los runtimes
+6. **PENDIENTE — y es el paso que bloquea al 7.** El compose generado sigue
+   componiendo por tag mutable (`compose_generator.py:99-100`), y
+   `apps/installer/backend/Dockerfile:5` sigue siendo `FROM python:3.12-slim`
+   **sin digest**, con la guarda de `tests/unit/test_supply_chain_config.py`
+   mirando todavía sólo `docker/`.
+7. **PENDIENTE**, bloqueado por el paso 6 —orden duro de §«Decisión»—. (Aquí
+   constaba un segundo bloqueo «por CI caído desde el 2026-07-30»; era falso y
+   se retiró el 2026-08-27.)
+   Sigue abierto si `release-images.yml` necesita un gate posterior al push
+   equivalente al `refresh-digests` de los runtimes
    (`.github/workflows/build-runtime-templates.yml:224-227`).
-8. **Cerrar la Fase B con la forma que gane**: si D, el subcomando `generate` y el
-   paso de finalización dentro de la red del stack; si A, el ADR de excepción al
-   0060 antes de escribir la primera línea. En ambos casos, **decidir qué pasa con
-   el wizard HTTP**: o se cablea al ejecutor real con guarda anti-simulación, o se
-   retira. Un wizard que finge y se publica como imagen es la peor de las tres
-   opciones.
-9. **Cerrar la superficie del instalador antes de distribuirlo**: bind a
-   `127.0.0.1` en vez de `0.0.0.0`, CORS acotado al origen real, y un gate de
-   identidad —aunque sea un token de un solo uso impreso en el arranque— delante
-   del endpoint que revela el root token de Vault.
-10. **Abrir el ADR de firma de imágenes** (cosign / identidad OIDC del workflow):
-    quién firma, quién verifica, y qué pasa cuando la verificación falla en un
-    host sin salida. Es lo único de esta lista que no tiene precedente en el repo.
+8. **PENDIENTE, pero ya con forma.** Gana D, así que la Fase B es el subcomando
+   `generate` —que hoy no existe: `cli.py:722-808` sólo declara `install`,
+   `uninstall` y `reinstall`— más el paso de finalización dentro de la red del
+   stack ya levantado. **El ADR de excepción al 0060 deja de hacer falta**, que es
+   la mitad del ahorro de esta firma. Sigue abierto qué pasa con el wizard HTTP: o
+   se cablea al ejecutor real con guarda anti-simulación, o se retira.
+9. **PENDIENTE.** El instalador sigue publicando 8080 y 3100 en `0.0.0.0`, sin
+   autenticación y con CORS `*`, delante del endpoint que revela el root token de
+   Vault. Con D la superficie se encoge sola **si** el wizard se retira en el paso
+   8; mientras exista y se distribuya, esto va **antes** de la distribución, no
+   después.
+10. **PENDIENTE.** Abrir el ADR de firma de imágenes (cosign / identidad OIDC del
+    workflow). Es lo único de la lista sin precedente en el repo, y esta firma lo
+    deja explícitamente fuera: ver §«Decisión», pregunta 5.
 
 ## Dudas abiertas
 
-Se dejan escritas porque presupuestar sobre ellas sería inventar:
+Se dejan escritas porque presupuestar sobre ellas sería inventar. **Las dos
+primeras siguen sin medir, pero ya no son alcanzables** desde que el paso 1 de la
+lista de arriba hizo que ningún bind quede ausente: se conservan como
+conocimiento de regresión, no como incógnitas del presupuesto.
 
 1. **El modo de fallo exacto de las dos colisiones** (`./postgres/init` dentro del
    PGDATA, `./vault/config.hcl` como directorio) está **deducido** del

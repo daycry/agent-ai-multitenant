@@ -24,12 +24,42 @@ part of the runtime Docker Compose stack.
 > detects a simulation seam without `--dry-run`
 > (`cli._assert_real_install_seams`). There is no such thing as a silent fake
 > install on that path — which is exactly the guarantee the wizard lacks.
->
-> Wiring the wizard to the real executor (per-request `compose_dir` / `cfg` /
-> `secrets` plumbing, plus a simulation guard on the reveal) is a documented
-> follow-up owned by the installer UI (prod-09). Until that lands, treat the
-> wizard as a UX prototype: it is good for reviewing the flow, the copy and the
-> GPU-detection screen, and for nothing else.
+
+### What changed on 2026-08-28: the simulation now declares itself
+
+Everything in the box above was already true, and was already written down — in
+a Python docstring, a YAML comment, this README and a runbook. **None of it
+reached the screen.** A `grep -iE 'simulaci|simulation|demo|fake'` over `app/`
+and `lib/` returned zero hits while the wizard was telling operators
+«Instalación completada. La plataforma está instalada» and handing them five
+Vault unseal keys under «save these now, there is no way to recover them».
+
+Three ways out were costed. Wiring the real executor is **not** one of them: ADR
+0161 signed that the installer container _generates and does not provision_, and
+without the Docker socket four of the five pipeline steps are impossible from
+inside — that road is 4-7 days **and a new ADR**. Removing the wizard costs 2-3
+days and throws away the half that is real (config capture + validation, steps
+2-7) plus two supply-chain guards that need the npm surface to exist. So:
+
+- **The two lying endpoints are off by default.** `/api/install/stream` and
+  `/api/finalize/reveal` answer `501` — naming the CLI — unless
+  `INSTALLER_ALLOW_SIMULATION` is set. Steps 1-7 keep serving, because they are
+  real.
+- **When the simulation does run, it says so on screen**: a permanent red banner
+  in the shell, a blocking dialog before the «Instalar» button that you have to
+  tick through, an explicit mark on the prerequisite list (those checks are a
+  stub and measure nothing about your machine), and a step-9 header that reads
+  «Simulación terminada — no se ha instalado nada» instead of announcing an
+  install. `simulated: true` also travels in the response bodies, for clients
+  that are not this browser.
+- **The stream no longer accepts secrets.** It used to receive
+  `storage.minio_secret_key` and the provider `oauth_token` / `api_key` in the
+  clear while three separate docstrings claimed it did not. The browser strips
+  them and the backend rejects them with a `400` that names the field and never
+  the value.
+
+`apps/installer/docker-compose.installer.yml` sets the variable explicitly and
+publishes on `127.0.0.1` only — the backend has no authentication of any kind.
 
 This README used to claim the exact opposite of the box above: that the installer
 provisioned a real host — Docker, `pg_*`, Vault, writing under
@@ -43,10 +73,11 @@ sentence was quoted as a premise in
 [ADR 0161](../../docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
 as the reason this correction exists.
 
-## Known breakage on the real path too: the relative paths
+## Known breakage on the real path: the relative paths (fixed — read it anyway)
 
-Even the CLI cannot finish on a clean machine today, and the reason is worth
-understanding before you debug the symptom instead of the cause.
+Until PR #124 the CLI could not finish on a clean machine either, and the reason
+is worth understanding before you debug the symptom instead of the cause. It is
+also why the installer package looks the way it does.
 
 The generated `docker-compose.yml` is **not** written into the repository: it is
 written into the data root (`cli.py` → `compose_dir = config.storage.data_root`,
@@ -68,11 +99,23 @@ see is a Postgres that reports `healthy` and has no `pgvector`.
 
 The full measurement, with the file:line for every path, is in
 [ADR 0161](../../docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-§"La avería que no estaba escrita". **A repair is in progress** and its executable
-guard derives both sets — the paths the compose asks for and the paths the
-install actually produces — from the code rather than from a hand-written list,
-because a hand-written list ages the moment someone adds a mount. No date is
-promised here; check the ADR's status for where it stands.
+§"La avería que no estaba escrita".
+
+**This one is fixed.** The auxiliaries now travel _inside_ the installer package
+(`installer_backend.stack_assets` — 23 files: Postgres init, the Vault config,
+both tinyproxy contexts, seccomp, monitoring), and the install writes them to
+`{data_root}/stack/` before the generated compose mounts them, so there is
+nothing left to resolve against a checkout that is not there. ADR 0161 answers
+its own question 4 with «Ya hecho». The executable guard
+([`tests/unit/test_installer_ships_stack_assets.py`](../../tests/unit/test_installer_ships_stack_assets.py))
+derives both sets — the paths the compose asks for and the paths the install
+actually produces — from the code rather than from a hand-written list, because a
+hand-written list ages the moment someone adds a mount.
+
+The breakage is written down here in the past tense on purpose: it is the reason
+the packaging looks the way it does, and the failure mode it produced (a Postgres
+reporting `healthy` with no `pgvector`, because Docker materialises a missing
+bind source as an empty directory) is worth recognising if it ever comes back.
 
 ## Layout
 
@@ -82,6 +125,7 @@ apps/installer/
 │   ├── page.tsx                 #   entry → <WizardShell/>
 │   ├── wizard-shell.tsx         #   stepper + panel + back/next navigation
 │   ├── stepper.tsx              #   9-step vertical stepper
+│   ├── simulation-notice.tsx    #   the «this installs nothing» banner + gate
 │   └── step-panel.tsx           #   per-step body (welcome filled; 2–9 stubs)
 ├── lib/
 │   ├── wizard.ts                # 9-step flow definition (mirrors backend)
@@ -93,7 +137,8 @@ apps/installer/
 │       ├── wizard.py            #   pure 9-step state machine
 │       ├── seams.py             #   injectable host seams (prereqs/install/lifecycle)
 │       ├── cli.py               #   the REAL install path (real bindings by default)
-│       └── main.py              #   FastAPI app — SIMULATED wizard (FakeStepExecutor)
+│       └── main.py              #   FastAPI app — SIMULATED wizard (FakeStepExecutor),
+│                                #     gated behind INSTALLER_ALLOW_SIMULATION
 ├── Dockerfile                   # UI image (Next standalone)
 ├── backend/Dockerfile           # backend image (FastAPI)
 └── docker-compose.installer.yml # bootstrap compose (runs ONLY the installer)
@@ -107,14 +152,14 @@ Tenant inicial → Resumen → Instalación → Listo`
 Phase A (task_15_01) ships the **shell**: ordering, titles and the forward/back
 state machine. Later tasks fill the steps:
 
-| Step(s)                                | Task                 | Real over HTTP?               |
-| -------------------------------------- | -------------------- | ----------------------------- |
-| Prereq validation (step 1 / Recursos)  | 15_02                | no — `StubPrereqChecker`      |
-| Capture forms (basics/resources/...)   | 15_03                | yes — config capture is real  |
-| Summary preview + confirm              | 15_04                | yes                           |
-| Install progress + live logs           | 15_05                | **no — `FakeStepExecutor`**   |
-| One-shot credentials + self-destruct   | 15_06                | **no — throwaway secrets**    |
-| Config generators (compose/.env/Vault) | 15_07–15_09 (Fase B) | used by the **CLI**, not HTTP |
+| Step(s)                                | Task                 | Real over HTTP?                                         |
+| -------------------------------------- | -------------------- | ------------------------------------------------------- |
+| Prereq validation (step 1 / Recursos)  | 15_02                | no — `StubPrereqChecker`                                |
+| Capture forms (basics/resources/...)   | 15_03                | yes — config capture is real                            |
+| Summary preview + confirm              | 15_04                | yes                                                     |
+| Install progress + live logs           | 15_05                | **no — `FakeStepExecutor`**, 501 unless the flag is set |
+| One-shot credentials + self-destruct   | 15_06                | **no — throwaway secrets**, 501 unless the flag is set  |
+| Config generators (compose/.env/Vault) | 15_07–15_09 (Fase B) | used by the **CLI**, not HTTP                           |
 
 The generators of the last row are real, tested and reachable — the CLI calls
 them. What is missing is the wiring that lets the _HTTP_ wizard call them too.
@@ -165,18 +210,27 @@ Only to review the wizard's UX. It will **not** install the platform.
 
 ```bash
 docker compose -f apps/installer/docker-compose.installer.yml up -d --build
-# open http://localhost:3100 ; tear down when you are done:
+# open http://127.0.0.1:3100 ; tear down when you are done:
 docker compose -f apps/installer/docker-compose.installer.yml down
 ```
 
-Note that `--build` is not optional today: both services are declared with
-`build:`, so this compose file **requires a clone of the repository**. There is no
-published installer image — the release workflow publishes six application images
-and none of them is this one. That is the opening fact of
-[ADR 0161](../../docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md),
-which is still `proposed`: whether an install-without-clone path exists as a
-supported product is an open operator decision, not something to infer from this
-file.
+Both ports are bound to loopback on purpose: this backend has no authentication
+and its CORS is `allow_origins=["*"]`. That compose also sets
+`INSTALLER_ALLOW_SIMULATION=1` explicitly — without it the wizard refuses to fake
+an install, which is the right default for the published image and useless for
+the one thing this compose is for.
+
+Note that `--build` is not optional here: both services are declared with
+`build:`, so this compose file **requires a clone of the repository**. The
+_published_ image is a different thing: since
+[ADR 0161](../../docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+was signed on 2026-08-27, `release-images.yml` publishes a seventh image —
+`ghcr.io/<owner>/installer` — built from `backend/Dockerfile`, whose `ENTRYPOINT`
+is the **CLI**, not this wizard. Packaging the wizard would be publishing the
+facade. The no-clone install path runs that image via
+[`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml);
+read that file before you run it, which is the point of it being a file and not a
+`curl | bash`.
 
 To actually install, use the CLI — the path documented in
 [`docs/06-runbooks/01-installation-from-scratch.md`](../../docs/06-runbooks/01-installation-from-scratch.md):

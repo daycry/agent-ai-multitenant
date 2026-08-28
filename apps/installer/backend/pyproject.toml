@@ -4,21 +4,62 @@ version = "1.0.0"
 description = "Temporary bootstrap installer backend (FastAPI) — served by the self-destructing installer container, NOT part of the runtime stack."
 requires-python = ">=3.12"
 dependencies = [
-  # Web framework — the only thing the installer backend needs at runtime.
+  # Web framework — the installer backend serves the wizard over HTTP. Ya NO es
+  # «lo único que necesita»: desde el ADR 0161 el `ENTRYPOINT` de la imagen
+  # publicada es el CLI, y el servidor es el modo secundario.
   # The installer is bootstrap-only tooling: it speaks to the host (docker
   # compose, prereq probes, /data writes) via injectable seams that the
   # tests mock. No DB, no Redis, no Vault client linked in here directly;
   # the real provisioning bindings arrive in Phase B (15_07–15_09).
   "fastapi>=0.110,<1",
   "uvicorn[standard]>=0.30,<1",
-  "pydantic>=2.5,<3",
+  # `[email]` NO es opcional aquí, aunque el nombre del extra lo sugiera:
+  # `TenantConfig.admin_email` es un `EmailStr`, y pydantic importa
+  # `email_validator` al CONSTRUIR la clase. Sin el extra, la imagen publicada
+  # muere en el import del módulo —no en un subcomando— y no responde ni al
+  # `--help` que este Dockerfile pone como CMD:
+  #
+  #     ModuleNotFoundError: No module named 'email_validator'
+  #       ... installer_backend/cli.py:138 → config.py:418, class TenantConfig
+  #     exit 1
+  #
+  # Medido construyendo la imagen el 2026-08-28: el camino sin clon entero —la
+  # razón de ser del ADR 0161— estaba roto desde la primera línea. No lo veía
+  # nadie porque no se escribe como `import`: el `import` lo hace pydantic desde
+  # dentro, y en el venv de desarrollo `email-validator` llega por api-server.
+  "pydantic[email]>=2.5,<3",
   "structlog>=24.1,<25",
+  # PyYAML es del CLI, no del servidor, y por eso faltaba: `cli.py`,
+  # `compose_generator.py` y `config_generators.py` hacen `import yaml` en el
+  # nivel superior, y funcionaba de rebote porque `uvicorn[standard]` arrastra
+  # `pyyaml>=5.1`. O sea, la capacidad del instalador de leer su propio
+  # `install.yaml` colgaba de un extra de un servidor web que la imagen ya no
+  # arranca por defecto: el día que alguien adelgace la imagen quitando FastAPI y
+  # uvicorn, `docker run …/installer --help` muere con `ModuleNotFoundError: No
+  # module named 'yaml'` en el import del módulo — ni el `--help` responde, y el
+  # mensaje no menciona el `install.yaml` por ninguna parte.
+  # El rango es el que el resto del monorepo ya resuelve (constraints.txt:173),
+  # así que declararlo no mueve el lock.
+  "pyyaml>=6,<7",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=9.1,<10",
   "httpx>=0.27,<1",
+]
+# El camino `install` DESDE EL HOST (`./scripts/install.sh`), que sí aprovisiona
+# y por tanto sí habla con Vault. `real_bindings.py` importa `hvac` de forma
+# diferida —dentro de la función que lo usa—, así que la imagen publicada, que
+# sólo corre `generate`, no lo necesita y no lo lleva.
+#
+# Va en un extra y no en `dependencies` por eso mismo, pero tiene que estar
+# declarado en algún sitio: hasta hoy quien corría `install` desde el host sólo
+# tenía `hvac` si además había instalado `api-server`, que es el ÚNICO lugar del
+# monorepo donde estaba declarado (apps/api-server/pyproject.toml:126). Eso no es
+# una dependencia, es una coincidencia. Mismo rango que allí.
+host = [
+  "hvac>=2.0,<3",
 ]
 
 [project.scripts]
@@ -28,5 +69,29 @@ installer-backend = "installer_backend.__main__:main"
 requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
+# El wheel lleva el árbol ENTERO del paquete, no sólo los `.py`, y de eso
+# depende que la instalación funcione: `installer_backend/stack_assets/` son los
+# 23 auxiliares que el compose generado monta (init de Postgres, config de Vault,
+# los dos contextos de tinyproxy, seccomp, monitorización). En el host del
+# operador no hay ningún `docker/` del que copiarlos — el Dockerfile de esta
+# imagen copia sólo `pyproject.toml` y `src/`.
+#
+# Que funcione es una propiedad del comportamiento POR DEFECTO de hatchling, no
+# algo declarado aquí: `packages` incluye todo lo que cuelga del directorio del
+# paquete, sea `.py` o no lo sea. Por eso NO hay ninguna clave de selección de
+# ficheros (`exclude`, `only-include`, `artifacts`, `sources`, `force-include`,
+# `ignore-vcs`, `skip-excluded-dirs`), y no es un olvido.
+#
+# Medido el 2026-08-27 construyendo el wheel desde una copia del contexto real:
+# 24 entradas bajo `installer_backend/stack_assets/` (los 23 + el `__init__.py`).
+# Con `exclude=["**/stack_assets/postgres/**"]` añadido aquí, el mismo wheel sale
+# con 19, el paquete IMPORTA igual, ningún test se entera y la instalación monta
+# `./stack/postgres/init` como directorio VACÍO dentro del PGDATA — la avería del
+# ADR 0161, de vuelta y muda.
+#
+# Si alguna vez hace falta una de esas claves: construye el wheel, mira dentro, y
+# actualiza `tests/unit/test_installer_ships_stack_assets.py` con lo que midas.
+# Esa guarda lee este fichero parseado como TOML, así que este comentario no la
+# dispara — la dispara una declaración de verdad.
 [tool.hatch.build.targets.wheel]
 packages = ["src/installer_backend"]

@@ -22,6 +22,7 @@ is skipped when the CLI is absent. Real ``docker compose up`` is a HUMAN test.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -32,6 +33,8 @@ import yaml
 from installer_backend.compose_generator import (
     _DEV_SECRET_MARKERS,
     APP_IMAGE_REGISTRY,
+    BOOTSTRAP_ENTRYPOINT,
+    BOOTSTRAP_SERVICE,
     CORE_SERVICES,
     GPU_SERVICE,
     MONITORING_SERVICES,
@@ -41,6 +44,7 @@ from installer_backend.compose_generator import (
     TTS_SERVICE,
     VOICE_SERVICES,
     WHISPER_MODELS_VOLUME,
+    _env_ref,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -61,6 +65,11 @@ from installer_backend.config import (
     StorageConfig,
     SystemConfig,
     TenantConfig,
+)
+from installer_backend.config_generators import (
+    build_env_vars,
+    generate_secrets,
+    render_env_file,
 )
 
 pytestmark = pytest.mark.unit
@@ -530,7 +539,8 @@ def test_hardening_defaults_on_every_service() -> None:
     # One-shot init services pull-and-exit, so they CANNOT be unless-stopped —
     # they still carry the rest of the hardening posture.
     # `textfile-init` es el tercero: hace `chmod 1777` del drop-dir y sale.
-    one_shots = {"ollama-bootstrap", "migrations", "textfile-init"}
+    # `bootstrap` es el cuarto: init de Vault + siembra + revelado, y sale.
+    one_shots = {"ollama-bootstrap", "migrations", "textfile-init", BOOTSTRAP_SERVICE}
     # prod-12 cadv_01: ya no queda ningún servicio privileged en el compose
     # generado (cAdvisor pasó al hardening estándar).
     privileged: set[str] = set()
@@ -669,11 +679,18 @@ def test_production_compose_has_no_dev_secret_markers() -> None:
 
 
 def test_production_secrets_are_env_references_only() -> None:
+    """En prod no hay literal, y tampoco hay default de NINGUNA clase.
+
+    Ni el explícito (`${VAR:-…}`, que arranca con la contraseña publicada en este
+    repo) ni el implícito: `${VAR}` a secas interpola a cadena vacía y sigue
+    adelante. La forma correcta es `${VAR:?…}`, que aborta el proyecto entero
+    antes de crear un contenedor.
+    """
     compose = generate_compose(_config(environment=Environment.PRODUCTION))
     pg_env = compose["services"]["postgres"]["environment"]
-    # Prod password is a bare ${VAR} reference with no dev fallback.
-    assert pg_env["POSTGRES_PASSWORD"] == "${POSTGRES_PASSWORD}"
+    assert pg_env["POSTGRES_PASSWORD"].startswith("${POSTGRES_PASSWORD:?")
     assert ":-" not in pg_env["POSTGRES_PASSWORD"]
+    assert pg_env["POSTGRES_PASSWORD"] != "${POSTGRES_PASSWORD}"
 
 
 def test_dev_environment_keeps_convenience_fallbacks() -> None:
@@ -699,10 +716,29 @@ def _docker_compose_available() -> bool:
 
 @pytest.fixture()
 def written_compose(tmp_path: Path) -> Iterator[str]:
-    text = render_compose_yaml(generate_compose(_config(gpu_enabled=True), monitoring=True))
-    path = tmp_path / "docker-compose.yml"
-    path.write_text(text, encoding="utf-8")
-    yield str(path)
+    """El compose generado **y su `.env`**, en el mismo directorio.
+
+    Los dos juntos, porque es como se instalan: el `.env` cuelga del directorio
+    del compose y `docker compose` lo carga solo. Escribir sólo el compose dejó
+    de valer el 2026-08-27, cuando las credenciales pasaron a `${VAR:?…}`: sin el
+    `.env`, `docker compose config` aborta — que es exactamente la conducta
+    buscada, así que este test dejaría de comprobar la estructura del fichero
+    para comprobar el fail-closed que ya comprueba otro.
+
+    Lo que se gana a cambio es mejor: ahora esto valida el PAR, que es la unidad
+    que se instala. Un `${VAR:?…}` sobre una variable que el `.env` no escribe
+    —el modo de fallo real, y el que tumba también `ps`, `logs` y `down`— sale
+    aquí con el nombre de la variable en el mensaje.
+    """
+    cfg = _config(gpu_enabled=True)
+    (tmp_path / "docker-compose.yml").write_text(
+        render_compose_yaml(generate_compose(cfg, monitoring=True)), encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text(
+        render_env_file(build_env_vars(cfg, generate_secrets(), monitoring=True)),
+        encoding="utf-8",
+    )
+    yield str(tmp_path / "docker-compose.yml")
 
 
 @pytest.mark.skipif(not _docker_compose_available(), reason="docker CLI not available")
@@ -714,8 +750,8 @@ def test_docker_compose_config_accepts_generated_file(written_compose: str) -> N
         timeout=60,
         check=False,
     )
-    # Unset ${ENV} placeholders only produce warnings on stderr; exit 0 means
-    # the schema + structure are valid.
+    # exit 0 = el esquema, la estructura Y la interpolación contra el `.env`
+    # generado son válidos.
     assert result.returncode == 0, result.stderr
 
 
@@ -951,7 +987,7 @@ def test_migrations_is_a_oneshot_alembic_upgrade() -> None:
     assert svc["restart"] == "no", "migrations is a one-shot, it must not restart"
     assert "api-server" in svc["image"], "runs from the api-server image (it ships the migrations)"
     # Runs as the migrations role (BYPASSRLS) and only needs postgres up.
-    assert svc["environment"]["DATABASE_URL"] == "${ADMIN_DATABASE_URL}"
+    assert svc["environment"]["DATABASE_URL"].startswith("${ADMIN_DATABASE_URL:?")
     assert svc["depends_on"]["postgres"]["condition"] == "service_healthy"
 
 
@@ -1301,3 +1337,322 @@ def test_no_alertmanager_secret_mount_without_monitoring() -> None:
     for name, svc in compose["services"].items():
         stray = [v for v in (svc.get("volumes") or []) if "alertmanager" in str(v)]
         assert not stray, f"{name} monta rutas de alertmanager sin monitorización: {stray}"
+
+
+# ---------------------------------------------------------------------------
+# Lo que el compose GENERADO hace cuando falta una variable del `.env`
+# (auditoría 2026-08-27, hallazgo medio-8).
+#
+# `${VAR}` a secas NO falla: docker compose avisa por stderr («variable is not
+# set, defaulting to a blank string») y sigue adelante con la cadena vacía. Es
+# exactamente la forma que prod-10 `secrets-6` declaró insuficiente para el
+# compose canónico, y el `_env_ref` del instalador la emitía en modo prod
+# mientras su docstring prometía lo contrario.
+#
+# El escenario concreto que lo convierte en un agujero y no en una molestia:
+# `docs/06-runbooks/05-key-rotation.md` hace editar el `.env` a mano. Si en la
+# edición se pierde `APP_USER_PASSWORD` y el PGDATA es nuevo, `02-roles.sh` hace
+# `${APP_USER_PASSWORD:-<literal de dev>}` — y bash trata la cadena vacía como
+# ausente —, así que el rol nace con la contraseña publicada en este repositorio.
+# Lo que ve el operador depende de qué variable se le caiga: unas revientan
+# ruidosamente y otras no. Esa lotería es justo lo que `:?` elimina.
+# ---------------------------------------------------------------------------
+#: Toda variable de este catálogo es una CREDENCIAL del stack generado: si falta,
+#: el servicio no puede arrancar de forma segura, así que tiene que ABORTAR. Se
+#: enumera a mano —igual que en `test_compose_no_default_credentials.py`— para
+#: que añadir una credencial sin `:?` sea una decisión consciente.
+_MANDATORY_GENERATED_CREDENTIALS = (
+    "POSTGRES_PASSWORD",
+    "MIGRATIONS_USER_PASSWORD",
+    "APP_USER_PASSWORD",
+    "SERVICE_USER_PASSWORD",
+    "REDIS_PASSWORD",
+    "MINIO_ROOT_PASSWORD",
+    "API_SERVER_JWT_SECRET",
+    "API_SERVER_INTERNAL_TOKEN_SECRET",
+)
+
+#: `${VAR:?mensaje}` — la forma que aborta el `up`.
+_REQUIRED_REF = re.compile(r"\$\{(?P<name>[A-Z][A-Z0-9_]*):\?(?P<msg>[^}]*)\}")
+#: `${VAR}` a secas sobre una credencial — la forma que interpola a vacío.
+_BARE_REF = re.compile(r"\$\{(?P<name>[A-Z][A-Z0-9_]*)\}")
+
+
+def _prod_compose_text() -> str:
+    return render_compose_yaml(
+        generate_compose(_config(environment=Environment.PRODUCTION), monitoring=True)
+    )
+
+
+@pytest.mark.parametrize("name", _MANDATORY_GENERATED_CREDENTIALS)
+def test_a_missing_credential_aborts_the_generated_stack(name: str) -> None:
+    text = _prod_compose_text()
+    required = {m.group("name"): m.group("msg") for m in _REQUIRED_REF.finditer(text)}
+    assert name in required, (
+        f"el compose generado no declara {name} obligatoria (`${{{name}:?…}}`): si "
+        "falta en el .env, compose interpola cadena vacía y el stack arranca con "
+        "una credencial vacía o con el literal de desarrollo del script de init"
+    )
+    message = required[name]
+    assert ".env" in message, (
+        f"el mensaje de aborto de {name} no dice dónde ponerla: {message!r}. Un "
+        "fallo de arranque sin instrucción es una sesión de depuración"
+    )
+
+
+def test_no_credential_of_the_generated_compose_is_a_bare_reference() -> None:
+    """La otra dirección: ninguna credencial se queda en `${VAR}` a secas.
+
+    Guarda contra el paso en vacío incluido — si el parser deja de ver
+    referencias, este test debe FALLAR, no aprobar por silencio.
+    """
+    text = _prod_compose_text()
+    bare = {m.group("name") for m in _BARE_REF.finditer(text)}
+    assert len(bare) + len(list(_REQUIRED_REF.finditer(text))) > 10, (
+        "la guarda dejó de encontrar referencias ${…} en el compose generado"
+    )
+    offenders = sorted(bare & set(_MANDATORY_GENERATED_CREDENTIALS))
+    assert not offenders, (
+        f"credenciales referenciadas como `${{VAR}}` a secas: {offenders}. Compose "
+        "las interpola a cadena vacía y sigue adelante"
+    )
+
+
+def test_env_ref_keeps_the_dev_fallback_but_never_in_prod() -> None:
+    """El contrato de la función, en las dos ramas.
+
+    En dev sigue habiendo `${VAR:-default}` para las comodidades; en prod no hay
+    default de ninguna clase, ni el vacío implícito.
+    """
+    assert _env_ref("SOME_KNOB", "handy", prod=False) == "${SOME_KNOB:-handy}"
+    prod_ref = _env_ref("SOME_KNOB", "handy", prod=True)
+    assert prod_ref.startswith("${SOME_KNOB:?")
+    assert "handy" not in prod_ref, "el default de dev se coló en el mensaje de aborto"
+    assert ".env" in prod_ref
+
+
+# ---------------------------------------------------------------------------
+# El rol BYPASSRLS y su contraseña (hallazgo grave-2).
+# ---------------------------------------------------------------------------
+def test_postgres_receives_the_service_role_password() -> None:
+    """Sin esta variable, `05-service-role-password.sh` no puede corregir nada y
+    `service_user` —LOGIN + CONNECT + BYPASSRLS + DML sobre todas las tablas—
+    se queda con el literal de desarrollo que está escrito en este repositorio.
+
+    Es una regresión con nombre: prod-14 `task_prod14_04` lo arregló en
+    `docker/docker-compose.yml:118` y escribió una guarda
+    (`tests/security/test_service_user_password_is_wired.py`) que sigue en verde
+    porque sólo mira el compose CANÓNICO. El que se instala en casa del operador
+    es éste.
+    """
+    env = generate_compose(_config())["services"]["postgres"]["environment"]
+    assert "SERVICE_USER_PASSWORD" in env, (
+        "el servicio postgres del compose generado no recibe SERVICE_USER_PASSWORD: "
+        "el rol que se salta la RLS de todos los tenants nace con la contraseña "
+        "publicada en este repositorio, y el único aviso es una línea de stderr"
+    )
+    assert env["SERVICE_USER_PASSWORD"].startswith("${SERVICE_USER_PASSWORD:?")
+
+
+# ---------------------------------------------------------------------------
+# Redis autenticado (hallazgo grave-3).
+# ---------------------------------------------------------------------------
+def _redis_dsns(compose: dict) -> dict[str, str]:
+    """{servicio:VARIABLE: valor} de toda DSN `redis://` del compose."""
+    found: dict[str, str] = {}
+    for name, svc in compose["services"].items():
+        for key, value in (svc.get("environment") or {}).items():
+            if isinstance(value, str) and value.startswith("redis://"):
+                found[f"{name}:{key}"] = value
+    return found
+
+
+def test_redis_requires_a_password() -> None:
+    """Ese Redis aloja las SESIONES de servidor, el broker de Celery y los
+    contadores de rate limit (`docs/04-reference/mandatory-env-vars.md`).
+    Corría sin `requirepass`: un `redis-cli` desde cualquier contenedor de
+    `agentic-net` —o desde el host por la IP del bridge, sin puerto publicado—
+    leía sesiones vivas, encolaba trabajo para los workers y ponía los contadores
+    de rate limit a cero. El operador no veía nada: el stack funciona."""
+    redis = generate_compose(_config())["services"]["redis"]
+    command = redis["command"]
+    text = command if isinstance(command, str) else " ".join(command)
+    assert "--requirepass" in text, "redis se instala SIN autenticación"
+    assert "${REDIS_PASSWORD:?" in text, (
+        "la contraseña de redis tiene que ser obligatoria: con `${REDIS_PASSWORD}` "
+        "a secas, un .env incompleto arranca un Redis con `requirepass ''`"
+    )
+
+
+def test_the_redis_healthcheck_authenticates() -> None:
+    """Con `requirepass`, un `redis-cli ping` pelado responde NOAUTH y sale != 0:
+    el contenedor se quedaría `unhealthy` para siempre y cualquier
+    `depends_on: service_healthy` bloquearía el stack entero. Poner la
+    contraseña sin arreglar la sonda cambia un agujero por una avería total."""
+    redis = generate_compose(_config())["services"]["redis"]
+    test = redis["healthcheck"]["test"]
+    probe = test if isinstance(test, str) else " ".join(test)
+    assert "$$REDIS_PASSWORD" in probe, "la sonda de redis no se autentica"
+    assert "PONG" in probe, (
+        "la sonda tiene que AFIRMAR la respuesta: `redis-cli -a … ping` devuelve 0 "
+        "aunque conteste NOAUTH"
+    )
+    assert "REDIS_PASSWORD" in (redis.get("environment") or {}), (
+        "redis-server no lee REDIS_PASSWORD del entorno, pero el healthcheck corre "
+        "DENTRO del contenedor y sí la necesita"
+    )
+
+
+def test_every_redis_dsn_of_the_stack_carries_the_credential() -> None:
+    """TODAS, no una muestra — medidas: 23 en un stack con monitorización.
+
+    Son api-server (cache/broker/backend), orchestrator (bus/broker), las tres de
+    CADA lane de workers (generic, privileged, marketplace, cortex-beat), las tres
+    del dispatcher y las tres del one-shot `bootstrap`. Una sola sin credencial es
+    un servicio que no arranca, así que el descubrimiento sale del compose y no de
+    una lista escrita a mano — una lista a mano envejece con el primer consumidor
+    nuevo, que es exactamente cómo las 20 se quedaron sin credencial a la vez.
+    """
+    dsns = _redis_dsns(generate_compose(_config(), monitoring=True))
+    assert len(dsns) >= 20, f"la guarda dejó de encontrar DSN de redis (vio {len(dsns)})"
+    naked = sorted(k for k, v in dsns.items() if not v.startswith("redis://:${REDIS_PASSWORD"))
+    assert not naked, f"DSN de redis sin credencial: {naked}"
+
+
+def test_the_redis_dsn_password_is_mandatory_too() -> None:
+    """Y dentro de la DSN también aborta: `redis://:${REDIS_PASSWORD}@…` con la
+    variable ausente produce `redis://:@redis:6379/1`, que es una URL válida con
+    contraseña vacía — o sea un servicio que arranca y no se puede autenticar."""
+    dsns = _redis_dsns(generate_compose(_config()))
+    assert dsns
+    for where, value in dsns.items():
+        assert "${REDIS_PASSWORD:?" in value, f"{where}: {value}"
+
+
+# ---------------------------------------------------------------------------
+# El one-shot `bootstrap` (hallazgo bloqueante-10 / grave-24).
+#
+# El banner del CLI (`cli.py:_next_steps_banner`) manda ejecutar
+# `docker compose run --rm bootstrap` como el segundo de los dos comandos que le
+# quedan al operador, y el compose generado no declaraba ese servicio: lo que
+# recibía era `no such service: bootstrap`, con un stack `Up (healthy)` —el
+# healthcheck de Vault acepta `sealedcode=200&uninitcode=200` a propósito— pero
+# con Vault sin inicializar, sin tenant, sin usuario admin y sin ningún revelado
+# de credenciales. La instalación PARECE terminada y no lo está.
+# ---------------------------------------------------------------------------
+def test_the_bootstrap_the_banner_announces_exists() -> None:
+    services = generate_compose(_config())["services"]
+    assert BOOTSTRAP_SERVICE in services, (
+        f"el compose generado no declara «{BOOTSTRAP_SERVICE}», que es lo que el "
+        "banner del CLI manda ejecutar como paso 2 de la instalación"
+    )
+
+
+def test_the_bootstrap_does_not_start_with_the_stack() -> None:
+    """`profiles: [bootstrap]` es lo que separa «se ejecuta una vez, a mano» de
+    «arranca con el stack». Sin el perfil, `docker compose up -d --wait` lo
+    lanzaría en cada arranque: un one-shot que reintenta inicializar Vault en
+    cada reinicio del host, y `--wait` esperando a un contenedor que sale."""
+    svc = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]
+    assert svc.get("profiles") == [BOOTSTRAP_SERVICE]
+    assert svc.get("restart") == "no", "un one-shot con restart automático es un bucle"
+
+
+def test_the_bootstrap_runs_inside_the_stack_network() -> None:
+    """Es la razón por la que este paso NO lo hace `generate` (ADR 0161, opción
+    D): Vault y postgres sólo son alcanzables desde dentro de `agentic-net`."""
+    svc = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]
+    assert "agentic-net" in svc["networks"]
+    assert "ports" not in svc, "un one-shot no publica nada en el host"
+
+
+def test_the_bootstrap_uses_the_api_server_image() -> None:
+    """La imagen que trae los seeds (`api_server.seeds`, `init_tenant`) y `hvac`.
+    Reconstruir una imagen propia para tres comandos sería una cuarta cosa que
+    publicar, versionar y escanear."""
+    services = generate_compose(_config())["services"]
+    assert services[BOOTSTRAP_SERVICE]["image"] == services["api-server"]["image"]
+
+
+def test_the_bootstrap_waits_for_what_it_needs() -> None:
+    """Vault arriba (aunque sellado: el healthcheck lo acepta a propósito),
+    postgres sano y el esquema YA migrado. Sembrar antes de Alembic falla con
+    `relation "organizations" does not exist`, que es el peor momento para
+    descubrirlo: después de que Vault haya emitido las unseal keys."""
+    deps = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]["depends_on"]
+    assert deps["postgres"]["condition"] == "service_healthy"
+    assert deps["vault"]["condition"] == "service_healthy"
+    assert deps["migrations"]["condition"] == "service_completed_successfully"
+
+
+def test_the_bootstrap_runs_the_entrypoint_the_seam_declares() -> None:
+    """El comando sale del símbolo, no de una cadena suelta en el YAML.
+
+    `BOOTSTRAP_ENTRYPOINT` es la costura con la otra mitad del paso 8 del ADR
+    0161: el módulo que la imagen del api-server tiene que exponer. Escribirlo a
+    mano aquí y allá es como una de las dos mitades se renombra sola.
+    """
+    svc = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]
+    assert svc["command"] == ["python", "-m", BOOTSTRAP_ENTRYPOINT]
+
+
+def test_the_bootstrap_gets_what_its_three_jobs_need() -> None:
+    """Init de Vault + siembra del tenant + revelado, y cada cosa su entrada."""
+    env = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]["environment"]
+    # Vault: dónde está.
+    assert env["API_SERVER_VAULT_URL"] == "http://vault:8200"
+    # Siembra: con el rol BYPASSRLS (los seeds escriben `organizations` y
+    # `users`, que una sesión atada a un tenant no puede tocar).
+    assert env["API_SERVER_ADMIN_DATABASE_URL"].startswith("${API_SERVER_ADMIN_DATABASE_URL")
+    # Y el tenant que hay que sembrar sale del `install.yaml`, no de un default.
+    assert env["AGENTIC_BOOTSTRAP_TENANT_NAME"] == "Acme"
+    assert env["AGENTIC_BOOTSTRAP_ADMIN_EMAIL"] == "admin@example.com"
+
+
+def test_the_bootstrap_environment_is_the_one_the_guards_key_on() -> None:
+    """Corre con el paquete del api-server, así que construye `api_server.config.
+    Settings`: sin `API_SERVER_ENVIRONMENT=prod` los guards anti-defaults no
+    disparan dentro de este contenedor y un secreto que falte se degradaría a su
+    literal de desarrollo EN SILENCIO — justo en el proceso que siembra al
+    primer System Owner de la instalación."""
+    env = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]["environment"]
+    assert env["API_SERVER_ENVIRONMENT"] == "prod"
+
+
+def test_the_admin_password_is_not_handed_to_the_bootstrap_by_the_env() -> None:
+    """El revelado tiene que ser ÚNICO, y una variable del `.env` no lo es.
+
+    `INIT_ADMIN_PASSWORD` en el compose significaría la contraseña del primer
+    System Owner escrita en un fichero del host, legible por cualquiera que ya
+    tenga el `.env` y superviviente a la sesión. La mintea el propio one-shot y
+    la enseña una vez por stdout, que es lo que el banner promete.
+    """
+    env = generate_compose(_config())["services"][BOOTSTRAP_SERVICE]["environment"]
+    assert "INIT_ADMIN_PASSWORD" not in env
+
+
+def test_the_bootstrap_gets_the_embedder_wiring_the_catalog_seed_needs() -> None:
+    """Sin esto, la siembra revienta a la mitad — y a la mitad ES lo grave.
+
+    `api_server.seeds` embebe el corpus del catálogo contra Ollama
+    (`seed_catalog_ingestion`). Si el one-shot no recibe el cableado del
+    embebedor, ese paso cae al default de desarrollo (`localhost`), no encuentra
+    nada y aborta la siembra: `run_seeds` NO captura excepciones a propósito.
+    Y aborta DESPUÉS del init de Vault, o sea después de que las unseal keys se
+    hayan mostrado la única vez que se muestran.
+
+    Por eso `bootstrap` está en la lista de servicios a los que
+    `generate_compose` inyecta el cableado de proveedores, junto al api-server.
+    """
+    cfg = _config(ollama_mode="cpu")
+    env = generate_compose(cfg)["services"][BOOTSTRAP_SERVICE]["environment"]
+    assert env["API_SERVER_OLLAMA_URL"] == "http://ollama:11434"
+    assert env["API_SERVER_EMBEDDING_MODEL"] == cfg.resources.embedding_model
+
+
+def test_the_bootstrap_is_not_part_of_the_running_topology() -> None:
+    """No entra en `CORE_SERVICES` a propósito: esa lista es lo que `up -d`
+    levanta y lo que los diagramas de topología dibujan. Un one-shot que el
+    operador ejecuta una vez y que sale no es parte del stack que corre."""
+    assert BOOTSTRAP_SERVICE not in CORE_SERVICES
+    assert BOOTSTRAP_SERVICE in selected_services(_config(), monitoring=False)

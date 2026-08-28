@@ -4,10 +4,10 @@ Guía para levantar el stack **en local, para desarrollar**. No es una
 instalación de producción y no pretende serlo: aquí se clona el repo, se corre
 `api-server` y `admin-panel` desde el código y Vault va en modo dev.
 
-> **¿Buscas producción?** Salta a la sección **«Instalación de producción: el
-> camino real»**, al final de esta página. Va aparte porque el camino de
-> producción **no es este** y porque tiene hoy dos averías conocidas que conviene
-> leer antes de reservar una máquina.
+> **¿Buscas producción?** Salta a la sección **«Instalación de producción: los
+> tres caminos»**, al final de esta página. Va aparte porque el camino de
+> producción **no es este** —esta página es el camino (2) de esa tabla— y porque
+> hay que saber en qué estado está cada uno antes de reservar una máquina.
 
 ## Prerequisitos
 
@@ -123,11 +123,34 @@ Suite completa (unit + integración):
 .venv/bin/python -m pytest tests/ -v            # Linux / macOS
 ```
 
-## Instalación de producción: el camino real
+## Instalación de producción: los tres caminos
 
-Nada de lo de arriba instala la plataforma en una máquina de producción. Para
-eso hay **un solo camino soportado**, y conviene decir cuál porque hay dos y uno
-de ellos no hace nada:
+Nada de lo de arriba instala la plataforma en una máquina de producción. Lo de
+arriba **es** el camino (2) de esta tabla: levanta la infraestructura y se queda
+ahí. Los tres caminos existen, exigen cosas distintas y hoy están en estados
+distintos; el estado está **medido** en el
+[ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md),
+no estimado.
+
+| Camino                                                                                                  | Qué exige del host                                                                                     | Estado hoy                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **(1) Sin clonar** — descargar el compose de arranque, leerlo, ejecutarlo, y después `up` + `bootstrap` | Docker + Compose v2 y salida a `ghcr.io`. **Ni git, ni Python, ni el repositorio**                     | **No disponible todavía**: no hay imagen del instalador publicada, el `run` sale con `denied`                                           |
+| **(2) Con clon + `docker compose`** — lo de esta página                                                 | git + el repositorio + `docker/.env`                                                                   | **Infraestructura sí, plataforma no**: el compose canónico no declara los servicios de aplicación                                       |
+| **(3) Con los scripts** — `./scripts/install.sh --config install.yaml`                                  | git + el repositorio + **Python 3.12 con `installer_backend` importable** (`scripts/dev/bootstrap.sh`) | **El camino soportado, y hoy no termina en una máquina limpia**: `PULL_IMAGES` va contra un tag que no se ha publicado nunca (ADR 0160) |
+
+El camino (1) es un **fichero que se descarga y se lee antes de ejecutarlo**
+—[`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml)—,
+no un `curl … | bash`, y lo que arranca **genera** el árbol de instalación en la
+raíz de datos y sale: el `docker compose up` lo ejecuta el operador. Los tres
+comandos, con lo que hay que mirar al leer el fichero, están en la referencia
+[04-reference/installation.md](../04-reference/installation.md) §«Los tres
+caminos de instalación».
+
+Los caminos (1) y (3) ejecutan **el mismo CLI**: lo que cambia es quién pone el
+intérprete —la imagen publicada o tu host— y hasta dónde llega (en (1) el
+contenedor genera y sale; en (3) el CLI lanza también el `up`). Y hay un frontal
+más que **no** es un cuarto camino porque no instala nada — ésta es la diferencia
+entre los dos que viven en el repositorio:
 
 - **CLI desatendido** (`scripts/install.sh --config install.yaml`) — el camino
   **REAL**. Cablea los bindings reales por defecto y **aborta con código 4

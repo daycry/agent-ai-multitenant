@@ -1,9 +1,11 @@
 "use client";
 
-import { AlertTriangle, KeyRound, Loader2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, KeyRound, Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { revealCredentials, type RevealPayload } from "@/lib/finalize";
+
+import { useInstallerMode } from "../simulation-notice";
 
 /** UI phase of the one-time reveal. */
 type RevealPhase = "loading" | "revealed" | "gone" | "incomplete" | "error";
@@ -16,8 +18,24 @@ type RevealPhase = "loading" | "revealed" | "gone" | "incomplete" | "error";
  * the installer; a second fetch is `410 Gone`. So this component reveals the
  * secrets a single time, warns the operator to save them now (no recovery), and
  * never re-requests them. The e2e spec mocks `/api/finalize/reveal`.
+ *
+ * ## La pantalla que mentía
+ *
+ * Hasta el 2026-08-28 esta cabecera decía «Instalación completada · La
+ * plataforma está instalada» **siempre**, incluso —y sobre todo— cuando el
+ * backend estaba simulado, que es el caso por defecto. Debajo servía un usuario,
+ * una contraseña, un root token de Vault y cinco unseal keys fabricadas con
+ * `secrets.token_urlsafe`, bajo el aviso de que se muestran una sola vez y no
+ * hay forma de recuperarlas. El operador las apuntaba. No abrían nada.
+ *
+ * Ahora la cabecera la decide el modo (`/api/mode`), y en simulación no existe
+ * ninguna frase que diga que hay algo instalado. El backend además marca su
+ * propia respuesta (`simulated` en `/api/finalize/reveal`) para los clientes que
+ * no son este navegador — un `curl`, un script — porque el aviso tiene que
+ * viajar con las credenciales, no sólo al lado.
  */
 export function DoneStep() {
+  const mode = useInstallerMode();
   const [phase, setPhase] = useState<RevealPhase>("loading");
   const [payload, setPayload] = useState<RevealPayload | null>(null);
   const requestedRef = useRef(false);
@@ -58,16 +76,42 @@ export function DoneStep() {
 
   return (
     <section data-testid="step-done" className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <ShieldCheck className="h-6 w-6 text-emerald-500" />
-          Instalación completada
-        </h2>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          La plataforma está instalada. Este instalador se autodestruye tras mostrarte estas
-          credenciales.
-        </p>
-      </header>
+      {mode.simulated ? (
+        <header className="flex flex-col gap-1">
+          <h2
+            data-testid="done-title"
+            data-simulated="true"
+            className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-red-600"
+          >
+            <ShieldAlert className="h-6 w-6 text-red-600" />
+            Simulación terminada — no se ha instalado nada
+          </h2>
+          <p className="max-w-prose text-sm text-red-700 dark:text-red-300">
+            No hay ninguna plataforma detrás de esta pantalla: no se ha arrancado ningún stack, no
+            se ha inicializado Vault y no existe ningún usuario administrador. Las credenciales de
+            abajo son valores desechables recién inventados y <strong>no abren nada</strong>: no las
+            guardes.
+          </p>
+          <p className="max-w-prose text-sm text-red-700/80 dark:text-red-300/80">
+            Para instalar de verdad: <code className="font-mono text-xs">{mode.real_path}</code>
+          </p>
+        </header>
+      ) : (
+        <header className="flex flex-col gap-1">
+          <h2
+            data-testid="done-title"
+            data-simulated="false"
+            className="flex items-center gap-2 text-2xl font-semibold tracking-tight"
+          >
+            <ShieldCheck className="h-6 w-6 text-emerald-500" />
+            Instalación completada
+          </h2>
+          <p className="text-muted-foreground max-w-prose text-sm">
+            La plataforma está instalada. Este instalador se autodestruye tras mostrarte estas
+            credenciales.
+          </p>
+        </header>
+      )}
 
       {phase === "loading" && (
         <p data-testid="reveal-loading" className="text-muted-foreground flex items-center gap-2">

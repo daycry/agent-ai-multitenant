@@ -582,6 +582,17 @@ TRIVY_EXEMPT: dict[tuple[str, str], str] = {
         "construye agent-runtime:v1 / browser-runtime:v1 solo para que el e2e no "
         "se salte; esos MISMOS Dockerfiles los escanea ci.yml:build-images"
     ),
+    ("install-e2e.yml", "install-e2e"): (
+        "construye las SEIS de plataforma sólo para que el instalador tenga algo "
+        "que bajar (no hay release publicada: platform_images.json trae `digests` "
+        "vacío) y las sirve desde un registro local que muere con el runner: no "
+        "publica nada. Esos MISMOS Dockerfiles ya los escanea Trivy en cada push "
+        "—api-server en ci.yml:build-images— y en cada release —workers, "
+        "orchestrator, notification-dispatcher, watchdog en release-images.yml:"
+        "backend, y admin-panel en release-images.yml:admin-panel—. Repetirlo "
+        "aquí no añadiría cobertura y sí ruido: teñiría de rojo el veredicto "
+        "«¿instala?» por una CVE que ya bloquea en su propio gate"
+    ),
 }
 
 

@@ -3,7 +3,6 @@
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, XCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { cn } from "@/lib/utils";
 import {
   fetchPrereqs,
   statusLabelEs,
@@ -11,6 +10,9 @@ import {
   type PrereqResponse,
   type PrereqStatus,
 } from "@/lib/prereqs";
+import { cn } from "@/lib/utils";
+
+import { useInstallerMode } from "./simulation-notice";
 
 /**
  * Step 1 — prerequisite validation (Plan 15 task_15_02).
@@ -22,6 +24,15 @@ import {
  *
  * The real host probing happens server-side behind an injectable seam; the
  * browser only renders and gates. The e2e spec mocks `/api/prereqs`.
+ *
+ * ⚠️ Con el backend simulado —hoy, por defecto— el seam cableado es
+ * `StubPrereqChecker`, que devuelve UNA fila en verde («Installer scaffold
+ * ready») que no ha medido nada de esta máquina. Y `can_proceed` se calcula
+ * sobre esa única fila, así que la puerta se abre igual en un host sin Docker,
+ * con 4 GiB de RAM y los puertos 80/443 ocupados. Se marca en pantalla en vez de
+ * cerrar el paso a la fuerza: cerrarlo dejaría inservible lo único que el wizard
+ * aporta hoy —revisar el flujo—, y quien pueda instalar de verdad no llega por
+ * aquí (lo hace por el CLI, que sí corre `RealPrereqChecker`).
  */
 interface PrereqPanelProps {
   /** Called whenever the install gate opens/closes (no required failures). */
@@ -47,6 +58,7 @@ const STATUS_CLASS: Record<PrereqStatus, string> = {
 };
 
 export function PrereqPanel({ onGateChange, embedded = false }: PrereqPanelProps) {
+  const mode = useInstallerMode();
   const [data, setData] = useState<PrereqResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,6 +111,18 @@ export function PrereqPanel({ onGateChange, embedded = false }: PrereqPanelProps
         Comprobamos que esta máquina cumple los prerequisitos para ejecutar el stack: Docker, Docker
         Compose v2, memoria, espacio en disco y, opcionalmente, una GPU NVIDIA.
       </p>
+
+      {mode.simulated && (
+        <p
+          data-testid="prereq-simulated"
+          className="rounded-md border-2 border-red-600 bg-red-600/10 px-4 py-3 text-sm text-red-600"
+        >
+          <strong>Estas comprobaciones son simuladas.</strong> El backend tiene cableado un stub que
+          no ha probado nada de esta máquina, así que la lista de abajo no dice si aquí se puede
+          instalar. Las comprobaciones de verdad (Docker, Compose v2, RAM, disco, puertos, GPU,
+          AppArmor) las corre el CLI: <code className="font-mono text-xs">{mode.real_path}</code>.
+        </p>
+      )}
 
       {loading && (
         <p
