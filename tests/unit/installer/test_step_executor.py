@@ -1321,3 +1321,32 @@ def test_las_tres_formas_en_que_compose_dice_que_algo_fallo(
     mensaje = str(exc.value)
     assert servicio in mensaje, f"no identificó `{servicio}` en: {linea!r}"
     assert "la pista que importa" in mensaje, f"identificó `{servicio}` pero no trajo su log"
+
+
+def test_el_fallo_del_one_shot_prioriza_las_lineas_de_error(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Una cola corta no vale cuando el one-shot es charlatán.
+
+    La siembra del catálogo imprime una línea por elemento indexado. Con una
+    ventana de ocho líneas, el error que causó el fallo se queda fuera y el
+    mensaje enseña ruido de progreso — medido en el e2e run 33193255711, donde
+    el one-shot salió con rc=5 (DATABASE) y las ocho últimas líneas eran todas
+    `catalog_ingestion.indexed`.
+
+    Que el mensaje exista no basta: tiene que llevar LA línea que importa.
+    """
+    ruido = [
+        f'{{"slug": "cosa-{i}", "event": "catalog_ingestion.indexed", "level": "info"}}'
+        for i in range(30)
+    ]
+    error = '{"event": "seed.failed", "level": "error", "detail": "relation does not exist"}'
+    runner = _bootstrap_runner(rc=5, before=(error, *ruido), reveal=False)
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    mensaje = str(exc.value)
+    assert "relation does not exist" in mensaje, (
+        "el mensaje no trae la línea de error: quedó enterrada bajo el ruido de "
+        f"progreso.\n{mensaje[:400]}"
+    )

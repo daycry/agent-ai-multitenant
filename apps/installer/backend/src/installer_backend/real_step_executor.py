@@ -928,13 +928,29 @@ class RealStepExecutor:
                 "es un problema de tu Docker ni de tu configuración."
             )
         else:
-            tail = [line for line in safe[-8:] if line.strip()]
-            detail = " / ".join(tail) if tail else "(sin salida)"
+            # La cola por sí sola no sirve cuando el one-shot es CHARLATÁN, y
+            # éste lo es: la siembra del catálogo imprime una línea por cada
+            # elemento indexado. Con una ventana de 8 líneas el error real se
+            # queda fuera y el mensaje enseña ruido de progreso — medido en el
+            # e2e run 33193255711, donde el fallo salió con rc=5 (DATABASE) y
+            # las ocho últimas líneas eran todas `catalog_ingestion.indexed`.
+            #
+            # Así que primero se BUSCAN las líneas que se declaran error, y la
+            # cola queda como respaldo para cuando no hay ninguna.
+            utiles = [line for line in safe if line.strip()]
+            marcas = ('"level": "error"', '"level": "critical"', '"error":', "Traceback")
+            severas = [line for line in utiles if any(m in line for m in marcas)]
+            if severas:
+                detail = "\n  | " + "\n  | ".join(severas[-6:])
+            elif utiles:
+                detail = "\n  | " + "\n  | ".join(utiles[-25:])
+            else:
+                detail = " (sin salida)"
             message = (
                 f"el one-shot de finalización `{BOOTSTRAP_SERVICE}` falló "
                 f"(rc={returncode}). Reprodúcelo con `docker compose run --rm "
                 f"{BOOTSTRAP_SERVICE}` desde {self.compose_dir} para ver el error "
-                f"entero. Últimas líneas: {detail}"
+                f"entero.{detail}"
             )
         if escrowed is not None:
             message += (
