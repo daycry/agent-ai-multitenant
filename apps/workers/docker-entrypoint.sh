@@ -28,7 +28,7 @@ DATA_ROOT="${WORKERS_DATA_ROOT:-/data/agent-platform}"
 # que llevara años tapado por un `|| true` sólo lo hacía invisible. Se acota a lo
 # que el worker usa de verdad: bare repos, worktrees, caché de dependencias y
 # los bundles de backup.
-WORKER_OWNED="projects worktrees dep-cache backups"
+WORKER_OWNED="projects worktrees dep-cache backups marketplace"
 
 if [ "$(id -u)" = "0" ]; then
     mkdir -p "$DATA_ROOT" 2>/dev/null || true

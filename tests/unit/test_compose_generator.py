@@ -1797,3 +1797,34 @@ def test_los_servicios_sin_http_no_heredan_la_sonda_del_api_server() -> None:
             f"el healthcheck de `{nombre}` sigue apuntando al endpoint HTTP del "
             f"api-server: {prueba!r}. Ese servicio no sirve HTTP."
         )
+
+
+def test_el_bootstrap_puede_escribir_los_artefactos_del_marketplace() -> None:
+    """El último paso de la instalación moría por un directorio sin provisionar.
+
+    `marketplace/seed.py:414` hace `mkdir(parents=True)` bajo
+    `/data/agent-platform/marketplace/artifacts`. Ese subárbol NO estaba en el
+    árbol de datos, `MARKETPLACE_ARTIFACT_ROOT` no se cablea en ninguna parte, y
+    el one-shot no montaba nada — así que el `mkdir` intentaba crear `/data` a
+    secas y salía con `Permission denied` (e2e run 33195432130).
+
+    Lo que lo hacía caro: pasaba en el ÚLTIMO paso, con Vault ya inicializado y
+    el revelado ya emitido. Una instalación que falla después de acuñar
+    credenciales irrepetibles es el peor momento para fallar.
+
+    Se monta el subárbol y no la raíz a propósito: la api-server no monta
+    `/data` por decisión documentada —las operaciones de git y disco van al
+    worker— y este one-shot corre con su misma imagen. Un almacén de artefactos
+    no es el árbol de worktrees.
+    """
+    compose = generate_compose(_config())
+    volumenes = compose["services"][BOOTSTRAP_SERVICE].get("volumes") or []
+    montado = [v for v in volumenes if "marketplace" in v]
+    assert montado, (
+        "el one-shot no monta el almacén de artefactos: la siembra de listings "
+        "fallará al escribirlos, y lo hará DESPUÉS de emitir el revelado."
+    )
+    assert not any(v.split(":")[1] == "/data/agent-platform" for v in volumenes if ":" in v), (
+        "monta la raíz de datos entera. La api-server no la monta por decisión "
+        "documentada y este one-shot usa su imagen: monta sólo el subárbol."
+    )

@@ -1160,6 +1160,18 @@ def _bootstrap_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     svc: dict[str, Any] = {
         "image": app_image("api-server"),
         "command": ["python", "-m", BOOTSTRAP_ENTRYPOINT],
+        # El almacén de artefactos del marketplace, y SÓLO él.
+        #
+        # La siembra de listings los escribe (`marketplace/seed.py:414`) y sin
+        # este montaje el `mkdir` fallaba con `Permission denied: '/data'`,
+        # tumbando la instalación en su ÚLTIMO paso, con Vault ya inicializado
+        # y el revelado ya emitido (e2e run 33195432130).
+        #
+        # Se monta el subárbol, no la raíz: la api-server no monta `/data` a
+        # propósito —las operaciones de git y de disco van al worker, y hay una
+        # regresión documentada por saltarse eso— y este one-shot corre con su
+        # misma imagen. Un almacén de artefactos no es el árbol de worktrees.
+        "volumes": [f"{cfg.storage.data_root}/marketplace:/data/agent-platform/marketplace"],
         "environment": env,
         # Fuera del `up`: lo ejecuta el operador, una vez, con
         # `docker compose run --rm bootstrap`.
