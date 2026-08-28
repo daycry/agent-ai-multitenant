@@ -647,6 +647,12 @@ _DATA_SUBDIRS: tuple[tuple[str, int, str], ...] = (
     ("worktrees", 0o750, "Per-task git worktrees (transient checkouts)."),
     ("dep-cache", 0o750, "Shared dependency cache across worktrees."),
     ("backups", 0o700, "Backup bundles (Plan 12) — may contain dumps."),
+    # Artefactos del marketplace oficial. El one-shot de bootstrap los ESCRIBE
+    # al sembrar los listings, y la api-server y los workers los LEEN en
+    # runtime (`LocalArtifactFetcher`). No estaba en el árbol: el `mkdir` de
+    # `marketplace/seed.py:414` fallaba con `Permission denied: '/data'` y
+    # tumbaba la instalación en el último paso (e2e run 33195432130).
+    ("marketplace/artifacts", 0o750, "Artefactos del marketplace oficial."),
     ("ollama", 0o750, "Local Ollama models (ollama_mode cpu/gpu)."),
     ("prometheus", 0o750, "Prometheus TSDB (monitoring overlay)."),
     ("alertmanager", 0o750, "Alertmanager state (monitoring overlay)."),

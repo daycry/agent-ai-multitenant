@@ -45,6 +45,7 @@ from installer_backend.compose_generator import (
     VOICE_SERVICES,
     WHISPER_MODELS_VOLUME,
     _env_ref,
+    app_image,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -555,7 +556,29 @@ def test_hardening_defaults_on_every_service() -> None:
             assert svc.get("privileged") is True, name
             continue
         # AppArmor MAC confinement is pinned on every other generated service.
-        assert "apparmor=agentic-default" in opts, name
+        #
+        # Con UNA excepción, y por una razón que no se puede resolver de otra
+        # manera (2026-08-28, e2e run 33177824929): `agentic-default` deniega el
+        # socket de Docker a todo el mundo —Principio 2, «a socket leak == host
+        # takeover»— y el `docker-socket-proxy` es el único servicio que existe
+        # para sostenerlo. Con el perfil compartido puesto, HAProxy arrancaba y
+        # sus peticiones morían con `503 … SC--`.
+        #
+        # Abrir el socket en el perfil compartido lo habría arreglado, y se lo
+        # habría dado también a los workers, que ejecutan código no confiable.
+        # Por eso lleva perfil propio: `agentic-socket-proxy`, idéntico al
+        # compartido salvo esa línea.
+        esperado = (
+            "apparmor=agentic-socket-proxy"
+            if name == "docker-socket-proxy"
+            else "apparmor=agentic-default"
+        )
+        assert esperado in opts, name
+        if name != "docker-socket-proxy":
+            assert "apparmor=agentic-socket-proxy" not in opts, (
+                f"{name} lleva el perfil del socket-proxy, que PERMITE el socket "
+                "de Docker. Sólo el propio proxy puede llevarlo."
+            )
         # Every non-privileged service drops ALL caps. Official infra images that
         # self-init as root (chown their data dir + drop to a service user via
         # gosu/su-exec) add the self-init caps back on top of the blanket drop;
@@ -1656,3 +1679,152 @@ def test_the_bootstrap_is_not_part_of_the_running_topology() -> None:
     operador ejecuta una vez y que sale no es parte del stack que corre."""
     assert BOOTSTRAP_SERVICE not in CORE_SERVICES
     assert BOOTSTRAP_SERVICE in selected_services(_config(), monitoring=False)
+
+
+def test_vault_puede_bloquear_memoria_sin_apagar_mlock() -> None:
+    """El `memlock` de Vault, y por qué no se resolvió apagando `mlock`.
+
+    Medido en el e2e (run 33175714605, 2026-08-28), con Postgres y Redis ya
+    sanos:
+
+        vault-1 | Error initializing core: Failed to lock memory:
+                  cannot allocate memory
+
+    ENOMEM de `mlock`: la firma del `RLIMIT_MEMLOCK` del host, que en un runner
+    Linux son 64 KiB. En Docker Desktop no se reproduce —su default es
+    efectivamente ilimitado—, así que este fallo NO aparece en ninguna máquina
+    de desarrollo Windows: sólo donde se instala de verdad.
+
+    `disable_mlock: true` lo habría arreglado en una línea. También habría
+    permitido que las claves de Vault acaben en swap, que es justo lo que el
+    ADR 0145 da por hecho que no pasa. Un fallo ruidoso a cambio de una fuga
+    silenciosa es mal negocio.
+    """
+    cfg = _config()
+    compose = generate_compose(cfg)
+    vault = compose["services"]["vault"]
+
+    assert vault.get("ulimits", {}).get("memlock") == {"soft": -1, "hard": -1}, (
+        "Vault no declara `memlock` sin límite: en un host con el default de "
+        "64 KiB no arrancará, y el stack entero aborta en `start_stack`."
+    )
+    assert "IPC_LOCK" in vault.get("cap_add", []), "sin IPC_LOCK, subir el ulimit no basta"
+    config_local = str(vault.get("environment", {}).get("VAULT_LOCAL_CONFIG", ""))
+    assert '"disable_mlock":true' not in config_local.replace(" ", ""), (
+        "se ha apagado `mlock`: eso permite que las claves de Vault vayan a "
+        "swap. Si de verdad hace falta en algún entorno, va con su propio ADR, "
+        "no como efecto colateral de hacer arrancar el stack."
+    )
+
+
+def test_todo_servicio_con_la_imagen_de_workers_puede_bajar_de_privilegios() -> None:
+    """Cuatro servicios comparten imagen y entrypoint; uno solo tenía las caps.
+
+    `apps/workers/docker-entrypoint.sh` arranca como root, repara la propiedad
+    del árbol de datos y ejecuta:
+
+        exec setpriv --reuid=1000 --regid=1000 --clear-groups "$@"
+
+    Sin SETUID/SETGID eso falla, y va **sin `|| true`** con `set -eu` detrás: el
+    contenedor muere al arrancar, su healthcheck queda `unhealthy` y el
+    `up --wait` aborta la instalación entera. Medido en el e2e run 33184204178:
+
+        setpriv: setresuid failed: Operation not permitted
+
+    La lista se comprueba DERIVANDO los servicios de su imagen, no enumerándolos:
+    cuando se arregló a mano sólo se tocó `workers` y los otros tres —
+    `workers-privileged`, `workers-marketplace`, `cortex-beat`— se quedaron
+    fuera, porque cada uno tiene su propio builder. Un servicio nuevo de esa
+    familia volvería a nacer sin ellas, y el síntoma aparecería en una
+    instalación real.
+    """
+    compose = generate_compose(_config())
+    imagen = app_image("workers")
+    familia = {
+        nombre: svc for nombre, svc in compose["services"].items() if svc.get("image") == imagen
+    }
+    assert len(familia) >= 4, (
+        f"sólo se han encontrado {len(familia)} servicios con la imagen de "
+        "workers: la derivación se ha roto y esta guarda estaría comprobando "
+        "casi nada"
+    )
+    sin_caps = sorted(
+        nombre
+        for nombre, svc in familia.items()
+        if not {"SETUID", "SETGID"} <= set(svc.get("cap_add", []))
+    )
+    assert not sin_caps, (
+        f"{sin_caps} usan la imagen de workers y no pueden bajar de privilegios. "
+        "Su entrypoint hace `setpriv` sin red: el contenedor morirá al arrancar "
+        "y el `up --wait` abortará la instalación."
+    )
+
+
+def test_los_servicios_sin_http_no_heredan_la_sonda_del_api_server() -> None:
+    """Un healthcheck heredado que no aplica es peor que ninguno.
+
+    `apps/watchdog/Dockerfile` y los de la familia de workers se construyen
+    `FROM ${BASE_IMAGE}`, que es la imagen del api-server — y ésa declara un
+    `HEALTHCHECK` contra `http://localhost:8000/healthz`. Un servicio que NO
+    sirve HTTP hereda esa sonda, queda `unhealthy` para siempre y tumba el
+    `up --wait` (e2e run 33192295213) mientras funciona perfectamente y lo dice
+    en su propio log.
+
+    No mide lo que dice medir, y su rojo permanente enseña a ignorarlo — que es
+    la peor consecuencia, porque el día que signifique algo nadie lo mirará.
+
+    La comprobación es que cada servicio SIN puerto declare su propio
+    healthcheck, en vez de enumerar cuáles: un servicio nuevo construido sobre
+    la misma base volvería a heredarla en silencio.
+    """
+    compose = generate_compose(_config())
+    # Los one-shots salen y no se vigilan; el resto de servicios de aplicación
+    # sin puerto publicado ni endpoint HTTP tienen que traer sonda propia.
+    sin_sonda = sorted(
+        nombre
+        for nombre, svc in compose["services"].items()
+        if nombre in {"watchdog", "cortex-beat"} and not svc.get("healthcheck")
+    )
+    assert not sin_sonda, (
+        f"{sin_sonda} no declaran healthcheck propio y heredan el del api-server, "
+        "que pega a http://localhost:8000/healthz. No sirven HTTP: quedarán "
+        "`unhealthy` para siempre y el `up --wait` abortará la instalación."
+    )
+    # Y que la sonda que traen NO sea la heredada disfrazada.
+    for nombre in ("watchdog", "cortex-beat"):
+        prueba = " ".join(str(x) for x in compose["services"][nombre]["healthcheck"]["test"])
+        assert "8000" not in prueba and "healthz" not in prueba, (
+            f"el healthcheck de `{nombre}` sigue apuntando al endpoint HTTP del "
+            f"api-server: {prueba!r}. Ese servicio no sirve HTTP."
+        )
+
+
+def test_el_bootstrap_puede_escribir_los_artefactos_del_marketplace() -> None:
+    """El último paso de la instalación moría por un directorio sin provisionar.
+
+    `marketplace/seed.py:414` hace `mkdir(parents=True)` bajo
+    `/data/agent-platform/marketplace/artifacts`. Ese subárbol NO estaba en el
+    árbol de datos, `MARKETPLACE_ARTIFACT_ROOT` no se cablea en ninguna parte, y
+    el one-shot no montaba nada — así que el `mkdir` intentaba crear `/data` a
+    secas y salía con `Permission denied` (e2e run 33195432130).
+
+    Lo que lo hacía caro: pasaba en el ÚLTIMO paso, con Vault ya inicializado y
+    el revelado ya emitido. Una instalación que falla después de acuñar
+    credenciales irrepetibles es el peor momento para fallar.
+
+    Se monta el subárbol y no la raíz a propósito: la api-server no monta
+    `/data` por decisión documentada —las operaciones de git y disco van al
+    worker— y este one-shot corre con su misma imagen. Un almacén de artefactos
+    no es el árbol de worktrees.
+    """
+    compose = generate_compose(_config())
+    volumenes = compose["services"][BOOTSTRAP_SERVICE].get("volumes") or []
+    montado = [v for v in volumenes if "marketplace" in v]
+    assert montado, (
+        "el one-shot no monta el almacén de artefactos: la siembra de listings "
+        "fallará al escribirlos, y lo hará DESPUÉS de emitir el revelado."
+    )
+    assert not any(v.split(":")[1] == "/data/agent-platform" for v in volumenes if ":" in v), (
+        "monta la raíz de datos entera. La api-server no la monta por decisión "
+        "documentada y este one-shot usa su imagen: monta sólo el subárbol."
+    )

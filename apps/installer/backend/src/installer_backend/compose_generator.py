@@ -387,6 +387,19 @@ WHISPER_MODELS_VOLUME = "whisper_models"
 #: it (real load is a host/HUMAN step — the kernel cannot be exercised in CI).
 APPARMOR_DEFAULT_PROFILE = "agentic-default"
 
+#: El perfil del `docker-socket-proxy`, y de ningún otro servicio.
+#:
+#: `agentic-default` deniega el socket de Docker a todo el mundo —Principio 2,
+#: «a socket leak == host takeover»— y este servicio es el único que existe para
+#: sostenerlo. Con el perfil compartido puesto, HAProxy arrancaba y sus
+#: peticiones morían con `503 … SC--`: no alcanzaba su propio backend (medido en
+#: el e2e run 33177824929).
+#:
+#: La alternativa —abrir el socket en el perfil compartido— se lo habría dado
+#: también a los workers, que son quienes ejecutan código no confiable. Un
+#: servicio roto cambiado por el agujero exacto que el Principio 2 cierra.
+APPARMOR_SOCKET_PROXY_PROFILE = "agentic-socket-proxy"
+
 
 def _logging_block() -> dict[str, Any]:
     """The capped json-file logging block every service shares."""
@@ -413,6 +426,7 @@ def _hardening(
     limits_cpus: str,
     limits_memory: str,
     cap_drop_all: bool = True,
+    apparmor_profile: str = APPARMOR_DEFAULT_PROFILE,
 ) -> dict[str, Any]:
     """Platform hardening defaults applied to a generated service.
 
@@ -438,7 +452,7 @@ def _hardening(
         "logging": _logging_block(),
         "security_opt": [
             "no-new-privileges:true",
-            f"apparmor={APPARMOR_DEFAULT_PROFILE}",
+            f"apparmor={apparmor_profile}",
         ],
         "deploy": {
             "resources": {"limits": {"cpus": limits_cpus, "memory": limits_memory}},
@@ -735,6 +749,21 @@ def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
     }
     # cap_drop:[ALL] + cap_add:[IPC_LOCK] (above) — drop everything, add back
     # only the cap Vault needs to mlock memory. no-new-privileges + limits apply.
+    #
+    # `memlock` sin límite, y NO `disable_mlock` (2026-08-28). Vault bloquea su
+    # memoria para que las claves no acaben en swap; el ADR 0145 se apoya en eso,
+    # así que apagarlo para que arranque habría sido cambiar un fallo ruidoso por
+    # una fuga silenciosa.
+    #
+    # Medido en el e2e (run 33175714605), con Postgres y Redis ya sanos:
+    #
+    #   vault-1 | Error initializing core: Failed to lock memory: cannot allocate memory
+    #
+    # ENOMEM de `mlock`, que es la firma del `RLIMIT_MEMLOCK` del host: un runner
+    # Linux trae 64 KiB por defecto. En Docker Desktop no se reproduce —su
+    # default es efectivamente ilimitado—, y por eso este fallo no aparece en
+    # ninguna máquina de desarrollo Windows: sólo donde se instala de verdad.
+    svc["ulimits"] = {"memlock": {"soft": -1, "hard": -1}}
     svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
     return svc
 
@@ -920,7 +949,14 @@ def _docker_socket_proxy_service(
         # the workers reach the Docker API, never the untrusted runtimes.
         "networks": ["agentic-docker"],
     }
-    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    # Su propio perfil, no el compartido: ver APPARMOR_SOCKET_PROXY_PROFILE.
+    svc.update(
+        _hardening(
+            limits_cpus="0.5",
+            limits_memory="256m",
+            apparmor_profile=APPARMOR_SOCKET_PROXY_PROFILE,
+        )
+    )
     return svc
 
 
@@ -1124,6 +1160,18 @@ def _bootstrap_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     svc: dict[str, Any] = {
         "image": app_image("api-server"),
         "command": ["python", "-m", BOOTSTRAP_ENTRYPOINT],
+        # El almacén de artefactos del marketplace, y SÓLO él.
+        #
+        # La siembra de listings los escribe (`marketplace/seed.py:414`) y sin
+        # este montaje el `mkdir` fallaba con `Permission denied: '/data'`,
+        # tumbando la instalación en su ÚLTIMO paso, con Vault ya inicializado
+        # y el revelado ya emitido (e2e run 33195432130).
+        #
+        # Se monta el subárbol, no la raíz: la api-server no monta `/data` a
+        # propósito —las operaciones de git y de disco van al worker, y hay una
+        # regresión documentada por saltarse eso— y este one-shot corre con su
+        # misma imagen. Un almacén de artefactos no es el árbol de worktrees.
+        "volumes": [f"{cfg.storage.data_root}/marketplace:/data/agent-platform/marketplace"],
         "environment": env,
         # Fuera del `up`: lo ejecuta el operador, una vez, con
         # `docker compose run --rm bootstrap`.
@@ -1332,6 +1380,27 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "networks": _WORKER_NETWORKS,
     }
     svc.update(_hardening(limits_cpus="4.0", limits_memory=mem))
+    # Los workers hacen EXACTAMENTE el mismo baile de auto-inicialización que
+    # postgres, redis, vault y clamav —arrancan como root, reparan la propiedad
+    # de su árbol de datos y bajan a su usuario de servicio— pero eran los únicos
+    # a los que no se les devolvían las capacidades. Medido (e2e run
+    # 33184204178):
+    #
+    #   chown: changing ownership of '/data/agent-platform/…': Operation not permitted
+    #   setpriv: setresuid failed: Operation not permitted
+    #
+    # El `chown` del entrypoint lleva `|| true` y sólo hace ruido; el que mata es
+    # `setpriv`, que va sin red y con `set -eu` detrás
+    # (`apps/workers/docker-entrypoint.sh:38`). Sin SETUID/SETGID el contenedor
+    # muere al arrancar, su healthcheck queda en `unhealthy` y el `up --wait`
+    # aborta la instalación entera.
+    #
+    # Se concede la MISMA lista que a los otros cuatro, no una propia: un
+    # segundo conjunto para el mismo patrón se justifica una vez y diverge
+    # después. Y sigue siendo mucho más estricto que el stack de desarrollo, que
+    # corre estos servicios con las capacidades por defecto de Docker (medido:
+    # `CapAdd=[] CapDrop=[]`).
+    svc["cap_add"] = list(_INFRA_CAPS)
     # Scale the GENERIC Celery worker pool per the wizard's resource choice.
     svc["deploy"]["replicas"] = cfg.resources.worker_replicas
     return svc
@@ -1396,6 +1465,9 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     # Corre como root (el volume-tar del backup lo exige); NO fijamos user 1000.
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     svc["deploy"]["replicas"] = 1
+    # Misma imagen y mismo entrypoint que `workers`: root -> chown -> setpriv.
+    # Sin estas capacidades `setpriv` falla y el contenedor muere al arrancar.
+    svc["cap_add"] = list(_INFRA_CAPS)
     return svc
 
 
@@ -1440,6 +1512,9 @@ def _workers_marketplace_service(cfg: InstallerConfig, *, prod: bool) -> dict[st
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     svc["deploy"]["replicas"] = 1
+    # Misma imagen y mismo entrypoint que `workers`: root -> chown -> setpriv.
+    # Sin estas capacidades `setpriv` falla y el contenedor muere al arrancar.
+    svc["cap_add"] = list(_INFRA_CAPS)
     return svc
 
 
@@ -1456,7 +1531,16 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     proceso beat es el PID 1 vivo del contenedor."""
     svc: dict[str, Any] = {
         "image": app_image("workers"),
-        "command": "celery -A workers.celery_app beat --loglevel=info",
+        "command": (
+            # `--schedule` explícito: sin él, beat escribe `celerybeat-schedule`
+            # en su CWD, que es `/app` — el directorio de CÓDIGO. El kernel lo
+            # denegaba (`mknod /app/celerybeat-schedule`, e2e run 33190944410) y
+            # la respuesta correcta no era abrir `/app` a escritura: el estado de
+            # ejecución no va en el árbol de la aplicación. Este servicio no monta
+            # volumen, así que `/tmp` es su sitio; lo que se pierde al reiniciar
+            # son las marcas de «última ejecución», y beat retoma su cadencia.
+            "celery -A workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule"
+        ),
         "environment": _workers_env(cfg, prod=prod),
         "healthcheck": {
             "test": [
@@ -1478,6 +1562,9 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     }
     svc.update(_hardening(limits_cpus="0.5", limits_memory="512m"))
     svc["deploy"]["replicas"] = 1
+    # Misma imagen y mismo entrypoint que `workers`: root -> chown -> setpriv.
+    # Sin estas capacidades `setpriv` falla y el contenedor muere al arrancar.
+    svc["cap_add"] = list(_INFRA_CAPS)
     return svc
 
 
@@ -1583,6 +1670,36 @@ def _watchdog_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "docker-socket-proxy": {"condition": "service_healthy"},
         },
         "networks": ["agentic-net", "agentic-docker"],
+        # Healthcheck PROPIO, y hace falta declararlo (2026-08-28, e2e run
+        # 33192295213).
+        #
+        # `apps/watchdog/Dockerfile` se construye `FROM ${BASE_IMAGE}`, que es la
+        # imagen del api-server — y ésa declara un `HEALTHCHECK` que pega a
+        # `http://localhost:8000/healthz` (api-server/Dockerfile:137). El watchdog
+        # NO sirve HTTP: es un bucle de sondeo. Así que heredaba una sonda que no
+        # podía pasar jamás, quedaba `unhealthy` para siempre y el `up --wait`
+        # abortaba la instalación entera — con el watchdog funcionando
+        # perfectamente y diciéndolo en su propio log.
+        #
+        # Un healthcheck heredado que no aplica es peor que ninguno: no mide lo
+        # que dice medir, y su rojo permanente enseña a ignorarlo.
+        #
+        # Se usa el patrón que `cortex-beat` ya emplea para lo mismo —comprobar
+        # que el proceso vigilado sigue siendo el PID 1— porque para un servicio
+        # sin puerto eso es exactamente lo que «sano» significa.
+        "healthcheck": {
+            "test": [
+                "CMD",
+                "python",
+                "-c",
+                "import sys; sys.exit(0 if b'watchdog' in "
+                "open('/proc/1/cmdline','rb').read() else 1)",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "20s",
+        },
     }
     svc.update(_hardening(limits_cpus="0.25", limits_memory="192m"))
     return svc

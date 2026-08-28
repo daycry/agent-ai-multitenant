@@ -1062,3 +1062,336 @@ def test_si_el_one_shot_muere_tras_inicializar_vault_las_claves_ya_estan_a_salvo
     )
     for key in _UNSEAL_KEYS:
         assert key not in message, "el mensaje de error no es un canal de revelado"
+
+
+# ---------------------------------------------------------------------------
+# El mensaje de un comando que falla lleva su salida (2026-08-28)
+# ---------------------------------------------------------------------------
+#
+# Lo destapó la tercera ejecución del e2e de instalación (run 33169724473). El
+# install murió en `start_stack` y lo único que dijo fue:
+#
+#     el comando falló (rc=1): docker compose -p agentic-platform … up -d --wait
+#
+# Qué servicio no arrancó, y por qué, se lo quedó el instalador — aunque el
+# runner lo tenía capturado en `output_lines` desde el principio: `_run` lo
+# tiraba al construir el error.
+#
+# El coste no es cosmético. Sin la salida, diagnosticar obliga a reproducir a
+# mano lo que la máquina acaba de ver; en casa de un cliente, eso es una llamada
+# de soporte por cada fallo.
+
+
+def _resultado_fallido(lineas: tuple[str, ...]) -> CommandResult:
+    return CommandResult(returncode=1, output_lines=lineas)
+
+
+def test_el_error_de_un_comando_lleva_su_salida() -> None:
+    """Sin esto, «falló» es todo lo que el operador sabe."""
+    salida = RealStepExecutor._cola_del_fallo(
+        _resultado_fallido(
+            (
+                "dependency failed to start: container agentic-platform-vault-1 is unhealthy",
+                "",
+            )
+        )
+    )
+    assert "vault-1 is unhealthy" in salida, f"la causa real no aparece en el mensaje: {salida!r}"
+
+
+def test_una_salida_larga_se_recorta_por_el_final() -> None:
+    """El final es donde está la causa; la cabecera avisa de que se recortó.
+
+    Un `docker compose up` escupe cientos de líneas de progreso de descarga. Si
+    el mensaje las llevara todas, la causa quedaría enterrada — que es otra
+    forma de no decirla.
+    """
+    muchas = tuple(f"linea {i}" for i in range(200))
+    salida = RealStepExecutor._cola_del_fallo(_resultado_fallido(muchas))
+    assert "linea 199" in salida, "se ha recortado por el lado equivocado"
+    assert "linea 0" not in salida, "no se ha recortado"
+    assert "de 200" in salida, "no avisa de que hay más líneas de las que enseña"
+
+
+def test_un_comando_mudo_lo_dice_en_vez_de_callar() -> None:
+    """Un mensaje vacío se lee como «no hay información», y no es lo mismo.
+
+    «No escribió nada» es un dato: descarta que la causa esté en la salida y
+    manda a mirar el código de salida y el entorno. Un hueco en blanco sólo
+    hace dudar de si el instalador la perdió.
+    """
+    salida = RealStepExecutor._cola_del_fallo(_resultado_fallido(("", "   ")))
+    assert "no escribió nada" in salida
+
+
+# ---------------------------------------------------------------------------
+# Cuando `up --wait` falla, el error trae los LOGS (2026-08-28)
+# ---------------------------------------------------------------------------
+#
+# `docker compose up --wait` informa del ESTADO de cada contenedor y de nada
+# mas. Medido en el e2e (run 33170713059): dos servicios en `Error` -postgres y
+# docker-socket-proxy- y CERO lineas de sus logs en las 12.954 del job. El
+# mensaje nombraba al culpable sin decir que le pasaba.
+#
+# No basta con confiar en que quien ejecute tenga un paso de diagnostico: el
+# operador de un cliente no lo tiene. El instalador los recoge el.
+
+
+def _argv_up() -> tuple[str, ...]:
+    return (
+        "docker",
+        "compose",
+        "-p",
+        PROJECT_NAME,
+        "-f",
+        f"{_COMPOSE_DIR}/docker-compose.yml",
+        "up",
+        "-d",
+        "--wait",
+    )
+
+
+def _argv_logs(servicio: str) -> tuple[str, ...]:
+    return (
+        "docker",
+        "compose",
+        "-p",
+        PROJECT_NAME,
+        "-f",
+        f"{_COMPOSE_DIR}/docker-compose.yml",
+        "logs",
+        "--no-color",
+        "--tail=40",
+        servicio,
+    )
+
+
+def test_el_fallo_de_up_trae_los_logs_del_servicio_que_no_arranco(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El caso real: postgres en `Error` y su log dentro del mensaje."""
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(
+                returncode=1,
+                output_lines=(" Container agentic-platform-postgres-1  Error",),
+            ),
+            _argv_logs("postgres"): CommandResult(
+                returncode=0,
+                output_lines=("postgres-1 | FATAL: la contrasena no coincide",),
+            ),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    assert "postgres" in mensaje, "no nombra el servicio que fallo"
+    assert "FATAL" in mensaje, f"nombra al culpable pero no dice que le pasa: {mensaje!r}"
+
+
+def test_si_compose_no_nombra_a_nadie_se_miran_los_cimientos(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El caso que deja al operador sin nada: compose falla sin senalar.
+
+    Si postgres no arranca, los veinte servicios que lo esperan por
+    `depends_on: healthy` se quedan en `Created` y compose puede no nombrar a
+    ninguno. Mirar los cuatro cimientos es la apuesta correcta: el error real
+    esta ahi o no esta en ninguna parte.
+    """
+    runner = FakeCommandRunner(
+        responses={_argv_up(): CommandResult(returncode=1, output_lines=("algo salio mal",))}
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    for cimiento in ("postgres", "redis", "vault", "minio"):
+        assert cimiento in mensaje, f"no se miro {cimiento}"
+
+
+def test_un_servicio_sin_log_lo_dice_en_vez_de_dejar_un_hueco(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """«Sin salida» es un dato; un blanco solo hace dudar de si se perdio."""
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(
+                returncode=1,
+                output_lines=(" Container agentic-platform-vault-1  Error",),
+            ),
+            _argv_logs("vault"): CommandResult(returncode=0, output_lines=()),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    assert "sin salida" in str(exc.value)
+
+
+def test_un_one_shot_que_sale_distinto_de_cero_tambien_se_recoge(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """La SEGUNDA forma de fallar de compose, que la primera versión perdía.
+
+    Un servicio de larga vida cuyo healthcheck no llega sale como `… Error`. Un
+    one-shot que sale distinto de cero —`migrations`, `bootstrap`— sale así:
+
+        Container agentic-platform-migrations-1  service "migrations"
+          didn't complete successfully: exit 1
+
+    …que NO termina en `Error`. Medido en el e2e run 33180241225: el install
+    murió por `migrations`, y el mensaje enseñó los logs de los cuatro cimientos
+    —los tres sanos— y ni una línea del servicio que había fallado.
+
+    Un recolector que mira sólo una de las dos formas es peor que ninguno: no
+    calla, enseña lo que no toca, y manda a diagnosticar el sitio equivocado.
+    """
+    linea = (
+        ' Container agentic-platform-migrations-1  service "migrations" '
+        "didn't complete successfully: exit 1"
+    )
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(returncode=1, output_lines=(linea,)),
+            _argv_logs("migrations"): CommandResult(
+                returncode=0,
+                output_lines=("migrations-1 | alembic: FAILED: no such revision",),
+            ),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    assert "migrations" in mensaje, "no nombra el one-shot que falló"
+    assert "no such revision" in mensaje, f"no trae el log del one-shot: {mensaje!r}"
+    assert "postgres" not in mensaje, (
+        "ha caído a los cimientos habiendo un culpable nombrado: enseñaría los "
+        "logs de tres servicios sanos y escondería el que importa"
+    )
+
+
+@pytest.mark.parametrize(
+    ("linea", "servicio"),
+    [
+        # Forma 1 — larga vida cuyo healthcheck no llegó (run 33171640034).
+        (" Container agentic-platform-postgres-1  Error", "postgres"),
+        # Forma 2 — one-shot que sale != 0 (run 33180241225).
+        (
+            ' Container agentic-platform-migrations-1  service "migrations" '
+            "didn't complete successfully: exit 1",
+            "migrations",
+        ),
+        # Forma 3 — en MINÚSCULA y sin tabular (run 33182384445).
+        (" container agentic-platform-cortex-beat-1 is unhealthy", "cortex-beat"),
+        # Los dos proxies no llevan el prefijo del proyecto.
+        (" Container agentic-egress-proxy  Error", "egress-proxy"),
+    ],
+)
+def test_las_tres_formas_en_que_compose_dice_que_algo_fallo(
+    installer_config: InstallerConfig,
+    gen_secrets: GeneratedSecrets,
+    linea: str,
+    servicio: str,
+) -> None:
+    """Cada una costó una ejecución del e2e descubrirla.
+
+    `docker compose up --wait` no tiene UNA manera de reportar un fallo: tiene
+    tres, y la tercera llega en minúscula y sin el formato tabulado de las otras
+    dos porque la emite otra parte de su código.
+
+    Están juntas en un solo test a propósito. Parcheándolas de una en una —que
+    es lo que hice tres veces— cada formato nuevo cuesta una ejecución entera y
+    el recolector cae al fallback, enseñando los logs de servicios sanos: no
+    calla, apunta al sitio equivocado.
+    """
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(returncode=1, output_lines=(linea,)),
+            _argv_logs(servicio): CommandResult(
+                returncode=0, output_lines=(f"{servicio}-1 | la pista que importa",)
+            ),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    assert servicio in mensaje, f"no identificó `{servicio}` en: {linea!r}"
+    assert "la pista que importa" in mensaje, f"identificó `{servicio}` pero no trajo su log"
+
+
+def test_el_fallo_del_one_shot_prioriza_las_lineas_de_error(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Una cola corta no vale cuando el one-shot es charlatán.
+
+    La siembra del catálogo imprime una línea por elemento indexado. Con una
+    ventana de ocho líneas, el error que causó el fallo se queda fuera y el
+    mensaje enseña ruido de progreso — medido en el e2e run 33193255711, donde
+    el one-shot salió con rc=5 (DATABASE) y las ocho últimas líneas eran todas
+    `catalog_ingestion.indexed`.
+
+    Que el mensaje exista no basta: tiene que llevar LA línea que importa.
+    """
+    ruido = [
+        f'{{"slug": "cosa-{i}", "event": "catalog_ingestion.indexed", "level": "info"}}'
+        for i in range(30)
+    ]
+    error = '{"event": "seed.failed", "level": "error", "detail": "relation does not exist"}'
+    runner = _bootstrap_runner(rc=5, before=(error, *ruido), reveal=False)
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    mensaje = str(exc.value)
+    assert "relation does not exist" in mensaje, (
+        "el mensaje no trae la línea de error: quedó enterrada bajo el ruido de "
+        f"progreso.\n{mensaje[:400]}"
+    )
+
+
+def test_un_aviso_con_campo_error_no_se_confunde_con_la_causa(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """`"error":` en una línea NO la convierte en el error (run 33194504572).
+
+    El aviso de ollama es un WARNING que lleva un campo `error`. Con un filtro
+    por subcadena, seis copias suyas llenaban la ventana y el fallo real seguía
+    sin verse — el mensaje pasó de enseñar ruido de progreso a enseñar ruido de
+    avisos, que no es mejor.
+
+    El NIVEL es lo que el emisor declara sobre la gravedad; el campo `error` es
+    sólo un dato suyo.
+    """
+    aviso = '{"error": "ollama embed failed", "event": "embedder_failed", "level": "warning"}'
+    real = '{"event": "seed.failed", "level": "error", "detail": "column x does not exist"}'
+    runner = _bootstrap_runner(rc=5, before=(real, *([aviso] * 20)), reveal=False)
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    mensaje = str(exc.value)
+    assert "column x does not exist" in mensaje, (
+        f"la causa real no aparece; la tapan los avisos:\n{mensaje[:500]}"
+    )
+    assert mensaje.count("ollama embed failed") <= 1, (
+        "el mismo aviso aparece repetido: seis copias idénticas no informan"
+    )
+
+
+def test_si_muere_sin_registrar_nada_grave_se_ve_el_final(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Una excepción no capturada no deja línea de nivel `error`.
+
+    Por eso la cola se enseña SIEMPRE, no sólo cuando no hay severas: si el
+    proceso murió de golpe, el final de su salida es lo único que queda.
+    """
+    runner = _bootstrap_runner(
+        rc=5, before=("paso 1", "paso 2", "lo último que hizo"), reveal=False
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    assert "lo último que hizo" in str(exc.value)

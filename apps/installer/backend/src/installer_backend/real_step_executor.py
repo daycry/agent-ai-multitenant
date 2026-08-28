@@ -100,7 +100,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import stack_assets
-from .command_runner import CommandRunner
+from .command_runner import CommandResult, CommandRunner
 from .compose_generator import (
     BOOTSTRAP_ENTRYPOINT,
     BOOTSTRAP_SERVICE,
@@ -464,6 +464,140 @@ class RealStepExecutor:
         except OSError as exc:
             raise StepExecutionError(_describe_os_error(exc, path)) from exc
 
+    #: Servicios cuyo log se recoge cuando `up --wait` falla, aunque compose no
+    #: los nombre. Son los que TODO lo demás espera por `depends_on: healthy`:
+    #: si uno de éstos no arranca, los veinte de detrás quedan en `Created` y el
+    #: error real está aquí y en ningún otro sitio.
+    _CIMIENTOS = ("postgres", "redis", "vault", "minio")
+
+    def _arrancar_el_stack(self, lines: list[str]) -> None:
+        """`up -d --wait`, y si falla, POR QUÉ falló.
+
+        `up --wait` informa del ESTADO de cada contenedor —`Started`, `Error`—
+        y de nada más. Eso deja un mensaje que nombra al culpable sin decir qué
+        le pasa: «Container agentic-platform-postgres-1 Error» y a reproducirlo
+        a mano. Medido en el e2e (run 33170713059, 2026-08-28): dos servicios en
+        `Error` y cero líneas de sus logs en toda la ejecución.
+
+        Así que al fallar se recogen los logs de los servicios que no llegaron a
+        sanos. Es una llamada más a `docker compose`, sólo en el camino de
+        error, y convierte el fallo en accionable sin depender de que quien lo
+        ejecute tenga un paso de diagnóstico preparado — el operador de un
+        cliente no lo tiene.
+        """
+        result = self.runner.run(
+            self._compose("up", "-d", "--wait"),
+            cwd=self.compose_dir,
+            on_line=lines.append,
+        )
+        if result.returncode == 0:
+            return
+
+        partes = [
+            f"el comando falló (rc={result.returncode}): "
+            f"{' '.join(self._compose('up', '-d', '--wait'))}",
+            self._cola_del_fallo(result),
+        ]
+        sospechosos = self._servicios_en_error(result) or list(self._CIMIENTOS)
+        partes.append(
+            f"\nLogs de los servicios que no llegaron a sanos ({', '.join(sospechosos)}):"
+        )
+        for servicio in sospechosos:
+            partes.append(self._log_de(servicio))
+        raise StepExecutionError("\n".join(partes))
+
+    #: Lo que compose escribe cuando un ONE-SHOT (`migrations`, `bootstrap`) sale
+    #: distinto de cero. NO termina en `Error`, así que la primera versión de
+    #: este recolector lo perdía: el e2e run 33180241225 murió por
+    #: `migrations … exit 1` y el mensaje enseñó los logs de los cuatro cimientos
+    #: —los tres sanos— y ni una línea del servicio que había fallado.
+    #:
+    #: Un recolector que mira sólo una de las dos formas de fallar es peor que
+    #: ninguno: no calla, enseña lo que no toca.
+    _FALLO_DE_ONE_SHOT = "didn't complete successfully"
+
+    #: Las TRES formas en que `docker compose up --wait` dice que algo falló.
+    #: Se enumeran porque cada una costó una ejecución del e2e descubrirla, y
+    #: escribirlas juntas es lo que impide seguir parcheándolas de una en una:
+    #:
+    #:   Container …-postgres-1  Error                          (larga vida)
+    #:   Container …-migrations-1  service "migrations" didn't
+    #:     complete successfully: exit 1                        (one-shot)
+    #:   container …-cortex-beat-1 is unhealthy                 (minúscula!)
+    #:
+    #: La tercera llega en MINÚSCULA y sin el formato tabulado de las otras dos.
+    #: No es un capricho de compose: la emite otra parte de su código.
+    _MARCAS_DE_FALLO = ("error", "is unhealthy", "didn't complete successfully")
+
+    @staticmethod
+    def _servicios_en_error(result: CommandResult) -> list[str]:
+        """Los servicios que compose dio por fallidos, en sus tres formas.
+
+        Se leen de lo que compose ya dijo en vez de volver a preguntar: si el
+        stack se cayó del todo, un `ps` posterior puede devolver otra cosa.
+        """
+        vistos: list[str] = []
+        for linea in result.output_lines:
+            texto = linea.strip()
+            bajo = texto.lower()
+            if "container" not in bajo:
+                continue
+            # Las dos marcas explícitas valen en cualquier posición; la palabra
+            # «Error» sólo cuenta al FINAL de la línea, porque compose la usa
+            # como estado y dentro de una frase es ruido.
+            explicita = any(marca in bajo for marca in ("is unhealthy", "didn't complete"))
+            if not explicita and not texto.endswith("Error"):
+                continue
+
+            # Cuando compose cita el SERVICIO entre comillas no hay que deducir
+            # nada del nombre del contenedor.
+            if '"' in texto and RealStepExecutor._FALLO_DE_ONE_SHOT in texto:
+                nombre = texto.split('"')[1]
+            else:
+                # El token siguiente a «container» es el nombre del contenedor.
+                resto = bajo.split("container", 1)[1].strip()
+                contenedor = resto.split()[0] if resto.split() else ""
+                # `agentic-platform-postgres-1` -> `postgres`; los dos proxies no
+                # llevan el prefijo del proyecto (`agentic-egress-proxy`).
+                nombre = contenedor.removeprefix(f"{PROJECT_NAME}-").removeprefix("agentic-")
+                if nombre.rsplit("-", 1)[-1].isdigit():
+                    nombre = nombre.rsplit("-", 1)[0]
+            if nombre and nombre not in vistos:
+                vistos.append(nombre)
+        return vistos
+
+    def _log_de(self, servicio: str, *, lineas: int = 40) -> str:
+        """El log de un servicio, o el motivo de que no se pudiera leer."""
+        recogido: list[str] = []
+        salida = self.runner.run(
+            self._compose("logs", "--no-color", f"--tail={lineas}", servicio),
+            cwd=self.compose_dir,
+            on_line=recogido.append,
+        )
+        cuerpo = [linea.rstrip() for linea in recogido if linea.strip()]
+        if not cuerpo:
+            motivo = (
+                "sin salida"
+                if salida.returncode == 0
+                else f"`docker compose logs` falló (rc={salida.returncode})"
+            )
+            return f"--- {servicio}: {motivo}"
+        return f"--- {servicio}:\n" + "\n".join(f"  | {linea}" for linea in cuerpo)
+
+    @staticmethod
+    def _cola_del_fallo(result: CommandResult, *, maximo: int = 25) -> str:
+        """Las últimas líneas de un comando que falló, o por qué no hay ninguna."""
+        utiles = [linea.rstrip() for linea in result.output_lines if linea.strip()]
+        if not utiles:
+            return "(el comando no escribió nada en stdout ni en stderr)"
+        recorte = utiles[-maximo:]
+        cabecera = (
+            f"últimas {len(recorte)} líneas de {len(utiles)}:"
+            if len(utiles) > len(recorte)
+            else "salida:"
+        )
+        return cabecera + "\n" + "\n".join(f"  | {linea}" for linea in recorte)
+
     def _run(
         self,
         args: list[str],
@@ -473,7 +607,20 @@ class RealStepExecutor:
     ) -> None:
         result = self.runner.run(args, cwd=self.compose_dir, env=env, on_line=lines.append)
         if result.returncode != 0:
-            raise StepExecutionError(f"el comando falló (rc={result.returncode}): {' '.join(args)}")
+            # El comando SOLO no basta, y costó una ejecución entera del e2e
+            # descubrirlo (run 33169724473, 2026-08-28): el install murió en
+            # `start_stack` y el mensaje decía «el comando falló (rc=1): docker
+            # compose … up -d --wait» y nada más. Qué servicio no arrancó, o por
+            # qué, se lo quedaba el instalador — y el runner LO TENÍA capturado
+            # en `output_lines` desde el principio.
+            #
+            # Un instalador que dice «falló» sin decir qué obliga a reproducir a
+            # mano lo que acaba de pasar delante de él. En casa de un cliente,
+            # eso es una llamada de soporte por cada fallo.
+            raise StepExecutionError(
+                f"el comando falló (rc={result.returncode}): {' '.join(args)}\n"
+                + self._cola_del_fallo(result)
+            )
 
     def execute(self, step: InstallStep, config: dict[str, object]) -> list[str]:  # noqa: ARG002
         lines: list[str] = []
@@ -483,7 +630,7 @@ class RealStepExecutor:
             case InstallStep.PULL_IMAGES:
                 self._run(self._compose("pull"), lines)
             case InstallStep.START_STACK:
-                self._run(self._compose("up", "-d", "--wait"), lines)
+                self._arrancar_el_stack(lines)
             case InstallStep.RUN_MIGRATIONS:
                 # The apps depend_on the one-shot `migrations` with
                 # service_completed_successfully, so `up --wait` above already
@@ -781,13 +928,59 @@ class RealStepExecutor:
                 "es un problema de tu Docker ni de tu configuración."
             )
         else:
-            tail = [line for line in safe[-8:] if line.strip()]
-            detail = " / ".join(tail) if tail else "(sin salida)"
+            # La cola por sí sola no sirve cuando el one-shot es CHARLATÁN, y
+            # éste lo es: la siembra del catálogo imprime una línea por cada
+            # elemento indexado. Con una ventana de 8 líneas el error real se
+            # queda fuera y el mensaje enseña ruido de progreso — medido en el
+            # e2e run 33193255711, donde el fallo salió con rc=5 (DATABASE) y
+            # las ocho últimas líneas eran todas `catalog_ingestion.indexed`.
+            #
+            # Así que primero se BUSCAN las líneas que se declaran error, y la
+            # cola queda como respaldo para cuando no hay ninguna.
+            utiles = [line for line in safe if line.strip()]
+
+            def _sin_repetir(lineas: list[str]) -> list[str]:
+                """Sin duplicados y en orden. Seis líneas idénticas no informan.
+
+                El one-shot repite el mismo aviso una vez por elemento del
+                catálogo: sin esto, la ventana se llena con seis copias de la
+                misma frase y el error real sigue sin verse (e2e run 33194504572).
+                """
+                vistas: list[str] = []
+                for linea in lineas:
+                    if linea not in vistas:
+                        vistas.append(linea)
+                return vistas
+
+            # `"level": "error"` y no `"error":`: una línea de log estructurado
+            # puede llevar un campo `error` siendo un WARNING —el aviso de
+            # ollama lo hace— y colarse como si fuera la causa. El nivel es lo
+            # que el propio emisor declara; el campo, sólo un dato suyo.
+            severas = _sin_repetir(
+                [
+                    linea
+                    for linea in utiles
+                    if '"level": "error"' in linea
+                    or '"level": "critical"' in linea
+                    or "Traceback" in linea
+                ]
+            )
+            cola = _sin_repetir(utiles[-40:])[-12:]
+            partes: list[str] = []
+            if severas:
+                partes.append("errores:\n  | " + "\n  | ".join(severas[-6:]))
+            # La cola SIEMPRE, aunque haya severas: si el proceso murió sin
+            # registrar nada de nivel error —una excepción no capturada, un
+            # `exit()` seco— lo único que queda es el final de su salida.
+            partes.append(
+                ("últimas líneas:\n  | " + "\n  | ".join(cola)) if cola else "(sin salida)"
+            )
+            detail = "\n" + "\n".join(partes)
             message = (
                 f"el one-shot de finalización `{BOOTSTRAP_SERVICE}` falló "
                 f"(rc={returncode}). Reprodúcelo con `docker compose run --rm "
                 f"{BOOTSTRAP_SERVICE}` desde {self.compose_dir} para ver el error "
-                f"entero. Últimas líneas: {detail}"
+                f"entero.{detail}"
             )
         if escrowed is not None:
             message += (

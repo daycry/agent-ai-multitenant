@@ -2,7 +2,7 @@
 title: "Publicar una release: ensayo, tag e imágenes en ghcr"
 docs_language: es
 audience: operador, system admin
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 
 # Runbook — Publicar una release de la plataforma
@@ -13,8 +13,18 @@ que van a instalar los clientes, cómo se comprueba que las imágenes están de
 verdad en el registro, y qué hacer cuando el ensayo sale mal.
 
 Está escrito para alguien que **no ha publicado nunca** esta plataforma, porque
-nadie lo ha hecho: medido el 2026-08-27, `release-images.yml` tiene
-`total_count: 0` runs y el repositorio no tiene ni una etiqueta.
+nadie lo ha hecho: **re-medido el 2026-08-28**, `release-images.yml` sigue con
+`total_count: 0` runs y el repositorio no tiene ni una etiqueta. En
+`ghcr.io/daycry` no hay hoy ninguna imagen de esta plataforma, y nada de este
+runbook debe leerse como que la haya.
+
+Eso es, además, lo único que separa a este proyecto de tener instalación
+distribuible: la instalación desde cero **sí** está verificada de punta a punta en
+un Linux limpio (run
+[`33197920542`](https://github.com/daycry/agent-ai-multitenant/actions/runs/33197920542),
+2026-08-28), pero contra imágenes **construidas en el propio job**. Publicar es lo
+que falta, y publicar es este runbook. El estado de cada camino de instalación
+está en [01-installation-from-scratch.md](./01-installation-from-scratch.md).
 
 > **TL;DR.** Ensaya con `v1.0.0-rc1`, comprueba con `docker manifest inspect` y
 > **deslogueado** que las seis imágenes existen, instala desde cero apuntando a
@@ -25,7 +35,9 @@ nadie lo ha hecho: medido el 2026-08-27, `release-images.yml` tiene
 >
 > **Y un orden que no se negocia**: la imagen del **instalador** —la séptima, la
 > que hace posible instalar sin clonar— se publica **después** de que esas seis se
-> puedan pinear por digest, nunca antes (§«La séptima imagen»).
+> puedan pinear por digest, nunca antes (§«La séptima imagen»). Desde que existe el
+> job `installer`, ese orden ya no depende de que alguien lo recuerde: lo impone
+> una cadena de `needs:`.
 
 ## Cuándo
 
@@ -105,6 +117,11 @@ El `needs:` no es decorativo: los cuatro backends heredan de `api-server` vía
 `ARG BASE_IMAGE`, así que **tienen que construirse después**. `admin-panel` no
 hereda de nadie y corre en paralelo con la base.
 
+Hay un **séptimo** job en el mismo fichero, `installer`, que cuelga de los tres
+anteriores y publica la imagen del instalador. Queda fuera de esta tabla porque lo
+que gobierna su sitio no es el grafo de builds, sino el orden duro del ADR 0161:
+§«[La séptima imagen](#la-séptima-imagen-el-instalador-y-el-orden-duro-que-la-precede)».
+
 ### A qué servicios alimentan esas seis imágenes
 
 El compose que genera el instalador resuelve **diez** servicios contra esas seis
@@ -125,25 +142,54 @@ Ese fichero levanta **una** imagen, la del instalador, y por eso publicarla es
 parte de la release y no un trámite aparte.
 
 **El orden duro: las seis primero, pineadas por digest; el instalador después.**
-No es una preferencia de secuencia, es lo único que hace que publicarlo signifique
-algo. Un instalador que el operador verifica por digest y que acto seguido se
-descarga seis imágenes por **tag mutable** no es una cadena más fuerte: es la
-misma cadena con el eslabón débil movido un paso y un artefacto más que auditar.
-El ADR 0161 lo firma así de literal —«sería mover el eslabón débil un paso y
-llamarlo arreglo»— y de ahí salen las **dos condiciones** que hay que comprobar
-_antes_ de publicar el instalador:
+Sigue vigente, y hoy **es mecánico, no documental**. No es una preferencia de
+secuencia: es lo único que hace que publicar el instalador signifique algo. Uno
+que el operador verifica por digest y que acto seguido se descarga seis imágenes
+por **tag mutable** no es una cadena más fuerte; es la misma cadena con el eslabón
+débil movido un paso y un artefacto más que auditar — el ADR 0161 lo firma así de
+literal: «sería mover el eslabón débil un paso y llamarlo arreglo».
 
-| Condición                                                     | Cómo se comprueba                                                                                                                                                                                       |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Las seis imágenes de plataforma se referencian **por digest** | El manifiesto que resuelve el pipeline (`installer_backend/platform_images.json`) trae los seis digests, y el compose generado deja de componer `…:${PLATFORM_IMAGE_TAG}` a secas (paso 6 del ADR 0161) |
-| CI da veredicto                                               | `gh run list --workflow=ci.yml --limit 1`. Está caído desde el **2026-07-30** por facturación de la cuenta (`CONTINUE_HERE.md`)                                                                         |
-| El workflow construye de verdad la imagen del instalador      | `grep -n installer .github/workflows/release-images.yml` — si no aparece, esta release publica seis imágenes y el camino sin clon sigue sin existir                                                     |
+Lo que ha cambiado desde que se escribió este runbook: **el workflow ya tiene el
+job que lo hace cumplir**. `release-images.yml` declara un job `installer` con
+`needs: [prep, api-server, backend, admin-panel]`, y dentro, en este orden:
+resuelve los seis digests contra el registro (`docker buildx imagetools inspect`)
+y reescribe `platform_images.json` → construye y empuja
+`ghcr.io/daycry/installer` → escanea con Trivy → **sella** el artefacto de
+arranque con el digest de lo que acaba de publicar → abre un PR con el manifiesto
+y el artefacto, y **sólo si el tag es final** (`vX.Y.Z`), no para un `rc`. La
+cadena de `needs:` es lo que convierte el orden en algo que no se puede saltar
+por descuido, y la vigila `tests/unit/test_release_publishes_the_installer.py`.
 
-La segunda condición es de higiene, no de diseño, y es la que más fácil se pasa
-por alto: **Trivy corre después del push** (siguiente apartado) y la guarda de
-digest vive en los tests. Publicar con CI caído es publicar **sin ningún control
-efectivo** — y hacerlo justo con el contenedor que mintea el root token de Vault
-y las cinco unseal keys en claro es el peor sitio para estrenar esa costumbre.
+Consecuencia que conviene tener delante antes de cortar: una CVE HIGH/CRITICAL en
+cualquiera de las seis deja al instalador **sin publicar** y al manifiesto **sin
+escribir**. Eso es correcto —el camino sin clon no debe existir sobre imágenes que
+suspendieron el gate—, pero significa que un rojo de Trivy en la base no produce
+«una release con un detalle pendiente»: produce una release de seis imágenes y
+ningún camino nuevo.
+
+Quedan **tres condiciones** que comprobar antes de cortar la release que publique
+el instalador. Sólo la primera es de diseño; las otras dos son de higiene, y son
+las que más fácil se pasan por alto:
+
+| Condición                                                     | Cómo se comprueba                                                                                                                                                                                                                       |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Las seis imágenes de plataforma se referencian **por digest** | El manifiesto que resuelve el pipeline (`installer_backend/platform_images.json`) trae los seis digests, y el compose generado deja de componer `…:${PLATFORM_IMAGE_TAG}` a secas (paso 6 del ADR 0161). Hoy declara `digests: {}`      |
+| CI da veredicto                                               | `gh run list --workflow=ci.yml --limit 1`. **Sí lo da** (medido el 2026-08-28). La avería de facturación de la cuenta que lo tuvo callado desde el 2026-07-30 está resuelta desde el 2026-08-27 — ver más abajo por qué se deja escrito |
+| El repositorio deja a Actions abrir PRs                       | Settings → Actions → General → Workflow permissions → «Allow GitHub Actions to create and approve pull requests». Sin esa casilla el job `installer` hace **todo** su trabajo y muere en la última línea con `GraphQL: … not permitted` |
+
+> **Por qué la fila de CI se deja escrita en vez de borrarla.** Este runbook decía
+> hasta hoy que CI «está caído desde el 2026-07-30 por facturación», citando
+> `CONTINUE_HERE.md`. Dejó de ser cierto el 2026-08-27 y la frase siguió aquí, que
+> es exactamente el modo de fallo que la propia nota de `CONTINUE_HERE.md:223`
+> describe de sí misma: sobrevivió a su causa y un agente la citó como hecho
+> **tres veces en un ADR firmado**, donde sostenía que no se podía publicar nada
+> porque no había controles. Los había. **Antes de repetir de aquí un estado
+> operativo, compruébalo** — el comando de la fila es de una línea.
+
+La higiene importa porque **Trivy corre después del push** (siguiente apartado) y
+la guarda de digest vive en los tests: publicar sin controles efectivos, y hacerlo
+justo con el contenedor que mintea el root token de Vault y las cinco unseal keys
+en claro, es el peor sitio para estrenar esa costumbre.
 
 **Dónde acaba el digest, y quién lo escribe.** El artefacto descargable lleva el
 hueco a la vista:
@@ -154,10 +200,11 @@ image: ghcr.io/daycry/installer:v1.0.0${INSTALLER_IMAGE_DIGEST:-}
 
 Con el hueco vacío, el fichero referencia un **tag mutable**: quien lo descargue
 mañana puede recibir otro contenido bajo el mismo nombre. Lo rellena el pipeline
-al publicar, sustituyendo la línea por su forma sellada
-(`…:v1.0.0@sha256:<64 hex>`), y **nunca se escribe a mano**: un digest puesto por
-una persona no tiene vía de refresco y congela sus CVEs para siempre — es la
-condición 1 del [ADR 0148](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md),
+al publicar (paso «Seal the bootstrap artifact…» del job `installer`),
+sustituyendo la línea por su forma sellada (`…:v1.0.0@sha256:<64 hex>`), y
+**nunca se escribe a mano**: un digest puesto por una persona no tiene vía de
+refresco y congela sus CVEs para siempre — es la condición 1 del
+[ADR 0148](../05-architecture-decisions/0148-distribucion-imagenes-runtime-por-digest.md),
 la misma que rige `runtime_images.json`.
 
 Lo que este orden **no** compra, y conviene no confundirlo: el digest protege
@@ -179,11 +226,31 @@ antes de mirar un log en rojo:
 - Es decir: un fallo de Trivy en la base deja la release **incompleta**, no limpia.
   Con un `rc` da igual; con el tag de verdad es el escenario que este runbook
   existe para evitar.
+- **La séptima no tiene esa mitigación, y es la peor.** Para las seis, el `needs:`
+  del job `installer` convierte un rojo en «no se publica el instalador». Para el
+  Trivy que escanea **al propio instalador** no hay nada detrás: la imagen ya está
+  en el registro, el paso de sellado no corre —así que el artefacto se queda en
+  `master` con el hueco `${INSTALLER_IMAGE_DIGEST:-}` vacío— y el hueco vacío
+  **no impide el `pull`**, porque el fichero nombra `installer:v1.0.0`, un tag que
+  sí resuelve. Quien lo descargue porque «ya salió la versión» se lleva
+  exactamente la imagen que acaba de suspender el gate.
+
+  La acción es **manual y del mismo turno** en que se ve el rojo: retira del
+  registro el tag recién publicado (`gh api -X DELETE` sobre la versión del
+  paquete en GHCR, o Packages → _Manage versions_), arregla la CVE y vuelve a
+  cortar. No lo dejes «hasta el siguiente intento»: mientras el tag esté, el
+  artefacto descargable apunta a él. El arreglo estructural —tag de cuarentena y
+  re-etiquetado tras Trivy, o `build --load` → scan → `push`— es follow-up de
+  prod-11.
 
 ## Comprobación previa
 
 1. **`master` verde.** La release construye lo que hay en el commit etiquetado; si
-   `ci.yml` no da veredicto, la release tampoco lo da.
+   `ci.yml` no da veredicto, la release tampoco lo da. **Y lo da**: la avería de
+   facturación que tuvo a CI callado desde el 2026-07-30 se resolvió el 2026-08-27
+   (`CONTINUE_HERE.md`), y `gh run list --workflow=ci.yml --limit 1` devuelve
+   veredictos reales — comprobado el 2026-08-28. Comprueba el del commit que vas a
+   etiquetar, no el último de cualquier rama.
 2. **El corte del changelog está hecho** en las **dos** mitades
    ([`CHANGELOG.md`](../../CHANGELOG.md) y [`CHANGELOG.es.md`](../../CHANGELOG.es.md)):
    la sección numerada existe y `[Unreleased]` está vacía.
@@ -202,6 +269,13 @@ antes de mirar un log en rojo:
 
 5. **Docker disponible en la máquina desde la que verificas**, porque la
    verificación real es un `docker manifest inspect` contra el registro público.
+6. **El repositorio deja a Actions abrir PRs** (Settings → Actions → General →
+   Workflow permissions). El job `installer` termina abriendo el PR del manifiesto
+   de digests y del artefacto sellado: sin esa casilla hace **todo** su trabajo
+   —incluido publicar la imagen— y muere en la última línea con
+   `GraphQL: GitHub Actions is not permitted to create or approve pull requests`.
+   El arreglo es la casilla, no el workflow, y es el mismo ajuste que ya necesita
+   `build-runtime-templates.yml`.
 
 ## Pasos
 
@@ -301,6 +375,28 @@ limpia. Lo que se verifica aquí no es la plataforma: es que `docker compose pul
 **termina** para los diez servicios. Si termina con el `rc`, terminará con el
 definitivo, porque el único cambio será el número.
 
+**Y este paso es hoy exactamente el hueco que queda, ni más ni menos.** Desde el
+2026-08-28 la instalación desde cero **sí** está verificada de punta a punta en un
+Linux limpio —22 servicios `healthy`, migraciones, Vault, tenant sembrado, HTTPS y
+login, run
+[`33197920542`](https://github.com/daycry/agent-ai-multitenant/actions/runs/33197920542),
+`4 passed`—, pero ese job **construye las seis imágenes dentro de sí mismo** y las
+sirve desde un registro local. Todo lo que ejercita ya está probado; lo único que
+no puede probar es que un `pull` **contra ghcr** resuelva. Ese es el trozo que
+compra este paso 3, y por eso no se salta aunque el nocturno esté en verde: son
+mitades distintas del mismo camino
+([01-installation-from-scratch.md](./01-installation-from-scratch.md)).
+
+> **El nocturno se pondrá rojo a propósito el día que publiques.** El job
+> [Install E2E](../../.github/workflows/install-e2e.yml) abre con un paso llamado
+> «El manifiesto de release sigue sin pinear» que **falla** en cuanto
+> `platform_images.json` trae digests: a partir de ahí `PLATFORM_IMAGE_TAG` deja de
+> formar parte de la referencia (`platform_images.py`) y el registro local del job
+> ya no puede servir esas imágenes. No es una avería, es el aviso de que a ese job
+> le toca cambiar de sujeto — pasar a instalar contra las imágenes publicadas, que
+> es justo lo que un nocturno debería probar desde ese día. Cuéntalo en el PR de la
+> release para que no lo descubra alguien a las tres de la mañana.
+
 ### 4. Empuja el tag definitivo — acto del operador
 
 **Este paso no se automatiza y no se delega.** El ADR 0160 lo firma así de
@@ -337,30 +433,45 @@ done
 roto a medias que el ensayo existía para evitar, y hay que cerrarlo antes de
 anunciar nada — la tabla de «Si el ensayo falla» aplica igual aquí.
 
-### 6. Sólo entonces: publicar el instalador y sellar el artefacto de arranque
+### 6. La séptima imagen: verificar lo que el pipeline acaba de publicar
 
-Este paso **no se hace en la misma release** que estrena las seis, salvo que las
-tres condiciones del apartado «La séptima imagen» ya se cumplan. Si alguna no se
-cumple, la release termina en el paso 5 y el camino sin clon sigue sin existir:
-eso es correcto, no una release incompleta.
+**Ojo al cambio de reparto.** Este paso ya no consiste en publicar el instalador
+aparte: el job `installer` de `release-images.yml` corre en la **misma** ejecución
+del tag, después de las seis, y publica la imagen, reescribe el manifiesto de
+digests y sella el artefacto de arranque. Lo que decide el operador no es _si_ ese
+job corre —corre siempre—, sino si el tag se corta con las **tres condiciones** de
+§«La séptima imagen» cumplidas. Lo que queda aquí es **verificar**, no ejecutar.
 
-Cuando se cumplan, el procedimiento es el mismo de los pasos 2 y 5 aplicado a una
-imagen más, con un cierre propio:
+Y si alguna condición no se cumple, o si Trivy tumba cualquiera de las seis, el
+`needs:` deja al instalador sin publicar y al manifiesto sin escribir: la release
+termina de hecho en el paso 5 y el camino sin clon sigue sin existir. Eso es
+correcto, no una release incompleta a medio arreglar.
+
+La verificación es la de los pasos 2 y 5 aplicada a una imagen más:
 
 ```bash
 docker logout ghcr.io
 docker manifest inspect "ghcr.io/daycry/installer:v1.0.0" > /dev/null && echo "OK installer"
 
-# El digest que hay que sellar en el artefacto (el del manifiesto publicado):
+# El digest publicado, para CONTRASTARLO con el que el pipeline dejó sellado:
 docker buildx imagetools inspect "ghcr.io/daycry/installer:v1.0.0" \
   --format '{{.Manifest.Digest}}'
 ```
 
-Ese digest es el que el pipeline escribe en
+Ese digest tiene que ser el que aparece en
 [`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml)
-sustituyendo `${INSTALLER_IMAGE_DIGEST:-}`. **No lo pegues a mano**: además de
-congelar sus CVEs (ADR 0148), un fichero editado a mano y otro publicado dejan de
-ser el mismo artefacto, y el camino sin clon se apoya en que lo sean.
+en lugar de `${INSTALLER_IMAGE_DIGEST:-}`. Lo escribe el pipeline y llega a
+`master` **por PR**, y sólo para un tag final `vX.Y.Z`: en un `rc` la imagen del
+instalador pinea sus digests —coherencia de lo que se publicó ese día— pero el
+árbol no se toca, o el siguiente que genere un compose desde `master` instalaría
+una release candidate creyendo que instala estable. **No lo pegues a mano**:
+además de congelar sus CVEs (ADR 0148), un fichero editado a mano y otro publicado
+dejan de ser el mismo artefacto, y el camino sin clon se apoya en que lo sean.
+
+Si tras un run verde el hueco sigue vacío, hay exactamente dos formas de que la
+imagen exista y el sellado no: el Trivy del propio job `installer` (que corta
+antes del sellado — ver el tercer punto de §«Trivy corre DESPUÉS del push») y la
+casilla de «create and approve pull requests» del repositorio.
 
 La comprobación final es la que hará un cliente, y se hace **como el cliente**:
 en un directorio vacío, sin checkout y sin sesión abierta.
@@ -382,8 +493,8 @@ de ser el que el ADR 0161 firmó, y su garantía se pierde sin que nada falle
 
 Una release está publicada cuando las cinco cosas son ciertas, en este orden:
 
-1. El run de `release-images.yml` del tag terminó **verde entero**: los seis jobs,
-   incluidos los pasos de Trivy.
+1. El run de `release-images.yml` del tag terminó **verde entero**: todos sus jobs
+   —el `installer` incluido— y todos sus pasos de Trivy.
 2. `docker manifest inspect` **deslogueado** resuelve las seis imágenes con el tag
    de la release.
 3. Una instalación desde cero en una máquina limpia completa el `docker compose pull`
@@ -393,11 +504,14 @@ Una release está publicada cuando las cinco cosas son ciertas, en este orden:
    número de la release, no `0.0.0`.
 5. El changelog tiene su sección numerada y `[Unreleased]` está vacía.
 
-Y una **sexta, sólo si esta release publicó además el instalador** (paso 6): el
-artefacto `docker/bootstrap/docker-compose.generate.yml` referencia la imagen
-**con el digest** de lo que se acaba de publicar, y descargarlo en un directorio
-vacío y pasarle `docker compose config` resuelve sin tocar el repositorio. Sin
-esa sexta, la release es válida: lo que no existe todavía es el camino sin clon.
+Y una **sexta, la del camino sin clon** (paso 6): el artefacto
+`docker/bootstrap/docker-compose.generate.yml` referencia la imagen **con el
+digest** de lo que se acaba de publicar, y descargarlo en un directorio vacío y
+pasarle `docker compose config` resuelve sin tocar el repositorio. El job
+`installer` la persigue por su cuenta en cada release final, pero puede quedarse
+sin cumplir —Trivy sobre el propio instalador, o la casilla de PRs del
+repositorio—. Sin esa sexta la release **es válida**: lo que no existe todavía es
+el camino sin clon, y decirlo así es más honesto que llamarla incompleta.
 
 ## Si el ensayo falla
 
@@ -405,14 +519,16 @@ Un ensayo en rojo es el ensayo **haciendo su trabajo**. El coste de arreglarlo a
 es una etiqueta desechable; el de arreglarlo después es una versión publicada a
 medias.
 
-| Síntoma en el log                                                      | Causa                                                                             | Qué hacer                                                                                                                                                                                                                |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `denied: permission_denied: The requested installation does not exist` | El workflow empuja a un namespace de GHCR que el `GITHUB_TOKEN` no puede escribir | El namespace tiene que derivar de `github.repository_owner`. Es el fallo que tumbó los 14 builds de runtime el 2026-08-21; la guarda es `tests/unit/test_ghcr_namespace_is_pushable.py`                                  |
-| El job `api-server` cae en el paso de Trivy                            | HIGH/CRITICAL **con fix disponible** en la imagen base ya publicada               | Triaje por [triage-vulnerabilidades.md](./triage-vulnerabilidades.md). Recuerda: la base ya está en el registro y los cuatro backends **no**                                                                             |
-| Los jobs `backend` salen como `skipped`                                | `needs: api-server` — la base falló y no llegaron a intentarlo                    | Arregla la base primero; no tiene sentido mirar estos logs                                                                                                                                                               |
-| Run verde pero `docker manifest inspect` deslogueado dice `denied`     | El paquete de GHCR es **privado**, que es el default del `GITHUB_TOKEN`           | Cambia la visibilidad del paquete y repite la comprobación **deslogueado** (paso 2)                                                                                                                                      |
-| Se publicó `:master` en vez de `:v1.0.0-rc1`                           | `workflow_dispatch` sin `-f tag=`                                                 | Relanza con el input relleno. Las imágenes `:master` son basura inofensiva; bórralas del registro al limpiar                                                                                                             |
-| GitHub marca el job `cancelled` al llegar a 60 / 30 min                | Se agotó el `timeout-minutes`                                                     | **Mide antes de tocar el número**: mira la duración real en el log del run. Subirlo sin esa medición es tapar el síntoma, y el primer run es el más lento porque la caché `type=gha` está fría — el segundo suele bastar |
+| Síntoma en el log                                                             | Causa                                                                             | Qué hacer                                                                                                                                                                                                                         |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `denied: permission_denied: The requested installation does not exist`        | El workflow empuja a un namespace de GHCR que el `GITHUB_TOKEN` no puede escribir | El namespace tiene que derivar de `github.repository_owner`. Es el fallo que tumbó los 14 builds de runtime el 2026-08-21; la guarda es `tests/unit/test_ghcr_namespace_is_pushable.py`                                           |
+| El job `api-server` cae en el paso de Trivy                                   | HIGH/CRITICAL **con fix disponible** en la imagen base ya publicada               | Triaje por [triage-vulnerabilidades.md](./triage-vulnerabilidades.md). Recuerda: la base ya está en el registro y los cuatro backends **no**                                                                                      |
+| Los jobs `backend` salen como `skipped`                                       | `needs: api-server` — la base falló y no llegaron a intentarlo                    | Arregla la base primero; no tiene sentido mirar estos logs                                                                                                                                                                        |
+| Run verde pero `docker manifest inspect` deslogueado dice `denied`            | El paquete de GHCR es **privado**, que es el default del `GITHUB_TOKEN`           | Cambia la visibilidad del paquete y repite la comprobación **deslogueado** (paso 2)                                                                                                                                               |
+| Se publicó `:master` en vez de `:v1.0.0-rc1`                                  | `workflow_dispatch` sin `-f tag=`                                                 | Relanza con el input relleno. Las imágenes `:master` son basura inofensiva; bórralas del registro al limpiar                                                                                                                      |
+| GitHub marca el job `cancelled` al llegar a 60 / 30 min                       | Se agotó el `timeout-minutes`                                                     | **Mide antes de tocar el número**: mira la duración real en el log del run. Subirlo sin esa medición es tapar el síntoma, y el primer run es el más lento porque la caché `type=gha` está fría — el segundo suele bastar          |
+| El job `installer` cae en su propio paso de Trivy                             | HIGH/CRITICAL en la imagen del **instalador**, ya publicada                       | **Retira el tag del registro en el acto** y vuelve a cortar: el artefacto de arranque nombra `installer:<tag>`, que resuelve aunque el sellado no haya corrido. Es el único Trivy de este workflow sin nada detrás que lo mitigue |
+| `GraphQL: GitHub Actions is not permitted to create or approve pull requests` | Falta la casilla de Workflow permissions del repositorio                          | La imagen del instalador **ya se publicó**; lo que falta es el PR del manifiesto y del artefacto sellado. Marca la casilla (comprobación previa 6) y relanza — no edites el manifiesto a mano                                     |
 
 Después de arreglar la causa, **repite el ensayo con una etiqueta nueva**
 (`v1.0.0-rc2`, `rc3`…) en vez de reutilizar la anterior: reempujar la misma

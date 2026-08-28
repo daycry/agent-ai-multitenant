@@ -131,13 +131,18 @@ The installer **generates and does not provision**: it writes the boot tree and
 exits, and never talks to the Docker daemon. That is why it does not mount
 `/var/run/docker.sock` — mounting it is effective root on the host, which
 [ADR 0060](docs/05-architecture-decisions/0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)
-rejected. **Needs the images published; not available yet.**
+rejected. **This path does not exist yet for a real user**: it needs the images
+published — the installer's own included — and there is none on
+`ghcr.io/daycry` today.
 
 **(2) Cloning, with Compose.** What the `Get started` steps above describe. Good
-for development and for reading the stack; the canonical compose brings up
-infrastructure, and the application services come from the generated compose.
+for development and for reading the stack, but it gives you infrastructure and
+not the product: the canonical compose brings up PostgreSQL, Redis, MinIO,
+Vault and the rest, and the application services come from the generated
+compose.
 
-**(3) Unattended, with the scripts** — the supported path today:
+**(3) Unattended, with the scripts** — the supported path, and the only one
+measured end to end:
 
 ```bash
 ./scripts/install.sh --config install.yaml   # profiles: scripts/install-profiles/
@@ -146,14 +151,35 @@ infrastructure, and the application services come from the generated compose.
 This CLI is the **real** install path. The HTTP wizard under `apps/installer` is
 a simulation: it provisions nothing and the credentials it reveals are not real.
 
-**Read this before you reserve a machine.** On a clean host the CLI does not
-reach the end today, and the reason is now a single one. Of the two breakages
-measured in ADR 0161, the second — the generated compose referring to files
-nobody wrote, which cloning did _not_ fix — **is repaired**: the auxiliaries
-travel inside the installer package. What remains is the first: **no images are
-published**, so `docker compose pull` has nothing to pull. Publishing is an
-operator action, and no dates are promised. State of each path:
-[installation runbook](docs/06-runbooks/01-installation-from-scratch.md).
+**What is proven.** On a clean Linux machine this path now runs to the end: 18
+steps green, 22 services healthy, Alembic migrations applied, Vault initialised,
+the first tenant seeded and its credentials revealed, the proxy serving HTTPS
+and the login working with the revealed credential. That is the
+[Install E2E](.github/workflows/install-e2e.yml) job, run `33197920542`, four
+tests passed.
+
+**What is not proven, and it is half the message.** That run **builds the six
+images inside the job and serves them from a local registry**. It exercises the
+installer, the generated compose and the boot sequence; it does **not** show
+that installing from the **published** images works, because none is published.
+That single gap is the whole distance between path (3), which works today with
+locally built images, and path (1), which a user who has not cloned still cannot
+use. Publishing is an operator action and no date is promised. State of each
+path: [installation runbook](docs/06-runbooks/01-installation-from-scratch.md).
+
+**Why any of that is believable.** The test behind it was written in June 2026
+and had never run once: it was gated on `E2E_INSTALL=1`, no workflow set the
+variable, and the gate falls in the fixture setup — so pytest collected the four
+cases, skipped them, and exited 0. A green check that installed nothing. It now
+runs **nightly and on manual dispatch**, and the job does not trust its own exit
+code: an anti-false-green guard
+([`scripts/check_e2e_install_report.py`](scripts/check_e2e_install_report.py))
+reads the JUnit report and fails when any of the four required cases did not
+actually execute. Turning it on took 24 runs and cost real defects, none of them
+hypothetical: the AppArmor profile had never been applied and broke six things,
+the workers were chowning every other service's data, the marketplace artifact
+store was not wired, and the watchdog had inherited an HTTP probe without
+serving HTTP.
 
 Configuration is read from `docker/.env`, which is git-ignored. Platform
 credentials live in **Vault**; the database stores only the pointer. The single
@@ -204,17 +230,23 @@ Stated plainly, so nobody goes looking for something that is not there:
   to `ghcr.io/daycry/*` when a `v*` tag is pushed — the
   [Release images](.github/workflows/release-images.yml) workflow has never run,
   because no such tag exists. Until then, images are built locally by the dev
-  scripts. (This line said `ghcr.io/agentic-platform/*` until 2026-08-27; the
+  scripts. This is now the only thing between the install path that has been
+  measured — path (3), with images built in the job — and the one that needs no
+  clone. (This line said `ghcr.io/agentic-platform/*` until 2026-08-27; the
   workflow derives the namespace from the repository owner, so it was wrong —
   and wrong in the one place a reader would copy it from.)
 - **The install wizard does not install.** The nine-step HTTP wizard under
   `apps/installer` runs against a fake executor: it provisions nothing and the
   credentials it reveals at the end are not real. The supported path is the CLI
-  above, and that one is blocked today by **one** of the two breakages in
-  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-  — the missing published images. The other, the generated compose referring to
-  files nobody wrote, is repaired. So: this repository is runnable for
-  development, and not yet installable on a clean production host.
+  above. Of the two breakages measured in
+  [ADR 0161](docs/05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md),
+  the second — the generated compose referring to files nobody wrote — is
+  repaired. The first, the missing published images, is not fixed, but it is now
+  **bounded**: the install e2e drives the whole sequence to the end on a clean
+  Linux host with images built inside the job, so what is left is publishing
+  them, not finding out what else breaks. So: a clean Linux host can be
+  installed today from a clone; what nobody can do yet is install from published
+  images, which is exactly what a user who does not clone needs.
 - **There is no published coverage number**, because no coverage service is
   wired up. CI enforces a ratchet floor on the unit subset instead
   ([`ci.yml`](.github/workflows/ci.yml), job `test-unit`).

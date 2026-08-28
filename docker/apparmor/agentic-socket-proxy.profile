@@ -1,3 +1,29 @@
+# Perfil AppArmor del `docker-socket-proxy`, y SÓLO de él.
+#
+# Por qué existe (2026-08-28, e2e run 33177824929). El perfil compartido
+# `agentic-default` deniega el socket de Docker a todo el mundo:
+#
+#     # a socket leak == host takeover
+#     deny /var/run/docker.sock rwklx,
+#
+# Eso es el Principio 2 y no se toca. Pero el `docker-socket-proxy` es el único
+# servicio que EXISTE para sostener ese socket: lo monta en solo lectura y expone
+# sobre él una API con ACL por endpoint, para que los workers puedan lanzar
+# runtimes sin ver el socket jamás. Con el perfil compartido puesto, HAProxy
+# arrancaba y sus peticiones morían con `503 ... SC--`: no podía conectar con su
+# propio backend.
+#
+# La salida NO era abrir el socket en `agentic-default`. Eso se lo habría dado
+# también a los workers, que son quienes ejecutan código no confiable — es decir,
+# habría cambiado un servicio roto por el agujero exacto que el Principio 2
+# existe para cerrar.
+#
+# Así que este perfil es `agentic-default` con UNA línea distinta. Todo lo demás
+# —capacidades, denegaciones de /proc y /sys, sin mount, sin ptrace— es idéntico
+# a propósito: cuanto más se parezcan, más difícil es que uno derive del otro sin
+# que nadie lo note. `tests/unit/test_apparmor_profile_stays_narrow.py` comprueba
+# que la diferencia siga siendo exactamente ésa.
+
 # AppArmor profile for the platform's long-lived services (Plan 15 task_15_16).
 #
 # Layered defence on top of the default-deny seccomp profile (task_15_15),
@@ -23,7 +49,7 @@
 
 #include <tunables/global>
 
-profile agentic-default flags=(attach_disconnected,mediate_deleted) {
+profile agentic-socket-proxy flags=(attach_disconnected,mediate_deleted) {
   #include <abstractions/base>
 
   # ---- Network: the services talk over the compose bridge networks. ----
@@ -94,16 +120,6 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   # ejecutable es ejecución de código arbitrario con otro nombre. Eso lo afirma
   # `tests/unit/test_apparmor_profile_stays_narrow.py`, que rechaza cualquier
   # regla que junte `w` y `m`.
-  # `x` además de `m`, y por qué las dos (2026-08-28, e2e run 33186222329).
-  #
-  # La primera versión de esta regla concedía `rm`: leer y mapear. Con eso las
-  # extensiones C cargaban y el arranque moría un paso después:
-  #
-  #   setpriv: failed to execute celery: Permission denied
-  #
-  # En `/opt/venv` viven las DOS cosas: los `.so` que se mapean y los
-  # ejecutables de `bin/` que se lanzan. Conceder una sin la otra deja al
-  # proceso pudiendo cargar librerías y sin poder arrancar el programa.
   /opt/**                   rixm,
   /usr/**                    rixm,
   /bin/**                   rixm,
@@ -215,8 +231,12 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   # ptrace of other tasks (read another container's memory / inject).
   deny ptrace (read, trace),
 
-  # Host-sensitive paths: deny writes to kernel knobs and boot/module state,
-  # and deny ANY access to the docker socket (a socket leak == host takeover).
+  # Host-sensitive paths: deny writes to kernel knobs and boot/module state.
+  #
+  # (En `agentic-default` esta frase seguía con «and deny ANY access to the
+  # docker socket». Aquí NO, y por eso se reescribe: un comentario heredado que
+  # describe lo contrario de lo que hace el fichero es peor que no tener
+  # comentario — el siguiente que lo lea creerá que el socket está cerrado.)
   deny /proc/sys/** wklx,
   deny /proc/sysrq-trigger wklx,
   deny /proc/kcore rwklx,
@@ -226,6 +246,8 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   deny /dev/mem rwklx,
   deny /dev/kmem rwklx,
   deny /dev/port rwklx,
-  deny /var/run/docker.sock rwklx,
-  deny /run/docker.sock rwklx,
+  # LA ÚNICA DIFERENCIA con `agentic-default`, y la razón de que este perfil
+  # exista: aquí el socket se PERMITE.
+  /var/run/docker.sock  rw,
+  /run/docker.sock      rw,
 }

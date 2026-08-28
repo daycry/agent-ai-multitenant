@@ -568,14 +568,37 @@ def test_compose_generator_emits_apparmor_on_every_service() -> None:
         providers=ProvidersConfig(ollama=OllamaProvider(enabled=True, endpoint="http://o:11434")),
         tenant=TenantConfig(tenant_name="Acme", admin_email="admin@example.com"),
     )
+    from installer_backend.compose_generator import APPARMOR_SOCKET_PROXY_PROFILE
+
     compose = generate_compose(cfg, monitoring=True)
-    expected = f"apparmor={APPARMOR_DEFAULT_PROFILE}"
+
+    # La invariante es que TODO servicio lleve un pin de AppArmor, no que todos
+    # lleven EL MISMO (2026-08-28). El `docker-socket-proxy` tiene el suyo, y
+    # tiene que tenerlo: `agentic-default` deniega el socket de Docker a todo el
+    # mundo —Principio 2, «a socket leak == host takeover»— y ese servicio es el
+    # único que existe para sostenerlo. Con el perfil compartido puesto, HAProxy
+    # arrancaba y sus peticiones morían con `503 … SC--` (e2e run 33177824929).
+    #
+    # Lo que NO se relaja: sigue prohibido que un servicio quede SIN pin, y sigue
+    # prohibido que uno que no sea el proxy lleve el perfil que abre el socket —
+    # eso se lo daría también a los workers, que ejecutan código no confiable.
+    permitido = {
+        "docker-socket-proxy": f"apparmor={APPARMOR_SOCKET_PROXY_PROFILE}",
+    }
+    por_defecto = f"apparmor={APPARMOR_DEFAULT_PROFILE}"
     missing: list[str] = []
+    indebido: list[str] = []
     for name, svc in compose["services"].items():
         opts = [str(x) for x in svc.get("security_opt", [])]
-        if expected not in opts:
+        if permitido.get(name, por_defecto) not in opts:
             missing.append(name)
+        if name != "docker-socket-proxy" and f"apparmor={APPARMOR_SOCKET_PROXY_PROFILE}" in opts:
+            indebido.append(name)
     assert not missing, "generated services WITHOUT the AppArmor pin: " + ", ".join(missing)
+    assert not indebido, (
+        "estos servicios llevan el perfil del socket-proxy, que PERMITE el socket "
+        "de Docker: " + ", ".join(indebido)
+    )
 
 
 def test_compose_generator_apparmor_name_matches_the_shipped_profile() -> None:
