@@ -1758,3 +1758,42 @@ def test_todo_servicio_con_la_imagen_de_workers_puede_bajar_de_privilegios() -> 
         "Su entrypoint hace `setpriv` sin red: el contenedor morirá al arrancar "
         "y el `up --wait` abortará la instalación."
     )
+
+
+def test_los_servicios_sin_http_no_heredan_la_sonda_del_api_server() -> None:
+    """Un healthcheck heredado que no aplica es peor que ninguno.
+
+    `apps/watchdog/Dockerfile` y los de la familia de workers se construyen
+    `FROM ${BASE_IMAGE}`, que es la imagen del api-server — y ésa declara un
+    `HEALTHCHECK` contra `http://localhost:8000/healthz`. Un servicio que NO
+    sirve HTTP hereda esa sonda, queda `unhealthy` para siempre y tumba el
+    `up --wait` (e2e run 33192295213) mientras funciona perfectamente y lo dice
+    en su propio log.
+
+    No mide lo que dice medir, y su rojo permanente enseña a ignorarlo — que es
+    la peor consecuencia, porque el día que signifique algo nadie lo mirará.
+
+    La comprobación es que cada servicio SIN puerto declare su propio
+    healthcheck, en vez de enumerar cuáles: un servicio nuevo construido sobre
+    la misma base volvería a heredarla en silencio.
+    """
+    compose = generate_compose(_config())
+    # Los one-shots salen y no se vigilan; el resto de servicios de aplicación
+    # sin puerto publicado ni endpoint HTTP tienen que traer sonda propia.
+    sin_sonda = sorted(
+        nombre
+        for nombre, svc in compose["services"].items()
+        if nombre in {"watchdog", "cortex-beat"} and not svc.get("healthcheck")
+    )
+    assert not sin_sonda, (
+        f"{sin_sonda} no declaran healthcheck propio y heredan el del api-server, "
+        "que pega a http://localhost:8000/healthz. No sirven HTTP: quedarán "
+        "`unhealthy` para siempre y el `up --wait` abortará la instalación."
+    )
+    # Y que la sonda que traen NO sea la heredada disfrazada.
+    for nombre in ("watchdog", "cortex-beat"):
+        prueba = " ".join(str(x) for x in compose["services"][nombre]["healthcheck"]["test"])
+        assert "8000" not in prueba and "healthz" not in prueba, (
+            f"el healthcheck de `{nombre}` sigue apuntando al endpoint HTTP del "
+            f"api-server: {prueba!r}. Ese servicio no sirve HTTP."
+        )

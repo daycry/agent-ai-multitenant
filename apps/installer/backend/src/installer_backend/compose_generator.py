@@ -1658,6 +1658,36 @@ def _watchdog_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  #
             "docker-socket-proxy": {"condition": "service_healthy"},
         },
         "networks": ["agentic-net", "agentic-docker"],
+        # Healthcheck PROPIO, y hace falta declararlo (2026-08-28, e2e run
+        # 33192295213).
+        #
+        # `apps/watchdog/Dockerfile` se construye `FROM ${BASE_IMAGE}`, que es la
+        # imagen del api-server — y ésa declara un `HEALTHCHECK` que pega a
+        # `http://localhost:8000/healthz` (api-server/Dockerfile:137). El watchdog
+        # NO sirve HTTP: es un bucle de sondeo. Así que heredaba una sonda que no
+        # podía pasar jamás, quedaba `unhealthy` para siempre y el `up --wait`
+        # abortaba la instalación entera — con el watchdog funcionando
+        # perfectamente y diciéndolo en su propio log.
+        #
+        # Un healthcheck heredado que no aplica es peor que ninguno: no mide lo
+        # que dice medir, y su rojo permanente enseña a ignorarlo.
+        #
+        # Se usa el patrón que `cortex-beat` ya emplea para lo mismo —comprobar
+        # que el proceso vigilado sigue siendo el PID 1— porque para un servicio
+        # sin puerto eso es exactamente lo que «sano» significa.
+        "healthcheck": {
+            "test": [
+                "CMD",
+                "python",
+                "-c",
+                "import sys; sys.exit(0 if b'watchdog' in "
+                "open('/proc/1/cmdline','rb').read() else 1)",
+            ],
+            "interval": "30s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "20s",
+        },
     }
     svc.update(_hardening(limits_cpus="0.25", limits_memory="192m"))
     return svc
