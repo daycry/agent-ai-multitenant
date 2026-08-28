@@ -387,6 +387,19 @@ WHISPER_MODELS_VOLUME = "whisper_models"
 #: it (real load is a host/HUMAN step — the kernel cannot be exercised in CI).
 APPARMOR_DEFAULT_PROFILE = "agentic-default"
 
+#: El perfil del `docker-socket-proxy`, y de ningún otro servicio.
+#:
+#: `agentic-default` deniega el socket de Docker a todo el mundo —Principio 2,
+#: «a socket leak == host takeover»— y este servicio es el único que existe para
+#: sostenerlo. Con el perfil compartido puesto, HAProxy arrancaba y sus
+#: peticiones morían con `503 … SC--`: no alcanzaba su propio backend (medido en
+#: el e2e run 33177824929).
+#:
+#: La alternativa —abrir el socket en el perfil compartido— se lo habría dado
+#: también a los workers, que son quienes ejecutan código no confiable. Un
+#: servicio roto cambiado por el agujero exacto que el Principio 2 cierra.
+APPARMOR_SOCKET_PROXY_PROFILE = "agentic-socket-proxy"
+
 
 def _logging_block() -> dict[str, Any]:
     """The capped json-file logging block every service shares."""
@@ -413,6 +426,7 @@ def _hardening(
     limits_cpus: str,
     limits_memory: str,
     cap_drop_all: bool = True,
+    apparmor_profile: str = APPARMOR_DEFAULT_PROFILE,
 ) -> dict[str, Any]:
     """Platform hardening defaults applied to a generated service.
 
@@ -438,7 +452,7 @@ def _hardening(
         "logging": _logging_block(),
         "security_opt": [
             "no-new-privileges:true",
-            f"apparmor={APPARMOR_DEFAULT_PROFILE}",
+            f"apparmor={apparmor_profile}",
         ],
         "deploy": {
             "resources": {"limits": {"cpus": limits_cpus, "memory": limits_memory}},
@@ -935,7 +949,14 @@ def _docker_socket_proxy_service(
         # the workers reach the Docker API, never the untrusted runtimes.
         "networks": ["agentic-docker"],
     }
-    svc.update(_hardening(limits_cpus="0.5", limits_memory="256m"))
+    # Su propio perfil, no el compartido: ver APPARMOR_SOCKET_PROXY_PROFILE.
+    svc.update(
+        _hardening(
+            limits_cpus="0.5",
+            limits_memory="256m",
+            apparmor_profile=APPARMOR_SOCKET_PROXY_PROFILE,
+        )
+    )
     return svc
 
 

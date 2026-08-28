@@ -318,10 +318,20 @@ jobs:
       # la respuesta NO es quitarle la exigencia: es mover el job a un
       # self-hosted Linux (input `runner`) y decirlo en el plan.
       # ---------------------------------------------------------------------
-      - name: Cargar el perfil AppArmor agentic-default
+      # Se cargan LOS DOS perfiles. El segundo existe porque `agentic-default`
+      # deniega el socket de Docker a todo el mundo (Principio 2) y el
+      # `docker-socket-proxy` es el único servicio que existe para sostenerlo.
+      # Cargar sólo el compartido deja al proxy respondiendo `503 … SC--` y con
+      # él se cae todo lo que lanza runtimes — medido en el run 33177824929.
+      - name: Cargar los perfiles AppArmor del stack
         timeout-minutes: 5
         run: |
           set -euo pipefail
+          sudo apparmor_parser -r -W docker/apparmor/agentic-socket-proxy.profile
+          if ! sudo aa-status | grep -qF 'agentic-socket-proxy'; then
+            echo "::error::apparmor_parser salió 0 pero el kernel no lista 'agentic-socket-proxy': el docker-socket-proxy arrancaría sin confinamiento o no arrancaría."
+            exit 1
+          fi
           sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile
           if ! sudo aa-status | grep -qF 'agentic-default'; then
             echo "apparmor_parser salió 0 pero el kernel no lista 'agentic-default'." >&2

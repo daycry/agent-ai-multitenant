@@ -173,3 +173,86 @@ def test_el_perfil_permite_toda_capacidad_que_el_generador_concede() -> None:
         "Añádelas al perfil CON el motivo: listarlas es un techo, no una "
         "concesión — quien tenga `cap_drop: ALL` sin `cap_add` sigue sin ellas."
     )
+
+
+# ---------------------------------------------------------------------------
+# El perfil del socket-proxy: uno solo, y con UNA diferencia (2026-08-28)
+# ---------------------------------------------------------------------------
+#
+# `agentic-default` deniega el socket de Docker a todo el mundo — Principio 2,
+# «a socket leak == host takeover». Y el `docker-socket-proxy` es el único
+# servicio que EXISTE para sostenerlo: lo monta en solo lectura y expone sobre
+# él una API con ACL por endpoint, para que los workers lancen runtimes sin ver
+# el socket jamás.
+#
+# Con el perfil compartido puesto, HAProxy arrancaba y sus peticiones morían con
+# `503 … SC--`: no alcanzaba su propio backend (e2e run 33177824929).
+#
+# El arreglo que NO se hizo, y que es el que alguien intentará dentro de seis
+# meses: abrir el socket en `agentic-default`. Habría funcionado, y se lo habría
+# dado también a los workers — que son quienes ejecutan código no confiable. Un
+# servicio roto cambiado por el agujero exacto que el Principio 2 cierra.
+
+_PERFIL_PROXY = _PERFIL.with_name("agentic-socket-proxy.profile")
+
+
+def _permite_el_socket(perfil: Path) -> bool:
+    for linea in perfil.read_text(encoding="utf-8").splitlines():
+        texto = linea.split("#", 1)[0].strip()
+        if "docker.sock" in texto and not texto.startswith("deny") and texto.endswith(","):
+            return True
+    return False
+
+
+def test_el_perfil_compartido_sigue_denegando_el_socket() -> None:
+    """La regla que sostiene el Principio 2. Si cae, cae el aislamiento entero."""
+    texto = _PERFIL.read_text(encoding="utf-8")
+    reglas = [
+        linea.split("#", 1)[0].strip()
+        for linea in texto.splitlines()
+        if "docker.sock" in linea.split("#", 1)[0]
+    ]
+    assert reglas, "el perfil compartido ya no dice nada del socket de Docker"
+    for regla in reglas:
+        assert regla.startswith("deny"), (
+            f"`agentic-default` tiene la regla `{regla}` sobre el socket de Docker. "
+            "Ese perfil lo llevan los workers, que ejecutan código no confiable: "
+            "abrirlo ahí es entregar el host. Si un servicio concreto necesita el "
+            "socket, dale su propio perfil como se hizo con el docker-socket-proxy."
+        )
+
+
+def test_solo_el_perfil_del_socket_proxy_permite_el_socket() -> None:
+    """Y ese perfil existe. Las dos mitades: ni de más, ni de menos."""
+    assert _PERFIL_PROXY.is_file(), f"falta {_PERFIL_PROXY.name}"
+    assert _permite_el_socket(_PERFIL_PROXY), (
+        "el perfil del socket-proxy ya no permite el socket: el proxy volverá a "
+        "responder 503 y con él se cae todo lo que lanza runtimes"
+    )
+    assert not _permite_el_socket(_PERFIL), "el perfil compartido lo permite"
+
+
+def test_los_dos_perfiles_solo_se_diferencian_en_el_socket() -> None:
+    """Cuanto más se parezcan, más difícil es que uno derive del otro sin verse.
+
+    Un endurecimiento que se añada a `agentic-default` y no aquí deja al servicio
+    MÁS sensible del stack con la postura más floja — y no habría nada que lo
+    dijera, porque los dos ficheros pasarían sus propias guardas.
+    """
+
+    def reglas(perfil: Path) -> set[str]:
+        vistas = set()
+        for linea in perfil.read_text(encoding="utf-8").splitlines():
+            texto = linea.split("#", 1)[0].strip()
+            if texto and texto.endswith(",") and "docker.sock" not in texto:
+                vistas.add(texto)
+        return vistas
+
+    solo_default = reglas(_PERFIL) - reglas(_PERFIL_PROXY)
+    solo_proxy = reglas(_PERFIL_PROXY) - reglas(_PERFIL)
+    assert not solo_default and not solo_proxy, (
+        f"los perfiles han derivado.\n  sólo en agentic-default: {sorted(solo_default)}"
+        f"\n  sólo en agentic-socket-proxy: {sorted(solo_proxy)}\n"
+        "La única diferencia legítima es la regla del socket. Si has endurecido "
+        "uno, endurece el otro; si la diferencia es deliberada, escríbela aquí."
+    )

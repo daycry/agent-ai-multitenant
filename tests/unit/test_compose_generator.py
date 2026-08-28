@@ -555,7 +555,29 @@ def test_hardening_defaults_on_every_service() -> None:
             assert svc.get("privileged") is True, name
             continue
         # AppArmor MAC confinement is pinned on every other generated service.
-        assert "apparmor=agentic-default" in opts, name
+        #
+        # Con UNA excepción, y por una razón que no se puede resolver de otra
+        # manera (2026-08-28, e2e run 33177824929): `agentic-default` deniega el
+        # socket de Docker a todo el mundo —Principio 2, «a socket leak == host
+        # takeover»— y el `docker-socket-proxy` es el único servicio que existe
+        # para sostenerlo. Con el perfil compartido puesto, HAProxy arrancaba y
+        # sus peticiones morían con `503 … SC--`.
+        #
+        # Abrir el socket en el perfil compartido lo habría arreglado, y se lo
+        # habría dado también a los workers, que ejecutan código no confiable.
+        # Por eso lleva perfil propio: `agentic-socket-proxy`, idéntico al
+        # compartido salvo esa línea.
+        esperado = (
+            "apparmor=agentic-socket-proxy"
+            if name == "docker-socket-proxy"
+            else "apparmor=agentic-default"
+        )
+        assert esperado in opts, name
+        if name != "docker-socket-proxy":
+            assert "apparmor=agentic-socket-proxy" not in opts, (
+                f"{name} lleva el perfil del socket-proxy, que PERMITE el socket "
+                "de Docker. Sólo el propio proxy puede llevarlo."
+            )
         # Every non-privileged service drops ALL caps. Official infra images that
         # self-init as root (chown their data dir + drop to a service user via
         # gosu/su-exec) add the self-init caps back on top of the blanket drop;
