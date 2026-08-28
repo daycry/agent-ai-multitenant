@@ -54,7 +54,16 @@ from installer_backend.config import Environment, InstallerConfig
 # Dev-default markers the prod secret guard rejects (mirror of
 # api_server.config._DEV_SECRET_MARKERS + the MinIO admin default). A generated
 # production .env must contain NONE of these.
-_DEV_SECRET_MARKERS: tuple[str, ...] = ("changeme", "dev-only", "minioadmin")
+#
+# `change_me` NO está en el catálogo del runtime, y está aquí a propósito: es el
+# marcador de los perfiles de `scripts/install-profiles/`, que el operador copia
+# y edita. `CHANGE_ME_minio_secret_placeholder_value` no contiene `changeme` —el
+# guion bajo lo rompe—, así que un perfil sin editar cuyo valor llegara al `.env`
+# pasaría el guardián con un secreto publicado en este repositorio por
+# contraseña. Hoy esos campos se descartan (ver `build_env_vars`), o sea que este
+# marcador es un cable trampa: no cambia nada mientras el descarte siga ahí, y
+# revienta el día que alguien cablee el YAML sin exigir la sustitución.
+_DEV_SECRET_MARKERS: tuple[str, ...] = ("changeme", "change_me", "dev-only", "minioadmin")
 
 #: Minimum number of random bytes behind every generated secret (>=256 bits of
 #: entropy once base64-encoded). Tokens are URL-safe so they are .env-clean
@@ -93,8 +102,30 @@ class GeneratedSecrets:
 
     postgres_password
         The ``postgres`` superuser password (initdb).
-    migrations_user_password / app_user_password
-        Passwords for the two DB roles created on first start (DDL vs DML).
+    migrations_user_password / app_user_password / service_user_password
+        Passwords for the THREE DB roles created on first start. El reparto es
+        el de prod-14 (``task_prod14_05`` / tenancy-2) y no es cosmético:
+
+        * ``migrations_user`` — PROPIETARIO del esquema, ``GRANT ALL``, DDL.
+          Sólo Alembic y el ``pg_dump`` del backup.
+        * ``app_user`` — NOBYPASSRLS: el camino de las peticiones humanas, con
+          ``app.tenant_id`` fijado en la sesión. Es lo que hace que la RLS
+          proteja algo.
+        * ``service_user`` — BYPASSRLS **sin DDL**: los servicios que trabajan
+          cruzando tenants (workers, orchestrator, dispatcher, superficie
+          /admin). Necesitan ver todas las filas; lo que NO necesitan es poder
+          ejecutar ``ALTER TABLE … DISABLE ROW LEVEL SECURITY``.
+
+        ``service_user_password`` la consume ``stack/postgres/init/
+        05-service-role-password.sh``, que corrige el literal de desarrollo con
+        el que ``04-service-role.sql`` crea el rol. Sin ella el rol BYPASSRLS
+        nace con una contraseña escrita en este repositorio, y el único aviso es
+        una línea en el stderr del contenedor de postgres.
+    redis_password
+        ``requirepass`` de Redis. Ese Redis aloja las SESIONES de servidor, el
+        broker de Celery y los contadores de rate limit: sin autenticación,
+        cualquiera con acceso al puerto lee sesiones vivas y encola trabajo para
+        los workers. Viaja además dentro de cada DSN ``redis://:<clave>@redis``.
     minio_root_user / minio_root_password
         MinIO admin credentials (the access/secret key the services use).
     jwt_secret
@@ -116,6 +147,11 @@ class GeneratedSecrets:
     postgres_password: str
     migrations_user_password: str
     app_user_password: str
+    # prod-14 task_prod14_04/05 (tenancy-2). El tercer rol, el que de verdad
+    # corren los servicios de larga vida. Ver el reparto en el docstring.
+    service_user_password: str
+    # prod-10 secrets-7. `--requirepass` de Redis, y credencial de las nueve DSN.
+    redis_password: str
     minio_root_user: str
     minio_root_password: str
     jwt_secret: str
@@ -157,6 +193,11 @@ def generate_secrets() -> GeneratedSecrets:
         postgres_password=_token(),
         migrations_user_password=_token(),
         app_user_password=_token(),
+        # Tirada INDEPENDIENTE, no una copia de la de `app_user`: si compartieran
+        # valor, comprometer el rol de aplicación entregaría también el rol que se
+        # salta la RLS de todos los tenants.
+        service_user_password=_token(),
+        redis_password=_token(),
         # A generated admin *name* (not "minioadmin") + a generated key.
         minio_root_user=f"minio-{secrets.token_hex(8)}",
         minio_root_password=_token(),
@@ -173,21 +214,66 @@ def generate_secrets() -> GeneratedSecrets:
 
 
 def _database_urls(secrets_: GeneratedSecrets) -> dict[str, str]:
-    """Build the application + admin DSNs from the generated DB credentials.
+    """Las TRES DSN del stack, una por rol, con las credenciales generadas.
 
-    The services read ``DATABASE_URL`` (app role, NOBYPASSRLS) and
-    ``ADMIN_DATABASE_URL`` (migrations role, BYPASSRLS). Both point at the
-    in-stack ``postgres`` service over the compose network. The passwords are
-    the generated ones, so the DSNs carry no dev-default marker.
+    El reparto lo fijó prod-14 (``task_prod14_05`` / tenancy-2) y vive escrito en
+    los cuatro ``config.py`` del runtime. Lo que hay que tener presente al leer
+    esto: **el `.env` gana al default de pydantic**, así que la postura real de
+    una instalación no la decide `config.py`, la decide este generador. Hasta el
+    2026-08-27 devolvía a los workers, al dispatcher y a la superficie /admin al
+    PROPIETARIO del esquema, deshaciendo prod-14 sin que ninguna guarda lo viera
+    (las de prod-14 leen los `config.py`, no el `.env`).
+
+    * ``DATABASE_URL`` — ``app_user``, NOBYPASSRLS. El camino de las peticiones
+      humanas, con ``app.tenant_id`` fijado por el middleware. Es el rol que hace
+      que la RLS proteja algo.
+    * ``SERVICE_DATABASE_URL`` — ``service_user``, BYPASSRLS y **sin DDL**. Lo
+      que corren los servicios de larga vida que trabajan cruzando tenants:
+      workers (la superficie más expuesta, porque ejecutan las tools de los
+      agentes), orchestrator, notification-dispatcher y los endpoints /admin.
+      Ven todas las filas; lo que no pueden es apagar la RLS.
+    * ``ADMIN_DATABASE_URL`` — ``migrations_user``, dueño del esquema con
+      ``GRANT ALL``. SÓLO el one-shot ``migrations`` (Alembic necesita DDL) y el
+      ``pg_dump`` del backup, que necesita al dueño para volcarlo todo.
+
+    Los tres apuntan al servicio ``postgres`` por la red del compose, y las
+    contraseñas son las generadas, así que ninguna DSN lleva marcador de
+    desarrollo.
     """
 
     db_name = "agentic_platform"
     app_url = f"postgresql+asyncpg://app_user:{secrets_.app_user_password}@postgres:5432/{db_name}"
+    service_url = (
+        f"postgresql+asyncpg://service_user:{secrets_.service_user_password}"
+        f"@postgres:5432/{db_name}"
+    )
     admin_url = (
         f"postgresql+asyncpg://migrations_user:{secrets_.migrations_user_password}"
         f"@postgres:5432/{db_name}"
     )
-    return {"DATABASE_URL": app_url, "ADMIN_DATABASE_URL": admin_url}
+    return {
+        "DATABASE_URL": app_url,
+        "SERVICE_DATABASE_URL": service_url,
+        "ADMIN_DATABASE_URL": admin_url,
+    }
+
+
+def _redis_url(secrets_: GeneratedSecrets, db: int) -> str:
+    """DSN autenticada contra el Redis del stack (``requirepass``, prod-10).
+
+    Redis no tiene usuario en este stack, sólo contraseña, así que la forma es
+    ``redis://:<clave>@redis:6379/<db>`` — con los dos puntos y el usuario vacío.
+
+    El valor va **en claro** y sin percent-encoding a propósito: el compose
+    construye estas mismas DSN interpolando ``${REDIS_PASSWORD}`` tal cual, y las
+    dos formas sólo coinciden mientras el secreto no lleve un carácter reservado
+    de URL. Codificarlo aquí y no allí es como se consigue que el `.env` y el
+    compose se autentiquen con cadenas distintas. La invariante que lo sostiene
+    —que ``_token()`` es URL-safe— la comprueba
+    ``test_every_secret_that_travels_inside_a_url_is_url_safe``.
+    """
+
+    return f"redis://:{secrets_.redis_password}@redis:6379/{db}"
 
 
 def _backup_env(cfg: InstallerConfig, secrets_: GeneratedSecrets) -> dict[str, str]:
@@ -257,6 +343,26 @@ def build_env_vars(
     endpoints) is included; provider *credentials* live in Vault (task 15_09),
     not here. The deployment ``ENVIRONMENT`` markers (the bare + per-service
     prefixed ones) are set so the guard actually runs in staging/prod.
+
+    Lo que este mapa NO consume del ``install.yaml``, dicho aquí porque no se
+    deduce leyendo el código y hoy el operador lo teclea creyendo lo contrario:
+
+    * ``storage.minio_access_key`` / ``minio_secret_key`` — campos OBLIGATORIOS
+      que se descartan. ``MINIO_ROOT_USER``/``MINIO_ROOT_PASSWORD`` salen de
+      :func:`generate_secrets`, que es más fuerte que lo que teclee nadie y es lo
+      que el gate e2e de instalación da por supuesto. El descarte lo fija
+      ``test_the_profile_placeholder_never_reaches_the_generated_env``.
+    * ``providers.*.api_key`` / ``oauth_token`` — el bootstrap de Vault sólo hace
+      la orquestación (init → unseal → KV → políticas); escribir VALORES en el KV
+      es dominio de prod-10, que todavía no existe. Así que hoy no hay destino
+      para esas credenciales y no se escriben en ningún artefacto.
+
+    Que se descarten es defendible; lo que no lo es es PEDIRLAS afirmando que van
+    a Vault. Esa mitad no vive en este fichero — está en
+    ``scripts/install-profiles/*.yaml`` (que promete «el instalador escribe los
+    secretos generados en Vault»), en la obligatoriedad de
+    :class:`~installer_backend.config.StorageConfig` y en el runbook de
+    producción, y sigue abierta.
     """
 
     runtime_env = _RUNTIME_ENVIRONMENT[cfg.system.environment]
@@ -273,11 +379,21 @@ def build_env_vars(
         "POSTGRES_PORT": "5432",
         "MIGRATIONS_USER_PASSWORD": secrets_.migrations_user_password,
         "APP_USER_PASSWORD": secrets_.app_user_password,
+        # prod-14 task_prod14_04. La consume `stack/postgres/init/
+        # 05-service-role-password.sh` en el PRIMER arranque para corregir el
+        # literal de desarrollo con el que `04-service-role.sql` crea el rol. Sin
+        # ella, el rol que se salta la RLS de todos los tenants nace con una
+        # contraseña escrita en este repositorio.
+        "SERVICE_USER_PASSWORD": secrets_.service_user_password,
         # --- derived DSNs the services read directly ---
         "DATABASE_URL": db_urls["DATABASE_URL"],
+        "SERVICE_DATABASE_URL": db_urls["SERVICE_DATABASE_URL"],
         "ADMIN_DATABASE_URL": db_urls["ADMIN_DATABASE_URL"],
         # --- Redis ---
-        "REDIS_URL": "redis://redis:6379/0",
+        # prod-10 secrets-7: `requirepass` obligatorio. Ahí viven las sesiones de
+        # servidor, el broker de Celery y los contadores de rate limit.
+        "REDIS_PASSWORD": secrets_.redis_password,
+        "REDIS_URL": _redis_url(secrets_, 0),
         "REDIS_MAX_MEM": "512mb",
         "REDIS_PORT": "6379",
         # --- MinIO ---
@@ -307,21 +423,38 @@ def build_env_vars(
         "API_SERVER_MINIO_ACCESS_KEY": secrets_.minio_root_user,
         "API_SERVER_MINIO_SECRET_KEY": secrets_.minio_root_password,
         "API_SERVER_DATABASE_URL": db_urls["DATABASE_URL"],
-        "API_SERVER_ADMIN_DATABASE_URL": db_urls["ADMIN_DATABASE_URL"],
+        # La superficie /admin: BYPASSRLS para leer cruzando tenants e insertar
+        # en `audit_log` sin `app.tenant_id`, pero SIN DDL. Con el dueño del
+        # esquema, `ALTER TABLE … DISABLE ROW LEVEL SECURITY` quedaba dentro del
+        # radio de explosión de /admin (prod-14 task_prod14_05).
+        "API_SERVER_ADMIN_DATABASE_URL": db_urls["SERVICE_DATABASE_URL"],
         # --- workers (WORKERS_ prefixed) ---
         "WORKERS_ENVIRONMENT": runtime_env,
-        "WORKERS_DATABASE_URL": db_urls["ADMIN_DATABASE_URL"],
+        # Los workers ejecutan las tools de los agentes LLM: son la superficie
+        # más expuesta de la plataforma. Con el dueño del esquema, desde su DSN
+        # se apaga el aislamiento multi-tenant de TODA la instalación sin tocar
+        # una fila. BYPASSRLS sí (escriben `executions` cruzando tenants), DDL no.
+        "WORKERS_DATABASE_URL": db_urls["SERVICE_DATABASE_URL"],
         "WORKERS_DATA_ROOT": cfg.storage.data_root,
         # Backup: el QUÉ se respalda depende del layout que genera el instalador,
         # así que se emite aquí y no se hereda del default de dev (prod-04).
         **_backup_env(cfg, secrets_),
         # --- orchestrator (ORCHESTRATOR_ prefixed) ---
         "ORCHESTRATOR_ENVIRONMENT": runtime_env,
-        "ORCHESTRATOR_DATABASE_URL": db_urls["DATABASE_URL"],
+        # El error espejo del de los workers, y el que falla en SILENCIO: con
+        # `app_user` (NOBYPASSRLS) y sin un solo `set_config('app.tenant_id')` en
+        # todo `apps/orchestrator/src/`, las policies filtran cada fila y el
+        # despachador no ve NINGUNA tarea. El stack sube entero `healthy` y los
+        # planes se quedan en `pending` para siempre: cero filas es una respuesta
+        # válida de SQL, así que no hay error ni traza que seguir.
+        "ORCHESTRATOR_DATABASE_URL": db_urls["SERVICE_DATABASE_URL"],
         # --- notification-dispatcher (NOTIFY_ prefixed) ---
         # MUST match API_SERVER_NOTIFICATION_ENCRYPTION_KEY (write/read pair).
         "NOTIFY_ENVIRONMENT": runtime_env,
-        "NOTIFY_DATABASE_URL": db_urls["ADMIN_DATABASE_URL"],
+        # Entrega cruzando tenants (BYPASSRLS), y valida `row.tenant_id ==
+        # request.tenant_id` en el límite de la tarea Celery porque la RLS no
+        # puede cazar un payload manipulado. DDL nunca lo necesitó.
+        "NOTIFY_DATABASE_URL": db_urls["SERVICE_DATABASE_URL"],
         "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": secrets_.notification_encryption_key,
         # --- platform image pins (consumed by the generated compose) ---
         "PLATFORM_IMAGE_TAG": "v1.0.0",

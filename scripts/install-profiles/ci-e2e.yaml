@@ -1,0 +1,86 @@
+# =============================================================================
+# Perfil de instalación: CI-E2E  (nightly `install-e2e.yml`)
+# =============================================================================
+# El perfil con el que corre el e2e de instalación en un runner Linux:
+#   ./scripts/install.sh --config scripts/install-profiles/ci-e2e.yaml
+#
+# NO es un perfil para operadores. Es `minimal.yaml` con UNA sola diferencia
+# —la voz apagada— y esa diferencia está gateada por un test, no por la buena
+# voluntad de quien lo edite:
+# `tests/unit/test_install_e2e_gate.py` compara este fichero con `minimal.yaml`
+# clave a clave y falla si divergen en cualquier otra cosa.
+#
+# (Hasta hoy esta línea citaba un fichero de test que NUNCA ha existido. Una
+# guarda citada y ausente es peor que ninguna cita: quien viene a editar el
+# perfil la busca, no la encuentra y concluye —razonablemente— que puede tocar
+# lo que quiera. Que las rutas citadas en esta cabecera existan de verdad lo
+# comprueba ahora `test_the_ci_profile_only_cites_guards_that_exist`.)
+#
+# Por qué existe la guarda antes que el perfil: un perfil «de CI» que puede
+# alejarse del que usa la gente acaba certificando una instalación que nadie
+# hace. Con la guarda, cada divergencia nueva cuesta editar el test y escribir
+# el porqué — que es exactamente el precio que debe tener.
+#
+# LA ÚNICA DIFERENCIA: `resources.voice_mode: none`
+# -------------------------------------------------
+# Omitir el campo NO es neutral: `ResourceConfig._resolve_modes` lo deriva a
+# `cpu` (config.py), y con `cpu` el compose generado añade `stt`
+# (fedirz/faster-whisper-server:latest-cpu) y `tts`
+# (ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2) — 1,9 GB comprimidos de descarga,
+# dos servidores de modelos compitiendo por los 16 GiB del runner, y el volumen
+# nombrado `whisper_models`, que el `uninstall` NO borra (va sin `-v`, ver
+# uninstall.py) y que en un runner self-hosted se acumula corrida tras corrida.
+#
+# Ninguna aserción del e2e (`tests/e2e/test_install_from_scratch.py`) mira la
+# voz: comprueba que el install termina, que Caddy sirve HTTPS, que 8000/3000
+# NO están publicados (ADR 0061) y que la credencial revelada autentica. Lo que
+# se pierde apagándola está escrito aquí para que nadie lo lea como cobertura:
+# **este e2e no acredita que el stack de voz (ADR 0073) instale**. Eso sigue
+# siendo un test humano sobre `minimal.yaml` o `recommended.yaml`.
+#
+# SECRETOS
+# --------
+# Ninguno real, y a propósito. El único proveedor habilitado es Ollama, al que
+# `validate_providers` (config.py) sólo le exige el `endpoint` — ni oauth_token
+# ni api_key. Los `CHANGE_ME_*` de MinIO son marcadores que NO viajan al `.env`
+# generado: `config_generators` escribe credenciales CSPRNG propias. Por eso el
+# job nocturno no necesita ni un `secrets.*` del repositorio.
+# -----------------------------------------------------------------------------
+
+# Paso 2 — sistema: dominio + entorno.
+system:
+  domain: agentic.example.com
+  environment: production
+
+# Paso 3 — recursos / GPU: lo mínimo para arrancar el stack.
+resources:
+  worker_replicas: 1
+  worker_memory_gib: 2
+  gpu_enabled: false
+  # La única divergencia con minimal.yaml. Ver la cabecera.
+  voice_mode: none
+
+# Paso 4 — almacenamiento: raíz de datos + bucket de MinIO.
+storage:
+  data_root: /data/agent-platform
+  minio_bucket: agentic-platform
+  minio_access_key: CHANGE_ME_minio_access
+  minio_secret_key: CHANGE_ME_minio_secret_placeholder_value
+
+# Paso 5 — proveedores LLM (catálogo cerrado ADR-0021).
+# Mínimo: un único proveedor local (Ollama) habilitado.
+providers:
+  ollama:
+    enabled: true
+    endpoint: http://ollama:11434
+
+# Paso 6 — tenant inicial + usuario administrador.
+tenant:
+  tenant_name: Acme
+  admin_email: admin@acme.com
+
+# Puertos publicados en el host (por defecto el compose canónico).
+ports:
+  admin_panel: 3000
+  api_server: 8000
+  minio_console: 9001

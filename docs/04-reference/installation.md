@@ -2,7 +2,7 @@
 title: Instalación, CLI, perfiles y endurecimiento de producción — Referencia
 audience: operador, system admin, devops, security
 phase: 15-instalador-produccion
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 
 # Instalación, CLI, perfiles y endurecimiento de producción — Referencia
@@ -64,8 +64,19 @@ less docker-compose.generate.yml     # este paso NO es decorativo: es su funció
 docker compose -f docker-compose.generate.yml run --rm generate
 
 cd /data/agent-platform && docker compose up -d --wait
-docker compose run --rm bootstrap    # Vault init + unseal + siembra + credenciales
+docker compose run --rm bootstrap    # <-- PENDIENTE: ver la nota de abajo
 ```
+
+> **El tercer comando todavía no funciona, y el instalador lo dice.** El one-shot
+> `bootstrap` (init de Vault + siembra del tenant + revelado de credenciales) es
+> la segunda mitad del paso 8 del ADR 0161: el compose generado ya declara el
+> servicio, pero la imagen del api-server aún no trae el módulo
+> `api_server.bootstrap` que ejecuta, así que el comando responde con un
+> `No module named …` y deja un stack `Up (healthy)` —el healthcheck de Vault
+> acepta a propósito un Vault sellado— sin Vault inicializado, sin tenant, sin
+> usuario admin y sin credenciales. Hasta que aterrice, el banner de `generate`
+> marca ese paso como `NO DISPONIBLE` y remite a terminar desde el host con el
+> CLI. Ver §«`generate` — escribir el árbol y salir».
 
 **Qué se está leyendo cuando se lee ese fichero**: que baja **una** imagen, que le
 monta **sólo** la raíz de datos y el `install.yaml` en solo lectura, y que **no
@@ -166,17 +177,137 @@ con código 4 (`PROVISION`)** si detecta un seam de simulación sin `--dry-run`
 (`cli._assert_real_install_seams`) — no existe la instalación falsa silenciosa.
 Códigos de salida estables:
 
-| Código | Significado                                                          |
-| ------ | -------------------------------------------------------------------- |
-| 0      | Instalación completada                                               |
-| 1      | Error de uso (args mal / falta `--config`)                           |
-| 2      | Error de config (`install.yaml` inválido; NO se provisiona nada)     |
-| 3      | Error de prereq (un prerequisito falló; aborta ANTES de provisionar) |
-| 4      | Error de provisión (un paso falló; el stack puede quedar a medias)   |
-| 5      | Abortado (el operador declinó una confirmación destructiva)          |
+| Código | Significado                                                                               | Qué hacer al recogerlo                                                        |
+| ------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 0      | Instalación completada                                                                    | —                                                                             |
+| 1      | Error de uso (args mal / falta `--config`)                                                | Corregir la invocación                                                        |
+| 2      | Error de config (`install.yaml` inválido; NO se provisiona nada)                          | Corregir el YAML                                                              |
+| 3      | Error de prereq (un prerequisito falló; aborta ANTES de provisionar)                      | Arreglar el host y reintentar                                                 |
+| 4      | Error de provisión (un paso falló; el stack puede quedar a medias)                        | Revisar el paso que falló; reintentar es seguro                               |
+| 5      | Abortado (el operador declinó una confirmación destructiva)                               | Nada: no se tocó nada                                                         |
+| 6      | `generate` no pudo escribir el árbol de arranque                                          | No se levantó nada; puede haber ficheros a medias bajo la raíz de datos       |
+| 7      | Purga INCOMPLETA: `uninstall --purge-data` no pudo borrarlo todo                          | **NO** dar la máquina por limpia: puede seguir ahí el `.env` con los secretos |
+| 8      | UNSAFE: la raíz de datos tiene una instalación previa ilegible; **no se ha escrito nada** | Recuperar el `.env` (o su `.env.bak.*`) o asumir la pérdida (ver abajo)       |
+| 9      | Excepción imprevista, ya traducida a un mensaje en stderr                                 | Leer el mensaje; la raíz de datos puede tener escrituras parciales            |
+
+**Las cuatro últimas filas faltaban aquí hasta el 2026-08-28**, y el 6 llevaba
+meses existiendo en el código sin estar documentado — la tabla iba del 0 al 5, así
+que la automatización del operador trataba como «desconocido» justo el código que
+iba a recibir. Cada una separa una decisión distinta de quien recoge el error: el
+6 dice «no se levantó nada» frente a «el stack puede estar a medias»; el 7, «no
+des la máquina por limpia»; el 8, «me niego, arréglalo tú» frente a «reintenta»;
+y el 9 existe para que ningún fallo imprevisto vuelva a salir como traza de
+Python con un exit 1, que en esta misma tabla significa «argumentos mal».
 
 Los secretos + unseal keys se imprimen a stdout **una vez** (sin recuperación;
-nunca a un fichero de log).
+nunca a un fichero de log). Con una excepción acotada y deliberada: ver
+§«Si la instalación se interrumpe después de inicializar Vault».
+
+### Reejecutar el instalador: qué pasa con los secretos
+
+La primera instalación falla tarde con frecuencia —Caddy no arranca porque otro
+servicio tiene el 443— pero para entonces PostgreSQL **ya hizo su `initdb`** con
+la contraseña del primer `.env`. Lo que hace el instalador al relanzarlo:
+
+| Estado de `{data_root}`                          | Qué hace                                                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Vacía                                            | Acuña todos los secretos con CSPRNG                                                                    |
+| Con `.env` legible                               | **Reutiliza** sus secretos; copia el anterior a `.env.bak.<timestamp>` (0600) antes de sobrescribir    |
+| Con `.env` legible al que le falta un data-bound | **Aborta con 8**, sin escribir nada                                                                    |
+| Con `.env` ilegible (permisos, corrupción)       | **Aborta con 8**, sin escribir nada                                                                    |
+| Con `postgres/PG_VERSION` y **sin** `.env`       | **Aborta con 8**: los secretos de esos datos se han perdido y ninguno de los que se generen los abrirá |
+
+Los secretos que se reutilizan sí o sí (perderlos no «rota» nada: deja los datos
+huérfanos) son las tres contraseñas de rol de PostgreSQL, el usuario y la clave
+raíz de MinIO, y las tres claves Fernet de las columnas cifradas. Los que firman
+o autentican (JWT, token interno, token de alertas, firma de URLs de review,
+contraseña de Redis) se reutilizan si están y se acuñan si faltan, **diciéndolo**
+por su nombre de variable — rotar el secreto JWT cierra todas las sesiones
+abiertas.
+
+`--force-new-secrets` (en `install` y en `generate`) es la puerta de emergencia:
+acuña todo de nuevo asumiendo que los datos que haya en disco quedan
+inaccesibles. **Sigue haciendo la copia del `.env` anterior**: que el operador
+asuma la pérdida no es motivo para quitarle la última copia de los secretos
+viejos.
+
+### Si la instalación se interrumpe después de inicializar Vault
+
+Entre `vault operator init` y el revelado final hay minutos —la siembra del
+catálogo built-in— y en ese tramo las cinco unseal keys existen **sólo en la
+memoria del proceso**. Si el proceso muere ahí (una sesión SSH que se cae, un
+paso que falla), un reintento no las recupera: `bootstrap_vault` detecta que
+Vault ya está inicializado y se niega, correctamente, a re-inicializar.
+
+Por eso el instalador escribe `{data_root}/UNSEAL-KEYS-BORRAME.txt` a 0600 **en
+cuanto** Vault se inicializa, y lo **borra en cuanto** las claves salen por
+pantalla. Si ese fichero está en disco, es que algo se interrumpió:
+
+1. copia de ahí las cinco claves y el root token (con desellado manual, [ADR
+   0145](../05-architecture-decisions/0145-vault-operable-tokens-y-unseal.md), los
+   cinco shares se reparten entre cinco custodias distintas — ese fichero **no**
+   es una de ellas);
+2. reanuda con `--vault-unseal-keys-from {data_root}/UNSEAL-KEYS-BORRAME.txt`;
+3. **borra el fichero.**
+
+El flag pide un fichero y no la clave en la línea de comandos a propósito: un
+share en `argv` queda a la vista de cualquier usuario del host en `ps` y en el
+historial del shell.
+
+### `generate` — escribir el árbol y salir (camino sin clon)
+
+Es el subcomando del [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+opción D, el que corre dentro de la imagen del instalador: **no habla con
+Docker** (montar el socket del daemon es acceso root al host, lo que rechazó el
+[ADR 0060](../05-architecture-decisions/0060-acceso-daemon-docker-y-ruta-api-interna-sandbox.md)),
+se le monta sólo la raíz de datos, ejecuta únicamente el paso `generate_config` y
+sale con **6** si no pudo escribir.
+
+```bash
+docker run --rm -v /data/agent-platform:/data/agent-platform \
+  -v ./install.yaml:/install.yaml:ro \
+  ghcr.io/daycry/installer:v1.0.0 generate --config /install.yaml
+```
+
+No tiene `--dry-run`, y es intencionado: el entregable de este subcomando **es**
+el árbol de ficheros, así que simularlo sólo produce un log en verde sobre una
+raíz de datos vacía.
+
+**Dos cosas que este camino NO hace, y que el banner final dice por escrito:**
+
+- **No corre la puerta de prerequisitos.** No puede: desde dentro del contenedor
+  no se ven el daemon Docker, la versión de Compose ni los puertos del host. Lo
+  único que sí mide —y mide— es el disco libre de la raíz de datos, que está
+  montada. El resto (80/443 libres, Docker ≥ 24.0, Compose ≥ 2.21, 8 GiB de RAM)
+  el banner los **lista** con los mismos umbrales que `prereqs.py`, para que el
+  operador los compruebe antes del `up`.
+- **No finaliza la instalación.** El paso `docker compose run --rm bootstrap`
+  —init de Vault, siembra del tenant, revelado de credenciales— es la segunda
+  mitad del paso 8 del ADR 0161 y **está pendiente**: el compose generado ya
+  declara el servicio, pero la imagen del api-server todavía no trae el módulo
+  `api_server.bootstrap` que ejecuta. Mientras siga así, el banner lo marca como
+  `NO DISPONIBLE` y **no ofrece salida de emergencia**, porque no la hay.
+
+  Este párrafo decía hasta el 2026-08-28 que el banner «remite a terminar desde
+  el host con `python -m installer_backend.cli install --config install.yaml`».
+  Era falso, y de la peor manera: ese camino **tampoco terminaba** —moría en el
+  mismo paso de Vault, porque el servicio no publica puerto y el cliente hablaba
+  contra `127.0.0.1:8200`—, así que ofrecía como remedio la avería que se quería
+  remediar. Un test lo daba por bueno, con lo que la suite en verde certificaba
+  una salida de emergencia rota: el mismo modo de fallo que ese test nació para
+  cazar, una vuelta más arriba.
+
+  **El banner no imprime nunca un comando que falla**; hay una guarda ejecutable
+  que cruza esa declaración contra el árbol del repositorio, así que el día que
+  el módulo aterrice la suite obliga a actualizar el banner.
+
+`tls_mode: provided` funciona en los dos caminos, pero de forma distinta: desde
+el host, el instalador **copia** `tls_cert_path`/`tls_key_path` a
+`{data_root}/caddy/tls/` (`server.crt` 0644, `server.key` 0600); desde el
+contenedor esas rutas del host no son alcanzables, así que el par tiene que estar
+**ya** en `{data_root}/caddy/tls/`. Si no se cumple ninguna de las dos, el paso 1
+falla con un mensaje que nombra las rutas — antes se aceptaba en silencio y Caddy
+arrancaba sin certificado, tumbando el `up --wait` entero.
 
 ### Plantillas por perfil
 

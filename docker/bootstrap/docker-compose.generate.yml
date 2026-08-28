@@ -12,11 +12,27 @@
 #      `config/global.yaml`, `caddy/Caddyfile` y `stack/**`— y sale.
 #
 # Lo que NO hace: levantar la plataforma. Eso lo ejecutas tú, en tu host y con
-# tus permisos. Los tres comandos, en orden:
+# tus permisos:
 #
 #   docker compose -f docker-compose.generate.yml run --rm generate
-#   cd /data/agent-platform && docker compose up -d --wait
-#   docker compose run --rm bootstrap    # Vault init + unseal + siembra
+#   sudo docker compose -f /data/agent-platform/docker-compose.yml up -d --wait
+#
+# EL `sudo` NO ES DECORATIVO. Este contenedor corre como root —lo necesita para
+# escribir bajo la raíz de datos que creas con `sudo mkdir -p`— y hace `chmod`
+# pero no `chown`, así que el árbol te queda **root:root**: `.env` 0600,
+# `docker-compose.yml` 0640. Con tu usuario normal en el grupo `docker` ese
+# `up -d` no puede ni leer el compose. O usas `sudo` para todo (también para cada
+# `ps` y cada log), o tomas posesión una vez, que es lo cómodo y conserva los
+# modos:  sudo chown -R $(id -u):$(id -g) /data/agent-platform
+#
+# Y FALTA LA FINALIZACIÓN: inicializar Vault, sembrar el tenant inicial y ver las
+# credenciales una sola vez. Por este camino está NO DISPONIBLE — el compose
+# generado declara el one-shot `bootstrap`, pero la imagen del api-server aún no
+# trae el módulo que ejecuta, así que responde «No module named
+# api_server.bootstrap» y no hace nada. NO lo ejecutes esperando que instale.
+# Se termina desde el host, con el repo clonado y el MISMO install.yaml:
+# `python -m installer_backend.cli install --config install.yaml` (reutiliza los
+# secretos del .env recién escrito). Runbook 01.
 #
 # -----------------------------------------------------------------------------
 # AQUÍ NO HAY `/var/run/docker.sock`, Y ÉSA ES LA DECISIÓN, NO UN OLVIDO.
@@ -42,9 +58,15 @@ services:
     # El tag es mutable —quien lo resuelva mañana puede recibir otro contenido—,
     # así que el hueco `${INSTALLER_IMAGE_DIGEST}` lo rellena el pipeline de
     # release con `@sha256:…` al publicar este artefacto, igual que
-    # `runtime_images.json` con las 14 imágenes de runtime (ADR 0148). Mientras
-    # el hueco esté VACÍO no hay imagen publicada y este fichero no puede
-    # funcionar todavía: el `pull` termina en `denied`.
+    # `runtime_images.json` con las 14 imágenes de runtime (ADR 0148).
+    #
+    # QUÉ SIGNIFICA EL HUECO VACÍO, exactamente: que este fichero **no ha sido
+    # sellado**. No significa que no haya imagen publicada, y creerlo es
+    # peligroso: Trivy escanea DESPUÉS del `push`, así que una release cuyo
+    # instalador salga rojo deja el tag en el registro y el sellado sin correr —
+    # el hueco vacío y el `pull` funcionando, bajando justo la imagen que
+    # suspendió el gate. Si vas a ejecutar esto con el hueco vacío, comprueba
+    # antes en las Releases del repo que la versión salió limpia.
     image: ghcr.io/daycry/installer:v1.0.0${INSTALLER_IMAGE_DIGEST:-}
 
     # Generar es escribir ficheros. Este contenedor mintea en claro el material

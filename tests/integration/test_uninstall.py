@@ -23,6 +23,8 @@ import pytest
 from installer_backend.cli import ExitCode, FlagConfirmer, main, run_uninstall
 from installer_backend.compose_generator import PROJECT_NAME
 from installer_backend.uninstall import (
+    PurgeLeftover,
+    PurgeReport,
     ScriptedConfirmer,
     StubDataPurger,
     StubStackTeardown,
@@ -176,7 +178,13 @@ def test_purge_data_with_extra_confirmation_wipes_data() -> None:
     assert purger.data_root == _DATA_ROOT
     assert result.data_purged is True
     assert result.data_preserved is False
-    assert inst.phases == ["confirm", "teardown", "confirm_purge", "purge_data"]
+    # Toda confirmación va ANTES de cualquier destrucción. El orden anterior
+    # (`confirm` → `teardown` → `confirm_purge`) preguntaba por los datos con el
+    # stack ya eliminado, lo que era inocuo mientras el teardown no tocaba
+    # volúmenes — pero ahora una purga confirmada se lleva también los volúmenes
+    # nombrados, y decidirlo después de haberlos borrado sería destruir por
+    # detrás de su propia puerta.
+    assert inst.phases == ["confirm", "confirm_purge", "teardown", "purge_data"]
 
 
 # ---------------------------------------------------------------------------
@@ -252,3 +260,96 @@ def test_main_uninstall_purge_data_with_yes_wipes() -> None:
     )
     assert code == int(ExitCode.OK)
     assert "ELIMINADOS" in out.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Los volúmenes NOMBRADOS del stack (auditoría 2026-08-27, menor).
+#
+# `voice_mode` se deriva a «cpu» aunque el operador no ponga el campo, así que
+# TODA instalación por defecto crea los servicios stt/tts y con ellos el volumen
+# `whisper_models`, donde se descargan varios GB de modelos. El teardown pasaba
+# `remove_volumes=False` SIEMPRE, con el comentario «los datos viven en el bind
+# mount» — cierto para los datos, falso para este volumen. `docker volume ls` lo
+# seguía mostrando después de un `--purge-data` que decía «Datos ELIMINADOS».
+# ---------------------------------------------------------------------------
+def test_confirmed_purge_also_removes_the_named_volumes() -> None:
+    confirmer = ScriptedConfirmer(name_answer=_DEPLOYMENT, yes_answers=[True, True])
+    inst, teardown, purger, out = _uninstaller(confirmer)
+
+    result = inst.run(_request(purge_data=True))
+
+    assert teardown.removed_volumes is True, (
+        "una purga confirmada tiene que llevarse `docker compose down -v`"
+    )
+    assert result.volumes_removed is True
+    assert purger.purged is True
+    # Y el operador lo LEE: un borrado que no se nombra es indistinguible de uno
+    # que no ocurrió.
+    assert "whisper_models" in out.getvalue()
+
+
+def test_declined_purge_leaves_the_named_volumes_alone() -> None:
+    # La otra mitad de la garantía: si la confirmación extra de la purga se
+    # deniega, los volúmenes NO se tocan — la pregunta se hace antes del down.
+    confirmer = ScriptedConfirmer(name_answer=_DEPLOYMENT, yes_answers=[True, False])
+    inst, teardown, purger, out = _uninstaller(confirmer)
+
+    result = inst.run(_request(purge_data=True))
+
+    assert teardown.torn_down is True
+    assert teardown.removed_volumes is False
+    assert result.volumes_removed is False
+    assert purger.purged is False
+    assert "whisper_models" not in out.getvalue()
+
+
+def test_uninstall_without_purge_keeps_volumes_for_a_later_reinstall() -> None:
+    # El caso por defecto no cambia: sin --purge-data se conservan datos Y
+    # volúmenes, que es lo que permite reinstalar encima.
+    confirmer = ScriptedConfirmer(name_answer=_DEPLOYMENT, yes_answers=[True])
+    inst, teardown, _purger, _out = _uninstaller(confirmer)
+
+    result = inst.run(_request())
+
+    assert teardown.removed_volumes is False
+    assert result.volumes_removed is False
+
+
+def test_run_uninstall_exits_with_an_error_when_the_purge_was_incomplete() -> None:
+    # Lo que ve la automatización. El desinstalador ya NO dice «Datos
+    # ELIMINADOS» si algo sobrevivió, pero devolver 0 igualmente dejaría a un
+    # script de decomiso marcando la máquina como limpia con el .env dentro.
+    class _PartialPurger:
+        """Un purgador que borra la mitad, como un punto de montaje ocupado."""
+
+        purged = False
+
+        def purge(self, data_root: str) -> PurgeReport:
+            self.purged = True
+            return PurgeReport(
+                lines=[f"base de datos: eliminada bajo {data_root}"],
+                leftovers=(
+                    PurgeLeftover(path=f"{data_root}/.env", reason="Device or resource busy"),
+                ),
+            )
+
+    out = io.StringIO()
+    inst = Uninstaller(
+        teardown=StubStackTeardown(),
+        purger=_PartialPurger(),
+        confirmer=FlagConfirmer(confirm_name_value=_DEPLOYMENT, yes=True),
+        out=out,
+    )
+    with pytest.raises(Exception) as exc:
+        run_uninstall(
+            deployment_name=_DEPLOYMENT,
+            data_root=_DATA_ROOT,
+            purge_data=True,
+            confirm_name=_DEPLOYMENT,
+            yes=True,
+            uninstaller=inst,
+            out=out,
+            dry_run=True,
+        )
+    assert getattr(exc.value, "code", None) == ExitCode.INCOMPLETE
+    assert ".env" in str(exc.value)

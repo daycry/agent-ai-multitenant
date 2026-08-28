@@ -9,6 +9,7 @@ import { useWizard } from "@/lib/use-wizard";
 import { cn } from "@/lib/utils";
 import { stepById, stepIndex, WIZARD_STEPS, type WizardStepId } from "@/lib/wizard";
 
+import { SimulationBanner, SimulationGateDialog, useInstallerMode } from "./simulation-notice";
 import { StepPanel, stepHasBlockingErrors } from "./step-panel";
 import { Stepper } from "./stepper";
 
@@ -17,10 +18,23 @@ import { Stepper } from "./stepper";
  * forward/back navigation. Holds the captured config (steps 2-6, task_15_03) in
  * client state and gates "next" on client-side validation per step. The prereq
  * step (resources) additionally gates on the backend probe (task_15_02).
+ *
+ * Y desde el 2026-08-28 lleva el aviso de simulación (`./simulation-notice`),
+ * que va AQUÍ y no dentro de un paso por dos razones: es permanente —se ve en
+ * los nueve— y el botón «Instalar» vive en este mismo footer, así que el
+ * diálogo bloqueante que lo precede tiene que poder interponerse antes de que
+ * `handleNext` avance. Un aviso que sólo aparece en el paso 1 lo pierde quien
+ * entra por un enlace, y uno que aparece después del progreso llega tarde.
  */
 export function WizardShell() {
   const wizard = useWizard();
   const config = useConfig();
+  const mode = useInstallerMode();
+
+  // El diálogo se abre al pulsar «Instalar» en el paso de confirmación, no al
+  // cargar: interponerlo en el sitio donde se toma la decisión es lo que lo
+  // hace imposible de pasar por alto sin convertirlo en ruido en los otros ocho.
+  const [gateOpen, setGateOpen] = useState(false);
   const meta = stepById(wizard.current);
   const total = WIZARD_STEPS.length;
   const position = stepIndex(wizard.current) + 1;
@@ -57,6 +71,13 @@ export function WizardShell() {
 
   const handleNext = useCallback(() => {
     const step = wizard.current;
+    // El paso de confirmación es el que dispara el aprovisionamiento. Si lo que
+    // hay detrás es una simulación, aquí es donde hay que decirlo: después ya
+    // sólo quedan una barra de progreso convincente y unas credenciales falsas.
+    if (step === "summary" && mode.simulated && !gateOpen) {
+      setGateOpen(true);
+      return;
+    }
     if (isConfigStep(step)) {
       // Re-validate; if invalid, surface errors for this step and don't advance.
       const errors = validateStep(step, config.config);
@@ -75,7 +96,15 @@ export function WizardShell() {
       return;
     }
     wizard.advance();
-  }, [wizard, config.config, prereqGateOpen, confirmed, installComplete]);
+  }, [wizard, config.config, prereqGateOpen, confirmed, installComplete, mode, gateOpen]);
+
+  // Aceptar la simulación cierra el diálogo y avanza en el mismo gesto: dejar
+  // el diálogo cerrado y el wizard quieto obligaría a pulsar «Instalar» otra
+  // vez, y un aviso que hay que reconocer dos veces se lee la mitad de veces.
+  const acceptSimulation = useCallback(() => {
+    setGateOpen(false);
+    wizard.advance();
+  }, [wizard]);
 
   // Going back from the summary step un-confirms (the operator may edit config).
   const handleBack = useCallback(() => {
@@ -108,6 +137,19 @@ export function WizardShell() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-6 px-6 py-10">
+      <SimulationBanner mode={mode} />
+
+      {gateOpen && (
+        <SimulationGateDialog
+          mode={mode}
+          onCancel={() => setGateOpen(false)}
+          // Sin autorización (`INSTALLER_ALLOW_SIMULATION`) el stream responde
+          // 501, así que no se ofrece un «continuar» que acabaría en un error
+          // de red incomprensible tres pantallas más adelante.
+          onAccept={mode.install_enabled ? acceptSimulation : undefined}
+        />
+      )}
+
       <header className="flex flex-col gap-1">
         <p className="text-muted-foreground text-sm">agentic-platform · instalador</p>
         <h1 className="text-3xl font-semibold tracking-tight" data-testid="wizard-title">

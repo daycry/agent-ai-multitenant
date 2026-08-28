@@ -2,19 +2,32 @@
 
 `RealStepExecutor` is the binding that turns the install pipeline from a
 simulacrum into a real provisioner. Driven here against in-memory fakes
-(FakeCommandRunner / FakeVaultClient / FakeEnvFileWriter / FakeDataTreeProvisioner)
+(FakeCommandRunner / FakeEnvFileWriter / FakeDataTreeProvisioner / FakeEscrowFile)
 so the ORCHESTRATION — which files are written, the docker compose argv + order,
-fail propagation, Vault bootstrap, the seed — is verified WITHOUT a Docker host.
-The real subprocess/hvac calls are exercised only by the e2e / human tests.
+fail propagation, la finalización, la siembra — is verified WITHOUT a Docker host.
+The real subprocess calls are exercised only by the e2e / human tests.
+
+Ya no hay `FakeVaultClient` aquí, y no es una simplificación del test: desde el
+ADR 0161 el instalador **no habla con Vault**. El paso BOOTSTRAP_VAULT delega en
+el one-shot `bootstrap` del compose generado, que corre DENTRO de `agentic-net`,
+y lo único que este ejecutor hace con Vault es leer lo que ese one-shot le cuenta
+por stdout. Lo que se guioniza aquí, por tanto, es esa salida.
 """
 
 from __future__ import annotations
 
+import errno
+import json
 import re
+from dataclasses import dataclass, field
 
 import pytest
-from installer_backend.command_runner import FakeCommandRunner
-from installer_backend.compose_generator import PROJECT_NAME
+from installer_backend.command_runner import CommandResult, FakeCommandRunner
+from installer_backend.compose_generator import (
+    BOOTSTRAP_ENTRYPOINT,
+    BOOTSTRAP_SERVICE,
+    PROJECT_NAME,
+)
 from installer_backend.config import InstallerConfig
 from installer_backend.config_generators import (
     FakeDataTreeProvisioner,
@@ -22,13 +35,94 @@ from installer_backend.config_generators import (
     GeneratedSecrets,
 )
 from installer_backend.install import InstallStep, StepExecutionError, StepExecutor
-from installer_backend.real_step_executor import RealStepExecutor
-from installer_backend.vault_bootstrap import FakeVaultClient
+from installer_backend.install_state import FakeFileReader
+from installer_backend.key_escrow import (
+    UNSEAL_KEYS_FILENAME,
+    FakeEscrowFile,
+    FileKeyEscrow,
+)
+from installer_backend.real_step_executor import (
+    BOOTSTRAP_REVEAL_EVENT,
+    BOOTSTRAP_UNSEAL_KEYS_ENV,
+    BOOTSTRAP_UNSEAL_KEYS_SEPARATOR,
+    RealStepExecutor,
+)
 
 pytestmark = pytest.mark.unit
 
 _COMPOSE_DIR = "/srv/agentic"
 _COMPOSE_FILE = f"{_COMPOSE_DIR}/docker-compose.yml"
+
+# ---------------------------------------------------------------------------
+# El one-shot de finalización: el contrato de su stdout, guionizado
+# ---------------------------------------------------------------------------
+#: El argv EXACTO que el paso BOOTSTRAP_VAULT tiene que emitir. Es —sin el `-p`
+#: y el `-f`, que el instalador conoce y el operador no— el MISMO comando que el
+#: banner de `generate` le deja escrito: `docker compose run --rm bootstrap`.
+#: Que sean el mismo es el punto entero del cambio, así que se afirma literal.
+_BOOTSTRAP_ARGV = (
+    "docker",
+    "compose",
+    "-p",
+    PROJECT_NAME,
+    "-f",
+    _COMPOSE_FILE,
+    "run",
+    "--rm",
+    BOOTSTRAP_SERVICE,
+)
+
+#: Valores de mentira con forma de secreto. Se afirma que NINGUNO sale por el log
+#: de progreso, así que tienen que ser reconocibles a simple vista en un diff.
+_ROOT_TOKEN = "hvs.token-raiz-de-mentira"
+_ADMIN_PASSWORD = "contrasena-de-mentira"
+_UNSEAL_KEYS = tuple(f"share-de-mentira-{i}" for i in range(1, 6))
+
+
+def _reveal_line(**overrides: object) -> str:
+    """La línea de revelado del one-shot, con el prefijo que antepone Compose.
+
+    El prefijo (`bootstrap-1  | `) NO es decorado: es lo que se ve de verdad en
+    la salida de `docker compose run`, y el parser tiene que sobrevivirlo. Es el
+    mismo motivo por el que `_admin_user_existed_from` busca las llaves dentro
+    de la línea en vez de hacer `json.loads` de la línea entera.
+    """
+
+    payload: dict[str, object] = {
+        "event": BOOTSTRAP_REVEAL_EVENT,
+        "already_initialized": False,
+        "unseal_keys": list(_UNSEAL_KEYS),
+        "root_token": _ROOT_TOKEN,
+        "key_threshold": 3,
+        "kv_mount": "secret",
+        "kv_enabled": True,
+        "policies_written": ["api-server", "workers", "orchestrator", "notification"],
+        "admin_password": _ADMIN_PASSWORD,
+        "admin_user_created": True,
+    }
+    payload.update(overrides)
+    return "bootstrap-1  | " + json.dumps(payload)
+
+
+def _bootstrap_argv(*passthrough: str) -> tuple[str, ...]:
+    """El argv del one-shot, con los flags `-e` de paso a través que toquen."""
+
+    head = _BOOTSTRAP_ARGV[:-1]
+    return (*head, *passthrough, _BOOTSTRAP_ARGV[-1])
+
+
+def _bootstrap_runner(
+    *,
+    rc: int = 0,
+    before: tuple[str, ...] = (),
+    reveal: bool = True,
+    argv: tuple[str, ...] = _BOOTSTRAP_ARGV,
+    **overrides: object,
+) -> FakeCommandRunner:
+    """Un runner que guioniza la salida del one-shot para el argv de arriba."""
+
+    lines = (*before, *((_reveal_line(**overrides),) if reveal else ()))
+    return FakeCommandRunner(responses={argv: CommandResult(rc, lines)})
 
 
 def _executor(
@@ -36,18 +130,15 @@ def _executor(
     secrets: GeneratedSecrets,
     *,
     runner: FakeCommandRunner | None = None,
-    vault: FakeVaultClient | None = None,
 ) -> tuple[RealStepExecutor, FakeCommandRunner, FakeEnvFileWriter, FakeDataTreeProvisioner]:
-    runner = runner or FakeCommandRunner()
+    runner = runner or _bootstrap_runner()
     writer = FakeEnvFileWriter()
     tree = FakeDataTreeProvisioner()
-    vault_client = vault or FakeVaultClient()
     ex = RealStepExecutor(
         compose_dir=_COMPOSE_DIR,
         runner=runner,
         env_writer=writer,
         tree=tree,
-        vault_client_factory=lambda _cfg: vault_client,
         cfg=cfg,
         secrets=secrets,
     )
@@ -131,7 +222,6 @@ def test_generate_config_lays_down_the_monitoring_auxiliaries_only_with_the_over
         runner=runner,
         env_writer=writer,
         tree=tree,
-        vault_client_factory=lambda _cfg: FakeVaultClient(),
         cfg=installer_config,
         secrets=gen_secrets,
         monitoring=True,
@@ -187,38 +277,267 @@ def test_a_failing_docker_step_raises_step_execution_error(
         ex.execute(InstallStep.START_STACK, {})
 
 
-def test_bootstrap_vault_runs_the_orchestration_and_captures_init(
+def test_el_bootstrap_corre_dentro_del_stack_y_no_contra_el_host(
     installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
 ) -> None:
-    vault = FakeVaultClient()
-    ex, *_ = _executor(installer_config, gen_secrets, vault=vault)
+    """El paso 4 delega en el one-shot del compose; no habla con Vault desde aquí.
+
+    Éste es el test del último bloqueante del camino de instalación. El paso
+    hablaba con Vault por HTTP desde el HOST —`real_bindings.build_hvac_vault_client`
+    contra `http://127.0.0.1:8200`—, y el servicio `vault` del compose generado
+    **no publica ningún puerto**: el único que publica es Caddy (80/443, ADR
+    0061), y Caddy sólo enruta api-server y admin-panel. O sea: aunque las
+    imágenes existieran, la instalación moría en el paso 4 con un
+    `ConnectionRefusedError` que —al no ser `VaultBootstrapError`— salía como
+    traza cruda de Python.
+
+    El arreglo NO es publicar el 8200: sería ampliar la superficie publicada
+    para ahorrarse un rediseño. Es el que ya decidió el ADR 0161: «el bootstrap
+    de Vault y la siembra corren dentro de la red del stack ya levantado, que es
+    donde tienen que correr».
+    """
+
+    ex, runner, *_ = _executor(installer_config, gen_secrets)
+
     ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
 
+    assert runner.calls == [_BOOTSTRAP_ARGV], (
+        "el paso tiene que ejecutar EXACTAMENTE el one-shot del compose, que es "
+        "el mismo comando que el banner de `generate` le deja al operador"
+    )
+    assert runner.cwds == [_COMPOSE_DIR]
     assert ex.vault_bootstrap_result is not None
-    assert ex.vault_bootstrap_result.init is not None  # fresh init
-    assert ex.vault_bootstrap_result.init.root_token == "fake-root-token"
+    assert ex.vault_bootstrap_result.init is not None  # init fresco
+    assert ex.vault_bootstrap_result.init.root_token == _ROOT_TOKEN
+    assert ex.vault_bootstrap_result.init.unseal_keys == _UNSEAL_KEYS
     assert ex.vault_bootstrap_result.kv_enabled is True
+    assert ex.vault_bootstrap_result.kv_mount == "secret"
+    assert len(ex.vault_bootstrap_result.policies_written) == 4
 
 
-def test_seed_tenant_captures_password_and_never_puts_it_in_argv(
+def test_el_install_y_el_banner_ejecutan_LITERALMENTE_el_mismo_comando(
     installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
 ) -> None:
-    ex, runner, _writer, _tree = _executor(installer_config, gen_secrets)
-    ex.execute(InstallStep.SEED_TENANT, {})
+    """La unificación de los dos caminos, afirmada donde puede derivar.
 
-    assert ex.seeded_admin_password, "the seed must generate an admin password"
-    pw = ex.seeded_admin_password
-    # The password is passed via env pass-through, NEVER on the command line.
-    for argv in runner.calls:
-        assert pw not in argv, "admin password leaked into argv"
-    # The built-in catalog seed ran (platform tenant + builtins) before init_tenant.
-    assert any("api_server.seeds" in c and "init_tenant" not in " ".join(c) for c in runner.calls)
-    # The init_tenant entrypoint was invoked as the last call.
-    seed_call = runner.calls[-1]
-    assert "api_server.seeds.init_tenant" in seed_call
-    assert "INIT_ADMIN_PASSWORD" in seed_call  # the -e pass-through flag (no value)
-    # The password is actually handed over as an ENV var (not argv).
-    assert runner.envs[-1] == {"INIT_ADMIN_PASSWORD": pw}
+    El `generate` sin clon imprime `docker compose run --rm bootstrap` y lo
+    ejecuta el operador; el `install` desde el host lo ejecuta por él. Si el
+    ejecutor añadiera un flag, cambiara el servicio o metiera un override de
+    comando, volverían a ser dos finalizaciones distintas —y la que se prueba en
+    los tests no sería la que el operador ejecuta a mano.
+    """
+
+    from installer_backend.cli import BOOTSTRAP_SERVICE as BANNER_SERVICE
+
+    ex, runner, *_ = _executor(installer_config, gen_secrets)
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    orden_del_banner = f"docker compose run --rm {BANNER_SERVICE}"
+    ejecutado = " ".join(runner.calls[0])
+    # Lo único que el instalador añade es el `-p`/`-f` que el operador no
+    # necesita porque ya está dentro del directorio del compose.
+    assert ejecutado.startswith("docker compose -p ")
+    assert ejecutado.endswith("run --rm " + BANNER_SERVICE)
+    assert orden_del_banner.split(" run ")[1] == ejecutado.split(" run ")[1]
+
+
+def test_el_revelado_del_one_shot_no_sale_por_el_log_de_progreso(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """La línea que trae las claves se captura, pero NO se reemite.
+
+    El resto de pasos vuelcan la salida del subproceso en las líneas de progreso
+    (`_run` pasa `on_line=lines.append`), y esas líneas las imprime el CLI y las
+    difunde el wizard por SSE. Con el one-shot eso dejaría las cinco unseal keys,
+    el root token y la contraseña de admin en el log de la instalación — y el
+    revelado de una sola vez se convierte en un revelado permanente escrito
+    donde nadie lo va a borrar.
+    """
+
+    ex, _runner, *_ = _executor(
+        installer_config,
+        gen_secrets,
+        runner=_bootstrap_runner(before=("Creating agentic-platform-bootstrap-run ... done",)),
+    )
+
+    lines = ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    blob = "\n".join(lines)
+
+    for secret in (_ROOT_TOKEN, _ADMIN_PASSWORD, *_UNSEAL_KEYS):
+        assert secret not in blob, f"secreto en el log de progreso: {secret}"
+    assert BOOTSTRAP_REVEAL_EVENT not in blob
+    # …pero lo que NO es secreto sí llega: si el paso enmudeciera del todo, un
+    # fallo del one-shot sería indistinguible de un éxito.
+    assert any("bootstrap-run" in line for line in lines), lines
+
+
+def test_un_one_shot_que_falla_sale_como_mensaje_y_no_como_traza(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """rc≠0 del one-shot → `StepExecutionError` con el comando y la salida dentro."""
+
+    runner = _bootstrap_runner(
+        rc=2,
+        before=("Error response from daemon: no such image",),
+        reveal=False,
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    message = str(exc.value)
+    assert BOOTSTRAP_SERVICE in message
+    assert "rc=2" in message
+    assert "no such image" in message, "sin la salida del one-shot no hay diagnóstico"
+
+
+def test_la_mitad_que_falta_del_paso_8_se_nombra_en_el_error(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Si la imagen no trae el módulo, el error dice CUÁL y de qué es la mitad.
+
+    Es la diferencia entre un diagnóstico y una sospecha sobre el Docker del
+    operador — la misma regla que sigue el banner de `generate`.
+    """
+
+    runner = _bootstrap_runner(
+        rc=1,
+        before=(f"/usr/bin/python: No module named {BOOTSTRAP_ENTRYPOINT}",),
+        reveal=False,
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    message = str(exc.value)
+    assert BOOTSTRAP_ENTRYPOINT in message
+    assert "ADR 0161" in message
+
+
+def test_un_one_shot_en_verde_sin_revelado_no_se_da_por_bueno(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """rc=0 sin línea de revelado es un fallo, no un éxito silencioso.
+
+    Sería el peor modo de fallo posible: la instalación sigue hasta el final,
+    imprime que ha terminado, se autodestruye… y no hay credenciales que revelar
+    porque nunca las hubo. El paso tiene que morir aquí, con el stack todavía
+    entero y el operador delante.
+    """
+
+    ex, *_ = _executor(installer_config, gen_secrets, runner=_bootstrap_runner(reveal=False))
+
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert BOOTSTRAP_REVEAL_EVENT in str(exc.value)
+
+
+def test_las_unseal_keys_que_aporta_el_operador_viajan_por_entorno(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """`--vault-unseal-keys-from` sigue funcionando: las claves llegan al one-shot.
+
+    Antes las usaba el cliente hvac del host. Ahora quien desella es el one-shot,
+    así que si no viajaran, el reintento sobre un Vault ya inicializado y sellado
+    volvería a morir — y la única salida documentada era destruir la instalación.
+
+    Van por entorno y NUNCA por argv: un share en la línea de comandos queda a la
+    vista de cualquier usuario del host en `ps` y en el historial del shell (es
+    la misma razón por la que se leen de un fichero y no de un flag).
+    """
+
+    keys = ("share-aportado-1", "share-aportado-2", "share-aportado-3")
+    runner = _bootstrap_runner(
+        argv=_bootstrap_argv("-e", BOOTSTRAP_UNSEAL_KEYS_ENV),
+        already_initialized=True,
+        unseal_keys=[],
+        root_token="",
+    )
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=runner,
+        env_writer=FakeEnvFileWriter(),
+        tree=FakeDataTreeProvisioner(),
+        cfg=installer_config,
+        secrets=gen_secrets,
+        existing_unseal_keys=keys,
+    )
+
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert runner.envs[-1] == {
+        BOOTSTRAP_UNSEAL_KEYS_ENV: BOOTSTRAP_UNSEAL_KEYS_SEPARATOR.join(keys)
+    }
+    argv = runner.calls[-1]
+    assert BOOTSTRAP_UNSEAL_KEYS_ENV in argv, "el flag `-e` de paso a través"
+    for key in keys:
+        assert key not in argv, "un share en argv es un share en `ps`"
+
+
+def test_un_vault_ya_inicializado_no_inventa_claves_que_revelar(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Re-bootstrap: el one-shot no re-inicializa, así que no hay init que revelar.
+
+    Es el mismo tres-estados de antes (`init=None` + `already_initialized`), y lo
+    que lo consume —`RealCredentialBuilder`— no cambia: falla ruidosamente en vez
+    de revelar nada.
+    """
+
+    ex, *_ = _executor(
+        installer_config,
+        gen_secrets,
+        runner=_bootstrap_runner(already_initialized=True, unseal_keys=[], root_token=""),
+    )
+
+    lines = ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert ex.vault_bootstrap_result is not None
+    assert ex.vault_bootstrap_result.already_initialized is True
+    assert ex.vault_bootstrap_result.init is None
+    assert any("ya inicializado" in line for line in lines), lines
+
+
+def test_la_siembra_no_se_repite_porque_el_one_shot_ya_sembro(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """SEED_TENANT rinde cuentas de lo que hizo el one-shot; no vuelve a sembrar.
+
+    El one-shot hace las tres cosas (init de Vault, siembra y revelado), así que
+    volver a lanzar `init_tenant` desde aquí no sería redundante y benigno: sería
+    un DEFECTO. `init_tenant` es idempotente y NO cambia la contraseña de un
+    usuario que ya existe, de modo que la segunda pasada mintearía una contraseña
+    que la base de datos no ha visto nunca y el paso la marcaría como «el admin
+    ya existía» — justo el aviso que dice que la contraseña revelada no sirve.
+    """
+
+    ex, runner, _writer, _tree = _executor(installer_config, gen_secrets)
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    lines = ex.execute(InstallStep.SEED_TENANT, {})
+
+    assert runner.calls == [_BOOTSTRAP_ARGV], "la siembra no vuelve a ejecutar nada"
+    assert ex.seeded_admin_password == _ADMIN_PASSWORD
+    assert ex.seeded_admin_user_existed is False
+    assert ex.admin_password_advisories() == ()
+    blob = "\n".join(lines)
+    assert _ADMIN_PASSWORD not in blob
+    assert BOOTSTRAP_SERVICE in blob, "hay que decir QUIÉN sembró, o parece que nadie"
+
+
+def test_la_siembra_sin_revelado_del_one_shot_falla_en_vez_de_pasar_de_largo(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Sin one-shot detrás no hay tenant, y decir que sí lo hay es el peor final."""
+
+    ex, *_ = _executor(installer_config, gen_secrets)
+
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.SEED_TENANT, {})
+
+    assert BOOTSTRAP_SERVICE in str(exc.value)
 
 
 def test_no_step_returns_a_log_line_containing_a_secret(
@@ -230,5 +549,516 @@ def test_no_step_returns_a_log_line_containing_a_secret(
     lines += ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
     lines += ex.execute(InstallStep.SEED_TENANT, {})
     blob = "\n".join(lines)
-    assert "fake-root-token" not in blob
+    assert _ROOT_TOKEN not in blob
+    for key in _UNSEAL_KEYS:
+        assert key not in blob
     assert (ex.seeded_admin_password or "x") not in blob
+
+
+# ---------------------------------------------------------------------------
+# Errores del sistema de ficheros: un mensaje, no una traza
+# ---------------------------------------------------------------------------
+@dataclass
+class ExplodingEnvFileWriter:
+    """Un escritor que falla como falla el sistema de ficheros de verdad.
+
+    ``errno`` es el parámetro que importa: lo que el operador tiene que hacer
+    con un EACCES (ejecutar con privilegios) no se parece en nada a lo que tiene
+    que hacer con un ENOSPC (liberar disco) ni con un EROFS (montó la raíz de
+    datos en solo lectura, el caso más probable del camino en contenedor).
+    """
+
+    errno_value: int
+    message: str = "boom"
+    written: dict[str, str] = field(default_factory=dict)
+    modes: dict[str, int] = field(default_factory=dict)
+
+    def write(self, path: str, content: str, *, mode: int) -> None:
+        raise OSError(self.errno_value, self.message, path)
+
+
+@pytest.mark.parametrize(
+    ("errno_value", "expected"),
+    [
+        (errno.EACCES, "permiso"),
+        (errno.EPERM, "permiso"),
+        (errno.ENOSPC, "disco"),
+        (errno.EROFS, "solo lectura"),
+        (errno.ENOTDIR, "no es un directorio"),
+    ],
+)
+def test_a_filesystem_failure_becomes_a_message_and_not_a_traceback(
+    installer_config: InstallerConfig,
+    gen_secrets: GeneratedSecrets,
+    errno_value: int,
+    expected: str,
+) -> None:
+    """EACCES/ENOSPC/EROFS/ENOTDIR salen como `StepExecutionError` explicado.
+
+    Antes salían como veinte líneas de traceback terminadas en
+    `PermissionError: [Errno 13] Permission denied: '/data/agent-platform'`, con
+    la pila interna de pathlib, sin ningún «error:», sin código de salida de la
+    tabla documentada (el proceso moría con 1, que en esa tabla significa
+    «argumentos mal») y sin ninguna indicación de qué hacer. Es el fallo MÁS
+    común del instalador: ejecutarlo sin permisos sobre la raíz de datos.
+    """
+
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=FakeCommandRunner(),
+        env_writer=ExplodingEnvFileWriter(errno_value=errno_value),
+        tree=FakeDataTreeProvisioner(),
+        cfg=installer_config,
+        secrets=gen_secrets,
+    )
+
+    with pytest.raises(StepExecutionError) as excinfo:
+        ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    message = str(excinfo.value)
+    assert expected in message.lower(), message
+    # La ruta concreta, o el operador no sabe dónde mirar.
+    assert _COMPOSE_DIR in message
+
+
+def test_a_failure_creating_the_data_tree_is_translated_too(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El `mkdir` del árbol de datos es la otra mitad, y fallaba igual de crudo.
+
+    Es además la que más se rompe en la práctica: los `write` van a ficheros
+    dentro de directorios que el propio escritor crea, pero el árbol incluye
+    rutas con modos concretos, y ahí es donde revienta un `/data` de otro dueño.
+    """
+
+    class ExplodingTree:
+        def provision(self, plan: list[object]) -> None:
+            raise OSError(errno.EACCES, "Permission denied", f"{_COMPOSE_DIR}/postgres")
+
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=FakeCommandRunner(),
+        env_writer=FakeEnvFileWriter(),
+        tree=ExplodingTree(),  # type: ignore[arg-type]
+        cfg=installer_config,
+        secrets=gen_secrets,
+    )
+
+    with pytest.raises(StepExecutionError) as excinfo:
+        ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    assert "permiso" in str(excinfo.value).lower()
+    assert f"{_COMPOSE_DIR}/postgres" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# tls_mode: provided — dos rutas que el operador rellena y que nadie leía
+# ---------------------------------------------------------------------------
+def _provided_tls(cfg: InstallerConfig, *, cert: str, key: str) -> InstallerConfig:
+    return cfg.model_copy(
+        update={
+            "system": cfg.system.model_copy(
+                update={"tls_mode": "provided", "tls_cert_path": cert, "tls_key_path": key}
+            )
+        }
+    )
+
+
+def test_the_corporate_cert_the_operator_configured_is_actually_copied(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """`tls_cert_path`/`tls_key_path` se copian al bind que monta Caddy.
+
+    La validación EXIGE esos dos campos (sin ellos rechaza el install.yaml), lo
+    que refuerza la impresión de que sirven para algo; y hasta el 2026-08-27 no
+    los leía ni una línea del repositorio. El instalador creaba
+    `{data_root}/caddy/tls` VACÍO a 0700, generaba un Caddyfile con
+    `tls /etc/caddy/tls/server.crt …` y montaba ese directorio vacío: Caddy no
+    encontraba el certificado, nunca pasaba a healthy, `up -d --wait` fallaba y
+    con él la instalación entera. Y como Caddy es el único servicio publicado, no
+    quedaba ni por dónde mirar desde el navegador.
+    """
+
+    cfg = _provided_tls(installer_config, cert="/etc/ssl/agentic.crt", key="/etc/ssl/agentic.key")
+    reader = FakeFileReader(
+        files={
+            # Sin cabecera PEM a propósito: la línea de apertura de una clave
+            # privada, escrita en un fichero del repositorio, dispara el hook
+            # `detect-private-key` — y con razón, porque no se distingue de una
+            # de verdad. El test no necesita PEM: sólo necesita saber QUÉ
+            # contenido acabó en qué ruta y con qué modo.
+            "/etc/ssl/agentic.crt": "cert-corporativo-de-prueba\n",
+            "/etc/ssl/agentic.key": "clave-privada-de-prueba\n",
+        }
+    )
+    writer = FakeEnvFileWriter()
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=FakeCommandRunner(),
+        env_writer=writer,
+        tree=FakeDataTreeProvisioner(),
+        cfg=cfg,
+        secrets=gen_secrets,
+        file_reader=reader,
+    )
+
+    ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    assert "cert-corporativo-de-prueba" in writer.written[f"{_COMPOSE_DIR}/caddy/tls/server.crt"]
+    assert "clave-privada-de-prueba" in writer.written[f"{_COMPOSE_DIR}/caddy/tls/server.key"]
+    # La clave privada NO puede quedar con el modo del certificado.
+    assert writer.modes[f"{_COMPOSE_DIR}/caddy/tls/server.crt"] == 0o644
+    assert writer.modes[f"{_COMPOSE_DIR}/caddy/tls/server.key"] == 0o600
+
+
+def test_a_cert_path_that_does_not_exist_fails_now_and_not_in_the_up(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Falla en el paso 1 con las dos rutas en el mensaje, no en el `up`.
+
+    El operador no tiene motivo para sospechar del certificado: lo configuró él.
+    Un fallo tardío le enseña `caddy unhealthy`, que apunta a cualquier otra
+    cosa; uno temprano le enseña la ruta que ha escrito mal.
+    """
+
+    cfg = _provided_tls(installer_config, cert="/etc/ssl/no-esta.crt", key="/etc/ssl/no-esta.key")
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=FakeCommandRunner(),
+        env_writer=FakeEnvFileWriter(),
+        tree=FakeDataTreeProvisioner(),
+        cfg=cfg,
+        secrets=gen_secrets,
+        file_reader=FakeFileReader(files={}),
+    )
+
+    with pytest.raises(StepExecutionError) as excinfo:
+        ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    message = str(excinfo.value)
+    assert "/etc/ssl/no-esta.crt" in message
+    assert f"{_COMPOSE_DIR}/caddy/tls" in message, (
+        "el mensaje tiene que dar la salida del camino en contenedor: dejar el "
+        "par en el bind, donde SÍ es alcanzable"
+    )
+
+
+def test_a_cert_already_dropped_in_the_bind_is_accepted(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El camino `generate` dentro del contenedor: las rutas del host no existen.
+
+    Ahí el par no se puede copiar —el contenedor sólo tiene montada la raíz de
+    datos— así que la única forma correcta es comprobar que ya está en su sitio.
+    Abortar aquí dejaría el camino sin clon sin ninguna forma de usar un
+    certificado corporativo.
+    """
+
+    cfg = _provided_tls(installer_config, cert="/host/agentic.crt", key="/host/agentic.key")
+    reader = FakeFileReader(
+        files={
+            f"{_COMPOSE_DIR}/caddy/tls/server.crt": "ya estaba",
+            f"{_COMPOSE_DIR}/caddy/tls/server.key": "ya estaba",
+        }
+    )
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=FakeCommandRunner(),
+        env_writer=FakeEnvFileWriter(),
+        tree=FakeDataTreeProvisioner(),
+        cfg=cfg,
+        secrets=gen_secrets,
+        file_reader=reader,
+    )
+
+    lines = ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    assert any("caddy/tls" in line for line in lines), lines
+
+
+def test_only_the_provided_mode_touches_the_tls_bind(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Con `internal` (el default) no se escribe ningún certificado.
+
+    Control negativo: sin él, un arreglo que escribiera siempre pasaría el test
+    de arriba y rompería el modo por defecto, que es el que usa casi todo el
+    mundo.
+    """
+
+    ex, _runner, writer, _tree = _executor(installer_config, gen_secrets)
+    ex.execute(InstallStep.GENERATE_CONFIG, {})
+
+    assert not [p for p in writer.written if "/caddy/tls/" in p]
+
+
+# ---------------------------------------------------------------------------
+# La contraseña que se revela tiene que ser la que abre la cuenta
+# ---------------------------------------------------------------------------
+def _seed_runner(*, created_user: bool | None) -> FakeCommandRunner:
+    """Un one-shot que dice —o calla— si el usuario admin se creó en esta pasada.
+
+    Tres estados, y los tres importan. `created_user=None` guioniza el caso en
+    que el one-shot NO lo declara en su revelado: el instalador cae entonces al
+    marcador `init_tenant.completed`, que `init_tenant` emite por su cuenta
+    dentro del mismo contenedor. Y si tampoco está —formato de log cambiado,
+    nivel subido—, la respuesta es «no lo sé», que no es lo mismo que «salió
+    bien» y el revelado la trata distinto.
+    """
+
+    if created_user is None:
+        return _bootstrap_runner(admin_user_created=None)
+    return _bootstrap_runner(admin_user_created=created_user)
+
+
+def test_a_freshly_created_admin_reveals_the_password_that_was_minted(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Instalación limpia: la contraseña minteada ES la que abre la cuenta."""
+
+    ex, *_ = _executor(installer_config, gen_secrets, runner=_seed_runner(created_user=True))
+
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    ex.execute(InstallStep.SEED_TENANT, {})
+
+    assert ex.seeded_admin_password == _ADMIN_PASSWORD
+    assert ex.seeded_admin_user_existed is False
+    assert ex.admin_password_advisories() == ()
+
+
+def test_an_admin_that_already_existed_is_not_given_a_password_it_does_not_have(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """`init_tenant` es idempotente: NO cambia la contraseña de un usuario que ya está.
+
+    Su docstring lo dice por escrito («the password of an existing user is left
+    untouched»). El instalador, en cambio, mintea una nueva en CADA ejecución y
+    se la enseñaba al operador como «Contraseña del administrador». En cualquier
+    reintento sobre datos conservados eso es una contraseña que la base de datos
+    no ha visto nunca: el operador la guarda, el instalador se autodestruye, y en
+    el primer login recibe credenciales inválidas sin ninguna pista de por qué.
+
+    Quien mintea ahora es el one-shot, pero la trampa es la MISMA y por eso el
+    test sigue aquí: lo que cambió es de dónde llega el dato, no que el dato deje
+    de hacer falta.
+    """
+
+    ex, *_ = _executor(installer_config, gen_secrets, runner=_seed_runner(created_user=False))
+
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    ex.execute(InstallStep.SEED_TENANT, {})
+
+    assert ex.seeded_admin_user_existed is True
+    advisories = ex.admin_password_advisories()
+    assert advisories, "el revelado no puede callarse esto"
+    blob = " ".join(advisories).lower()
+    assert "ya exist" in blob
+    assert "no la ha cambiado" in blob
+    # Y la contraseña minteada NO puede aparecer en el aviso.
+    assert (ex.seeded_admin_password or "x") not in " ".join(advisories)
+
+
+def test_el_marcador_de_init_tenant_sirve_de_respaldo_si_el_revelado_calla(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Sin `admin_user_created` en el revelado, vale el log del propio `init_tenant`.
+
+    El one-shot ejecuta `api_server.seeds.init_tenant` dentro de su contenedor, y
+    ése emite `init_tenant.completed` con `created_user` por su cuenta. Leerlo
+    como respaldo no es acoplarse dos veces al mismo dato: es no perder la
+    respuesta cuando la mitad que aún no existe se implemente sin ese campo.
+    """
+
+    runner = _bootstrap_runner(
+        admin_user_created=None,
+        before=(
+            '{"event": "init_tenant.completed", "tenant_id": "0192", '
+            '"user_id": "0193", "created_org": false, "created_user": false, '
+            '"created_membership": false, "level": "info"}',
+        ),
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert ex.seeded_admin_user_existed is True
+
+
+def test_an_unreadable_seed_result_is_reported_as_unknown_not_as_success(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Si no consta por ninguna vía, se dice «no se ha podido confirmar».
+
+    Es la diferencia entre acoplarse a un formato de log y depender de él en
+    silencio: el día que `init_tenant` cambie su salida, el instalador tiene que
+    avisar de que ya no sabe, no seguir afirmando que la contraseña es buena.
+    """
+
+    ex, *_ = _executor(installer_config, gen_secrets, runner=_seed_runner(created_user=None))
+
+    ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    ex.execute(InstallStep.SEED_TENANT, {})
+
+    assert ex.seeded_admin_user_existed is None
+    assert any("no se ha podido" in a.lower() for a in ex.admin_password_advisories())
+
+
+# ---------------------------------------------------------------------------
+# El depósito de emergencia de las unseal keys
+# ---------------------------------------------------------------------------
+def _escrowed_executor(
+    cfg: InstallerConfig,
+    secrets: GeneratedSecrets,
+    runner: FakeCommandRunner,
+) -> tuple[RealStepExecutor, FileKeyEscrow, FakeEscrowFile]:
+    store = FakeEscrowFile()
+    escrow = FileKeyEscrow(data_root=_COMPOSE_DIR, store=store)
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=runner,
+        env_writer=FakeEnvFileWriter(),
+        tree=FakeDataTreeProvisioner(),
+        cfg=cfg,
+        secrets=secrets,
+        key_escrow=escrow,
+    )
+    return ex, escrow, store
+
+
+def test_the_unseal_keys_are_deposited_the_moment_vault_is_initialised(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Antes de seguir al paso siguiente, las claves ya están en disco.
+
+    Lo que cambió con la delegación es de DÓNDE salen: antes las devolvía el
+    cliente hvac del host, ahora se leen de la línea de revelado del one-shot. Lo
+    que NO cambia —y es lo que este test fija— es que se depositan lo primero:
+    entre el init y el revelado hay minutos, y si el proceso muere en ese tramo
+    esas cinco claves no vuelven a existir por ningún camino.
+    """
+
+    ex, escrow, store = _escrowed_executor(installer_config, gen_secrets, _bootstrap_runner())
+
+    lines = ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert escrow.pending_path() == f"{_COMPOSE_DIR}/{UNSEAL_KEYS_FILENAME}"
+    assert store.modes[escrow.path] == 0o600
+    # Y lo depositado son las claves DEL ONE-SHOT, no un placeholder.
+    deposited = store.files[escrow.path]
+    for key in _UNSEAL_KEYS:
+        assert key in deposited
+    assert _ROOT_TOKEN in deposited
+    # El operador tiene que ver que existe, o no sabrá que hay que borrarlo.
+    assert any(UNSEAL_KEYS_FILENAME in line for line in lines), lines
+    # …pero la línea de log NO lleva ninguna clave dentro.
+    assert _ROOT_TOKEN not in "\n".join(lines)
+
+
+class _UnwritableEscrowFile:
+    """Un depósito sobre un sistema de ficheros que no admite escrituras."""
+
+    def write(self, path: str, content: str, *, mode: int) -> None:
+        raise PermissionError(errno.EACCES, "Permission denied", path)
+
+    def exists(self, path: str) -> bool:
+        return False
+
+    def remove(self, path: str) -> None:  # pragma: no cover - nunca se llega
+        raise AssertionError("no hay nada que borrar")
+
+
+def test_un_deposito_que_no_se_puede_escribir_avisa_pero_no_tumba_la_instalacion(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """La red de seguridad puede fallar; abortar por ella garantizaría la caída.
+
+    Si la raíz de datos no admite escrituras, el depósito no se puede escribir.
+    Abortar ahí sería lo contrario de lo que el depósito persigue: las claves
+    siguen vivas en memoria y el revelado del final las va a enseñar, así que
+    tumbar la instalación en ese punto convierte «me he quedado sin red» en «he
+    perdido las claves». Lo que no puede hacer es callárselo — ni salir como
+    traza, que es como salía cualquier fallo del sistema de ficheros de este
+    paso antes del 2026-08-27.
+    """
+
+    escrow = FileKeyEscrow(data_root=_COMPOSE_DIR, store=_UnwritableEscrowFile())
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=_bootstrap_runner(),
+        env_writer=FakeEnvFileWriter(),
+        tree=FakeDataTreeProvisioner(),
+        cfg=installer_config,
+        secrets=gen_secrets,
+        key_escrow=escrow,
+    )
+
+    lines = ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert ex.vault_bootstrap_result is not None, "el paso tiene que haber terminado"
+    blob = "\n".join(lines)
+    assert "AVISO" in blob
+    assert "sin permiso" in blob, "hay que decir POR QUÉ no se pudo escribir"
+    for key in _UNSEAL_KEYS:
+        assert key not in blob
+
+
+def test_claves_acunadas_sin_deposito_y_one_shot_muerto_se_dice_que_es_irreversible(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Los dos fallos a la vez: el peor estado posible, y el que no se puede callar.
+
+    Vault se inicializó, las claves no se pudieron escribir en ninguna parte y el
+    one-shot murió después. Ese Vault queda sellado sin recuperación, y reintentar
+    la instalación va a fallar exactamente igual para siempre. Decir sólo «el
+    one-shot falló» manda al operador a un bucle: reintenta, vuelve a fallar, y
+    nada en pantalla explica por qué esta vez tampoco.
+    """
+
+    escrow = FileKeyEscrow(data_root=_COMPOSE_DIR, store=_UnwritableEscrowFile())
+    ex = RealStepExecutor(
+        compose_dir=_COMPOSE_DIR,
+        runner=_bootstrap_runner(rc=1, before=("seeding builtins…",)),
+        env_writer=FakeEnvFileWriter(),
+        tree=FakeDataTreeProvisioner(),
+        cfg=installer_config,
+        secrets=gen_secrets,
+        key_escrow=escrow,
+    )
+
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    message = str(exc.value)
+    assert "sin recuperaci" in message, "hay que decir que es irreversible"
+    assert "04-disaster-recovery" in message, "y adónde va a mirar el operador"
+    for key in _UNSEAL_KEYS:
+        assert key not in message
+
+
+def test_si_el_one_shot_muere_tras_inicializar_vault_las_claves_ya_estan_a_salvo(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El peor caso del paso: Vault inicializado y el one-shot muerto después.
+
+    Es exactamente el hueco para el que existe el depósito, sólo que ahora cabe
+    ENTERO dentro de un único subproceso: el one-shot inicializa Vault, emite el
+    revelado, se pone a sembrar el catálogo built-in —minutos— y se muere. Si el
+    depósito esperase a que `rc == 0`, las cinco claves se irían con el proceso y
+    ese Vault no se podría desellar nunca más.
+    """
+
+    runner = _bootstrap_runner(rc=1, before=("seeding builtins…",))
+    # El revelado sale ANTES del fallo, que es como ocurre de verdad.
+    ex, escrow, _store = _escrowed_executor(installer_config, gen_secrets, runner)
+
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+
+    assert escrow.pending_path() is not None, "las claves se han perdido"
+    message = str(exc.value)
+    assert UNSEAL_KEYS_FILENAME in message, (
+        "el error tiene que decir dónde quedaron las claves: sin eso el operador "
+        "no sabe que están a un `cat` de distancia"
+    )
+    for key in _UNSEAL_KEYS:
+        assert key not in message, "el mensaje de error no es un canal de revelado"

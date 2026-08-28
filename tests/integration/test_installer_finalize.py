@@ -38,6 +38,22 @@ from installer_backend.seams import StubInstallerLifecycle
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def _autoriza_la_simulacion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """El paso 9 que se ejercita aquí es el SIMULADO, y se declara como tal.
+
+    Desde la auditoría del 2026-08-28 `/api/finalize/reveal` responde `501` con
+    seams de simulación y sin `INSTALLER_ALLOW_SIMULATION`: era la pantalla que
+    servía cinco unseal keys de Vault recién inventadas con el mismo contrato que
+    el camino real, bajo el aviso de que no había forma de recuperarlas. La
+    ceremonia de «una sola vez» que se comprueba aquí no cambia; lo que cambia es
+    que correrla exige pedirla. Sin esta línea, los tests de ruta pasarían a
+    verde **vacíos** contra un 501.
+    """
+
+    monkeypatch.setenv("INSTALLER_ALLOW_SIMULATION", "1")
+
+
 # A sentinel set of secret values we assert never appear in disk/logs.
 _ADMIN_PW = "s3cr3t-admin-pw-never-leaks"
 _ROOT_TOKEN = "s.r00t-token-never-leaks"
@@ -201,17 +217,37 @@ def test_status_route_reflects_the_finalize_gate() -> None:
     service = FinalizeService(lifecycle=StubInstallerLifecycle())
     client = _client_with_finalize(service)
 
+    # `simulated` entra en el contrato el 2026-08-28: `installed: True` sobre un
+    # FakeStepExecutor significa «la simulación terminó», no «la plataforma está
+    # instalada», y la UI no podía distinguir las dos cosas. Se comprueba con
+    # igualdad exacta a propósito: un campo nuevo en esta respuesta tiene que
+    # romper aquí y obligar a decidir qué pinta la pantalla con él.
     # Before install: not installed, cannot reveal.
     pre = client.get("/api/finalize/status").json()
-    assert pre == {"installed": False, "can_reveal": False, "revealed": False}
+    assert pre == {
+        "installed": False,
+        "can_reveal": False,
+        "revealed": False,
+        "simulated": True,
+    }
 
     service.arm(_credentials())
     armed = client.get("/api/finalize/status").json()
-    assert armed == {"installed": True, "can_reveal": True, "revealed": False}
+    assert armed == {
+        "installed": True,
+        "can_reveal": True,
+        "revealed": False,
+        "simulated": True,
+    }
 
     client.post("/api/finalize/reveal")
     after = client.get("/api/finalize/status").json()
-    assert after == {"installed": True, "can_reveal": False, "revealed": True}
+    assert after == {
+        "installed": True,
+        "can_reveal": False,
+        "revealed": True,
+        "simulated": True,
+    }
 
 
 def test_successful_install_arms_finalize_then_reveals_once() -> None:
@@ -256,6 +292,7 @@ def test_failed_install_does_not_arm_finalize() -> None:
         "installed": False,
         "can_reveal": False,
         "revealed": False,
+        "simulated": True,
     }
     reveal = client.post("/api/finalize/reveal")
     assert reveal.status_code == 409

@@ -21,8 +21,21 @@ import pytest
 
 #: Repo root (this file is tests/e2e/conftest.py).
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
 #: The install profile the e2e drives. Minimal = 1 worker, Ollama only.
-E2E_PROFILE = REPO_ROOT / "scripts" / "install-profiles" / "minimal.yaml"
+#:
+#: ``E2E_INSTALL_PROFILE`` lo reapunta (ruta relativa al repo o absoluta) sin
+#: cambiar el DEFECTO, que sigue siendo `minimal.yaml`: el nocturno de
+#: `.github/workflows/install-e2e.yml` instala con `ci-e2e.yaml`, que es
+#: `minimal.yaml` con la voz apagada. Lo que impide que ese perfil se aleje del
+#: que usa la gente NO es la buena voluntad de quien lo edite, sino
+#: `tests/unit/test_install_e2e_gate.py`, que compara los dos ficheros clave a
+#: clave y falla ante cualquier divergencia no declarada.
+E2E_PROFILE = (
+    (REPO_ROOT / os.environ["E2E_INSTALL_PROFILE"]).resolve()
+    if os.environ.get("E2E_INSTALL_PROFILE")
+    else REPO_ROOT / "scripts" / "install-profiles" / "minimal.yaml"
+)
 
 
 @pytest.fixture(scope="session")
@@ -109,14 +122,35 @@ def _profile_data_root() -> str:
     return str(doc["storage"]["data_root"])
 
 
-def _parse_reveal(stdout: str) -> dict[str, str]:
-    """Extract admin username/password from the one-time reveal block (best-effort)."""
+#: Las etiquetas EXACTAS con las que el CLI imprime el revelado. Salen de
+#: ``installer_backend.finalize.build_reveal`` (campo ``label_es``) y las
+#: escribe ``cli.py`` como ``  {label_es}: {secret}``.
+#:
+#: Se comparan literalmente y NO por heurística. La versión anterior buscaba la
+#: subcadena ``"password"`` en cada línea, y la CLI imprime «Contraseña del
+#: administrador»: nunca encontraba la contraseña, así que
+#: ``test_admin_login_with_the_revealed_credential`` se saltaba SOLO — el e2e
+#: habría dado «verde» sin haber comprobado lo único que acredita que la siembra
+#: creó un admin usable. Que estas dos constantes sigan siendo las que el
+#: instalador imprime lo comprueba `tests/unit/test_install_e2e_gate.py`, sin
+#: necesidad de un runner con Docker.
+_LABEL_ADMIN_USERNAME = "Usuario administrador"
+_LABEL_ADMIN_PASSWORD = "Contraseña del administrador"
 
+
+def _parse_reveal(stdout: str) -> dict[str, str]:
+    """Extract admin username/password from the one-time reveal block."""
+
+    wanted = {
+        _LABEL_ADMIN_USERNAME: "admin_username",
+        _LABEL_ADMIN_PASSWORD: "admin_password",
+    }
     creds: dict[str, str] = {}
     for line in stdout.splitlines():
-        low = line.lower()
-        if "admin" in low and "@" in line and "password" not in low:
-            creds.setdefault("admin_username", line.split()[-1].strip())
-        if "password" in low:
-            creds.setdefault("admin_password", line.split()[-1].strip())
+        label, separator, value = line.strip().partition(": ")
+        if not separator:
+            continue
+        key = wanted.get(label)
+        if key is not None and value.strip():
+            creds.setdefault(key, value.strip())
     return creds

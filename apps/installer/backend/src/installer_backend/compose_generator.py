@@ -208,6 +208,27 @@ CORE_SERVICES: tuple[str, ...] = (
     "caddy",
 )
 
+# ---------------------------------------------------------------------------
+# El one-shot de finalización (ADR 0161, paso 8). Ver `_bootstrap_service`.
+#
+# NO entra en CORE_SERVICES a propósito, y no es un descuido: esa tupla es «lo
+# que `docker compose up -d` levanta y lo que los diagramas de topología
+# dibujan» (`tests/docs/test_diagram_guards.py`, `tests/unit/
+# test_docs_governance.py`). Un one-shot que el operador ejecuta una vez y que
+# sale no forma parte del stack que corre; dibujarlo como si lo fuera sería la
+# misma clase de mentira que los servicios fantasma que esas guardas persiguen.
+# Se añade en `selected_services`, siempre, porque siempre hace falta.
+# ---------------------------------------------------------------------------
+#: Nombre del servicio. Es el MISMO símbolo que imprime el banner del CLI
+#: (`installer_backend.cli.BOOTSTRAP_SERVICE`): si los dos se separan, el
+#: operador recibe un `no such service`.
+BOOTSTRAP_SERVICE = "bootstrap"
+
+#: Módulo que ejecuta el one-shot dentro de la imagen del api-server. Es la
+#: costura con la otra mitad del paso 8; el contrato está escrito en el docstring
+#: de `_bootstrap_service`.
+BOOTSTRAP_ENTRYPOINT = "api_server.bootstrap"
+
 #: Services added only when the monitoring overlay is requested. Mirrors
 #: docker/docker-compose.monitoring.yml so a production install has the SAME
 #: observability as dev — including Alertmanager (routes Prometheus' alert rules
@@ -467,17 +488,69 @@ def _http_healthcheck(url: str, *, start_period: str = "30s") -> dict[str, Any]:
 
 
 def _env_ref(var: str, dev_default: str | None, *, prod: bool) -> str:
-    """A ``${VAR}`` reference, keeping a dev fallback only outside prod.
+    """Una referencia a ``VAR`` que en producción **aborta** si falta.
 
-    For a production install we omit the ``:-default`` fallback so the compose
-    carries NO dev-default marker (the prod secret guard rejects those) and a
-    missing ``.env`` value fails loudly instead of silently using a known
-    secret. For dev/staging we keep the convenience fallback.
+    Tres formas posibles, y sólo dos son aceptables:
+
+    * ``${VAR:-default}`` — fail-OPEN. El despliegue arranca con el literal de
+      desarrollo. Es el hallazgo ``secrets-6`` de prod-10; se conserva sólo
+      fuera de producción, para las comodidades de dev.
+    * ``${VAR}`` a secas — **también fail-open, y peor porque no lo parece**.
+      Docker Compose avisa por stderr («variable is not set, defaulting to a
+      blank string») y sigue adelante con la variable VACÍA. Esta función la
+      emitía en modo prod mientras este mismo docstring prometía lo contrario
+      (auditoría 2026-08-27). El daño concreto: con ``APP_USER_PASSWORD`` vacía
+      sobre un PGDATA nuevo, ``stack/postgres/init/02-roles.sh`` hace
+      ``${APP_USER_PASSWORD:-<literal de dev>}`` y bash trata la cadena vacía
+      como ausente, así que el rol nace con la contraseña publicada en este
+      repositorio. Y lo que ve el operador depende de qué variable se le caiga:
+      unas revientan ruidosamente y otras no.
+    * ``${VAR:?mensaje}`` — fail-CLOSED, y la que se emite en producción. El
+      ``up`` aborta antes de arrancar un solo contenedor, con un mensaje que
+      dice dónde poner la variable. Misma forma y mismo criterio que exige
+      ``tests/unit/test_compose_no_default_credentials.py`` sobre el compose
+      canónico; ``test_a_missing_credential_aborts_the_generated_stack`` lo
+      exige sobre el generado.
+
+    El mensaje nombra el ``.env`` a propósito: la interpolación ocurre al CARGAR
+    el fichero, así que el aborto alcanza también a ``ps``, ``logs``, ``config`` y
+    ``down`` — justo los comandos con los que alguien intentaría diagnosticarlo.
+    Sin instrucción, ese aborto es una sesión de depuración.
+
+    Y va en ASCII puro, que no es descuido: este texto se repite en ~30 valores
+    del YAML generado, y una sola vocal acentuada obliga a PyYAML a volcarlos en
+    estilo entrecomillado con escapes ``ó`` y continuaciones de línea. El
+    fichero sigue siendo válido —y ``docker compose config`` lo acepta—, pero el
+    artefacto que el ADR 0161 pide que el operador AUDITE antes de ejecutarlo se
+    vuelve ilegible. Un fichero que no se puede leer no se audita.
     """
 
-    if prod or dev_default is None:
+    if prod:
+        return f"${{{var}:?falta {var} en el .env junto a este compose}}"
+    if dev_default is None:
         return f"${{{var}}}"
     return f"${{{var}:-{dev_default}}}"
+
+
+def _redis_dsn(db: int, *, prod: bool) -> str:
+    """DSN autenticada contra el Redis del stack: ``redis://:<clave>@redis:6379/N``.
+
+    La dirección es fija (la impone este compose), la credencial no: viaja como
+    referencia al `.env`, como cualquier otro secreto. Redis no tiene usuario en
+    este stack —sólo contraseña—, de ahí los dos puntos con el usuario vacío.
+
+    Punto de enganche ÚNICO a propósito. Las once DSN de Redis del stack estaban
+    escritas a mano, once veces, y por eso las once se quedaron sin credencial a
+    la vez cuando prod-10 puso `requirepass` en el compose canónico. Con una sola
+    función, añadir un consumidor nuevo sin credencial exige saltársela.
+
+    Y la contraseña también es obligatoria DENTRO de la URL: con
+    ``${REDIS_PASSWORD}`` a secas y la variable ausente, esto produce
+    ``redis://:@redis:6379/1``, que es una URL perfectamente válida con
+    contraseña vacía — un servicio que arranca y no se puede autenticar.
+    """
+
+    return f"redis://:{_env_ref('REDIS_PASSWORD', None, prod=prod)}@redis:6379/{db}"
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +567,22 @@ def _postgres_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "POSTGRES_INITDB_ARGS": "--encoding=UTF8 --locale=C",
             "MIGRATIONS_USER_PASSWORD": _env_ref("MIGRATIONS_USER_PASSWORD", None, prod=prod),
             "APP_USER_PASSWORD": _env_ref("APP_USER_PASSWORD", None, prod=prod),
+            # prod-14 task_prod14_04/05. La contraseña de `service_user`, el rol
+            # BYPASSRLS SIN DDL con el que corren workers, orchestrator,
+            # dispatcher y la superficie /admin. La consumen
+            # `stack/postgres/init/04-service-role.sql` (que crea el rol con un
+            # literal de desarrollo) y `05-service-role-password.sh` (que lo
+            # corrige desde aquí). Faltaba, así que el init caía SIEMPRE al
+            # literal — la llave que se salta la RLS de todos los tenants,
+            # escrita en este repositorio y alcanzable desde cualquier contenedor
+            # de `agentic-net`. Lo avisaba por el stderr del contenedor de
+            # postgres, donde nadie mira.
+            #
+            # Es la misma regresión que prod-14 arregló en el compose canónico: su
+            # guarda (`tests/security/test_service_user_password_is_wired.py`)
+            # sigue verde porque sólo mira `docker/docker-compose.yml`, y el que
+            # se instala en casa del operador es éste.
+            "SERVICE_USER_PASSWORD": _env_ref("SERVICE_USER_PASSWORD", None, prod=prod),
         },
         "volumes": [
             f"{cfg.storage.data_root}/postgres:/var/lib/postgresql/data",
@@ -519,11 +608,42 @@ def _postgres_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     return svc
 
 
-def _redis_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # noqa: ARG001
+def _redis_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """Redis 7 — sesiones de servidor, broker de Celery y contadores de rate limit.
+
+    **Con `requirepass`, y no por higiene.** Esto NO es una caché de resultados:
+    según la referencia del propio repo (`docs/04-reference/mandatory-env-vars.md`)
+    ahí viven las SESIONES de servidor, el broker de Celery —o sea, la capacidad
+    de encolar trabajo para los workers— y los contadores de rate limit. Corría
+    sin autenticación: un `redis-cli` desde cualquier contenedor de `agentic-net`,
+    o desde el propio host por la IP del bridge y sin necesidad de puerto
+    publicado, leía sesiones vivas, encolaba ejecuciones y ponía los contadores a
+    cero. El operador no veía nada, porque el stack funciona perfectamente.
+
+    Es el hallazgo `secrets-7` de prod-10 otra vez: su guarda
+    (`tests/unit/test_compose_redis_auth_and_dev_binds.py`) exige `--requirepass`
+    en `docker/docker-compose.yml` y sigue verde, porque el compose que se
+    instala —éste— no lo miraba nadie.
+
+    Dos detalles que van juntos y no se pueden separar:
+
+    * La contraseña es **obligatoria** (`${REDIS_PASSWORD:?…}` en prod): un
+      despliegue que olvide la variable debe abortar, no quedarse abierto. Con
+      `${REDIS_PASSWORD}` a secas arrancaría un `requirepass ''`.
+    * El healthcheck se **autentica**. Con `requirepass`, un `redis-cli ping`
+      pelado responde NOAUTH y sale != 0: el contenedor se quedaría `unhealthy`
+      para siempre y todos los `depends_on: service_healthy` bloquearían el stack
+      entero. Poner la contraseña sin arreglar la sonda cambia un agujero por una
+      avería total. Se afirma el `PONG` porque `redis-cli -a … ping` devuelve 0
+      aunque la respuesta sea un error.
+    """
+
     svc: dict[str, Any] = {
         "image": IMAGE_REDIS,
         "command": [
             "redis-server",
+            "--requirepass",
+            _env_ref("REDIS_PASSWORD", None, prod=prod),
             "--appendonly",
             "yes",
             "--appendfsync",
@@ -535,9 +655,15 @@ def _redis_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
             "--maxmemory-policy",
             "allkeys-lru",
         ],
+        "environment": {
+            # Sólo para que el healthcheck de abajo pueda autenticarse DENTRO del
+            # contenedor. `redis-server` no lee REDIS_PASSWORD del entorno: su
+            # contraseña es la del `--requirepass` de arriba.
+            "REDIS_PASSWORD": _env_ref("REDIS_PASSWORD", None, prod=prod),
+        },
         "volumes": [f"{cfg.storage.data_root}/redis:/data"],
         "healthcheck": {
-            "test": ["CMD", "redis-cli", "ping"],
+            "test": ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG'],
             "interval": "10s",
             "timeout": "3s",
             "retries": 5,
@@ -847,18 +973,31 @@ def _migrations_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]: 
     return svc
 
 
-def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+def _api_server_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """El entorno completo de un proceso que corre con el paquete ``api_server``.
+
+    Sale de ``_api_server_service`` para que el one-shot ``bootstrap`` —misma
+    imagen, mismas ``api_server.config.Settings``— lo herede ENTERO en vez de
+    llevar una copia recortada a mano. La copia recortada es el modo de fallo:
+    ``Settings`` es fail-closed en producción, así que una variable que falte no
+    degrada una función, impide construir el objeto y el contenedor muere antes
+    de hacer nada. Y aquí «antes de hacer nada» puede significar «después de que
+    Vault haya emitido las unseal keys».
+    """
+
     env = _app_environment(cfg, "API_SERVER_", prod=prod)
     env.update(
         {
             "API_SERVER_ADMIN_DATABASE_URL": _env_ref(
                 "API_SERVER_ADMIN_DATABASE_URL", None, prod=prod
             ),
-            # In-stack service URLs are fixed by this compose → literals (no .env
-            # ref needed). Redis logical DBs: 0 cache, 1 broker, 2 result.
-            "API_SERVER_REDIS_URL": "redis://redis:6379/0",
-            "API_SERVER_BROKER_URL": "redis://redis:6379/1",
-            "API_SERVER_RESULT_BACKEND": "redis://redis:6379/2",
+            # In-stack service URLs: la DIRECCIÓN la fija este compose, así que
+            # va literal; la CREDENCIAL no, así que va por referencia al `.env`
+            # (ver `_redis_dsn`). Vault y MinIO no llevan credencial en la URL.
+            # Redis logical DBs: 0 cache, 1 broker, 2 result.
+            "API_SERVER_REDIS_URL": _redis_dsn(0, prod=prod),
+            "API_SERVER_BROKER_URL": _redis_dsn(1, prod=prod),
+            "API_SERVER_RESULT_BACKEND": _redis_dsn(2, prod=prod),
             "API_SERVER_VAULT_URL": "http://vault:8200",
             "API_SERVER_MINIO_URL": "http://minio:9000",
             # Secrets: reference the per-service prefixed .env var that
@@ -899,6 +1038,108 @@ def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
             "API_SERVER_SSO_REDIRECT_BASE_URL": f"https://{cfg.system.domain}/api",
         }
     )
+    return env
+
+
+def _bootstrap_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    """El one-shot de FINALIZACIÓN: init de Vault + siembra del tenant + revelado.
+
+    Es el segundo de los dos comandos que el CLI le deja al operador (ADR 0161,
+    opción D). Existe como servicio del compose, y no como una capacidad del
+    contenedor del instalador, por una razón concreta: **Vault y postgres sólo
+    son alcanzables desde dentro de `agentic-net`**, y el instalador corre con
+    `network_mode: none` y sin socket de Docker, que es justo lo que hace que la
+    opción D no necesite una excepción al ADR 0060.
+
+    Hasta el 2026-08-27 este servicio NO estaba declarado, y el banner del CLI lo
+    mandaba ejecutar igualmente. Lo que recibía el operador era
+    `no such service: bootstrap` sobre un stack `Up (healthy)` —el healthcheck de
+    Vault acepta `sealedcode=200&uninitcode=200` a propósito— con Vault sin
+    inicializar y sellado, sin tenant, sin usuario admin y sin ningún revelado de
+    credenciales. La instalación PARECE terminada y no lo está, que es el peor
+    modo de fallo que puede tener un instalador.
+
+    Las cinco decisiones de este bloque, y por qué cada una:
+
+    * **`profiles: [bootstrap]`** — separa «se ejecuta una vez, a mano» de
+      «arranca con el stack». Sin el perfil, `docker compose up -d --wait` lo
+      lanzaría en CADA arranque del host: un one-shot reintentando inicializar
+      Vault en cada reinicio, y un `--wait` esperando a un contenedor que sale.
+      `docker compose run` activa solo el perfil del servicio que nombra, así que
+      el comando del banner sigue funcionando tal cual.
+    * **`restart: "no"`** — un one-shot con reinicio automático es un bucle.
+    * **La imagen del api-server** — es la que trae los seeds
+      (`api_server.seeds`, `api_server.seeds.init_tenant`) y `hvac`. Publicar una
+      séptima imagen para tres comandos sería una cosa más que versionar, escanear
+      y pinear por digest.
+    * **`depends_on` con las tres condiciones** — Vault arriba (aunque SELLADO:
+      su healthcheck lo acepta a propósito, y desellar es precisamente parte del
+      trabajo de este one-shot), postgres sano, y el esquema YA migrado. Sembrar
+      antes de Alembic falla con `relation "organizations" does not exist`, y ése
+      es el peor momento para descubrirlo: después de que Vault haya emitido unas
+      unseal keys que se muestran EXACTAMENTE UNA VEZ.
+    * **`INIT_ADMIN_PASSWORD` NO viaja en el entorno** — la contraseña del primer
+      System Owner la mintea el propio one-shot y la enseña una vez por stdout.
+      Ponerla en el compose la escribiría en el `.env` del host: legible por
+      cualquiera que ya lo tenga, y superviviente a la sesión. Eso no es un
+      revelado único, es un secreto en un fichero.
+
+    **La otra mitad de esta costura vive fuera de este módulo.**
+    :data:`BOOTSTRAP_ENTRYPOINT` nombra el módulo que la imagen del api-server
+    tiene que exponer, y su contrato es exactamente lo que promete el banner del
+    CLI: (1) `vault operator init` + unseal + KV v2 + políticas por servicio,
+    idempotente en el límite del init —una Vault ya inicializada NO se re-inicia,
+    que sería destructivo y sin recuperación—; (2) `api_server.seeds` +
+    `api_server.seeds.init_tenant` con el tenant y el email de aquí y una
+    contraseña CSPRNG minteada dentro; (3) el revelado por stdout, una vez, de
+    las unseal keys, el root token y esa contraseña. Se nombra como símbolo, y no
+    como cadena suelta, por la misma razón por la que `cli.py` hizo lo propio con
+    el nombre del servicio: es el único sitio donde las dos mitades se tocan.
+
+    **Y ese módulo TODAVÍA NO EXISTE** (comprobado el 2026-08-27:
+    ``importlib.util.find_spec("api_server.bootstrap")`` devuelve ``None``). Vive
+    en ``apps/api-server/``, fuera del alcance de este fichero. Declarar el
+    servicio igualmente no es tapar el agujero: es moverlo de sitio, y a uno
+    mejor. Sin el servicio, el operador recibía `no such service: bootstrap` —un
+    error que apunta a su Docker— y no tenía dónde mirar; con él, recibe un
+    `No module named api_server.bootstrap` que nombra la pieza que falta y la
+    imagen donde debe estar. Lo que NO se puede hacer es dejar el banner
+    ordenando un comando inexistente: eso convierte «falta media tarea» en «tu
+    instalación está rota y no sabemos por qué».
+    """
+
+    env = _api_server_env(cfg, prod=prod)
+    env.update(
+        {
+            # Los argumentos del one-shot, no ajustes del runtime: van sin el
+            # prefijo `API_SERVER_` a propósito, porque no son campos de
+            # `api_server.config.Settings` y emitirlos con el prefijo haría creer
+            # al contrato de prefijos que hay dos campos que no existen.
+            "AGENTIC_BOOTSTRAP_TENANT_NAME": cfg.tenant.tenant_name,
+            "AGENTIC_BOOTSTRAP_ADMIN_EMAIL": str(cfg.tenant.admin_email),
+        }
+    )
+    svc: dict[str, Any] = {
+        "image": app_image("api-server"),
+        "command": ["python", "-m", BOOTSTRAP_ENTRYPOINT],
+        "environment": env,
+        # Fuera del `up`: lo ejecuta el operador, una vez, con
+        # `docker compose run --rm bootstrap`.
+        "profiles": [BOOTSTRAP_SERVICE],
+        "depends_on": {
+            "postgres": {"condition": "service_healthy"},
+            "vault": {"condition": "service_healthy"},
+            "migrations": {"condition": "service_completed_successfully"},
+        },
+        "networks": ["agentic-net"],
+    }
+    svc.update(_hardening(limits_cpus="1.0", limits_memory="1g"))
+    svc["restart"] = "no"  # one-shot: corre una vez y sale
+    return svc
+
+
+def _api_server_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
+    env = _api_server_env(cfg, prod=prod)
     svc: dict[str, Any] = {
         "image": app_image("api-server"),
         "environment": env,
@@ -925,8 +1166,8 @@ def _orchestrator_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]
     env = _app_environment(cfg, "ORCHESTRATOR_", prod=prod)
     env.update(
         {
-            "ORCHESTRATOR_REDIS_URL": "redis://redis:6379/0",
-            "ORCHESTRATOR_BROKER_URL": "redis://redis:6379/1",
+            "ORCHESTRATOR_REDIS_URL": _redis_dsn(0, prod=prod),
+            "ORCHESTRATOR_BROKER_URL": _redis_dsn(1, prod=prod),
         }
     )
     svc: dict[str, Any] = {
@@ -971,13 +1212,13 @@ def _workers_env(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     env = _app_environment(cfg, "WORKERS_", prod=prod)
     env.update(
         {
-            "WORKERS_BROKER_URL": "redis://redis:6379/1",
-            "WORKERS_RESULT_BACKEND": "redis://redis:6379/2",
+            "WORKERS_BROKER_URL": _redis_dsn(1, prod=prod),
+            "WORKERS_RESULT_BACKEND": _redis_dsn(2, prod=prod),
             # prod-01 A10 (auditoría 2026-07-06): DB 0, la MISMA que lee el WS del
             # api-server (API_SERVER_REDIS_URL) y el orchestrator — los streams
             # exec:{id} del worker se publican aquí. Con /3 (sin consumidor) el
             # streaming en vivo de logs quedaba roto (manuals.yml ya lo corrigió).
-            "WORKERS_EVENTS_REDIS_URL": "redis://redis:6379/0",
+            "WORKERS_EVENTS_REDIS_URL": _redis_dsn(0, prod=prod),
             "WORKERS_DATA_ROOT": cfg.storage.data_root,
             # Docker API via the least-privilege proxy, never the raw socket
             # (task_09, ADR 0060). DOCKER_HOST is read by the docker SDK itself,
@@ -1242,14 +1483,14 @@ def _notification_dispatcher_service(cfg: InstallerConfig, *, prod: bool) -> dic
     env = _app_environment(cfg, "NOTIFY_", prod=prod)
     env.update(
         {
-            "NOTIFY_BROKER_URL": "redis://redis:6379/1",
-            "NOTIFY_RESULT_BACKEND": "redis://redis:6379/2",
+            "NOTIFY_BROKER_URL": _redis_dsn(1, prod=prod),
+            "NOTIFY_RESULT_BACKEND": _redis_dsn(2, prod=prod),
             # AUD16 (H10): la DB del bus de eventos/DLQ debe ser la MISMA que
             # miran los consumidores (workers/api-server/orchestrator = DB 0).
             # Con la antigua DB 3, el stream dlq:notifications era invisible
             # para el sampler de métricas y NotificationsDLQNotEmpty no podía
             # disparar jamás en prod (dev ya usaba DB 0).
-            "NOTIFY_EVENTS_REDIS_URL": "redis://redis:6379/0",
+            "NOTIFY_EVENTS_REDIS_URL": _redis_dsn(0, prod=prod),
             "NOTIFY_NOTIFICATION_ENCRYPTION_KEY": _env_ref(
                 "NOTIFY_NOTIFICATION_ENCRYPTION_KEY", None, prod=prod
             ),
@@ -1760,6 +2001,7 @@ _BUILDERS = {
     "docker-socket-proxy": _docker_socket_proxy_service,
     "migrations": _migrations_service,
     "api-server": _api_server_service,
+    BOOTSTRAP_SERVICE: _bootstrap_service,
     "orchestrator": _orchestrator_service,
     "workers": _workers_service,
     "workers-privileged": _workers_privileged_service,
@@ -1849,13 +2091,19 @@ def enabled_providers(cfg: InstallerConfig) -> tuple[LLMProviderKind, ...]:
 def selected_services(cfg: InstallerConfig, *, monitoring: bool) -> list[str]:
     """The ordered list of service names the generated compose will contain.
 
-    Core services are always present; the in-stack ``ollama`` service + its
-    ``ollama-bootstrap`` one-shot are added when ``ollama_mode != "none"`` (ADR
-    0056); the voice ``stt``/``tts`` services when ``voice_mode != "none"`` (ADR
-    0073); the monitoring overlay services only when requested.
+    Core services are always present; the ``bootstrap`` one-shot is always
+    DECLARED but never started by ``up`` (it lives behind its own profile — ADR
+    0161 paso 8); the in-stack ``ollama`` service + its ``ollama-bootstrap``
+    one-shot are added when ``ollama_mode != "none"`` (ADR 0056); the voice
+    ``stt``/``tts`` services when ``voice_mode != "none"`` (ADR 0073); the
+    monitoring overlay services only when requested.
     """
 
     services = list(CORE_SERVICES)
+    # El one-shot de finalización: SIEMPRE declarado, NUNCA arrancado por `up`
+    # (vive bajo `profiles: [bootstrap]`). Va aquí y no en CORE_SERVICES porque
+    # esa tupla describe el stack que corre — ver el bloque de BOOTSTRAP_SERVICE.
+    services.append(BOOTSTRAP_SERVICE)
     if cfg.resources.ollama_mode != "none":
         services.append(OLLAMA_SERVICE)
         services.append(OLLAMA_BOOTSTRAP_SERVICE)
@@ -1967,7 +2215,17 @@ def generate_compose(
         builder = _BUILDERS[name]
         svc = builder(cfg, prod=prod)
         # Inject the provider wiring into the application services only.
-        if name in ("api-server", "orchestrator", "workers", "notification-dispatcher"):
+        # `bootstrap` incluido: `api_server.seeds` embebe el corpus del catálogo
+        # contra Ollama, y sin el cableado del embebedor caería a su default de
+        # dev (localhost) — un seed que revienta aborta la siembra ENTERA, y aquí
+        # sería después de que Vault haya emitido las unseal keys.
+        if name in (
+            "api-server",
+            "orchestrator",
+            "workers",
+            "notification-dispatcher",
+            BOOTSTRAP_SERVICE,
+        ):
             env = svc.setdefault("environment", {})
             assert isinstance(env, dict)
             env.update(provider_env)

@@ -29,9 +29,11 @@ from __future__ import annotations
 import io
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 from installer_backend.cli import (
+    BOOTSTRAP_ENTRYPOINT_AVAILABLE,
     BOOTSTRAP_SERVICE,
     BootTreeGenerator,
     CliError,
@@ -42,7 +44,14 @@ from installer_backend.cli import (
     run_generate,
 )
 from installer_backend.command_runner import CommandResult
-from installer_backend.compose_generator import STACK_ASSETS_DIR_NAME, generate_compose
+from installer_backend.compose_generator import (
+    BOOTSTRAP_ENTRYPOINT,
+    STACK_ASSETS_DIR_NAME,
+    generate_compose,
+)
+from installer_backend.compose_generator import (
+    BOOTSTRAP_SERVICE as COMPOSE_BOOTSTRAP_SERVICE,
+)
 from installer_backend.config import InstallerConfig
 from installer_backend.config_generators import (
     FakeDataTreeProvisioner,
@@ -54,6 +63,14 @@ from installer_backend.install import (
     InstallStep,
     StepExecutionError,
     StepExecutor,
+)
+from installer_backend.prereqs import (
+    BYTES_PER_GIB,
+    DEFAULT_MIN_DISK_GIB,
+    DEFAULT_MIN_RAM_GIB,
+    MIN_COMPOSE_VERSION,
+    MIN_DOCKER_VERSION,
+    REQUIRED_FREE_PORTS,
 )
 from installer_backend.real_step_executor import RealStepExecutor
 
@@ -325,48 +342,158 @@ def test_generate_no_acepta_dry_run() -> None:
 # ---------------------------------------------------------------------------
 # La salida: el diseño D convierte una línea en tres, y hay que decirlo
 # ---------------------------------------------------------------------------
-def test_generate_anuncia_los_dos_comandos_que_faltan(
+def _generate(tmp_path, cfg: InstallerConfig, secrets: GeneratedSecrets, **kwargs) -> str:
+    """Corre ``generate`` con el ejecutor real-salvo-disco y devuelve lo impreso."""
+
+    executor, _runner, _writer, _tree = _real_executor(cfg, secrets)
+    out = io.StringIO()
+    run_generate(
+        _write_config(tmp_path),
+        generator=BootTreeGenerator(executor=executor, out=out, **kwargs),
+        out=out,
+    )
+    return out.getvalue()
+
+
+def test_generate_anuncia_el_comando_que_de_verdad_falta(
     tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
 ) -> None:
-    """El operador tiene que saber que quedan DOS comandos suyos por ejecutar.
+    """El primer comando SIEMPRE se anuncia: sin él no hay stack.
 
     Un instalador que termina en verde sin decirlo deja un stack que no existe y
     un operador convencido de lo contrario.
     """
 
-    executor, _runner, _writer, _tree = _real_executor(installer_config, gen_secrets)
-    out = io.StringIO()
+    printed = _generate(tmp_path, installer_config, gen_secrets)
 
-    run_generate(
-        _write_config(tmp_path),
-        generator=BootTreeGenerator(executor=executor, out=out),
-        out=out,
-    )
-
-    printed = out.getvalue()
     root = installer_config.storage.data_root
     assert f"cd {root} && docker compose up -d --wait" in printed
-    assert f"docker compose run --rm {BOOTSTRAP_SERVICE}" in printed
 
 
-def test_el_bootstrap_que_el_banner_anuncia_sigue_sin_existir_en_el_compose(
+def test_el_banner_no_manda_ejecutar_un_bootstrap_que_todavia_no_corre(
+    tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Mientras falte la otra mitad del paso 8, el banner NO da esa orden.
+
+    Éste es el test que fija el arreglo, y nació al revés: antes afirmaba que el
+    banner imprimía `docker compose run --rm bootstrap` **sin ninguna reserva**,
+    así que la suite en verde certificaba el agujero. Lo que recibía el operador
+    era un stack `Up (healthy)` —el healthcheck de Vault acepta a propósito un
+    Vault sellado— con Vault sin inicializar, sin tenant, sin usuario admin y sin
+    credenciales, después de que el instalador le hubiera dicho que ese comando
+    le iba a dar todas esas cosas. Un banner que manda ejecutar algo que falla es
+    peor que no imprimir nada: convierte «falta media tarea» en «tu Docker está
+    roto».
+
+    El día que `api_server.bootstrap` exista, `BOOTSTRAP_ENTRYPOINT_AVAILABLE`
+    pasa a True y este test cambia de rama solo — no hay que acordarse de él,
+    porque `test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol`
+    obliga a mover la bandera.
+
+    **Corregido el 2026-08-28**, y la corrección es la mitad interesante. Este
+    test exigía que el banner rematara con «termina desde el host con
+    `installer_backend.cli install`», descrito como «el camino que SÍ termina
+    hoy». No terminaba: el paso 4 del `install` hablaba con Vault contra
+    `127.0.0.1:8200` y el servicio `vault` del compose generado no publica ningún
+    puerto —el único que publica es Caddy (ADR 0061)—, así que moría con una
+    traza cruda. O sea que la suite en verde certificaba, otra vez, una salida de
+    emergencia rota; sólo que esta vez la que se ofrecía en lugar de la orden que
+    sí se había retirado. Desde que el `install` delega en este mismo one-shot,
+    las dos mitades comparten destino, y lo que el banner tiene que decir es eso.
+    """
+
+    printed = _generate(tmp_path, installer_config, gen_secrets)
+    orden = f"docker compose run --rm {BOOTSTRAP_SERVICE}"
+
+    if BOOTSTRAP_ENTRYPOINT_AVAILABLE:
+        assert orden in printed
+        return
+
+    # La orden puede aparecer NOMBRADA (para decir que no está disponible), pero
+    # nunca como uno de los pasos que el operador debe ejecutar.
+    assert "NO DISPONIBLE" in printed or "no disponible" in printed
+    assert BOOTSTRAP_ENTRYPOINT in printed, (
+        "hay que nombrar el módulo que falta: es lo que convierte el error en un "
+        "diagnóstico en vez de en una sospecha sobre el Docker del operador"
+    )
+    # Y NO puede ofrecer el `install` desde el host como si lo supliera: ejecuta
+    # exactamente este mismo one-shot, así que hoy muere en el mismo sitio.
+    assert "installer_backend.cli install --config" not in printed, (
+        "mandar al operador a gastar una instalación entera para llegar al mismo "
+        "punto muerto es peor que no ofrecer salida: cuesta una instalación"
+    )
+    assert "NINGÚN camino" in printed or "ninguno de los dos caminos" in printed.lower(), (
+        "si la finalización no está disponible por ninguna vía, hay que decirlo: "
+        "un banner que insinúa que hay otra deja al operador buscándola"
+    )
+
+
+def test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol() -> None:
+    """La bandera del banner y el árbol del repositorio no pueden discrepar.
+
+    `BOOTSTRAP_ENTRYPOINT_AVAILABLE` es una declaración escrita a mano, y una
+    declaración a mano envejece: si alguien aterriza `api_server.bootstrap` y no
+    la mueve, el banner seguiría diciendo «no disponible» de algo que ya
+    funciona; si alguien la mueve antes de tiempo, vuelve el callejón sin salida.
+    Aquí se cruza contra el sitio donde el módulo tiene que vivir, derivado del
+    propio `BOOTSTRAP_ENTRYPOINT` para que un renombrado no deje la guarda
+    apuntando a una ruta muerta.
+    """
+
+    repo = Path(__file__).resolve().parents[3]
+    module_dir = repo / "apps" / "api-server" / "src" / Path(*BOOTSTRAP_ENTRYPOINT.split("."))
+    on_disk = (module_dir / "__main__.py").is_file() or module_dir.with_suffix(".py").is_file()
+
+    assert on_disk == BOOTSTRAP_ENTRYPOINT_AVAILABLE, (
+        f"BOOTSTRAP_ENTRYPOINT_AVAILABLE={BOOTSTRAP_ENTRYPOINT_AVAILABLE} pero el "
+        f"módulo {BOOTSTRAP_ENTRYPOINT} {'SÍ' if on_disk else 'NO'} está en "
+        f"{module_dir}. Si acabas de aterrizar la segunda mitad del paso 8 del "
+        "ADR 0161, mueve la bandera en cli.py: el banner volverá a dar la orden."
+    )
+
+
+def test_el_bootstrap_que_el_banner_anuncia_existe_en_el_compose(
     installer_config: InstallerConfig,
 ) -> None:
-    """Guarda-alambre: el banner nombra un servicio que el compose aún NO declara.
+    """El banner y el compose nombran el MISMO servicio, y ese servicio existe.
 
-    El paso 8 del ADR 0161 son dos mitades — el subcomando ``generate`` y el
-    one-shot de finalización dentro de la red del stack — y esta es la única
-    costura donde se tocan. Sin esta guarda, la deuda vive en un comentario que
-    nadie lee y el operador se come un ``no such service: bootstrap``.
+    Esta guarda nació al revés: afirmaba que el compose **no** lo declaraba, y su
+    propio mensaje pedía darle la vuelta el día que aterrizara la otra mitad del
+    paso 8 del ADR 0161. Ese día es hoy (auditoría 2026-08-27), así que deja de
+    ser una deuda anotada y pasa a ser el contrato que impide la avería: el
+    banner manda ejecutar `docker compose run --rm bootstrap` sin ninguna
+    reserva, y con el servicio ausente lo que recibía el operador era
+    `no such service: bootstrap` sobre un stack `Up (healthy)` con Vault sellado
+    y sin inicializar, sin tenant y sin usuario admin. La instalación parece
+    terminada y no lo está.
+
+    Es la ÚNICA costura donde el banner (CLI) y el generador de compose se tocan,
+    por eso se afirma aquí y con el símbolo, no con la cadena "bootstrap".
     """
 
     services = generate_compose(installer_config)["services"]
-    assert BOOTSTRAP_SERVICE not in services, (
-        f"El compose generado ya declara «{BOOTSTRAP_SERVICE}»: la otra mitad del "
-        "paso 8 del ADR 0161 está hecha. Da la vuelta a esta guarda (`in` en vez "
-        "de `not in`) — deja de ser una deuda anotada y pasa a ser un contrato "
-        "comprobable entre el banner y el compose."
+    assert BOOTSTRAP_SERVICE in services, (
+        f"El banner manda ejecutar «{BOOTSTRAP_SERVICE}» y el compose generado no "
+        "lo declara: el operador recibe `no such service` y se queda con Vault sin "
+        "inicializar, sin tenant y sin credenciales, creyendo que ha terminado."
     )
+    # Y que exista no basta: `up -d --wait` no debe arrancarlo. Un one-shot sin
+    # perfil se relanzaría en cada arranque del host, y `--wait` esperaría a un
+    # contenedor que sale.
+    assert services[BOOTSTRAP_SERVICE].get("profiles") == [BOOTSTRAP_SERVICE]
+
+
+def test_el_banner_y_el_compose_no_pueden_nombrar_servicios_distintos() -> None:
+    """Los dos módulos declaran el nombre por su cuenta; aquí se cruzan.
+
+    `cli.BOOTSTRAP_SERVICE` (lo que el banner IMPRIME) y
+    `compose_generator.BOOTSTRAP_SERVICE` (lo que el compose DECLARA) son dos
+    constantes distintas en dos ficheros distintos. Mientras coincidan, el
+    comando que lee el operador existe; si alguien renombra una, el `no such
+    service` vuelve exactamente igual que antes y sin que nada más falle.
+    """
+
+    assert BOOTSTRAP_SERVICE == COMPOSE_BOOTSTRAP_SERVICE
 
 
 # ---------------------------------------------------------------------------
@@ -424,3 +551,82 @@ def test_main_cablea_el_subcomando_generate(tmp_path) -> None:
 
     missing = str(tmp_path / "no-existe.yaml")
     assert main(["generate", "--config", missing], out=io.StringIO()) == int(ExitCode.CONFIG)
+
+
+# ---------------------------------------------------------------------------
+# Los prerequisitos: `generate` no es una puerta, pero tampoco puede callarse
+# ---------------------------------------------------------------------------
+def test_el_banner_lista_los_prerequisitos_que_nadie_comprueba_en_este_camino(
+    tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Lo que el contenedor no puede ver, se lo dice al operador para que lo vea él.
+
+    `generate` no habla con Docker —es LA propiedad de la opción D— así que no
+    puede sondear el daemon, ni la versión de Compose, ni los puertos del host
+    desde su propia netns. Pero las comprobaciones existen, con mensajes de
+    remediación buenos y en castellano, y en este camino no las corría nadie: el
+    operador se enteraba de que nginx tenía el 443 al ejecutar `up -d --wait`,
+    con parte del stack ya levantada. Un instalador que sabe la comprobación y no
+    la enseña es peor que uno que no la tiene.
+
+    Los umbrales salen de `prereqs.py`, no de literales aquí: si alguien sube el
+    mínimo de RAM, el banner lo sigue solo.
+    """
+
+    printed = _generate(tmp_path, installer_config, gen_secrets)
+
+    assert str(REQUIRED_FREE_PORTS[0]) in printed
+    assert str(REQUIRED_FREE_PORTS[1]) in printed
+    assert f"{MIN_COMPOSE_VERSION[0]}.{MIN_COMPOSE_VERSION[1]}" in printed
+    assert f"{MIN_DOCKER_VERSION[0]}.{MIN_DOCKER_VERSION[1]}" in printed
+    assert f"{DEFAULT_MIN_RAM_GIB}" in printed
+
+
+def test_el_disco_libre_si_se_puede_medir_desde_dentro_y_se_mide(
+    tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """La raíz de datos está MONTADA: su disco libre es el del host, y es medible.
+
+    Es la mitad de la puerta de prerequisitos que sí vale desde dentro del
+    contenedor, así que se ejecuta de verdad en vez de listarse. Se emite como
+    AVISO y no como puerta: escribir el árbol de arranque en una máquina a la que
+    se le va a montar un disco mayor es legítimo, y abortar ahí sería inventar un
+    bloqueo que el `install` desde el host tampoco impone en este punto.
+    """
+
+    poco = 3 * BYTES_PER_GIB
+    printed = _generate(tmp_path, installer_config, gen_secrets, free_disk_probe=lambda _p: poco)
+
+    assert "AVISO" in printed
+    assert "3.0" in printed, printed
+    assert str(DEFAULT_MIN_DISK_GIB) in printed
+
+
+def test_con_disco_de_sobra_no_se_inventa_un_aviso(
+    tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Control negativo: un aviso que sale siempre deja de leerse."""
+
+    de_sobra = (DEFAULT_MIN_DISK_GIB + 100) * BYTES_PER_GIB
+    printed = _generate(
+        tmp_path, installer_config, gen_secrets, free_disk_probe=lambda _p: de_sobra
+    )
+
+    assert "AVISO: disco" not in printed
+
+
+def test_una_sonda_de_disco_que_no_puede_medir_no_rompe_la_generacion(
+    tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Si no se puede medir, se dice; lo que no se hace es fallar por ello.
+
+    El entregable de este subcomando es el árbol de ficheros. Que una sonda
+    informativa no sepa contestar no puede impedir escribirlo.
+    """
+
+    def revienta(_path: str) -> int:
+        raise OSError("no se puede medir")
+
+    printed = _generate(tmp_path, installer_config, gen_secrets, free_disk_probe=revienta)
+
+    assert f"cd {installer_config.storage.data_root} && docker compose up" in printed

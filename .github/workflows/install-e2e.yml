@@ -1,0 +1,703 @@
+# =============================================================================
+# Install E2E — la instalación de verdad, en un Linux de verdad, cada noche.
+# =============================================================================
+#
+# ## Por qué existe este fichero
+#
+# `tests/e2e/test_install_from_scratch.py` se escribió el 2026-06-17 y hasta hoy
+# NUNCA se ha ejecutado. No estaba roto: estaba apagado. Su gate son dos
+# fixtures de sesión encadenadas (`tests/e2e/conftest.py`) —`E2E_INSTALL=1` y un
+# daemon Docker que responda— y NINGÚN workflow exportaba esa variable. El gate
+# cae en el SETUP, no en la recolección, así que pytest recolectaba los cuatro
+# casos, los saltaba y salía 0.
+#
+# El precio ya está cobrado, y conviene que quien lea esto dentro de un año lo
+# sepa con el caso concreto: **el compose que genera el instalador montaba once
+# rutas que nadie creaba**. `./postgres/init` resolvía DENTRO del PGDATA, Docker
+# inventaba el directorio vacío, el cluster no se inicializaba y la base nacía
+# sin `pgvector` y sin sus roles. Postgres salía `healthy`. La avería se cobraba
+# en la primera consulta que necesitaba la extensión — y el único test capaz de
+# verla llevaba meses dando verde sin instalar nada.
+#
+# O sea que el problema NO era que faltara un test. Era que el test se saltaba y
+# el skip se leía como aprobado. Por eso la pieza principal de este workflow no
+# es pytest: es el paso «Gate anti-falso-verde», que lee el informe JUnit y
+# falla si alguno de los cuatro casos exigidos no se ejecutó. Un check verde que
+# no ejecuta es peor que no tener check.
+#
+# La red de seguridad que el resto de CI usa contra esto —tratar el `exit 5` de
+# pytest, «no tests collected», como fallo (ci.yml:320-322 y :755-761)— aquí es
+# CIEGA: los casos SÍ se recolectan. Está escrito con más detalle en
+# `scripts/check_e2e_install_report.py`.
+#
+# ## Qué NO acredita este job
+#
+# * La **voz** (ADR 0073): instala con `scripts/install-profiles/ci-e2e.yaml`,
+#   que apaga `stt`/`tts`. La cabecera de ese fichero dice por qué.
+# * La **postura MAC real** en runners hospedados de GitHub, si algún día el
+#   paso de AppArmor pasa a fallar ahí (hoy se exige que cargue, ver abajo).
+# * Que las imágenes PUBLICADAS instalen: aquí se construyen en el propio job y
+#   se sirven desde un registro local. Ver «De dónde salen las imágenes».
+#
+# ## Por qué nocturno y no en cada PR
+#
+# La decisión ya estaba tomada y escrita —`docs/roadmap/prod-01-despliegue-ejecutable.md:387`
+# («nightly + ejecución obligatoria antes del cierre del plan, no en cada PR»)—
+# y los números la sostienen: los cinco shards de `test-integration` corren con
+# `timeout-minutes: 45` y midieron 17-25 min de suite más 5 min de setup (ci.yml
+# :483-516). Este job pide del orden de una hora ÉL SOLO, en serie: construir
+# seis imágenes, empujarlas, bajar ~5 GB de terceros, levantar una veintena de servicios,
+# migrar, sembrar y desinstalar. Colgarlo de cada push duplicaría la espera de
+# cada PR para repetir cada vez una comprobación que sólo cambia cuando cambian
+# el instalador, el compose generado o los Dockerfiles.
+#
+# `workflow_dispatch` además de `schedule` porque la primera ejecución hay que
+# poder pedirla a mano —y porque el repo lo exige a todo workflow
+# (`tests/docs/test_ci_workflows.py::test_triggers_allow_manual_dispatch`).
+#
+# ## Secretos: ninguno, y a propósito
+#
+# El perfil habilita UN proveedor LLM, Ollama, al que `validate_providers`
+# (installer_backend/config.py) sólo le exige el `endpoint`; los tres que piden
+# credenciales (claude_sdk, copilot, azure_foundry) van deshabilitados. Nada del
+# pipeline de instalación llama a un LLM. Los `CHANGE_ME_*` de MinIO del perfil
+# son marcadores que NO viajan al `.env`: el generador escribe credenciales
+# CSPRNG propias (medido: el `.env` generado pasa el guard de secretos de
+# producción). `tests/unit/test_install_e2e_gate.py` falla si alguien habilita
+# aquí un proveedor que necesite secreto, para que la necesidad se descubra al
+# editar el perfil y no a las 3 de la mañana.
+#
+# Si algún día este job tiene que ejercitar un agente de verdad
+# (task_prod01_20 lo insinúa), el secreto que haría falta es UNO de estos y hay
+# que darlo de alta en el repositorio y cablearlo aquí: `ANTHROPIC_OAUTH_TOKEN`
+# (claude_sdk) o `AZURE_APIM_API_KEY` + endpoint (azure_foundry). NO se inventan
+# aquí: el job de evaluación ya tiene cuatro casillas de secreto vacías desde
+# hace meses (`eval-on-prompt-change.yml`), y una quinta vacía no ayuda a nadie.
+#
+# ## De dónde salen las imágenes
+#
+# No hay ninguna publicada: `platform_images.json` declara `digests: {}` y «sin
+# release publicada todavía», y no existe ni un tag git. Así que el compose
+# generado apunta a `ghcr.io/daycry/<app>:v1.0.0`, que no existe, y el paso
+# PULL_IMAGES del instalador (`docker compose pull`, sin `--ignore-pull-failures`)
+# aborta la instalación entera con rc=1.
+#
+# Tenerlas en el almacén local del runner NO basta: `docker compose pull` de una
+# imagen que el daemon tiene pero que no vive en ningún repositorio da «pull
+# access denied». Es la misma regresión que este repo ya midió y revirtió con
+# los dos tinyproxy (compose_generator.py:668-676), y aquellos tienen una
+# escapatoria que las seis de aplicación no tienen: `pull_policy: build`.
+#
+# La salida limpia, y sin tocar una línea de producto: un `registry:2` dentro
+# del propio job y `PLATFORM_REGISTRY` apuntando a él. La referencia viaja al
+# compose como `${PLATFORM_REGISTRY:-ghcr.io/daycry}/<app>:${PLATFORM_IMAGE_TAG:-v1.0.0}`
+# y se resuelve en el HOST, y la variable del shell gana al `.env` generado
+# (que las fija con valor explícito). El runner de subprocesos del instalador
+# hereda `os.environ` (`command_runner.py:72`), así que llegan vivas hasta el
+# `docker compose`.
+#
+# ESTO CADUCA SOLO, y hay que escribirlo ahora para que no se descubra dentro de
+# seis meses: en cuanto una release pinee digests, `PLATFORM_IMAGE_TAG`
+# DESAPARECE de la referencia (platform_images.py:53-58) y el registro local
+# deja de servir. El paso «El manifiesto de release sigue sin pinear» falla ese
+# día a propósito, diciendo qué hacer.
+# =============================================================================
+name: Install E2E
+
+on:
+  # 03:17 UTC. La hora en punto es la más congestionada en Actions y los
+  # arranques se retrasan; 17 minutos después no compite con nadie.
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: >-
+          Etiqueta del runner. `ubuntu-latest` es el hospedado; pon aquí un
+          self-hosted Linux con Docker si el hospedado no puede cargar el perfil
+          AppArmor o no llega a los 50 GiB libres que exige el instalador.
+        required: false
+        default: ubuntu-latest
+
+# Una instalación a medias es peor que ninguna: si una ejecución sigue viva, la
+# siguiente ESPERA en vez de cancelarla a mitad del `up` y dejar el runner con
+# medio stack en pie (en un self-hosted eso persiste).
+concurrency:
+  group: install-e2e
+  cancel-in-progress: false
+
+# Este job no publica nada ni habla con la API de GitHub: sólo necesita el
+# checkout. Las imágenes se construyen y se sirven dentro del propio runner, así
+# que el token no tiene que poder escribir en el registro (ni en nada).
+permissions:
+  contents: read
+
+jobs:
+  install-e2e:
+    name: Install e2e (Linux, instalación real)
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    # ------------------------------------------------------------------------
+    # Presupuesto, con los datos que hay (no hay medición propia todavía: la
+    # primera ejecución es la que la produce).
+    #
+    #   preparación + pip + AppArmor + registro            ~8 min
+    #   construir 6 imágenes                              ~20 min   <- `build-images`
+    #                                                                  hace 29 en <=60
+    #                                                                  con `docker build`
+    #                                                                  plano; api-server
+    #                                                                  en frío midió 5m57
+    #   empujar las 6 al registro local                    ~3 min
+    #   pytest: install (tope propio 1500 s = 25 min)     ~25 min   <- conftest.py:65
+    #           + uninstall (tope propio 600 s = 10 min)  ~10 min   <- conftest.py:86
+    #   diagnóstico + limpieza                             ~5 min
+    #                                                     -------
+    #                                                      71 min
+    #
+    # Ésa es la ESPERA esperada. El número de abajo es otra cosa, y confundirlos
+    # fue el defecto que tenía este bloque: aquí iba `80`, «margen sobre 71».
+    #
+    # El reloj del JOB no es la defensa contra un cuelgue —lo son los topes por
+    # paso—, porque un job que agota su `timeout-minutes` queda **`cancelled`**:
+    # ni verde ni rojo. Este repo ya pagó eso dos veces (ci.yml:490-495 y
+    # :1197-1204), y en un NOCTURNO es peor que en un PR: GitHub sólo avisa por
+    # correo de los `schedule` que FALLAN, así que un job cancelado se apaga en
+    # silencio. Encima el paso «Gate anti-falso-verde» corre `if: always()`, o
+    # sea que en una cancelación se ejecuta, imprime su veredicto… y el job se
+    # queda igualmente en gris.
+    #
+    # Para que valga la frase «con topes por paso, lo que se agota FALLA», el
+    # reloj del job tiene que ser MÁS LARGO que lo que sus pasos pueden consumir.
+    # Si no, el primero en llegar es el del job y la defensa no actúa. Con `80`
+    # no lo era ni de lejos. La suma de los topes declarados:
+    #
+    #   checkout 10 + manifiesto 2 + preparar 10 + apparmor 5 + setup-python 10
+    #   + pip 10 + reloj 2 + preflight 5 + registro 5 + build+push 40
+    #   + resuelven 5 + pytest 45 + gate 5 + diagnóstico 10 + limpieza 10 = 174
+    #
+    # + los pasos que GitHub corre fuera de esa lista y que también consumen el
+    # reloj del job (`Set up job`, los `Post` de las acciones, `Complete job`).
+    # De ahí 180. NO es holgura para que algo tarde más: cada paso sigue
+    # acotado por SU tope, así que un cuelgue real falla igual de pronto que
+    # antes — lo único que cambia es que ahora sale ROJO en vez de gris.
+    #
+    # La aritmética la sujeta un test, porque a mano envejece al primer paso que
+    # se añada: `tests/unit/test_install_e2e_gate.py`
+    # ::test_every_step_carries_a_clock_and_they_fit_in_the_jobs_own — que exige
+    # además que NINGÚN paso se quede sin tope, porque uno solo sin él rompe la
+    # cuenta entera.
+    # ------------------------------------------------------------------------
+    timeout-minutes: 180
+    env:
+      # Reapuntan la referencia de las seis al registro local. Ganan al `.env`
+      # generado, que las escribe con valor explícito (config_generators.py).
+      PLATFORM_REGISTRY: localhost:5000
+      PLATFORM_IMAGE_TAG: ci-e2e
+      E2E_INSTALL_PROFILE: scripts/install-profiles/ci-e2e.yaml
+      # La raíz de datos que declara ese perfil. Se nombra aquí porque este job
+      # tiene que prepararla ANTES de instalar; que las dos no se separen lo
+      # comprueba tests/unit/test_install_e2e_gate.py.
+      DATA_ROOT: /data/agent-platform
+      REGISTRY_CONTAINER: e2e-registry
+      JUNIT_REPORT: reports/e2e-install.xml
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 10
+
+      # ---------------------------------------------------------------------
+      # El mando del registro local sólo funciona MIENTRAS no haya release.
+      # Cuando la haya, la referencia lleva `@sha256:…` y el tag desaparece:
+      # este job estaría instalando algo distinto de lo que cree. Mejor rojo con
+      # instrucciones que verde equivocado.
+      # ---------------------------------------------------------------------
+      - name: El manifiesto de release sigue sin pinear
+        timeout-minutes: 2
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          manifest = Path("apps/installer/backend/src/installer_backend/platform_images.json")
+          data = json.loads(manifest.read_text(encoding="utf-8"))
+          digests = data.get("digests") or {}
+          if digests:
+              print(
+                  "Ya hay release publicada: el manifiesto pinea "
+                  f"{sorted(digests)} por digest.\n"
+                  "PLATFORM_IMAGE_TAG ya no forma parte de la referencia "
+                  "(platform_images.py:53-58), así que el registro local de este job "
+                  "no puede servir esas imágenes.\n"
+                  "Qué hacer: instalar contra las imágenes publicadas de verdad "
+                  "(quitar PLATFORM_REGISTRY/PLATFORM_IMAGE_TAG de este workflow y "
+                  "los pasos de build+push), que además es lo que el nocturno debería "
+                  "probar a partir de ese día.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print(f"Sin release publicada ({data['registry']} {data['version']}, digests vacío):")
+          print("las seis se construyen aquí y se sirven desde el registro local.")
+          PY
+
+      # ---------------------------------------------------------------------
+      # Los prerrequisitos del instalador NO son configurables: RAM >= 8 GiB,
+      # 50 GiB libres en la raíz de datos y 80/443 libres, con los umbrales
+      # cableados en el constructor (prereqs.py:58,61,66 + cli.py, que construye
+      # `RealPrereqChecker` sin `thresholds`). No hay palanca — y bajarla sería
+      # debilitar la guarda, no arreglar nada. Así que lo que se ajusta es el
+      # RUNNER, para que cumpla de verdad lo que el instalador exige:
+      #
+      #  1. Se libera `/`, donde vive /var/lib/docker: las seis imágenes propias
+      #     + ~5 GB comprimidos de terceros + la copia que guarda el registro
+      #     local no caben en los ~25 GiB que deja libres la imagen del runner.
+      #  2. La raíz de datos se monta sobre el disco efímero (`/mnt`), que es el
+      #     grande. Y se CREA antes de medir: `_free_disk_bytes` (prereqs.py:505)
+      #     mide la raíz de datos si existe y cae a `/` si no, así que sin este
+      #     mkdir el prereq mediría otra cosa.
+      # ---------------------------------------------------------------------
+      - name: Preparar el runner (disco + raíz de datos)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          echo "::group::Antes"
+          df -h /
+          if [ -d /mnt ]; then df -h /mnt; fi
+          echo "::endgroup::"
+
+          # Toolchains preinstalados que este job no usa. `rm -rf` de algo que no
+          # existe no falla, así que la lista puede envejecer sin romper nada.
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/boost \
+            /opt/hostedtoolcache/CodeQL
+          # Las imágenes precargadas del runner (node, buildpack-deps…) tampoco
+          # las usa nadie aquí, y son varios GB en /var/lib/docker.
+          docker image prune --all --force
+
+          sudo mkdir -p /mnt/agent-data "$(dirname "$DATA_ROOT")"
+          # Idempotente: en un self-hosted que repite el job, volver a montar
+          # apilaría binds sobre el mismo punto.
+          if ! mountpoint -q "$(dirname "$DATA_ROOT")"; then
+            sudo mount --bind /mnt/agent-data "$(dirname "$DATA_ROOT")"
+          fi
+          sudo mkdir -p "$DATA_ROOT"
+
+          echo "::group::Después"
+          df -h / /mnt "$DATA_ROOT"
+          echo "::endgroup::"
+
+          libres_gib=$(df -B1 --output=avail "$DATA_ROOT" | tail -1 | awk '{print int($1/1024/1024/1024)}')
+          echo "Libres en $DATA_ROOT: ${libres_gib} GiB (el instalador exige 50)."
+          if [ "$libres_gib" -lt 50 ]; then
+            echo "El runner NO cumple el prerrequisito de disco: el install abortaría en" >&2
+            echo "prereqs con exit 3 (scripts/install.sh:25) sin tocar Docker. No se baja" >&2
+            echo "el umbral: o el runner tiene 50 GiB libres, o este job va a un self-hosted" >&2
+            echo "que los tenga (workflow_dispatch -> input 'runner')." >&2
+            exit 1
+          fi
+
+      # ---------------------------------------------------------------------
+      # TODOS los servicios del compose generado llevan
+      # `security_opt: apparmor=agentic-default` (compose_generator.py:418-420),
+      # y ese perfil lo carga el KERNEL DEL HOST: si no está cargado, Docker
+      # aborta el arranque de CADA contenedor y no hay instalación que valga.
+      #
+      # Aquí se exige que cargue, SIN `|| echo` — al revés que en
+      # `test-integration`, que puede caer al overlay docker-compose.ci.yml
+      # (apparmor=unconfined). Aquí ese overlay no existe: el compose lo genera
+      # el instalador y neutralizar su MAC sería falsear justo lo que se prueba.
+      #
+      # Es la hipótesis con más riesgo de todo este fichero: ci.yml:615-630
+      # afirma que un runner hospedado no puede cargar perfiles, y
+      # 06-runbooks/apparmor-profiles.md dice que cargarlos «NO puede ejecutarse
+      # en CI», pero ambos conviven con un intento best-effort cuyo resultado
+      # nadie ha mirado nunca porque el `|| echo` lo tapa. Si esto se pone rojo,
+      # la respuesta NO es quitarle la exigencia: es mover el job a un
+      # self-hosted Linux (input `runner`) y decirlo en el plan.
+      # ---------------------------------------------------------------------
+      - name: Cargar el perfil AppArmor agentic-default
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile
+          if ! sudo aa-status | grep -qF 'agentic-default'; then
+            echo "apparmor_parser salió 0 pero el kernel no lista 'agentic-default'." >&2
+            echo "Todos los servicios del compose generado lo pinan en security_opt, así que" >&2
+            echo "Docker abortaría el arranque de todos. Ver docs/06-runbooks/apparmor-profiles.md." >&2
+            exit 1
+          fi
+          echo "Perfil agentic-default cargado y confirmado por el kernel."
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        timeout-minutes: 10
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # ---------------------------------------------------------------------
+      # El instalador NO declara `hvac` ni `pyyaml` en su pyproject: hoy
+      # funcionan «de rebote» desde el venv del monorepo. Se instalan explícitos
+      # para que este job no dependa de ese rebote — el fallo, si no, aparece en
+      # BOOTSTRAP_VAULT como un ImportError sin capturar, que es el peor sitio.
+      #
+      # `pytest-timeout` va aparte y a propósito: el e2e lleva
+      # `@pytest.mark.timeout(1800)` (test_install_from_scratch.py:20) y ese
+      # decorador es INERTE sin el plugin — y `--strict-markers` no lo delata,
+      # porque la marca está registrada a mano en pyproject.toml. Sin él, un
+      # install colgado se comería el reloj del job entero en vez de fallar en su
+      # caso. El paso siguiente comprueba que el plugin está de verdad.
+      # ---------------------------------------------------------------------
+      - name: Instalar el instalador + las dependencias del e2e
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
+          python -m pip install hvac pyyaml httpx pytest pytest-timeout -c constraints.txt
+
+      - name: El reloj por-test existe de verdad
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          python -c "import pytest_timeout; print('pytest-timeout', pytest_timeout.__version__)"
+
+      # ---------------------------------------------------------------------
+      # PREFLIGHT DE PRERREQUISITOS.
+      #
+      # Los cinco prerrequisitos BLOQUEANTES (docker, compose, ram, disk, ports)
+      # abortan el install con exit 3 ANTES de tocar Docker: `cli.py` construye
+      # `RealPrereqChecker` sin `thresholds`, o sea con los umbrales cableados.
+      # Si uno no se cumple, sin este paso el job se entera 25 minutos más tarde
+      # —después de construir y empujar seis imágenes— y encima dentro del
+      # `assert` de la fixture `installed_stack`, como un volcado del stdout de
+      # `install.sh` cuyo mensaje habla del stack y no del runner. Así es como un
+      # job se gana la fama de «rojo por ruido», y de ahí a desactivarlo hay un
+      # paso — que sería perder la cobertura por la otra puerta.
+      #
+      # No se re-implementa NADA: se corre el checker del propio instalador, así
+      # que no hay umbrales duplicados que se desincronicen ni un segundo criterio
+      # que pueda discrepar del que decide de verdad. Lo que este paso añade es el
+      # CUÁNDO. Que los cinco estén cubiertos lo comprueba
+      # `tests/unit/test_install_e2e_gate.py::test_the_workflow_preflights_every_blocking_prerequisite`,
+      # que los descubre corriendo `PREREQ_CHECKS`: un prerrequisito duro nuevo
+      # entra solo, sin que nadie tenga que acordarse.
+      #
+      # Bajo `sudo` y con el mismo intérprete que instalará, porque uno de los
+      # cinco lo exige: `_ports_in_use` (prereqs.py:414-435) sólo cuenta como
+      # ocupado un EADDRINUSE, y sin privilegio para bindear <1024 lo que sale es
+      # EACCES — que NO es ocupación. Sin `sudo`, el check de puertos pasaría
+      # siempre, que es la definición de guarda decorativa.
+      # ---------------------------------------------------------------------
+      - name: Preflight de prerrequisitos (el checker que aborta el install)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          sudo env DATA_ROOT="$DATA_ROOT" "$python_bin" - <<'PY'
+          import os
+          import sys
+
+          from installer_backend.prereqs import RealPrereqChecker, SystemHostProbe
+
+          checker = RealPrereqChecker(SystemHostProbe(os.environ["DATA_ROOT"]))
+          resultados = checker.check_all()
+          if len(resultados) < 5:
+              print(
+                  f"el checker sólo devolvió {len(resultados)} resultados: el "
+                  "descubrimiento de PREREQ_CHECKS está roto y este paso estaría "
+                  "pasando en vacío.",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+
+          bloqueantes = []
+          for r in resultados:
+              # `PREREQ <clave>` es el formato que exige la guarda de unidad: la
+              # evidencia va IMPRESA en el log del run, no en un comentario.
+              print(f"PREREQ {r.key}: {r.status.value.upper()} — {r.detail}")
+              if r.blocking:
+                  bloqueantes.append(f"  {r.key}: {r.detail}\n    remedio: {r.remediation}")
+
+          if bloqueantes:
+              print(
+                  "\nEste runner NO cumple los prerrequisitos del instalador. El "
+                  "install abortaría en prereqs con exit 3 (scripts/install.sh:25) "
+                  "sin tocar Docker:\n" + "\n".join(bloqueantes) + "\n\n"
+                  "NO se bajan los umbrales: están cableados en prereqs.py porque son "
+                  "lo que el stack necesita para arrancar. O el runner cumple, o este "
+                  "job va a un self-hosted que cumpla (workflow_dispatch -> input "
+                  "'runner').",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          print("\nLos cinco prerrequisitos bloqueantes se cumplen en este runner.")
+          PY
+
+      # ---------------------------------------------------------------------
+      # Registro local. Docker trata `localhost`/127.0.0.0/8 como inseguro por
+      # defecto, así que no hace falta tocar `insecure-registries` del daemon.
+      # Su almacén va al disco grande: las seis imágenes se guardan DOS veces
+      # (almacén del daemon + blobs del registro) y eso no cabe en `/`.
+      # ---------------------------------------------------------------------
+      - name: Levantar el registro local (localhost:5000)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /mnt/e2e-registry
+          docker run -d --name "$REGISTRY_CONTAINER" \
+            -p 127.0.0.1:5000:5000 \
+            -v /mnt/e2e-registry:/var/lib/registry \
+            registry:2
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then
+              echo "Registro local en pie."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "el registro local no respondió en 60 s" >&2
+          exit 1
+
+      # ---------------------------------------------------------------------
+      # Las SEIS que el compose generado referencia. La lista NO se escribe a
+      # mano: sale de `PLATFORM_APPS`, que es la misma fuente que usa el
+      # generador. Enumerarla a mano fue exactamente el defecto que dejó al
+      # `watchdog` diez días fuera del build en 2026-08.
+      #
+      # `docker build` plano, NO buildx, por la misma razón que `build-images`
+      # lleva escrita (ci.yml:871-876): el driver docker-container resuelve los
+      # `FROM` sólo contra registries, y las cuatro derivadas heredan de una base
+      # que en ese momento sólo existe en el almacén local.
+      # ---------------------------------------------------------------------
+      - name: Construir y empujar las seis imágenes de plataforma
+        timeout-minutes: 40
+        run: |
+          set -euo pipefail
+          mapfile -t apps < <(
+            python -c "from installer_backend.platform_images import PLATFORM_APPS; print('\n'.join(PLATFORM_APPS))"
+          )
+          echo "Imágenes que el compose generado referencia: ${apps[*]}"
+          if [ "${#apps[@]}" -lt 6 ]; then
+            echo "PLATFORM_APPS trajo ${#apps[@]} nombres: el descubrimiento está roto." >&2
+            exit 1
+          fi
+
+          base_tag="agentic-platform/api-server:e2e-base"
+          docker build -f apps/api-server/Dockerfile -t "$base_tag" .
+
+          empujadas=0
+          for app in "${apps[@]}"; do
+            dockerfile="apps/$app/Dockerfile"
+            if [ ! -f "$dockerfile" ]; then
+              echo "$app está en PLATFORM_APPS y no tiene $dockerfile." >&2
+              exit 1
+            fi
+            local_tag="agentic-platform/$app:e2e"
+            echo "::group::docker build $app"
+            if [ "$app" = "api-server" ]; then
+              docker tag "$base_tag" "$local_tag"
+            elif grep -qE '^ARG[[:space:]]+BASE_IMAGE' "$dockerfile"; then
+              # Derivada: contexto la RAÍZ del repo (hace COPY de apps/ y packages/).
+              docker build -f "$dockerfile" --build-arg BASE_IMAGE="$base_tag" -t "$local_tag" .
+            else
+              # Autocontenida: su propio directorio como contexto. El build-arg se
+              # DEDUCE del Dockerfile — `next.config.js` revienta el build de
+              # producción sin NEXT_PUBLIC_API_URL (prod-09, hallazgo frontend-8), y
+              # `/api` es el prefijo de mismo origen tras Caddy (ADR 0061).
+              build_args=()
+              if grep -qE '^ARG[[:space:]]+NEXT_PUBLIC_API_URL' "$dockerfile"; then
+                build_args+=(--build-arg NEXT_PUBLIC_API_URL=/api)
+              fi
+              docker build "${build_args[@]+"${build_args[@]}"}" -t "$local_tag" "apps/$app"
+            fi
+            echo "::endgroup::"
+
+            remote_tag="$PLATFORM_REGISTRY/$app:$PLATFORM_IMAGE_TAG"
+            docker tag "$local_tag" "$remote_tag"
+            docker push "$remote_tag"
+            empujadas=$((empujadas + 1))
+          done
+
+          if [ "$empujadas" -ne "${#apps[@]}" ]; then
+            echo "se empujaron $empujadas de ${#apps[@]}: falta alguna." >&2
+            exit 1
+          fi
+          echo "Empujadas $empujadas imágenes a $PLATFORM_REGISTRY con tag $PLATFORM_IMAGE_TAG."
+
+      # ---------------------------------------------------------------------
+      # Que el push «no falle» no prueba que el pull vaya a encontrarlas: el
+      # paso PULL_IMAGES del instalador aborta la instalación entera con rc!=0
+      # (real_step_executor.py:113-124) y ese fallo aparecería 20 minutos más
+      # tarde, con medio job gastado y un mensaje que no señala aquí.
+      # ---------------------------------------------------------------------
+      - name: Las seis resuelven en el registro
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          mapfile -t apps < <(
+            python -c "from installer_backend.platform_images import PLATFORM_APPS; print('\n'.join(PLATFORM_APPS))"
+          )
+          for app in "${apps[@]}"; do
+            if ! curl -fsS "http://127.0.0.1:5000/v2/$app/tags/list" | grep -qF "\"$PLATFORM_IMAGE_TAG\""; then
+              echo "$PLATFORM_REGISTRY/$app:$PLATFORM_IMAGE_TAG no está en el registro." >&2
+              exit 1
+            fi
+            echo "  ok $app:$PLATFORM_IMAGE_TAG"
+          done
+
+      # ---------------------------------------------------------------------
+      # LA INSTALACIÓN DE VERDAD.
+      #
+      # Bajo `sudo` porque es como se instala esto: la raíz de datos cuelga de
+      # `/` y el árbol se crea con modos 0700/0750 (real_bindings.py). Y hay una
+      # razón más fina, que es la que decide: dentro de esa raíz escriben
+      # contenedores con SUS propios UID (postgres, minio, vault). La purga del
+      # `uninstall` corre con los privilegios de quien lanzó pytest, así que si
+      # el install fuera de root y pytest no, la purga no podría borrar esos
+      # ficheros — y el fallo saldría en el TEARDOWN de la fixture, con el stack
+      # ya bajado y sin logs que mirar. Mismo usuario en las dos mitades.
+      #
+      # `sudo env VAR=…` y no `sudo -E`: el segundo depende de la política
+      # `setenv` de sudoers; `env` es un programa corriente y funciona siempre.
+      # `PYTHON_BIN` se pasa porque `scripts/install.sh` invoca `${PYTHON_BIN:-python}`
+      # y el `python` de root no es el de setup-python.
+      #
+      # Se invoca SÓLO `test_install_from_scratch.py`, no `tests/e2e`. Dos
+      # razones: `test_worktree_execution.py` pide el fixture `installed_stack`
+      # —o sea que pagaría la instalación entera— para hacer después un
+      # `pytest.skip()` incondicional que no acredita nada; y
+      # `test_agent_http_allowlist_chain.py` no toca Docker siquiera. Con un
+      # único módulo, el gate del paso siguiente puede exigir CERO saltos, sin
+      # lista de tolerados donde esconder uno.
+      # ---------------------------------------------------------------------
+      - name: pytest tests/e2e/test_install_from_scratch.py (instalación real)
+        id: e2e
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+
+          # El informe tiene que ser el de ESTA corrida, y el gate no puede
+          # saberlo: lee un XML y no tiene con qué distinguir el que pytest acaba
+          # de escribir del que dejó otra ejecución. En un runner hospedado el
+          # workspace nace limpio y da igual; el `workflow_dispatch` de arriba
+          # invita explícitamente a un SELF-HOSTED, donde el workspace persiste
+          # y donde el informe además lo escribe ROOT (`sudo env … pytest`), así
+          # que el `git clean` del checkout —que corre como el usuario del
+          # runner— no puede borrarlo.
+          #
+          # Con el informe viejo en su sitio, un pytest que muera antes de
+          # escribir el suyo deja al gate leyendo el veredicto de anteayer y
+          # anunciando «los 4 casos se EJECUTARON y pasaron». El job sale rojo
+          # igual (este paso falló), pero la frase impresa miente — y es la que
+          # alguien citará mañana para dar por acreditado deploy-1/2/3.
+          #
+          # Borrándolo antes, la rama «no existe» del gate pasa a significar lo
+          # que dice. `sudo` porque el de la corrida anterior es de root.
+          sudo rm -f "$JUNIT_REPORT"
+          if [ -e "$JUNIT_REPORT" ]; then
+            echo "$JUNIT_REPORT sigue ahí tras el rm: el gate leería un informe" >&2
+            echo "que no ha escrito este run. Se para aquí a propósito." >&2
+            exit 1
+          fi
+
+          python_bin="$(command -v python)"
+          sudo env \
+            E2E_INSTALL=1 \
+            E2E_INSTALL_PROFILE="$E2E_INSTALL_PROFILE" \
+            PLATFORM_REGISTRY="$PLATFORM_REGISTRY" \
+            PLATFORM_IMAGE_TAG="$PLATFORM_IMAGE_TAG" \
+            PYTHON_BIN="$python_bin" \
+            "$python_bin" -m pytest tests/e2e/test_install_from_scratch.py \
+              -v -p no:cacheprovider --junitxml="$JUNIT_REPORT"
+
+      # ---------------------------------------------------------------------
+      # EL PASO QUE JUSTIFICA EL FICHERO. pytest sale 0 tanto si los cuatro
+      # casos pasaron como si los cuatro se saltaron: el gate `E2E_INSTALL` cae
+      # en el setup de las fixtures, no en la recolección. Este paso lee el
+      # informe máquina y falla si algún caso exigido falta o lleva `<skipped>`.
+      # `if: always()` para que hable también cuando pytest ya falló: distingue
+      # «el e2e ejecutó y falló» de «el e2e no ejecutó», que no son lo mismo.
+      # ---------------------------------------------------------------------
+      - name: Gate anti-falso-verde (el e2e EJECUTÓ, no se saltó)
+        if: always()
+        timeout-minutes: 5
+        run: python scripts/check_e2e_install_report.py "$JUNIT_REPORT"
+
+      # ---------------------------------------------------------------------
+      # Si el install falla, el fixture revienta ANTES del `yield` y por tanto
+      # ANTES del uninstall (conftest.py): los contenedores siguen en pie y aquí
+      # se les puede sacar el log. Si el que falla es un test, el teardown ya
+      # desinstaló y esto sólo dejará el estado del host — que también dice
+      # cosas (disco agotado, el perfil AppArmor, los puertos).
+      # ---------------------------------------------------------------------
+      - name: Diagnóstico (sólo si algo falló)
+        if: failure()
+        timeout-minutes: 10
+        run: |
+          # Sin `set -e` a propósito: si un diagnóstico falla, los demás tienen
+          # que seguir corriendo — es el único momento en que se puede mirar.
+          set -uo pipefail
+          echo "::group::Host"
+          df -h /
+          if [ -d /mnt ]; then df -h /mnt; fi
+          df -h "$DATA_ROOT"
+          docker system df
+          sudo aa-status | head -20
+          echo "Escuchando en 80/443/5000:"
+          ss -ltn
+          echo "::endgroup::"
+          if [ -f "$DATA_ROOT/docker-compose.yml" ]; then
+            echo "::group::Stack generado"
+            sudo docker compose -p agentic-platform \
+              --project-directory "$DATA_ROOT" -f "$DATA_ROOT/docker-compose.yml" ps -a
+            sudo docker compose -p agentic-platform \
+              --project-directory "$DATA_ROOT" -f "$DATA_ROOT/docker-compose.yml" logs --tail=200
+            echo "::endgroup::"
+            echo "::group::Árbol de datos"
+            sudo ls -la "$DATA_ROOT"
+            echo "::endgroup::"
+          else
+            echo "No hay $DATA_ROOT/docker-compose.yml: el install no llegó a GENERATE_CONFIG."
+          fi
+
+      # ---------------------------------------------------------------------
+      # El uninstall del e2e sólo corre si el fixture llegó al `yield`. Esto
+      # cierra los demás caminos para que el runner quede como estaba — es lo que
+      # importa en un self-hosted, donde el `input: runner` puede apuntar.
+      # ---------------------------------------------------------------------
+      - name: Dejar el runner limpio
+        if: always()
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          if [ -f "$DATA_ROOT/docker-compose.yml" ]; then
+            sudo docker compose -p agentic-platform \
+              --project-directory "$DATA_ROOT" -f "$DATA_ROOT/docker-compose.yml" \
+              down -v --remove-orphans
+          fi
+          sudo rm -rf "$DATA_ROOT"
+          if docker ps -aq -f "name=^${REGISTRY_CONTAINER}$" | grep -q .; then
+            docker rm -f "$REGISTRY_CONTAINER"
+          fi
+          if mountpoint -q "$(dirname "$DATA_ROOT")"; then
+            sudo umount "$(dirname "$DATA_ROOT")"
+          fi
+          sudo rm -rf /mnt/agent-data /mnt/e2e-registry
+          # Las imágenes NO se borran aquí: sus tags son fijos (`:e2e`, `:ci-e2e`),
+          # así que la corrida siguiente las reemplaza en vez de acumularlas. Lo
+          # que sí se acumula son las capas huérfanas de cada reconstrucción;
+          # `prune` sin `-a` se lleva sólo ésas y no toca las imágenes con tag de
+          # otros jobs.
+          #
+          # Lo que NO hay que leer aquí es «así sirven de caché en un self-hosted»:
+          # el paso «Preparar el runner» abre con `docker image prune --all`, que
+          # se lleva toda imagen sin contenedor vivo, tags incluidos. O sea que en
+          # un self-hosted la corrida siguiente reconstruye las seis desde cero de
+          # todas formas — el prune de arriba está ahí porque el DISCO es un
+          # prerrequisito duro (50 GiB) y gana a la caché. Si algún día se quiere
+          # la caché de verdad, lo que hay que acotar es aquel `--all`, no esto.
+          docker image prune --force
+          df -h /

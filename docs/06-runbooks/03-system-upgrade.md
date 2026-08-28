@@ -242,23 +242,55 @@ que Vault esté desellado, la API/worker no leen secretos y fallan.
 
 Cuando lo que cambia es la **configuración/compose** (no la versión de las
 imágenes), el camino limpio es re-ejecutar el instalador en modo
-**preservación** (Fase B, `task_15_13`), que regenera config + compose y
-**reutiliza los secretos y las unseal keys existentes** sin tocar los
-datos:
+**preservación** (Fase B, `task_15_13`), que regenera config + compose
+**reutilizando los secretos existentes** y sin tocar los datos:
 
 ```bash
-./scripts/reinstall.sh            # PRESERVE es el modo por defecto, no borra nada
+# PRESERVE es el modo por defecto: no borra nada.
+# --config es OBLIGATORIO: la reinstalación REGENERA config y compose, así que
+# necesita el mismo install.yaml que una instalación. La raíz de datos sale de
+# ahí (storage.data_root), no de un flag aparte.
+./scripts/reinstall.sh --config install.yaml
 ```
 
 La reutilización de los secretos existentes es **obligatoria** en modo
-preservación: los datos de PostgreSQL/MinIO conservados y el árbol de
-secretos cifrado por Vault están ligados a ellos; regenerar secretos
-**huérfanaría** los datos cifrados. No uses `--fresh` para un upgrade
-(`--fresh` borra el árbol de datos tras doble confirmación — eso es
-desinstalar y reinstalar, no actualizar). Detalle del flujo y los códigos
-de salida en [01-installation-from-scratch.md](./01-installation-from-scratch.md)
-(`scripts/reinstall.sh` delega en
-`installer_backend.cli reinstall`).
+preservación: los datos de PostgreSQL/MinIO conservados y las columnas
+cifradas con Fernet están ligados a ellos; regenerar secretos los
+**huérfanaría**. El instalador lee el `.env` de la instalación anterior y
+reutiliza esos valores exactos; si no puede leerlo, o si le falta alguno
+de los secretos atados a datos, **aborta** (código 5) en vez de generar
+unos nuevos. No uses `--fresh` para un upgrade (`--fresh` borra el árbol
+de datos tras doble confirmación — eso es desinstalar y reinstalar, no
+actualizar).
+
+**Qué hace exactamente**, para que no haya sorpresas: detecta la
+instalación previa (raíz de datos + `docker compose ps`), para el stack
+**sin** tocar volúmenes, y ejecuta cuatro de los seis pasos del
+instalador — `generate_config` (con los secretos reutilizados),
+`pull_images`, `start_stack` y `run_migrations`.
+
+**Los dos pasos que NO ejecuta, y por qué:**
+
+- `bootstrap_vault` — Vault ya está inicializado y re-inicializarlo no
+  tiene vuelta atrás. Además queda **sellado** al reiniciar su
+  contenedor, y este proceso **no lo desella**: el
+  [ADR 0145](../05-architecture-decisions/0145-vault-operable-tokens-y-unseal.md)
+  mantiene el desellado **manual**. Deséllalo tú al terminar, igual que
+  tras cualquier reinicio (ver arriba y
+  [04-disaster-recovery.md](./04-disaster-recovery.md)).
+- `seed_tenant` — el tenant, el usuario admin y el catálogo built-in ya
+  existen. Ese paso mintea una contraseña de administrador **nueva** en
+  cada ejecución; sobre un despliegue existente te daría una credencial
+  que no abre la cuenta. Por eso una reinstalación con preservación **no
+  muestra credenciales nuevas**: siguen siendo las de antes.
+
+Si algún secreto **rotable** (el secreto JWT, el token interno, el de
+ingesta de alertas o el de firma de URLs de revisión) no estaba en el
+`.env` anterior — el caso real: instalaciones previas a que ese secreto
+existiera —, se genera uno nuevo y el instalador **te dice cuál**. Rotar
+el secreto JWT cierra todas las sesiones abiertas.
+
+`scripts/reinstall.sh` delega en `installer_backend.cli reinstall`.
 
 ## Verificación post-upgrade
 

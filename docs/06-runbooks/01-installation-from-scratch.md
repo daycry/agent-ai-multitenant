@@ -70,8 +70,12 @@ install.yaml`, la orquestación headless desde un fichero YAML. Aprovisiona
 - Provisionar un entorno de evaluación/staging desde cero.
 
 Para reinstalar sobre datos existentes (preservándolos), usa
-`scripts/reinstall.sh` (NO este runbook borra nada por sí mismo); para
-desinstalar, `scripts/uninstall.sh` con su doble confirmación.
+`scripts/reinstall.sh --config install.yaml` (NO este runbook borra nada
+por sí mismo). El `--config` es obligatorio: una reinstalación regenera
+config y compose, así que necesita el mismo `install.yaml`. El flujo
+completo —qué pasos ejecuta, cuáles no y por qué— está en
+[03-system-upgrade.md](./03-system-upgrade.md#alternativa--reinstalación-con-preservación-de-datos).
+Para desinstalar, `scripts/uninstall.sh` con su doble confirmación.
 
 ## Prerequisitos
 
@@ -185,7 +189,9 @@ un `install.yaml`, sin navegador
 > inicializado, así que **re-ejecutar `install.sh` no vuelve a revelar** las
 > unseal keys / root token (no hay recuperación: se mostraron una vez). Para
 > reintentar limpio: `scripts/uninstall.sh --purge-data` (borra `vault/file`) y
-> reinstala, o usa `scripts/reinstall.sh --fresh`.
+> reinstala, o usa
+> `scripts/reinstall.sh --config install.yaml --fresh --confirm-name agentic-platform --yes`
+> (doble confirmación: borra el árbol de datos y reinstala desde cero).
 
 ### Perfiles
 

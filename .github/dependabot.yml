@@ -88,8 +88,21 @@ updates:
   # que hace sostenible el digest-pinning de task_digest_pin_11: Dependabot
   # reescribe `@sha256:…` y el tag del comentario a la vez.
   #
-  # Los Dockerfiles de apps/ (api-server, workers, …) NO entran aquí: su
-  # ciclo de vida lo gobierna prod-01-despliegue-ejecutable.
+  # Los Dockerfiles de apps/ que derivan de la imagen BASE (api-server,
+  # workers, orchestrator, notification-dispatcher, watchdog) NO entran aquí:
+  # su `FROM` es un `ARG BASE_IMAGE`, no una descarga de un registry, así que
+  # no hay digest que refrescar. Su ciclo de vida lo gobierna
+  # prod-01-despliegue-ejecutable.
+  #
+  # Los TRES de apps/ que sí pinean una base externa por digest sí entran, y
+  # entraron tarde: hasta el 2026-08-28 tenían el digest congelado y ninguna
+  # vía de refresco, que es exactamente lo que la cabecera de este fichero
+  # llama «PEOR que un tag flotante». Son la imagen del instalador —la única
+  # que un operador se descarga en el camino sin clon (ADR 0161)—, el wizard
+  # de arranque y el admin-panel. Las copias de `docker/` que viajan dentro
+  # del paquete del instalador (`stack_assets/`) NO entran: son idénticas a su
+  # original, que ya está cubierto arriba, y una segunda entrada crearía dos
+  # fuentes de verdad para el mismo digest.
   # ---------------------------------------------------------------------
   - package-ecosystem: "docker"
     directories:
@@ -97,6 +110,9 @@ updates:
       - "/docker/egress-proxy"
       - "/docker/registry-proxy"
       - "/docker/whatsapp-neonize"
+      - "/apps/installer"
+      - "/apps/installer/backend"
+      - "/apps/admin-panel"
     schedule:
       interval: "weekly"
       day: "monday"

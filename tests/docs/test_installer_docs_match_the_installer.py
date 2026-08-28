@@ -262,6 +262,46 @@ def test_the_relative_path_breakage_is_written_where_it_is_read(doc: Path) -> No
     )
 
 
+def test_the_readme_does_not_describe_a_landed_repair_as_pending() -> None:
+    """La avería tiene que CONSTAR; describirla como abierta cuando ya se cerró
+    es la misma mentira en la dirección pesimista.
+
+    `apps/installer/README.md` decía «Even the CLI cannot finish on a clean
+    machine today… **A repair is in progress**… No date is promised here». La
+    reparación aterrizó: los auxiliares viajan dentro del paquete
+    (`installer_backend.stack_assets`), el README raíz lo dice con todas las
+    letras y el ADR 0161 responde su pregunta 4 con «Ya hecho». Dos README del
+    mismo repo contradiciéndose sobre el estado de la única avería que impedía
+    instalar, y quien lea el pesimista presupuesta una reparación ya pagada.
+
+    El ancla es el CÓDIGO, no una fecha: mientras el paquete embarque los
+    auxiliares, el README no puede decir que la reparación está en curso. El día
+    que alguien los saque, esta guarda se apaga sola y la frase vuelve a ser
+    legítima.
+    """
+    from installer_backend import stack_assets
+
+    assert stack_assets.ALL_ASSETS, (
+        "`installer_backend.stack_assets` ya no embarca auxiliares: si la "
+        "reparación se ha deshecho, esta guarda sobra — pero compruébalo"
+    )
+
+    text = _read(_INSTALLER_README)
+    pendiente = re.compile(
+        r"repair\s+is\s+in\s+progress|reparaci[óo]n\s+en\s+curso|"
+        r"no\s+date\s+is\s+promised|sin\s+fecha\s+prometida",
+        re.IGNORECASE,
+    )
+    match = pendiente.search(text)
+    assert match is None, (
+        f"{_doc_id(_INSTALLER_README)} describe como pendiente una reparación que "
+        f"ya aterrizó ({match.group(0)!r}): el paquete embarca "
+        f"{len(stack_assets.ALL_ASSETS)} auxiliares y el compose generado los "
+        "monta desde ahí. Cuéntalo en pasado, conservando la mención a la avería "
+        "(la guarda de arriba la sigue exigiendo: constar no es seguir abierta)"
+    )
+
+
 def test_getting_started_points_at_the_real_install_path() -> None:
     """La guía de arranque no puede despachar producción con «ya llegará».
 

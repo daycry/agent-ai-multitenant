@@ -313,6 +313,33 @@ jobs:
       # DESPUÉS del push, así que un rojo aquí NO despublica la imagen. Lo que sí
       # hace es dejar el paso siguiente sin correr, o sea que el manifiesto no
       # llega al árbol y la release queda marcada fallida entera.
+      #
+      # QUÉ HACER SI ESTE TRIVY SALE ROJO — y hay que hacerlo a mano.
+      # ------------------------------------------------------------------
+      # Para las SEIS de plataforma, el escaneo posterior al push tiene una
+      # mitigación real: este job depende de ellas, así que un rojo en cualquiera
+      # deja el instalador sin publicar. Para la SÉPTIMA sobre sí misma no hay
+      # ninguna, y conviene que quien corte la release lo sepa antes de que pase:
+      #
+      #   * `ghcr.io/<owner>/installer:<tag>` YA existe en el registro: la
+      #     publicación va antes del escaneo.
+      #   * El paso de sellado no corre, así que `docker/bootstrap/docker-compose.generate.yml`
+      #     se queda en master con el hueco `${INSTALLER_IMAGE_DIGEST:-}` VACÍO.
+      #   * Pero ese fichero nombra `installer:v1.0.0`, un tag que SÍ resuelve. El
+      #     hueco vacío NO impide el `pull`: quien descargue el artefacto porque
+      #     «ya salió la versión» se lleva exactamente la imagen que acaba de
+      #     suspender el gate de HIGH/CRITICAL.
+      #
+      # La acción, en el mismo turno en que se ve el rojo: RETIRA del registro el
+      # tag recién publicado (`gh api -X DELETE` sobre la versión del paquete en
+      # GHCR, o la UI de Packages), arregla la CVE, y vuelve a cortar. No dejes el
+      # tag «hasta el siguiente intento»: mientras esté, el artefacto descargable
+      # apunta a él.
+      #
+      # El arreglo estructural —publicar con un tag de cuarentena y re-etiquetar
+      # sólo tras Trivy, o partir el paso en `build --load` → scan → `push`— es
+      # follow-up de prod-11 y NO se hace aquí: cambiar la tubería de release en
+      # el mismo commit que publica la séptima imagen es más riesgo del que quita.
       - name: Trivy — installer publicada (HIGH/CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

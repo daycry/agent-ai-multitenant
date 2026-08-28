@@ -15,6 +15,7 @@ import {
 import { type ConfigController } from "@/lib/use-config";
 import { stepById, type WizardStepId } from "@/lib/wizard";
 
+import { useInstallerMode } from "./simulation-notice";
 import { BasicsStep } from "./steps/basics-step";
 import { DoneStep } from "./steps/done-step";
 import { InstallStep } from "./steps/install-step";
@@ -54,6 +55,7 @@ export function StepPanel({
   onConfirmChange,
   onInstallComplete,
 }: StepPanelProps) {
+  const mode = useInstallerMode();
   const meta = stepById(step);
   const errors: FieldErrors =
     showErrors && isConfigStep(step) ? validateStep(step, config.config) : {};
@@ -64,16 +66,37 @@ export function StepPanel({
         <h2 className="text-2xl font-semibold tracking-tight">
           Bienvenido al instalador de <span className="text-brand-gradient">agentic-platform</span>
         </h2>
-        <p className="text-muted-foreground max-w-prose">
-          Este asistente te guiará en 9 pasos para configurar e instalar la plataforma en esta
-          máquina. Comprobaremos los prerequisitos, capturaremos la configuración y aprovisionaremos
-          el stack con Docker Compose.
-        </p>
-        <p className="text-muted-foreground max-w-prose text-sm">
-          El instalador es temporal: una vez completada la instalación, este contenedor se
-          autodestruye. Guarda las credenciales que se muestren al final, ya que solo se enseñan una
-          vez.
-        </p>
+        {mode.simulated ? (
+          <>
+            {/* La bienvenida prometía dos cosas que no ocurren: que se
+                aprovisiona el stack y que hay credenciales que guardar. Las dos
+                frases juntas son las que hacían que alguien apuntase cinco
+                unseal keys inventadas. */}
+            <p className="max-w-prose">
+              Este asistente recorre los 9 pasos de la instalación, pero{" "}
+              <strong>no instala nada</strong>: captura y valida tu configuración —eso sí es real— y
+              a partir del paso 8 el progreso está guionizado. No hay stack, ni Vault, ni usuario
+              administrador al final, y las credenciales que se muestren no abren nada.
+            </p>
+            <p className="text-muted-foreground max-w-prose text-sm">
+              Para instalar de verdad, el camino es el CLI:{" "}
+              <code className="font-mono text-xs">{mode.real_path}</code>.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-muted-foreground max-w-prose">
+              Este asistente te guiará en 9 pasos para configurar e instalar la plataforma en esta
+              máquina. Comprobaremos los prerequisitos, capturaremos la configuración y
+              aprovisionaremos el stack con Docker Compose.
+            </p>
+            <p className="text-muted-foreground max-w-prose text-sm">
+              El instalador es temporal: una vez completada la instalación, este contenedor se
+              autodestruye. Guarda las credenciales que se muestren al final, ya que solo se enseñan
+              una vez.
+            </p>
+          </>
+        )}
       </section>
     );
   }

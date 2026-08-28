@@ -271,6 +271,67 @@ def test_the_artifact_explains_why_the_socket_is_absent(artifact_text: str) -> N
     )
 
 
+def test_the_artifact_does_not_claim_an_empty_slot_makes_the_pull_fail(
+    artifact_text: str,
+) -> None:
+    """El hueco vacío NO significa «no hay imagen publicada». Decía que sí.
+
+    La frase era: «Mientras el hueco esté VACÍO no hay imagen publicada y este
+    fichero no puede funcionar todavía: el `pull` termina en `denied`». Es falsa
+    en el estado que más importa. Trivy corre DESPUÉS del `push` en
+    `release-images.yml`: si la imagen del instalador sale roja, el tag YA existe
+    en el registro y el paso de sellado no llega a correr, así que el hueco se
+    queda vacío **con la imagen publicada**. El `pull` de este fichero no termina
+    en `denied`: baja exactamente la imagen que acaba de suspender el gate de
+    HIGH/CRITICAL.
+
+    Y el daño de esa frase es peor que el de no decir nada: convence al lector de
+    que el fichero se autoprotege, así que lo ejecuta sin comprobar.
+    """
+    ofensiva = re.compile(
+        r"(?:hueco|slot)[^.]{0,160}?(?:vac[ií]o|empty)[^.]{0,200}?"
+        r"(?:no\s+hay\s+imagen|denied|not\s+published)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = ofensiva.search(artifact_text)
+    assert match is None, (
+        f"{_doc_id(_ARTIFACT)} sigue afirmando que un hueco de digest vacío "
+        f"implica que no hay imagen publicada: {match.group(0)[:160]!r}.\n"
+        "Con Trivy después del push, un rojo deja el tag publicado y el hueco "
+        "sin sellar a la vez: el `pull` funciona y baja la imagen suspendida."
+    )
+
+
+def test_the_artifact_says_who_ends_up_owning_the_tree(artifact_text: str) -> None:
+    """El árbol sale root:root, y los comandos siguientes los teclea el operador.
+
+    El contenedor corre como root a propósito (escribe bajo una raíz de datos que
+    el runbook manda crear con `sudo mkdir -p`) y hace `chmod` pero no `chown`:
+    `.env` 0600 root:root, `docker-compose.yml` 0640 root:root, la raíz 0750. En
+    la postura más común —usuario normal en el grupo `docker`, la que deja
+    `curl get.docker.com | sh`— el `docker compose up -d` que este mismo fichero
+    manda ejecutar a continuación no puede ni leer el compose.
+
+    Lo que ve el operador es `permission denied` sobre un árbol que acaba de
+    crear él. `sudo` lo arregla, pero nadie se lo dice: por eso tiene que constar
+    AQUÍ, que es lo que se lee antes de ejecutar nada.
+    """
+    # `root:root` literal, y no un `root` suelto: la cabecera ya nombra el «acceso
+    # root efectivo a la máquina» al explicar por qué no hay socket de Docker, y
+    # una guarda que buscara `root` a secas pasaría en verde con esa frase sin que
+    # nadie haya escrito nada sobre la PROPIEDAD del árbol.
+    assert "root:root" in artifact_text, (
+        f"{_doc_id(_ARTIFACT)} no dice que el árbol generado queda root:root. Sin "
+        "eso, el siguiente comando del propio fichero falla con `permission "
+        "denied` y parece un problema de Docker"
+    )
+    tras_la_propiedad = artifact_text.split("root:root", 1)[1][:600]
+    assert re.search(r"sudo|chown", tras_la_propiedad), (
+        f"{_doc_id(_ARTIFACT)} nombra el problema de propiedad pero no la salida "
+        "(`sudo`, o tomar posesión con `chown`) junto a él: media corrección"
+    )
+
+
 def test_the_artifact_is_readable_in_thirty_seconds(artifact_text: str) -> None:
     """Su función es que alguien lo lea antes de ejecutarlo. Si no cabe, no se lee.
 

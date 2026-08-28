@@ -357,3 +357,210 @@ def test_data_tree_provisioner_seam_records_plan() -> None:
     plan = build_data_tree_plan(_config())
     provisioner.provision(plan)
     assert provisioner.provisioned == plan
+
+
+# ---------------------------------------------------------------------------
+# A QUIÉN le da la base de datos el `.env` generado (auditoría 2026-08-27,
+# hallazgos bloqueante-1 y grave-4).
+#
+# El reparto de roles lo decidió prod-14 (`task_prod14_05` / tenancy-2) y está
+# escrito en los cuatro `config.py` del runtime, que es donde nadie lo mira:
+#
+#   * `app_user`        NOBYPASSRLS — el camino con tenant en la sesión.
+#   * `service_user`    BYPASSRLS **sin DDL** — quien trabaja cruzando tenants.
+#   * `migrations_user` PROPIETARIO del esquema, GRANT ALL, DDL — Alembic y el
+#                       `pg_dump` del backup, y NADIE más.
+#
+# El `.env` los pisa: una variable de entorno gana al default de pydantic. Así
+# que la postura real de una instalación no la fija `config.py`, la fija ESTE
+# generador, y hasta hoy devolvía a los workers, al dispatcher y a la superficie
+# /admin al dueño del esquema — desde donde un `ALTER TABLE … DISABLE ROW LEVEL
+# SECURITY` desmonta el aislamiento multi-tenant de toda la instalación sin
+# tocar una fila. La guarda de prod-14 (`tests/security/
+# test_service_role_is_the_runtime_default.py`) seguía verde porque sólo lee los
+# `config.py`: el contrato roto vivía en la costura entre el default y el `.env`.
+#
+# Estos tests miran esa costura, que es el único sitio donde se ve.
+# ---------------------------------------------------------------------------
+def _dsn_user(dsn: str) -> str:
+    """El rol de una DSN ``postgresql[+driver]://usuario:clave@host/db``."""
+    return dsn.split("://", 1)[1].split(":", 1)[0]
+
+
+#: Las DSN que consume un servicio que trabaja CRUZANDO tenants sin `app.tenant_id`
+#: en la sesión. Todas quieren `service_user`: BYPASSRLS, y NADA de DDL.
+_SERVICE_ROLE_DSNS = (
+    "WORKERS_DATABASE_URL",
+    "ORCHESTRATOR_DATABASE_URL",
+    "NOTIFY_DATABASE_URL",
+    "API_SERVER_ADMIN_DATABASE_URL",
+)
+
+
+@pytest.mark.parametrize("key", _SERVICE_ROLE_DSNS)
+def test_cross_tenant_services_get_the_service_role_not_the_schema_owner(key: str) -> None:
+    """Ni el dueño del esquema (radio de explosión) ni el rol de aplicación (no
+    despacha nada). Exactamente ``service_user``."""
+    env = build_env_vars(_config(), generate_secrets())
+    user = _dsn_user(env[key])
+    assert user == "service_user", (
+        f"{key} corre como {user!r}. Con `migrations_user` el servicio puede "
+        "`ALTER TABLE … DISABLE ROW LEVEL SECURITY` y apagar el aislamiento "
+        "multi-tenant de toda la instalación; con `app_user` (NOBYPASSRLS) no ve "
+        "ninguna fila, porque nadie fija `app.tenant_id` en esa sesión."
+    )
+
+
+def test_the_orchestrator_can_actually_see_a_task() -> None:
+    """El error espejo, y merece prueba propia porque falla en SILENCIO.
+
+    Con `app_user` el orchestrator arranca sano, el stack sube entero `healthy` y
+    las tareas se quedan en `pending` para siempre: las policies RLS son
+    ``tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid`` y sin
+    la variable de sesión la comparación es NULL, así que la fila se filtra. Cero
+    filas es una respuesta válida de SQL: ni error, ni traza. Un test que sólo
+    comprobara «no es migrations_user» daría esto por bueno.
+    """
+    env = build_env_vars(_config(), generate_secrets())
+    assert _dsn_user(env["ORCHESTRATOR_DATABASE_URL"]) != "app_user", (
+        "el orchestrator despacha para TODOS los tenants y no fija `app.tenant_id` "
+        "en ninguna parte de su código: con el rol NOBYPASSRLS no despacharía "
+        "ninguna tarea, y sin un solo error que lo delate"
+    )
+
+
+def test_only_alembic_and_the_backup_hold_the_schema_owner() -> None:
+    """`migrations_user` aparece en DOS sitios del `.env`, y en ninguno más.
+
+    ``ADMIN_DATABASE_URL`` lo lee el one-shot `migrations` (Alembic necesita DDL)
+    y ``WORKERS_BACKUP_DATABASE_URL`` el `pg_dump` del backup (necesita al dueño
+    para volcarlo todo). Cualquier tercera aparición es un servicio de larga vida
+    con DDL en la mano, que es el hallazgo.
+    """
+    env = build_env_vars(_config(), generate_secrets())
+    holders = sorted(
+        key
+        for key, value in env.items()
+        if isinstance(value, str) and "://migrations_user:" in value
+    )
+    assert holders == ["ADMIN_DATABASE_URL", "WORKERS_BACKUP_DATABASE_URL"], (
+        f"el dueño del esquema viaja en {holders}. Sólo Alembic y el pg_dump del "
+        "backup pueden llevarlo"
+    )
+
+
+def test_the_app_role_stays_on_the_tenant_bound_path() -> None:
+    """Y el reparto no se arregla moviéndolo TODO a `service_user`: el camino con
+    tenant en la sesión (el de las peticiones humanas) sigue siendo NOBYPASSRLS,
+    que es lo que hace que la RLS proteja algo."""
+    env = build_env_vars(_config(), generate_secrets())
+    assert _dsn_user(env["DATABASE_URL"]) == "app_user"
+    assert env["API_SERVER_DATABASE_URL"] == env["DATABASE_URL"]
+
+
+def test_service_user_password_is_generated_and_emitted() -> None:
+    """El rol BYPASSRLS no puede nacer con la contraseña publicada en este repo.
+
+    `stack/postgres/init/04-service-role.sql` crea `service_user` con el literal
+    de desarrollo y `05-service-role-password.sh` lo corrige DESDE
+    `SERVICE_USER_PASSWORD`. Sin esa variable en el `.env`, el rol se queda con la
+    contraseña que está escrita en este repositorio: LOGIN + CONNECT + BYPASSRLS +
+    DML sobre todas las tablas, alcanzable desde cualquier contenedor de
+    `agentic-net`. El único aviso era una línea en el stderr del contenedor de
+    postgres, donde nadie mira.
+    """
+    s = generate_secrets()
+    env = build_env_vars(_config(), s)
+    assert env["SERVICE_USER_PASSWORD"] == s.service_user_password
+    assert len(env["SERVICE_USER_PASSWORD"]) >= 40
+    # Y es la MISMA que llevan las DSN de los servicios: si divergen, el rol
+    # existe con una clave y los servicios se autentican con otra.
+    for key in _SERVICE_ROLE_DSNS:
+        assert s.service_user_password in env[key], key
+    # Material independiente: reutilizar el de `app_user` haría que comprometer
+    # el rol de aplicación entregase también el que se salta la RLS.
+    assert s.service_user_password not in (s.app_user_password, s.migrations_user_password)
+
+
+# ---------------------------------------------------------------------------
+# Redis con autenticación (auditoría 2026-08-27, hallazgo grave-3).
+# ---------------------------------------------------------------------------
+def test_redis_password_is_generated_and_the_dsn_carries_it() -> None:
+    """Ese Redis NO es una caché: aloja las SESIONES de servidor, el broker de
+    Celery (o sea, la capacidad de encolar trabajo para los workers) y los
+    contadores de rate limit (`docs/04-reference/mandatory-env-vars.md`). Sin
+    `requirepass`, cualquiera con acceso al puerto los lee y los escribe, y el
+    operador no ve nada: el stack funciona perfectamente."""
+    s = generate_secrets()
+    env = build_env_vars(_config(), s)
+    assert env["REDIS_PASSWORD"] == s.redis_password
+    assert env["REDIS_URL"] == f"redis://:{s.redis_password}@redis:6379/0"
+
+
+def test_every_secret_that_travels_inside_a_url_is_url_safe() -> None:
+    """La invariante que mantiene coherentes las DSN del `.env` y las del compose.
+
+    El `.env` construye las URLs en Python con el valor en claro; el compose las
+    construye interpolando `${REDIS_PASSWORD}` tal cual. Las dos formas coinciden
+    SÓLO mientras el secreto no lleve un carácter reservado de URL: un arroba o
+    una barra partirían la DSN por sitios distintos en cada lado, y el fallo sería
+    un «authentication failed» sin causa visible. `secrets.token_urlsafe` lo
+    garantiza — pero garantizado y COMPROBADO no son lo mismo, y esto es lo que
+    impide que un cambio de generador lo rompa en silencio.
+    """
+    s = generate_secrets()
+    reserved = set(":/?#[]@ \t\"'\\%")
+    for name, value in (
+        ("redis_password", s.redis_password),
+        ("service_user_password", s.service_user_password),
+        ("app_user_password", s.app_user_password),
+        ("migrations_user_password", s.migrations_user_password),
+        ("postgres_password", s.postgres_password),
+    ):
+        offenders = sorted(reserved & set(value))
+        assert not offenders, f"{name} lleva caracteres que rompen una URL: {offenders}"
+
+
+def test_new_secrets_carry_no_dev_marker() -> None:
+    s = generate_secrets()
+    for value in (s.service_user_password, s.redis_password):
+        lowered = value.lower()
+        for marker in _DEV_SECRET_MARKERS:
+            assert marker not in lowered, f"{value!r} contiene el marcador {marker!r}"
+
+
+# ---------------------------------------------------------------------------
+# Los secretos que el operador teclea en `install.yaml` (hallazgo medio-5).
+# ---------------------------------------------------------------------------
+def test_the_profile_placeholder_never_reaches_the_generated_env() -> None:
+    """Los `CHANGE_ME_…` de los perfiles NO viajan al `.env` — y ahora la guarda
+    lo comprueba en vez de darlo por hecho.
+
+    `storage.minio_access_key` / `minio_secret_key` son campos OBLIGATORIOS que
+    este generador **no consume**: el `.env` lleva las credenciales de MinIO que
+    acuña `generate_secrets()`. Eso es deliberado (una clave CSPRNG es más fuerte
+    que la que teclee nadie, y es lo que el gate e2e de instalación da por
+    supuesto), pero convierte el descarte en la única cosa que separa una
+    instalación sana de una con el placeholder del perfil por contraseña raíz del
+    almacén de objetos. Si alguien cablea el YAML algún día, que reviente aquí y
+    no en producción.
+    """
+    cfg = _config()
+    cfg.storage.minio_access_key = "CHANGE_ME_minio_access"
+    text = generate_env_file(cfg, generate_secrets())
+    assert "CHANGE_ME" not in text
+    assert_env_passes_prod_secret_guard(text)
+
+
+def test_the_prod_guard_rejects_an_unsubstituted_placeholder() -> None:
+    """Y la otra mitad: si un `CHANGE_ME_` llegara al `.env`, el guardián aborta.
+
+    Antes no: el catálogo de marcadores era `changeme` / `dev-only` /
+    `minioadmin`, y el placeholder de los perfiles no contiene ninguno (el guion
+    bajo rompe `changeme`). Una instalación con el perfil sin editar habría pasado
+    el guardián con un marcador público por contraseña.
+    """
+    with pytest.raises(ValueError, match="desarrollo"):
+        assert_env_passes_prod_secret_guard(
+            "MINIO_ROOT_PASSWORD=CHANGE_ME_minio_secret_placeholder_value\n"
+        )

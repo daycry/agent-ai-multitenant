@@ -25,6 +25,7 @@ manifiesto sin tocar**, por mucho que los blobs estén subidos. Sin esa cadena d
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,124 @@ def test_trivy_mira_la_imagen_del_instalador() -> None:
             "un Trivy sin `exit-code: 1` informa y deja pasar: es el modo de "
             "fallo que hace creer que hay un gate donde sólo hay un informe"
         )
+
+
+def _trivy_options(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Las opciones de cada paso de Trivy de un job, sin la imagen escaneada."""
+    out: list[dict[str, Any]] = []
+    for step in job.get("steps") or []:
+        if "trivy-action" not in str(step.get("uses", "")):
+            continue
+        with_ = dict(step.get("with") or {})
+        with_.pop("image-ref", None)
+        out.append(with_)
+    return out
+
+
+def test_el_instalador_se_escanea_EXACTAMENTE_igual_que_las_otras_seis() -> None:
+    """La séptima no puede tener un gate más flojo que las otras, ni por descuido.
+
+    `severity` + `exit-code` ya los comprueba el test de arriba, pero el gate
+    también depende de `ignore-unfixed` (una CVE sin fix disponible no debe
+    tumbar la release) y de `trivyignores` (las exenciones con fecha de caducidad
+    del `.trivyignore`). Un `ignore-unfixed: false` sólo en el instalador lo
+    dejaría rojo por CVEs que las otras seis se perdonan; uno `true` de más, al
+    revés. Se compara el conjunto ENTERO de opciones, sin la imagen, para que
+    cualquier divergencia futura tenga que ser deliberada.
+
+    También fija la versión de la action: una `trivy-action` distinta en este job
+    es otra base de datos de vulnerabilidades y otro criterio.
+    """
+    jobs = _jobs()
+    installer, job_installer = _job_building(_INSTALLER_DOCKERFILE)
+
+    referencia: list[tuple[str, dict[str, Any]]] = []
+    for name in _PLATFORM_JOBS:
+        for opciones in _trivy_options(jobs[name]):
+            referencia.append((name, opciones))
+    assert referencia, (
+        "ninguno de los jobs de plataforma tiene un paso de Trivy: esta guarda "
+        "estaría comparando contra nada"
+    )
+
+    canonicas = referencia[0][1]
+    discrepan = [f"{name}: {opciones}" for name, opciones in referencia if opciones != canonicas]
+    assert not discrepan, (
+        "las seis de plataforma ya no se escanean igual entre sí, así que no hay "
+        "un criterio con el que comparar el instalador:\n  " + "\n  ".join(discrepan)
+    )
+
+    usos_referencia = {
+        str(step.get("uses"))
+        for name in _PLATFORM_JOBS
+        for step in jobs[name].get("steps") or []
+        if "trivy-action" in str(step.get("uses", ""))
+    }
+    usos_installer = {
+        str(step.get("uses"))
+        for step in job_installer.get("steps") or []
+        if "trivy-action" in str(step.get("uses", ""))
+    }
+    assert usos_installer == usos_referencia, (
+        f"`{installer}` usa una versión de trivy-action distinta de la de las "
+        f"seis ({usos_installer} vs {usos_referencia}): otra base de datos de "
+        "vulnerabilidades es otro veredicto"
+    )
+
+    for opciones in _trivy_options(job_installer):
+        assert opciones == canonicas, (
+            f"el Trivy del job `{installer}` no recibe el mismo trato que el de "
+            f"las seis de plataforma:\n  instalador: {opciones}\n  las seis:    "
+            f"{canonicas}"
+        )
+
+
+def test_el_job_del_instalador_escribe_que_un_rojo_no_despublica() -> None:
+    """El hecho tiene que estar donde lo lee quien publica: en el propio job.
+
+    En este workflow Trivy corre DESPUÉS del `push` (declarado desde prod-11 y no
+    se cambia aquí). Para las seis de plataforma hay una mitigación real: el job
+    del instalador depende de ellas, así que un rojo deja la séptima sin
+    publicar. **Para la séptima sobre sí misma no hay ninguna**: si Trivy la
+    encuentra roja, `ghcr.io/<owner>/installer:<tag>` YA existe en el registro,
+    el paso de sellado no corre, y el artefacto descargable se queda con el hueco
+    del digest vacío mientras el tag que nombra sí resuelve.
+
+    Quien corta una release necesita saber que en ese estado hay una acción
+    manual pendiente. Un hecho así escrito sólo en una auditoría es un hecho que
+    nadie va a leer el día que pase.
+    """
+    installer, _job = _job_building(_INSTALLER_DOCKERFILE)
+    # El comentario no sobrevive al parseo del YAML, así que se lee el fichero
+    # crudo, acotado al bloque de este job más el comentario que lo precede, que
+    # es donde este workflow explica sus decisiones.
+    crudo = _WORKFLOW.read_text(encoding="utf-8")
+    partes = crudo.split(f"\n  {installer}:", 1)
+    assert len(partes) == 2, f"no se encuentra el bloque del job `{installer}` en el fichero"
+    contexto = partes[0][-4000:] + partes[1]
+
+    # Se exige el encabezado LITERAL, no una palabra suelta: el fichero ya dice
+    # «un rojo aquí NO despublica la imagen» —el HECHO— desde antes, y una guarda
+    # que buscara «despublica» pasaría en verde sin que nadie haya escrito la
+    # ACCIÓN. Es el §4 de `verificar-antes-de-implementar.md`: la guarda vacía.
+    marcador = "QUÉ HACER SI ESTE TRIVY SALE ROJO"
+    assert marcador in contexto, (
+        f"el job `{installer}` no lleva la sección «{marcador}». Dice que un rojo "
+        "no despublica —el hecho— pero no qué tiene que hacer entonces quien "
+        "cortó la release. En ese estado `installer:<tag>` YA existe en el "
+        "registro bajo el nombre exacto que el artefacto descargable menciona, el "
+        "sellado no ha corrido, y quien descargue ese fichero se lleva justo la "
+        "imagen que acaba de suspender el gate."
+    )
+    assert "docker-compose.generate.yml" in contexto, (
+        f"la sección «{marcador}» del job `{installer}` no menciona el artefacto "
+        "descargable, que es la mitad del daño: el fichero que la gente baja "
+        "apunta a ese tag"
+    )
+    assert re.search(r"retira|borra|elimina|cuarentena", contexto, re.IGNORECASE), (
+        f"la sección «{marcador}» del job `{installer}` no dice qué acción tomar "
+        "sobre el tag ya publicado"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,23 @@ from installer_backend.seams import ProgressEvent
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(autouse=True)
+def _autoriza_la_simulacion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Estos tests EJERCITAN la simulación, así que la piden expresamente.
+
+    Desde la auditoría del 2026-08-28, `/api/install/stream` responde `501` si
+    los seams cableados son fakes y nadie ha encendido
+    `INSTALLER_ALLOW_SIMULATION` — un wizard que fingía una instalación completa
+    y revelaba credenciales inventadas era el hallazgo GRAVE de esa lente. El
+    contrato de las rutas (orden, halt, retry, ausencia de secretos en el
+    stream) sigue siendo el mismo; lo que cambia es que ahora hay que declarar
+    que se está simulando, aquí y en el contenedor. Sin esta línea los tests de
+    ruta pasarían a verde **vacíos**: un `501` tampoco filtra secretos.
+    """
+
+    monkeypatch.setenv("INSTALLER_ALLOW_SIMULATION", "1")
+
+
 # ---------------------------------------------------------------------------
 # Pure orchestration logic (no route).
 # ---------------------------------------------------------------------------

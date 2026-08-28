@@ -8,6 +8,48 @@ import { INSTALL_STEPS, type InstallStepStatus } from "@/lib/install";
 import { useInstall, type InstallPhase } from "@/lib/use-install";
 import { cn } from "@/lib/utils";
 
+import { useInstallerMode } from "../simulation-notice";
+
+/**
+ * Los campos que NO pueden salir del navegador por este stream.
+ *
+ * `toWireConfig` los incluye porque el MISMO objeto se postea a
+ * `/api/config/validate`, que sí los necesita para responder los `*_set`. Aquí
+ * se quitan uno por uno antes de enviar: el backend los rechaza con un `400`
+ * desde el 2026-08-28, así que dejarlos sería además un error de red.
+ *
+ * Espejo de los `SecretStr` de `InstallerConfig`
+ * (`installer_backend.main.secret_field_paths`, que los DERIVA del modelo). Si
+ * alguien añade un proveedor con credencial y no lo añade aquí, el backend lo
+ * dirá con un 400 que nombra el campo — que es exactamente el fallo que avisa
+ * dónde está la causa, y por eso la guarda vive allí y no aquí.
+ */
+const SECRET_WIRE_PATHS: readonly string[] = [
+  "storage.minio_secret_key",
+  "providers.claude_sdk.oauth_token",
+  "providers.copilot.oauth_token",
+  "providers.azure_foundry.api_key",
+];
+
+/** Copia del eco de config sin los campos secretos. No muta el original. */
+export function stripSecrets(wire: Record<string, unknown>): Record<string, unknown> {
+  const copy = structuredClone(wire) as Record<string, unknown>;
+  for (const path of SECRET_WIRE_PATHS) {
+    const segments = path.split(".");
+    const leaf = segments.pop() as string;
+    let node: Record<string, unknown> | undefined = copy;
+    for (const segment of segments) {
+      const next: unknown = node?.[segment];
+      node =
+        typeof next === "object" && next !== null ? (next as Record<string, unknown>) : undefined;
+    }
+    if (node !== undefined) {
+      delete node[leaf];
+    }
+  }
+  return copy;
+}
+
 interface InstallStepProps {
   /** The captured config (steps 2-6). Only its non-secret echo is streamed. */
   config: InstallerConfig;
@@ -38,15 +80,28 @@ const STATUS_CLASS: Record<InstallStepStatus, string> = {
  * No host access happens in the browser — the backend orchestrator (behind its
  * injectable executor seam) does the work; this component only reflects the
  * stream. The e2e spec mocks `/api/install/stream`.
+ *
+ * ⚠️ Cuando el backend está simulado —hoy, por defecto— esta pantalla NO
+ * aprovisiona nada: el progreso está guionizado. Se dice aquí y se dice en
+ * pantalla, porque el texto que había («Estamos aprovisionando el stack») es
+ * justo el que hacía que alguien se lo creyera.
  */
 export function InstallStep({ config, onComplete }: InstallStepProps) {
   const install = useInstall();
+  const mode = useInstallerMode();
   const startedRef = useRef(false);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Only build the non-secret wire echo for the stream. Secrets reach Vault via
-  // Phase B's bootstrap, never over this progress stream.
-  const wireConfig = toWireConfig(config);
+  // El eco que viaja va SIN secretos, y ahora de verdad.
+  //
+  // Hasta el 2026-08-28 este comentario decía «Only build the non-secret wire
+  // echo» y era falso: `toWireConfig` metía `storage.minio_secret_key` en claro
+  // y, por cada proveedor habilitado, su `oauth_token` o su `api_key`, y eso es
+  // lo que `install.start()` publicaba como cuerpo del POST. No había daño
+  // observable —el backend no los registraba y el ejecutor falso los ignoraba—,
+  // pero la afirmación era falsa en tres sitios a la vez, y quien fuera a
+  // decidir el futuro del wizard la leería como premisa.
+  const wireConfig = stripSecrets(toWireConfig(config));
 
   // Auto-start the install once when the step mounts.
   useEffect(() => {
@@ -79,10 +134,15 @@ export function InstallStep({ config, onComplete }: InstallStepProps) {
   return (
     <section data-testid="step-install" className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <h2 className="text-2xl font-semibold tracking-tight">Instalación</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">
+          {mode.simulated ? "Instalación (simulada)" : "Instalación"}
+        </h2>
         <p className="text-muted-foreground max-w-prose text-sm">
-          Estamos aprovisionando el stack. No cierres esta ventana hasta que termine. El progreso y
-          los logs se actualizan en tiempo real.
+          {mode.simulated
+            ? "Esta pantalla NO está aprovisionando nada: el progreso y los logs de abajo están " +
+              "guionizados por el backend simulado. Sirven para revisar el flujo, no para instalar."
+            : "Estamos aprovisionando el stack. No cierres esta ventana hasta que termine. El " +
+              "progreso y los logs se actualizan en tiempo real."}
         </p>
       </header>
 
@@ -160,14 +220,26 @@ export function InstallStep({ config, onComplete }: InstallStepProps) {
         </div>
       )}
 
-      {install.phase === "done" && (
-        <p
-          data-testid="install-success"
-          className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600"
-        >
-          Instalación completada. Continúa para ver las credenciales (se muestran una sola vez).
-        </p>
-      )}
+      {install.phase === "done" &&
+        (mode.simulated ? (
+          <p
+            data-testid="install-success"
+            data-simulated="true"
+            className="rounded-md border-2 border-red-600 bg-red-600/10 px-4 py-3 text-sm text-red-600"
+          >
+            <strong>Simulación completada — no se ha instalado nada.</strong> Ningún stack ha
+            arrancado, Vault no se ha inicializado y no existe ningún usuario administrador. Las
+            credenciales del paso siguiente son valores desechables que no abren nada.
+          </p>
+        ) : (
+          <p
+            data-testid="install-success"
+            data-simulated="false"
+            className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600"
+          >
+            Instalación completada. Continúa para ver las credenciales (se muestran una sola vez).
+          </p>
+        ))}
 
       {/* ----- Live log ----- */}
       <div className="flex flex-col gap-2">
