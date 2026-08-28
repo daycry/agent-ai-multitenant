@@ -64,19 +64,26 @@ less docker-compose.generate.yml     # este paso NO es decorativo: es su funció
 docker compose -f docker-compose.generate.yml run --rm generate
 
 cd /data/agent-platform && docker compose up -d --wait
-docker compose run --rm bootstrap    # <-- PENDIENTE: ver la nota de abajo
+docker compose run --rm bootstrap    # <-- la finalización: ver la nota de abajo
 ```
 
-> **El tercer comando todavía no funciona, y el instalador lo dice.** El one-shot
-> `bootstrap` (init de Vault + siembra del tenant + revelado de credenciales) es
-> la segunda mitad del paso 8 del ADR 0161: el compose generado ya declara el
-> servicio, pero la imagen del api-server aún no trae el módulo
-> `api_server.bootstrap` que ejecuta, así que el comando responde con un
-> `No module named …` y deja un stack `Up (healthy)` —el healthcheck de Vault
-> acepta a propósito un Vault sellado— sin Vault inicializado, sin tenant, sin
-> usuario admin y sin credenciales. Hasta que aterrice, el banner de `generate`
-> marca ese paso como `NO DISPONIBLE` y remite a terminar desde el host con el
-> CLI. Ver §«`generate` — escribir el árbol y salir».
+> **El tercer comando es la finalización, y sólo se ejecuta una vez.** El
+> one-shot `bootstrap` inicializa Vault (init + desellado + KV v2 + las cuatro
+> políticas por servicio), siembra el tenant inicial con su primer System Owner
+> y el catálogo built-in, y **revela las credenciales UNA sola vez** por stdout:
+> las cinco unseal keys, el root token y la contraseña del administrador.
+> Cópialas antes de cerrar la terminal — **no tienen recuperación**: un Vault ya
+> inicializado no se re-inicializa, porque hacerlo sería destructivo.
+>
+> Corre dentro de la red del stack, y ése es todo el motivo por el que existe
+> como servicio del compose en vez de como un paso del instalador: el servicio
+> `vault` **no publica ningún puerto** —el único que publica es Caddy,
+> [ADR 0061](../05-architecture-decisions/0061-reverse-proxy-tls.md)—, así
+> que desde el host no es alcanzable. Es idempotente: si Vault ya estaba
+> inicializado no lo re-inicializa (y no inventa claves nuevas en el revelado), y
+> si el usuario admin ya existía **no** revela una contraseña, porque `init_tenant`
+> no cambia la de un usuario que ya está. Ver §«`generate` — escribir el árbol y
+> salir».
 
 **Qué se está leyendo cuando se lee ese fichero**: que baja **una** imagen, que le
 monta **sólo** la raíz de datos y el `install.yaml` en solo lectura, y que **no
@@ -281,12 +288,20 @@ raíz de datos vacía.
   montada. El resto (80/443 libres, Docker ≥ 24.0, Compose ≥ 2.21, 8 GiB de RAM)
   el banner los **lista** con los mismos umbrales que `prereqs.py`, para que el
   operador los compruebe antes del `up`.
-- **No finaliza la instalación.** El paso `docker compose run --rm bootstrap`
-  —init de Vault, siembra del tenant, revelado de credenciales— es la segunda
-  mitad del paso 8 del ADR 0161 y **está pendiente**: el compose generado ya
-  declara el servicio, pero la imagen del api-server todavía no trae el módulo
-  `api_server.bootstrap` que ejecuta. Mientras siga así, el banner lo marca como
-  `NO DISPONIBLE` y **no ofrece salida de emergencia**, porque no la hay.
+- **No finaliza la instalación**, y no puede: la finalización habla con Vault, y
+  Vault sólo es alcanzable desde dentro de la red del stack. El paso
+  `docker compose run --rm bootstrap` —init de Vault, siembra del tenant,
+  revelado de credenciales— lo ejecuta el operador después del `up`, y el banner
+  lo imprime como el segundo de los dos comandos que quedan. Es la segunda mitad
+  del paso 8 del ADR 0161, y **aterrizó el 2026-08-28**
+  (`apps/api-server/src/api_server/bootstrap/`); desde entonces los dos caminos
+  de instalación acaban ejecutando la misma implementación.
+
+  La regla del banner no se retiró con la deuda que la motivó: **sólo manda
+  ejecutar lo que existe**. Hay una guarda ejecutable que cruza esa declaración
+  con el árbol del repositorio, así que si el módulo desapareciera el banner
+  volvería a marcar el paso como `NO DISPONIBLE` en vez de ordenar un comando que
+  falla.
 
   Este párrafo decía hasta el 2026-08-28 que el banner «remite a terminar desde
   el host con `python -m installer_backend.cli install --config install.yaml`».
@@ -295,11 +310,9 @@ raíz de datos vacía.
   contra `127.0.0.1:8200`—, así que ofrecía como remedio la avería que se quería
   remediar. Un test lo daba por bueno, con lo que la suite en verde certificaba
   una salida de emergencia rota: el mismo modo de fallo que ese test nació para
-  cazar, una vuelta más arriba.
-
-  **El banner no imprime nunca un comando que falla**; hay una guarda ejecutable
-  que cruza esa declaración contra el árbol del repositorio, así que el día que
-  el módulo aterrice la suite obliga a actualizar el banner.
+  cazar, una vuelta más arriba. Esa guarda disparó el 2026-08-28, que es para lo
+  que estaba: el módulo aterrizó, la suite se puso roja, y el banner, la bandera
+  y este documento se actualizaron a la vez.
 
 `tls_mode: provided` funciona en los dos caminos, pero de forma distinta: desde
 el host, el instalador **copia** `tls_cert_path`/`tls_key_path` a

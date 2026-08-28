@@ -370,12 +370,21 @@ def test_generate_anuncia_el_comando_que_de_verdad_falta(
     assert f"cd {root} && docker compose up -d --wait" in printed
 
 
-def test_el_banner_no_manda_ejecutar_un_bootstrap_que_todavia_no_corre(
+def test_el_banner_solo_manda_ejecutar_el_bootstrap_si_ese_bootstrap_existe(
     tmp_path, installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
 ) -> None:
-    """Mientras falte la otra mitad del paso 8, el banner NO da esa orden.
+    """El banner sólo da la orden si el one-shot existe. Desde el 2026-08-28, la da.
 
-    Éste es el test que fija el arreglo, y nació al revés: antes afirmaba que el
+    Este test cambia de rama solo con `BOOTSTRAP_ENTRYPOINT_AVAILABLE`, y esa
+    bandera la mueve —a la fuerza—
+    `test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol`. Con
+    `api_server.bootstrap` ya en el árbol, lo que se afirma aquí es que el banner
+    imprime `docker compose run --rm bootstrap`; la otra rama sigue escrita
+    porque la regla no era «esperar a ese módulo», era «no mandar ejecutar lo que
+    no existe», y el día que alguien lo borre el banner tiene que volver a
+    decirlo.
+
+    Éste es el test que fijó el arreglo, y nació al revés: antes afirmaba que el
     banner imprimía `docker compose run --rm bootstrap` **sin ninguna reserva**,
     así que la suite en verde certificaba el agujero. Lo que recibía el operador
     era un stack `Up (healthy)` —el healthcheck de Vault acepta a propósito un
@@ -384,11 +393,6 @@ def test_el_banner_no_manda_ejecutar_un_bootstrap_que_todavia_no_corre(
     le iba a dar todas esas cosas. Un banner que manda ejecutar algo que falla es
     peor que no imprimir nada: convierte «falta media tarea» en «tu Docker está
     roto».
-
-    El día que `api_server.bootstrap` exista, `BOOTSTRAP_ENTRYPOINT_AVAILABLE`
-    pasa a True y este test cambia de rama solo — no hay que acordarse de él,
-    porque `test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol`
-    obliga a mover la bandera.
 
     **Corregido el 2026-08-28**, y la corrección es la mitad interesante. Este
     test exigía que el banner rematara con «termina desde el host con
@@ -438,6 +442,10 @@ def test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol() -> No
     Aquí se cruza contra el sitio donde el módulo tiene que vivir, derivado del
     propio `BOOTSTRAP_ENTRYPOINT` para que un renombrado no deje la guarda
     apuntando a una ruta muerta.
+
+    **Disparó el 2026-08-28**, que es para lo que estaba: el módulo aterrizó, la
+    suite se puso roja, y la bandera pasó a `True` junto con el banner y la
+    documentación. Sigue vigilando el sentido contrario.
     """
 
     repo = Path(__file__).resolve().parents[3]

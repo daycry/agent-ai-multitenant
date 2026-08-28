@@ -32,7 +32,7 @@ from installer_backend.real_step_executor import BOOTSTRAP_REVEAL_EVENT, RealSte
 pytestmark = pytest.mark.unit
 
 _COMPOSE_DIR = "/srv/agentic"
-_ROOT_TOKEN = "hvs.token-raiz-de-mentira"
+_ROOT_TOKEN = "hvs.token-de-mentira-para-tests"
 _ADMIN_PASSWORD = "contrasena-de-mentira"
 _UNSEAL_KEYS = tuple(f"share-de-mentira-{i}" for i in range(1, 6))
 

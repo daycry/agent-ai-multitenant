@@ -48,7 +48,9 @@ one-shot :data:`~installer_backend.compose_generator.BOOTSTRAP_SERVICE`, bajo
 Con esto **los dos caminos ejecutan lo mismo**. El ``generate`` sin clon deja al
 operador ``docker compose run --rm bootstrap``; el ``install`` desde el host
 ejecuta ese mismo comando por él. Antes eran dos implementaciones distintas de la
-finalización, y sólo una de ellas —la que no existe todavía— podía funcionar.
+finalización, y sólo una de ellas —la que entonces no existía todavía— podía
+funcionar. La otra mitad aterrizó el 2026-08-28 (``api_server.bootstrap``), así
+que hoy los dos caminos llegan al final por la misma implementación.
 
 El contrato con la otra mitad (:data:`BOOTSTRAP_REVEAL_EVENT`)
 --------------------------------------------------------------
@@ -377,9 +379,12 @@ def _redact_bootstrap_output(raw: list[str], reveal: BootstrapReveal | None) -> 
     Dos filtros, y el segundo no es redundante. El primero quita la línea de
     revelado por su marcador, que es el contrato. El segundo quita cualquier
     línea que contenga uno de los valores revelados, y cubre el caso en que la
-    otra mitad —que todavía no existe— además los imprima en claro «para que se
-    vean mejor». Depender sólo del contrato aquí sería fiar la propiedad de
-    seguridad a un módulo que aún nadie ha escrito.
+    otra mitad además los imprima en claro «para que se vean mejor». Se escribió
+    cuando esa mitad no existía —fiar una propiedad de seguridad a un módulo que
+    aún nadie ha escrito no es fiarla a nadie— y se conserva ahora que sí
+    existe, por lo mismo: `api_server.bootstrap` se redacta a sí mismo, pero una
+    propiedad de seguridad que depende de que las DOS mitades acierten a la vez
+    se queda con la disciplina de las dos.
     """
 
     secrets = reveal.secret_values if reveal is not None else ()
@@ -768,10 +773,12 @@ class RealStepExecutor:
             message = (
                 f"el one-shot `{BOOTSTRAP_SERVICE}` no pudo arrancar: la imagen del "
                 f"api-server no trae el módulo `{BOOTSTRAP_ENTRYPOINT}` que ejecuta. "
-                "Es la segunda mitad del paso 8 del ADR 0161 y está pendiente: sin "
-                "ella no hay init de Vault, ni tenant, ni usuario admin, ni "
-                "credenciales, por NINGUNO de los dos caminos de instalación. No es "
-                "un problema de tu Docker ni de tu configuración."
+                "Es la segunda mitad del paso 8 del ADR 0161, y aterrizó el "
+                "2026-08-28: si ves esto, la imagen del api-server que tienes es "
+                "ANTERIOR a esa fecha. Reconstrúyela o baja una etiqueta más nueva; "
+                "sin ese módulo no hay init de Vault, ni tenant, ni usuario admin, "
+                "ni credenciales, por NINGUNO de los dos caminos de instalación. No "
+                "es un problema de tu Docker ni de tu configuración."
             )
         else:
             tail = [line for line in safe[-8:] if line.strip()]

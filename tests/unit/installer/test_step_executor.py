@@ -74,7 +74,7 @@ _BOOTSTRAP_ARGV = (
 
 #: Valores de mentira con forma de secreto. Se afirma que NINGUNO sale por el log
 #: de progreso, así que tienen que ser reconocibles a simple vista en un diff.
-_ROOT_TOKEN = "hvs.token-raiz-de-mentira"
+_ROOT_TOKEN = "hvs.token-de-mentira-para-tests"
 _ADMIN_PASSWORD = "contrasena-de-mentira"
 _UNSEAL_KEYS = tuple(f"share-de-mentira-{i}" for i in range(1, 6))
 

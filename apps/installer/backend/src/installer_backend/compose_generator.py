@@ -1096,16 +1096,18 @@ def _bootstrap_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     como cadena suelta, por la misma razón por la que `cli.py` hizo lo propio con
     el nombre del servicio: es el único sitio donde las dos mitades se tocan.
 
-    **Y ese módulo TODAVÍA NO EXISTE** (comprobado el 2026-08-27:
-    ``importlib.util.find_spec("api_server.bootstrap")`` devuelve ``None``). Vive
-    en ``apps/api-server/``, fuera del alcance de este fichero. Declarar el
-    servicio igualmente no es tapar el agujero: es moverlo de sitio, y a uno
-    mejor. Sin el servicio, el operador recibía `no such service: bootstrap` —un
-    error que apunta a su Docker— y no tenía dónde mirar; con él, recibe un
-    `No module named api_server.bootstrap` que nombra la pieza que falta y la
-    imagen donde debe estar. Lo que NO se puede hacer es dejar el banner
-    ordenando un comando inexistente: eso convierte «falta media tarea» en «tu
-    instalación está rota y no sabemos por qué».
+    **Ese módulo ya existe desde el 2026-08-28**
+    (``apps/api-server/src/api_server/bootstrap/``), así que las dos mitades se
+    tocan de verdad y el banner del CLI vuelve a ordenar el comando sin reservas.
+
+    Este bloque se declaró un día antes, con la otra mitad todavía sin escribir, y
+    conviene dejar dicho por qué: declarar el servicio sin el módulo no tapaba el
+    agujero, lo movía a un sitio mejor. Sin el servicio, el operador recibía
+    `no such service: bootstrap` —un error que apunta a su Docker— y no tenía
+    dónde mirar; con él, recibía un `No module named api_server.bootstrap` que
+    nombra la pieza que falta y la imagen donde debe estar. Hoy ese mensaje sigue
+    siendo el diagnóstico correcto para una imagen del api-server ANTERIOR al
+    módulo, que es el único caso en que puede volver a aparecer.
     """
 
     env = _api_server_env(cfg, prod=prod)

@@ -59,12 +59,14 @@ convencido de lo contrario.
 
 Ese banner tiene una regla dura: **sólo puede mandar ejecutar lo que existe**. El
 paso 8 del ADR 0161 son dos mitades —este subcomando y el one-shot ``bootstrap``—
-y la segunda está a medias: el compose generado ya declara el servicio, pero la
-imagen del api-server todavía no trae el módulo que ejecuta
-(:data:`BOOTSTRAP_ENTRYPOINT_AVAILABLE`). Mientras siga así, el banner lo nombra
-como PENDIENTE y remite al ``install`` desde el host, que sí termina. Un banner
-que ordena un comando que falla es peor que no imprimir nada: convierte «falta
-media tarea» en «tu Docker está roto».
+y desde el 2026-08-28 las dos están: el compose generado declara el servicio y la
+imagen del api-server trae el módulo ``api_server.bootstrap`` que ejecuta
+(:data:`BOOTSTRAP_ENTRYPOINT_AVAILABLE`). Por eso el banner vuelve a imprimir los
+DOS comandos. La regla no se retira con la deuda que la motivó: un banner que
+ordena un comando que falla es peor que no imprimir nada —convierte «falta media
+tarea» en «tu Docker está roto»—, así que la bandera se cruza con el árbol del
+repositorio en un test y volvería a marcar el paso como PENDIENTE si el módulo
+desapareciera.
 
 Y no es sólo el banner. ``generate`` es el único camino que instala sin clonar,
 así que también es el único donde **nadie corre la puerta de prerequisitos**: no
@@ -265,29 +267,26 @@ class ExitCode(IntEnum):
 #: ficheros, y si divergen el operador recibe un `no such service`.
 BOOTSTRAP_SERVICE = "bootstrap"
 
-#: ¿Se puede EJECUTAR ya ese one-shot? Hoy **no**, y la distinción es la que
-#: separa un banner honesto de una avería.
+#: ¿Se puede EJECUTAR ya ese one-shot? Desde el **2026-08-28, sí**.
 #:
-#: El paso 8 del ADR 0161 son dos mitades. La primera —este subcomando— está
+#: El paso 8 del ADR 0161 son dos mitades. La primera —este subcomando— estaba
 #: hecha, y desde el 2026-08-27 el compose generado también DECLARA el servicio.
-#: La segunda no: la imagen del api-server todavía no trae el módulo
+#: La segunda faltaba: la imagen del api-server no traía el módulo
 #: ``api_server.bootstrap`` que el servicio ejecuta, así que
-#: ``docker compose run --rm bootstrap`` responde
-#: ``No module named api_server.bootstrap``.
+#: ``docker compose run --rm bootstrap`` respondía ``No module named
+#: api_server.bootstrap`` y dejaba al operador con un stack ``Up (healthy)``
+#: —el healthcheck de Vault acepta a propósito un Vault sellado—, sin Vault
+#: inicializado, sin tenant, sin usuario admin y sin credenciales, después de que
+#: el instalador le hubiera dicho que ese comando le daba todo eso.
 #:
-#: Que el servicio exista mejoró el error (antes era `no such service`, que
-#: apunta al Docker del operador) pero no cierra el agujero: el operador se
-#: queda con un stack ``Up (healthy)`` —el healthcheck de Vault acepta a
-#: propósito un Vault sellado—, sin Vault inicializado, sin tenant, sin usuario
-#: admin y sin credenciales, después de que el instalador le haya dicho que ese
-#: comando le daba todo eso.
-#:
-#: Mientras esto sea ``False`` el banner NOMBRA el paso como pendiente y remite
-#: al ``install`` desde el host. Es una bandera escrita a mano, así que hay una
+#: Ese módulo ya existe (`apps/api-server/src/api_server/bootstrap/`), así que el
+#: banner vuelve a dar la orden sin reservas y las dos mitades se tocan de
+#: verdad. Sigue siendo una bandera escrita a mano, y por eso sigue habiendo una
 #: guarda que la cruza contra el árbol del repositorio
-#: (``test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol``): el
-#: día que el módulo aterrice, la suite se pone roja hasta que se mueva.
-BOOTSTRAP_ENTRYPOINT_AVAILABLE = False
+#: (``test_la_disponibilidad_del_bootstrap_declarada_coincide_con_el_arbol``): si
+#: alguien borrase o renombrase el módulo sin tocar esto, el banner mandaría
+#: ejecutar un comando que falla — que es exactamente lo que había antes.
+BOOTSTRAP_ENTRYPOINT_AVAILABLE = True
 
 
 def headless_pipeline() -> tuple[str, ...]:
@@ -819,17 +818,21 @@ def _prereq_advisories() -> list[str]:
 def _remaining_commands(root: str) -> list[str]:
     """Los comandos que le quedan al operador — sólo los que EXISTEN.
 
-    Con :data:`BOOTSTRAP_ENTRYPOINT_AVAILABLE` en ``False`` este banner NO manda
-    ejecutar el one-shot de finalización, y ni siquiera lo presenta como «el
-    paso 2»: lo describe como pendiente y dice explícitamente que no se ejecute.
-    El compose ya lo declara, pero la imagen del api-server no trae el módulo que
-    ejecuta, así que el comando responde ``No module named …`` y deja al operador
-    con un stack ``Up (healthy)`` —el healthcheck de Vault acepta a propósito un
-    Vault sellado— sin Vault inicializado, sin tenant, sin admin y sin
-    credenciales, creyendo que ha terminado.
+    **Desde el 2026-08-28 son dos**, porque la segunda mitad del paso 8 del ADR
+    0161 ya está: la imagen del api-server trae el módulo
+    :data:`BOOTSTRAP_ENTRYPOINT`, así que el one-shot de finalización se puede
+    ejecutar de verdad y el banner vuelve a ordenarlo sin reservas.
 
-    Se nombra el módulo que falta a propósito: es lo que convierte el error en un
-    diagnóstico en vez de en una sospecha sobre el Docker del operador.
+    La rama de abajo se conserva —y con ella :data:`BOOTSTRAP_ENTRYPOINT_AVAILABLE`—
+    porque la regla no era «esperar a ese módulo», era «no mandar ejecutar lo que
+    no existe». Si alguien borrara o renombrara el módulo, la guarda que cruza la
+    bandera con el árbol se pone roja y el banner vuelve a decir la verdad: sin
+    él, el comando responde ``No module named …`` y deja al operador con un stack
+    ``Up (healthy)`` —el healthcheck de Vault acepta a propósito un Vault
+    sellado— sin Vault inicializado, sin tenant, sin admin y sin credenciales,
+    creyendo que ha terminado. Se nombra el módulo que falta a propósito: es lo
+    que convierte el error en un diagnóstico en vez de en una sospecha sobre el
+    Docker del operador.
 
     **Lo que este banner dejó de decir el 2026-08-28**, y por qué importa: remitía
     al ``install`` desde el host como «el camino que SÍ termina hoy». No
@@ -852,7 +855,8 @@ def _remaining_commands(root: str) -> list[str]:
             "",
             "  El (2) inicializa Vault, siembra el tenant inicial y muestra las",
             "  credenciales UNA sola vez. Corre dentro de la red del stack, que es",
-            "  donde tiene que correr.",
+            "  donde tiene que correr. GUARDA lo que imprime antes de cerrar la",
+            "  terminal: las unseal keys y el root token no tienen recuperación.",
         ]
     return [
         "  Queda UN comando que ejecutas TÚ:",
@@ -861,11 +865,12 @@ def _remaining_commands(root: str) -> list[str]:
         "",
         "  Y falta la FINALIZACIÓN —init de Vault, siembra del tenant inicial y",
         "  revelado de credenciales—, que hoy está NO DISPONIBLE por NINGÚN camino.",
-        f"  El compose declara el servicio `{BOOTSTRAP_SERVICE}`, pero la imagen",
-        f"  del api-server todavía no trae el módulo `{BOOTSTRAP_ENTRYPOINT}` que",
-        f"  ejecuta: `docker compose run --rm {BOOTSTRAP_SERVICE}` responde",
+        f"  El compose declara el servicio `{BOOTSTRAP_SERVICE}`, pero esta imagen",
+        f"  del api-server no trae el módulo `{BOOTSTRAP_ENTRYPOINT}` que ejecuta:",
+        f"  `docker compose run --rm {BOOTSTRAP_SERVICE}` responde",
         f"  «No module named {BOOTSTRAP_ENTRYPOINT}» y no hace nada. Es la segunda",
-        "  mitad del paso 8 del ADR 0161 y está pendiente. NO lo ejecutes.",
+        "  mitad del paso 8 del ADR 0161, y aterrizó el 2026-08-28: si estás",
+        "  leyendo esto, tu imagen es anterior. NO lo ejecutes; reconstrúyela.",
         "",
         "  El `install` desde el host TAMPOCO lo suple: desde el 2026-08-28",
         "  ejecuta ese mismo one-shot en vez de hablar con Vault por su cuenta,",

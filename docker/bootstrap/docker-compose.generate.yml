@@ -25,14 +25,24 @@
 # `ps` y cada log), o tomas posesión una vez, que es lo cómodo y conserva los
 # modos:  sudo chown -R $(id -u):$(id -g) /data/agent-platform
 #
-# Y FALTA LA FINALIZACIÓN: inicializar Vault, sembrar el tenant inicial y ver las
-# credenciales una sola vez. Por este camino está NO DISPONIBLE — el compose
-# generado declara el one-shot `bootstrap`, pero la imagen del api-server aún no
-# trae el módulo que ejecuta, así que responde «No module named
-# api_server.bootstrap» y no hace nada. NO lo ejecutes esperando que instale.
-# Se termina desde el host, con el repo clonado y el MISMO install.yaml:
-# `python -m installer_backend.cli install --config install.yaml` (reutiliza los
-# secretos del .env recién escrito). Runbook 01.
+# Y QUEDA LA FINALIZACIÓN, que es un TERCER comando y también lo ejecutas tú:
+#
+#   sudo docker compose -f /data/agent-platform/docker-compose.yml \
+#        run --rm bootstrap
+#
+# Inicializa Vault (init + desellado + KV v2 + las políticas por servicio),
+# siembra el tenant inicial con su primer System Owner y el catálogo built-in, y
+# **enseña las credenciales UNA sola vez** por pantalla: las cinco unseal keys,
+# el root token y la contraseña del administrador. CÓPIALAS antes de cerrar la
+# terminal: no tienen recuperación, porque un Vault ya inicializado no se
+# re-inicializa (hacerlo sería destructivo).
+#
+# Corre DENTRO de la red del stack, y no es un capricho: el servicio `vault` no
+# publica ningún puerto —el único que publica es Caddy, ADR 0061—, así que desde
+# tu host no es alcanzable. Es idempotente: puedes relanzarlo. Si Vault ya estaba
+# inicializado no lo re-inicializa ni inventa claves nuevas, y si el usuario
+# admin ya existía no te enseña una contraseña, porque la suya no ha cambiado.
+# Runbook 01.
 #
 # -----------------------------------------------------------------------------
 # AQUÍ NO HAY `/var/run/docker.sock`, Y ÉSA ES LA DECISIÓN, NO UN OLVIDO.

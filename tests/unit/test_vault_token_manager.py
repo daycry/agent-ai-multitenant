@@ -251,24 +251,61 @@ def test_the_ttl_gauge_tracks_the_live_ttl() -> None:
 # ---------------------------------------------------------------------------
 # El cableado — «mecanismo entregado, cero llamantes» (§5)
 # ---------------------------------------------------------------------------
+#: Los ÚNICOS sitios que pueden construir un `hvac.Client` por su cuenta, con el
+#: motivo por el que la renovación en segundo plano no les aplica. Es la misma
+#: forma de inventario congelado que usa `tests/unit/test_app_boundaries.py`: no
+#: relaja la guarda, la hace específica —un `hvac.Client(` NUEVO en cualquier
+#: otro fichero sigue poniéndola roja, y una excepción que deje de necesitarse
+#: también, porque se comprueba que sigue siendo cierta.
+_HVAC_CLIENT_EXEMPTIONS: dict[str, str] = {
+    "vault_client.py": (
+        "LA fábrica. Es quien construye el cliente de vida larga y quien renueva "
+        "su token en un hilo de fondo."
+    ),
+    "bootstrap/hvac_client.py": (
+        "El one-shot de finalización (ADR 0161, paso 8). No cabe en la fábrica y "
+        "no le aplica el problema que la fábrica resuelve, por tres razones: "
+        "(1) es un proceso EFÍMERO que corre segundos y sale, así que no hay "
+        "token que caduque un mes después — el hilo de renovación no tendría a "
+        "quién renovar; (2) el token que usa es el ROOT que él mismo acaba de "
+        "acuñar con `operator init`, o el que le pasa el operador para esa única "
+        "pasada: ninguno de los dos está en `settings.vault_token`; (3) "
+        "`build_vault_client()` devuelve None cuando Vault no está cableado, que "
+        "es exactamente el estado que este módulo existe para cambiar."
+    ),
+}
+
+
 def test_no_api_server_module_builds_its_own_hvac_client() -> None:
     """Un manager que renueva el token de UN cliente no sirve de nada si otro
     módulo se construye el suyo por su cuenta: ese segundo token caducaría igual.
 
-    Guarda de descubrimiento sobre el árbol: cualquier `hvac.Client(` fuera de la
-    fábrica es un consumidor que se quedó fuera de la renovación.
+    Guarda de descubrimiento sobre el árbol: cualquier `hvac.Client(` fuera de
+    :data:`_HVAC_CLIENT_EXEMPTIONS` es un consumidor que se quedó fuera de la
+    renovación.
     """
     import api_server
 
     root = Path(next(iter(api_server.__path__)))
-    offenders = [
+    builders = {
         path.relative_to(root).as_posix()
         for path in root.rglob("*.py")
-        if path.name != "vault_client.py" and "hvac.Client(" in path.read_text(encoding="utf-8")
-    ]
+        if "hvac.Client(" in path.read_text(encoding="utf-8")
+    }
+
+    offenders = sorted(builders - set(_HVAC_CLIENT_EXEMPTIONS))
     assert not offenders, (
         "estos módulos construyen su propio hvac.Client en vez de usar "
         f"api_server.vault_client.build_vault_client(): {offenders}"
+    )
+
+    # Y al revés: una excepción que ya no construye ningún cliente es una
+    # excepción caducada, y una lista de excepciones caducadas es como esta
+    # guarda se vuelve decorativa.
+    stale = sorted(set(_HVAC_CLIENT_EXEMPTIONS) - builders)
+    assert not stale, (
+        "estas excepciones ya no construyen un hvac.Client; retíralas de "
+        f"_HVAC_CLIENT_EXEMPTIONS: {stale}"
     )
 
 
