@@ -506,9 +506,19 @@ class RealStepExecutor:
             partes.append(self._log_de(servicio))
         raise StepExecutionError("\n".join(partes))
 
+    #: Lo que compose escribe cuando un ONE-SHOT (`migrations`, `bootstrap`) sale
+    #: distinto de cero. NO termina en `Error`, así que la primera versión de
+    #: este recolector lo perdía: el e2e run 33180241225 murió por
+    #: `migrations … exit 1` y el mensaje enseñó los logs de los cuatro cimientos
+    #: —los tres sanos— y ni una línea del servicio que había fallado.
+    #:
+    #: Un recolector que mira sólo una de las dos formas de fallar es peor que
+    #: ninguno: no calla, enseña lo que no toca.
+    _FALLO_DE_ONE_SHOT = "didn't complete successfully"
+
     @staticmethod
     def _servicios_en_error(result: CommandResult) -> list[str]:
-        """Los servicios que compose nombró como `Error` en su propia salida.
+        """Los servicios que compose dio por fallidos, en sus DOS formas.
 
         Se leen de lo que compose ya dijo en vez de volver a preguntar: si el
         stack se cayó del todo, un `ps` posterior puede devolver otra cosa.
@@ -516,7 +526,19 @@ class RealStepExecutor:
         vistos: list[str] = []
         for linea in result.output_lines:
             texto = linea.strip()
-            if not texto.endswith("Error") or "Container" not in texto:
+            if "Container" not in texto:
+                continue
+
+            # Forma 2 — el one-shot: compose cita el nombre del SERVICIO entre
+            # comillas, así que no hay que deducirlo del nombre del contenedor.
+            if RealStepExecutor._FALLO_DE_ONE_SHOT in texto and '"' in texto:
+                nombre = texto.split('"')[1]
+                if nombre and nombre not in vistos:
+                    vistos.append(nombre)
+                continue
+
+            # Forma 1 — el servicio de larga vida cuyo healthcheck no llegó.
+            if not texto.endswith("Error"):
                 continue
             contenedor = texto.split("Container", 1)[1].rsplit("Error", 1)[0].strip()
             # `agentic-platform-postgres-1` -> `postgres`; los dos proxies no

@@ -1228,3 +1228,46 @@ def test_un_servicio_sin_log_lo_dice_en_vez_de_dejar_un_hueco(
     with pytest.raises(StepExecutionError) as exc:
         ex.execute(InstallStep.START_STACK, {})
     assert "sin salida" in str(exc.value)
+
+
+def test_un_one_shot_que_sale_distinto_de_cero_tambien_se_recoge(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """La SEGUNDA forma de fallar de compose, que la primera versión perdía.
+
+    Un servicio de larga vida cuyo healthcheck no llega sale como `… Error`. Un
+    one-shot que sale distinto de cero —`migrations`, `bootstrap`— sale así:
+
+        Container agentic-platform-migrations-1  service "migrations"
+          didn't complete successfully: exit 1
+
+    …que NO termina en `Error`. Medido en el e2e run 33180241225: el install
+    murió por `migrations`, y el mensaje enseñó los logs de los cuatro cimientos
+    —los tres sanos— y ni una línea del servicio que había fallado.
+
+    Un recolector que mira sólo una de las dos formas es peor que ninguno: no
+    calla, enseña lo que no toca, y manda a diagnosticar el sitio equivocado.
+    """
+    linea = (
+        ' Container agentic-platform-migrations-1  service "migrations" '
+        "didn't complete successfully: exit 1"
+    )
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(returncode=1, output_lines=(linea,)),
+            _argv_logs("migrations"): CommandResult(
+                returncode=0,
+                output_lines=("migrations-1 | alembic: FAILED: no such revision",),
+            ),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    assert "migrations" in mensaje, "no nombra el one-shot que falló"
+    assert "no such revision" in mensaje, f"no trae el log del one-shot: {mensaje!r}"
+    assert "postgres" not in mensaje, (
+        "ha caído a los cimientos habiendo un culpable nombrado: enseñaría los "
+        "logs de tres servicios sanos y escondería el que importa"
+    )
