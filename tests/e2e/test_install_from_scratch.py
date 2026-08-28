@@ -19,10 +19,26 @@ import pytest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(1800)]
 
-#: The domain the minimal profile serves on (Host header for the proxy).
+#: El dominio que sirve el perfil, y por el que hay que ENTRAR (2026-08-28).
+#
+# Hasta hoy esto era `_BASE = "https://127.0.0.1"` con `Host: agentic.example.com`
+# en la cabecera. Con HTTP plano habría bastado; con HTTPS no, y la primera
+# ejecución real del test lo demostró (e2e run 33196741325):
+#
+#   httpx.ConnectError: [SSL: TLSV1_ALERT_INTERNAL_ERROR] tlsv1 alert internal error
+#
+# El Caddyfile generado declara el sitio `agentic.example.com` con `tls
+# internal`. En TLS el nombre del sitio viaja en el **SNI**, que se toma de la
+# URL —`127.0.0.1`—, no de la cabecera `Host`, que sólo se lee DESPUÉS del
+# handshake. Caddy no tiene certificado para esa IP y aborta antes de llegar a
+# mirar la cabecera.
+#
+# Se entra por el nombre, que además es lo que hace un usuario. El job lo
+# resuelve a 127.0.0.1 en `/etc/hosts`; quien corra esto a mano tiene que hacer
+# lo mismo, y por eso el fallo lo dice.
 _DOMAIN = "agentic.example.com"
-_BASE = "https://127.0.0.1"
-_HEADERS = {"Host": _DOMAIN}
+_BASE = f"https://{_DOMAIN}"
+_HEADERS: dict[str, str] = {}
 
 
 def test_install_completes_and_is_not_a_simulation(installed_stack: dict[str, str]) -> None:

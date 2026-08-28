@@ -323,6 +323,19 @@ jobs:
       # `docker-socket-proxy` es el único servicio que existe para sostenerlo.
       # Cargar sólo el compartido deja al proxy respondiendo `503 … SC--` y con
       # él se cae todo lo que lanza runtimes — medido en el run 33177824929.
+      # El dominio del perfil tiene que resolver a la máquina, porque el e2e
+      # entra por NOMBRE y no por IP. Y tiene que entrar por nombre: el sitio
+      # se sirve con `tls internal`, así que el certificado se elige por el SNI
+      # —que sale de la URL— y no por la cabecera `Host`, que Caddy sólo lee
+      # después del handshake. Pedirle `https://127.0.0.1` termina en
+      # `TLSV1_ALERT_INTERNAL_ERROR` (medido: run 33196741325).
+      - name: Resolver el dominio del perfil a esta máquina
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          echo "127.0.0.1 agentic.example.com" | sudo tee -a /etc/hosts
+          getent hosts agentic.example.com
+
       - name: Cargar los perfiles AppArmor del stack
         timeout-minutes: 5
         run: |
