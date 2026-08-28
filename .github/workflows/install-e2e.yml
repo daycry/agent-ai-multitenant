@@ -356,7 +356,13 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
-          python -m pip install hvac pyyaml httpx pytest pytest-timeout -c constraints.txt
+          # pytest-asyncio NO es opcional aunque este e2e no use corrutinas: el
+          # `[tool.pytest.ini_options]` del repo declara
+          # `asyncio_default_fixture_loop_scope`, y `addopts` lleva
+          # `--strict-config`, así que sin el plugin pytest ni arranca — sale
+          # con rc=4 y «Unknown config option», que no se parece en nada a
+          # «falta un plugin».
+          python -m pip install hvac pyyaml httpx pytest pytest-timeout pytest-asyncio -c constraints.txt
 
       # La comprobación pregunta DOS cosas distintas y las dos hacen falta:
       #
@@ -384,6 +390,30 @@ jobs:
             echo "::error::pytest NO tiene registrado pytest-timeout: la marca timeout(1800) del e2e sería decorativa y un install colgado agotaría el runner."
             exit 1
           }
+
+      # Que pytest ARRANQUE con la configuración de este repo, y que RECOJA el
+      # e2e. Cinco segundos, y va aquí a propósito: delante del preflight, del
+      # registro y de construir seis imágenes.
+      #
+      # Por qué existe (2026-08-28, run 33168854379): faltaba `pytest-asyncio`,
+      # así que `--strict-config` tumbaba a pytest con rc=4 antes de recoger un
+      # solo test. El job lo descubrió DESPUÉS de levantar el registro y empujar
+      # las seis imágenes — diez minutos para averiguar que el intérprete no
+      # podía ni empezar.
+      #
+      # `--collect-only` es la pregunta barata que separa «el entorno está mal»
+      # de «la instalación falla». Sin ella, las dos se ven igual desde fuera:
+      # un job en rojo al final.
+      - name: pytest arranca y recoge el e2e (antes de gastar en imágenes)
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python -m pytest tests/e2e/test_install_from_scratch.py \
+            --collect-only -q -p no:cacheprovider \
+            || {
+              echo "::error::pytest no puede arrancar o recoger el e2e con la configuración del repo. Es un problema del ENTORNO del job (plugin ausente, opción desconocida), no de la instalación: revisa el paso de dependencias antes de mirar el instalador."
+              exit 1
+            }
 
       # ---------------------------------------------------------------------
       # PREFLIGHT DE PRERREQUISITOS.
