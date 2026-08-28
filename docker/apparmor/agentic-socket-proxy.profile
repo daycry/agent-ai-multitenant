@@ -132,6 +132,30 @@ profile agentic-socket-proxy flags=(attach_disconnected,mediate_deleted) {
   /lib64/**                 rix,
   /etc/**                   r,
 
+  # Los scripts de inicialización de Postgres, y por qué esto no es un agujero
+  # (2026-08-28, e2e run 33179252441).
+  #
+  # El catch-all `/** r` de arriba concede lectura y NO ejecución. Los ficheros
+  # que el instalador monta en `/docker-entrypoint-initdb.d/` caen ahí, así que
+  # el `.sql` funcionaba —psql lo LEE— y el `.sh` no:
+  #
+  #   02-roles.sh: /usr/bin/env: bad interpreter: Permission denied
+  #
+  # …y con él, la base nacía sin sus roles. Peor: el `initdb` había llegado a
+  # crear la BD y las extensiones, así que el directorio deja de estar vacío y el
+  # siguiente arranque dice «Skipping initialization». El fallo se vuelve
+  # PERMANENTE y silencioso — pgvector sí, roles no.
+  #
+  # Ejecutar (y no hacer `source`) es deliberado: `stack_assets` los escribe 0755
+  # porque sourcearlos metería su `set -euo pipefail` en el shell del entrypoint,
+  # que sigue corriendo después. El modo es correcto; lo que faltaba era permiso.
+  #
+  # Por qué es estrecho: ese directorio NO es escribible bajo este perfil —los
+  # únicos sitios con `w` son /tmp, /run, /var/run, /var/lib y /var/log—, así que
+  # un proceso confinado sólo puede ejecutar ahí lo que la imagen o el bind
+  # montaron, no algo que él mismo haya dejado.
+  /docker-entrypoint-initdb.d/**  rix,
+
   # Writable runtime dirs only (data volumes, scratch, runtime state).
   /tmp/                     rw,
   /tmp/**                   rwk,
