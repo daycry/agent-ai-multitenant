@@ -170,8 +170,8 @@ que quien no ha clonado sigue sin poder usar. Publicar es acto del operador, y
 no se prometen fechas. Estado de cada camino:
 [runbook de instalación](docs/06-runbooks/01-installation-from-scratch.md).
 
-**Por qué nada de esto es una promesa.** El test que hay detrás se escribió en
-junio de 2026 y no se había ejecutado NUNCA: estaba gateado por `E2E_INSTALL=1`,
+**Por qué esto se puede creer.** El test que hay detrás se escribió en junio de
+2026 y no se había ejecutado NUNCA: estaba gateado por `E2E_INSTALL=1`,
 ningún workflow ponía la variable, y el gate cae en el setup de las fixtures —
 así que pytest recolectaba los cuatro casos, los saltaba y salía 0. Un check
 verde que no instalaba nada. Ahora corre **cada noche y a petición**, y el job

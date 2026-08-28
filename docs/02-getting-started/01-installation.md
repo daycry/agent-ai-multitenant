@@ -128,15 +128,20 @@ Suite completa (unit + integración):
 Nada de lo de arriba instala la plataforma en una máquina de producción. Lo de
 arriba **es** el camino (2) de esta tabla: levanta la infraestructura y se queda
 ahí. Los tres caminos existen, exigen cosas distintas y hoy están en estados
-distintos; el estado está **medido** en el
+distintos. El estado no está estimado: la anatomía de cada camino está medida en
+el
 [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md),
-no estimado.
+y lo que el camino (3) hace de verdad en una máquina limpia está medido
+**ejecutándolo** — el nocturno
+[Install E2E](../../.github/workflows/install-e2e.yml), ejecución
+[33197920542](https://github.com/daycry/agent-ai-multitenant/actions/runs/33197920542)
+del 2026-08-28.
 
-| Camino                                                                                                  | Qué exige del host                                                                                     | Estado hoy                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **(1) Sin clonar** — descargar el compose de arranque, leerlo, ejecutarlo, y después `up` + `bootstrap` | Docker + Compose v2 y salida a `ghcr.io`. **Ni git, ni Python, ni el repositorio**                     | **No disponible todavía**: no hay imagen del instalador publicada, el `run` sale con `denied`                                           |
-| **(2) Con clon + `docker compose`** — lo de esta página                                                 | git + el repositorio + `docker/.env`                                                                   | **Infraestructura sí, plataforma no**: el compose canónico no declara los servicios de aplicación                                       |
-| **(3) Con los scripts** — `./scripts/install.sh --config install.yaml`                                  | git + el repositorio + **Python 3.12 con `installer_backend` importable** (`scripts/dev/bootstrap.sh`) | **El camino soportado, y hoy no termina en una máquina limpia**: `PULL_IMAGES` va contra un tag que no se ha publicado nunca (ADR 0160) |
+| Camino                                                                                                  | Qué exige del host                                                                                                                                      | Estado hoy                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(1) Sin clonar** — descargar el compose de arranque, leerlo, ejecutarlo, y después `up` + `bootstrap` | Docker + Compose v2 y salida a `ghcr.io`. **Ni git, ni Python, ni el repositorio**                                                                      | **No disponible todavía**, y el e2e no lo cambia: no hay imagen del instalador publicada y el `run` sale con `denied`. Falta **publicar las imágenes**, la del propio instalador incluida                                                                                                          |
+| **(2) Con clon + `docker compose`** — lo de esta página                                                 | git + el repositorio + `docker/.env`                                                                                                                    | **Infraestructura sí, plataforma no.** Sin cambios: el compose canónico no declara los servicios de aplicación                                                                                                                                                                                     |
+| **(3) Con los scripts** — `./scripts/install.sh --config install.yaml`                                  | git + el repositorio + **Python 3.12 con `installer_backend` importable** (`scripts/dev/bootstrap.sh`) + AppArmor cargado + el dominio resolviendo aquí | **Verificado de punta a punta el 2026-08-28** en un Linux limpio: 22 servicios healthy, migraciones aplicadas, Vault inicializado, tenant sembrado, HTTPS y login con la credencial revelada. **Con las seis imágenes construidas en el propio job y servidas desde un registro local**, ver abajo |
 
 El camino (1) es un **fichero que se descarga y se lee antes de ejecutarlo**
 —[`docker/bootstrap/docker-compose.generate.yml`](../../docker/bootstrap/docker-compose.generate.yml)—,
@@ -175,37 +180,69 @@ el runbook
 el paso a paso de producción con dominio propio, en
 [`06-runbooks/08-instalacion-produccion.md`](../06-runbooks/08-instalacion-produccion.md).
 
-### Lo que hoy no termina, y por qué se dice aquí
+### Lo que hoy no termina es la PUBLICACIÓN, no la instalación
 
-El camino real tampoco llega hasta el final en una máquina limpia. Está medido en
-el [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-y son dos averías **independientes**:
+Hasta hoy este apartado decía que el camino real no llegaba al final en una
+máquina limpia, y era verdad. **Ya no.** El 2026-08-28 el camino (3) instaló
+entero en un Linux limpio: 22 servicios healthy, migraciones aplicadas, Vault
+inicializado, tenant sembrado con sus credenciales reveladas, el proxy sirviendo
+HTTPS y el login funcionando con esa credencial. Es el nocturno
+[Install E2E](../../.github/workflows/install-e2e.yml), ejecución
+[33197920542](https://github.com/daycry/agent-ai-multitenant/actions/runs/33197920542).
 
-1. **No hay imágenes publicadas.** El paso `PULL_IMAGES` tira de un tag que
-   nunca se ha publicado — no existe ningún `git tag` y el workflow de release
-   jamás ha corrido
+**Lo que no termina, y hay que decirlo con el mismo cuidado, es la publicación.**
+Ese e2e **construye las seis imágenes de plataforma dentro del propio job** y las
+sirve desde un registro local, porque en `ghcr.io/daycry` no hay ninguna. De ahí
+salen las dos consecuencias que quedan vivas:
+
+1. **El camino (1) sigue sin existir para un usuario real.** Sin imagen del
+   instalador publicada, su `docker compose run` termina en `denied` — y con ella
+   faltan las seis de plataforma que ese camino descargaría después
    ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
-2. ~~**Las rutas relativas del compose generado no resuelven.**~~ **Reparada el
-   2026-08-27.** El instalador escribe el `docker-compose.yml` en la **raíz de
-   datos** (`/data/agent-platform` por defecto), no en el repo, y lanza `docker
-compose` desde ahí: cada `./algo` de ese fichero resuelve contra
-   `/data/agent-platform/…`, donde no hay ningún checkout — **clonar el
-   repositorio no lo arreglaba**, que era la mitad contraintuitiva. De siete
-   familias de rutas relativas el instalador escribía una; ahora escribe las
-   siete, las seis nuevas bajo `stack/` y desde su propio paquete.
+2. **En tu máquina, el camino (3) todavía necesita esas imágenes.** El paso
+   `PULL_IMAGES` hace `docker compose pull` contra un tag que nunca se ha
+   publicado y aborta. El e2e lo rodea construyéndolas y reapuntando
+   `PLATFORM_REGISTRY` / `PLATFORM_IMAGE_TAG` a su registro local; publicar es lo
+   que quita ese rodeo. Es un acto del operador y aquí no se promete fecha.
 
-La segunda merecía leerse con cuidado porque **no avisaba donde estaba la
-causa**: ante el lado host ausente de un bind, Docker lo materializa como
-directorio vacío. Así, `./postgres/init` acababa **dentro** del PGDATA, `initdb`
-encontraba un directorio no vacío y los SQL reales (`pgvector`, roles de servicio)
-no corrían nunca. Lo que se veía era un Postgres `healthy` sin `pgvector`, con el
-error saliendo a la primera consulta que la necesita.
+Lo que **sí** se reparó, y conviene que conste porque su modo de fallo no avisaba
+dónde estaba la causa: ~~las rutas relativas del compose generado no resolvían~~
+**(reparado el 2026-08-27)**. El instalador escribe el `docker-compose.yml` en la
+**raíz de datos** (`/data/agent-platform` por defecto), no en el repo, y lanza
+`docker compose` desde ahí: cada `./algo` resolvía contra `/data/agent-platform/…`,
+donde no hay ningún checkout — **clonar el repositorio no lo arreglaba**, que era
+la mitad contraintuitiva. Ante el lado host ausente de un bind, Docker lo
+materializa como directorio vacío: `./postgres/init` acababa **dentro** del
+PGDATA, `initdb` encontraba un directorio no vacío y los SQL reales (`pgvector`,
+roles de servicio) no corrían nunca. Lo que se veía era un Postgres `healthy` sin
+`pgvector`, con el error saliendo a la primera consulta que la necesita. De siete
+familias de rutas el instalador escribía una; ahora escribe las siete, las seis
+nuevas bajo `stack/` y desde su propio paquete. Lo sostienen dos guardas que
+derivan del código —no de una lista a mano— las rutas que el compose pide y las
+que la instalación produce (`tests/unit/test_generated_compose_is_installable.py`)
+y la integridad de lo que el instalador lleva dentro
+(`tests/unit/test_installer_ships_stack_assets.py`).
 
-Lo sostienen ahora dos guardas que derivan del código —no de una lista a mano— las
-rutas que el compose pide y las que la instalación produce
-(`tests/unit/test_generated_compose_is_installable.py`) y la integridad de lo que
-el instalador lleva dentro (`tests/unit/test_installer_ships_stack_assets.py`).
-**La primera avería sigue abierta**: el estado vivo es el del ADR 0161.
+### Lo que hace falta en tu máquina para instalar como lo hace el e2e
+
+El instalador no prepara el host: eso lo hace quien instala. Estas tres cosas las
+pone el job antes de llamar a `install.sh`, y sin ellas la instalación no llega al
+final.
+
+| Hace falta                                            | Si falta                                                                                                                                                          | Cómo                                                                                                                                                          |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Que el **dominio del perfil resuelva a esta máquina** | El proxy corta el handshake TLS (`TLSV1_ALERT_INTERNAL_ERROR`) y no sirve nada                                                                                    | `echo "127.0.0.1 tu.dominio" \| sudo tee -a /etc/hosts`, o un DNS que apunte al host                                                                          |
+| Los **perfiles AppArmor** cargados en el kernel       | Todos los servicios del compose generado pinan `apparmor=agentic-default` (y el `docker-socket-proxy`, el suyo): Docker aborta el arranque de **cada** contenedor | `sudo apparmor_parser -r -W docker/apparmor/agentic-default.profile` (y el del socket-proxy); ver [apparmor-profiles.md](../06-runbooks/apparmor-profiles.md) |
+| Las **seis imágenes de plataforma** alcanzables       | `PULL_IMAGES` aborta con rc=1 contra un tag que no existe                                                                                                         | Hoy: construirlas y servirlas desde un registro propio, con `PLATFORM_REGISTRY`. Mañana: publicadas en `ghcr`                                                 |
+
+**Por qué el dominio y no la IP** — el detalle que costó una ejecución entera y
+que hasta hoy no estaba escrito en ninguna guía. El sitio se sirve con `tls internal`, y en
+TLS el nombre viaja en el **SNI**, que sale de **la URL**. La cabecera `Host` no
+sirve para esto: el proxy sólo la lee **después** del handshake, y para entonces
+ya ha tenido que elegir certificado. Entrar por `https://127.0.0.1` con
+`Host: tu.dominio` no es una variante equivalente de entrar por el nombre; es un
+handshake sin certificado que ofrecer. El e2e lo hacía así y murió con
+`TLSV1_ALERT_INTERNAL_ERROR` antes de mirar una sola respuesta (run 33196741325).
 
 ## Próximos pasos
 

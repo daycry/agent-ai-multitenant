@@ -23,16 +23,24 @@ enlazados.
 
 Hay tres formas de poner esto en una máquina y **no son intercambiables**: cada
 una exige cosas distintas del host y hoy están en estados distintos. La tercera
-columna está **medida** sobre el árbol en el
-[ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
-(firmado el 2026-08-27), no estimada — que es la diferencia entre elegir camino y
-reservar una máquina para descubrirlo.
+columna no está estimada, y desde el 2026-08-28 tiene dos fuentes distintas —
+que conviene no confundir:
 
-| Camino                                                                                                  | Qué exige del host                                                                                                                  | Estado hoy                                                                                                                                                                                                     |
-| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **(1) Sin clonar** — descargar el compose de arranque, leerlo, ejecutarlo, y después `up` + `bootstrap` | Docker + Compose v2, salida a `ghcr.io`, un `install.yaml` y la raíz de datos creada. **Ni git, ni Python, ni el repositorio**      | **No disponible todavía.** No hay ninguna imagen del instalador publicada, así que el `run` termina en `denied`. El artefacto ya existe y es auditable; falta publicar                                         |
-| **(2) Con clon + `docker compose`**                                                                     | git, el repositorio, `docker/.env` (nueve variables sin default abortan sin él)                                                     | **Levanta infraestructura, no la plataforma.** El compose canónico no declara los servicios de aplicación: da Postgres, Redis, MinIO, Vault, ClamAV, docling, proxies, searxng, Ollama                         |
-| **(3) Con los scripts** — `./scripts/install.sh --config install.yaml`                                  | git, el repositorio, **Python 3.12 y el paquete `installer_backend` importable** (`scripts/dev/bootstrap.sh`), y root sobre `/data` | **Es el camino real, y hoy no termina en una máquina limpia**: el paso `PULL_IMAGES` va contra un tag que nunca se ha publicado ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)) |
+- **La anatomía de los tres caminos** está medida sobre el árbol en el
+  [ADR 0161](../05-architecture-decisions/0161-distribucion-e-instalacion-de-la-plataforma.md)
+  (firmado el 2026-08-27): qué exige cada uno, qué le falta.
+- **Lo que el camino (3) hace de verdad en una máquina limpia** está medido
+  ejecutándolo: el nocturno
+  [Install E2E](../../.github/workflows/install-e2e.yml), ejecución
+  [33197920542](https://github.com/daycry/agent-ai-multitenant/actions/runs/33197920542).
+  Leer el árbol y ejecutarlo no son la misma evidencia, y el camino (3) cambió de
+  estado el día que se ejecutó.
+
+| Camino                                                                                                  | Qué exige del host                                                                                                                                                                                                      | Estado hoy                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **(1) Sin clonar** — descargar el compose de arranque, leerlo, ejecutarlo, y después `up` + `bootstrap` | Docker + Compose v2, salida a `ghcr.io`, un `install.yaml` y la raíz de datos creada. **Ni git, ni Python, ni el repositorio**                                                                                          | **No disponible todavía**, y el e2e del 2026-08-28 no lo cambia: no hay ninguna imagen del instalador publicada, así que el `run` termina en `denied`. El artefacto ya existe y es auditable, y el CLI que lleva dentro es el mismo que acaba de instalar de verdad por el camino (3): **lo único que falta es publicar**                                                                                                                     |
+| **(2) Con clon + `docker compose`**                                                                     | git, el repositorio, `docker/.env` (nueve variables sin default abortan sin él)                                                                                                                                         | **Levanta infraestructura, no la plataforma.** Sin cambios: el compose canónico no declara los servicios de aplicación — da Postgres, Redis, MinIO, Vault, ClamAV, docling, proxies, searxng, Ollama                                                                                                                                                                                                                                          |
+| **(3) Con los scripts** — `./scripts/install.sh --config install.yaml`                                  | git, el repositorio, **Python 3.12 y el paquete `installer_backend` importable** (`scripts/dev/bootstrap.sh`), root sobre `/data`, los perfiles AppArmor cargados y que el dominio del perfil **resuelva a la máquina** | **Verificado de punta a punta el 2026-08-28** en un Linux limpio ([run 33197920542](https://github.com/daycry/agent-ai-multitenant/actions/runs/33197920542)): job entero en verde (18 pasos), 22 servicios healthy, migraciones aplicadas, Vault inicializado, tenant sembrado, credenciales reveladas, el proxy sirviendo HTTPS y el login funcionando con la credencial revelada. **Con imágenes construidas en el propio job**, ver abajo |
 
 Tres cosas que no se deducen de la tabla y deciden la elección:
 
@@ -47,6 +55,18 @@ Tres cosas que no se deducen de la tabla y deciden la elección:
   producto.
 - **El wizard HTTP no es un cuarto camino.** Es una **simulación** (`FakeStepExecutor`)
   que recorre los nueve pasos sin aprovisionar nada; véase el apartado siguiente.
+
+> **El matiz del camino (3), que es la mitad del mensaje.** Ese e2e **construye
+> las seis imágenes de plataforma dentro del propio job** y las sirve desde un
+> registro local (`localhost:5000`, con `PLATFORM_REGISTRY` y
+> `PLATFORM_IMAGE_TAG` reapuntados). Acredita el instalador, el compose generado
+> y la secuencia de arranque completa; **no** acredita que la instalación
+> funcione con las imágenes **publicadas**, porque no hay ninguna publicada en
+> `ghcr.io/daycry`. Ése único hueco es toda la distancia que queda entre el
+> camino (3) —que hoy termina con imágenes construidas en local— y el camino (1),
+> que quien no ha clonado sigue sin poder usar. Publicar es un acto del operador
+> y aquí no se promete fecha: el orden duro está en el runbook
+> [09-release.md](../06-runbooks/09-release.md).
 
 ### (1) Sin clonar: descargar, leer, ejecutar
 
@@ -98,7 +118,11 @@ los comandos son tres y no uno.
 > este camino exista es la publicación, y ésa tiene un **orden duro** —las seis
 > imágenes de plataforma pineadas por digest primero— escrito en el runbook
 > [09-release.md](../06-runbooks/09-release.md) §«La séptima imagen». Mientras
-> tanto, el camino soportado es el (3).
+> tanto, el camino soportado —y el único ejecutado de punta a punta— es el (3).
+>
+> Lo que **no** falta es el código: el CLI que correría dentro de esa imagen es
+> el mismo que instaló de verdad el 2026-08-28 por el camino (3). Lo que falta es
+> el envase.
 
 ### (2) Con clon: la infraestructura, no el producto
 
@@ -113,7 +137,7 @@ Levanta la capa de infraestructura y nada más. Los servicios de aplicación
 que **genera el instalador**, no éste. El paso a paso de desarrollo está en
 [02-getting-started/01-installation.md](../02-getting-started/01-installation.md).
 
-### (3) Con los scripts: el camino soportado hoy
+### (3) Con los scripts: el camino soportado, y el único verificado
 
 ```bash
 cp scripts/install-profiles/recommended.yaml install.yaml
@@ -126,6 +150,31 @@ del runbook de producción** son los que hacen fallar esto en una máquina limpi
 `install.sh` es un wrapper de `python -m installer_backend.cli install`, así que
 necesita Python 3.12 y el paquete importable; en Debian/Ubuntu limpio no existe
 siquiera un binario llamado `python`.
+
+#### Lo que hace falta en TU máquina para reproducirlo
+
+El e2e no instala en el vacío: prepara el host antes. Estas tres cosas las hace
+el job y no las hace el instalador, así que si faltan, la instalación no termina
+— y ninguna de las tres avisa donde está la causa.
+
+| Hace falta                                          | Si falta                                                                                                                                                                                   | Cómo lo resuelve el job                                                                        |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Que el **dominio del perfil resuelva a la máquina** | El proxy corta el handshake TLS: `TLSV1_ALERT_INTERNAL_ERROR`, antes de servir nada                                                                                                        | `echo "127.0.0.1 agentic.example.com" \| sudo tee -a /etc/hosts` (o un DNS que apunte al host) |
+| Los **dos perfiles AppArmor** cargados en el kernel | Todos los servicios del compose generado pinan `apparmor=agentic-default` (y el `docker-socket-proxy`, el suyo): Docker **aborta el arranque de cada contenedor**, y no hay `up` que valga | `sudo apparmor_parser -r -W docker/apparmor/{agentic-socket-proxy,agentic-default}.profile`    |
+| Las **seis imágenes de plataforma** alcanzables     | `PULL_IMAGES` hace `docker compose pull` contra un tag que nunca se ha publicado y aborta con rc=1 ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md))          | Las construye en el job y las sirve desde `localhost:5000` vía `PLATFORM_REGISTRY`             |
+
+**Por qué el dominio y no la IP, que es el detalle que cuesta una ejecución
+entera.** El sitio se sirve con `tls internal`, y en TLS el nombre viaja en el
+**SNI**, que sale de la URL. La cabecera `Host` no sirve: Caddy sólo la lee
+**después** del handshake, y para entonces ya ha tenido que elegir certificado.
+Pedirle `https://127.0.0.1` con `Host: agentic.example.com` no es una variante
+equivalente de entrar por el nombre — es un handshake que no tiene certificado
+que ofrecer. Está medido: el e2e entraba así y murió con
+`TLSV1_ALERT_INTERNAL_ERROR` antes de mirar una sola respuesta (run 33196741325).
+
+La receta completa, paso a paso y con los umbrales, es el propio workflow
+[`install-e2e.yml`](../../.github/workflows/install-e2e.yml): es lo que se
+ejecuta cada noche, así que no puede quedarse atrás sin ponerse rojo.
 
 ## El instalador
 
@@ -388,10 +437,16 @@ Está medido, ruta por ruta y con file:line, en el
 §«La avería que no estaba escrita», junto a la otra avería independiente del mismo
 camino: el `docker compose pull` va contra un tag que no existe
 ([ADR 0160](../05-architecture-decisions/0160-versionado-de-la-plataforma.md)).
-**La reparación está en curso**, con una guarda ejecutable que deriva del código
-—no de una lista escrita a mano, que envejece en cuanto alguien añade un
-montaje— tanto el conjunto de rutas que el compose pide como el que la
-instalación produce. Sin fechas: el estado vivo es el del ADR 0161.
+
+**La reparación de las rutas aterrizó**, y la sostiene una guarda ejecutable que
+deriva del código —no de una lista escrita a mano, que envejece en cuanto alguien
+añade un montaje— tanto el conjunto de rutas que el compose pide como el que la
+instalación produce (`tests/unit/test_generated_compose_is_installable.py`, más
+`tests/unit/test_installer_ships_stack_assets.py` para lo que el paquete embarca).
+La prueba de que ya no es teoría es que el e2e del 2026-08-28 instaló entero: si
+alguna de las siete familias siguiera sin viajar, Postgres habría vuelto a nacer
+sin `pgvector`. **La avería del tag sigue abierta**, y es la que mantiene el
+camino (1) inexistente.
 
 ## Uninstall y reinstall
 
@@ -434,10 +489,10 @@ con el mismo tag, porque eso es justo lo que hacía irrepetible el sandbox.
 
 ### Requisito de red del host
 
-| Necesita                          | Para qué                                                   |
-| --------------------------------- | ---------------------------------------------------------- |
-| Alcanzar `ghcr.io`                | Descargar las 14 imágenes de runtime y las 5 de plataforma |
-| `docker login ghcr.io` (opcional) | Solo si los packages de la organización no son públicos    |
+| Necesita                          | Para qué                                                                                                                                                                                     |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Alcanzar `ghcr.io`                | Descargar las 14 imágenes de runtime —publicadas y fijadas por digest— y las 6 de plataforma, que **todavía no están publicadas**: hoy ese `pull` falla (§«Los tres caminos de instalación») |
+| `docker login ghcr.io` (opcional) | Solo si los packages de la organización no son públicos                                                                                                                                      |
 
 La descarga ocurre **la primera vez que se usa cada runtime**, no en la
 instalación: una plataforma que solo ejecute proyectos PHP nunca baja la imagen
@@ -528,11 +583,23 @@ cat packages/shared-test-runtimes/src/shared_test_runtimes/runtime_images.json
 
 ## Endurecimiento de producción
 
-> **Regla.** El **enforcement real del kernel / Vault / Redis NO corre en CI**.
-> Cada control se entrega como **perfil + cableado en compose/runtime** y se
-> **valida estructuralmente** (suites de seguridad que fallan en rojo solo ante
-> un retroceso de hardening). El enforcement real es **test humano** +
-> **pentest externo** (`task_15_27`).
+> **Regla, con la mitad que dejó de ser cierta el 2026-08-28.** Cada control se
+> entrega como **perfil + cableado en compose/runtime** y se **valida
+> estructuralmente** (suites de seguridad que fallan en rojo solo ante un
+> retroceso de hardening). Eso sigue igual. Lo que ya no vale es la frase
+> completa «el enforcement real del kernel NO corre en CI»: el nocturno
+> [Install E2E](../../.github/workflows/install-e2e.yml) **carga los dos perfiles
+> AppArmor en el kernel del runner**, se niega a seguir si `aa-status` no los
+> lista, e instala el stack entero confinado por ellos. Y ahí es donde se
+> descubrió que **el perfil de plataforma no se había aplicado nunca**: rompía
+> seis cosas distintas —desde el `docker-socket-proxy` hasta cualquier extensión
+> C de Python—, ninguna visible para una suite estructural, porque todas eran
+> ejecución.
+>
+> Lo que **sigue fuera de CI**: la allowlist seccomp del runtime no confiable
+> bajo un run real, la rotación de credenciales contra un Vault vivo, el
+> hardening del panel admin con Redis + MFA reales, y el **pentest externo**
+> (`task_15_27`). Eso es test humano.
 
 ### Aislamiento de contenedores (seccomp + AppArmor)
 
@@ -597,10 +664,20 @@ Ver [ADR 0042](../05-architecture-decisions/0042-hardening-panel-admin-mfa-ip-al
   `tests/integration/test_uninstall.py`, `tests/integration/test_reinstall.py`,
   `tests/security/*`, `tests/integration/test_credential_rotation.py`,
   `tests/smoke/`.
-- **Pendiente / reservado al humano.** La instalación / desinstalación / restore
-  reales, el enforcement de kernel (seccomp/AppArmor), la rotación contra un Vault
-  vivo, el hardening admin con Redis + MFA reales y los specs Playwright
-  (instalador + portal) son **tests humanos / de stack**. El **pentest externo**
-  (`task_15_27`, genera el ADR 0099) y el **release v1.0.0** (`task_15_29`) están
-  **reservados al humano**. Detalle en el
+- **Ya no es test humano** (desde el 2026-08-28): la **instalación real** en un
+  Linux limpio, el **enforcement AppArmor del kernel** sobre el stack instalado y
+  la **desinstalación con `--purge-data`** —que ejecuta la bajada de la propia
+  fixture del e2e, comprobando además que la raíz de datos desaparece— los cubre
+  el nocturno [Install E2E](../../.github/workflows/install-e2e.yml). Y no se
+  cubre a sí mismo: una guarda anti-falso-verde
+  (`scripts/check_e2e_install_report.py`) lee el informe JUnit y falla si alguno
+  de los cuatro casos exigidos no se **ejecutó**, porque el defecto que pagó este
+  test fue justamente un verde que saltaba.
+- **Pendiente / reservado al humano.** El **restore** real, la **rotación contra
+  un Vault vivo**, el **hardening admin con Redis + MFA reales**, la allowlist
+  **seccomp del runtime no confiable** bajo un run de verdad y los specs
+  Playwright (instalador + portal). El **pentest externo** (`task_15_27`, genera
+  el ADR 0099) y el **release v1.0.0** (`task_15_29`) están **reservados al
+  humano** — y ese release es exactamente lo que hoy separa al camino (1) de
+  existir. Detalle en el
   [changelog del Plan 15](../07-changelog/15-instalador-produccion.md).
