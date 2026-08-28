@@ -75,8 +75,28 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   #      runtime dirs. The host rootfs stays read-only. ----
   /                         r,
   /**                       r,
-  /usr/**                    rix,
-  /bin/**                   rix,
+
+  # `m` — mapear un fichero como memoria EJECUTABLE. Es un permiso distinto de
+  # `x`, y su ausencia fue el cuarto fallo que este perfil destapó al aplicarse
+  # por primera vez (e2e run 33181382229):
+  #
+  #   ImportError: /opt/venv/…/rpds.cpython-312-x86_64-linux-gnu.so:
+  #     failed to map segment from shared object
+  #
+  # Toda extensión C de Python —`rpds`, `pydantic-core`, `asyncpg`, `psycopg`—
+  # se carga con `mmap(PROT_EXEC)`. Sin `m`, NINGÚN servicio del stack puede
+  # importar una: no era un problema de las migraciones, era de todos, y salió
+  # ahí por ser lo primero que corre.
+  #
+  # Sólo se concede donde el código YA es de solo lectura para el proceso. Los
+  # sitios con `w` de más abajo —/tmp, /run, /var/run, /var/lib, /var/log— NO lo
+  # llevan, y no pueden llevarlo: escribir un fichero y luego mapearlo como
+  # ejecutable es ejecución de código arbitrario con otro nombre. Eso lo afirma
+  # `tests/unit/test_apparmor_profile_stays_narrow.py`, que rechaza cualquier
+  # regla que junte `w` y `m`.
+  /opt/**                   rm,
+  /usr/**                    rixm,
+  /bin/**                   rixm,
 
   # EXCEPCIÓN, estrecha y con motivo (2026-08-28).
   #
@@ -101,9 +121,9 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   /usr/local/etc/haproxy/    rw,
   /usr/local/etc/haproxy/**  rwk,
 
-  /sbin/**                  rix,
-  /lib/**                   rix,
-  /lib64/**                 rix,
+  /sbin/**                  rixm,
+  /lib/**                   rixm,
+  /lib64/**                 rixm,
   /etc/**                   r,
 
   # Los scripts de inicialización de Postgres, y por qué esto no es un agujero

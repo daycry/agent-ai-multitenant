@@ -256,3 +256,61 @@ def test_los_dos_perfiles_solo_se_diferencian_en_el_socket() -> None:
         "La única diferencia legítima es la regla del socket. Si has endurecido "
         "uno, endurece el otro; si la diferencia es deliberada, escríbela aquí."
     )
+
+
+# ---------------------------------------------------------------------------
+# `w` y `m` en la misma regla es ejecución de código arbitrario (2026-08-28)
+# ---------------------------------------------------------------------------
+#
+# `m` permite mapear un fichero como memoria EJECUTABLE, y hubo que concederlo:
+# sin él ninguna extensión C de Python se puede importar y no arranca ni una
+# migración (e2e run 33181382229, `failed to map segment from shared object`).
+#
+# Pero se concedió SÓLO donde el código ya es de solo lectura para el proceso.
+# Una ruta que tenga `w` y `m` a la vez deja escribir un fichero y ejecutarlo
+# después: es la primitiva de la que protege todo lo demás del perfil, y con la
+# que quedaría abierta sin que ninguna otra regla lo notara.
+
+
+@pytest.mark.parametrize("perfil", [_PERFIL, _PERFIL.with_name("agentic-socket-proxy.profile")])
+def test_ninguna_ruta_es_escribible_y_mapeable_a_la_vez(perfil: Path) -> None:
+    """La invariante que hace segura la concesión de `m`."""
+    culpables = [
+        f"{ruta} ({permisos})"
+        for ruta, permisos in _reglas_de(perfil)
+        if "w" in permisos and "m" in permisos
+    ]
+    assert not culpables, (
+        f"en {perfil.name} estas reglas conceden escritura Y mapeo ejecutable: "
+        f"{culpables}.\nEso permite dejar un fichero y ejecutarlo después, que "
+        "es exactamente la primitiva de la que protege el resto del perfil. "
+        "`m` sólo va donde el proceso no puede escribir."
+    )
+
+
+def _reglas_de(perfil: Path) -> list[tuple[str, str]]:
+    reglas: list[tuple[str, str]] = []
+    for linea in perfil.read_text(encoding="utf-8").splitlines():
+        texto = linea.split("#", 1)[0].strip()
+        if not texto.startswith("/") or not texto.endswith(","):
+            continue
+        casa = re.match(r"^(\S+)\s+([a-zA-Z]+),$", texto)
+        if casa:
+            reglas.append((casa.group(1), casa.group(2)))
+    return reglas
+
+
+def test_las_extensiones_c_se_pueden_cargar() -> None:
+    """La otra mitad: que `m` no se retire «limpiando» y vuelva el fallo.
+
+    El venv de las imágenes vive en `/opt/venv`, y ahí están los `.so` de
+    pydantic-core, asyncpg, rpds… Sin `m` sobre `/opt`, el stack entero deja de
+    arrancar y el síntoma —`failed to map segment`— no se parece en nada a un
+    problema de permisos de AppArmor.
+    """
+    for perfil in (_PERFIL, _PERFIL.with_name("agentic-socket-proxy.profile")):
+        mapeables = {ruta for ruta, permisos in _reglas_de(perfil) if "m" in permisos}
+        assert "/opt/**" in mapeables, (
+            f"{perfil.name} ya no permite mapear `/opt/**`: ninguna extensión C "
+            "de Python podrá importarse y no arrancará ni una migración."
+        )
