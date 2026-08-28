@@ -51,6 +51,30 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   /**                       r,
   /usr/**                    rix,
   /bin/**                   rix,
+
+  # EXCEPCIÓN, estrecha y con motivo (2026-08-28).
+  #
+  # El `docker-socket-proxy` es HAProxy, y su entrypoint GENERA su propia
+  # configuración al arrancar a partir de las variables de la ACL (CONTAINERS=1,
+  # EXEC=0…). Escribe en `/usr/local/etc/haproxy/haproxy.cfg`, que cae bajo el
+  # `/usr/** rix` de arriba — sin `w`. Resultado medido en la primera ejecución
+  # real de este perfil (e2e run 33171640034):
+  #
+  #   docker-entrypoint.sh: line 18: can't create
+  #     /usr/local/etc/haproxy/haproxy.cfg: Permission denied
+  #
+  # …y con él, el contenedor en bucle, su healthcheck en `Error`, y la
+  # instalación entera abortando en `start_stack`. No es un servicio accesorio:
+  # es el que sostiene el socket de Docker por el Principio 2.
+  #
+  # Se abre SÓLO ese directorio, no `/usr/**`. Lo que hay dentro es config
+  # generada en cada arranque, no binarios: escribir ahí no permite sustituir un
+  # ejecutable que otro proceso vaya a correr, que es de lo que protege la regla
+  # general. `tests/unit/test_apparmor_profile_stays_narrow.py` comprueba que la
+  # excepción no se ensancha.
+  /usr/local/etc/haproxy/    rw,
+  /usr/local/etc/haproxy/**  rwk,
+
   /sbin/**                  rix,
   /lib/**                   rix,
   /lib64/**                 rix,
