@@ -938,14 +938,44 @@ class RealStepExecutor:
             # Así que primero se BUSCAN las líneas que se declaran error, y la
             # cola queda como respaldo para cuando no hay ninguna.
             utiles = [line for line in safe if line.strip()]
-            marcas = ('"level": "error"', '"level": "critical"', '"error":', "Traceback")
-            severas = [line for line in utiles if any(m in line for m in marcas)]
+
+            def _sin_repetir(lineas: list[str]) -> list[str]:
+                """Sin duplicados y en orden. Seis líneas idénticas no informan.
+
+                El one-shot repite el mismo aviso una vez por elemento del
+                catálogo: sin esto, la ventana se llena con seis copias de la
+                misma frase y el error real sigue sin verse (e2e run 33194504572).
+                """
+                vistas: list[str] = []
+                for linea in lineas:
+                    if linea not in vistas:
+                        vistas.append(linea)
+                return vistas
+
+            # `"level": "error"` y no `"error":`: una línea de log estructurado
+            # puede llevar un campo `error` siendo un WARNING —el aviso de
+            # ollama lo hace— y colarse como si fuera la causa. El nivel es lo
+            # que el propio emisor declara; el campo, sólo un dato suyo.
+            severas = _sin_repetir(
+                [
+                    linea
+                    for linea in utiles
+                    if '"level": "error"' in linea
+                    or '"level": "critical"' in linea
+                    or "Traceback" in linea
+                ]
+            )
+            cola = _sin_repetir(utiles[-40:])[-12:]
+            partes: list[str] = []
             if severas:
-                detail = "\n  | " + "\n  | ".join(severas[-6:])
-            elif utiles:
-                detail = "\n  | " + "\n  | ".join(utiles[-25:])
-            else:
-                detail = " (sin salida)"
+                partes.append("errores:\n  | " + "\n  | ".join(severas[-6:]))
+            # La cola SIEMPRE, aunque haya severas: si el proceso murió sin
+            # registrar nada de nivel error —una excepción no capturada, un
+            # `exit()` seco— lo único que queda es el final de su salida.
+            partes.append(
+                ("últimas líneas:\n  | " + "\n  | ".join(cola)) if cola else "(sin salida)"
+            )
+            detail = "\n" + "\n".join(partes)
             message = (
                 f"el one-shot de finalización `{BOOTSTRAP_SERVICE}` falló "
                 f"(rc={returncode}). Reprodúcelo con `docker compose run --rm "

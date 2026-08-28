@@ -1350,3 +1350,48 @@ def test_el_fallo_del_one_shot_prioriza_las_lineas_de_error(
         "el mensaje no trae la línea de error: quedó enterrada bajo el ruido de "
         f"progreso.\n{mensaje[:400]}"
     )
+
+
+def test_un_aviso_con_campo_error_no_se_confunde_con_la_causa(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """`"error":` en una línea NO la convierte en el error (run 33194504572).
+
+    El aviso de ollama es un WARNING que lleva un campo `error`. Con un filtro
+    por subcadena, seis copias suyas llenaban la ventana y el fallo real seguía
+    sin verse — el mensaje pasó de enseñar ruido de progreso a enseñar ruido de
+    avisos, que no es mejor.
+
+    El NIVEL es lo que el emisor declara sobre la gravedad; el campo `error` es
+    sólo un dato suyo.
+    """
+    aviso = '{"error": "ollama embed failed", "event": "embedder_failed", "level": "warning"}'
+    real = '{"event": "seed.failed", "level": "error", "detail": "column x does not exist"}'
+    runner = _bootstrap_runner(rc=5, before=(real, *([aviso] * 20)), reveal=False)
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    mensaje = str(exc.value)
+    assert "column x does not exist" in mensaje, (
+        f"la causa real no aparece; la tapan los avisos:\n{mensaje[:500]}"
+    )
+    assert mensaje.count("ollama embed failed") <= 1, (
+        "el mismo aviso aparece repetido: seis copias idénticas no informan"
+    )
+
+
+def test_si_muere_sin_registrar_nada_grave_se_ve_el_final(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """Una excepción no capturada no deja línea de nivel `error`.
+
+    Por eso la cola se enseña SIEMPRE, no sólo cuando no hay severas: si el
+    proceso murió de golpe, el final de su salida es lo único que queda.
+    """
+    runner = _bootstrap_runner(
+        rc=5, before=("paso 1", "paso 2", "lo último que hizo"), reveal=False
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.BOOTSTRAP_VAULT, {})
+    assert "lo último que hizo" in str(exc.value)
