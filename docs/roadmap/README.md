@@ -221,6 +221,7 @@ Informes previos a un plan: exploran el problema y proponen opciones. No llevan 
 | [2026-08-12-analisis-agentic-workflow.md](./2026-08-12-analisis-agentic-workflow.md)                                           | Qué ideas de `AgentShekel/agentic-workflow` nos faltan. Su §4 lleva las **seis decisiones del operador** del 2026-08-12, que originan el plan `gov-01`.                 |
 | [2026-08-27-comparativa-autogpt.md](./2026-08-27-comparativa-autogpt.md)                                                       | Comparativa con AutoGPT: de ~35 candidatos, 13 refutados con fichero:línea y 14 que no aplican. Casi nada suyo nos sirve; el valor fue destapar siete defectos propios. |
 | [2026-08-27-coste-de-kubernetes.md](./2026-08-27-coste-de-kubernetes.md)                                                       | Qué costaría migrar a Kubernetes: 175-275 días-persona, de los que sólo un cuarto es traducción. Once averías no obvias, 14 ADR a reabrir y cero demanda registrada.    |
+| [2026-08-28-imagenes-de-proyecto-y-preview.md](./2026-08-28-imagenes-de-proyecto-y-preview.md)                                 | Qué se puede automatizar de los contenedores de pruebas de usuario: son tres imágenes distintas, no una. 11 datos manuales, 10 fallos mudos; recomienda 14-23 d.        |
 
 ## Cola de validación humana
 
