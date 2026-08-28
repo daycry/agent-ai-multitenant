@@ -111,3 +111,65 @@ def test_la_excepcion_de_haproxy_sigue_estando() -> None:
         "configuración al arrancar y sin permiso de escritura entra en bucle, "
         "tumbando la instalación en `start_stack`."
     )
+
+
+# ---------------------------------------------------------------------------
+# El perfil y el generador tienen que estar de acuerdo sobre las capacidades
+# ---------------------------------------------------------------------------
+#
+# Ésta es la guarda que habría ahorrado la sexta ejecución del e2e
+# (run 33174222896). El compose generado concedía `cap_add: [IPC_LOCK, SETFCAP]`
+# a Vault y este perfil no las listaba, así que AppArmor las denegaba DESPUÉS de
+# que Docker las concediera:
+#
+#   vault-1 | unable to set CAP_SETFCAP effective capability: Operation not permitted
+#
+# Dos ficheros que tienen que decir lo mismo y ningún test cruzándolos: la deriva
+# estaba garantizada, y el sitio donde se manifiesta es una instalación real.
+
+
+def _capacidades_del_perfil() -> set[str]:
+    encontradas: set[str] = set()
+    for linea in _PERFIL.read_text(encoding="utf-8").splitlines():
+        texto = linea.split("#", 1)[0].strip()
+        casa = re.match(r"^capability\s+([a-z_]+),$", texto)
+        if casa:
+            encontradas.add(casa.group(1))
+    return encontradas
+
+
+def _capacidades_que_concede_el_generador() -> set[str]:
+    """Las que el compose generado pone en algún `cap_add`, leídas del árbol."""
+    from installer_backend import compose_generator as generador
+
+    concedidas: set[str] = set()
+    for nombre in dir(generador):
+        if not nombre.startswith("_") or "CAPS" not in nombre:
+            continue
+        valor = getattr(generador, nombre)
+        if isinstance(valor, (list, tuple)):
+            concedidas.update(str(c).lower() for c in valor)
+    # Las que un builder concreto añade además de la lista compartida.
+    fuente = (
+        _PERFIL.parents[2] / "apps/installer/backend/src/installer_backend" / "compose_generator.py"
+    ).read_text(encoding="utf-8")
+    for bloque in re.findall(r'"cap_add":\s*\[([^\]]*)\]', fuente):
+        concedidas.update(c.strip().strip('"').lower() for c in bloque.split(",") if '"' in c)
+    return {c for c in concedidas if c and c.isidentifier()}
+
+
+def test_el_perfil_permite_toda_capacidad_que_el_generador_concede() -> None:
+    """Docker concede y AppArmor deniega: el fallo se ve en producción, no aquí."""
+    concedidas = _capacidades_que_concede_el_generador()
+    assert concedidas, (
+        "no se ha leído ninguna capacidad del generador: la derivación se ha "
+        "roto y esta guarda estaría comparando conjuntos vacíos"
+    )
+    faltan = sorted(concedidas - _capacidades_del_perfil())
+    assert not faltan, (
+        f"el compose generado concede {faltan} y el perfil AppArmor no las "
+        "permite. Docker se las dará y AppArmor se las quitará, y el servicio "
+        "entrará en bucle sin que nada lo explique hasta ver sus logs.\n"
+        "Añádelas al perfil CON el motivo: listarlas es un techo, no una "
+        "concesión — quien tenga `cap_drop: ALL` sin `cap_add` sigue sin ellas."
+    )

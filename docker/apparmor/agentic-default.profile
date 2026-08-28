@@ -45,6 +45,32 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   capability setuid,
   capability net_bind_service,
 
+  # Las dos que faltaban, y por qué no son un ensanchamiento (2026-08-28).
+  #
+  # El compose generado concede `cap_add: [IPC_LOCK, SETFCAP, …]` a Vault, y el
+  # stack vivo confirma que las tiene. Pero este perfil no las listaba, así que
+  # AppArmor las denegaba DESPUÉS de que Docker las concediera:
+  #
+  #   vault-1 | unable to set CAP_SETFCAP effective capability: Operation not permitted
+  #
+  # …y Vault en bucle, y la instalación abortando en `start_stack` (e2e run
+  # 33174222896). Vault las necesita por diseño: `SETFCAP` porque su entrypoint
+  # hace `setcap` sobre su binario, e `IPC_LOCK` para `mlock`, que es lo que
+  # impide que las claves acaben en swap — desactivarlo sería el arreglo malo.
+  #
+  # Listarlas aquí NO se las da a nadie más. Una regla `capability` de AppArmor
+  # es un TECHO, no una concesión: un servicio con `cap_drop: ALL` y sin
+  # `cap_add` sigue sin poder usarlas porque Docker se las quitó antes. Lo único
+  # que cambia es que AppArmor deje de ser la segunda denegación para quien sí
+  # las tiene legítimamente.
+  #
+  # `tests/unit/test_apparmor_profile_stays_narrow.py` cruza esta lista con las
+  # que el generador concede: si mañana un servicio pide una capacidad nueva y
+  # nadie la añade aquí, la suite lo dice — en vez de descubrirlo en una
+  # instalación real, que es como se descubrió ésta.
+  capability ipc_lock,
+  capability setfcap,
+
   # ---- Filesystem: read the image rootfs, confine WRITES to the expected
   #      runtime dirs. The host rootfs stays read-only. ----
   /                         r,
