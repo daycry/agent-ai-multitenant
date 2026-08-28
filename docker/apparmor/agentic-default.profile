@@ -161,6 +161,24 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   /docker-entrypoint-initdb.d/**  rix,
 
   # Writable runtime dirs only (data volumes, scratch, runtime state).
+  # `/dev/shm` — memoria compartida POSIX (2026-08-28, e2e run 33189020440).
+  #
+  # El pool `prefork` de Celery crea un `RLock` por worker, y por debajo eso es
+  # un semáforo POSIX, que vive en `/dev/shm`. Sin escritura ahí:
+  #
+  #   Unrecoverable error: PermissionError(13, 'Permission denied')
+  #     billiard/context.py … RLock()
+  #
+  # No es cosa del dispatcher: lo necesita CUALQUIER proceso Python que use
+  # multiprocessing, o sea todos los pools de Celery del stack. Salió en el
+  # dispatcher por ser el primero que llegó a arrancar su pool.
+  #
+  # Va sin `m` a propósito, y la guarda lo exige: un tmpfs escribible que
+  # además se pudiera mapear como ejecutable sería ejecución de código
+  # arbitrario. Aquí sólo se guardan semáforos y buffers.
+  /dev/shm/                 rw,
+  /dev/shm/**               rwk,
+
   /tmp/                     rw,
   /tmp/**                   rwk,
   /run/                     rw,

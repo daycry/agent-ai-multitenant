@@ -337,3 +337,32 @@ def test_el_venv_se_puede_mapear_Y_ejecutar(perfil: Path) -> None:
         f"{perfil.name}: /opt/** sin `x`, no se puede ejecutar nada del venv "
         "(`celery`, `alembic`, `uvicorn`…) y el contenedor muere al arrancar"
     )
+
+
+@pytest.mark.parametrize("perfil", [_PERFIL, _PERFIL.with_name("agentic-socket-proxy.profile")])
+def test_la_memoria_compartida_es_escribible(perfil: Path) -> None:
+    """Sin `/dev/shm` escribible no arranca ningún pool de Celery.
+
+    El pool `prefork` crea un `RLock` por worker, y por debajo eso es un
+    semáforo POSIX que vive en `/dev/shm`. Sin escritura ahí (e2e run
+    33189020440):
+
+        Unrecoverable error: PermissionError(13, 'Permission denied')
+          billiard/context.py … RLock()
+
+    No es cosa de un servicio: lo necesita cualquier proceso Python con
+    multiprocessing, o sea todos los pools del stack. Salió en el dispatcher por
+    ser el primero que llegó a arrancar el suyo — otro caso de un fallo general
+    que aparece en el primero que pasa por ahí.
+    """
+    permisos = dict(_reglas_de(perfil)).get("/dev/shm/**", "")
+    assert "w" in permisos, (
+        f"{perfil.name}: /dev/shm/** no es escribible. Ningún pool de Celery "
+        "arrancará, y el error —PermissionError sobre un RLock— no se parece "
+        "en nada a un problema de AppArmor."
+    )
+    assert "m" not in permisos, (
+        f"{perfil.name}: /dev/shm/** concede `m`. Un tmpfs escribible que además "
+        "se pueda mapear como ejecutable es ejecución de código arbitrario: ahí "
+        "sólo van semáforos y buffers."
+    )
