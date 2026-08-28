@@ -1271,3 +1271,53 @@ def test_un_one_shot_que_sale_distinto_de_cero_tambien_se_recoge(
         "ha caído a los cimientos habiendo un culpable nombrado: enseñaría los "
         "logs de tres servicios sanos y escondería el que importa"
     )
+
+
+@pytest.mark.parametrize(
+    ("linea", "servicio"),
+    [
+        # Forma 1 — larga vida cuyo healthcheck no llegó (run 33171640034).
+        (" Container agentic-platform-postgres-1  Error", "postgres"),
+        # Forma 2 — one-shot que sale != 0 (run 33180241225).
+        (
+            ' Container agentic-platform-migrations-1  service "migrations" '
+            "didn't complete successfully: exit 1",
+            "migrations",
+        ),
+        # Forma 3 — en MINÚSCULA y sin tabular (run 33182384445).
+        (" container agentic-platform-cortex-beat-1 is unhealthy", "cortex-beat"),
+        # Los dos proxies no llevan el prefijo del proyecto.
+        (" Container agentic-egress-proxy  Error", "egress-proxy"),
+    ],
+)
+def test_las_tres_formas_en_que_compose_dice_que_algo_fallo(
+    installer_config: InstallerConfig,
+    gen_secrets: GeneratedSecrets,
+    linea: str,
+    servicio: str,
+) -> None:
+    """Cada una costó una ejecución del e2e descubrirla.
+
+    `docker compose up --wait` no tiene UNA manera de reportar un fallo: tiene
+    tres, y la tercera llega en minúscula y sin el formato tabulado de las otras
+    dos porque la emite otra parte de su código.
+
+    Están juntas en un solo test a propósito. Parcheándolas de una en una —que
+    es lo que hice tres veces— cada formato nuevo cuesta una ejecución entera y
+    el recolector cae al fallback, enseñando los logs de servicios sanos: no
+    calla, apunta al sitio equivocado.
+    """
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(returncode=1, output_lines=(linea,)),
+            _argv_logs(servicio): CommandResult(
+                returncode=0, output_lines=(f"{servicio}-1 | la pista que importa",)
+            ),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    assert servicio in mensaje, f"no identificó `{servicio}` en: {linea!r}"
+    assert "la pista que importa" in mensaje, f"identificó `{servicio}` pero no trajo su log"

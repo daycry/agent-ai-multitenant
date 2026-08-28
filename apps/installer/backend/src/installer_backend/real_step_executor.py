@@ -516,9 +516,22 @@ class RealStepExecutor:
     #: ninguno: no calla, enseña lo que no toca.
     _FALLO_DE_ONE_SHOT = "didn't complete successfully"
 
+    #: Las TRES formas en que `docker compose up --wait` dice que algo falló.
+    #: Se enumeran porque cada una costó una ejecución del e2e descubrirla, y
+    #: escribirlas juntas es lo que impide seguir parcheándolas de una en una:
+    #:
+    #:   Container …-postgres-1  Error                          (larga vida)
+    #:   Container …-migrations-1  service "migrations" didn't
+    #:     complete successfully: exit 1                        (one-shot)
+    #:   container …-cortex-beat-1 is unhealthy                 (minúscula!)
+    #:
+    #: La tercera llega en MINÚSCULA y sin el formato tabulado de las otras dos.
+    #: No es un capricho de compose: la emite otra parte de su código.
+    _MARCAS_DE_FALLO = ("error", "is unhealthy", "didn't complete successfully")
+
     @staticmethod
     def _servicios_en_error(result: CommandResult) -> list[str]:
-        """Los servicios que compose dio por fallidos, en sus DOS formas.
+        """Los servicios que compose dio por fallidos, en sus tres formas.
 
         Se leen de lo que compose ya dijo en vez de volver a preguntar: si el
         stack se cayó del todo, un `ps` posterior puede devolver otra cosa.
@@ -526,25 +539,29 @@ class RealStepExecutor:
         vistos: list[str] = []
         for linea in result.output_lines:
             texto = linea.strip()
-            if "Container" not in texto:
+            bajo = texto.lower()
+            if "container" not in bajo:
+                continue
+            # Las dos marcas explícitas valen en cualquier posición; la palabra
+            # «Error» sólo cuenta al FINAL de la línea, porque compose la usa
+            # como estado y dentro de una frase es ruido.
+            explicita = any(marca in bajo for marca in ("is unhealthy", "didn't complete"))
+            if not explicita and not texto.endswith("Error"):
                 continue
 
-            # Forma 2 — el one-shot: compose cita el nombre del SERVICIO entre
-            # comillas, así que no hay que deducirlo del nombre del contenedor.
-            if RealStepExecutor._FALLO_DE_ONE_SHOT in texto and '"' in texto:
+            # Cuando compose cita el SERVICIO entre comillas no hay que deducir
+            # nada del nombre del contenedor.
+            if '"' in texto and RealStepExecutor._FALLO_DE_ONE_SHOT in texto:
                 nombre = texto.split('"')[1]
-                if nombre and nombre not in vistos:
-                    vistos.append(nombre)
-                continue
-
-            # Forma 1 — el servicio de larga vida cuyo healthcheck no llegó.
-            if not texto.endswith("Error"):
-                continue
-            contenedor = texto.split("Container", 1)[1].rsplit("Error", 1)[0].strip()
-            # `agentic-platform-postgres-1` -> `postgres`; los dos proxies no
-            # llevan el prefijo del proyecto (`agentic-egress-proxy`).
-            nombre = contenedor.removeprefix(f"{PROJECT_NAME}-").removeprefix("agentic-")
-            nombre = nombre.rsplit("-", 1)[0] if nombre.rsplit("-", 1)[-1].isdigit() else nombre
+            else:
+                # El token siguiente a «container» es el nombre del contenedor.
+                resto = bajo.split("container", 1)[1].strip()
+                contenedor = resto.split()[0] if resto.split() else ""
+                # `agentic-platform-postgres-1` -> `postgres`; los dos proxies no
+                # llevan el prefijo del proyecto (`agentic-egress-proxy`).
+                nombre = contenedor.removeprefix(f"{PROJECT_NAME}-").removeprefix("agentic-")
+                if nombre.rsplit("-", 1)[-1].isdigit():
+                    nombre = nombre.rsplit("-", 1)[0]
             if nombre and nombre not in vistos:
                 vistos.append(nombre)
         return vistos
