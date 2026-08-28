@@ -45,6 +45,7 @@ from installer_backend.compose_generator import (
     VOICE_SERVICES,
     WHISPER_MODELS_VOLUME,
     _env_ref,
+    app_image,
     assert_no_dev_secret_markers,
     enabled_providers,
     generate_compose,
@@ -1713,4 +1714,47 @@ def test_vault_puede_bloquear_memoria_sin_apagar_mlock() -> None:
         "se ha apagado `mlock`: eso permite que las claves de Vault vayan a "
         "swap. Si de verdad hace falta en algún entorno, va con su propio ADR, "
         "no como efecto colateral de hacer arrancar el stack."
+    )
+
+
+def test_todo_servicio_con_la_imagen_de_workers_puede_bajar_de_privilegios() -> None:
+    """Cuatro servicios comparten imagen y entrypoint; uno solo tenía las caps.
+
+    `apps/workers/docker-entrypoint.sh` arranca como root, repara la propiedad
+    del árbol de datos y ejecuta:
+
+        exec setpriv --reuid=1000 --regid=1000 --clear-groups "$@"
+
+    Sin SETUID/SETGID eso falla, y va **sin `|| true`** con `set -eu` detrás: el
+    contenedor muere al arrancar, su healthcheck queda `unhealthy` y el
+    `up --wait` aborta la instalación entera. Medido en el e2e run 33184204178:
+
+        setpriv: setresuid failed: Operation not permitted
+
+    La lista se comprueba DERIVANDO los servicios de su imagen, no enumerándolos:
+    cuando se arregló a mano sólo se tocó `workers` y los otros tres —
+    `workers-privileged`, `workers-marketplace`, `cortex-beat`— se quedaron
+    fuera, porque cada uno tiene su propio builder. Un servicio nuevo de esa
+    familia volvería a nacer sin ellas, y el síntoma aparecería en una
+    instalación real.
+    """
+    compose = generate_compose(_config())
+    imagen = app_image("workers")
+    familia = {
+        nombre: svc for nombre, svc in compose["services"].items() if svc.get("image") == imagen
+    }
+    assert len(familia) >= 4, (
+        f"sólo se han encontrado {len(familia)} servicios con la imagen de "
+        "workers: la derivación se ha roto y esta guarda estaría comprobando "
+        "casi nada"
+    )
+    sin_caps = sorted(
+        nombre
+        for nombre, svc in familia.items()
+        if not {"SETUID", "SETGID"} <= set(svc.get("cap_add", []))
+    )
+    assert not sin_caps, (
+        f"{sin_caps} usan la imagen de workers y no pueden bajar de privilegios. "
+        "Su entrypoint hace `setpriv` sin red: el contenedor morirá al arrancar "
+        "y el `up --wait` abortará la instalación."
     )

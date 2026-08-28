@@ -1368,6 +1368,27 @@ def _workers_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
         "networks": _WORKER_NETWORKS,
     }
     svc.update(_hardening(limits_cpus="4.0", limits_memory=mem))
+    # Los workers hacen EXACTAMENTE el mismo baile de auto-inicialización que
+    # postgres, redis, vault y clamav —arrancan como root, reparan la propiedad
+    # de su árbol de datos y bajan a su usuario de servicio— pero eran los únicos
+    # a los que no se les devolvían las capacidades. Medido (e2e run
+    # 33184204178):
+    #
+    #   chown: changing ownership of '/data/agent-platform/…': Operation not permitted
+    #   setpriv: setresuid failed: Operation not permitted
+    #
+    # El `chown` del entrypoint lleva `|| true` y sólo hace ruido; el que mata es
+    # `setpriv`, que va sin red y con `set -eu` detrás
+    # (`apps/workers/docker-entrypoint.sh:38`). Sin SETUID/SETGID el contenedor
+    # muere al arrancar, su healthcheck queda en `unhealthy` y el `up --wait`
+    # aborta la instalación entera.
+    #
+    # Se concede la MISMA lista que a los otros cuatro, no una propia: un
+    # segundo conjunto para el mismo patrón se justifica una vez y diverge
+    # después. Y sigue siendo mucho más estricto que el stack de desarrollo, que
+    # corre estos servicios con las capacidades por defecto de Docker (medido:
+    # `CapAdd=[] CapDrop=[]`).
+    svc["cap_add"] = list(_INFRA_CAPS)
     # Scale the GENERIC Celery worker pool per the wizard's resource choice.
     svc["deploy"]["replicas"] = cfg.resources.worker_replicas
     return svc
@@ -1432,6 +1453,9 @@ def _workers_privileged_service(cfg: InstallerConfig, *, prod: bool) -> dict[str
     # Corre como root (el volume-tar del backup lo exige); NO fijamos user 1000.
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     svc["deploy"]["replicas"] = 1
+    # Misma imagen y mismo entrypoint que `workers`: root -> chown -> setpriv.
+    # Sin estas capacidades `setpriv` falla y el contenedor muere al arrancar.
+    svc["cap_add"] = list(_INFRA_CAPS)
     return svc
 
 
@@ -1476,6 +1500,9 @@ def _workers_marketplace_service(cfg: InstallerConfig, *, prod: bool) -> dict[st
     }
     svc.update(_hardening(limits_cpus="2.0", limits_memory="2g"))
     svc["deploy"]["replicas"] = 1
+    # Misma imagen y mismo entrypoint que `workers`: root -> chown -> setpriv.
+    # Sin estas capacidades `setpriv` falla y el contenedor muere al arrancar.
+    svc["cap_add"] = list(_INFRA_CAPS)
     return svc
 
 
@@ -1514,6 +1541,9 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     }
     svc.update(_hardening(limits_cpus="0.5", limits_memory="512m"))
     svc["deploy"]["replicas"] = 1
+    # Misma imagen y mismo entrypoint que `workers`: root -> chown -> setpriv.
+    # Sin estas capacidades `setpriv` falla y el contenedor muere al arrancar.
+    svc["cap_add"] = list(_INFRA_CAPS)
     return svc
 
 
