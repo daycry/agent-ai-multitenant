@@ -358,11 +358,32 @@ jobs:
           python -m pip install -e "apps/installer/backend[dev]" -c constraints.txt
           python -m pip install hvac pyyaml httpx pytest pytest-timeout -c constraints.txt
 
+      # La comprobación pregunta DOS cosas distintas y las dos hacen falta:
+      #
+      #   1. que el plugin se pueda importar, y
+      #   2. que pytest lo tenga REGISTRADO — que es lo que hace que la marca
+      #      `timeout(1800)` del test signifique algo. Un plugin instalado pero
+      #      no cargado deja la marca como decoración: el test correría sin
+      #      reloj y un install colgado se comería las 6 h del runner.
+      #
+      # La versión se lee de los metadatos del paquete, NO de un `__version__`
+      # del módulo: `pytest_timeout` no lo expone (2.4.0 comprobado), así que
+      # la primera versión de este paso moría con AttributeError — y el fallo
+      # se leía como «falta el plugin» cuando el plugin estaba instalado.
       - name: El reloj por-test existe de verdad
         timeout-minutes: 2
         run: |
           set -euo pipefail
-          python -c "import pytest_timeout; print('pytest-timeout', pytest_timeout.__version__)"
+          python - <<'PY'
+          from importlib.metadata import version
+          import pytest_timeout  # noqa: F401  - que importe es la mitad de la pregunta
+          print("pytest-timeout", version("pytest-timeout"))
+          PY
+          # La otra mitad: que pytest lo cargue de verdad.
+          python -m pytest --version --version 2>&1 | grep -qi "timeout" || {
+            echo "::error::pytest NO tiene registrado pytest-timeout: la marca timeout(1800) del e2e sería decorativa y un install colgado agotaría el runner."
+            exit 1
+          }
 
       # ---------------------------------------------------------------------
       # PREFLIGHT DE PRERREQUISITOS.
