@@ -464,6 +464,87 @@ class RealStepExecutor:
         except OSError as exc:
             raise StepExecutionError(_describe_os_error(exc, path)) from exc
 
+    #: Servicios cuyo log se recoge cuando `up --wait` falla, aunque compose no
+    #: los nombre. Son los que TODO lo demás espera por `depends_on: healthy`:
+    #: si uno de éstos no arranca, los veinte de detrás quedan en `Created` y el
+    #: error real está aquí y en ningún otro sitio.
+    _CIMIENTOS = ("postgres", "redis", "vault", "minio")
+
+    def _arrancar_el_stack(self, lines: list[str]) -> None:
+        """`up -d --wait`, y si falla, POR QUÉ falló.
+
+        `up --wait` informa del ESTADO de cada contenedor —`Started`, `Error`—
+        y de nada más. Eso deja un mensaje que nombra al culpable sin decir qué
+        le pasa: «Container agentic-platform-postgres-1 Error» y a reproducirlo
+        a mano. Medido en el e2e (run 33170713059, 2026-08-28): dos servicios en
+        `Error` y cero líneas de sus logs en toda la ejecución.
+
+        Así que al fallar se recogen los logs de los servicios que no llegaron a
+        sanos. Es una llamada más a `docker compose`, sólo en el camino de
+        error, y convierte el fallo en accionable sin depender de que quien lo
+        ejecute tenga un paso de diagnóstico preparado — el operador de un
+        cliente no lo tiene.
+        """
+        result = self.runner.run(
+            self._compose("up", "-d", "--wait"),
+            cwd=self.compose_dir,
+            on_line=lines.append,
+        )
+        if result.returncode == 0:
+            return
+
+        partes = [
+            f"el comando falló (rc={result.returncode}): "
+            f"{' '.join(self._compose('up', '-d', '--wait'))}",
+            self._cola_del_fallo(result),
+        ]
+        sospechosos = self._servicios_en_error(result) or list(self._CIMIENTOS)
+        partes.append(
+            f"\nLogs de los servicios que no llegaron a sanos ({', '.join(sospechosos)}):"
+        )
+        for servicio in sospechosos:
+            partes.append(self._log_de(servicio))
+        raise StepExecutionError("\n".join(partes))
+
+    @staticmethod
+    def _servicios_en_error(result: CommandResult) -> list[str]:
+        """Los servicios que compose nombró como `Error` en su propia salida.
+
+        Se leen de lo que compose ya dijo en vez de volver a preguntar: si el
+        stack se cayó del todo, un `ps` posterior puede devolver otra cosa.
+        """
+        vistos: list[str] = []
+        for linea in result.output_lines:
+            texto = linea.strip()
+            if not texto.endswith("Error") or "Container" not in texto:
+                continue
+            contenedor = texto.split("Container", 1)[1].rsplit("Error", 1)[0].strip()
+            # `agentic-platform-postgres-1` -> `postgres`; los dos proxies no
+            # llevan el prefijo del proyecto (`agentic-egress-proxy`).
+            nombre = contenedor.removeprefix(f"{PROJECT_NAME}-").removeprefix("agentic-")
+            nombre = nombre.rsplit("-", 1)[0] if nombre.rsplit("-", 1)[-1].isdigit() else nombre
+            if nombre and nombre not in vistos:
+                vistos.append(nombre)
+        return vistos
+
+    def _log_de(self, servicio: str, *, lineas: int = 40) -> str:
+        """El log de un servicio, o el motivo de que no se pudiera leer."""
+        recogido: list[str] = []
+        salida = self.runner.run(
+            self._compose("logs", "--no-color", f"--tail={lineas}", servicio),
+            cwd=self.compose_dir,
+            on_line=recogido.append,
+        )
+        cuerpo = [linea.rstrip() for linea in recogido if linea.strip()]
+        if not cuerpo:
+            motivo = (
+                "sin salida"
+                if salida.returncode == 0
+                else f"`docker compose logs` falló (rc={salida.returncode})"
+            )
+            return f"--- {servicio}: {motivo}"
+        return f"--- {servicio}:\n" + "\n".join(f"  | {linea}" for linea in cuerpo)
+
     @staticmethod
     def _cola_del_fallo(result: CommandResult, *, maximo: int = 25) -> str:
         """Las últimas líneas de un comando que falló, o por qué no hay ninguna."""
@@ -510,7 +591,7 @@ class RealStepExecutor:
             case InstallStep.PULL_IMAGES:
                 self._run(self._compose("pull"), lines)
             case InstallStep.START_STACK:
-                self._run(self._compose("up", "-d", "--wait"), lines)
+                self._arrancar_el_stack(lines)
             case InstallStep.RUN_MIGRATIONS:
                 # The apps depend_on the one-shot `migrations` with
                 # service_completed_successfully, so `up --wait` above already

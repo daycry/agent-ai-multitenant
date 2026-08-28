@@ -1122,3 +1122,109 @@ def test_un_comando_mudo_lo_dice_en_vez_de_callar() -> None:
     """
     salida = RealStepExecutor._cola_del_fallo(_resultado_fallido(("", "   ")))
     assert "no escribió nada" in salida
+
+
+# ---------------------------------------------------------------------------
+# Cuando `up --wait` falla, el error trae los LOGS (2026-08-28)
+# ---------------------------------------------------------------------------
+#
+# `docker compose up --wait` informa del ESTADO de cada contenedor y de nada
+# mas. Medido en el e2e (run 33170713059): dos servicios en `Error` -postgres y
+# docker-socket-proxy- y CERO lineas de sus logs en las 12.954 del job. El
+# mensaje nombraba al culpable sin decir que le pasaba.
+#
+# No basta con confiar en que quien ejecute tenga un paso de diagnostico: el
+# operador de un cliente no lo tiene. El instalador los recoge el.
+
+
+def _argv_up() -> tuple[str, ...]:
+    return (
+        "docker",
+        "compose",
+        "-p",
+        PROJECT_NAME,
+        "-f",
+        f"{_COMPOSE_DIR}/docker-compose.yml",
+        "up",
+        "-d",
+        "--wait",
+    )
+
+
+def _argv_logs(servicio: str) -> tuple[str, ...]:
+    return (
+        "docker",
+        "compose",
+        "-p",
+        PROJECT_NAME,
+        "-f",
+        f"{_COMPOSE_DIR}/docker-compose.yml",
+        "logs",
+        "--no-color",
+        "--tail=40",
+        servicio,
+    )
+
+
+def test_el_fallo_de_up_trae_los_logs_del_servicio_que_no_arranco(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El caso real: postgres en `Error` y su log dentro del mensaje."""
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(
+                returncode=1,
+                output_lines=(" Container agentic-platform-postgres-1  Error",),
+            ),
+            _argv_logs("postgres"): CommandResult(
+                returncode=0,
+                output_lines=("postgres-1 | FATAL: la contrasena no coincide",),
+            ),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    assert "postgres" in mensaje, "no nombra el servicio que fallo"
+    assert "FATAL" in mensaje, f"nombra al culpable pero no dice que le pasa: {mensaje!r}"
+
+
+def test_si_compose_no_nombra_a_nadie_se_miran_los_cimientos(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """El caso que deja al operador sin nada: compose falla sin senalar.
+
+    Si postgres no arranca, los veinte servicios que lo esperan por
+    `depends_on: healthy` se quedan en `Created` y compose puede no nombrar a
+    ninguno. Mirar los cuatro cimientos es la apuesta correcta: el error real
+    esta ahi o no esta en ninguna parte.
+    """
+    runner = FakeCommandRunner(
+        responses={_argv_up(): CommandResult(returncode=1, output_lines=("algo salio mal",))}
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    mensaje = str(exc.value)
+    for cimiento in ("postgres", "redis", "vault", "minio"):
+        assert cimiento in mensaje, f"no se miro {cimiento}"
+
+
+def test_un_servicio_sin_log_lo_dice_en_vez_de_dejar_un_hueco(
+    installer_config: InstallerConfig, gen_secrets: GeneratedSecrets
+) -> None:
+    """«Sin salida» es un dato; un blanco solo hace dudar de si se perdio."""
+    runner = FakeCommandRunner(
+        responses={
+            _argv_up(): CommandResult(
+                returncode=1,
+                output_lines=(" Container agentic-platform-vault-1  Error",),
+            ),
+            _argv_logs("vault"): CommandResult(returncode=0, output_lines=()),
+        }
+    )
+    ex, *_ = _executor(installer_config, gen_secrets, runner=runner)
+    with pytest.raises(StepExecutionError) as exc:
+        ex.execute(InstallStep.START_STACK, {})
+    assert "sin salida" in str(exc.value)
