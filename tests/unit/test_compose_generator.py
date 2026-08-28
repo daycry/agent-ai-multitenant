@@ -1656,3 +1656,39 @@ def test_the_bootstrap_is_not_part_of_the_running_topology() -> None:
     operador ejecuta una vez y que sale no es parte del stack que corre."""
     assert BOOTSTRAP_SERVICE not in CORE_SERVICES
     assert BOOTSTRAP_SERVICE in selected_services(_config(), monitoring=False)
+
+
+def test_vault_puede_bloquear_memoria_sin_apagar_mlock() -> None:
+    """El `memlock` de Vault, y por qué no se resolvió apagando `mlock`.
+
+    Medido en el e2e (run 33175714605, 2026-08-28), con Postgres y Redis ya
+    sanos:
+
+        vault-1 | Error initializing core: Failed to lock memory:
+                  cannot allocate memory
+
+    ENOMEM de `mlock`: la firma del `RLIMIT_MEMLOCK` del host, que en un runner
+    Linux son 64 KiB. En Docker Desktop no se reproduce —su default es
+    efectivamente ilimitado—, así que este fallo NO aparece en ninguna máquina
+    de desarrollo Windows: sólo donde se instala de verdad.
+
+    `disable_mlock: true` lo habría arreglado en una línea. También habría
+    permitido que las claves de Vault acaben en swap, que es justo lo que el
+    ADR 0145 da por hecho que no pasa. Un fallo ruidoso a cambio de una fuga
+    silenciosa es mal negocio.
+    """
+    cfg = _config()
+    compose = generate_compose(cfg)
+    vault = compose["services"]["vault"]
+
+    assert vault.get("ulimits", {}).get("memlock") == {"soft": -1, "hard": -1}, (
+        "Vault no declara `memlock` sin límite: en un host con el default de "
+        "64 KiB no arrancará, y el stack entero aborta en `start_stack`."
+    )
+    assert "IPC_LOCK" in vault.get("cap_add", []), "sin IPC_LOCK, subir el ulimit no basta"
+    config_local = str(vault.get("environment", {}).get("VAULT_LOCAL_CONFIG", ""))
+    assert '"disable_mlock":true' not in config_local.replace(" ", ""), (
+        "se ha apagado `mlock`: eso permite que las claves de Vault vayan a "
+        "swap. Si de verdad hace falta en algún entorno, va con su propio ADR, "
+        "no como efecto colateral de hacer arrancar el stack."
+    )

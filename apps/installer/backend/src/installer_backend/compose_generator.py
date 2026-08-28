@@ -735,6 +735,21 @@ def _vault_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:  # no
     }
     # cap_drop:[ALL] + cap_add:[IPC_LOCK] (above) — drop everything, add back
     # only the cap Vault needs to mlock memory. no-new-privileges + limits apply.
+    #
+    # `memlock` sin límite, y NO `disable_mlock` (2026-08-28). Vault bloquea su
+    # memoria para que las claves no acaben en swap; el ADR 0145 se apoya en eso,
+    # así que apagarlo para que arranque habría sido cambiar un fallo ruidoso por
+    # una fuga silenciosa.
+    #
+    # Medido en el e2e (run 33175714605), con Postgres y Redis ya sanos:
+    #
+    #   vault-1 | Error initializing core: Failed to lock memory: cannot allocate memory
+    #
+    # ENOMEM de `mlock`, que es la firma del `RLIMIT_MEMLOCK` del host: un runner
+    # Linux trae 64 KiB por defecto. En Docker Desktop no se reproduce —su
+    # default es efectivamente ilimitado—, y por eso este fallo no aparece en
+    # ninguna máquina de desarrollo Windows: sólo donde se instala de verdad.
+    svc["ulimits"] = {"memlock": {"soft": -1, "hard": -1}}
     svc.update(_hardening(limits_cpus="1.0", limits_memory="512m"))
     return svc
 

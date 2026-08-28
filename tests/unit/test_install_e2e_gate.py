@@ -568,9 +568,24 @@ def test_the_report_is_wiped_before_pytest_can_write_it() -> None:
     La salida es que el informe EXISTA sólo si pytest lo escribió: se borra
     antes, y entonces la rama «no existe» del gate pasa a significar lo que dice.
     """
-    pasos = [s for s in _steps() if _E2E_MODULE_PATH in s.get("run", "")]
+    # Se seleccionan los pasos que ESCRIBEN el informe, no los que nombran el
+    # módulo. La distinción se pagó el 2026-08-28: al añadir un paso de
+    # `--collect-only` —que corre el mismo fichero para comprobar que pytest
+    # arranca, y no produce XML— esta guarda pasó a ver dos pasos y falló por su
+    # premisa, no por el defecto que vigila.
+    #
+    # `$JUNIT_REPORT` es el criterio correcto porque es exactamente el artefacto
+    # que el gate lee después: un paso que no lo escribe no puede dejar uno viejo
+    # en su sitio, que es de lo que este test protege.
+    pasos = [
+        s
+        for s in _steps()
+        if _E2E_MODULE_PATH in s.get("run", "") and "$JUNIT_REPORT" in s.get("run", "")
+    ]
     assert len(pasos) == 1, (
-        f"{len(pasos)} pasos invocan {_E2E_MODULE_PATH}: esta guarda asume uno solo"
+        f"{len(pasos)} pasos escriben $JUNIT_REPORT corriendo {_E2E_MODULE_PATH}: "
+        "esta guarda asume uno solo. Si de verdad hacen falta dos, cada uno tiene "
+        "que borrar el informe antes y este test tiene que comprobarlo en los dos."
     )
     run = pasos[0]["run"]
 
