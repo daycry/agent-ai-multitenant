@@ -29,6 +29,7 @@ justo debajo del centinela, tiene que saltar igual.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 from types import ModuleType
 
@@ -111,6 +112,53 @@ def test_un_token_real_junto_al_centinela_sigue_saltando() -> None:
     assert gate.VAULT_TOKEN_RE.search(limpio) is not None, (
         "un token real ha pasado por convivir con el centinela: la exención "
         "está perdonando el fichero en vez del literal"
+    )
+
+
+def test_ningun_fichero_rastreado_lleva_un_token_que_no_sea_el_centinela() -> None:
+    """El aviso local del fallo que ya costó dos vueltas de CI (2026-08-28).
+
+    El gate de secretos corre **sólo en CI**, y a propósito: los artefactos que
+    persigue están en `.gitignore`, así que un gate que mirase lo staged no
+    vería jamás el problema que lo motivó (lo dice su propio `--help`). Correcto
+    para su pregunta, pero deja sin red la otra: un literal con forma de token
+    dentro de un fichero **rastreado**.
+
+    Eso pasó dos veces seguidas el mismo día. Alguien escribe un test de Vault,
+    inventa un token falso plausible, y el fallo aparece un cuarto de hora
+    después en CI, en un job que no habla de secretos. Cada vuelta cuesta un
+    push, un run entero y volver a mirar logs.
+
+    Esta comprobación no sustituye al gate: hace la pregunta pequeña —la que sí
+    se puede contestar en local— y la contesta en milisegundos.
+    """
+    gate = _cargar_gate()
+    rastreados = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+    culpables: list[str] = []
+    for rel in rastreados:
+        ruta = _REPO / rel
+        try:
+            texto = ruta.read_text(encoding="utf-8", errors="ignore")
+        except OSError:  # pragma: no cover - fichero recién borrado
+            continue
+        if gate.VAULT_TOKEN_RE.search(texto.replace(gate.FAKE_TOKEN_SENTINEL, "")):
+            culpables.append(rel)
+
+    assert not culpables, (
+        f"estos ficheros llevan un literal con forma de token de Vault: {culpables}.\n"
+        "Si es un fixture, usa el centinela registrado en "
+        "`scripts/check_no_secret_artifacts.py` (FAKE_TOKEN_SENTINEL) en vez de "
+        "inventar uno: es el único exento, y usarlo evita que este defecto "
+        "aparezca quince minutos más tarde en un job de CI que no habla de "
+        "secretos.\n"
+        "Si NO es un fixture, es un secreto de verdad: revócalo antes de nada."
     )
 
 

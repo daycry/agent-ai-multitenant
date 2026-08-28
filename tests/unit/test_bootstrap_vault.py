@@ -353,7 +353,7 @@ class _StubSys:
     def initialize(self, *, secret_shares: int, secret_threshold: int) -> dict[str, object]:
         return {
             "keys_base64": [f"share-{i}" for i in range(secret_shares)],
-            "root_token": "hvs.acunado-por-el-init",
+            "root_token": "hvs.token-de-mentira-para-tests",
         }
 
     def submit_unseal_key(self, key: str) -> dict[str, object]:
@@ -390,8 +390,8 @@ def test_el_adaptador_autentica_el_cliente_con_el_root_token_recien_acunado() ->
     assert adapter.has_token() is False
     init = adapter.initialize(secret_shares=5, secret_threshold=3)
 
-    assert init.root_token == "hvs.acunado-por-el-init"
-    assert stub.token == "hvs.acunado-por-el-init"
+    assert init.root_token == "hvs.token-de-mentira-para-tests"
+    assert stub.token == "hvs.token-de-mentira-para-tests"
     assert adapter.has_token() is True
 
 
