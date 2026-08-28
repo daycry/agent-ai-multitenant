@@ -314,3 +314,26 @@ def test_las_extensiones_c_se_pueden_cargar() -> None:
             f"{perfil.name} ya no permite mapear `/opt/**`: ninguna extensión C "
             "de Python podrá importarse y no arrancará ni una migración."
         )
+
+
+@pytest.mark.parametrize("perfil", [_PERFIL, _PERFIL.with_name("agentic-socket-proxy.profile")])
+def test_el_venv_se_puede_mapear_Y_ejecutar(perfil: Path) -> None:
+    """En `/opt/venv` viven los `.so` Y los ejecutables: hacen falta `m` y `x`.
+
+    La primera versión de la regla concedía sólo `rm`. Con eso las extensiones C
+    cargaban —el fallo anterior desaparecía— y el arranque moría un paso después
+    (e2e run 33186222329):
+
+        setpriv: failed to execute celery: Permission denied
+
+    Dos permisos distintos para dos cosas distintas que viven en el mismo sitio.
+    Conceder uno sin el otro deja al proceso pudiendo cargar librerías y sin
+    poder lanzar el programa — y el síntoma cambia lo suficiente como para
+    parecer un problema nuevo.
+    """
+    permisos = dict(_reglas_de(perfil)).get("/opt/**", "")
+    assert "m" in permisos, f"{perfil.name}: /opt/** sin `m`, las extensiones C no cargan"
+    assert "x" in permisos, (
+        f"{perfil.name}: /opt/** sin `x`, no se puede ejecutar nada del venv "
+        "(`celery`, `alembic`, `uvicorn`…) y el contenedor muere al arrancar"
+    )

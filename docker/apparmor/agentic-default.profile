@@ -94,7 +94,17 @@ profile agentic-default flags=(attach_disconnected,mediate_deleted) {
   # ejecutable es ejecución de código arbitrario con otro nombre. Eso lo afirma
   # `tests/unit/test_apparmor_profile_stays_narrow.py`, que rechaza cualquier
   # regla que junte `w` y `m`.
-  /opt/**                   rm,
+  # `x` además de `m`, y por qué las dos (2026-08-28, e2e run 33186222329).
+  #
+  # La primera versión de esta regla concedía `rm`: leer y mapear. Con eso las
+  # extensiones C cargaban y el arranque moría un paso después:
+  #
+  #   setpriv: failed to execute celery: Permission denied
+  #
+  # En `/opt/venv` viven las DOS cosas: los `.so` que se mapean y los
+  # ejecutables de `bin/` que se lanzan. Conceder una sin la otra deja al
+  # proceso pudiendo cargar librerías y sin poder arrancar el programa.
+  /opt/**                   rixm,
   /usr/**                    rixm,
   /bin/**                   rixm,
 

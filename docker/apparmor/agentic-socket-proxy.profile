@@ -120,7 +120,7 @@ profile agentic-socket-proxy flags=(attach_disconnected,mediate_deleted) {
   # ejecutable es ejecución de código arbitrario con otro nombre. Eso lo afirma
   # `tests/unit/test_apparmor_profile_stays_narrow.py`, que rechaza cualquier
   # regla que junte `w` y `m`.
-  /opt/**                   rm,
+  /opt/**                   rixm,
   /usr/**                    rixm,
   /bin/**                   rixm,
 
