@@ -701,6 +701,17 @@ jobs:
           # Sin `set -e` a propósito: si un diagnóstico falla, los demás tienen
           # que seguir corriendo — es el único momento en que se puede mirar.
           set -uo pipefail
+          # Las DENEGACIONES de AppArmor, tal como las registra el kernel.
+          #
+          # Se añade el 2026-08-28 tras gastar dos ejecuciones adivinando qué
+          # regla faltaba: el síntoma que ve la aplicación —un `EPERM` de
+          # `sem_open`, un `ImportError` al mapear un `.so`— no dice NADA del
+          # perfil, y sin esto cada hipótesis cuesta un run entero de ~10 min.
+          # El kernel sí lo dice: nombra el perfil, la operación y la ruta.
+          echo "::group::AppArmor DENIED (del kernel)"
+          sudo dmesg 2>/dev/null | grep -i apparmor | grep -i denied | tail -60 \
+            || echo "sin denegaciones registradas (o dmesg no accesible)"
+          echo "::endgroup::"
           echo "::group::Host"
           df -h /
           if [ -d /mnt ]; then df -h /mnt; fi
