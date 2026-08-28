@@ -1062,3 +1062,63 @@ def test_si_el_one_shot_muere_tras_inicializar_vault_las_claves_ya_estan_a_salvo
     )
     for key in _UNSEAL_KEYS:
         assert key not in message, "el mensaje de error no es un canal de revelado"
+
+
+# ---------------------------------------------------------------------------
+# El mensaje de un comando que falla lleva su salida (2026-08-28)
+# ---------------------------------------------------------------------------
+#
+# Lo destapó la tercera ejecución del e2e de instalación (run 33169724473). El
+# install murió en `start_stack` y lo único que dijo fue:
+#
+#     el comando falló (rc=1): docker compose -p agentic-platform … up -d --wait
+#
+# Qué servicio no arrancó, y por qué, se lo quedó el instalador — aunque el
+# runner lo tenía capturado en `output_lines` desde el principio: `_run` lo
+# tiraba al construir el error.
+#
+# El coste no es cosmético. Sin la salida, diagnosticar obliga a reproducir a
+# mano lo que la máquina acaba de ver; en casa de un cliente, eso es una llamada
+# de soporte por cada fallo.
+
+
+def _resultado_fallido(lineas: tuple[str, ...]) -> CommandResult:
+    return CommandResult(returncode=1, output_lines=lineas)
+
+
+def test_el_error_de_un_comando_lleva_su_salida() -> None:
+    """Sin esto, «falló» es todo lo que el operador sabe."""
+    salida = RealStepExecutor._cola_del_fallo(
+        _resultado_fallido(
+            (
+                "dependency failed to start: container agentic-platform-vault-1 is unhealthy",
+                "",
+            )
+        )
+    )
+    assert "vault-1 is unhealthy" in salida, f"la causa real no aparece en el mensaje: {salida!r}"
+
+
+def test_una_salida_larga_se_recorta_por_el_final() -> None:
+    """El final es donde está la causa; la cabecera avisa de que se recortó.
+
+    Un `docker compose up` escupe cientos de líneas de progreso de descarga. Si
+    el mensaje las llevara todas, la causa quedaría enterrada — que es otra
+    forma de no decirla.
+    """
+    muchas = tuple(f"linea {i}" for i in range(200))
+    salida = RealStepExecutor._cola_del_fallo(_resultado_fallido(muchas))
+    assert "linea 199" in salida, "se ha recortado por el lado equivocado"
+    assert "linea 0" not in salida, "no se ha recortado"
+    assert "de 200" in salida, "no avisa de que hay más líneas de las que enseña"
+
+
+def test_un_comando_mudo_lo_dice_en_vez_de_callar() -> None:
+    """Un mensaje vacío se lee como «no hay información», y no es lo mismo.
+
+    «No escribió nada» es un dato: descarta que la causa esté en la salida y
+    manda a mirar el código de salida y el entorno. Un hueco en blanco sólo
+    hace dudar de si el instalador la perdió.
+    """
+    salida = RealStepExecutor._cola_del_fallo(_resultado_fallido(("", "   ")))
+    assert "no escribió nada" in salida

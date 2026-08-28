@@ -100,7 +100,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import stack_assets
-from .command_runner import CommandRunner
+from .command_runner import CommandResult, CommandRunner
 from .compose_generator import (
     BOOTSTRAP_ENTRYPOINT,
     BOOTSTRAP_SERVICE,
@@ -464,6 +464,20 @@ class RealStepExecutor:
         except OSError as exc:
             raise StepExecutionError(_describe_os_error(exc, path)) from exc
 
+    @staticmethod
+    def _cola_del_fallo(result: CommandResult, *, maximo: int = 25) -> str:
+        """Las últimas líneas de un comando que falló, o por qué no hay ninguna."""
+        utiles = [linea.rstrip() for linea in result.output_lines if linea.strip()]
+        if not utiles:
+            return "(el comando no escribió nada en stdout ni en stderr)"
+        recorte = utiles[-maximo:]
+        cabecera = (
+            f"últimas {len(recorte)} líneas de {len(utiles)}:"
+            if len(utiles) > len(recorte)
+            else "salida:"
+        )
+        return cabecera + "\n" + "\n".join(f"  | {linea}" for linea in recorte)
+
     def _run(
         self,
         args: list[str],
@@ -473,7 +487,20 @@ class RealStepExecutor:
     ) -> None:
         result = self.runner.run(args, cwd=self.compose_dir, env=env, on_line=lines.append)
         if result.returncode != 0:
-            raise StepExecutionError(f"el comando falló (rc={result.returncode}): {' '.join(args)}")
+            # El comando SOLO no basta, y costó una ejecución entera del e2e
+            # descubrirlo (run 33169724473, 2026-08-28): el install murió en
+            # `start_stack` y el mensaje decía «el comando falló (rc=1): docker
+            # compose … up -d --wait» y nada más. Qué servicio no arrancó, o por
+            # qué, se lo quedaba el instalador — y el runner LO TENÍA capturado
+            # en `output_lines` desde el principio.
+            #
+            # Un instalador que dice «falló» sin decir qué obliga a reproducir a
+            # mano lo que acaba de pasar delante de él. En casa de un cliente,
+            # eso es una llamada de soporte por cada fallo.
+            raise StepExecutionError(
+                f"el comando falló (rc={result.returncode}): {' '.join(args)}\n"
+                + self._cola_del_fallo(result)
+            )
 
     def execute(self, step: InstallStep, config: dict[str, object]) -> list[str]:  # noqa: ARG002
         lines: list[str] = []
