@@ -361,6 +361,16 @@ def test_la_memoria_compartida_es_escribible(perfil: Path) -> None:
         "arrancará, y el error —PermissionError sobre un RLock— no se parece "
         "en nada a un problema de AppArmor."
     )
+    # `l` (link) hace falta ADEMÁS de `w`, y costó una ejecución entera saberlo:
+    # con sólo `rwk` el fallo era idéntico. Lo dijo el kernel, no la aplicación:
+    #   apparmor="DENIED" operation="link" name="/dev/shm/sem.mp-…"
+    #     requested_mask="l" denied_mask="l" comm="celery"
+    # Python crea los semáforos POSIX con `link()` para que sea atómico.
+    assert "l" in permisos, (
+        f"{perfil.name}: /dev/shm/** sin `l`. Los semáforos POSIX se crean con "
+        "`link()`, así que sin ese permiso no arranca ningún pool de Celery — y "
+        "el síntoma es el mismo que sin `w`, lo que hace el fallo indistinguible."
+    )
     assert "m" not in permisos, (
         f"{perfil.name}: /dev/shm/** concede `m`. Un tmpfs escribible que además "
         "se pueda mapear como ejecutable es ejecución de código arbitrario: ahí "

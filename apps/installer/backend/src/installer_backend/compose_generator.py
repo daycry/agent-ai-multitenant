@@ -1519,7 +1519,16 @@ def _cortex_beat_service(cfg: InstallerConfig, *, prod: bool) -> dict[str, Any]:
     proceso beat es el PID 1 vivo del contenedor."""
     svc: dict[str, Any] = {
         "image": app_image("workers"),
-        "command": "celery -A workers.celery_app beat --loglevel=info",
+        "command": (
+            # `--schedule` explícito: sin él, beat escribe `celerybeat-schedule`
+            # en su CWD, que es `/app` — el directorio de CÓDIGO. El kernel lo
+            # denegaba (`mknod /app/celerybeat-schedule`, e2e run 33190944410) y
+            # la respuesta correcta no era abrir `/app` a escritura: el estado de
+            # ejecución no va en el árbol de la aplicación. Este servicio no monta
+            # volumen, así que `/tmp` es su sitio; lo que se pierde al reiniciar
+            # son las marcas de «última ejecución», y beat retoma su cadencia.
+            "celery -A workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule"
+        ),
         "environment": _workers_env(cfg, prod=prod),
         "healthcheck": {
             "test": [

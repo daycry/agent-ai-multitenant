@@ -193,7 +193,7 @@ profile agentic-socket-proxy flags=(attach_disconnected,mediate_deleted) {
   # además se pudiera mapear como ejecutable sería ejecución de código
   # arbitrario. Aquí sólo se guardan semáforos y buffers.
   /dev/shm/                 rw,
-  /dev/shm/**               rwk,
+  /dev/shm/**               rwlk,
 
   /tmp/                     rw,
   /tmp/**                   rwk,
