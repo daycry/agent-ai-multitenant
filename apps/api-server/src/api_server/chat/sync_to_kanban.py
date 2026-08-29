@@ -459,6 +459,42 @@ def _spec_fields_changed(task: Task, spec_task: dict[str, Any]) -> bool:
     )
 
 
+def _merge_acceptance(actuales: Any, del_spec: list[Any]) -> list[Any]:
+    """Vuelca los criterios del spec SIN destruir los que el spec no sabe expresar.
+
+    El defecto que cierra (ADR 0162): un `task.acceptance_criteria = acceptance` a
+    secas pisaba lo que un humano hubiera escrito. Y lo pisaba con algo
+    estrictamente MENOS informativo, porque el planner tiene prohibido por prompt
+    emitir comandos ejecutables y su normalizador devuelve `list[str]`: un criterio
+    con `runtime` y `command` **no puede venir del spec**. Así que un replan
+    convertía en prosa el único dato que hace que una tarea se verifique de verdad,
+    y lo hacía en silencio.
+
+    La regla, que vale más allá de este caso: **una resincronización no puede
+    destruir información que el spec es estructuralmente incapaz de transportar.**
+
+    Cómo se casan: por posición, que es como se ordenan las dos listas. Si en esa
+    posición había un criterio estructurado y el spec trae prosa, se conserva la
+    estructura y se actualiza sólo la descripción — el replan sigue pudiendo
+    reescribir el texto, que es para lo que está.
+    """
+    previos = list(actuales or [])
+    salida: list[Any] = []
+    for i, nuevo in enumerate(del_spec):
+        anterior = previos[i] if i < len(previos) else None
+        if (
+            isinstance(anterior, dict)
+            and anterior.get("runtime")
+            and anterior.get("command")
+            and not isinstance(nuevo, dict)
+        ):
+            texto = str(nuevo).strip()
+            salida.append({**anterior, "description": texto} if texto else anterior)
+        else:
+            salida.append(nuevo)
+    return salida
+
+
 def _apply_spec_to_task(
     task: Task, spec_task: dict[str, Any], role_agents: dict[PlanningRole, UUID] | None
 ) -> None:
@@ -471,7 +507,7 @@ def _apply_spec_to_task(
         task.description = description
     acceptance = spec_task.get("acceptance_criteria")
     if isinstance(acceptance, list):
-        task.acceptance_criteria = acceptance
+        task.acceptance_criteria = _merge_acceptance(task.acceptance_criteria, acceptance)
     complexity = spec_task.get("complexity")
     if isinstance(complexity, str) and complexity in {"xs", "s", "m", "l", "xl"}:
         task.estimated_complexity = complexity

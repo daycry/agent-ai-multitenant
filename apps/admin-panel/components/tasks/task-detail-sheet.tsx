@@ -12,12 +12,19 @@
  * esperando a un humano. Hasta ahora esas acciones solo existían en el panel de
  * tareas escaladas del plan, así que una tarea `blocked` por un run que falló
  * de forma ordinaria —que no escala— se veía pero no se podía desatascar.
+ *
+ * Los criterios de aceptación viven en `task-criteria-section.tsx` desde el
+ * ADR 0162: con el editor de la declaración («cómo se comprueba esto») dentro,
+ * esta ficha pasaba de 662 a ~850 líneas, que es justo el crecimiento por
+ * agregación que la guarda de tamaño del panel existe para frenar.
  */
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { CriteriaSection } from "@/components/tasks/task-criteria-section";
+import { TaskEditDialog } from "@/components/tasks/task-edit-dialog";
 import { acceptsHumanAction, TaskHumanActions } from "@/components/tasks/task-human-actions";
 import { TaskReviewCriteria } from "@/components/tasks/task-review-criteria";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -30,10 +37,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { RoleGuard } from "@/components/ui/role-guard";
-import { cleanCriteria, criterionText, type CriterionDraft } from "@/lib/acceptance-criteria";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { fetchAllPages } from "@/lib/paginate";
@@ -86,10 +91,12 @@ export function TaskDetailSheet({
 }) {
   const t = useT("taskDetail");
   const tCommon = useT("common");
+  const tEdit = useT("taskEdit");
   const router = useRouter();
   const queryClient = useQueryClient();
   const taskId = task?.id ?? null;
   const projectId = task?.project_id ?? null;
+  const [editOpen, setEditOpen] = useState(false);
 
   const detailQuery = useQuery({
     queryKey: ["task-detail", taskId],
@@ -137,7 +144,10 @@ export function TaskDetailSheet({
     <Dialog open={open} onOpenChange={onOpenChange} size="xl">
       <DialogContent data-testid="task-detail-sheet">
         <DialogHeader>
-          <DialogTitle>{task?.title ?? t("fallbackTitle")}</DialogTitle>
+          {/* El título sale del DETALLE cuando ya está cargado, no del que
+              traía la tarjeta: tras renombrar la tarea desde el formulario de
+              edición, la cabecera seguía enseñando el nombre viejo. */}
+          <DialogTitle>{detail?.title ?? task?.title ?? t("fallbackTitle")}</DialogTitle>
           {detail && (
             <p className="text-muted-foreground text-sm">
               <Badge variant="muted">{detail.status}</Badge>
@@ -229,11 +239,31 @@ export function TaskDetailSheet({
               </RoleGuard>
             ) : null}
           </div>
+          {/* Editar es la única puerta a los ocho campos que el `PUT` acepta y
+              que ninguna pantalla ofrecía (ADR 0162). Va aquí y no sólo en la
+              lista del proyecto porque esta ficha es también la que abre el
+              tablero por plan: con el botón sólo allí, media plataforma
+              seguiría sin poder cambiar el agente de una tarea. */}
+          {taskId && projectId ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditOpen(true)}
+              data-testid="task-detail-edit"
+            >
+              {tEdit("open")}
+            </Button>
+          ) : null}
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             {tCommon("close")}
           </Button>
         </DialogFooter>
       </DialogContent>
+      <TaskEditDialog
+        task={taskId && projectId ? { id: taskId, project_id: projectId } : null}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+      />
     </Dialog>
   );
 }
@@ -275,280 +305,6 @@ function DependsOnSection({ projectId, dependsOn }: { projectId: string; depends
         })}
       </ul>
     </section>
-  );
-}
-
-/** Editable rows carry a stable key so removing a middle row never steals focus
- * from the inputs React would otherwise reuse by index. */
-type CriterionRow = CriterionDraft & { key: number };
-
-function CriteriaSection({
-  projectId,
-  taskId,
-  criteria,
-}: {
-  projectId: string;
-  taskId: string;
-  criteria: unknown[];
-}) {
-  const errorText = useErrorText();
-  const t = useT("taskDetail");
-  const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [rows, setRows] = useState<CriterionRow[]>([]);
-  // A pending AI proposal to confirm against the CURRENT criteria before it can
-  // replace them (null = no comparison open). Only used when the task already
-  // had criteria — an empty task goes straight to the editor.
-  const [proposal, setProposal] = useState<string[] | null>(null);
-  const keyer = useRef(0);
-
-  function enterEditWith(drafts: CriterionDraft[]) {
-    keyer.current = 0;
-    setRows(drafts.map((d) => ({ key: keyer.current++, text: d.text, original: d.original })));
-    setEditing(true);
-  }
-
-  function startEdit() {
-    enterEditWith(criteria.map((c) => ({ text: criterionText(c), original: c })));
-  }
-
-  const mutation = useMutation({
-    mutationFn: (next: unknown[]) =>
-      apiFetch<TaskDetail>(`/projects/${projectId}/tasks/${taskId}`, {
-        method: "PUT",
-        body: { acceptance_criteria: next },
-      }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["task-detail", taskId], updated);
-      setEditing(false);
-    },
-  });
-
-  // AI generation proposes criteria WITHOUT persisting (the endpoint takes the
-  // existing ones into account). Empty task → preload the editor to review;
-  // otherwise → open the comparison so a regenerate never overwrites silently.
-  const generateMutation = useMutation({
-    mutationFn: () =>
-      apiFetch<{ acceptance_criteria: string[] }>(
-        `/projects/${projectId}/tasks/${taskId}/generate-acceptance-criteria`,
-        { method: "POST" },
-      ),
-    onSuccess: ({ acceptance_criteria }) => {
-      const proposed = acceptance_criteria ?? [];
-      if (criteria.length === 0) {
-        enterEditWith(proposed.map((t) => ({ text: t, original: null })));
-      } else {
-        setProposal(proposed);
-      }
-    },
-  });
-
-  function acceptProposal() {
-    const proposed = proposal ?? [];
-    setProposal(null);
-    enterEditWith(proposed.map((t) => ({ text: t, original: null })));
-  }
-
-  if (!editing) {
-    return (
-      <section className="mb-4" data-testid="task-detail-criteria">
-        <div className="mb-1 flex items-center justify-between">
-          <h4 className="text-muted-foreground text-xs font-semibold uppercase tracking-wide">
-            {t("criteriaHeading")}
-          </h4>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => generateMutation.mutate()}
-              disabled={generateMutation.isPending}
-              data-testid="task-criteria-generate"
-            >
-              {generateMutation.isPending
-                ? t("criteriaGenerating")
-                : criteria.length > 0
-                  ? t("criteriaRegenerate")
-                  : t("criteriaGenerate")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={startEdit}
-              data-testid="task-criteria-edit"
-            >
-              {t("criteriaEdit")}
-            </Button>
-          </div>
-        </div>
-        {criteria.length > 0 ? (
-          <ul className="list-disc space-y-1 pl-5 text-sm">
-            {criteria.map((c, i) => (
-              <li key={i}>{criterionText(c)}</li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-muted-foreground text-xs italic" data-testid="task-criteria-empty">
-            {t("criteriaEmpty")}
-          </p>
-        )}
-        {generateMutation.isError ? (
-          <p className="text-destructive mt-1 text-sm" data-testid="task-criteria-generate-error">
-            {t("criteriaGenerateError")} {errorText(generateMutation.error)}
-          </p>
-        ) : null}
-        <CriteriaCompareDialog
-          open={proposal !== null}
-          current={criteria}
-          proposed={proposal ?? []}
-          onAccept={acceptProposal}
-          onCancel={() => setProposal(null)}
-        />
-      </section>
-    );
-  }
-
-  return (
-    <section className="mb-4" data-testid="task-detail-criteria">
-      <h4 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-        {t("criteriaHeading")}
-      </h4>
-      <div className="space-y-2">
-        {rows.map((row, i) => (
-          <div
-            key={row.key}
-            className="flex items-center gap-2"
-            data-testid={`task-criterion-row-${i}`}
-          >
-            <Input
-              value={row.text}
-              onChange={(e) =>
-                setRows((prev) =>
-                  prev.map((r) => (r.key === row.key ? { ...r, text: e.target.value } : r)),
-                )
-              }
-              placeholder={t("criterionPlaceholder")}
-              data-testid="task-criterion-input"
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setRows((prev) => prev.filter((r) => r.key !== row.key))}
-              data-testid={`task-criterion-remove-${i}`}
-              aria-label={t("criterionRemove")}
-            >
-              ×
-            </Button>
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 flex items-center justify-between">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() =>
-            setRows((prev) => [...prev, { key: keyer.current++, text: "", original: null }])
-          }
-          data-testid="task-criterion-add"
-        >
-          {t("criterionAdd")}
-        </Button>
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setEditing(false)}
-            data-testid="task-criteria-cancel"
-          >
-            {t("cancel")}
-          </Button>
-          <Button
-            size="sm"
-            onClick={() => mutation.mutate(cleanCriteria(rows))}
-            disabled={mutation.isPending}
-            data-testid="task-criteria-save"
-          >
-            {t("save")}
-          </Button>
-        </div>
-      </div>
-      {mutation.isError ? (
-        <p className="text-destructive mt-1 text-sm">
-          {t("criteriaSaveError")} {errorText(mutation.error)}
-        </p>
-      ) : null}
-    </section>
-  );
-}
-
-/** Side-by-side "current vs proposed" confirmation shown before an AI
- * regeneration can replace criteria the task already had. Accepting funnels the
- * proposal into the editor (an explicit Save persists); cancelling keeps the
- * current criteria untouched. */
-function CriteriaCompareDialog({
-  open,
-  current,
-  proposed,
-  onAccept,
-  onCancel,
-}: {
-  open: boolean;
-  current: unknown[];
-  proposed: string[];
-  onAccept: () => void;
-  onCancel: () => void;
-}) {
-  const t = useT("taskDetail");
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) onCancel();
-      }}
-      size="lg"
-    >
-      <DialogContent data-testid="task-criteria-compare">
-        <DialogHeader>
-          <DialogTitle>{t("compareTitle")}</DialogTitle>
-        </DialogHeader>
-        <DialogBody>
-          <div className="grid grid-cols-2 gap-4">
-            <div data-testid="task-criteria-compare-current">
-              <h5 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-                {t("compareCurrent")}
-              </h5>
-              <ul className="list-disc space-y-1 pl-5 text-sm">
-                {current.map((c, i) => (
-                  <li key={i}>{criterionText(c)}</li>
-                ))}
-              </ul>
-            </div>
-            <div data-testid="task-criteria-compare-proposed">
-              <h5 className="text-muted-foreground mb-1 text-xs font-semibold uppercase tracking-wide">
-                {t("compareProposed")}
-              </h5>
-              <ul className="list-disc space-y-1 pl-5 text-sm">
-                {proposed.map((c, i) => (
-                  <li key={i}>{c}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </DialogBody>
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onCancel}
-            data-testid="task-criteria-compare-cancel"
-          >
-            {t("cancel")}
-          </Button>
-          <Button size="sm" onClick={onAccept} data-testid="task-criteria-compare-accept">
-            {t("compareAccept")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

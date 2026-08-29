@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from api_server.assistant.model_config import to_provider_model_name
+from api_server.chat.modes import BUILTIN_MODES, BuiltinChatMode
 from api_server.chat.planning_graph import (
     PlanningRole,
     PlanningState,
@@ -120,18 +121,13 @@ _ROLE_LABELS: dict[PlanningRole, str] = {
     PlanningRole.TECHNICAL_WRITER: "📝 Documentación",
 }
 
-_MODE_PROMPTS: dict[str, str] = {
-    "discussion": (
-        "Eres el portavoz del equipo del proyecto en una RONDA DE DISCUSIÓN abierta. "
-        "Aporta ideas, opiniones y alternativas de forma clara y concisa (markdown). "
-        "NO generes un plan estructurado: es un intercambio abierto."
-    ),
-    "execution": (
-        "Eres el portavoz del equipo del proyecto en modo EJECUCIÓN. Ayuda a coordinar "
-        "y seguir el trabajo: responde con foco operativo (estado, siguientes pasos, "
-        "bloqueos, decisiones), claro y conciso (markdown)."
-    ),
-}
+# Los modos que ESTE camino responde con una sola llamada al LLM. `planning` no
+# está: va por el sub-grafo (`_stream_planning`) y sus prompts se componen por
+# nodo en `chat/planning_llm.py`, no aquí — quien audite el prompt de planning
+# tiene que mirar allí.
+_SIMPLE_REPLY_MODES: frozenset[str] = frozenset(
+    {BuiltinChatMode.DISCUSSION.value, BuiltinChatMode.EXECUTION.value}
+)
 
 _ROLE_MAP = {"user": "user", "agent": "assistant", "system": "system"}
 
@@ -430,6 +426,22 @@ async def _resolve_chat_provider(
     return provider, kind, api_model
 
 
+def _mode_system_prompt(mode: str) -> str:
+    """El prompt de modo que el chat ENVÍA, leído del catálogo único (ADR 0162).
+
+    Antes esto salía de un `_MODE_PROMPTS` local cuyos textos no coincidían con
+    los de `chat.modes`, que es lo que `GET /chat-modes` publica y lo que la
+    sección Persona pinta como «prompt efectivo». O sea: la pantalla de auditoría
+    enseñaba un prompt que no se enviaba. Con una sola fuente, auditar el prompt
+    vuelve a significar algo.
+
+    Un modo desconocido —`custom`, que llega hasta aquí sin el registro del
+    tenant, o basura— cae en discussion, igual que antes: es el preset que menos
+    supone."""
+    resolved = mode if mode in _SIMPLE_REPLY_MODES else BuiltinChatMode.DISCUSSION.value
+    return BUILTIN_MODES[resolved].system_prompt
+
+
 async def _simple_reply(
     provider: LLMProvider,
     model: str,
@@ -439,7 +451,7 @@ async def _simple_reply(
     extra: dict[str, Any],
 ) -> str:
     """A single team reply for non-planning modes (discussion / execution)."""
-    system = _MODE_PROMPTS.get(mode, _MODE_PROMPTS["discussion"])
+    system = _mode_system_prompt(mode)
     messages = [LLMMessage(role="system", content=system)]
     for entry in history:
         raw_role = str(entry["role"])

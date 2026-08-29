@@ -3,7 +3,7 @@
 // cuando— la tarea está parada esperando a una persona que además pueda actuar.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -43,12 +43,27 @@ function detail(status: string) {
     acceptance_criteria: [],
     depends_on: [],
     inputs: {},
+    // Los tres campos que sólo trae el detalle completo: la ficha no los pinta,
+    // pero el formulario de edición que cuelga de ella los siembra desde la
+    // MISMA `queryKey`, y sin ellos el fixture no sería el que devuelve la API.
+    estimated_complexity: "m",
+    max_retries: 3,
+    assigned_agent_id: null,
+    reviewer_agent_id: null,
   };
 }
 
 function renderSheet(status: string, who = ADMIN) {
   currentUser.mockReturnValue(who);
-  apiFetchMock.mockResolvedValue(detail(status));
+  // Responde POR RUTA y no lo mismo a todo: la ficha cuelga del formulario de
+  // edición, que pide además los planes del proyecto y el catálogo de agentes.
+  // Con un `mockResolvedValue` único, esas dos listas recibían el objeto de la
+  // tarea y el `.map` reventaba — un fallo del fixture, no del componente.
+  apiFetchMock.mockImplementation((path: string) => {
+    if (path === "/projects/p-1/tasks/t-1") return Promise.resolve(detail(status));
+    if (path.startsWith("/tasks/t-1/history")) return Promise.resolve({ events: [] });
+    return Promise.resolve([]);
+  });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -86,6 +101,18 @@ describe("TaskDetailSheet · acciones humanas", () => {
     // Espera a que el detalle cargue: si no, «no está» sería cierto por lento.
     expect(await screen.findByText("running")).toBeTruthy();
     expect(screen.queryByTestId("task-human-actions-t-1")).toBeNull();
+  });
+
+  it("abre el formulario de edición, que es la única puerta a los ocho campos", async () => {
+    // El tablero por plan monta esta misma ficha: con el botón sólo en la lista
+    // del proyecto, media plataforma seguiría sin poder cambiarle el agente a
+    // una tarea (ADR 0162).
+    renderSheet("backlog");
+
+    fireEvent.click(await screen.findByTestId("task-detail-edit"));
+
+    expect(await screen.findByTestId("task-edit-dialog")).toBeTruthy();
+    expect(await screen.findByTestId("task-edit-assignee")).toBeTruthy();
   });
 
   it("hides them from a member who is not a tenant admin", async () => {

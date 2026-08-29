@@ -4376,9 +4376,19 @@ export const dictionary = {
       en: "An open round of ideas and opinions",
     },
     modeExecution: { es: "Ejecución", en: "Execution" },
+    /**
+     * El hint decía «El equipo ejecuta tareas del plan aprobado» y el modo NO
+     * ejecuta nada (ADR 0162): `chat/responder.py` bifurca sólo en `planning`,
+     * y `discussion` y `execution` caen los dos en `_simple_reply` — una única
+     * llamada al LLM, sin tools. Lo que este modo hace de verdad es hablar del
+     * trabajo; la ejecución se arranca desde el plan, y por eso el texto cita
+     * el rótulo exacto de ese botón (`planDetail.lifecycleStart`) en vez de
+     * parafrasearlo: así el operador sabe qué buscar y `labels-honesty.test.ts`
+     * puede atar los dos textos.
+     */
     modeExecutionHint: {
-      es: "El equipo ejecuta tareas del plan aprobado",
-      en: "The team runs the tasks of the approved plan",
+      es: "El equipo coordina y comenta el trabajo; aquí no se ejecuta nada. La ejecución se arranca en el plan, con «Empezar ejecución»",
+      en: "The team coordinates and comments on the work; nothing is executed here. Execution is started from the plan, with “Start execution”",
     },
     // --- feed ---
     feedLoading: { es: "Cargando mensajes…", en: "Loading messages…" },
@@ -6280,8 +6290,99 @@ export const dictionary = {
       es: "Condición concreta y verificable…",
       en: "A concrete, verifiable condition…",
     },
+    criterionTextLabel: { es: "Enunciado del criterio", en: "The criterion's statement" },
     criterionRemove: { es: "Quitar criterio", en: "Remove criterion" },
     criterionAdd: { es: "+ Añadir criterio", en: "+ Add criterion" },
+
+    /**
+     * ADR 0162 — declarar CÓMO se comprueba cada criterio.
+     *
+     * El worker sólo ejecuta los criterios que son un dict con `runtime` y
+     * `command`, y hasta el 2026-08-29 el editor emitía siempre una cadena: no
+     * había ningún camino humano para declarar que una tarea se verifica
+     * ejecutando algo. Estas claves son ese camino, más los rótulos que hacen
+     * visible cuántos criterios se comprueban de verdad.
+     *
+     * Los textos dicen lo que PASA, no lo que sería bonito que pasara: el aviso
+     * del comando y el de la señal esperada están escritos contra dos defectos
+     * medidos, no como ayuda genérica.
+     */
+    checkDeclare: { es: "Declarar cómo se comprueba", en: "Declare how it is checked" },
+    checkUndeclare: { es: "Quitar la declaración", en: "Remove the declaration" },
+    checkHeading: { es: "Cómo se comprueba", en: "How it is checked" },
+    checkTypeLabel: { es: "Tipo de comprobación", en: "Kind of check" },
+    checkTypeAutomated: {
+      es: "Automática — la ejecuta el runtime de tests",
+      en: "Automated — run by the test runtime",
+    },
+    checkTypeManual: {
+      es: "Manual — la comprueba una persona",
+      en: "By hand — a person checks it",
+    },
+    checkRuntimeLabel: { es: "Runtime de tests", en: "Test runtime" },
+    checkRuntimeNone: { es: "Elige un runtime…", en: "Pick a runtime…" },
+    checkRuntimeLoading: { es: "Cargando el catálogo…", en: "Loading the catalog…" },
+    checkRuntimeUnknown: {
+      es: "Runtime que ya no está en el catálogo ({id})",
+      en: "A runtime no longer in the catalog ({id})",
+    },
+    checkRuntimeError: {
+      es: "No se pudo cargar el catálogo de runtimes. Vuelve a abrir el editor antes de guardar: un runtime que no exista hace fallar la tarea al ejecutarse.",
+      en: "The runtime catalog could not be loaded. Reopen the editor before saving: a runtime that does not exist makes the task fail when it runs.",
+    },
+    checkCommandLabel: { es: "Comando", en: "Command" },
+    checkCommandPlaceholder: {
+      es: "Por ejemplo: vendor/bin/phpunit --testsuite Unit",
+      en: "For example: vendor/bin/phpunit --testsuite Unit",
+    },
+    checkCommandHint: {
+      es: "Se ejecuta dentro del contenedor del runtime, sobre el worktree de la tarea. Cuidado con los filtros que puedan no casar con nada: un comando que no ejecuta ningún test sale con código 0 y hoy se registra como verde.",
+      en: "It runs inside the runtime container, over the task's worktree. Beware of filters that may match nothing: a command that runs no tests exits with code 0 and is currently recorded as green.",
+    },
+    checkSignalLabel: { es: "Señal esperada", en: "Expected signal" },
+    checkSignalHint: {
+      es: "Hoy el runtime da por buena la comprobación cuando el comando termina con código 0. Otras señales quedan escritas en el criterio, pero todavía no se evalúan.",
+      en: "Today the runtime accepts the check when the command ends with code 0. Other signals are stored in the criterion, but they are not evaluated yet.",
+    },
+    checkReasonLabel: {
+      es: "Por qué esto no se puede comprobar a máquina",
+      en: "Why this cannot be checked by a machine",
+    },
+    checkReasonPlaceholder: {
+      es: "Por ejemplo: hay que mirar el PDF generado a ojo.",
+      en: "For example: someone has to look at the generated PDF.",
+    },
+    checkManualHint: {
+      es: "Una comprobación manual no la ejecuta nadie: queda escrita para que conste que esta tarea no se verificó sola, y quién tiene que mirarla.",
+      en: "A check done by hand is not run by anyone: it is written down so it is on record that this task did not verify itself, and that someone has to look.",
+    },
+    checkStateAutomated: { es: "Comprobación automática", en: "Automated check" },
+    checkStateManual: { es: "Comprobación manual", en: "Checked by hand" },
+    checkStateUndeclared: { es: "Sin comprobación", en: "No check" },
+    checkSummary: {
+      es: "{automated} de {total} criterios se comprueban solos.",
+      en: "{automated} of {total} criteria are checked on their own.",
+    },
+    checkUndeclaredHint: {
+      es: "«Sin comprobación» significa que nadie ejecuta nada y nadie ha dicho por qué; edita el criterio para declararlo.",
+      en: "“No check” means nobody runs anything and nobody said why; edit the criterion to declare it.",
+    },
+    errorCriterionTextRequired: {
+      es: "Escribe el enunciado: un criterio sin texto se descarta al guardar y se llevaría la declaración por delante.",
+      en: "Write the statement: a criterion with no text is dropped on save, and it would take the declaration with it.",
+    },
+    errorCriterionRuntimeRequired: {
+      es: "Elige el runtime que ejecuta el comando.",
+      en: "Pick the runtime that runs the command.",
+    },
+    errorCriterionCommandRequired: {
+      es: "Escribe el comando que comprueba el criterio.",
+      en: "Write the command that checks the criterion.",
+    },
+    errorCriterionReasonRequired: {
+      es: "Explica por qué no se puede comprobar a máquina.",
+      en: "Explain why it cannot be checked by a machine.",
+    },
     cancel: { es: "Cancelar", en: "Cancel" },
     save: { es: "Guardar", en: "Save" },
     compareTitle: {
@@ -6333,19 +6434,29 @@ export const dictionary = {
   taskActions: {
     approve: { es: "Aprobar manualmente", en: "Approve manually" },
     retry: { es: "Reintentar", en: "Retry" },
-    reassign: { es: "Reasignar con guía", en: "Reassign with guidance" },
+    /**
+     * Se llamaba «Reasignar con guía» y no reasigna nada (ADR 0162).
+     * `task_lifecycle.py` mapea `reassign_with_guidance` a
+     * `("backlog", "human_action", True)`: la tarea vuelve al backlog, la guía
+     * queda anotada y se SUMA un reintento — el agente asignado no se toca. El
+     * rótulo prometía lo único que la acción no hace, así que quien quería
+     * cambiar de agente lo pulsaba y se encontraba con la misma tarea, el mismo
+     * agente y un reintento menos de presupuesto. Cambiar de agente se hace
+     * ahora en el formulario de edición de la tarea (`taskEdit`).
+     */
+    reassign: { es: "Devolver al backlog con guía", en: "Send back to the backlog" },
     block: { es: "Bloquear con motivo", en: "Block with a reason" },
     cancel: { es: "Cancelar", en: "Cancel" },
     reassignDescription: {
-      es: "Devuelve la tarea al backlog con instrucciones específicas para el siguiente intento. La guía queda en el historial de la tarea.",
-      en: "Sends the task back to the backlog with specific instructions for the next attempt. The guidance is kept in the task history.",
+      es: "Devuelve la tarea al backlog con instrucciones específicas para el siguiente intento. No cambia el agente asignado y consume un reintento del presupuesto de la tarea. La guía queda en el historial.",
+      en: "Sends the task back to the backlog with specific instructions for the next attempt. It does not change the assigned agent, and it uses up one retry from the task's budget. The guidance is kept in the history.",
     },
     reassignLabel: { es: "Guía para el agente", en: "Guidance for the agent" },
     reassignPlaceholder: {
       es: "Por ejemplo: 'Intenta otro enfoque usando la librería X en vez de Y.'",
       en: "For example: “Try another approach using library X instead of Y.”",
     },
-    reassignSubmit: { es: "Reasignar", en: "Reassign" },
+    reassignSubmit: { es: "Devolver al backlog", en: "Send it back" },
     blockDescription: {
       es: "Marca la tarea como bloqueada por una causa externa (falta de acceso, dependencia pendiente, decisión de producto…). El motivo queda visible en el historial.",
       en: "Marks the task as blocked by an external cause (missing access, a pending dependency, a product decision…). The reason stays visible in the history.",
@@ -6357,6 +6468,91 @@ export const dictionary = {
     },
     blockSubmit: { es: "Bloquear", en: "Block" },
   },
+
+  /**
+   * `components/tasks/task-edit-dialog.tsx` — el formulario de edición de tarea
+   * (ADR 0162).
+   *
+   * Namespace propio y no dentro de `projectTasks` por la misma razón que
+   * `taskActions`: el diálogo lo montan DOS pantallas (el Kanban del proyecto y
+   * la ficha compartida, que a su vez cuelga del tablero por plan) y su
+   * vocabulario no es de ninguna de las dos.
+   *
+   * Las etiquetas de campo NO se reaprovechan de `projectTasks.field*` aunque
+   * varias digan lo mismo: aquéllas son las del diálogo de ALTA, que edita tres
+   * campos, y compartirlas ataría el texto de dos formularios que van a
+   * divergir. Los VALORES de prioridad sí salen del catálogo compartido
+   * (`taskPriority`), que es donde el vocabulario del enum tiene que vivir una
+   * sola vez. Los de complejidad no tienen entrada aquí a propósito: `xs`…`xl`
+   * son códigos de talla, no prosa, y se pintan en mayúsculas tal cual — meter
+   * cinco claves con la misma cadena en los dos idiomas sólo añadiría cinco
+   * excepciones a la guarda de copia-pega de `i18n.test.ts`.
+   */
+  taskEdit: {
+    open: { es: "Editar", en: "Edit" },
+    dialogTitle: { es: "Editar la tarea", en: "Edit the task" },
+    dialogDescription: {
+      es: "Cambia los datos de la tarea. El estado no se toca desde aquí: se mueve arrastrando la tarjeta en el tablero, que es donde la máquina de estados puede negarse.",
+      en: "Change the task's data. Its status is not edited here: it moves by dragging the card on the board, which is where the state machine can refuse.",
+    },
+    loading: { es: "Cargando la tarea…", en: "Loading the task…" },
+    loadError: { es: "No se pudo cargar la tarea:", en: "The task could not be loaded:" },
+    saveError: {
+      es: "No se pudieron guardar los cambios:",
+      en: "The changes could not be saved:",
+    },
+    fieldTitle: { es: "Título", en: "Title" },
+    fieldDescription: { es: "Descripción", en: "Description" },
+    fieldPriority: { es: "Prioridad", en: "Priority" },
+    fieldPlan: { es: "Plan del que cuelga", en: "Parent plan" },
+    planNone: { es: "Sin plan (tarea libre)", en: "No plan (free task)" },
+    plansLoading: { es: "Cargando los planes…", en: "Loading the plans…" },
+    planUnknown: { es: "Plan desconocido ({id})", en: "Unknown plan ({id})" },
+    fieldComplexity: { es: "Complejidad estimada", en: "Estimated complexity" },
+    complexityNone: { es: "Sin estimar", en: "Not estimated" },
+    fieldMaxRetries: { es: "Reintentos máximos", en: "Maximum retries" },
+    maxRetriesHint: {
+      es: "Entre {min} y {max}. Al agotarlos la tarea se bloquea y espera a un humano.",
+      en: "Between {min} and {max}. Once they run out the task blocks and waits for a human.",
+    },
+    fieldAssignee: { es: "Agente que la implementa", en: "Implementing agent" },
+    fieldReviewer: { es: "Agente que la revisa", en: "Reviewing agent" },
+    agentNone: {
+      es: "Sin fijar (lo decide el orquestador)",
+      en: "Not set (the orchestrator decides)",
+    },
+    agentUnknown: { es: "Agente desconocido ({id})", en: "Unknown agent ({id})" },
+    agentsLoading: { es: "Cargando los agentes…", en: "Loading the agents…" },
+    agentsError: {
+      es: "No se pudo cargar el catálogo de agentes: los dos desplegables quedan como estaban.",
+      en: "The agent catalogue could not be loaded: both dropdowns keep their current value.",
+    },
+    errorTitleEmpty: {
+      es: "El título no puede quedar vacío.",
+      en: "The title cannot be left empty.",
+    },
+    errorTitleTooLong: {
+      es: "El título no puede pasar de {max} caracteres.",
+      en: "The title cannot be longer than {max} characters.",
+    },
+    errorRetriesNotInteger: {
+      es: "Los reintentos máximos son un número entero.",
+      en: "Maximum retries must be a whole number.",
+    },
+    errorRetriesRange: {
+      es: "Los reintentos máximos van de {min} a {max}.",
+      en: "Maximum retries go from {min} to {max}.",
+    },
+    warnReviewerIsAssignee: {
+      es: "El revisor sería el mismo agente que implementa: nadie miraría este trabajo con ojos ajenos. El servidor lo acepta; el materializador de planes se niega a emparejarlos.",
+      en: "The reviewer would be the same agent that implements: nobody would look at this work with fresh eyes. The server accepts it; the plan materialiser refuses to pair them.",
+    },
+    noChanges: { es: "No hay nada que guardar todavía.", en: "There is nothing to save yet." },
+    cancel: { es: "Cancelar", en: "Cancel" },
+    save: { es: "Guardar cambios", en: "Save changes" },
+    saving: { es: "Guardando…", en: "Saving…" },
+  },
+
   /**
    * `components/shared/state-block.tsx` — el triple estado (cargando / error /
    * vacío) que montan **21 ficheros** de `app/`.

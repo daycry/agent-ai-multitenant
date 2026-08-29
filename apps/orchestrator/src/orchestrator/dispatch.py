@@ -178,6 +178,25 @@ _MAX_TASK_COMMENTS = 10
 # Per-runtime log tail kept in the reviewer block (the full logs live in the
 # audit event / `docker logs`); enough for the reviewer to see what failed.
 _TEST_REPORT_LOG_TAIL = 1500
+# Y la cola del caso VERDE (ADR 0162). Antes no había ninguna: los logs sólo se
+# adjuntaban `if not passed`, así que la única prueba de que un `exit_code == 0`
+# no había ejecutado ni un test —«No tests executed!», «0 tests»— se le ocultaba
+# al reviewer justo en el caso donde cambia el veredicto.
+#
+# Por qué NO es la misma cola que el fallo: el rojo se paga una vez y necesita el
+# traceback entero; el verde se paga en CADA revisión de CADA proyecto que pasa,
+# y ahí el reviewer no necesita el detalle sino la línea de recuento. Esa línea la
+# imprimen todas las plantillas del catálogo al FINAL de la salida, así que una
+# cola corta la captura entera.
+#
+# Y por qué 512 y no un número redondo cualquiera: es el peor epílogo del
+# catálogo con margen. Maven/Gradle no terminan en el recuento, sino que imprimen
+# detrás un banner de cierre (`BUILD SUCCESS`, dos separadores de 72 guiones,
+# `Total time`, `Finished at`) que mide 401 caracteres; con menos, ese banner
+# empujaría al «Tests run: N» fuera del bloque y el caso «0 tests» volvería a ser
+# invisible. El resto del catálogo cabe de sobra (pytest ~50, phpunit ~70,
+# jest ~130). Lo fija `test_the_green_tail_fits_the_longest_summary_epilogue`.
+_TEST_REPORT_PASSED_LOG_TAIL = 512
 
 
 # P1-7: cuántos outputs previos del implementador ve el reviewer y la cola por
@@ -326,10 +345,17 @@ def _format_test_report_block(
             header += ")"
             lines.append(header)
         logs_tail = str(o.get("logs_tail") or "")
-        if not passed and logs_tail:
+        if logs_tail:
+            # El verde TAMBIÉN adjunta su cola (ADR 0162): `exit_code == 0` no
+            # significa «los tests pasaron», puede significar «no había tests»
+            # —un `--filter` que no casa, una suite mal nombrada—, y esa frase
+            # sólo está en los logs. Antes la condición era `not passed`, o sea,
+            # el dato existía en la variable y el código decidía no enseñarlo.
+            # Presupuesto asimétrico a propósito: ver las constantes.
+            budget = _TEST_REPORT_LOG_TAIL if not passed else _TEST_REPORT_PASSED_LOG_TAIL
             lines.append("  logs (tail):")
             lines.append("  ```")
-            lines.append(logs_tail[-_TEST_REPORT_LOG_TAIL:])
+            lines.append(logs_tail[-budget:])
             lines.append("  ```")
     lines.append("</test-report>")
     return "\n".join(lines)

@@ -69,7 +69,18 @@ def test_a_failed_outcome_renders_exactly_as_before() -> None:
     )
 
 
-def test_a_passed_outcome_renders_exactly_as_before() -> None:
+def test_a_passed_outcome_now_carries_its_log_tail() -> None:
+    """Este test CAMBIÓ, y conviene decir por qué en vez de dejarlo mudo.
+
+    Hasta el 2026-08-29 afirmaba lo contrario —que un outcome verde renderiza sin
+    logs— y por eso se llamaba `..._renders_exactly_as_before`. Pero eso no era
+    una no-regresión: era el defecto de la §«trampa» del ADR 0162 fijado por un
+    test. `exit_code == 0` no significa «los tests pasaron», y la línea que lo
+    desmiente («No tests executed!») vive justo en la cola que se descartaba.
+
+    La forma exacta del caso verde la cubre
+    `tests/unit/test_green_test_report_shows_its_logs.py`; aquí sólo se re-ancla
+    para que este fichero no siga afirmando lo derogado."""
     out = _block(
         [
             {
@@ -81,7 +92,15 @@ def test_a_passed_outcome_renders_exactly_as_before() -> None:
             }
         ]
     )
-    assert out == "<test-report>\n- runtime node-jest: PASSED (exit_codes=[0])\n</test-report>"
+    assert out == (
+        "<test-report>\n"
+        "- runtime node-jest: PASSED (exit_codes=[0])\n"
+        "  logs (tail):\n"
+        "  ```\n"
+        "ok\n"
+        "  ```\n"
+        "</test-report>"
+    )
 
 
 def test_a_timed_out_outcome_renders_exactly_as_before() -> None:

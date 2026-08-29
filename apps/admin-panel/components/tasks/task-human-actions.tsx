@@ -19,6 +19,13 @@
  * es el espejo EXACTO de ese gate: ofrecer un botón que el backend va a
  * rechazar es peor que no ofrecerlo.
  *
+ * **`reassign_with_guidance` no reasigna** (ADR 0162), por si alguien viene a
+ * «arreglar» el rótulo: la acción mapea a `("backlog", "human_action", True)`,
+ * o sea vuelta al backlog + guía anotada + un reintento consumido, sin tocar el
+ * agente asignado. El nombre de la acción es contrato del backend y se queda; el
+ * texto que ve el humano dice lo que pasa, y `lib/i18n/labels-honesty.test.ts`
+ * lo sujeta. Cambiar de agente se hace en `task-edit-dialog.tsx`.
+ *
  * Los dos diálogos (reasignar / bloquear) son propios de cada instancia. El
  * `Dialog` de la casa no renderiza nada cerrado y anida bien dentro de otro
  * (la pila de Escape lo contempla), así que montar el componente dentro de la
@@ -27,7 +34,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Ban, Check, RotateCcw, Workflow } from "lucide-react";
+import { Ban, Check, RotateCcw, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -123,7 +130,9 @@ export function TaskHumanActions({
           disabled={busy}
           data-testid={`reassign-${taskId}`}
         >
-          <Workflow className="mr-1 h-3.5 w-3.5" />
+          {/* Flecha de vuelta y no el icono de flujo: la acción devuelve la
+              tarea al backlog, no la enruta a otro sitio (ADR 0162). */}
+          <Undo2 className="mr-1 h-3.5 w-3.5" />
           {t("reassign")}
         </Button>
         <Button
