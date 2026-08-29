@@ -17,6 +17,16 @@ docs_language: es
 > toca el gobierno de calidad —qué puede darse por bueno sin haber ejecutado
 > nada— y por eso se deja escrita con sus cuatro opciones y sus costes en vez de
 > resolverse aquí.
+>
+> **Qué está ya entregado (2026-08-29):** la decisión 1 completa (D + A1) y, de la
+> decisión 2, **sólo D y B** — las dos que no cambian ningún veredicto. **A y C
+> siguen sin firmar y sin implementar**, y mientras lo estén el falso verde es
+> **visible pero no está cerrado**. Conviene no confundir una cosa con la otra.
+>
+> **Revisión del 2026-08-29:** la opción A se reformula. La versión original
+> —«que el planner genere el comando»— era mala por una razón estructural que se
+> explica en su sección, y no contemplaba las tareas que legítimamente no tienen
+> nada que testear. Ambas cosas están corregidas.
 
 ## Contexto
 
@@ -179,14 +189,14 @@ elegir entre mentir y no saber.
 
 ### Opciones
 
-| Opción                                                 | Qué cambia                                                     | Coste            | Riesgo                                          |
-| ------------------------------------------------------ | -------------------------------------------------------------- | ---------------- | ----------------------------------------------- |
-| **A** — el planner genera criterios ejecutables        | Invertir la regla en los dos generadores + limpiador + esquema | Alto (4 frentes) | Alto: el planner sabe 1 de las 3 cosas que pide |
-| **B** — decirle al reviewer «tests: NO EJECUTADOS»     | El bloque vacío pasa a bloque explícito                        | **Bajo**         | Creerse que basta                               |
-| **C** — gate duro: `approve` no cierra sin tests       | `_apply_review_verdict` degrada a escalado                     | Bajo el sitio    | **Bloqueante hoy**                              |
-| **D** — que el fallo del test-runtime deje de tragarse | 5 puntos de `except` pasan a outcome visible                   | **Bajo**         | Bajo: no cambia ningún veredicto                |
+| Opción                                                                  | Qué cambia                                                 | Coste         | Riesgo                                    |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------- | ------------- | ----------------------------------------- |
+| **A** — que cada criterio DECLARE cómo se verifica                      | Quien escribe el test declara comando o «no automatizable» | Medio         | El agente declara: se mide, no se bloquea |
+| **B** — decirle al reviewer «tests: NO EJECUTADOS»                      | El bloque vacío pasa a bloque explícito                    | **Bajo**      | Creerse que basta                         |
+| **C** — gate: `approve` no cierra sin la evidencia que la tarea declaró | `_apply_review_verdict` degrada a escalado                 | Bajo el sitio | Bloqueante SIN A; estrecho CON A          |
+| **D** — que el fallo del test-runtime deje de tragarse                  | 5 puntos de `except` pasan a outcome visible               | **Bajo**      | Bajo: no cambia ningún veredicto          |
 
-### Recomendación: **D, luego B. A después. C sólo cuando A exista**
+### Recomendación: **D, luego B. A reformulada. C sólo después de A**
 
 **D es la única que no cambia nada y lo arregla todo un poco.** No toca un solo
 veredicto ni un solo prompt: hace que un fallo de infraestructura **deje de
@@ -201,16 +211,123 @@ había y reventaron», «el proyecto no declara runtime»— cuesta tres puntos 
 código. Pero sólo **se lo dice** al modelo: el veredicto sigue siendo suyo. Quien
 firme B tiene que aceptar que es una mejora de información, no una garantía.
 
-**A es la de fondo, y es cara y arriesgada.** El planner tendría que saber tres
-cosas y sólo sabe una: el `runtime` sí es derivable de
-`projects.default_runtime_template`; el `command` y la señal esperada, no. Y hay
-que decirlo claro: **hoy la regla contraria está escrita a propósito en tres
-sitios**. Invertirla es revisar una decisión, no corregir un descuido.
+**A, y aquí este documento se corrige.** La formulación original —«que el planner
+genere el comando»— es mala, y por una razón estructural: **el planner planifica
+antes de que el código exista**. Pedirle el `command` es pedirle que prediga un
+nombre de fichero, y un modelo al que se le pide algo que no puede comprobar
+escribe algo _plausible_. El fallo resultante es peor que no tener comando: un
+`--filter LoginTest` inventado que falla se lee como «el código está roto», no
+como «el criterio era ficticio» — el mismo patrón que el `not found` del §Contexto
+acusando al repositorio del tenant.
 
-**C no se puede encender hoy, y conviene entender por qué.** Como no existe
-ningún productor de criterios ejecutables, un gate que exija constancia de
-ejecución **bloquearía el 100 % de las tareas**. C es la consecuencia natural de
-A, no su alternativa. Encenderla antes convierte una guarda en una parada.
+**La reformulación: A no produce un comando, produce una DECISIÓN.** Por cada
+criterio, una de dos, y el silencio deja de ser una respuesta válida:
+
+> «esto se verifica ejecutando X» — o — «esto no es verificable a máquina, y este
+> es el motivo»
+
+Y quien la toma no es el planner: es **quien acaba de escribir el test**. El
+planner escribe la intención en prosa, como hoy; el implementador declara con qué
+se verifica, porque es el único actor que lo sabe. Eso invierte la naturaleza de
+la tarea —de **predecir** un nombre de fichero a **reportar** lo que acaba de
+correr— y el sitio ya existe: `submit_result`, del [ADR 0087](0087-self-review-autoritativo-escalado-humano.md).
+
+**C sigue sin poder encenderse antes que A**, pero con la reformulación deja de
+ser un gate ciego: exige evidencia **sólo donde la propia tarea declaró que debía
+haberla**. Sin A, un gate que pida constancia de ejecución bloquearía el 100 % de
+las tareas, porque hoy no hay productor de criterios ejecutables. C es la
+consecuencia natural de A, no su alternativa.
+
+Y conviene encenderla **graduada**: primero que quede registrado que no hubo
+tests, después que escale, y sólo al final que bloquee. Así se ve el volumen real
+antes de que nada se pare.
+
+### Las tareas que no tienen nada que testear
+
+Un análisis, un diseño, un ADR, una tarea de documentación. Existen dentro de
+proyectos que **sí** declaran runtime, así que acotar por proyecto —lo que este
+documento hacía en su primera versión— es demasiado grueso.
+
+**Lo que hay hoy.** No existe ninguna columna de tipo de tarea: las de `tasks` son
+título, descripción, estado, prioridad, agente asignado, revisor,
+`acceptance_criteria`, inputs, complejidad, reintentos y fechas. La única señal
+estructural de qué clase de trabajo es una tarea es a qué agente está asignada.
+
+**Pero la pieza correcta ya existe, a nivel de criterio**: `check_type`, con
+`automated` frente a manual/humano. Los no-automáticos ya se saltan y se
+registran como «skipped»
+([`test_runtime.py`](../../apps/workers/src/workers/test_runtime.py)).
+
+**Y está rota igual que todo lo demás de este documento**, en una línea:
+
+```python
+if entry.get("check_type", "automated") != "automated":
+```
+
+**Ausente significa `automated`.** El silencio se lee como «esto debería
+verificarse a máquina», y por eso el gate no puede distinguir hoy entre «esta
+tarea no tiene nada que testear» —legítimo— y «esta tarea sí debía tenerlo y
+nadie produjo el comando» —el defecto—. Es el mismo falso verde un piso más
+abajo.
+
+Es el tercer sitio de este ADR donde aparece la misma regla, así que conviene
+enunciarla: **un valor ausente no puede significar nada más fuerte que
+«desconocido»**. `project_root` vacío no puede significar «la raíz»,
+`allowed_commands` vacío no puede significar «todo», y `check_type` ausente no
+puede significar «automático».
+
+Con A reformulada, esto se resuelve solo: una tarea de análisis declara «sin
+comprobación automática» y pasa el gate **honestamente, con constancia escrita
+del motivo**. No hace falta ni columna nueva ni inferencia por rol — que se
+descartó a propósito: el rol es un proxy débil (a un backend dev se le asignan
+tareas de investigación a diario), e **inferir es lo que produjo todos los
+defectos que este documento mide**.
+
+### El riesgo de que se juegue, y por qué no se cierra con una guarda
+
+Si es el agente quien declara qué se verifica, puede marcarlo todo como
+no-verificable y esquivar el gate. Es real y hay que decirlo.
+
+A diferencia del silencio de hoy, **esto se cuenta**: qué porcentaje de tareas
+declara «sin comprobación automática», por proyecto y por agente. Un agente de
+implementación cuyas tareas son manuales el 90 % de las veces es una señal
+visible.
+
+Va como **métrica, no como guarda**: bloquear por porcentaje se aprende a jugar
+enseguida y castiga a los proyectos que legítimamente tienen poco que
+automatizar. La diferencia con el estado actual no es que se impida — es que hoy
+**ni siquiera se puede contar**.
+
+### La trampa que hay que cerrar CON A, o A fabrica un verde nuevo
+
+De la misma base de datos, y esto no es teoría:
+
+```text
+vendor/bin/phpunit --testsuite E2E --colors=never   =>  ok=true
+No tests executed!
+```
+
+Dos ejecuciones **en verde habiendo ejecutado cero tests**. Exit code 0, y la
+plataforma lo registró como correcto.
+
+Es decir: **`exit_code == 0` no significa «los tests pasaron»; puede significar
+«no había tests»** — un `--filter` que no casa con nada, una suite mal nombrada,
+un `phpunit.xml` que no ve el directorio.
+
+`expected_signal: "exit_code == 0"` es el default de
+[`test_runtime.py`](../../apps/workers/src/workers/test_runtime.py), así que A
+tal cual heredaría el agujero: un criterio que existe, se ejecuta, sale verde y
+no ha probado nada. El mismo falso verde un piso más arriba, y costaría otro medio
+año descubrirlo.
+
+**Quien firme A debe exigir que el criterio compruebe además que el recuento de
+tests es mayor que cero.** El dato ya está disponible: el catálogo declara
+`output_parsers=("junit_xml", "raw_text")` y el JUnit XML lleva ese número.
+
+Y hay un motivo extra para no dejarlo abierto: con A, el mismo agente que escribe
+el test declara el comando que lo verifica. Un comando que pasa trivialmente
+—`true`, o un filtro que no casa con nada— es la salida barata, y arriba está la
+prueba de que ocurre sin que nadie lo pretenda.
 
 ### Una nota sobre el vocabulario
 
