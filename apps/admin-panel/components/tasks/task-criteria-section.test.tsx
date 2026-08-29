@@ -44,10 +44,34 @@ function renderSection(criteria: unknown[]) {
     return Promise.resolve({ id: "t-1", acceptance_criteria: [] });
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={qc}>
       <CriteriaSection projectId="p-1" taskId="t-1" criteria={criteria} />
     </QueryClientProvider>,
+  );
+}
+
+/**
+ * Espera a que `GET /runtime-templates` haya poblado el `<select>`.
+ *
+ * El plazo se sube de los 1000 ms que trae testing-library por defecto porque
+ * **el plazo no es lo que este test afirma**: afirma que la opción aparece, no
+ * que aparezca antes de un segundo. Con la máquina cargada —dos suites en
+ * paralelo— la resolución de react-query más el re-render pasaban del segundo y
+ * el fichero salía en rojo dos veces de cada tres, verde en aislado. Un rojo que
+ * depende de lo ocupado que esté el ordenador es exactamente el falso fallo que
+ * el encargo del ADR 0162 manda evitar, y encima enseña a desconfiar del rojo.
+ *
+ * Lo que NO se toca: la opción sigue teniendo que aparecer de verdad, y el
+ * `fireEvent.change` posterior sólo prende si existe.
+ */
+function awaitRuntimeCatalog(): Promise<HTMLElement> {
+  return screen.findByRole(
+    "option",
+    { name: "PHP · PHPUnit" },
+    // Por debajo de los 5000 ms de `testTimeout` de vitest, para que un fallo
+    // real se lea como «no apareció la opción» y no como «se acabó el test».
+    { timeout: 4000 },
   );
 }
 
@@ -83,7 +107,7 @@ describe("CriteriaSection · declarar cómo se comprueba (ADR 0162)", () => {
     });
     // El catálogo llega por `GET /runtime-templates`: sin esperar, el `<select>`
     // no tendría todavía la `<option>` y el cambio no prendería.
-    await screen.findByRole("option", { name: "PHP · PHPUnit" });
+    await awaitRuntimeCatalog();
     fireEvent.change(screen.getByTestId("task-criterion-runtime-0"), {
       target: { value: "php-phpunit" },
     });
@@ -149,7 +173,7 @@ describe("CriteriaSection · declarar cómo se comprueba (ADR 0162)", () => {
     fireEvent.change(screen.getByTestId("task-criterion-check-type-0"), {
       target: { value: "automated" },
     });
-    await screen.findByRole("option", { name: "PHP · PHPUnit" });
+    await awaitRuntimeCatalog();
     fireEvent.change(screen.getByTestId("task-criterion-runtime-0"), {
       target: { value: "php-phpunit" },
     });
@@ -174,7 +198,7 @@ describe("CriteriaSection · declarar cómo se comprueba (ADR 0162)", () => {
 });
 
 describe("CriteriaSection · visibilidad de lo que se comprueba", () => {
-  it("marca cada criterio y cuenta cuántos se comprueban de verdad", () => {
+  it("marca cada criterio y cuenta las TRES categorías por separado", () => {
     renderSection([
       "prosa suelta",
       { description: "tests unitarios", runtime: "python-pytest", command: "pytest -q" },
@@ -186,9 +210,13 @@ describe("CriteriaSection · visibilidad de lo que se comprueba", () => {
       "Comprobación automática",
     );
     expect(screen.getByTestId("task-criterion-state-2").textContent).toBe("Comprobación manual");
-    expect(screen.getByTestId("task-criteria-check-summary").textContent).toContain(
-      "1 de 3 criterios se comprueban solos",
-    );
+
+    // Las tres cuentas por separado. «1 de 3 se comprueban solos» dejaba fuera
+    // justo la distinción que el ADR 0162 pide: «declarado manual» y «nadie ha
+    // declarado nada» caían los dos en el mismo «no».
+    expect(screen.getByTestId("task-criteria-coverage-automated").textContent).toContain("1");
+    expect(screen.getByTestId("task-criteria-coverage-manual").textContent).toContain("1");
+    expect(screen.getByTestId("task-criteria-coverage-undeclared").textContent).toContain("1");
   });
 
   it("un criterio que dice «automated» sin comando NO se cuenta como automático", () => {
@@ -196,9 +224,95 @@ describe("CriteriaSection · visibilidad de lo que se comprueba", () => {
     // misma promesa vacía que el ADR mide, un piso más arriba.
     renderSection([{ description: "x", check_type: "automated" }]);
     expect(screen.getByTestId("task-criterion-state-0").textContent).toBe("Sin comprobación");
-    expect(screen.getByTestId("task-criteria-check-summary").textContent).toContain(
-      "0 de 1 criterios se comprueban solos",
+    expect(screen.getByTestId("task-criteria-coverage-undeclared").textContent).toContain("1");
+    expect(screen.queryByTestId("task-criteria-coverage-automated")).toBeNull();
+  });
+
+  it("distingue A SIMPLE VISTA «declarado manual» de «sin declarar»", () => {
+    // No basta con que el rótulo diga cosas distintas: los dos casos caían en el
+    // mismo «no se comprueba solo», y el operador no podía saber si alguien
+    // había decidido algo o si nadie había dicho nada.
+    renderSection([
+      { description: "revisar la maqueta", check_type: "manual", manual_reason: "a ojo" },
+      "prosa suelta",
+    ]);
+    const manual = screen.getByTestId("task-criterion-state-0");
+    const undeclared = screen.getByTestId("task-criterion-state-1");
+    expect(manual.textContent).not.toBe(undeclared.textContent);
+    expect(manual.className).not.toBe(undeclared.className);
+  });
+
+  it("el motivo de una comprobación manual se lee sin abrir el editor", () => {
+    // «Cuántos están declarados manuales CON SU MOTIVO»: el motivo es la mitad
+    // que convierte «esto no se automatiza» en una decisión auditable. Estaba
+    // escrito en la BD y sólo se veía abriendo el formulario de edición.
+    renderSection([
+      {
+        description: "revisar la maqueta",
+        check_type: "manual",
+        manual_reason: "hay que mirar el PDF a ojo",
+      },
+    ]);
+    expect(screen.getByTestId("task-criterion-detail-0").textContent).toContain(
+      "hay que mirar el PDF a ojo",
     );
+  });
+
+  it("el comando de una comprobación automática se lee sin abrir el editor", () => {
+    renderSection([
+      { description: "tests unitarios", runtime: "python-pytest", command: "pytest -q" },
+    ]);
+    expect(screen.getByTestId("task-criterion-detail-0").textContent).toContain("pytest -q");
+  });
+
+  it("un criterio que el worker descarta NO enseña su comando como si fuera a correr", () => {
+    // Declara `command` pero le falta el runtime, así que `_run_task_tests` lo
+    // salta. Enseñar el comando ahí sería prometer una ejecución que no ocurre.
+    renderSection([{ description: "x", check_type: "automated", command: "pytest -q" }]);
+    expect(screen.queryByTestId("task-criterion-detail-0")).toBeNull();
+  });
+});
+
+describe("CriteriaSection · una tarea sin nada que automatizar NO parece un fallo", () => {
+  /*
+   * Es la mitad del encargo que manda sobre el resto: el sistema tiene que
+   * evitar fallos Y FALSOS FALLOS. Una tarea de análisis con todos sus
+   * criterios declarados manuales está perfectamente bien, y pintarla en ámbar
+   * —o resumirla como «0 de 3»— fabrica el falso fallo en versión visual.
+   */
+  it("no enseña ceros, ni avisos, ni un solo píxel de alarma", () => {
+    const { container } = renderSection([
+      {
+        description: "el informe explica la causa raíz",
+        check_type: "manual",
+        manual_reason: "lo lee una persona",
+      },
+      {
+        description: "el ADR lista las opciones descartadas",
+        check_type: "manual",
+        manual_reason: "lo lee una persona",
+      },
+    ]);
+
+    expect(screen.getByTestId("task-criteria-coverage-manual").textContent).toContain("2");
+    // Las categorías vacías NO se pintan: un «0 en automático» se lee como una
+    // carencia, y aquí no falta nada.
+    expect(screen.queryByTestId("task-criteria-coverage-automated")).toBeNull();
+    expect(screen.queryByTestId("task-criteria-coverage-undeclared")).toBeNull();
+    expect(screen.queryByTestId("task-criteria-coverage-note")).toBeNull();
+    expect(screen.getByTestId("task-criteria-coverage").textContent).not.toContain("0");
+
+    // Ni ámbar ni rojo: los tokens semánticos de aviso y de error no aparecen.
+    expect(
+      container.querySelector(".bg-warning-soft, .bg-danger-soft, .text-destructive"),
+    ).toBeNull();
+  });
+
+  it("en cambio, sí avisa cuando hay criterios sin declarar", () => {
+    // La contraparte del test de arriba: si el aviso no apareciera NUNCA, aquél
+    // pasaría por construcción y no mediría nada.
+    renderSection(["prosa suelta"]);
+    expect(screen.getByTestId("task-criteria-coverage-note")).toBeTruthy();
   });
 });
 
@@ -228,8 +342,13 @@ describe("i18n de la declaración", () => {
       "checkStateAutomated",
       "checkStateManual",
       "checkStateUndeclared",
-      "checkSummary",
       "checkUndeclaredHint",
+      "coverageLabel",
+      "coverageAutomated",
+      "coverageManual",
+      "coverageUndeclared",
+      "detailCommand",
+      "detailReason",
       "errorCriterionTextRequired",
       "errorCriterionRuntimeRequired",
       "errorCriterionCommandRequired",

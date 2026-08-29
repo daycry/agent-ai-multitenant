@@ -31,7 +31,7 @@ const MEMBER = {
   isLoading: false,
 };
 
-function detail(status: string) {
+function detail(status: string, acceptanceCriteria: unknown[] = []) {
   return {
     id: "t-1",
     project_id: "p-1",
@@ -40,7 +40,7 @@ function detail(status: string) {
     description: null,
     status,
     priority: "medium",
-    acceptance_criteria: [],
+    acceptance_criteria: acceptanceCriteria,
     depends_on: [],
     inputs: {},
     // Los tres campos que sólo trae el detalle completo: la ficha no los pinta,
@@ -53,14 +53,15 @@ function detail(status: string) {
   };
 }
 
-function renderSheet(status: string, who = ADMIN) {
+function renderSheet(status: string, who = ADMIN, acceptanceCriteria: unknown[] = []) {
   currentUser.mockReturnValue(who);
   // Responde POR RUTA y no lo mismo a todo: la ficha cuelga del formulario de
   // edición, que pide además los planes del proyecto y el catálogo de agentes.
   // Con un `mockResolvedValue` único, esas dos listas recibían el objeto de la
   // tarea y el `.map` reventaba — un fallo del fixture, no del componente.
   apiFetchMock.mockImplementation((path: string) => {
-    if (path === "/projects/p-1/tasks/t-1") return Promise.resolve(detail(status));
+    if (path === "/projects/p-1/tasks/t-1")
+      return Promise.resolve(detail(status, acceptanceCriteria));
     if (path.startsWith("/tasks/t-1/history")) return Promise.resolve({ events: [] });
     return Promise.resolve([]);
   });
@@ -113,6 +114,29 @@ describe("TaskDetailSheet · acciones humanas", () => {
 
     expect(await screen.findByTestId("task-edit-dialog")).toBeTruthy();
     expect(await screen.findByTestId("task-edit-assignee")).toBeTruthy();
+  });
+
+  it("resume la cobertura de los criterios que devuelve la API, sin bloquear nada", async () => {
+    // Anclado en el payload de `GET /projects/{p}/tasks/{t}`, que es donde el
+    // dato NACE: la ficha es quien lo baja y quien se lo pasa a la sección. Un
+    // test que construyera los criterios a mano dentro de la sección pasaría
+    // aunque la ficha dejara de leer `acceptance_criteria`.
+    renderSheet("backlog", ADMIN, [
+      "prosa suelta",
+      { description: "tests unitarios", runtime: "python-pytest", command: "pytest -q" },
+      { description: "revisar la maqueta", check_type: "manual", manual_reason: "a ojo" },
+    ]);
+
+    expect((await screen.findByTestId("task-criteria-coverage-automated")).textContent).toContain(
+      "1",
+    );
+    expect(screen.getByTestId("task-criteria-coverage-manual").textContent).toContain("1");
+    expect(screen.getByTestId("task-criteria-coverage-undeclared").textContent).toContain("1");
+
+    // La cobertura informa; NO bloquea. El ADR 0162 deja el gate (opción C) sin
+    // firmar a propósito, porque ahí es donde viven los falsos fallos.
+    expect((screen.getByTestId("task-criteria-edit") as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId("task-detail-edit") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("hides them from a member who is not a tenant admin", async () => {

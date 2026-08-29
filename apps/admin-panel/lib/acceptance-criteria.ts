@@ -210,10 +210,46 @@ export function draftFromCriterion(c: unknown): CriterionDraft {
  * como error.
  */
 export function criterionCheckState(c: unknown): CriterionCheckState {
+  // OJO CON EL VOCABULARIO, porque hay dos preguntas distintas y el worker
+  // responde la otra:
+  //
+  //   * esta función responde **cómo se comprueba** el criterio — realidad de
+  //     ejecución. Un dict con `runtime` y `command` SE EJECUTA aunque nadie
+  //     declarase `check_type`, así que aquí es `automated`. Es lo que el
+  //     operador quiere ver de un vistazo: qué se verifica de verdad.
+  //   * el worker cuenta **quién lo declaró** (`checks_without_declared_check_type`,
+  //     ADR 0162). Ahí ese mismo criterio suma como NO DECLARADO, y es correcto:
+  //     se ejecuta por inercia del formato, no porque alguien lo decidiera.
+  //
+  // Las dos son ciertas y no se pueden fundir sin perder una. Si algún día se
+  // quiere enseñar la segunda en pantalla, va en un indicador APARTE — no
+  // cambiando lo que significa `automated` aquí, que dejaría la ficha diciendo
+  // «sin comprobación» de tareas que sí se comprueban.
   if (!isStructured(c)) return "undeclared";
   const declared = field(c, "check_type") || "automated";
   if (declared !== "automated") return "manual";
   return field(c, "runtime") && field(c, "command") ? "automated" : "undeclared";
+}
+
+/**
+ * Lo que la declaración de un criterio dice, para poder leerlo SIN abrir el
+ * editor: el comando que se va a ejecutar, o el motivo por el que nadie lo va a
+ * ejecutar. `""` cuando no hay nada que enseñar.
+ *
+ * Se decide por `criterionCheckState` y no por los campos crudos a propósito.
+ * Un criterio que trae `command` pero al que le falta el `runtime` lo descarta
+ * `_run_task_tests` en silencio: enseñar ese comando sería prometer una
+ * ejecución que no ocurre, que es el falso verde del ADR 0162 escrito en la
+ * ficha. Sin declaración no se inventa ninguna — «nadie ha declarado nada» y
+ * «declarado manual sin motivo escrito» son estados distintos y ninguno de los
+ * dos se rellena con un texto de relleno.
+ */
+export function criterionDeclarationDetail(c: unknown): string {
+  if (!isStructured(c)) return "";
+  const state = criterionCheckState(c);
+  if (state === "automated") return field(c, "command");
+  if (state === "manual") return field(c, "manual_reason");
+  return "";
 }
 
 /** Cuántos criterios de una tarea se comprueban de verdad, y cuántos no. */

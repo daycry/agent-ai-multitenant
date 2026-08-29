@@ -466,6 +466,32 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "que el código funciona: dilo explícitamente en tu revisión, "
             "juzga el diff por sí mismo y sé más exigente con lo que sin "
             "tests no puedes verificar.\n\n"
+            # ADR 0162, ola 2. Hasta aquí el reviewer sólo veía el código de
+            # salida, y en la base de datos viva hay ejecuciones de PHPUnit con
+            # `exit 0` y «No tests executed!» registradas como correctas. Ahora
+            # el bloque puede traer el RECUENTO real, y esto le enseña sus tres
+            # formas. La tercera —«no se pudo contar»— es la que NO puede
+            # leerse como cero: confundirlas fabricaría un falso FALLO, que es
+            # justo lo que el operador ha pedido evitar. Sigue sin haber orden
+            # de rechazar por ningún recuento: eso es la opción C, sin firmar.
+            "Dentro del bloque, cada runtime puede traer además una línea "
+            "`tests:` con cuántos tests se ejecutaron DE VERDAD, y sus tres "
+            "formas no significan lo mismo. (1) Un recuento con número "
+            "(«12 executed, 12 passed») es evidencia dura, y el paréntesis "
+            "`counted from …` te dice si salió de un informe estructurado o "
+            "de leer el epílogo por pantalla. (2) `ZERO tests` significa que "
+            "el comando terminó sin ejecutar ni uno: un `exit_code == 0` así "
+            "NO prueba que el código funcione —puede ser un filtro que no "
+            "casa con nada, una suite mal nombrada o una configuración que no "
+            "ve el directorio—, así que dilo en tu revisión y no lo cuentes "
+            "como cobertura. (3) `could not determine how many tests ran` "
+            "significa que la plataforma no supo leer la salida: NO es lo "
+            "mismo que cero, y no puedes tratarlo ni como «no hubo tests» ni "
+            "como «los tests pasaron»; es simplemente desconocido, y lo "
+            "honesto es decir que no pudiste verificarlo. Si no aparece "
+            "ninguna línea `tests:`, ese informe es anterior a la medición y "
+            "no dice nada sobre el recuento. En los tres casos el veredicto "
+            "sigue siendo tuyo: esto es información, no una orden.\n\n"
             "Termina SIEMPRE tu revisión con un veredicto estructurado "
             "en una línea propia:\n"
             "  `<verdict>approve</verdict>` si el PR puede mergearse,\n"
@@ -508,6 +534,27 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "not read it as proof that the code works: say so explicitly in "
             "your review, judge the diff on its own merits, and be stricter "
             "about whatever you cannot verify without tests.\n\n"
+            # Misma adición que en el prompt ES (ADR 0162, ola 2). Los dos
+            # idiomas tienen que decir lo mismo, o el reviewer se comporta
+            # distinto según el `docs_language` del tenant.
+            "Inside that block, each runtime may also carry a `tests:` line "
+            "saying how many tests ACTUALLY ran, and its three forms do not "
+            "mean the same thing. (1) A line with numbers ('12 executed, 12 "
+            "passed') is hard evidence, and the `counted from …` suffix tells "
+            "you whether it came from a structured report or from reading the "
+            "runner's on-screen epilogue. (2) `ZERO tests` means the command "
+            "finished without executing a single one: such an `exit_code == "
+            "0` does not prove the code works — it can be a filter matching "
+            "nothing, a mis-named suite, or a config that cannot see the test "
+            "directory — so say so in your review and do not count it as "
+            "coverage. (3) `could not determine how many tests ran` means the "
+            "platform could not read the output: that is NOT the same as "
+            "zero, and you may treat it neither as 'there were no tests' nor "
+            "as 'the tests passed'; it is simply unknown, and the honest move "
+            "is to state that you could not verify it. If no `tests:` line "
+            "appears at all, that report predates the measurement and says "
+            "nothing about the count. In all three cases the verdict remains "
+            "yours: this is information, not an instruction.\n\n"
             "ALWAYS finish your review with a structured verdict on its "
             "own line:\n"
             "  `<verdict>approve</verdict>` if the PR can be merged,\n"

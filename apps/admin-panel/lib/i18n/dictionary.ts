@@ -6359,14 +6359,28 @@ export const dictionary = {
     checkStateAutomated: { es: "Comprobación automática", en: "Automated check" },
     checkStateManual: { es: "Comprobación manual", en: "Checked by hand" },
     checkStateUndeclared: { es: "Sin comprobación", en: "No check" },
-    checkSummary: {
-      es: "{automated} de {total} criterios se comprueban solos.",
-      en: "{automated} of {total} criteria are checked on their own.",
-    },
     checkUndeclaredHint: {
       es: "«Sin comprobación» significa que nadie ejecuta nada y nadie ha dicho por qué; edita el criterio para declararlo.",
       en: "“No check” means nobody runs anything and nobody said why; edit the criterion to declare it.",
     },
+
+    /*
+     * El resumen de cobertura. Sustituye a `checkSummary` («{automated} de
+     * {total} criterios se comprueban solos»), que hacía dos cosas mal:
+     * metía «declarado manual» y «sin declarar» en el mismo saco del «no», y
+     * leía como una carencia lo que en una tarea de análisis o de documentación
+     * es lo correcto. Los textos enumeran lo que hay —las categorías vacías no
+     * se pintan— y no califican: informan, no acusan.
+     *
+     * Sin plurales a propósito: la capa i18n interpola y no flexiona, así que
+     * cada texto tiene que leerse igual de bien con 1 que con 7.
+     */
+    coverageLabel: { es: "Cómo se comprueban:", en: "How they are checked:" },
+    coverageAutomated: { es: "{count} en automático", en: "{count} automated" },
+    coverageManual: { es: "{count} a mano", en: "{count} by hand" },
+    coverageUndeclared: { es: "{count} sin comprobación", en: "{count} with no check" },
+    detailCommand: { es: "Ejecuta:", en: "Runs:" },
+    detailReason: { es: "Motivo:", en: "Why:" },
     errorCriterionTextRequired: {
       es: "Escribe el enunciado: un criterio sin texto se descarta al guardar y se llevaría la declaración por delante.",
       en: "Write the statement: a criterion with no text is dropped on save, and it would take the declaration with it.",

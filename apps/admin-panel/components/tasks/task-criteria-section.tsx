@@ -16,14 +16,21 @@
  *    (`_coerce_check` + `_run_task_tests`). Un criterio que se declara
  *    `automated` sin comando aparece como «sin comprobación» porque es lo que
  *    ocurre: el worker lo descarta en silencio.
- * 2. **El resumen es la respuesta a la pregunta del ADR**: de un vistazo,
- *    cuántos criterios de esta tarea se comprueban de verdad. Hasta hoy la
- *    respuesta era siempre cero y no había forma de saberlo.
+ * 2. **Enseña la declaración, no sólo su rótulo.** Debajo de cada criterio va el
+ *    comando que se va a ejecutar o el motivo por el que no se ejecuta ninguno.
+ *    Estaban los dos en la base de datos y sólo se veían abriendo el editor, así
+ *    que «esto no se automatiza» era una decisión sin constancia visible — que
+ *    es justo lo que el ADR 0162 pide que deje de pasar.
+ *
+ * El resumen de cobertura (cuántos de cada clase) vive en
+ * `task-criteria-coverage.tsx`: es lo único que se lee sin tocar nada, y tenía
+ * que poder cambiar de redacción sin abrir el editor de criterios.
  */
 
 import { useId, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { CriteriaCoverage } from "@/components/tasks/task-criteria-coverage";
 import { CriterionCheckPanel } from "@/components/tasks/task-criterion-check-panel";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,9 +45,9 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   cleanCriteria,
-  criteriaCheckSummary,
   criteriaErrors,
   criterionCheckState,
+  criterionDeclarationDetail,
   criterionErrors,
   criterionText,
   draftFromCriterion,
@@ -63,10 +70,25 @@ type CriterionRow = CriterionDraft & { key: number };
  * persigue. El que llama la atención es `undeclared`, que es el estado que hoy
  * tienen todos los criterios de la plataforma sin que nadie lo supiera.
  */
+// `undeclared` va en NEUTRO, no en ámbar, y la razón importa: hoy lo están TODOS
+// los criterios de la plataforma. Pintar el parque entero de aviso no informa de
+// nada —si todo alarma, nada alarma— y además acusa a quien no hizo nada mal: el
+// sistema nunca le pidió que declarase. Un aviso que señala a todo el mundo es un
+// falso fallo en versión visual, y se distingue igual de bien por la etiqueta.
+// Ninguno de los tres es un aviso, y `undeclared` menos que ninguno: hoy lo están
+// TODOS los criterios de la plataforma. Pintar el parque entero de ámbar no
+// informa —si todo alarma, nada alarma— y acusa a quien no hizo nada mal, porque
+// el sistema nunca le pidió que declarase nada. Es un falso fallo en versión
+// visual.
+//
+// Se distinguen igual, sin alarmar: `info` para lo que se comprueba a máquina,
+// el tinte de marca para lo que alguien decidió marcar manual, y el neutro para
+// el hueco. `default` y `muted` comparten clases, así que no sirven para separar
+// dos estados: hay que elegir variantes que de verdad se vean distintas.
 const STATE_STYLE: Record<CriterionCheckState, { variant: BadgeVariant; key: LabelKey }> = {
   automated: { variant: "info", key: "checkStateAutomated" },
-  manual: { variant: "muted", key: "checkStateManual" },
-  undeclared: { variant: "warning", key: "checkStateUndeclared" },
+  manual: { variant: "primary", key: "checkStateManual" },
+  undeclared: { variant: "muted", key: "checkStateUndeclared" },
 };
 
 type LabelKey = "checkStateAutomated" | "checkStateManual" | "checkStateUndeclared";
@@ -181,16 +203,37 @@ export function CriteriaSection({
         </div>
         {criteria.length > 0 ? (
           <>
-            <CheckSummary criteria={criteria} />
+            <CriteriaCoverage criteria={criteria} />
             <ul className="space-y-1 text-sm">
               {criteria.map((c, i) => {
-                const style = STATE_STYLE[criterionCheckState(c)];
+                const state = criterionCheckState(c);
+                const style = STATE_STYLE[state];
+                // El comando o el motivo declarados, en la propia lista: son la
+                // mitad que convierte «esto no se automatiza» en una decisión
+                // auditable, y hasta hoy sólo se veían abriendo el editor.
+                const detail = criterionDeclarationDetail(c);
                 return (
                   <li key={i} className="flex items-start gap-2">
                     <Badge variant={style.variant} data-testid={`task-criterion-state-${i}`}>
                       {t(style.key)}
                     </Badge>
-                    <span>{criterionText(c)}</span>
+                    <span>
+                      {criterionText(c)}
+                      {detail ? (
+                        <span
+                          className="text-muted-foreground block text-xs"
+                          data-testid={`task-criterion-detail-${i}`}
+                        >
+                          {state === "automated" ? (
+                            <>
+                              {t("detailCommand")} <code className="font-mono">{detail}</code>
+                            </>
+                          ) : (
+                            `${t("detailReason")} ${detail}`
+                          )}
+                        </span>
+                      ) : null}
+                    </span>
                   </li>
                 );
               })}
@@ -335,18 +378,6 @@ export function CriteriaSection({
  */
 function checkSeed(row: CriterionDraft): CriterionCheck | undefined {
   return draftFromCriterion(row.original).check ?? undefined;
-}
-
-/** Cuántos criterios de la tarea se comprueban de verdad (ADR 0162). */
-function CheckSummary({ criteria }: { criteria: unknown[] }) {
-  const t = useT("taskDetail");
-  const summary = criteriaCheckSummary(criteria);
-  return (
-    <p className="text-muted-foreground mb-1 text-xs" data-testid="task-criteria-check-summary">
-      {t("checkSummary", { automated: summary.automated, total: summary.total })}
-      {summary.undeclared > 0 ? ` ${t("checkUndeclaredHint")}` : null}
-    </p>
-  );
 }
 
 /** Side-by-side "current vs proposed" confirmation shown before an AI

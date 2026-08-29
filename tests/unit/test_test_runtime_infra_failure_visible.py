@@ -257,26 +257,33 @@ async def test_an_unknown_runtime_id_is_recorded(monkeypatch: pytest.MonkeyPatch
 # ---------------------------------------------------------------------------
 # Punto 5 — servicios auxiliares mal declarados (ADR 0129)
 # ---------------------------------------------------------------------------
-class _FakeResult:
-    def __init__(self, runtime: str) -> None:
-        self.runtime = runtime
-        self.exit_codes = (0,)
-        self.container_id = "c1"
-        self.network_name = "n1"
-        self.timed_out = False
-        self.logs = "ok"
+def _a_successful_result(runtime: str) -> Any:
+    """Un resultado de lanzamiento correcto, con el tipo REAL.
 
-    def all_passed(self) -> bool:
-        return True
+    Esto era un `_FakeResult` escrito a mano con los seis atributos que el
+    serializador leía entonces, y el día que el outcome ganó campos (ADR 0162,
+    ola 1) el doble se quedó atrás y reventó. Usar `TestRuntimeResult` de verdad
+    es lo que impide que vuelva a pasar: si el contrato crece, o el doble crece
+    con él o falla la construcción aquí mismo, que es donde se ve."""
+    from workers.test_runtime import TestRuntimeResult
+
+    return TestRuntimeResult(
+        runtime=runtime,
+        exit_codes=(0,),
+        logs="ok",
+        container_id="c1",
+        network_name="n1",
+        timed_out=False,
+    )
 
 
 class _FakeRunner:
     def __init__(self, *_a: Any, **_k: Any) -> None:
         self.launched: list[Any] = []
 
-    def launch(self, spec: Any) -> _FakeResult:
+    def launch(self, spec: Any) -> Any:
         self.launched.append(spec)
-        return _FakeResult(spec.plan.template.id)
+        return _a_successful_result(spec.plan.template.id)
 
 
 @pytest.mark.asyncio
@@ -330,12 +337,12 @@ async def test_a_launch_failure_is_recorded_and_the_other_plans_still_run(
         def __init__(self, *_a: Any, **_k: Any) -> None:
             pass
 
-        def launch(self, spec: Any) -> _FakeResult:
+        def launch(self, spec: Any) -> Any:
             if spec.plan.template.id == "python-pytest":
                 raise test_runtime.RuntimeImageUnavailableError(
                     "no se pudo obtener la imagen de runtime fijada por digest"
                 )
-            return _FakeResult(spec.plan.template.id)
+            return _a_successful_result(spec.plan.template.id)
 
     monkeypatch.setattr(test_runtime, "TestRuntimeRunner", _HalfBrokenRunner)
 
@@ -380,20 +387,22 @@ def test_the_infra_outcome_is_json_safe() -> None:
     assert json.loads(json.dumps(outcome)) == outcome
 
 
-def test_the_runner_result_shape_still_matches_the_fake() -> None:
-    """Guarda de los dobles de arriba: si `TestRuntimeResult` cambia de forma, el
-    fake deja de representarlo y estos tests pasarían por la razón equivocada."""
-    from workers.test_runtime import TestRuntimeResult
+def test_the_two_outcome_shapes_carry_the_same_keys() -> None:
+    """El outcome de FALLO y el de éxito tienen que ser el mismo dict.
 
-    real = TestRuntimeResult(
-        runtime="python-pytest",
-        exit_codes=(0,),
-        logs="ok",
-        container_id="c1",
-        timed_out=False,
-        network_name="n1",
-    )
-    fake = _FakeResult("python-pytest")
-    for attr in ("runtime", "exit_codes", "logs", "container_id", "timed_out", "network_name"):
-        assert hasattr(real, attr) and hasattr(fake, attr), attr
-    assert real.all_passed() == fake.all_passed()
+    Es la razón de que `infra_failure_outcome` exista con esta forma: el bloque
+    `<test-report>` los renderiza sin casos especiales, así que una clave
+    presente sólo en uno de los dos se leería como ausente en el otro — y en
+    este módulo «ausente» es justo lo que no puede confundirse con nada.
+
+    Esta guarda sustituye a una que comparaba el resultado real contra un doble
+    escrito a mano recorriendo una LISTA de atributos: al crecer el contrato
+    (ADR 0162, ola 1) la lista se quedó corta y la guarda no vio la divergencia.
+    Comparar los conjuntos de claves enteros no se queda corto nunca."""
+    from workers.tasks.test_runtime_task import INFRA_FAILURE_KEY, infra_failure_outcome
+    from workers.tasks.test_runtime_task import runtime_outcome as serialise
+
+    ok = serialise(_a_successful_result("python-pytest"))
+    ko = infra_failure_outcome(stage="docker_unavailable", detail="daemon down")
+
+    assert set(ko) - {INFRA_FAILURE_KEY} == set(ok)

@@ -57,6 +57,14 @@ _TEST_PHASE_MAX_WAIT_S = 3600
 # que el fallo es de la plataforma y no del código del tenant. Esa distinción
 # importa porque un reviewer que lea «FAILED» a secas culpará al diff.
 INFRA_FAILURE_KEY = "infrastructure_failure"
+# --- recuento de tests (ADR 0162, ola 1) ------------------------------------
+#
+# La clave del outcome que dice CUÁNTOS tests corrieron. Es una unión
+# discriminada por presencia —dict = se midió (aunque sea 0); ``None`` = NO se
+# pudo medir— y esa diferencia es todo el valor de la ola: hoy el veredicto sale
+# sólo del código de salida, y en la BD viva hay dos ejecuciones de PHPUnit con
+# exit 0 y `No tests executed!` registradas como correctas.
+TEST_COUNTS_KEY = "test_counts"
 # Cola del detalle. Acaba en un JSONB de auditoría y en el prompt del reviewer,
 # igual que el `logs_tail` de un outcome real; mismo orden de magnitud.
 _INFRA_DETAIL_TAIL = 2000
@@ -78,6 +86,51 @@ def infra_failure_outcome(*, stage: str, detail: str, runtime: str = "unknown") 
         "timed_out": False,
         INFRA_FAILURE_KEY: stage,
         "logs_tail": detail[-_INFRA_DETAIL_TAIL:],
+        # AUSENTE, jamás cero (ADR 0162, ola 1): un fallo de infraestructura es
+        # el caso donde más caro sale confundir «no se pudo medir» con «no había
+        # tests» — la misma confusión que la opción D vino a cerrar, un piso más
+        # abajo. Aquí ni siquiera hubo salida que leer.
+        TEST_COUNTS_KEY: None,
+        "checks_without_declared_check_type": 0,
+    }
+
+
+def runtime_outcome(result: Any) -> dict[str, Any]:
+    """Serializar un ``TestRuntimeResult`` al outcome que se persiste.
+
+    Vive como función y no en línea dentro del bucle porque este dict **es el
+    contrato**: con el JSONB de auditoría, con el ``<test-report>`` del reviewer
+    y con la siguiente ola. Un contrato que sólo existe dentro de un bucle no se
+    puede fijar con un test sin montar media fase de tests alrededor.
+
+    ``test_counts`` es una unión discriminada por presencia y hay que leerla como
+    tal (ADR 0162, ola 1):
+
+      * ``{"total": N, "passed": …, "failed": …, "errored": …, "skipped": …,
+        "source": "junit_xml" | "phpunit_text" | …}`` — se midió. ``total`` puede
+        ser 0, y entonces significa que se ejecutaron CERO tests: el
+        ``No tests executed!`` con exit 0 que hay en la base de datos viva.
+      * ``None`` — **no se pudo medir**. NO es cero.
+
+    La clave está SIEMPRE presente, con valor ``None`` cuando no hay medición,
+    para que quien la consuma no tenga que distinguir además «no vino en el
+    payload» (un outcome anterior a esta ola). El idioma que NO hay que usar es
+    ``(o.get("test_counts") or {}).get("total", 0)``: colapsa los tres estados
+    en dos y reintroduce el falso fallo que todo esto viene a evitar.
+    """
+    counts = result.test_counts
+    return {
+        "runtime": result.runtime,
+        "exit_codes": list(result.exit_codes),
+        "all_passed": result.all_passed(),
+        "container_id": result.container_id,
+        "network_name": result.network_name,
+        "timed_out": result.timed_out,
+        # Truncate logs to keep the JSONB payload reasonable — full logs are
+        # available via `docker logs <container_id>` if needed (until cleanup).
+        "logs_tail": result.logs[-4000:] if result.logs else "",
+        TEST_COUNTS_KEY: counts.as_dict() if counts is not None else None,
+        "checks_without_declared_check_type": result.checks_without_declared_check_type,
     }
 
 
@@ -483,18 +536,5 @@ async def _launch_test_runtime_plans(
                 )
             )
             continue
-        outcomes.append(
-            {
-                "runtime": result.runtime,
-                "exit_codes": list(result.exit_codes),
-                "all_passed": result.all_passed(),
-                "container_id": result.container_id,
-                "network_name": result.network_name,
-                "timed_out": result.timed_out,
-                # Truncate logs to keep the JSONB payload reasonable —
-                # full logs are available via `docker logs <container_id>`
-                # if needed (until cleanup).
-                "logs_tail": result.logs[-4000:] if result.logs else "",
-            }
-        )
+        outcomes.append(runtime_outcome(result))
     return outcomes

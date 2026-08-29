@@ -236,6 +236,38 @@ _NO_TEST_RESULTS = "NO TEST RESULTS"
 # paquete de workers; el contrato es el payload JSONB del audit event.
 _INFRA_FAILURE_KEY = "infrastructure_failure"
 
+# --- el recuento de tests en el bloque del reviewer (ADR 0162, ola 2) --------
+#
+# La clave que el test-runtime pone con CUÁNTOS tests corrieron
+# (`workers.tasks.test_runtime_task.TEST_COUNTS_KEY`). Es una unión discriminada
+# por PRESENCIA y por VALOR, y las tres ramas tienen que llegar al prompt como
+# tres frases distintas:
+#
+#   (a) dict con `total` > 0  → se midió y corrieron N tests
+#   (b) dict con `total` == 0 → se midió y corrieron CERO — el falso verde que
+#       el ADR mide en la BD viva: `No tests executed!` con `exit_code == 0`
+#   (c) `None`                → NO SE PUDO MEDIR. **Jamás cero.**
+#
+# Colapsar (c) en (b) fabricaría el falso FALLO que el encargo prohíbe: le diría
+# al reviewer «este cambio no ejecutó ni un test» cuando lo único cierto es que
+# no supimos leer la salida.
+_TEST_COUNTS_KEY = "test_counts"
+# Y la cuarta rama, que no es un estado del recuento sino del PARQUE: la clave
+# ausente. Todos los `test_run_completed` persistidos antes de la ola 1 son así.
+# Un informe anterior a la medición no dice nada sobre el recuento —ni siquiera
+# que no se pudiera medir—, así que no se le añade línea: renderiza byte a byte
+# lo de siempre.
+_COUNTS_KEY_ABSENT = object()
+
+# Los dos literales que discriminan (b) y (c) a la lectura. Están en constantes
+# porque el prompt sembrado del reviewer los CITA desde otro desplegable
+# (`api_server.seeds.builtin_agents`), igual que `_NO_TEST_RESULTS`: si alguien
+# reescribe la redacción sin tocar el prompt, la instrucción deja de aplicarse y
+# nadie se entera. Un test ata los dos lados.
+_ZERO_TESTS_MARKER = "ZERO tests"
+_UNMEASURED_TESTS_MARKER = "could not determine how many tests ran"
+_TESTS_LINE_PREFIX = "  tests: "
+
 
 def _count_executable_criteria(task: Any) -> int:
     """Cuántos ``acceptance_criteria`` de la tarea puede EJECUTAR el test-runtime.
@@ -251,6 +283,94 @@ def _count_executable_criteria(task: Any) -> int:
         for criterion in (getattr(task, "acceptance_criteria", None) or [])
         if isinstance(criterion, dict) and criterion.get("runtime") and criterion.get("command")
     )
+
+
+def _measured_counts(raw: Any) -> dict[str, Any] | None:
+    """El recuento MEDIDO que trae un outcome, o ``None`` si no hay ninguno.
+
+    El dato llega de un ``payload`` JSONB de auditoría, o sea, de un esquema
+    libre con años de versiones distintas dentro. Cualquier forma que no sea un
+    recuento reconocible degrada a ``None`` —«no se pudo medir»— y **nunca** a
+    un cero fabricado. Es la regla del ADR 0162 aplicada al pie de la letra: un
+    cero es una acusación («este cambio no ejecutó ni un test») y un ``None`` es
+    sólo una laguna, así que ante la duda toca la laguna.
+    """
+    if not isinstance(raw, dict):
+        return None
+    total = raw.get("total")
+    if not isinstance(total, int) or isinstance(total, bool) or total < 0:
+        return None
+    return raw
+
+
+def _counts_bucket(counts: dict[str, Any], key: str) -> int:
+    """Un bucket del recuento, saneado. Mismo criterio que arriba: lo que no sea
+    un entero no negativo vale 0 en vez de romper el bloque entero."""
+    value = counts.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return 0
+    return value
+
+
+def _format_test_counts_line(raw: Any, *, passed: bool) -> str | None:
+    """La línea de recuento de un outcome, o ``None`` cuando no toca ponerla.
+
+    Las tres redacciones son deliberadamente irreconciliables entre sí (ver las
+    constantes): el reviewer LEE, no parsea, así que si (c) se pareciera a (b)
+    acabaría tratando «no supimos contar» como «no corrió nada».
+
+    En inglés, como el resto del bloque, y a propósito: el ``<test-report>`` es
+    UN texto que se le entrega al reviewer sea cual sea el idioma del tenant.
+    Lo que sí vive en los dos idiomas es el prompt que enseña a leerlo.
+    """
+    if raw is _COUNTS_KEY_ABSENT:
+        # Outcome anterior a la medición: no se le inventa una línea. Ver la
+        # constante — decir «no se pudo medir» de un informe que ni lo intentó
+        # sería afirmar algo que nadie comprobó.
+        return None
+    counts = _measured_counts(raw)
+    if counts is None:
+        # (c) NO SE PUDO MEDIR. La segunda frase existe porque un LLM tiende a
+        # redondear «no lo sé» a «nada», y ese redondeo ES el falso fallo que
+        # esta ola viene a evitar.
+        return (
+            f"{_TESTS_LINE_PREFIX}{_UNMEASURED_TESTS_MARKER} — the runtime output "
+            "could not be parsed. UNKNOWN is not zero: do NOT read it as a "
+            "measurement of zero."
+        )
+    source = str(counts.get("source") or "unknown")
+    if int(counts["total"]) == 0:
+        # (b) el falso verde que el ADR mide en la instalación viva.
+        line = (
+            f"{_TESTS_LINE_PREFIX}{_ZERO_TESTS_MARKER} ran (counted from {source}) — "
+            "measured, not guessed."
+        )
+        if passed:
+            # Sólo si el comando salió VERDE. Con `exit != 0` esta frase sería
+            # sencillamente falsa, y una frase falsa en el prompt vale menos que
+            # ninguna.
+            line += (
+                " The command exited 0 WITHOUT executing a single test, so this run is "
+                "NOT evidence that the code works."
+            )
+        return line
+    # (a) se midió y corrieron N. Los buckets a cero no se imprimen: esta línea
+    # se paga en CADA revisión de CADA proyecto que pasa.
+    parts = [f"{int(counts['total'])} executed"]
+    # `passed` NO se imprime incondicionalmente, y aquí está el motivo: si el
+    # bucket falta, `_counts_bucket` devuelve 0 por saneamiento, y el reviewer
+    # leería «12 executed, 0 passed» — o sea «fallaron los doce». Eso no es un
+    # cero medido: es un dato ausente disfrazado de acusación, que es exactamente
+    # la confusión que esta línea existe para impedir. Un total sin desglose se
+    # queda en el total.
+    if isinstance(counts.get("passed"), int) and not isinstance(counts.get("passed"), bool):
+        parts.append(f"{_counts_bucket(counts, 'passed')} passed")
+    parts += [
+        f"{_counts_bucket(counts, key)} {key}"
+        for key in ("failed", "errored", "skipped")
+        if _counts_bucket(counts, key)
+    ]
+    return f"{_TESTS_LINE_PREFIX}{', '.join(parts)} (counted from {source})"
 
 
 def _format_absent_test_report_block(
@@ -315,7 +435,13 @@ def _format_test_report_block(
     opción B): dice cuál de los casos es, porque la ausencia de resultados no
     puede seguir siendo indistinguible del diseño. Los tres parámetros son
     obligatorios a propósito — con un default, un caller nuevo elegiría por
-    omisión uno de los tres mensajes y volvería a mentir."""
+    omisión uno de los tres mensajes y volvería a mentir.
+
+    Cada outcome puede traer además su RECUENTO de tests (``test_counts``, ola 2
+    del mismo ADR), que es lo que convierte «salió con 0» en una afirmación
+    comprobable. Un outcome sin esa clave —todo el parque persistido antes de la
+    ola 1— renderiza exactamente igual que antes: ver
+    :func:`_format_test_counts_line`."""
     if not outcomes:
         return _format_absent_test_report_block(
             project_declares_runtime=project_declares_runtime,
@@ -333,6 +459,11 @@ def _format_test_report_block(
         if infra_stage:
             # Un `FAILED` a secas haría que el reviewer culpase al diff de un
             # fallo de la plataforma (ADR 0162, D).
+            #
+            # Y NO lleva línea de recuento: esta cabecera ya dice «the tests did
+            # NOT run», que es la versión FUERTE de «no se pudo medir». Añadir
+            # debajo la versión débil invita a leerlos como dos problemas
+            # distintos cuando son el mismo hecho dicho dos veces.
             lines.append(
                 f"- runtime {runtime}: INFRASTRUCTURE FAILURE ({infra_stage}) — the "
                 "tests did NOT run. This is a platform failure, not evidence about "
@@ -344,6 +475,16 @@ def _format_test_report_block(
                 header += ", timed_out=true"
             header += ")"
             lines.append(header)
+            # El recuento va DEBAJO de la cabecera y ENCIMA de los logs: la
+            # cabecera dice qué decidió el código de salida y el recuento dice
+            # sobre cuántos tests lo decidió — que hasta esta ola era la
+            # pregunta que nadie contestaba. No toca `status`: bloquear es la
+            # opción C del ADR 0162 y no está firmada.
+            counts_line = _format_test_counts_line(
+                o.get(_TEST_COUNTS_KEY, _COUNTS_KEY_ABSENT), passed=passed
+            )
+            if counts_line is not None:
+                lines.append(counts_line)
         logs_tail = str(o.get("logs_tail") or "")
         if logs_tail:
             # El verde TAMBIÉN adjunta su cola (ADR 0162): `exit_code == 0` no
