@@ -536,6 +536,13 @@ class TestRuntimeSpec:
     # decides (stack_exec + cold-cache pre_install set it). The bridge stays
     # ``internal=True`` regardless — never raw NAT.
     dep_egress: bool = False
+    # ADR 0162 (decisión 1): la raíz del PROYECTO dentro del worktree, relativa a
+    # la raíz de éste (p. ej. ``ci4build``). ``None``/``""`` = el proyecto vive en
+    # la raíz, que es el comportamiento de siempre. Va aquí y no en cada llamada
+    # porque las dos bocas que deciden —``default_pre_install`` y los acceptance
+    # checks— no tienen ningún parámetro por el que recibirla: corrían desde
+    # ``/workspace`` hiciera lo que hiciera el agente.
+    project_root: str | None = None
 
 
 @dataclass(frozen=True)
@@ -662,8 +669,14 @@ class TestRuntimeRunner:
             # command IS the install (ADR 0094 D2). ``cwd`` (ADR 0093, 2026-07-24)
             # runs the command in a SUBDIRECTORY of the worktree (e.g. a project
             # scaffolded under ``ci4build/``) so the toolchain bootstraps with the
-            # right relative paths.
-            return self._exec(main_container, command, timeout_s=timeout_s, cwd=cwd)
+            # right relative paths; cuando el agente no lo pide, manda la raíz
+            # declarada del proyecto (ADR 0162).
+            return self._exec(
+                main_container,
+                command,
+                timeout_s=timeout_s,
+                cwd=effective_cwd(cwd, spec.project_root),
+            )
         finally:
             self._cleanup(
                 main_container,
@@ -820,11 +833,18 @@ class TestRuntimeRunner:
         Returns ``(None, logs)`` on success, or ``([rc]*n_checks, logs)`` if a
         command fails — so the caller marks every check failed (couldn't even
         run them) and the reporter shows the failed install, not fake test
-        failures. Pre_install runs while egress is attached (ADR 0094 D2)."""
+        failures. Pre_install runs while egress is attached (ADR 0094 D2).
+
+        ADR 0162: corre bajo ``spec.project_root``. Sin eso, un proyecto anidado
+        instalaba desde la raíz del worktree y ``composer`` contestaba «could not
+        find a composer.json file in /workspace» — el fallo más repetido de la
+        medición."""
         template = spec.plan.template
         all_logs: list[str] = []
         for cmd in template.default_pre_install:
-            exec_rc, exec_logs = self._exec(container, cmd, timeout_s=DEFAULT_TIMEOUT_S)
+            exec_rc, exec_logs = self._exec(
+                container, cmd, timeout_s=DEFAULT_TIMEOUT_S, cwd=spec.project_root
+            )
             all_logs.append(f"--- pre_install: {cmd}\n{exec_logs}\n")
             if exec_rc != 0:
                 return [exec_rc] * len(spec.plan.checks), "".join(all_logs)
@@ -838,14 +858,20 @@ class TestRuntimeRunner:
         """Run each acceptance check, return ``(exit_codes, logs, timed_out)``.
 
         Runs AFTER pre_install and AFTER egress is dropped (ADR 0094 D2), so the
-        test phase has no network path off its internal bridge."""
+        test phase has no network path off its internal bridge.
+
+        ADR 0162: cada check corre bajo ``spec.project_root``, como el
+        pre_install. Es la boca que decide si una tarea pasa, y era la que menos
+        sabía dónde está el proyecto."""
         all_logs: list[str] = []
         exit_codes: list[int] = []
         timed_out = False
 
         for check in spec.plan.checks:
             budget = check.timeout_s or DEFAULT_TIMEOUT_S
-            exec_rc, exec_logs = self._exec(container, check.command, timeout_s=budget)
+            exec_rc, exec_logs = self._exec(
+                container, check.command, timeout_s=budget, cwd=spec.project_root
+            )
             all_logs.append(
                 f"--- check {check.id or check.description!r}: {check.command}\n{exec_logs}\n"
             )
@@ -1038,6 +1064,27 @@ class InvalidCwdError(ValueError):
     unsafe characters."""
 
 
+def effective_cwd(explicit: str | None, project_root: str | None) -> str | None:
+    """Qué directorio manda cuando hay dos candidatos (ADR 0162, decisión 1).
+
+    Precedencia: el ``cwd`` explícito de la llamada del agente GANA sobre la raíz
+    declarada del proyecto —su petición es más concreta que la configuración: en
+    un monorepo puede estar tocando otro subproyecto—; sin él manda
+    ``project_root``; sin ninguno de los dos, la raíz del worktree, que es el
+    comportamiento de siempre.
+
+    Un valor en blanco cuenta como AUSENTE, no como «corre en la raíz»: el agente
+    que omite el parámetro (el 46 % medido) no está decidiendo nada, y tratarlo
+    como decisión tiraría por tierra la configuración del proyecto justo en el
+    caso que esto viene a arreglar.
+    """
+    if explicit and explicit.strip():
+        return explicit
+    if project_root and project_root.strip():
+        return project_root
+    return None
+
+
 def _apply_cwd(command: str, cwd: str | None) -> str:
     """Prefix ``command`` with ``cd <cwd> &&`` when a working directory is given.
 
@@ -1056,6 +1103,15 @@ def _apply_cwd(command: str, cwd: str | None) -> str:
         raise InvalidCwdError(f"cwd must be a relative path inside the worktree, got {cwd!r}")
     if not all(c.isalnum() or c in "._-/" for c in clean):
         raise InvalidCwdError(f"cwd has unsafe characters: {cwd!r}")
+    # A leading `-` is not a breakout — the charset above already closes that —
+    # but it IS a `cd` that does something else: `cd -` jumps to the previous
+    # directory and `cd -rf` is a flag error. Either way the command would run
+    # somewhere nobody chose. Mirrored in the API-side validator so the two
+    # halves cannot drift (ADR 0162).
+    if any(p.startswith("-") for p in parts):
+        raise InvalidCwdError(
+            f"cwd segments must not start with '-' (cd reads them as flags): {cwd!r}"
+        )
     return f"cd {clean} && {command}"
 
 
@@ -1074,6 +1130,7 @@ __all__ = [
     "TestRuntimeSpec",
     "build_aux_run_kwargs",
     "default_aux_services",
+    "effective_cwd",
     "group_tasks_by_runtime",
     "resolve_run_runtime",
     "resolve_run_runtime_id",

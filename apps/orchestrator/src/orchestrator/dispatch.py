@@ -208,16 +208,101 @@ def _format_prior_outputs(outputs: list[str]) -> str:
     return "\n\n".join(blocks)
 
 
-def _format_test_report_block(outcomes: list[dict[str, Any]]) -> str:
+# ADR 0162 (decisión 2, opción B). Cabecera del bloque cuando NO hay resultados,
+# en primera línea para que el modelo no tenga que deducirla del cuerpo.
+_NO_TEST_RESULTS = "NO TEST RESULTS"
+# La clave que el test-runtime pone en un outcome cuando lo que falló fue la
+# PLATAFORMA y no el código del tenant (`workers.tasks.test_runtime_task`
+# .INFRA_FAILURE_KEY). Se repite aquí porque el orchestrator no importa el
+# paquete de workers; el contrato es el payload JSONB del audit event.
+_INFRA_FAILURE_KEY = "infrastructure_failure"
+
+
+def _count_executable_criteria(task: Any) -> int:
+    """Cuántos ``acceptance_criteria`` de la tarea puede EJECUTAR el test-runtime.
+
+    El predicado es el mismo que aplica el worker antes de lanzar la fase de
+    tests (``workers.execution._run_task_tests``): un criterio es ejecutable si
+    es un dict con ``runtime`` **y** ``command``. Se repite aquí en vez de
+    importarse porque el orchestrator no depende del paquete de workers — y por
+    eso la paridad entre los dos la fija un test, no la buena voluntad.
+    """
+    return sum(
+        1
+        for criterion in (getattr(task, "acceptance_criteria", None) or [])
+        if isinstance(criterion, dict) and criterion.get("runtime") and criterion.get("command")
+    )
+
+
+def _format_absent_test_report_block(
+    *,
+    project_declares_runtime: bool,
+    executable_criteria: int,
+    tests_were_launched: bool,
+) -> str:
+    """El bloque cuando no hay ni un outcome — el hallazgo del ADR 0162.
+
+    Devolvía cadena vacía, y entonces el bloque ``<test-report>`` **desaparecía**
+    del prompt: un proyecto sin tests y un proyecto cuyos tests reventaron
+    producían exactamente el mismo prompt de reviewer. Los tres discriminantes
+    salen de datos reales —el runtime que declara el proyecto, los criterios
+    ejecutables de la tarea y si consta un ``test_run_started``—, no de
+    adivinar.
+    """
+    if tests_were_launched:
+        body = (
+            f"{_NO_TEST_RESULTS} — INFRASTRUCTURE. The test phase was launched for this "
+            "task and brought back no outcome at all. The tests did NOT run: this is a "
+            "platform failure, NOT a project without tests, and NOT evidence that the "
+            "code is fine."
+        )
+    elif executable_criteria > 0:
+        body = (
+            f"{_NO_TEST_RESULTS} — this task carries {executable_criteria} executable "
+            "acceptance criteria, but there is no record that the test phase ever "
+            "started: they did not run. Treat this as MISSING evidence, never as a pass."
+        )
+    elif not project_declares_runtime:
+        body = (
+            f"{_NO_TEST_RESULTS} — the project declares no test runtime template, so "
+            "there was nothing to execute. No automated test evidence exists for this "
+            "change."
+        )
+    else:
+        body = (
+            f"{_NO_TEST_RESULTS} — the task's acceptance criteria are not executable by "
+            "the test runtime (an executable criterion needs BOTH `runtime` and "
+            "`command`), so nothing was launched. No automated test evidence exists for "
+            "this change."
+        )
+    return f"<test-report>\n{body}\n</test-report>"
+
+
+def _format_test_report_block(
+    outcomes: list[dict[str, Any]],
+    *,
+    project_declares_runtime: bool,
+    executable_criteria: int,
+    tests_were_launched: bool,
+) -> str:
     """Render persisted ``test_run_completed`` outcomes as the reviewer's
     ``<test-report>`` prompt block (prod-17 task_prod17_test_02).
 
     Reads the outcome dicts the test-runtime persists (``runtime``, ``exit_codes``,
     ``all_passed``, ``timed_out``, ``logs_tail``) — no dependency on the sandboxed
-    runtime package. Returns ``""`` when there are no outcomes (the reviewer then
-    reviews the diff alone — graceful degradation)."""
+    runtime package.
+
+    Sin outcomes el bloque **ya no es cadena vacía** (ADR 0162, decisión 2
+    opción B): dice cuál de los casos es, porque la ausencia de resultados no
+    puede seguir siendo indistinguible del diseño. Los tres parámetros son
+    obligatorios a propósito — con un default, un caller nuevo elegiría por
+    omisión uno de los tres mensajes y volvería a mentir."""
     if not outcomes:
-        return ""
+        return _format_absent_test_report_block(
+            project_declares_runtime=project_declares_runtime,
+            executable_criteria=executable_criteria,
+            tests_were_launched=tests_were_launched,
+        )
     lines = ["<test-report>"]
     for o in outcomes:
         runtime = str(o.get("runtime", "unknown"))
@@ -225,11 +310,21 @@ def _format_test_report_block(outcomes: list[dict[str, Any]]) -> str:
         status = "PASSED" if passed else "FAILED"
         exit_codes = o.get("exit_codes")
         timed_out = bool(o.get("timed_out", False))
-        header = f"- runtime {runtime}: {status} (exit_codes={exit_codes}"
-        if timed_out:
-            header += ", timed_out=true"
-        header += ")"
-        lines.append(header)
+        infra_stage = str(o.get(_INFRA_FAILURE_KEY) or "")
+        if infra_stage:
+            # Un `FAILED` a secas haría que el reviewer culpase al diff de un
+            # fallo de la plataforma (ADR 0162, D).
+            lines.append(
+                f"- runtime {runtime}: INFRASTRUCTURE FAILURE ({infra_stage}) — the "
+                "tests did NOT run. This is a platform failure, not evidence about "
+                "the code under review."
+            )
+        else:
+            header = f"- runtime {runtime}: {status} (exit_codes={exit_codes}"
+            if timed_out:
+                header += ", timed_out=true"
+            header += ")"
+            lines.append(header)
         logs_tail = str(o.get("logs_tail") or "")
         if not passed and logs_tail:
             lines.append("  logs (tail):")
@@ -884,8 +979,11 @@ class TaskDispatcher:
         # prod-17 task_prod17_test_02: fold the latest test-runtime outcomes into a
         # `<test-report>` block the reviewer reads (ADR 0027 loop). The test-runtime
         # (task_prod17_test_01) persists `test_run_completed` audit events; we read
-        # the freshest few. Absent (no tests run yet) → empty → the reviewer reviews
-        # the diff alone (graceful degradation).
+        # the freshest few.
+        #
+        # ADR 0162 (decisión 2, opción B): la ausencia de outcomes ya NO produce un
+        # bloque vacío. «No había nada que ejecutar» y «se lanzó y no volvió nada»
+        # son dos cosas distintas y hasta ahora llegaban al reviewer como la misma.
         test_outcomes = list(
             (
                 await session.execute(
@@ -900,7 +998,26 @@ class TaskDispatcher:
                 )
             ).scalars()
         )
-        test_report = _format_test_report_block(list(reversed(test_outcomes)))
+        # El discriminante del tercer caso sale de un dato, no de una inferencia:
+        # si consta un `test_run_started` y no hay ni un `test_run_completed`, la
+        # fase se lanzó y no volvió con nada.
+        tests_were_launched = (
+            await session.execute(
+                select(TaskAuditEvent.id)
+                .where(
+                    TaskAuditEvent.task_id == task.id,
+                    TaskAuditEvent.tenant_id == task.tenant_id,
+                    TaskAuditEvent.kind == "test_run_started",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none() is not None
+        test_report = _format_test_report_block(
+            list(reversed(test_outcomes)),
+            project_declares_runtime=bool(getattr(project, "default_runtime_template", None)),
+            executable_criteria=_count_executable_criteria(task),
+            tests_were_launched=tests_were_launched,
+        )
 
         request = await self._assemble_run_request(
             session, task=task, agent=reviewer, project=project, model_spec=model_spec
@@ -916,7 +1033,8 @@ class TaskDispatcher:
             # ciclo. La description queda solo como fallback sin criteria.
             "acceptance_criteria": _render_acceptance_criteria(task),
             "implementer_output": prior_output or "",
-            # `<test-report>` block (prod-17 test_02); "" when no tests ran yet.
+            # `<test-report>` block (prod-17 test_02). Llega SIEMPRE desde el
+            # ADR 0162: cuando no hay resultados, el bloque dice por qué.
             "test_report": test_report,
         }
         return request

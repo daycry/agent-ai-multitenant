@@ -448,6 +448,24 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "tu primer comentario debe citar el `failed_criterion` exacto "
             "y la `testreport_evidence` (no inventes lo que dice el "
             "report, cítalo).\n\n"
+            # ADR 0162 (decisión 2, opción B). Antes el bloque DESAPARECÍA
+            # cuando no había resultados, así que un proyecto sin tests y un
+            # proyecto cuyos tests reventaron le llegaban al reviewer idénticos.
+            # Ahora el bloque llega siempre y dice cuál de los dos es; esto le
+            # enseña a leerlo. Lo que NO se hace aquí es ordenarle rechazar: eso
+            # sería la opción C —el gate duro— por la puerta de atrás, y esa no
+            # está firmada (hoy bloquearía el 100 % de las tareas).
+            "Ese bloque llega SIEMPRE. Cuando empieza por `NO TEST "
+            "RESULTS`, lee CUÁL de los casos declara, porque no significan "
+            "lo mismo: «no había nada que ejecutar» es una propiedad del "
+            "proyecto, mientras que un fallo de INFRAESTRUCTURA (o unos "
+            "criterios ejecutables que nunca arrancaron) significa que los "
+            "tests NO corrieron y que no existe evidencia automática sobre "
+            "este cambio. En ese segundo caso no trates la ausencia como si "
+            "el proyecto no tuviera tests, ni la interpretes como prueba de "
+            "que el código funciona: dilo explícitamente en tu revisión, "
+            "juzga el diff por sí mismo y sé más exigente con lo que sin "
+            "tests no puedes verificar.\n\n"
             "Termina SIEMPRE tu revisión con un veredicto estructurado "
             "en una línea propia:\n"
             "  `<verdict>approve</verdict>` si el PR puede mergearse,\n"
@@ -477,6 +495,19 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "evidence: if tests fail, your first comment MUST cite the "
             "exact `failed_criterion` and the `testreport_evidence` (don't "
             "paraphrase — quote it).\n\n"
+            # Misma adición que en el prompt ES (ADR 0162, opción B): los dos
+            # idiomas tienen que decir lo mismo, o el reviewer se comporta
+            # distinto según el `docs_language` del tenant.
+            "That block ALWAYS arrives. When it starts with `NO TEST "
+            "RESULTS`, read WHICH case it declares, because they do not mean "
+            "the same thing: 'there was nothing to execute' is a property of "
+            "the project, whereas an INFRASTRUCTURE failure (or executable "
+            "criteria that never started) means the tests did NOT run and no "
+            "automated evidence exists for this change. In that second case, "
+            "do not treat the absence as if the project had no tests, and do "
+            "not read it as proof that the code works: say so explicitly in "
+            "your review, judge the diff on its own merits, and be stricter "
+            "about whatever you cannot verify without tests.\n\n"
             "ALWAYS finish your review with a structured verdict on its "
             "own line:\n"
             "  `<verdict>approve</verdict>` if the PR can be merged,\n"
