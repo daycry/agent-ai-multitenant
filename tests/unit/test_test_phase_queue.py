@@ -145,7 +145,13 @@ async def test_a_broker_failure_never_breaks_a_finished_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """El invariante que hay que conservar: el run YA terminó bien y la tarea ya
-    se movió a review. Un fallo de la fase de tests no puede tumbarlo."""
+    se movió a review. Un fallo de la fase de tests no puede tumbarlo.
+
+    Lo que cambió con el ADR 0162 (decisión 2, opción D): el fallo ya no se
+    devuelve como `{}`. Devolver la nada era exactamente lo que hacía que un
+    fallo de infraestructura se le presentara al reviewer igual que un proyecto
+    sin tests. Aquí el request ni siquiera trae `tenant_id`, así que no puede
+    persistirse el evento — y ni eso rompe el run."""
     from workers.tasks import test_runtime_task
 
     fake = _FakeApp(_FakeAsyncResult(raises=TimeoutError("no worker on `test`")))
@@ -154,7 +160,8 @@ async def test_a_broker_failure_never_breaks_a_finished_run(
     out = await test_runtime_task.dispatch_test_runtime_and_wait(
         {"task_id": "t1", "acceptance_criteria": [_check()]}
     )
-    assert out == {}
+    assert out["status"] == "dispatch_failed"
+    assert out["all_passed"] is False
 
 
 @pytest.mark.asyncio

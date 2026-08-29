@@ -124,18 +124,27 @@ def _stack_command_allowed(command: str, allowed: list[str]) -> str | None:
     return None
 
 
-def _resolve_stack_dep_cache(template: Any, worktree_host_path: str, data_root: str) -> str | None:
+def _resolve_stack_dep_cache(
+    template: Any,
+    worktree_host_path: str,
+    data_root: str,
+    project_root: str | None = None,
+) -> str | None:
     """Resolve the warm dep-cache host path for a stack command, or None.
 
     Best-effort (ADR 0045/0093): a missing/cold lock file or cache layout must
     never block the command — the install just runs cold (and resolves its
-    registries via the proxy, ADR 0094)."""
+    registries via the proxy, ADR 0094).
+
+    ``project_root`` (ADR 0162) es el directorio DONDE VA A CORRER el comando, no
+    la raíz del worktree: es ahí donde está el lockfile. Con el worktree a secas,
+    todo proyecto anidado se quedaba sin caché en silencio."""
     from pathlib import Path
 
     from shared_test_runtimes.dep_cache import DepCacheManager, compute_lock_hash
 
     try:
-        lock = compute_lock_hash(Path(worktree_host_path), template.id)
+        lock = compute_lock_hash(Path(worktree_host_path), template.id, project_root=project_root)
         if not lock.hash:
             return None
         entry = DepCacheManager(Path(data_root) / "dep-cache").mount_for(template, lock.hash)
@@ -204,6 +213,12 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
     finally:
         await engine.dispose()
 
+    # ADR 0162 (decisión 1): la raíz del proyecto DENTRO del worktree, declarada
+    # por el operador en `repository_config`. Ausente o vacía = vive en la raíz,
+    # que es el comportamiento de siempre.
+    root_raw = repo_cfg.get("project_root")
+    project_root = str(root_raw).strip() or None if isinstance(root_raw, str) else None
+
     deny = _stack_command_allowed(command, allowed)
     if deny is not None:
         return {"exit_code": -1, "logs": deny, "timed_out": False, "allowed": sorted(allowed)}
@@ -221,6 +236,7 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
             RuntimePlan,
             TestRuntimeRunner,
             TestRuntimeSpec,
+            effective_cwd,
             resolve_run_runtime,
         )
     except ImportError:
@@ -261,12 +277,26 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
             ),
             "timed_out": False,
         }
-    dep_cache_host_path = _resolve_stack_dep_cache(template, worktree_host_path, settings.data_root)
+    exec_cwd = effective_cwd(cwd, project_root)
+    # El lockfile vive en la RAÍZ DEL PROYECTO, no donde corra este comando en
+    # concreto. Aquí había un `project_root=exec_cwd` que parecía más coherente y
+    # era una regresión: con un `cwd` explícito del agente (`tests`, `src/…`) la
+    # caché se ponía a buscar `composer.lock` ahí, no lo encontraba y se
+    # desactivaba — en proyectos EN LA RAÍZ, que antes acertaban siempre.
+    #
+    # La precedencia del ADR 0162 gobierna DÓNDE SE EJECUTA (`exec_cwd`, abajo);
+    # la caché es otra pregunta y tiene otra respuesta.
+    dep_cache_host_path = _resolve_stack_dep_cache(
+        template, worktree_host_path, settings.data_root, project_root=project_root
+    )
 
     spec = TestRuntimeSpec(
         plan=RuntimePlan(template=template, checks=()),
         worktree_host_path=worktree_host_path,
         dep_cache_host_path=dep_cache_host_path,
+        # ADR 0162: el runner la aplica cuando el agente no pide `cwd` — el 46 %
+        # de las llamadas medidas, y las que peor salían.
+        project_root=project_root,
         # ADR 0094: stack_exec IS the install (composer install / npm ci / …) —
         # it needs proxied egress to the registries for the whole command.
         dep_egress=True,
@@ -282,6 +312,9 @@ async def _run_stack_command(  # noqa: PLR0911, PLR0915
         task_id=str(task_id),
         runtime=template.id,
         command=command[:120],
+        # ADR 0162: sin esto, la única forma de saber desde dónde corrió un
+        # comando era deducirlo del error que devolvía.
+        cwd=exec_cwd,
     )
     runner = TestRuntimeRunner(settings)
     try:

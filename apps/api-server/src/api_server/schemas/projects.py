@@ -44,6 +44,11 @@ _MAX_JSON_CONFIG_BYTES = 65536
 _MAX_ALLOWED_COMMANDS = 100
 _MAX_COMMAND_LENGTH = 128
 
+# ADR 0162: `repository_config.project_root`. `C:\algo` lo cazaría igualmente el
+# juego de caracteres (los dos puntos no están permitidos), pero con un mensaje
+# que habla de caracteres y no de lo que pasa: que es una ruta absoluta.
+_WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:")
+
 
 # --- allowed_domains (prod-12 task_prod12_ssrf_03) ---------------------------
 # Deny-by-default FQDN allowlist for the agent HTTP tools. Server-side
@@ -271,6 +276,69 @@ def _validate_human_approval_policy(value: dict[str, Any] | None) -> dict[str, A
     return value
 
 
+def _validate_repository_config(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Valida SOLO la clave `project_root` del blob (ADR 0162, decisión 1).
+
+    El resto de `repository_config` sigue sin esquema a propósito. `project_root`
+    no puede: es la ruta del proyecto DENTRO del worktree y acaba concatenada en
+    un `sh -c` dentro del runtime (`workers.test_runtime._apply_cwd`). Lo que el
+    worker rechazaría en tiempo de run se rechaza aquí, en la puerta — si no, el
+    operador guarda un valor, la API responde 200, y el fallo aparece dentro de
+    un run, en un log que nadie mira.
+
+    El juego de caracteres es EL MISMO que el del worker (`[A-Za-z0-9._/-]`), y
+    va deliberadamente espejado: dos validadores que se separan son peores que
+    uno solo. Se rechaza además lo que el worker se limita a reescribir en
+    silencio —la ruta absoluta, a la que le quita la barra— porque guardar algo
+    distinto de lo que el operador tecleó rompe la correspondencia entre lo que
+    ve en la UI y lo que se ejecuta.
+    """
+    if value is None or "project_root" not in value:
+        return value
+    raw = value["project_root"]
+    if raw is None:
+        # Ausente, `null` y `""` son la misma cosa: el proyecto vive en la raíz.
+        return value
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"repository_config.project_root tiene que ser una cadena, no {type(raw).__name__}"
+        )
+    root = raw.strip()
+    if not root:
+        return {**value, "project_root": ""}
+    if root.startswith("/") or _WINDOWS_ABSOLUTE_RE.match(root):
+        raise ValueError(
+            "repository_config.project_root es una ruta RELATIVA a la raíz del "
+            f"worktree (p. ej. 'ci4build'), no absoluta: {raw!r}"
+        )
+    normalised = root.rstrip("/")
+    # `..` en cualquier forma: como segmento (`a/../b`) y como subcadena. Lo
+    # segundo es más estricto que el worker a propósito — ninguna raíz de
+    # proyecto legítima lleva `..`, y comprobar la subcadena ahorra tener que
+    # razonar sobre en qué orden se normaliza la ruta aguas abajo.
+    parts = normalised.split("/")
+    if not normalised or ".." in normalised or any(p in ("", ".") for p in parts):
+        raise ValueError(
+            "repository_config.project_root no puede salir del worktree ni llevar "
+            f"segmentos vacíos, '.' o '..': {raw!r}"
+        )
+    if not all(c.isalnum() or c in "._-/" for c in normalised):
+        raise ValueError(
+            "repository_config.project_root solo admite [A-Za-z0-9._/-] — el valor "
+            f"se concatena en el `sh -c` del runtime: {raw!r}"
+        )
+    # Un guion inicial no es inyección —el juego de caracteres ya la cierra— pero
+    # sí es un `cd` que hace otra cosa: `cd -` salta al directorio anterior, y
+    # `cd -rf` es un error de flag. El comando se ejecutaría en un sitio que nadie
+    # eligió, y el síntoma volvería a acusar al repositorio del tenant.
+    if any(p.startswith("-") for p in parts):
+        raise ValueError(
+            "repository_config.project_root no puede tener segmentos que empiecen "
+            f"por '-': `cd` los lee como opciones, no como directorios: {raw!r}"
+        )
+    return {**value, "project_root": normalised}
+
+
 def _check_json_config_size(value: Any, field_name: str) -> None:
     """Reject a free-form JSON config blob over `_MAX_JSON_CONFIG_BYTES`.
 
@@ -406,6 +474,11 @@ class ProjectCreateRequest(BaseModel):
     def _check_human_approval_policy(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return _validate_human_approval_policy(value)
 
+    @field_validator("repository_config", mode="after")
+    @classmethod
+    def _check_repository_config(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_repository_config(value)
+
     @field_validator(
         "rag_knowledge_bases",
         "worker_config",
@@ -522,6 +595,11 @@ class ProjectUpdateRequest(BaseModel):
     @classmethod
     def _check_human_approval_policy(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         return _validate_human_approval_policy(value)
+
+    @field_validator("repository_config", mode="after")
+    @classmethod
+    def _check_repository_config(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _validate_repository_config(value)
 
     @field_validator(
         "rag_knowledge_bases",

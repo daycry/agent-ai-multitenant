@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 import os
 import shutil
 import time
@@ -40,6 +41,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .types import RuntimeTemplate
+
+# Logger de stdlib a propósito: este paquete no tiene dependencias (ni structlog),
+# y se importa tanto desde el worker como desde herramientas sueltas.
+_log = logging.getLogger("shared_test_runtimes.dep_cache")
 
 # How long a cache entry can sit untouched before the TTL purge sweeps
 # it. Matches Plan 06 task_06_11 ("TTL de 14 días sin uso → purga
@@ -89,9 +94,35 @@ class LockHashResult:
     prefix: str
 
 
+def _project_dir(workdir: Path, project_root: str | None) -> Path:
+    """Directorio del proyecto dentro del worktree (ADR 0162, decisión 1).
+
+    ``project_root`` es una ruta RELATIVA a la raíz del worktree. Un valor que no
+    lo sea (absoluto, con ``..``, con segmentos vacíos) se DESCARTA con un log y
+    se cae a la raíz: nunca se sale del worktree. La composición va por
+    ``joinpath(*segmentos)`` y no por ``workdir / project_root`` porque en
+    pathlib el operando absoluto se come al izquierdo —``Path("/wt") / "/etc"``
+    es ``/etc``—, que aquí sería una fuga silenciosa.
+    """
+    if not project_root or not project_root.strip():
+        return workdir
+    clean = project_root.strip().strip("/")
+    parts = clean.split("/")
+    if not clean or any(p in ("", ".", "..") for p in parts):
+        _log.warning(
+            "dep-cache: project_root %r no es una ruta relativa dentro del worktree; "
+            "se busca el lockfile en la raíz",
+            project_root,
+        )
+        return workdir
+    return workdir.joinpath(*parts)
+
+
 def compute_lock_hash(
     worktree_path: Path | str,
     runtime_id: str,
+    *,
+    project_root: str | None = None,
 ) -> LockHashResult:
     """Hash the lock file the runtime cares about, sha256 hex.
 
@@ -103,15 +134,31 @@ def compute_lock_hash(
     The hash is over the lock file's *bytes*, not a parsed tree. That
     way an inconsequential whitespace change still busts the cache
     (safer than risking a stale cache from a missed semantic edit).
+
+    ``project_root`` (ADR 0162) es el subdirectorio del worktree donde vive el
+    proyecto. Sin él, un proyecto anidado no tenía su lockfile donde se miraba,
+    y la caché se desactivaba **sin un solo log**: cada run reinstalaba el árbol
+    de dependencias entero y nadie podía saber por qué. El hash de un proyecto
+    en la raíz no cambia — es la clave de un directorio en disco, y cambiarlo
+    dejaría huérfanas todas las cachés calientes.
     """
     workdir = Path(worktree_path)
     entry = RUNTIME_LOCK_FILES.get(runtime_id)
     if entry is None or not entry[0]:
+        # Sin lockfile declarado (generic-shell / generic-http): es de diseño, no
+        # un descarte que haya que denunciar.
         return LockHashResult(runtime_id=runtime_id, lock_path=None, hash=None, prefix="")
 
     lock_name, prefix = entry
-    lock_path = workdir / lock_name
+    lock_path = _project_dir(workdir, project_root) / lock_name
     if not lock_path.is_file():
+        _log.warning(
+            "dep-cache DESACTIVADA para el runtime %s: no hay lockfile en %s "
+            "(¿el proyecto vive en un subdirectorio? se declara en "
+            "repository_config.project_root)",
+            runtime_id,
+            lock_path,
+        )
         return LockHashResult(runtime_id=runtime_id, lock_path=lock_path, hash=None, prefix=prefix)
 
     h = hashlib.sha256()

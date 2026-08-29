@@ -10,9 +10,12 @@ output is supposed to satisfy. Different stacks → different runtimes
 The four tasks of Fase B all live here:
 
   * ``group_tasks_by_runtime`` (task_06_04) — read each task's
-    ``acceptance_criteria`` list, keep only ``check_type='automated'``
-    entries, and group them by runtime. Each :class:`RuntimePlan`
-    becomes one container launch downstream.
+    ``acceptance_criteria`` list, drop the entries DECLARED non-automated
+    (manual / human), and group the rest by runtime. Each
+    :class:`RuntimePlan` becomes one container launch downstream.
+    Ojo con el matiz del ADR 0162: un criterio que no declara nada NO es
+    «automated», es NO DECLARADO — se ejecuta igual que siempre, pero queda
+    contado aparte (:meth:`RuntimePlan.undeclared_check_type_count`).
   * :class:`TestRuntimeRunner.launch` (task_06_05) — wire the
     template's image + worktree mount + dep-cache mount + aux network
     + ephemeral compose into ``docker.containers.run``, with the same
@@ -48,6 +51,7 @@ from typing import Any
 import structlog
 from docker.types import Mount
 from shared_test_runtimes.catalog import get as get_template
+from shared_test_runtimes.counts import TestCounts, count_tests
 from shared_test_runtimes.images import pinned_pull_reference
 from shared_test_runtimes.types import RuntimeTemplate
 
@@ -173,8 +177,15 @@ class AcceptanceCheck:
     runtime: str
     command: str
     expected_signal: str = "exit_code == 0"
+    """OJO: se guarda y NO SE EVALÚA en ningún sitio. El veredicto de un check
+    sale sólo del código de salida. Está así a propósito —evaluarlo es trabajo
+    de otra ola del ADR 0162— y se deja escrito aquí para que nadie lo lea como
+    una garantía que no existe."""
     timeout_s: int | None = None
     raw: Mapping[str, Any] = field(default_factory=dict)
+    # ADR 0162: qué `check_type` DECLARÓ el criterio, o ``None`` si nadie lo
+    # declaró. No es lo mismo que «automated»: ver :func:`_coerce_check`.
+    declared_check_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,15 +201,52 @@ class RuntimePlan:
     template: RuntimeTemplate
     checks: tuple[AcceptanceCheck, ...]
 
+    def undeclared_check_type_count(self) -> int:
+        """Cuántos de estos checks corren sin que nadie declarase su tipo.
+
+        Va al outcome como MÉTRICA, nunca como guarda: el ADR 0162 descarta
+        expresamente bloquear por porcentaje —se aprende a jugar enseguida y
+        castiga a los proyectos que legítimamente tienen poco que automatizar—.
+        La diferencia con el estado anterior no es que se impida algo: es que
+        antes ni siquiera se podía contar."""
+        return sum(1 for check in self.checks if check.declared_check_type is None)
+
+
+# Centinela para distinguir «la clave `check_type` NO ESTÁ» de «está y vale
+# algo». `dict.get(k, "automated")` no sabe hacer esa distinción, y ahí estaba
+# el defecto: el silencio se leía como una declaración.
+_CHECK_TYPE_MISSING: Any = object()
+
 
 def _coerce_check(entry: Mapping[str, Any]) -> AcceptanceCheck | None:
     """Best-effort coercion of one acceptance_criteria dict.
 
     Returns ``None`` when the entry is missing required fields or is a
     non-automated check (manual / human). The caller logs these as
-    "skipped" so the user sees them in the worker output."""
-    if entry.get("check_type", "automated") != "automated":
+    "skipped" so the user sees them in the worker output.
+
+    **ADR 0162 — el silencio deja de significar «automated».** Esto era
+    ``entry.get("check_type", "automated") != "automated"``: un criterio sin
+    ``check_type`` se leía como «esto DEBERÍA verificarse a máquina», que es la
+    misma regla que el ADR enuncia tres veces y descarta — *un valor ausente no
+    puede significar nada más fuerte que «desconocido»*. Sin esa distinción no
+    se puede separar «esta tarea no tiene nada que testear» (legítimo) de «esta
+    tarea sí debía tenerlo y nadie lo declaró» (el defecto).
+
+    Lo que **no** cambia es a quién se ejecuta: un criterio con ``runtime`` +
+    ``command`` y sin ``check_type`` sigue ejecutándose exactamente como hoy, o
+    las tareas que ya funcionan se quedarían sin tests de golpe. Lo que cambia
+    es que queda constancia en :attr:`AcceptanceCheck.declared_check_type`.
+    """
+    raw_check_type = entry.get("check_type", _CHECK_TYPE_MISSING)
+    if raw_check_type is _CHECK_TYPE_MISSING:
+        # NO DECLARADO. Se ejecuta —comportamiento de siempre— pero se anota.
+        declared_check_type: str | None = None
+    elif str(raw_check_type) != "automated":
+        # Declarado como manual / humano / vacío / nulo: se salta, como siempre.
         return None
+    else:
+        declared_check_type = "automated"
     runtime = entry.get("runtime")
     command = entry.get("command")
     if not runtime or not command:
@@ -211,6 +259,7 @@ def _coerce_check(entry: Mapping[str, Any]) -> AcceptanceCheck | None:
         expected_signal=str(entry.get("expected_signal") or "exit_code == 0"),
         timeout_s=int(entry["timeout_s"]) if entry.get("timeout_s") is not None else None,
         raw=dict(entry),
+        declared_check_type=declared_check_type,
     )
 
 
@@ -536,6 +585,13 @@ class TestRuntimeSpec:
     # decides (stack_exec + cold-cache pre_install set it). The bridge stays
     # ``internal=True`` regardless — never raw NAT.
     dep_egress: bool = False
+    # ADR 0162 (decisión 1): la raíz del PROYECTO dentro del worktree, relativa a
+    # la raíz de éste (p. ej. ``ci4build``). ``None``/``""`` = el proyecto vive en
+    # la raíz, que es el comportamiento de siempre. Va aquí y no en cada llamada
+    # porque las dos bocas que deciden —``default_pre_install`` y los acceptance
+    # checks— no tienen ningún parámetro por el que recibirla: corrían desde
+    # ``/workspace`` hiciera lo que hiciera el agente.
+    project_root: str | None = None
 
 
 @dataclass(frozen=True)
@@ -553,8 +609,26 @@ class TestRuntimeResult:
     container_id: str
     timed_out: bool
     network_name: str
+    # ADR 0162 (ola 1): cuántos tests corrieron de verdad, o ``None`` cuando no
+    # se pudo saber. Los TRES estados del ADR viven en este campo y no se pueden
+    # colapsar: ``TestCounts(total=N)`` = parseado con N; ``TestCounts(total=0)``
+    # = parseado y CERO tests (el `No tests executed!` con exit 0 de la BD viva);
+    # ``None`` = NO SE PUDO MEDIR. Nunca ``TestCounts(total=0)`` para este
+    # último: eso le diría al reviewer que el cambio no ejecutó ni un test
+    # cuando lo único cierto es que no supimos leer la salida — un falso fallo.
+    test_counts: TestCounts | None = None
+    # Cuántos de los checks que se ejecutaron no traían `check_type` declarado.
+    # Métrica, no guarda (ver :meth:`RuntimePlan.undeclared_check_type_count`).
+    checks_without_declared_check_type: int = 0
 
     def all_passed(self) -> bool:
+        """El veredicto, y NO lo tocan los recuentos de arriba.
+
+        Deliberadamente sigue saliendo sólo del código de salida, así que un
+        ``No tests executed!`` con exit 0 **sigue dando verde**. No es un
+        descuido: el gate es la opción C del ADR 0162 y no está firmada,
+        precisamente porque ahí viven los falsos fallos. Esta ola hace visible
+        el falso verde; cerrarlo es otra decisión y otra firma."""
         return not self.timed_out and all(rc == 0 for rc in self.exit_codes)
 
 
@@ -564,9 +638,14 @@ class TestRuntimeRunner:
     The runner owns the *Docker side* — creating the task's private
     bridge, starting aux services, starting the optional DinD proxy,
     starting the main test container, executing each check command in
-    sequence, then tearing the whole compose down. It deliberately
-    does NOT own the parsing of test output: that's task_06_14's job
-    (each runtime's output parsers).
+    sequence, then tearing the whole compose down.
+
+    El parseo de la salida sigue viviendo en ``shared_test_runtimes.parsers``;
+    lo que el runner sí hace desde el ADR 0162 es LLAMARLO
+    (:meth:`_count_tests`), para que el resultado diga cuántos tests corrieron.
+    Esos parsers llevaban escritos desde el Plan 06 y nadie en ``apps/`` los
+    importaba, así que la plataforma no distinguía una suite de 200 tests en
+    verde de un ``--filter`` que no casó con nada.
     """
 
     def __init__(self, settings: Settings, *, client: Any = None) -> None:
@@ -602,7 +681,12 @@ class TestRuntimeRunner:
             if registry_proxy is not None:
                 self._detach_proxy(network, registry_proxy)
                 registry_proxy = None
+            undeclared = spec.plan.undeclared_check_type_count()
             if failed_codes is not None:
+                # El `pre_install` falló: no llegó a correr ni un check, así que
+                # el recuento queda AUSENTE. Poner cero aquí sería decir «este
+                # cambio no ejecutó ningún test» cuando lo cierto es que no se
+                # llegó a intentar — la confusión (c)→(b) del ADR 0162.
                 return TestRuntimeResult(
                     runtime=spec.plan.template.id,
                     exit_codes=tuple(failed_codes),
@@ -610,6 +694,7 @@ class TestRuntimeRunner:
                     container_id=getattr(main_container, "id", "") or "",
                     timed_out=False,
                     network_name=network.name,
+                    checks_without_declared_check_type=undeclared,
                 )
             exit_codes, check_logs, timed_out = self._run_test_checks(spec, main_container)
             return TestRuntimeResult(
@@ -619,6 +704,12 @@ class TestRuntimeRunner:
                 container_id=getattr(main_container, "id", "") or "",
                 timed_out=timed_out,
                 network_name=network.name,
+                # Se cuenta sobre `check_logs`, NO sobre `pre_logs + check_logs`:
+                # la salida de `composer install` / `npm ci` no es un informe de
+                # tests, y meterla en el texto sólo añade formas de que un
+                # reconocedor vea un epílogo donde no lo hay.
+                test_counts=self._count_tests(spec, check_logs),
+                checks_without_declared_check_type=undeclared,
             )
         finally:
             self._cleanup(
@@ -662,8 +753,14 @@ class TestRuntimeRunner:
             # command IS the install (ADR 0094 D2). ``cwd`` (ADR 0093, 2026-07-24)
             # runs the command in a SUBDIRECTORY of the worktree (e.g. a project
             # scaffolded under ``ci4build/``) so the toolchain bootstraps with the
-            # right relative paths.
-            return self._exec(main_container, command, timeout_s=timeout_s, cwd=cwd)
+            # right relative paths; cuando el agente no lo pide, manda la raíz
+            # declarada del proyecto (ADR 0162).
+            return self._exec(
+                main_container,
+                command,
+                timeout_s=timeout_s,
+                cwd=effective_cwd(cwd, spec.project_root),
+            )
         finally:
             self._cleanup(
                 main_container,
@@ -820,11 +917,18 @@ class TestRuntimeRunner:
         Returns ``(None, logs)`` on success, or ``([rc]*n_checks, logs)`` if a
         command fails — so the caller marks every check failed (couldn't even
         run them) and the reporter shows the failed install, not fake test
-        failures. Pre_install runs while egress is attached (ADR 0094 D2)."""
+        failures. Pre_install runs while egress is attached (ADR 0094 D2).
+
+        ADR 0162: corre bajo ``spec.project_root``. Sin eso, un proyecto anidado
+        instalaba desde la raíz del worktree y ``composer`` contestaba «could not
+        find a composer.json file in /workspace» — el fallo más repetido de la
+        medición."""
         template = spec.plan.template
         all_logs: list[str] = []
         for cmd in template.default_pre_install:
-            exec_rc, exec_logs = self._exec(container, cmd, timeout_s=DEFAULT_TIMEOUT_S)
+            exec_rc, exec_logs = self._exec(
+                container, cmd, timeout_s=DEFAULT_TIMEOUT_S, cwd=spec.project_root
+            )
             all_logs.append(f"--- pre_install: {cmd}\n{exec_logs}\n")
             if exec_rc != 0:
                 return [exec_rc] * len(spec.plan.checks), "".join(all_logs)
@@ -838,14 +942,20 @@ class TestRuntimeRunner:
         """Run each acceptance check, return ``(exit_codes, logs, timed_out)``.
 
         Runs AFTER pre_install and AFTER egress is dropped (ADR 0094 D2), so the
-        test phase has no network path off its internal bridge."""
+        test phase has no network path off its internal bridge.
+
+        ADR 0162: cada check corre bajo ``spec.project_root``, como el
+        pre_install. Es la boca que decide si una tarea pasa, y era la que menos
+        sabía dónde está el proyecto."""
         all_logs: list[str] = []
         exit_codes: list[int] = []
         timed_out = False
 
         for check in spec.plan.checks:
             budget = check.timeout_s or DEFAULT_TIMEOUT_S
-            exec_rc, exec_logs = self._exec(container, check.command, timeout_s=budget)
+            exec_rc, exec_logs = self._exec(
+                container, check.command, timeout_s=budget, cwd=spec.project_root
+            )
             all_logs.append(
                 f"--- check {check.id or check.description!r}: {check.command}\n{exec_logs}\n"
             )
@@ -858,6 +968,46 @@ class TestRuntimeRunner:
                 break
 
         return exit_codes, "".join(all_logs), timed_out
+
+    def _count_tests(self, spec: TestRuntimeSpec, check_logs: str) -> TestCounts | None:
+        """Cuántos tests corrieron, según los parsers que declara la plantilla.
+
+        **Enciende los ocho parsers de ``shared_test_runtimes.parsers``**, que
+        llevaban escritos desde el Plan 06 sin que nadie en ``apps/`` los
+        importara. La plantilla declara cuáles y en qué orden
+        (``output_parsers``); el catálogo ya expresa la preferencia.
+
+        Devuelve ``None`` cuando no se pudo medir, y eso **no es cero**: son los
+        estados (c) y (b) del ADR 0162 y confundirlos fabrica un falso fallo.
+
+        **Granularidad, dicha para que nadie lea de más:** el recuento es del
+        PLAN (un runtime), no de cada check. Se cuenta sobre el log concatenado
+        de sus checks, así que si un plan lleva varios y sólo se entiende el
+        epílogo de algunos, el total es la suma de LOS ENTENDIDOS — un
+        subrecuento, no una medida completa. Es honesto para el caso normal (un
+        check por plan) y se prefirió a la alternativa —declarar AUSENTE el plan
+        entero en cuanto un check no se entienda—, que tiraría la señal buena
+        junto con la que falta.
+
+        El ``except`` ancho no es pereza y no tapa nada que decida: la medición
+        es nueva, el veredicto lleva años funcionando, y un bug del contador no
+        puede tumbar una fase de tests que ya terminó. Lo que se pierde es el
+        recuento —que queda AUSENTE, dicho honestamente— y queda el log.
+        """
+        try:
+            return count_tests(
+                check_logs,
+                runtime=spec.plan.template.id,
+                parsers=tuple(spec.plan.template.output_parsers),
+            )
+        except Exception as exc:
+            _log.error(
+                "test_counts_failed",
+                runtime=spec.plan.template.id,
+                error_type=exc.__class__.__name__,
+                error=str(exc),
+            )
+            return None
 
     def _build_test_kwargs(
         self,
@@ -1038,6 +1188,27 @@ class InvalidCwdError(ValueError):
     unsafe characters."""
 
 
+def effective_cwd(explicit: str | None, project_root: str | None) -> str | None:
+    """Qué directorio manda cuando hay dos candidatos (ADR 0162, decisión 1).
+
+    Precedencia: el ``cwd`` explícito de la llamada del agente GANA sobre la raíz
+    declarada del proyecto —su petición es más concreta que la configuración: en
+    un monorepo puede estar tocando otro subproyecto—; sin él manda
+    ``project_root``; sin ninguno de los dos, la raíz del worktree, que es el
+    comportamiento de siempre.
+
+    Un valor en blanco cuenta como AUSENTE, no como «corre en la raíz»: el agente
+    que omite el parámetro (el 46 % medido) no está decidiendo nada, y tratarlo
+    como decisión tiraría por tierra la configuración del proyecto justo en el
+    caso que esto viene a arreglar.
+    """
+    if explicit and explicit.strip():
+        return explicit
+    if project_root and project_root.strip():
+        return project_root
+    return None
+
+
 def _apply_cwd(command: str, cwd: str | None) -> str:
     """Prefix ``command`` with ``cd <cwd> &&`` when a working directory is given.
 
@@ -1056,6 +1227,15 @@ def _apply_cwd(command: str, cwd: str | None) -> str:
         raise InvalidCwdError(f"cwd must be a relative path inside the worktree, got {cwd!r}")
     if not all(c.isalnum() or c in "._-/" for c in clean):
         raise InvalidCwdError(f"cwd has unsafe characters: {cwd!r}")
+    # A leading `-` is not a breakout — the charset above already closes that —
+    # but it IS a `cd` that does something else: `cd -` jumps to the previous
+    # directory and `cd -rf` is a flag error. Either way the command would run
+    # somewhere nobody chose. Mirrored in the API-side validator so the two
+    # halves cannot drift (ADR 0162).
+    if any(p.startswith("-") for p in parts):
+        raise InvalidCwdError(
+            f"cwd segments must not start with '-' (cd reads them as flags): {cwd!r}"
+        )
     return f"cd {clean} && {command}"
 
 
@@ -1074,6 +1254,7 @@ __all__ = [
     "TestRuntimeSpec",
     "build_aux_run_kwargs",
     "default_aux_services",
+    "effective_cwd",
     "group_tasks_by_runtime",
     "resolve_run_runtime",
     "resolve_run_runtime_id",

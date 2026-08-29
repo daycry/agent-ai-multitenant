@@ -104,3 +104,105 @@ def test_known_hash_pin(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_bytes(b"hello\n")
     result = compute_lock_hash(tmp_path, "python-pytest")
     assert result.hash == "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+
+
+# ---------------------------------------------------------------------------
+# ADR 0162 (decisión 1) — la cuarta boca: el lockfile de un proyecto anidado
+# ---------------------------------------------------------------------------
+
+
+class _RecordingLogger:
+    """Doble del logger del módulo. `caplog` es frágil aquí (gotcha
+    `caplog-y-orden-de-tests`: otras suites llaman a `logging.disable`)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def warning(self, msg: str, *args: object, **_kw: object) -> None:
+        self.calls.append((msg, args))
+
+
+def test_lock_hash_finds_the_lockfile_under_the_project_root(tmp_path: Path) -> None:
+    """El proyecto vive en `ci4build/`, y su `composer.lock` con él. Mirando
+    sólo la raíz, `compute_lock_hash` devolvía `hash=None` y DESACTIVABA la
+    caché de dependencias — el mismo defecto de las otras tres bocas, pagando
+    un precio distinto (cada run reinstala desde cero)."""
+    from shared_test_runtimes.dep_cache import compute_lock_hash
+
+    nested = tmp_path / "ci4build"
+    nested.mkdir()
+    (nested / "composer.lock").write_bytes(b'{"hash":"abc"}\n')
+
+    found = compute_lock_hash(tmp_path, "php-phpunit", project_root="ci4build")
+    assert found.hash is not None
+    assert found.lock_path == nested / "composer.lock"
+    # Y el contenido es lo que se hashea: mismo fichero en la raíz, mismo hash.
+    (tmp_path / "composer.lock").write_bytes(b'{"hash":"abc"}\n')
+    assert compute_lock_hash(tmp_path, "php-phpunit").hash == found.hash
+
+
+def test_a_root_project_hash_does_not_change(tmp_path: Path) -> None:
+    """No-regresión dura: el hash es la clave del directorio de caché en disco.
+    Si cambiara para los proyectos de la raíz, TODAS las cachés calientes
+    quedarían huérfanas de golpe."""
+    from shared_test_runtimes.dep_cache import compute_lock_hash
+
+    (tmp_path / "requirements.txt").write_bytes(b"hello\n")
+    pinned = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+
+    assert compute_lock_hash(tmp_path, "python-pytest").hash == pinned
+    assert compute_lock_hash(tmp_path, "python-pytest", project_root=None).hash == pinned
+    assert compute_lock_hash(tmp_path, "python-pytest", project_root="").hash == pinned
+    assert compute_lock_hash(tmp_path, "python-pytest", project_root="   ").hash == pinned
+
+
+def test_a_missing_lockfile_is_logged_instead_of_silently_disabling_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lo que denuncia el ADR 0162: devolvía `hash=None` y se apagaba la caché
+    **sin un solo log**. El comportamiento no cambia (sigue `None`); lo que
+    cambia es que ahora se puede saber, y dónde miró."""
+    from shared_test_runtimes import dep_cache
+
+    fake = _RecordingLogger()
+    monkeypatch.setattr(dep_cache, "_log", fake)
+
+    result = dep_cache.compute_lock_hash(tmp_path, "php-phpunit", project_root="ci4build")
+
+    assert result.hash is None
+    rendered = [msg % args for msg, args in fake.calls]
+    assert any("composer.lock" in line and "ci4build" in line for line in rendered)
+
+
+def test_a_traversing_project_root_never_escapes_the_worktree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Aquí la ruta no se concatena en un `sh -c` sino en un `Path`, y
+    `Path('/wt') / '/etc'` da `/etc` — el operando absoluto se come al izquierdo.
+    Un `..` cae a la raíz del worktree (y se dice), nunca fuera."""
+    from shared_test_runtimes import dep_cache
+
+    (tmp_path / "requirements.txt").write_bytes(b"hello\n")
+    fake = _RecordingLogger()
+    monkeypatch.setattr(dep_cache, "_log", fake)
+
+    for bad in ("..", "../..", "a/../..", "."):
+        result = dep_cache.compute_lock_hash(tmp_path, "python-pytest", project_root=bad)
+        assert result.lock_path == tmp_path / "requirements.txt"
+    assert fake.calls  # el descarte del valor inválido no es mudo
+
+
+def test_an_absolute_project_root_is_read_as_relative_like_the_worker_does(
+    tmp_path: Path,
+) -> None:
+    """`_apply_cwd` (worker) le quita la barra inicial y lo trata como relativo.
+    Aquí se hace lo MISMO: si los dos no coinciden, la caché busca el lockfile en
+    un sitio y el comando corre en otro, que es peor que no cachear."""
+    from shared_test_runtimes.dep_cache import compute_lock_hash
+
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc" / "requirements.txt").write_bytes(b"hello\n")
+
+    result = compute_lock_hash(tmp_path, "python-pytest", project_root="/etc")
+    assert result.lock_path == tmp_path / "etc" / "requirements.txt"
+    assert result.hash is not None

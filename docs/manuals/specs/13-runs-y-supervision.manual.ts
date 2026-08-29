@@ -130,8 +130,10 @@ const steps: Step[] = [
             <li><b>Reintentar</b> — re-encola la tarea reseteando sus
             reintentos; si el plan entero estaba bloqueado por ella, también lo
             reactiva.</li>
-            <li><b>Reasignar con guía</b> — devuelve la tarea al agente con una
-            indicación tuya (aparece en su contexto del siguiente run).</li>
+            <li><b>Devolver al backlog con guía</b> — devuelve la tarea al backlog
+            con una indicación tuya (aparece en su contexto del siguiente run)
+            y suma un reintento. NO cambia el agente asignado: para eso, edita
+            la tarea y usa el selector de agente.</li>
             <li><b>Bloquear con motivo</b> — la aparca documentando por qué.</li>
           </ul>
           <p>Si el plan completo está <code>blocked</code> (ninguna tarea puede

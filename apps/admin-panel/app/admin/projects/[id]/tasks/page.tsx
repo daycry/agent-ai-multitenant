@@ -41,6 +41,7 @@ import { Label } from "@/components/ui/label";
 import { MarkdownTextarea } from "@/components/ui/markdown-textarea";
 import { ViewToggle, type ViewMode } from "@/components/ui/view-toggle";
 import { TaskDetailSheet } from "@/components/tasks/task-detail-sheet";
+import { TaskEditDialog } from "@/components/tasks/task-edit-dialog";
 import { cn } from "@/lib/utils";
 import { ApiError, apiFetch } from "@/lib/api";
 import { translate, useT } from "@/lib/i18n";
@@ -388,6 +389,11 @@ function FilterChip({ label, value, count, active, onClick }: FilterChipProps) {
 function TaskRow({ projectId, task }: { projectId: string; task: Task }) {
   const t = useT("projectTasks");
   const tStatus = useT("taskStatus");
+  const tEdit = useT("taskEdit");
+  // La vista de lista no abre la ficha (eso es cosa de las tarjetas del
+  // Kanban), así que su puerta al formulario de edición es propia: sin ella,
+  // editar una tarea obligaría a cambiar de vista primero.
+  const [editOpen, setEditOpen] = useState(false);
   const statusVariant = STATUS_VARIANT[task.status] ?? "muted";
   const statusKey = STATUS_LABEL_KEY[task.status];
   const priorityVariant = PRIORITY_VARIANT[task.priority] ?? "muted";
@@ -424,6 +430,14 @@ function TaskRow({ projectId, task }: { projectId: string; task: Task }) {
           >
             {statusKey ? tStatus(statusKey) : task.status}
           </Badge>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditOpen(true)}
+            data-testid={`task-row-${task.id}-edit`}
+          >
+            {tEdit("open")}
+          </Button>
         </div>
       </CardHeader>
       {task.description && (
@@ -431,6 +445,11 @@ function TaskRow({ projectId, task }: { projectId: string; task: Task }) {
           <p className="text-muted-foreground text-sm line-clamp-2">{task.description}</p>
         </CardContent>
       )}
+      <TaskEditDialog
+        task={editOpen ? { id: task.id, project_id: projectId } : null}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+      />
     </Card>
   );
 }

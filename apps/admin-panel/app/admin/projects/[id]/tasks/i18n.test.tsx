@@ -326,14 +326,14 @@ describe("acciones humanas sobre una tarea en los dos idiomas", () => {
 
     expect(screen.getByTestId("approve-task-1").textContent).toContain("Approve manually");
     expect(screen.getByTestId("retry-task-1").textContent).toContain("Retry");
-    expect(screen.getByTestId("reassign-task-1").textContent).toContain("Reassign with guidance");
+    expect(screen.getByTestId("reassign-task-1").textContent).toContain("Send back to the backlog");
     expect(screen.getByTestId("block-task-1").textContent).toContain("Block with a reason");
     expect(screen.getByTestId("cancel-task-1").textContent).toContain("Cancel");
 
     expect(screen.queryByText("Aprobar manualmente")).toBeNull();
   });
 
-  it("traduce el diálogo de reasignar con guía", async () => {
+  it("traduce el diálogo de devolver al backlog con guía", async () => {
     actions("en");
 
     fireEvent.click(screen.getByTestId("reassign-task-1"));
@@ -344,7 +344,7 @@ describe("acciones humanas sobre una tarea en los dos idiomas", () => {
     expect(screen.getByTestId("reassign-guidance-edit").getAttribute("placeholder")).toContain(
       "Try another approach",
     );
-    expect(screen.getByTestId("reassign-submit").textContent).toBe("Reassign");
+    expect(screen.getByTestId("reassign-submit").textContent).toBe("Send it back");
   });
 
   it("traduce el diálogo de bloquear con motivo", async () => {

@@ -72,6 +72,19 @@ class ChatModeConfig:
 # ---------------------------------------------------------------------------
 # Built-in catalog
 # ---------------------------------------------------------------------------
+# ATENCIÓN antes de tocar estos textos: desde el 2026-08-29 (ADR 0162) este
+# catálogo es la ÚNICA fuente de los prompts de modo. Lo que hay aquí es lo que
+# `GET /chat-modes` publica como «prompt efectivo» Y lo que `_simple_reply`
+# (chat/responder.py) mete de verdad como mensaje `system`. Antes eran dos
+# catálogos con textos distintos, así que la pantalla de auditoría enseñaba algo
+# que no se enviaba. Si haces un segundo diccionario de prompts en otro módulo,
+# reabres exactamente esa brecha —y `test_chat_mode_prompt_single_source.py`
+# rompe para avisarlo.
+#
+# `_PLANNING_PROMPT` es la excepción y conviene saberlo: `planning` NO pasa por
+# `_simple_reply`, va por el sub-grafo multi-agente, y los prompts que ese
+# sub-grafo envía se componen por nodo en `chat/planning_llm.py`. Este texto
+# describe el modo para la UI; no es el que recibe el LLM de planning.
 _PLANNING_PROMPT = (
     "Estás en el modo PLANNING. El equipo construye un plan estructurado"
     " para resolver la petición del usuario. El Project Manager es el"
@@ -82,21 +95,46 @@ _PLANNING_PROMPT = (
     " usa solo herramientas de consulta o de comentario sobre el plan."
 )
 
+# Fusión de los dos catálogos (ADR 0162). Lo que se conservó del texto que vivía
+# en `responder`: el encuadre de PORTAVOZ ÚNICO —`_simple_reply` es una sola
+# llamada al LLM que produce UN mensaje firmado por el equipo, así que «cada
+# agente puede intervenir libremente» empujaba al modelo a fingir un diálogo— y
+# la petición explícita de markdown, que el frontend renderiza. Lo que se
+# conservó de este módulo: el encuadre del modo y la guarda de no ejecutar
+# acciones de escritura.
 _DISCUSSION_PROMPT = (
-    "Estás en el modo DISCUSSION. El equipo explora ideas en torno a la"
-    " petición del usuario. Cada agente puede intervenir libremente"
-    " aportando su perspectiva. NO se produce un plan estructurado en"
-    " este modo; el resultado esperado es claridad sobre el problema y"
-    " sus opciones. Evita ejecutar acciones de escritura o llamadas"
-    " externas; mantén la conversación textual."
+    "Estás en el modo DISCUSSION y eres el PORTAVOZ ÚNICO del equipo del"
+    " proyecto: respondes por todos en un solo mensaje, sin simular un"
+    " diálogo entre agentes. El equipo explora ideas en torno a la petición"
+    " del usuario, así que aporta perspectivas, alternativas y riesgos de"
+    " forma clara y concisa, en markdown. NO se produce un plan estructurado"
+    " en este modo; el resultado esperado es claridad sobre el problema y sus"
+    " opciones. Mantén la conversación textual: no ejecutes acciones de"
+    " escritura ni llamadas externas."
 )
 
+# Aquí la fusión además CORRIGE. El texto anterior ordenaba «registra avances en
+# task_comment, actualiza estados vía kanban_update», y este canal no entrega
+# ninguna tool: `respond_to_conversation` sólo bifurca hacia el sub-grafo en
+# `planning`; discussion y execution caen los dos en `_simple_reply`, una llamada
+# al LLM sin tools. Pedirle al modelo algo que no puede hacer no es inocuo: su
+# incumplimiento se lee como que el equipo no hizo el trabajo. La ejecución real
+# la arranca `POST /plans/{id}/start-execution`, y decirlo evita que el usuario
+# espere aquí un trabajo que se lanza en otro sitio.
+#
+# Cablear `allowed_tools` por modo (que las haría ciertas) está DESCARTADO a
+# propósito: encender una restricción que lleva tiempo siendo decorativa cambia
+# el comportamiento de todos los agentes de golpe y pide su propio ADR.
 _EXECUTION_PROMPT = (
-    "Estás en el modo EXECUTION. El plan ya está aprobado y sincronizado"
-    " al Kanban. El equipo ejecuta tareas siguiendo el DAG: respeta"
-    " dependencias, registra avances en task_comment, actualiza estados"
-    " vía kanban_update. Las acciones sensibles (deploy, git_push) están"
-    " sujetas al motor de aprobación humana de cada proyecto."
+    "Estás en el modo EXECUTION y eres el PORTAVOZ ÚNICO del equipo del"
+    " proyecto: respondes por todos en un solo mensaje, en markdown. El plan"
+    " ya está aprobado y sincronizado al Kanban, y el equipo lo ejecuta"
+    " siguiendo el DAG de dependencias. Tu papel en ESTA conversación es"
+    " coordinar y dar seguimiento por escrito: estado, siguientes pasos,"
+    " bloqueos y decisiones, claro y conciso. Esta conversación no ejecuta"
+    " trabajo ni mueve el Kanban por sí misma —la ejecución real se arranca"
+    " sobre el plan aprobado—, y las acciones sensibles (deploy, git_push)"
+    " siguen sujetas al motor de aprobación humana de cada proyecto."
 )
 
 
