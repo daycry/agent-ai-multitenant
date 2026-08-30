@@ -11,7 +11,7 @@
 # activa, y por tanto la elección conservadora— es el npm que empaqueta: 11.17
 # trae `node-tar` 7.5.16, o sea CVE-2026-59873 (CRITICAL) sin cerrar. La línea
 # 26 embarca npm 11.19 con `node-tar` 7.5.19. El pin sigue siendo por digest.
-FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS runtime
+FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime-node-jest" \
       org.opencontainers.image.version="v1" \
