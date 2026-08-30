@@ -26,7 +26,7 @@
 # archivo de Debian. El pin no se quita, se ADELANTA: verificado con Trivy que
 # el digest nuevo trae CERO HIGH/CRITICAL con fix. Es el riesgo 3 de prod-11 en
 # estado puro — un pin sin refresco congela las CVE de la base.
-FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS builder
+FROM python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217 AS builder
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -94,7 +94,7 @@ COPY docker/agent-runtimes/agent-runtime/agent_runtime/ ./agent_runtime/
 RUN pip install --no-cache-dir -c /constraints.txt .
 
 # ---- runtime: slim image, non-root, no build tools ----------------
-FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65 AS runtime
+FROM python:3.12-slim@sha256:09f7da3bc104798d0afb40bc08d23ab2da20a76130cec1f2ef170848f5d85217 AS runtime
 
 LABEL org.opencontainers.image.title="agent-runtime" \
       org.opencontainers.image.version="v1" \
