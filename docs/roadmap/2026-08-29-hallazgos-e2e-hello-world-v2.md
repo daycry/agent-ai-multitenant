@@ -546,3 +546,135 @@ real cuando lo haya.
 
 Si después de cablear queda algo que ningún rol puede hacer con ninguna pieza del
 catálogo, ESO es un hueco de verdad, y entonces se añade con su justificación.
+
+---
+
+## Cierre de H13, H14 y H15 (2026-08-30) — y lo que apareció al cerrarlos
+
+Los tres se cierran en los PR [#142](https://github.com/daycry/agent-ai-multitenant/pull/142)
+y [#144](https://github.com/daycry/agent-ai-multitenant/pull/144). Lo que sigue
+no es el registro de las correcciones —eso está en los commits— sino de **lo que
+apareció al hacerlas**, que es la parte que se pierde si no se anota.
+
+### H13 — la causa no estaba donde la buscábamos
+
+El código repartía `stack-exec` a seis roles **desde julio**. La base de datos
+llevaba desde el **2026-06-28** sin tocarse. No había un permiso olvidado: había
+un catálogo **presente y rancio**, porque el seed completo es un CLI manual que
+nada dispara y la única red de arranque que existía garantiza filas _cuando
+faltan_, nunca _cuando están y mienten_.
+
+**Sembrar cuando falta y mantener al día son garantías distintas**, y sólo
+existía la primera. Ésa es la frase que hay que recordar de todo este hallazgo.
+
+El indicio que lo delataba estaba a la vista y se leía al revés: **20 agentes SÍ
+tenían la tool, y todos eran copias de tenant**. Las copias estaban mejor que el
+original del que salían, porque un humano las había parcheado a mano dos veces
+(junio y julio) sin dejar detrás nada que impidiera la repetición. Cada equipo
+adoptado después nacía peor que los adoptados antes.
+
+**Corregido:** `refresh_builtin_agent_capabilities` re-afirma el catálogo en cada
+arranque, sobre los **seis** pasos de cableado. Una transacción por paso, para
+que un roster aún sin sembrar no arrastre a los que sí fueron.
+
+### H16 (nuevo) — `ci4-reviewer` escribía donde el montaje no deja
+
+Apareció al cerrar H13, y es su mitad gemela. `stack-exec` ya se derivaba del
+rol, pero `write-file` y `delete-file` seguían **cableadas a mano** en
+`_BASE_TOOLS`. Resultado: tres declaraciones sobre el mismo agente, dos ciertas.
+
+| Fuente                                | Decía                       |
+| ------------------------------------- | --------------------------- |
+| `ROLE_DEFAULT_TOOLS["reviewer"]`      | `_READ` — no escribe        |
+| El prompt del propio `ci4-reviewer`   | «montado en SÓLO LECTURA»   |
+| `_BASE_TOOLS` (lo que de verdad daba) | `write-file`, `delete-file` |
+
+Y el montaje es real: la rama `review_worktree` de `workers/execution.py` es la
+**única** que pone `read_only=True` (ADR 0095). Cada `write_file` rebotaba con
+EROFS — un error del sistema de ficheros indistinguible de una ruta mal puesta,
+así que el agente reintenta. **Le sobraba puerta, no le faltaba permiso**: la
+misma trampa del ADR 0162 por el otro lado.
+
+**Se mantiene `shell-exec`** a propósito: `grep`/`cat` sí funcionan sobre un
+montaje de sólo lectura, así que no es la misma clase de defecto.
+
+### H17 (nuevo) — el gate de evals no se disparaba con dos de sus tres fuentes
+
+`eval-on-prompt-change.yml` vigilaba `builtin_agents.py` y `qa_e2e_automator.py`.
+No vigilaba `ci4_team.py` (**diez** prompts) ni `tool_usage_guidance.py`, que se
+**concatena** al prompt de los 34 y por tanto cambia el prompt efectivo sin tocar
+ninguno de los dos ficheros vigilados.
+
+Un filtro que no cubre la fuente **no falla: no se ejecuta**. El check aparece en
+verde en el listado del PR porque nunca corrió, que es la forma cara de fallar.
+
+### H18 (nuevo) — el registro de tablas sin modelo no lo comprobaba nadie
+
+La migración 0145 deja su tabla de respaldo viva tras el upgrade (a propósito: el
+downgrade retira **exactamente** lo insertado en vez de recalcularlo, que
+borraría los grants parcheados a mano en junio y julio). Eso rompió
+`test_the_schema_drift_can_only_shrink`.
+
+La salida correcta existía —`TABLES_WITHOUT_A_MODEL`, con precedente idéntico en
+`approval_policy_backfill_0133`— y **el inventario de deriva sigue vacío**: no se
+reabrió nada. Pero al usarla se vio que su propia regla («explica por qué la
+tabla NO PUEDE tener modelo; "todavía no lo tiene" es deriva») vivía sólo en el
+docstring. Ahora se comprueba, junto con la pareja que importa: un respaldo
+excluido del autogenerate **y** legible por la aplicación es lo peor de las dos
+mitades sueltas — desaparece de la comparación de esquema Y sigue siendo un
+camino de lectura abierto.
+
+### H14 — cerrado, y su mitad silenciosa
+
+Las tools se cerraron en #142. Al revisarlo apareció que el QA E2E Automator
+tenía **cuatro skills declaradas y cero en la base**: vive fuera de
+`BUILTIN_AGENTS` y ningún paso se las escribía. La definición era correcta, se
+leía bien, se testeaba en unidad… y no llegaba a la tabla.
+
+Lo **cazó sola la guarda** escrita para H13, que deriva la lista de pasos del
+propio seed: al registrar el paso nuevo, falló nombrándolo.
+
+De paso se le da `playwright-e2e`, que **no la repartía nadie en todo el
+catálogo** — en el agente que se llama así.
+
+### H15 — el recuento era de la base vieja
+
+El hallazgo decía «13 de 26 tools sin repartir». Contra el catálogo ya corregido
+son **cuatro de trece**, y las cuatro correctamente sin repartir:
+
+| Tool                | Por qué NO se reparte                                |
+| ------------------- | ---------------------------------------------------- |
+| `apply-patch`       | Retirada en PROJ-08/F3 — no cableada en el runtime   |
+| `search-code`       | Íd. El grep vive dentro de `shell_exec`/`stack_exec` |
+| `summarize-text`    | Íd. Resumir es el propio LLM                         |
+| `send-notification` | No está en `RUNTIME_WIRED_TOOL_NAMES`                |
+
+Repartirlas sería exactamente la promesa falsa que quemó las 24 llamadas del run
+de 2,22 USD: el agente las ve, las invoca y fallan siempre.
+
+**Discrepancia anotada y no perseguida:** `builtin_families.py` del agent-runtime
+trata `send_notification` como canónica mientras `RUNTIME_WIRED_TOOL_NAMES` no la
+incluye. Como no la tiene nadie, hoy no rompe nada; merece una mirada antes de
+concedérsela a alguien.
+
+Las skills sí bajaron de 28 a 24 sin repartir, y casi todas las que quedan son de
+stack concreto (`nextjs-app-router`, `tanstack-query`, `shadcn-components`…) o de
+integraciones (`atlassian-*`): les falta el equipo que las use, no el cableado.
+
+### H19 (nuevo, de infraestructura) — dos PR bloqueados sin un solo check que mirar
+
+Los PR #141 y #143 (digests de runtime) llevaban días en `BLOCKED` con «no checks
+reported». La causa: **los creó un workflow con `GITHUB_TOKEN`**, y GitHub no
+dispara workflows para eventos originados por ese token. La protección de rama
+exige checks que nunca podían existir.
+
+**Cerrar y reabrir el PR los despierta.** #143 se mergeó así; #141 se cerró por
+obsoleto (mergearlo habría **regresado** `master` a digests más viejos del mismo
+fichero).
+
+### Lo que sigue abierto
+
+- **Aplicar la migración 0145 y desplegar** en la instalación viva.
+- **Re-correr el E2E** con los agentes ya equipados. El plan sigue BLOQUEADO.
+- **La guía en PDF** con el recorrido real.
+- H2, H3, H5, H7, H8, H9, H10, H11 — según su estado en las secciones de arriba.
