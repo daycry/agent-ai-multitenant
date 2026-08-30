@@ -18,12 +18,12 @@
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.101.4",
+    "@tanstack/react-query": "^5.102.3",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "github-slugger": "^2.0.0",
     "lucide-react": "^0.400.0",
-    "mermaid": "^11.17.0",
+    "mermaid": "^11.17.1",
     "next": "15.5.23",
     "qrcode.react": "^4.2.0",
     "react": "18.3.1",
