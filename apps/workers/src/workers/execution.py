@@ -973,6 +973,237 @@ async def _mark_commit_failed(
         )
 
 
+# ---------------------------------------------------------------------------
+# ADR 0162 (opción A, ola 2) — la declaración del implementador se vuelve criterio
+# ---------------------------------------------------------------------------
+#
+# **El tramo que faltaba.** La ola 1 dejó al agente declarando con qué se
+# verifica cada criterio, y la declaración se quedaba en `executions.steps_log`:
+# se contaba y no se usaba. Con eso, el run SIGUIENTE de la misma tarea tampoco
+# disparaba el test-runtime — que es exactamente lo que la opción A venía a
+# arreglar.
+#
+# Aquí la declaración pasa a `tasks.acceptance_criteria`. Y la disciplina de esa
+# escritura no es opcional, porque tiene precedente escrito y caro:
+# `api_server.chat.sync_to_kanban._merge_acceptance` existe porque un replan
+# convertía en prosa el único dato que hacía verificable a una tarea. La regla
+# que enunció —*una escritura no puede destruir información que la otra mitad no
+# sabe expresar*— vale aquí en su forma más estricta, porque **nada distingue en
+# la columna lo que escribió el operador a mano de lo que dejó un run anterior**.
+# Así que se trata todo lo ya escrito como del operador: la declaración RELLENA
+# huecos y no pisa ninguno.
+#
+# Y persistir es INFORMACIÓN, no gate: el número de criterios no cambia, ninguno
+# desaparece y `all_passed()` sigue saliendo sólo del código de salida. La opción
+# C no está firmada.
+
+# El conjunto CERRADO de campos que una declaración puede aportar a un criterio.
+# Mismo vocabulario que `agent_runtime.check_declarations` un contenedor más
+# allá, y que `test_runtime._coerce_check` un piso más abajo: inventar aquí un
+# tercer nombre para lo mismo es cómo se acaba con una clave que nadie lee.
+_DECLARATION_FIELDS = ("check_type", "runtime", "command", "expected_signal", "reason")
+# Techo por campo y por lista. Lo que llega aquí lo escribió un LLM dentro de un
+# sandbox y acaba en una columna JSONB: sin tope, una respuesta degenerada engorda
+# la fila de la tarea para siempre.
+_MAX_DECLARED_FIELD_LEN = 500
+_MAX_DECLARATIONS = 32
+
+
+def _criterion_key(text: Any) -> str:
+    """La forma con la que se casa un criterio con su declaración.
+
+    Colapsa espacios y mayúsculas porque quien reescribe el criterio en la
+    declaración es un modelo copiando de su propio prompt: exigir igualdad byte a
+    byte convertiría cada espacio de más en un «no declarado» falso.
+
+    Está duplicada respecto a ``agent_runtime.check_declarations._criterion_key``
+    porque el worker NO importa el paquete del contenedor (ni puede: corre en otra
+    imagen). La paridad la fija un test, no la buena voluntad — igual que la del
+    predicado de criterio ejecutable con ``orchestrator.dispatch``.
+    """
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _criterion_names(criterion: Any) -> set[str]:
+    """Con qué nombres puede referirse una declaración a ESTE criterio."""
+    names: set[str] = set()
+    if isinstance(criterion, dict):
+        for key in ("description", "text", "criterion", "name", "id"):
+            value = criterion.get(key)
+            if isinstance(value, str) and value.strip():
+                names.add(_criterion_key(value))
+    else:
+        names.add(_criterion_key(criterion))
+    names.discard("")
+    return names
+
+
+def _declared_checks_from_result(final_result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Las declaraciones que trae la línea ``execution.finished``, revalidadas.
+
+    Viaja por la MISMA vía que ``approval`` y ``finish_status`` — el sobre del
+    resultado del run— y no por un canal propio: un segundo camino para sacar
+    cosas del contenedor es un segundo camino que mantener y desincronizar.
+
+    Se revalida en vez de fiarse porque al otro lado hay JSON escrito por un
+    modelo dentro de un sandbox. Una entrada sin ``criterion`` no dice de qué
+    criterio habla y una sin ``check_type`` no declara nada: ninguna de las dos es
+    una declaración, y contarlas como tales le devolvería al silencio la categoría
+    de respuesta válida que la opción A retira. Nunca lanza: el entregable ya está
+    escrito y la execution ya está finalizada.
+    """
+    raw = (final_result or {}).get("check_declarations")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in raw[:_MAX_DECLARATIONS]:
+        if not isinstance(item, dict):
+            continue
+        clean = {
+            key: value.strip()[:_MAX_DECLARED_FIELD_LEN]
+            for key in ("criterion", *_DECLARATION_FIELDS)
+            if isinstance(value := item.get(key), str) and value.strip()
+        }
+        if "criterion" in clean and "check_type" in clean:
+            out.append(clean)
+    return out
+
+
+def _accepted_fields(base: dict[str, Any], declaration: dict[str, Any]) -> dict[str, Any]:
+    """Qué de una declaración se puede escribir sobre ``base`` sin destruir nada."""
+    fields = {
+        key: value
+        for key in _DECLARATION_FIELDS
+        if isinstance(value := declaration.get(key), str) and value and not base.get(key)
+    }
+    # LO QUE DECLARA EL AGENTE, que es la pregunta que gobierna estas guardas — y
+    # NO lo que va a escribirse. El filtro de arriba descarta todo campo que el
+    # criterio YA trae (`not base.get(key)`), así que un criterio con `check_type`
+    # propio nunca lo mete en `fields`, y leer la rama de `fields` contestaba
+    # "automated" pasara lo que pasara: las dos guardas de abajo se saltaban
+    # enteras.
+    #
+    # Lo que eso dejaba pasar, medido: criterio ya `automated` + declaración
+    # `manual` con `command: "true"` acababa ejecutando `true`, saliendo con 0 y
+    # llegándole al reviewer como PASSED — un verde por un criterio cuya propia
+    # declaración decía que ninguna máquina lo comprueba. Es literalmente la
+    # salida barata que estas guardas existen para cerrar.
+    declarado = declaration.get("check_type") or "automated"
+    if declarado == "automated":
+        if base.get("check_type") and base.get("check_type") != "automated":
+            # El criterio ya estaba declarado NO automático, y eso no se pisa
+            # (arriba se filtra `check_type`). Escribirle igualmente el comando
+            # dejaría una fila que se contradice: «ninguna máquina comprueba esto»
+            # con una máquina apuntada al lado — y que además nunca correría,
+            # porque `test_runtime` salta todo lo que no sea `automated`. Un dato
+            # muerto que induce a error al leer la ficha vale menos que ninguno.
+            for key in ("runtime", "command", "expected_signal"):
+                fields.pop(key, None)
+        return fields
+    # Declaración NO automática. Dos casos, y son distintos:
+    if base.get("runtime") and base.get("command"):
+        # (1) El criterio YA era ejecutable y no lo escribió este run. Dejar que
+        # una declaración lo marque manual sería apagar con una frase el test que
+        # otro escribió: `test_runtime` salta todo lo que no sea `automated`, y el
+        # resultado se leería como un proyecto que legítimamente no tiene nada que
+        # automatizar. Es la salida barata del §«El riesgo de que se juegue».
+        fields.pop("check_type", None)
+        fields.pop("reason", None)
+        return fields
+    # (2) El agente dice que no es automatizable Y adjunta un comando: la
+    # declaración se contradice a sí misma. Se respeta la mitad que DECIDE y se
+    # descarta el comando — quedarse con él ejecutaría algo que su propio autor
+    # dijo que no verifica nada.
+    for key in ("runtime", "command", "expected_signal"):
+        fields.pop(key, None)
+    return fields
+
+
+def merge_declared_checks(criteria: list[Any], declarations: list[dict[str, Any]]) -> list[Any]:
+    """Los criterios de la tarea con lo que el implementador declaró, FUSIONADO.
+
+    Casa cada declaración con su criterio por texto normalizado o por ``id``, y
+    la que no casa con ninguno **se descarta**: un modelo que se inventa un
+    criterio no puede fabricar trabajo que nadie pidió, ni hacer desaparecer el
+    silencio sobre uno que sí existe.
+
+    Devuelve una lista con exactamente los mismos criterios en el mismo orden.
+    Sin nada que aportar devuelve una lista igual a la de entrada, y entonces el
+    caller ni siquiera escribe.
+    """
+    if not declarations:
+        return list(criteria)
+    pending = list(declarations)
+    out: list[Any] = []
+    for criterion in criteria:
+        names = _criterion_names(criterion)
+        match = next(
+            (d for d in pending if _criterion_key(d.get("criterion")) in names),
+            None,
+        )
+        if match is None:
+            out.append(criterion)
+            continue
+        pending.remove(match)
+        base: dict[str, Any] = (
+            dict(criterion) if isinstance(criterion, dict) else {"description": str(criterion)}
+        )
+        fields = _accepted_fields(base, match)
+        # Un criterio en prosa al que la declaración no aporta nada se queda en
+        # prosa: convertirlo en dict sin añadir información sólo cambia la forma
+        # del dato, y una escritura sin novedad es ruido de auditoría.
+        out.append({**base, **fields} if fields else criterion)
+    if pending:
+        _log.info(
+            "workers.declared_checks_unmatched",
+            unmatched=len(pending),
+            criteria=len(criteria),
+        )
+    return out
+
+
+async def _persist_declared_checks(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    task_id: UUID,
+    declarations: list[dict[str, Any]],
+    fallback: list[Any],
+) -> list[Any]:
+    """Escribir la declaración en ``tasks.acceptance_criteria`` y devolver el resultado.
+
+    Se fusiona contra lo que hay **en la fila**, no contra la foto que el run se
+    llevó al empezar: el operador puede haber editado los criterios mientras el
+    contenedor corría, y escribir una lista construida sobre una versión que ya
+    no existe sería el pisotón por la puerta de atrás.
+
+    Best-effort como el resto del post-proceso: el entregable ya está en el
+    worktree y la execution ya está finalizada, así que un fallo aquí devuelve la
+    foto del run (``fallback``) y la fase de tests sigue con lo que tenía.
+    """
+    if not declarations:
+        return fallback
+    try:
+        async with sessionmaker() as session, session.begin():
+            task = await session.get(Task, task_id)
+            if task is None:
+                return fallback
+            current = list(task.acceptance_criteria or [])
+            merged = merge_declared_checks(current, declarations)
+            if merged == current:
+                return current
+            task.acceptance_criteria = merged
+            _log.info(
+                "workers.declared_checks_persisted",
+                task_id=str(task_id),
+                declarations=len(declarations),
+                criteria=len(merged),
+            )
+            return merged
+    except Exception as exc:  # pragma: no cover - defensive best-effort
+        _log.warning("workers.declared_checks_persist_failed", task_id=str(task_id), error=str(exc))
+        return fallback
+
+
 async def _run_task_tests(
     settings: Settings,
     *,
@@ -1419,12 +1650,19 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
     exec_id: str,
     runner: AgentContainerRunner | None,
     cancel_poll_interval_s: float,
-) -> tuple[_RuntimeResult, dict[str, Any] | None]:
+) -> tuple[_RuntimeResult, dict[str, Any] | None, list[dict[str, Any]]]:
     """Fase 3 (P3): lanza el contenedor agent-runtime, streamea su stdout al
     stream Redis `exec:{id}` y pliega los eventos en el resultado del run.
 
-    Devuelve ``(resultado, approval)`` — ``approval`` es el payload que emite un
-    run aparcado en una acción sensible (task_02_33), ``None`` en el resto."""
+    Devuelve ``(resultado, approval, declaraciones)``. ``approval`` es el payload
+    que emite un run aparcado en una acción sensible (task_02_33), ``None`` en el
+    resto; ``declaraciones`` es con qué dijo el implementador que se verifica cada
+    criterio (ADR 0162, opción A), lista vacía cuando no declaró nada.
+
+    Las dos salen del MISMO sitio —el sobre `execution.finished`— y no de
+    `_RuntimeResult`: ninguna de las dos es una columna de la fila `executions`,
+    son payloads que dirigen el post-proceso. Meterlas en el resultado que
+    `finalize_execution` persiste sería guardarlas donde nadie las va a leer."""
     # The container's stdout is pumped by a background thread; bridge
     # each line onto an asyncio queue so the live Redis publishing (and
     # event collection) happens on the running loop.
@@ -1612,7 +1850,7 @@ async def _launch_and_stream(  # noqa: PLR0915 - lanzamiento + streaming + poll 
             runtime_image_digest=result.runtime_image_digest,
         )
     approval = final_result.get("approval") if final_result else None
-    return result, approval
+    return result, approval, _declared_checks_from_result(final_result)
 
 
 async def _finalize_and_transition(
@@ -1702,6 +1940,7 @@ async def _implementer_post_process(
     task_id: UUID,
     tenant_id: UUID,
     exec_id: str,
+    check_declarations: list[dict[str, Any]],
 ) -> None:
     """Fase 5 (P3): post-proceso del camino implementador (prod-18) — commit +
     tests ANTES de que el evento de estado sea visible (ya persistido en fase 4;
@@ -1711,7 +1950,13 @@ async def _implementer_post_process(
     trailers) + pushed to the plan branch by the WORKER (the sandbox has no git
     credentials). P2.3/F26: commit for a clean `done` AND for an escalation
     (`needs_human_review`) so the human validator gets the diff. task_prod18_
-    test_01: tests run over the worktree only for a `done` run. All best-effort."""
+    test_01: tests run over the worktree only for a `done` run. All best-effort.
+
+    ADR 0162 (opción A, ola 2): ``check_declarations`` es lo que el implementador
+    declaró sobre cómo se verifica cada criterio. Va como argumento OBLIGATORIO
+    —sin default— porque un default lo convertiría en la lista vacía por omisión
+    en cuanto alguien añadiese un caller, y una lista vacía significa «nadie
+    declaró nada»: exactamente el silencio que la opción A retira."""
     # AUD16-02: aplicar los task_comment que el agente emitió durante el run
     # (efectos del sink → steps_log → PlanComment). Best-effort, para TODOS los
     # estados terminales — una nota de un run fallido es a menudo la más útil.
@@ -1722,6 +1967,19 @@ async def _implementer_post_process(
         steps=result.steps,
         task_id=task_id,
         tenant_id=tenant_id,
+    )
+    # ADR 0162 (opción A, ola 2): lo que el implementador declaró pasa a ser
+    # criterio de la tarea, ANTES de la fase de tests. El orden no es estético: si
+    # se escribiera después, este run seguiría lanzando los tests con los
+    # criterios en prosa que el agente acaba de sustituir y el circuito sólo se
+    # cerraría un run más tarde. Se hace para TODOS los estados terminales del
+    # camino implementador, no sólo para `done`: lo que un run escalado averiguó
+    # sobre cómo se verifica la tarea le vale a quien la retome.
+    acceptance_criteria = await _persist_declared_checks(
+        sessionmaker,
+        task_id=task_id,
+        declarations=check_declarations,
+        fallback=prepared.task_acceptance_criteria,
     )
     if (
         result.status in ("done", "needs_human_review")
@@ -1749,7 +2007,7 @@ async def _implementer_post_process(
                 tenant_id=tenant_id,
                 task_id=task_id,
                 worktree_host_path=workspace.host_path,
-                acceptance_criteria=prepared.task_acceptance_criteria,
+                acceptance_criteria=acceptance_criteria,
             )
         if commit_abort_code:
             # P2.3(b)/F13 + P7: a real git failure — surface it (with its
@@ -1919,6 +2177,10 @@ async def conduct_execution(
     workspace = await _provision_workspace(settings, prepared, task_id=task_id)
 
     approval: dict[str, Any] | None = None
+    # ADR 0162 (opción A, ola 2): con qué declaró el implementador que se verifica
+    # cada criterio. Vacío en los caminos de fail-fast — sin contenedor no hay
+    # quien declare, y eso es AUSENCIA, nunca «no hay nada que verificar».
+    check_declarations: list[dict[str, Any]] = []
     failfast: tuple[str, str] | None = None
     if prepared.resolution_error is not None:
         # Fail-fast (ADR 0057 F1): sin proveedor resoluble NO se lanza el
@@ -1960,7 +2222,7 @@ async def conduct_execution(
             usage=dict(_EMPTY_USAGE),
         )
     else:
-        result, approval = await _launch_and_stream(
+        result, approval, check_declarations = await _launch_and_stream(
             request,
             settings=settings,
             sessionmaker=sessionmaker,
@@ -2024,6 +2286,7 @@ async def conduct_execution(
             task_id=task_id,
             tenant_id=tenant_id,
             exec_id=exec_id,
+            check_declarations=check_declarations,
         )
 
     # prod-06 task_prod06_budget_01: now that the run's cost is persisted

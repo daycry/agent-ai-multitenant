@@ -19,7 +19,22 @@ export interface PlanTaskSpec {
   role?: string;
   depends_on?: string[];
   estimated_hours?: number;
-  acceptance_criteria?: string[];
+  /**
+   * `unknown[]` y no `string[]` — ADR 0162, opción A.
+   *
+   * Un criterio es prosa (la inmensa mayoría) **o** un diccionario que DECLARA
+   * cómo se comprueba: el par `runtime`+`command`, o un `check_type` explícito.
+   * Desde que `_clean_acceptance_criteria` dejó de aplanarlos
+   * (`chat/planning_llm.py`), el spec baja con las dos formas mezcladas.
+   *
+   * Mientras esto dijo `string[]`, los dos consumidores de este tipo mentían y
+   * el compilador les daba la razón: la lista de correcciones pintaba el
+   * criterio como hijo de React —«Objects are not valid as a React child», la
+   * tarjeta entera abajo— y el editor del spec lo serializaba
+   * `[object Object]`, borrando la declaración al guardar. Renderízalo siempre
+   * con `criterionText()`.
+   */
+  acceptance_criteria?: unknown[];
   // ADR 0107: las tareas nacidas de un rechazo humano llevan origin=correction.
   origin?: string;
 }

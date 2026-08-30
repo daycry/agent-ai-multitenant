@@ -185,6 +185,9 @@ export default function TeamDetailPage() {
           onAdopted={(newId) => {
             setAdoptOpen(false);
             void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+            // H9b: misma razón que en la lista de equipos — adoptar con destino
+            // «un proyecto» cambia el `team_id` de ese proyecto en el servidor.
+            void queryClient.invalidateQueries({ queryKey: ["projects"] });
             router.push(`/admin/teams/${newId}`);
           }}
         />

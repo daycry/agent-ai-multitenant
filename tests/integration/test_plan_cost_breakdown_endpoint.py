@@ -67,7 +67,7 @@ async def _seed(dsn: str) -> dict[str, UUID]:
 
 async def _seed_with_agent(dsn: str) -> dict[str, UUID]:
     """Like ``_seed`` but also wires a team with one ``backend_dev`` agent whose
-    model_config pins ``claude-opus-4-7``, and points the project at that team —
+    model_config pins ``claude-opus-5``, and points the project at that team —
     so a spec task with ``role: backend_dev`` resolves to that agent's model."""
     tenant_id = uuid4()
     user_id = uuid4()
@@ -110,7 +110,7 @@ async def _seed_with_agent(dsn: str) -> dict[str, UUID]:
             "Cost Team",
         )
         # A global_tenant_template agent (project_id NULL) satisfies the
-        # scope<->project_id CHECK; its model_config pins claude-opus-4-7.
+        # scope<->project_id CHECK; its model_config pins claude-opus-5.
         await conn.execute(
             "INSERT INTO agents (id, tenant_id, name, role, system_prompt, scope, model_config)"
             " VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
@@ -120,7 +120,7 @@ async def _seed_with_agent(dsn: str) -> dict[str, UUID]:
             "backend_dev",
             "Eres una desarrolladora backend.",
             "global_tenant_template",
-            '{"provider": "claude_sdk", "model": "claude-opus-4-7", "temperature": 0.1}',
+            '{"provider": "claude_sdk", "model": "claude-opus-5", "temperature": 0.1}',
         )
         await conn.execute(
             "INSERT INTO team_members (team_id, agent_id) VALUES ($1, $2)",
@@ -255,10 +255,10 @@ async def test_cost_breakdown_query_overrides_model_and_rate(
         )
         plan_id = create.json()["id"]
 
-        # ?model=claude-opus-4-7 picks the more expensive model.
+        # ?model=claude-opus-5 picks the more expensive model.
         # ?hourly_rate=80 raises the human cost proportionally.
         opus = await client.get(
-            f"/plans/{plan_id}/cost-breakdown?model=claude-opus-4-7&hourly_rate=80",
+            f"/plans/{plan_id}/cost-breakdown?model=claude-opus-5&hourly_rate=80",
             headers=headers,
         )
         gpt = await client.get(
@@ -275,7 +275,7 @@ async def test_cost_breakdown_query_overrides_model_and_rate(
 
         # Opus is strictly more expensive than gpt-4o.
         assert float(opus_body["ai"]["cost_min"]) > float(gpt_body["ai"]["cost_min"])
-        assert opus_body["ai"]["default_model_id"] == "claude-opus-4-7"
+        assert opus_body["ai"]["default_model_id"] == "claude-opus-5"
 
 
 @pytest.mark.asyncio
@@ -292,7 +292,7 @@ async def test_cost_breakdown_prices_task_by_assigned_agent_model(
 
     spec = {
         "tasks": [
-            # Maps to the team's backend_dev agent (model_config = claude-opus-4-7).
+            # Maps to the team's backend_dev agent (model_config = claude-opus-5).
             {"id": "t1", "title": "Backend", "complexity": "m", "role": "backend_dev"},
             # No role → no agent → falls back to the default (gpt-4o).
             {"id": "t2", "title": "Suelta", "complexity": "m"},
@@ -316,10 +316,10 @@ async def test_cost_breakdown_prices_task_by_assigned_agent_model(
         by_id = {t["task_id"]: t for t in ai["tasks"]}
 
         # The agent's model wins for its task; the unassigned task stays on default.
-        assert by_id["t1"]["model_id"] == "claude-opus-4-7"
+        assert by_id["t1"]["model_id"] == "claude-opus-5"
         assert by_id["t2"]["model_id"] == "gpt-4o"
         # Opus IS in the catalog → it priced (not a missing-model 0 row).
-        assert "claude-opus-4-7" not in ai["missing_models"]
+        assert "claude-opus-5" not in ai["missing_models"]
         assert float(by_id["t1"]["cost_min"]) > 0
 
 

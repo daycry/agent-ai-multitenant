@@ -74,9 +74,12 @@ const SUMMARY_MESSAGE = {
 };
 
 function renderIn(lang: "es" | "en", { messages = [] as unknown[] } = {}) {
-  apiFetchMock.mockImplementation((path: string) => {
+  apiFetchMock.mockImplementation((path: string, opts?: { method?: string }) => {
     if (path === "/projects/proj-1/conversations") return Promise.resolve([CONVERSATION]);
     if (path === "/projects/proj-1/planning-roles") return Promise.resolve({ roles: ["backend"] });
+    // El POST se queda EN VUELO para poder mirar el eco optimista (H7), que sólo
+    // existe mientras el servidor no ha contestado.
+    if (path.includes("/messages") && opts?.method === "POST") return new Promise(() => {});
     if (path.includes("/messages")) return Promise.resolve(messages);
     return Promise.resolve([]);
   });
@@ -166,6 +169,23 @@ describe("projects/[id]/chat — chat del proyecto", () => {
     expect(screen.getByTestId("chat-summary-toggle").textContent).toContain("hide");
 
     expect(screen.queryByText(/mensajes anteriores/)).toBeNull();
+  });
+
+  it("la marca «enviando…» del eco optimista se traduce en los dos idiomas", async () => {
+    // H7: el eco se pinta al instante, y dice que TODAVÍA no ha llegado al
+    // servidor. Es texto nuevo, así que tiene que tener sus dos caras.
+    renderIn("es");
+    fireEvent.change(await screen.findByTestId("chat-input"), { target: { value: "hola" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+    expect((await screen.findByTestId("chat-message-sending")).textContent).toContain("enviando…");
+
+    cleanup();
+
+    renderIn("en");
+    fireEvent.change(await screen.findByTestId("chat-input"), { target: { value: "hi" } });
+    fireEvent.click(screen.getByTestId("chat-send"));
+    expect((await screen.findByTestId("chat-message-sending")).textContent).toContain("sending…");
+    expect(screen.queryByText(/enviando/)).toBeNull();
   });
 
   it("la pestaña de vista previa del composer también cambia de idioma", async () => {

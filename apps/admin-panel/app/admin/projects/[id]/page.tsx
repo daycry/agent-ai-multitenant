@@ -106,6 +106,30 @@ interface Project {
   budget_period_length_days?: number | null;
 }
 
+/**
+ * Una opción del desplegable de «Equipo».
+ *
+ * `is_builtin` marca los equipos de PLATAFORMA (los seeds son los únicos que lo
+ * ponen a `true`; `fork_team_into` y `create_team` crean siempre con `false`), y
+ * es la diferencia que decide si el equipo sirve para algo en este proyecto:
+ *
+ *   * chat    — `api_server.chat.responder.team_role_agents` exige
+ *               `Team.tenant_id == project.tenant_id` Y
+ *               `Agent.tenant_id == project.tenant_id`;
+ *   * despacho— `orchestrator.dispatch.Dispatcher._candidates` exige
+ *               `Agent.tenant_id == task.tenant_id`.
+ *
+ * Ninguna de las dos hace excepción con el tenant `Platform`, así que un
+ * built-in asignado a un proyecto de otro tenant no da «un equipo compartido»:
+ * da CERO agentes utilizables — peor que no tener equipo, porque sin equipo el
+ * pool de despacho todavía incluye los globales del tenant.
+ */
+interface TeamOption {
+  id: string;
+  name: string;
+  is_builtin?: boolean;
+}
+
 interface ProjectUpdate {
   name?: string;
   description?: string | null;
@@ -452,10 +476,19 @@ function ProjectEditDialog({
   const [teamId, setTeamId] = useState(project.team_id ?? "");
   const teamsQuery = useQuery({
     queryKey: ["teams", "list"],
-    queryFn: () => apiFetch<{ id: string; name: string }[]>("/teams"),
+    queryFn: () => apiFetch<TeamOption[]>("/teams"),
     refetchOnWindowFocus: false,
     enabled: open,
   });
+  // H9a (recorrido E2E 2026-08-29): `GET /teams` devuelve MEZCLADOS los equipos
+  // built-in de plataforma (visibles vía RLS) y las copias del tenant, y el
+  // desplegable los pintaba en una sola lista plana. Elegir uno de plataforma
+  // deja el proyecto sin agentes utilizables —el porqué, en `TeamOption`— y nada
+  // en la pantalla lo insinuaba: era ofrecer una opción rota.
+  const teams = teamsQuery.data ?? [];
+  const platformTeams = teams.filter((t) => t.is_builtin === true);
+  const tenantTeams = teams.filter((t) => t.is_builtin !== true);
+  const selectedIsPlatform = platformTeams.some((t) => t.id === teamId);
 
   // Reset form when the dialog reopens with a (possibly stale)
   // project — otherwise an edit, save, reopen still shows the old
@@ -529,13 +562,37 @@ function ProjectEditDialog({
               data-testid="edit-project-team"
             >
               <option value="">{t("noTeam")}</option>
-              {(teamsQuery.data ?? []).map((team) => (
-                <option key={team.id} value={team.id}>
-                  {team.name}
-                </option>
-              ))}
+              {tenantTeams.length > 0 && (
+                <optgroup label={t("teamGroupTenant")}>
+                  {tenantTeams.map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {/* Se LISTAN pero no se pueden elegir: un proyecto que ya tiene
+                  uno asignado (el estado que produce H6) necesita seguir viendo
+                  cuál es para entender el aviso de abajo. */}
+              {platformTeams.length > 0 && (
+                <optgroup label={t("teamGroupPlatform")}>
+                  {platformTeams.map((team) => (
+                    <option key={team.id} value={team.id} disabled>
+                      {team.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </Select>
             <p className="text-muted-foreground text-xs">{t("teamHint")}</p>
+            {selectedIsPlatform && (
+              <p
+                className="bg-warning-soft text-warning-soft-foreground rounded p-2 text-xs"
+                data-testid="edit-project-team-platform-warning"
+              >
+                {t("teamPlatformWarning")}
+              </p>
+            )}
           </div>
           {mutation.isError && (
             <p

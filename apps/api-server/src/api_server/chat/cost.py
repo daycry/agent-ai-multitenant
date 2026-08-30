@@ -337,17 +337,57 @@ class PriceCatalog:
         return self.prices.get(model_id)
 
 
-# Placeholder prices (USD per 1M tokens) — Plan 11 wires the real catalog.
-# Reference values from public 2026-Q2 pricing for Anthropic, OpenAI
-# via Azure Foundry, and Ollama (local = $0).
+# Catálogo de RESPALDO (USD por 1M de tokens). No es la fuente de verdad: en una
+# instalación viva mandan las filas abiertas de ``model_prices``, que
+# ``cost_resolution.load_price_catalog`` superpone encima de esto (la fila de la
+# BD gana). Esto es lo que se lee en un arranque en frío, con la tabla vacía.
+#
+# H4-residuo (recorrido E2E 2026-08-29): faltaba la generación que el panel
+# ofrece, y el precio de Opus 4.7 estaba además mal (15/75 por 5/25). Un precio
+# viejo en un catálogo de respaldo es de lo que menos se mira y de lo que más se
+# cree.
+#
+# **AÑADIR sí, BORRAR no** (hallazgo MEDIO 5 de la ola 2). Al meter la
+# generación nueva se retiraron `claude-opus-4-7` y `claude-sonnet-4-6`, que no
+# son modelos retirados: son los que `seeds/builtin_agents.py` asigna a ONCE
+# agentes built-in, o sea los que corren hoy en la instalación viva. Un precio
+# desactualizado da un importe malo; un precio AUSENTE hace algo peor — el
+# estimador deja de contar ese modelo (lo reporta en `missing_models`) y su coste
+# desaparece del presupuesto sin que nada falle. Un modelo se saca de aquí cuando
+# deja de usarse, no cuando sale su sucesor.
+# `tests/unit/test_catalogo_precios_cubre_lo_que_se_usa.py` lo ata a las semillas.
+#
+# Los importes son la tarifa pública de Anthropic (tabla de modelos vigente,
+# 2026-06-24): Opus 5 y Opus 4.7 5/25, Sonnet 5 y Sonnet 4.6 3/15 (la de Sonnet 5
+# es la de lista; la promocional de lanzamiento vence el 2026-08-31) y Haiku 4.5
+# 1/5. Un modelo SIN precio conocido no se inventa: se deja fuera y el estimador
+# lo reporta como faltante, que la UI enseña como aviso — «sin precio» es un
+# estado legítimo; un precio falso, no.
 DEFAULT_AI_PRICE_CATALOG = PriceCatalog(
     prices={
+        "claude-opus-5": ModelPrice(
+            "claude-opus-5",
+            currency="USD",
+            input_per_million=Decimal("5.00"),
+            output_per_million=Decimal("25.00"),
+        ),
+        # Sigue en el catálogo porque `seeds/builtin_agents.py` se lo asigna a
+        # tres agentes built-in (`architect`, `researcher`, `security`): quitarlo
+        # dejaría sin contar el coste de los tres, y son los caros.
         "claude-opus-4-7": ModelPrice(
             "claude-opus-4-7",
             currency="USD",
-            input_per_million=Decimal("15.00"),
-            output_per_million=Decimal("75.00"),
+            input_per_million=Decimal("5.00"),
+            output_per_million=Decimal("25.00"),
         ),
+        "claude-sonnet-5": ModelPrice(
+            "claude-sonnet-5",
+            currency="USD",
+            input_per_million=Decimal("3.00"),
+            output_per_million=Decimal("15.00"),
+        ),
+        # Idem: es el modelo de OCHO de los agentes built-in, el más extendido
+        # del parque. Es justo el que más caro sale de no cobrar.
         "claude-sonnet-4-6": ModelPrice(
             "claude-sonnet-4-6",
             currency="USD",
@@ -357,8 +397,8 @@ DEFAULT_AI_PRICE_CATALOG = PriceCatalog(
         "claude-haiku-4-5": ModelPrice(
             "claude-haiku-4-5",
             currency="USD",
-            input_per_million=Decimal("0.80"),
-            output_per_million=Decimal("4.00"),
+            input_per_million=Decimal("1.00"),
+            output_per_million=Decimal("5.00"),
         ),
         "gpt-4o": ModelPrice(
             "gpt-4o",

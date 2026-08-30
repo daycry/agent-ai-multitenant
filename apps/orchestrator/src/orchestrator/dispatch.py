@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -268,6 +269,101 @@ _ZERO_TESTS_MARKER = "ZERO tests"
 _UNMEASURED_TESTS_MARKER = "could not determine how many tests ran"
 _TESTS_LINE_PREFIX = "  tests: "
 
+# --- la señal que DECLARÓ cada criterio (ADR 0162, opción A) -----------------
+#
+# El recuento de arriba dice sobre cuántos tests decidió el código de salida.
+# Esto dice si se cumplió lo que el criterio DECLARÓ que tenía que ocurrir —que
+# es una pregunta distinta y a menudo la única que separa un verde real de un
+# `No tests executed!` con exit 0—. Se evalúa por check desde la ola 1 y se
+# persiste en el outcome; hasta aquí no llegaba a leerse.
+#
+# Los tres estados son los mismos de siempre y **no se colapsan**. El tercero es
+# el que importa: si «no se pudo evaluar» se redactase como «no se cumplió», el
+# bloque acusaría al código del tenant de algo que sólo dice que la señal no era
+# de las que sabemos comprobar. Ése es el falso fallo que manda sobre todo lo
+# demás en este ADR.
+_CHECK_SIGNALS_KEY = "check_signals"
+_SIGNAL_LINE_PREFIX = "  signal: "
+_SIGNAL_MET_MARKER = "declared signal HOLDS"
+_SIGNAL_UNMET_MARKER = "declared signal NOT met"
+_SIGNAL_UNEVALUATED_MARKER = "declared signal could not be evaluated"
+# Centinela: distinguir «la clave `satisfied` NO ESTÁ» —un payload anterior a
+# esta medición, del que no sabemos nada— de «está y vale `null`», que SÍ es una
+# afirmación: no se pudo evaluar.
+_SIGNAL_KEY_ABSENT = object()
+# El `check_id` sale de la descripción del criterio cuando el criterio no trae
+# `id`, y una descripción puede ser un párrafo. Esta línea se paga en cada
+# revisión: se recorta.
+_SIGNAL_ID_MAX_LEN = 120
+
+# La señal HISTÓRICA, la que trae por defecto todo criterio ya escrito
+# (`test_runtime.AcceptanceCheck.expected_signal`). Su veredicto ES el código de
+# salida, que la cabecera ya imprime, así que una línea para ella repetiría la
+# cabecera en cada revisión de cada proyecto sin informar de nada — el mismo
+# criterio por el que un fallo de infraestructura no lleva línea de recuento.
+#
+# El patrón está duplicado respecto a `shared_test_runtimes.signals` porque el
+# orchestrator NO depende del paquete de los workers (dos desplegables), igual
+# que `_count_executable_criteria` duplica el predicado del worker. La paridad
+# entre los dos lados la fija un test, no la buena voluntad.
+_DEFAULT_SIGNAL_RE = re.compile(r"^exit_?code\s*==\s*0$", re.IGNORECASE)
+
+
+def _signal_adds_nothing(raw: Any) -> bool:
+    """Si la señal declarada no dice nada que la cabecera no diga ya.
+
+    Cierto para la señal por defecto y para la ausencia de señal. Una expresión
+    que no reconocemos NO cae aquí: sí aporta —dice que alguien declaró algo que
+    no supimos comprobar— y se reporta como «no se pudo evaluar».
+    """
+    text = " ".join(str(raw or "").split())
+    return not text or bool(_DEFAULT_SIGNAL_RE.match(text))
+
+
+def _format_signal_lines(raw: Any) -> list[str]:
+    """Una línea por check cuya señal declarada dice algo que la cabecera no dice.
+
+    El payload viene de un JSONB de auditoría con años de versiones dentro, así
+    que lo que no se reconoce **no se renderiza**: de los tres estados, el que se
+    inventaría al adivinar es precisamente el falso fallo.
+    """
+    if not isinstance(raw, list):
+        return []
+    lines: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        expected = entry.get("expected_signal")
+        if not isinstance(expected, str) or _signal_adds_nothing(expected):
+            continue
+        satisfied = entry.get("satisfied", _SIGNAL_KEY_ABSENT)
+        if satisfied is _SIGNAL_KEY_ABSENT or not (
+            satisfied is None or isinstance(satisfied, bool)
+        ):
+            continue
+        check_id = " ".join(str(entry.get("check_id") or "?").split())[:_SIGNAL_ID_MAX_LEN]
+        head = f"{_SIGNAL_LINE_PREFIX}{check_id} declared `{' '.join(expected.split())}` — "
+        if satisfied is True:
+            lines.append(f"{head}{_SIGNAL_MET_MARKER}: measured, not guessed.")
+        elif satisfied is False:
+            # (b) El falso verde del ADR, dicho con todas las letras: el proceso
+            # pudo salir con 0 y aun así el criterio NO quedó verificado.
+            lines.append(
+                f"{head}{_SIGNAL_UNMET_MARKER}: the condition the criterion itself "
+                "declared did not hold, so this check is NOT evidence that the "
+                "criterion is met."
+            )
+        else:
+            # (c) La segunda frase existe porque un LLM tiende a redondear «no lo
+            # sé» a «no». Ese redondeo ES el falso fallo.
+            lines.append(
+                f"{head}{_SIGNAL_UNEVALUATED_MARKER}: either the expression is not "
+                "one the platform knows how to check, or it needed a test count "
+                "that could not be measured. UNKNOWN is not a failure: do NOT read "
+                "it as the criterion having failed."
+            )
+    return lines
+
 
 def _count_executable_criteria(task: Any) -> int:
     """Cuántos ``acceptance_criteria`` de la tarea puede EJECUTAR el test-runtime.
@@ -441,7 +537,14 @@ def _format_test_report_block(
     del mismo ADR), que es lo que convierte «salió con 0» en una afirmación
     comprobable. Un outcome sin esa clave —todo el parque persistido antes de la
     ola 1— renderiza exactamente igual que antes: ver
-    :func:`_format_test_counts_line`."""
+    :func:`_format_test_counts_line`.
+
+    Y puede traer las SEÑALES que declaró cada criterio (``check_signals``,
+    opción A): si se cumplió lo que el propio criterio dijo que tenía que
+    ocurrir. Sólo se imprimen las que dicen algo que la cabecera no dice ya —o
+    sea, ninguna del parque actual, que usa la señal por defecto—, así que un
+    proyecto que no declara nada renderiza también byte a byte como hoy: ver
+    :func:`_format_signal_lines`."""
     if not outcomes:
         return _format_absent_test_report_block(
             project_declares_runtime=project_declares_runtime,
@@ -485,6 +588,13 @@ def _format_test_report_block(
             )
             if counts_line is not None:
                 lines.append(counts_line)
+            # ADR 0162 (opción A): y DEBAJO del recuento, si cada criterio
+            # cumplió lo que él mismo declaró. Va por check y no por runtime
+            # porque ahí es donde se evalúa: un resumen del plan dejaría que un
+            # check contestara por otro, que es la respuesta silenciosamente
+            # falsa que este ADR persigue en todas sus formas. Tampoco toca
+            # `status`: el gate es la opción C y no está firmada.
+            lines.extend(_format_signal_lines(o.get(_CHECK_SIGNALS_KEY)))
         logs_tail = str(o.get("logs_tail") or "")
         if logs_tail:
             # El verde TAMBIÉN adjunta su cola (ADR 0162): `exit_code == 0` no

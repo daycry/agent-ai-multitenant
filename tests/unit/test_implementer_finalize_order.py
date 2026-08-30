@@ -99,6 +99,12 @@ async def _run_post_process(monkeypatch: pytest.MonkeyPatch, *, status: str = "d
         task_id=uuid4(),
         tenant_id=uuid4(),
         exec_id=str(uuid4()),
+        # ADR 0162 (opción A, ola 2): sin declaraciones el post-proceso no abre
+        # ni la transacción de persistencia, así que el `object()` de arriba
+        # sigue bastando como sessionmaker. El orden que fija este fichero no
+        # cambia; lo que la declaración añade se fija en
+        # `test_la_declaracion_cierra_el_circulo.py`.
+        check_declarations=[],
     )
     return calls
 

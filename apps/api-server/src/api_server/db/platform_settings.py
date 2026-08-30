@@ -828,7 +828,13 @@ MODEL_DEFAULT_CONFIG_KEY = "model.default_config"
 # valor que envía por defecto el plugin de GitHub Copilot en VS Code.
 DEFAULT_MODEL_CONFIG: dict[str, Any] = {
     "provider": "claude_sdk",
-    "model": "claude-sonnet-4",
+    # H4-residuo (recorrido E2E 2026-08-29): esto decía `claude-sonnet-4` — una
+    # generación por detrás de lo que el propio panel ofrece, y distinta del
+    # default del cliente (`ClaudeAgentProvider.default_model`). Los defaults de
+    # código son los que gobiernan a quien NO elige modelo, así que su deriva no
+    # se ve desde ninguna pantalla; la ata
+    # `tests/unit/test_default_models_are_one_generation.py`.
+    "model": "claude-sonnet-5",
     "temperature": 0.1,
 }
 

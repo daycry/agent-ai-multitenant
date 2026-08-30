@@ -208,8 +208,9 @@ async def adopt_team(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source team not found")
 
     # Resuelve scope destino + (opcional) proyecto del tenant.
+    target_project: Project | None = None
     if payload.target == "project":
-        project = (
+        target_project = (
             await session.execute(
                 select(Project).where(
                     Project.id == payload.project_id,
@@ -219,7 +220,7 @@ async def adopt_team(
                 )
             )
         ).scalar_one_or_none()
-        if project is None:
+        if target_project is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
         scope = AgentScope.PROJECT_LOCAL.value
         fork_project_id: UUID | None = payload.project_id
@@ -237,6 +238,24 @@ async def adopt_team(
         llm_config=payload.llm_config,
         granted_by=principal.user_id,
     )
+
+    # H9b (recorrido E2E 2026-08-29): con destino «un proyecto», el proyecto pasa
+    # a USAR el equipo adoptado. La adopción ya creaba el equipo y forkeaba sus
+    # miembros ATADOS a ese proyecto (`scope=project_local`, `project_id`), pero
+    # dejaba `projects.team_id` donde estuviera —típicamente el built-in del que
+    # se venía huyendo—, así que el resultado era un equipo que sólo ese proyecto
+    # puede usar y que ese proyecto NO usaba. Un paso a medias que sólo se veía
+    # mirando la BD, y que había que rematar a mano desde «Editar proyecto».
+    #
+    # Sólo en este destino: con destino «catálogo del tenant» el equipo es
+    # reutilizable y el usuario no ha dicho en qué proyecto quiere estrenarlo.
+    #
+    # `target_project` sale de una query con `Project.tenant_id == tenant_id`, así
+    # que el repunte no puede cruzar tenants; el endpoint ya exige tenant_admin.
+    if target_project is not None:
+        target_project.team_id = new_team.id
+        await session.flush()
+
     await session.refresh(new_team)
     members = await _load_members(session, new_team.id)
     return to_team_response(new_team, members)

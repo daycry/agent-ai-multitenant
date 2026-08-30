@@ -250,6 +250,50 @@ async def test_project_model_config_roundtrip(configured_app, migrations_pg_dsn:
 
 
 @pytest.mark.asyncio
+async def test_two_projects_with_the_same_name_can_both_fork_the_team(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El fork del equipo no puede ser lo que impide repetir el nombre de un proyecto.
+
+    Desde el arreglo de H6 (2026-08-29) el asistente marca «personalizar el
+    equipo» SIEMPRE que la plantilla trae un built-in, así que el fork pasó de
+    ser una casilla que casi nadie tocaba al camino por defecto. Eso pone en el
+    camino principal un choque que antes casi no se alcanzaba: `fork_team_into`
+    bautiza la copia con el nombre del proyecto, y `uq_teams_tenant_name_live`
+    es único por tenant. Dos proyectos homónimos —que la plataforma SÍ permite,
+    de ahí el desempate de `slug` con `-{id8}`— pedirían el mismo nombre de
+    equipo.
+
+    Este test fija que el segundo proyecto se crea igual. Si un día vuelve a
+    fallar, el arreglo va en el NOMBRE del fork, nunca en desactivar el fork.
+    """
+    seeded = await _seed(migrations_pg_dsn)
+    token = await _mint_token(seeded["user_a"], seeded["tenant_a"])
+    headers = {"Authorization": f"Bearer {token}"}
+    team_a = str(seeded["team_a"])
+
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        first = await client.post(
+            "/projects",
+            json=_minimal_payload(name="Hello World", team_id=team_a, fork_team=True),
+            headers=headers,
+        )
+        assert first.status_code == 201, first.text
+
+        second = await client.post(
+            "/projects",
+            json=_minimal_payload(name="Hello World", team_id=team_a, fork_team=True),
+            headers=headers,
+        )
+
+    assert second.status_code == 201, second.text
+    # Y cada uno con SU equipo: compartirlos sería el defecto que H9 describe.
+    assert second.json()["team_id"] != first.json()["team_id"]
+
+
+@pytest.mark.asyncio
 async def test_create_project_fork_team_opt_in(configured_app, migrations_pg_dsn: str) -> None:
     """Ola C / ADR 0068: `fork_team=True` al crear forkea el equipo referenciado a
     una copia editable del tenant y repunta `project.team_id` al fork; el default

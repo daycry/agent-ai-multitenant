@@ -48,7 +48,7 @@ def test_min_is_below_max_for_every_complexity() -> None:
             {"id": f"t-{c}", "title": c, "complexity": c} for c in DEFAULT_COMPLEXITY_ESTIMATES
         ]
     }
-    result = compute_ai_cost(spec, default_model_id="claude-sonnet-4-6")
+    result = compute_ai_cost(spec, default_model_id="claude-sonnet-5")
     for row in result.tasks:
         assert row.cost_min < row.cost_max
         assert row.tokens_in_min < row.tokens_in_max
@@ -63,7 +63,7 @@ def test_total_is_the_sum_of_per_task_ranges() -> None:
             {"id": "t3", "title": "C", "complexity": "m"},
         ],
     }
-    result = compute_ai_cost(spec, default_model_id="claude-sonnet-4-6")
+    result = compute_ai_cost(spec, default_model_id="claude-sonnet-5")
     expected_min = sum((t.cost_min for t in result.tasks), Decimal("0"))
     expected_max = sum((t.cost_max for t in result.tasks), Decimal("0"))
     assert result.cost_min == expected_min
@@ -74,13 +74,13 @@ def test_task_level_model_override_takes_precedence() -> None:
     """A task can pin its own model; the override beats the default."""
     spec = {
         "tasks": [
-            {"id": "t1", "title": "Expensive", "complexity": "m", "model": "claude-opus-4-7"},
+            {"id": "t1", "title": "Expensive", "complexity": "m", "model": "claude-opus-5"},
             {"id": "t2", "title": "Cheap", "complexity": "m"},
         ],
     }
     result = compute_ai_cost(spec, default_model_id="gpt-4o")
     by_id = {t.task_id: t for t in result.tasks}
-    assert by_id["t1"].model_id == "claude-opus-4-7"
+    assert by_id["t1"].model_id == "claude-opus-5"
     assert by_id["t2"].model_id == "gpt-4o"
     # Opus is more expensive than gpt-4o on every dimension.
     assert by_id["t1"].cost_min > by_id["t2"].cost_min
@@ -102,11 +102,11 @@ def test_task_models_override_beats_task_model_and_default() -> None:
     result = compute_ai_cost(
         spec,
         default_model_id="gpt-4o",
-        task_models={"t1": "claude-opus-4-7", "t2": "claude-opus-4-7"},
+        task_models={"t1": "claude-opus-5", "t2": "claude-opus-5"},
     )
     by_id = {t.task_id: t for t in result.tasks}
-    assert by_id["t1"].model_id == "claude-opus-4-7"  # beats the task's own "gpt-4o"
-    assert by_id["t2"].model_id == "claude-opus-4-7"  # beats the default
+    assert by_id["t1"].model_id == "claude-opus-5"  # beats the task's own "gpt-4o"
+    assert by_id["t2"].model_id == "claude-opus-5"  # beats the default
     assert by_id["t3"].model_id == "gpt-4o"  # not in the map → falls back to default
     # Opus is more expensive than gpt-4o, so the resolved tasks cost more.
     assert by_id["t1"].cost_min > by_id["t3"].cost_min
@@ -115,7 +115,7 @@ def test_task_models_override_beats_task_model_and_default() -> None:
 def test_task_models_empty_or_none_is_a_noop() -> None:
     spec = {"tasks": [{"id": "t1", "title": "A", "complexity": "m"}]}
     base = compute_ai_cost(spec, default_model_id="gpt-4o")
-    for tm in (None, {}, {"other": "claude-opus-4-7"}):
+    for tm in (None, {}, {"other": "claude-opus-5"}):
         result = compute_ai_cost(spec, default_model_id="gpt-4o", task_models=tm)
         assert result.tasks[0].model_id == base.tasks[0].model_id == "gpt-4o"
 
@@ -195,10 +195,15 @@ def test_custom_complexity_estimates_are_respected() -> None:
 
 
 def test_default_catalog_has_the_four_provider_models() -> None:
-    """Every model in the catálogo cerrado (ADR 0021) shows up here."""
+    """Every model in the catálogo cerrado (ADR 0021) shows up here.
+
+    Los ids Claude se movieron a la generación vigente en H4-residuo (recorrido
+    E2E 2026-08-29); que no se queden atrás lo vigila además
+    ``tests/unit/test_default_models_are_one_generation.py``.
+    """
     expected = {
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
+        "claude-opus-5",
+        "claude-sonnet-5",
         "claude-haiku-4-5",
         "gpt-4o",
         "llama3.1",

@@ -537,26 +537,133 @@ def _normalise_summary(raw: Any) -> dict[str, Any]:
     return {"description": text} if text else {}
 
 
-def _clean_acceptance_criteria(raw: Any) -> list[str]:
-    """Coerce a task's ``acceptance_criteria`` into a clean list of descriptive,
-    verifiable strings — the agent's "definition of done" (rendered by
-    ``providers._criterion_text``). Trims; flattens a ``{description}`` dict to its
-    text; drops empties/non-strings; caps count and per-criterion length. NOT
-    executable commands (those are out of the planner's scope — too unreliable)."""
+# ADR 0162 (opción A) — el conjunto CERRADO de claves que un criterio conserva.
+#
+# Cerrado a propósito: el criterio acaba en un JSONB y en el prompt del agente, y
+# dejar pasar lo que venga es la vía por la que `repository_config` acumuló siete
+# claves que nadie lee (§Decisión 1 del ADR). Cada clave de aquí tiene un
+# consumidor REAL, y son todos del worker:
+#
+#   description      lo que el agente lee como «definición de hecho»
+#   runtime, command lo que `execution.py` exige —los DOS— para lanzar la fase de
+#                    tests; sin el par no hay nada ejecutable que preservar
+#   check_type       la declaración de la opción A; su AUSENCIA es un dato
+#   expected_signal  la condición del §«La trampa que hay que cerrar CON A»
+#   timeout_s        el presupuesto por check (`test_phase_wait_budget_s`)
+#   id               con qué nombre aparece el check en el informe
+#   reason           por qué NO es automatizable; sin él, «manual» es
+#                    indistinguible del silencio que el ADR viene a retirar
+_CRITERION_TEXT_KEYS = ("description", "text", "criterion")
+_CRITERION_STRUCTURED_KEYS = (
+    "runtime",
+    "command",
+    "check_type",
+    "expected_signal",
+    "id",
+    "reason",
+)
+
+
+def criterion_text(item: Any) -> str:
+    """El texto legible de un criterio, venga como cadena o como estructura.
+
+    La contrapartida obligatoria de conservar la forma estructurada: todo lo que
+    RENDERIZA un criterio —el prompt de generación, el digest de tareas
+    hermanas— tiene que pasar por aquí, o pintará el ``repr`` de un diccionario
+    y el modelo leerá ``{'description': …}`` como si fuera el criterio.
+
+    Es el gemelo de ``agent_runtime.providers._criterion_text``, que hace lo
+    mismo al otro lado del contenedor.
+    """
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in _CRITERION_TEXT_KEYS:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _structured_criterion(item: dict[str, Any], text: str) -> dict[str, Any] | None:
+    """La forma estructurada de un criterio, o ``None`` si no hay ninguna.
+
+    Hay estructura que preservar en exactamente dos casos, que son las dos
+    mitades de la DECISIÓN que pide la opción A del ADR 0162:
+
+      * **«esto se verifica ejecutando X»** — el par ``runtime`` + ``command``
+        completo. A medias no cuenta: el worker exige los dos
+        (``execution.py``), así que preservar sólo uno fijaría un dato que no
+        dispara nada y ensuciaría de diccionarios el 100 % de los criterios de
+        prosa que vienen envueltos en ``{description}``.
+      * **«esto no es verificable a máquina»** — un ``check_type`` DECLARADO.
+
+    Fuera de esos dos casos devuelve ``None`` y el criterio baja como cadena,
+    que es lo que era y lo que seguirá siendo la inmensa mayoría.
+
+    Lo que NO hace, y es la regla que el ADR enuncia tres veces: rellenar un
+    ``check_type`` ausente. Un valor ausente no puede significar nada más fuerte
+    que «desconocido»; inventarlo aquí fabricaría la declaración que la opción A
+    pide que alguien TOME, y dejaría al contador de no-declarados del worker
+    (``checks_without_declared_check_type``) contando ceros para siempre.
+    """
+    runtime = str(item.get("runtime") or "").strip()
+    command = str(item.get("command") or "").strip()
+    declares_check_type = "check_type" in item
+    if not (runtime and command) and not declares_check_type:
+        return None
+    out: dict[str, Any] = {"description": text}
+    for key in _CRITERION_STRUCTURED_KEYS:
+        if key not in item:
+            continue
+        value = item[key]
+        if isinstance(value, str):
+            trimmed = value.strip()[:_MAX_CRITERION_LEN].strip()
+            if trimmed:
+                out[key] = trimmed
+        elif value is not None:
+            out[key] = value
+    timeout_s = item.get("timeout_s")
+    if isinstance(timeout_s, int) and not isinstance(timeout_s, bool) and timeout_s > 0:
+        out["timeout_s"] = timeout_s
+    return out
+
+
+def _clean_acceptance_criteria(raw: Any) -> list[Any]:
+    """Normalise a task's ``acceptance_criteria`` — prose stays prose, structure
+    SURVIVES.
+
+    **Por qué dejó de devolver ``list[str]`` (ADR 0162, opción A).** Esta función
+    era la cuarta y última capa de la cadena que impedía que existiera un
+    criterio ejecutable: aplanaba cualquier diccionario a su ``description``, así
+    que un ``{runtime, command}`` escrito por el operador desde la UI —o
+    conservado por un replan— desaparecía en cuanto volvía a pasar por aquí. Con
+    ella aplanando, reescribir los prompts no habría producido ni un criterio
+    ejecutable.
+
+    Lo que devuelve, por entrada:
+
+      * ``str``  — prosa, recortada y acotada. **El caso normal**, y el que no
+        podía romperse: los dos generadores tienen escrito en el prompt que no
+        emitan comandos, y con razón (el planner planifica ANTES de que el código
+        exista, así que pedirle un ``command`` es pedirle que prediga un nombre
+        de fichero).
+      * ``dict`` — sólo cuando el criterio DECLARA algo: el par
+        ``runtime``+``command``, o un ``check_type`` explícito. Ver
+        :func:`_structured_criterion`.
+
+    Sigue recortando, descartando lo vacío y lo que no es texto, y acotando
+    número y longitud: la estructura no compra una excepción a los límites.
+    """
     if not isinstance(raw, list):
         return []
-    out: list[str] = []
+    out: list[Any] = []
     for item in raw:
-        value = (
-            (item.get("description") or item.get("text") or item.get("criterion") or "")
-            if isinstance(item, dict)
-            else item
-        )
-        if not isinstance(value, str):
+        text = criterion_text(item)[:_MAX_CRITERION_LEN].strip()
+        if not text:
             continue
-        text = value.strip()[:_MAX_CRITERION_LEN].strip()
-        if text:
-            out.append(text)
+        structured = _structured_criterion(item, text) if isinstance(item, dict) else None
+        out.append(structured if structured is not None else text)
         if len(out) >= _MAX_ACCEPTANCE_CRITERIA:
             break
     return out

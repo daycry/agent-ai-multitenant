@@ -187,6 +187,13 @@ export default function TeamsListPage() {
           onAdopted={(newId) => {
             setAdopting(null);
             void queryClient.invalidateQueries({ queryKey: ["teams", "list"] });
+            // H9b: con destino «un proyecto», la adopción repunta
+            // `projects.team_id` al equipo nuevo (routers/teams.py), así que
+            // toda caché de proyectos queda vieja. Se invalida el prefijo
+            // entero y sin mirar el destino: el callback sólo recibe el id del
+            // equipo, y un refetch de más cuesta menos que una ficha que sigue
+            // enseñando el equipo del que el operador acaba de salir.
+            void queryClient.invalidateQueries({ queryKey: ["projects"] });
             router.push(`/admin/teams/${newId}`);
           }}
         />

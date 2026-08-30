@@ -9,6 +9,7 @@
  * tocar.
  */
 
+import { criterionText } from "@/lib/acceptance-criteria";
 import { ApiError } from "@/lib/api";
 import { translate, type Lang, type MessageKey } from "@/lib/i18n";
 import type { PlanTaskSpec } from "@/app/admin/projects/[id]/plans/[planId]/plan-spec-types";
@@ -36,8 +37,19 @@ export interface TaskDraft {
   complexity: string;
   estimatedHours: string;
   dependsOn: string[];
-  /** Un criterio por línea. */
+  /** Un criterio por línea, en su TEXTO legible. */
   criteria: string;
+  /**
+   * Los criterios tal y como bajaron del spec, para devolverles su forma al
+   * guardar (ADR 0162, opción A).
+   *
+   * Un `<textarea>` sólo puede sostener texto, así que un criterio que declara
+   * `runtime`+`command` pierde aquí todo menos su enunciado. Sin este apunte, el
+   * único camino de vuelta era emitir la línea como cadena — o sea, abrir el
+   * editor y pulsar «Guardar» sin tocar nada BORRABA la declaración ejecutable
+   * y con ella la ejecución de los tests, en silencio.
+   */
+  criteriaOriginals: readonly unknown[];
   /** Campos del spec que el editor no toca (p. ej. `origin`), preservados
    * tal cual para no perderlos al guardar. */
   rest: Record<string, unknown>;
@@ -65,10 +77,63 @@ export function toDrafts(tasks: readonly PlanTaskSpec[]): TaskDraft[] {
       complexity: complexity ?? "",
       estimatedHours: hours == null ? "" : String(hours),
       dependsOn: [...(deps ?? [])],
-      criteria: (criteria ?? []).join("\n"),
+      // `criterionText` y no `join("\n")` a secas: un criterio estructurado se
+      // serializaba `[object Object]` y el operador editaba ESO.
+      criteria: (criteria ?? []).map(criterionText).join("\n"),
+      criteriaOriginals: [...(criteria ?? [])],
       rest,
     };
   });
+}
+
+/** La forma con la que se reconoce un criterio entre lo tecleado y lo que había:
+ * colapsa espacios y mayúsculas, igual que `check_declarations._criterion_key`
+ * al otro lado. Exigir igualdad byte a byte convertiría un espacio de más en la
+ * pérdida de la declaración. */
+function criterionKey(text: string): string {
+  return text.split(/\s+/).filter(Boolean).join(" ").toLowerCase();
+}
+
+/** True si el criterio trae algo que un `<textarea>` no puede sostener. */
+function isStructuredCriterion(c: unknown): boolean {
+  return typeof c === "object" && c !== null && !Array.isArray(c);
+}
+
+/**
+ * Los criterios que emite una fila: cada línea recupera la forma estructurada
+ * del criterio del que salió, y las demás bajan como prosa.
+ *
+ * **Se casa por TEXTO y no por posición**, y no es un detalle de comodidad:
+ * heredar por índice ataría el `command` de un criterio a la línea que ocupe su
+ * sitio tras insertar otra encima — un criterio ejecutable puesto donde nadie lo
+ * declaró, que es el «criterio fantasma» que la ola 2 del ADR 0162 prohíbe
+ * expresamente. Cada original se reclama UNA vez, así que dos líneas iguales no
+ * se llevan la misma declaración.
+ *
+ * La contrapartida, que hay que decir: **reescribir el enunciado de una línea
+ * pierde su declaración** y el criterio vuelve a prosa. Es la degradación
+ * conservadora —lo que hoy pasa con el 100 % de ellos— y nunca atribuye una
+ * declaración al criterio equivocado, que es el fallo caro.
+ */
+function criteriaFromDraft(draft: TaskDraft): unknown[] {
+  const byKey = new Map<string, unknown[]>();
+  for (const original of draft.criteriaOriginals) {
+    if (!isStructuredCriterion(original)) continue;
+    const key = criterionKey(criterionText(original));
+    if (!key) continue;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(original);
+    else byKey.set(key, [original]);
+  }
+  const out: unknown[] = [];
+  for (const line of draft.criteria.split("\n")) {
+    const text = line.trim();
+    if (!text) continue;
+    const bucket = byKey.get(criterionKey(text));
+    const original = bucket?.shift();
+    out.push(original ?? text);
+  }
+  return out;
 }
 
 /** Vuelta al shape del spec. Los campos vacíos se OMITEN en vez de viajar como
@@ -86,10 +151,7 @@ export function toTaskSpecs(drafts: readonly TaskDraft[]): PlanTaskSpec[] {
     const hours = Number.parseFloat(draft.estimatedHours);
     if (Number.isFinite(hours)) spec.estimated_hours = hours;
     if (draft.dependsOn.length > 0) spec.depends_on = [...draft.dependsOn];
-    const criteria = draft.criteria
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const criteria = criteriaFromDraft(draft);
     if (criteria.length > 0) spec.acceptance_criteria = criteria;
     return spec;
   });

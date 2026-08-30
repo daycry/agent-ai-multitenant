@@ -121,6 +121,10 @@ export function PlanSpecEditorSection({
           estimatedHours: "",
           dependsOn: [],
           criteria: "",
+          // Una tarea recién creada no viene de ningún spec, así que no hay
+          // declaración estructurada que devolver: todo lo que se teclee aquí
+          // es prosa.
+          criteriaOriginals: [],
           rest: {},
         },
       ];

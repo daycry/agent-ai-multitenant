@@ -19,9 +19,30 @@ import type { Message } from "./chat-types";
 interface MessageFeedProps {
   messages: Message[];
   loading: boolean;
+  /**
+   * Ids de los ecos optimistas todavía sin confirmar (H7, `chat-echo.ts`). Se
+   * pintan como el resto pero marcados: el eco es un mensaje que la
+   * conversación aún no tiene, y decir lo contrario es lo que hace dudar al
+   * usuario de si pulsó dos veces.
+   */
+  pendingIds?: ReadonlySet<string>;
+  /**
+   * Ids de los ecos cuyo POST falló. Se pintan igual —el texto del usuario es
+   * lo único que queda de su mensaje— pero marcados como fallidos y con un
+   * reintento, en vez de desaparecer sin decir nada.
+   */
+  failedIds?: ReadonlySet<string>;
+  /** Reintentar el envío de un eco fallido. */
+  onRetry?: (message: Message) => void;
 }
 
-export function MessageFeed({ messages, loading }: MessageFeedProps) {
+export function MessageFeed({
+  messages,
+  loading,
+  pendingIds,
+  failedIds,
+  onRetry,
+}: MessageFeedProps) {
   const t = useT("projectChat");
 
   if (loading) {
@@ -38,7 +59,12 @@ export function MessageFeed({ messages, loading }: MessageFeedProps) {
     <ol className="space-y-3" data-testid="chat-feed">
       {messages.map((m) => (
         <li key={m.id}>
-          <MessageRow message={m} />
+          <MessageRow
+            message={m}
+            pending={pendingIds?.has(m.id) ?? false}
+            failed={failedIds?.has(m.id) ?? false}
+            onRetry={onRetry ? () => onRetry(m) : undefined}
+          />
         </li>
       ))}
     </ol>
@@ -91,7 +117,18 @@ function SummaryRow({ message, folded }: { message: Message; folded: number }) {
   );
 }
 
-function MessageRow({ message }: { message: Message }) {
+function MessageRow({
+  message,
+  pending,
+  failed,
+  onRetry,
+}: {
+  message: Message;
+  pending: boolean;
+  failed: boolean;
+  onRetry?: () => void;
+}) {
+  const t = useT("projectChat");
   const folded = summaryFoldedCount(message.attachments);
   if (message.is_summary && folded > 0) {
     return <SummaryRow message={message} folded={folded} />;
@@ -110,8 +147,9 @@ function MessageRow({ message }: { message: Message }) {
       </div>
     );
   }
-  const tone =
-    message.author_kind === "agent"
+  const tone = failed
+    ? "border-destructive/60 bg-destructive/5"
+    : message.author_kind === "agent"
       ? "border-indigo-500/40 bg-indigo-500/5"
       : "border-emerald-500/40 bg-emerald-500/5";
   // Agents may emit structured plan drafts as markdown (tables, lists,
@@ -127,10 +165,35 @@ function MessageRow({ message }: { message: Message }) {
     <div
       className={cn("rounded border px-3 py-2 text-sm", tone)}
       data-testid={`chat-message-${message.author_kind}`}
+      // El banner de sistema y el resumen ya lo llevaban; el turno normal no, y
+      // sin él un test sólo puede CONTAR globos. Contar es justo lo que dejó
+      // pasar H7: dos filas con el mismo texto se ven idénticas, y una
+      // aserción sobre un DOM todavía sin repintar cuadra sola.
+      data-message-id={message.id}
     >
       {body}
       <p className="text-muted-foreground mt-1 text-[10px] uppercase tracking-wide">
         {message.author_kind} · {message.mode}
+        {pending ? (
+          <span className="ml-1 italic" data-testid="chat-message-sending">
+            · {t("sending")}
+          </span>
+        ) : null}
+        {failed ? (
+          <span className="text-destructive ml-1 font-medium" data-testid="chat-message-failed">
+            · {t("sendFailed")}
+          </span>
+        ) : null}
+        {failed && onRetry ? (
+          <button
+            type="button"
+            className="text-destructive ml-2 underline underline-offset-2"
+            onClick={onRetry}
+            data-testid="chat-message-retry"
+          >
+            {t("retrySend")}
+          </button>
+        ) : null}
       </p>
     </div>
   );

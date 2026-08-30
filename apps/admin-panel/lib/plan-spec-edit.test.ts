@@ -177,3 +177,63 @@ describe("describeSaveError", () => {
     expect(message).toContain("t1 («Migrar el esquema»)");
   });
 });
+
+/**
+ * IMPORTANTE 4 de la ola 2 del ADR 0162 — el editor del spec y el criterio
+ * ESTRUCTURADO.
+ *
+ * Desde que `_clean_acceptance_criteria` dejó de aplanar (ola 1), un criterio
+ * puede bajar del backend como diccionario con `runtime` + `command`. Este
+ * editor lo trataba como `string[]`: `join("\n")` lo pintaba
+ * `[object Object]` y —lo caro— al guardar volvía al spec COMO ESA CADENA,
+ * borrando para siempre la única declaración ejecutable que el ADR 0162 vino a
+ * fabricar. Un fallo de tipo que no se ve en pantalla como tal: se ve como que
+ * el test-runtime dejó de dispararse.
+ */
+describe("un criterio ESTRUCTURADO sobrevive al editor del spec (ADR 0162)", () => {
+  const STRUCTURED = {
+    description: "La portada responde 200 y sus tests pasan",
+    check_type: "automated",
+    runtime: "php-phpunit",
+    command: "vendor/bin/phpunit --testsuite Feature",
+    expected_signal: "exit_code == 0 and tests > 0",
+  };
+
+  function rowWithStructured(): TaskDraft {
+    return toDrafts([{ id: "t1", title: "T", acceptance_criteria: [STRUCTURED, "Y en prosa"] }])[0];
+  }
+
+  it("el textarea enseña el TEXTO del criterio, no su [object Object]", () => {
+    expect(rowWithStructured().criteria).toBe(
+      "La portada responde 200 y sus tests pasan\nY en prosa",
+    );
+  });
+
+  it("y al guardar vuelve al spec con su declaración INTACTA", () => {
+    // Sin esto, abrir el editor y pulsar «Guardar» sin tocar nada convertía el
+    // criterio ejecutable en prosa: el worker exige `runtime` Y `command`
+    // (`execution.py::_run_task_tests`), así que la tarea dejaba de ejecutar sus
+    // tests sin que nada lo dijera.
+    expect(toTaskSpecs([rowWithStructured()])[0].acceptance_criteria).toEqual([
+      STRUCTURED,
+      "Y en prosa",
+    ]);
+  });
+
+  it("un criterio BORRADO del textarea no vuelve por la puerta de atrás", () => {
+    const row = rowWithStructured();
+    expect(toTaskSpecs([{ ...row, criteria: "Y en prosa" }])[0].acceptance_criteria).toEqual([
+      "Y en prosa",
+    ]);
+  });
+
+  it("una línea NUEVA sigue siendo prosa: no hereda la declaración de otra", () => {
+    // Heredar por posición ataría un `command` a un criterio que nadie declaró
+    // así — el «criterio fantasma» que el propio ADR prohíbe en su ola 2.
+    const row = rowWithStructured();
+    const spec = toTaskSpecs([
+      { ...row, criteria: "Otra cosa\nLa portada responde 200 y sus tests pasan" },
+    ])[0];
+    expect(spec.acceptance_criteria).toEqual(["Otra cosa", STRUCTURED]);
+  });
+});
