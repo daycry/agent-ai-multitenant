@@ -181,3 +181,94 @@ def test_el_fallo_del_refresco_no_impide_arrancar() -> None:
         assert not any(isinstance(n, ast.Raise) for n in ast.walk(handler)), (
             "el manejador vuelve a lanzar: un problema de siembra impediría arrancar"
         )
+
+
+# ---------------------------------------------------------------------------
+# El agente TIENE QUE EXISTIR antes de que se le cablee nada
+# ---------------------------------------------------------------------------
+#: Los tres rosters, con el seed que CREA sus filas en `agents`. La distinción
+#: entre crear el agente y cablearle capacidades no es teórica: el 2026-08-30 el
+#: refresco re-aplicaba capacidades sobre agentes que daba por presentes, y al
+#: añadir `ci4-tech-writer` el arranque falló contra la FK de
+#: `agent_tools.agent_id`. El equipo se quedó a diez miembros en la base
+#: mientras el código declaraba once, y sólo se supo mirando los logs.
+_SEEDS_QUE_CREAN_AGENTES: dict[str, str] = {
+    "agents": "seed_builtin_agents",
+    "ci4_agents": "seed_ci4_agents",
+    "qa_e2e_automator": "seed_qa_e2e_automator",
+}
+
+#: Y el seed que los mete en su equipo (`team_members.agent_id`, otra FK).
+_SEEDS_DE_PERTENENCIA: dict[str, str] = {
+    "teams": "seed_builtin_teams",
+    "ci4_team": "seed_ci4_team",
+}
+
+
+def test_el_refresco_crea_los_agentes_antes_de_cablearlos() -> None:
+    """Las tres mitades: que el agente exista, tenga capacidades y esté en su equipo.
+
+    Un refresco que sólo cablea capacidades es media garantía. «Las tools de un
+    agente built-in son de la PLATAFORMA» no se sostiene si el agente en sí sólo
+    llega corriendo el CLI a mano — que es el defecto una vuelta más abajo.
+    """
+    referenciados = _nombres_referenciados(_funcion(_STARTUP, "refresh_builtin_agent_capabilities"))
+
+    faltan = sorted(
+        fn
+        for fn in (*_SEEDS_QUE_CREAN_AGENTES.values(), *_SEEDS_DE_PERTENENCIA.values())
+        if fn not in referenciados
+    )
+    assert not faltan, (
+        f"el refresco de arranque no llama a {faltan}: un agente built-in nuevo "
+        "no llegará a la base, y el cableado de sus tools fallará contra la FK"
+    )
+
+
+def test_los_agentes_van_antes_que_sus_capacidades() -> None:
+    """El orden es la clave ajena, no una preferencia de estilo.
+
+    `agent_tools.agent_id` y `agent_skills.agent_id` apuntan a `agents`, y
+    `team_members.agent_id` también. Sembrar el cableado antes que el agente
+    revienta; sembrar la pertenencia antes que el agente, igual.
+    """
+    # Se lee la TUPLA de pasos, no la función entera: el bloque de `import` lista
+    # los seeds en orden alfabético, así que buscar por texto daba un orden que
+    # no es el de ejecución — y el primer intento de este test falló por eso,
+    # con `assert 8 < 0`.
+    fn = _funcion(_STARTUP, "refresh_builtin_agent_capabilities")
+    tupla = next(
+        n.value
+        for n in ast.walk(fn)
+        if isinstance(n, ast.AnnAssign)
+        and isinstance(n.target, ast.Name)
+        and n.target.id == "pasos"
+        and n.value is not None
+    )
+    orden = [x.id for x in ast.walk(tupla) if isinstance(x, ast.Name)]
+    assert len(orden) >= 8, f"la tupla de pasos sólo trae {orden}"
+    pos = {nombre: orden.index(nombre) for nombre in set(orden)}
+
+    ultimo_agente = max(pos[fn] for fn in _SEEDS_QUE_CREAN_AGENTES.values())
+    primera_capacidad = min(
+        pos[fn]
+        for fn in (
+            "seed_builtin_agent_tools",
+            "seed_builtin_agent_skills",
+            "seed_ci4_agent_tools",
+            "seed_ci4_agent_skills",
+            "seed_qa_e2e_automator_tools",
+            "seed_qa_e2e_automator_skills",
+        )
+    )
+    assert ultimo_agente < primera_capacidad, (
+        "hay un paso de capacidades ANTES del último paso que crea agentes: "
+        "el cableado fallará contra `agent_tools.agent_id` para cualquier "
+        "agente built-in que aún no exista en la base"
+    )
+
+    primera_pertenencia = min(pos[fn] for fn in _SEEDS_DE_PERTENENCIA.values())
+    assert ultimo_agente < primera_pertenencia, (
+        "la pertenencia al equipo se siembra antes de crear los agentes: "
+        "fallará contra `team_members.agent_id`"
+    )
