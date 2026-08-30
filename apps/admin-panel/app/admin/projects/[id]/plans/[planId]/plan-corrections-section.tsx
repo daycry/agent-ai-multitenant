@@ -11,6 +11,7 @@ import { CheckCircle2, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { criterionText } from "@/lib/acceptance-criteria";
 import { apiFetch } from "@/lib/api";
 import { useT } from "@/lib/i18n";
 import { renderPlanDraft } from "@/lib/plan-draft-md";
@@ -203,8 +204,14 @@ export function CorrectionsSection({
                       </p>
                       {task.acceptance_criteria && task.acceptance_criteria.length > 0 ? (
                         <ul className="mt-1 list-disc pl-5 text-xs">
+                          {/* `criterionText` y no `{c}`: desde el ADR 0162 un
+                              criterio puede ser un diccionario que declara con
+                              qué se verifica, y React tumba el árbol entero
+                              ante un objeto («Objects are not valid as a React
+                              child») — con él, la tarjeta de correcciones de un
+                              plan rechazado dejaba de pintarse. */}
                           {task.acceptance_criteria.map((c, i) => (
-                            <li key={i}>{c}</li>
+                            <li key={i}>{criterionText(c)}</li>
                           ))}
                         </ul>
                       ) : null}

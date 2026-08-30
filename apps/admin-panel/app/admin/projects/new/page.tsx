@@ -45,11 +45,21 @@ interface Project {
   repository_config: Record<string, unknown> | null;
   human_approval_policy: Record<string, unknown> | null;
   is_template: boolean;
+  // H1 (recorrido E2E 2026-08-29): el runtime que la plantilla DECLARA. El
+  // asistente no lo leía, así que un proyecto de la plantilla CodeIgniter 4
+  // (`php-phpunit`) nacía en «sin runtime por defecto» — que no es sin runtime,
+  // es `DEFAULT_RUN_RUNTIME_ID` = `python-pytest`. `composer` en una imagen de
+  // Python, y el `command not found` acusando al repositorio del usuario.
+  default_runtime_template: string | null;
 }
 
 interface Team {
   id: string;
   name: string;
+  // Marcador de equipo de PLATAFORMA: `is_builtin` implica tenant `Platform`
+  // (los seeds son los únicos que lo ponen; `fork_team_into` y `create_team`
+  // siempre crean con `false`). Ver el aviso de H6 más abajo.
+  is_builtin?: boolean;
 }
 
 const STRIP_PREFIX = /^Plantilla:\s*/i;
@@ -65,6 +75,10 @@ export default function NewProjectWizardPage() {
   const { lang } = useLang();
   const tWizard = useT("projectWizard");
   const tDeploy = useT("marketplaceDeploy");
+  // Los rótulos «equipos de plataforma / de este tenant» los estrena el diálogo
+  // de edición del proyecto (H9a) y se reusan aquí a propósito: duplicarlos en
+  // `projectWizard` sería dos textos que dicen lo mismo y que un día divergen.
+  const tProjectHub = useT("projectHub");
 
   // Step 1: pick a template (or start blank). Step 2: customize. Step 3
   // (ADR 0142, sólo si el tenant tiene algo instalado): «Capacidades».
@@ -79,7 +93,8 @@ export default function NewProjectWizardPage() {
   // template's KBs are the point of picking it); a blank project ignores it.
   const [applyKbGrants, setApplyKbGrants] = useState(true);
   // Ola C / ADR 0068: forkear el equipo de la plantilla a una copia editable del
-  // proyecto (default off = referenciar el equipo tal cual).
+  // proyecto. Arranca en `false` porque es el estado del proyecto EN BLANCO, que
+  // no tiene equipo de plantilla que copiar; `pickTemplate` lo pone a `true`.
   const [forkTeam, setForkTeam] = useState(false);
   // Equipo para un proyecto EN BLANCO (sin plantilla): "" = sin equipo. En los
   // basados en plantilla el equipo lo aporta la plantilla (selected.team_id).
@@ -115,13 +130,64 @@ export default function NewProjectWizardPage() {
   const runtimesQuery = useRuntimeTemplates();
   const runtimeTemplates = runtimesQuery.data ?? [];
 
+  // ---- El runtime de la plantilla que el catálogo no sirve ----------------
+  //
+  // `pickTemplate` fija `template.default_runtime_template` SIN mirar el
+  // catálogo. Si ese id no está entre las opciones, el `<select>` se queda sin
+  // nada seleccionado: el operador ve un desplegable en blanco —indistinguible
+  // de «— Sin runtime por defecto —»— mientras el formulario envía un id que
+  // nadie ha visto. Y «sin runtime» NO es sin runtime: es
+  // `DEFAULT_RUN_RUNTIME_ID` = `python-pytest` (H1).
+  //
+  // Por eso el valor se CONSERVA y se pinta con su propia opción. Caer a `""`
+  // por nuestra cuenta sería elegir por el operador justo el valor peligroso.
+  const runtimeOrphan = runtime !== "" && !runtimeTemplates.some((rt) => rt.id === runtime);
+  // Y sólo se ACUSA al catálogo de no servirlo cuando el catálogo ha
+  // contestado. Mientras carga o si falla no sabemos qué sirve, y no saberlo no
+  // es saber que no está — la regla del ADR 0162: un valor ausente no puede
+  // significar nada más fuerte que «desconocido».
+  const runtimeUnknown = runtimeOrphan && runtimesQuery.isSuccess;
+
   const teamsById = new Map((teamsQuery.data ?? []).map((t) => [t.id, t]));
+
+  // ---- H6: el equipo de la plantilla, y si es utilizable por este tenant ----
+  //
+  // Un equipo `is_builtin` es del tenant `Platform`, y sus agentes también. Las
+  // DOS vías que resuelven agentes desde el equipo del proyecto filtran por el
+  // tenant del PROYECTO y no hacen excepción con la plataforma:
+  //
+  //   * chat    — `chat.responder.team_role_agents`: `Team.tenant_id` Y
+  //               `Agent.tenant_id` han de ser los del proyecto;
+  //   * despacho— `orchestrator.dispatch.Dispatcher._candidates`:
+  //               `Agent.tenant_id == task.tenant_id`.
+  //
+  // O sea: referenciar un built-in no da «un equipo compartido», da CERO agentes
+  // utilizables — peor que no tener equipo, porque sin equipo el pool de
+  // despacho todavía incluye los globales del tenant. Por eso aquí la copia no
+  // es una preferencia: es la única forma de que el proyecto pueda planificar.
+  const templateTeam = selected?.team_id ? teamsById.get(selected.team_id) : undefined;
+  const forkTeamRequired = templateTeam?.is_builtin === true;
+  const effectiveForkTeam = forkTeamRequired || forkTeam;
+  // El mismo corte para el desplegable del proyecto EN BLANCO (H9a): ahí no hay
+  // casilla de «personalizar», así que un built-in elegido no tendría arreglo.
+  const allTeams = teamsQuery.data ?? [];
+  const platformTeams = allTeams.filter((t) => t.is_builtin === true);
+  const tenantTeams = allTeams.filter((t) => t.is_builtin !== true);
 
   function pickTemplate(template: Project) {
     setSelected(template);
     setName(suggestedName(template));
     setDescription(template.description ?? "");
     setApplyKbGrants(true);
+    // H1: el runtime que declara la plantilla, preseleccionado y EDITABLE — «sin
+    // runtime» sigue siendo elegible para quien lo quiera a propósito.
+    setRuntime(template.default_runtime_template ?? "");
+    // H6: copiar el equipo es el default al adoptar plantilla, igual que en el
+    // servidor (`_resolve_template_adoption`: `fork_team = template is not
+    // None`). El asistente mandaba `fork_team: false` explícito y ese `false`
+    // entraba en `model_fields_set`, así que la herencia del servidor no llegaba
+    // a correr NUNCA: los dos hallazgos nacen del mismo envío de más.
+    setForkTeam(true);
     setStep(2);
     setSubmitError(null);
   }
@@ -131,6 +197,8 @@ export default function NewProjectWizardPage() {
     setName("");
     setDescription("");
     setApplyKbGrants(true);
+    setRuntime("");
+    setForkTeam(false);
     setStep(2);
     setSubmitError(null);
   }
@@ -149,7 +217,7 @@ export default function NewProjectWizardPage() {
         body.template_id = selected.id;
         body.apply_template_kb_grants = applyKbGrants;
         body.team_id = selected.team_id;
-        if (selected.team_id) body.fork_team = forkTeam;
+        if (selected.team_id) body.fork_team = effectiveForkTeam;
         body.worker_config = selected.worker_config;
         body.repository_config = selected.repository_config;
         body.human_approval_policy = selected.human_approval_policy;
@@ -325,12 +393,27 @@ export default function NewProjectWizardPage() {
                   data-testid="wizard-runtime-select"
                 >
                   <option value="">— {tWizard("runtimeNone")} —</option>
+                  {/* El id que no está en el catálogo, con su propia opción: sin
+                      ella el desplegable se queda en blanco y miente. */}
+                  {runtimeOrphan && (
+                    <option value={runtime} data-testid="wizard-runtime-orphan-option">
+                      {runtime}
+                    </option>
+                  )}
                   {runtimeTemplates.map((rt) => (
                     <option key={rt.id} value={rt.id}>
                       {runtimeLabel(rt, lang)}
                     </option>
                   ))}
                 </Select>
+                {runtimeUnknown && (
+                  <p
+                    className="bg-warning-soft text-warning-soft-foreground rounded p-2 text-xs"
+                    data-testid="wizard-runtime-unknown"
+                  >
+                    {tWizard("runtimeUnknown", { id: runtime })}
+                  </p>
+                )}
                 {runtimesQuery.isError && (
                   <p
                     className="text-danger-soft-foreground text-xs"
@@ -353,11 +436,28 @@ export default function NewProjectWizardPage() {
                     data-testid="wizard-team-select"
                   >
                     <option value="">{tWizard("teamNone")}</option>
-                    {(teamsQuery.data ?? []).map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
+                    {tenantTeams.length > 0 && (
+                      <optgroup label={tProjectHub("teamGroupTenant")}>
+                        {tenantTeams.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {/* Mismo motivo que en «Editar proyecto» (H9a), y aquí más
+                        grave: el proyecto en blanco no tiene casilla de
+                        «personalizar el equipo», así que elegir un built-in no
+                        tendría remedio desde esta pantalla. */}
+                    {platformTeams.length > 0 && (
+                      <optgroup label={tProjectHub("teamGroupPlatform")}>
+                        {platformTeams.map((t) => (
+                          <option key={t.id} value={t.id} disabled>
+                            {t.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </Select>
                   <p className="text-muted-foreground text-xs">{tWizard("teamHint")}</p>
                 </div>
@@ -438,19 +538,34 @@ export default function NewProjectWizardPage() {
                 </div>
               )}
               {selected?.team_id && (
-                <label className="flex items-start gap-2" data-testid="wizard-fork-team">
-                  <Checkbox
-                    checked={forkTeam}
-                    onChange={(e) => setForkTeam(e.target.checked)}
-                    data-testid="wizard-fork-team-checkbox"
-                  />
-                  <span>
-                    {tWizard("forkTeam")}
-                    <span className="text-muted-foreground block text-xs">
-                      {tWizard("forkTeamHint")}
+                <div className="flex flex-col gap-1.5">
+                  <label className="flex items-start gap-2" data-testid="wizard-fork-team">
+                    <Checkbox
+                      checked={effectiveForkTeam}
+                      disabled={forkTeamRequired}
+                      onChange={(e) => setForkTeam(e.target.checked)}
+                      data-testid="wizard-fork-team-checkbox"
+                    />
+                    <span>
+                      {tWizard("forkTeam")}
+                      <span className="text-muted-foreground block text-xs">
+                        {tWizard("forkTeamHint")}
+                      </span>
                     </span>
-                  </span>
-                </label>
+                  </label>
+                  {/* H6: con un equipo de plataforma la copia no es opcional —
+                      desmarcarla daría un proyecto sin agentes visibles. Se
+                      explica en vez de desaparecer la casilla: quien la busque
+                      tiene que entender por qué está bloqueada. */}
+                  {forkTeamRequired && (
+                    <p
+                      className="bg-warning-soft text-warning-soft-foreground rounded p-2 text-xs"
+                      data-testid="wizard-fork-team-required"
+                    >
+                      {tWizard("forkTeamRequired")}
+                    </p>
+                  )}
+                </div>
               )}
               {selected?.human_approval_policy?.preset != null && (
                 <div>

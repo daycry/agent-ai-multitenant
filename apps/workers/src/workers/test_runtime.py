@@ -53,6 +53,7 @@ from docker.types import Mount
 from shared_test_runtimes.catalog import get as get_template
 from shared_test_runtimes.counts import TestCounts, count_tests
 from shared_test_runtimes.images import pinned_pull_reference
+from shared_test_runtimes.signals import evaluate_signal
 from shared_test_runtimes.types import RuntimeTemplate
 
 import docker
@@ -177,15 +178,74 @@ class AcceptanceCheck:
     runtime: str
     command: str
     expected_signal: str = "exit_code == 0"
-    """OJO: se guarda y NO SE EVALÚA en ningún sitio. El veredicto de un check
-    sale sólo del código de salida. Está así a propósito —evaluarlo es trabajo
-    de otra ola del ADR 0162— y se deja escrito aquí para que nadie lo lea como
-    una garantía que no existe."""
+    """Qué tiene que ocurrir para que este criterio se dé por verificado.
+
+    **Desde el ADR 0162 (opción A) SÍ se evalúa** —``shared_test_runtimes.signals``,
+    reportado en :attr:`TestRuntimeResult.check_signals`— pero sigue sin decidir:
+    el veredicto de un check (:meth:`TestRuntimeResult.all_passed`) continúa
+    saliendo sólo del código de salida. Convertir esta señal en gate es la opción
+    C, que **no está firmada**.
+
+    El default ``exit_code == 0`` es también el agujero que documenta el ADR: en
+    la base de datos viva hay dos PHPUnit en verde con ``No tests executed!``. Un
+    criterio que quiera cerrarlo declara ``exit_code == 0 and tests > 0``."""
     timeout_s: int | None = None
     raw: Mapping[str, Any] = field(default_factory=dict)
     # ADR 0162: qué `check_type` DECLARÓ el criterio, o ``None`` si nadie lo
     # declaró. No es lo mismo que «automated»: ver :func:`_coerce_check`.
     declared_check_type: str | None = None
+
+
+@dataclass(frozen=True)
+class CheckSignal:
+    """Si la señal que UN check declaró se cumplió — o si no se pudo saber.
+
+    ADR 0162 (opción A). Es el par del recuento de tests un piso más abajo: mide
+    por CHECK, que es donde el dato nace, y con los mismos tres estados que no se
+    pueden colapsar.
+
+    ``satisfied``:
+      * ``True``  — la señal declarada se cumple.
+      * ``False`` — no se cumple. El caso que el ADR persigue: exit 0 con cero
+        tests ejecutados cuando el criterio pedía ``tests > 0``.
+      * ``None``  — **no se pudo evaluar**: la señal no es de las que sabemos
+        comprobar, o exigía un recuento y el recuento quedó AUSENTE. Nunca
+        ``False``, que sería acusar al código del tenant de algo que sólo dice
+        que no supimos leer la salida.
+
+    Y no decide nada: ``TestRuntimeResult.all_passed()`` no lo mira.
+    """
+
+    check_id: str
+    expected_signal: str
+    exit_code: int
+    satisfied: bool | None
+    test_counts: TestCounts | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Forma JSON-safe: acaba en el JSONB de auditoría del test-runtime."""
+        return {
+            "check_id": self.check_id,
+            "expected_signal": self.expected_signal,
+            "exit_code": self.exit_code,
+            "satisfied": self.satisfied,
+            "test_counts": self.test_counts.as_dict() if self.test_counts is not None else None,
+        }
+
+
+@dataclass(frozen=True)
+class _ChecksOutcome:
+    """Lo que devuelve la fase de checks de un plan.
+
+    Existe como tipo y no como tupla de cuatro porque el cuarto elemento
+    —las señales— es información nueva y una tupla de cuatro posiciones es
+    exactamente donde alguien acaba desempaquetando en el orden equivocado.
+    """
+
+    exit_codes: list[int]
+    logs: str
+    timed_out: bool
+    signals: tuple[CheckSignal, ...]
 
 
 @dataclass(frozen=True)
@@ -620,13 +680,20 @@ class TestRuntimeResult:
     # Cuántos de los checks que se ejecutaron no traían `check_type` declarado.
     # Métrica, no guarda (ver :meth:`RuntimePlan.undeclared_check_type_count`).
     checks_without_declared_check_type: int = 0
+    # ADR 0162 (opción A): si la señal que declaró CADA check se cumplió. Vacío
+    # cuando no llegó a ejecutarse ninguno —un `pre_install` que falla, p. ej.—,
+    # y eso es honesto: no hay señal que reportar de un check que no corrió.
+    # Rellenarlo de `False` ahí diría que los criterios no se cumplieron, que es
+    # acusar al código del tenant de un fallo de la plataforma.
+    check_signals: tuple[CheckSignal, ...] = ()
 
     def all_passed(self) -> bool:
         """El veredicto, y NO lo tocan los recuentos de arriba.
 
         Deliberadamente sigue saliendo sólo del código de salida, así que un
-        ``No tests executed!`` con exit 0 **sigue dando verde**. No es un
-        descuido: el gate es la opción C del ADR 0162 y no está firmada,
+        ``No tests executed!`` con exit 0 **sigue dando verde**, y lo sigue dando
+        aunque :attr:`check_signals` diga que la señal declarada NO se cumple. No
+        es un descuido: el gate es la opción C del ADR 0162 y no está firmada,
         precisamente porque ahí viven los falsos fallos. Esta ola hace visible
         el falso verde; cerrarlo es otra decisión y otra firma."""
         return not self.timed_out and all(rc == 0 for rc in self.exit_codes)
@@ -696,20 +763,22 @@ class TestRuntimeRunner:
                     network_name=network.name,
                     checks_without_declared_check_type=undeclared,
                 )
-            exit_codes, check_logs, timed_out = self._run_test_checks(spec, main_container)
+            checks = self._run_test_checks(spec, main_container)
             return TestRuntimeResult(
                 runtime=spec.plan.template.id,
-                exit_codes=tuple(exit_codes),
-                logs=pre_logs + check_logs,
+                exit_codes=tuple(checks.exit_codes),
+                logs=pre_logs + checks.logs,
                 container_id=getattr(main_container, "id", "") or "",
-                timed_out=timed_out,
+                timed_out=checks.timed_out,
                 network_name=network.name,
-                # Se cuenta sobre `check_logs`, NO sobre `pre_logs + check_logs`:
-                # la salida de `composer install` / `npm ci` no es un informe de
-                # tests, y meterla en el texto sólo añade formas de que un
-                # reconocedor vea un epílogo donde no lo hay.
-                test_counts=self._count_tests(spec, check_logs),
+                # Se cuenta sobre los logs de los CHECKS, NO sobre
+                # `pre_logs + checks.logs`: la salida de `composer install` /
+                # `npm ci` no es un informe de tests, y meterla en el texto sólo
+                # añade formas de que un reconocedor vea un epílogo donde no lo
+                # hay.
+                test_counts=self._count_tests(spec, checks.logs),
                 checks_without_declared_check_type=undeclared,
+                check_signals=checks.signals,
             )
         finally:
             self._cleanup(
@@ -938,17 +1007,25 @@ class TestRuntimeRunner:
         self,
         spec: TestRuntimeSpec,
         container: Any,
-    ) -> tuple[list[int], str, bool]:
-        """Run each acceptance check, return ``(exit_codes, logs, timed_out)``.
+    ) -> _ChecksOutcome:
+        """Run each acceptance check and report what happened with each one.
 
         Runs AFTER pre_install and AFTER egress is dropped (ADR 0094 D2), so the
         test phase has no network path off its internal bridge.
 
         ADR 0162: cada check corre bajo ``spec.project_root``, como el
         pre_install. Es la boca que decide si una tarea pasa, y era la que menos
-        sabía dónde está el proyecto."""
+        sabía dónde está el proyecto.
+
+        ADR 0162 (opción A): además del código de salida, aquí se evalúa la señal
+        que el criterio DECLARÓ, y se evalúa **con la salida de ese check y sólo
+        de ese check**. Contar sobre el log del plan entero dejaría que el
+        epílogo de otro check —o el ruido de un ``composer install``— contestara
+        por él, que es la clase de respuesta silenciosamente falsa que este ADR
+        persigue en todas sus formas."""
         all_logs: list[str] = []
         exit_codes: list[int] = []
+        signals: list[CheckSignal] = []
         timed_out = False
 
         for check in spec.plan.checks:
@@ -960,6 +1037,7 @@ class TestRuntimeRunner:
                 f"--- check {check.id or check.description!r}: {check.command}\n{exec_logs}\n"
             )
             exit_codes.append(exec_rc)
+            signals.append(self._check_signal(spec, check, exit_code=exec_rc, logs=exec_logs))
             if exec_rc == 124:
                 # 124 is the conventional "timeout" exit code from GNU
                 # timeout / our exec wrapper. Stop running further
@@ -967,7 +1045,47 @@ class TestRuntimeRunner:
                 timed_out = True
                 break
 
-        return exit_codes, "".join(all_logs), timed_out
+        return _ChecksOutcome(
+            exit_codes=exit_codes,
+            logs="".join(all_logs),
+            timed_out=timed_out,
+            signals=tuple(signals),
+        )
+
+    def _check_signal(
+        self,
+        spec: TestRuntimeSpec,
+        check: AcceptanceCheck,
+        *,
+        exit_code: int,
+        logs: str,
+    ) -> CheckSignal:
+        """Evaluar la señal de UN check contra su propia salida (ADR 0162).
+
+        El ``except`` ancho es la misma decisión que en :meth:`_count_tests` y por
+        la misma razón: la evaluación es nueva y el veredicto lleva años
+        funcionando. Un bug aquí pierde la señal —que queda AUSENTE, dicho
+        honestamente— y no puede tumbar una fase de tests que ya terminó.
+        """
+        counts = self._count_tests(spec, logs)
+        try:
+            satisfied = evaluate_signal(check.expected_signal, exit_code=exit_code, counts=counts)
+        except Exception as exc:
+            _log.error(
+                "check_signal_evaluation_failed",
+                runtime=spec.plan.template.id,
+                check_id=check.id,
+                error_type=exc.__class__.__name__,
+                error=str(exc),
+            )
+            satisfied = None
+        return CheckSignal(
+            check_id=check.id or check.description,
+            expected_signal=check.expected_signal,
+            exit_code=exit_code,
+            satisfied=satisfied,
+            test_counts=counts,
+        )
 
     def _count_tests(self, spec: TestRuntimeSpec, check_logs: str) -> TestCounts | None:
         """Cuántos tests corrieron, según los parsers que declara la plantilla.

@@ -84,15 +84,47 @@ _PROJECT_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
-async def _verify_team_visible(session: AsyncSession, team_id: UUID) -> None:
+async def _verify_team_visible(session: AsyncSession, team_id: UUID, tenant_id: UUID) -> None:
     """RLS already filters cross-tenant teams; this lookup converts a
     silent miss into an explicit 404 rather than letting Postgres raise
-    the FK error message when the tenant_id-scoped SELECT returns 0."""
+    the FK error message when the tenant_id-scoped SELECT returns 0.
+
+    Y rechaza además el equipo **de otro tenant**, que la RLS SÍ deja ver cuando
+    es built-in (a propósito: hay que poder listarlos para adoptarlos). Asignar
+    uno deja el proyecto con CERO agentes utilizables —`team_role_agents` y el
+    pool del despachador filtran los agentes por el tenant del proyecto, y los
+    del built-in son del tenant Platform—, así que el chat no responde y el
+    despacho se queda sin candidatos. Es peor que no tener equipo: sin
+    `team_id` el pool cae a los agentes globales del tenant; con uno ajeno, los
+    `member_ids` se evaporan.
+
+    El corte es **por tenant, no por `is_builtin`**, y la diferencia importa: un
+    proyecto del propio tenant Platform SÍ puede usar sus built-in legítimamente,
+    porque ahí los tenants coinciden. Cortar por `is_builtin` habría bloqueado
+    ese caso — un falso fallo, que es lo que este trabajo lleva toda la semana
+    evitando.
+
+    La comprobación vive aquí y no sólo en el formulario porque el formulario es
+    una cortesía: quien llame al endpoint directamente merece el mismo resultado,
+    y el defecto que esto cierra se descubría escribiendo en el chat, muy lejos
+    de donde se cometió.
+    """
     result = await session.execute(
-        select(Team.id).where(Team.id == team_id, Team.deleted_at.is_(None))
+        select(Team.id, Team.tenant_id).where(Team.id == team_id, Team.deleted_at.is_(None))
     )
-    if result.scalar_one_or_none() is None:
+    row = result.one_or_none()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team not found")
+    if row.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "that team belongs to another tenant (platform built-ins do) and cannot be "
+                "assigned to this project: its agents would be invisible here, leaving the "
+                "project with no usable agents. Adopt a copy of the team first "
+                "(Teams -> Adopt) and assign the copy."
+            ),
+        )
 
 
 async def _verify_template_visible(
@@ -140,6 +172,44 @@ _TEMPLATE_INHERITED_FIELDS: tuple[str, ...] = (
     "default_runtime_template",
     "allowed_domains",
 )
+
+
+#: Sufijo del equipo que nace al forkear para un proyecto. Público (sin `_`)
+#: porque su test lo importa: si cambia, el test tiene que cambiar con él y no
+#: quedarse comprobando un literal que ya nadie escribe.
+FORKED_TEAM_NAME_SUFFIX = " — equipo"
+
+#: `teams.name` es `String(120)`; `ProjectCreateRequest.name` llega a 255.
+_TEAM_NAME_MAX = 120
+
+
+def _fit_team_name(project_name: str, tail: str) -> str:
+    """`{nombre}{tail}{sufijo}` recortado para caber en `teams.name`."""
+    room = _TEAM_NAME_MAX - len(tail) - len(FORKED_TEAM_NAME_SUFFIX)
+    # `rstrip` DESPUÉS del recorte: cortar por el medio de un nombre deja un
+    # espacio colgando justo antes del sufijo, y « — equipo» con doble espacio
+    # se lee como un error de la plataforma, no como un nombre largo.
+    return f"{project_name[:room].rstrip()}{tail}{FORKED_TEAM_NAME_SUFFIX}"
+
+
+def forked_team_name_candidates(project_name: str, project_id: UUID) -> tuple[str, str]:
+    """Nombre preferido + desempate para el equipo forkeado de un proyecto.
+
+    `uq_teams_tenant_name_live` (migración 0126) es único por tenant sobre los
+    equipos vivos, y la plataforma SÍ permite dos proyectos homónimos en el mismo
+    tenant — por eso el `slug` del proyecto se desempata con `-{id8}`. Desde el
+    arreglo de H6 (2026-08-29) el fork del equipo dejó de ser una casilla que
+    casi nadie marcaba para ser el camino por defecto al crear desde plantilla,
+    así que ese choque pasó a ser alcanzable: el segundo proyecto homónimo
+    respondía 409 `duplicate_team_name`.
+
+    El desempate imita al del slug a propósito —nombre legible en el caso normal,
+    id corto sólo cuando hace falta— y va atado al PROYECTO, no al nombre: si
+    dependiera del nombre, el tercer homónimo volvería a chocar.
+    """
+    return _fit_team_name(project_name, ""), _fit_team_name(
+        project_name, f" ({project_id.hex[:8]})"
+    )
 
 
 def _resolve_template_adoption(
@@ -330,9 +400,6 @@ async def create_project(
 ) -> ProjectResponse:
     tenant_id = require_tenant_id(principal)
 
-    if payload.team_id is not None:
-        await _verify_team_visible(session, payload.team_id)
-
     # PROJ-01: adopción SERVER-SIDE. El wizard era quien copiaba la forma de la
     # plantilla (equipo, allowlist, runtime, …); la API directa creaba proyectos
     # inertes. Ahora el servidor hereda del template todo campo que el caller no
@@ -341,6 +408,19 @@ async def create_project(
     if payload.template_id is not None:
         template = await _verify_template_visible(session, payload.template_id, tenant_id)
     inherited, effective_team_id, fork_team = _resolve_template_adoption(payload, template)
+
+    # La comprobación de tenant va DESPUÉS de resolver la adopción, y sólo cuando
+    # NO se va a forkear. Ponerla antes —sobre `payload.team_id`— era mi propio
+    # defecto y rompía el camino normal: el asistente manda el id del equipo
+    # built-in de la plantilla ESPERANDO que se forkee, así que validar el
+    # payload rechazaba con 422 la creación que precisamente iba a terminar bien.
+    # Convertía «nace sin poder planificar» en «no se puede crear», que es peor.
+    #
+    # Lo que importa es el equipo con el que el proyecto SE QUEDA: si hay fork, es
+    # una copia del tenant y no hay nada que objetar; si no lo hay, se referencia
+    # tal cual y ahí sí aplica la guarda.
+    if effective_team_id is not None and not fork_team:
+        await _verify_team_visible(session, effective_team_id, tenant_id)
 
     # P1-02: el slug identifica el bare repo del proyecto en disco — dos
     # proyectos vivos del mismo tenant no pueden compartirlo. En colisión se
@@ -412,13 +492,32 @@ async def create_project(
             )
         ).scalar_one_or_none()
         if source_team is not None:
+            # El nombre del fork tiene que ser único por tenant y caber en
+            # `teams.name`; ver `forked_team_name_candidates`. El índice único
+            # sigue siendo el backstop contra la carrera entre dos creaciones
+            # simultáneas, igual que con el `slug` del proyecto.
+            candidates = forked_team_name_candidates(project.name, project.id)
+            taken = set(
+                (
+                    await session.execute(
+                        select(Team.name).where(
+                            Team.tenant_id == tenant_id,
+                            Team.name.in_(candidates),
+                            Team.deleted_at.is_(None),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            team_name = next((c for c in candidates if c not in taken), candidates[-1])
             forked = await fork_team_into(
                 session,
                 source_team,
                 tenant_id=tenant_id,
                 scope=AgentScope.PROJECT_LOCAL.value,
                 project_id=project.id,
-                name=f"{project.name} — equipo",
+                name=team_name,
                 llm_config=None,
                 granted_by=principal.user_id,
             )
@@ -458,13 +557,21 @@ async def update_project(
     principal: AuthPrincipal = Depends(require_tenant_admin),
     session: AsyncSession = Depends(get_tenant_session),
 ) -> ProjectResponse:
-    require_tenant_id(principal)
+    tenant_id = require_tenant_id(principal)
     project = await get_writable_or_404(
         session, Project, project_id, principal, not_found_detail="project not found"
     )
 
-    if "team_id" in payload.model_fields_set and payload.team_id is not None:
-        await _verify_team_visible(session, payload.team_id)
+    # Sólo si el equipo CAMBIA. Validarlo siempre que el payload lo trajera dejaba
+    # sin editar —en nada, ni el nombre— a los proyectos que YA arrastran un equipo
+    # de otro tenant: precisamente los que este defecto creó y que hay que poder
+    # reparar. Un formulario que reenvía el valor actual no está pidiendo nada.
+    if (
+        "team_id" in payload.model_fields_set
+        and payload.team_id is not None
+        and payload.team_id != project.team_id
+    ):
+        await _verify_team_visible(session, payload.team_id, tenant_id)
 
     # P1-01: máquina mínima de estados del proyecto. active<->paused->archived;
     # archived es terminal salvo el unarchive del admin (->active).

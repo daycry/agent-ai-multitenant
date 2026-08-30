@@ -229,11 +229,11 @@ _CHEAP_SPEC = {
 }
 # An expensive plan (many big tasks on Opus) — easily above 1 USD.
 _EXPENSIVE_SPEC = {
-    "metadata": {"default_model_id": "claude-opus-4-7"},
+    "metadata": {"default_model_id": "claude-opus-5"},
     "tasks": [
-        {"id": "t1", "title": "A", "complexity": "xl", "model": "claude-opus-4-7"},
-        {"id": "t2", "title": "B", "complexity": "xl", "model": "claude-opus-4-7"},
-        {"id": "t3", "title": "C", "complexity": "xl", "model": "claude-opus-4-7"},
+        {"id": "t1", "title": "A", "complexity": "xl", "model": "claude-opus-5"},
+        {"id": "t2", "title": "B", "complexity": "xl", "model": "claude-opus-5"},
+        {"id": "t3", "title": "C", "complexity": "xl", "model": "claude-opus-5"},
     ],
 }
 
@@ -405,7 +405,7 @@ async def test_expensive_plan_above_threshold_needs_two_signatures(
     seeded = await _seed(migrations_pg_dsn, threshold="0.01")
 
     # Sanity: our fixture spec actually exceeds the threshold.
-    ai = compute_ai_cost(_EXPENSIVE_SPEC, default_model_id="claude-opus-4-7")
+    ai = compute_ai_cost(_EXPENSIVE_SPEC, default_model_id="claude-opus-5")
     assert ai.cost_max > Decimal("0.01")
 
     alice_token = await _mint_token(seeded["alice_id"], seeded["tenant_id"])

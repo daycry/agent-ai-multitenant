@@ -49,6 +49,45 @@ def node_step(index: int, node: str, summary: str, *, status: str = "ok") -> dic
     return _base(index, StepKind.NODE, node, summary, status)
 
 
+def check_declaration_step(
+    index: int,
+    node: str,
+    *,
+    coverage: dict[str, Any],
+) -> dict[str, Any]:
+    """Con qué dijo el agente que se verifica cada criterio (ADR 0162, opción A).
+
+    **Por qué vive en el ``steps_log`` y no en otro sitio.** Es el único canal por
+    el que esta información sale hoy del contenedor efímero y se persiste: los
+    pasos se guardan verbatim en ``executions.steps_log``, que es la misma
+    columna de la que salieron las 180 ejecuciones que midió el ADR 0162. Una
+    declaración que no llegue a ninguna parte no es una declaración: es el
+    «estado que nadie produce ni consume» que el propio ADR denuncia.
+
+    Lo que lleva —``criteria_total``, ``checks_without_declared_check_type`` y
+    las declaraciones— es una MÉTRICA. El ADR descarta expresamente bloquear por
+    porcentaje: se aprende a jugar enseguida y castiga a los proyectos que
+    legítimamente tienen poco que automatizar. La diferencia con el estado
+    anterior no es que se impida algo — es que antes ni siquiera se podía contar.
+
+    ``status`` es siempre ``ok``: este paso REGISTRA, no juzga. Marcarlo de otro
+    modo cuando hay criterios sin declarar sería empezar a pintar de rojo un run
+    que terminó bien, que es la opción C por la puerta de atrás.
+    """
+    total = int(coverage.get("criteria_total") or 0)
+    undeclared = int(coverage.get("checks_without_declared_check_type") or 0)
+    step = _base(
+        index,
+        StepKind.NODE,
+        node,
+        f"Verificación declarada para {total - undeclared}/{total} criterios"
+        + (f" — {undeclared} sin declarar" if undeclared else ""),
+        "ok",
+    )
+    step.update(coverage)
+    return step
+
+
 def model_call_step(
     index: int,
     node: str,

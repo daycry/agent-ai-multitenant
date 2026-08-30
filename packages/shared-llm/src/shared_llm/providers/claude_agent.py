@@ -218,7 +218,12 @@ class ClaudeAgentProvider:
         # a subscription WITHOUT an API key — the alternative auth mode for the
         # same `claude_sdk` provider kind.
         oauth_token: str | None = None,
-        default_model: str = "claude-sonnet-4-5",
+        # H4-residuo (recorrido E2E 2026-08-29): este default y el de la
+        # plataforma (`DEFAULT_MODEL_CONFIG`) son dos defaults del MISMO camino
+        # y llevaban meses en generaciones distintas —`claude-sonnet-4-5` aquí,
+        # `claude-sonnet-4` allí—, sin nada que los atase. Los ata ahora
+        # `tests/unit/test_default_models_are_one_generation.py`.
+        default_model: str = "claude-sonnet-5",
         # The completion-shaped path keeps tools off by default — the
         # `run_agent()` path is where tools belong.
         default_allowed_tools: list[str] | None = None,

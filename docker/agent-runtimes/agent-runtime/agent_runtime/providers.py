@@ -56,6 +56,7 @@ from shared_llm.reasoning import reasoning_call_kwargs
 from shared_llm.retry import RetryEvent, retry_delay
 from shared_llm.retry import is_transient as shared_is_transient
 
+from agent_runtime.check_declarations import normalise_declarations, parse_checks_block
 from agent_runtime.model import (
     DecisionKind,
     ModelClient,
@@ -97,7 +98,27 @@ _DECIDE_SYSTEM = (
     "files (write_file); an analysis or review task means reading what you need and "
     "returning a written conclusion; a testing task means running the tests. The "
     "task's acceptance criteria, when given, define what 'done' means — work toward "
-    "them and stop once they are met. Use the research tools (memory_recall, "
+    "them and stop once they are met.\n"
+    # ADR 0162 (opción A): la declaración por criterio, instruida por los DOS
+    # caminos porque los proveedores no son simétricos. En los HTTP existe el
+    # esquema de `acceptance_checks`, pero un campo que el prompt no menciona se
+    # rellena poco y mal; en claude_sdk NO hay esquema ninguno, así que sin esta
+    # instrucción el bloque `<checks>` no se emitiría jamás — y claude_sdk es el
+    # proveedor que corre en la instalación viva.
+    "When you finish, DECLARE how each acceptance criterion is verified — one entry "
+    "per criterion, no criterion left out. Each entry is one of two things: "
+    "`check_type: automated` with the `runtime` and the exact `command` you ran "
+    "(add `expected_signal: exit_code == 0 and tests > 0` whenever that command runs "
+    "a test suite — an exit code of 0 on its own can also mean 'no tests were "
+    "executed'), or `check_type: manual` with a `reason` saying why no machine can "
+    "check it (an analysis, a design decision, prose in a README). Report what you "
+    "ACTUALLY ran: never invent a command, a file name or a test filter. If you are "
+    "calling `submit_result`, put them in its `acceptance_checks` argument; if you "
+    "are finishing in plain prose, put them in a single line "
+    '`<checks>[{"criterion": "…", "check_type": "automated", "runtime": "…", '
+    '"command": "…", "expected_signal": "…"}]</checks>` just before the '
+    "`<finish .../>` line.\n"
+    "Use the research tools (memory_recall, "
     "rag_search, list_files, read_file) only to gather what you genuinely need, "
     "then act; never repeat a search or re-read a file you have already seen, and "
     "ignore files unrelated to the task. Exception to the ONE-tool rule: you MAY "
@@ -224,6 +245,70 @@ _SUBMIT_RESULT_TOOL: dict[str, Any] = {
                 "summary": {
                     "type": "string",
                     "description": "A short summary of what was done (the task's final output).",
+                },
+                # ADR 0162 (opción A): la DECISIÓN por criterio. NO está en
+                # `required` a propósito — un `submit_result` sin declaraciones
+                # tiene que seguir cerrando la tarea exactamente igual que ayer,
+                # o esto dejaría de ser una métrica para ser un gate (la opción
+                # C, que no está firmada). El silencio se cuenta, no bloquea.
+                "acceptance_checks": {
+                    "type": "array",
+                    "description": (
+                        "One entry per acceptance criterion of the task, declaring HOW it "
+                        "is verified. You are the only actor that can know this: you just "
+                        "wrote the code and the tests. Report what you actually ran — do "
+                        "not invent a command or a file name."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "criterion": {
+                                "type": "string",
+                                "description": (
+                                    "The acceptance criterion this entry is about, copied "
+                                    "verbatim from the task (or its id)."
+                                ),
+                            },
+                            "check_type": {
+                                "type": "string",
+                                "enum": ["automated", "manual"],
+                                "description": (
+                                    "automated = a command verifies it; manual = it is not "
+                                    "verifiable by a machine (then give `reason`)."
+                                ),
+                            },
+                            "runtime": {
+                                "type": "string",
+                                "description": (
+                                    "Runtime template the command runs in "
+                                    "(e.g. php-phpunit, python-pytest, node-jest)."
+                                ),
+                            },
+                            "command": {
+                                "type": "string",
+                                "description": (
+                                    "The exact command that verifies this criterion, as you ran it."
+                                ),
+                            },
+                            "expected_signal": {
+                                "type": "string",
+                                "description": (
+                                    "What must hold for the criterion to be verified. Use "
+                                    "'exit_code == 0 and tests > 0' whenever the command "
+                                    "runs a test suite: exit code 0 alone can also mean "
+                                    "'no tests were executed'."
+                                ),
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": (
+                                    "Why this criterion cannot be verified automatically. "
+                                    "Required when check_type is manual."
+                                ),
+                            },
+                        },
+                        "required": ["criterion", "check_type"],
+                    },
                 },
             },
             "required": ["status", "summary"],
@@ -781,6 +866,14 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
     The discarded calls are logged instead of being dropped silently behind a
     blind ``tool_calls[0]`` index.
 
+    ADR 0162 (opción A): un FINISH trae además, cuando el agente la escribió, la
+    DECLARACIÓN de con qué se verifica cada criterio de aceptación. Llega por dos
+    canales que NO son simétricos y por eso se leen en sitios distintos: el
+    argumento ``acceptance_checks`` de la tool en los proveedores HTTP, y un
+    bloque ``<checks>`` de la prosa en ``claude_sdk`` —que no recibe la tool—. Los
+    dos desembocan en ``ModelDecision.check_declarations``, y ninguno puede
+    tumbar el FINISH: lo mal formado se descarta y el criterio queda NO DECLARADO.
+
     F32: the ``submit_result`` FINISH is GUARDED by the robustness signal. When the
     response is TRUNCATED (finish_reason=length) or the call's own ``arguments`` came
     back CORRUPT (present but undecodable → its ``summary``/``status`` were LOST and
@@ -833,6 +926,11 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
                 output=str(args.get("summary", "") or "") or (resp.content or ""),
                 rationale=resp.content or "",
                 finish_status=status if status in _FINISH_STATUSES else None,
+                # ADR 0162 (opción A): el canal ESTRUCTURADO de la declaración.
+                # `normalise_declarations` no lanza nunca: una declaración mal
+                # formada deja el criterio NO DECLARADO —que es lo honesto— en
+                # vez de tumbar un FINISH cuyo entregable ya está escrito.
+                check_declarations=normalise_declarations(args.get("acceptance_checks")),
             )
     elif calls:
         first = calls[0]
@@ -893,9 +991,17 @@ def _decision_from(resp: CompletionResponse, *, model: str) -> ModelResponse:
                 ),
             )
         else:
-            output, finish_status = _parse_finish_tag(resp.content or "")
+            # ADR 0162 (opción A): el canal de PROSA, el único que tiene
+            # claude_sdk. El bloque `<checks>` se despoja ANTES de leer el tag de
+            # finish para que el JSON no acabe en el entregable ni estorbe al
+            # reconocedor del tag.
+            content, check_declarations = parse_checks_block(resp.content or "")
+            output, finish_status = _parse_finish_tag(content)
             decision = ModelDecision(
-                kind=DecisionKind.FINISH, output=output, finish_status=finish_status
+                kind=DecisionKind.FINISH,
+                output=output,
+                finish_status=finish_status,
+                check_declarations=check_declarations,
             )
     return ModelResponse(
         decision=decision,

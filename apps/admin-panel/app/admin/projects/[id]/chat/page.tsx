@@ -22,6 +22,8 @@
  *   · `message-feed.tsx`       — la lista, la fila y el resumen plegable
  *   · `generate-plan-button.tsx` — el CTA que materializa el plan
  *   · `chat-composer.tsx`      — el textarea con @-menciones y vista previa
+ *   · `chat-echo.ts`           — el eco optimista y su reconciliación (H7)
+ *   · `chat-turn.ts`           — si el equipo sigue trabajando en el turno (H8)
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -36,7 +38,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Select } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
-import { chatRefetchInterval, isReplyInFlight } from "@/lib/chat-feed";
 import { conversationLabel, nextActiveAfterDelete } from "@/lib/conversation-history";
 import { useT } from "@/lib/i18n";
 import { useLangOptional } from "@/lib/lang-context";
@@ -44,7 +45,9 @@ import { useErrorText } from "@/lib/use-error-text";
 import { useWebSocket, wsUrl } from "@/lib/ws";
 
 import { ChatComposer } from "./chat-composer";
+import { appendUnlessPresent, mergePendingEchoes, nextEchoId, type PendingEcho } from "./chat-echo";
 import { ChatModeSelector } from "./chat-mode-selector";
+import { chatPollInterval, isTeamWorking, turnFeed } from "./chat-turn";
 import { MESSAGE_WINDOW, type Conversation, type Message } from "./chat-types";
 import { GeneratePlanButton } from "./generate-plan-button";
 import { MessageFeed } from "./message-feed";
@@ -62,6 +65,11 @@ export default function ProjectChatPage() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Mensajes enviados que aún no han vuelto del servidor (H7). Fuera de la caché
+  // de React Query a propósito: el feed se re-sondea cada 3 s mientras el turno
+  // está en vuelo y un refetch reemplaza el array entero, llevándose por delante
+  // un eco sin confirmar. Ver `chat-echo.ts`.
+  const [pendingEchoes, setPendingEchoes] = useState<PendingEcho[]>([]);
 
   const conversationsQuery = useQuery({
     queryKey: ["conversations", projectId],
@@ -168,8 +176,11 @@ export default function ProjectChatPage() {
     // many messages over minutes (PM → specialists → synthesis), so `isReplyInFlight` keeps
     // polling for the whole turn — not just until the first agent message — then stops (no idle
     // polling). See lib/chat-feed.
+    // H8: `chatPollInterval` es `chatRefetchInterval` menos los turnos que un
+    // aviso del sistema ya cerró — sondear tres minutos algo que nadie va a
+    // escribir es la otra mitad del mismo error que el spinner fantasma.
     refetchInterval: (query) =>
-      chatRefetchInterval(query.state.data as Message[] | undefined, Date.now()),
+      chatPollInterval(query.state.data as Message[] | undefined, Date.now()),
   });
 
   // POST a new user message. The composer below uses this; the
@@ -182,9 +193,47 @@ export default function ProjectChatPage() {
         method: "POST",
         body: { author_kind: "user", content },
       }),
-    onSuccess: (created) => {
+    // H7 (a): el usuario ve su mensaje al pulsar «Enviar», sin esperar al ida y
+    // vuelta. `seenIds` congela lo que ya había en el feed para poder reconocer
+    // después CUÁL de los mensajes de usuario es el suyo — repetir la misma
+    // frase es legítimo y casar por texto a secas se comería el segundo.
+    onMutate: ({ conversationId, content }) => {
+      const echo: PendingEcho = {
+        tempId: nextEchoId(),
+        conversationId,
+        content,
+        mode: activeConversation?.current_mode ?? "",
+        createdAt: new Date().toISOString(),
+        seenIds: (queryClient.getQueryData<Message[]>(["messages", conversationId]) ?? []).map(
+          (m) => m.id,
+        ),
+      };
+      setPendingEchoes((prev) => [...prev, echo]);
+      return { tempId: echo.tempId };
+    },
+    // H7 (b): el WebSocket publica el mensaje ANTES de que el POST conteste
+    // (`routers/conversations.py`), así que aquí llegaba un id que ya estaba en
+    // la caché y se añadía otra vez. De ahí los dos globos `USER · PLANNING`.
+    onSuccess: (created, _vars, ctx) => {
       queryClient.setQueryData<Message[]>(["messages", created.conversation_id], (prev) =>
-        prev ? [...prev, created] : [created],
+        appendUnlessPresent(prev, created),
+      );
+      // El eco se retira SÓLO al salir bien: el persistido ya ocupa su sitio.
+      // React agrupa esta actualización con la de arriba, así que no parpadea.
+      const tempId = ctx?.tempId;
+      if (tempId) setPendingEchoes((prev) => prev.filter((e) => e.tempId !== tempId));
+    },
+    // Y si falla, el eco se QUEDA. Antes se retiraba en `onSettled` —o sea,
+    // también al fallar— y no había `onError`: el mensaje que el usuario acababa
+    // de escribir desaparecía de la pantalla sin que nada dijese por qué. El
+    // eco es el único sitio donde queda ese texto, así que pasa a fallido: sigue
+    // visible, deja de decir «enviando…» (que ya no es cierto) y ofrece
+    // reintentar.
+    onError: (_error, _vars, ctx) => {
+      const tempId = ctx?.tempId;
+      if (!tempId) return;
+      setPendingEchoes((prev) =>
+        prev.map((e) => (e.tempId === tempId ? { ...e, failed: true } : e)),
       );
     },
   });
@@ -248,6 +297,45 @@ export default function ProjectChatPage() {
       });
     },
   );
+
+  // El feed a pintar: lo persistido más los ecos de ESTA conversación que aún no
+  // han vuelto (H7). El filtro por conversación no es decorativo: sin él, enviar
+  // y cambiar de hilo pintaría el eco en el hilo equivocado.
+  const feed = useMemo(
+    () =>
+      mergePendingEchoes(
+        messagesQuery.data ?? [],
+        pendingEchoes.filter((e) => e.conversationId === activeConversationId),
+      ),
+    [messagesQuery.data, pendingEchoes, activeConversationId],
+  );
+  // Los ecos se pintan marcados como «enviando…»: un eco que se hace pasar por
+  // mensaje ya entregado es una mentira pequeña, pero es la que hace dudar al
+  // usuario de si pulsó dos veces. Los que fallaron salen de este conjunto y
+  // entran en el de abajo: seguir diciendo «enviando…» de algo que ya terminó
+  // (y mal) es la misma mentira, más cara.
+  const pendingIds = useMemo(
+    () => new Set(pendingEchoes.filter((e) => !e.failed).map((e) => e.tempId)),
+    [pendingEchoes],
+  );
+  const failedIds = useMemo(
+    () => new Set(pendingEchoes.filter((e) => e.failed).map((e) => e.tempId)),
+    [pendingEchoes],
+  );
+  // El aviso de fallo se ata al hilo ABIERTO por el mismo motivo que el eco: un
+  // error de otra conversación pintado aquí acusa al mensaje equivocado.
+  const failedHere = pendingEchoes.some(
+    (e) => e.failed && e.conversationId === activeConversationId,
+  );
+
+  // Reintentar un envío fallido: se retira el eco fallido y se vuelve a enviar
+  // el MISMO texto, que es el que sigue en pantalla.
+  const retrySend = (message: Message) => {
+    const echo = pendingEchoes.find((e) => e.tempId === message.id);
+    if (!echo) return;
+    setPendingEchoes((prev) => prev.filter((e) => e.tempId !== echo.tempId));
+    postMessage.mutate({ conversationId: echo.conversationId, content: echo.content });
+  };
 
   // ----------------------------------------------------------------
   // Render
@@ -392,11 +480,34 @@ export default function ProjectChatPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <MessageFeed messages={messagesQuery.data ?? []} loading={messagesQuery.isLoading} />
+          <MessageFeed
+            messages={feed}
+            loading={messagesQuery.isLoading}
+            pendingIds={pendingIds}
+            failedIds={failedIds}
+            onRetry={retrySend}
+          />
+          {/* El fallo, dicho con todas las letras. Sin esto el único indicio
+              era la ausencia del mensaje, que es justo lo que no se ve. */}
+          {postMessage.isError && failedHere ? (
+            <p className="text-destructive mt-3 text-sm" role="alert" data-testid="chat-send-error">
+              {t("sendErrorPrefix")} {errorText(postMessage.error)}
+            </p>
+          ) : null}
           {(() => {
             // "Pensando" mientras el turno sigue en vuelo: en planning abarca toda la ronda
             // (PM → especialistas → síntesis), no solo hasta el primer mensaje del equipo.
-            const awaitingReply = isReplyInFlight(messagesQuery.data, Date.now());
+            //
+            // H8: `isTeamWorking` es `isReplyInFlight` menos los turnos que un aviso del
+            // sistema ya cerró. El aviso «el equipo no tiene agentes configurados» es un
+            // mensaje `system` reciente y sin adjuntos, o sea que el propio mensaje que
+            // declaraba que nadie iba a contestar encendía este indicador.
+            //
+            // Y `turnFeed` retira los ecos que FALLARON: se quedan pintados (es donde
+            // sobrevive el texto del usuario), pero un mensaje que no llegó al servidor
+            // no empieza ningún turno. Sin esto, el arreglo de H7 reintroducía H8 por
+            // otra puerta — «no se pudo enviar» y «el equipo está pensando…» a la vez.
+            const awaitingReply = isTeamWorking(turnFeed(feed, failedIds), Date.now());
             return awaitingReply ? (
               <p
                 className="text-muted-foreground mt-3 animate-pulse text-sm"
@@ -408,7 +519,7 @@ export default function ProjectChatPage() {
           })()}
           {activeConversation ? (
             <GeneratePlanButton
-              messages={messagesQuery.data ?? []}
+              messages={feed}
               projectId={projectId}
               conversationId={activeConversation.id}
             />

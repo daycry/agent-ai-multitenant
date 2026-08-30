@@ -8,8 +8,10 @@ the task already had criteria, confirms against a comparison) before saving via
 ``PUT /projects/{pid}/tasks/{tid}``.
 
 Reuses the planner's JSON extraction and cleaner so criteria are normalised
-IDENTICALLY everywhere (trim, flatten ``{description|text|criterion}`` dicts,
-cap count/length).
+IDENTICALLY everywhere (trim, cap count/length). Desde el ADR 0162 el
+normalizador CONSERVA la forma estructurada de un criterio ejecutable; este
+módulo la aplana igualmente a texto, y sólo él, porque su contrato de salida es
+una propuesta en prosa que el operador revisa — ver :func:`_extract_criteria`.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from api_server.chat.planning_llm import (
     _MAX_ACCEPTANCE_CRITERIA,
     _clean_acceptance_criteria,
     _extract_json,
+    criterion_text,
 )
 
 # Same definition of a good criterion the planner uses (planning_llm.py:389-398):
@@ -59,18 +62,23 @@ _MAX_SIBLING_CRITERIA = 3
 _MAX_SIBLING_CONTEXT_LEN = 2000
 
 
-def format_sibling_context(siblings: list[tuple[str, list[str]]]) -> str:
+def format_sibling_context(siblings: list[tuple[str, list[Any]]]) -> str:
     """Compact digest of sibling tasks (``title`` + a few of their acceptance
     criteria) for the generation prompt, so this task's criteria stay CONSISTENT
     with decisions a sibling already fixed (a response contract, an error format,
     …). Returns ``""`` when there is nothing usable; caps per-sibling criteria and
-    total length."""
+    total length.
+
+    ADR 0162: los criterios llegan ya normalizados y desde la opción A pueden
+    venir ESTRUCTURADOS, así que el texto se saca con ``criterion_text`` y no con
+    ``str(c)`` — que pintaría el ``repr`` del diccionario y el modelo leería
+    ``{'description': …}`` como si fuera el criterio de la hermana."""
     parts: list[str] = []
     for raw_title, criteria in siblings:
         title = str(raw_title).strip()
         if not title:
             continue
-        crits = [str(c).strip() for c in criteria[:_MAX_SIBLING_CRITERIA] if str(c).strip()]
+        crits = [t for c in criteria[:_MAX_SIBLING_CRITERIA] if (t := criterion_text(c))]
         parts.append(f"- {title}: {'; '.join(crits)}" if crits else f"- {title}")
     return "\n".join(parts)[:_MAX_SIBLING_CONTEXT_LEN]
 
@@ -79,7 +87,7 @@ def build_criteria_messages(
     *,
     title: str,
     description: str | None,
-    existing: list[str],
+    existing: list[Any],
     project_context: dict[str, Any],
     sibling_context: str = "",
 ) -> list[Message]:
@@ -111,7 +119,9 @@ def build_criteria_messages(
             "distinta):\n" + sibling_context.strip()
         )
     if existing:
-        joined = "\n".join(f"- {c}" for c in existing)
+        # ADR 0162: `criterion_text` y no `{c}` — un criterio ejecutable llega
+        # aquí como diccionario y su `repr` no es lo que hay que refinar.
+        joined = "\n".join(f"- {t}" for c in existing if (t := criterion_text(c)))
         lines.append(
             "Criterios actuales (REFÍNALOS y COMPLÉTALOS conservando los que sean "
             "buenos; no los ignores):\n" + joined
@@ -140,10 +150,21 @@ def _first_json_value(text: str) -> Any:
 def _extract_criteria(text: str) -> list[str]:
     """Parse the LLM reply into a cleaned criteria list. Accepts the requested
     wrapper ``{"acceptance_criteria": [...]}`` and a bare JSON array (with or
-    without surrounding prose); anything unusable yields ``[]``."""
+    without surrounding prose); anything unusable yields ``[]``.
+
+    **Aplana a texto A PROPÓSITO, y es el único sitio del sistema donde eso sigue
+    siendo correcto (ADR 0162).** El normalizador del planner ya no aplana —ahí
+    el aplanado era el defecto—, pero el contrato de ESTE endpoint es prosa: lo
+    que devuelve es una PROPUESTA que un operador lee y confirma en la UI
+    (``GeneratedAcceptanceCriteria.acceptance_criteria: list[str]``), y la
+    reformulación de la opción A dice quién declara el comando — **quien acaba de
+    escribir el test**, en ``submit_result``, no un generador que trabaja antes
+    de que el código exista. Un modelo al que se le pide algo que no puede
+    comprobar escribe algo *plausible*, y un ``--filter LoginTest`` inventado que
+    falla se lee como «el código está roto»."""
     value = _first_json_value(text)
     raw = value.get("acceptance_criteria") if isinstance(value, dict) else value
-    return _clean_acceptance_criteria(raw)
+    return [t for c in _clean_acceptance_criteria(raw) if (t := criterion_text(c))]
 
 
 async def generate_task_acceptance_criteria(
@@ -151,7 +172,7 @@ async def generate_task_acceptance_criteria(
     *,
     title: str,
     description: str | None,
-    existing: list[str],
+    existing: list[Any],
     project_context: dict[str, Any],
     model: str | None,
     sibling_context: str = "",

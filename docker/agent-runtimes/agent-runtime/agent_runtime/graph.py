@@ -33,6 +33,7 @@ from langgraph.graph import END, START, StateGraph
 from shared_llm import LLMError
 
 from agent_runtime.approval import ApprovalGate
+from agent_runtime.check_declarations import declaration_coverage
 from agent_runtime.guardrails import run_hook
 from agent_runtime.loop_detection import DEFAULT_LOOP_THRESHOLD, LoopDetector
 from agent_runtime.model import DecisionKind, ModelClient, ModelDecision
@@ -69,7 +70,13 @@ from agent_runtime.state import (
     ReviewState,
     initial_state,
 )
-from agent_runtime.steps import memory_read_step, model_call_step, node_step, tool_call_step
+from agent_runtime.steps import (
+    check_declaration_step,
+    memory_read_step,
+    model_call_step,
+    node_step,
+    tool_call_step,
+)
 from agent_runtime.tool_classification import (
     _base_tool_name,
     _is_mutating_tool,
@@ -337,6 +344,21 @@ class ExecutionResult:
     # ella, dos runs con resultados distintos son indistinguibles y no se puede
     # atribuir una mejora (ni una regresión) a un cambio de prompt.
     prompt_version: str | None = None
+    # ADR 0162 (opción A, ola 2): con qué declaró el implementador que se
+    # verifica cada criterio de aceptación.
+    #
+    # **Por qué está AQUÍ y no sólo en el `steps_log`.** En la ola 1 la
+    # declaración se emitía como paso y ahí se quedaba: se contaba y no se usaba,
+    # así que nadie ejecutaba el comando que el agente acababa de declarar. El
+    # `steps_log` es una columna de auditoría; el que llega al worker con forma de
+    # dato es este sobre — el mismo por el que ya viajan `approval` y
+    # `finish_status`. Se eligió esa vía y no un canal nuevo a propósito: un
+    # segundo camino para sacar cosas del contenedor es un segundo camino que
+    # mantener y desincronizar.
+    #
+    # Lista vacía = el agente no declaró nada, y ese silencio **se cuenta, no
+    # bloquea** (la opción C no está firmada).
+    check_declarations: list[dict[str, Any]] = field(default_factory=list)
 
     def succeeded(self) -> bool:
         return self.status == STATUS_DONE
@@ -353,6 +375,7 @@ class ExecutionResult:
             "finish_status": self.finish_status,
             "guardrail_events": self.guardrail_events,
             "prompt_version": self.prompt_version,
+            "check_declarations": [dict(d) for d in self.check_declarations],
         }
 
 
@@ -881,6 +904,25 @@ class _AgentLoop:
                     "steps": steps,
                 }
 
+        if decision.kind == DecisionKind.FINISH:
+            # ADR 0162 (opción A): al cerrar, queda escrito con qué se verifica
+            # cada criterio — y cuántos no lo declaró nadie. Se emite en el turno
+            # de FINISH y no en `finalize` porque es AQUÍ donde la declaración
+            # nace, en la respuesta del modelo; leerla más tarde de
+            # `last_decision` funcionaría hoy y se rompería en silencio el día
+            # que otro nodo reescriba la decisión (que es justo lo que hacen ya
+            # el guardrail `post_llm` y el gate de aprobación).
+            criteria = list(state["task"].get("acceptance_criteria") or [])
+            if criteria:
+                # Sin criterios no hay nada que declarar, y un paso que dijera
+                # «0 de 0» sería ruido en el timeline de todos los runs.
+                steps.append(
+                    check_declaration_step(
+                        base + len(steps),
+                        "plan",
+                        coverage=declaration_coverage(criteria, decision.check_declarations),
+                    )
+                )
         return {
             "last_decision": decision.as_dict(),
             "iteration": self.tracker.usage.iterations,
@@ -1960,4 +2002,26 @@ def run_agent(
         # prompt del AGENTE, sin el cual dos runs con personas distintas
         # compartían etiqueta y la atribución no era posible.
         prompt_version=prompt_version(agent_seal),
+        # ADR 0162 (opción A, ola 2): la declaración viaja SÓLO si el run terminó
+        # de verdad en un FINISH. El guardrail `post_llm` y el gate de aprobación
+        # reescriben la decisión conservando el resto de sus campos, así que un
+        # run que aborta después de que a un FINISH lo reescribieran a `noop`
+        # dejaría en `last_decision` una declaración de un cierre que no ocurrió.
+        # Reportarla como si fuera de este run sería atribuirle una verificación
+        # que nadie hizo.
+        check_declarations=_finish_declarations(last_decision),
     )
+
+
+def _finish_declarations(last_decision: dict[str, Any]) -> list[dict[str, Any]]:
+    """Las declaraciones de un cierre REAL, saneadas (ADR 0162, opción A).
+
+    Sanea aquí y no en el borde de fuera porque este es el sitio donde la
+    estructura todavía se conoce: al otro lado del contenedor sólo hay JSON.
+    """
+    if str(last_decision.get("kind") or "") != str(DecisionKind.FINISH):
+        return []
+    raw = last_decision.get("check_declarations")
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, dict)]

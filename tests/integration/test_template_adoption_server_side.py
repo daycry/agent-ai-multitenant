@@ -172,7 +172,22 @@ async def test_adoption_inherits_full_shape_and_forks_team(
 
 @pytest.mark.asyncio
 async def test_adoption_respects_explicit_overrides(configured_app, migrations_pg_dsn: str) -> None:
-    """Lo que el caller fija explícitamente GANA a la plantilla."""
+    """Lo que el caller fija explícitamente GANA a la plantilla.
+
+    Con UNA excepción desde el ADR 0162, y este test la fija: `fork_team: False`
+    sobre un equipo built-in **ya no crea el proyecto**, devuelve 422.
+
+    Antes devolvía 201 y dejaba el proyecto referenciando el equipo de
+    plataforma, que es justo el defecto H6: sus agentes son del tenant Platform,
+    el chat y el despachador filtran por el tenant del proyecto, y el resultado
+    es un proyecto QUE NO PUEDE PLANIFICAR. El síntoma no aparecía al crear sino
+    al escribir el primer mensaje, muy lejos de aquí.
+
+    Así que el override sigue respetándose —el caller manda— pero el resultado
+    de respetarlo es inválido y se dice en el momento, no tres pantallas después.
+    El resto de overrides (`allowed_commands`) sí se comprueban, con un equipo
+    que sí es asignable.
+    """
     seeded = await _seed(migrations_pg_dsn)
     headers = {"Authorization": f"Bearer {await _token(seeded['admin'], seeded['tenant'])}"}
     async with AsyncClient(
@@ -188,10 +203,28 @@ async def test_adoption_respects_explicit_overrides(configured_app, migrations_p
             },
             headers=headers,
         )
+    assert resp.status_code == 422, resp.text
+    assert "another tenant" in resp.text, f"se rechazó por otro motivo del esperado: {resp.text}"
+
+    # Y el override SÍ se respeta cuando el equipo resultante es asignable: el
+    # mismo POST, dejando que la adopción forkee (el default), hereda la forma de
+    # la plantilla y conserva lo que el caller fijó.
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/projects",
+            json={
+                "name": "Mi CI4 custom",
+                "template_id": str(seeded["template"]),
+                "allowed_commands": ["composer"],
+            },
+            headers=headers,
+        )
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["allowed_commands"] == ["composer"]
-    # Sin fork explícito: referencia el equipo del template tal cual.
-    assert body["team_id"] == str(seeded["team"])
+    # El equipo NO es el built-in: es la copia que la adopción acaba de forkear.
+    assert body["team_id"] != str(seeded["team"])
     # El resto sigue heredado.
     assert body["default_runtime_template"] == "php-phpunit"

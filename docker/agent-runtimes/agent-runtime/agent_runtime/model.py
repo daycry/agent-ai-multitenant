@@ -41,6 +41,13 @@ class ModelDecision:
     # `submit_result` tool, else None (prose finish / ACT). It is a HINT shown in
     # the UI and given to the reviewer — NOT the authoritative verdict.
     finish_status: str | None = None
+    # ADR 0162 (opción A): con qué se verifica cada criterio de aceptación, según
+    # QUIEN ACABA DE ESCRIBIR EL TEST. Una entrada por criterio declarado: o el
+    # comando que lo comprueba, o que no es automatizable y por qué. Vacío cuando
+    # el agente no declaró nada — y ese silencio se CUENTA (el paso de
+    # `checks_without_declared_check_type` del `steps_log`), nunca bloquea: el
+    # gate es la opción C y no está firmada.
+    check_declarations: tuple[dict[str, Any], ...] = ()
     # ADR 0111: extra READ-ONLY tool calls the model emitted in the same turn
     # (the consecutive read-only prefix beyond `tool`, cap enforced at the
     # decision layer). `act` runs them all in ONE iteration; mutators never
@@ -55,6 +62,7 @@ class ModelDecision:
             "output": self.output,
             "rationale": self.rationale,
             "finish_status": self.finish_status,
+            "check_declarations": [dict(d) for d in self.check_declarations],
             "batch_calls": [dict(call) for call in self.batch_calls],
         }
 

@@ -65,6 +65,19 @@ INFRA_FAILURE_KEY = "infrastructure_failure"
 # sólo del código de salida, y en la BD viva hay dos ejecuciones de PHPUnit con
 # exit 0 y `No tests executed!` registradas como correctas.
 TEST_COUNTS_KEY = "test_counts"
+# --- la señal que cada criterio DECLARÓ (ADR 0162, opción A) -----------------
+#
+# `expected_signal` llevaba desde el Plan 06 guardándose sin que nadie lo leyera.
+# Esta clave es donde por fin se ve: una entrada por check con `satisfied` en
+# TRES estados —cierta / falsa / **no se pudo evaluar**— y el recuento con el que
+# se decidió. Igual que arriba, `None` NO es `False`: si no se pudo medir, no se
+# puede afirmar que fallara.
+#
+# Lista VACÍA cuando no llegó a correr ningún check (un `pre_install` que falla,
+# un fallo de infraestructura). Es honesto: no hay señal que reportar de algo que
+# no se ejecutó, y llenarla de `false` acusaría al código del tenant de un fallo
+# de la plataforma.
+CHECK_SIGNALS_KEY = "check_signals"
 # Cola del detalle. Acaba en un JSONB de auditoría y en el prompt del reviewer,
 # igual que el `logs_tail` de un outcome real; mismo orden de magnitud.
 _INFRA_DETAIL_TAIL = 2000
@@ -92,6 +105,8 @@ def infra_failure_outcome(*, stage: str, detail: str, runtime: str = "unknown") 
         # abajo. Aquí ni siquiera hubo salida que leer.
         TEST_COUNTS_KEY: None,
         "checks_without_declared_check_type": 0,
+        # Ningún check llegó a ejecutarse: no hay señal que reportar.
+        CHECK_SIGNALS_KEY: [],
     }
 
 
@@ -117,6 +132,13 @@ def runtime_outcome(result: Any) -> dict[str, Any]:
     payload» (un outcome anterior a esta ola). El idioma que NO hay que usar es
     ``(o.get("test_counts") or {}).get("total", 0)``: colapsa los tres estados
     en dos y reintroduce el falso fallo que todo esto viene a evitar.
+
+    ``check_signals`` (opción A) es lo mismo por CHECK: una entrada por criterio
+    ejecutado con la señal que declaró, el código de salida, el recuento con el
+    que se evaluó y ``satisfied`` en los mismos tres estados —``true`` / ``false``
+    / ``null`` = **no se pudo evaluar**—. Se lee igual de estricto: ``null`` no
+    es ``false``. Y ninguna de las dos claves toca ``all_passed``: la opción C,
+    que es la que convertiría esto en un gate, **no está firmada**.
     """
     counts = result.test_counts
     return {
@@ -131,6 +153,7 @@ def runtime_outcome(result: Any) -> dict[str, Any]:
         "logs_tail": result.logs[-4000:] if result.logs else "",
         TEST_COUNTS_KEY: counts.as_dict() if counts is not None else None,
         "checks_without_declared_check_type": result.checks_without_declared_check_type,
+        CHECK_SIGNALS_KEY: [signal.as_dict() for signal in result.check_signals],
     }
 
 

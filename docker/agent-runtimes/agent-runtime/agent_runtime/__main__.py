@@ -156,6 +156,13 @@ def _build_auto_recall(api: Any | None, *, role: str | None = None) -> Any | Non
         return None
 
     def _recall(task: dict[str, Any]) -> list[dict[str, Any]]:
+        # Import TARDÍO, como el resto de este módulo: `providers` arrastra httpx
+        # y el SDK de Claude, y `__main__` está escrito a propósito para poder
+        # importarse sin pagar eso (ver el preflight de `langgraph`). Cuando esto
+        # se ejecuta, el run ya construyó su cliente de modelo desde `providers`,
+        # así que la importación es gratis.
+        from agent_runtime.providers import _criterion_text
+
         # P1-3: la query era solo título+descripción — una tarea mal titulada
         # recuperaba poco. Se añaden el ROL del agente y los primeros criterios
         # de aceptación (la definición real de hecho).
@@ -166,7 +173,12 @@ def _build_auto_recall(api: Any | None, *, role: str | None = None) -> Any | Non
         ]
         criteria = task.get("acceptance_criteria")
         if isinstance(criteria, list):
-            parts.extend(str(c).strip() for c in criteria[:_AUTO_RECALL_CRITERIA])
+            # ADR 0162: `_criterion_text` y no `str(c)`. Un criterio estructurado
+            # —el operador ya podía escribirlos desde la UI, y desde la opción A
+            # el planner puede emitirlos— convertía media query en el `repr` de
+            # un diccionario, así que el recall recuperaba PEOR justo en las
+            # tareas que sí declaran cómo se verifican.
+            parts.extend(_criterion_text(c).strip() for c in criteria[:_AUTO_RECALL_CRITERIA])
         query = " — ".join(p for p in parts if p)[:2000]
         if not query:
             return []

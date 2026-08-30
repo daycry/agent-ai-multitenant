@@ -2769,9 +2769,16 @@ export const dictionary = {
       en: "The team and its agents live at the tenant level (reusable across projects).",
     },
     adoptTargetProject: { es: "Un proyecto", en: "A project" },
+    /**
+     * H9b: adoptar con destino «un proyecto» ya no se queda a medias — desde
+     * `POST /teams/{id}/adopt` la adopción ADEMÁS repunta `projects.team_id` al
+     * equipo nuevo. El texto sólo hablaba de la atadura, así que quien lo leía
+     * seguía creyendo que después tenía que ir al proyecto a seleccionarlo a
+     * mano (y quien no lo hacía se quedaba con el equipo anterior).
+     */
     adoptTargetProjectHelp: {
-      es: "El equipo y sus agentes quedan atados a un proyecto concreto.",
-      en: "The team and its agents are tied to a specific project.",
+      es: "El equipo y sus agentes quedan atados a un proyecto concreto, y ese proyecto pasa a usarlo: no hace falta asignarlo después a mano.",
+      en: "The team and its agents are tied to a specific project, and that project starts using it: no need to assign it by hand afterwards.",
     },
     adoptNoProjects: {
       es: "No tienes proyectos. Crea uno primero o adopta al catálogo del tenant.",
@@ -4226,6 +4233,17 @@ export const dictionary = {
       es: "No se pudo cargar el catálogo de runtimes.",
       en: "The runtime catalog could not be loaded.",
     },
+    /**
+     * La plantilla declara un runtime que el catálogo NO sirve. El id se
+     * conserva —caer a «sin runtime» sería elegir por el operador el valor
+     * peligroso: «sin runtime» es `python-pytest` (H1)— y se avisa para que
+     * decida él. Sólo se dice cuando el catálogo ha CONTESTADO: no saber qué
+     * sirve no es saber que ese runtime no está.
+     */
+    runtimeUnknown: {
+      es: "El runtime «{id}» que declara la plantilla no está en el catálogo de la plataforma. Se conserva tal cual: revísalo antes de crear el proyecto o elige otro.",
+      en: 'The runtime "{id}" declared by the template is not in the platform catalog. It is kept as-is: check it before creating the project, or pick another one.',
+    },
     teamLabel: { es: "Equipo", en: "Team" },
     teamNone: { es: "Sin equipo", en: "No team" },
     teamHint: {
@@ -4258,6 +4276,14 @@ export const dictionary = {
     forkTeamHint: {
       es: "Crea una copia editable del equipo (agentes propios del proyecto). Si no, se referencia el equipo de la plantilla (compartido; no editable si es built-in).",
       en: "Creates an editable copy of the team (agents owned by the project). Otherwise the team of the template is referenced (shared; not editable if it is built-in).",
+    },
+    // H6 del recorrido E2E (2026-08-29): la plantilla trae un equipo de
+    // PLATAFORMA, cuyos agentes son del tenant `Platform`. El chat y el
+    // despacho filtran por el tenant del proyecto, así que referenciarlo deja
+    // el proyecto con cero agentes utilizables. La copia deja de ser opcional.
+    forkTeamRequired: {
+      es: "Este equipo es de la plataforma: sus agentes pertenecen al tenant Platform y tu proyecto no puede usarlos. Por eso el proyecto se crea con su propia copia del equipo; sin ella no podría planificar ni ejecutar tareas.",
+      en: "This is a platform team: its agents belong to the Platform tenant and your project cannot use them. That is why the project is created with its own copy of the team; without it the project could neither plan nor run tasks.",
     },
     previewPolicy: { es: "Política humana", en: "Human policy" },
     previewRepository: { es: "Repositorio", en: "Repository" },
@@ -4409,6 +4435,25 @@ export const dictionary = {
     summaryNote: {
       es: "El equipo lee este resumen en lugar de esos mensajes. Los originales siguen más arriba en la conversación.",
       en: "The team reads this summary instead of those messages. The originals are still further up in the conversation.",
+    },
+    /**
+     * Marca del eco optimista (H7, `chat/chat-echo.ts`): el mensaje ya se ve,
+     * pero todavía no ha vuelto del servidor. Sin esta marca el eco se haría
+     * pasar por mensaje entregado — mentira pequeña, y justo la que hacía dudar
+     * al usuario de si había pulsado «Enviar» dos veces.
+     */
+    sending: { es: "enviando…", en: "sending…" },
+    /**
+     * El envío que FALLÓ. `postMessage` no tenía `onError` y `onSettled`
+     * retiraba el eco pasara lo que pasase: un POST fallido borraba de la
+     * pantalla el mensaje recién escrito sin decir nada. El eco se queda, pero
+     * deja de decir «enviando…» —que ya no es cierto— y ofrece reintentar.
+     */
+    sendFailed: { es: "no se pudo enviar", en: "could not be sent" },
+    retrySend: { es: "Reintentar", en: "Retry" },
+    sendErrorPrefix: {
+      es: "No se pudo enviar el mensaje:",
+      en: "The message could not be sent:",
     },
     // --- generar plan y composer ---
     generatePlan: { es: "Generar Plan", en: "Generate plan" },
@@ -5014,6 +5059,25 @@ export const dictionary = {
         "The project's team governs which agents run its tasks and the memory policy " +
         "(ADR 0071).",
     },
+    // H9a del recorrido E2E (2026-08-29): `GET /teams` mezcla los built-in de
+    // plataforma con las copias del tenant. Los primeros no son asignables
+    // porque sus agentes son de otro tenant y ni el chat ni el despacho los ven.
+    teamGroupTenant: { es: "Equipos de este tenant", en: "Teams in this tenant" },
+    teamGroupPlatform: {
+      es: "Equipos de la plataforma (no asignables)",
+      en: "Platform teams (not assignable)",
+    },
+    teamPlatformWarning: {
+      es:
+        "Este equipo es de la plataforma: sus agentes pertenecen al tenant Platform y este " +
+        "proyecto no puede usarlos, así que el equipo no responde en el chat ni recibe " +
+        "tareas. Ve a Equipos y usa «+ Adoptar» con destino este proyecto para tener una " +
+        "copia propia.",
+      en:
+        "This is a platform team: its agents belong to the Platform tenant and this project " +
+        "cannot use them, so the team neither answers in the chat nor receives tasks. Go to " +
+        "Teams and use “+ Adopt” targeting this project to get your own copy.",
+    },
     cancel: { es: "Cancelar", en: "Cancel" },
     save: { es: "Guardar", en: "Save" },
     saving: { es: "Guardando…", en: "Saving…" },
@@ -5112,13 +5176,27 @@ export const dictionary = {
       es: "Rama por defecto local al día con el remoto.",
       en: "Local default branch is up to date with the remote.",
     },
+    /**
+     * H3 (recorrido E2E 2026-08-29). `align_default_branch` devuelve
+     * `remote_empty` cuando `refs/remotes/origin/<rama configurada>` no
+     * resuelve, y eso pasa por DOS motivos indistinguibles: el remoto está
+     * vacío, o su rama por defecto es otra —el caso real: el formulario
+     * precarga `main` y el repositorio usa `master`—. El texto afirmaba «repo
+     * vacío» y recomendaba un push inicial: con la rama mal configurada, ese
+     * push crea en el remoto una rama que no debería existir. Lo fija
+     * `tests/integration/test_remote_empty_is_not_only_an_empty_repo.py`.
+     */
     alignmentRemoteEmpty: {
       es:
-        "El remoto no tiene la rama por defecto (repo vacío). Haz un push inicial; hasta " +
-        "entonces el PR del plan no podrá abrirse.",
+        "El remoto no tiene la rama «{branch}». O el repositorio está vacío, o su rama por " +
+        "defecto es otra (p. ej. «master» donde aquí pone «main»): comprueba cuál usa el " +
+        "remoto antes de hacer un push inicial, o crearás allí una rama que no debería " +
+        "existir. Mientras esa rama no exista, el PR del plan no podrá abrirse.",
       en:
-        "The remote has no default branch (empty repo). Do an initial push; until then the " +
-        "plan's PR cannot be opened.",
+        "The remote has no «{branch}» branch. Either the repository is empty or its default " +
+        "branch is a different one (e.g. «master» where this field says «main»): check which " +
+        "one the remote uses before pushing an initial commit, or you will create a branch " +
+        "there that should not exist. Until that branch exists, the plan's PR cannot be opened.",
     },
     alignmentDiverged: {
       es:
@@ -6336,13 +6414,19 @@ export const dictionary = {
       en: "For example: vendor/bin/phpunit --testsuite Unit",
     },
     checkCommandHint: {
-      es: "Se ejecuta dentro del contenedor del runtime, sobre el worktree de la tarea. Cuidado con los filtros que puedan no casar con nada: un comando que no ejecuta ningún test sale con código 0 y hoy se registra como verde.",
-      en: "It runs inside the runtime container, over the task's worktree. Beware of filters that may match nothing: a command that runs no tests exits with code 0 and is currently recorded as green.",
+      es: "Se ejecuta dentro del contenedor del runtime, sobre el worktree de la tarea. Cuidado con los filtros que puedan no casar con nada: un comando que no ejecuta ningún test sale con código 0 y se registra como verde. La señal esperada es lo que lo destapa.",
+      en: "It runs inside the runtime container, over the task's worktree. Beware of filters that may match nothing: a command that runs no tests exits with code 0 and is recorded as green. The expected signal is what exposes that.",
     },
     checkSignalLabel: { es: "Señal esperada", en: "Expected signal" },
+    // El texto anterior decía que otras señales «todavía no se evalúan». Desde
+    // la ola 2 del ADR 0162 sí se evalúan (`shared_test_runtimes/signals.py`), y
+    // esa frase desanimaba justo de escribir la única que cierra el falso verde.
+    // Lo que sigue siendo cierto —y hay que decirlo, o promete un bloqueo que no
+    // existe— es que la señal se INFORMA y no decide: el veredicto sale del
+    // código de salida hasta que se firme la opción C.
     checkSignalHint: {
-      es: "Hoy el runtime da por buena la comprobación cuando el comando termina con código 0. Otras señales quedan escritas en el criterio, pero todavía no se evalúan.",
-      en: "Today the runtime accepts the check when the command ends with code 0. Other signals are stored in the criterion, but they are not evaluated yet.",
+      es: 'Se evalúa por comprobación y se le enseña al revisor. Escribe "exit_code == 0 and tests > 0" para no dar por buena una ejecución que no corrió ningún test. Informa: no bloquea la tarea por sí sola.',
+      en: 'Evaluated per check and shown to the reviewer. Write "exit_code == 0 and tests > 0" so a run that executed no tests is not taken as good. It reports: on its own it does not block the task.',
     },
     checkReasonLabel: {
       es: "Por qué esto no se puede comprobar a máquina",

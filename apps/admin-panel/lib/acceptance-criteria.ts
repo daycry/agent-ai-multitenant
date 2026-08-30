@@ -29,9 +29,15 @@
  * - `workers/test_runtime.py::_coerce_check` — qué entradas se ejecutan.
  * - `workers/execution.py::_run_task_tests` — qué entradas llegan siquiera a
  *   la fase de tests.
+ * - `shared_test_runtimes/signals.py::evaluate_signal` — qué significa que un
+ *   check «pasó», que desde la ola 2 del ADR 0162 ya no es sólo el código de
+ *   salida.
  *
  * Si cambian allí, cambian aquí. Una copia desincronizada es peor que no
- * tenerla, porque promete una ejecución que no ocurre.
+ * tenerla, porque promete una ejecución que no ocurre — o, como pasó con
+ * `expected_signal`, niega una que sí ocurre y desanima al operador de
+ * declararla. `tests/unit/test_espejo_ts_de_la_senal.py` ata mecánicamente el
+ * único trozo del espejo que se puede atar: el default.
  */
 
 /** Mirror of the planner's caps (`planning_llm._MAX_ACCEPTANCE_CRITERIA`). */
@@ -40,14 +46,23 @@ export const MAX_ACCEPTANCE_CRITERIA = 8;
 export const MAX_CRITERION_LEN = 300;
 
 /**
- * Espejo del default de `AcceptanceCheck.expected_signal` (`test_runtime.py`).
+ * Espejo del default de `AcceptanceCheck.expected_signal` (`test_runtime.py`),
+ * que es el mismo `SIGNAL_EXIT_ZERO` de `shared_test_runtimes/signals.py`.
  *
- * **Ojo con lo que promete**: hoy el worker calcula el veredicto como
- * `not timed_out and all(rc == 0)` y NO evalúa `expected_signal` en ningún
- * punto — se persiste y ya. Es el hueco que el propio ADR 0162 señala («
- * `exit_code == 0` no significa "los tests pasaron"; puede significar "no había
- * tests"»), y por eso la UI lo declara como texto y avisa de que otras señales
- * quedan escritas pero todavía no se comprueban.
+ * **Qué promete y qué no, desde la ola 2 del ADR 0162.** El worker SÍ evalúa
+ * `expected_signal`, por check y con la salida de ese check
+ * (`test_runtime.py` → `evaluate_signal`), y lo reporta en `check_signals` con
+ * tres estados que no se colapsan: se cumplió / NO se cumplió / **no se pudo
+ * evaluar**. Lo que NO hace —y es deliberado— es decidir: `all_passed()` sigue
+ * saliendo sólo del código de salida, porque bloquear es la opción C del ADR y
+ * sigue sin firmar. Una señal incumplida se ve en el `<test-report>` del
+ * reviewer y no degrada ningún veredicto.
+ *
+ * Por eso este default sigue siendo `exit_code == 0` y tiene que seguir
+ * siéndolo: exigirle un recuento haría que cada criterio ya escrito pidiera
+ * algo que nadie declaró. Quien quiera cerrar la trampa del §«La trampa que hay
+ * que cerrar CON A» —un comando que sale con código 0 sin ejecutar un test—
+ * escribe `exit_code == 0 and tests > 0` a mano. Es OPT-IN.
  */
 export const DEFAULT_EXPECTED_SIGNAL = "exit_code == 0";
 

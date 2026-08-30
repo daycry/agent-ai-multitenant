@@ -91,11 +91,18 @@ async def _seed_tenant(dsn: str) -> dict[str, UUID]:
             user_a,
             "tenant_admin",
         )
+        # El proyecto nace apuntando al equipo BUILT-IN, que es exactamente el
+        # estado que produce crear desde plantilla (H6 del recorrido E2E del
+        # 2026-08-29): un equipo del tenant `Platform` cuyos agentes ni el chat
+        # ni el despacho pueden ver desde este tenant. Adoptar «para este
+        # proyecto» tiene que sacarlo de ahí, y con `team_id` a NULL el test no
+        # distinguiría «lo repunta» de «lo rellena».
         await conn.execute(
-            "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3)",
+            "INSERT INTO projects (id, tenant_id, name, team_id) VALUES ($1, $2, $3, $4)",
             project_a,
             tenant_a,
             "A Project",
+            _CI4_TEAM_ID,
         )
     finally:
         await conn.close()
@@ -232,6 +239,155 @@ async def test_adopt_builtin_team_into_project(configured_app, migrations_pg_dsn
         # El built-in original NO se muta.
         src = await conn.fetchrow("SELECT is_builtin FROM teams WHERE id = $1", _CI4_TEAM_ID)
         assert src["is_builtin"] is True
+
+        # H9b (recorrido E2E 2026-08-29): el destino «un proyecto» deja ese
+        # proyecto USANDO el equipo adoptado. Antes la adopción creaba el equipo
+        # y forkeaba sus 10 agentes atados al proyecto, pero `projects.team_id`
+        # seguía apuntando al built-in: había que ir a «Editar proyecto» y
+        # elegirlo a mano, y el paso a medias sólo se veía mirando la BD.
+        proj = await conn.fetchrow("SELECT team_id FROM projects WHERE id = $1", ids["project_a"])
+        assert proj["team_id"] == new_team_id
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_platform_builtin_team_leaves_the_project_with_zero_agents(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """La premisa de la que cuelga el arreglo de H6 en el panel, medida.
+
+    El asistente de creación pasó a copiar SIEMPRE el equipo cuando la plantilla
+    trae uno built-in, y los dos desplegables de equipo dejaron de ofrecerlos.
+    Eso sólo se sostiene si un built-in de plataforma es INUTILIZABLE por un
+    proyecto de otro tenant — si fuese utilizable «a veces», lo correcto sería
+    avisar, no impedir. Este test lo fija donde el dato nace: la resolución de
+    agentes del equipo del proyecto.
+
+    Se corre con la sesión de MIGRACIONES, que no tiene RLS encima, a propósito:
+    así lo que se mide son los filtros EXPLÍCITOS por `tenant_id` de
+    `team_role_agents`, no la política de fila. Si mañana alguien los quitase
+    creyendo que RLS ya cubre el caso, este test seguiría cayendo.
+    """
+    from api_server.chat.responder import team_role_agents
+    from api_server.db.domain import Project
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    ids = await _prepare(migrations_pg_dsn)
+    async_dsn = migrations_pg_dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+    engine = create_async_engine(async_dsn, pool_pre_ping=False)
+    try:
+        sm = async_sessionmaker(engine, expire_on_commit=False)
+
+        # (1) Tal y como lo dejaba «crear desde plantilla»: equipo built-in.
+        async with sm() as session:
+            project = (
+                await session.execute(sa_select(Project).where(Project.id == ids["project_a"]))
+            ).scalar_one()
+            assert project.team_id == _CI4_TEAM_ID
+            assert await team_role_agents(session, project) == {}
+
+        # El vacío de arriba tiene que ser atribuible a la TENANCIA, no a un
+        # equipo sin miembros: sin esta comprobación, un seed que dejara de
+        # poblar el equipo haría pasar el caso sin medir nada de lo que dice
+        # medir. Los 10 miembros están, y los 10 son del tenant `Platform`.
+        conn = await asyncpg.connect(migrations_pg_dsn)
+        try:
+            rows = await conn.fetch(
+                "SELECT a.tenant_id FROM team_members tm JOIN agents a ON a.id = tm.agent_id"
+                " WHERE tm.team_id = $1",
+                _CI4_TEAM_ID,
+            )
+            assert len(rows) == 10
+            assert {r["tenant_id"] for r in rows} == {_PLATFORM_TENANT_ID}
+            assert ids["tenant_a"] != _PLATFORM_TENANT_ID
+        finally:
+            await conn.close()
+
+        # (2) Tras adoptar el mismo equipo PARA ese proyecto, el equipo responde.
+        token = await _mint_token(ids["user_a"], ids["tenant_a"])
+        async with AsyncClient(
+            transport=ASGITransport(app=configured_app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                f"/teams/{_CI4_TEAM_ID}/adopt",
+                json={
+                    "target": "project",
+                    "project_id": str(ids["project_a"]),
+                    "name": "CI4 del proyecto",
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert resp.status_code == 201, resp.text
+
+        async with sm() as session:
+            project = (
+                await session.execute(sa_select(Project).where(Project.id == ids["project_a"]))
+            ).scalar_one()
+            roles = await team_role_agents(session, project)
+            assert roles, "el equipo adoptado tiene que resolver agentes para el chat"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_adopt_for_a_project_of_another_tenant_is_a_404(
+    configured_app, migrations_pg_dsn: str
+) -> None:
+    """El repunte de `projects.team_id` es una ESCRITURA nueva sobre una tabla de
+    otro agregado: hay que demostrar que no cruza tenants. El proyecto existe,
+    pero es de otro tenant, así que la adopción no lo encuentra y no escribe."""
+    ids = await _prepare(migrations_pg_dsn)
+
+    tenant_b, user_b, project_b = uuid4(), uuid4(), uuid4()
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO organizations (id, name, slug) VALUES ($1, $2, $3)",
+            tenant_b,
+            "Tenant B",
+            "tenant-b",
+        )
+        await conn.execute(
+            "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)",
+            user_b,
+            "b@x.test",
+            "x",
+        )
+        await conn.execute(
+            "INSERT INTO user_org_memberships (id, tenant_id, user_id, role) VALUES ($1,$2,$3,$4)",
+            uuid4(),
+            tenant_b,
+            user_b,
+            "tenant_admin",
+        )
+        await conn.execute(
+            "INSERT INTO projects (id, tenant_id, name) VALUES ($1, $2, $3)",
+            project_b,
+            tenant_b,
+            "B Project",
+        )
+    finally:
+        await conn.close()
+
+    # user_a (tenant_a) intenta adoptar PARA el proyecto de tenant_b.
+    token = await _mint_token(ids["user_a"], ids["tenant_a"])
+    async with AsyncClient(
+        transport=ASGITransport(app=configured_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            f"/teams/{_CI4_TEAM_ID}/adopt",
+            json={"target": "project", "project_id": str(project_b), "name": "Robado"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 404, resp.text
+
+    conn = await asyncpg.connect(migrations_pg_dsn)
+    try:
+        proj = await conn.fetchrow("SELECT team_id FROM projects WHERE id = $1", project_b)
+        assert proj["team_id"] is None
     finally:
         await conn.close()
 
@@ -265,5 +421,11 @@ async def test_adopt_builtin_team_into_tenant(configured_app, migrations_pg_dsn:
         for m in members:
             assert m["scope"] == "global_tenant_template"
             assert m["project_id"] is None
+
+        # El destino «catálogo del tenant» NO reasigna nada: el repunte de H9b es
+        # del destino «un proyecto», que es donde el usuario ya dijo cuál. Sin
+        # este caso, «repunta siempre» pasaría igual de verde.
+        proj = await conn.fetchrow("SELECT team_id FROM projects WHERE id = $1", ids["project_a"])
+        assert proj["team_id"] == _CI4_TEAM_ID
     finally:
         await conn.close()

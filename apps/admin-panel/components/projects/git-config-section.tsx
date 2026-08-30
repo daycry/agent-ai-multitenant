@@ -346,7 +346,12 @@ export function GitConfigSection({
               data-testid="git-alignment"
             >
               {alignment.warn ? <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : null}
-              {t(alignment.key)}
+              {/* H3: el aviso NOMBRA la rama configurada. Se toma de la config
+                  GUARDADA (`value`), no del campo del formulario, porque es la
+                  que el worker intentó alinear — mostrar lo que el operador
+                  acaba de teclear diría algo que no ha llegado a pasar. Las
+                  claves sin `{branch}` ignoran la variable (ver `interpolate`). */}
+              {t(alignment.key, { branch: value?.default_branch ?? "" })}
             </p>
           ) : null}
         </div>

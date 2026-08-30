@@ -1,8 +1,9 @@
 ---
 adr_id: "0162"
 title: "ADR 0162: La raíz del proyecto, y qué pasa cuando los tests no se ejecutaron"
-status: proposed
+status: accepted
 date: 2026-08-28
+decided_on: 2026-08-29
 deciders: [operador]
 relates_to: [0045, 0084, 0087, 0093, 0129, 0148, 0159]
 plan_referenced: prod-17-bucle-ai-reviewer
@@ -11,22 +12,139 @@ docs_language: es
 
 # ADR 0162 — La raíz del proyecto, y qué pasa cuando los tests no se ejecutaron
 
-> **Estado: `proposed`.** Este documento **no decide**: mide, acota y recomienda.
-> Las dos decisiones que plantea tienen naturaleza distinta y pueden firmarse por
-> separado. La primera es de fontanería y su recomendación es firme. La segunda
-> toca el gobierno de calidad —qué puede darse por bueno sin haber ejecutado
-> nada— y por eso se deja escrita con sus cuatro opciones y sus costes en vez de
-> resolverse aquí.
+> **Estado: `accepted`.** Nació midiendo y recomendando; sus dos decisiones se
+> han ido firmando por separado, que es como se escribieron.
 >
-> **Qué está ya entregado (2026-08-29):** la decisión 1 completa (D + A1) y, de la
-> decisión 2, **sólo D y B** — las dos que no cambian ningún veredicto. **A y C
-> siguen sin firmar y sin implementar**, y mientras lo estén el falso verde es
-> **visible pero no está cerrado**. Conviene no confundir una cosa con la otra.
+> **Firmado y entregado:**
+>
+> | Decisión                                                 | Firmada        | Entregada                                                       |
+> | -------------------------------------------------------- | -------------- | --------------------------------------------------------------- |
+> | 1 — de dónde sale la raíz del proyecto (**D + A1**)      | 2026-08-28     | completa                                                        |
+> | 2 **D** — que el fallo del test-runtime deje de tragarse | 2026-08-28     | completa                                                        |
+> | 2 **B** — decirle al reviewer «tests: NO EJECUTADOS»     | 2026-08-28     | completa                                                        |
+> | 2 **A** — que cada criterio DECLARE cómo se verifica     | 2026-08-29     | **circuito cerrado (2026-08-30) — con las salvedades de abajo** |
+> | 2 **C** — el gate                                        | **sin firmar** | **sin implementar**                                             |
+>
+> **La opción C sigue abierta a propósito, y no por descuido.** Es donde viven
+> los falsos fallos, y el operador los puso por delante de todo lo demás: nada de
+> lo entregado bloquea una tarea, degrada un `approve` ni impide que un plan
+> avance. Mientras C no se firme, el falso verde es **visible pero no está
+> cerrado**; conviene no confundir una cosa con la otra.
 >
 > **Revisión del 2026-08-29:** la opción A se reformula. La versión original
 > —«que el planner genere el comando»— era mala por una razón estructural que se
 > explica en su sección, y no contemplaba las tareas que legítimamente no tienen
-> nada que testear. Ambas cosas están corregidas.
+> nada que testear. Ambas cosas están corregidas, y **lo firmado es la
+> reformulación**, no el texto original.
+>
+> ## Qué de la opción A está entregado, y qué NO
+>
+> Se detalla porque un ADR que dice «implementado» de algo a medias es peor que
+> uno que no dice nada. Va por olas porque así se entregó, y porque cada una
+> nombra explícitamente lo que dejó abierta.
+>
+> ### Ola 1 (2026-08-29) — vocabulario, canal y medición
+>
+> 1. **La cuarta capa, levantada.** `_clean_acceptance_criteria`
+>    ([`planning_llm.py`](../../apps/api-server/src/api_server/chat/planning_llm.py))
+>    estaba tipada `-> list[str]` y **aplanaba** cualquier diccionario a su
+>    `description`. Con ella aplanando, reescribir prompts no habría producido ni
+>    un criterio ejecutable. Ahora conserva la forma estructurada —el par
+>    `runtime`+`command`, o un `check_type` declarado— y sigue devolviendo cadenas
+>    para la prosa, que es y seguirá siendo la inmensa mayoría. Y **no rellena un
+>    `check_type` ausente**: inventarlo ahí fabricaría la declaración que A pide
+>    que alguien tome.
+> 2. **El implementador puede declarar, por los dos caminos.** `submit_result`
+>    gana el argumento `acceptance_checks` en los proveedores HTTP, y `claude_sdk`
+>    —que no recibe esa tool— declara con un bloque `<checks>` en la prosa,
+>    despojado del entregable, por el mismo camino ya probado del tag
+>    `<finish status="…"/>` (F1.5). Los dos desembocan en
+>    `ModelDecision.check_declarations`, y ninguno puede tumbar un FINISH: lo mal
+>    formado se descarta y el criterio queda NO DECLARADO.
+> 3. **El silencio se cuenta.** Al cerrar, el grafo escribe en el `steps_log`
+>    —la misma columna de la que salieron las 180 ejecuciones que midió este
+>    documento— cuántos criterios tenía la tarea y cuántos nadie declaró, con el
+>    nombre que ya usa el worker: `checks_without_declared_check_type`. Métrica,
+>    no guarda: el ADR descarta expresamente bloquear por porcentaje.
+> 4. **La condición del recuento, evaluada.** `expected_signal` llevaba desde el
+>    Plan 06 guardándose sin que nadie lo leyera. Ahora un criterio puede declarar
+>    `exit_code == 0 and tests > 0` y la plataforma lo evalúa **por check y con la
+>    salida de ese check**
+>    ([`signals.py`](../../packages/shared-test-runtimes/src/shared_test_runtimes/signals.py)),
+>    reportándolo en el outcome (`check_signals`) con tres estados que no se
+>    colapsan: cierto / falso / **no se pudo evaluar**. Si no se pudo medir, la
+>    señal queda ausente — **jamás falsa**, que sería el falso fallo.
+>
+> ### Ola 2 (2026-08-30) — el circuito, cerrado
+>
+> La ola 1 dejó tres cosas dichas en negativo: la declaración no salía del
+> contenedor, no se persistía como criterio y `check_signals` no llegaba al
+> reviewer. **Las tres están hechas.** Lo que sigue las sustituye.
+>
+> 5. **Sale del contenedor, por la vía que ya existía.**
+>    `ExecutionResult.check_declarations` viaja en la línea `execution.finished`
+>    ([`graph.py`](../../docker/agent-runtimes/agent-runtime/agent_runtime/graph.py)),
+>    que es el mismo sobre por el que ya salen `approval`, `finish_status` y
+>    `prompt_version`; el worker la lee de ahí
+>    (`execution._declared_checks_from_result`) y **la revalida** en vez de
+>    fiarse, porque al otro lado hay JSON escrito por un modelo dentro de un
+>    sandbox. Sólo viaja si el run terminó de verdad en un FINISH: el guardrail
+>    `post_llm` y el gate de aprobación reescriben la decisión conservando el
+>    resto de sus campos, así que leerla sin esa condición le atribuiría a un run
+>    abortado una verificación que nadie hizo.
+> 6. **Se persiste como criterio de la tarea, FUSIONANDO.**
+>    `execution.merge_declared_checks` casa cada declaración con su criterio —por
+>    texto normalizado o por `id`— y actualiza `tasks.acceptance_criteria`. Tres
+>    reglas que no son negociables, y la primera tiene precedente propio en
+>    `sync_to_kanban._merge_acceptance`:
+>    - **lo ya escrito NO se pisa.** Nada distingue en la columna lo que puso el
+>      operador a mano de lo que dejó un run anterior, así que se trata todo lo
+>      escrito como del operador: la declaración rellena huecos y no sobrescribe
+>      ninguno;
+>    - **una declaración que no casa con ningún criterio se descarta**, jamás
+>      añade un criterio fantasma;
+>    - **un criterio ejecutable no se puede apagar declarándolo manual.** Es la
+>      salida barata del §«El riesgo de que se juegue»: `check_type` distinto de
+>      `automated` hace que el test-runtime lo salte, así que un agente podría
+>      desactivar con una frase el test que otro escribió.
+>      La escritura ocurre **antes** de la fase de tests y para todos los estados
+>      terminales del camino implementador, así que el comando declarado se ejecuta
+>      ya en el run que lo declaró — no sólo en el siguiente.
+> 7. **`check_signals` llega al reviewer.** `_format_test_report_block`
+>    ([`dispatch.py`](../../apps/orchestrator/src/orchestrator/dispatch.py))
+>    imprime una línea por check con las **tres redacciones irreconciliables** que
+>    ya usa para el recuento: se cumplió / NO se cumplió / **no se pudo
+>    evaluar**. La tercera no puede leerse como la segunda, y un test lo fija: ahí
+>    es donde vive el falso fallo. Sólo se imprime la señal que dice algo que la
+>    cabecera no dice ya, o sea **ninguna** del parque actual —que usa el default
+>    `exit_code == 0`, cuyo veredicto ES el código de salida—, y por eso un
+>    proyecto que no declara nada renderiza byte a byte como antes.
+>
+> **Y con eso la condición del recuento tiene PRODUCTOR.** `exit_code == 0 and
+tests > 0` sólo aparecía en los prompts del agente: nadie lo escribía en un
+> criterio, así que el evaluador de la ola 1 era código inalcanzable disfrazado de
+> funcionalidad. Ahora lo produce el propio implementador y el camino entero
+> —declaración → resultado del run → criterio → `group_tasks_by_runtime` →
+> evaluación— está fijado por un test que no construye a mano ningún eslabón.
+>
+> **Lo que sigue sin estar, y hay que decirlo:**
+>
+> - **La opción C sigue sin firmar y nada bloquea.** `all_passed()` sale sólo del
+>   código de salida; una señal incumplida se ve en el prompt del reviewer y no
+>   degrada ningún veredicto. El falso verde es **visible y no está cerrado**.
+> - **El prompt sembrado del reviewer no enseña a leer las líneas nuevas.** Cita
+>   los literales del recuento (`builtin_agents.py`, ES y EN) pero no los de la
+>   señal, así que hoy se apoyan en su propia redacción. Cerrarlo pide tocar las
+>   semillas.
+> - **Un replan puede aplanar una declaración MANUAL.**
+>   `sync_to_kanban._merge_acceptance` preserva un criterio estructurado sólo
+>   cuando trae `runtime` **y** `command`; un `check_type: manual` con su `reason`
+>   no cumple esa condición y volvería a prosa. Es la misma regla de aquel
+>   arreglo aplicada a medias, y hay que extenderla.
+> - **La declaración no viaja en `_RuntimeResult`.** Viaja al lado, como
+>   `approval`: ninguna de las dos es una columna de la fila `executions`, son
+>   payloads que dirigen el post-proceso. Quien la busque en `run_result.py` no
+>   la va a encontrar, y es a propósito.
 
 ## Contexto
 
@@ -197,6 +315,12 @@ elegir entre mentir y no saber.
 | **D** — que el fallo del test-runtime deje de tragarse                  | 5 puntos de `except` pasan a outcome visible               | **Bajo**      | Bajo: no cambia ningún veredicto          |
 
 ### Recomendación: **D, luego B. A reformulada. C sólo después de A**
+
+> **Firmado el 2026-08-29: D, B y A (la reformulación).** El orden recomendado se
+> siguió tal cual. **C sigue sin firmar y sin implementar**, y la nota de cabecera
+> detalla qué de A quedó fuera del alcance de la primera ola. Lo que sigue es el
+> razonamiento con el que se firmó; se deja en presente porque es el argumento, no
+> el estado.
 
 **D es la única que no cambia nada y lo arregla todo un poco.** No toca un solo
 veredicto ni un solo prompt: hace que un fallo de infraestructura **deje de
@@ -392,6 +516,22 @@ desactivarse en silencio. No hay migración y el contrato público no cambia.
 inmediato y el reviewer pasa a ver la diferencia entre «no hay tests» y «los tests
 no corrieron». El falso verde **no desaparece**: se hace visible. Eliminarlo exige
 A, y bloquearlo exige C después de A.
+
+**Lo que ha pasado de verdad (2026-08-30).** D y B están entregadas y A está
+firmada y **cerrada como circuito**: existe el vocabulario (un criterio conserva
+su forma estructurada), existe el canal (el implementador declara en
+`submit_result`, por tool en los proveedores HTTP y por bloque `<checks>` en
+`claude_sdk`), existe la medición (el silencio se cuenta en el `steps_log`;
+`expected_signal` se evalúa por check) y ahora existe el retorno: la declaración
+sale del contenedor en el sobre del resultado, se fusiona en
+`tasks.acceptance_criteria` sin pisar nada, dispara el test-runtime en el mismo
+run que la declaró y su señal llega al `<test-report>` con los tres estados sin
+colapsar.
+
+Lo que **no** ha cambiado —y es deliberado— es que nada de esto bloquee. El falso
+verde sigue siendo **visible y no cerrado**: ahora se ve entero, con el comando
+que lo verificaba y con la señal que no se cumplió, pero el veredicto sigue
+saliendo del código de salida. Cerrarlo es la opción C, y sigue sin firmar.
 
 **Obligación formal si se elige C.** Convertir el escalado automático en norma
 toca el principio 7 del [`CLAUDE.md`](../../CLAUDE.md) —tests humanos a nivel de
