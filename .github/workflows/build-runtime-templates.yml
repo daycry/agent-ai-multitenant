@@ -302,9 +302,40 @@ jobs:
           git commit -m "chore(runtimes): refresca los digests publicados (${VERSION})" \
                      -m "Generado por build-runtime-templates.yml sobre ${GITHUB_SHA}. ADR 0148."
           git push origin "$branch"
+          # El cuerpo lleva escrita la instruccion para despertar el PR, y
+          # no es una nota de cortesia: nace SIN NINGUN CHECK y la
+          # proteccion de rama los exige, asi que queda en BLOCKED para
+          # siempre. La causa es de GitHub y no se puede sortear desde aqui:
+          # los eventos originados por GITHUB_TOKEN no disparan workflows,
+          # por diseno, para evitar bucles de auto-alimentacion.
+          #
+          # Medido el 2026-08-30: los PR #141 y #143 llevaban dias parados
+          # con 'no checks reported' y nadie sabia por que, porque el PR no
+          # decia nada. Un bloqueo sin explicacion cuesta mas que el bloqueo.
+          #
+          # La salida definitiva pide un token de GitHub App o un PAT con
+          # repo+workflow, y eso es un secreto nuevo: decision del operador.
+          # Mientras tanto se escribe el gesto que si funciona.
+          #
+          # El cuerpo va por `printf` a un fichero y no en el `--body`: este
+          # paso es un escalar de bloque YAML, y una linea a columna cero
+          # (el `---` de Markdown) cerraria el bloque y partiria el fichero.
+          printf '%s\n' \
+            "Digests resueltos contra \`${REGISTRY}\` tras publicar las 14 imagenes y pasar Trivy. Los escribe el pipeline: editarlos a mano congelaria sus CVEs (ADR 0148, condicion 1)." \
+            "" \
+            "---" \
+            "" \
+            "**Este PR nace sin checks y hay que despertarlo a mano: cierralo y vuelve a abrirlo.**" \
+            "" \
+            "Lo ha creado un workflow con \`GITHUB_TOKEN\`, y GitHub no dispara workflows para eventos originados por ese token (es una salvaguarda contra bucles, no un fallo de configuracion). Como la proteccion de rama exige checks que nunca van a existir, el PR se queda en \`BLOCKED\` indefinidamente." \
+            "" \
+            "Cerrar y reabrir genera un evento con identidad humana, y entonces CI arranca con normalidad." \
+            "" \
+            "Antes de mergear, **comprueba que no haya otro PR de digests mas reciente**: los dos tocan el mismo \`runtime_images.json\`, asi que mergear el viejo REGRESA los digests a una version anterior. Si lo hay, cierra este por obsoleto." \
+            > /tmp/pr-body.md
           gh pr create --base master --head "$branch" \
-            --title "chore(runtimes): digests de las imágenes de runtime (${VERSION})" \
-            --body "Digests resueltos contra \`${REGISTRY}\` tras publicar las 14 imágenes y pasar Trivy. Los escribe el pipeline: editarlos a mano congelaría sus CVEs (ADR 0148, condición 1)."
+            --title "chore(runtimes): digests de las imagenes de runtime (${VERSION})" \
+            --body-file /tmp/pr-body.md
 
   # Final aggregator job so branch protection can require a single
   # check ("Build runtime templates / summary") instead of fourteen.
