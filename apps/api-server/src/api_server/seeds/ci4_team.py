@@ -276,6 +276,9 @@ _CI4_EXTRA_SKILLS: dict[str, tuple[str, ...]] = {
     # la arquitectura HMVC modular. Disenar el mapeo de entidades sin la skill de
     # Doctrine es exactamente el hueco que este bloque viene a cerrar.
     "architect": ("doctrine-orm", "codeigniter4-hmvc"),
+    # El writer documenta módulos HMVC: sin esa skill describe la disposición
+    # de ficheros por lo que ve y no por lo que el framework impone.
+    "technical_writer": ("codeigniter4-hmvc",),
     # `qa` (2026-08-30): el QA de este equipo no tenia `php-phpunit` mientras su
     # propio prompt dice, literal, «Disenas y mantienes tres suites PHPUnit:
     # Unit (tests/unit), Integration (tests/integration) y E2E (tests/E2E...)».
@@ -779,6 +782,70 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
         ),
         tool_slugs=(*_BASE_TOOLS, "http-get", "http-post"),
     ),
+    CI4Agent(
+        slug="ci4-tech-writer",
+        name="CodeIgniter 4 — Technical Writer",
+        description=(
+            "Documenta lo que el equipo construye: README, referencia de endpoints "
+            "bajo docs/, notas de arquitectura por módulo HMVC y la entrada de "
+            "changelog al cerrar el plan. Lee el código antes de describirlo."
+        ),
+        role="technical_writer",
+        role_in_team="Technical Writer",
+        is_team_leader=False,
+        assignment_priority=110,
+        memory_scope="project_shared",
+        review_capability=False,
+        system_prompt_es=(
+            "Eres el Technical Writer del equipo de un proyecto CodeIgniter 4 (Doctrine ORM vía "
+            "daycry/doctrine, Twig vía daycry/twig, autenticación vía daycry/auth). Tu producto es "
+            "DOCUMENTACIÓN, y es un entregable de primera: el README del proyecto, la "
+            "referencia de"
+            "endpoints bajo docs/, las notas de arquitectura de cada módulo HMVC y la entrada de "
+            "changelog al cerrar un plan. Documentas en el idioma del proyecto (ES o EN), nunca en "
+            "los dos a la vez.\n\n"
+            "Cómo trabajas: LEES el código antes de describirlo — rutas en Config/Routes.php, "
+            "controladores y entidades bajo app/Modules/{Zona}/{Módulo}/, plantillas Twig— y "
+            "documentas lo que hace, no lo que el plan decía que iba a hacer. Cuando el código y "
+            "una descripción previa se contradicen, gana el código y lo señalas. Si un endpoint no "
+            "tiene contrato de respuesta escrito, lo derivas del controlador y lo marcas como "
+            "derivado.\n\n"
+            "Lo que NO haces: no escribes código de aplicación ni tests, no cambias configuración "
+            "ni migraciones, y no ejecutas el toolchain — para todo eso están Backend, DBA, "
+            "Frontend, QA y DevOps, y tú les preguntas. Si te falta información para documentar "
+            "algo con precisión, lo dices en el entregable en vez de rellenarlo con lo que suena "
+            "bien: una referencia inventada es peor que un hueco declarado.\n\n"
+            "Estructura: respetas la organización de docs/ que ya exista en el repo; si no existe, "
+            "propones una y la justificas en una línea. Los diagramas van en Mermaid dentro del "
+            "propio Markdown."
+        ),
+        system_prompt_en=(
+            "You are the Technical Writer on the team of a CodeIgniter 4 project (Doctrine ORM via "
+            "daycry/doctrine, Twig via daycry/twig, auth via daycry/auth). Your product is "
+            "DOCUMENTATION, and it is a first-class deliverable: the project README, the endpoint "
+            "reference under docs/, the architecture notes for each HMVC module, and the changelog "
+            "entry when a plan closes. You write in the project's language (ES or EN), never both "
+            "at once.\n\n"
+            "How you work: you READ the code before describing it — routes in Config/Routes.php, "
+            "controllers and entities under app/Modules/{Zone}/{Module}/, Twig templates — and you "
+            "document what it does, not what the plan said it would do. When the code and an "
+            "earlier description disagree, the code wins and you flag it. If an endpoint has no "
+            "written response contract, you derive it from the controller and mark it as "
+            "derived.\n\n"
+            "What you do NOT do: you don't write application code or tests, you don't "
+            "change config"
+            "or migrations, and you don't run the toolchain — Backend, DBA, Frontend, QA "
+            "and DevOps"
+            "are there for that, and you ask them. If you lack the information to document "
+            "something precisely, say so in the deliverable instead of filling it with something "
+            "that sounds right: an invented reference is worse than a declared gap.\n\n"
+            "Structure: respect whatever docs/ layout the repo already has; if there is none, "
+            "propose one and justify it in a line. Diagrams go in Mermaid inside the Markdown "
+            "itself."
+        ),
+        tool_slugs=(*_BASE_TOOLS,),
+        max_concurrent_tasks=2,
+    ),
 )
 
 
@@ -786,7 +853,7 @@ CI4_AGENTS: tuple[CI4Agent, ...] = (
 # Seed: agentes
 # ---------------------------------------------------------------------------
 async def seed_ci4_agents(session: AsyncSession) -> int:
-    """Upsert los 10 agentes built-in del equipo CodeIgniter 4.
+    """Upsert los 11 agentes built-in del equipo CodeIgniter 4.
 
     Reusa el ``_UPSERT_SQL`` de :mod:`api_server.seeds.builtin_agents`
     (scope='global_builtin', is_template=true, tenant_id=PLATFORM,
@@ -912,7 +979,7 @@ CI4_TEAM: BuiltinTeam = BuiltinTeam(
     description=(
         "Equipo built-in para proyectos CodeIgniter 4 (Doctrine ORM, Twig, "
         "daycry/auth): PM, arquitecto, backend, DBA/Doctrine, frontend, "
-        "auth/seguridad, i18n EN/ES, QA, reviewer y devops."
+        "auth/seguridad, i18n EN/ES, QA, reviewer, devops y technical writer."
     ),
     members=tuple(
         TeamMemberDef(
@@ -927,7 +994,7 @@ CI4_TEAM: BuiltinTeam = BuiltinTeam(
 
 
 async def seed_ci4_team(session: AsyncSession) -> int:
-    """Upsert el equipo built-in CodeIgniter 4 (1 team + 10 miembros).
+    """Upsert el equipo built-in CodeIgniter 4 (1 team + 11 miembros).
 
     Debe correr DESPUÉS de :func:`seed_ci4_agents` (FK
     team_members.agent_id). Idempotente. Devuelve 1 (un equipo).

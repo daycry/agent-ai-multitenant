@@ -3,8 +3,8 @@
 Adoptar un equipo built-in crea una COPIA editable del tenant: un Team
 ``is_builtin=false`` enlazado al origen vía ``forked_from_team_id``, con cada
 miembro FORKEADO (persona + tools + skills clonadas) y los ``TeamMember``
-recreados. Usa el equipo CI4 real como fuente (10 miembros con tools+skills tras
-la Ola B). El built-in original no se muta. Re-adopción permitida.
+recreados. Usa el equipo CI4 real como fuente, con su roster completo (el tamaño
+se DERIVA: ver `_MIEMBROS_CI4`). El built-in original no se muta. Re-adopción permitida.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import asyncpg
 import pytest
 from alembic import command
+from api_server.seeds.ci4_team import CI4_TEAM
 from httpx import ASGITransport, AsyncClient
 from uuid6 import uuid7
 
@@ -22,6 +23,12 @@ pytestmark = pytest.mark.integration
 
 _PLATFORM_TENANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 _CI4_TEAM_ID = UUID("6996ecb8-6536-54a4-9f0d-aceb135c0593")  # CI4_TEAM.id (uuid5 estable)
+
+#: Tamaño del roster CI4, DERIVADO. Estuvo escrito a mano (`== 10`) en tres
+#: aserciones de este fichero hasta el 2026-08-30, y añadir el Technical Writer
+#: que le faltaba al equipo las rompió todas a la vez sin que ninguna delatara
+#: un defecto real. La adopción debe clonar EL ROSTER, sea del tamaño que sea.
+_MIEMBROS_CI4 = len(CI4_TEAM.members)
 _TRUNCATE = (
     "TRUNCATE agent_skills, agent_tools, team_members, teams, agents, skills,"
     " tools, projects, user_org_memberships, organizations, users RESTART IDENTITY CASCADE"
@@ -208,14 +215,14 @@ async def test_adopt_builtin_team_into_project(configured_app, migrations_pg_dsn
 
         assert _json.loads(team["model_config"]) == model_cfg
 
-        # 10 miembros, todos agentes forkeados project_local de tenant_a.
+        # Todo el roster, y todos forkeados project_local de tenant_a.
         members = await conn.fetch(
             "SELECT a.scope, a.project_id, a.forked_from_agent_id, a.tenant_id"
             " FROM team_members tm JOIN agents a ON a.id = tm.agent_id"
             " WHERE tm.team_id = $1",
             new_team_id,
         )
-        assert len(members) == 10
+        assert len(members) == _MIEMBROS_CI4
         for m in members:
             assert m["scope"] == "project_local"
             assert m["project_id"] == ids["project_a"]
@@ -299,7 +306,7 @@ async def test_a_platform_builtin_team_leaves_the_project_with_zero_agents(
                 " WHERE tm.team_id = $1",
                 _CI4_TEAM_ID,
             )
-            assert len(rows) == 10
+            assert len(rows) == _MIEMBROS_CI4
             assert {r["tenant_id"] for r in rows} == {_PLATFORM_TENANT_ID}
             assert ids["tenant_a"] != _PLATFORM_TENANT_ID
         finally:
@@ -417,7 +424,7 @@ async def test_adopt_builtin_team_into_tenant(configured_app, migrations_pg_dsn:
             " JOIN agents a ON a.id = tm.agent_id WHERE tm.team_id = $1",
             new_team_id,
         )
-        assert len(members) == 10
+        assert len(members) == _MIEMBROS_CI4
         for m in members:
             assert m["scope"] == "global_tenant_template"
             assert m["project_id"] is None

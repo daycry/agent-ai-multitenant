@@ -4,7 +4,7 @@
 Verifies the whole CI4 built-in fabric the seeders materialize:
 
   * The ``codeigniter-4`` team exists with ``is_builtin=true``, 10 members,
-    a single leader (``ci4-pm``) and the roster's assignment_priority 10..100.
+    a single leader (``ci4-pm``) y las prioridades derivadas del roster.
   * The 10 ``ci4-*`` agents land with ``scope='global_builtin'``,
     ``tenant_id=PLATFORM``, ``is_template=true`` and a ``model_config`` that
     carries bilingual ``system_prompts`` but does NOT pin provider/model
@@ -34,8 +34,29 @@ from uuid import uuid4
 import asyncpg
 import pytest
 from alembic import command
+from api_server.seeds.builtin_agents import BUILTIN_AGENTS
+from api_server.seeds.ci4_team import CI4_AGENTS
 
 pytestmark = pytest.mark.integration
+
+# El tamaño del roster se DERIVA, no se escribe. Hasta el 2026-08-30 había siete
+#  a mano repartidos por este fichero: añadir el Technical Writer que
+# faltaba —el equipo no tenía a nadie que documentara, y el PM lo suplía a
+# escondidas— obligaba a tocarlos uno a uno, y el que se olvidara delataría un
+# defecto que no existe. Uno de los siete NO era un conteo (la prioridad del
+# líder, que da la casualidad de que también es 10) y por eso sigue literal.
+_ESPERADOS = len(CI4_AGENTS)
+
+#: Prioridades del roster, DERIVADAS. Antes era `list(range(10, 101, 10))`, que
+#: además de fijar el tamaño fijaba el paso: añadir un miembro con prioridad 110
+#: rompía el test por el tamaño y habría dejado pasar en silencio un salto de
+#: 10 a 30 en medio, que es el defecto que esta aserción sí debe cazar.
+_PRIORIDADES = sorted(a.assignment_priority for a in CI4_AGENTS)
+
+#: Total de agentes `global_builtin` que siembra la cadena de este test: los
+#: once del catálogo core más el roster CI4. El QA E2E Automator y las
+#: plantillas humanas NO entran (los siembran otros pasos).
+_BUILTIN_TOTAL = len(BUILTIN_AGENTS) + len(CI4_AGENTS)
 
 CI4_AGENT_SLUGS = (
     "ci4-pm",
@@ -151,7 +172,7 @@ def test_codeigniter_4_team_has_ten_members_and_pm_leader(
     counts = asyncio.run(_run_full_seed(_as_async_dsn(migrations_pg_dsn)))
 
     assert counts["core_agents"] == 11
-    assert counts["ci4_agents"] == 10
+    assert counts["ci4_agents"] == _ESPERADOS
 
     async def _inspect() -> dict[str, object]:
         conn = await asyncpg.connect(migrations_pg_dsn)
@@ -178,14 +199,14 @@ def test_codeigniter_4_team_has_ten_members_and_pm_leader(
     result = asyncio.run(_inspect())
     assert result["is_builtin"] is True
     members = result["members"]  # type: ignore[assignment]
-    assert len(members) == 10
+    assert len(members) == _ESPERADOS
     # Exactly one leader, and it is ci4-pm (priority 10).
     leaders = [m for m in members if m["is_team_leader"]]
     assert len(leaders) == 1
     assert leaders[0]["agent_name"] == "CodeIgniter 4 — Project Manager"
     assert leaders[0]["assignment_priority"] == 10
-    # Priorities span the roster 10..100 in steps of 10.
-    assert [m["assignment_priority"] for m in members] == list(range(10, 101, 10))
+    # Las prioridades son EXACTAMENTE las del roster, en orden.
+    assert [m["assignment_priority"] for m in members] == _PRIORIDADES
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +233,7 @@ def test_ci4_agents_are_global_builtin_without_pinned_model(
     from api_server.seeds import PLATFORM_TENANT_ID
 
     rows = asyncio.run(_fetch())
-    assert len(rows) == 10
+    assert len(rows) == _ESPERADOS
     for row in rows:
         assert row["scope"] == "global_builtin", row["name"]
         assert row["tenant_id"] == PLATFORM_TENANT_ID, row["name"]
@@ -460,10 +481,8 @@ def test_eleven_core_agents_stay_intact(alembic_config, migrations_pg_dsn: str) 
             await conn.close()
 
     total_builtin, ci4 = asyncio.run(_counts())
-    # 11 core + 10 CI4 = 21 global_builtin AI agents (qa_e2e_automator and the
-    # human templates are NOT seeded by this test's chain).
-    assert ci4 == 10
-    assert total_builtin == 21
+    assert ci4 == _ESPERADOS
+    assert total_builtin == _BUILTIN_TOTAL
 
 
 def test_ci4_seed_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
@@ -506,7 +525,7 @@ def test_ci4_seed_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
             await conn.close()
 
     ci4_agents, ci4_members, ci4_tools, ci4_kbs = asyncio.run(_counts())
-    assert ci4_agents == 10
-    assert ci4_members == 10
+    assert ci4_agents == _ESPERADOS
+    assert ci4_members == _ESPERADOS
     assert ci4_tools == first["ci4_agent_tools"]
     assert ci4_kbs == 8

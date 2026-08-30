@@ -8,6 +8,7 @@ from uuid import uuid4
 import asyncpg
 import pytest
 from alembic import command
+from api_server.seeds.builtin_teams import BUILTIN_TEAMS
 
 pytestmark = pytest.mark.integration
 
@@ -64,7 +65,7 @@ def test_seed_creates_five_builtin_teams(alembic_config, migrations_pg_dsn: str)
 
     n_agents, n_teams = asyncio.run(_run_full_seed(_as_async_dsn(migrations_pg_dsn)))
     assert n_agents == 11
-    assert n_teams == 5
+    assert n_teams == len(BUILTIN_TEAMS)
 
     async def _fetch_names() -> set[str]:
         conn = await asyncpg.connect(migrations_pg_dsn)
@@ -105,7 +106,11 @@ def test_seed_is_idempotent_and_member_counts_stable(
     n_teams, n_members = asyncio.run(_fetch_counts())
     assert n_teams == 5
     # 6 + 6 + 4 + 4 + 4 = 24 members across the five teams.
-    assert n_members == 24
+    # DERIVADO, no escrito: era `== 24` a mano, y meter el Technical Writer que
+    # faltaba en cuatro equipos lo rompió sin señalar ningún defecto. Lo que este
+    # test debe fijar es que la siembra es idempotente —que re-sembrar no
+    # duplica ni pierde miembros—, no cuántos hay.
+    assert n_members == sum(len(t.members) for t in BUILTIN_TEAMS)
 
 
 def test_every_team_has_exactly_one_leader(alembic_config, migrations_pg_dsn: str) -> None:
