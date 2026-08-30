@@ -507,6 +507,21 @@ _NOMBRA_PERO_DELEGA: dict[tuple[str, str], str] = {
         "a fondo; delegas». Es el encuadre del proyecto, no una promesa suya."
     ),
     ("ci4-pm", "doctrine-orm"): ("Idem: contexto del proyecto, no trabajo del PM."),
+    # El Technical Writer abre con la MISMA frase de encuadre que el PM, y por la
+    # misma razón: enumera el stack del proyecto para situarse. Lo que hace con
+    # Twig y Doctrine es LEERLOS para describirlos —su prompt dice «LEES el
+    # código antes de describirlo»— y para eso tiene `codeigniter4-hmvc`, que es
+    # la disposición que el framework impone. Darle además las skills de
+    # implementación de cada pieza del stack ensancharía su prompt sin añadir
+    # capacidad: no escribe plantillas ni mapea entidades.
+    ("ci4-tech-writer", "twig-templating"): (
+        "Documenta las vistas Twig, no las escribe: su prompt dice expresamente "
+        "«no escribes código de aplicación ni tests»."
+    ),
+    ("ci4-tech-writer", "doctrine-orm"): (
+        "Documenta el modelo de datos, no lo mapea. Misma frase de encuadre que "
+        "el PM y mismo motivo."
+    ),
 }
 
 

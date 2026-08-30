@@ -1,0 +1,119 @@
+"""Ningún equipo built-in se queda sin nadie que pueda documentar.
+
+## El defecto, y cómo se vio
+
+`CLAUDE.md` (principio 8) exige documentación en `/docs/` con estructura
+canónica y dice que **«el Technical Writer agente la mantiene al cierre de cada
+plan»**. El agente existe, con `write-file`, `delete-file`, `api-documentation`
+y `changelog-authoring`.
+
+Pero estaba en **UNO de los seis** equipos built-in (`research-spec`). Y eso no
+es una carencia estética, porque el pool de candidatos del dispatch es cerrado:
+
+```python
+if team_id is not None:
+    member_ids = select(TeamMember.agent_id).where(TeamMember.team_id == team_id)
+    pool_filter = or_(Agent.id.in_(member_ids), project_local)
+```
+
+(`orchestrator/dispatch.py`, `_candidates`). Un built-in **global** que no esté
+en el equipo NO entra nunca. Así que en cinco de seis equipos, una tarea de rol
+`technical_writer` resolvía a `NULL` y la documentación no tenía dueño.
+
+## Cómo se descubrió, que es la parte que conviene recordar
+
+No mirando el código: mirando **lo que los agentes hicieron**. En el histórico de
+ejecuciones, el PM del equipo CodeIgniter había llamado a `write_file` nueve
+veces — siete sobre código y configuración que su prompt le prohíbe tocar
+(`app/Config/Paths.php`, `vendor/autoload.php`, `tests/Feature/HelloTest.php`,
+`composer.json`, `.env`) y **dos sobre documentación** (`README.md`,
+`docs/api/hello_endpoint.md`).
+
+Esas dos son la huella del hueco: el PM documentaba porque no había nadie más.
+Retirarle la escritura sin poner un writer habría dejado los proyectos sin
+documentación en vez de con documentación escrita por quien no debía.
+"""
+
+from __future__ import annotations
+
+import pytest
+from api_server.seeds.builtin_agents import BUILTIN_AGENTS
+from api_server.seeds.builtin_teams import BUILTIN_TEAMS
+from api_server.seeds.ci4_team import CI4_AGENTS, CI4_TEAM
+
+pytestmark = pytest.mark.unit
+
+_TODOS_LOS_EQUIPOS = (*BUILTIN_TEAMS, CI4_TEAM)
+_ROL_POR_SLUG = {a.slug: a.role for a in (*BUILTIN_AGENTS, *CI4_AGENTS)}
+
+
+def _roles_del_equipo(equipo: object) -> set[str]:
+    miembros = getattr(equipo, "members", ())
+    return {_ROL_POR_SLUG[m.agent_slug] for m in miembros if m.agent_slug in _ROL_POR_SLUG}
+
+
+def test_los_equipos_conocidos_se_resuelven() -> None:
+    """Si los slugs dejaran de casar, todo lo de abajo pasaría en vacío."""
+    for equipo in _TODOS_LOS_EQUIPOS:
+        roles = _roles_del_equipo(equipo)
+        assert roles, (
+            f"el equipo {getattr(equipo, 'slug', '?')!r} no resuelve NINGUNO de sus "
+            "miembros a un rol: cambió la forma de declararlos y esta guarda dejó de mirar"
+        )
+
+
+@pytest.mark.parametrize("equipo", _TODOS_LOS_EQUIPOS, ids=lambda t: str(getattr(t, "slug", "?")))
+def test_cada_equipo_tiene_technical_writer(equipo: object) -> None:
+    assert "technical_writer" in _roles_del_equipo(equipo), (
+        f"el equipo {getattr(equipo, 'slug', '?')!r} no tiene ningún agente de rol "
+        "`technical_writer`. El pool de candidatos del dispatch son los MIEMBROS del "
+        "equipo más los agentes `project_local`, así que el Technical Writer global no "
+        "le llega: una tarea de documentación resolvería a NULL, y en la práctica la "
+        "acaba escribiendo el PM, que tiene prohibido escribir."
+    )
+
+
+@pytest.mark.parametrize("equipo", _TODOS_LOS_EQUIPOS, ids=lambda t: str(getattr(t, "slug", "?")))
+def test_quien_documenta_puede_escribir(equipo: object) -> None:
+    """Tener el rol no basta: hace falta que pueda producir el fichero.
+
+    La otra mitad del mismo hueco. Un `technical_writer` en el equipo sin
+    `write-file` es la misma trampa por la puerta de al lado — el rol resuelve,
+    la tarea se asigna, y el agente no puede entregar.
+    """
+    por_slug = {a.slug: a for a in (*BUILTIN_AGENTS, *CI4_AGENTS)}
+    escritores = [
+        por_slug[m.agent_slug]
+        for m in getattr(equipo, "members", ())
+        if por_slug.get(m.agent_slug) is not None
+        and _ROL_POR_SLUG.get(m.agent_slug) == "technical_writer"
+    ]
+    assert escritores, "cubierto por el test de arriba"
+    for agente in escritores:
+        tools = set(agente.resolved_tool_slugs())
+        assert "write-file" in tools, (
+            f"{agente.slug!r} documenta para el equipo "
+            f"{getattr(equipo, 'slug', '?')!r} y no tiene `write-file`: la tarea se le "
+            "asignaría y no podría entregar nada"
+        )
+
+
+def test_el_writer_lleva_la_skill_del_changelog() -> None:
+    """`CLAUDE.md` lo exige como criterio de cierre de plan, no como adorno.
+
+    Los criterios de cierre listan «entrada generada en
+    `docs/07-changelog/{plan_id}.md`». Si quien cierra el plan no lleva
+    `changelog-authoring`, ese criterio depende de que el modelo improvise el
+    formato — que es como se acaba con changelogs que no se pueden leer en serie.
+    """
+    por_slug = {a.slug: a for a in (*BUILTIN_AGENTS, *CI4_AGENTS)}
+    sin_skill = sorted(
+        slug
+        for slug, agente in por_slug.items()
+        if _ROL_POR_SLUG.get(slug) == "technical_writer"
+        and "changelog-authoring" not in agente.resolved_skill_slugs()
+    )
+    assert not sin_skill, (
+        f"agentes de rol `technical_writer` sin `changelog-authoring`: {sin_skill}. "
+        "Es el entregable que CLAUDE.md exige para cerrar un plan."
+    )

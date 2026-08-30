@@ -66,6 +66,7 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
             TeamMemberDef("frontend-dev", "Frontend", assignment_priority=40),
             TeamMemberDef("qa-engineer", "QA", assignment_priority=60),
             TeamMemberDef("reviewer", "Reviewer", assignment_priority=70),
+            TeamMemberDef("technical-writer", "Technical Writer", assignment_priority=80),
         ),
     ),
     BuiltinTeam(
@@ -82,6 +83,7 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
             TeamMemberDef("backend-junior", "Backend Junior", assignment_priority=50),
             TeamMemberDef("qa-engineer", "QA", assignment_priority=60),
             TeamMemberDef("reviewer", "Reviewer", assignment_priority=70),
+            TeamMemberDef("technical-writer", "Technical Writer", assignment_priority=80),
         ),
     ),
     BuiltinTeam(
@@ -109,6 +111,7 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
             TeamMemberDef("devops-engineer", "DevOps", assignment_priority=20),
             TeamMemberDef("security-specialist", "Security Specialist", assignment_priority=30),
             TeamMemberDef("qa-engineer", "QA", assignment_priority=50),
+            TeamMemberDef("technical-writer", "Technical Writer", assignment_priority=80),
         ),
     ),
     BuiltinTeam(
@@ -122,6 +125,7 @@ BUILTIN_TEAMS: tuple[BuiltinTeam, ...] = (
             TeamMemberDef("backend-senior", "Data Engineer", assignment_priority=20),
             TeamMemberDef("researcher", "Investigador", assignment_priority=40),
             TeamMemberDef("qa-engineer", "QA", assignment_priority=60),
+            TeamMemberDef("technical-writer", "Technical Writer", assignment_priority=80),
         ),
     ),
 )
