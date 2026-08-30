@@ -124,6 +124,78 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    # -------------------------------------------------------------------
+    # Por que hay un `ignore` ademas del filtro de `update-types`
+    # -------------------------------------------------------------------
+    # El grupo ya declaraba `update-types: [minor, patch]`, y aun asi el PR
+    # #130 subia `python:3.12 -> 3.14`, `php:8.3 -> 8.5`, `golang:1.26 ->
+    # 1.27`, `rust:1.97 -> 1.98` y `maven:3.9-eclipse-temurin-21 ->
+    # maven:3-eclipse-temurin-26`. No es que el filtro fallara: es que para
+    # dependabot un tag `python:3.12` tiene major=3 y minor=12, asi que subir a
+    # 3.14 ES un update "minor". Para el lenguaje son DOS releases de features.
+    #
+    # La guarda existia, estaba configurada, y no protegia lo que todo el mundo
+    # creia que protegia, porque la nocion de "minor" del tag no es la del
+    # lenguaje. Ese desajuste es el defecto, no el bump.
+    #
+    # Lo que se rompia en concreto, y por eso no es una preferencia estetica:
+    #
+    #   * `CLAUDE.md` fija **Python 3.12** como lenguaje backend. El bump lo
+    #     subia a 3.14 en cinco Dockerfiles, el del instalador incluido.
+    #   * `maven:3.9-...` pasaba a `maven:3-...`: eso AFLOJA un pin, que este
+    #     repo prohibe expresamente, y encima cambiaba Java 21 (LTS) por 26.
+    #   * `php:8.3 -> 8.5` contradecia el comentario escrito justo encima del
+    #     `FROM` en php-phpunit y php-pest: «La version de PHP no cambia — sube
+    #     el snapshot de Debian». Cambiar la version del lenguaje bajo el que
+    #     corren los tests de TODOS los proyectos del sistema es una decision,
+    #     no una linea dentro de un grupo llamado `docker-bases`.
+    #
+    # Lo que este `ignore` NO bloquea, y es justo lo que el grupo existe para
+    # traer: los **refrescos de digest** del MISMO tag. Dependabot los trata
+    # aparte de los updates semver, asi que `python:3.12-slim@sha256:vieja`
+    # sigue llegando como `python:3.12-slim@sha256:nueva` con sus CVE de Debian
+    # corregidas. El pin sin refresco es «PEOR que un tag flotante» segun la
+    # cabecera de este fichero, y eso se conserva intacto.
+    #
+    # Subir de version un lenguaje sigue siendo posible: se hace a mano, con su
+    # ADR, midiendo que el ecosistema acompana. Que es como se decidio 3.12.
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "php"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "golang"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "rust"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "maven"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "gradle"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "ruby"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "mcr.microsoft.com/dotnet/sdk"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
     groups:
       docker-bases:
         patterns:
