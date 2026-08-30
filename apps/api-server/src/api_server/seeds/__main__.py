@@ -65,6 +65,7 @@ from api_server.seeds.human_agent_templates import seed_human_agent_templates
 from api_server.seeds.platform import ensure_platform_tenant
 from api_server.seeds.qa_e2e_automator import (
     seed_qa_e2e_automator,
+    seed_qa_e2e_automator_skills,
     seed_qa_e2e_automator_tools,
 )
 
@@ -139,6 +140,11 @@ SEED_STEPS: tuple[SeedStep, ...] = (
     # dentro de una función que varios arneses llaman sin ese paso previo.
     # MUST run after `qa_e2e_automator` (FK agent_tools.agent_id) y `tools`.
     SeedStep("qa_e2e_automator_tools", seed_qa_e2e_automator_tools),
+    # Y su mitad gemela. Faltaba: `resolved_skill_slugs` devolvía cuatro skills
+    # y en la base había cero, porque este agente vive fuera de BUILTIN_AGENTS y
+    # `agent_skills` no lo alcanzaba. MUST run after `qa_e2e_automator` (FK
+    # agent_skills.agent_id) y `skills` (FK agent_skills.skill_id).
+    SeedStep("qa_e2e_automator_skills", seed_qa_e2e_automator_skills),
     # Plan codeigniter-4-builtin-team: wire each ci4-* agent to its
     # built-in tools via the agent_tools junction (the table does NOT
     # restrict scope, so global_builtin agents can carry tools). MUST run

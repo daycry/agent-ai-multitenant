@@ -85,9 +85,9 @@ def _pasos_de_capacidades() -> set[str]:
 def test_la_derivacion_de_pasos_encuentra_algo() -> None:
     """Si la derivación devolviera vacío, el test de cobertura pasaría a ciegas."""
     pasos = _pasos_de_capacidades()
-    assert len(pasos) >= 5, (
+    assert len(pasos) >= 6, (
         f"la derivación encontró {sorted(pasos)}; se esperaban al menos los "
-        "cinco pasos de cableado (built-in, CI4 y QA E2E, tools y skills)"
+        "seis pasos de cableado (built-in, CI4 y QA E2E, tools y skills)"
     )
 
 
@@ -106,6 +106,7 @@ def test_el_refresco_cubre_todos_los_rosters() -> None:
         "ci4_agent_tools": "seed_ci4_agent_tools",
         "ci4_agent_skills": "seed_ci4_agent_skills",
         "qa_e2e_automator_tools": "seed_qa_e2e_automator_tools",
+        "qa_e2e_automator_skills": "seed_qa_e2e_automator_skills",
     }
 
     # Que el mapa de arriba no envejezca respecto al seed real.

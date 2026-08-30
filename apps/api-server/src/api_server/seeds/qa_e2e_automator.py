@@ -135,6 +135,20 @@ QA_E2E_AUTOMATOR = BuiltinAgent(
     temperature=0.2,
     system_prompt_es=_SYSTEM_PROMPT_ES,
     system_prompt_en=_SYSTEM_PROMPT_EN,
+    # Explícitas en vez de heredadas del rol `qa`, por una sola razón:
+    # `playwright-e2e` no la reparte NADIE en todo el catálogo, y este es el
+    # agente que se llama así. Un «QA E2E Automator» sin la skill de Playwright
+    # es la versión en pequeño del mismo defecto que persigue todo este trabajo
+    # — la pieza existe, está escrita, y no llega a quien la necesita.
+    # Las otras cuatro son las del rol; se repiten aquí porque declarar
+    # `skill_slugs` sustituye a la herencia, no la extiende.
+    skill_slugs=(
+        "playwright-e2e",
+        "test-pyramid-design",
+        "regression-test-strategy",
+        "edge-case-identification",
+        "contract-testing",
+    ),
 )
 
 
@@ -209,6 +223,48 @@ async def seed_qa_e2e_automator_tools(session: AsyncSession) -> int:
         )
     await session.execute(
         _DELETE_STALE_AGENT_TOOLS_SQL,
+        {"agent_id": str(QA_E2E_AUTOMATOR.id), "keep_ids": keep_ids},
+    )
+    return len(keep_ids)
+
+
+async def seed_qa_e2e_automator_skills(session: AsyncSession) -> int:
+    """Cablea las skills del QA E2E Automator (`agent_skills`). Devuelve enlaces.
+
+    La mitad gemela de :func:`seed_qa_e2e_automator_tools`, y llega después por
+    el mismo motivo por el que aquélla llegó tarde: este agente vive FUERA de
+    ``BUILTIN_AGENTS`` —para no mover el conteo de once que fija
+    ``test_seed_agents``— así que ``seed_builtin_agent_skills`` no lo alcanza y
+    nadie más lo hacía. Resultado medido el 2026-08-30: ``resolved_skill_slugs``
+    devolvía cuatro skills desde siempre y en la base había CERO, porque no
+    existía el paso que las escribiera.
+
+    Es el modo de fallo más silencioso de este catálogo: la definición es
+    correcta, se puede leer, se puede testear en unidad… y no llega nunca a la
+    tabla. Cerrar un roster a medias —tools sí, skills no— deja exactamente este
+    hueco, y por eso el refresco de arranque deriva su lista de pasos del propio
+    seed en vez de llevarla escrita a mano.
+
+    Debe correr DESPUÉS de :func:`seed_qa_e2e_automator` (FK
+    ``agent_skills.agent_id``) y de ``seed_builtin_skills`` (FK
+    ``agent_skills.skill_id``). Reusa el upsert + la poda de
+    :mod:`api_server.seeds.builtin_agents`: mismo contrato idempotente que el
+    resto del catálogo.
+    """
+    from api_server.seeds.builtin_agents import (
+        _DELETE_STALE_AGENT_SKILLS_SQL,
+        _UPSERT_AGENT_SKILL_SQL,
+    )
+    from api_server.seeds.builtin_skills import _skill_id
+
+    keep_ids = [str(_skill_id(slug)) for slug in QA_E2E_AUTOMATOR.resolved_skill_slugs()]
+    for skill_id in keep_ids:
+        await session.execute(
+            _UPSERT_AGENT_SKILL_SQL,
+            {"agent_id": str(QA_E2E_AUTOMATOR.id), "skill_id": skill_id},
+        )
+    await session.execute(
+        _DELETE_STALE_AGENT_SKILLS_SQL,
         {"agent_id": str(QA_E2E_AUTOMATOR.id), "keep_ids": keep_ids},
     )
     return len(keep_ids)

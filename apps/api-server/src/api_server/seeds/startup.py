@@ -107,9 +107,11 @@ async def refresh_builtin_agent_capabilities(
     la retira de la base — que es lo que hace que un arreglo aterrice y no sólo
     quede escrito.
 
-    **Los cinco pasos, y por qué son cinco.** El cableado de capacidades vive
+    **Los seis pasos, y por qué son seis.** El cableado de capacidades vive
     repartido por roster: `BUILTIN_AGENTS` tiene el suyo, el equipo CodeIgniter 4
-    tiene el suyo y el QA E2E Automator vive fuera de ambas tuplas. Una primera
+    tiene el suyo y el QA E2E Automator vive fuera de ambas tuplas (y por eso
+    llevaba cuatro skills declaradas y cero en la base: nadie las escribía).
+    Una primera
     versión de esta función llamaba sólo a los dos primeros y dejaba fuera
     justamente a los diez agentes CI4, que son el roster del incidente: habría
     parecido que arreglaba el problema mientras el equipo que lo sufrió seguía
@@ -129,7 +131,10 @@ async def refresh_builtin_agent_capabilities(
         seed_builtin_agent_tools,
     )
     from api_server.seeds.ci4_team import seed_ci4_agent_skills, seed_ci4_agent_tools
-    from api_server.seeds.qa_e2e_automator import seed_qa_e2e_automator_tools
+    from api_server.seeds.qa_e2e_automator import (
+        seed_qa_e2e_automator_skills,
+        seed_qa_e2e_automator_tools,
+    )
 
     pasos: tuple[tuple[str, Any], ...] = (
         ("agent_tools", seed_builtin_agent_tools),
@@ -137,6 +142,7 @@ async def refresh_builtin_agent_capabilities(
         ("ci4_agent_tools", seed_ci4_agent_tools),
         ("ci4_agent_skills", seed_ci4_agent_skills),
         ("qa_e2e_automator_tools", seed_qa_e2e_automator_tools),
+        ("qa_e2e_automator_skills", seed_qa_e2e_automator_skills),
     )
 
     aplicados: dict[str, int] = {}
