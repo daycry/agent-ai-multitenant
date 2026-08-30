@@ -11,7 +11,7 @@
 # backend, agent-runtime y browser-runtime—, así que compartía la base
 # vulnerable sin que ninguna guarda lo dijese. Se refresca con las otras tres
 # justamente por eso: la que nadie mira es la que se queda atrás.
-FROM python:3.12-slim@sha256:dd29372629eeba2dd003fd9e9d35a5b8236c44727875a0364254b5127af88e65
+FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5
 
 # Parches de seguridad del SO: la misma capa que llevan `agent-runtime` y los
 # cuatro templates parcheados el 2026-08-19. Faltaba aquí por la razón que da el
