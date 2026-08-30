@@ -83,6 +83,19 @@ GLOBAL_TABLES_ALLOWLIST: dict[str, str] = {
         " que Alembic cree), y así cualquier tenant podía leer la configuración"
         " de aprobación de los proyectos de los demás."
     ),
+    "agent_tools_backfill_0145": (
+        "Respaldo interno de la migración 0145: las filas de `agent_tools` que"
+        " aquella añadió a las copias de agentes built-in atrapadas sin"
+        " `stack_exec`, para que su `downgrade` borre EXACTAMENTE ésas y no las"
+        " que puso un administrador del tenant después. La escribe el `upgrade` y"
+        " la lee el `downgrade`, ambos como `migrations_user`; la APLICACIÓN no la"
+        " toca. No lleva `tenant_id` porque no se le da acceso: la propia 0145"
+        " revoca todo permiso a `app_user` y `service_user` en el mismo `upgrade`"
+        " que la crea —la lección de la 0138, donde el respaldo de la 0133 nació"
+        " legible cross-tenant por los default privileges de 02-roles.sh— y"
+        " `test_the_backfill_table_is_unreachable_from_the_app` (en"
+        " `test_stack_exec_backfill_migration.py`) lo comprueba."
+    ),
     "organizations": (
         "ES el tenant. Su aislamiento no es `tenant_id = app.tenant_id` sino"
         " `id = app.tenant_id` (policy `org_self_only`, migración 0001)."

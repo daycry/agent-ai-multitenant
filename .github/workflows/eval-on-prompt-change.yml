@@ -45,6 +45,14 @@ on:
       # system_prompt text here; promotion/eval grades against these).
       - "apps/api-server/src/api_server/seeds/builtin_agents.py"
       - "apps/api-server/src/api_server/seeds/qa_e2e_automator.py"
+      - "apps/api-server/src/api_server/seeds/ci4_team.py"
+      # `tool_usage_guidance.py` no define agentes: se CONCATENA al prompt de
+      # todos ellos, así que tocarla cambia el prompt efectivo de los 34 sin
+      # tocar ninguno de los ficheros de arriba. Faltaba, y el hueco es del
+      # mismo tipo que el de `ci4_team.py`: la lista se escribió cuando los
+      # prompts vivían en un solo sitio y no se movió al repartirse.
+      # `tests/unit/test_eval_trigger_covers_every_prompt_source.py` la fija.
+      - "apps/api-server/src/api_server/seeds/tool_usage_guidance.py"
       # The eval harness itself — re-run the gate when the judge/diff/CI
       # logic that decides regressions changes.
       - "apps/api-server/src/api_server/evals/**"
@@ -54,6 +62,8 @@ on:
     paths:
       - "apps/api-server/src/api_server/seeds/builtin_agents.py"
       - "apps/api-server/src/api_server/seeds/qa_e2e_automator.py"
+      - "apps/api-server/src/api_server/seeds/ci4_team.py"
+      - "apps/api-server/src/api_server/seeds/tool_usage_guidance.py"
       - "apps/api-server/src/api_server/evals/**"
       - ".github/workflows/eval-on-prompt-change.yml"
   workflow_dispatch:

@@ -383,6 +383,20 @@ async def _ensure_builtin_catalog() -> None:
     except Exception:
         _logger.warning("startup.builtin_catalog_check_failed", exc_info=True)
 
+    # ADR 0162 / hallazgo del 2026-08-30: lo de arriba siembra CUANDO FALTA, y el
+    # defecto que costó un run entero era otro — el catálogo estaba presente y
+    # RANCIO. El código repartía `stack-exec` desde julio y la BD llevaba desde el
+    # 2026-06-28 sin tocarse, porque el seed completo es un CLI que nada dispara.
+    # Las tools de un agente built-in son de la plataforma (quien personaliza,
+    # adopta una copia), así que re-afirmarlas en cada arranque es lo correcto.
+    try:
+        from api_server.db.session import get_admin_sessionmaker
+        from api_server.seeds.startup import refresh_builtin_agent_capabilities
+
+        await refresh_builtin_agent_capabilities(get_admin_sessionmaker())
+    except Exception:
+        _logger.warning("startup.builtin_agent_capabilities_check_failed", exc_info=True)
+
 
 async def _resume_chat_replies() -> None:
     # c9 (audit 2026-07-03): the team chat reply runs as an in-process detached

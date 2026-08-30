@@ -78,14 +78,40 @@ class BuiltinAgent:
 
         return self.tool_slugs or default_tool_slugs(self.role)
 
+    @property
+    def effective_prompt_es(self) -> str:
+        """El prompt ES tal y como lo recibe el agente: persona + ejecución.
+
+        La guía de ejecución (`shell_exec` vs `stack_exec`) se GENERA a partir de
+        las tools que el agente tiene de verdad, no se teclea en cada persona.
+        Tecleada, envejece a la primera vez que alguien cambia el reparto de
+        tools y deja un prompt prometiendo una puerta que ya no existe — que es
+        exactamente el fallo que costó un run de 2,22 USD, sólo que al revés.
+
+        Mismo patrón que :attr:`api_server.seeds.ci4_team.CI4Agent.effective_prompt_es`,
+        y por el mismo motivo: el texto ES vive en ``agents.system_prompt`` Y en
+        ``model_config.system_prompts``, así que las dos escrituras tienen que
+        salir del mismo sitio o divergen sin que nada falle.
+        """
+        from api_server.seeds.tool_usage_guidance import execution_guidance
+
+        return self.system_prompt_es + execution_guidance(self.resolved_tool_slugs())[0]
+
+    @property
+    def effective_prompt_en(self) -> str:
+        """El prompt EN efectivo: persona + ejecución (ver ``effective_prompt_es``)."""
+        from api_server.seeds.tool_usage_guidance import execution_guidance
+
+        return self.system_prompt_en + execution_guidance(self.resolved_tool_slugs())[1]
+
     def to_model_config(self) -> dict[str, Any]:
         return {
             "provider": self.model_provider,
             "model": self.model_name,
             "temperature": self.temperature,
             "system_prompts": {
-                "es": self.system_prompt_es,
-                "en": self.system_prompt_en,
+                "es": self.effective_prompt_es,
+                "en": self.effective_prompt_en,
             },
         }
 
@@ -144,7 +170,11 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "elección de stacks, estrategias de datos, modelo de auth y "
             "multi-tenancy. Documenta cada decisión como un ADR (Contexto, "
             "Decisión, Alternativas, Consecuencias). NO codificas features de "
-            "negocio, pero SÍ escribes esqueletos y módulos base. Pide datos "
+            "negocio, pero SÍ escribes esqueletos y módulos base — y andamiar "
+            "(crear el proyecto, generar clases base, instalar la dependencia "
+            "que decide la arquitectura) es toolchain, así que va por "
+            "`stack_exec`: «no codifico features» no significa «no ejecuto». "
+            "Pide datos "
             "(no opiniones) cuando dos alternativas estén empatadas. Marca "
             "explícitamente cuando una decisión es reversible vs one-way door."
         ),
@@ -154,7 +184,11 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "data strategies, auth model, multi-tenancy. Document each decision "
             "as an ADR (Context, Decision, Alternatives, Consequences). You do "
             "NOT implement business features, but you DO write skeletons and "
-            "base modules. Ask for data (not opinions) when two alternatives "
+            "base modules — and scaffolding (creating the project, generating "
+            "base classes, installing the dependency the architecture picks) is "
+            "toolchain work, so it goes through `stack_exec`: «I don't code "
+            "features» does not mean «I don't execute». "
+            "Ask for data (not opinions) when two alternatives "
             "are tied. Explicitly mark whether a decision is reversible or a "
             "one-way door."
         ),
@@ -408,7 +442,10 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "URL o referencia verificable. Si encuentras consenso, lo "
             "señalas; si la comunidad está dividida, presentas ambos lados. "
             "Tu output alimenta una decisión del Arquitecto — sé breve y "
-            "concreto. No implementas; tu producto es un documento."
+            "concreto. No implementas; tu producto es un documento. Y ese "
+            "documento lo ESCRIBES con `write_file` como markdown en el "
+            "workspace: un informe que sólo existe dentro de tu respuesta no "
+            "cuenta como entregable y la tarea se cerrará sin nada que revisar."
         ),
         system_prompt_en=(
             "You are a Researcher. You investigate technical options "
@@ -417,7 +454,10 @@ BUILTIN_AGENTS: tuple[BuiltinAgent, ...] = (
             "URL or verifiable reference. If there is consensus, you say so; "
             "if the community is split, you present both sides. Your output "
             "feeds an Architect decision — be brief and concrete. You do "
-            "not implement; your product is a document."
+            "not implement; your product is a document. And you WRITE that "
+            "document with `write_file` as markdown in the workspace: a report "
+            "that only exists inside your reply does not count as a "
+            "deliverable, and the task will close with nothing to review."
         ),
     ),
     BuiltinAgent(
@@ -640,7 +680,10 @@ async def seed_builtin_agents(session: AsyncSession) -> int:
                 "name": agent.name,
                 "description": agent.description,
                 "role": agent.role,
-                "system_prompt": agent.system_prompt_es,
+                # El EFECTIVO, no la persona pelada: la columna plana y
+                # `model_config.system_prompts` tienen que decir lo mismo (ver
+                # `effective_prompt_es`).
+                "system_prompt": agent.effective_prompt_es,
                 "model_config": json.dumps(agent.to_model_config()),
                 "memory_scope": agent.memory_scope,
                 "review_capability": agent.review_capability,
@@ -708,7 +751,14 @@ _DELETE_STALE_AGENT_TOOLS_SQL = text("""
 async def seed_builtin_agent_tools(session: AsyncSession) -> int:
     """Wire each built-in agent to its tools (por rol; ver ``resolved_tool_slugs``).
     Idempotent: upsert + poda de links fuera del spec. Debe correr DESPUÉS de
-    seed_builtin_agents y seed_builtin_tools (FKs de agent_tools)."""
+    seed_builtin_agents y seed_builtin_tools (FKs de agent_tools).
+
+    Cubre SÓLO ``BUILTIN_AGENTS``. El QA E2E Automator vive fuera de esa tupla
+    (para no mover el conteo de once que fija ``test_seed_agents``) y lo cablea
+    ``seed_qa_e2e_automator_tools``, en su propio módulo y su propio paso: meterlo
+    aquí le añadiría a esta función una precondición invisible —que el paso
+    ``qa_e2e_automator`` haya corrido— que varios arneses de test no cumplen.
+    """
     from api_server.seeds.builtin_tools import _tool_id
 
     links = 0

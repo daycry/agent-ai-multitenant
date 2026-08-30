@@ -25,7 +25,7 @@
 [![Docker Compose](https://img.shields.io/badge/Docker%20Compose-single%20host-2496ED.svg?logo=docker&logoColor=white)](docker/docker-compose.yml)
 
 [![ADRs](https://img.shields.io/badge/ADRs-163-0ea5e9.svg)](docs/05-architecture-decisions/README.md)
-[![Migrations](https://img.shields.io/badge/migrations-144-0ea5e9.svg)](apps/api-server/migrations/versions)
+[![Migrations](https://img.shields.io/badge/migrations-145-0ea5e9.svg)](apps/api-server/migrations/versions)
 [![Test runtimes](https://img.shields.io/badge/test%20runtimes-14-0ea5e9.svg)](docker/agent-runtimes)
 [![Sensitive actions](https://img.shields.io/badge/gated%20action%20categories-13-0ea5e9.svg)](docs/04-reference/README.md)
 

@@ -324,3 +324,357 @@ haciendo falta.
 **Este hallazgo no pide arreglo nuevo:** pide firmar la opción A del ADR 0162 (que
 cada criterio declare cómo se verifica, y que lo declare quien escribe el test,
 no el planner).
+
+---
+
+# Segunda pasada (2026-08-30) — con los arreglos desplegados
+
+Proyecto **`Landing CI4`**, creado desde cero con el mismo flujo y la misma
+petición, sobre el stack ya reconstruido con el PR #142.
+
+## Lo que cambió, medido
+
+|                                      | Primera pasada                     | Segunda                |
+| ------------------------------------ | ---------------------------------- | ---------------------- |
+| Agentes utilizables al crear         | **0**                              | **10**                 |
+| Runtime heredado de la plantilla     | `NULL` (= `python-pytest`)         | `php-phpunit`          |
+| Pasos manuales para poder planificar | adoptar + asignar + fijar runtime  | **ninguno**            |
+| Rama por defecto equivocada          | silencio hasta que fallara el push | **avisada al guardar** |
+
+**H1 y H6 cerrados**, y se ven en pantalla. El paso 2 del asistente trae ahora el
+runtime de la plantilla puesto, la casilla de copia del equipo **marcada y
+bloqueada**, y un aviso que explica el porqué donde se comete la decisión:
+
+> «Este equipo es de la plataforma: sus agentes pertenecen al tenant Platform y
+> tu proyecto no puede usarlos. Por eso el proyecto se crea con su propia copia
+> del equipo; sin ella no podría planificar ni ejecutar tareas.»
+
+**H3 cerrado, y con el tono correcto.** Dejando la rama en `main` a propósito
+—que es el default— la sincronización avisa:
+
+> ⚠️ «El remoto no tiene la rama «main». O el repositorio está vacío, o su rama
+> por defecto es otra (p. ej. «master» donde aquí pone «main»): comprueba cuál
+> usa el remoto antes de hacer un push inicial, o crearás allí una rama que no
+> debería existir. Mientras esa rama no exista, el PR del plan no podrá abrirse.»
+
+No lo arregla solo —derivar para proponer, nunca para aplicar— pero da síntoma,
+causa probable con el ejemplo del caso, y **consecuencia**. Antes esto se
+descubría cuando fallaba el push.
+
+## H10 — CONFIRMADO como defecto, no como artefacto
+
+En la primera pasada quedó anotado como «sospechoso, probablemente cosa de la
+automatización». Ya no: en esta pasada el **primer clic no surtió efecto** en
+cuatro controles distintos —«Editar», «Borrar», «Usar plantilla» y «Empezar una
+conversación»—, y en los cuatro el clic por coordenadas funcionó a la primera.
+
+Que le ocurra a botones de pantallas distintas descarta que sea un `ref` rancio
+de una pantalla concreta. Un humano lo notaría como «a veces hay que darle dos
+veces», que es de las quejas más difíciles de reproducir y de las que más
+desgastan.
+
+Sigue sin causa raíz identificada: es lo que queda por investigar de este
+recorrido.
+
+---
+
+## H13 — BLOQUEANTE: los agentes del equipo CI4 no tienen `stack_exec`
+
+**El hallazgo más importante del recorrido, y el que probablemente explica el
+pasado entero.**
+
+El plan arrancó, la primera tarea —«Instalar esqueleto de CodeIgniter 4 vía
+Composer»— empezó a las 09:52, y a los 12 minutos el plan estaba **bloqueado**
+con **2,22 USD gastados** (frente a 0,61 estimados) y **62,2k tokens**, sin
+haber instalado nada.
+
+**Lo que hizo el agente, en orden:**
+
+1. Pidió lo correcto, a la primera y por la vía correcta:
+
+   ```json
+   {
+     "tool": "stack_exec",
+     "command": "composer create-project codeigniter4/appstarter . --no-interaction"
+   }
+   ```
+
+2. La plataforma le contestó:
+
+   ```text
+   tool 'stack_exec' not allowed in this mode
+   ```
+
+3. Y entonces se pasó **24 llamadas a `shell_exec`** buscando PHP dentro de su
+   propio sandbox: `php -v`, `find / -iname php*`, `ls -la /usr/local/bin`,
+   `find /usr -name "**/php*"`… una y otra vez, hasta agotar los reintentos.
+
+Recuento de tools del run: **24 `shell_exec` · 1 `stack_exec`** (denegada).
+
+**La causa, comprobada en BD:** **ninguno de los 10 agentes** del equipo
+CodeIgniter 4 tiene `stack_exec` asignada. Ni el devops, ni los backend, ni QA.
+El equipo built-in que la plataforma trae _para proyectos PHP_ no reparte la
+única tool que puede ejecutar el toolchain de PHP.
+
+**Por qué es peor que un permiso olvidado.** Encadena con el defecto que el ADR
+0162 ya describía, y lo convierte en trampa:
+
+- el proyecto autoriza `php`, `composer`, `phpunit`, `spark`;
+- `shell_exec` **acepta esos comandos** porque `allowed_commands` es UNA lista
+  para las DOS puertas (ADR 0093, decisión D2);
+- el sandbox no los tiene, así que devuelve el error crudo del SO;
+- y el agente, que no puede distinguir «no autorizado» de «no instalado»,
+  concluye que le falta la ruta y se pone a buscarla.
+
+**El agente no se equivocó: le cerramos la puerta buena y le dejamos abierta la
+mala.** La única tool que resuelve la tarea está denegada, y la que no la
+resuelve acepta la petición sin rechistar.
+
+**Y explica el 0 de 180.** Hasta hoy ninguna ejecución de la instalación había
+disparado el test-runtime. Se atribuyó a la falta de criterios ejecutables (H11),
+que es cierto pero no es todo: aunque los hubiera habido, **estos agentes no
+pueden ejecutar nada del stack**.
+
+**Lo que SÍ funcionó, y conviene decirlo:** el sistema no se quedó girando. Agotó
+reintentos, bloqueó el plan y marcó el coste **«por encima»** en rojo (2,22 USD
+sobre 0,61 estimados). La contención existe; lo que falla es lo que se contuvo.
+
+**Arreglo:** dar `stack_exec` a los agentes que implementan del equipo built-in
+CI4 —y revisar los otros cinco equipos built-in por el mismo motivo—. Y por
+encima de eso: que un proyecto con `allowed_commands` de un stack cuyos agentes
+no tienen `stack_exec` sea una incoherencia **detectable**, porque hoy no lo es
+por ninguna vía salvo leer un run fallido.
+
+---
+
+## H14 — Un agente de IA del catálogo tiene CERO tools (CORREGIDO: eran seis, cinco son humanos)
+
+Buscando el alcance de H13 apareció su hermano. De los **27 agentes built-in**
+del tenant Platform, **21 tienen tools y 6 no tienen ninguna**. Y los 6 sin tools
+son exactamente los que **no pertenecen a ningún equipo**: los especialistas que
+un tenant adopta de uno en uno.
+
+| Agente                   | Rol            | Tools |
+| ------------------------ | -------------- | ----- |
+| Brand Lead               | `custom`       | 0     |
+| DBA Senior               | `devops`       | 0     |
+| UX Lead                  | `frontend_dev` | 0     |
+| QA E2E Automator         | `qa`           | 0     |
+| Legal Reviewer           | `reviewer`     | 0     |
+| Security Reviewer Senior | `security`     | 0     |
+
+**Un «QA E2E Automator» que no puede ejecutar nada. Un «DBA Senior» sin una sola
+herramienta.** Se adoptan con su persona, su prompt de especialista y sus manos
+atadas.
+
+**Por qué esto es la misma familia que H13 y no un caso aparte:** el prompt de un
+especialista describe lo que sabe hacer, y el agente lo intentará. Sin tools, el
+resultado no es «no hace nada»: es un run que da vueltas hasta agotar
+iteraciones, exactamente como el de las 24 llamadas buscando PHP. La diferencia
+es que aquí no falta _una_ tool: faltan todas.
+
+**CORRECCIÓN (2026-08-30), y es mía.** El recuento de arriba está mal y el
+revisor adversarial lo cazó: **cinco de los seis son `agent_type='human'`** —
+plantillas de agente HUMANO, personas que participan en el flujo aprobando y
+opinando. Que no tengan tools no es un defecto: es lo correcto, porque no
+ejecutan nada.
+
+| Agente                   | Tipo     | ¿Defecto? |
+| ------------------------ | -------- | --------- |
+| **QA E2E Automator**     | **`ai`** | **SÍ**    |
+| Brand Lead               | `human`  | no        |
+| DBA Senior               | `human`  | no        |
+| Legal Reviewer           | `human`  | no        |
+| Security Reviewer Senior | `human`  | no        |
+| UX Lead                  | `human`  | no        |
+
+Queda **uno**, y sigue siendo grave por lo que es: un **automatizador de E2E**,
+de IA, sin una sola herramienta. Su nombre promete ejecutar Playwright y no
+puede abrir un fichero.
+
+La lección de mi error, que es la misma que persigue todo este trabajo: conté
+filas sin mirar la columna que distingue **quién ejecuta** de **quién decide**.
+Un dato agregado sin la dimensión que lo cualifica dice lo que uno quiere oír.
+
+**Alcance de la corrección:** la auditoría en curso cubre los 6 equipos built-in.
+El QA E2E Automator necesita la misma pasada —tools por rol, y prompt coherente con
+lo que pueden hacer— y no estaban en su encargo.
+
+---
+
+## H15 — El patrón no es escasez, es cableado: la mitad del catálogo no se reparte
+
+Buscando si «faltaban» tools, agentes o skills, el dato dice lo contrario:
+
+|                  | En catálogo | Sin asignar a ningún agente built-in |
+| ---------------- | ----------- | ------------------------------------ |
+| Tools            | 26          | **13**                               |
+| Skills           | 56          | **25**                               |
+| Agentes built-in | 27          | 6 con **cero** tools (H14)           |
+
+**Ninguna de las tres dimensiones tiene un problema de falta.** Las tres tienen
+el mismo: lo que existe no llega a quien lo necesita.
+
+**Las 13 tools sin cablear** no son marginales:
+
+```text
+stack_exec                          ← ejecutar el toolchain (H13)
+git_status, git_diff, git_log, git_commit   ← CUATRO tools de git, ninguna
+apply_patch, search_code            ← aplicar cambios, buscar en el código
+context7.query_docs, context7.resolve_library_id
+atlassian.jira_transition_issue, atlassian.confluence_create_page
+changelog_stamp                     ← el changelog que CLAUDE.md exige al cerrar un plan
+summarize_text
+```
+
+Cuatro tools de git sin repartir, en una plataforma cuya **unidad de cambio es
+una rama git** (principio 5). Y `search_code`, que es lo primero que necesita
+quien toca un repositorio ajeno.
+
+**Las 25 skills sin cablear** son las que los roles piden por su nombre:
+`Python/pytest`, `Playwright E2E`, `SQLAlchemy async`, `FastAPI routing`,
+`Next.js App Router`, `Tailwind CSS`, `Property-based testing`,
+`Dockerfile optimization`, `Changelog authoring`, `OpenAPI authoring`,
+`RAG con pgvector`, `Load & stress testing`… Un QA sin `Python/pytest` ni
+`Playwright E2E`; un backend sin `SQLAlchemy async`.
+
+**La conclusión que gobierna la corrección, y que se anota para no perderla:**
+antes de añadir una sola pieza nueva al catálogo hay que **cablear la mitad que
+ya está escrita y no se usa**. Añadir sobre un catálogo desconectado empeora la
+proporción entre lo que existe y lo que sirve, y hace más difícil ver el hueco
+real cuando lo haya.
+
+Si después de cablear queda algo que ningún rol puede hacer con ninguna pieza del
+catálogo, ESO es un hueco de verdad, y entonces se añade con su justificación.
+
+---
+
+## Cierre de H13, H14 y H15 (2026-08-30) — y lo que apareció al cerrarlos
+
+Los tres se cierran en los PR [#142](https://github.com/daycry/agent-ai-multitenant/pull/142)
+y [#144](https://github.com/daycry/agent-ai-multitenant/pull/144). Lo que sigue
+no es el registro de las correcciones —eso está en los commits— sino de **lo que
+apareció al hacerlas**, que es la parte que se pierde si no se anota.
+
+### H13 — la causa no estaba donde la buscábamos
+
+El código repartía `stack-exec` a seis roles **desde julio**. La base de datos
+llevaba desde el **2026-06-28** sin tocarse. No había un permiso olvidado: había
+un catálogo **presente y rancio**, porque el seed completo es un CLI manual que
+nada dispara y la única red de arranque que existía garantiza filas _cuando
+faltan_, nunca _cuando están y mienten_.
+
+**Sembrar cuando falta y mantener al día son garantías distintas**, y sólo
+existía la primera. Ésa es la frase que hay que recordar de todo este hallazgo.
+
+El indicio que lo delataba estaba a la vista y se leía al revés: **20 agentes SÍ
+tenían la tool, y todos eran copias de tenant**. Las copias estaban mejor que el
+original del que salían, porque un humano las había parcheado a mano dos veces
+(junio y julio) sin dejar detrás nada que impidiera la repetición. Cada equipo
+adoptado después nacía peor que los adoptados antes.
+
+**Corregido:** `refresh_builtin_agent_capabilities` re-afirma el catálogo en cada
+arranque, sobre los **seis** pasos de cableado. Una transacción por paso, para
+que un roster aún sin sembrar no arrastre a los que sí fueron.
+
+### H16 (nuevo) — `ci4-reviewer` escribía donde el montaje no deja
+
+Apareció al cerrar H13, y es su mitad gemela. `stack-exec` ya se derivaba del
+rol, pero `write-file` y `delete-file` seguían **cableadas a mano** en
+`_BASE_TOOLS`. Resultado: tres declaraciones sobre el mismo agente, dos ciertas.
+
+| Fuente                                | Decía                       |
+| ------------------------------------- | --------------------------- |
+| `ROLE_DEFAULT_TOOLS["reviewer"]`      | `_READ` — no escribe        |
+| El prompt del propio `ci4-reviewer`   | «montado en SÓLO LECTURA»   |
+| `_BASE_TOOLS` (lo que de verdad daba) | `write-file`, `delete-file` |
+
+Y el montaje es real: la rama `review_worktree` de `workers/execution.py` es la
+**única** que pone `read_only=True` (ADR 0095). Cada `write_file` rebotaba con
+EROFS — un error del sistema de ficheros indistinguible de una ruta mal puesta,
+así que el agente reintenta. **Le sobraba puerta, no le faltaba permiso**: la
+misma trampa del ADR 0162 por el otro lado.
+
+**Se mantiene `shell-exec`** a propósito: `grep`/`cat` sí funcionan sobre un
+montaje de sólo lectura, así que no es la misma clase de defecto.
+
+### H17 (nuevo) — el gate de evals no se disparaba con dos de sus tres fuentes
+
+`eval-on-prompt-change.yml` vigilaba `builtin_agents.py` y `qa_e2e_automator.py`.
+No vigilaba `ci4_team.py` (**diez** prompts) ni `tool_usage_guidance.py`, que se
+**concatena** al prompt de los 34 y por tanto cambia el prompt efectivo sin tocar
+ninguno de los dos ficheros vigilados.
+
+Un filtro que no cubre la fuente **no falla: no se ejecuta**. El check aparece en
+verde en el listado del PR porque nunca corrió, que es la forma cara de fallar.
+
+### H18 (nuevo) — el registro de tablas sin modelo no lo comprobaba nadie
+
+La migración 0145 deja su tabla de respaldo viva tras el upgrade (a propósito: el
+downgrade retira **exactamente** lo insertado en vez de recalcularlo, que
+borraría los grants parcheados a mano en junio y julio). Eso rompió
+`test_the_schema_drift_can_only_shrink`.
+
+La salida correcta existía —`TABLES_WITHOUT_A_MODEL`, con precedente idéntico en
+`approval_policy_backfill_0133`— y **el inventario de deriva sigue vacío**: no se
+reabrió nada. Pero al usarla se vio que su propia regla («explica por qué la
+tabla NO PUEDE tener modelo; "todavía no lo tiene" es deriva») vivía sólo en el
+docstring. Ahora se comprueba, junto con la pareja que importa: un respaldo
+excluido del autogenerate **y** legible por la aplicación es lo peor de las dos
+mitades sueltas — desaparece de la comparación de esquema Y sigue siendo un
+camino de lectura abierto.
+
+### H14 — cerrado, y su mitad silenciosa
+
+Las tools se cerraron en #142. Al revisarlo apareció que el QA E2E Automator
+tenía **cuatro skills declaradas y cero en la base**: vive fuera de
+`BUILTIN_AGENTS` y ningún paso se las escribía. La definición era correcta, se
+leía bien, se testeaba en unidad… y no llegaba a la tabla.
+
+Lo **cazó sola la guarda** escrita para H13, que deriva la lista de pasos del
+propio seed: al registrar el paso nuevo, falló nombrándolo.
+
+De paso se le da `playwright-e2e`, que **no la repartía nadie en todo el
+catálogo** — en el agente que se llama así.
+
+### H15 — el recuento era de la base vieja
+
+El hallazgo decía «13 de 26 tools sin repartir». Contra el catálogo ya corregido
+son **cuatro de trece**, y las cuatro correctamente sin repartir:
+
+| Tool                | Por qué NO se reparte                                |
+| ------------------- | ---------------------------------------------------- |
+| `apply-patch`       | Retirada en PROJ-08/F3 — no cableada en el runtime   |
+| `search-code`       | Íd. El grep vive dentro de `shell_exec`/`stack_exec` |
+| `summarize-text`    | Íd. Resumir es el propio LLM                         |
+| `send-notification` | No está en `RUNTIME_WIRED_TOOL_NAMES`                |
+
+Repartirlas sería exactamente la promesa falsa que quemó las 24 llamadas del run
+de 2,22 USD: el agente las ve, las invoca y fallan siempre.
+
+**Discrepancia anotada y no perseguida:** `builtin_families.py` del agent-runtime
+trata `send_notification` como canónica mientras `RUNTIME_WIRED_TOOL_NAMES` no la
+incluye. Como no la tiene nadie, hoy no rompe nada; merece una mirada antes de
+concedérsela a alguien.
+
+Las skills sí bajaron de 28 a 24 sin repartir, y casi todas las que quedan son de
+stack concreto (`nextjs-app-router`, `tanstack-query`, `shadcn-components`…) o de
+integraciones (`atlassian-*`): les falta el equipo que las use, no el cableado.
+
+### H19 (nuevo, de infraestructura) — dos PR bloqueados sin un solo check que mirar
+
+Los PR #141 y #143 (digests de runtime) llevaban días en `BLOCKED` con «no checks
+reported». La causa: **los creó un workflow con `GITHUB_TOKEN`**, y GitHub no
+dispara workflows para eventos originados por ese token. La protección de rama
+exige checks que nunca podían existir.
+
+**Cerrar y reabrir el PR los despierta.** #143 se mergeó así; #141 se cerró por
+obsoleto (mergearlo habría **regresado** `master` a digests más viejos del mismo
+fichero).
+
+### Lo que sigue abierto
+
+- **Aplicar la migración 0145 y desplegar** en la instalación viva.
+- **Re-correr el E2E** con los agentes ya equipados. El plan sigue BLOQUEADO.
+- **La guía en PDF** con el recorrido real.
+- H2, H3, H5, H7, H8, H9, H10, H11 — según su estado en las secciones de arriba.
