@@ -29,13 +29,26 @@ pytestmark = pytest.mark.integration
 TECH_WRITER_SLUG = "technical-writer"
 TECH_WRITER_NAME = "Technical Writer"
 TECH_WRITER_ROLE = "technical_writer"
-EXPECTED_SKILL_SLUGS = {
-    "structured-writing",
-    "mermaid-diagrams",
-    "adr-authoring",
-    "runbook-authoring",
-    "api-documentation",
-}
+
+
+def _expected_skill_slugs() -> frozenset[str]:
+    """Las skills del Technical Writer, DERIVADAS del seed.
+
+    Antes esto era un `set` literal copiado a mano, y por tanto una segunda
+    fuente de verdad. El 2026-08-30 se le añadió `changelog-authoring` —que es
+    justo lo que el docstring de este fichero dice que hace «at plan close»— y
+    la copia se quedó atrás: el test de recuento cayó con `assert 6 == 5` y el
+    de contenido NO se enteró, porque filtraba por su propia lista.
+
+    Derivarla del seed hace que añadir o quitar una skill no exija tocar este
+    fichero, y que un cambio no intencionado siga cayendo.
+    """
+    from api_server.seeds.builtin_agents import BUILTIN_AGENTS
+
+    for agent in BUILTIN_AGENTS:
+        if agent.slug == TECH_WRITER_SLUG:
+            return frozenset(agent.resolved_skill_slugs())
+    raise AssertionError(f"{TECH_WRITER_SLUG!r} ya no está en BUILTIN_AGENTS")
 
 
 # ---------------------------------------------------------------------------
@@ -118,10 +131,15 @@ async def _fetch_tech_writer_skill_slugs(dsn: str) -> set[str]:
     finally:
         await conn.close()
 
-    from api_server.seeds.builtin_skills import _skill_id
+    # El mapa se construye sobre el CATÁLOGO ENTERO, no sobre el conjunto
+    # esperado. Construirlo sobre lo esperado —como se hacía— filtraba las filas
+    # por él, de modo que una skill de MÁS en la base era invisible: este test
+    # sólo podía detectar ausencias, nunca excesos, y decía comprobar «exactly
+    # the curated docs skills».
+    from api_server.seeds.builtin_skills import BUILTIN_SKILLS, _skill_id
 
-    slug_by_id = {_skill_id(slug): slug for slug in EXPECTED_SKILL_SLUGS}
-    return {slug_by_id[r["id"]] for r in rows if r["id"] in slug_by_id}
+    slug_by_id = {_skill_id(sk.slug): sk.slug for sk in BUILTIN_SKILLS}
+    return {slug_by_id.get(r["id"], str(r["id"])) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +198,7 @@ def test_tech_writer_wired_to_docs_skills(alembic_config, migrations_pg_dsn: str
     asyncio.run(_run_seed_via_async_sa(_as_async_dsn(migrations_pg_dsn)))
 
     slugs = asyncio.run(_fetch_tech_writer_skill_slugs(migrations_pg_dsn))
-    assert slugs == EXPECTED_SKILL_SLUGS
+    assert slugs == _expected_skill_slugs()
 
 
 def test_reseed_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
@@ -217,7 +235,7 @@ def test_reseed_is_idempotent(alembic_config, migrations_pg_dsn: str) -> None:
 
     agents, skill_links = asyncio.run(_counts())
     assert agents == 1, "re-seed must not duplicate the agent row"
-    assert skill_links == len(EXPECTED_SKILL_SLUGS)
+    assert skill_links == len(_expected_skill_slugs())
 
 
 def test_tech_writer_visible_to_tenant_sessions(alembic_config, migrations_pg_dsn: str) -> None:
@@ -297,7 +315,7 @@ def test_only_tech_writer_carries_docs_skills(alembic_config, migrations_pg_dsn:
         if role != "technical_writer"
         for slug in slugs
     }
-    exclusive = EXPECTED_SKILL_SLUGS - shared_elsewhere
+    exclusive = _expected_skill_slugs() - shared_elsewhere
     assert exclusive, "el seed dejó de tener skills exclusivas del writer — revisar el reparto"
     exclusive_ids = [_skill_id(slug) for slug in exclusive]
 

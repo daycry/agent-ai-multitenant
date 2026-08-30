@@ -49,6 +49,7 @@ import pytest
 from api_server.agent_persona import PERSONA_MAX_CHARS
 from api_server.seeds.builtin_agents import BUILTIN_AGENTS
 from api_server.seeds.builtin_role_capabilities import (
+    FILE_WRITING_TOOLS,
     ROLE_DEFAULT_TOOLS,
     ROLES_THAT_EXECUTE_TOOLCHAIN,
     ROLES_WITH_READ_ONLY_WORKSPACE,
@@ -84,6 +85,7 @@ class _Builtin:
     persona: tuple[str, str]
     effective: tuple[str, str]
     tools: frozenset[str]
+    skills: frozenset[str]
 
 
 def _all_builtins() -> tuple[_Builtin, ...]:
@@ -103,6 +105,7 @@ def _all_builtins() -> tuple[_Builtin, ...]:
                 persona=(agent.system_prompt_es, agent.system_prompt_en),
                 effective=(agent.effective_prompt_es, agent.effective_prompt_en),
                 tools=frozenset(agent.resolved_tool_slugs()),
+                skills=frozenset(agent.resolved_skill_slugs()),
             )
         )
     for ci4 in CI4_AGENTS:
@@ -113,6 +116,7 @@ def _all_builtins() -> tuple[_Builtin, ...]:
                 persona=(ci4.system_prompt_es, ci4.system_prompt_en),
                 effective=(ci4.effective_prompt_es, ci4.effective_prompt_en),
                 tools=frozenset(ci4.resolved_tool_slugs()),
+                skills=frozenset(ci4.resolved_skill_slugs()),
             )
         )
     return tuple(out)
@@ -212,6 +216,39 @@ def test_the_role_map_agrees_about_who_may_write() -> None:
             f"{sorted(tools & WORKSPACE_MUTATING_TOOLS)} pero su workspace se "
             "monta en sólo lectura (ADR 0095)"
         )
+
+
+def test_no_roster_grants_a_writing_tool_its_role_withholds() -> None:
+    """La AUTORIDAD sobre quién escribe es el mapa por rol, no cada seed.
+
+    Este es el guarda general, y llega tras ver el mismo defecto TRES veces:
+    `stack-exec` repartida a brocha gorda por el equipo CI4 mientras el mapa era
+    selectivo; `write-file`/`delete-file` en el `ci4-reviewer` contra un montaje
+    de sólo lectura; y `ci4-pm` con las cuatro de `_FILE_TOOLS` mientras el rol
+    `project_manager` está en `_READ` y su propio prompt dice «NO escribes».
+
+    Las tres tenían la misma forma: un roster concediendo por su cuenta una
+    puerta de escritura que el mapa por rol no da. Cazar cada una por separado
+    deja la cuarta esperando, así que lo que se fija aquí es la REGLA, no los
+    casos: un equipo puede añadir tools de lectura o de red que su rol no liste
+    —`http-get` al devops, por ejemplo— pero **quién puede ESCRIBIR lo decide el
+    mapa por rol y sólo él**.
+    """
+    exceso = []
+    for b in BUILTINS:
+        permitidas = frozenset(ROLE_DEFAULT_TOOLS.get(b.role, ())) & FILE_WRITING_TOOLS
+        tiene = b.tools & FILE_WRITING_TOOLS
+        de_mas = sorted(tiene - permitidas)
+        if de_mas:
+            exceso.append((b.slug, b.role, de_mas))
+
+    assert not exceso, (
+        "rosters que conceden por su cuenta una tool de ESCRITURA DE FICHEROS que "
+        "el mapa por rol NO da: "
+        f"{exceso}. O la tool entra en ROLE_DEFAULT_TOOLS para ese "
+        "rol —y entonces la reciben todos los agentes del rol, que es el punto—, "
+        "o el roster deja de concederla."
+    )
 
 
 def test_the_writing_tools_named_by_the_criterion_exist() -> None:
@@ -430,3 +467,99 @@ def test_the_effective_prompt_fits_the_persona_cap() -> None:
                 f"{b.slug} [{lang}]: {len(text)} caracteres > {PERSONA_MAX_CHARS}; "
                 "se entregaría truncado y el corte se come el final del prompt"
             )
+
+
+# ---------------------------------------------------------------------------
+# 5. Lo mismo, para SKILLS — la mitad que faltaba
+# ---------------------------------------------------------------------------
+# La auditoría del 2026-08-30 encontró tres huecos que todas las guardas de
+# arriba dejaban pasar porque miran TOOLS: el Frontend Developer nombraba
+# Next.js, Tailwind, shadcn/ui y TanStack Query sin tener ninguna de las cuatro
+# skills; el Technical Writer perdía `changelog-authoring` porque declarar
+# `skill_slugs` SUSTITUYE la herencia del rol; y el QA de CodeIgniter mantenía
+# «tres suites PHPUnit» sin `php-phpunit`.
+#
+# Un prompt que nombra una skill que el agente no tiene no falla —por eso no
+# aparecía en ningún sitio— pero produce trabajo peor: el modelo cree tener un
+# repertorio que no tiene. Es el gemelo silencioso del defecto de las tools.
+
+#: (fragmento LITERAL del prompt, skill sin la cual esa mención es hueca).
+#: Cada par se comprobó midiendo la cadena contra el prompt efectivo, no a ojo.
+_SKILL_QUE_EL_PROMPT_NOMBRA: tuple[tuple[str, str], ...] = (
+    ("Next.js App Router", "nextjs-app-router"),
+    ("Tailwind", "tailwind-design"),
+    ("shadcn/ui", "shadcn-components"),
+    ("TanStack Query", "tanstack-query"),
+    ("PHPUnit", "php-phpunit"),
+    ("Twig", "twig-templating"),
+    ("Doctrine ORM", "doctrine-orm"),
+)
+
+#: Agentes que NOMBRAN un stack sin pretender ejecutarlo, con su motivo. La
+#: distincion no es cosmetica: sin ella la tabla de arriba obliga a repartir
+#: skills a quien solo describe el contexto del proyecto, y una skill de mas
+#: ensancha el prompt sin anadir capacidad.
+_NOMBRA_PERO_DELEGA: dict[tuple[str, str], str] = {
+    ("ci4-pm", "twig-templating"): (
+        "Su persona abre nombrando el stack como CONTEXTO — «un equipo de "
+        "desarrollo sobre CodeIgniter 4 (con Doctrine ORM via daycry/doctrine, "
+        "Twig via daycry/twig...)»— y sigue con «NO escribes ni revisas codigo "
+        "a fondo; delegas». Es el encuadre del proyecto, no una promesa suya."
+    ),
+    ("ci4-pm", "doctrine-orm"): ("Idem: contexto del proyecto, no trabajo del PM."),
+}
+
+
+@pytest.mark.parametrize(("fragmento", "skill"), _SKILL_QUE_EL_PROMPT_NOMBRA)
+def test_a_prompt_that_names_a_stack_has_its_skill(fragmento: str, skill: str) -> None:
+    """Quien NOMBRA un stack en su prompt tiene la skill de ese stack.
+
+    Incompleto por construcción, como los tests 3 y 4: una mención con otra
+    redacción se escapa. No se pretende otra cosa — lo que se fija es que los
+    casos MEDIDOS no vuelvan, y que añadir un par a la tabla sea barato.
+    """
+    # Se mira la PERSONA, no el prompt efectivo. El efectivo lleva concatenados
+    # bloques generados que comparten los 34 agentes, asi que buscar ahi marcaba
+    # media plantilla por una mencion que no es suya — medido, no supuesto.
+    huerfanos = sorted(
+        b.slug
+        for b in BUILTINS
+        if any(fragmento.lower() in p.lower() for p in b.persona)
+        and skill not in b.skills
+        and (b.slug, skill) not in _NOMBRA_PERO_DELEGA
+    )
+    assert not huerfanos, (
+        f"agentes cuyo prompt nombra {fragmento!r} y NO tienen la skill "
+        f"{skill!r}: {huerfanos}. O se les concede, o el prompt deja de "
+        "prometer un repertorio que no está detrás."
+    )
+
+
+def test_declaring_skills_never_silently_drops_the_roles_own() -> None:
+    """Declarar `skill_slugs` SUSTITUYE la herencia; que sea a propósito.
+
+    Es la mecánica exacta que dejó `changelog-authoring` sin llegar a NADIE: el
+    Technical Writer listó cinco skills y la sexta —la que su rol sí traía, y la
+    que CLAUDE.md exige para cerrar un plan— desapareció sin que nada lo dijera.
+
+    No se prohíbe recortar: se exige que lo recortado esté en la lista de
+    excepciones con su motivo, para que un descuido no pase por decisión.
+    """
+    from api_server.seeds.builtin_role_capabilities import ROLE_DEFAULT_SKILLS
+
+    # (slug del agente, skill del rol que se retira) -> por qué.
+    permitido: dict[tuple[str, str], str] = {}
+
+    perdidas = []
+    for b in BUILTINS:
+        del_rol = set(ROLE_DEFAULT_SKILLS.get(b.role, ()))
+        faltan = sorted(s for s in del_rol - b.skills if (b.slug, s) not in permitido)
+        if faltan:
+            perdidas.append((b.slug, b.role, faltan))
+
+    assert not perdidas, (
+        "agentes que pierden en silencio skills que su ROL sí trae, por declarar "
+        f"`skill_slugs` sin incluirlas: {perdidas}. Si el recorte es deliberado, "
+        "añádelo al dict `permitido` de este test con el motivo escrito; si no, "
+        "vuelve a listar la skill en el agente."
+    )
